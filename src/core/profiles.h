@@ -46,11 +46,19 @@
 
 /**
  * Profile structure
+ *
+ * head_oid is the peeled commit (or tree, for orphan branches) OID of the
+ * profile's branch HEAD at load time. profile_load populates it via a single
+ * git_reference_peel, so any profile_t constructed through the loader carries
+ * its current HEAD OID without further Git operations. Stack-initialized
+ * profile_t bypassing profile_load would have a zero head_oid — none exist
+ * in the codebase.
  */
 typedef struct {
     char *name;              /* Profile name (e.g., "global", "darwin") */
     git_reference *ref;      /* Branch reference */
     git_tree *tree;          /* Profile tree (loaded lazily) */
+    git_oid head_oid;        /* Peeled HEAD OID (set by profile_load) */
 } profile_t;
 
 /**
@@ -201,39 +209,6 @@ error_t *profile_list_load(
     const string_array_t *names,
     bool strict,
     profile_list_t **out
-);
-
-/**
- * Peel every profile's cached ref into a profile_name → HEAD-oid-hex map
- *
- * Given a loaded profile_list_t, iterates once and peels each profile->ref
- * to its commit OID, storing a 40-char hex string per entry. The returned
- * map has borrowed-mode keys (profile->name pointers, owned by the profile
- * list) and arena-allocated values. Callers free with hashmap_free(map,
- * NULL); the hex strings are reclaimed when the arena is destroyed.
- *
- * Peeling profile->ref (vs. re-resolving by name) mirrors profile_load_tree()
- * and uniformly handles commit-backed branches as well as orphan branches
- * pointing directly at a tree. profile_list_load() guarantees profile->ref
- * is non-NULL for every returned profile, so a missing ref signals a
- * stack-initialized profile_t that bypassed the loader — this function
- * reports that as ERR_INTERNAL.
- *
- * Typical use: paired with profile_list_load() by any caller that needs to
- * stamp records with their source profile's current git_oid. See manifest.c
- * mutation paths.
- *
- * @param profiles Loaded profile list (must not be NULL)
- * @param arena Arena for hex string allocation (must not be NULL; the
- *              returned map borrows values from this arena)
- * @param out_map Output hashmap (must not be NULL; caller frees with
- *                hashmap_free(map, NULL))
- * @return Error or NULL on success
- */
-error_t *profile_list_head_oids(
-    const profile_list_t *profiles,
-    arena_t *arena,
-    hashmap_t **out_map
 );
 
 /**

@@ -292,6 +292,12 @@ static error_t *build_manifest(
  *   2. Caller passes existing->deployed_at to this function
  *   3. Function writes that exact value
  *
+ * The git_oid column is derived from manifest_entry->source_profile->head_oid
+ * — every caller has a profile_t in hand via the entry, and the loader caches
+ * head_oid at construction time. This function trusts that contract: callers
+ * must use entries from profile_build_manifest (or equivalent) where
+ * source_profile is populated.
+ *
  * Responsibilities:
  *   - Extract blob_oid from tree entry
  *   - Extract metadata (mode, owner, group, encrypted flag)
@@ -300,8 +306,9 @@ static error_t *build_manifest(
  *
  * @param repo Git repository
  * @param state State handle (with active transaction)
- * @param manifest_entry Entry from in-memory manifest (borrowed)
- * @param git_oid Git commit reference (40-char hex)
+ * @param manifest_entry Entry from in-memory manifest (borrowed); MUST have
+ *                       source_profile set (guaranteed for entries from
+ *                       profile_build_manifest)
  * @param metadata Merged metadata from all profiles
  * @param deployed_at Caller-determined lifecycle timestamp (NOT modified):
  *       - 0: File never deployed (shows as [undeployed] if missing)
@@ -313,7 +320,6 @@ static error_t *sync_entry_to_state(
     git_repository *repo,
     state_t *state,
     const file_entry_t *manifest_entry,
-    const char *git_oid,
     const metadata_t *metadata,
     time_t deployed_at,
     arena_t *arena
@@ -321,12 +327,21 @@ static error_t *sync_entry_to_state(
     CHECK_NULL(repo);
     CHECK_NULL(state);
     CHECK_NULL(manifest_entry);
-    CHECK_NULL(git_oid);
+    CHECK_NULL(manifest_entry->source_profile);
     CHECK_NULL(manifest_entry->profile_name);
 
     error_t *err = NULL;
     char *blob_oid = NULL;
     metadata_item_t *meta_item = NULL;
+
+    /* Derive git_oid hex from source profile's cached HEAD. The hex form is
+     * a transport artifact for the SQLite TEXT column — no caller needs it
+     * outside this function. */
+    char git_oid_hex[GIT_OID_HEXSZ + 1];
+    git_oid_tostr(
+        git_oid_hex, sizeof(git_oid_hex),
+        &manifest_entry->source_profile->head_oid
+    );
 
     /* 1. Extract blob_oid from tree entry */
     const struct git_oid *blob_oid_obj = git_tree_entry_id(manifest_entry->entry);
@@ -385,7 +400,7 @@ static error_t *sync_entry_to_state(
         .filesystem_path = manifest_entry->filesystem_path,
         .profile         = (char *) manifest_entry->profile_name,
         .type            = file_type,
-        .git_oid         = (char *) git_oid,
+        .git_oid         = git_oid_hex,
         .blob_oid        = blob_oid,
         .mode            = mode,
         .owner           = meta_item ? meta_item->owner : NULL,
@@ -447,26 +462,20 @@ error_t *manifest_enable_profile(
     manifest_t *manifest = NULL;
     profile_list_t *profiles = NULL;
     metadata_t *metadata = NULL;
-    git_oid head_oid;
-    char head_oid_str[GIT_OID_HEXSZ + 1];
 
     arena_t *arena = arena_create(64 * 1024);
     if (!arena) return ERROR(ERR_MEMORY, "Failed to create manifest arena");
 
-    /* 1. Get HEAD oid for profile */
-    err = get_branch_head_oid(repo, profile_name, &head_oid);
-    if (err) {
-        arena_destroy(arena);
-        return error_wrap(err, "Failed to get HEAD for profile '%s'", profile_name);
-    }
-    git_oid_tostr(head_oid_str, sizeof(head_oid_str), &head_oid);
-
-    /* 2. Build manifest with proper transient parameter handling
+    /* 1. Build manifest with proper transient parameter handling
      *
      * Transient parameters are for temporary custom prefix operations (e.g., dotta add -p temp --prefix /opt),
      * NOT for normal profile enable (which modifies persistent state).
      *
      * Validator requires "both or neither" - only pass transient override when custom_prefix is non-NULL.
+     *
+     * The profile's HEAD OID comes from build_manifest's loaded profile_list_t
+     * (each profile_t carries its peeled head_oid), reaching sync_entry_to_state
+     * via entry->source_profile. No upfront ref resolution needed.
      */
     const char *transient_prof = custom_prefix ? profile_name : NULL;
     const char *transient_pfx = custom_prefix;
@@ -605,7 +614,7 @@ error_t *manifest_enable_profile(
         }
 
         /* Sync entry with deployed_at timestamp */
-        err = sync_entry_to_state(repo, state, entry, head_oid_str, metadata, deployed_at, arena);
+        err = sync_entry_to_state(repo, state, entry, metadata, deployed_at, arena);
         if (err) goto cleanup;
     }
 
@@ -813,7 +822,6 @@ error_t *manifest_disable_profile(
     size_t count = 0;
     manifest_t *fallback_manifest = NULL;
     profile_list_t *fallback_profiles = NULL;
-    hashmap_t *profile_oids = NULL;
     metadata_t *fallback_metadata = NULL;
 
     arena_t *arena = arena_create(64 * 1024);
@@ -846,15 +854,6 @@ error_t *manifest_disable_profile(
         if (err) {
             arena_destroy(arena);
             return error_wrap(err, "Failed to build fallback manifest");
-        }
-    }
-
-    /* Build profile→oid map for O(1) lookups in fallback processing */
-    if (fallback_profiles) {
-        err = profile_list_head_oids(fallback_profiles, arena, &profile_oids);
-        if (err) {
-            err = error_wrap(err, "Failed to build profile OID map");
-            goto cleanup;
         }
     }
 
@@ -921,21 +920,11 @@ error_t *manifest_disable_profile(
              * VWD Invariant: Entry metadata must match source profile's Git tree + metadata.json.
              */
 
-            /* Get git_oid from pre-built map (O(1) lookup) */
-            const char *fallback_oid_str = hashmap_get(
-                profile_oids, fallback->profile_name
-            );
-            if (!fallback_oid_str) {
-                err = ERROR(
-                    ERR_INTERNAL, "Missing OID for profile '%s'",
-                    fallback->profile_name
-                );
-                goto cleanup;
-            }
-
-            /* Sync to state using proven, tested logic */
+            /* Sync to state using proven, tested logic. The fallback entry's
+             * source_profile (set by profile_build_manifest) carries the cached
+             * head_oid, which sync_entry_to_state derives the git_oid hex from. */
             err = sync_entry_to_state(
-                repo, state, fallback, fallback_oid_str, fallback_metadata,
+                repo, state, fallback, fallback_metadata,
                 entry->deployed_at, arena
             );
             if (err) {
@@ -1238,7 +1227,6 @@ directory_cleanup:
 
 cleanup:
     if (fallback_metadata) metadata_free(fallback_metadata);
-    if (profile_oids) hashmap_free(profile_oids, NULL);
     if (fallback_profiles) profile_list_free(fallback_profiles);
     if (fallback_manifest) manifest_free(fallback_manifest);
     arena_destroy(arena);
@@ -1310,7 +1298,6 @@ error_t *manifest_remove_files(
     error_t *err = NULL;
     manifest_t *fresh_manifest = NULL;
     profile_list_t *profiles = NULL;
-    hashmap_t *profile_oids = NULL;
     hashmap_t *prefix_map = NULL;
     metadata_t *metadata = NULL;
     size_t removed_count = 0;
@@ -1338,14 +1325,7 @@ error_t *manifest_remove_files(
         goto cleanup;
     }
 
-    /* 2. Build profile→oid map (profile_name → git_oid string) for fast lookups */
-    err = profile_list_head_oids(profiles, arena, &profile_oids);
-    if (err) {
-        err = error_wrap(err, "Failed to build profile OID map");
-        goto cleanup;
-    }
-
-    /* 3. Load merged metadata from enabled profiles for fallback resolution
+    /* 2. Load merged metadata from enabled profiles for fallback resolution
      *
      * Pattern: Same as manifest_disable_profile, manifest_sync_diff.
      * Metadata is authoritative for mode, owner, group, encrypted fields.
@@ -1363,7 +1343,7 @@ error_t *manifest_remove_files(
         err = NULL;
     }
 
-    /* 4. Get custom prefix for the removed profile from state */
+    /* 3. Get custom prefix for the removed profile from state */
     err = state_get_prefix_map(state, &prefix_map);
     if (err) {
         err = error_wrap(err, "Failed to get custom prefix map");
@@ -1426,21 +1406,9 @@ error_t *manifest_remove_files(
              *
              * CRITICAL: Use sync_entry_to_state to ensure consistent metadata.
              * This extracts blob_oid, type, mode from fallback's Git tree entry
-             * and applies metadata precedence from .dotta/metadata.json.
+             * and applies metadata precedence from .dotta/metadata.json. The
+             * git_oid hex is derived from fallback->source_profile->head_oid.
              */
-            const char *fallback_profile = fallback->profile_name;
-
-            /* Get HEAD oid for fallback profile (hex string) */
-            const char *fallback_oid_str = hashmap_get(profile_oids, fallback_profile);
-            if (!fallback_oid_str) {
-                err = ERROR(
-                    ERR_INTERNAL, "Missing OID for profile '%s'",
-                    fallback_profile
-                );
-                state_free_entry(current_entry);
-                free(filesystem_path);
-                goto cleanup;
-            }
 
             /* Preserve deployed_at (lifecycle history) before sync overwrites entry */
             time_t preserved_deployed_at = current_entry->deployed_at;
@@ -1467,7 +1435,7 @@ error_t *manifest_remove_files(
              * 3. Uses INSERT OR REPLACE for atomic, complete entry update
              */
             err = sync_entry_to_state(
-                repo, state, fallback, fallback_oid_str, metadata, preserved_deployed_at, arena
+                repo, state, fallback, metadata, preserved_deployed_at, arena
             );
             if (err) {
                 state_free_entry(current_entry);
@@ -1587,7 +1555,6 @@ error_t *manifest_remove_files(
 cleanup:
     if (metadata) metadata_free(metadata);
     if (prefix_map) hashmap_free(prefix_map, free);
-    if (profile_oids) hashmap_free(profile_oids, NULL);
     if (fresh_manifest) manifest_free(fresh_manifest);
     if (profiles) profile_list_free(profiles);
     arena_destroy(arena);
@@ -1627,7 +1594,6 @@ error_t *manifest_rebuild(
     state_file_entry_t *old_entries = NULL;
     size_t old_count = 0;
     hashmap_t *old_map = NULL;
-    hashmap_t *profile_oids = NULL;
     metadata_t *metadata = NULL;
 
     arena_t *arena = arena_create(64 * 1024);
@@ -1687,14 +1653,7 @@ error_t *manifest_rebuild(
         goto cleanup;
     }
 
-    /* 4. Build profile→oid map for git_oid field */
-    err = profile_list_head_oids(profiles, arena, &profile_oids);
-    if (err) {
-        err = error_wrap(err, "Failed to build profile oid map");
-        goto cleanup;
-    }
-
-    /* 5. Load merged metadata from all profiles */
+    /* 4. Load merged metadata from all profiles */
     err = metadata_load_from_profiles(repo, enabled_profiles, &metadata);
     if (err) {
         /* Metadata may not exist for old profiles - continue with NULL */
@@ -1705,23 +1664,13 @@ error_t *manifest_rebuild(
         err = NULL;
     }
 
-    /* 6. Sync ALL entries from manifest to state (single pass, no filtering)
+    /* 5. Sync ALL entries from manifest to state (single pass, no filtering)
      *
      * Key difference from manifest_enable_profile: We sync ALL entries because
      * the state is empty (cleared in step 1). No filtering needed - every file
      * in the manifest belongs in the rebuilt state. */
     for (size_t i = 0; i < manifest->count; i++) {
         file_entry_t *entry = &manifest->entries[i];
-
-        /* Get git_oid for this entry's source profile */
-        const char *git_oid = hashmap_get(profile_oids, entry->profile_name);
-        if (!git_oid) {
-            err = ERROR(
-                ERR_INTERNAL, "Missing OID for profile '%s'",
-                entry->profile_name
-            );
-            goto cleanup;
-        }
 
         /* Check if entry existed before rebuild (preserve deployed_at for lifecycle tracking) */
         state_file_entry_t *old_entry = hashmap_get(old_map, entry->filesystem_path);
@@ -1743,7 +1692,7 @@ error_t *manifest_rebuild(
         }
 
         /* Sync to state with preserved/computed deployed_at */
-        err = sync_entry_to_state(repo, state, entry, git_oid, metadata, deployed_at, arena);
+        err = sync_entry_to_state(repo, state, entry, metadata, deployed_at, arena);
         if (err) goto cleanup;
     }
 
@@ -1755,7 +1704,6 @@ error_t *manifest_rebuild(
 
 cleanup:
     if (old_map) hashmap_free(old_map, NULL);
-    if (profile_oids) hashmap_free(profile_oids, NULL);
     if (profiles) profile_list_free(profiles);
     if (metadata) metadata_free(metadata);
     if (manifest) manifest_free(manifest);
@@ -1907,7 +1855,6 @@ error_t *manifest_repair_stale(
     hashmap_t *stale_profiles = NULL;
     manifest_t *fresh_manifest = NULL;
     profile_list_t *fresh_profiles = NULL;
-    hashmap_t *profile_oids = NULL;
     hashmap_t *repaired_paths = NULL;
     metadata_t *metadata = NULL;
 
@@ -1962,19 +1909,15 @@ error_t *manifest_repair_stale(
     }
 
     /* Phase 2: Build fresh manifest from current Git state.
-     * This gives us the ground truth for what files should exist. */
+     * This gives us the ground truth for what files should exist. The
+     * loaded fresh_profiles each carry their cached head_oid; entries
+     * pulled from fresh_manifest reach sync_entry_to_state via
+     * source_profile, so no separate profile→oid map is needed. */
     err = build_manifest(
         repo, state, enabled_profiles, NULL, NULL, arena, &fresh_manifest, &fresh_profiles
     );
     if (err) {
         err = error_wrap(err, "Failed to build fresh manifest for stale repair");
-        goto cleanup;
-    }
-
-    /* Build profile→oid map for git_oid field updates */
-    err = profile_list_head_oids(fresh_profiles, arena, &profile_oids);
-    if (err) {
-        err = error_wrap(err, "Failed to build profile oid map for repair");
         goto cleanup;
     }
 
@@ -2021,16 +1964,9 @@ error_t *manifest_repair_stale(
              *
              * Use sync_entry_to_state to update with current Git truth.
              * Preserve deployed_at — the file's lifecycle history is unchanged,
-             * only the expected state cache needs updating.
+             * only the expected state cache needs updating. The git_oid hex is
+             * derived from fresh_entry->source_profile->head_oid.
              */
-            const char *git_oid = hashmap_get(profile_oids, fresh_entry->profile_name);
-            if (!git_oid) {
-                err = ERROR(
-                    ERR_INTERNAL, "Missing OID for profile '%s'",
-                    fresh_entry->profile_name
-                );
-                goto cleanup;
-            }
 
             /* Determine if file content actually changed (blob_oid differs).
              *
@@ -2076,7 +2012,7 @@ error_t *manifest_repair_stale(
             }
 
             err = sync_entry_to_state(
-                repo, state, fresh_entry, git_oid, metadata, entry->deployed_at, arena
+                repo, state, fresh_entry, metadata, entry->deployed_at, arena
             );
             if (err) {
                 err = error_wrap(
@@ -2172,7 +2108,6 @@ error_t *manifest_repair_stale(
 cleanup:
     if (stale_profiles) hashmap_free(stale_profiles, free);
     if (profile_scope) hashmap_free(profile_scope, NULL);
-    if (profile_oids) hashmap_free(profile_oids, NULL);
     if (fresh_profiles) profile_list_free(fresh_profiles);
     if (metadata) metadata_free(metadata);
     if (fresh_manifest) manifest_free(fresh_manifest);
@@ -2206,7 +2141,6 @@ error_t *manifest_reorder_profiles(
     state_file_entry_t *old_entries = NULL;
     size_t old_count = 0;
     hashmap_t *old_map = NULL;
-    hashmap_t *profile_oids = NULL;
     metadata_t *metadata = NULL;
 
     arena_t *arena = arena_create(64 * 1024);
@@ -2254,7 +2188,11 @@ error_t *manifest_reorder_profiles(
         }
     }
 
-    /* 4. Load metadata and build profile→oid map */
+    /* 4. Load metadata
+     *
+     * Profile head_oid hex is derived inside sync_entry_to_state from
+     * new_entry->source_profile (set by profile_build_manifest). No
+     * separate profile→oid map needed. */
     err = metadata_load_from_profiles(repo, new_profile_order, &metadata);
     if (err && err->code != ERR_NOT_FOUND) {
         goto cleanup;
@@ -2262,12 +2200,6 @@ error_t *manifest_reorder_profiles(
     if (err) {
         error_free(err);
         err = NULL;
-    }
-
-    err = profile_list_head_oids(profiles, arena, &profile_oids);
-    if (err) {
-        err = error_wrap(err, "Failed to build profile OID map");
-        goto cleanup;
     }
 
     /* 5. Process each file in new manifest */
@@ -2280,18 +2212,8 @@ error_t *manifest_reorder_profiles(
         if (!old_entry) {
             /* New file (rare in reorder, but handle it) */
 
-            /* Get OID from pre-built map (O(1) lookup) */
-            const char *oid_str = hashmap_get(profile_oids, new_entry->profile_name);
-            if (!oid_str) {
-                err = ERROR(
-                    ERR_INTERNAL, "Missing OID for profile '%s'",
-                    new_entry->profile_name
-                );
-                goto cleanup;
-            }
-
             /* New file - deployed_at=0 (never deployed) */
-            err = sync_entry_to_state(repo, state, new_entry, oid_str, metadata, 0, arena);
+            err = sync_entry_to_state(repo, state, new_entry, metadata, 0, arena);
             if (err) {
                 goto cleanup;
             }
@@ -2303,19 +2225,9 @@ error_t *manifest_reorder_profiles(
             if (owner_changed) {
                 /* Owner changed - update entry to new owner */
 
-                /* Get OID from pre-built map (O(1) lookup) */
-                const char *oid_str = hashmap_get(profile_oids, new_entry->profile_name);
-                if (!oid_str) {
-                    err = ERROR(
-                        ERR_INTERNAL, "Missing OID for profile '%s'",
-                        new_entry->profile_name
-                    );
-                    goto cleanup;
-                }
-
                 /* Sync with new owner, preserve existing deployed_at */
                 err = sync_entry_to_state(
-                    repo, state, new_entry, oid_str, metadata, old_entry->deployed_at, arena
+                    repo, state, new_entry, metadata, old_entry->deployed_at, arena
                 );
                 if (err) {
                     goto cleanup;
@@ -2396,7 +2308,6 @@ error_t *manifest_reorder_profiles(
     }
 
 cleanup:
-    if (profile_oids) hashmap_free(profile_oids, NULL);
     if (old_map) hashmap_free(old_map, NULL);
     if (profiles) profile_list_free(profiles);
     if (metadata) metadata_free(metadata);
@@ -2490,14 +2401,13 @@ error_t *manifest_update_files(
     error_t *err = NULL;
     profile_list_t *profiles = NULL;
     manifest_t *fresh_manifest = NULL;
-    hashmap_t *profile_oids = NULL;
     metadata_t *metadata_merged = NULL;
     bool using_cache = (metadata_cache != NULL);
 
     arena_t *arena = arena_create(64 * 1024);
     if (!arena) return ERROR(ERR_MEMORY, "Failed to create manifest arena");
 
-    /* 1. Load enabled profiles from Git */
+    /* 1. Load enabled profiles from Git (each profile_t carries cached head_oid) */
     err = profile_list_load(repo, enabled_profiles, false, &profiles);
     if (err) {
         arena_destroy(arena);
@@ -2528,14 +2438,7 @@ error_t *manifest_update_files(
         goto cleanup;
     }
 
-    /* 5. Build profile oid map (profile_name -> git_oid string) */
-    err = profile_list_head_oids(profiles, arena, &profile_oids);
-    if (err) {
-        err = error_wrap(err, "Failed to build profile oid map");
-        goto cleanup;
-    }
-
-    /* 6. Load fresh metadata if not provided (NULL handling)
+    /* 5. Load fresh metadata if not provided (NULL handling)
      *
      * CRITICAL: If metadata_cache is NULL, load merged metadata from Git.
      * This ensures we have current metadata including all newly-committed files.
@@ -2580,15 +2483,9 @@ error_t *manifest_update_files(
             }
 
             if (fallback) {
-                /* Fallback exists - update to fallback profile */
-                const char *git_oid = hashmap_get(profile_oids, fallback->profile_name);
-                if (!git_oid) {
-                    err = ERROR(
-                        ERR_INTERNAL, "Missing OID for profile '%s'",
-                        fallback->profile_name
-                    );
-                    goto cleanup;
-                }
+                /* Fallback exists - update to fallback profile.
+                 * git_oid hex is derived from fallback->source_profile->head_oid
+                 * inside sync_entry_to_state. */
 
                 /* Get metadata - from cache if available, otherwise use merged */
                 const metadata_t *metadata = NULL;
@@ -2622,7 +2519,7 @@ error_t *manifest_update_files(
                 }
 
                 err = sync_entry_to_state(
-                    repo, state, fallback, git_oid, metadata, deployed_at, arena
+                    repo, state, fallback, metadata, deployed_at, arena
                 );
                 if (err) {
                     err = error_wrap(
@@ -2710,15 +2607,11 @@ error_t *manifest_update_files(
             /* Sync to state with deployed_at = now()
              *
              * Key insight: UPDATE captures files FROM filesystem, so they're
-             * already deployed. We set deployed_at to mark them as known. */
-            const char *git_oid = hashmap_get(profile_oids, item->profile);
-            if (!git_oid) {
-                err = ERROR(
-                    ERR_INTERNAL, "Missing OID for profile '%s'",
-                    item->profile
-                );
-                goto cleanup;
-            }
+             * already deployed. We set deployed_at to mark them as known.
+             *
+             * Precedence check above ensures entry->source_profile->name ==
+             * item->profile, so the head_oid derived inside sync_entry_to_state
+             * is correct for this item. */
 
             /* Get metadata - from cache if available, otherwise use merged */
             const metadata_t *metadata = NULL;
@@ -2728,7 +2621,7 @@ error_t *manifest_update_files(
                 metadata = metadata_merged;
             }
 
-            err = sync_entry_to_state(repo, state, entry, git_oid, metadata, time(NULL), arena);
+            err = sync_entry_to_state(repo, state, entry, metadata, time(NULL), arena);
             if (err) {
                 err = error_wrap(
                     err, "Failed to sync '%s' to manifest",
@@ -2792,7 +2685,6 @@ error_t *manifest_update_files(
 
 cleanup:
     if (metadata_merged) metadata_free(metadata_merged);
-    if (profile_oids) hashmap_free(profile_oids, NULL);
     if (fresh_manifest) manifest_free(fresh_manifest);
     if (profiles) profile_list_free(profiles);
     arena_destroy(arena);
@@ -2886,14 +2778,13 @@ error_t *manifest_add_files(
     error_t *err = NULL;
     profile_list_t *profiles = NULL;
     manifest_t *fresh_manifest = NULL;
-    hashmap_t *profile_oids = NULL;
     metadata_t *metadata_merged = NULL;
     bool using_cache = (metadata_cache != NULL);
 
     arena_t *arena = arena_create(64 * 1024);
     if (!arena) return ERROR(ERR_MEMORY, "Failed to create manifest arena");
 
-    /* 1. Load enabled profiles from Git */
+    /* 1. Load enabled profiles from Git (each profile_t carries cached head_oid) */
     err = profile_list_load(repo, enabled_profiles, false, &profiles);
     if (err) {
         arena_destroy(arena);
@@ -2924,19 +2815,11 @@ error_t *manifest_add_files(
         goto cleanup;
     }
 
-    /* 5. Build profile oid map (profile_name -> git_oid string) */
-    err = profile_list_head_oids(profiles, arena, &profile_oids);
-    if (err) {
-        err = error_wrap(err, "Failed to build profile oid map");
-        goto cleanup;
-    }
-
-    /* 6. Load fresh metadata if not provided (NULL handling)
+    /* 5. Load fresh metadata if not provided (NULL handling)
      *
      * CRITICAL: If metadata_cache is NULL, load merged metadata from Git.
      * This ensures we have current metadata including all newly-committed files.
      *
-     * Pattern: Same as manifest_sync_diff() (lines 1671-1688).
      * Merged metadata contains all enabled profiles with precedence applied.
      */
     if (!metadata_cache) {
@@ -2958,7 +2841,7 @@ error_t *manifest_add_files(
         }
     }
 
-    /* 7. Process each file */
+    /* 6. Process each file */
     for (size_t i = 0; i < filesystem_paths->count; i++) {
         const char *filesystem_path = filesystem_paths->items[i];
 
@@ -2996,8 +2879,8 @@ error_t *manifest_add_files(
         /* Sync to state with deployed_at = now()
          *
          * Key insight: ADD captures files FROM filesystem, so they're
-         * already deployed. We set deployed_at to mark them as known. */
-        const char *profile_git_oid = hashmap_get(profile_oids, entry->profile_name);
+         * already deployed. We set deployed_at to mark them as known.
+         * git_oid hex is derived from entry->source_profile->head_oid. */
 
         /* Get metadata - from cache if available, otherwise use merged */
         const metadata_t *metadata = NULL;
@@ -3007,7 +2890,7 @@ error_t *manifest_add_files(
             metadata = metadata_merged;
         }
 
-        err = sync_entry_to_state(repo, state, entry, profile_git_oid, metadata, time(NULL), arena);
+        err = sync_entry_to_state(repo, state, entry, metadata, time(NULL), arena);
 
         if (err) {
             err = error_wrap(
@@ -3040,7 +2923,6 @@ error_t *manifest_add_files(
 
 cleanup:
     if (metadata_merged) metadata_free(metadata_merged);
-    if (profile_oids) hashmap_free(profile_oids, NULL);
     if (fresh_manifest) manifest_free(fresh_manifest);
     if (profiles) profile_list_free(profiles);
     arena_destroy(arena);
@@ -3122,7 +3004,6 @@ error_t *manifest_sync_diff(
     /* Resources to clean up */
     profile_list_t *profiles = NULL;
     manifest_t *fresh_manifest = NULL;
-    hashmap_t *profile_oids = NULL;
     hashmap_t *prefix_map = NULL;
     metadata_t *metadata_merged = NULL;
     git_tree *old_tree = NULL;
@@ -3169,14 +3050,7 @@ error_t *manifest_sync_diff(
         goto cleanup;
     }
 
-    /* 1.4. Build profile→oid map (profile_name -> git_oid string) */
-    err = profile_list_head_oids(profiles, arena, &profile_oids);
-    if (err) {
-        err = error_wrap(err, "Failed to build profile oid map");
-        goto cleanup;
-    }
-
-    /* 1.5. Load or use cached metadata
+    /* 1.4. Load or use cached metadata
      *
      * Note: metadata_cache is a hashmap (profile_name → metadata_t*) from workspace.
      * If not provided, we load merged metadata for all profiles. For lookups, we
@@ -3296,16 +3170,11 @@ error_t *manifest_sync_diff(
              *
              * Key: Sync only updates Git, it doesn't deploy to filesystem.
              * User must run 'dotta apply' to actually deploy these changes.
-             * We preserve deployed_at to maintain lifecycle tracking. */
-            const char *git_oid_str = hashmap_get(profile_oids, profile_name);
-            if (!git_oid_str) {
-                err = ERROR(
-                    ERR_INTERNAL, "Missing OID for profile '%s'",
-                    profile_name
-                );
-                free(filesystem_path);
-                goto cleanup;
-            }
+             * We preserve deployed_at to maintain lifecycle tracking.
+             *
+             * Precedence check above ensures entry->source_profile->name ==
+             * profile_name, so the head_oid hex derived inside
+             * sync_entry_to_state matches the profile being synced. */
 
             /* Get metadata - from cache if available, otherwise use merged */
             const metadata_t *profile_metadata = NULL;
@@ -3333,7 +3202,7 @@ error_t *manifest_sync_diff(
             }
 
             err = sync_entry_to_state(
-                repo, state, entry, git_oid_str, profile_metadata, deployed_at, arena
+                repo, state, entry, profile_metadata, deployed_at, arena
             );
             if (err) {
                 err = error_wrap(
@@ -3366,20 +3235,8 @@ error_t *manifest_sync_diff(
                 /* File exists in another profile (fallback found!)
                  *
                  * Update manifest entry to point to the new profile owner.
-                 * Preserve deployed_at to maintain lifecycle tracking. */
-
-                const char *fallback_git_oid = hashmap_get(
-                    profile_oids,
-                    entry->profile_name
-                );
-                if (!fallback_git_oid) {
-                    err = ERROR(
-                        ERR_INTERNAL, "Missing OID for profile '%s'",
-                        entry->profile_name
-                    );
-                    free(filesystem_path);
-                    goto cleanup;
-                }
+                 * Preserve deployed_at to maintain lifecycle tracking.
+                 * git_oid hex is derived from entry->source_profile->head_oid. */
 
                 /* Get metadata - from cache if available, otherwise use merged */
                 const metadata_t *fallback_metadata = NULL;
@@ -3412,7 +3269,7 @@ error_t *manifest_sync_diff(
                 }
 
                 err = sync_entry_to_state(
-                    repo, state, entry, fallback_git_oid, fallback_metadata, deployed_at, arena
+                    repo, state, entry, fallback_metadata, deployed_at, arena
                 );
                 if (err) {
                     err = error_wrap(
@@ -3541,7 +3398,6 @@ cleanup:
     if (old_tree) git_tree_free(old_tree);
     if (metadata_merged) metadata_free(metadata_merged);
     if (prefix_map) hashmap_free(prefix_map, free);
-    if (profile_oids) hashmap_free(profile_oids, NULL);
     if (fresh_manifest) manifest_free(fresh_manifest);
     if (profiles) profile_list_free(profiles);
     arena_destroy(arena);

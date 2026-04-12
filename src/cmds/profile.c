@@ -115,22 +115,14 @@ static void print_manifest_enable_stats(
     } else {
         /* Compact summary */
         if (stats->needs_deployment > 0) {
-            if (stats->already_deployed > 0) {
-                output_print(
-                    out, OUTPUT_NORMAL,
-                    "  Staged %zu file%s for deployment (%zu already up-to-date)\n",
-                    stats->needs_deployment, stats->needs_deployment == 1 ? "" : "s",
-                    stats->already_deployed
-                );
-            } else {
-                output_print(
-                    out, OUTPUT_NORMAL, "  Staged %zu file%s for deployment\n",
-                    stats->needs_deployment, stats->needs_deployment == 1 ? "" : "s"
-                );
-            }
-        } else if (stats->already_deployed > 0) {
             output_print(
-                out, OUTPUT_NORMAL, "  All %zu file%s already deployed\n",
+                out, OUTPUT_NORMAL, "  Staged %zu file%s for deployment\n",
+                stats->needs_deployment, stats->needs_deployment == 1 ? "" : "s"
+            );
+        }
+        if (stats->already_deployed > 0) {
+            output_print(
+                out, OUTPUT_NORMAL, "  Found %zu file%s already up-to-date\n",
                 stats->already_deployed, stats->already_deployed == 1 ? "" : "s"
             );
         }
@@ -197,7 +189,7 @@ static void print_manifest_disable_stats(
 
         if (stats->files_with_fallback > 0) {
             output_print(
-                out, OUTPUT_NORMAL, "  %zu file%s reverted to lower precedence\n",
+                out, OUTPUT_NORMAL, "  Reverted %zu file%s to lower precedence\n",
                 stats->files_with_fallback,
                 stats->files_with_fallback == 1 ? "" : "s"
             );
@@ -1025,11 +1017,6 @@ static error_t *profile_disable(
             if (strcmp(to_disable->items[j], profile_name) == 0) {
                 should_disable = true;
                 disabled_count++;
-
-                output_styled(
-                    out, OUTPUT_VERBOSE, "  {green}✓{reset} Disabling %s\n",
-                    profile_name
-                );
                 break;
             }
         }
@@ -1124,6 +1111,10 @@ static error_t *profile_disable(
                 }
 
                 /* Show manifest analysis (verbose: detailed, normal: compact) */
+                output_styled(
+                    out, OUTPUT_NORMAL, "  {green}✓{reset} Disabled %s\n",
+                    profile_name
+                );
                 print_manifest_disable_stats(out, profile_name, &stats);
 
                 /* Remove from state */

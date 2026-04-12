@@ -123,7 +123,6 @@ static inline stat_cache_t stat_cache_from_stat(const struct stat *st) {
  *   - > 0 = file known to dotta (either deployed or existed when profile enabled)
  *
  * Key fields:
- * - commit_oid: Commit OID of the source profile's HEAD at sync time (binary)
  * - blob_oid: Blob OID for file content identity (binary)
  * - owner/group: For root/ files
  * - encrypted: Encryption flag
@@ -140,9 +139,8 @@ typedef struct {
     /* Type */
     state_file_type_t type;     /* File type */
 
-    /* Git tracking (binary OIDs — mirror the BLOB columns in virtual_manifest).
+    /* Git tracking (binary OID — mirrors the BLOB column in virtual_manifest).
      * Hex conversion lives only at display boundaries, never on the hot path. */
-    git_oid commit_oid;         /* Commit OID of source profile HEAD at sync time */
     git_oid blob_oid;           /* Blob OID for file content identity */
 
     /* Metadata */
@@ -546,17 +544,14 @@ error_t *state_clear_files(state_t *state);
 /**
  * Helper: Create file entry
  *
- * The commit_oid/blob_oid parameters mirror the state_file_entry_t fields.
- * Named explicitly (not `git_oid`) because C treats a prior parameter name as
- * in scope for subsequent parameters, which would break
- * `const git_oid *git_oid` followed by `const git_oid *...`.
+ * The blob_oid parameter is named explicitly (not `git_oid`) because C treats
+ * a prior parameter name as in scope for subsequent parameters.
  *
  * @param storage_path Storage path (must not be NULL)
  * @param filesystem_path Filesystem path (must not be NULL)
  * @param profile Profile name (must not be NULL)
  * @param old_profile Previous profile (can be NULL)
  * @param type File type
- * @param commit_oid Commit OID of source profile HEAD (must not be NULL, copied)
  * @param blob_oid Blob OID for content identity (must not be NULL, copied)
  * @param mode Permission mode (0 if no metadata tracked)
  * @param owner Owner username (can be NULL)
@@ -573,7 +568,6 @@ error_t *state_create_entry(
     const char *profile,
     const char *old_profile,
     state_file_type_t type,
-    const git_oid *commit_oid,
     const git_oid *blob_oid,
     mode_t mode,
     const char *owner,
@@ -692,29 +686,45 @@ error_t *state_update_entry(
 );
 
 /**
- * Update commit_oid for all manifest entries from a specific profile
+ * Set commit_oid for a profile in enabled_profiles
  *
- * Synchronizes commit_oid to match the profile's current branch HEAD.
- * Maintains invariant: all files from profile P have commit_oid = P's HEAD.
+ * Writes the profile's current branch HEAD to the per-profile commit_oid
+ * column. Single-row UPDATE on enabled_profiles.
  *
- * Called after operations that move branch HEAD:
+ * Called after operations that move a profile's branch HEAD:
  * - manifest_sync_diff (after pull/merge)
  * - manifest_add_files (after commit)
  * - manifest_update_files (after commit)
  * - manifest_remove_files (after commit)
- *
- * Updates ALL entries (active and inactive) for consistency.
- * Inactive entries will be removed by apply, but should stay current.
+ * - manifest_enable_profile (after initial population)
+ * - manifest_rebuild (after full repopulation)
  *
  * @param state State (must not be NULL, must have active transaction)
  * @param profile_name Profile name (must not be NULL)
- * @param new_commit_oid New commit OID for profile HEAD (must not be NULL)
+ * @param commit_oid New commit OID for profile HEAD (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *state_update_commit_oid_for_profile(
+error_t *state_set_profile_commit_oid(
     state_t *state,
     const char *profile_name,
-    const git_oid *new_commit_oid
+    const git_oid *commit_oid
+);
+
+/**
+ * Read a profile's stored commit_oid from enabled_profiles
+ *
+ * Returns the last-synced HEAD OID for a profile. Used by stale detection
+ * to compare stored vs current branch HEAD.
+ *
+ * @param state State (must not be NULL)
+ * @param profile_name Profile name (must not be NULL)
+ * @param out_commit_oid Output OID (must not be NULL)
+ * @return Error or NULL on success (ERR_NOT_FOUND if profile not enabled)
+ */
+error_t *state_get_profile_commit_oid(
+    const state_t *state,
+    const char *profile_name,
+    git_oid *out_commit_oid
 );
 
 /**

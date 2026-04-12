@@ -1160,9 +1160,9 @@ static int manifest_build_callback(
         /* Initialize entry.
          *
          * realloc() does NOT zero new memory. Zero the whole slot first so
-         * every VWD cache field (including the inline commit_oid/blob_oid) starts
-         * in the "not populated from state" state; then overwrite the fields
-         * this Git-built path actually sets. Matches the contract that
+         * every VWD cache field (including the inline blob_oid) starts in the
+         * "not populated from state" state; then overwrite the fields this
+         * Git-built path actually sets. Matches the contract that
          * git_oid_is_zero() == "no state cache". */
         file_entry_t *new_entry = &ctx->manifest->entries[ctx->manifest->count];
         memset(new_entry, 0, sizeof(*new_entry));
@@ -1887,7 +1887,7 @@ void manifest_free(manifest_t *manifest) {
         }
 
         /* Skip string field frees when arena-backed.
-         * commit_oid and blob_oid are inline binary fields — no free. */
+         * blob_oid is an inline binary field — no free. */
         if (!manifest->arena_backed) {
             free(manifest->entries[i].storage_path);
             free(manifest->entries[i].filesystem_path);

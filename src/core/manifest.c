@@ -55,22 +55,25 @@ static error_t *get_branch_head_oid(
 }
 
 /**
- * Synchronize commit_oid for all files in a profile to match branch HEAD
+ * Synchronize commit_oid for a profile in enabled_profiles
  *
- * Maintains critical invariant: all files from profile P have commit_oid = P's HEAD.
+ * Resolves the profile's branch HEAD and writes it to the per-profile
+ * commit_oid column. Called after any Git mutation that moves a branch HEAD.
  *
  * Called after any operation that moves a profile's branch HEAD:
  * - After sync (remote changes pulled)
  * - After add (new files committed)
  * - After update (file changes committed)
  * - After remove (file deletions committed)
+ * - After enable (initial population)
+ * - After rebuild (full repopulation)
  *
  * @param repo Repository (must not be NULL)
  * @param state State (must not be NULL, must have active transaction)
  * @param profile_name Profile name (must not be NULL)
  * @return Error or NULL on success
  */
-static error_t *sync_profile_git_oids(
+static error_t *sync_profile_commit_oid(
     git_repository *repo,
     state_t *state,
     const char *profile_name
@@ -86,8 +89,8 @@ static error_t *sync_profile_git_oids(
         return error_wrap(err, "Failed to get HEAD for profile '%s'", profile_name);
     }
 
-    /* Update all entries from this profile */
-    return state_update_commit_oid_for_profile(state, profile_name, &head_oid);
+    /* Update entry from this profile */
+    return state_set_profile_commit_oid(state, profile_name, &head_oid);
 }
 
 /**
@@ -292,17 +295,17 @@ static error_t *build_manifest(
  *   2. Caller passes existing->deployed_at to this function
  *   3. Function writes that exact value
  *
- * The commit_oid column is derived from manifest_entry->source_profile->head_oid
- * — every caller has a profile_t in hand via the entry, and the loader caches
- * head_oid at construction time. This function trusts that contract: callers
- * must use entries from profile_build_manifest (or equivalent) where
- * source_profile is populated.
+ * Callers must use entries from profile_build_manifest (or equivalent) where
+ * source_profile is populated — the tree entry is needed for blob_oid.
  *
  * Responsibilities:
  *   - Extract blob_oid from tree entry
  *   - Extract metadata (mode, owner, group, encrypted flag)
  *   - Build state entry structure with caller-provided deployed_at
  *   - Write to state database (INSERT OR REPLACE)
+ *
+ * Note: commit_oid is stored per-profile in enabled_profiles, not per-file.
+ * Callers are responsible for calling sync_profile_commit_oid after syncing.
  *
  * @param repo Git repository
  * @param state State handle (with active transaction)
@@ -373,15 +376,14 @@ static error_t *sync_entry_to_state(
      *   2. Git mode (fallback) - authoritative for type, good default for permissions */
     mode_t mode = meta_item ? meta_item->mode : git_mode;
 
-    /* 5. Build state entry. commit_oid/blob_oid are inline struct copies — the
-     * commit OID comes from source_profile's cached HEAD (populated by
-     * profile_load), the blob OID is the libgit2-owned tree entry id. */
+    /* 5. Build state entry. blob_oid is an inline struct copy from the
+     * libgit2-owned tree entry id. commit_oid lives in enabled_profiles
+     * (per-profile, not per-file) and is set by sync_profile_commit_oid. */
     state_file_entry_t state_entry = {
         .storage_path    = manifest_entry->storage_path,
         .filesystem_path = manifest_entry->filesystem_path,
         .profile         = (char *) manifest_entry->profile_name,
         .type            = file_type,
-        .commit_oid      = manifest_entry->source_profile->head_oid,
         .blob_oid        = *blob_oid_obj,
         .mode            = mode,
         .owner           = meta_item ? meta_item->owner : NULL,
@@ -604,7 +606,25 @@ error_t *manifest_enable_profile(
         out_stats->needs_deployment = needs_deployment;
     }
 
-    /* 5. Sync tracked directories */
+    /* 5. Record profile's current HEAD in enabled_profiles.commit_oid.
+     *
+     * state_enable_profile inserts with zeroblob(20); this replaces the
+     * sentinel with the real HEAD. Uses the already-loaded profile_list_t
+     * to avoid a redundant ref lookup. */
+    for (size_t p = 0; p < profiles->count; p++) {
+        if (strcmp(profiles->profiles[p].name, profile_name) == 0) {
+            err = state_set_profile_commit_oid(
+                state, profile_name, &profiles->profiles[p].head_oid
+            );
+            if (err) {
+                err = error_wrap(err, "Failed to set commit_oid for profile '%s'", profile_name);
+                goto cleanup;
+            }
+            break;
+        }
+    }
+
+    /* 6. Sync tracked directories */
     err = manifest_sync_directories(repo, state, enabled_profiles);
     if (err) {
         goto cleanup;
@@ -1384,8 +1404,7 @@ error_t *manifest_remove_files(
              *
              * CRITICAL: Use sync_entry_to_state to ensure consistent metadata.
              * This extracts blob_oid, type, mode from fallback's Git tree entry
-             * and applies metadata precedence from .dotta/metadata.json. The
-             * commit_oid is derived from fallback->source_profile->head_oid.
+             * and applies metadata precedence from .dotta/metadata.json.
              */
 
             /* Preserve deployed_at (lifecycle history) before sync overwrites entry */
@@ -1513,9 +1532,8 @@ error_t *manifest_remove_files(
     if (out_fallbacks) *out_fallbacks = fallback_count;
 
     /* After removing files, the profile's branch HEAD has moved to a new commit.
-     * ALL files from this profile must have their commit_oid updated to match the new HEAD,
-     * not just the removed files. */
-    err = sync_profile_git_oids(repo, state, removed_profile);
+     * Update the per-profile commit_oid in enabled_profiles. */
+    err = sync_profile_commit_oid(repo, state, removed_profile);
     if (err) {
         err = error_wrap(
             err, "Failed to sync commit_oid for profile '%s'",
@@ -1674,6 +1692,24 @@ error_t *manifest_rebuild(
         if (err) goto cleanup;
     }
 
+    /* 6. Record each profile's current HEAD in enabled_profiles.commit_oid.
+     *
+     * Uses the already-loaded profile_list_t to avoid redundant ref lookups.
+     * This replaces the zero sentinel that state_set_profiles wrote for new
+     * profiles (clone path) and refreshes the value for existing profiles. */
+    for (size_t p = 0; p < profiles->count; p++) {
+        err = state_set_profile_commit_oid(
+            state, profiles->profiles[p].name, &profiles->profiles[p].head_oid
+        );
+        if (err) {
+            err = error_wrap(
+                err, "Failed to set commit_oid for profile '%s'",
+                profiles->profiles[p].name
+            );
+            goto cleanup;
+        }
+    }
+
     /* 7. Sync tracked directories */
     err = manifest_sync_directories(repo, state, enabled_profiles);
     if (err) {
@@ -1693,86 +1729,64 @@ cleanup:
 /**
  * Detect which enabled profiles have stale manifest entries
  *
- * Single-pass scan of state entries to find profiles whose stored commit_oid
- * doesn't match the profile branch's current HEAD. Mismatch means external
- * Git operations occurred (commit, rebase, etc.) since the last dotta operation.
+ * Iterates in-scope profiles and compares each profile's stored commit_oid
+ * (from enabled_profiles) against its branch's current HEAD. Mismatch means
+ * external Git operations occurred since the last dotta operation.
  *
- * Uses a dedup hashmap to ensure each profile is checked exactly once,
- * regardless of how many entries it has.
+ * HEAD OID source: profile_scope values are optional profile_t * pointers.
+ * When non-NULL, the cached profile->head_oid is used directly (zero Git
+ * calls). When NULL, the function resolves the branch HEAD via ref lookup.
  *
- * HEAD OID source: the scope map's values are treated as optional
- * profile_t * pointers. When non-NULL, the cached profile->head_oid is
- * used directly (zero Git calls). When NULL, the function falls back to
- * resolving the branch HEAD via get_branch_head_oid. Callers that already
- * hold loaded profile_t's (e.g., workspace via ws->profile_index) get the
- * fast path automatically; callers that only have profile names pass NULL
- * values and use the fallback.
+ * O(P) state queries + O(P) ref lookups where P = profile count.
+ * Zero ref lookups when profile_scope values carry loaded profile_t *.
  *
  * @param repo Git repository (must not be NULL)
- * @param entries State file entries to scan (must not be NULL if count > 0)
- * @param entry_count Number of entries
- * @param profile_scope Profile scope filter (must not be NULL). Keys mark
- *                      in-scope profiles; values are profile_t * with cached
- *                      head_oid or NULL. Membership is checked with
- *                      hashmap_has so NULL values remain distinct from
- *                      absent keys.
- * @param out_stale Output: hashmap of profile_name -> git_oid * (current HEAD)
- *                  for stale profiles. NULL if no profiles are stale. Caller
- *                  frees with hashmap_free(map, free); the git_oid payloads
- *                  are heap-allocated and free() releases them cleanly.
+ * @param state State handle (must not be NULL)
+ * @param profile_scope Profile scope filter (must not be NULL). Keys are
+ *                      in-scope profile names; values are profile_t * with
+ *                      cached head_oid (fast path) or NULL (ref lookup fallback).
+ * @param out_stale Output: hashmap of profile_name -> (void*)1 sentinel for
+ *                  stale profiles. NULL if none stale. Caller frees with
+ *                  hashmap_free(map, NULL).
  * @return Error or NULL on success
  */
 error_t *manifest_detect_stale_profiles(
     git_repository *repo,
-    const state_file_entry_t *entries,
-    size_t entry_count,
+    const state_t *state,
     const hashmap_t *profile_scope,
     hashmap_t **out_stale
 ) {
     *out_stale = NULL;
 
-    if (entry_count == 0) return NULL;
-
     error_t *err = NULL;
     hashmap_t *stale_map = NULL;
 
-    /* Track which profiles we've already checked (avoid redundant ref lookups) */
-    hashmap_t *checked = hashmap_borrow(16);
-    if (!checked) {
-        return ERROR(ERR_MEMORY, "Failed to create profile check set");
-    }
+    /* Iterate profile_scope keys — one check per profile, no dedup needed. */
+    hashmap_iter_t iter;
+    hashmap_iter_init(&iter, profile_scope);
 
-    for (size_t i = 0; i < entry_count; i++) {
-        const state_file_entry_t *entry = &entries[i];
-
-        /* Only check ACTIVE entries with a valid profile name. The commit_oid
-         * field is inline now — its presence is guaranteed by the schema. */
-        if (!entry->state || strcmp(entry->state, STATE_ACTIVE) != 0) {
-            continue;
-        }
-        if (!entry->profile) {
-            continue;
-        }
-        if (!hashmap_has(profile_scope, entry->profile)) {
-            continue;  /* Profile not in scope */
+    const char *name;
+    while (hashmap_iter_next(&iter, &name, NULL)) {
+        /* Read stored commit_oid for this profile */
+        git_oid stored_oid;
+        error_t *read_err = state_get_profile_commit_oid(state, name, &stored_oid);
+        if (read_err) {
+            if (read_err->code == ERR_NOT_FOUND) {
+                /* Profile in scope but not in DB (race with disable) — skip */
+                error_free(read_err);
+                continue;
+            }
+            hashmap_free(stale_map, NULL);
+            return read_err;
         }
 
-        /* Skip if already checked this profile */
-        if (hashmap_get(checked, entry->profile)) {
-            continue;
-        }
-
-        /* Mark as checked (store non-NULL sentinel) */
-        err = hashmap_set(checked, entry->profile, (void *) (uintptr_t) 1);
-        if (err) goto cleanup;
-
-        /* Fetch profile HEAD — prefer cached OID from scope value */
+        /* Fetch current branch HEAD — prefer cached OID from scope value */
         git_oid head_oid;
-        profile_t *scoped = hashmap_get(profile_scope, entry->profile);
+        profile_t *scoped = hashmap_get(profile_scope, name);
         if (scoped) {
             git_oid_cpy(&head_oid, &scoped->head_oid);
         } else {
-            err = get_branch_head_oid(repo, entry->profile, &head_oid);
+            err = get_branch_head_oid(repo, name, &head_oid);
             if (err) {
                 /* Branch may have been deleted — skip (safety handles this) */
                 error_free(err);
@@ -1781,39 +1795,25 @@ error_t *manifest_detect_stale_profiles(
             }
         }
 
-        if (!git_oid_equal(&entry->commit_oid, &head_oid)) {
+        if (!git_oid_equal(&stored_oid, &head_oid)) {
             /* Profile is stale — HEAD moved since last dotta operation */
             if (!stale_map) {
                 stale_map = hashmap_borrow(16);
                 if (!stale_map) {
-                    err = ERROR(ERR_MEMORY, "Failed to create stale profile map");
-                    goto cleanup;
+                    return ERROR(ERR_MEMORY, "Failed to create stale profile map");
                 }
             }
 
-            git_oid *oid_copy = malloc(sizeof(git_oid));
-            if (!oid_copy) {
-                err = ERROR(ERR_MEMORY, "Failed to allocate HEAD oid");
-                goto cleanup;
-            }
-            git_oid_cpy(oid_copy, &head_oid);
-
-            err = hashmap_set(stale_map, entry->profile, oid_copy);
+            err = hashmap_set(stale_map, name, (void *) (uintptr_t) 1);
             if (err) {
-                free(oid_copy);
-                goto cleanup;
+                hashmap_free(stale_map, NULL);
+                return err;
             }
         }
     }
 
-    hashmap_free(checked, NULL);
     *out_stale = stale_map;
     return NULL;
-
-cleanup:
-    hashmap_free(checked, NULL);
-    hashmap_free(stale_map, free);
-    return err;
 }
 
 /**
@@ -1856,24 +1856,10 @@ error_t *manifest_repair_stale(
     arena_t *arena = arena_create(64 * 1024);
     if (!arena) return ERROR(ERR_MEMORY, "Failed to create manifest arena");
 
-    /* Phase 1: Load all state entries and detect staleness (single DB query).
+    /* Phase 1: Detect stale profiles via per-profile commit_oid comparison.
      *
-     * Loads all entries once, then single-pass detects stale profiles via
-     * manifest_detect_stale_profiles(). Pre-loaded entries are reused in
-     * Phase 3, eliminating per-profile DB queries entirely.
-     *
-     * If no profile is stale, exits immediately (zero cost common case). */
-    err = state_get_all_files(state, arena, &all_entries, &all_count);
-    if (err) {
-        arena_destroy(arena);
-        return error_wrap(err, "Failed to load state entries for stale detection");
-    }
-
-    /* Build profile scope hashmap for O(1) lookups during detection.
-     *
-     * Values are NULL: this path only has profile names, so stale detection
-     * falls back to ref lookups via get_branch_head_oid. Membership is tested
-     * via hashmap_has, which stays distinct from NULL values. */
+     * O(P) state queries + O(P) ref lookups. If no profile is stale, exits
+     * immediately without loading file entries (zero cost common case). */
     profile_scope = hashmap_borrow(enabled_profiles->count);
     if (!profile_scope) {
         err = ERROR(ERR_MEMORY, "Failed to create profile scope map");
@@ -1885,7 +1871,7 @@ error_t *manifest_repair_stale(
     }
 
     err = manifest_detect_stale_profiles(
-        repo, all_entries, all_count, profile_scope, &stale_profiles
+        repo, state, profile_scope, &stale_profiles
     );
     if (err) {
         err = error_wrap(err, "Failed to detect stale profiles");
@@ -1894,6 +1880,14 @@ error_t *manifest_repair_stale(
 
     if (!stale_profiles) {
         goto cleanup;  /* All profiles current — nothing to repair */
+    }
+
+    /* Load all state entries for Phase 3 repair loop. Only loaded when
+     * staleness is detected — common case (no staleness) pays zero cost. */
+    err = state_get_all_files(state, arena, &all_entries, &all_count);
+    if (err) {
+        err = error_wrap(err, "Failed to load state entries for stale repair");
+        goto cleanup;
     }
 
     /* Create repaired_paths map if caller wants it */
@@ -1961,15 +1955,14 @@ error_t *manifest_repair_stale(
              *
              * Use sync_entry_to_state to update with current Git truth.
              * Preserve deployed_at — the file's lifecycle history is unchanged,
-             * only the expected state cache needs updating. The commit_oid is
-             * derived from fresh_entry->source_profile->head_oid.
+             * only the expected state cache needs updating.
              */
 
             /* Determine if file content actually changed (blob_oid differs).
              *
              * A profile HEAD can move without changing this file's blob
              * (other files in the commit changed). Distinguishing content
-             * changes from commit_oid-only refreshes enables:
+             * changes from HEAD-only refreshes enables:
              *   - Accurate repaired_paths (Path B only verifies content-changed files)
              *   - Accurate stats (user sees real content changes, not bookkeeping)
              *
@@ -2086,7 +2079,23 @@ error_t *manifest_repair_stale(
         }
     }
 
-    /* Phase 4: Sync tracked directories to reflect current Git state.
+    /* Phase 4: Update stored commit_oid for each repaired profile */
+    hashmap_iter_t stale_iter;
+    hashmap_iter_init(&stale_iter, stale_profiles);
+
+    const char *stale_name;
+    while (hashmap_iter_next(&stale_iter, &stale_name, NULL)) {
+        err = sync_profile_commit_oid(repo, state, stale_name);
+        if (err) {
+            err = error_wrap(
+                err, "Failed to sync commit_oid for repaired profile '%s'",
+                stale_name
+            );
+            goto cleanup;
+        }
+    }
+
+    /* Phase 5: Sync tracked directories to reflect current Git state.
      *
      * External Git changes may have added/removed directories in metadata.
      * Re-syncing ensures the tracked_directories table is consistent. */
@@ -2103,7 +2112,7 @@ error_t *manifest_repair_stale(
     }
 
 cleanup:
-    if (stale_profiles) hashmap_free(stale_profiles, free);
+    if (stale_profiles) hashmap_free(stale_profiles, NULL);
     if (profile_scope) hashmap_free(profile_scope, NULL);
     if (fresh_profiles) profile_list_free(fresh_profiles);
     if (metadata) metadata_free(metadata);
@@ -2480,9 +2489,7 @@ error_t *manifest_update_files(
             }
 
             if (fallback) {
-                /* Fallback exists - update to fallback profile.
-                 * commit_oid is derived from fallback->source_profile->head_oid
-                 * inside sync_entry_to_state. */
+                /* Fallback exists - update to fallback profile. */
 
                 /* Get metadata - from cache if available, otherwise use merged */
                 const metadata_t *metadata = NULL;
@@ -2659,10 +2666,10 @@ error_t *manifest_update_files(
         }
     }
 
-    /* Sync commit_oid for each unique profile */
+    /* Set stored commit_oid for each profile whose HEAD moved */
     for (size_t i = 0; i < updated_profiles->count; i++) {
         const char *prof = updated_profiles->items[i];
-        err = sync_profile_git_oids(repo, state, prof);
+        err = sync_profile_commit_oid(repo, state, prof);
         if (err) {
             string_array_free(updated_profiles);
             err = error_wrap(err, "Failed to sync commit_oid for profile '%s'", prof);
@@ -2874,8 +2881,7 @@ error_t *manifest_add_files(
         /* Sync to state with deployed_at = now()
          *
          * Key insight: ADD captures files FROM filesystem, so they're
-         * already deployed. We set deployed_at to mark them as known.
-         * commit_oid is derived from entry->source_profile->head_oid. */
+         * already deployed. We set deployed_at to mark them as known. */
 
         /* Get metadata - from cache if available, otherwise use merged */
         const metadata_t *metadata = NULL;
@@ -2899,9 +2905,8 @@ error_t *manifest_add_files(
     }
 
     /* After adding files, the profile's branch HEAD has moved to a new commit.
-     * ALL files from this profile must have their commit_oid updated to match the new HEAD,
-     * not just the newly added files. */
-    err = sync_profile_git_oids(repo, state, profile_name);
+     * Update the per-profile commit_oid in enabled_profiles. */
+    err = sync_profile_commit_oid(repo, state, profile_name);
     if (err) {
         err = error_wrap(
             err, "Failed to sync commit_oid for profile '%s'",
@@ -3226,8 +3231,7 @@ error_t *manifest_sync_diff(
                 /* File exists in another profile (fallback found!)
                  *
                  * Update manifest entry to point to the new profile owner.
-                 * Preserve deployed_at to maintain lifecycle tracking.
-                 * commit_oid is derived from entry->source_profile->head_oid. */
+                 * Preserve deployed_at to maintain lifecycle tracking. */
 
                 /* Get metadata - from cache if available, otherwise use merged */
                 const metadata_t *fallback_metadata = NULL;
@@ -3361,11 +3365,8 @@ error_t *manifest_sync_diff(
     if (out_fallbacks) *out_fallbacks = fallbacks;
     if (out_skipped) *out_skipped = skipped;
 
-    /* Synchronize commit_oid for ALL files from this profile.
-     * After sync, the branch HEAD has moved to new_oid. ALL files from this
-     * profile must have their commit_oid updated to match, not just files in the diff.
-     * This maintains the invariant: all files from profile P have commit_oid = P's HEAD. */
-    err = sync_profile_git_oids(repo, state, profile_name);
+    /* Update the per-profile commit_oid in enabled_profiles to match the new HEAD. */
+    err = sync_profile_commit_oid(repo, state, profile_name);
     if (err) {
         err = error_wrap(
             err, "Failed to sync commit_oid for profile '%s'",

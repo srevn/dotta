@@ -29,7 +29,7 @@
 #include "sys/filesystem.h"
 
 /* Schema version - must match database */
-#define STATE_SCHEMA_VERSION "8"
+#define STATE_SCHEMA_VERSION "9"
 
 /* Database file name */
 #define STATE_DB_NAME "dotta.db"
@@ -150,6 +150,7 @@ static error_t *initialize_schema(sqlite3 *db) {
         "    position INTEGER PRIMARY KEY,"
         "    name TEXT NOT NULL UNIQUE,"
         "    enabled_at INTEGER NOT NULL,"
+        "    commit_oid BLOB NOT NULL,"
         "    custom_prefix TEXT"
         ") STRICT;"
 
@@ -164,7 +165,6 @@ static error_t *initialize_schema(sqlite3 *db) {
         "    profile TEXT NOT NULL,"
         "    old_profile TEXT,"
         "    "
-        "    commit_oid BLOB NOT NULL,"
         "    blob_oid BLOB NOT NULL,"
         "    "
         "    type TEXT NOT NULL CHECK(type IN ('file', 'symlink', 'executable')),"
@@ -466,15 +466,14 @@ static error_t *prepare_statements(state_t *state) {
      * Uses IS NOT for NULL-safe comparison (IS NOT treats NULL = NULL). */
     const char *sql_insert =
         "INSERT INTO virtual_manifest "
-        "(filesystem_path, storage_path, profile, old_profile, commit_oid, blob_oid, "
+        "(filesystem_path, storage_path, profile, old_profile, blob_oid, "
         " type, mode, owner, \"group\", encrypted, state, deployed_at, "
         " stat_mtime, stat_size, stat_ino) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
         "ON CONFLICT(filesystem_path) DO UPDATE SET "
         "  storage_path = excluded.storage_path, "
         "  profile      = excluded.profile, "
         "  old_profile  = COALESCE(excluded.old_profile, virtual_manifest.old_profile), "
-        "  commit_oid   = excluded.commit_oid, "
         "  blob_oid     = excluded.blob_oid, "
         "  type         = excluded.type, "
         "  mode         = excluded.mode, "
@@ -531,20 +530,20 @@ static error_t *prepare_statements(state_t *state) {
      * preserves the existing stat cache. When blob_oid changes, incoming
      * stat cache values are written (typically zeros = invalidation).
      *
-     * Uses numbered parameters (?NNN) so the CASE WHEN can reference ?5
+     * Uses numbered parameters (?NNN) so the CASE WHEN can reference ?4
      * (blob_oid) without additional bindings. */
     const char *sql_update_entry =
         "UPDATE virtual_manifest SET "
-        "storage_path = ?1, profile = ?2, old_profile = ?3, commit_oid = ?4, "
-        "blob_oid = ?5, type = ?6, mode = ?7, owner = ?8, \"group\" = ?9, "
-        "encrypted = ?10, state = ?11, deployed_at = ?12, "
-        "stat_mtime = CASE WHEN ?5 IS NOT virtual_manifest.blob_oid "
-        "             THEN ?13 ELSE virtual_manifest.stat_mtime END, "
-        "stat_size  = CASE WHEN ?5 IS NOT virtual_manifest.blob_oid "
-        "             THEN ?14 ELSE virtual_manifest.stat_size END, "
-        "stat_ino   = CASE WHEN ?5 IS NOT virtual_manifest.blob_oid "
-        "             THEN ?15 ELSE virtual_manifest.stat_ino END "
-        "WHERE filesystem_path = ?16;";
+        "storage_path = ?1, profile = ?2, old_profile = ?3, "
+        "blob_oid = ?4, type = ?5, mode = ?6, owner = ?7, \"group\" = ?8, "
+        "encrypted = ?9, state = ?10, deployed_at = ?11, "
+        "stat_mtime = CASE WHEN ?4 IS NOT virtual_manifest.blob_oid "
+        "             THEN ?12 ELSE virtual_manifest.stat_mtime END, "
+        "stat_size  = CASE WHEN ?4 IS NOT virtual_manifest.blob_oid "
+        "             THEN ?13 ELSE virtual_manifest.stat_size END, "
+        "stat_ino   = CASE WHEN ?4 IS NOT virtual_manifest.blob_oid "
+        "             THEN ?14 ELSE virtual_manifest.stat_ino END "
+        "WHERE filesystem_path = ?15;";
 
     rc = sqlite3_prepare_v2(
         state->db, sql_update_entry, -1, &state->stmt_update_entry, NULL
@@ -571,7 +570,7 @@ static error_t *prepare_statements(state_t *state) {
 
     /* Get file (used in workspace analysis) */
     const char *sql_get =
-        "SELECT storage_path, profile, old_profile, commit_oid, blob_oid, "
+        "SELECT storage_path, profile, old_profile, blob_oid, "
         "type, mode, owner, \"group\", encrypted, state, deployed_at, "
         "stat_mtime, stat_size, stat_ino "
         "FROM virtual_manifest WHERE filesystem_path = ?;";
@@ -588,7 +587,7 @@ static error_t *prepare_statements(state_t *state) {
 
     /* Get file by storage path (used by profile discovery) */
     const char *sql_get_by_storage =
-        "SELECT filesystem_path, profile, old_profile, commit_oid, blob_oid, "
+        "SELECT filesystem_path, profile, old_profile, blob_oid, "
         "type, mode, owner, \"group\", encrypted, state, deployed_at, "
         "stat_mtime, stat_size, stat_ino "
         "FROM virtual_manifest WHERE storage_path = ? AND state = 'active' LIMIT 1;";
@@ -608,7 +607,7 @@ static error_t *prepare_statements(state_t *state) {
 
     /* Get entries by profile (used by profile disable) */
     const char *sql_by_profile =
-        "SELECT filesystem_path, storage_path, profile, old_profile, commit_oid, blob_oid, "
+        "SELECT filesystem_path, storage_path, profile, old_profile, blob_oid, "
         "type, mode, owner, \"group\", encrypted, state, deployed_at, "
         "stat_mtime, stat_size, stat_ino FROM virtual_manifest WHERE profile = ?;";
 
@@ -643,8 +642,8 @@ static error_t *prepare_statements(state_t *state) {
 
     /* Insert profile (used in state_set_profiles) */
     const char *sql_profile =
-        "INSERT INTO enabled_profiles (position, name, enabled_at, custom_prefix) "
-        "VALUES (?, ?, ?, ?);";
+        "INSERT INTO enabled_profiles (position, name, enabled_at, commit_oid, custom_prefix) "
+        "VALUES (?, ?, ?, ?, ?);";
 
     rc = sqlite3_prepare_v2(state->db, sql_profile, -1, &state->stmt_insert_profile, NULL);
     if (rc != SQLITE_OK) {
@@ -920,10 +919,16 @@ error_t *state_enable_profile(
         return ERROR(ERR_INVALID_ARG, "Profile name cannot be empty");
     }
 
-    /* UPSERT: Insert or update on conflict */
+    /* UPSERT: Insert or update on conflict.
+     *
+     * commit_oid is zeroblob(20) on fresh INSERT — the manifest layer fills it
+     * via state_set_profile_commit_oid after syncing entries. On UPSERT conflict
+     * (profile already enabled), commit_oid is preserved — it represents the
+     * last-synced HEAD and must not be clobbered by a prefix update. */
     const char *sql =
-        "INSERT INTO enabled_profiles (name, custom_prefix, enabled_at, position) "
-        "VALUES (?1, ?2, ?3, (SELECT COALESCE(MAX(position), 0) + 1 FROM enabled_profiles)) "
+        "INSERT INTO enabled_profiles (name, custom_prefix, enabled_at, commit_oid, position) "
+        "VALUES (?1, ?2, ?3, zeroblob(20), "
+        "  (SELECT COALESCE(MAX(position), 0) + 1 FROM enabled_profiles)) "
         "ON CONFLICT(name) DO UPDATE SET custom_prefix = ?2, enabled_at = ?3";
 
     sqlite3_stmt *stmt = NULL;
@@ -1067,10 +1072,70 @@ error_t *state_get_prefix_map(
 }
 
 /**
+ * Load commit_oid map from enabled_profiles (preservation helper)
+ *
+ * Returns a hashmap of name → heap-allocated git_oid. Caller frees with
+ * hashmap_free(map, free). Used by state_set_profiles to preserve commit_oid
+ * across DELETE → re-INSERT.
+ */
+static error_t *load_commit_oid_map(state_t *state, hashmap_t **out_map) {
+    CHECK_NULL(state);
+    CHECK_NULL(state->db);
+    CHECK_NULL(out_map);
+
+    hashmap_t *map = hashmap_create(16);
+    if (!map) {
+        return ERROR(ERR_MEMORY, "Failed to create commit_oid map");
+    }
+
+    const char *sql = "SELECT name, commit_oid FROM enabled_profiles ORDER BY position ASC";
+
+    sqlite3_stmt *stmt = NULL;
+    int rc = sqlite3_prepare_v2(state->db, sql, -1, &stmt, NULL);
+    if (rc != SQLITE_OK) {
+        hashmap_free(map, NULL);
+        return sqlite_error(state->db, "Failed to prepare commit_oid map query");
+    }
+
+    while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+        const char *name = (const char *) sqlite3_column_text(stmt, 0);
+        const void *blob = sqlite3_column_blob(stmt, 1);
+        if (!name || !blob) continue;
+
+        git_oid *oid = malloc(sizeof(git_oid));
+        if (!oid) {
+            sqlite3_finalize(stmt);
+            hashmap_free(map, free);
+            return ERROR(ERR_MEMORY, "Failed to allocate commit_oid copy");
+        }
+        memcpy(oid->id, blob, GIT_OID_RAWSZ);
+
+        error_t *err = hashmap_set(map, name, oid);
+        if (err) {
+            free(oid);
+            sqlite3_finalize(stmt);
+            hashmap_free(map, free);
+            return err;
+        }
+    }
+
+    if (rc != SQLITE_DONE) {
+        sqlite3_finalize(stmt);
+        hashmap_free(map, free);
+        return sqlite_error(state->db, "Failed to query commit_oid map");
+    }
+
+    sqlite3_finalize(stmt);
+    *out_map = map;
+    return NULL;
+}
+
+/**
  * Set enabled profiles (bulk operation)
  *
  * Bulk API for atomic profile list replacement (clone, reorder, interactive).
- * Automatically preserves custom_prefix values for profiles that remain enabled.
+ * Automatically preserves custom_prefix and commit_oid values for profiles
+ * that remain enabled.
  *
  * For individual profile changes, prefer state_enable_profile()/state_disable_profile()
  * which provide explicit custom prefix management.
@@ -1090,13 +1155,20 @@ error_t *state_set_profiles(
     CHECK_NULL(profiles);
     CHECK_NULL(state->db);
 
-    /* Load current custom_prefix values before DELETE to preserve them.
-     * This enables safe profile reordering without losing custom prefix associations.
-     * New profiles get NULL custom_prefix (use state_enable_profile() to set). */
+    /* Load current custom_prefix and commit_oid values before DELETE to preserve them.
+     * This enables safe profile reordering without losing associations.
+     * New profiles get NULL custom_prefix and zeroblob(20) commit_oid. */
     hashmap_t *prefix_map = NULL;
     error_t *err = state_get_prefix_map(state, &prefix_map);
     if (err) {
         return error_wrap(err, "Failed to load custom prefix map");
+    }
+
+    hashmap_t *oid_map = NULL;
+    err = load_commit_oid_map(state, &oid_map);
+    if (err) {
+        hashmap_free(prefix_map, free);
+        return error_wrap(err, "Failed to load commit_oid map");
     }
 
     /* Delete all existing profiles */
@@ -1104,6 +1176,7 @@ error_t *state_set_profiles(
     int rc = sqlite3_exec(state->db, "DELETE FROM enabled_profiles;", NULL, NULL, &errmsg);
     if (rc != SQLITE_OK) {
         hashmap_free(prefix_map, free);
+        hashmap_free(oid_map, free);
         err = ERROR(
             ERR_STATE_INVALID, "Failed to clear profiles: %s",
             errmsg ? errmsg : sqlite3_errstr(rc)
@@ -1112,35 +1185,48 @@ error_t *state_set_profiles(
         return err;
     }
 
-    /* Insert new profiles with preserved custom_prefix values */
+    /* 20-byte zero buffer for new profiles without existing commit_oid */
+    static const unsigned char zero_oid[GIT_OID_RAWSZ] = {0};
+
+    /* Insert new profiles with preserved custom_prefix and commit_oid values */
     time_t now = time(NULL);
     for (size_t i = 0; i < profiles->count; i++) {
         /* Reset and bind statement */
         sqlite3_reset(state->stmt_insert_profile);
         sqlite3_clear_bindings(state->stmt_insert_profile);
 
-        /* Bind parameters: position, name, enabled_at, custom_prefix */
+        /* Bind parameters: position, name, enabled_at, commit_oid, custom_prefix */
         sqlite3_bind_int64(state->stmt_insert_profile, 1, (sqlite3_int64) i);
         sqlite3_bind_text(state->stmt_insert_profile, 2, profiles->items[i], -1, SQLITE_TRANSIENT);
         sqlite3_bind_int64(state->stmt_insert_profile, 3, (sqlite3_int64) now);
 
+        /* Lookup and bind preserved commit_oid (or zeros for new profiles) */
+        const git_oid *preserved_oid = hashmap_get(oid_map, profiles->items[i]);
+        if (preserved_oid) {
+            sqlite3_bind_blob(state->stmt_insert_profile, 4, preserved_oid->id, GIT_OID_RAWSZ, SQLITE_STATIC);
+        } else {
+            sqlite3_bind_blob(state->stmt_insert_profile, 4, zero_oid, GIT_OID_RAWSZ, SQLITE_STATIC);
+        }
+
         /* Lookup and bind preserved custom_prefix (or NULL if not set) */
         const char *custom_prefix = (const char *) hashmap_get(prefix_map, profiles->items[i]);
         if (custom_prefix) {
-            sqlite3_bind_text(state->stmt_insert_profile, 4, custom_prefix, -1, SQLITE_STATIC);
+            sqlite3_bind_text(state->stmt_insert_profile, 5, custom_prefix, -1, SQLITE_STATIC);
         } else {
-            sqlite3_bind_null(state->stmt_insert_profile, 4);
+            sqlite3_bind_null(state->stmt_insert_profile, 5);
         }
 
         rc = sqlite3_step(state->stmt_insert_profile);
         if (rc != SQLITE_DONE) {
             hashmap_free(prefix_map, free);
+            hashmap_free(oid_map, free);
             return sqlite_error(state->db, "Failed to insert profile");
         }
     }
 
-    /* Free the prefix map */
+    /* Free preservation maps */
     hashmap_free(prefix_map, free);
+    hashmap_free(oid_map, free);
 
     /* Update cache */
     if (state->profiles) {
@@ -1194,62 +1280,59 @@ error_t *state_add_file(state_t *state, const state_file_entry_t *entry) {
         sqlite3_bind_null(state->stmt_insert_file, 4);
     }
 
-    /* 5-6. commit_oid & blob_oid — bound as 20-byte BLOB. Using entry->x.id (the
-     * backing byte array) rather than &entry->x keeps the intent explicit: we
+    /* 5. blob_oid — bound as 20-byte BLOB. Using entry->blob_oid.id (the backing
+     * byte array) rather than &entry->blob_oid keeps the intent explicit: we
      * are writing the raw hash bytes, not a struct snapshot whose layout happens
      * to start with them. SQLITE_TRANSIENT lets SQLite copy before we modify. */
     sqlite3_bind_blob(
-        state->stmt_insert_file, 5, entry->commit_oid.id, GIT_OID_RAWSZ, SQLITE_TRANSIENT
-    );
-    sqlite3_bind_blob(
-        state->stmt_insert_file, 6, entry->blob_oid.id, GIT_OID_RAWSZ, SQLITE_TRANSIENT
+        state->stmt_insert_file, 5, entry->blob_oid.id, GIT_OID_RAWSZ, SQLITE_TRANSIENT
     );
 
-    /* 7. type */
+    /* 6. type */
     const char *type_str = entry->type == STATE_FILE_REGULAR ? "file"
                          : entry->type == STATE_FILE_SYMLINK ? "symlink" : "executable";
-    sqlite3_bind_text(state->stmt_insert_file, 7, type_str, -1, SQLITE_STATIC);
+    sqlite3_bind_text(state->stmt_insert_file, 6, type_str, -1, SQLITE_STATIC);
 
-    /* 8. mode */
+    /* 7. mode */
     if (entry->mode > 0) {
-        sqlite3_bind_int(state->stmt_insert_file, 8, entry->mode);
+        sqlite3_bind_int(state->stmt_insert_file, 7, entry->mode);
+    } else {
+        sqlite3_bind_null(state->stmt_insert_file, 7);
+    }
+
+    /* 8. owner */
+    if (entry->owner) {
+        sqlite3_bind_text(state->stmt_insert_file, 8, entry->owner, -1, SQLITE_TRANSIENT);
     } else {
         sqlite3_bind_null(state->stmt_insert_file, 8);
     }
 
-    /* 9. owner */
-    if (entry->owner) {
-        sqlite3_bind_text(state->stmt_insert_file, 9, entry->owner, -1, SQLITE_TRANSIENT);
+    /* 9. group */
+    if (entry->group) {
+        sqlite3_bind_text(state->stmt_insert_file, 9, entry->group, -1, SQLITE_TRANSIENT);
     } else {
         sqlite3_bind_null(state->stmt_insert_file, 9);
     }
 
-    /* 10. group */
-    if (entry->group) {
-        sqlite3_bind_text(state->stmt_insert_file, 10, entry->group, -1, SQLITE_TRANSIENT);
-    } else {
-        sqlite3_bind_null(state->stmt_insert_file, 10);
-    }
+    /* 10. encrypted */
+    sqlite3_bind_int(state->stmt_insert_file, 10, entry->encrypted ? 1 : 0);
 
-    /* 11. encrypted */
-    sqlite3_bind_int(state->stmt_insert_file, 11, entry->encrypted ? 1 : 0);
-
-    /* 12. state */
+    /* 11. state */
     if (entry->state && entry->state[0] != '\0') {
-        sqlite3_bind_text(state->stmt_insert_file, 12, entry->state, -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(state->stmt_insert_file, 11, entry->state, -1, SQLITE_TRANSIENT);
     } else {
-        sqlite3_bind_text(state->stmt_insert_file, 12, STATE_ACTIVE, -1, SQLITE_STATIC);
+        sqlite3_bind_text(state->stmt_insert_file, 11, STATE_ACTIVE, -1, SQLITE_STATIC);
     }
 
-    /* 13. deployed_at */
+    /* 12. deployed_at */
     sqlite3_bind_int64(
-        state->stmt_insert_file, 13, (sqlite3_int64) entry->deployed_at
+        state->stmt_insert_file, 12, (sqlite3_int64) entry->deployed_at
     );
 
-    /* 14-16. stat cache (fast-path divergence detection) */
-    sqlite3_bind_int64(state->stmt_insert_file, 14, entry->stat_cache.mtime);
-    sqlite3_bind_int64(state->stmt_insert_file, 15, entry->stat_cache.size);
-    sqlite3_bind_int64(state->stmt_insert_file, 16, (sqlite3_int64) entry->stat_cache.ino);
+    /* 13-15. stat cache (fast-path divergence detection) */
+    sqlite3_bind_int64(state->stmt_insert_file, 13, entry->stat_cache.mtime);
+    sqlite3_bind_int64(state->stmt_insert_file, 14, entry->stat_cache.size);
+    sqlite3_bind_int64(state->stmt_insert_file, 15, (sqlite3_int64) entry->stat_cache.ino);
 
     /* Execute (don't finalize - statement is reused) */
     int rc = sqlite3_step(state->stmt_insert_file);
@@ -1358,48 +1441,45 @@ error_t *state_get_file(
     if (rc != SQLITE_ROW) {
         if (rc == SQLITE_DONE) {
             return ERROR(
-                ERR_NOT_FOUND,
-                "File not found in state: %s", filesystem_path
+                ERR_NOT_FOUND, "File not found in state: %s", filesystem_path
             );
         }
         return sqlite_error(state->db, "Failed to query file");
     }
 
     /* Extract columns from scope-based schema
-     * Columns 0-11: core fields, 12-14: stat cache */
+     * Columns 0-10: core fields, 11-13: stat cache */
     const char *storage_path = (const char *) sqlite3_column_text(stmt, 0);
     const char *profile = (const char *) sqlite3_column_text(stmt, 1);
     const char *old_profile = (const char *) sqlite3_column_text(stmt, 2);
 
-    git_oid commit_oid;
-    git_oid blob_oid;
     /* Read path trusts sqlite3's schema enforcement: BLOB NOT NULL means non-NULL,
      * and our own bind path is the only writer so length is always GIT_OID_RAWSZ. */
-    memcpy(commit_oid.id, sqlite3_column_blob(stmt, 3), GIT_OID_RAWSZ);
-    memcpy(blob_oid.id, sqlite3_column_blob(stmt, 4), GIT_OID_RAWSZ);
+    git_oid blob_oid;
+    memcpy(blob_oid.id, sqlite3_column_blob(stmt, 3), GIT_OID_RAWSZ);
 
-    const char *type_str = (const char *) sqlite3_column_text(stmt, 5);
+    const char *type_str = (const char *) sqlite3_column_text(stmt, 4);
 
     /* Read mode as integer (0 if NULL) */
     mode_t mode = 0;
-    if (sqlite3_column_type(stmt, 6) != SQLITE_NULL) {
-        mode = (mode_t) sqlite3_column_int(stmt, 6);
+    if (sqlite3_column_type(stmt, 5) != SQLITE_NULL) {
+        mode = (mode_t) sqlite3_column_int(stmt, 5);
     }
 
-    const char *owner = (const char *) sqlite3_column_text(stmt, 7);
-    const char *group = (const char *) sqlite3_column_text(stmt, 8);
-    int encrypted = sqlite3_column_int(stmt, 9);
-    const char *state_str = (const char *) sqlite3_column_text(stmt, 10);
-    sqlite3_int64 deployed_at = sqlite3_column_int64(stmt, 11);
+    const char *owner = (const char *) sqlite3_column_text(stmt, 6);
+    const char *group = (const char *) sqlite3_column_text(stmt, 7);
+    int encrypted = sqlite3_column_int(stmt, 8);
+    const char *state_str = (const char *) sqlite3_column_text(stmt, 9);
+    sqlite3_int64 deployed_at = sqlite3_column_int64(stmt, 10);
 
     /* Stat cache (fast-path divergence detection) */
     stat_cache_t stat_cache = {
-        .mtime = sqlite3_column_int64(stmt,            12),
-        .size  = sqlite3_column_int64(stmt,            13),
-        .ino   = (uint64_t) sqlite3_column_int64(stmt, 14),
+        .mtime = sqlite3_column_int64(stmt,            11),
+        .size  = sqlite3_column_int64(stmt,            12),
+        .ino   = (uint64_t) sqlite3_column_int64(stmt, 13),
     };
 
-    /* Validate required string columns (OIDs already validated via read_oid_column) */
+    /* Validate required string columns */
     if (!storage_path || !profile || !type_str) {
         return ERROR(
             ERR_STATE_INVALID,
@@ -1418,9 +1498,8 @@ error_t *state_get_file(
     /* Create entry (caller owns) */
     state_file_entry_t *entry = NULL;
     error_t *err = state_create_entry(
-        storage_path, filesystem_path, profile, old_profile, type,
-        &commit_oid, &blob_oid, mode, owner, group, encrypted != 0,
-        state_str, (time_t) deployed_at, &entry
+        storage_path, filesystem_path, profile, old_profile, type, &blob_oid,
+        mode, owner, group, encrypted != 0, state_str, (time_t) deployed_at, &entry
     );
 
     if (err) return err;
@@ -1462,35 +1541,33 @@ error_t *state_get_file_by_storage(
 
     /* Extract columns:
      * 0: filesystem_path (not the WHERE key here, must be read from result)
-     * 1-14: same layout as state_get_file columns 1-14 */
+     * 1-13: same layout as state_get_file columns 1-13 */
     const char *filesystem_path = (const char *) sqlite3_column_text(stmt, 0);
     const char *profile = (const char *) sqlite3_column_text(stmt, 1);
     const char *old_profile = (const char *) sqlite3_column_text(stmt, 2);
 
-    git_oid commit_oid;
-    git_oid blob_oid;
     /* Read path trusts sqlite3's schema enforcement: BLOB NOT NULL means non-NULL,
      * and our own bind path is the only writer so length is always GIT_OID_RAWSZ. */
-    memcpy(commit_oid.id, sqlite3_column_blob(stmt, 3), GIT_OID_RAWSZ);
-    memcpy(blob_oid.id, sqlite3_column_blob(stmt, 4), GIT_OID_RAWSZ);
+    git_oid blob_oid;
+    memcpy(blob_oid.id, sqlite3_column_blob(stmt, 3), GIT_OID_RAWSZ);
 
-    const char *type_str = (const char *) sqlite3_column_text(stmt, 5);
+    const char *type_str = (const char *) sqlite3_column_text(stmt, 4);
 
     mode_t mode = 0;
-    if (sqlite3_column_type(stmt, 6) != SQLITE_NULL) {
-        mode = (mode_t) sqlite3_column_int(stmt, 6);
+    if (sqlite3_column_type(stmt, 5) != SQLITE_NULL) {
+        mode = (mode_t) sqlite3_column_int(stmt, 5);
     }
 
-    const char *owner = (const char *) sqlite3_column_text(stmt, 7);
-    const char *group = (const char *) sqlite3_column_text(stmt, 8);
-    int encrypted = sqlite3_column_int(stmt, 9);
-    const char *state_str = (const char *) sqlite3_column_text(stmt, 10);
-    sqlite3_int64 deployed_at = sqlite3_column_int64(stmt, 11);
+    const char *owner = (const char *) sqlite3_column_text(stmt, 6);
+    const char *group = (const char *) sqlite3_column_text(stmt, 7);
+    int encrypted = sqlite3_column_int(stmt, 8);
+    const char *state_str = (const char *) sqlite3_column_text(stmt, 9);
+    sqlite3_int64 deployed_at = sqlite3_column_int64(stmt, 10);
 
     stat_cache_t stat_cache = {
-        .mtime = sqlite3_column_int64(stmt,            12),
-        .size  = sqlite3_column_int64(stmt,            13),
-        .ino   = (uint64_t) sqlite3_column_int64(stmt, 14),
+        .mtime = sqlite3_column_int64(stmt,            11),
+        .size  = sqlite3_column_int64(stmt,            12),
+        .ino   = (uint64_t) sqlite3_column_int64(stmt, 13),
     };
 
     if (!filesystem_path || !profile || !type_str) {
@@ -1509,9 +1586,8 @@ error_t *state_get_file_by_storage(
 
     state_file_entry_t *entry = NULL;
     error_t *err = state_create_entry(
-        storage_path, filesystem_path, profile, old_profile, type,
-        &commit_oid, &blob_oid, mode, owner, group, encrypted != 0,
-        state_str, (time_t) deployed_at, &entry
+        storage_path, filesystem_path, profile, old_profile, type, &blob_oid,
+        mode, owner, group, encrypted != 0, state_str, (time_t) deployed_at, &entry
     );
 
     if (err) return err;
@@ -1586,9 +1662,9 @@ error_t *state_get_all_files(
     #define DUP(s)      (arena ? arena_strdup(arena, (s)) : strdup((s)))
     #define DUP_OPT(s)  ((s) ? DUP(s) : NULL)
 
-    /* Query all files (16 columns: 13 core + 3 stat cache) */
+    /* Query all files (15 columns: 12 core + 3 stat cache) */
     const char *sql_files =
-        "SELECT filesystem_path, storage_path, profile, old_profile, commit_oid, blob_oid, "
+        "SELECT filesystem_path, storage_path, profile, old_profile, blob_oid, "
         "type, mode, owner, \"group\", encrypted, state, deployed_at, "
         "stat_mtime, stat_size, stat_ino "
         "FROM virtual_manifest ORDER BY filesystem_path;";
@@ -1603,35 +1679,34 @@ error_t *state_get_all_files(
     size_t i = 0;
     while ((rc = sqlite3_step(stmt)) == SQLITE_ROW && i < file_count) {
         /* Get columns with NULL checking (scope-based schema)
-         * Columns 0-12: core fields, 13-15: stat cache */
+         * Columns 0-11: core fields, 12-14: stat cache */
         const char *fs_path = (const char *) sqlite3_column_text(stmt, 0);
         const char *storage_path = (const char *) sqlite3_column_text(stmt, 1);
         const char *profile = (const char *) sqlite3_column_text(stmt, 2);
         const char *old_profile = (const char *) sqlite3_column_text(stmt, 3);
 
-        /* Read binary OIDs directly into the entry (no intermediate allocation). */
-        memcpy(entries[i].commit_oid.id, sqlite3_column_blob(stmt, 4), GIT_OID_RAWSZ);
-        memcpy(entries[i].blob_oid.id, sqlite3_column_blob(stmt, 5), GIT_OID_RAWSZ);
+        /* Read binary blob_oid directly into the entry (no intermediate allocation). */
+        memcpy(entries[i].blob_oid.id, sqlite3_column_blob(stmt, 4), GIT_OID_RAWSZ);
 
-        const char *type_str = (const char *) sqlite3_column_text(stmt, 6);
+        const char *type_str = (const char *) sqlite3_column_text(stmt, 5);
 
         /* Read mode as integer (0 if NULL) */
         mode_t mode = 0;
-        if (sqlite3_column_type(stmt, 7) != SQLITE_NULL) {
-            mode = (mode_t) sqlite3_column_int(stmt, 7);
+        if (sqlite3_column_type(stmt, 6) != SQLITE_NULL) {
+            mode = (mode_t) sqlite3_column_int(stmt, 6);
         }
 
-        const char *owner = (const char *) sqlite3_column_text(stmt, 8);
-        const char *group = (const char *) sqlite3_column_text(stmt, 9);
-        int encrypted = sqlite3_column_int(stmt, 10);
-        const char *state_str = (const char *) sqlite3_column_text(stmt, 11);
-        sqlite3_int64 deployed_at = sqlite3_column_int64(stmt, 12);
+        const char *owner = (const char *) sqlite3_column_text(stmt, 7);
+        const char *group = (const char *) sqlite3_column_text(stmt, 8);
+        int encrypted = sqlite3_column_int(stmt, 9);
+        const char *state_str = (const char *) sqlite3_column_text(stmt, 10);
+        sqlite3_int64 deployed_at = sqlite3_column_int64(stmt, 11);
 
         /* Stat cache (fast-path divergence detection) */
         stat_cache_t stat_cache = {
-            .mtime = sqlite3_column_int64(stmt,            13),
-            .size  = sqlite3_column_int64(stmt,            14),
-            .ino   = (uint64_t) sqlite3_column_int64(stmt, 15),
+            .mtime = sqlite3_column_int64(stmt,            12),
+            .size  = sqlite3_column_int64(stmt,            13),
+            .ino   = (uint64_t) sqlite3_column_int64(stmt, 14),
         };
 
         /* Validate non-nullable string columns (OIDs already validated above) */
@@ -1701,7 +1776,7 @@ error_t *state_get_all_files(
 void state_free_all_files(state_file_entry_t *entries, size_t count) {
     if (!entries) return;
 
-    /* commit_oid and blob_oid are inline binary fields — no allocation to free. */
+    /* blob_oid is an inline binary field — no allocation to free. */
     for (size_t i = 0; i < count; i++) {
         free(entries[i].filesystem_path);
         free(entries[i].storage_path);
@@ -3014,13 +3089,11 @@ void state_free(state_t *state) {
  * Create file entry
  *
  * Helper function to allocate and initialize a file entry.
- * See state.h for the commit_oid/blob_oid parameter naming rationale.
  *
  * @param storage_path Storage path (must not be NULL)
  * @param filesystem_path Filesystem path (must not be NULL)
  * @param profile Profile name (must not be NULL)
  * @param type File type
- * @param commit_oid Commit OID of source profile HEAD (must not be NULL, copied)
  * @param blob_oid Blob OID for content identity (must not be NULL, copied)
  * @param mode Permission mode (can be NULL)
  * @param owner Owner username (can be NULL)
@@ -3036,7 +3109,6 @@ error_t *state_create_entry(
     const char *profile,
     const char *old_profile,
     state_file_type_t type,
-    const git_oid *commit_oid,
     const git_oid *blob_oid,
     mode_t mode,
     const char *owner,
@@ -3049,7 +3121,6 @@ error_t *state_create_entry(
     CHECK_NULL(storage_path);
     CHECK_NULL(filesystem_path);
     CHECK_NULL(profile);
-    CHECK_NULL(commit_oid);
     CHECK_NULL(blob_oid);
     CHECK_NULL(out);
 
@@ -3063,8 +3134,7 @@ error_t *state_create_entry(
     entry->filesystem_path = strdup(filesystem_path);
     entry->profile = strdup(profile);
 
-    /* Copy binary OIDs (20 bytes each, no allocation) */
-    git_oid_cpy(&entry->commit_oid, commit_oid);
+    /* Copy binary blob OID (20 bytes, no allocation) */
     git_oid_cpy(&entry->blob_oid, blob_oid);
 
     /* Copy optional string fields */
@@ -3334,7 +3404,7 @@ error_t *state_update_entry(
     const char *type_str = entry->type == STATE_FILE_REGULAR ? "file"
                          : entry->type == STATE_FILE_SYMLINK ? "symlink" : "executable";
 
-    /* Reset and bind all 15 fields + filesystem_path for WHERE clause */
+    /* Reset and bind all 14 fields + filesystem_path for WHERE clause */
     sqlite3_reset(state->stmt_update_entry);
     sqlite3_clear_bindings(state->stmt_update_entry);
 
@@ -3348,53 +3418,50 @@ error_t *state_update_entry(
     }
 
     sqlite3_bind_blob(
-        state->stmt_update_entry, 4, entry->commit_oid.id, GIT_OID_RAWSZ, SQLITE_TRANSIENT
+        state->stmt_update_entry, 4, entry->blob_oid.id, GIT_OID_RAWSZ, SQLITE_TRANSIENT
     );
-    sqlite3_bind_blob(
-        state->stmt_update_entry, 5, entry->blob_oid.id, GIT_OID_RAWSZ, SQLITE_TRANSIENT
-    );
-    sqlite3_bind_text(state->stmt_update_entry, 6, type_str, -1, SQLITE_STATIC);
+    sqlite3_bind_text(state->stmt_update_entry, 5, type_str, -1, SQLITE_STATIC);
 
     if (entry->mode > 0) {
-        sqlite3_bind_int(state->stmt_update_entry, 7, entry->mode);
+        sqlite3_bind_int(state->stmt_update_entry, 6, entry->mode);
+    } else {
+        sqlite3_bind_null(state->stmt_update_entry, 6);
+    }
+
+    if (entry->owner) {
+        sqlite3_bind_text(state->stmt_update_entry, 7, entry->owner, -1, SQLITE_TRANSIENT);
     } else {
         sqlite3_bind_null(state->stmt_update_entry, 7);
     }
 
-    if (entry->owner) {
-        sqlite3_bind_text(state->stmt_update_entry, 8, entry->owner, -1, SQLITE_TRANSIENT);
+    if (entry->group) {
+        sqlite3_bind_text(state->stmt_update_entry, 8, entry->group, -1, SQLITE_TRANSIENT);
     } else {
         sqlite3_bind_null(state->stmt_update_entry, 8);
     }
 
-    if (entry->group) {
-        sqlite3_bind_text(state->stmt_update_entry, 9, entry->group, -1, SQLITE_TRANSIENT);
-    } else {
-        sqlite3_bind_null(state->stmt_update_entry, 9);
-    }
+    sqlite3_bind_int(state->stmt_update_entry, 9, entry->encrypted ? 1 : 0);
 
-    sqlite3_bind_int(state->stmt_update_entry, 10, entry->encrypted ? 1 : 0);
-
-    /* 11. state */
+    /* 10. state */
     if (entry->state && entry->state[0] != '\0') {
-        sqlite3_bind_text(state->stmt_update_entry, 11, entry->state, -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(state->stmt_update_entry, 10, entry->state, -1, SQLITE_TRANSIENT);
     } else {
-        sqlite3_bind_text(state->stmt_update_entry, 11, STATE_ACTIVE, -1, SQLITE_STATIC);
+        sqlite3_bind_text(state->stmt_update_entry, 10, STATE_ACTIVE, -1, SQLITE_STATIC);
     }
 
-    /* 12. deployed_at */
-    sqlite3_bind_int64(state->stmt_update_entry, 12, (sqlite3_int64) entry->deployed_at);
+    /* 11. deployed_at */
+    sqlite3_bind_int64(state->stmt_update_entry, 11, (sqlite3_int64) entry->deployed_at);
 
-    /* 13-15. stat cache (fast-path divergence detection)
+    /* 12-14. stat cache (fast-path divergence detection)
      *
      * These values are only written when blob_oid changes (CASE WHEN in SQL).
      * When blob_oid is unchanged, the existing DB values are preserved. */
-    sqlite3_bind_int64(state->stmt_update_entry, 13, entry->stat_cache.mtime);
-    sqlite3_bind_int64(state->stmt_update_entry, 14, entry->stat_cache.size);
-    sqlite3_bind_int64(state->stmt_update_entry, 15, (sqlite3_int64) entry->stat_cache.ino);
+    sqlite3_bind_int64(state->stmt_update_entry, 12, entry->stat_cache.mtime);
+    sqlite3_bind_int64(state->stmt_update_entry, 13, entry->stat_cache.size);
+    sqlite3_bind_int64(state->stmt_update_entry, 14, (sqlite3_int64) entry->stat_cache.ino);
 
-    /* 16. filesystem_path for WHERE clause */
-    sqlite3_bind_text(state->stmt_update_entry, 16, entry->filesystem_path, -1, SQLITE_TRANSIENT);
+    /* 15. filesystem_path for WHERE clause */
+    sqlite3_bind_text(state->stmt_update_entry, 15, entry->filesystem_path, -1, SQLITE_TRANSIENT);
 
     /* Execute */
     int rc = sqlite3_step(state->stmt_update_entry);
@@ -3413,39 +3480,36 @@ error_t *state_update_entry(
 }
 
 /**
- * Update commit_oid for all manifest entries from a specific profile
+ * Set commit_oid for a profile in enabled_profiles
  *
- * Synchronizes commit_oid to match the profile's current branch HEAD.
- * Maintains invariant: all files from profile P have commit_oid = P's HEAD.
+ * Single-row UPDATE on enabled_profiles. Records the profile's current
+ * branch HEAD as the last-synced commit.
  *
- * Called after operations that move branch HEAD:
+ * Called after operations that move a profile's branch HEAD:
  * - manifest_sync_diff (after pull/merge)
  * - manifest_add_files (after commit)
  * - manifest_update_files (after commit)
  * - manifest_remove_files (after commit)
- *
- * Updates ALL entries (active and inactive) for consistency.
- * Inactive entries will be removed by apply, but should stay current.
+ * - manifest_enable_profile (after populating entries)
+ * - manifest_rebuild (after syncing all entries)
+ * - manifest_repair_stale (after repairing entries)
  *
  * @param state State (must not be NULL, must have active transaction)
  * @param profile_name Profile name (must not be NULL)
- * @param new_commit_oid New commit OID for profile HEAD (must not be NULL)
+ * @param commit_oid New commit OID for profile HEAD (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *state_update_commit_oid_for_profile(
+error_t *state_set_profile_commit_oid(
     state_t *state,
     const char *profile_name,
-    const git_oid *new_commit_oid
+    const git_oid *commit_oid
 ) {
     CHECK_NULL(state);
     CHECK_NULL(state->db);
     CHECK_NULL(profile_name);
-    CHECK_NULL(new_commit_oid);
+    CHECK_NULL(commit_oid);
 
-    /* Update ALL entries for this profile (active and inactive).
-     * Maintains invariant: all files from profile P have commit_oid = P's HEAD.
-     * Inactive entries will be removed by apply, but should stay consistent. */
-    const char *sql = "UPDATE virtual_manifest SET commit_oid = ?1 WHERE profile = ?2";
+    const char *sql = "UPDATE enabled_profiles SET commit_oid = ?1 WHERE name = ?2";
 
     sqlite3_stmt *stmt = NULL;
     int rc = sqlite3_prepare_v2(state->db, sql, -1, &stmt, NULL);
@@ -3457,7 +3521,7 @@ error_t *state_update_commit_oid_for_profile(
     }
 
     /* Bind parameters (20-byte BLOB for the OID column) */
-    sqlite3_bind_blob(stmt, 1, new_commit_oid->id, GIT_OID_RAWSZ, SQLITE_TRANSIENT);
+    sqlite3_bind_blob(stmt, 1, commit_oid->id, GIT_OID_RAWSZ, SQLITE_TRANSIENT);
     sqlite3_bind_text(stmt, 2, profile_name, -1, SQLITE_TRANSIENT);
 
     /* Execute */
@@ -3466,11 +3530,62 @@ error_t *state_update_commit_oid_for_profile(
 
     if (rc != SQLITE_DONE) {
         return ERROR(
-            ERR_STATE_INVALID, "Failed to update commit_oid for profile '%s': %s",
+            ERR_STATE_INVALID, "Failed to set commit_oid for profile '%s': %s",
             profile_name, sqlite3_errmsg(state->db)
         );
     }
 
+    return NULL;
+}
+
+/**
+ * Read a profile's stored commit_oid from enabled_profiles
+ *
+ * @param state State (must not be NULL)
+ * @param profile_name Profile name (must not be NULL)
+ * @param out_commit_oid Output: the stored commit OID (must not be NULL)
+ * @return Error or NULL on success (ERR_NOT_FOUND if profile not in enabled_profiles)
+ */
+error_t *state_get_profile_commit_oid(
+    const state_t *state,
+    const char *profile_name,
+    git_oid *out_commit_oid
+) {
+    CHECK_NULL(state);
+    CHECK_NULL(profile_name);
+    CHECK_NULL(out_commit_oid);
+
+    if (!state->db) {
+        return ERROR(
+            ERR_NOT_FOUND, "No database — profile '%s' not enabled", profile_name
+        );
+    }
+
+    const char *sql = "SELECT commit_oid FROM enabled_profiles WHERE name = ?";
+
+    sqlite3_stmt *stmt = NULL;
+    int rc = sqlite3_prepare_v2(state->db, sql, -1, &stmt, NULL);
+    if (rc != SQLITE_OK) {
+        return sqlite_error(state->db, "Failed to prepare commit_oid query");
+    }
+
+    sqlite3_bind_text(stmt, 1, profile_name, -1, SQLITE_TRANSIENT);
+
+    rc = sqlite3_step(stmt);
+    if (rc != SQLITE_ROW) {
+        sqlite3_finalize(stmt);
+        if (rc == SQLITE_DONE) {
+            return ERROR(
+                ERR_NOT_FOUND,
+                "Profile '%s' not found in enabled_profiles", profile_name
+            );
+        }
+        return sqlite_error(state->db, "Failed to query commit_oid");
+    }
+
+    memcpy(out_commit_oid->id, sqlite3_column_blob(stmt, 0), GIT_OID_RAWSZ);
+    sqlite3_finalize(stmt);
+    
     return NULL;
 }
 
@@ -3560,29 +3675,28 @@ error_t *state_get_entries_by_profile(
         const char *profile = (const char *) sqlite3_column_text(stmt, 2);
         const char *old_profile = (const char *) sqlite3_column_text(stmt, 3);
 
-        /* Read binary OIDs directly into the entry (no intermediate allocation). */
-        memcpy(entries[i].commit_oid.id, sqlite3_column_blob(stmt, 4), GIT_OID_RAWSZ);
-        memcpy(entries[i].blob_oid.id, sqlite3_column_blob(stmt, 5), GIT_OID_RAWSZ);
+        /* Read binary blob_oid directly into the entry (no intermediate allocation). */
+        memcpy(entries[i].blob_oid.id, sqlite3_column_blob(stmt, 4), GIT_OID_RAWSZ);
 
-        const char *type_str = (const char *) sqlite3_column_text(stmt, 6);
+        const char *type_str = (const char *) sqlite3_column_text(stmt, 5);
 
         /* Read mode as integer (0 if NULL) */
         mode_t mode = 0;
-        if (sqlite3_column_type(stmt, 7) != SQLITE_NULL) {
-            mode = (mode_t) sqlite3_column_int(stmt, 7);
+        if (sqlite3_column_type(stmt, 6) != SQLITE_NULL) {
+            mode = (mode_t) sqlite3_column_int(stmt, 6);
         }
 
-        const char *owner = (const char *) sqlite3_column_text(stmt, 8);
-        const char *group = (const char *) sqlite3_column_text(stmt, 9);
-        int encrypted = sqlite3_column_int(stmt, 10);
-        const char *state_str = (const char *) sqlite3_column_text(stmt, 11);
-        sqlite3_int64 deployed_at = sqlite3_column_int64(stmt, 12);
+        const char *owner = (const char *) sqlite3_column_text(stmt, 7);
+        const char *group = (const char *) sqlite3_column_text(stmt, 8);
+        int encrypted = sqlite3_column_int(stmt, 9);
+        const char *state_str = (const char *) sqlite3_column_text(stmt, 10);
+        sqlite3_int64 deployed_at = sqlite3_column_int64(stmt, 11);
 
         /* Stat cache (fast-path divergence detection) */
         stat_cache_t stat_cache = {
-            .mtime = sqlite3_column_int64(stmt,            13),
-            .size  = sqlite3_column_int64(stmt,            14),
-            .ino   = (uint64_t) sqlite3_column_int64(stmt, 15),
+            .mtime = sqlite3_column_int64(stmt,            12),
+            .size  = sqlite3_column_int64(stmt,            13),
+            .ino   = (uint64_t) sqlite3_column_int64(stmt, 14),
         };
 
         if (!fs_path || !storage_path || !profile || !type_str) {
@@ -3634,6 +3748,7 @@ error_t *state_get_entries_by_profile(
 
     *out = entries;
     *count = i;
+
     return NULL;
 }
 
@@ -3668,6 +3783,7 @@ time_t state_get_profile_timestamp(const state_t *state, const char *profile_nam
     }
 
     sqlite3_finalize(stmt);
+
     return timestamp;
 }
 
@@ -3681,7 +3797,7 @@ void state_free_entry(state_file_entry_t *entry) {
         return;
     }
 
-    /* commit_oid and blob_oid are inline binary fields — no allocation to free. */
+    /* blob_oid is an inline binary field — no allocation to free. */
     free(entry->storage_path);
     free(entry->filesystem_path);
     free(entry->profile);

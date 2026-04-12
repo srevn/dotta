@@ -326,7 +326,6 @@ error_t *manifest_enable_profile(
     manifest_t *manifest = NULL;
     profile_list_t *profiles = NULL;
     metadata_t *metadata = NULL;
-    hashmap_t *existing_map = NULL;
 
     arena_t *arena = arena_create(64 * 1024);
     if (!arena) return ERROR(ERR_MEMORY, "Failed to create manifest arena");
@@ -369,37 +368,12 @@ error_t *manifest_enable_profile(
         err = NULL;
     }
 
-    /* Pre-load existing state entries for O(1) deployed_at preservation.
+    /* 4. Sync entries owned by this profile (highest precedence)
      *
-     * Eliminates per-entry state_get_file() queries in the sync loop below.
-     * Pattern: Same as manifest_rebuild and manifest_reorder_profiles. */
-    state_file_entry_t *existing_entries = NULL;
-    size_t existing_count = 0;
-
-    err = state_get_all_files(state, arena, &existing_entries, &existing_count);
-    if (err) {
-        err = error_wrap(err, "Failed to pre-load state entries");
-        goto cleanup;
-    }
-
-    if (existing_count > 0) {
-        existing_map = hashmap_borrow(existing_count);
-        if (!existing_map) {
-            err = ERROR(ERR_MEMORY, "Failed to create existing entries hashmap");
-            goto cleanup;
-        }
-        for (size_t j = 0; j < existing_count; j++) {
-            err = hashmap_set(
-                existing_map, existing_entries[j].filesystem_path, &existing_entries[j]
-            );
-            if (err) {
-                err = error_wrap(err, "Failed to populate existing entries hashmap");
-                goto cleanup;
-            }
-        }
-    }
-
-    /* 4. Sync entries owned by this profile (highest precedence) */
+     * deployed_at for INSERT (new files) is determined by lstat: time(NULL) if
+     * the file exists on disk, 0 if it doesn't. For UPDATE (existing entries),
+     * deployed_at is preserved by the SQL UPSERT — the caller-provided value
+     * is only used on the INSERT path. */
 
     /* Track counts for user feedback */
     size_t total_files = 0;
@@ -416,82 +390,44 @@ error_t *manifest_enable_profile(
 
         total_files++;
 
-        /* Determine deployed_at timestamp for lifecycle tracking
+        /* Determine deployed_at and count statistics via lstat.
          *
-         * For EXISTING entries: Preserve deployed_at from pre-loaded state (O(1) hashmap)
-         * For NEW entries: Check filesystem to set initial deployed_at
-         *
-         * deployed_at = 0   → File never deployed by dotta
-         * deployed_at > 0   → File known to dotta (either deployed or existed when profile enabled)
-         */
+         * For UPDATE (existing entries): SQL UPSERT preserves the existing
+         * deployed_at regardless of the value passed here.
+         * For INSERT (new entries): lstat determines the initial value.
+         *   time(NULL) = file exists on disk ("known to dotta")
+         *   0          = file missing or inaccessible ("never deployed") */
         time_t deployed_at;
         struct stat st;
 
-        /* O(1) lookup in pre-loaded state entries */
-        state_file_entry_t *existing_entry = existing_map
-            ? hashmap_get(existing_map, entry->filesystem_path)
-            : NULL;
-
-        if (existing_entry) {
-            /* File already in manifest - preserve existing timestamp */
-            deployed_at = existing_entry->deployed_at;
-
-            /* Check filesystem to update stats only (deployed_at already known) */
-            if (lstat(entry->filesystem_path, &st) == 0) {
-                already_deployed++;
-            } else if (errno == ENOENT) {
-                /* File doesn't exist - needs deployment */
-                needs_deployment++;
-            } else {
-                /* Access error (permission denied, I/O error, etc.)
-                 *
-                 * Conservative approach: Count as needs_deployment rather than
-                 * blocking the entire enable operation. The apply command will
-                 * perform fresh divergence analysis with proper error handling.
-                 *
-                 * Rationale: For existing entries, deployed_at is already known
-                 * from state. The lstat() check here is purely for statistics.
-                 * Statistics inaccuracy is acceptable to avoid blocking manifest
-                 * updates in scenarios like non-root users managing root-owned files.
-                 */
-                needs_deployment++;
-            }
+        /* New entry - check if file exists on filesystem */
+        if (lstat(entry->filesystem_path, &st) == 0) {
+            /* File exists - mark as "known to dotta" */
+            deployed_at = time(NULL);
+            already_deployed++;
+        } else if (errno == ENOENT) {
+            /* File doesn't exist - mark as "never deployed" */
+            deployed_at = 0;
+            needs_deployment++;
         } else {
-            /* New entry - check if file exists on filesystem */
-            if (lstat(entry->filesystem_path, &st) == 0) {
-                /* File exists - mark as "known to dotta" */
-                deployed_at = time(NULL);
-                already_deployed++;
-            } else if (errno == ENOENT) {
-                /* File doesn't exist - mark as "never deployed" */
-                deployed_at = 0;
-                needs_deployment++;
-            } else {
-                /* Unexpected error (permission denied, I/O error, etc.)
-                 *
-                 * Non-fatal approach: Use conservative default (deployed_at = 0) and
-                 * count as needs_deployment rather than blocking the entire operation.
-                 * This maintains the VWD scope invariant (all profile files in manifest)
-                 * while deferring deployment decisions to runtime convergence.
-                 *
-                 * Rationale: The deployed_at timestamp is only an initial guess for
-                 * statistics. The real divergence is determined at runtime during
-                 * status/apply commands via workspace divergence analysis. Using a
-                 * conservative default (0) allows the operation to proceed while
-                 * signaling to the user that these files need attention.
-                 *
-                 * This matches the approach for existing entries (lines 519-531) where
-                 * lstat() failures are tolerated for statistics. The consistency ensures
-                 * that a single inaccessible file cannot prevent enabling a profile
-                 * containing hundreds of other valid files.
-                 */
-                deployed_at = 0;
-                needs_deployment++;
+            /* Unexpected error (permission denied, I/O error, etc.)
+             *
+             * Non-fatal approach: Use conservative default (deployed_at = 0) and
+             * count as needs_deployment rather than blocking the entire operation.
+             * This maintains the VWD scope invariant (all profile files in manifest)
+             * while deferring deployment decisions to runtime convergence.
+             *
+             * Rationale: The deployed_at timestamp is only an initial guess for
+             * statistics. The real divergence is determined at runtime during
+             * status/apply commands via workspace divergence analysis. Using a
+             * conservative default (0) allows the operation to proceed while
+             * signaling to the user that these files need attention. */
+            deployed_at = 0;
+            needs_deployment++;
 
-                /* Track access errors for user feedback */
-                if (out_stats) {
-                    out_stats->access_errors++;
-                }
+            /* Track access errors for user feedback */
+            if (out_stats) {
+                out_stats->access_errors++;
             }
         }
 
@@ -533,7 +469,6 @@ error_t *manifest_enable_profile(
     }
 
 cleanup:
-    if (existing_map) hashmap_free(existing_map, NULL);
     if (profiles) profile_list_free(profiles);
     if (metadata) metadata_free(metadata);
     if (manifest) manifest_free(manifest);
@@ -801,32 +736,10 @@ error_t *manifest_disable_profile(
         }
 
         if (fallback) {
-            /* File exists in lower-precedence profile - update to fallback
-             *
-             * CRITICAL: Use sync_entry_to_state to ensure consistent, correct metadata
-             * handling. This reuses the proven logic for:
-             *
-             * 1. Extracting blob_oid from Git tree entry (content hash)
-             * 2. Loading rich metadata from .dotta/metadata.json:
-             *    - Custom mode (user's intended permissions, not Git's default)
-             *    - Ownership (owner/group for root/ files)
-             *    - Encryption flag (from metadata, not Git)
-             * 3. Applying metadata precedence (metadata.mode overrides git.mode)
-             * 4. Handling NULL values (non-root files, missing metadata)
-             * 5. Writing complete, consistent state entry
-             *
-             * We preserve entry->deployed_at to maintain the file's lifecycle history.
-             * The file was deployed under the disabled profile; fallback doesn't change
-             * that historical fact.
-             *
-             * VWD Invariant: Entry metadata must match source profile's Git tree + metadata.json.
-             */
-
-            /* Sync fallback entry to state (old_profile tracks reassignment
-             * for user visibility: "file moved from darwin to global") */
-            err = sync_entry_to_state(
-                repo, state, fallback, fallback_metadata, entry->deployed_at, entry->profile
-            );
+            /* File exists in lower-precedence profile — update to fallback.
+             * deployed_at preserved by SQL UPSERT (lifecycle history unchanged),
+             * old_profile auto-captured by SQL (profile is changing). */
+            err = sync_entry_to_state(repo, state, fallback, fallback_metadata, 0, NULL);
             if (err) {
                 err = error_wrap(
                     err, "Failed to sync entry to fallback for %s",
@@ -1231,26 +1144,10 @@ error_t *manifest_remove_files(
         }
 
         if (fallback) {
-            /* Fallback found: sync complete entry from fallback profile
-             *
-             * CRITICAL: Use sync_entry_to_state to ensure consistent metadata.
-             * This extracts blob_oid, type, mode from fallback's Git tree entry
-             * and applies metadata precedence from .dotta/metadata.json.
-             */
-
-            /* Preserve deployed_at (lifecycle history) before sync overwrites entry */
-            time_t preserved_deployed_at = current_entry->deployed_at;
-
-            /* Sync complete entry from fallback (proven pattern)
-             *
-             * sync_entry_to_state correctly:
-             * 1. Extracts blob_oid from fallback's Git tree entry
-             * 2. Gets metadata (mode, owner, group, encrypted) from merged metadata
-             * 3. Uses INSERT OR REPLACE for atomic, complete entry update
-             */
-            err = sync_entry_to_state(
-                repo, state, fallback, metadata, preserved_deployed_at, current_entry->profile
-            );
+            /* Fallback found — sync complete entry from fallback profile.
+             * deployed_at preserved by SQL UPSERT, old_profile auto-captured
+             * by SQL when the owning profile changes. */
+            err = sync_entry_to_state(repo, state, fallback, metadata, 0, NULL);
             if (err) {
                 state_free_entry(current_entry);
                 free(filesystem_path);
@@ -1775,13 +1672,11 @@ error_t *manifest_repair_stale(
                 }
             }
 
-            /* Pass old_profile when owning profile shifts during repair */
-            const char *repair_old_profile = strcmp(fresh_entry->profile_name, entry->profile) != 0
-                                           ? entry->profile : NULL;
+            /* deployed_at preserved by SQL UPSERT, old_profile auto-captured
+             * by SQL when the owning profile shifts during repair. */
+            bool profile_shifted = strcmp(fresh_entry->profile_name, entry->profile) != 0;
 
-            err = sync_entry_to_state(
-                repo, state, fresh_entry, metadata, entry->deployed_at, repair_old_profile
-            );
+            err = sync_entry_to_state(repo, state, fresh_entry, metadata, 0, NULL);
             if (err) {
                 err = error_wrap(
                     err, "Failed to repair stale entry '%s'",
@@ -1791,7 +1686,7 @@ error_t *manifest_repair_stale(
             }
 
             /* Track profile reassignment when owning profile shifts during repair */
-            if (repair_old_profile) {
+            if (profile_shifted) {
                 out_stats->reassigned++;
             }
 
@@ -1980,12 +1875,9 @@ error_t *manifest_reorder_profiles(
                 strcmp(old_entry->profile, new_entry->profile_name) != 0;
 
             if (owner_changed) {
-                /* Owner changed - update entry to new owner */
-
-                /* Sync with new owner, preserve existing deployed_at */
-                err = sync_entry_to_state(
-                    repo, state, new_entry, metadata, old_entry->deployed_at, old_entry->profile
-                );
+                /* Owner changed — sync with new owner. deployed_at preserved
+                 * by SQL UPSERT, old_profile auto-captured by SQL. */
+                err = sync_entry_to_state(repo, state, new_entry, metadata, 0, NULL);
                 if (err) {
                     goto cleanup;
                 }
@@ -2201,32 +2093,10 @@ error_t *manifest_update_files(
             }
 
             if (fallback) {
-                /* Fallback exists - update to fallback profile. */
-
-                /* Preserve existing deployed_at and track old_profile when falling back */
-                time_t deployed_at = 0;
-                char *old_profile_name = NULL;
-                state_file_entry_t *existing_entry = NULL;
-                error_t *get_err = state_get_file(state, item->filesystem_path, &existing_entry);
-                if (get_err == NULL && existing_entry != NULL) {
-                    deployed_at = existing_entry->deployed_at;
-                    /* Save old profile for reassignment tracking */
-                    if (existing_entry->profile) {
-                        old_profile_name = arena_strdup(arena, existing_entry->profile);
-                    }
-                    state_free_entry(existing_entry);
-                } else if (get_err) {
-                    if (get_err->code == ERR_NOT_FOUND) {
-                        error_free(get_err);
-                    } else {
-                        err = get_err;
-                        goto cleanup;
-                    }
-                }
-
-                err = sync_entry_to_state(
-                    repo, state, fallback, metadata, deployed_at, old_profile_name
-                );
+                /* Fallback found — update manifest to the fallback profile.
+                 * deployed_at preserved by SQL UPSERT, old_profile auto-captured
+                 * by SQL when the owning profile changes. */
+                err = sync_entry_to_state(repo, state, fallback, metadata, 0, NULL);
                 if (err) {
                     err = error_wrap(
                         err, "Failed to sync fallback for '%s'",
@@ -2818,30 +2688,10 @@ error_t *manifest_sync_diff(
                 continue;
             }
 
-            /* Sync entry to state, preserving deployed_at for existing files
-             *
-             * Key: Sync only updates Git, it doesn't deploy to filesystem.
-             * User must run 'dotta apply' to actually deploy these changes.
-             * We preserve deployed_at to maintain lifecycle tracking. */
-
-            /* Preserve existing deployed_at if file already in manifest */
-            time_t deployed_at = 0;
-            state_file_entry_t *existing = NULL;
-            error_t *get_err = state_get_file(state, filesystem_path, &existing);
-            if (get_err == NULL && existing != NULL) {
-                deployed_at = existing->deployed_at;
-                state_free_entry(existing);
-            } else if (get_err) {
-                if (get_err->code == ERR_NOT_FOUND) {
-                    error_free(get_err);
-                } else {
-                    err = get_err;
-                    free(filesystem_path);
-                    goto cleanup;
-                }
-            }
-
-            err = sync_entry_to_state(repo, state, entry, metadata, deployed_at, NULL);
+            /* Sync entry to state. deployed_at is preserved by SQL UPSERT on
+             * UPDATE; 0 is used for INSERT (new file, never deployed). old_profile
+             * auto-captured by SQL when the owning profile changes. */
+            err = sync_entry_to_state(repo, state, entry, metadata, 0, NULL);
             if (err) {
                 err = error_wrap(
                     err, "Failed to sync '%s' to manifest",
@@ -2870,37 +2720,10 @@ error_t *manifest_sync_diff(
 
             if (entry && entry->profile_name &&
                 strcmp(entry->profile_name, profile_name) != 0) {
-                /* File exists in another profile (fallback found!)
-                 *
-                 * Update manifest entry to point to the new profile owner.
-                 * Preserve deployed_at to maintain lifecycle tracking. */
-
-                /* Preserve existing deployed_at and track old_profile when falling back */
-                time_t deployed_at = 0;
-                char *old_profile_name = NULL;
-                state_file_entry_t *existing_fb = NULL;
-
-                error_t *get_err_fb = state_get_file(state, filesystem_path, &existing_fb);
-                if (get_err_fb == NULL && existing_fb != NULL) {
-                    deployed_at = existing_fb->deployed_at;
-                    /* Save old profile for reassignment tracking */
-                    if (existing_fb->profile) {
-                        old_profile_name = arena_strdup(arena, existing_fb->profile);
-                    }
-                    state_free_entry(existing_fb);
-                } else if (get_err_fb) {
-                    if (get_err_fb->code == ERR_NOT_FOUND) {
-                        error_free(get_err_fb);
-                    } else {
-                        err = get_err_fb;
-                        free(filesystem_path);
-                        goto cleanup;
-                    }
-                }
-
-                err = sync_entry_to_state(
-                    repo, state, entry, metadata, deployed_at, old_profile_name
-                );
+                /* Fallback found — update manifest to the new profile owner.
+                 * deployed_at preserved by SQL UPSERT, old_profile auto-captured
+                 * by SQL when the owning profile changes. */
+                err = sync_entry_to_state(repo, state, entry, metadata, 0, NULL);
                 if (err) {
                     err = error_wrap(
                         err, "Failed to sync fallback for '%s'",

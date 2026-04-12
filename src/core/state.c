@@ -197,7 +197,7 @@ static error_t *initialize_schema(sqlite3 *db) {
         "    owner TEXT,"
         "    \"group\" TEXT,"
         "    state TEXT NOT NULL DEFAULT 'active'"
-        "      CHECK(state IN ('active', 'inactive', 'deleted', 'released')),"
+        "      CHECK(state IN ('active', 'inactive', 'deleted')),"
         "    deployed_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))"
         ") STRICT;"
 
@@ -443,20 +443,27 @@ static error_t *prepare_statements(state_t *state) {
 
     /* Insert/update file (used by manifest sync operations - hot path)
      *
-     * old_profile handling via COALESCE: When the incoming value is NULL,
-     * preserves existing old_profile (pending reassignment metadata not yet
-     * acknowledged by apply). When non-NULL, overrides with the new value.
-     * This enables atomic reassignment tracking in one UPSERT operation.
+     * UPDATE-path field preservation (ON CONFLICT clause):
+     *
+     * deployed_at: Always preserved from existing row. No manifest operation
+     * needs to overwrite deployed_at on UPDATE — Git-side changes don't move
+     * the deployment timestamp. INSERT uses the caller-provided value (0 for
+     * undeployed, time(NULL) for files captured from filesystem). Deployed_at
+     * is only modified post-INSERT via state_update_post_deploy() after apply.
+     *
+     * old_profile: Three-branch CASE:
+     *   1. Explicit non-NULL from caller — takes precedence (direct override)
+     *   2. Profile changing, caller passes NULL — auto-captures current profile
+     *      from the existing row (eliminates read-before-write for reassignment)
+     *   3. Profile unchanged, caller passes NULL — preserves existing old_profile
      * Clearing is done separately via state_clear_old_profile().
      *
-     * Stat cache preservation: When blob_oid is unchanged (same content),
-     * preserves the existing stat cache rather than zeroing it. This avoids
-     * forcing the slow path (full content hash) for files whose content
-     * hasn't actually changed — common during sync, fallback, reorder,
-     * and repair operations.
-     *
-     * When blob_oid changes, stat cache is replaced with the incoming values
-     * (zeros from sync_entry_to_state), correctly invalidating the cache.
+     * stat_cache: When blob_oid is unchanged (same content), preserves the
+     * existing stat cache rather than zeroing it. This avoids forcing the slow
+     * path (full content hash) for files whose content hasn't changed — common
+     * during sync, fallback, reorder, and repair operations. When blob_oid
+     * changes, stat cache is replaced with incoming values (zeros from
+     * sync_entry_to_state), correctly invalidating the cache.
      *
      * Uses IS NOT for NULL-safe comparison (IS NOT treats NULL = NULL). */
     const char *sql_insert =
@@ -468,7 +475,11 @@ static error_t *prepare_statements(state_t *state) {
         "ON CONFLICT(filesystem_path) DO UPDATE SET "
         "  storage_path = excluded.storage_path, "
         "  profile      = excluded.profile, "
-        "  old_profile  = COALESCE(excluded.old_profile, virtual_manifest.old_profile), "
+        "  old_profile  = CASE "
+        "                   WHEN excluded.old_profile IS NOT NULL THEN excluded.old_profile "
+        "                   WHEN excluded.profile != virtual_manifest.profile "
+        "                        THEN virtual_manifest.profile "
+        "                   ELSE virtual_manifest.old_profile END, "
         "  blob_oid     = excluded.blob_oid, "
         "  type         = excluded.type, "
         "  mode         = excluded.mode, "
@@ -476,7 +487,7 @@ static error_t *prepare_statements(state_t *state) {
         "  \"group\"    = excluded.\"group\", "
         "  encrypted    = excluded.encrypted, "
         "  state        = excluded.state, "
-        "  deployed_at  = excluded.deployed_at, "
+        "  deployed_at  = virtual_manifest.deployed_at, "
         "  stat_mtime   = CASE WHEN excluded.blob_oid IS NOT virtual_manifest.blob_oid "
         "                 THEN excluded.stat_mtime ELSE virtual_manifest.stat_mtime END, "
         "  stat_size    = CASE WHEN excluded.blob_oid IS NOT virtual_manifest.blob_oid "
@@ -2528,11 +2539,10 @@ error_t *state_set_directory_state(
 
     /* Validate state value */
     if (strcmp(new_state, STATE_ACTIVE) != 0 && strcmp(new_state, STATE_INACTIVE) != 0 &&
-        strcmp(new_state, STATE_DELETED) != 0 && strcmp(new_state, STATE_RELEASED) != 0) {
+        strcmp(new_state, STATE_DELETED) != 0) {
         return ERROR(
             ERR_INVALID_ARG,
-            "Invalid state '%s' (must be 'active', 'inactive', 'deleted', or 'released')",
-            new_state
+            "Invalid state '%s' (must be 'active', 'inactive' or 'deleted')", new_state
         );
     }
 

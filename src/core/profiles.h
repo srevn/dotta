@@ -80,12 +80,11 @@ typedef struct {
  * - The manifest is the authoritative cache of expected state
  * - Fields are populated from state database during workspace load
  * - Enables O(1) divergence checking without N database queries
- * - Tree entries are lazy-loaded on demand (NULL until needed)
- * - For manifests built from Git trees, tree entries are pre-populated
+ * - Identity fields (blob_oid, type, mode) are always populated regardless
+ *   of construction path (Git tree walk or state DB)
  *
  * Memory ownership:
  * - All string fields are owned and must be freed in manifest_free()
- * - git_tree_entry is owned and must be freed (NULL is valid, means not loaded)
  * - profile_name is borrowed (from profile_list_t, workspace profile_index,
  *   state arena, or manifest's owned_profile_name for tree-based manifests)
  */
@@ -94,25 +93,21 @@ typedef struct {
     char *storage_path;              /* Path in profile (home/.bashrc) */
     char *filesystem_path;           /* Deployed path (/home/user/.bashrc) */
 
-    /* Git tree reference */
-    git_tree_entry *entry;           /* Git tree entry (owned, can be NULL for VWD entries) */
-
     /* Profile ownership */
     const char *profile_name;        /* Profile name (borrowed, used for all name-based operations) */
 
-    /* VWD Expected State Cache (populated from state database)
+    /* Identity + VWD Expected State Cache
      *
-     * These fields cache the expected state from the manifest table,
-     * eliminating N+1 queries during divergence analysis. They represent
-     * what the file SHOULD be according to enabled profiles.
+     * Identity fields (blob_oid, type, mode) are populated by both
+     * construction paths: directly from git_tree_entry during tree walk,
+     * or from state database during workspace load.
      *
-     * blob_oid is an inline binary OID that mirrors the corresponding
-     * state_file_entry_t field. For Git-built manifests (profile_build_manifest),
-     * it is zero-initialised; git_oid_is_zero() distinguishes the
-     * "not populated from state" case from a real OID.
+     * Deployment context fields (deployed_at, stat_cache, encrypted,
+     * owner, group, old_profile) are only populated for state-built entries.
+     * They remain zero/NULL for Git-built manifests.
      */
     char *old_profile;               /* Previous owner if changed, NULL otherwise (VWD cache) */
-    git_oid blob_oid;                /* Blob OID for content identity (zero = not cached) */
+    git_oid blob_oid;                /* Blob OID for content identity (always populated) */
     state_file_type_t type;          /* File type (REGULAR, SYMLINK, EXECUTABLE) */
     mode_t mode;                     /* Permission mode (e.g., 0644), 0 if no metadata tracked */
     char *owner;                     /* Owner username (root/ files only, can be NULL) */
@@ -451,8 +446,6 @@ void profile_list_free(profile_list_t *list);
 
 /**
  * Free manifest
- *
- * Frees all resources including git_tree_entry objects.
  *
  * @param manifest Manifest to free (can be NULL)
  */

@@ -8,7 +8,7 @@
  * Key patterns:
  *   - Precedence Oracle: Reuses profile_build_manifest() for correctness
  *   - Transaction Management: Caller manages transactions, we operate within them
- *   - Blob OID Extraction: Uses git_tree_entry_id() for O(1) content identity
+ *   - Blob OID Extraction: Reads pre-populated blob_oid from file_entry_t for O(1) content identity
  *   - Metadata Integration: Uses metadata_load_from_profiles() for merged view
  */
 
@@ -73,100 +73,6 @@ static const git_oid *profile_list_head_oid(
         if (strcmp(list->profiles[i].name, name) == 0)
             return &list->profiles[i].head_oid;
     }
-    return NULL;
-}
-
-/**
- * Extract file metadata from Git tree entry
- *
- * Authoritative extraction of file type and mode from Git tree entry.
- * This implements the VWD principle: Git is the single source of truth.
- *
- * File TYPE is always derived from Git filemode (authoritative).
- * File MODE is extracted as fallback for when metadata is unavailable.
- *
- * Metadata mode can override the returned mode, but NOT the type.
- *
- * Algorithm:
- *   1. Extract git_filemode via git_tree_entry_filemode()
- *   2. Map to state_file_type_t (blob → regular, blob_executable → executable, link → symlink)
- *   3. Extract permission bits (0755, 0644, 0777)
- *
- * Error Handling:
- *   - GIT_FILEMODE_TREE: Returns ERR_INTERNAL (directories never in manifest)
- *   - Unknown filemode: Returns ERR_INTERNAL (defensive programming)
- *   - NULL inputs: Returns ERR_INVALID_ARG via CHECK_NULL
- *
- * @param entry Git tree entry (must not be NULL)
- * @param out_type File type (must not be NULL)
- * @param out_mode Permission mode (must not be NULL)
- * @return Error or NULL on success
- */
-static error_t *extract_file_metadata_from_tree_entry(
-    const git_tree_entry *entry,
-    state_file_type_t *out_type,
-    mode_t *out_mode
-) {
-    CHECK_NULL(entry);
-    CHECK_NULL(out_type);
-    CHECK_NULL(out_mode);
-
-    /* Extract authoritative filemode from Git tree entry */
-    git_filemode_t filemode = git_tree_entry_filemode(entry);
-
-    /* Map Git filemode to state file type and mode
-     *
-     * This is the ONLY place where Git filemode is converted to state type.
-     * Precedence: Git is authoritative for TYPE, metadata can override MODE. */
-    state_file_type_t type;
-    mode_t mode;
-
-    switch (filemode) {
-        case GIT_FILEMODE_BLOB:
-            /* Regular non-executable file */
-            type = STATE_FILE_REGULAR;
-            mode = 0644;
-            break;
-
-        case GIT_FILEMODE_BLOB_EXECUTABLE:
-            /* Executable file */
-            type = STATE_FILE_EXECUTABLE;
-            mode = 0755;
-            break;
-
-        case GIT_FILEMODE_LINK:
-            /* Symbolic link - mode=0 (no mode to track).
-             *
-             * Symlink permissions are not deployable:
-             * - symlink() syscall has no mode parameter
-             * - chmod() on symlink changes target or fails (OS-dependent)
-             * - lstat() st_mode varies by OS (Linux: 0777, BSD: 0755)
-             *
-             * Access control is determined by target, not symlink. */
-            type = STATE_FILE_SYMLINK;
-            mode = 0;
-            break;
-
-        case GIT_FILEMODE_TREE:
-            /* Directories should never appear in manifest entries.
-             * File entries are extracted from tree walks which skip directories.
-             * If we see this, it indicates a bug in the tree traversal logic. */
-            return ERROR(
-                ERR_INTERNAL, "Unexpected directory in manifest tree entry"
-            );
-
-        default:
-            /* Unknown/unsupported filemode - defensive programming.
-             * Git may add new filemodes in future versions. Fail explicitly
-             * rather than silently mishandling. */
-            return ERROR(
-                ERR_INTERNAL, "Unknown or unsupported git filemode: 0%o",
-                filemode
-            );
-    }
-
-    *out_type = type;
-    *out_mode = mode;
     return NULL;
 }
 
@@ -312,20 +218,13 @@ static error_t *sync_entry_to_state(
     CHECK_NULL(repo);
     CHECK_NULL(state);
     CHECK_NULL(manifest_entry);
-    CHECK_NULL(manifest_entry->entry);
     CHECK_NULL(manifest_entry->profile_name);
 
     error_t *err = NULL;
     metadata_item_t *meta_item = NULL;
 
-    /* 1. Extract blob_oid from tree entry (binary, borrowed from libgit2). */
-    const git_oid *blob_oid_obj = git_tree_entry_id(manifest_entry->entry);
-    if (!blob_oid_obj) {
-        return ERROR(
-            ERR_INTERNAL, "Tree entry has no OID for '%s'",
-            manifest_entry->storage_path
-        );
-    }
+    /* 1. Read blob_oid from pre-populated entry field (set during tree walk). */
+    const git_oid *blob_oid_obj = &manifest_entry->blob_oid;
 
     /* 2. Get metadata item (may not exist for old profiles) */
     if (metadata) {
@@ -342,14 +241,12 @@ static error_t *sync_entry_to_state(
         }
     }
 
-    /* 3. Extract file type and mode from Git tree entry (authoritative source) */
-    state_file_type_t file_type;
-    mode_t git_mode = 0;
-
-    err = extract_file_metadata_from_tree_entry(
-        manifest_entry->entry, &file_type, &git_mode
-    );
-    if (err) return err;
+    /* 3. Read file type and mode from pre-populated entry fields.
+     *
+     * These were derived from git_tree_entry_filemode() during the tree walk
+     * callback and stored as scalar fields on file_entry_t. */
+    state_file_type_t file_type = manifest_entry->type;
+    mode_t git_mode = manifest_entry->mode;
 
     /* 4. Determine mode with metadata precedence (no allocation needed!)
      *
@@ -360,7 +257,7 @@ static error_t *sync_entry_to_state(
     mode_t mode = meta_item ? meta_item->mode : git_mode;
 
     /* 5. Build state entry. blob_oid is an inline struct copy from the
-     * libgit2-owned tree entry id. commit_oid lives in enabled_profiles
+     * pre-populated entry field. commit_oid lives in enabled_profiles
      * (per-profile, not per-file) and is set via state_set_profile_commit_oid
      * using the cached head_oid from the loaded profile_list_t. */
     state_file_entry_t state_entry = {
@@ -1953,11 +1850,7 @@ error_t *manifest_repair_stale(
              * Mirrors the blob_changed check in workspace_build_manifest_from_state()
              * (Path A) for symmetric treatment across both staleness paths.
              */
-            bool blob_changed = true;  /* Default: assume changed (safe) */
-            const git_oid *new_blob_oid = git_tree_entry_id(fresh_entry->entry);
-            if (new_blob_oid) {
-                blob_changed = !git_oid_equal(&entry->blob_oid, new_blob_oid);
-            }
+            bool blob_changed = !git_oid_equal(&entry->blob_oid, &fresh_entry->blob_oid);
 
             /* Save old blob_oid for content-changed entries BEFORE updating.
              *

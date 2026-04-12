@@ -673,7 +673,7 @@ static error_t *compare_manifest_to_filesystem(
         }
 
         bool encrypted = metadata_get_file_encrypted(metadata, storage_path);
-        git_filemode_t mode = git_tree_entry_filemode(entry->entry);
+        git_filemode_t mode = state_type_to_git_filemode(entry->type);
 
         /* Name-only output */
         if (opts->name_only) {
@@ -690,8 +690,8 @@ static error_t *compare_manifest_to_filesystem(
 
             /* Get content from historical commit (cached) */
             const buffer_t *hist_content = NULL;
-            err = content_cache_get_from_tree_entry(
-                cache, entry->entry, storage_path, profile_name,
+            err = content_cache_get_from_blob_oid(
+                cache, &entry->blob_oid, storage_path, profile_name,
                 encrypted, &hist_content
             );
             if (err) {
@@ -720,8 +720,8 @@ static error_t *compare_manifest_to_filesystem(
 
         /* Full diff output */
         const buffer_t *hist_content = NULL;
-        err = content_cache_get_from_tree_entry(
-            cache, entry->entry, storage_path, profile_name, encrypted,
+        err = content_cache_get_from_blob_oid(
+            cache, &entry->blob_oid, storage_path, profile_name, encrypted,
             &hist_content
         );
         if (err) {

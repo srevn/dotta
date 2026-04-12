@@ -17,7 +17,7 @@
  *
  * Simple API (single-file operations):
  *   buffer_t *content;
- *   content_get_from_tree_entry(repo, entry, path, profile, meta, km, &content);
+ *   content_get_from_blob_oid(repo, &oid, path, profile, encrypted, km, &content);
  *   // ... use content ...
  *   buffer_free(content);  // Caller owns buffer
  *
@@ -25,7 +25,7 @@
  *   content_cache_t *cache = content_cache_create(repo, km);
  *   for (each file) {
  *       const buffer_t *content;  // Note: const
- *       content_cache_get_from_tree_entry(cache, entry, path, profile, encrypted, &content);
+ *       content_cache_get_from_blob_oid(cache, &oid, path, profile, encrypted, &content);
  *       // ... use content (don't free - cache owns it) ...
  *   }
  *   content_cache_free(cache);  // Frees all cached buffers
@@ -63,56 +63,17 @@ typedef struct metadata metadata_t;
 typedef struct content_cache content_cache_t;
 
 /**
- * Get plaintext content from tree entry
+ * Get plaintext content from blob OID
  *
  * Use for single-file operations (e.g., show command).
  * Caller owns the returned buffer and must free it.
  *
  * Process:
- * 1. Load blob from tree entry
+ * 1. Load blob from OID
  * 2. Check magic header for encryption
  * 3. Validate encryption matches expectation (defense in depth)
- * 4. If encrypted:
- *    a. Get master key from keymanager
- *    b. Derive profile key
- *    c. Decrypt blob
+ * 4. If encrypted: decrypt using profile key from keymanager
  * 5. If plaintext: return blob content
- *
- * @param repo Git repository (must not be NULL)
- * @param entry Tree entry to read (must not be NULL)
- * @param storage_path Path in profile (e.g., "home/.bashrc", must not be NULL)
- *          SECURITY: Used as AAD in encryption. Must be actual Git tree path
- *          (from tree traversal). Wrong path causes decrypt failure (by design).
- * @param profile_name Profile name for key derivation (must not be NULL)
- * @param expected_encrypted Expected encryption state (for validation)
- *          Manifest operations: pass entry->encrypted (from state cache)
- *          Historical operations: extract from metadata before calling
- * @param km Key manager (can be NULL if file is known to be plaintext)
- * @param out_content Output buffer (CALLER OWNS - must free with buffer_free)
- * @return Error or NULL on success
- *
- * Errors:
- * - ERR_CRYPTO: File is encrypted but no keymanager provided
- * - ERR_CRYPTO: Decryption failed (wrong key, corruption, or path mismatch)
- * - ERR_STATE_INVALID: Magic header doesn't match expected encryption state
- * - ERR_NOT_FOUND: Blob not found
- * - ERR_INVALID_ARG: Required arguments are NULL
- */
-error_t *content_get_from_tree_entry(
-    git_repository *repo,
-    const git_tree_entry *entry,
-    const char *storage_path,
-    const char *profile_name,
-    bool expected_encrypted,
-    keymanager_t *km,
-    buffer_t *out_content
-);
-
-/**
- * Get plaintext content from blob OID
- *
- * Lower-level variant when you have OID directly.
- * Same ownership and error semantics as content_get_from_tree_entry.
  *
  * @param repo Git repository (must not be NULL)
  * @param blob_oid Blob OID (must not be NULL)
@@ -123,6 +84,13 @@ error_t *content_get_from_tree_entry(
  * @param km Key manager (can be NULL if file is known to be plaintext)
  * @param out_content Output buffer (CALLER OWNS - must free with buffer_free)
  * @return Error or NULL on success
+ *
+ * Errors:
+ * - ERR_CRYPTO: File is encrypted but no keymanager provided
+ * - ERR_CRYPTO: Decryption failed (wrong key, corruption, or path mismatch)
+ * - ERR_STATE_INVALID: Magic header doesn't match expected encryption state
+ * - ERR_NOT_FOUND: Blob not found
+ * - ERR_INVALID_ARG: Required arguments are NULL
  */
 error_t *content_get_from_blob_oid(
     git_repository *repo,
@@ -151,7 +119,7 @@ content_cache_t *content_cache_create(
 );
 
 /**
- * Get plaintext content from tree entry (cached)
+ * Get plaintext content from blob OID (cached)
  *
  * Use for batch operations (e.g., status, workspace analysis).
  * Returns borrowed reference valid until cache is freed.
@@ -162,28 +130,6 @@ content_cache_t *content_cache_create(
  *
  * On subsequent access for same OID:
  * - Returns cached buffer (O(1) lookup)
- *
- * @param cache Content cache (must not be NULL)
- * @param entry Tree entry to read (must not be NULL)
- * @param storage_path Path in profile (must not be NULL, used as AAD for encryption)
- * @param profile_name Profile name (must not be NULL)
- * @param expected_encrypted Expected encryption state (for validation)
- * @param out_content Output buffer (BORROWED - cache owns, don't free)
- * @return Error or NULL on success
- */
-error_t *content_cache_get_from_tree_entry(
-    content_cache_t *cache,
-    const git_tree_entry *entry,
-    const char *storage_path,
-    const char *profile_name,
-    bool expected_encrypted,
-    const buffer_t **out_content
-);
-
-/**
- * Get plaintext content from blob OID (cached)
- *
- * Lower-level cached variant. Same semantics as content_cache_get_from_tree_entry.
  *
  * @param cache Content cache (must not be NULL)
  * @param blob_oid Blob OID (must not be NULL)

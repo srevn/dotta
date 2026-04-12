@@ -464,10 +464,13 @@ static error_t *analyze_file_divergence(
 
     /* Determine if entry came from state database using VWD cache
      *
-     * If manifest was built from state, VWD fields are populated (blob_oid is
-     * a real OID). If manifest was built from Git, blob_oid is left all-zero
-     * by the profile_build_manifest() callback. git_oid_is_zero() distinguishes
-     * the two cases — a real Git blob can never have the null OID. */
+     * Workspace manifests are always built from state (via
+     * workspace_build_manifest_from_state), so blob_oid is always a real OID
+     * here. The zero-check is a defensive guard — not a type discriminant.
+     *
+     * Note: Git-built manifests (from profile_build_manifest) now also carry
+     * non-zero blob_oid, but those manifests are transient and never enter the
+     * workspace divergence pipeline. */
     bool in_state = !git_oid_is_zero(&manifest_entry->blob_oid);
 
     /* Single stat capture for the entire analysis
@@ -2212,39 +2215,10 @@ static error_t *patch_entry_from_fresh(
     const metadata_t *metadata,
     arena_t *arena
 ) {
-    /* Extract blob OID from fresh tree entry */
-    if (!fresh_entry->entry) {
-        return ERROR(
-            ERR_INTERNAL, "Fresh entry has no tree entry for '%s'",
-            fresh_entry->storage_path
-        );
-    }
-    const git_oid *blob_oid = git_tree_entry_id(fresh_entry->entry);
-    if (!blob_oid) {
-        return ERROR(
-            ERR_INTERNAL, "Fresh tree entry has no OID for '%s'",
-            fresh_entry->storage_path
-        );
-    }
-
-    /* Derive type and default mode from git filemode */
-    git_filemode_t filemode = git_tree_entry_filemode(fresh_entry->entry);
-    state_file_type_t new_type;
-    mode_t new_mode;
-    switch (filemode) {
-        case GIT_FILEMODE_LINK:
-            new_type = STATE_FILE_SYMLINK;
-            new_mode = 0;
-            break;
-        case GIT_FILEMODE_BLOB_EXECUTABLE:
-            new_type = STATE_FILE_EXECUTABLE;
-            new_mode = 0755;
-            break;
-        default:
-            new_type = STATE_FILE_REGULAR;
-            new_mode = 0644;
-            break;
-    }
+    /* Read identity fields from fresh entry (populated during tree walk) */
+    const git_oid *blob_oid = &fresh_entry->blob_oid;
+    state_file_type_t new_type = fresh_entry->type;
+    mode_t new_mode = fresh_entry->mode;
 
     /* Look up metadata for this file (may override mode, provide owner/group/encrypted) */
     const char *new_owner = NULL;
@@ -2548,7 +2522,6 @@ static error_t *workspace_build_manifest_from_state(
                 entry->deployed_at = state_entry->deployed_at;
                 /* stat_cache set after blob_changed check below — preserved when
                  * blob_oid unchanged, left at STAT_CACHE_UNSET when changed */
-                entry->entry = NULL;
 
                 /* Now overwrite stale fields from fresh manifest */
                 const metadata_t *meta = ws_get_metadata(ws, fresh_entry->profile_name);
@@ -2632,7 +2605,6 @@ static error_t *workspace_build_manifest_from_state(
             entry->encrypted = state_entry->encrypted;
             entry->deployed_at = state_entry->deployed_at;
             entry->stat_cache = state_entry->stat_cache;
-            entry->entry = NULL;
         }
 
         /* Track entry for cleanup — must precede any further fallible operations
@@ -2664,12 +2636,7 @@ static error_t *workspace_build_manifest_from_state(
 
 cleanup:
     /* Simplified error cleanup — arena handles all string fields.
-     * Only free heap-allocated structures and libgit2 objects. */
-    for (size_t j = 0; j < manifest_idx; j++) {
-        if (ws->manifest->entries[j].entry) {
-            git_tree_entry_free(ws->manifest->entries[j].entry);
-        }
-    }
+     * Only free heap-allocated structures. */
     hashmap_free(path_map, NULL);
     free(ws->manifest->entries);
     free(ws->manifest);

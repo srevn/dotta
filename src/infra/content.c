@@ -224,36 +224,6 @@ error_t *content_get_from_blob_oid(
     return err;
 }
 
-error_t *content_get_from_tree_entry(
-    git_repository *repo,
-    const git_tree_entry *entry,
-    const char *storage_path,
-    const char *profile_name,
-    bool expected_encrypted,
-    keymanager_t *km,
-    buffer_t *out_content
-) {
-    CHECK_NULL(repo);
-    CHECK_NULL(entry);
-    CHECK_NULL(storage_path);
-    CHECK_NULL(profile_name);
-    CHECK_NULL(out_content);
-
-    /* Get OID from tree entry */
-    const git_oid *blob_oid = git_tree_entry_id(entry);
-    if (!blob_oid) {
-        return ERROR(
-            ERR_INTERNAL, "Failed to get OID from tree entry"
-        );
-    }
-
-    /* Delegate to blob OID variant */
-    return content_get_from_blob_oid(
-        repo, blob_oid, storage_path, profile_name,
-        expected_encrypted, km, out_content
-    );
-}
-
 content_cache_t *content_cache_create(
     git_repository *repo,
     keymanager_t *km
@@ -347,33 +317,6 @@ error_t *content_cache_get_from_blob_oid(
 
     *out_content = content;
     return NULL;
-}
-
-error_t *content_cache_get_from_tree_entry(
-    content_cache_t *cache,
-    const git_tree_entry *entry,
-    const char *storage_path,
-    const char *profile_name,
-    bool expected_encrypted,
-    const buffer_t **out_content
-) {
-    CHECK_NULL(cache);
-    CHECK_NULL(entry);
-    CHECK_NULL(storage_path);
-    CHECK_NULL(profile_name);
-    CHECK_NULL(out_content);
-
-    /* Get OID from tree entry */
-    const git_oid *blob_oid = git_tree_entry_id(entry);
-    if (!blob_oid) {
-        return ERROR(ERR_INTERNAL, "Failed to get OID from tree entry");
-    }
-
-    /* Delegate to blob OID variant */
-    return content_cache_get_from_blob_oid(
-        cache, blob_oid, storage_path, profile_name,
-        expected_encrypted, out_content
-    );
 }
 
 void content_cache_free(content_cache_t *cache) {

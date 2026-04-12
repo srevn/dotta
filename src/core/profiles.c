@@ -896,8 +896,7 @@ static error_t *profile_list_tree_files(git_tree *tree, string_array_t **out) {
  *
  * Passed to gitops_tree_walk() to build manifest entries directly during
  * tree traversal, eliminating O(N×D) two-pass overhead. The callback
- * uses git_tree_entry_dup() for O(1) owned copies instead of re-traversing
- * from root via git_tree_entry_bypath().
+ * extracts identity fields from borrowed tree entries at O(1) per file.
  *
  * Memory ownership:
  * - manifest: borrowed, caller retains ownership
@@ -920,17 +919,21 @@ struct manifest_build_ctx {
  *
  * Performance optimization: Instead of collecting paths in pass 1 then
  * re-traversing via git_tree_entry_bypath() in pass 2 (O(N×D)), this
- * callback builds file_entry_t directly using git_tree_entry_dup() (O(N)).
+ * callback builds file_entry_t directly in O(N) time.
+ *
+ * Extracts identity fields (blob_oid, type, mode) from the borrowed tree
+ * entry at the callback boundary — no git_tree_entry_dup needed, no opaque
+ * handle stored on file_entry_t.
  *
  * Handles:
  * - Metadata file filtering (.dotta/, .bootstrap, etc.)
  * - Storage path to filesystem path conversion
  * - Profile precedence override (higher precedence wins)
  * - Array growth on demand
- * - File type derivation from Git filemode
+ * - File identity extraction from Git tree entry
  *
  * @param root Directory path within tree (empty string for root level)
- * @param entry Git tree entry (NOT owned - must dup for ownership)
+ * @param entry Git tree entry (borrowed — valid for callback duration only)
  * @param payload Pointer to manifest_build_ctx
  * @return 0 to continue walk, -1 to stop on error
  */
@@ -1011,18 +1014,6 @@ static int manifest_build_callback(
         }
     }
 
-    /* Get owned copy of tree entry */
-    git_tree_entry *dup_entry = NULL;
-    int git_err = git_tree_entry_dup(&dup_entry, entry);
-    if (git_err != 0) {
-        if (!ctx->arena) free(filesystem_path);
-        ctx->error = ERROR(
-            ERR_GIT, "Failed to duplicate tree entry: %s",
-            git_error_last() ? git_error_last()->message : "unknown"
-        );
-        return -1;
-    }
-
     /* Check for existing entry (profile precedence override) */
     void *idx_ptr = hashmap_get(ctx->path_map, filesystem_path);
 
@@ -1041,7 +1032,6 @@ static int manifest_build_callback(
                                             : strdup(storage_path);
         if (!dup_storage_path) {
             if (!ctx->arena) free(filesystem_path);
-            git_tree_entry_free(dup_entry);
             ctx->error = ERROR(ERR_MEMORY, "Failed to duplicate storage path");
             return -1;
         }
@@ -1051,24 +1041,28 @@ static int manifest_build_callback(
             free(ctx->manifest->entries[existing_idx].storage_path);
             free(ctx->manifest->entries[existing_idx].filesystem_path);
         }
-        git_tree_entry_free(ctx->manifest->entries[existing_idx].entry);
 
-        /* Update with new values */
-        ctx->manifest->entries[existing_idx].storage_path = dup_storage_path;
-        ctx->manifest->entries[existing_idx].filesystem_path = filesystem_path;
-        ctx->manifest->entries[existing_idx].entry = dup_entry;
-        ctx->manifest->entries[existing_idx].profile_name = ctx->profile_name;
+        /* Update with new values from higher-precedence profile */
+        file_entry_t *override = &ctx->manifest->entries[existing_idx];
+        override->storage_path = dup_storage_path;
+        override->filesystem_path = filesystem_path;
+        override->profile_name = ctx->profile_name;
 
-        /* Update type from overriding entry's filemode (may differ between profiles) */
-        switch (git_tree_entry_filemode(dup_entry)) {
+        /* Extract identity from borrowed tree entry (blob_oid, type, mode).
+         * The overriding profile may differ in filemode (e.g., executable bit). */
+        git_oid_cpy(&override->blob_oid, git_tree_entry_id(entry));
+        switch (git_tree_entry_filemode(entry)) {
             case GIT_FILEMODE_BLOB_EXECUTABLE:
-                ctx->manifest->entries[existing_idx].type = STATE_FILE_EXECUTABLE;
+                override->type = STATE_FILE_EXECUTABLE;
+                override->mode = 0755;
                 break;
             case GIT_FILEMODE_LINK:
-                ctx->manifest->entries[existing_idx].type = STATE_FILE_SYMLINK;
+                override->type = STATE_FILE_SYMLINK;
+                override->mode = 0;
                 break;
             default:
-                ctx->manifest->entries[existing_idx].type = STATE_FILE_REGULAR;
+                override->type = STATE_FILE_REGULAR;
+                override->mode = 0644;
                 break;
         }
 
@@ -1079,7 +1073,6 @@ static int manifest_build_callback(
         if (ctx->manifest->count >= ctx->capacity) {
             if (ctx->capacity > SIZE_MAX / 2) {
                 if (!ctx->arena) free(filesystem_path);
-                git_tree_entry_free(dup_entry);
                 ctx->error = ERROR(ERR_INTERNAL, "Manifest capacity overflow");
                 return -1;
             }
@@ -1091,7 +1084,6 @@ static int manifest_build_callback(
             );
             if (!new_entries) {
                 if (!ctx->arena) free(filesystem_path);
-                git_tree_entry_free(dup_entry);
                 ctx->error = ERROR(ERR_MEMORY, "Failed to grow manifest");
                 return -1;
             }
@@ -1105,7 +1097,6 @@ static int manifest_build_callback(
             : strdup(storage_path);
         if (!dup_storage_path) {
             if (!ctx->arena) free(filesystem_path);
-            git_tree_entry_free(dup_entry);
             ctx->error = ERROR(ERR_MEMORY, "Failed to duplicate storage path");
             return -1;
         }
@@ -1113,28 +1104,31 @@ static int manifest_build_callback(
         /* Initialize entry.
          *
          * realloc() does NOT zero new memory. Zero the whole slot first so
-         * every VWD cache field (including the inline blob_oid) starts in the
-         * "not populated from state" state; then overwrite the fields this
-         * Git-built path actually sets. Matches the contract that
-         * git_oid_is_zero() == "no state cache". */
+         * every VWD cache field starts clean; then overwrite the fields this
+         * Git-built path actually sets. Deployment context fields (deployed_at,
+         * stat_cache, encrypted, owner, group) remain zero — they are only
+         * populated for state-built entries. */
         file_entry_t *new_entry = &ctx->manifest->entries[ctx->manifest->count];
         memset(new_entry, 0, sizeof(*new_entry));
         new_entry->storage_path = dup_storage_path;
         new_entry->filesystem_path = filesystem_path;
-        new_entry->entry = dup_entry;
         new_entry->profile_name = ctx->profile_name;
 
-        /* Derive type from Git filemode (executable bit detection) */
-        switch (git_tree_entry_filemode(dup_entry)) {
+        /* Extract identity from borrowed tree entry (blob_oid, type, mode) */
+        git_oid_cpy(&new_entry->blob_oid, git_tree_entry_id(entry));
+        switch (git_tree_entry_filemode(entry)) {
             case GIT_FILEMODE_BLOB_EXECUTABLE:
                 new_entry->type = STATE_FILE_EXECUTABLE;
+                new_entry->mode = 0755;
                 break;
             case GIT_FILEMODE_LINK:
                 new_entry->type = STATE_FILE_SYMLINK;
+                new_entry->mode = 0;
                 break;
             default:
                 /* Should never happen (we filtered to blobs above) */
                 new_entry->type = STATE_FILE_REGULAR;
+                new_entry->mode = 0644;
                 break;
         }
 
@@ -1151,8 +1145,6 @@ static int manifest_build_callback(
             }
             new_entry->storage_path = NULL;
             new_entry->filesystem_path = NULL;
-            git_tree_entry_free(new_entry->entry);
-            new_entry->entry = NULL;
             ctx->error = error_wrap(err, "Failed to update hashmap");
             return -1;
         }
@@ -1238,8 +1230,7 @@ error_t *profile_has_custom_files(
  * Build manifest from profiles
  *
  * Performance: O(N) where N is total files across all profiles.
- * Uses manifest_build_callback for single-pass tree traversal with
- * git_tree_entry_dup() instead of two-pass with git_tree_entry_bypath().
+ * Uses manifest_build_callback for single-pass tree traversal.
  */
 error_t *profile_build_manifest(
     git_repository *repo,
@@ -1302,9 +1293,9 @@ error_t *profile_build_manifest(
 
         /* Build manifest entries via single-pass tree traversal
          *
-         * The callback captures owned tree entries with git_tree_entry_dup(),
-         * converts paths, handles precedence override, and populates
-         * file_entry_t directly—all in O(N) time. */
+         * The callback extracts identity fields (blob_oid, type, mode) from
+         * borrowed tree entries, converts paths, handles precedence override,
+         * and populates file_entry_t directly—all in O(N) time. */
         struct manifest_build_ctx ctx = {
             .manifest      = manifest,
             .capacity      = capacity,
@@ -1734,11 +1725,9 @@ error_t *profile_build_manifest_from_tree(
 
     /* Build manifest entries via single-pass tree traversal
      *
-     * The callback captures owned tree entries with git_tree_entry_dup(),
-     * converts paths, and populates file_entry_t directly—all in O(N) time.
-     *
-     * Tree-based manifests have pre-populated tree entries from
-     * git_tree_entry_dup() — consumers never need lazy loading.
+     * The callback extracts identity fields (blob_oid, type, mode) from
+     * borrowed tree entries, converts paths, and populates file_entry_t
+     * directly—all in O(N) time.
      *
      * custom_prefix borrows from function parameter — outlives tree walk. */
     struct manifest_build_ctx ctx = {
@@ -1831,11 +1820,6 @@ void manifest_free(manifest_t *manifest) {
     }
 
     for (size_t i = 0; i < manifest->count; i++) {
-        /* Free Git tree entry (always libgit2-allocated, never arena) */
-        if (manifest->entries[i].entry) {
-            git_tree_entry_free(manifest->entries[i].entry);
-        }
-
         /* Skip string field frees when arena-backed.
          * blob_oid is an inline binary field — no free. */
         if (!manifest->arena_backed) {

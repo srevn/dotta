@@ -671,21 +671,6 @@ error_t *state_set_file_state(
 );
 
 /**
- * Update full entry
- *
- * Updates all fields of a manifest entry.
- * Used by manifest sync operations to update entries when Git changes.
- *
- * @param state State (must not be NULL, must have active transaction)
- * @param entry Entry with updated fields (must not be NULL)
- * @return Error or NULL on success (not found is an error)
- */
-error_t *state_update_entry(
-    state_t *state,
-    const state_file_entry_t *entry
-);
-
-/**
  * Set commit_oid for a profile in enabled_profiles
  *
  * Writes the profile's current branch HEAD to the per-profile commit_oid

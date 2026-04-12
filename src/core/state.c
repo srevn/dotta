@@ -58,7 +58,6 @@ struct state {
     sqlite3_stmt *stmt_insert_file;         /* INSERT OR REPLACE virtual_manifest */
     sqlite3_stmt *stmt_update_post_deploy;  /* UPDATE virtual_manifest SET deployed_at + stat cache */
     sqlite3_stmt *stmt_update_stat_cache;   /* UPDATE virtual_manifest SET stat cache only */
-    sqlite3_stmt *stmt_update_entry;        /* UPDATE virtual_manifest (full) */
     sqlite3_stmt *stmt_remove_file;         /* DELETE FROM virtual_manifest */
     sqlite3_stmt *stmt_file_exists;         /* SELECT 1 FROM virtual_manifest */
     sqlite3_stmt *stmt_get_file;            /* SELECT * FROM virtual_manifest */
@@ -444,15 +443,11 @@ static error_t *prepare_statements(state_t *state) {
 
     /* Insert/update file (used by manifest sync operations - hot path)
      *
-     * old_profile preservation: Always preserves existing old_profile when
-     * the incoming value is NULL. This prevents any UPSERT path from
-     * silently discarding pending reassignment metadata (set by
-     * manifest_disable_profile, manifest_reorder_profiles, etc.) that has
-     * not yet been acknowledged by apply.
-     *
-     * Setting old_profile is done exclusively via state_update_entry()
-     * (direct UPDATE). Clearing is done via state_clear_old_profile().
-     * This UPSERT only needs to preserve — never set or clear.
+     * old_profile handling via COALESCE: When the incoming value is NULL,
+     * preserves existing old_profile (pending reassignment metadata not yet
+     * acknowledged by apply). When non-NULL, overrides with the new value.
+     * This enables atomic reassignment tracking in one UPSERT operation.
+     * Clearing is done separately via state_clear_old_profile().
      *
      * Stat cache preservation: When blob_oid is unchanged (same content),
      * preserves the existing stat cache rather than zeroing it. This avoids
@@ -523,38 +518,6 @@ static error_t *prepare_statements(state_t *state) {
         return sqlite_error(state->db, "Failed to prepare update stat cache statement");
     }
 
-    /* Update full entry (used by manifest sync operations)
-     *
-     * Stat cache preservation: Same CASE WHEN pattern as INSERT statement.
-     * When blob_oid is unchanged (read-modify-write for old_profile tracking),
-     * preserves the existing stat cache. When blob_oid changes, incoming
-     * stat cache values are written (typically zeros = invalidation).
-     *
-     * Uses numbered parameters (?NNN) so the CASE WHEN can reference ?4
-     * (blob_oid) without additional bindings. */
-    const char *sql_update_entry =
-        "UPDATE virtual_manifest SET "
-        "storage_path = ?1, profile = ?2, old_profile = ?3, "
-        "blob_oid = ?4, type = ?5, mode = ?6, owner = ?7, \"group\" = ?8, "
-        "encrypted = ?9, state = ?10, deployed_at = ?11, "
-        "stat_mtime = CASE WHEN ?4 IS NOT virtual_manifest.blob_oid "
-        "             THEN ?12 ELSE virtual_manifest.stat_mtime END, "
-        "stat_size  = CASE WHEN ?4 IS NOT virtual_manifest.blob_oid "
-        "             THEN ?13 ELSE virtual_manifest.stat_size END, "
-        "stat_ino   = CASE WHEN ?4 IS NOT virtual_manifest.blob_oid "
-        "             THEN ?14 ELSE virtual_manifest.stat_ino END "
-        "WHERE filesystem_path = ?15;";
-
-    rc = sqlite3_prepare_v2(
-        state->db, sql_update_entry, -1, &state->stmt_update_entry, NULL
-    );
-    if (rc != SQLITE_OK) {
-        sqlite3_finalize(state->stmt_insert_file);
-        sqlite3_finalize(state->stmt_update_post_deploy);
-        sqlite3_finalize(state->stmt_update_stat_cache);
-        return sqlite_error(state->db, "Failed to prepare update entry statement");
-    }
-
     /* File exists check (used in status - hot path) */
     const char *sql_exists =
         "SELECT 1 FROM virtual_manifest WHERE filesystem_path = ? LIMIT 1;";
@@ -564,7 +527,6 @@ static error_t *prepare_statements(state_t *state) {
         sqlite3_finalize(state->stmt_insert_file);
         sqlite3_finalize(state->stmt_update_post_deploy);
         sqlite3_finalize(state->stmt_update_stat_cache);
-        sqlite3_finalize(state->stmt_update_entry);
         return sqlite_error(state->db, "Failed to prepare exists statement");
     }
 
@@ -580,7 +542,6 @@ static error_t *prepare_statements(state_t *state) {
         sqlite3_finalize(state->stmt_insert_file);
         sqlite3_finalize(state->stmt_update_post_deploy);
         sqlite3_finalize(state->stmt_update_stat_cache);
-        sqlite3_finalize(state->stmt_update_entry);
         sqlite3_finalize(state->stmt_file_exists);
         return sqlite_error(state->db, "Failed to prepare get statement");
     }
@@ -599,7 +560,6 @@ static error_t *prepare_statements(state_t *state) {
         sqlite3_finalize(state->stmt_insert_file);
         sqlite3_finalize(state->stmt_update_post_deploy);
         sqlite3_finalize(state->stmt_update_stat_cache);
-        sqlite3_finalize(state->stmt_update_entry);
         sqlite3_finalize(state->stmt_file_exists);
         sqlite3_finalize(state->stmt_get_file);
         return sqlite_error(state->db, "Failed to prepare get by storage statement");
@@ -616,7 +576,6 @@ static error_t *prepare_statements(state_t *state) {
         sqlite3_finalize(state->stmt_insert_file);
         sqlite3_finalize(state->stmt_update_post_deploy);
         sqlite3_finalize(state->stmt_update_stat_cache);
-        sqlite3_finalize(state->stmt_update_entry);
         sqlite3_finalize(state->stmt_file_exists);
         sqlite3_finalize(state->stmt_get_file);
         sqlite3_finalize(state->stmt_get_file_by_storage);
@@ -632,7 +591,6 @@ static error_t *prepare_statements(state_t *state) {
         sqlite3_finalize(state->stmt_insert_file);
         sqlite3_finalize(state->stmt_update_post_deploy);
         sqlite3_finalize(state->stmt_update_stat_cache);
-        sqlite3_finalize(state->stmt_update_entry);
         sqlite3_finalize(state->stmt_file_exists);
         sqlite3_finalize(state->stmt_get_file);
         sqlite3_finalize(state->stmt_get_file_by_storage);
@@ -650,7 +608,6 @@ static error_t *prepare_statements(state_t *state) {
         sqlite3_finalize(state->stmt_insert_file);
         sqlite3_finalize(state->stmt_update_post_deploy);
         sqlite3_finalize(state->stmt_update_stat_cache);
-        sqlite3_finalize(state->stmt_update_entry);
         sqlite3_finalize(state->stmt_file_exists);
         sqlite3_finalize(state->stmt_get_file);
         sqlite3_finalize(state->stmt_get_file_by_storage);
@@ -686,11 +643,6 @@ static void finalize_statements(state_t *state) {
     if (state->stmt_update_stat_cache) {
         sqlite3_finalize(state->stmt_update_stat_cache);
         state->stmt_update_stat_cache = NULL;
-    }
-
-    if (state->stmt_update_entry) {
-        sqlite3_finalize(state->stmt_update_entry);
-        state->stmt_update_entry = NULL;
     }
 
     if (state->stmt_file_exists) {
@@ -1186,7 +1138,7 @@ error_t *state_set_profiles(
     }
 
     /* 20-byte zero buffer for new profiles without existing commit_oid */
-    static const unsigned char zero_oid[GIT_OID_RAWSZ] = {0};
+    static const unsigned char zero_oid[GIT_OID_RAWSZ] = { 0 };
 
     /* Insert new profiles with preserved custom_prefix and commit_oid values */
     time_t now = time(NULL);
@@ -1203,7 +1155,9 @@ error_t *state_set_profiles(
         /* Lookup and bind preserved commit_oid (or zeros for new profiles) */
         const git_oid *preserved_oid = hashmap_get(oid_map, profiles->items[i]);
         if (preserved_oid) {
-            sqlite3_bind_blob(state->stmt_insert_profile, 4, preserved_oid->id, GIT_OID_RAWSZ, SQLITE_STATIC);
+            sqlite3_bind_blob(
+                state->stmt_insert_profile, 4, preserved_oid->id, GIT_OID_RAWSZ, SQLITE_STATIC
+            );
         } else {
             sqlite3_bind_blob(state->stmt_insert_profile, 4, zero_oid, GIT_OID_RAWSZ, SQLITE_STATIC);
         }
@@ -3382,104 +3336,6 @@ error_t *state_set_file_state(
 }
 
 /**
- * Update full entry
- *
- * Updates all fields of a manifest entry.
- * Used by manifest sync operations to update entries when Git changes.
- *
- * @param state State (must not be NULL, must have active transaction)
- * @param entry Entry with updated fields (must not be NULL)
- * @return Error or NULL on success (not found is an error)
- */
-error_t *state_update_entry(
-    state_t *state,
-    const state_file_entry_t *entry
-) {
-    CHECK_NULL(state);
-    CHECK_NULL(entry);
-    CHECK_NULL(state->db);
-    CHECK_NULL(state->stmt_update_entry);
-
-    /* Convert type enum to string */
-    const char *type_str = entry->type == STATE_FILE_REGULAR ? "file"
-                         : entry->type == STATE_FILE_SYMLINK ? "symlink" : "executable";
-
-    /* Reset and bind all 14 fields + filesystem_path for WHERE clause */
-    sqlite3_reset(state->stmt_update_entry);
-    sqlite3_clear_bindings(state->stmt_update_entry);
-
-    sqlite3_bind_text(state->stmt_update_entry, 1, entry->storage_path, -1, SQLITE_TRANSIENT);
-    sqlite3_bind_text(state->stmt_update_entry, 2, entry->profile, -1, SQLITE_TRANSIENT);
-
-    if (entry->old_profile) {
-        sqlite3_bind_text(state->stmt_update_entry, 3, entry->old_profile, -1, SQLITE_TRANSIENT);
-    } else {
-        sqlite3_bind_null(state->stmt_update_entry, 3);
-    }
-
-    sqlite3_bind_blob(
-        state->stmt_update_entry, 4, entry->blob_oid.id, GIT_OID_RAWSZ, SQLITE_TRANSIENT
-    );
-    sqlite3_bind_text(state->stmt_update_entry, 5, type_str, -1, SQLITE_STATIC);
-
-    if (entry->mode > 0) {
-        sqlite3_bind_int(state->stmt_update_entry, 6, entry->mode);
-    } else {
-        sqlite3_bind_null(state->stmt_update_entry, 6);
-    }
-
-    if (entry->owner) {
-        sqlite3_bind_text(state->stmt_update_entry, 7, entry->owner, -1, SQLITE_TRANSIENT);
-    } else {
-        sqlite3_bind_null(state->stmt_update_entry, 7);
-    }
-
-    if (entry->group) {
-        sqlite3_bind_text(state->stmt_update_entry, 8, entry->group, -1, SQLITE_TRANSIENT);
-    } else {
-        sqlite3_bind_null(state->stmt_update_entry, 8);
-    }
-
-    sqlite3_bind_int(state->stmt_update_entry, 9, entry->encrypted ? 1 : 0);
-
-    /* 10. state */
-    if (entry->state && entry->state[0] != '\0') {
-        sqlite3_bind_text(state->stmt_update_entry, 10, entry->state, -1, SQLITE_TRANSIENT);
-    } else {
-        sqlite3_bind_text(state->stmt_update_entry, 10, STATE_ACTIVE, -1, SQLITE_STATIC);
-    }
-
-    /* 11. deployed_at */
-    sqlite3_bind_int64(state->stmt_update_entry, 11, (sqlite3_int64) entry->deployed_at);
-
-    /* 12-14. stat cache (fast-path divergence detection)
-     *
-     * These values are only written when blob_oid changes (CASE WHEN in SQL).
-     * When blob_oid is unchanged, the existing DB values are preserved. */
-    sqlite3_bind_int64(state->stmt_update_entry, 12, entry->stat_cache.mtime);
-    sqlite3_bind_int64(state->stmt_update_entry, 13, entry->stat_cache.size);
-    sqlite3_bind_int64(state->stmt_update_entry, 14, (sqlite3_int64) entry->stat_cache.ino);
-
-    /* 15. filesystem_path for WHERE clause */
-    sqlite3_bind_text(state->stmt_update_entry, 15, entry->filesystem_path, -1, SQLITE_TRANSIENT);
-
-    /* Execute */
-    int rc = sqlite3_step(state->stmt_update_entry);
-
-    if (rc != SQLITE_DONE) {
-        return sqlite_error(state->db, "Failed to update entry");
-    }
-
-    /* Check if row was actually updated */
-    int changes = sqlite3_changes(state->db);
-    if (changes == 0) {
-        return ERROR(ERR_NOT_FOUND, "File '%s' not found in manifest", entry->filesystem_path);
-    }
-
-    return NULL;
-}
-
-/**
  * Set commit_oid for a profile in enabled_profiles
  *
  * Single-row UPDATE on enabled_profiles. Records the profile's current
@@ -3585,7 +3441,7 @@ error_t *state_get_profile_commit_oid(
 
     memcpy(out_commit_oid->id, sqlite3_column_blob(stmt, 0), GIT_OID_RAWSZ);
     sqlite3_finalize(stmt);
-    
+
     return NULL;
 }
 

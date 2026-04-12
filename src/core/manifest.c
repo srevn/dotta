@@ -213,7 +213,8 @@ static error_t *sync_entry_to_state(
     state_t *state,
     const file_entry_t *manifest_entry,
     const metadata_t *metadata,
-    time_t deployed_at
+    time_t deployed_at,
+    const char *old_profile
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(state);
@@ -264,6 +265,7 @@ static error_t *sync_entry_to_state(
         .storage_path    = manifest_entry->storage_path,
         .filesystem_path = manifest_entry->filesystem_path,
         .profile         = (char *) manifest_entry->profile_name,
+        .old_profile     = (char *) old_profile,
         .type            = file_type,
         .blob_oid        = *blob_oid_obj,
         .mode            = mode,
@@ -275,11 +277,11 @@ static error_t *sync_entry_to_state(
         .deployed_at     = deployed_at
     };
 
-    /* 6. Write entry to state (INSERT OR REPLACE with caller's deployed_at)
+    /* 6. Write entry to state (INSERT OR REPLACE)
      *
-     * Uses INSERT OR REPLACE for atomic upsert - handles both new entries
-     * and updates to existing entries. The deployed_at value comes directly
-     * from the caller, who is responsible for preservation logic.
+     * Uses INSERT OR REPLACE for atomic upsert. The SQL's COALESCE on
+     * old_profile preserves existing values when NULL, overrides when
+     * non-NULL — enabling atomic reassignment tracking in one operation.
      */
     err = state_add_file(state, &state_entry);
     if (err) {
@@ -494,7 +496,7 @@ error_t *manifest_enable_profile(
         }
 
         /* Sync entry with deployed_at timestamp */
-        err = sync_entry_to_state(repo, state, entry, metadata, deployed_at);
+        err = sync_entry_to_state(repo, state, entry, metadata, deployed_at, NULL);
         if (err) goto cleanup;
     }
 
@@ -820,9 +822,10 @@ error_t *manifest_disable_profile(
              * VWD Invariant: Entry metadata must match source profile's Git tree + metadata.json.
              */
 
-            /* Sync fallback entry to state */
+            /* Sync fallback entry to state (old_profile tracks reassignment
+             * for user visibility: "file moved from darwin to global") */
             err = sync_entry_to_state(
-                repo, state, fallback, fallback_metadata, entry->deployed_at
+                repo, state, fallback, fallback_metadata, entry->deployed_at, entry->profile
             );
             if (err) {
                 err = error_wrap(
@@ -832,78 +835,7 @@ error_t *manifest_disable_profile(
                 goto cleanup;
             }
 
-            /* Track profile reassignment (old_profile metadata)
-             *
-             * ARCHITECTURE: Separation of concerns between Git-sync and reassignment.
-             *
-             * sync_entry_to_state() is a low-level Git→State sync primitive used across
-             * the codebase. It correctly writes the fallback entry but does NOT set
-             * old_profile (Git-sync concern, not profile management semantics).
-             *
-             * Profile reassignment tracking is a higher-level semantic that provides
-             * user visibility into transitions (e.g., "file moved from darwin to global").
-             * This layered approach maintains clean separation:
-             *   Layer 1: Git→State sync (proven metadata extraction, blob_oid, etc.)
-             *   Layer 2: Reassignment tracking (profile change attribution)
-             *
-             * The old_profile field enables:
-             *   - User visibility: status shows "home/.bashrc (darwin → global)"
-             *   - Informed decisions: user sees why file is modified before apply
-             *   - Audit trail: track reassignment history until deployment acknowledges it
-             *
-             * Post-deployment: apply clears old_profile after successful deployment,
-             * acknowledging the reassignment is complete.
-             */
-            state_file_entry_t *updated_entry = NULL;
-            err = state_get_file(state, entry->filesystem_path, &updated_entry);
-            if (err) {
-                err = error_wrap(
-                    err, "Failed to read entry for reassignment tracking: %s",
-                    entry->filesystem_path
-                );
-                goto cleanup;
-            }
-
-            /* Set old_profile to the disabled profile name (reassignment)
-             *
-             * MEMORY SAFETY:
-             * - entry->profile is owned by entries[] array (valid until cleanup)
-             * - str_replace_owned() creates independent copy in updated_entry
-             * - updated_entry is heap-allocated by state_get_file()
-             *
-             * INVARIANT: entry->profile is never NULL for manifest entries
-             */
-            if (!entry->profile) {
-                /* Should never happen - defensive check */
-                state_free_entry(updated_entry);
-                err = ERROR(
-                    ERR_INTERNAL, "Manifest entry missing profile field: %s",
-                    entry->storage_path
-                );
-                goto cleanup;
-            }
-
-            err = str_replace_owned(&updated_entry->old_profile, entry->profile);
-            if (err) {
-                state_free_entry(updated_entry);
-                err = error_wrap(
-                    err, "Failed to set old_profile for %s",
-                    entry->storage_path
-                );
-                goto cleanup;
-            }
-
-            /* Persist the reassignment tracking */
-            err = state_update_entry(state, updated_entry);
-            state_free_entry(updated_entry);  /* Always free, even on success */
-            if (err) {
-                err = error_wrap(
-                    err, "Failed to persist old_profile for %s",
-                    entry->storage_path
-                );
-                goto cleanup;
-            }
-
+            /* Track profile reassignment (old_profile metadata) */
             fallback_count++;
         } else {
             /* No fallback - mark as inactive (staged for removal)
@@ -1309,20 +1241,6 @@ error_t *manifest_remove_files(
             /* Preserve deployed_at (lifecycle history) before sync overwrites entry */
             time_t preserved_deployed_at = current_entry->deployed_at;
 
-            /* Save old profile name for reassignment tracking
-             *
-             * MEMORY SAFETY: Must copy before sync_entry_to_state, which uses
-             * state_add_file (INSERT OR REPLACE) and overwrites the entry.
-             * current_entry->profile is guaranteed non-NULL (verified above).
-             */
-            char *old_profile_name = arena_strdup(arena, current_entry->profile);
-            if (!old_profile_name) {
-                err = ERROR(ERR_MEMORY, "Failed to copy old profile name");
-                state_free_entry(current_entry);
-                free(filesystem_path);
-                goto cleanup;
-            }
-
             /* Sync complete entry from fallback (proven pattern)
              *
              * sync_entry_to_state correctly:
@@ -1331,7 +1249,7 @@ error_t *manifest_remove_files(
              * 3. Uses INSERT OR REPLACE for atomic, complete entry update
              */
             err = sync_entry_to_state(
-                repo, state, fallback, metadata, preserved_deployed_at
+                repo, state, fallback, metadata, preserved_deployed_at, current_entry->profile
             );
             if (err) {
                 state_free_entry(current_entry);
@@ -1343,51 +1261,7 @@ error_t *manifest_remove_files(
                 goto cleanup;
             }
 
-            /* Track profile reassignment (old_profile metadata)
-             *
-             * ARCHITECTURE: Separation of concerns between Git-sync and reassignment.
-             *
-             * sync_entry_to_state() is a low-level Git→State sync primitive.
-             * Reassignment tracking is a higher-level semantic that provides user
-             * visibility into transitions (e.g., "file moved from darwin to global").
-             *
-             * The old_profile field enables:
-             *   - User visibility: status shows "home/.bashrc (darwin → global)"
-             *   - Informed decisions: user sees why file is modified before apply
-             *   - Audit trail: track reassignment history until deployment acknowledges it
-             */
-            state_file_entry_t *updated_entry = NULL;
-            err = state_get_file(state, filesystem_path, &updated_entry);
-            if (err) {
-                state_free_entry(current_entry);
-                free(filesystem_path);
-                err = error_wrap(
-                    err, "Failed to read entry for old_profile tracking"
-                );
-                goto cleanup;
-            }
-
-            err = str_replace_owned(&updated_entry->old_profile, old_profile_name);
-            old_profile_name = NULL;
-
-            if (err) {
-                state_free_entry(updated_entry);
-                state_free_entry(current_entry);
-                free(filesystem_path);
-                goto cleanup;
-            }
-
-            err = state_update_entry(state, updated_entry);
-            state_free_entry(updated_entry);
-            if (err) {
-                state_free_entry(current_entry);
-                free(filesystem_path);
-                err = error_wrap(
-                    err, "Failed to persist old_profile"
-                );
-                goto cleanup;
-            }
-
+            /* Track profile reassignment (old_profile metadata) */
             fallback_count++;
         } else {
             /* No fallback - mark as deleted (controlled deletion)
@@ -1595,7 +1469,7 @@ error_t *manifest_rebuild(
         }
 
         /* Sync to state with preserved/computed deployed_at */
-        err = sync_entry_to_state(repo, state, entry, metadata, deployed_at);
+        err = sync_entry_to_state(repo, state, entry, metadata, deployed_at, NULL);
         if (err) goto cleanup;
     }
 
@@ -1901,8 +1775,12 @@ error_t *manifest_repair_stale(
                 }
             }
 
+            /* Pass old_profile when owning profile shifts during repair */
+            const char *repair_old_profile = strcmp(fresh_entry->profile_name, entry->profile) != 0
+                                           ? entry->profile : NULL;
+
             err = sync_entry_to_state(
-                repo, state, fresh_entry, metadata, entry->deployed_at
+                repo, state, fresh_entry, metadata, entry->deployed_at, repair_old_profile
             );
             if (err) {
                 err = error_wrap(
@@ -1912,43 +1790,8 @@ error_t *manifest_repair_stale(
                 goto cleanup;
             }
 
-            /* Track profile reassignment when owning profile shifts during repair.
-             *
-             * Same read-modify-write pattern as manifest_reorder_profiles,
-             * manifest_disable_profile, manifest_remove_files, manifest_sync_diff.
-             *
-             * entry->profile is still valid (pre-loaded all_entries array, not
-             * modified by sync_entry_to_state's DB write). Verified non-NULL
-             * by the filter at the top of this loop iteration.
-             *
-             * Triggers: external git rm (fallback to lower precedence),
-             *           external git add (higher precedence takes over). */
-            if (strcmp(fresh_entry->profile_name, entry->profile) != 0) {
-                state_file_entry_t *updated_entry = NULL;
-                err = state_get_file(state, entry->filesystem_path, &updated_entry);
-                if (err) {
-                    err = error_wrap(
-                        err, "Failed to read entry for reassignment tracking"
-                    );
-                    goto cleanup;
-                }
-
-                err = str_replace_owned(&updated_entry->old_profile, entry->profile);
-                if (err) {
-                    state_free_entry(updated_entry);
-                    goto cleanup;
-                }
-
-                err = state_update_entry(state, updated_entry);
-                state_free_entry(updated_entry);
-                if (err) {
-                    err = error_wrap(
-                        err, "Failed to track reassignment for '%s'",
-                        entry->storage_path
-                    );
-                    goto cleanup;
-                }
-
+            /* Track profile reassignment when owning profile shifts during repair */
+            if (repair_old_profile) {
                 out_stats->reassigned++;
             }
 
@@ -2126,8 +1969,8 @@ error_t *manifest_reorder_profiles(
         if (!old_entry) {
             /* New file (rare in reorder, but handle it) */
 
-            /* New file - deployed_at=0 (never deployed) */
-            err = sync_entry_to_state(repo, state, new_entry, metadata, 0);
+            /* New file - deployed_at = 0 (never deployed) */
+            err = sync_entry_to_state(repo, state, new_entry, metadata, 0, NULL);
             if (err) {
                 goto cleanup;
             }
@@ -2141,35 +1984,8 @@ error_t *manifest_reorder_profiles(
 
                 /* Sync with new owner, preserve existing deployed_at */
                 err = sync_entry_to_state(
-                    repo, state, new_entry, metadata, old_entry->deployed_at
+                    repo, state, new_entry, metadata, old_entry->deployed_at, old_entry->profile
                 );
-                if (err) {
-                    goto cleanup;
-                }
-
-                /* Track profile reassignment for user visibility
-                 *
-                 * Pattern: Same as manifest_disable_profile and manifest_remove_files.
-                 * Enables status to show "home/.bashrc (darwin → global)" after reorder.
-                 */
-                state_file_entry_t *updated_entry = NULL;
-                err = state_get_file(state, new_entry->filesystem_path, &updated_entry);
-                if (err) {
-                    err = error_wrap(
-                        err, "Failed to read entry for old_profile tracking: %s",
-                        new_entry->filesystem_path
-                    );
-                    goto cleanup;
-                }
-
-                err = str_replace_owned(&updated_entry->old_profile, old_entry->profile);
-                if (err) {
-                    state_free_entry(updated_entry);
-                    goto cleanup;
-                }
-
-                err = state_update_entry(state, updated_entry);
-                state_free_entry(updated_entry);
                 if (err) {
                     goto cleanup;
                 }
@@ -2411,58 +2227,32 @@ error_t *manifest_update_files(
                 time_t deployed_at = 0;
                 char *old_profile_name = NULL;
                 state_file_entry_t *existing_entry = NULL;
-                error_t *get_err1 = state_get_file(
-                    state, item->filesystem_path, &existing_entry
-                );
-                if (get_err1 == NULL && existing_entry != NULL) {
+                error_t *get_err = state_get_file(state, item->filesystem_path, &existing_entry);
+                if (get_err == NULL && existing_entry != NULL) {
                     deployed_at = existing_entry->deployed_at;
                     /* Save old profile for reassignment tracking */
                     if (existing_entry->profile) {
                         old_profile_name = arena_strdup(arena, existing_entry->profile);
                     }
                     state_free_entry(existing_entry);
-                } else if (get_err1) {
-                    if (get_err1->code == ERR_NOT_FOUND) {
-                        error_free(get_err1);
+                } else if (get_err) {
+                    if (get_err->code == ERR_NOT_FOUND) {
+                        error_free(get_err);
                     } else {
-                        err = get_err1;
+                        err = get_err;
                         goto cleanup;
                     }
                 }
 
-                err = sync_entry_to_state(repo, state, fallback, metadata, deployed_at);
+                err = sync_entry_to_state(
+                    repo, state, fallback, metadata, deployed_at, old_profile_name
+                );
                 if (err) {
                     err = error_wrap(
                         err, "Failed to sync fallback for '%s'",
                         item->filesystem_path
                     );
                     goto cleanup;
-                }
-
-                /* Update old_profile if profile was reassigned */
-                if (old_profile_name) {
-                    state_file_entry_t *updated_entry = NULL;
-                    error_t *get_err2 = state_get_file(
-                        state, item->filesystem_path, &updated_entry
-                    );
-                    if (get_err2 == NULL && updated_entry != NULL) {
-                        /* Set old_profile to track reassignment */
-                        err = str_replace_owned(&updated_entry->old_profile, old_profile_name);
-                        if (!err) {
-                            err = state_update_entry(state, updated_entry);
-                        }
-                        state_free_entry(updated_entry);
-                    } else if (get_err2) {
-                        error_free(get_err2);
-                    }
-
-                    if (err) {
-                        err = error_wrap(
-                            err, "Failed to track reassignment for '%s'",
-                            item->filesystem_path
-                        );
-                        goto cleanup;
-                    }
                 }
 
                 (*out_fallbacks)++;
@@ -2527,7 +2317,7 @@ error_t *manifest_update_files(
                 metadata = metadata_merged;
             }
 
-            err = sync_entry_to_state(repo, state, entry, metadata, time(NULL));
+            err = sync_entry_to_state(repo, state, entry, metadata, time(NULL), NULL);
             if (err) {
                 err = error_wrap(
                     err, "Failed to sync '%s' to manifest",
@@ -2804,7 +2594,7 @@ error_t *manifest_add_files(
             metadata = metadata_merged;
         }
 
-        err = sync_entry_to_state(repo, state, entry, metadata, time(NULL));
+        err = sync_entry_to_state(repo, state, entry, metadata, time(NULL), NULL);
 
         if (err) {
             err = error_wrap(
@@ -3116,7 +2906,7 @@ error_t *manifest_sync_diff(
                 }
             }
 
-            err = sync_entry_to_state(repo, state, entry, profile_metadata, deployed_at);
+            err = sync_entry_to_state(repo, state, entry, profile_metadata, deployed_at, NULL);
             if (err) {
                 err = error_wrap(
                     err, "Failed to sync '%s' to manifest",
@@ -3162,6 +2952,7 @@ error_t *manifest_sync_diff(
                 time_t deployed_at = 0;
                 char *old_profile_name = NULL;
                 state_file_entry_t *existing_fb = NULL;
+
                 error_t *get_err_fb = state_get_file(state, filesystem_path, &existing_fb);
                 if (get_err_fb == NULL && existing_fb != NULL) {
                     deployed_at = existing_fb->deployed_at;
@@ -3180,7 +2971,9 @@ error_t *manifest_sync_diff(
                     }
                 }
 
-                err = sync_entry_to_state(repo, state, entry, fallback_metadata, deployed_at);
+                err = sync_entry_to_state(
+                    repo, state, entry, fallback_metadata, deployed_at, old_profile_name
+                );
                 if (err) {
                     err = error_wrap(
                         err, "Failed to sync fallback for '%s'",
@@ -3190,34 +2983,7 @@ error_t *manifest_sync_diff(
                     goto cleanup;
                 }
 
-                /* Track profile reassignment for user visibility
-                 *
-                 * Pattern: Same as manifest_update_files and manifest_disable_profile.
-                 * Enables status to show "home/.bashrc (darwin → global)" after sync.
-                 */
-                if (old_profile_name) {
-                    state_file_entry_t *updated_entry = NULL;
-                    error_t *get_err2 = state_get_file(state, filesystem_path, &updated_entry);
-                    if (get_err2 == NULL && updated_entry != NULL) {
-                        err = str_replace_owned(&updated_entry->old_profile, old_profile_name);
-                        if (!err) {
-                            err = state_update_entry(state, updated_entry);
-                        }
-                        state_free_entry(updated_entry);
-                    } else if (get_err2) {
-                        error_free(get_err2);
-                    }
-
-                    if (err) {
-                        err = error_wrap(
-                            err, "Failed to track reassignment for '%s'",
-                            filesystem_path
-                        );
-                        free(filesystem_path);
-                        goto cleanup;
-                    }
-                }
-
+                /* Track profile reassignment for user visibility */
                 fallbacks++;
 
             } else {

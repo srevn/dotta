@@ -2147,26 +2147,16 @@ static error_t *analyze_encryption_policy_mismatch(
                  * Result: User sees both flags: "modified [encryption]" in status. */
                 existing->divergence |= DIVERGENCE_ENCRYPTION;
             } else {
-                /* File has NO other divergence - encryption policy is the only issue.
-                 * Determine state: if in state, it's deployed; otherwise undeployed. */
-                bool in_state = false;
-
-                if (ws->state) {
-                    state_file_entry_t *state_entry = NULL;
-                    error_t *state_err = state_get_file(
-                        ws->state,
-                        manifest_entry->filesystem_path,
-                        &state_entry
-                    );
-                    if (state_err == NULL && state_entry) {
-                        in_state = true;
-                        state_free_entry(state_entry);
-                    }
-                    error_free(state_err);
-                }
-
-                workspace_state_t item_state = in_state ? WORKSPACE_STATE_DEPLOYED
-                                                        : WORKSPACE_STATE_UNDEPLOYED;
+                /* File has NO other divergence — encryption policy is the only issue.
+                 *
+                 * Use deployed_at from VWD cache to determine lifecycle state.
+                 * Manifest is built from state (workspace_build_manifest_from_state),
+                 * so deployed_at is always populated:
+                 *   > 0  → file known/deployed
+                 *   == 0 → file never deployed */
+                workspace_state_t item_state = manifest_entry->deployed_at > 0
+                    ? WORKSPACE_STATE_DEPLOYED
+                    : WORKSPACE_STATE_UNDEPLOYED;
 
                 struct stat enc_stat;
                 bool on_filesystem = (lstat(manifest_entry->filesystem_path, &enc_stat) == 0);

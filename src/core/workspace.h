@@ -44,19 +44,15 @@
  *   never in deployment state (created implicitly when files are deployed)
  * - Use item_kind to distinguish between files and directories.
  *
- * Memory layout optimized for cache locality: pointers grouped together to
- * fit in first cache line (64 bytes), followed by scalars.
- *
  * Lifetime notes:
  * - filesystem_path, storage_path: borrowed from arena-backed manifest/state entries
- * - profile, metadata_profile: arena_strdup'd (arena-owned, freed via arena_destroy)
+ * - profile: arena_strdup'd (arena-owned, freed via arena_destroy)
  * - old_profile: borrowed from arena-backed manifest entry (can be NULL)
  */
 typedef struct {
     char *filesystem_path;      /* Target path on filesystem (arena-borrowed) */
     char *storage_path;         /* Path in profile, e.g., home/.bashrc (arena-borrowed) */
     char *profile;              /* Winning profile name (arena-owned) */
-    char *metadata_profile;     /* Which profile's metadata won, can differ from profile (arena-owned) */
     char *old_profile;          /* Previous profile from state, NULL if unchanged (arena-borrowed) */
 
     /* Item classification */
@@ -106,7 +102,7 @@ typedef struct {
 
     /* Stale repair context (from manifest_repair_stale)
      *
-     * When non-NULL, maps filesystem_path → git_oid * (old blob OID, binary)
+     * When non-NULL, maps filesystem_path -> git_oid * (old blob OID, binary)
      * for entries that were persistently repaired before workspace_load(). Used
      * to set DIVERGENCE_STALE on items whose file content matches the old
      * (deployed) blob, enabling preflight to distinguish "expected state
@@ -397,11 +393,10 @@ content_cache_t *workspace_get_content_cache(const workspace_t *ws);
  * The function handles special cases:
  *   - TYPE divergence suppresses MODE tag (type change makes mode irrelevant)
  *   - ENCRYPTION divergence upgrades color to MAGENTA if not already RED
- *   - Metadata from different profile shows "metadata from X" instead of "from X"
  *
  * Metadata Format:
  *   - "from {profile}" - Standard source profile
- *   - "metadata from {profile}" - Metadata-specific profile (differs from content)
+ *   - "{old} → {new}" - Profile reassignment transition
  *   - "in {profile}" - For untracked items
  *
  * Thread Safety: Uses only stack variables and string literals. Safe for

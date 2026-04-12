@@ -4,17 +4,11 @@
  * Manages three-state consistency: Profile (git), Deployment (state.db), Filesystem (disk).
  * Detects and categorizes divergence to prevent data loss and enable safe operations.
  *
- * Metadata Architecture:
- * Profiles layer with precedence (global < OS < host). The merged_metadata map
- * pre-applies precedence during workspace_load(), ensuring all analysis functions
- * compare against the "winning" metadata. This prevents false divergence when
- * multiple profiles track the same path with different metadata.
- *
- * Key Design:
- * - merged_metadata: Single hashmap with precedence already applied
- * - Maps: key -> index+1 into merged_entries (realloc-safe, like diverged_index)
- * - Key interpretation: Both FILES and DIRECTORIES use storage_path (portable)
- * - Built once in workspace_load(), used by all analysis functions
+ * Trust Model:
+ * Files trust the VWD manifest (virtual_manifest table), maintained by manifest layer.
+ * Directories trust the tracked_directories state column, maintained by
+ * manifest_sync_directories() with mark-inactive-then-reactivate semantics.
+ * Both are patched in-memory for stale profiles (external Git changes).
  */
 
 #include "core/workspace.h"
@@ -46,17 +40,6 @@
 #include "sys/filesystem.h"
 #include "sys/gitops.h"
 #include "utils/privilege.h"
-
-/**
- * Merged metadata entry (internal structure)
- *
- * Pairs a metadata item with its source profile name to track provenance
- * after profile precedence is applied.
- */
-typedef struct {
-    const metadata_item_t *item;      /* Borrowed from metadata_cache */
-    const char *profile_name;         /* Which profile provided this (borrowed) */
-} merged_metadata_entry_t;
 
 /**
  * Pending stat cache update (internal type)
@@ -99,11 +82,10 @@ struct workspace {
     content_cache_t *content_cache;  /* Owned - caches decrypted content */
     hashmap_t *metadata_cache;       /* Owned - maps profile_name -> metadata_t* */
 
-    /* Unified metadata view with profile precedence applied */
-    hashmap_t *merged_metadata;              /* Owned map: key -> index+1 into merged_entries (as void*) */
-    merged_metadata_entry_t *merged_entries; /* Owned array of entries */
-    size_t merged_count;                     /* Number of merged entries */
-    size_t merged_capacity;                  /* Allocated capacity of merged array */
+    /* Cached directory state (shared between analyze_orphaned_directories
+     * and analyze_directory_metadata_divergence to avoid redundant table scans) */
+    state_directory_entry_t *cached_state_dirs;  /* Arena-allocated (NULL until first load) */
+    size_t cached_state_dir_count;               /* Number of cached directory entries */
 
     /* Divergence tracking */
     workspace_item_t *diverged;      /* Array of diverged items (files and directories) */
@@ -115,6 +97,7 @@ struct workspace {
     bool manifest_stale;             /* True if any profile's stored HEAD was stale */
     hashmap_t *stale_paths;          /* Patched entries (NULL if no staleness) */
     hashmap_t *released_paths;       /* Entries removed from Git (NULL if no staleness) */
+    hashmap_t *stale_profiles;       /* profile_name -> sentinel for stale profiles (NULL if none) */
     const hashmap_t *repaired_paths; /* From manifest_repair_stale: path -> old_blob_oid (borrowed) */
 
     /* Stat cache updates (accumulated during divergence analysis) */
@@ -144,27 +127,6 @@ static const metadata_t *ws_get_metadata(
         return NULL;
     }
     return hashmap_get(ws->metadata_cache, profile_name);
-}
-
-/**
- * Look up merged metadata entry by key
- *
- * The merged_metadata hashmap stores array indices (as index+1 cast to void*)
- * rather than direct pointers, making lookups safe across realloc of merged_entries.
- *
- * @param ws Workspace (must not be NULL)
- * @param key Lookup key (storage_path for both files and directories)
- * @return Entry pointer or NULL if not found
- */
-static const merged_metadata_entry_t *merged_metadata_lookup(
-    const workspace_t *ws,
-    const char *key
-) {
-    if (!ws->merged_metadata) return NULL;
-    void *idx_ptr = hashmap_get(ws->merged_metadata, key);
-    if (!idx_ptr) return NULL;
-    size_t idx = (size_t) (uintptr_t) idx_ptr - 1;
-    return &ws->merged_entries[idx];
 }
 
 /**
@@ -366,7 +328,6 @@ static error_t *workspace_add_diverged(
     entry->filesystem_path = (char *) filesystem_path;
     entry->storage_path = (char *) storage_path;
     entry->profile = arena_strdup(ws->arena, profile);
-    entry->metadata_profile = NULL;  /* Will be set below if metadata exists */
 
     entry->state = state;
     entry->divergence = divergence;
@@ -378,18 +339,6 @@ static error_t *workspace_add_diverged(
 
     if (profile && !entry->profile) {
         return ERROR(ERR_MEMORY, "Failed to allocate diverged entry");
-    }
-
-    /* Check if this item has metadata in merged_metadata and populate provenance
-     * Both files and directories use storage_path as key (portable) */
-    if (storage_path) {
-        const merged_metadata_entry_t *meta_entry = merged_metadata_lookup(ws, storage_path);
-        if (meta_entry && meta_entry->profile_name) {
-            entry->metadata_profile = arena_strdup(ws->arena, meta_entry->profile_name);
-            if (!entry->metadata_profile) {
-                return ERROR(ERR_MEMORY, "Failed to allocate metadata_profile");
-            }
-        }
     }
 
     /* Store array index in hashmap for O(1) lookup */
@@ -663,7 +612,7 @@ static error_t *analyze_file_divergence(
          *
          * PHASE B: Full metadata (all permission bits + ownership)
          *   - Only if metadata exists for this file
-         *   - Catches: granular changes like 0600→0644, ownership changes
+         *   - Catches: granular changes like 0600->0644, ownership changes
          *
          * Both phases use the SAME file_stat (captured above), so no
          * extra syscalls. Flags are accumulated with |=.
@@ -717,13 +666,13 @@ static error_t *analyze_file_divergence(
      * Use deployed_at timestamp to distinguish lifecycle states.
      *
      * deployed_at semantics (from SCOPE_BASED_ARCHITECTURE_PLAN.md Annex A):
-     * - deployed_at = 0 → File never deployed by dotta
-     * - deployed_at > 0 → File known to dotta (deployed or pre-existing)
+     * - deployed_at = 0 -> File never deployed by dotta
+     * - deployed_at > 0 -> File known to dotta (deployed or pre-existing)
      *
      * Classification:
-     * 1. File missing + deployed_at = 0 → UNDEPLOYED (needs initial deployment)
-     * 2. File missing + deployed_at > 0 → DELETED (was deployed, needs restoration)
-     * 3. File present → DEPLOYED (may have divergence)
+     * 1. File missing + deployed_at = 0 -> UNDEPLOYED (needs initial deployment)
+     * 2. File missing + deployed_at > 0 -> DELETED (was deployed, needs restoration)
+     * 3. File present -> DEPLOYED (may have divergence)
      */
     if (!on_filesystem) {
         /* File in manifest but missing from filesystem */
@@ -760,7 +709,7 @@ static error_t *analyze_file_divergence(
      *
      * Path B (persistent repair): For apply command.
      * manifest_repair_stale() already updated state, workspace sees repaired
-     * entries. repaired_paths maps path → old_blob_oid. We verify the file
+     * entries. repaired_paths maps path -> old_blob_oid. We verify the file
      * on disk matches old_blob_oid (what dotta deployed) before setting
      * DIVERGENCE_STALE. This prevents overwriting user modifications:
      *   - File matches old blob: DIVERGENCE_STALE (safe to deploy new content)
@@ -1263,10 +1212,10 @@ static error_t *analyze_orphaned_files(workspace_t *ws) {
                  * - File accessible: divergence = computed from content/metadata analysis
                  *
                  * This enables status to predict apply behavior:
-                 * - DIVERGENCE_NONE → Clean orphan, will be removed
-                 * - DIVERGENCE_CONTENT/TYPE → Modified, apply will skip (safety check)
-                 * - DIVERGENCE_MODE/OWNERSHIP → Metadata changed, apply will skip
-                 * - DIVERGENCE_UNVERIFIED → Cannot verify, apply will skip
+                 * - DIVERGENCE_NONE -> Clean orphan, will be removed
+                 * - DIVERGENCE_CONTENT/TYPE -> Modified, apply will skip (safety check)
+                 * - DIVERGENCE_MODE/OWNERSHIP -> Metadata changed, apply will skip
+                 * - DIVERGENCE_UNVERIFIED -> Cannot verify, apply will skip
                  */
                 divergence_type_t divergence = DIVERGENCE_NONE;
                 if (stat_valid) {
@@ -1310,69 +1259,96 @@ static error_t *analyze_orphaned_files(workspace_t *ws) {
 /**
  * Analyze state for orphaned directory entries
  *
- * Mirrors analyze_orphaned_files but compares state directories
- * against merged_metadata instead of manifest.
+ * Uses the tracked_directories state column as the VWD authority for directories.
+ * manifest_sync_directories() maintains this column with mark-inactive-then-reactivate
+ * semantics on every manifest write operation, making it the single source of truth.
  *
- * Detects ALL orphaned directories (enabled + disabled profiles) and
- * marks each with profile_enabled flag for caller filtering.
+ * Trust model (mirrors file orphan detection against the manifest):
+ *   - Profile not in workspace scope -> ORPHANED (disabled or deleted profile)
+ *   - State column not ACTIVE -> ORPHANED (manifest_sync_directories marked it)
+ *   - Profile is stale + directory not in current Git metadata -> ORPHANED
+ *   - Otherwise -> trust the state column (non-stale, ACTIVE = valid)
  *
- * Directories in state but not in any profile's metadata are orphaned
- * and should be pruned.
+ * The stale case uses the eagerly-loaded metadata_cache, which is always warm.
+ *
+ * Detects ALL orphaned directories (enabled + disabled profiles) and marks
+ * each with profile_enabled flag for caller filtering.
  */
 static error_t *analyze_orphaned_directories(workspace_t *ws) {
     CHECK_NULL(ws);
     CHECK_NULL(ws->state);
-    CHECK_NULL(ws->merged_metadata);
     CHECK_NULL(ws->profile_index);
 
     error_t *err = NULL;
-    state_directory_entry_t *state_dirs = NULL;
-    size_t state_count = 0;
 
-    /* Get all directories in state (arena-allocated, freed with ws->arena) */
-    err = state_get_all_directories(ws->state, ws->arena, &state_dirs, &state_count);
-    if (err) {
-        return error_wrap(err, "Failed to get state directories");
+    /* Load directories from state (cached for analyze_directory_metadata_divergence) */
+    if (!ws->cached_state_dirs) {
+        error_t *load_err = state_get_all_directories(
+            ws->state,
+            ws->arena,
+            &ws->cached_state_dirs,
+            &ws->cached_state_dir_count
+        );
+        if (load_err) {
+            return error_wrap(load_err, "Failed to load state directories");
+        }
     }
 
-    /* Early exit: no directories in state means no orphans */
-    if (state_count == 0) {
-        return NULL;
-    }
+    if (ws->cached_state_dir_count == 0) return NULL;
 
-    /* Identify orphans: in state, not in merged_metadata */
-    for (size_t i = 0; i < state_count; i++) {
-        const state_directory_entry_t *state_entry = &state_dirs[i];
-        const char *dir_path = state_entry->filesystem_path;
-        const char *storage_path = state_entry->storage_path;
-        const char *profile = state_entry->profile;
+    for (size_t i = 0; i < ws->cached_state_dir_count; i++) {
+        const state_directory_entry_t *dir = &ws->cached_state_dirs[i];
+        const char *profile = dir->profile;
+        bool profile_in_scope = hashmap_has(ws->profile_index, profile);
 
-        /* Check if directory exists in merged_metadata (O(1) lookup)
-         * For directories: key in merged_metadata = storage_path (portable) */
-        const merged_metadata_entry_t *meta_entry = merged_metadata_lookup(ws, storage_path);
+        /* Determine orphan status from state column authority */
+        bool is_orphaned = false;
 
-        /* Orphaned if: not in metadata OR wrong kind (defensive check) */
-        bool is_orphaned = (!meta_entry || meta_entry->item->kind != METADATA_ITEM_DIRECTORY);
+        if (!profile_in_scope) {
+            /* Profile disabled or deleted — directory is orphaned */
+            is_orphaned = true;
+        } else if (dir->state && (strcmp(dir->state, STATE_INACTIVE) == 0 ||
+            strcmp(dir->state, STATE_DELETED) == 0)) {
+            /* manifest_sync_directories() marked it non-active */
+            is_orphaned = true;
+        } else if (ws->stale_profiles && hashmap_has(ws->stale_profiles, profile)) {
+            /* Profile is stale — verify directory still exists in current Git metadata.
+             * metadata_cache is eagerly loaded for all profiles, so this is O(1). */
+            const metadata_t *meta = ws_get_metadata(ws, profile);
+            if (!meta) {
+                is_orphaned = true;
+            } else {
+                const metadata_item_t *meta_item = NULL;
+                error_t *get_err = metadata_get_item(meta, dir->storage_path, &meta_item);
+                if (get_err) {
+                    /* Not found or error — directory removed from metadata externally */
+                    error_free(get_err);
+                    is_orphaned = true;
+                } else if (meta_item->kind != METADATA_ITEM_DIRECTORY) {
+                    /* Kind changed (was directory, now file/symlink) */
+                    is_orphaned = true;
+                }
+            }
+        }
+        /* else: profile in scope, state ACTIVE, not stale -> trust state column */
 
         if (is_orphaned) {
-            /* Orphaned: in state, not in metadata */
-            bool profile_enabled = (hashmap_get(ws->profile_index, profile) != NULL);
-            bool on_filesystem = fs_exists(dir_path);
+            bool profile_enabled = profile_in_scope;
+            bool on_filesystem = fs_exists(dir->filesystem_path);
 
             err = workspace_add_diverged(
                 ws,
-                dir_path,                  /* Already arena-allocated */
-                storage_path,              /* Already arena-allocated */
+                dir->filesystem_path,       /* Already arena-allocated */
+                dir->storage_path,          /* Already arena-allocated */
                 profile,
-                NULL,                      /* No old_profile for orphans */
-                WORKSPACE_STATE_ORPHANED,  /* State: in state, not in profile */
-                DIVERGENCE_NONE,           /* Divergence: none */
+                NULL,                       /* No old_profile for orphans */
+                WORKSPACE_STATE_ORPHANED,   /* State: in state, not in profile */
+                DIVERGENCE_NONE,            /* Divergence: none */
                 WORKSPACE_ITEM_DIRECTORY,
                 on_filesystem,
                 profile_enabled,
-                false                      /* No profile change for orphans */
+                false                       /* No profile change for orphans */
             );
-
             if (err) {
                 return error_wrap(err, "Failed to add orphaned directory");
             }
@@ -1724,8 +1700,7 @@ static error_t *analyze_untracked_files(
         for (size_t i = 0; i < dir_count; i++) {
             const state_directory_entry_t *dir_entry = &directories[i];
 
-            /* Skip removal-pending directories (STATE_INACTIVE, STATE_DELETED,
-             * or STATE_RELEASED)
+            /* Skip removal-pending directories (STATE_INACTIVE or STATE_DELETED)
              *
              * ARCHITECTURE: These directories are staged for removal.
              * We should NOT scan them for untracked files because:
@@ -1736,8 +1711,7 @@ static error_t *analyze_untracked_files(
              * This ensures untracked file detection only applies to active directories.
              */
             if (dir_entry->state && (strcmp(dir_entry->state, STATE_INACTIVE) == 0 ||
-                strcmp(dir_entry->state, STATE_DELETED) == 0 ||
-                strcmp(dir_entry->state, STATE_RELEASED) == 0)) {
+                strcmp(dir_entry->state, STATE_DELETED) == 0)) {
                 continue;  /* Skip silently - these will be handled by orphan detection */
             }
 
@@ -1746,8 +1720,8 @@ static error_t *analyze_untracked_files(
              * In the in-memory stale detection path (read-only commands), the
              * directory state in the database is still ACTIVE (state not modified),
              * but analyze_orphaned_directories() has already identified it as
-             * orphaned (not in merged_metadata rebuilt from current Git). Scanning
-             * such directories would report files as [new] that are actually
+             * orphaned (verified against current Git metadata). Scanning such
+             * directories would report files as [new] that are actually
              * [released] — creating confusing duplicate entries.
              */
             if (hashmap_get(ws->diverged_index, dir_entry->filesystem_path) != NULL) {
@@ -1814,24 +1788,32 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
     CHECK_NULL(ws);
     CHECK_NULL(ws->state);
 
-    /* Get all tracked directories from state database (arena-allocated) */
-    state_directory_entry_t *directories = NULL;
-    size_t dir_count = 0;
-    error_t *err = state_get_all_directories(ws->state, ws->arena, &directories, &dir_count);
-    if (err) {
-        return error_wrap(err, "Failed to load tracked directories from state");
+    error_t *err = NULL;
+
+    /* Use cached directories (shared with analyze_orphaned_directories) */
+    if (!ws->cached_state_dirs) {
+        error_t *load_err = state_get_all_directories(
+            ws->state,
+            ws->arena,
+            &ws->cached_state_dirs,
+            &ws->cached_state_dir_count
+        );
+        if (load_err) {
+            return error_wrap(
+                load_err, "Failed to load tracked directories from state"
+            );
+        }
     }
 
-    if (dir_count == 0) {
+    if (ws->cached_state_dir_count == 0) {
         return NULL;  /* No tracked directories */
     }
 
     /* Check each tracked directory for divergence */
-    for (size_t i = 0; i < dir_count; i++) {
-        const state_directory_entry_t *dir_entry = &directories[i];
+    for (size_t i = 0; i < ws->cached_state_dir_count; i++) {
+        const state_directory_entry_t *dir_entry = &ws->cached_state_dirs[i];
 
-        /* Skip removal-pending directories (STATE_INACTIVE, STATE_DELETED,
-         * or STATE_RELEASED)
+        /* Skip removal-pending directories (STATE_INACTIVE, STATE_DELETED)
          *
          * ARCHITECTURE: These directories are staged for removal and shouldn't
          * participate in divergence analysis. They'll be detected as orphans
@@ -1840,8 +1822,7 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
          * This mirrors file handling pattern and the untracked directory scan skip.
          */
         if (dir_entry->state && (strcmp(dir_entry->state, STATE_INACTIVE) == 0 ||
-            strcmp(dir_entry->state, STATE_DELETED) == 0 ||
-            strcmp(dir_entry->state, STATE_RELEASED) == 0)) {
+            strcmp(dir_entry->state, STATE_DELETED) == 0)) {
             continue;  /* Skip silently - orphan detection will handle this */
         }
 
@@ -1905,7 +1886,7 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
 
         /* Verify it's actually a directory (type may have changed)
          *
-         * Type changes (dir → file, dir → symlink) are detected here because:
+         * Type changes (dir -> file, dir -> symlink) are detected here because:
          * 1. lstat() doesn't follow symlinks, so symlinks are caught
          * 2. S_ISDIR() fails for regular files and symlinks
          *
@@ -1922,7 +1903,7 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
                 profile_name,
                 NULL,                      /* No old_profile for directories */
                 WORKSPACE_STATE_DEPLOYED,  /* Path exists, just wrong type */
-                DIVERGENCE_TYPE,           /* Type changed (dir → file/symlink) */
+                DIVERGENCE_TYPE,           /* Type changed (dir -> file/symlink) */
                 WORKSPACE_ITEM_DIRECTORY,
                 true,                      /* on_filesystem (path exists, wrong type) */
                 true,                      /* profile_enabled */
@@ -2086,45 +2067,24 @@ static error_t *analyze_encryption_policy_mismatch(
          * Prevents leak if future code adds early returns in metadata block. */
         gitops_blob_view_close(&blob_view);
 
-        /* Tier 2: Cross-validate with metadata (defense in depth) */
-        const metadata_t *metadata = ws_get_metadata(ws, profile_name);
-        if (metadata) {
-            const metadata_item_t *meta_entry = NULL;
-            error_t *lookup_err = metadata_get_item(metadata, storage_path, &meta_entry);
-
-            if (lookup_err == NULL && meta_entry) {
-                /* Validate kind: encryption metadata only applies to files.
-                 * Symlinks and directories are never encrypted, so skip
-                 * encryption validation for non-FILE kinds. */
-                if (meta_entry->kind != METADATA_ITEM_FILE) {
-                    if (meta_entry->kind == METADATA_ITEM_DIRECTORY) {
-                        fprintf(
-                            stderr, "warning: metadata corruption for '%s' in profile '%s': "
-                            "expected FILE, got DIRECTORY. Skipping encryption validation.\n",
-                            storage_path, profile_name
-                        );
-                    }
-                    /* SYMLINK: encryption not applicable, silently skip */
-                } else {
-                    /* Detect mismatch between magic header and metadata */
-                    if (is_encrypted != meta_entry->file.encrypted) {
-                        fprintf(
-                            stderr,
-                            "warning: metadata corruption detected for '%s' in profile '%s'\n"
-                            "  Magic header says: %s\n"
-                            "  Metadata says: %s\n"
-                            "  Using actual state from magic header. To fix, run:\n"
-                            "    dotta update -p %s '%s'\n",
-                            storage_path, profile_name,
-                            is_encrypted ? "encrypted" : "plaintext",
-                            is_encrypted ? "plaintext" : "encrypted",
-                            profile_name, storage_path
-                        );
-                    }
-                }
-            }
-
-            error_free(lookup_err);
+        /* Tier 2: Cross-validate against VWD expected state (defense in depth)
+         *
+         * manifest_entry->encrypted is set from metadata by sync_entry_to_state()
+         * and updated by patch_entry_from_fresh() for stale entries. It always
+         * equals what metadata says — zero Git reads needed. */
+        if (is_encrypted != manifest_entry->encrypted) {
+            fprintf(
+                stderr,
+                "warning: encryption mismatch for '%s' in profile '%s'\n"
+                "  Blob content says: %s\n"
+                "  VWD expected state says: %s\n"
+                "  Using actual state from blob content. To fix, run:\n"
+                "    dotta update -p %s '%s'\n",
+                storage_path, profile_name,
+                is_encrypted ? "encrypted" : "plaintext",
+                is_encrypted ? "plaintext" : "encrypted",
+                profile_name, storage_path
+            );
         }
 
         /* Policy mismatch: should be encrypted but isn't */
@@ -2152,8 +2112,8 @@ static error_t *analyze_encryption_policy_mismatch(
                  * Use deployed_at from VWD cache to determine lifecycle state.
                  * Manifest is built from state (workspace_build_manifest_from_state),
                  * so deployed_at is always populated:
-                 *   > 0  → file known/deployed
-                 *   == 0 → file never deployed */
+                 *   > 0  -> file known/deployed
+                 *   == 0 -> file never deployed */
                 workspace_state_t item_state = manifest_entry->deployed_at > 0
                     ? WORKSPACE_STATE_DEPLOYED
                     : WORKSPACE_STATE_UNDEPLOYED;
@@ -2479,10 +2439,10 @@ static error_t *workspace_build_manifest_from_state(
              * The fresh manifest represents current Git truth. Three cases:
              *
              * CASE A: File found in fresh manifest (same or different profile)
-             *   → Patch VWD cache with current values. File stays in manifest.
+             *   -> Patch VWD cache with current values. File stays in manifest.
              *
              * CASE B: File NOT in fresh manifest (removed from all profiles)
-             *   → File removed from Git externally. Add to released_paths,
+             *   -> File removed from Git externally. Add to released_paths,
              *     skip from manifest. Orphan analysis will classify as RELEASED.
              */
             void *fresh_idx_ptr = hashmap_get(fresh_manifest->index, state_entry->filesystem_path);
@@ -2621,7 +2581,11 @@ static error_t *workspace_build_manifest_from_state(
     ws->manifest->arena_backed = true;
 
     manifest_free(fresh_manifest);
-    hashmap_free(stale_profiles, NULL);
+
+    /* Transfer stale_profiles ownership to workspace for use by
+     * analyze_orphaned_directories() — freed in workspace_free() */
+    ws->stale_profiles = stale_profiles;
+
     return NULL;
 
 cleanup:
@@ -2739,100 +2703,6 @@ error_t *workspace_load(
                 set_err, "Failed to cache metadata for profile '%s'",
                 profile_name
             );
-        }
-    }
-
-    /* Build unified metadata view with profile precedence.
-     * CRITICAL INVARIANT: profiles array is in precedence order (global → OS → host).
-     * Iterating in order naturally implements "last profile wins" - we update existing
-     * entries to track the winning profile. */
-
-    /* Initialize merged entries array */
-    ws->merged_entries = NULL;
-    ws->merged_count = 0;
-    ws->merged_capacity = 0;
-
-    ws->merged_metadata = hashmap_borrow(256);
-    if (!ws->merged_metadata) {
-        workspace_free(ws);
-        return ERROR(ERR_MEMORY, "Failed to create merged metadata map");
-    }
-
-    for (size_t p = 0; p < profiles->count; p++) {
-        const char *profile_name = profiles->items[p];
-        const metadata_t *metadata = hashmap_get(ws->metadata_cache, profile_name);
-
-        if (!metadata) {
-            /* Profile has no metadata - skip (empty metadata was created above) */
-            continue;
-        }
-
-        /* Get ALL items from this profile (files + directories) */
-        size_t item_count = 0;
-        const metadata_item_t *items = metadata_get_all_items(metadata, &item_count);
-
-        if (!items || item_count == 0) {
-            continue;  /* No items in this profile */
-        }
-
-        /* Add/update items in merged map - last profile wins (precedence) */
-        for (size_t i = 0; i < item_count; i++) {
-            const metadata_item_t *item = &items[i];
-
-            /* Use item's key field as map key.
-             * - For FILES: key = storage_path (e.g., "home/.bashrc")
-             * - For DIRECTORIES: key = storage_path (e.g., "home/.config")
-             *
-             * COLLISION HANDLING: A real filesystem cannot have both a file and directory
-             * at the same path, so collisions should never occur in practice. However,
-             * if different profiles track the same path with different kinds (file vs directory),
-             * the last profile wins (precedence). This is safe because:
-             * 1. Git enforces this constraint (a tree entry is either blob or tree, not both)
-             * 2. Filesystem enforces this constraint (path is either file or dir, not both)
-             * 3. The winning entry represents current filesystem reality */
-
-            /* Check if entry exists (for updating profile_name on override).
-             * Hashmap stores index+1 (not raw pointers) to stay valid across realloc. */
-            void *idx_ptr = hashmap_get(ws->merged_metadata, item->key);
-
-            if (idx_ptr) {
-                /* Update existing entry - last profile wins (precedence) */
-                size_t idx = (size_t) (uintptr_t) idx_ptr - 1;
-                ws->merged_entries[idx].item = item;
-                ws->merged_entries[idx].profile_name = profile_name;
-            } else {
-                /* Grow array if needed */
-                if (ws->merged_count >= ws->merged_capacity) {
-                    size_t new_cap = ws->merged_capacity == 0 ? 256 : ws->merged_capacity * 2;
-                    merged_metadata_entry_t *new_entries = realloc(
-                        ws->merged_entries,
-                        new_cap * sizeof(merged_metadata_entry_t)
-                    );
-                    if (!new_entries) {
-                        workspace_free(ws);
-                        return ERROR(ERR_MEMORY, "Failed to grow merged entries");
-                    }
-                    ws->merged_entries = new_entries;
-                    ws->merged_capacity = new_cap;
-                }
-
-                /* Add new entry */
-                merged_metadata_entry_t *entry = &ws->merged_entries[ws->merged_count];
-                entry->item = item;
-                entry->profile_name = profile_name;
-
-                /* Store index+1 in hashmap (index 0 → value 1, avoiding NULL) */
-                error_t *map_err = hashmap_set(
-                    ws->merged_metadata,
-                    item->key,
-                    (void *) (uintptr_t) (ws->merged_count + 1)
-                );
-                if (map_err) {
-                    workspace_free(ws);
-                    return error_wrap(map_err, "Failed to add entry to merged metadata");
-                }
-                ws->merged_count++;
-            }
         }
     }
 
@@ -3303,30 +3173,11 @@ bool workspace_item_extract_display_info(
                 }
             }
 
-            /* Format metadata string
-             *
-             * Priority: profile transition > metadata source > default.
-             * When profile changed, always show old → new transition.
-             * When mode/ownership also diverges, append metadata source. */
-            const char *meta_profile = item->metadata_profile ?
-                item->metadata_profile : item->profile;
-
+            /* Format metadata string */
             if (item->profile_changed && item->old_profile) {
-                if (item->divergence & (DIVERGENCE_MODE | DIVERGENCE_OWNERSHIP)) {
-                    snprintf(
-                        metadata_buf, metadata_size, "%s → %s, metadata from %s",
-                        item->old_profile, item->profile, meta_profile
-                    );
-                } else {
-                    snprintf(
-                        metadata_buf, metadata_size, "%s → %s",
-                        item->old_profile, item->profile
-                    );
-                }
-            } else if (item->divergence & (DIVERGENCE_MODE | DIVERGENCE_OWNERSHIP)) {
                 snprintf(
-                    metadata_buf, metadata_size, "metadata from %s",
-                    meta_profile
+                    metadata_buf, metadata_size, "%s → %s",
+                    item->old_profile, item->profile
                 );
             } else {
                 snprintf(
@@ -3452,9 +3303,9 @@ error_t *workspace_flush_stat_caches(workspace_t *ws) {
 
     /* Begin our own transaction only when no external transaction is active.
      * This handles all cases:
-     *   - apply: borrowed state_load_for_update → transaction active → skip
-     *   - status/diff/sync: borrowed state_load → no transaction → begin/commit
-     *   - legacy workspace-owned: state_load → no transaction → begin/commit */
+     *   - apply: borrowed state_load_for_update -> transaction active -> skip
+     *   - status/diff/sync: borrowed state_load -> no transaction -> begin/commit
+     *   - legacy workspace-owned: state_load -> no transaction -> begin/commit */
     bool needs_transaction = !state_in_transaction(ws->state);
 
     if (needs_transaction) {
@@ -3515,13 +3366,6 @@ void workspace_free(workspace_t *ws) {
     hashmap_free(ws->profile_index, NULL);
     hashmap_free(ws->diverged_index, NULL);
 
-    /* Free merged_metadata BEFORE metadata_cache (borrowed pointers)
-     * NULL = don't free values (they're in merged_entries) */
-    hashmap_free(ws->merged_metadata, NULL);
-
-    /* Free merged_entries array (strings are borrowed, just free array) */
-    free(ws->merged_entries);
-
     /* Free encryption infrastructure */
     if (ws->metadata_cache) {
         hashmap_free(ws->metadata_cache, metadata_free);
@@ -3532,6 +3376,7 @@ void workspace_free(workspace_t *ws) {
     /* Free staleness tracking (NULL-safe) */
     hashmap_free(ws->stale_paths, NULL);
     hashmap_free(ws->released_paths, NULL);
+    hashmap_free(ws->stale_profiles, NULL);
 
     /* Free manifest (arena_backed mode: frees git_tree_entry objects,
      * entries array, hashmap, and struct — all heap-allocated) */

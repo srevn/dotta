@@ -11,17 +11,16 @@
 #include <string.h>
 #include <sys/mman.h>
 
-#include "base/array.h"
 #include "base/error.h"
 #include "base/output.h"
-#include "core/metadata.h"
 #include "core/state.h"
 #include "crypto/keymanager.h"
 
 /**
  * Count encrypted files in current profiles
  *
- * Helper for status display.
+ * Queries the VWD manifest directly — the encrypted flag is already
+ * cached per entry, so no Git tree walks or metadata parsing needed.
  */
 static error_t *count_encrypted_files(
     git_repository *repo,
@@ -35,63 +34,24 @@ static error_t *count_encrypted_files(
     /* Load state to get enabled profiles */
     state_t *state = NULL;
     error_t *err = state_load(repo, &state);
-    if (err) {
-        /* No state file is not an error - no profiles deployed yet */
-        if (error_code(err) == ERR_NOT_FOUND) {
-            error_free(err);
-            return NULL;
-        }
-        return error_wrap(err, "Failed to load state");
-    }
+    if (err) return error_wrap(err, "Failed to load state");
 
-    /* Get profile names from state */
-    string_array_t *profiles = NULL;
-    err = state_get_profiles(state, &profiles);
+    state_file_entry_t *entries = NULL;
+    size_t count = 0;
+    err = state_get_all_files(state, NULL, &entries, &count);
     if (err) {
         state_free(state);
-        return error_wrap(err, "Failed to get profiles from state");
+        return error_wrap(err, "Failed to get manifest entries");
     }
 
-    if (!profiles || profiles->count == 0) {
-        if (profiles) {
-            string_array_free(profiles);
+    for (size_t i = 0; i < count; i++) {
+        if (entries[i].encrypted &&
+            entries[i].state && strcmp(entries[i].state, STATE_ACTIVE) == 0) {
+            (*out_count)++;
         }
-        state_free(state);
-        return NULL;
     }
 
-    /* Load metadata from all profiles */
-    metadata_t *metadata = NULL;
-    err = metadata_load_from_profiles(repo, profiles, &metadata);
-    if (err) {
-        /* If metadata loading fails, it's not fatal for status display */
-        if (error_code(err) == ERR_NOT_FOUND) {
-            error_free(err);
-            string_array_free(profiles);
-            state_free(state);
-            return NULL;
-        }
-        string_array_free(profiles);
-        state_free(state);
-        return error_wrap(err, "Failed to load metadata");
-    }
-
-    /* Count encrypted files */
-    size_t count;
-    const metadata_item_t **files = metadata_get_items_by_kind(
-        metadata, METADATA_ITEM_FILE, &count
-    );
-    if (files) {
-        for (size_t i = 0; i < count; i++) {
-            if (files[i]->file.encrypted) {
-                (*out_count)++;
-            }
-        }
-        free(files);  /* Free pointer array only */
-    }
-
-    metadata_free(metadata);
-    string_array_free(profiles);
+    state_free_all_files(entries, count);
     state_free(state);
 
     return NULL;

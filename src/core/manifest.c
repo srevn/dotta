@@ -55,42 +55,25 @@ static error_t *get_branch_head_oid(
 }
 
 /**
- * Synchronize commit_oid for a profile in enabled_profiles
+ * Find a profile's cached HEAD OID from a loaded profile list
  *
- * Resolves the profile's branch HEAD and writes it to the per-profile
- * commit_oid column. Called after any Git mutation that moves a branch HEAD.
+ * Linear scan over the list (P < 10 typically). Every profile_t in a list
+ * built by profile_list_load carries its peeled HEAD OID, so this avoids
+ * a redundant ref lookup via get_branch_head_oid.
  *
- * Called after any operation that moves a profile's branch HEAD:
- * - After sync (remote changes pulled)
- * - After add (new files committed)
- * - After update (file changes committed)
- * - After remove (file deletions committed)
- * - After enable (initial population)
- * - After rebuild (full repopulation)
- *
- * @param repo Repository (must not be NULL)
- * @param state State (must not be NULL, must have active transaction)
- * @param profile_name Profile name (must not be NULL)
- * @return Error or NULL on success
+ * @param list Loaded profile list (must not be NULL)
+ * @param name Profile name to find (must not be NULL)
+ * @return Pointer to cached head_oid, or NULL if name not in list
  */
-static error_t *sync_profile_commit_oid(
-    git_repository *repo,
-    state_t *state,
-    const char *profile_name
+static const git_oid *profile_list_head_oid(
+    const profile_list_t *list,
+    const char *name
 ) {
-    CHECK_NULL(repo);
-    CHECK_NULL(state);
-    CHECK_NULL(profile_name);
-
-    /* Get current HEAD for profile */
-    git_oid head_oid;
-    error_t *err = get_branch_head_oid(repo, profile_name, &head_oid);
-    if (err) {
-        return error_wrap(err, "Failed to get HEAD for profile '%s'", profile_name);
+    for (size_t i = 0; i < list->count; i++) {
+        if (strcmp(list->profiles[i].name, name) == 0)
+            return &list->profiles[i].head_oid;
     }
-
-    /* Update entry from this profile */
-    return state_set_profile_commit_oid(state, profile_name, &head_oid);
+    return NULL;
 }
 
 /**
@@ -305,7 +288,8 @@ static error_t *build_manifest(
  *   - Write to state database (INSERT OR REPLACE)
  *
  * Note: commit_oid is stored per-profile in enabled_profiles, not per-file.
- * Callers are responsible for calling sync_profile_commit_oid after syncing.
+ * Callers are responsible for calling state_set_profile_commit_oid after syncing,
+ * using the cached head_oid from the loaded profile_list_t.
  *
  * @param repo Git repository
  * @param state State handle (with active transaction)
@@ -378,7 +362,8 @@ static error_t *sync_entry_to_state(
 
     /* 5. Build state entry. blob_oid is an inline struct copy from the
      * libgit2-owned tree entry id. commit_oid lives in enabled_profiles
-     * (per-profile, not per-file) and is set by sync_profile_commit_oid. */
+     * (per-profile, not per-file) and is set via state_set_profile_commit_oid
+     * using the cached head_oid from the loaded profile_list_t. */
     state_file_entry_t state_entry = {
         .storage_path    = manifest_entry->storage_path,
         .filesystem_path = manifest_entry->filesystem_path,
@@ -611,17 +596,18 @@ error_t *manifest_enable_profile(
      * state_enable_profile inserts with zeroblob(20); this replaces the
      * sentinel with the real HEAD. Uses the already-loaded profile_list_t
      * to avoid a redundant ref lookup. */
-    for (size_t p = 0; p < profiles->count; p++) {
-        if (strcmp(profiles->profiles[p].name, profile_name) == 0) {
-            err = state_set_profile_commit_oid(
-                state, profile_name, &profiles->profiles[p].head_oid
-            );
-            if (err) {
-                err = error_wrap(err, "Failed to set commit_oid for profile '%s'", profile_name);
-                goto cleanup;
-            }
-            break;
-        }
+    const git_oid *head_oid = profile_list_head_oid(profiles, profile_name);
+    if (!head_oid) {
+        err = ERROR(
+            ERR_INTERNAL,
+            "Profile '%s' not found in loaded profile list", profile_name
+        );
+        goto cleanup;
+    }
+    err = state_set_profile_commit_oid(state, profile_name, head_oid);
+    if (err) {
+        err = error_wrap(err, "Failed to set commit_oid for profile '%s'", profile_name);
+        goto cleanup;
     }
 
     /* 6. Sync tracked directories */
@@ -1533,7 +1519,15 @@ error_t *manifest_remove_files(
 
     /* After removing files, the profile's branch HEAD has moved to a new commit.
      * Update the per-profile commit_oid in enabled_profiles. */
-    err = sync_profile_commit_oid(repo, state, removed_profile);
+    const git_oid *head_oid = profile_list_head_oid(profiles, removed_profile);
+    if (!head_oid) {
+        err = ERROR(
+            ERR_INTERNAL,
+            "Profile '%s' not found in loaded profile list", removed_profile
+        );
+        goto cleanup;
+    }
+    err = state_set_profile_commit_oid(state, removed_profile, head_oid);
     if (err) {
         err = error_wrap(
             err, "Failed to sync commit_oid for profile '%s'",
@@ -2079,13 +2073,25 @@ error_t *manifest_repair_stale(
         }
     }
 
-    /* Phase 4: Update stored commit_oid for each repaired profile */
+    /* Phase 4: Update stored commit_oid for each repaired profile.
+     *
+     * fresh_profiles carries the current HEAD OID for each enabled profile
+     * (loaded by build_manifest via profile_list_load). Use it directly
+     * instead of re-resolving the same refs. */
     hashmap_iter_t stale_iter;
     hashmap_iter_init(&stale_iter, stale_profiles);
 
     const char *stale_name;
     while (hashmap_iter_next(&stale_iter, &stale_name, NULL)) {
-        err = sync_profile_commit_oid(repo, state, stale_name);
+        const git_oid *head_oid = profile_list_head_oid(fresh_profiles, stale_name);
+        if (!head_oid) {
+            err = ERROR(
+                ERR_INTERNAL,
+                "Stale profile '%s' not found in loaded profile list", stale_name
+            );
+            goto cleanup;
+        }
+        err = state_set_profile_commit_oid(state, stale_name, head_oid);
         if (err) {
             err = error_wrap(
                 err, "Failed to sync commit_oid for repaired profile '%s'",
@@ -2669,7 +2675,16 @@ error_t *manifest_update_files(
     /* Set stored commit_oid for each profile whose HEAD moved */
     for (size_t i = 0; i < updated_profiles->count; i++) {
         const char *prof = updated_profiles->items[i];
-        err = sync_profile_commit_oid(repo, state, prof);
+        const git_oid *head_oid = profile_list_head_oid(profiles, prof);
+        if (!head_oid) {
+            string_array_free(updated_profiles);
+            err = ERROR(
+                ERR_INTERNAL,
+                "Profile '%s' not found in loaded profile list", prof
+            );
+            goto cleanup;
+        }
+        err = state_set_profile_commit_oid(state, prof, head_oid);
         if (err) {
             string_array_free(updated_profiles);
             err = error_wrap(err, "Failed to sync commit_oid for profile '%s'", prof);
@@ -2906,7 +2921,15 @@ error_t *manifest_add_files(
 
     /* After adding files, the profile's branch HEAD has moved to a new commit.
      * Update the per-profile commit_oid in enabled_profiles. */
-    err = sync_profile_commit_oid(repo, state, profile_name);
+    const git_oid *head_oid = profile_list_head_oid(profiles, profile_name);
+    if (!head_oid) {
+        err = ERROR(
+            ERR_INTERNAL,
+            "Profile '%s' not found in loaded profile list", profile_name
+        );
+        goto cleanup;
+    }
+    err = state_set_profile_commit_oid(state, profile_name, head_oid);
     if (err) {
         err = error_wrap(
             err, "Failed to sync commit_oid for profile '%s'",
@@ -3365,8 +3388,10 @@ error_t *manifest_sync_diff(
     if (out_fallbacks) *out_fallbacks = fallbacks;
     if (out_skipped) *out_skipped = skipped;
 
-    /* Update the per-profile commit_oid in enabled_profiles to match the new HEAD. */
-    err = sync_profile_commit_oid(repo, state, profile_name);
+    /* Update the per-profile commit_oid in enabled_profiles to match the new HEAD.
+     * Use new_oid directly — it's the explicit sync target passed by the caller,
+     * and matches the branch HEAD that profile_list_load would resolve. */
+    err = state_set_profile_commit_oid(state, profile_name, new_oid);
     if (err) {
         err = error_wrap(
             err, "Failed to sync commit_oid for profile '%s'",

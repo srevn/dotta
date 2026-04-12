@@ -324,6 +324,7 @@ error_t *manifest_enable_profile(
     manifest_t *manifest = NULL;
     profile_list_t *profiles = NULL;
     metadata_t *metadata = NULL;
+    hashmap_t *existing_map = NULL;
 
     arena_t *arena = arena_create(64 * 1024);
     if (!arena) return ERROR(ERR_MEMORY, "Failed to create manifest arena");
@@ -366,6 +367,36 @@ error_t *manifest_enable_profile(
         err = NULL;
     }
 
+    /* Pre-load existing state entries for O(1) deployed_at preservation.
+     *
+     * Eliminates per-entry state_get_file() queries in the sync loop below.
+     * Pattern: Same as manifest_rebuild and manifest_reorder_profiles. */
+    state_file_entry_t *existing_entries = NULL;
+    size_t existing_count = 0;
+
+    err = state_get_all_files(state, arena, &existing_entries, &existing_count);
+    if (err) {
+        err = error_wrap(err, "Failed to pre-load state entries");
+        goto cleanup;
+    }
+
+    if (existing_count > 0) {
+        existing_map = hashmap_borrow(existing_count);
+        if (!existing_map) {
+            err = ERROR(ERR_MEMORY, "Failed to create existing entries hashmap");
+            goto cleanup;
+        }
+        for (size_t j = 0; j < existing_count; j++) {
+            err = hashmap_set(
+                existing_map, existing_entries[j].filesystem_path, &existing_entries[j]
+            );
+            if (err) {
+                err = error_wrap(err, "Failed to populate existing entries hashmap");
+                goto cleanup;
+            }
+        }
+    }
+
     /* 4. Sync entries owned by this profile (highest precedence) */
 
     /* Track counts for user feedback */
@@ -385,8 +416,8 @@ error_t *manifest_enable_profile(
 
         /* Determine deployed_at timestamp for lifecycle tracking
          *
+         * For EXISTING entries: Preserve deployed_at from pre-loaded state (O(1) hashmap)
          * For NEW entries: Check filesystem to set initial deployed_at
-         * For EXISTING entries: Preserve existing deployed_at (handled in sync_entry_to_state)
          *
          * deployed_at = 0   → File never deployed by dotta
          * deployed_at > 0   → File known to dotta (either deployed or existed when profile enabled)
@@ -394,15 +425,16 @@ error_t *manifest_enable_profile(
         time_t deployed_at;
         struct stat st;
 
-        /* Check if entry already exists in state (to preserve deployed_at) */
-        state_file_entry_t *existing_entry = NULL;
-        error_t *check_err = state_get_file(state, entry->filesystem_path, &existing_entry);
+        /* O(1) lookup in pre-loaded state entries */
+        state_file_entry_t *existing_entry = existing_map
+            ? hashmap_get(existing_map, entry->filesystem_path)
+            : NULL;
 
-        if (check_err == NULL && existing_entry != NULL) {
+        if (existing_entry) {
             /* File already in manifest - preserve existing timestamp */
             deployed_at = existing_entry->deployed_at;
 
-            /* Check filesystem to update stats only */
+            /* Check filesystem to update stats only (deployed_at already known) */
             if (lstat(entry->filesystem_path, &st) == 0) {
                 already_deployed++;
             } else if (errno == ENOENT) {
@@ -422,18 +454,8 @@ error_t *manifest_enable_profile(
                  */
                 needs_deployment++;
             }
-
-            state_free_entry(existing_entry);
         } else {
             /* New entry - check if file exists on filesystem */
-            if (check_err && check_err->code == ERR_NOT_FOUND) {
-                error_free(check_err);
-                check_err = NULL;
-            } else if (check_err) {
-                err = check_err;
-                goto cleanup;
-            }
-
             if (lstat(entry->filesystem_path, &st) == 0) {
                 /* File exists - mark as "known to dotta" */
                 deployed_at = time(NULL);
@@ -509,6 +531,7 @@ error_t *manifest_enable_profile(
     }
 
 cleanup:
+    if (existing_map) hashmap_free(existing_map, NULL);
     if (profiles) profile_list_free(profiles);
     if (metadata) metadata_free(metadata);
     if (manifest) manifest_free(manifest);
@@ -3497,7 +3520,7 @@ cleanup:
     /* Per-iteration resources are NULL on normal exit (freed in loop above).
      * Non-NULL only if outer loop exited before per-iteration cleanup (e.g.,
      * metadata_load_from_branch error before inner loop). */
-    free(directories);
+    if (directories) free(directories);
     if (metadata) metadata_free(metadata);
     if (prefix_map) hashmap_free(prefix_map, free);
     arena_destroy(arena);

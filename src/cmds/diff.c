@@ -135,6 +135,7 @@ static const char *get_status_message_from_item(
  * @param item Workspace item with divergence info (must not be NULL)
  * @param entry Manifest entry with VWD cache fields (must not be NULL)
  * @param cache Content cache (must not be NULL)
+ * @param repo Repository (must not be NULL)
  * @param direction Diff direction
  * @param opts Command options (must not be NULL)
  * @param out Output context (must not be NULL)
@@ -208,21 +209,10 @@ static error_t *show_file_diff_from_workspace(
         return NULL;
     }
 
-    /* Lazy-load tree entry for content and mode access.
-     * Note: Placed after early returns (name-only, missing files, mode-only, reassignment-only)
-     * to avoid unnecessary Git operations when tree entry not needed. */
-    error_t *err = file_entry_ensure_tree_entry((file_entry_t *) entry, repo);
-    if (err) {
-        return error_wrap(
-            err, "Failed to load tree entry for '%s'",
-            item->filesystem_path
-        );
-    }
-
-    /* Get content from cache (borrowed reference - don't free) */
+    /* Get content from cache via VWD-cached blob_oid (borrowed reference - don't free) */
     const buffer_t *content = NULL;
-    err = content_cache_get_from_tree_entry(
-        cache, entry->entry, entry->storage_path, entry->profile_name,
+    error_t *err = content_cache_get_from_blob_oid(
+        cache, &entry->blob_oid, entry->storage_path, entry->profile_name,
         entry->encrypted, &content
     );
     if (err) {
@@ -233,7 +223,7 @@ static error_t *show_file_diff_from_workspace(
     }
 
     /* Generate diff */
-    git_filemode_t mode = git_tree_entry_filemode(entry->entry);
+    git_filemode_t mode = state_type_to_git_filemode(entry->type);
     compare_direction_t cmp_dir = (direction == DIFF_UPSTREAM)
                                 ? CMP_DIR_UPSTREAM : CMP_DIR_DOWNSTREAM;
 
@@ -274,8 +264,8 @@ static error_t *show_file_diff_from_workspace(
  * @param diverged Array of diverged items from workspace (must not be NULL)
  * @param diverged_count Number of diverged items
  * @param manifest Manifest for tree entry lookup (must not be NULL)
- * @param repo Repository (must not be NULL)
  * @param content_cache Content cache for blob access (must not be NULL)
+ * @param repo Repository (must not be NULL)
  * @param direction Diff direction (UPSTREAM or DOWNSTREAM)
  * @param filter_profiles Profile filter for CLI (can be NULL for no filter)
  * @param file_filter File filter for CLI (can be NULL for no filter)

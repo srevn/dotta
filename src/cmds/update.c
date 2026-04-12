@@ -456,8 +456,7 @@ static error_t *filter_items_for_update(
  * Creates a hashmap: profile_name -> item_array_t*
  * Each profile gets an array of items that belong to it.
  *
- * Uses item->profile string for grouping (not file_entry_t.source_profile
- * pointer, as that may be NULL for items from disabled profiles).
+ * Uses item->profile string for grouping.
  *
  * @param items Array of workspace item pointers (must not be NULL)
  * @param count Number of items

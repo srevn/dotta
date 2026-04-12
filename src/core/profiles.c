@@ -181,50 +181,6 @@ error_t *profile_load_tree(git_repository *repo, profile_t *profile) {
     );
 }
 
-error_t *file_entry_ensure_tree_entry(
-    file_entry_t *entry,
-    git_repository *repo
-) {
-    CHECK_NULL(entry);
-    CHECK_NULL(repo);
-    CHECK_NULL(entry->source_profile);
-    CHECK_NULL(entry->storage_path);
-
-    /* Idempotent: already loaded */
-    if (entry->entry) {
-        return NULL;
-    }
-
-    /* Load profile tree (cached in profile structure) */
-    error_t *err = profile_load_tree(repo, entry->source_profile);
-    if (err) {
-        return error_wrap(
-            err, "Failed to load tree for profile '%s'",
-            entry->profile_name
-        );
-    }
-
-    /* Lookup tree entry from Git (creates owned reference) */
-    int git_err = git_tree_entry_bypath(
-        &entry->entry, entry->source_profile->tree, entry->storage_path
-    );
-    if (git_err != 0) {
-        if (git_err == GIT_ENOTFOUND) {
-            return ERROR(
-                ERR_NOT_FOUND, "File '%s' not found in profile '%s' Git tree",
-                entry->storage_path, entry->profile_name
-            );
-        }
-        err = error_from_git(git_err);
-        return error_wrap(
-            err, "Failed to lookup tree entry for '%s' in profile '%s'",
-            entry->storage_path, entry->profile_name
-        );
-    }
-
-    return NULL;
-}
-
 /**
  * Match hierarchical profile names from available names
  *
@@ -946,7 +902,6 @@ static error_t *profile_list_tree_files(git_tree *tree, string_array_t **out) {
  * Memory ownership:
  * - manifest: borrowed, caller retains ownership
  * - path_map: borrowed, caller retains ownership
- * - profile: borrowed, caller retains ownership
  * - custom_prefix: borrowed, can be NULL (used for path_from_storage only)
  * - error: owned by callback, caller must free on error
  */
@@ -954,7 +909,6 @@ struct manifest_build_ctx {
     manifest_t *manifest;       /* Target manifest (modified by callback) */
     size_t capacity;            /* Current entries capacity (updated on growth) */
     hashmap_t *path_map;        /* For O(1) dedup/override detection */
-    profile_t *profile;         /* Current profile (borrowed, NULL for tree-based manifests) */
     const char *profile_name;   /* Profile name for entries and error messages */
     const char *custom_prefix;  /* For path_from_storage (can be NULL) */
     arena_t *arena;             /* Arena for string allocations (NULL = heap) */
@@ -1103,7 +1057,6 @@ static int manifest_build_callback(
         ctx->manifest->entries[existing_idx].storage_path = dup_storage_path;
         ctx->manifest->entries[existing_idx].filesystem_path = filesystem_path;
         ctx->manifest->entries[existing_idx].entry = dup_entry;
-        ctx->manifest->entries[existing_idx].source_profile = ctx->profile;
         ctx->manifest->entries[existing_idx].profile_name = ctx->profile_name;
 
         /* Update type from overriding entry's filemode (may differ between profiles) */
@@ -1169,7 +1122,6 @@ static int manifest_build_callback(
         new_entry->storage_path = dup_storage_path;
         new_entry->filesystem_path = filesystem_path;
         new_entry->entry = dup_entry;
-        new_entry->source_profile = ctx->profile;
         new_entry->profile_name = ctx->profile_name;
 
         /* Derive type from Git filemode (executable bit detection) */
@@ -1357,7 +1309,6 @@ error_t *profile_build_manifest(
             .manifest      = manifest,
             .capacity      = capacity,
             .path_map      = path_map,
-            .profile       = profile,
             .profile_name  = profile->name,
             .custom_prefix = prefix_map
                 ? (const char *) hashmap_get(prefix_map, profile->name)
@@ -1786,15 +1737,14 @@ error_t *profile_build_manifest_from_tree(
      * The callback captures owned tree entries with git_tree_entry_dup(),
      * converts paths, and populates file_entry_t directly—all in O(N) time.
      *
-     * No source_profile for tree-based manifests — entries have pre-populated
-     * tree entries from git_tree_entry_dup() and never need lazy loading.
+     * Tree-based manifests have pre-populated tree entries from
+     * git_tree_entry_dup() — consumers never need lazy loading.
      *
      * custom_prefix borrows from function parameter — outlives tree walk. */
     struct manifest_build_ctx ctx = {
         .manifest      = manifest,
         .capacity      = capacity,
         .path_map      = path_map,
-        .profile       = NULL,
         .profile_name  = manifest->owned_profile_name,
         .custom_prefix = custom_prefix,
         .arena         = NULL,

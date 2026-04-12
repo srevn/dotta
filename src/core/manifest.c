@@ -177,9 +177,8 @@ static error_t *extract_file_metadata_from_tree_entry(
  * and manifest building (Profiles). This is the "precedence oracle" pattern -
  * profile_build_manifest() determines file ownership, then we use that answer.
  *
- * IMPORTANT: Manifest entries reference profile structures (source_profile field).
- * The profile_list must remain alive while the manifest is in use, otherwise
- * accessing entry->source_profile->name results in use-after-free.
+ * Note: Manifest entries borrow profile_name strings from the profile_list.
+ * The profile_list must remain alive while the manifest is in use.
  *
  * @param repo Git repository (must not be NULL)
  * @param state State handle for prefix resolution (must not be NULL)
@@ -279,7 +278,7 @@ static error_t *build_manifest(
  *   3. Function writes that exact value
  *
  * Callers must use entries from profile_build_manifest (or equivalent) where
- * source_profile is populated — the tree entry is needed for blob_oid.
+ * the tree entry is pre-populated (needed for blob_oid extraction).
  *
  * Responsibilities:
  *   - Extract blob_oid from tree entry
@@ -294,8 +293,8 @@ static error_t *build_manifest(
  * @param repo Git repository
  * @param state State handle (with active transaction)
  * @param manifest_entry Entry from in-memory manifest (borrowed); MUST have
- *                       source_profile set (guaranteed for entries from
- *                       profile_build_manifest)
+ *                       tree entry and profile_name set (guaranteed for entries
+ *                       from profile_build_manifest)
  * @param metadata Merged metadata from all profiles
  * @param deployed_at Caller-determined lifecycle timestamp (NOT modified):
  *       - 0: File never deployed (shows as [undeployed] if missing)
@@ -313,7 +312,7 @@ static error_t *sync_entry_to_state(
     CHECK_NULL(repo);
     CHECK_NULL(state);
     CHECK_NULL(manifest_entry);
-    CHECK_NULL(manifest_entry->source_profile);
+    CHECK_NULL(manifest_entry->entry);
     CHECK_NULL(manifest_entry->profile_name);
 
     error_t *err = NULL;
@@ -438,10 +437,6 @@ error_t *manifest_enable_profile(
      * NOT for normal profile enable (which modifies persistent state).
      *
      * Validator requires "both or neither" - only pass transient override when custom_prefix is non-NULL.
-     *
-     * The profile's HEAD OID comes from build_manifest's loaded profile_list_t
-     * (each profile_t carries its peeled head_oid), reaching sync_entry_to_state
-     * via entry->source_profile. No upfront ref resolution needed.
      */
     const char *transient_prof = custom_prefix ? profile_name : NULL;
     const char *transient_pfx = custom_prefix;
@@ -905,9 +900,7 @@ error_t *manifest_disable_profile(
              * VWD Invariant: Entry metadata must match source profile's Git tree + metadata.json.
              */
 
-            /* Sync to state using proven, tested logic. The fallback entry's
-             * source_profile (set by profile_build_manifest) carries the cached
-             * head_oid, which sync_entry_to_state derives the commit_oid from. */
+            /* Sync fallback entry to state */
             err = sync_entry_to_state(
                 repo, state, fallback, fallback_metadata, entry->deployed_at
             );
@@ -1894,10 +1887,7 @@ error_t *manifest_repair_stale(
     }
 
     /* Phase 2: Build fresh manifest from current Git state.
-     * This gives us the ground truth for what files should exist. The
-     * loaded fresh_profiles each carry their cached head_oid; entries
-     * pulled from fresh_manifest reach sync_entry_to_state via
-     * source_profile, so no separate profile→oid map is needed. */
+     * This gives us the ground truth for what files should exist. */
     err = build_manifest(
         repo, state, enabled_profiles, NULL, NULL, arena, &fresh_manifest, &fresh_profiles
     );
@@ -2200,11 +2190,7 @@ error_t *manifest_reorder_profiles(
         }
     }
 
-    /* 4. Load metadata
-     *
-     * Profile head_oid hex is derived inside sync_entry_to_state from
-     * new_entry->source_profile (set by profile_build_manifest). No
-     * separate profile→oid map needed. */
+    /* 4. Load metadata */
     err = metadata_load_from_profiles(repo, new_profile_order, &metadata);
     if (err && err->code != ERR_NOT_FOUND) {
         goto cleanup;
@@ -2615,11 +2601,7 @@ error_t *manifest_update_files(
             /* Sync to state with deployed_at = now()
              *
              * Key insight: UPDATE captures files FROM filesystem, so they're
-             * already deployed. We set deployed_at to mark them as known.
-             *
-             * Precedence check above ensures entry->source_profile->name ==
-             * item->profile, so the head_oid derived inside sync_entry_to_state
-             * is correct for this item. */
+             * already deployed. We set deployed_at to mark them as known. */
 
             /* Get metadata - from cache if available, otherwise use merged */
             const metadata_t *metadata = NULL;
@@ -3191,11 +3173,7 @@ error_t *manifest_sync_diff(
              *
              * Key: Sync only updates Git, it doesn't deploy to filesystem.
              * User must run 'dotta apply' to actually deploy these changes.
-             * We preserve deployed_at to maintain lifecycle tracking.
-             *
-             * Precedence check above ensures entry->source_profile->name ==
-             * profile_name, so the head_oid hex derived inside
-             * sync_entry_to_state matches the profile being synced. */
+             * We preserve deployed_at to maintain lifecycle tracking. */
 
             /* Get metadata - from cache if available, otherwise use merged */
             const metadata_t *profile_metadata = NULL;

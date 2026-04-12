@@ -347,44 +347,20 @@ error_t *deploy_file(
         return NULL;
     }
 
-    /* Lazy-load tree entry for blob content and file mode */
-    err = file_entry_ensure_tree_entry(entry, repo);
-    if (err) {
-        return error_wrap(
-            err, "Failed to load tree entry for '%s'",
+    /* Validate blob_oid from VWD cache. A zero OID means the entry was never
+     * populated from state — should be impossible for entries reaching the
+     * deploy path, but we keep the defensive check. */
+    if (git_oid_is_zero(&entry->blob_oid)) {
+        return ERROR(
+            ERR_INTERNAL, "Missing blob_oid for '%s' (state corruption?)",
             entry->filesystem_path
         );
     }
 
-    /* Get file mode from tree entry */
-    git_filemode_t mode = git_tree_entry_filemode(entry->entry);
-    git_object_t type = git_tree_entry_type(entry->entry);
-
-    if (type != GIT_OBJECT_BLOB) {
-        err = ERROR(
-            ERR_INTERNAL, "Unsupported object type for '%s'",
-            entry->storage_path
-        );
-        goto cleanup;
-    }
-
     /* Handle symlinks - these are never encrypted, so handle separately */
-    if (mode == GIT_FILEMODE_LINK) {
-        /* For symlinks, we need to load the blob directly since content layer
-         * is designed for regular files with potential encryption.
-         *
-         * The VWD cache's blob_oid is now a 20-byte binary OID. A zero OID
-         * means the entry was never populated from state — which should be
-         * impossible for an entry reaching the deploy path, but we keep the
-         * defensive check. */
-        if (git_oid_is_zero(&entry->blob_oid)) {
-            err = ERROR(
-                ERR_INTERNAL, "Missing blob_oid for symlink '%s'",
-                entry->storage_path
-            );
-            goto cleanup;
-        }
-
+    if (entry->type == STATE_FILE_SYMLINK) {
+        /* For symlinks, we load the blob directly since the content layer
+         * is designed for regular files with potential encryption. */
         size_t target_len = 0;
         err = gitops_read_blob_content(
             repo, &entry->blob_oid, (void **) &target_str, &target_len
@@ -468,9 +444,9 @@ error_t *deploy_file(
     }
 
     /* Handle regular files - get content from cache with transparent decryption */
-    err = content_cache_get_from_tree_entry(
+    err = content_cache_get_from_blob_oid(
         cache,
-        entry->entry,
+        &entry->blob_oid,
         entry->storage_path,
         entry->profile_name ? entry->profile_name : "unknown",
         entry->encrypted,
@@ -495,7 +471,7 @@ error_t *deploy_file(
     mode_t file_mode = entry->mode;
     if (file_mode == 0) {
         /* Defensive fallback - indicates unexpected state corruption */
-        file_mode = (mode == GIT_FILEMODE_BLOB_EXECUTABLE) ? 0755 : 0644;
+        file_mode = (entry->type == STATE_FILE_EXECUTABLE) ? 0755 : 0644;
 
         if (opts->verbose) {
             fprintf(

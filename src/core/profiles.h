@@ -86,9 +86,8 @@ typedef struct {
  * Memory ownership:
  * - All string fields are owned and must be freed in manifest_free()
  * - git_tree_entry is owned and must be freed (NULL is valid, means not loaded)
- * - source_profile is borrowed (from profile_list_t or workspace profile_index)
- * - profile_name is borrowed (same lifetime as source_profile
- *   or manifest's owned_profile_name for tree-based manifests)
+ * - profile_name is borrowed (from profile_list_t, workspace profile_index,
+ *   state arena, or manifest's owned_profile_name for tree-based manifests)
  */
 typedef struct {
     /* Paths */
@@ -96,23 +95,9 @@ typedef struct {
     char *filesystem_path;           /* Deployed path (/home/user/.bashrc) */
 
     /* Git tree reference */
-    git_tree_entry *entry;           /* Git tree entry (owned, lazy-loaded, can be NULL) */
+    git_tree_entry *entry;           /* Git tree entry (owned, can be NULL for VWD entries) */
 
-    /* Profile ownership
-     *
-     * source_profile is a tree-loading handle — only used by
-     * file_entry_ensure_tree_entry() for lazy Git tree access and by
-     * patch_entry_from_fresh() for pointer identity comparison.
-     * All name-based operations use profile_name instead.
-     *
-     * NULL invariant: For manifests from profile_build_manifest() and
-     * workspace_build_manifest_from_state(), profile_name is NULL iff
-     * source_profile is NULL (set together at all assignment sites).
-     * For tree-based manifests (profile_build_manifest_from_tree()),
-     * source_profile is NULL while profile_name is set (tree entries
-     * are pre-populated, so lazy loading is never needed).
-     */
-    profile_t *source_profile;       /* Git tree-loading handle (borrowed, core-internal) */
+    /* Profile ownership */
     const char *profile_name;        /* Profile name (borrowed, used for all name-based operations) */
 
     /* VWD Expected State Cache (populated from state database)
@@ -372,35 +357,6 @@ bool profile_exists(git_repository *repo, const char *name);
 error_t *profile_load_tree(
     git_repository *repo,
     profile_t *profile
-);
-
-/**
- * Ensure tree entry is loaded for file entry (lazy load if NULL)
- *
- * Loads the git_tree_entry for a file entry if not already loaded.
- * Safe to call multiple times (idempotent). Profile tree loading is
- * cached in profile structure, so redundant calls are cheap.
- *
- * This enables lazy loading for manifests built from state database
- * (VWD architecture), where tree entries are only needed for specific
- * operations (encryption analysis, content deployment, diff generation).
- *
- * PERFORMANCE: First call is O(Git tree lookup), potentially expensive.
- * Only call when tree entry is actually needed. Callers should lazy-load
- * as late as possible (after early returns) to avoid unnecessary work.
- *
- * ERROR SEMANTICS:
- * - Returns ERR_NOT_FOUND if file doesn't exist in Git tree
- * - Returns wrapped error if profile tree fails to load
- * - Caller decides fatal (deploy/diff) vs non-fatal (encryption analysis)
- *
- * @param entry File entry (must not be NULL)
- * @param repo Repository (must not be NULL)
- * @return Error or NULL on success
- */
-error_t *file_entry_ensure_tree_entry(
-    file_entry_t *entry,
-    git_repository *repo
 );
 
 /**

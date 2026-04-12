@@ -2058,24 +2058,13 @@ static error_t *analyze_encryption_policy_mismatch(
         /* Validate actual encryption state using two-tier validation */
         bool is_encrypted = false;
 
-        /* Lazy-load tree entry for encryption magic header check */
-        err = file_entry_ensure_tree_entry((file_entry_t *) manifest_entry, ws->repo);
-        if (err) {
-            /* Non-fatal: encryption analysis is advisory, skip if unavailable */
-            fprintf(
-                stderr, "warning: failed to load tree entry for '%s' in profile '%s': %s\n",
-                storage_path, profile_name, err->message ? err->message : "unknown error"
-            );
-            error_free(err);
-            continue;
-        }
-
         /* Tier 1: Check magic header in blob (source of truth).
+         * Uses VWD-cached blob_oid directly — no tree entry loading needed.
          * Zero-copy view — we only peek at the first few header bytes,
          * so copying the full blob here would be wasteful. */
         gitops_blob_view_t blob_view;
         error_t *view_err = gitops_blob_view_open(
-            ws->repo, git_tree_entry_id(manifest_entry->entry), &blob_view
+            ws->repo, &manifest_entry->blob_oid, &blob_view
         );
         if (view_err) {
             /* Non-fatal: can't read blob - skip this file */
@@ -2310,9 +2299,8 @@ static error_t *patch_entry_from_fresh(
     vwd_entry->stat_cache = STAT_CACHE_UNSET;
 
     /* Update profile ownership if owner changed (precedence shift) */
-    if (fresh_entry->source_profile &&
-        vwd_entry->source_profile != fresh_entry->source_profile) {
-        vwd_entry->source_profile = fresh_entry->source_profile;
+    if (fresh_entry->profile_name &&
+        strcmp(vwd_entry->profile_name, fresh_entry->profile_name) != 0) {
         vwd_entry->profile_name = fresh_entry->profile_name;
     }
 
@@ -2323,8 +2311,8 @@ static error_t *patch_entry_from_fresh(
  * Build in-memory manifest from state manifest table
  *
  * Reads manifest entries from state DB and constructs manifest_t structure.
- * Does NOT load git_tree_entry* pointers (set to NULL). Tree entries are
- * lazy-loaded only when needed for content display (diffs, conflict resolution).
+ * Does NOT load git_tree_entry* pointers (set to NULL). Consumers use the
+ * VWD-cached blob_oid for content access instead of tree entry loading.
  *
  * Staleness Detection and In-Memory Patching:
  * After loading state entries, compares each profile's stored HEAD against
@@ -2485,10 +2473,8 @@ static error_t *workspace_build_manifest_from_state(
         const state_file_entry_t *state_entry = &state_entries[i];
         file_entry_t *entry = &ws->manifest->entries[manifest_idx];
 
-        /* Find profile in workspace's profile list (O(1) hashmap lookup) */
-        entry->source_profile = hashmap_get(ws->profile_index, state_entry->profile);
-
-        if (!entry->source_profile) {
+        /* Check profile is in workspace scope (O(1) hashmap lookup) */
+        if (!hashmap_has(ws->profile_index, state_entry->profile)) {
             /* Profile not in workspace scope - this is expected when:
              * 1. Profile was disabled but manifest has orphaned entries
              * 2. Profile branch was deleted outside dotta
@@ -2500,8 +2486,8 @@ static error_t *workspace_build_manifest_from_state(
             continue;
         }
 
-        /* Cache profile name (borrowed, same lifetime as workspace) */
-        entry->profile_name = entry->source_profile->name;
+        /* Borrow profile name from state entry (same arena lifetime as workspace) */
+        entry->profile_name = state_entry->profile;
 
         /* Borrow paths from arena-backed state entries (same lifetime) */
         entry->storage_path = state_entry->storage_path;
@@ -3617,9 +3603,8 @@ void workspace_free(workspace_t *ws) {
      * Also frees cached_state_files array (arena_calloc'd). */
     arena_destroy(ws->arena);
 
-    /* Free profiles AFTER manifest and arena — manifest entries hold
-     * borrowed source_profile pointers into this list, and arena strings
-     * may reference profile names. Both are freed above. */
+    /* Free profiles AFTER arena — arena strings may reference profile
+     * names. Arena is freed above. */
     profile_list_free(ws->profiles);
 
     /* Only free state if we own it (allocated via state_load).

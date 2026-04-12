@@ -126,7 +126,7 @@ error_t *manifest_enable_profile(
  *   1. Get all manifest entries owned by disabled profile
  *   2. Build manifest from remaining profiles (fallback check)
  *   3. For each entry:
- *      - If fallback found: update source_profile (profile reassignment)
+ *      - If fallback found: reassign to fallback profile
  *      - If no fallback: mark as STATE_INACTIVE (staged for removal by apply)
  *
  * Preconditions:
@@ -506,7 +506,7 @@ error_t *manifest_repair_stale(
  *   2. Get all current manifest entries and build hashmap for O(1) lookups
  *   3. For each file in new manifest:
  *      - If not in old manifest: add with deployed_at = 0 (rare, file never deployed)
- *      - If owner changed: update source_profile (deployed_at preserved)
+ *      - If owner changed: update profile assignment (deployed_at preserved)
  *      - If owner unchanged: skip (preserve existing entry)
  *   4. For files in old manifest but not new: remain for orphan detection (apply removes)
  *

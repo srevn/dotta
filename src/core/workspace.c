@@ -3158,24 +3158,6 @@ content_cache_t *workspace_get_content_cache(const workspace_t *ws) {
 }
 
 /**
- * Get metadata cache from workspace
- *
- * Returns the pre-loaded metadata cache (hashmap: profile_name → metadata_t*)
- * populated during workspace_load(). This cache remains valid for the
- * workspace's lifetime and can be passed to bulk operations that need
- * per-profile metadata without redundant loads.
- *
- * @param ws Workspace (must not be NULL)
- * @return Metadata cache hashmap (borrowed reference, do not free, can be NULL)
- */
-const hashmap_t *workspace_get_metadata_cache(const workspace_t *ws) {
-    if (!ws) {
-        return NULL;
-    }
-    return ws->metadata_cache;
-}
-
-/**
  * Extract display tags and metadata from workspace item
  */
 bool workspace_item_extract_display_info(

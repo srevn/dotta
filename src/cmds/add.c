@@ -717,7 +717,6 @@ static error_t *auto_enable_and_sync_profile(
         profile_name,
         added_files,
         enabled_profiles,
-        NULL,  /* metadata_cache - pass NULL for fresh load */
         &synced_count
     );
     if (err) {
@@ -904,7 +903,6 @@ static error_t *update_manifest_after_add(
         profile_name,
         added_files,
         enabled_profiles,
-        NULL,  /* metadata_cache - pass NULL for fresh load */
         &synced_count
     );
 

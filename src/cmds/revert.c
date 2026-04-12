@@ -1193,7 +1193,6 @@ error_t *cmd_revert(
         &current_oid,       /* Before revert (captured at step 3) */
         &new_head_oid,      /* After revert */
         enabled_profiles,
-        NULL,               /* metadata_cache - will load if needed */
         &synced,
         &removed,
         &fallbacks,

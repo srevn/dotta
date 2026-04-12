@@ -1191,7 +1191,7 @@ static error_t *flatten_items_to_array(
  * Preconditions:
  *   - All profile updates already succeeded (Git commits done)
  *   - items_by_profile contains profile_name → item_array_t mappings
- *   - ws contains valid workspace with metadata cache
+ *   - ws contains valid workspace
  *
  * Postconditions:
  *   - Manifest entries synced for enabled profiles only
@@ -1279,11 +1279,6 @@ static error_t *update_manifest_after_update(
         goto cleanup;
     }
 
-    /* Get workspace resources
-     *
-     * IMPORTANT: Do NOT use workspace metadata cache - it was loaded before
-     * Git commits and is now stale. Pass NULL to manifest_update_files() to
-     * force fresh metadata loading from the updated Git state. */
     /* Use bulk sync operation (O(M + N) - optimal!) */
     size_t synced = 0, removed = 0, fallbacks = 0;
     err = manifest_update_files(
@@ -1292,7 +1287,6 @@ static error_t *update_manifest_after_update(
         all_items,
         item_count,
         enabled_profiles,
-        NULL,  /* metadata_cache - pass NULL for fresh load */
         &synced,
         &removed,
         &fallbacks

@@ -558,7 +558,6 @@ static bool sync_manifest(
     size_t synced = 0, removed = 0, fallbacks = 0, skipped = 0;
     error_t *err = manifest_sync_diff(
         repo, state, profile_name, old_oid, new_oid, enabled_profiles,
-        NULL /* metadata_cache — stale after fetch */,
         &synced, &removed, &fallbacks, &skipped
     );
 

@@ -206,10 +206,6 @@ error_t *manifest_disable_profile(
  * @param items Array of workspace items to sync (must not be NULL)
  * @param item_count Number of items
  * @param enabled_profiles All enabled profiles (must not be NULL)
- * @param metadata_cache Hashmap: profile_name → metadata_t* (optional).
- *                       Pass NULL to load fresh metadata from Git automatically.
- *                       Pass a hashmap for performance optimization if you have
- *                       fresh per-profile metadata already loaded.
  * @param out_synced Output: count of files synced (must not be NULL)
  * @param out_removed Output: count of files removed (must not be NULL)
  * @param out_fallbacks Output: count of fallback resolutions (must not be NULL)
@@ -221,7 +217,6 @@ error_t *manifest_update_files(
     const workspace_item_t **items,
     size_t item_count,
     const string_array_t *enabled_profiles,
-    const hashmap_t *metadata_cache,
     size_t *out_synced,
     size_t *out_removed,
     size_t *out_fallbacks
@@ -280,10 +275,6 @@ error_t *manifest_update_files(
  * @param profile_name Profile files were added to (must not be NULL)
  * @param filesystem_paths Array of filesystem paths (must not be NULL)
  * @param enabled_profiles All enabled profiles (must not be NULL)
- * @param metadata_cache Hashmap: profile_name → metadata_t* (optional).
- *                       Pass NULL to load fresh metadata from Git automatically.
- *                       Pass a hashmap for performance optimization if you have
- *                       fresh per-profile metadata already loaded.
  * @param out_synced Output: count of files synced (must not be NULL)
  * @return Error or NULL on success
  */
@@ -293,7 +284,6 @@ error_t *manifest_add_files(
     const char *profile_name,
     const string_array_t *filesystem_paths,
     const string_array_t *enabled_profiles,
-    const hashmap_t *metadata_cache,
     size_t *out_synced
 );
 
@@ -612,7 +602,6 @@ error_t *manifest_reorder_profiles(
  * @param old_oid Old commit before sync (must not be NULL)
  * @param new_oid New commit after sync (must not be NULL)
  * @param enabled_profiles All enabled profiles for precedence (must not be NULL)
- * @param metadata_cache Pre-loaded metadata (can be NULL, will load if needed)
  * @param out_synced Output: number of files synced (can be NULL)
  * @param out_removed Output: number of files removed (can be NULL)
  * @param out_fallbacks Output: number of fallback resolutions (can be NULL)
@@ -626,7 +615,6 @@ error_t *manifest_sync_diff(
     const git_oid *old_oid,
     const git_oid *new_oid,
     const string_array_t *enabled_profiles,
-    const hashmap_t *metadata_cache,
     size_t *out_synced,
     size_t *out_removed,
     size_t *out_fallbacks,

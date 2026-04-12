@@ -383,22 +383,6 @@ keymanager_t *workspace_get_keymanager(const workspace_t *ws);
 content_cache_t *workspace_get_content_cache(const workspace_t *ws);
 
 /**
- * Get metadata cache from workspace
- *
- * Returns the pre-loaded metadata cache (hashmap: profile_name → metadata_t*)
- * populated during workspace_load(). This cache remains valid for the
- * workspace's lifetime and can be passed to bulk operations that need
- * per-profile metadata without redundant loads.
- *
- * Typical usage: Pass to manifest_sync_files_bulk() to avoid redundant
- * metadata loads during batch operations.
- *
- * @param ws Workspace (must not be NULL)
- * @return Metadata cache hashmap (borrowed reference, do not free, can be NULL)
- */
-const hashmap_t *workspace_get_metadata_cache(const workspace_t *ws);
-
-/**
  * Extract display tags and metadata from workspace item
  *
  * Translates workspace item state and divergence flags into presentation

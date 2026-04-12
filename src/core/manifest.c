@@ -2092,7 +2092,6 @@ cleanup:
  * @param items Array of workspace items to sync (must not be NULL)
  * @param item_count Number of items
  * @param enabled_profiles All enabled profiles (must not be NULL)
- * @param metadata_cache Hashmap: profile_name → metadata_t* (must not be NULL)
  * @param out_synced Output: count of files synced (must not be NULL)
  * @param out_removed Output: count of files removed (must not be NULL)
  * @param out_fallbacks Output: count of fallback resolutions (must not be NULL)
@@ -2104,7 +2103,6 @@ error_t *manifest_update_files(
     const workspace_item_t **items,
     size_t item_count,
     const string_array_t *enabled_profiles,
-    const hashmap_t *metadata_cache,
     size_t *out_synced,
     size_t *out_removed,
     size_t *out_fallbacks
@@ -2131,8 +2129,7 @@ error_t *manifest_update_files(
     error_t *err = NULL;
     profile_list_t *profiles = NULL;
     manifest_t *fresh_manifest = NULL;
-    metadata_t *metadata_merged = NULL;
-    bool using_cache = (metadata_cache != NULL);
+    metadata_t *metadata = NULL;
 
     arena_t *arena = arena_create(64 * 1024);
     if (!arena) return ERROR(ERR_MEMORY, "Failed to create manifest arena");
@@ -2168,29 +2165,20 @@ error_t *manifest_update_files(
         goto cleanup;
     }
 
-    /* 5. Load fresh metadata if not provided (NULL handling)
-     *
-     * CRITICAL: If metadata_cache is NULL, load merged metadata from Git.
-     * This ensures we have current metadata including all newly-committed files.
-     *
-     * Merged metadata contains all enabled profiles with precedence applied.
-     */
-    if (!metadata_cache) {
-        /* No cache provided - load merged metadata for all enabled profiles */
-        err = metadata_load_from_profiles(repo, enabled_profiles, &metadata_merged);
-        if (err && err->code != ERR_NOT_FOUND) {
-            err = error_wrap(err, "Failed to load metadata for manifest sync");
-            goto cleanup;
-        }
+    /* 5. Load fresh merged metadata from Git (post-commit state) */
+    err = metadata_load_from_profiles(repo, enabled_profiles, &metadata);
+    if (err && err->code != ERR_NOT_FOUND) {
+        err = error_wrap(err, "Failed to load metadata for manifest sync");
+        goto cleanup;
+    }
+    if (err) {
+        /* No metadata file exists - create empty metadata (old profiles without metadata.json)
+         * This is required for metadata resolution (even if file has no custom metadata) */
+        error_free(err);
+        err = metadata_create_empty(&metadata);
         if (err) {
-            /* No metadata file exists - create empty metadata (old profiles without metadata.json)
-             * This is required for metadata resolution (even if file has no custom metadata) */
-            error_free(err);
-            err = metadata_create_empty(&metadata_merged);
-            if (err) {
-                err = error_wrap(err, "Failed to create empty metadata");
-                goto cleanup;
-            }
+            err = error_wrap(err, "Failed to create empty metadata");
+            goto cleanup;
         }
     }
 
@@ -2214,14 +2202,6 @@ error_t *manifest_update_files(
 
             if (fallback) {
                 /* Fallback exists - update to fallback profile. */
-
-                /* Get metadata - from cache if available, otherwise use merged */
-                const metadata_t *metadata = NULL;
-                if (using_cache) {
-                    metadata = hashmap_get(metadata_cache, fallback->profile_name);
-                } else {
-                    metadata = metadata_merged;
-                }
 
                 /* Preserve existing deployed_at and track old_profile when falling back */
                 time_t deployed_at = 0;
@@ -2309,14 +2289,6 @@ error_t *manifest_update_files(
              * Key insight: UPDATE captures files FROM filesystem, so they're
              * already deployed. We set deployed_at to mark them as known. */
 
-            /* Get metadata - from cache if available, otherwise use merged */
-            const metadata_t *metadata = NULL;
-            if (using_cache) {
-                metadata = hashmap_get(metadata_cache, item->profile);
-            } else {
-                metadata = metadata_merged;
-            }
-
             err = sync_entry_to_state(repo, state, entry, metadata, time(NULL), NULL);
             if (err) {
                 err = error_wrap(
@@ -2389,7 +2361,7 @@ error_t *manifest_update_files(
     }
 
 cleanup:
-    if (metadata_merged) metadata_free(metadata_merged);
+    if (metadata) metadata_free(metadata);
     if (fresh_manifest) manifest_free(fresh_manifest);
     if (profiles) profile_list_free(profiles);
     arena_destroy(arena);
@@ -2450,7 +2422,6 @@ cleanup:
  * @param profile_name Profile files were added to (must not be NULL)
  * @param filesystem_paths Array of filesystem paths (must not be NULL)
  * @param enabled_profiles All enabled profiles (must not be NULL)
- * @param metadata_cache Hashmap: profile_name → metadata_t* (must not be NULL)
  * @param out_synced Output: count of files synced (must not be NULL)
  * @return Error or NULL on success
  */
@@ -2460,7 +2431,6 @@ error_t *manifest_add_files(
     const char *profile_name,
     const string_array_t *filesystem_paths,
     const string_array_t *enabled_profiles,
-    const hashmap_t *metadata_cache,
     size_t *out_synced
 ) {
     CHECK_NULL(repo);
@@ -2483,8 +2453,7 @@ error_t *manifest_add_files(
     error_t *err = NULL;
     profile_list_t *profiles = NULL;
     manifest_t *fresh_manifest = NULL;
-    metadata_t *metadata_merged = NULL;
-    bool using_cache = (metadata_cache != NULL);
+    metadata_t *metadata = NULL;
 
     arena_t *arena = arena_create(64 * 1024);
     if (!arena) return ERROR(ERR_MEMORY, "Failed to create manifest arena");
@@ -2520,29 +2489,20 @@ error_t *manifest_add_files(
         goto cleanup;
     }
 
-    /* 5. Load fresh metadata if not provided (NULL handling)
-     *
-     * CRITICAL: If metadata_cache is NULL, load merged metadata from Git.
-     * This ensures we have current metadata including all newly-committed files.
-     *
-     * Merged metadata contains all enabled profiles with precedence applied.
-     */
-    if (!metadata_cache) {
-        /* No cache provided - load merged metadata for all enabled profiles */
-        err = metadata_load_from_profiles(repo, enabled_profiles, &metadata_merged);
-        if (err && err->code != ERR_NOT_FOUND) {
-            err = error_wrap(err, "Failed to load metadata for manifest sync");
-            goto cleanup;
-        }
+    /* 5. Load fresh merged metadata from Git (post-commit state) */
+    err = metadata_load_from_profiles(repo, enabled_profiles, &metadata);
+    if (err && err->code != ERR_NOT_FOUND) {
+        err = error_wrap(err, "Failed to load metadata for manifest sync");
+        goto cleanup;
+    }
+    if (err) {
+        /* No metadata file exists - create empty metadata (old profiles without metadata.json)
+         * This is required for metadata resolution (even if file has no custom metadata) */
+        error_free(err);
+        err = metadata_create_empty(&metadata);
         if (err) {
-            /* No metadata file exists - create empty metadata (old profiles without metadata.json)
-             * This is required for metadata resolution (even if file has no custom metadata) */
-            error_free(err);
-            err = metadata_create_empty(&metadata_merged);
-            if (err) {
-                err = error_wrap(err, "Failed to create empty metadata");
-                goto cleanup;
-            }
+            err = error_wrap(err, "Failed to create empty metadata");
+            goto cleanup;
         }
     }
 
@@ -2586,14 +2546,6 @@ error_t *manifest_add_files(
          * Key insight: ADD captures files FROM filesystem, so they're
          * already deployed. We set deployed_at to mark them as known. */
 
-        /* Get metadata - from cache if available, otherwise use merged */
-        const metadata_t *metadata = NULL;
-        if (using_cache) {
-            metadata = hashmap_get(metadata_cache, entry->profile_name);
-        } else {
-            metadata = metadata_merged;
-        }
-
         err = sync_entry_to_state(repo, state, entry, metadata, time(NULL), NULL);
 
         if (err) {
@@ -2633,7 +2585,7 @@ error_t *manifest_add_files(
     }
 
 cleanup:
-    if (metadata_merged) metadata_free(metadata_merged);
+    if (metadata) metadata_free(metadata);
     if (fresh_manifest) manifest_free(fresh_manifest);
     if (profiles) profile_list_free(profiles);
     arena_destroy(arena);
@@ -2659,7 +2611,7 @@ cleanup:
  *     - Build fresh manifest from current Git state (post-sync)
  *     - Create hashmap index for O(1) file lookups
  *     - Build profile→oid map
- *     - Load or use cached metadata
+ *     - Load merged metadata from Git
  *
  *   Phase 2: Compute Diff
  *     - Lookup old and new trees
@@ -2684,10 +2636,10 @@ cleanup:
  * @param old_oid Old commit before sync (must not be NULL)
  * @param new_oid New commit after sync (must not be NULL)
  * @param enabled_profiles All enabled profiles for precedence (must not be NULL)
- * @param metadata_cache Pre-loaded metadata (can be NULL, will load if needed)
  * @param out_synced Output: number of files synced (can be NULL)
  * @param out_removed Output: number of files removed (can be NULL)
  * @param out_fallbacks Output: number of fallback resolutions (can be NULL)
+ * @param out_skipped Output: number of custom/ files skipped due to missing prefix (can be NULL)
  * @return Error or NULL on success
  */
 error_t *manifest_sync_diff(
@@ -2697,7 +2649,6 @@ error_t *manifest_sync_diff(
     const git_oid *old_oid,
     const git_oid *new_oid,
     const string_array_t *enabled_profiles,
-    const hashmap_t *metadata_cache,
     size_t *out_synced,
     size_t *out_removed,
     size_t *out_fallbacks,
@@ -2716,7 +2667,7 @@ error_t *manifest_sync_diff(
     profile_list_t *profiles = NULL;
     manifest_t *fresh_manifest = NULL;
     hashmap_t *prefix_map = NULL;
-    metadata_t *metadata_merged = NULL;
+    metadata_t *metadata = NULL;
     git_tree *old_tree = NULL;
     git_tree *new_tree = NULL;
     git_diff *diff = NULL;
@@ -2759,28 +2710,20 @@ error_t *manifest_sync_diff(
         goto cleanup;
     }
 
-    /* 1.4. Load or use cached metadata
-     *
-     * Note: metadata_cache is a hashmap (profile_name → metadata_t*) from workspace.
-     * If not provided, we load merged metadata for all profiles. For lookups, we
-     * need to handle both patterns. */
-
-    if (!metadata_cache) {
-        /* No cache provided - load merged metadata for all enabled profiles */
-        err = metadata_load_from_profiles(repo, enabled_profiles, &metadata_merged);
-        if (err && err->code != ERR_NOT_FOUND) {
-            err = error_wrap(err, "Failed to load metadata");
-            goto cleanup;
-        }
+    /* 1.4. Load merged metadata from Git (post-sync state) */
+    err = metadata_load_from_profiles(repo, enabled_profiles, &metadata);
+    if (err && err->code != ERR_NOT_FOUND) {
+        err = error_wrap(err, "Failed to load metadata");
+        goto cleanup;
+    }
+    if (err) {
+        /* No metadata file exists - create empty metadata (old profiles without metadata.json)
+         * This is required for metadata resolution (even if file has no custom metadata) */
+        error_free(err);
+        err = metadata_create_empty(&metadata);
         if (err) {
-            /* No metadata file exists - create empty metadata (old profiles without metadata.json)
-             * This is required for metadata resolution (even if file has no custom metadata) */
-            error_free(err);
-            err = metadata_create_empty(&metadata_merged);
-            if (err) {
-                err = error_wrap(err, "Failed to create empty metadata");
-                goto cleanup;
-            }
+            err = error_wrap(err, "Failed to create empty metadata");
+            goto cleanup;
         }
     }
 
@@ -2881,14 +2824,6 @@ error_t *manifest_sync_diff(
              * User must run 'dotta apply' to actually deploy these changes.
              * We preserve deployed_at to maintain lifecycle tracking. */
 
-            /* Get metadata - from cache if available, otherwise use merged */
-            const metadata_t *profile_metadata = NULL;
-            if (metadata_cache) {
-                profile_metadata = hashmap_get(metadata_cache, profile_name);
-            } else {
-                profile_metadata = metadata_merged;
-            }
-
             /* Preserve existing deployed_at if file already in manifest */
             time_t deployed_at = 0;
             state_file_entry_t *existing = NULL;
@@ -2906,7 +2841,7 @@ error_t *manifest_sync_diff(
                 }
             }
 
-            err = sync_entry_to_state(repo, state, entry, profile_metadata, deployed_at, NULL);
+            err = sync_entry_to_state(repo, state, entry, metadata, deployed_at, NULL);
             if (err) {
                 err = error_wrap(
                     err, "Failed to sync '%s' to manifest",
@@ -2940,14 +2875,6 @@ error_t *manifest_sync_diff(
                  * Update manifest entry to point to the new profile owner.
                  * Preserve deployed_at to maintain lifecycle tracking. */
 
-                /* Get metadata - from cache if available, otherwise use merged */
-                const metadata_t *fallback_metadata = NULL;
-                if (metadata_cache) {
-                    fallback_metadata = hashmap_get(metadata_cache, entry->profile_name);
-                } else {
-                    fallback_metadata = metadata_merged;
-                }
-
                 /* Preserve existing deployed_at and track old_profile when falling back */
                 time_t deployed_at = 0;
                 char *old_profile_name = NULL;
@@ -2972,7 +2899,7 @@ error_t *manifest_sync_diff(
                 }
 
                 err = sync_entry_to_state(
-                    repo, state, entry, fallback_metadata, deployed_at, old_profile_name
+                    repo, state, entry, metadata, deployed_at, old_profile_name
                 );
                 if (err) {
                     err = error_wrap(
@@ -3071,7 +2998,7 @@ cleanup:
     if (diff) git_diff_free(diff);
     if (new_tree) git_tree_free(new_tree);
     if (old_tree) git_tree_free(old_tree);
-    if (metadata_merged) metadata_free(metadata_merged);
+    if (metadata) metadata_free(metadata);
     if (prefix_map) hashmap_free(prefix_map, free);
     if (fresh_manifest) manifest_free(fresh_manifest);
     if (profiles) profile_list_free(profiles);

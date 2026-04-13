@@ -911,32 +911,29 @@ error_t *cmd_apply(
         }
     }
 
-    string_array_free(enabled_profiles);
-    enabled_profiles = NULL;
-
-    /* Load profiles
+    /* Resolve enabled profile names for workspace scope.
      *
-     * Separate workspace scope (persistent) from operation filter (temporary).
-     *   - enabled_profiles: ALWAYS persistent enabled profile names (for VWD scope)
-     *   - filter_profiles / active_profiles: CLI filter names or workspace names (for filtering operations)
+     * Separate workspace scope (persistent) from operation filter (temporary):
+     *   - enabled_profiles: ALWAYS persistent enabled profile names (VWD scope)
+     *   - filter_profiles / active_profiles: CLI filter for operations
      *
-     * This ensures accurate orphan detection while supporting CLI filtering.
-     */
-    output_print(out, OUTPUT_VERBOSE, "Loading profiles...\n");
+     * Zero profiles is a valid convergence target: the VWD is empty, all state
+     * entries become orphans, and apply cleans them up. This enables the
+     * "disable last profile, then apply" workflow.
+     *
+     * The stale repair phase already queried state_get_profiles. If that returned
+     * zero, skip profile_resolve_enabled — no branches to validate. If non-empty,
+     * re-resolve for branch validation and missing-profile warnings. */
+    if (enabled_profiles->count > 0) {
+        string_array_free(enabled_profiles);
+        enabled_profiles = NULL;
 
-    /* Phase 1: Resolve enabled profile names (ALWAYS persistent, ignore CLI overrides) */
-    err = profile_resolve_enabled(repo, state, &enabled_profiles);
-    if (err) {
-        err = error_wrap(err, "Failed to resolve enabled profiles");
-        goto cleanup;
-    }
-
-    if (enabled_profiles->count == 0) {
-        err = ERROR(
-            ERR_NOT_FOUND, "No enabled profiles found\n"
-            "Hint: Run 'dotta profile enable <name>' to enable profiles"
-        );
-        goto cleanup;
+        output_print(out, OUTPUT_VERBOSE, "Loading profiles...\n");
+        err = profile_resolve_enabled(repo, state, &enabled_profiles);
+        if (err) {
+            err = error_wrap(err, "Failed to resolve enabled profiles");
+            goto cleanup;
+        }
     }
 
     /* Phase 2: Resolve operation profile names

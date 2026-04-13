@@ -876,17 +876,25 @@ error_t *cmd_status(
      *
      * Workspace always loads with persistent profiles to maintain accurate
      * orphan detection. Display operations filter by CLI profiles if specified.
-     */
+     *
+     * Zero profiles is a valid state: workspace classifies all state entries as
+     * orphaned. This enables the "disable last profile, then status" workflow. */
     err = profile_resolve_enabled(repo, state, &enabled_profiles);
     if (err) {
-        err = error_wrap(err, "Failed to resolve enabled profiles");
-        goto cleanup;
-    }
-
-    if (enabled_profiles->count == 0) {
-        output_info(out, OUTPUT_NORMAL, "No enabled profiles found");
-        output_hint(out, OUTPUT_NORMAL, "Run 'dotta profile enable <name>'");
-        goto cleanup;
+        if (err->code == ERR_NOT_FOUND) {
+            /* Zero enabled profiles — show orphan state.
+             * Workspace classifies all state entries as orphaned. */
+            error_free(err);
+            err = NULL;
+            enabled_profiles = string_array_new(0);
+            if (!enabled_profiles) {
+                err = ERROR(ERR_MEMORY, "Failed to create empty profile array");
+                goto cleanup;
+            }
+        } else {
+            err = error_wrap(err, "Failed to resolve enabled profiles");
+            goto cleanup;
+        }
     }
 
     /* Resolve display profile names */

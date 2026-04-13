@@ -2063,14 +2063,10 @@ error_t *manifest_update_files(
         goto cleanup;
     }
     if (err) {
-        /* No metadata file exists - create empty metadata (old profiles without metadata.json)
-         * This is required for metadata resolution (even if file has no custom metadata) */
+        /* Non-fatal: Old profiles may not have metadata.json
+         * sync_entry_to_state handles NULL metadata gracefully (uses Git defaults) */
         error_free(err);
-        err = metadata_create_empty(&metadata);
-        if (err) {
-            err = error_wrap(err, "Failed to create empty metadata");
-            goto cleanup;
-        }
+        err = NULL;
     }
 
     /* 7. Process each item */
@@ -2365,14 +2361,10 @@ error_t *manifest_add_files(
         goto cleanup;
     }
     if (err) {
-        /* No metadata file exists - create empty metadata (old profiles without metadata.json)
-         * This is required for metadata resolution (even if file has no custom metadata) */
+        /* Non-fatal: Old profiles may not have metadata.json
+         * sync_entry_to_state handles NULL metadata gracefully (uses Git defaults) */
         error_free(err);
-        err = metadata_create_empty(&metadata);
-        if (err) {
-            err = error_wrap(err, "Failed to create empty metadata");
-            goto cleanup;
-        }
+        err = NULL;
     }
 
     /* 6. Process each file */
@@ -2586,14 +2578,10 @@ error_t *manifest_sync_diff(
         goto cleanup;
     }
     if (err) {
-        /* No metadata file exists - create empty metadata (old profiles without metadata.json)
-         * This is required for metadata resolution (even if file has no custom metadata) */
+        /* Non-fatal: Old profiles may not have metadata.json
+         * sync_entry_to_state handles NULL metadata gracefully (uses Git defaults) */
         error_free(err);
-        err = metadata_create_empty(&metadata);
-        if (err) {
-            err = error_wrap(err, "Failed to create empty metadata");
-            goto cleanup;
-        }
+        err = NULL;
     }
 
     /* PHASE 2: COMPUTE DIFF (O(D)) */

@@ -2436,14 +2436,22 @@ static error_t *workspace_build_manifest_from_state(
         return ERROR(ERR_MEMORY, "Failed to allocate manifest");
     }
 
-    /* Allocate entries array (max size = state_count) */
-    ws->manifest->entries = calloc(state_count, sizeof(file_entry_t));
-    if (!ws->manifest->entries) {
-        free(ws->manifest);
-        ws->manifest = NULL;
-        manifest_free(fresh_manifest);
-        hashmap_free(stale_profiles, NULL);
-        return ERROR(ERR_MEMORY, "Failed to allocate manifest entries");
+    /* Allocate entries array (max size = state_count).
+     *
+     * calloc(0, X) is implementation-defined per C17 §7.22.3.2p2 — may
+     * return NULL or a unique non-NULL pointer depending on the libc.
+     * Skip the allocation entirely for empty state: a manifest_t with
+     * entries=NULL, count=0 is a valid empty manifest, and manifest_free
+     * already tolerates entries == NULL (free(NULL) is a no-op). */
+    if (state_count > 0) {
+        ws->manifest->entries = calloc(state_count, sizeof(file_entry_t));
+        if (!ws->manifest->entries) {
+            free(ws->manifest);
+            ws->manifest = NULL;
+            manifest_free(fresh_manifest);
+            hashmap_free(stale_profiles, NULL);
+            return ERROR(ERR_MEMORY, "Failed to allocate manifest entries");
+        }
     }
 
     /*

@@ -64,8 +64,7 @@ typedef struct {
     char *name;              /* Profile name (e.g., "global", "darwin") */
     git_reference *ref;      /* Branch reference */
     git_tree *tree;          /* Profile tree (loaded lazily) */
-    git_object *peeled;      /* Peeled ref object from profile_load, consumed by
-                                profile_load_tree or released by profile_free */
+    git_object *peeled;      /* Peeled ref object from profile_load */
     git_oid head_oid;        /* Peeled HEAD OID (set by profile_load) */
 } profile_t;
 
@@ -108,12 +107,20 @@ typedef struct {
      */
     char *old_profile;               /* Previous owner if changed, NULL otherwise (VWD cache) */
     git_oid blob_oid;                /* Blob OID for content identity (always populated) */
+
+    /* Type */
     state_file_type_t type;          /* File type (REGULAR, SYMLINK, EXECUTABLE) */
+
+    /* Metadata */
     mode_t mode;                     /* Permission mode (e.g., 0644), 0 if no metadata tracked */
     char *owner;                     /* Owner username (root/ files only, can be NULL) */
     char *group;                     /* Group name (root/ files only, can be NULL) */
     bool encrypted;                  /* Encryption flag */
+
+    /* Lifecycle tracking */
     time_t deployed_at;              /* Lifecycle timestamp (0 = never deployed, >0 = known) */
+
+    /* Stat cache */
     stat_cache_t stat_cache;         /* Filesystem stat at last known-good state (all-zero = unset) */
 } file_entry_t;
 

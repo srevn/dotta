@@ -402,21 +402,16 @@ error_t *manifest_rebuild(
  * Detect which enabled profiles have stale manifest entries
  *
  * Compares each in-scope profile's stored commit_oid (from enabled_profiles)
- * against its branch's current HEAD. Mismatch means external Git operations
- * occurred since the last dotta operation.
- *
- * HEAD OID source: profile_scope values are optional profile_t * pointers.
- * When non-NULL, the cached head_oid is used (zero ref lookups). When NULL,
- * resolves via get_branch_head_oid
+ * against its branch's current HEAD via lightweight ref-to-OID lookups.
+ * Mismatch means external Git operations occurred since the last dotta
+ * operation.
  *
  * Performance: O(P) state queries + O(P) ref lookups where P = profile count.
- * Zero ref lookups when profile_scope values carry loaded profile_t *.
  *
  * @param repo Git repository (must not be NULL)
  * @param state State handle (must not be NULL)
- * @param profile_scope Profile scope filter (must not be NULL). Keys are
- *                      in-scope profile names; values are profile_t * with
- *                      cached head_oid (fast path) or NULL (ref lookup fallback).
+ * @param profile_scope Name-only membership set (must not be NULL). Keys are
+ *                      in-scope profile names; values are ignored (NULL).
  * @param out_stale Output: hashmap of profile_name -> sentinel for stale profiles.
  *                  NULL if no profiles are stale. Caller frees with hashmap_free(map, NULL).
  * @return Error or NULL on success

@@ -1458,19 +1458,18 @@ error_t *manifest_detect_stale_profiles(
             return read_err;
         }
 
-        /* Fetch current branch HEAD — prefer cached OID from scope value */
+        /* Fetch current branch HEAD via lightweight ref-to-OID lookup.
+         *
+         * profile_scope is a name-only membership set (NULL values) — both
+         * callers (workspace and manifest_repair_stale) pass name sets, not
+         * loaded profile_t objects. */
         git_oid head_oid;
-        profile_t *scoped = hashmap_get(profile_scope, name);
-        if (scoped) {
-            git_oid_cpy(&head_oid, &scoped->head_oid);
-        } else {
-            err = get_branch_head_oid(repo, name, &head_oid);
-            if (err) {
-                /* Branch may have been deleted — skip (safety handles this) */
-                error_free(err);
-                err = NULL;
-                continue;
-            }
+        err = get_branch_head_oid(repo, name, &head_oid);
+        if (err) {
+            /* Branch may have been deleted — skip (safety handles this) */
+            error_free(err);
+            err = NULL;
+            continue;
         }
 
         if (!git_oid_equal(&stored_oid, &head_oid)) {

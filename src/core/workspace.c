@@ -69,8 +69,8 @@ struct workspace {
     manifest_t *manifest;            /* Profile state (owned) */
     state_t *state;                  /* Deployment state (owned or borrowed) */
     bool owns_state;                 /* True if state is owned, false if borrowed */
-    profile_list_t *profiles;        /* Selected profiles for this workspace (owned) */
-    hashmap_t *profile_index;        /* Maps profile_name -> profile_t* (for O(1) lookup) */
+    const string_array_t *profiles;  /* Borrowed from caller — valid for workspace lifetime */
+    hashmap_t *profile_index;        /* Maps profile_name -> NULL (membership set, O(1) lookup) */
 
     /* Cached state query (shared between workspace_build_manifest_from_state
      * and analyze_orphaned_files to avoid redundant full-table scan) */
@@ -134,7 +134,7 @@ static const metadata_t *ws_get_metadata(
  */
 static error_t *workspace_create_empty(
     git_repository *repo,
-    profile_list_t *profiles,
+    const string_array_t *profiles,
     workspace_t **out
 ) {
     CHECK_NULL(repo);
@@ -147,9 +147,9 @@ static error_t *workspace_create_empty(
     }
 
     ws->repo = repo;
-    ws->profiles = profiles;                /* Owned - freed in workspace_free */
+    ws->profiles = profiles;           /* Borrowed — caller keeps alive past workspace_free */
 
-    ws->profile_index = hashmap_borrow(32); /* Keys: profile->name (borrowed from caller) */
+    ws->profile_index = hashmap_borrow(32); /* Keys: borrowed from profiles->items[] */
     if (!ws->profile_index) {
         free(ws);
         return ERROR(ERR_MEMORY, "Failed to create profile index");
@@ -162,10 +162,10 @@ static error_t *workspace_create_empty(
         return ERROR(ERR_MEMORY, "Failed to create diverged index");
     }
 
-    /* Build profile index for O(1) profile lookup */
+    /* Build profile membership set for O(1) scope checks.
+     * Values are NULL — this is a pure name set, not a value map. */
     for (size_t i = 0; i < profiles->count; i++) {
-        profile_t *profile = &profiles->profiles[i];
-        error_t *err = hashmap_set(ws->profile_index, profile->name, profile);
+        error_t *err = hashmap_set(ws->profile_index, profiles->items[i], NULL);
         if (err) {
             hashmap_free(ws->diverged_index, NULL);
             hashmap_free(ws->profile_index, NULL);
@@ -1141,7 +1141,7 @@ static error_t *analyze_orphaned_files(workspace_t *ws) {
                 (ws->released_paths && hashmap_get(ws->released_paths, fs_path) != NULL) ||
                 (state_entry->state && strcmp(state_entry->state, STATE_RELEASED) == 0);
 
-            bool profile_enabled = (hashmap_get(ws->profile_index, profile) != NULL);
+            bool profile_enabled = hashmap_has(ws->profile_index, profile);
 
             if (is_released) {
                 /* RELEASED: File removed from Git externally (loss of authority)
@@ -1651,7 +1651,7 @@ static error_t *analyze_untracked_files(
 
     /* Scan tracked directories from each enabled profile's state database */
     for (size_t p = 0; p < ws->profiles->count; p++) {
-        const char *profile_name = ws->profiles->profiles[p].name;
+        const char *profile_name = ws->profiles->items[p];
 
         /* Get tracked directories from state database for this profile */
         state_directory_entry_t *directories = NULL;
@@ -1828,7 +1828,7 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
 
         /* Skip directories from profiles not in the enabled set.
          * Metadata divergence is only meaningful for active profiles. */
-        if (!hashmap_get(ws->profile_index, dir_entry->profile)) {
+        if (!hashmap_has(ws->profile_index, dir_entry->profile)) {
             continue;
         }
 
@@ -2180,16 +2180,14 @@ static error_t *patch_entry_from_fresh(
         error_t *meta_err = metadata_get_item(metadata, fresh_entry->storage_path, &meta_item);
         if (meta_err) {
             /* NOT_FOUND is fine (old profiles without metadata) */
-            if (meta_err->code != ERR_NOT_FOUND) {
-                return meta_err;
-            }
+            if (meta_err->code != ERR_NOT_FOUND) return meta_err;
             error_free(meta_err);
         } else if (meta_item) {
-            if (meta_item->mode != 0) {
-                new_mode = meta_item->mode;
-            }
+            if (meta_item->mode != 0) new_mode = meta_item->mode;
+
             new_owner = meta_item->owner;
             new_group = meta_item->group;
+
             if (meta_item->kind == METADATA_ITEM_FILE) {
                 new_encrypted = meta_item->file.encrypted;
             }
@@ -2222,10 +2220,20 @@ static error_t *patch_entry_from_fresh(
      * filesystem content against the NEW expected blob_oid. */
     vwd_entry->stat_cache = STAT_CACHE_UNSET;
 
-    /* Update profile ownership if owner changed (precedence shift) */
+    /* Update profile ownership if owner changed (precedence shift).
+     *
+     * Arena-strdup the name so the VWD entry is self-contained — the fresh
+     * manifest (and the local profile_list_t that built it) may be freed
+     * before the workspace. */
     if (fresh_entry->profile_name &&
         strcmp(vwd_entry->profile_name, fresh_entry->profile_name) != 0) {
-        vwd_entry->profile_name = fresh_entry->profile_name;
+        vwd_entry->profile_name = arena_strdup(arena, fresh_entry->profile_name);
+        if (!vwd_entry->profile_name) {
+            return ERROR(
+                ERR_MEMORY, "Failed to allocate profile name for '%s'",
+                fresh_entry->storage_path
+            );
+        }
     }
 
     return NULL;
@@ -2265,7 +2273,8 @@ static error_t *patch_entry_from_fresh(
  * @return Error or NULL on success
  */
 static error_t *workspace_build_manifest_from_state(
-    workspace_t *ws, bool skip_stale_detection
+    workspace_t *ws,
+    bool skip_stale_detection
 ) {
     CHECK_NULL(ws);
     CHECK_NULL(ws->state);
@@ -2276,6 +2285,7 @@ static error_t *workspace_build_manifest_from_state(
     size_t state_count = 0;
     hashmap_t *stale_profiles = NULL;
     manifest_t *fresh_manifest = NULL;
+    profile_list_t *local_profiles = NULL;  /* Only loaded when stale — freed before return */
 
     /* Create workspace arena for all workspace-lifetime string allocations.
      * 128 KB fits ~200 files comfortably in a single block. */
@@ -2301,9 +2311,10 @@ static error_t *workspace_build_manifest_from_state(
      * its branch's current HEAD. If any mismatch: external Git operations
      * occurred, VWD cache is stale.
      *
-     * Cost: O(P) state queries + O(P) ref lookups where P = enabled profile
-     * count (typically < 10). Zero ref lookups when profile_index carries
-     * loaded profile_t * values.
+     * Cost: O(P) state queries + O(P) ref-to-OID lookups where P = enabled
+     * profile count (typically < 10). profile_index is a membership set (NULL
+     * values), so manifest_detect_stale_profiles resolves HEAD via lightweight
+     * git_reference_name_to_id — no profile_list_load overhead.
      *
      * When the caller has already persisted a fresh manifest via
      * manifest_repair_stale() within its transaction (apply.c), the state we
@@ -2332,17 +2343,76 @@ static error_t *workspace_build_manifest_from_state(
     if (stale_profiles) {
         ws->manifest_stale = true;
 
+        /* Load full profile_t objects — needed by profile_build_manifest for
+         * Git tree walks. Scoped to the stale repair path; freed below after
+         * the fresh manifest is consumed and profile names are arena_strdup'd. */
+        err = profile_list_load(ws->repo, ws->profiles, &local_profiles);
+        if (err) {
+            hashmap_free(stale_profiles, NULL);
+            return error_wrap(err, "Failed to load profiles for stale repair");
+        }
+
+        /* Load metadata for all profiles (not just stale ones — precedence
+         * resolution in the fresh manifest may assign files to non-stale
+         * profiles, and patch_entry_from_fresh needs their metadata).
+         *
+         * Stored on ws->metadata_cache so analyze_orphaned_directories can
+         * also access it later via ws_get_metadata(). */
+        ws->metadata_cache = hashmap_borrow(16);
+        if (!ws->metadata_cache) {
+            profile_list_free(local_profiles);
+            hashmap_free(stale_profiles, NULL);
+            return ERROR(ERR_MEMORY, "Failed to create metadata cache");
+        }
+
+        for (size_t i = 0; i < ws->profiles->count; i++) {
+            const char *profile_name = ws->profiles->items[i];
+            metadata_t *metadata = NULL;
+
+            error_t *meta_err = metadata_load_from_branch(ws->repo, profile_name, &metadata);
+            if (meta_err) {
+                /* Graceful fallback: create empty metadata if loading fails.
+                 * This ensures content layer always has metadata for validation.
+                 * Empty metadata will cause "file not in metadata" errors during
+                 * divergence analysis, which is the correct behavior for profiles
+                 * without metadata (new profiles or corrupted metadata files). */
+                error_free(meta_err);
+                error_t *create_err = metadata_create_empty(&metadata);
+                if (create_err) {
+                    profile_list_free(local_profiles);
+                    hashmap_free(stale_profiles, NULL);
+                    return error_wrap(
+                        create_err, "Failed to create metadata for profile '%s'",
+                        profile_name
+                    );
+                }
+            }
+
+            error_t *set_err = hashmap_set(ws->metadata_cache, profile_name, metadata);
+            if (set_err) {
+                metadata_free(metadata);
+                profile_list_free(local_profiles);
+                hashmap_free(stale_profiles, NULL);
+                return error_wrap(
+                    set_err, "Failed to cache metadata for profile '%s'",
+                    profile_name
+                );
+            }
+        }
+
         /* Get prefix map for path resolution during fresh manifest build */
         hashmap_t *prefix_map = NULL;
         err = state_get_prefix_map(ws->state, &prefix_map);
         if (err) {
+            profile_list_free(local_profiles);
             hashmap_free(stale_profiles, NULL);
             return error_wrap(err, "Failed to get prefix map for stale repair");
         }
 
-        err = profile_build_manifest(ws->repo, ws->profiles, prefix_map, NULL, &fresh_manifest);
+        err = profile_build_manifest(ws->repo, local_profiles, prefix_map, NULL, &fresh_manifest);
         hashmap_free(prefix_map, free);
         if (err) {
+            profile_list_free(local_profiles);
             hashmap_free(stale_profiles, NULL);
             return error_wrap(err, "Failed to build fresh manifest for stale repair");
         }
@@ -2352,6 +2422,7 @@ static error_t *workspace_build_manifest_from_state(
         ws->released_paths = hashmap_borrow(16);
         if (!ws->stale_paths || !ws->released_paths) {
             manifest_free(fresh_manifest);
+            profile_list_free(local_profiles);
             hashmap_free(stale_profiles, NULL);
             return ERROR(ERR_MEMORY, "Failed to allocate staleness tracking");
         }
@@ -2582,6 +2653,11 @@ static error_t *workspace_build_manifest_from_state(
 
     manifest_free(fresh_manifest);
 
+    /* Free local profiles — all VWD profile_name pointers that were patched
+     * from fresh_manifest entries are now arena_strdup'd (see
+     * patch_entry_from_fresh), so no dangling references remain. */
+    profile_list_free(local_profiles);
+
     /* Transfer stale_profiles ownership to workspace for use by
      * analyze_orphaned_directories() — freed in workspace_free() */
     ws->stale_profiles = stale_profiles;
@@ -2596,6 +2672,7 @@ cleanup:
     free(ws->manifest);
     ws->manifest = NULL;
     manifest_free(fresh_manifest);
+    profile_list_free(local_profiles);
     hashmap_free(stale_profiles, NULL);
     return err;
 }
@@ -2630,22 +2707,17 @@ error_t *workspace_load(
     workspace_t *ws = NULL;
     error_t *err = NULL;
 
-    /* Construct profile_list_t from validated names.
-     * Workspace owns the result — freed in workspace_free().
-     * Strict: callers validate names upstream (profile_resolve_enabled,
-     * profile_resolve_filter). A load failure here means a branch
-     * disappeared between validation and load and is surfaced to the
-     * caller rather than silently dropped. */
-    profile_list_t *loaded_profiles = NULL;
-    err = profile_list_load(repo, profiles, &loaded_profiles);
+    /* Create empty workspace — borrows profile names from caller.
+     *
+     * No profile_list_load here. Full profile_t objects (Git ref resolution,
+     * peel, tree loading) are deferred to the rare stale repair path inside
+     * workspace_build_manifest_from_state. In the common (non-stale) case,
+     * the workspace never touches Git for profile loading.
+     *
+     * Metadata loading is similarly deferred — only needed when stale entries
+     * must be patched from fresh Git state. */
+    err = workspace_create_empty(repo, profiles, &ws);
     if (err) {
-        return error_wrap(err, "Failed to load profiles from names");
-    }
-
-    /* Create empty workspace (takes ownership of loaded_profiles on success) */
-    err = workspace_create_empty(repo, loaded_profiles, &ws);
-    if (err) {
-        profile_list_free(loaded_profiles);
         return err;
     }
 
@@ -2660,50 +2732,6 @@ error_t *workspace_load(
     if (!ws->content_cache) {
         workspace_free(ws);
         return ERROR(ERR_MEMORY, "Failed to create content cache");
-    }
-
-    ws->metadata_cache = hashmap_borrow(16);
-    if (!ws->metadata_cache) {
-        workspace_free(ws);
-        return ERROR(ERR_MEMORY, "Failed to create metadata cache");
-    }
-
-    /* Pre-load metadata for all profiles (performance optimization).
-     *
-     * Iterates the caller's name array directly. Strict profile_list_load
-     * guarantees loaded_profiles->count == profiles->count, so the two
-     * iteration sets are identical. */
-    for (size_t i = 0; i < profiles->count; i++) {
-        const char *profile_name = profiles->items[i];
-        metadata_t *metadata = NULL;
-
-        error_t *meta_err = metadata_load_from_branch(repo, profile_name, &metadata);
-        if (meta_err) {
-            /* Graceful fallback: create empty metadata if loading fails.
-             * This ensures content layer always has metadata for validation.
-             * Empty metadata will cause "file not in metadata" errors during
-             * divergence analysis, which is the correct behavior for profiles
-             * without metadata (new profiles or corrupted metadata files). */
-            error_free(meta_err);
-            error_t *create_err = metadata_create_empty(&metadata);
-            if (create_err) {
-                workspace_free(ws);
-                return error_wrap(
-                    create_err, "Failed to create metadata for profile '%s'",
-                    profile_name
-                );
-            }
-        }
-
-        error_t *set_err = hashmap_set(ws->metadata_cache, profile_name, metadata);
-        if (set_err) {
-            metadata_free(metadata);
-            workspace_free(ws);
-            return error_wrap(
-                set_err, "Failed to cache metadata for profile '%s'",
-                profile_name
-            );
-        }
     }
 
     /* Load or borrow deployment state */
@@ -3386,10 +3414,6 @@ void workspace_free(workspace_t *ws) {
      * in manifest entries, state entries, and diverged items.
      * Also frees cached_state_files array (arena_calloc'd). */
     arena_destroy(ws->arena);
-
-    /* Free profiles AFTER arena — arena strings may reference profile
-     * names. Arena is freed above. */
-    profile_list_free(ws->profiles);
 
     /* Only free state if we own it (allocated via state_load).
      * If borrowed from caller (state_load_for_update), caller is responsible. */

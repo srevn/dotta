@@ -144,9 +144,11 @@ typedef struct {
  * that operations like `dotta status -p global` only report divergence for the
  * specified profile, not the entire repository.
  *
- * Profile loading: The workspace constructs and owns its profile_list_t
- * internally from the provided names. Callers never need to construct
- * profile_list_t — only validated profile names are required.
+ * Profile loading: The workspace borrows the provided name array (caller
+ * must keep it alive until workspace_free). Full profile_t objects are NOT
+ * loaded eagerly — they are deferred to the rare stale repair path where
+ * Git tree walks are needed. In the common (non-stale) case, workspace_load
+ * performs zero Git ref resolution or peel operations for profile loading.
  *
  * State Ownership:
  * - If state is NULL: Workspace allocates its own state via state_load() and
@@ -274,20 +276,17 @@ const workspace_item_t *workspace_get_item(
 /**
  * Get cached metadata for profile
  *
- * Returns pre-loaded metadata from the workspace cache (O(1) lookup).
- * The metadata cache is populated during workspace_load() for all profiles
- * in the workspace scope.
+ * Returns metadata from the workspace cache (O(1) lookup). The cache is
+ * populated only when staleness was detected during workspace_load() — in
+ * the common (non-stale) case, this returns NULL for all profiles.
  *
- * Use this instead of metadata_load_from_branch() when you have a workspace
- * to avoid redundant Git operations. The returned metadata is owned by the
- * workspace and remains valid until workspace_free() is called.
- *
- * This is a performance optimization - operations that need metadata for
- * multiple profiles can reuse the cache instead of loading from Git repeatedly.
+ * Callers should treat this as an opportunistic cache: use the result when
+ * non-NULL, fall back to metadata_load_from_branch() otherwise. The only
+ * external consumer (update.c) already follows this pattern.
  *
  * @param ws Workspace (must not be NULL)
  * @param profile_name Profile name (must not be NULL)
- * @return Metadata or NULL if profile has no metadata (borrowed reference)
+ * @return Metadata or NULL if not cached (borrowed reference, valid until workspace_free)
  */
 const metadata_t *workspace_get_metadata(
     const workspace_t *ws,

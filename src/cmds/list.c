@@ -638,7 +638,7 @@ static error_t *list_file_history(
      * Note: No custom prefix context available for list command - users must use
      * storage format (custom/etc/nginx.conf) for custom/ paths */
     char *storage_path = NULL;
-    error_t *err = path_resolve_input(opts->file_path, false, NULL, 0, &storage_path);
+    error_t *err = path_resolve_input(opts->file_path, false, NULL, &storage_path);
     if (err) {
         return error_wrap(err, "Failed to resolve path '%s'", opts->file_path);
     }

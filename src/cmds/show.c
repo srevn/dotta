@@ -658,7 +658,7 @@ error_t *cmd_show(
      * Note: No custom prefix context available for show command - users must use
      * storage format (custom/etc/nginx.conf) for custom/ paths */
     const char *search_path = opts->file_path;
-    error_t *convert_err = path_resolve_input(opts->file_path, false, NULL, 0, &converted);
+    error_t *convert_err = path_resolve_input(opts->file_path, false, NULL, &converted);
     if (convert_err) {
         error_free(convert_err);
         /* Fall back to original path (may be a partial match pattern) */

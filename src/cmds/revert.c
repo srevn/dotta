@@ -146,7 +146,7 @@ static error_t *discover_file(
      *
      * Note: No custom prefix context available for revert command - users must use
      * storage format (custom/etc/nginx.conf) for custom/ paths */
-    err = path_resolve_input(file_path, false, NULL, 0, &storage_path);
+    err = path_resolve_input(file_path, false, NULL, &storage_path);
     if (err) {
         return err;
     }

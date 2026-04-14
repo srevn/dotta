@@ -1508,7 +1508,7 @@ error_t *cmd_diff(
 
         err = path_filter_create(
             (const char **) opts->files, opts->file_count,
-            (const char **) prefixes->items, prefixes->count, &file_filter
+            prefixes, &file_filter
         );
         string_array_free(prefixes);
 

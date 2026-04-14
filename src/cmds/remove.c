@@ -163,7 +163,7 @@ static error_t *resolve_paths_to_remove(
          *
          * Note: No custom prefix context available for remove command - users must use
          * storage format (custom/etc/nginx.conf) for custom/ paths */
-        err = path_resolve_input(input_path, false, NULL, 0, &storage_path);
+        err = path_resolve_input(input_path, false, NULL, &storage_path);
         if (err) {
             if (!opts->force) {
                 goto cleanup;

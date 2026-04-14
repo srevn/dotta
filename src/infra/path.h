@@ -174,7 +174,7 @@ error_t *path_get_home(char **out);
  *                           Used for show/revert/remove/filters
  *
  * Custom prefix detection:
- *   When custom_prefixes is provided (non-NULL with prefix_count > 0),
+ *   When custom_prefixes is provided (non-NULL with count > 0),
  *   filesystem paths are checked against each prefix BEFORE $HOME detection.
  *   First matching prefix wins. This enables proper resolution of paths
  *   like /mnt/jail/etc/nginx.conf to custom/etc/nginx.conf when /mnt/jail
@@ -204,16 +204,14 @@ error_t *path_get_home(char **out);
  *
  * @param input User-provided path string (must not be NULL)
  * @param require_exists Whether to canonicalize and verify existence
- * @param custom_prefixes Array of custom prefixes to try (can be NULL)
- * @param prefix_count Number of custom prefixes (0 if none)
+ * @param custom_prefixes Custom prefixes to try (NULL = no custom prefixes)
  * @param out_storage_path Output in storage format (must not be NULL, caller must free)
  * @return Error or NULL on success
  */
 error_t *path_resolve_input(
     const char *input,
     bool require_exists,
-    const char **custom_prefixes,
-    size_t prefix_count,
+    const string_array_t *custom_prefixes,
     char **out_storage_path
 );
 
@@ -253,7 +251,7 @@ typedef struct {
  * - Recursive patterns (doublestar followed by /foo) match at any depth
  *
  * Custom prefix detection:
- *   When custom_prefixes is provided (non-NULL with prefix_count > 0),
+ *   When custom_prefixes is provided (non-NULL with count > 0),
  *   filesystem path inputs are checked against each prefix during resolution.
  *   This enables users to specify /mnt/jail/etc/nginx.conf as a filter and
  *   have it correctly match custom/etc/nginx.conf in the manifest.
@@ -261,7 +259,7 @@ typedef struct {
  * NULL semantics:
  * - If inputs is NULL or count is 0, returns NULL filter (matches all)
  * - A NULL filter passed to path_filter_matches() matches all paths
- * - custom_prefixes can be NULL (equivalent to prefix_count=0)
+ * - custom_prefixes can be NULL (no custom prefix resolution)
  *
  * Error handling:
  * - If any path resolution fails, returns error and cleans up
@@ -269,16 +267,14 @@ typedef struct {
  *
  * @param inputs User-provided path or pattern strings (can be NULL if count is 0)
  * @param count Number of inputs
- * @param custom_prefixes Array of custom prefixes for resolution (can be NULL)
- * @param prefix_count Number of custom prefixes (0 if none)
+ * @param custom_prefixes Custom prefixes for resolution (NULL = no custom prefixes)
  * @param out Path filter (must not be NULL, receives NULL if no filter)
  * @return Error or NULL on success
  */
 error_t *path_filter_create(
     const char **inputs,
     size_t count,
-    const char **custom_prefixes,
-    size_t prefix_count,
+    const string_array_t *custom_prefixes,
     path_filter_t **out
 );
 

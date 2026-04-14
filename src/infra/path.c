@@ -742,8 +742,7 @@ static bool path_is_relative(const char *input) {
 error_t *path_resolve_input(
     const char *input,
     bool require_exists,
-    const char **custom_prefixes,
-    size_t prefix_count,
+    const string_array_t *custom_prefixes,
     char **out_storage_path
 ) {
     CHECK_NULL(input);
@@ -881,14 +880,14 @@ error_t *path_resolve_input(
         /* If resolved to home/ or root/ but we have custom prefixes,
          * check if any match (explicit prefix wins over implicit detection) */
         if ((prefix == PREFIX_ROOT || prefix == PREFIX_HOME) &&
-            custom_prefixes && prefix_count > 0) {
+            custom_prefixes && custom_prefixes->count > 0) {
             /* Try each custom prefix to see if we should use custom/ instead */
-            for (size_t i = 0; i < prefix_count; i++) {
-                if (!custom_prefixes[i]) continue;
+            for (size_t i = 0; i < custom_prefixes->count; i++) {
+                if (!custom_prefixes->items[i]) continue;
 
                 const char *relative = NULL;
                 int match = extract_relative_after_prefix(
-                    normalized, custom_prefixes[i], &relative
+                    normalized, custom_prefixes->items[i], &relative
                 );
                 if (match > 0) {
                     /* Found a matching custom prefix - rebuild as custom/ */
@@ -938,13 +937,13 @@ error_t *path_resolve_input(
          */
 
         /* Try custom prefixes first (explicit user intent wins) */
-        if (custom_prefixes && prefix_count > 0) {
-            for (size_t i = 0; i < prefix_count; i++) {
-                if (!custom_prefixes[i]) continue;
+        if (custom_prefixes && custom_prefixes->count > 0) {
+            for (size_t i = 0; i < custom_prefixes->count; i++) {
+                if (!custom_prefixes->items[i]) continue;
 
                 const char *rel = NULL;
                 int cmatch = extract_relative_after_prefix(
-                    normalized, custom_prefixes[i], &rel
+                    normalized, custom_prefixes->items[i], &rel
                 );
                 if (cmatch > 0) {
                     /* Found a matching custom prefix */
@@ -1026,8 +1025,7 @@ cleanup:
 error_t *path_filter_create(
     const char **inputs,
     size_t count,
-    const char **custom_prefixes,
-    size_t prefix_count,
+    const string_array_t *custom_prefixes,
     path_filter_t **out
 ) {
     CHECK_NULL(out);
@@ -1111,7 +1109,7 @@ error_t *path_filter_create(
         /* Case 2: Exact path - resolve and store in hashmap */
         char *resolved = NULL;
         err = path_resolve_input(
-            input, false, custom_prefixes, prefix_count, &resolved
+            input, false, custom_prefixes, &resolved
         );
         if (err) {
             err = error_wrap(err, "Invalid path '%s'", input);

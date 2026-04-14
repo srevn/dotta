@@ -66,8 +66,7 @@ struct workspace {
 
     /* State data */
     manifest_t *manifest;            /* Profile state (owned) */
-    state_t *state;                  /* Deployment state (owned or borrowed) */
-    bool owns_state;                 /* True if state is owned, false if borrowed */
+    state_t *state;                  /* Deployment state (borrowed from caller) */
     const string_array_t *profiles;  /* Borrowed from caller — valid for workspace lifetime */
     hashmap_t *profile_index;        /* Maps profile -> NULL (membership set, O(1) lookup) */
 
@@ -2665,6 +2664,7 @@ error_t *workspace_load(
     workspace_t **out
 ) {
     CHECK_NULL(repo);
+    CHECK_NULL(state);
     CHECK_NULL(profiles);
     CHECK_NULL(options);
     CHECK_NULL(out);
@@ -2709,23 +2709,8 @@ error_t *workspace_load(
         return ERROR(ERR_MEMORY, "Failed to create content cache");
     }
 
-    /* Load or borrow deployment state */
-    if (state) {
-        /* Borrow caller's state (typically from state_load_for_update).
-         * This ensures workspace analyzes state within the active transaction,
-         * not a stale committed snapshot. Caller retains ownership. */
-        ws->state = state;
-        ws->owns_state = false;
-    } else {
-        /* Allocate our own state (read-only mode for status/diff commands).
-         * Workspace owns this and will free it in workspace_free(). */
-        err = state_load(repo, &ws->state);
-        if (err) {
-            workspace_free(ws);
-            return error_wrap(err, "Failed to load state");
-        }
-        ws->owns_state = true;
-    }
+    /* Borrow caller's state. Caller retains ownership and must free it. */
+    ws->state = state;
 
     /* Build manifest from state (Virtual Working Directory architecture)
      * This replaces the old manifest_build() which walked Git trees.
@@ -2984,16 +2969,6 @@ const manifest_t *workspace_get_manifest(const workspace_t *ws) {
         return NULL;
     }
     return ws->manifest;
-}
-
-/**
- * Get the deployment state from workspace
- */
-const state_t *workspace_get_state(const workspace_t *ws) {
-    if (!ws) {
-        return NULL;
-    }
-    return ws->state;
 }
 
 /**
@@ -3284,12 +3259,8 @@ bool workspace_is_stale(const workspace_t *ws) {
 /**
  * Flush accumulated stat cache updates to the state database
  *
- * When the workspace owns its state (read-only mode, e.g. status/diff),
- * no transaction is active — wraps the batch in BEGIN/COMMIT to avoid
- * N individual autocommits (each triggering a WAL write + fsync).
- *
- * When state is borrowed (e.g. apply), the caller's transaction is already
- * active — flushes directly into it.
+ * Begins its own transaction only when state isn't already in one
+ * (status/diff/sync). Apply always passes state already-in-transaction.
  */
 error_t *workspace_flush_stat_caches(workspace_t *ws) {
     CHECK_NULL(ws);
@@ -3298,17 +3269,9 @@ error_t *workspace_flush_stat_caches(workspace_t *ws) {
         return NULL;
     }
 
-    /* state may be NULL for empty databases (no manifest, no files).
-     * stat_update_count should be 0 in this case, but guard defensively. */
-    if (!ws->state) {
-        return NULL;
-    }
-
-    /* Begin our own transaction only when no external transaction is active.
-     * This handles all cases:
-     *   - apply: borrowed state_load_for_update -> transaction active -> skip
-     *   - status/diff/sync: borrowed state_load -> no transaction -> begin/commit
-     *   - legacy workspace-owned: state_load -> no transaction -> begin/commit */
+    /* Begin our own transaction only when no external transaction is active:
+     *   - apply: state_load_for_update -> already in transaction -> skip
+     *   - status/diff/sync: state_load -> no transaction -> begin/commit */
     bool needs_transaction = !state_in_transaction(ws->state);
 
     if (needs_transaction) {
@@ -3389,12 +3352,6 @@ void workspace_free(workspace_t *ws) {
      * in manifest entries, state entries, and diverged items.
      * Also frees cached_state_files array (arena_calloc'd). */
     arena_destroy(ws->arena);
-
-    /* Only free state if we own it (allocated via state_load).
-     * If borrowed from caller (state_load_for_update), caller is responsible. */
-    if (ws->owns_state) {
-        state_free(ws->state);
-    }
 
     free(ws);
 }

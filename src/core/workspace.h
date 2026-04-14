@@ -152,21 +152,9 @@ typedef struct {
  * to the rare stale repair path. In the common (non-stale) case,
  * workspace_load performs zero Git tree operations for profile loading.
  *
- * State Ownership:
- * - If state is NULL: Workspace allocates its own state via state_load() and
- *   owns it (will free it in workspace_free). Use this for read-only operations
- *   like status and diff.
- * - If state is non-NULL: Workspace borrows the provided state and does NOT
- *   free it (caller remains responsible). Use this for transactional operations
- *   where the command has already opened a write transaction via
- *   state_load_for_update(). This ensures the workspace analyzes the state
- *   within the active transaction, not a stale committed snapshot.
- *
  * @param repo Git repository (must not be NULL)
- * @param state State handle (can be NULL)
- *              - NULL: Allocate read-only state internally (workspace owns it)
- *              - non-NULL: Borrow existing state (caller owns it, typically from
- *                state_load_for_update for transactional operations)
+ * @param state State handle (must not be NULL, borrowed from caller;
+ *              caller retains ownership and must free it after workspace_free)
  * @param profiles Validated profile names in precedence order (must not be NULL)
  * @param config Configuration (for ignore patterns, can be NULL)
  * @param options Analysis options (must not be NULL)
@@ -336,21 +324,6 @@ error_t *check_item_metadata_divergence(
  * @return Manifest (borrowed reference, never NULL for valid workspace)
  */
 const manifest_t *workspace_get_manifest(const workspace_t *ws);
-
-/**
- * Get the deployment state from workspace
- *
- * Returns borrowed reference to the state_t that was loaded during
- * workspace_load(). The state is owned by the workspace and remains
- * valid until workspace_free() is called.
- *
- * This allows commands to access deployment state without redundant
- * loads, improving performance and reducing database connections.
- *
- * @param ws Workspace (must not be NULL)
- * @return State (borrowed reference, never NULL for valid workspace)
- */
-const state_t *workspace_get_state(const workspace_t *ws);
 
 /**
  * Get keymanager from workspace

@@ -842,7 +842,7 @@ static error_t *profile_enable(
         /* Sync profile to manifest and capture stats */
         manifest_enable_stats_t stats = { 0 };
         err = manifest_enable_profile(
-            repo, state, profile_name, opts->custom_prefix, enabled, &stats
+            repo, state, profile_name, enabled, &stats
         );
         if (err) {
             err = error_wrap(

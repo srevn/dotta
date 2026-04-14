@@ -1028,7 +1028,7 @@ error_t *profile_has_custom_files(
 error_t *profile_build_manifest(
     git_repository *repo,
     const string_array_t *profiles,
-    const hashmap_t *prefix_map,
+    const state_t *state,
     arena_t *arena,
     manifest_t **out
 ) {
@@ -1039,6 +1039,15 @@ error_t *profile_build_manifest(
     error_t *err = NULL;
     manifest_t *manifest = NULL;
     hashmap_t *path_map = NULL;
+    hashmap_t *prefix_map = NULL;
+
+    /* Load custom prefix map from state (internalized — callers no longer manage this) */
+    if (state) {
+        err = state_get_prefix_map(state, &prefix_map);
+        if (err) {
+            return error_wrap(err, "Failed to get custom prefix map");
+        }
+    }
 
     /* Allocate manifest */
     manifest = calloc(1, sizeof(manifest_t));
@@ -1120,6 +1129,10 @@ error_t *profile_build_manifest(
         capacity = ctx.capacity;
     }
 
+    /* prefix_map no longer needed — all per-profile lookups are done */
+    hashmap_free(prefix_map, free);
+    prefix_map = NULL;
+
     /* Success - transfer index ownership to manifest */
     manifest->index = path_map;
     manifest->arena_backed = (arena != NULL);
@@ -1128,6 +1141,7 @@ error_t *profile_build_manifest(
     return NULL;
 
 cleanup:
+    hashmap_free(prefix_map, free);
     hashmap_free(path_map, NULL);
     if (err) manifest_free(manifest);
 

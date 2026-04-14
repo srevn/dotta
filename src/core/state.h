@@ -457,6 +457,29 @@ error_t *state_get_prefix_map(
 );
 
 /**
+ * Get custom prefix for a single profile
+ *
+ * Targeted single-row lookup for one profile's custom prefix.
+ * Returns NULL via *out_prefix when the profile has no custom prefix
+ * (standard home/root deployment), when the profile is not enabled,
+ * or when the state has no database.
+ *
+ * Use this instead of state_get_prefix_map() when only one profile's
+ * prefix is needed — avoids allocating and populating the full map.
+ *
+ * @param state State handle (must not be NULL)
+ * @param profile_name Profile to query (must not be NULL)
+ * @param out_prefix Output prefix string (must not be NULL; *out_prefix set to
+ *                   NULL if no custom prefix, otherwise caller must free)
+ * @return Error or NULL on success (NULL prefix is not an error)
+ */
+error_t *state_get_profile_prefix(
+    const state_t *state,
+    const char *profile_name,
+    char **out_prefix
+);
+
+/**
  * Set enabled profiles (bulk operation)
  *
  * BULK API: For atomic profile list replacement (clone, reorder, interactive).

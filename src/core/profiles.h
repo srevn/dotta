@@ -320,17 +320,17 @@ error_t *profile_has_custom_files(
  * Later profiles override earlier ones. Loads each profile's Git tree
  * internally via gitops_load_branch_tree (one tree alive per iteration).
  *
- * For profiles with custom/ files, resolves deployment prefix from
- * prefix_map (profile_name → custom_prefix). Profiles not in the map
- * or with NULL prefix deploy to home/root normally. Custom/ files are
- * skipped for profiles without a prefix entry.
+ * Custom prefix resolution is handled internally: when state is non-NULL,
+ * loads the prefix map from the state database to resolve custom/ files.
+ * Profiles without a custom prefix deploy to home/root normally.
+ * Custom/ files are skipped for profiles without a prefix entry.
  *
  * Memory: manifest entries borrow profile_name from the caller's profiles
  * array. The profiles array must outlive the returned manifest.
  *
  * @param repo Repository (must not be NULL)
  * @param profiles Profile names in precedence order (must not be NULL)
- * @param prefix_map Custom prefix map (can be NULL — all profiles use home/root)
+ * @param state State handle for custom prefix resolution (NULL = no custom prefixes)
  * @param arena Arena for string allocations (NULL = heap)
  * @param out Manifest (must not be NULL, caller must free with manifest_free)
  * @return Error or NULL on success
@@ -338,7 +338,7 @@ error_t *profile_has_custom_files(
 error_t *profile_build_manifest(
     git_repository *repo,
     const string_array_t *profiles,
-    const hashmap_t *prefix_map,
+    const state_t *state,
     arena_t *arena,
     manifest_t **out
 );

@@ -604,9 +604,9 @@ static error_t *create_commit(
  *   8. Commit transaction atomically
  *
  * CRITICAL ORDER: Step 5 must precede step 6. The custom_prefix stored in step 5
- * is required by state_get_prefix_map() during manifest_add_files() in step 6 to
- * resolve custom/ storage paths. Transaction atomicity ensures: enable + sync
- * succeed together or fail together (automatic rollback on error).
+ * is required by manifest_add_files() in step 6 (which loads the prefix map
+ * internally) to resolve custom/ storage paths. Transaction atomicity ensures:
+ * enable + sync succeed together or fail together (automatic rollback on error).
  *
  * @param repo Git repository (must not be NULL)
  * @param profile_name Profile to auto-enable (must not be NULL, must exist in Git)
@@ -692,8 +692,8 @@ static error_t *auto_enable_and_sync_profile(
      *
      * CRITICAL ORDER: Must enable BEFORE manifest sync so custom_prefix
      * is available in state for path resolution during manifest_add_files().
-     * The custom prefix is stored in the enabled_profiles table and used
-     * by state_get_prefix_map() to resolve custom/ storage paths.
+     * The custom prefix is stored in the enabled_profiles table and loaded
+     * internally by the manifest layer to resolve custom/ storage paths.
      *
      * Transaction Safety: If manifest sync (STEP 6) fails, state_free()
      * automatically rolls back this change (see cleanup handler). */
@@ -705,8 +705,8 @@ static error_t *auto_enable_and_sync_profile(
 
     /* STEP 6: Sync files to manifest with DEPLOYED status
      *
-     * manifest_add_files() calls state_get_prefix_map() internally to build
-     * the manifest. The custom_prefix stored in STEP 5 is now available for
+     * manifest_add_files() loads the prefix map internally to build the
+     * manifest. The custom_prefix stored in STEP 5 is now available for
      * resolving custom/ storage paths via path_from_storage().
      *
      * Precedence: If this profile has lower precedence than existing enabled
@@ -880,8 +880,8 @@ static error_t *update_manifest_after_add(
     /* STEP 3: Update custom prefix in state if adding custom/ files
      *
      * CRITICAL ORDER: Must store prefix BEFORE manifest_add_files() so
-     * state_get_prefix_map() can resolve custom/ storage paths during
-     * manifest building. Same ordering constraint as
+     * the prefix map (loaded internally) can resolve custom/ storage paths
+     * during manifest building. Same ordering constraint as
      * auto_enable_and_sync_profile() (STEP 5 → STEP 6).
      *
      * Only called when custom_prefix is non-NULL to avoid clearing an

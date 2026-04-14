@@ -2386,16 +2386,8 @@ static error_t *workspace_build_manifest_from_state(
             }
         }
 
-        /* Get prefix map for path resolution during fresh manifest build */
-        hashmap_t *prefix_map = NULL;
-        err = state_get_prefix_map(ws->state, &prefix_map);
-        if (err) {
-            hashmap_free(stale_profiles, NULL);
-            return error_wrap(err, "Failed to get prefix map for stale repair");
-        }
-
-        err = profile_build_manifest(ws->repo, ws->profiles, prefix_map, NULL, &fresh_manifest);
-        hashmap_free(prefix_map, free);
+        /* Build fresh manifest from current Git state for stale comparison */
+        err = profile_build_manifest(ws->repo, ws->profiles, ws->state, NULL, &fresh_manifest);
         if (err) {
             hashmap_free(stale_profiles, NULL);
             return error_wrap(err, "Failed to build fresh manifest for stale repair");

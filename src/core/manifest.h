@@ -63,26 +63,28 @@ typedef struct {
 } manifest_repair_stats_t;
 
 /**
- * Enable profile in manifest with optional custom prefix
+ * Enable profile in manifest
  *
  * Called when a profile is enabled. Populates manifest from Git branch
  * with precedence resolution across all enabled profiles.
  *
  * Algorithm:
- *   1. Get HEAD oid for profile
- *   2. Load prefix map from state (state_get_prefix_map)
- *   3. Add new profile's custom prefix to map (if provided)
- *   4. Build manifest from all enabled profiles with prefix context (precedence oracle)
- *   5. Load merged metadata from all profiles
- *   6. For each file owned by this profile (highest precedence):
+ *   1. Build manifest from all enabled profiles (precedence oracle)
+ *   2. Load merged metadata from all profiles
+ *   3. For each file owned by this profile (highest precedence):
  *      - Extract blob OID from Git tree entry (content identity)
  *      - Extract metadata
  *      - Insert/update manifest entry
+ *
+ * Custom prefix resolution is handled internally by the oracle.
+ * The caller must store the custom prefix via state_enable_profile()
+ * BEFORE calling this function, so it's visible in the state database.
  *
  * Preconditions:
  *   - profile_name MUST be in enabled_profiles
  *   - state MUST have active transaction (via state_load_for_update)
  *   - Git branch for profile_name MUST exist
+ *   - Custom prefix (if any) MUST already be stored via state_enable_profile()
  *
  * Postconditions:
  *   - All files from profile added/updated in manifest
@@ -103,7 +105,6 @@ typedef struct {
  * @param repo Git repository
  * @param state State handle (with active transaction)
  * @param profile_name Profile being enabled
- * @param custom_prefix Custom prefix for this profile (NULL for home/root profiles)
  * @param enabled_profiles All enabled profiles (including profile_name)
  * @return Error or NULL on success
  */
@@ -111,7 +112,6 @@ error_t *manifest_enable_profile(
     git_repository *repo,
     state_t *state,
     const char *profile_name,
-    const char *custom_prefix,
     const string_array_t *enabled_profiles,
     manifest_enable_stats_t *out_stats
 );

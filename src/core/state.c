@@ -1035,6 +1035,59 @@ error_t *state_get_prefix_map(
 }
 
 /**
+ * Get custom prefix for a single profile
+ */
+error_t *state_get_profile_prefix(
+    const state_t *state,
+    const char *profile_name,
+    char **out_prefix
+) {
+    CHECK_NULL(state);
+    CHECK_NULL(profile_name);
+    CHECK_NULL(out_prefix);
+
+    *out_prefix = NULL;
+
+    /* Empty state (no DB file) has no prefixes */
+    if (!state->db) {
+        return NULL;
+    }
+
+    const char *sql =
+        "SELECT custom_prefix FROM enabled_profiles WHERE name = ?";
+
+    sqlite3_stmt *stmt = NULL;
+    int rc = sqlite3_prepare_v2(state->db, sql, -1, &stmt, NULL);
+    if (rc != SQLITE_OK) {
+        return sqlite_error(state->db, "Failed to prepare profile prefix query");
+    }
+
+    rc = sqlite3_bind_text(stmt, 1, profile_name, -1, SQLITE_STATIC);
+    if (rc != SQLITE_OK) {
+        sqlite3_finalize(stmt);
+        return sqlite_error(state->db, "Failed to bind profile name");
+    }
+
+    rc = sqlite3_step(stmt);
+    if (rc == SQLITE_ROW) {
+        const char *prefix_db = (const char *) sqlite3_column_text(stmt, 0);
+        if (prefix_db) {
+            *out_prefix = strdup(prefix_db);
+            if (!*out_prefix) {
+                sqlite3_finalize(stmt);
+                return ERROR(ERR_MEMORY, "Failed to allocate profile prefix");
+            }
+        }
+    } else if (rc != SQLITE_DONE) {
+        sqlite3_finalize(stmt);
+        return sqlite_error(state->db, "Failed to query profile prefix");
+    }
+
+    sqlite3_finalize(stmt);
+    return NULL;
+}
+
+/**
  * Load commit_oid map from enabled_profiles (preservation helper)
  *
  * Returns a hashmap of name → heap-allocated git_oid. Caller frees with

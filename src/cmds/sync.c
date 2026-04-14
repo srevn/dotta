@@ -321,14 +321,14 @@ static error_t *pull_branch_ff(
 static error_t *sync_fetch_enabled_profiles(
     git_repository *repo,
     const char *remote_name,
-    const string_array_t *names,
+    const string_array_t *profiles,
     sync_results_t *results,
     output_ctx_t *out,
     transfer_context_t *xfer
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(remote_name);
-    CHECK_NULL(names);
+    CHECK_NULL(profiles);
     CHECK_NULL(results);
     CHECK_NULL(out);
 
@@ -366,7 +366,7 @@ static error_t *sync_fetch_enabled_profiles(
      * to exist (or have existed) on the remote. Local-only profiles (never
      * pushed) have no tracking ref and would cause the entire batched fetch
      * to fail with a "ref not found" error from the remote. */
-    char **branch_names = malloc(names->count * sizeof(char *));
+    char **branch_names = malloc(profiles->count * sizeof(char *));
     if (!branch_names) {
         if (ephemeral) {
             output_clear_line(out);
@@ -377,11 +377,11 @@ static error_t *sync_fetch_enabled_profiles(
     }
 
     size_t fetch_count = 0;
-    for (size_t i = 0; i < names->count; i++) {
+    for (size_t i = 0; i < profiles->count; i++) {
         char remote_refname[DOTTA_REFNAME_MAX];
         error_t *err_build = gitops_build_refname(
             remote_refname, sizeof(remote_refname), "refs/remotes/%s/%s",
-            remote_name, names->items[i]
+            remote_name, profiles->items[i]
         );
         if (err_build) {
             error_free(err_build);
@@ -392,7 +392,7 @@ static error_t *sync_fetch_enabled_profiles(
         int rc = git_reference_lookup(&ref, repo, remote_refname);
         if (rc == 0) {
             git_reference_free(ref);
-            branch_names[fetch_count++] = names->items[i];
+            branch_names[fetch_count++] = profiles->items[i];
         }
     }
 
@@ -453,20 +453,20 @@ static error_t *sync_fetch_enabled_profiles(
 static error_t *sync_analyze_phase(
     git_repository *repo,
     const char *remote_name,
-    const string_array_t *names,
+    const string_array_t *profiles,
     sync_results_t *results,
     output_ctx_t *out
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(remote_name);
-    CHECK_NULL(names);
+    CHECK_NULL(profiles);
     CHECK_NULL(results);
     CHECK_NULL(out);
 
-    for (size_t i = 0; i < names->count; i++) {
+    for (size_t i = 0; i < profiles->count; i++) {
         profile_sync_result_t *result = &results->profiles[i];
 
-        result->profile_name = strdup(names->items[i]);
+        result->profile_name = strdup(profiles->items[i]);
         if (!result->profile_name) {
             return ERROR(ERR_MEMORY, "Failed to allocate profile name");
         }
@@ -474,7 +474,7 @@ static error_t *sync_analyze_phase(
         /* Analyze state */
         upstream_info_t *info = NULL;
         error_t *err = upstream_analyze_profile(
-            repo, remote_name, names->items[i], &info
+            repo, remote_name, profiles->items[i], &info
         );
 
         if (err) {

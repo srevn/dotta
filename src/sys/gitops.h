@@ -80,10 +80,6 @@ error_t *gitops_discover_and_open(git_repository **out, const char *start_path);
 bool gitops_is_repository(const char *path);
 
 /**
- * Branch/Reference operations
- */
-
-/**
  * Check if branch exists
  *
  * @param repo Repository (must not be NULL)
@@ -164,10 +160,6 @@ error_t *gitops_is_current_branch(
 );
 
 /**
- * Tree operations
- */
-
-/**
  * Load tree from reference
  *
  * @param repo Repository (must not be NULL)
@@ -176,6 +168,26 @@ error_t *gitops_is_current_branch(
  * @return Error or NULL on success
  */
 error_t *gitops_load_tree(git_repository *repo, const char *ref_name, git_tree **out);
+
+/**
+ * Load tree from a branch by name, optionally capturing the peeled HEAD OID
+ *
+ * Convenience wrapper: builds "refs/heads/<branch_name>" and resolves to tree.
+ * When out_oid is non-NULL, atomically captures the peeled OID from the same
+ * git_reference_peel that produces the tree — no separate ref lookup needed.
+ *
+ * @param repo Repository (must not be NULL)
+ * @param branch_name Branch name (must not be NULL)
+ * @param out_tree Tree object (must not be NULL, caller must free with git_tree_free)
+ * @param out_oid Peeled HEAD OID (can be NULL to skip)
+ * @return Error or NULL on success
+ */
+error_t *gitops_load_branch_tree(
+    git_repository *repo,
+    const char *branch_name,
+    git_tree **out_tree,
+    git_oid *out_oid
+);
 
 /**
  * Walk tree with callback
@@ -278,10 +290,6 @@ error_t *gitops_read_blob_content(
     void **out_content,
     size_t *out_size
 );
-
-/**
- * Commit operations
- */
 
 /**
  * Create commit
@@ -458,10 +466,6 @@ error_t *gitops_commit_tree_updates_safe(
     git_oid *out_oid
 );
 
-/**
- * Remote operations
- */
-
 /* Forward declaration for transfer context */
 typedef struct transfer_context_s transfer_context_t;
 
@@ -565,10 +569,6 @@ error_t *gitops_get_remote_url(
 );
 
 /**
- * Reference operations
- */
-
-/**
  * Create reference
  *
  * @param repo Repository (must not be NULL)
@@ -638,10 +638,6 @@ error_t *gitops_resolve_reference_oid(
 error_t *gitops_build_refname(char *buffer, size_t buffer_size, const char *format, ...);
 
 /**
- * Index operations
- */
-
-/**
  * Get repository index
  *
  * @param repo Repository (must not be NULL)
@@ -669,13 +665,6 @@ error_t *gitops_index_add(git_index *index, const char *path);
 error_t *gitops_index_write_tree(git_index *index, git_oid *out);
 
 /**
- * Advanced merge/rebase operations (HEAD-safe)
- *
- * These operations never modify HEAD and are designed for dotta's architecture
- * where HEAD must always point to dotta-worktree.
- */
-
-/**
  * Get tree from commit OID
  *
  * Convenience function to extract tree from a commit.
@@ -690,10 +679,6 @@ error_t *gitops_get_tree_from_commit(
     const git_oid *commit_oid,
     git_tree **out_tree
 );
-
-/**
- * Diff operations
- */
 
 /**
  * Generate diff between two trees
@@ -729,10 +714,6 @@ error_t *gitops_diff_get_stats(
     git_diff *diff,
     git_diff_stats **out_stats
 );
-
-/**
- * Merge/rebase operations
- */
 
 /**
  * Find merge base between two commits

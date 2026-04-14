@@ -495,16 +495,23 @@ error_t *gitops_is_current_branch(
 /**
  * Tree operations
  */
-error_t *gitops_load_tree(
+
+/**
+ * Resolve a Git reference to its tree, optionally capturing the peeled OID
+ *
+ * Shared implementation for gitops_load_tree and gitops_load_branch_tree.
+ * The OID captured (when out_oid is non-NULL) is the peeled object's OID:
+ * the commit OID for commit-backed branches, the tree OID for orphan-tree
+ * branches. This matches the OID that the old profile_load captured
+ * via the same git_reference_peel(ANY) path, ensuring staleness detection
+ * consistency.
+ */
+static error_t *resolve_ref_to_tree(
     git_repository *repo,
     const char *ref_name,
-    git_tree **out
+    git_tree **out_tree,
+    git_oid *out_oid
 ) {
-    CHECK_NULL(repo);
-    CHECK_NULL(ref_name);
-    CHECK_NULL(out);
-    CHECK_ARG(ref_name[0] != '\0', "Reference name cannot be empty");
-
     /* Get reference */
     git_reference *ref = NULL;
     int err = git_reference_lookup(&ref, repo, ref_name);
@@ -526,6 +533,11 @@ error_t *gitops_load_tree(
         );
     }
 
+    /* Capture peeled OID before consuming the object */
+    if (out_oid) {
+        git_oid_cpy(out_oid, git_object_id(obj));
+    }
+
     /* Handle different object types */
     git_object_t obj_type = git_object_type(obj);
 
@@ -534,7 +546,7 @@ error_t *gitops_load_tree(
          * SAFETY: We verified obj_type == GIT_OBJECT_COMMIT, so this cast is safe
          */
         git_commit *commit = (git_commit *) obj;
-        err = git_commit_tree(out, commit);
+        err = git_commit_tree(out_tree, commit);
         git_object_free(obj);
         if (err < 0) {
             return error_from_git(err);
@@ -543,7 +555,7 @@ error_t *gitops_load_tree(
         /* Orphan branch pointing directly to tree
          * SAFETY: We verified obj_type == GIT_OBJECT_TREE, so this cast is safe
          */
-        *out = (git_tree *) obj;
+        *out_tree = (git_tree *) obj;
         /* Don't free obj - we're transferring ownership to caller */
     } else {
         /* Unexpected object type */
@@ -555,6 +567,40 @@ error_t *gitops_load_tree(
     }
 
     return NULL;
+}
+
+error_t *gitops_load_tree(
+    git_repository *repo,
+    const char *ref_name,
+    git_tree **out
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(ref_name);
+    CHECK_NULL(out);
+    CHECK_ARG(ref_name[0] != '\0', "Reference name cannot be empty");
+
+    return resolve_ref_to_tree(repo, ref_name, out, NULL);
+}
+
+error_t *gitops_load_branch_tree(
+    git_repository *repo,
+    const char *branch_name,
+    git_tree **out_tree,
+    git_oid *out_oid
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(branch_name);
+    CHECK_NULL(out_tree);
+
+    char refname[DOTTA_REFNAME_MAX];
+    error_t *err = gitops_build_refname(
+        refname, sizeof(refname), "refs/heads/%s", branch_name
+    );
+    if (err) {
+        return error_wrap(err, "Invalid branch name '%s'", branch_name);
+    }
+
+    return resolve_ref_to_tree(repo, refname, out_tree, out_oid);
 }
 
 error_t *gitops_tree_walk(

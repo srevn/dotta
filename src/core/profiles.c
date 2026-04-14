@@ -24,13 +24,13 @@
 /**
  * Check if profile exists
  */
-bool profile_exists(git_repository *repo, const char *name) {
-    if (!repo || !name) {
+bool profile_exists(git_repository *repo, const char *profile) {
+    if (!repo || !profile) {
         return false;
     }
 
     bool exists = false;
-    error_t *err = gitops_branch_exists(repo, name, &exists);
+    error_t *err = gitops_branch_exists(repo, profile, &exists);
     if (err) {
         error_free(err);
         return false;
@@ -40,159 +40,17 @@ bool profile_exists(git_repository *repo, const char *name) {
 }
 
 /**
- * Load profile
- */
-error_t *profile_load(
-    git_repository *repo,
-    const char *name,
-    profile_t **out
-) {
-    CHECK_NULL(repo);
-    CHECK_NULL(name);
-    CHECK_NULL(out);
-
-    error_t *err = NULL;
-    profile_t *profile = NULL;
-
-    /* Allocate profile */
-    profile = calloc(1, sizeof(profile_t));
-    if (!profile) {
-        err = ERROR(ERR_MEMORY, "Failed to allocate profile");
-        goto cleanup;
-    }
-
-    profile->name = strdup(name);
-    if (!profile->name) {
-        err = ERROR(ERR_MEMORY, "Failed to allocate profile name");
-        goto cleanup;
-    }
-
-    /* Load reference */
-    char refname[DOTTA_REFNAME_MAX];
-    err = gitops_build_refname(
-        refname, sizeof(refname), "refs/heads/%s", name
-    );
-    if (err) {
-        err = error_wrap(
-            err, "Invalid profile name '%s'",
-            name
-        );
-        goto cleanup;
-    }
-
-    err = gitops_lookup_reference(repo, refname, &profile->ref);
-    if (err) {
-        err = error_wrap(
-            err, "Profile not found: %s",
-            name
-        );
-        goto cleanup;
-    }
-
-    /* Peel ref to its underlying object to cache the HEAD OID.
-     * GIT_OBJECT_ANY handles both commit-backed and orphan-tree branches
-     * uniformly. The peeled object is retained on the profile so that a
-     * subsequent profile_load_tree call can consume it instead of peeling
-     * the same ref a second time. */
-    int git_err = git_reference_peel(&profile->peeled, profile->ref, GIT_OBJECT_ANY);
-    if (git_err < 0) {
-        err = error_wrap(
-            error_from_git(git_err),
-            "Failed to peel reference for profile '%s'", name
-        );
-        goto cleanup;
-    }
-    git_oid_cpy(&profile->head_oid, git_object_id(profile->peeled));
-
-    /* Tree will be loaded lazily */
-    profile->tree = NULL;
-
-    *out = profile;
-
-    return NULL;
-
-cleanup:
-    if (profile) {
-        free(profile->name);
-        if (profile->peeled) {
-            git_object_free(profile->peeled);
-        }
-        if (profile->ref) {
-            git_reference_free(profile->ref);
-        }
-        free(profile);
-    }
-
-    return err;
-}
-
-/**
- * Load profile tree (lazy)
- *
- * Consumes profile->peeled (produced by profile_load) instead of re-peeling
- * the same reference. For commit-backed branches, the commit object is used
- * to derive the tree and then released. For orphan-tree branches, the tree
- * object is transferred directly. profile->peeled is cleared after consumption
- * so profile_free won't double-release it.
- */
-error_t *profile_load_tree(git_repository *repo, profile_t *profile) {
-    CHECK_NULL(repo);
-    CHECK_NULL(profile);
-
-    if (profile->tree) {
-        return NULL;  /* Already loaded */
-    }
-
-    /* The cached peel from profile_load should always be present for a
-     * profile constructed via profile_load. Missing it means a second call
-     * after the first consumed it without loading a tree (shouldn't happen
-     * because the first call sets profile->tree before clearing peeled) or
-     * a profile_t that bypassed the loader (no such path exists). Treat it
-     * as an invariant violation. */
-    if (!profile->peeled) {
-        return ERROR(
-            ERR_INTERNAL, "Profile '%s': no peeled object cached",
-            profile->name
-        );
-    }
-
-    git_object *obj = profile->peeled;
-    profile->peeled = NULL;
-
-    git_object_t obj_type = git_object_type(obj);
-    if (obj_type == GIT_OBJECT_COMMIT) {
-        int git_err = git_commit_tree(&profile->tree, (git_commit *) obj);
-        git_object_free(obj);
-        if (git_err < 0) {
-            return error_from_git(git_err);
-        }
-        return NULL;
-    }
-
-    if (obj_type == GIT_OBJECT_TREE) {
-        profile->tree = (git_tree *) obj;  /* Ownership transferred */
-        return NULL;
-    }
-
-    git_object_free(obj);
-    return ERROR(
-        ERR_GIT, "Profile '%s': unexpected object type %d",
-        profile->name, (int) obj_type
-    );
-}
-
-/**
- * Match hierarchical profile names from available names
+ * Match hierarchical profiles from available branches
  *
  * Finds base match (exact prefix) and sub-matches (prefix/variant, one level
  * deep only). Sub-matches are sorted alphabetically for deterministic ordering.
  *
- * @param available Available names to match against
+ * @param available Available branch names to match against
  * @param prefix Prefix to match (e.g., "darwin", "hosts/myhost")
  * @param out Output array to append matches to (base first, then sorted subs)
  * @return Error or NULL on success
  */
-static error_t *match_hierarchical_names(
+static error_t *match_hierarchical_profiles(
     const string_array_t *available,
     const char *prefix,
     string_array_t *out
@@ -265,14 +123,14 @@ error_t *profile_detect(
     error_t *err = NULL;
     char *os_name = NULL;
 
-    string_array_t *names = string_array_new(0);
-    if (!names) {
-        return ERROR(ERR_MEMORY, "Failed to allocate profile names array");
+    string_array_t *profiles = string_array_new(0);
+    if (!profiles) {
+        return ERROR(ERR_MEMORY, "Failed to allocate profiles array");
     }
 
     /* 1. "global" — always first if present */
     if (string_array_contains(available_branches, "global")) {
-        err = string_array_push(names, "global");
+        err = string_array_push(profiles, "global");
         if (err) goto cleanup;
     }
 
@@ -290,7 +148,7 @@ error_t *profile_detect(
             *p = (char) tolower((unsigned char) *p);
         }
 
-        err = match_hierarchical_names(available_branches, os_name, names);
+        err = match_hierarchical_profiles(available_branches, os_name, profiles);
         if (err) {
             /* Non-fatal: skip OS profiles if detection fails */
             error_free(err);
@@ -307,7 +165,7 @@ error_t *profile_detect(
         char host_prefix[DOTTA_REFNAME_MAX];
         int ret = snprintf(host_prefix, sizeof(host_prefix), "hosts/%s", hostname);
         if (ret >= 0 && (size_t) ret < sizeof(host_prefix)) {
-            err = match_hierarchical_names(available_branches, host_prefix, names);
+            err = match_hierarchical_profiles(available_branches, host_prefix, profiles);
             if (err) {
                 /* Non-fatal: skip host profiles if detection fails */
                 error_free(err);
@@ -319,80 +177,13 @@ error_t *profile_detect(
 
     /* Success */
     free(os_name);
-    *out_profiles = names;
+    *out_profiles = profiles;
 
     return NULL;
 
 cleanup:
     free(os_name);
-    string_array_free(names);
-
-    return err;
-}
-
-/**
- * Load multiple profiles
- *
- * Strict: any name whose branch cannot be loaded produces a wrapped error.
- * Callers are expected to have validated names against branch existence
- * already (see profile_resolve_enabled, profile_resolve_filter). A failure
- * here indicates a race with an external operation that deleted the branch
- * between validation and load — surface it rather than silently shrink the
- * list.
- */
-error_t *profile_list_load(
-    git_repository *repo,
-    const string_array_t *names,
-    profile_list_t **out
-) {
-    CHECK_NULL(repo);
-    CHECK_NULL(names);
-    CHECK_NULL(out);
-
-    error_t *err = NULL;
-    profile_list_t *list = NULL;
-
-    list = calloc(1, sizeof(profile_list_t));
-    if (!list) {
-        err = ERROR(ERR_MEMORY, "Failed to allocate profile list");
-        goto cleanup;
-    }
-
-    /* calloc(0, X) is implementation-defined per C17 §7.22.3.2p2 — may
-     * return NULL or a unique non-NULL pointer depending on the libc.
-     * Skip the allocation entirely for empty name arrays: a profile_list_t
-     * with profiles=NULL, count=0 is a valid empty list, and
-     * profile_list_free already tolerates list->profiles == NULL. */
-    if (names->count > 0) {
-        list->profiles = calloc(names->count, sizeof(profile_t));
-        if (!list->profiles) {
-            err = ERROR(ERR_MEMORY, "Failed to allocate profiles array");
-            goto cleanup;
-        }
-    }
-    list->count = 0;
-
-    for (size_t i = 0; i < names->count; i++) {
-        profile_t *profile = NULL;
-        err = profile_load(repo, names->items[i], &profile);
-        if (err) {
-            err = error_wrap(
-                err, "Failed to load profile '%s'",
-                names->items[i]
-            );
-            goto cleanup;
-        }
-
-        list->profiles[list->count++] = *profile;
-        free(profile);
-    }
-
-    *out = list;
-
-    return NULL;
-
-cleanup:
-    if (err) profile_list_free(list);
+    string_array_free(profiles);
 
     return err;
 }
@@ -406,7 +197,7 @@ cleanup:
 error_t *profile_get_custom_prefixes(
     git_repository *repo,
     const state_t *state,
-    const string_array_t *names,
+    const string_array_t *profiles,
     string_array_t **out_prefixes
 ) {
     CHECK_NULL(out_prefixes);
@@ -444,9 +235,9 @@ error_t *profile_get_custom_prefixes(
         return error_wrap(err, "Failed to get custom prefix map");
     }
 
-    if (names) {
-        for (size_t i = 0; i < names->count; i++) {
-            const char *prefix = (const char *) hashmap_get(prefix_map, names->items[i]);
+    if (profiles) {
+        for (size_t i = 0; i < profiles->count; i++) {
+            const char *prefix = (const char *) hashmap_get(prefix_map, profiles->items[i]);
             if (prefix) {
                 err = string_array_push(prefixes, prefix);
                 if (err) break;
@@ -548,8 +339,8 @@ cleanup:
 /**
  * Resolve enabled profile names from state database
  *
- * Lightweight name-only resolution — no Git ref resolution or profile_t
- * allocation. Loads state, validates that referenced profiles exist as
+ * Lightweight name-only resolution — no Git ref resolution or tree loading.
+ * Loads state, validates that referenced profiles exist as
  * branches, and returns the validated names. Warns on stderr about
  * missing profiles.
  *
@@ -673,20 +464,20 @@ error_t *profile_resolve_filter(
     }
 
     error_t *err = NULL;
-    string_array_t *names = string_array_new(cli_count);
-    if (!names) {
-        return ERROR(ERR_MEMORY, "Failed to allocate profile names");
+    string_array_t *validated = string_array_new(cli_count);
+    if (!validated) {
+        return ERROR(ERR_MEMORY, "Failed to allocate validated profiles");
     }
 
     for (size_t i = 0; i < cli_count; i++) {
         if (profile_exists(repo, cli_profiles[i])) {
-            err = string_array_push(names, cli_profiles[i]);
+            err = string_array_push(validated, cli_profiles[i]);
             if (err) {
-                string_array_free(names);
-                return error_wrap(err, "Failed to add profile name '%s'", cli_profiles[i]);
+                string_array_free(validated);
+                return error_wrap(err, "Failed to add profile '%s'", cli_profiles[i]);
             }
         } else if (strict_mode) {
-            string_array_free(names);
+            string_array_free(validated);
             return ERROR(
                 ERR_NOT_FOUND, "Profile not found: %s\n"
                 "Hint: Run 'dotta profile list' to see available profiles",
@@ -696,7 +487,7 @@ error_t *profile_resolve_filter(
         /* Non-strict: skip non-existent profiles silently */
     }
 
-    *out = names;
+    *out = validated;
     return NULL;
 }
 
@@ -875,8 +666,8 @@ static int tree_walk_callback(
  * List deployable files in a Git tree
  *
  * Walks the tree, filters metadata paths, and returns storage paths.
- * This is the lightweight primitive for "files in a branch" without
- * requiring a profile_t.
+ * This is the lightweight primitive for "files in a branch" — takes
+ * a pre-loaded tree and returns storage paths.
  *
  * @param tree Git tree to walk (must not be NULL)
  * @param out String array of storage paths (must not be NULL, caller must free)
@@ -1171,20 +962,22 @@ static int manifest_build_callback(
  */
 error_t *profile_list_files(
     git_repository *repo,
-    profile_t *profile,
+    const char *profile_name,
     string_array_t **out
 ) {
     CHECK_NULL(repo);
-    CHECK_NULL(profile);
+    CHECK_NULL(profile_name);
     CHECK_NULL(out);
 
-    /* Load tree if not loaded (lazy loading) */
-    error_t *err = profile_load_tree(repo, profile);
+    git_tree *tree = NULL;
+    error_t *err = gitops_load_branch_tree(repo, profile_name, &tree, NULL);
     if (err) {
-        return err;
+        return error_wrap(err, "Failed to load tree for profile '%s'", profile_name);
     }
 
-    return profile_list_tree_files(profile->tree, out);
+    err = profile_list_tree_files(tree, out);
+    git_tree_free(tree);
+    return err;
 }
 
 /**
@@ -1204,20 +997,8 @@ error_t *profile_has_custom_files(
 
     *out_has_custom = false;
 
-    char refname[DOTTA_REFNAME_MAX];
-    error_t *err = gitops_build_refname(
-        refname, sizeof(refname), "refs/heads/%s", profile_name
-    );
-    if (err) {
-        return error_wrap(
-            err, "Invalid profile name '%s'",
-            profile_name
-        );
-    }
-
-    /* Load tree if not loaded (lazy loading) */
     git_tree *tree = NULL;
-    err = gitops_load_tree(repo, refname, &tree);
+    error_t *err = gitops_load_branch_tree(repo, profile_name, &tree, NULL);
     if (err) {
         return error_wrap(
             err, "Failed to load tree for profile '%s'",
@@ -1238,14 +1019,15 @@ error_t *profile_has_custom_files(
 }
 
 /**
- * Build manifest from profiles
+ * Build manifest from profile names
  *
  * Performance: O(N) where N is total files across all profiles.
  * Uses manifest_build_callback for single-pass tree traversal.
+ * One Git tree alive per iteration (loaded, walked, freed).
  */
 error_t *profile_build_manifest(
     git_repository *repo,
-    profile_list_t *profiles,
+    const string_array_t *profiles,
     const hashmap_t *prefix_map,
     arena_t *arena,
     manifest_t **out
@@ -1290,14 +1072,15 @@ error_t *profile_build_manifest(
 
     /* Process each profile in order (later profiles override earlier) */
     for (size_t i = 0; i < profiles->count; i++) {
-        profile_t *profile = &profiles->profiles[i];
+        const char *profile = profiles->items[i];
 
-        /* Load tree (lazy loading - cached in profile struct) */
-        err = profile_load_tree(repo, profile);
+        /* Load tree for this profile (scoped to iteration) */
+        git_tree *tree = NULL;
+        err = gitops_load_branch_tree(repo, profile, &tree, NULL);
         if (err) {
             err = error_wrap(
                 err, "Failed to load tree for profile '%s'",
-                profile->name
+                profile
             );
             goto cleanup;
         }
@@ -1306,25 +1089,29 @@ error_t *profile_build_manifest(
          *
          * The callback extracts identity fields (blob_oid, type, mode) from
          * borrowed tree entries, converts paths, handles precedence override,
-         * and populates file_entry_t directly—all in O(N) time. */
+         * and populates file_entry_t directly—all in O(N) time.
+         *
+         * profile_name borrows from caller's profiles array — must outlive manifest */
         struct manifest_build_ctx ctx = {
             .manifest      = manifest,
             .capacity      = capacity,
             .path_map      = path_map,
-            .profile_name  = profile->name,
+            .profile_name  = profile,
             .custom_prefix = prefix_map
-                ? (const char *) hashmap_get(prefix_map, profile->name)
+                ? (const char *) hashmap_get(prefix_map, profile)
                 : NULL,
             .arena         = arena,
             .error         = NULL
         };
 
-        err = gitops_tree_walk(profile->tree, manifest_build_callback, &ctx);
+        err = gitops_tree_walk(tree, manifest_build_callback, &ctx);
+        git_tree_free(tree);
+
         if (err || ctx.error) {
             err = ctx.error ? ctx.error : err;
             err = error_wrap(
                 err, "Failed to build manifest for profile '%s'",
-                profile->name
+                profile
             );
             goto cleanup;
         }
@@ -1436,8 +1223,8 @@ static int file_index_callback(
  * Build inverted index of all files across profiles
  *
  * Walks each branch tree directly into a hashmap that maps storage paths
- * to lists of profile names. Uses gitops_load_tree instead of profile_t
- * to avoid per-branch allocation overhead, and populates the hashmap
+ * to lists of profile names. Uses gitops_load_branch_tree for direct tree
+ * loading, and populates the hashmap
  * during the tree walk to eliminate intermediate string arrays.
  *
  * Complexity: O(M×P) where M = profile count, P = avg files per profile.
@@ -1482,18 +1269,8 @@ error_t *profile_build_file_index(
             continue;
         }
 
-        char refname[DOTTA_REFNAME_MAX];
-        err = gitops_build_refname(
-            refname, sizeof(refname), "refs/heads/%s", branch_name
-        );
-        if (err) {
-            error_free(err);
-            err = NULL;
-            continue;  /* Non-fatal: skip this profile */
-        }
-
         git_tree *tree = NULL;
-        err = gitops_load_tree(repo, refname, &tree);
+        err = gitops_load_branch_tree(repo, branch_name, &tree, NULL);
         if (err) {
             error_free(err);
             err = NULL;
@@ -1773,54 +1550,6 @@ cleanup:
     return err;
 }
 
-/**
- * Free profile
- */
-void profile_free(profile_t *profile) {
-    if (!profile) {
-        return;
-    }
-
-    free(profile->name);
-    if (profile->peeled) {
-        git_object_free(profile->peeled);
-    }
-    if (profile->ref) {
-        git_reference_free(profile->ref);
-    }
-    if (profile->tree) {
-        git_tree_free(profile->tree);
-    }
-    free(profile);
-}
-
-/**
- * Free profile list
- */
-void profile_list_free(profile_list_t *list) {
-    if (!list) {
-        return;
-    }
-
-    if (list->profiles) {
-        for (size_t i = 0; i < list->count; i++) {
-            profile_t *profile = &list->profiles[i];
-            free(profile->name);
-            if (profile->peeled) {
-                git_object_free(profile->peeled);
-            }
-            if (profile->ref) {
-                git_reference_free(profile->ref);
-            }
-            if (profile->tree) {
-                git_tree_free(profile->tree);
-            }
-        }
-    }
-
-    free(list->profiles);
-    free(list);
-}
 
 /**
  * Free manifest

@@ -94,7 +94,6 @@ static error_t *resolve_paths_to_remove(
     error_t *err = NULL;
     string_array_t *storage_paths = NULL;
     string_array_t *filesystem_paths = NULL;
-    profile_t *profile = NULL;
     string_array_t *profile_files = NULL;
     hashmap_t *profile_files_map = NULL;
     hashmap_t *prefix_map = NULL;
@@ -120,18 +119,8 @@ static error_t *resolve_paths_to_remove(
         goto cleanup;
     }
 
-    /* Load profile to check file existence */
-    err = profile_load(repo, profile_name, &profile);
-    if (err) {
-        err = error_wrap(
-            err, "Failed to load profile '%s'",
-            profile_name
-        );
-        goto cleanup;
-    }
-
     /* Get list of files in profile */
-    err = profile_list_files(repo, profile, &profile_files);
+    err = profile_list_files(repo, profile_name, &profile_files);
     if (err) {
         err = error_wrap(err, "Failed to list files in profile");
         goto cleanup;
@@ -313,7 +302,6 @@ cleanup:
     if (prefix_map) hashmap_free(prefix_map, free);
     if (profile_files_map) hashmap_free(profile_files_map, NULL);
     if (profile_files) string_array_free(profile_files);
-    if (profile) profile_free(profile);
     if (storage_paths) string_array_free(storage_paths);
     if (filesystem_paths) string_array_free(filesystem_paths);
 
@@ -1348,7 +1336,6 @@ static error_t *delete_profile_branch(
     char *repo_dir = NULL;
     hook_context_t *hook_ctx = NULL;
     string_array_t *all_profiles = NULL;
-    profile_t *profile = NULL;
     string_array_t *files = NULL;
     string_array_t *hook_fs_paths = NULL;
     char *hook_custom_prefix = NULL;
@@ -1397,23 +1384,13 @@ static error_t *delete_profile_branch(
     all_profiles = NULL;
 
     /* Load profile to count files */
-    err = profile_load(repo, opts->profile, &profile);
+    err = profile_list_files(repo, opts->profile, &files);
     if (err) {
-        err = error_wrap(err, "Failed to load profile '%s'", opts->profile);
-        goto cleanup;
-    }
-
-    err = profile_list_files(repo, profile, &files);
-    if (err) {
-        err = error_wrap(err, "Failed to list files in profile");
+        err = error_wrap(err, "Failed to list files in profile '%s'", opts->profile);
         goto cleanup;
     }
 
     size_t file_count = files->count;
-
-    /* Keep files alive for hook context; freed in cleanup */
-    profile_free(profile);
-    profile = NULL;
 
     /* Dry run */
     if (opts->dry_run) {
@@ -1939,7 +1916,6 @@ cleanup:
     if (upstream_info) upstream_info_free(upstream_info);
     if (remote_name) free(remote_name);
     if (files) string_array_free(files);
-    if (profile) profile_free(profile);
     if (all_profiles) string_array_free(all_profiles);
 
     return err;

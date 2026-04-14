@@ -257,10 +257,10 @@ static error_t *list_profiles(
             continue;
         }
 
-        /* Verbose/remote: Load profile for stats */
-        profile_t *profile = NULL;
+        /* Verbose: Load tree for stats */
+        git_tree *tree = NULL;
         if (verbose) {
-            err = profile_load(repo, profile_name, &profile);
+            err = gitops_load_branch_tree(repo, profile_name, &tree, NULL);
             if (err) {
                 output_warning(
                     out, OUTPUT_NORMAL, "Failed to load profile '%s': %s",
@@ -268,7 +268,7 @@ static error_t *list_profiles(
                 );
                 error_free(err);
                 err = NULL;
-                /* profile stays NULL - stats skipped, name still shown */
+                /* tree stays NULL - stats skipped, name still shown */
             }
         }
 
@@ -278,10 +278,10 @@ static error_t *list_profiles(
             indicator, (int) max_name_len, profile_name
         );
 
-        /* Verbose: Add stats (requires successfully loaded profile) */
-        if (verbose && profile) {
+        /* Verbose: Add stats (requires successfully loaded tree) */
+        if (verbose && tree) {
             profile_stats_t stats = { 0 };
-            error_t *stats_err = stats_get_profile_stats(repo, profile->tree, &stats);
+            error_t *stats_err = stats_get_profile_stats(repo, tree, &stats);
             if (!stats_err) {
                 char size_str[32];
                 output_format_size(stats.total_size, size_str, sizeof(size_str));
@@ -346,7 +346,7 @@ static error_t *list_profiles(
         }
 
         output_newline(out, OUTPUT_NORMAL);
-        profile_free(profile);
+        git_tree_free(tree);
     }
 
     /* Print remote legend if shown */
@@ -396,21 +396,10 @@ static error_t *list_files(
 
     bool verbose = output_is_verbose(out);
 
-    /* Load profile */
-    profile_t *profile = NULL;
-    error_t *err = profile_load(repo, opts->profile, &profile);
-    if (err) {
-        return error_wrap(
-            err, "Failed to load profile '%s'",
-            opts->profile
-        );
-    }
-
     /* List files */
     string_array_t *files = NULL;
-    err = profile_list_files(repo, profile, &files);
+    error_t *err = profile_list_files(repo, opts->profile, &files);
     if (err) {
-        profile_free(profile);
         return error_wrap(
             err, "Failed to list files in profile '%s'",
             opts->profile
@@ -420,7 +409,6 @@ static error_t *list_files(
     if (files->count == 0) {
         output_info(out, OUTPUT_NORMAL, "No files in profile '%s'", opts->profile);
         string_array_free(files);
-        profile_free(profile);
         return NULL;
     }
 
@@ -431,10 +419,14 @@ static error_t *list_files(
     /* Sort for consistent output */
     string_array_sort(files);
 
-    /* Build file→commit map if verbose */
+    /* Load tree and build file→commit map if verbose */
+    git_tree *tree = NULL;
     file_commit_map_t *commit_map = NULL;
     if (verbose) {
-        err = stats_build_file_commit_map(repo, opts->profile, profile->tree, &commit_map);
+        err = gitops_load_branch_tree(repo, opts->profile, &tree, NULL);
+        if (!err) {
+            err = stats_build_file_commit_map(repo, opts->profile, tree, &commit_map);
+        }
         if (err) {
             /* Non-fatal: continue without commit info */
             output_warning(
@@ -497,7 +489,7 @@ static error_t *list_files(
         if (verbose) {
             /* Get file stats */
             git_tree_entry *entry = NULL;
-            int git_err = git_tree_entry_bypath(&entry, profile->tree, file_path);
+            int git_err = tree ? git_tree_entry_bypath(&entry, tree, file_path) : -1;
             if (git_err == 0) {
                 /* Check encryption status and display indicator */
                 bool encrypted = is_file_encrypted(metadata, repo, entry, file_path);
@@ -586,8 +578,10 @@ static error_t *list_files(
     if (metadata) {
         metadata_free(metadata);
     }
+    if (tree) {
+        git_tree_free(tree);
+    }
     string_array_free(files);
-    profile_free(profile);
 
     return NULL;
 }
@@ -675,8 +669,8 @@ static error_t *list_file_history(
     /* Verify profile exists and check if file is in current tree (fast pre-check).
      * This validates the profile early and gives a clear hint for typos/deleted files
      * before the expensive O(total_commits) history walk. */
-    profile_t *profile = NULL;
-    err = profile_load(repo, profile_name, &profile);
+    git_tree *tree = NULL;
+    err = gitops_load_branch_tree(repo, profile_name, &tree, NULL);
     if (err) {
         error_t *wrapped = error_wrap(err, "Profile '%s' not found", profile_name);
         free(discovered_profile);
@@ -684,19 +678,13 @@ static error_t *list_file_history(
         return wrapped;
     }
 
-    err = profile_load_tree(repo, profile);
-    if (!err) {
-        git_tree_entry *check = NULL;
-        if (git_tree_entry_bypath(&check, profile->tree, storage_path) != 0) {
-            output_info(out, OUTPUT_NORMAL, "File not in current tree, searching history...");
-        } else {
-            git_tree_entry_free(check);
-        }
+    git_tree_entry *check = NULL;
+    if (git_tree_entry_bypath(&check, tree, storage_path) != 0) {
+        output_info(out, OUTPUT_NORMAL, "File not in current tree, searching history...");
     } else {
-        error_free(err);
-        err = NULL;
+        git_tree_entry_free(check);
     }
-    profile_free(profile);
+    git_tree_free(tree);
 
     /* Get file history */
     file_history_t *history = NULL;

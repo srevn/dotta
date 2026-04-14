@@ -2223,8 +2223,7 @@ static error_t *patch_entry_from_fresh(
     /* Update profile ownership if owner changed (precedence shift).
      *
      * Arena-strdup the name so the VWD entry is self-contained — the fresh
-     * manifest (and the local profile_list_t that built it) may be freed
-     * before the workspace. */
+     * manifest may be freed before the workspace. */
     if (fresh_entry->profile_name &&
         strcmp(vwd_entry->profile_name, fresh_entry->profile_name) != 0) {
         vwd_entry->profile_name = arena_strdup(arena, fresh_entry->profile_name);
@@ -2285,7 +2284,6 @@ static error_t *workspace_build_manifest_from_state(
     size_t state_count = 0;
     hashmap_t *stale_profiles = NULL;
     manifest_t *fresh_manifest = NULL;
-    profile_list_t *local_profiles = NULL;  /* Only loaded when stale — freed before return */
 
     /* Create workspace arena for all workspace-lifetime string allocations.
      * 128 KB fits ~200 files comfortably in a single block. */
@@ -2314,7 +2312,7 @@ static error_t *workspace_build_manifest_from_state(
      * Cost: O(P) state queries + O(P) ref-to-OID lookups where P = enabled
      * profile count (typically < 10). profile_index is a membership set (NULL
      * values), so manifest_detect_stale_profiles resolves HEAD via lightweight
-     * git_reference_name_to_id — no profile_list_load overhead.
+     * git_reference_name_to_id.
      *
      * When the caller has already persisted a fresh manifest via
      * manifest_repair_stale() within its transaction (apply.c), the state we
@@ -2343,15 +2341,6 @@ static error_t *workspace_build_manifest_from_state(
     if (stale_profiles) {
         ws->manifest_stale = true;
 
-        /* Load full profile_t objects — needed by profile_build_manifest for
-         * Git tree walks. Scoped to the stale repair path; freed below after
-         * the fresh manifest is consumed and profile names are arena_strdup'd. */
-        err = profile_list_load(ws->repo, ws->profiles, &local_profiles);
-        if (err) {
-            hashmap_free(stale_profiles, NULL);
-            return error_wrap(err, "Failed to load profiles for stale repair");
-        }
-
         /* Load metadata for all profiles (not just stale ones — precedence
          * resolution in the fresh manifest may assign files to non-stale
          * profiles, and patch_entry_from_fresh needs their metadata).
@@ -2360,7 +2349,6 @@ static error_t *workspace_build_manifest_from_state(
          * also access it later via ws_get_metadata(). */
         ws->metadata_cache = hashmap_borrow(16);
         if (!ws->metadata_cache) {
-            profile_list_free(local_profiles);
             hashmap_free(stale_profiles, NULL);
             return ERROR(ERR_MEMORY, "Failed to create metadata cache");
         }
@@ -2379,7 +2367,6 @@ static error_t *workspace_build_manifest_from_state(
                 error_free(meta_err);
                 error_t *create_err = metadata_create_empty(&metadata);
                 if (create_err) {
-                    profile_list_free(local_profiles);
                     hashmap_free(stale_profiles, NULL);
                     return error_wrap(
                         create_err, "Failed to create metadata for profile '%s'",
@@ -2391,7 +2378,6 @@ static error_t *workspace_build_manifest_from_state(
             error_t *set_err = hashmap_set(ws->metadata_cache, profile_name, metadata);
             if (set_err) {
                 metadata_free(metadata);
-                profile_list_free(local_profiles);
                 hashmap_free(stale_profiles, NULL);
                 return error_wrap(
                     set_err, "Failed to cache metadata for profile '%s'",
@@ -2404,15 +2390,13 @@ static error_t *workspace_build_manifest_from_state(
         hashmap_t *prefix_map = NULL;
         err = state_get_prefix_map(ws->state, &prefix_map);
         if (err) {
-            profile_list_free(local_profiles);
             hashmap_free(stale_profiles, NULL);
             return error_wrap(err, "Failed to get prefix map for stale repair");
         }
 
-        err = profile_build_manifest(ws->repo, local_profiles, prefix_map, NULL, &fresh_manifest);
+        err = profile_build_manifest(ws->repo, ws->profiles, prefix_map, NULL, &fresh_manifest);
         hashmap_free(prefix_map, free);
         if (err) {
-            profile_list_free(local_profiles);
             hashmap_free(stale_profiles, NULL);
             return error_wrap(err, "Failed to build fresh manifest for stale repair");
         }
@@ -2422,7 +2406,6 @@ static error_t *workspace_build_manifest_from_state(
         ws->released_paths = hashmap_borrow(16);
         if (!ws->stale_paths || !ws->released_paths) {
             manifest_free(fresh_manifest);
-            profile_list_free(local_profiles);
             hashmap_free(stale_profiles, NULL);
             return ERROR(ERR_MEMORY, "Failed to allocate staleness tracking");
         }
@@ -2661,11 +2644,6 @@ static error_t *workspace_build_manifest_from_state(
 
     manifest_free(fresh_manifest);
 
-    /* Free local profiles — all VWD profile_name pointers that were patched
-     * from fresh_manifest entries are now arena_strdup'd (see
-     * patch_entry_from_fresh), so no dangling references remain. */
-    profile_list_free(local_profiles);
-
     /* Transfer stale_profiles ownership to workspace for use by
      * analyze_orphaned_directories() — freed in workspace_free() */
     ws->stale_profiles = stale_profiles;
@@ -2680,7 +2658,6 @@ cleanup:
     free(ws->manifest);
     ws->manifest = NULL;
     manifest_free(fresh_manifest);
-    profile_list_free(local_profiles);
     hashmap_free(stale_profiles, NULL);
     return err;
 }
@@ -2717,10 +2694,9 @@ error_t *workspace_load(
 
     /* Create empty workspace — borrows profile names from caller.
      *
-     * No profile_list_load here. Full profile_t objects (Git ref resolution,
-     * peel, tree loading) are deferred to the rare stale repair path inside
+     * Git tree loading is deferred to the rare stale repair path inside
      * workspace_build_manifest_from_state. In the common (non-stale) case,
-     * the workspace never touches Git for profile loading.
+     * the workspace never touches Git for profile trees.
      *
      * Metadata loading is similarly deferred — only needed when stale entries
      * must be patched from fresh Git state. */

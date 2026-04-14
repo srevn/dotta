@@ -45,30 +45,6 @@
 #include "core/state.h"
 
 /**
- * Profile structure
- *
- * head_oid is the peeled commit (or tree, for orphan branches) OID of the
- * profile's branch HEAD at load time. profile_load populates it via a single
- * git_reference_peel, so any profile_t constructed through the loader carries
- * its current HEAD OID without further Git operations. Stack-initialized
- * profile_t bypassing profile_load would have a zero head_oid — none exist
- * in the codebase.
- *
- * peeled retains the git_object produced by that single peel so profile_load_tree
- * can reuse it instead of re-peeling the same ref. It is consumed (freed or
- * ownership-transferred to profile->tree) by the first profile_load_tree call;
- * if tree loading is never invoked, profile_free releases it. NULL after
- * consumption.
- */
-typedef struct {
-    char *name;              /* Profile name (e.g., "global", "darwin") */
-    git_reference *ref;      /* Branch reference */
-    git_tree *tree;          /* Profile tree (loaded lazily) */
-    git_object *peeled;      /* Peeled ref object from profile_load */
-    git_oid head_oid;        /* Peeled HEAD OID (set by profile_load) */
-} profile_t;
-
-/**
  * File entry in manifest
  *
  * Represents a single file to be deployed. This structure serves as the
@@ -84,7 +60,7 @@ typedef struct {
  *
  * Memory ownership:
  * - All string fields are owned and must be freed in manifest_free()
- * - profile_name is borrowed (from profile_list_t, workspace profile_index,
+ * - profile_name is borrowed (from caller's names array, workspace profile_index,
  *   state arena, or manifest's owned_profile_name for tree-based manifests)
  */
 typedef struct {
@@ -135,7 +111,7 @@ typedef struct {
  * For tree-based manifests (profile_build_manifest_from_tree), the manifest
  * owns the profile name string that entries borrow.
  * This is NULL for manifests from profile_build_manifest() (which borrow
- * from the caller's profile_list_t) and workspace_build_manifest_from_state()
+ * from the caller's profiles array) and workspace_build_manifest_from_state()
  * (which borrow from the workspace's profile_index).
  */
 typedef struct {
@@ -145,14 +121,6 @@ typedef struct {
     char *owned_profile_name;      /* Owned name for tree-based manifests (NULL otherwise) */
     bool arena_backed;             /* If true, entry string fields are arena-owned (skip free) */
 } manifest_t;
-
-/**
- * Profile list
- */
-typedef struct {
-    profile_t *profiles;
-    size_t count;
-} profile_list_t;
 
 /**
  * Detect matching profile names from a list of available branches
@@ -178,39 +146,6 @@ typedef struct {
 error_t *profile_detect(
     const string_array_t *available_branches,
     string_array_t **out_profiles
-);
-
-/**
- * Load specific profile
- *
- * @param repo Repository (must not be NULL)
- * @param name Profile name (must not be NULL)
- * @param out Profile (must not be NULL, caller must free with profile_free)
- * @return Error or NULL on success
- */
-error_t *profile_load(
-    git_repository *repo,
-    const char *name,
-    profile_t **out
-);
-
-/**
- * Load multiple profiles
- *
- * Strict: any name whose branch cannot be loaded produces a wrapped error.
- * Callers relying on prior name validation get a loud failure on race
- * (e.g., external `git branch -D` between validation and load) instead of
- * a silently truncated profile list.
- *
- * @param repo Repository (must not be NULL)
- * @param names Profile names (must not be NULL)
- * @param out Profile list (must not be NULL, caller must free)
- * @return Error or NULL on success
- */
-error_t *profile_list_load(
-    git_repository *repo,
-    const string_array_t *names,
-    profile_list_t **out
 );
 
 /**
@@ -244,7 +179,7 @@ error_t *profile_resolve_filter(
  * validates that each exists as a branch, and returns validated names.
  * Warns on stderr about profiles referenced in state that no longer exist.
  *
- * Does NOT resolve Git references or allocate profile_t structs.
+ * Does NOT resolve Git references or load profile trees.
  *
  * @param repo Repository (must not be NULL)
  * @param state State handle for connection reuse (NULL = load internally)
@@ -271,15 +206,15 @@ error_t *profile_resolve_enabled(
  * @param repo Repository (only used when state==NULL)
  * @param state State handle for connection reuse (NULL = load internally)
  *              When non-NULL, only reads from the handle (const).
- * @param names Profile names to query (NULL = all enabled profiles with
- *              custom prefixes; iteration order is undefined)
+ * @param profiles Profile names to query (NULL = all enabled profiles with
+ *                 custom prefixes; iteration order is undefined)
  * @param out_prefixes Non-NULL custom prefixes (must not be NULL, caller frees)
  * @return Error or NULL on success (empty array if no custom prefixes)
  */
 error_t *profile_get_custom_prefixes(
     git_repository *repo,
     const state_t *state,
-    const string_array_t *names,
+    const string_array_t *profiles,
     string_array_t **out_prefixes
 );
 
@@ -323,9 +258,8 @@ bool profile_filter_matches(
  * List all local profile branch names
  *
  * Returns names of all local branches except 'dotta-worktree'.
- * Lightweight alternative to profile_list_load — iterates Git refs
- * but only extracts branch names without resolving references or
- * allocating profile_t structs.
+ * Iterates Git refs and extracts branch names without resolving
+ * references or loading trees.
  *
  * @param repo Repository (must not be NULL)
  * @param out String array of branch names (must not be NULL, caller must free)
@@ -340,37 +274,25 @@ error_t *profile_list_all_local(
  * Check if profile exists
  *
  * @param repo Repository (must not be NULL)
- * @param name Profile name (must not be NULL)
+ * @param profile Profile name (must not be NULL)
  * @return true if profile branch exists
  */
-bool profile_exists(git_repository *repo, const char *name);
-
-/**
- * Load profile tree (lazy loading)
- *
- * Loads the Git tree for a profile if not already loaded.
- * The tree is cached in the profile structure.
- *
- * @param repo Repository (must not be NULL)
- * @param profile Profile (must not be NULL)
- * @return Error or NULL on success
- */
-error_t *profile_load_tree(
-    git_repository *repo,
-    profile_t *profile
-);
+bool profile_exists(git_repository *repo, const char *profile);
 
 /**
  * List files in profile
  *
+ * Loads the profile's Git tree internally and walks it to collect
+ * storage paths. Tree is freed before return.
+ *
  * @param repo Repository (must not be NULL)
- * @param profile Profile (must not be NULL, may load tree lazily)
+ * @param profile_name Profile name (must not be NULL)
  * @param out String array of storage paths (must not be NULL, caller must free)
  * @return Error or NULL on success
  */
 error_t *profile_list_files(
     git_repository *repo,
-    profile_t *profile,
+    const char *profile_name,
     string_array_t **out
 );
 
@@ -392,18 +314,22 @@ error_t *profile_has_custom_files(
 );
 
 /**
- * Build manifest from profiles
+ * Build manifest from profile names
  *
  * Merges files from all profiles according to precedence rules.
- * Later profiles override earlier ones.
+ * Later profiles override earlier ones. Loads each profile's Git tree
+ * internally via gitops_load_branch_tree (one tree alive per iteration).
  *
  * For profiles with custom/ files, resolves deployment prefix from
  * prefix_map (profile_name → custom_prefix). Profiles not in the map
  * or with NULL prefix deploy to home/root normally. Custom/ files are
  * skipped for profiles without a prefix entry.
  *
+ * Memory: manifest entries borrow profile_name from the caller's profiles
+ * array. The profiles array must outlive the returned manifest.
+ *
  * @param repo Repository (must not be NULL)
- * @param profiles Profile list (must not be NULL)
+ * @param profiles Profile names in precedence order (must not be NULL)
  * @param prefix_map Custom prefix map (can be NULL — all profiles use home/root)
  * @param arena Arena for string allocations (NULL = heap)
  * @param out Manifest (must not be NULL, caller must free with manifest_free)
@@ -411,7 +337,7 @@ error_t *profile_has_custom_files(
  */
 error_t *profile_build_manifest(
     git_repository *repo,
-    profile_list_t *profiles,
+    const string_array_t *profiles,
     const hashmap_t *prefix_map,
     arena_t *arena,
     manifest_t **out
@@ -435,20 +361,6 @@ error_t *profile_build_manifest_from_tree(
     const char *custom_prefix,
     manifest_t **out
 );
-
-/**
- * Free profile
- *
- * @param profile Profile to free (can be NULL)
- */
-void profile_free(profile_t *profile);
-
-/**
- * Free profile list
- *
- * @param list Profile list to free (can be NULL)
- */
-void profile_list_free(profile_list_t *list);
 
 /**
  * Free manifest

@@ -1231,23 +1231,20 @@ static error_t *test_path_ignore(
 
     /* If specific profile requested, test only that one */
     if (specific_profile) {
-        /* Load single profile */
-        profile_t *profile = NULL;
-        error_t *err = profile_load(repo, specific_profile, &profile);
-        if (err) {
-            return error_wrap(
-                err, "Failed to load profile '%s'",
+        /* Verify profile exists */
+        if (!profile_exists(repo, specific_profile)) {
+            return ERROR(
+                ERR_NOT_FOUND, "Profile '%s' does not exist",
                 specific_profile
             );
         }
 
         /* Create ignore context for this profile */
         ignore_context_t *ctx = NULL;
-        err = ignore_context_create(
+        error_t *err = ignore_context_create(
             repo, config, specific_profile, NULL, 0, &ctx
         );
         if (err) {
-            profile_free(profile);
             return error_wrap(
                 err, "Failed to create ignore context"
             );
@@ -1257,7 +1254,6 @@ static error_t *test_path_ignore(
         ignore_test_result_t result;
         err = ignore_test_path(ctx, effective_path, is_directory, &result);
         ignore_context_free(ctx);
-        profile_free(profile);
 
         if (err) {
             return error_wrap(err, "Failed to test path");

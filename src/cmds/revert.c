@@ -155,30 +155,22 @@ static error_t *discover_file(
 
     /* Fast path: If profile specified, check only that profile */
     if (profile_hint) {
-        profile_t *profile = NULL;
-        err = profile_load(repo, profile_hint, &profile);
+        git_tree *tree = NULL;
+        err = gitops_load_branch_tree(repo, profile_hint, &tree, NULL);
         if (err) {
             free(storage_path);
             return error_wrap(err, "Failed to load profile '%s'", profile_hint);
         }
 
-        /* Load tree */
-        err = profile_load_tree(repo, profile);
-        if (err) {
-            profile_free(profile);
-            free(storage_path);
-            return error_wrap(err, "Failed to load tree for profile '%s'", profile_hint);
-        }
-
         /* Check if file exists in tree */
         git_tree_entry *entry = NULL;
-        int git_err = git_tree_entry_bypath(&entry, profile->tree, storage_path);
+        int git_err = git_tree_entry_bypath(&entry, tree, storage_path);
         bool exists = (git_err == 0);
 
         if (entry) {
             git_tree_entry_free(entry);
         }
-        profile_free(profile);
+        git_tree_free(tree);
 
         if (!exists) {
             /* File not in HEAD - try history search as fallback */

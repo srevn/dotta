@@ -54,79 +54,7 @@ static error_t *get_branch_head_oid(
     return gitops_resolve_reference_oid(repo, refname, out_oid);
 }
 
-/**
- * Find a profile's cached HEAD OID from a loaded profile list
- *
- * Linear scan over the list (P < 10 typically). Every profile_t in a list
- * built by profile_list_load carries its peeled HEAD OID, so this avoids
- * a redundant ref lookup via get_branch_head_oid.
- *
- * @param list Loaded profile list (must not be NULL)
- * @param name Profile name to find (must not be NULL)
- * @return Pointer to cached head_oid, or NULL if name not in list
- */
-static const git_oid *profile_list_head_oid(
-    const profile_list_t *list,
-    const char *name
-) {
-    for (size_t i = 0; i < list->count; i++) {
-        if (strcmp(list->profiles[i].name, name) == 0)
-            return &list->profiles[i].head_oid;
-    }
-    return NULL;
-}
 
-/**
- * Build manifest from profiles (precedence oracle)
- *
- * Loads profile objects from Git and builds a precedence-resolved manifest.
- * The caller owns prefix_map (borrowed, not freed by this function).
- *
- * Note: Manifest entries borrow profile_name strings from the profile_list.
- * The profile_list must remain alive while the manifest is in use.
- *
- * @param repo Git repository (must not be NULL)
- * @param profiles Profile names to build from (must not be NULL)
- * @param prefix_map Custom prefix map (borrowed, can be NULL)
- * @param arena Arena for manifest string allocations (NULL = heap)
- * @param out_manifest Output manifest (caller must free with manifest_free)
- * @param out_profiles Output profile list (caller must free with profile_list_free)
- * @return Error or NULL on success
- */
-static error_t *build_manifest(
-    git_repository *repo,
-    const string_array_t *profiles,
-    const hashmap_t *prefix_map,
-    arena_t *arena,
-    manifest_t **out_manifest,
-    profile_list_t **out_profiles
-) {
-    CHECK_NULL(repo);
-    CHECK_NULL(profiles);
-    CHECK_NULL(out_manifest);
-    CHECK_NULL(out_profiles);
-
-    error_t *err = NULL;
-    profile_list_t *list = NULL;
-    manifest_t *manifest = NULL;
-
-    /* Load profiles from Git (profiles module - pure Git operations) */
-    err = profile_list_load(repo, profiles, &list);
-    if (err) {
-        return error_wrap(err, "Failed to load profiles for manifest build");
-    }
-
-    /* Build manifest from profiles with prefix map (applies precedence rules) */
-    err = profile_build_manifest(repo, list, prefix_map, arena, &manifest);
-    if (err) {
-        profile_list_free(list);
-        return error_wrap(err, "Failed to build manifest from profiles");
-    }
-
-    *out_manifest = manifest;
-    *out_profiles = list;
-    return NULL;
-}
 
 /**
  * Sync single entry from in-memory manifest to state
@@ -155,7 +83,7 @@ static error_t *build_manifest(
  *
  * Note: commit_oid is stored per-profile in enabled_profiles, not per-file.
  * Callers are responsible for calling state_set_profile_commit_oid after syncing,
- * using the cached head_oid from the loaded profile_list_t.
+ * using get_branch_head_oid() to resolve the current HEAD.
  *
  * @param repo Git repository
  * @param state State handle (with active transaction)
@@ -221,7 +149,7 @@ static error_t *sync_entry_to_state(
     /* 5. Build state entry. blob_oid is an inline struct copy from the
      * pre-populated entry field. commit_oid lives in enabled_profiles
      * (per-profile, not per-file) and is set via state_set_profile_commit_oid
-     * using the cached head_oid from the loaded profile_list_t. */
+     * using get_branch_head_oid() to resolve the current HEAD. */
     state_file_entry_t state_entry = {
         .storage_path    = manifest_entry->storage_path,
         .filesystem_path = manifest_entry->filesystem_path,
@@ -285,7 +213,6 @@ error_t *manifest_enable_profile(
 
     error_t *err = NULL;
     manifest_t *manifest = NULL;
-    profile_list_t *profiles = NULL;
     hashmap_t *prefix_map = NULL;
     metadata_t *metadata = NULL;
 
@@ -323,22 +250,13 @@ error_t *manifest_enable_profile(
     }
 
     /* 2. Build FRESH manifest from Git (post-add state) */
-    err = build_manifest(
-        repo, enabled_profiles, prefix_map, arena, &manifest, &profiles
+    err = profile_build_manifest(
+        repo, enabled_profiles, prefix_map, arena, &manifest
     );
     if (err) {
         hashmap_free(prefix_map, free);
         arena_destroy(arena);
         return error_wrap(err, "Failed to build manifest for profile sync");
-    }
-
-    /* Defensive: build_manifest should always set outputs on success */
-    if (!manifest || !profiles) {
-        err = ERROR(
-            ERR_INTERNAL,
-            "build_manifest succeeded but returned NULL outputs"
-        );
-        goto cleanup;
     }
 
     /* 3. Load merged metadata from all profiles */
@@ -430,17 +348,14 @@ error_t *manifest_enable_profile(
     /* 5. Record profile's current HEAD in enabled_profiles.commit_oid.
      *
      * state_enable_profile inserts with zeroblob(20); this replaces the
-     * sentinel with the real HEAD. Uses the already-loaded profile_list_t
-     * to avoid a redundant ref lookup. */
-    const git_oid *head_oid = profile_list_head_oid(profiles, profile_name);
-    if (!head_oid) {
-        err = ERROR(
-            ERR_INTERNAL,
-            "Profile '%s' not found in loaded profile list", profile_name
-        );
+     * sentinel with the real HEAD. */
+    git_oid head_oid;
+    err = get_branch_head_oid(repo, profile_name, &head_oid);
+    if (err) {
+        err = error_wrap(err, "Failed to get HEAD for profile '%s'", profile_name);
         goto cleanup;
     }
-    err = state_set_profile_commit_oid(state, profile_name, head_oid);
+    err = state_set_profile_commit_oid(state, profile_name, &head_oid);
     if (err) {
         err = error_wrap(err, "Failed to set commit_oid for profile '%s'", profile_name);
         goto cleanup;
@@ -454,7 +369,6 @@ error_t *manifest_enable_profile(
 
 cleanup:
     if (prefix_map) hashmap_free(prefix_map, free);
-    if (profiles) profile_list_free(profiles);
     if (metadata) metadata_free(metadata);
     if (manifest) manifest_free(manifest);
     arena_destroy(arena);
@@ -467,7 +381,7 @@ cleanup:
  *
  * Loads metadata from each remaining profile and builds O(1) lookup hashmaps
  * for directory fallback resolution. This implements "last wins" precedence,
- * matching the file fallback pattern (build_manifest()) and workspace metadata
+ * matching the file fallback pattern (profile_build_manifest()) and workspace metadata
  * merge pattern.
  *
  * PRECEDENCE MODEL:
@@ -578,7 +492,7 @@ static error_t *build_directory_fallback_index(
          *
          * Unconditionally set/update - later profiles override (last wins).
          * This implements the same precedence as:
-         *   - File fallback: build_manifest()
+         *   - File fallback: profile_build_manifest()
          *   - Metadata merge: metadata_merge()
          *
          * Precedence order: global < OS < host (see profiles.h)
@@ -643,7 +557,6 @@ error_t *manifest_disable_profile(
     state_file_entry_t *entries = NULL;
     size_t count = 0;
     manifest_t *fallback_manifest = NULL;
-    profile_list_t *fallback_profiles = NULL;
     hashmap_t *prefix_map = NULL;
     metadata_t *fallback_metadata = NULL;
 
@@ -675,9 +588,8 @@ error_t *manifest_disable_profile(
             arena_destroy(arena);
             return error_wrap(err, "Failed to get custom prefix map");
         }
-        err = build_manifest(
-            repo, remaining_enabled, prefix_map, arena, &fallback_manifest,
-            &fallback_profiles
+        err = profile_build_manifest(
+            repo, remaining_enabled, prefix_map, arena, &fallback_manifest
         );
         if (err) {
             hashmap_free(prefix_map, free);
@@ -962,7 +874,6 @@ directory_cleanup:
 cleanup:
     if (prefix_map) hashmap_free(prefix_map, free);
     if (fallback_metadata) metadata_free(fallback_metadata);
-    if (fallback_profiles) profile_list_free(fallback_profiles);
     if (fallback_manifest) manifest_free(fallback_manifest);
     arena_destroy(arena);
     return err;
@@ -1032,7 +943,6 @@ error_t *manifest_remove_files(
 
     error_t *err = NULL;
     manifest_t *fresh_manifest = NULL;
-    profile_list_t *profiles = NULL;
     hashmap_t *prefix_map = NULL;
     metadata_t *metadata = NULL;
     size_t removed_count = 0;
@@ -1047,8 +957,8 @@ error_t *manifest_remove_files(
         arena_destroy(arena);
         return error_wrap(err, "Failed to get custom prefix map");
     }
-    err = build_manifest(
-        repo, enabled_profiles, prefix_map, arena, &fresh_manifest, &profiles
+    err = profile_build_manifest(
+        repo, enabled_profiles, prefix_map, arena, &fresh_manifest
     );
     if (err) {
         hashmap_free(prefix_map, free);
@@ -1056,14 +966,6 @@ error_t *manifest_remove_files(
         return error_wrap(
             err, "Failed to build manifest for fallback detection"
         );
-    }
-
-    /* Defensive: build_manifest should always set outputs on success */
-    if (!fresh_manifest || !profiles) {
-        err = ERROR(
-            ERR_INTERNAL, "build_manifest succeeded but returned NULL outputs"
-        );
-        goto cleanup;
     }
 
     /* 2. Load merged metadata from enabled profiles for fallback resolution
@@ -1197,15 +1099,13 @@ error_t *manifest_remove_files(
 
     /* After removing files, the profile's branch HEAD has moved to a new commit.
      * Update the per-profile commit_oid in enabled_profiles. */
-    const git_oid *head_oid = profile_list_head_oid(profiles, removed_profile);
-    if (!head_oid) {
-        err = ERROR(
-            ERR_INTERNAL,
-            "Profile '%s' not found in loaded profile list", removed_profile
-        );
+    git_oid head_oid;
+    err = get_branch_head_oid(repo, removed_profile, &head_oid);
+    if (err) {
+        err = error_wrap(err, "Failed to get HEAD for profile '%s'", removed_profile);
         goto cleanup;
     }
-    err = state_set_profile_commit_oid(state, removed_profile, head_oid);
+    err = state_set_profile_commit_oid(state, removed_profile, &head_oid);
     if (err) {
         err = error_wrap(
             err, "Failed to sync commit_oid for profile '%s'",
@@ -1224,7 +1124,6 @@ cleanup:
     if (metadata) metadata_free(metadata);
     if (prefix_map) hashmap_free(prefix_map, free);
     if (fresh_manifest) manifest_free(fresh_manifest);
-    if (profiles) profile_list_free(profiles);
     arena_destroy(arena);
 
     return err;
@@ -1258,7 +1157,6 @@ error_t *manifest_rebuild(
 
     error_t *err = NULL;
     manifest_t *manifest = NULL;
-    profile_list_t *profiles = NULL;
     hashmap_t *prefix_map = NULL;
     state_file_entry_t *old_entries = NULL;
     size_t old_count = 0;
@@ -1311,19 +1209,11 @@ error_t *manifest_rebuild(
         err = error_wrap(err, "Failed to get custom prefix map");
         goto cleanup;
     }
-    err = build_manifest(
-        repo, enabled_profiles, prefix_map, arena, &manifest, &profiles
+    err = profile_build_manifest(
+        repo, enabled_profiles, prefix_map, arena, &manifest
     );
     if (err) {
         err = error_wrap(err, "Failed to build manifest for rebuild");
-        goto cleanup;
-    }
-
-    /* Defensive: build_manifest should always set outputs on success */
-    if (!manifest || !profiles) {
-        err = ERROR(
-            ERR_INTERNAL, "build_manifest succeeded but returned NULL outputs"
-        );
         goto cleanup;
     }
 
@@ -1372,17 +1262,25 @@ error_t *manifest_rebuild(
 
     /* 6. Record each profile's current HEAD in enabled_profiles.commit_oid.
      *
-     * Uses the already-loaded profile_list_t to avoid redundant ref lookups.
      * This replaces the zero sentinel that state_set_profiles wrote for new
      * profiles (clone path) and refreshes the value for existing profiles. */
-    for (size_t p = 0; p < profiles->count; p++) {
+    for (size_t p = 0; p < enabled_profiles->count; p++) {
+        git_oid head_oid;
+        err = get_branch_head_oid(repo, enabled_profiles->items[p], &head_oid);
+        if (err) {
+            err = error_wrap(
+                err, "Failed to get HEAD for profile '%s'",
+                enabled_profiles->items[p]
+            );
+            goto cleanup;
+        }
         err = state_set_profile_commit_oid(
-            state, profiles->profiles[p].name, &profiles->profiles[p].head_oid
+            state, enabled_profiles->items[p], &head_oid
         );
         if (err) {
             err = error_wrap(
                 err, "Failed to set commit_oid for profile '%s'",
-                profiles->profiles[p].name
+                enabled_profiles->items[p]
             );
             goto cleanup;
         }
@@ -1397,7 +1295,6 @@ error_t *manifest_rebuild(
 cleanup:
     if (old_map) hashmap_free(old_map, NULL);
     if (prefix_map) hashmap_free(prefix_map, free);
-    if (profiles) profile_list_free(profiles);
     if (metadata) metadata_free(metadata);
     if (manifest) manifest_free(manifest);
     arena_destroy(arena);
@@ -1412,18 +1309,12 @@ cleanup:
  * (from enabled_profiles) against its branch's current HEAD. Mismatch means
  * external Git operations occurred since the last dotta operation.
  *
- * HEAD OID source: profile_scope values are optional profile_t * pointers.
- * When non-NULL, the cached profile->head_oid is used directly (zero Git
- * calls). When NULL, the function resolves the branch HEAD via ref lookup.
- *
  * O(P) state queries + O(P) ref lookups where P = profile count.
- * Zero ref lookups when profile_scope values carry loaded profile_t *.
  *
  * @param repo Git repository (must not be NULL)
  * @param state State handle (must not be NULL)
  * @param profile_scope Profile scope filter (must not be NULL). Keys are
- *                      in-scope profile names; values are profile_t * with
- *                      cached head_oid (fast path) or NULL (ref lookup fallback).
+ *                      in-scope profile names; values are ignored (NULL sentinels).
  * @param out_stale Output: hashmap of profile_name -> (void*)1 sentinel for
  *                  stale profiles. NULL if none stale. Caller frees with
  *                  hashmap_free(map, NULL).
@@ -1444,11 +1335,11 @@ error_t *manifest_detect_stale_profiles(
     hashmap_iter_t iter;
     hashmap_iter_init(&iter, profile_scope);
 
-    const char *name;
-    while (hashmap_iter_next(&iter, &name, NULL)) {
+    const char *profile;
+    while (hashmap_iter_next(&iter, &profile, NULL)) {
         /* Read stored commit_oid for this profile */
         git_oid stored_oid;
-        error_t *read_err = state_get_profile_commit_oid(state, name, &stored_oid);
+        error_t *read_err = state_get_profile_commit_oid(state, profile, &stored_oid);
         if (read_err) {
             if (read_err->code == ERR_NOT_FOUND) {
                 /* Profile in scope but not in DB (race with disable) — skip */
@@ -1461,11 +1352,10 @@ error_t *manifest_detect_stale_profiles(
 
         /* Fetch current branch HEAD via lightweight ref-to-OID lookup.
          *
-         * profile_scope is a name-only membership set (NULL values) — both
-         * callers (workspace and manifest_repair_stale) pass name sets, not
-         * loaded profile_t objects. */
+         * profile_scope is a membership set (NULL values) — both callers
+         * (workspace and manifest_repair_stale) pass profile sets. */
         git_oid head_oid;
-        err = get_branch_head_oid(repo, name, &head_oid);
+        err = get_branch_head_oid(repo, profile, &head_oid);
         if (err) {
             /* Branch may have been deleted — skip (safety handles this) */
             error_free(err);
@@ -1482,7 +1372,7 @@ error_t *manifest_detect_stale_profiles(
                 }
             }
 
-            err = hashmap_set(stale_map, name, (void *) (uintptr_t) 1);
+            err = hashmap_set(stale_map, profile, (void *) (uintptr_t) 1);
             if (err) {
                 hashmap_free(stale_map, NULL);
                 return err;
@@ -1528,7 +1418,6 @@ error_t *manifest_repair_stale(
     hashmap_t *stale_profiles = NULL;
     hashmap_t *prefix_map = NULL;
     manifest_t *fresh_manifest = NULL;
-    profile_list_t *fresh_profiles = NULL;
     hashmap_t *repaired_paths = NULL;
     metadata_t *metadata = NULL;
 
@@ -1585,8 +1474,8 @@ error_t *manifest_repair_stale(
         err = error_wrap(err, "Failed to get custom prefix map");
         goto cleanup;
     }
-    err = build_manifest(
-        repo, enabled_profiles, prefix_map, arena, &fresh_manifest, &fresh_profiles
+    err = profile_build_manifest(
+        repo, enabled_profiles, prefix_map, arena, &fresh_manifest
     );
     if (err) {
         err = error_wrap(err, "Failed to build fresh manifest for stale repair");
@@ -1723,25 +1612,19 @@ error_t *manifest_repair_stale(
         }
     }
 
-    /* Phase 4: Update stored commit_oid for each repaired profile.
-     *
-     * fresh_profiles carries the current HEAD OID for each enabled profile
-     * (loaded by build_manifest via profile_list_load). Use it directly
-     * instead of re-resolving the same refs. */
+    /* Phase 4: Update stored commit_oid for each repaired profile. */
     hashmap_iter_t stale_iter;
     hashmap_iter_init(&stale_iter, stale_profiles);
 
     const char *stale_name;
     while (hashmap_iter_next(&stale_iter, &stale_name, NULL)) {
-        const git_oid *head_oid = profile_list_head_oid(fresh_profiles, stale_name);
-        if (!head_oid) {
-            err = ERROR(
-                ERR_INTERNAL,
-                "Stale profile '%s' not found in loaded profile list", stale_name
-            );
+        git_oid head_oid;
+        err = get_branch_head_oid(repo, stale_name, &head_oid);
+        if (err) {
+            err = error_wrap(err, "Failed to get HEAD for profile '%s'", stale_name);
             goto cleanup;
         }
-        err = state_set_profile_commit_oid(state, stale_name, head_oid);
+        err = state_set_profile_commit_oid(state, stale_name, &head_oid);
         if (err) {
             err = error_wrap(
                 err, "Failed to sync commit_oid for repaired profile '%s'",
@@ -1771,7 +1654,6 @@ cleanup:
     if (stale_profiles) hashmap_free(stale_profiles, NULL);
     if (profile_scope) hashmap_free(profile_scope, NULL);
     if (prefix_map) hashmap_free(prefix_map, free);
-    if (fresh_profiles) profile_list_free(fresh_profiles);
     if (metadata) metadata_free(metadata);
     if (fresh_manifest) manifest_free(fresh_manifest);
     if (repaired_paths) hashmap_free(repaired_paths, free);
@@ -1800,7 +1682,6 @@ error_t *manifest_reorder_profiles(
 
     error_t *err = NULL;
     manifest_t *new_manifest = NULL;
-    profile_list_t *profiles = NULL;
     hashmap_t *prefix_map = NULL;
     state_file_entry_t *old_entries = NULL;
     size_t old_count = 0;
@@ -1816,19 +1697,13 @@ error_t *manifest_reorder_profiles(
         arena_destroy(arena);
         return error_wrap(err, "Failed to get custom prefix map");
     }
-    err = build_manifest(
-        repo, new_profile_order, prefix_map, arena, &new_manifest, &profiles
+    err = profile_build_manifest(
+        repo, new_profile_order, prefix_map, arena, &new_manifest
     );
     if (err) {
         hashmap_free(prefix_map, free);
         arena_destroy(arena);
         return error_wrap(err, "Failed to build manifest for precedence update");
-    }
-
-    /* Defensive: build_manifest should always set outputs on success */
-    if (!new_manifest || !profiles) {
-        err = ERROR(ERR_INTERNAL, "build_manifest succeeded but returned NULL outputs");
-        goto cleanup;
     }
 
     /* 2. Verify new manifest has index */
@@ -1946,7 +1821,6 @@ error_t *manifest_reorder_profiles(
 cleanup:
     if (old_map) hashmap_free(old_map, NULL);
     if (prefix_map) hashmap_free(prefix_map, free);
-    if (profiles) profile_list_free(profiles);
     if (metadata) metadata_free(metadata);
     if (new_manifest) manifest_free(new_manifest);
     arena_destroy(arena);
@@ -2034,7 +1908,6 @@ error_t *manifest_update_files(
     }
 
     error_t *err = NULL;
-    profile_list_t *profiles = NULL;
     manifest_t *fresh_manifest = NULL;
     hashmap_t *prefix_map = NULL;
     metadata_t *metadata = NULL;
@@ -2048,8 +1921,8 @@ error_t *manifest_update_files(
         arena_destroy(arena);
         return error_wrap(err, "Failed to get custom prefix map");
     }
-    err = build_manifest(
-        repo, enabled_profiles, prefix_map, arena, &fresh_manifest, &profiles
+    err = profile_build_manifest(
+        repo, enabled_profiles, prefix_map, arena, &fresh_manifest
     );
     if (err) {
         hashmap_free(prefix_map, free);
@@ -2207,16 +2080,14 @@ error_t *manifest_update_files(
     /* 6. Set stored commit_oid for each profile whose HEAD moved */
     for (size_t i = 0; i < updated_profiles->count; i++) {
         const char *prof = updated_profiles->items[i];
-        const git_oid *head_oid = profile_list_head_oid(profiles, prof);
-        if (!head_oid) {
+        git_oid head_oid;
+        err = get_branch_head_oid(repo, prof, &head_oid);
+        if (err) {
             string_array_free(updated_profiles);
-            err = ERROR(
-                ERR_INTERNAL,
-                "Profile '%s' not found in loaded profile list", prof
-            );
+            err = error_wrap(err, "Failed to get HEAD for profile '%s'", prof);
             goto cleanup;
         }
-        err = state_set_profile_commit_oid(state, prof, head_oid);
+        err = state_set_profile_commit_oid(state, prof, &head_oid);
         if (err) {
             string_array_free(updated_profiles);
             err = error_wrap(err, "Failed to sync commit_oid for profile '%s'", prof);
@@ -2236,7 +2107,6 @@ cleanup:
     if (metadata) metadata_free(metadata);
     if (prefix_map) hashmap_free(prefix_map, free);
     if (fresh_manifest) manifest_free(fresh_manifest);
-    if (profiles) profile_list_free(profiles);
     arena_destroy(arena);
 
     return err;
@@ -2324,7 +2194,6 @@ error_t *manifest_add_files(
     }
 
     error_t *err = NULL;
-    profile_list_t *profiles = NULL;
     manifest_t *fresh_manifest = NULL;
     hashmap_t *prefix_map = NULL;
     metadata_t *metadata = NULL;
@@ -2338,8 +2207,8 @@ error_t *manifest_add_files(
         arena_destroy(arena);
         return error_wrap(err, "Failed to get custom prefix map");
     }
-    err = build_manifest(
-        repo, enabled_profiles, prefix_map, arena, &fresh_manifest, &profiles
+    err = profile_build_manifest(
+        repo, enabled_profiles, prefix_map, arena, &fresh_manifest
     );
     if (err) {
         hashmap_free(prefix_map, free);
@@ -2421,15 +2290,13 @@ error_t *manifest_add_files(
 
     /* After adding files, the profile's branch HEAD has moved to a new commit.
      * Update the per-profile commit_oid in enabled_profiles. */
-    const git_oid *head_oid = profile_list_head_oid(profiles, profile_name);
-    if (!head_oid) {
-        err = ERROR(
-            ERR_INTERNAL,
-            "Profile '%s' not found in loaded profile list", profile_name
-        );
+    git_oid head_oid;
+    err = get_branch_head_oid(repo, profile_name, &head_oid);
+    if (err) {
+        err = error_wrap(err, "Failed to get HEAD for profile '%s'", profile_name);
         goto cleanup;
     }
-    err = state_set_profile_commit_oid(state, profile_name, head_oid);
+    err = state_set_profile_commit_oid(state, profile_name, &head_oid);
     if (err) {
         err = error_wrap(
             err, "Failed to sync commit_oid for profile '%s'",
@@ -2448,7 +2315,6 @@ cleanup:
     if (metadata) metadata_free(metadata);
     if (prefix_map) hashmap_free(prefix_map, free);
     if (fresh_manifest) manifest_free(fresh_manifest);
-    if (profiles) profile_list_free(profiles);
     arena_destroy(arena);
 
     return err;
@@ -2525,7 +2391,6 @@ error_t *manifest_sync_diff(
     error_t *err = NULL;
 
     /* Resources to clean up */
-    profile_list_t *profiles = NULL;
     manifest_t *fresh_manifest = NULL;
     hashmap_t *prefix_map = NULL;
     metadata_t *metadata = NULL;
@@ -2545,8 +2410,8 @@ error_t *manifest_sync_diff(
         err = error_wrap(err, "Failed to get custom prefix map");
         goto cleanup;
     }
-    err = build_manifest(
-        repo, enabled_profiles, prefix_map, arena, &fresh_manifest, &profiles
+    err = profile_build_manifest(
+        repo, enabled_profiles, prefix_map, arena, &fresh_manifest
     );
     if (err) {
         err = error_wrap(err, "Failed to build fresh manifest");
@@ -2775,7 +2640,7 @@ error_t *manifest_sync_diff(
 
     /* Update the per-profile commit_oid in enabled_profiles to match the new HEAD.
      * Use new_oid directly — it's the explicit sync target passed by the caller,
-     * and matches the branch HEAD that profile_list_load would resolve. */
+     * and matches the branch HEAD that get_branch_head_oid would resolve. */
     err = state_set_profile_commit_oid(state, profile_name, new_oid);
     if (err) {
         err = error_wrap(
@@ -2799,7 +2664,6 @@ cleanup:
     if (metadata) metadata_free(metadata);
     if (prefix_map) hashmap_free(prefix_map, free);
     if (fresh_manifest) manifest_free(fresh_manifest);
-    if (profiles) profile_list_free(profiles);
     arena_destroy(arena);
 
     return err;

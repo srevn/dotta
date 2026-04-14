@@ -411,7 +411,7 @@ error_t *cmd_bootstrap(
     }
 
     /* Resolve profile names — all branches produce string_array_t (name-only).
-     * Bootstrap never needs full profile_t structs (Git refs, trees). */
+     * Bootstrap only needs profile names, not Git trees. */
     if (opts->profile_count > 0) {
         /* Explicit profiles: validate branch existence */
         err = profile_resolve_filter(

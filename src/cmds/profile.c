@@ -40,22 +40,14 @@ static error_t *count_profile_files(
     CHECK_NULL(profile_name);
     CHECK_NULL(count);
 
-    profile_t *profile = NULL;
-    error_t *err = profile_load(repo, profile_name, &profile);
-    if (err) {
-        return error_wrap(err, "Failed to load profile");
-    }
-
     string_array_t *files = NULL;
-    err = profile_list_files(repo, profile, &files);
+    error_t *err = profile_list_files(repo, profile_name, &files);
     if (err) {
-        profile_free(profile);
         return error_wrap(err, "Failed to list files");
     }
 
     *count = files->count;
     string_array_free(files);
-    profile_free(profile);
     return NULL;
 }
 

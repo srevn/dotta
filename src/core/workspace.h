@@ -145,10 +145,9 @@ typedef struct {
  * specified profile, not the entire repository.
  *
  * Profile loading: The workspace borrows the provided name array (caller
- * must keep it alive until workspace_free). Full profile_t objects are NOT
- * loaded eagerly — they are deferred to the rare stale repair path where
- * Git tree walks are needed. In the common (non-stale) case, workspace_load
- * performs zero Git ref resolution or peel operations for profile loading.
+ * must keep it alive until workspace_free). Git tree loading is deferred
+ * to the rare stale repair path. In the common (non-stale) case,
+ * workspace_load performs zero Git tree operations for profile loading.
  *
  * State Ownership:
  * - If state is NULL: Workspace allocates its own state via state_load() and

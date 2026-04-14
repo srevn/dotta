@@ -52,8 +52,8 @@
  *
  * Memory ownership:
  * - All string fields are owned and must be freed in manifest_free()
- * - profile_name is borrowed (from caller's names array, workspace profile_index,
- *   state arena, or manifest's owned_profile_name for tree-based manifests)
+ * - profile is borrowed (from caller's profiles array, workspace profile_index,
+ *   state arena, or manifest's owned_profile for tree-based manifests)
  */
 typedef struct file_entry {
     /* Paths */
@@ -61,10 +61,10 @@ typedef struct file_entry {
     char *filesystem_path;           /* Deployed path (/home/user/.bashrc) */
 
     /* Profile ownership */
-    const char *profile_name;        /* Profile name (borrowed, used for all name-based operations) */
+    const char *profile;             /* Profile name (borrowed, used for all name-based operations) */
+    char *old_profile;               /* Previous owner if changed, NULL otherwise (VWD cache) */
 
     /* Identity */
-    char *old_profile;               /* Previous owner if changed, NULL otherwise (VWD cache) */
     git_oid blob_oid;                /* Blob OID for content identity (always populated) */
 
     /* Type */
@@ -101,7 +101,7 @@ typedef struct manifest {
     file_entry_t *entries;
     size_t count;
     hashmap_t *index;              /* Maps filesystem_path -> index in entries array (offset by 1), can be NULL */
-    char *owned_profile_name;      /* Owned name for tree-based manifests (NULL otherwise) */
+    char *owned_profile;           /* Owned profile name for tree-based manifests (NULL otherwise) */
     bool arena_backed;             /* If true, entry string fields are arena-owned (skip free) */
 } manifest_t;
 
@@ -155,9 +155,9 @@ typedef struct {
  * BEFORE calling this function, so it's visible in the state database.
  *
  * Preconditions:
- *   - profile_name MUST be in enabled_profiles
+ *   - profile MUST be in enabled_profiles
  *   - state MUST have active transaction (via state_load_for_update)
- *   - Git branch for profile_name MUST exist
+ *   - Git branch for profile MUST exist
  *   - Custom prefix (if any) MUST already be stored via state_enable_profile()
  *
  * Postconditions:
@@ -178,14 +178,14 @@ typedef struct {
  *
  * @param repo Git repository
  * @param state State handle (with active transaction)
- * @param profile_name Profile being enabled
- * @param enabled_profiles All enabled profiles (including profile_name)
+ * @param profile Profile being enabled
+ * @param enabled_profiles All enabled profiles (including profile)
  * @return Error or NULL on success
  */
 error_t *manifest_enable_profile(
     git_repository *repo,
     state_t *state,
-    const char *profile_name,
+    const char *profile,
     const string_array_t *enabled_profiles,
     manifest_enable_stats_t *out_stats
 );
@@ -204,7 +204,7 @@ error_t *manifest_enable_profile(
  *      - If no fallback: mark as STATE_INACTIVE (staged for removal by apply)
  *
  * Preconditions:
- *   - profile_name MUST NOT be in remaining_enabled
+ *   - profile MUST NOT be in remaining_enabled
  *   - state MUST have active transaction
  *
  * Postconditions:
@@ -222,14 +222,14 @@ error_t *manifest_enable_profile(
  *
  * @param repo Git repository
  * @param state State handle (with active transaction)
- * @param profile_name Profile being disabled
- * @param remaining_enabled Remaining enabled profiles (excluding profile_name)
+ * @param profile Profile being disabled
+ * @param remaining_enabled Remaining enabled profiles (excluding profile)
  * @return Error or NULL on success
  */
 error_t *manifest_disable_profile(
     git_repository *repo,
     state_t *state,
-    const char *profile_name,
+    const char *profile,
     const string_array_t *remaining_enabled,
     manifest_disable_stats_t *out_stats
 );
@@ -325,7 +325,7 @@ error_t *manifest_update_files(
  *   - state MUST have active transaction (via state_load_for_update)
  *   - Git commits MUST be completed (branches at final state)
  *   - filesystem_paths MUST be valid, canonical paths
- *   - profile_name SHOULD be enabled (function gracefully handles if not)
+ *   - profile SHOULD be enabled (function gracefully handles if not)
  *
  * Postconditions:
  *   - Files synced to manifest with deployed_at = time(NULL)
@@ -346,7 +346,7 @@ error_t *manifest_update_files(
  *
  * @param repo Git repository (must not be NULL)
  * @param state State handle (with active transaction, must not be NULL)
- * @param profile_name Profile files were added to (must not be NULL)
+ * @param profile Profile files were added to (must not be NULL)
  * @param filesystem_paths Array of filesystem paths (must not be NULL)
  * @param enabled_profiles All enabled profiles (must not be NULL)
  * @param out_synced Output: count of files synced (must not be NULL)
@@ -355,7 +355,7 @@ error_t *manifest_update_files(
 error_t *manifest_add_files(
     git_repository *repo,
     state_t *state,
-    const char *profile_name,
+    const char *profile,
     const string_array_t *filesystem_paths,
     const string_array_t *enabled_profiles,
     size_t *out_synced
@@ -486,7 +486,7 @@ error_t *manifest_rebuild(
  * @param state State handle (must not be NULL)
  * @param profile_scope Name-only membership set (must not be NULL). Keys are
  *                      in-scope profile names; values are ignored (NULL).
- * @param out_stale Output: hashmap of profile_name -> sentinel for stale profiles.
+ * @param out_stale Output: hashmap of profile -> sentinel for stale profiles.
  *                  NULL if no profiles are stale. Caller frees with hashmap_free(map, NULL).
  * @return Error or NULL on success
  */
@@ -640,9 +640,9 @@ error_t *manifest_reorder_profiles(
  *
  * Preconditions:
  *   - state MUST have active transaction (via state_load_for_update)
- *   - old_oid and new_oid MUST be valid commits for profile_name's branch
- *   - profile_name MUST be in enabled_profiles
- *   - Branch HEAD for profile_name MUST point to new_oid (post-sync state)
+ *   - old_oid and new_oid MUST be valid commits for profile's branch
+ *   - profile MUST be in enabled_profiles
+ *   - Branch HEAD for profile MUST point to new_oid (post-sync state)
  *
  * Postconditions:
  *   - Added/modified files synced (deployed_at preserved if exists, else 0 for new files)
@@ -667,7 +667,7 @@ error_t *manifest_reorder_profiles(
  *
  * @param repo Repository (must not be NULL)
  * @param state State with active transaction (must not be NULL)
- * @param profile_name Profile being synced (must not be NULL)
+ * @param profile Profile being synced (must not be NULL)
  * @param old_oid Old commit before sync (must not be NULL)
  * @param new_oid New commit after sync (must not be NULL)
  * @param enabled_profiles All enabled profiles for precedence (must not be NULL)
@@ -680,7 +680,7 @@ error_t *manifest_reorder_profiles(
 error_t *manifest_sync_diff(
     git_repository *repo,
     state_t *state,
-    const char *profile_name,
+    const char *profile,
     const git_oid *old_oid,
     const git_oid *new_oid,
     const string_array_t *enabled_profiles,
@@ -751,7 +751,7 @@ error_t *manifest_sync_directories(
  * Profiles without a custom prefix deploy to home/root normally.
  * Custom/ files are skipped for profiles without a prefix entry.
  *
- * Memory: manifest entries borrow profile_name from the caller's profiles
+ * Memory: manifest entries borrow profile from the caller's profiles
  * array. The profiles array must outlive the returned manifest.
  *
  * @param repo Repository (must not be NULL)
@@ -776,14 +776,14 @@ error_t *manifest_build(
  * This is a simplified version of manifest_build() for a single tree.
  *
  * @param tree Git tree to build manifest from (must not be NULL)
- * @param profile_name Profile name for entries (must not be NULL)
+ * @param profile Profile name for entries (must not be NULL)
  * @param custom_prefix Custom prefix for custom/ paths (NULL for graceful degradation)
  * @param out Manifest (must not be NULL, caller must free with manifest_free)
  * @return Error or NULL on success
  */
 error_t *manifest_build_from_tree(
     git_tree *tree,
-    const char *profile_name,
+    const char *profile,
     const char *custom_prefix,
     manifest_t **out
 );

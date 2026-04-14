@@ -28,7 +28,7 @@
  * Per-profile sync result
  */
 typedef struct {
-    char *profile_name;
+    char *profile;
     sync_branch_state_t state;
     size_t ahead;
     size_t behind;
@@ -81,7 +81,7 @@ static void sync_results_free(sync_results_t *results) {
     }
 
     for (size_t i = 0; i < results->count; i++) {
-        free(results->profiles[i].profile_name);
+        free(results->profiles[i].profile);
         free(results->profiles[i].error_message);
     }
 
@@ -466,8 +466,8 @@ static error_t *sync_analyze_phase(
     for (size_t i = 0; i < profiles->count; i++) {
         profile_sync_result_t *result = &results->profiles[i];
 
-        result->profile_name = strdup(profiles->items[i]);
-        if (!result->profile_name) {
+        result->profile = strdup(profiles->items[i]);
+        if (!result->profile) {
             return ERROR(ERR_MEMORY, "Failed to allocate profile name");
         }
 
@@ -545,7 +545,7 @@ static void mark_result_failed(
 static bool sync_manifest(
     git_repository *repo,
     state_t *state,
-    const char *profile_name,
+    const char *profile,
     const git_oid *old_oid,
     const git_oid *new_oid,
     const string_array_t *enabled_profiles,
@@ -557,7 +557,7 @@ static bool sync_manifest(
 ) {
     size_t synced = 0, removed = 0, fallbacks = 0, skipped = 0;
     error_t *err = manifest_sync_diff(
-        repo, state, profile_name, old_oid, new_oid, enabled_profiles,
+        repo, state, profile, old_oid, new_oid, enabled_profiles,
         &synced, &removed, &fallbacks, &skipped
     );
 
@@ -590,7 +590,7 @@ static bool sync_manifest(
 static void sync_manifest_and_report(
     git_repository *repo,
     state_t *state,
-    const char *profile_name,
+    const char *profile,
     const git_oid *old_oid,
     const git_oid *new_oid,
     const string_array_t *enabled_profiles,
@@ -598,7 +598,7 @@ static void sync_manifest_and_report(
 ) {
     size_t synced = 0, removed = 0, fallbacks = 0, skipped = 0;
     bool ok = sync_manifest(
-        repo, state, profile_name, old_oid, new_oid, enabled_profiles,
+        repo, state, profile, old_oid, new_oid, enabled_profiles,
         out, &synced, &removed, &fallbacks, &skipped
     );
 
@@ -612,11 +612,11 @@ static void sync_manifest_and_report(
     if (skipped > 0) {
         output_warning(
             out, OUTPUT_NORMAL, "     %zu custom file%s skipped (no prefix configured for '%s')",
-            skipped, skipped == 1 ? "" : "s", profile_name
+            skipped, skipped == 1 ? "" : "s", profile
         );
         output_hint(
             out, OUTPUT_NORMAL, "     Run: dotta profile enable --prefix <path> %s",
-            profile_name
+            profile
         );
     }
 }
@@ -629,7 +629,7 @@ static void sync_manifest_and_report(
  */
 static error_t *attempt_rollback(
     resolve_context_t *ctx,
-    const char *profile_name,
+    const char *profile,
     const char *failure_reason,
     output_ctx_t *out
 ) {
@@ -641,7 +641,7 @@ static error_t *attempt_rollback(
             err, "Failed to rollback branch '%s' after %s.\n"
             "Repository may be in an inconsistent state.\n"
             "Manual intervention required: git reset --hard origin/%s",
-            profile_name, failure_reason, profile_name
+            profile, failure_reason, profile
         );
     }
 
@@ -668,7 +668,7 @@ static void handle_remote_ahead(
         /* Just warn - don't auto-pull */
         output_info(
             out, OUTPUT_NORMAL, "  ↓ {yellow}%s{reset}: remote has %zu new commit%s",
-            result->profile_name, result->behind, result->behind == 1 ? "" : "s"
+            result->profile, result->behind, result->behind == 1 ? "" : "s"
         );
 
         if (no_pull) {
@@ -686,18 +686,18 @@ static void handle_remote_ahead(
     /* Auto-pull when safe (fast-forward only) */
     output_info(
         out, OUTPUT_VERBOSE, "  Pulling %s (%zu commit%s behind)...",
-        result->profile_name, result->behind, result->behind == 1 ? "" : "s"
+        result->profile, result->behind, result->behind == 1 ? "" : "s"
     );
 
     bool pulled = false;
     git_oid old_oid, new_oid;
     error_t *err = pull_branch_ff(
-        repo, remote_name, result->profile_name, &pulled, &old_oid, &new_oid
+        repo, remote_name, result->profile, &pulled, &old_oid, &new_oid
     );
     if (err) {
         output_error(
             out, "  ✗ %s: pull failed - %s",
-            result->profile_name, error_message(err)
+            result->profile, error_message(err)
         );
         mark_result_failed(result, results, err);
         return;
@@ -707,7 +707,7 @@ static void handle_remote_ahead(
         /* Already up-to-date - report in verbose mode */
         output_info(
             out, OUTPUT_VERBOSE, "  = {green}%s{reset}: already up-to-date",
-            result->profile_name
+            result->profile
         );
         /* Decrement need_pull_count since it was already up-to-date */
         if (results->need_pull_count > 0) {
@@ -725,31 +725,31 @@ static void handle_remote_ahead(
     /* Sync manifest — stats needed for success message */
     size_t synced = 0, removed = 0, fallbacks = 0, skipped = 0;
     bool manifest_ok = sync_manifest(
-        repo, state, result->profile_name, &old_oid, &new_oid,
+        repo, state, result->profile, &old_oid, &new_oid,
         enabled_profiles, out, &synced, &removed, &fallbacks, &skipped
     );
 
     if (!manifest_ok) {
         output_success(
             out, OUTPUT_NORMAL, "  {green}%s{reset}: pulled %zu commit%s (manifest sync failed)",
-            result->profile_name, result->behind, result->behind == 1 ? "" : "s"
+            result->profile, result->behind, result->behind == 1 ? "" : "s"
         );
     } else {
         output_success(
             out, OUTPUT_NORMAL,
             "  {green}%s{reset}: pulled %zu commit%s (%zu staged, %zu removed, %zu fallback%s)",
-            result->profile_name, result->behind, result->behind == 1 ? "" : "s",
+            result->profile, result->behind, result->behind == 1 ? "" : "s",
             synced, removed, fallbacks, fallbacks == 1 ? "" : "s"
         );
     }
     if (skipped > 0) {
         output_warning(
             out, OUTPUT_NORMAL, "     %zu custom file%s skipped (no prefix configured for '%s')",
-            skipped, skipped == 1 ? "" : "s", result->profile_name
+            skipped, skipped == 1 ? "" : "s", result->profile
         );
         output_hint(
             out, OUTPUT_NORMAL, "     Run: dotta profile enable --prefix <path> %s",
-            result->profile_name
+            result->profile
         );
     }
 }
@@ -791,7 +791,7 @@ static error_t *resolve_and_push_divergence(
     /* Initialize divergence context (saves current state for rollback) */
     resolve_context_t ctx;
     error_t *err = resolve_init(
-        &ctx, repo, remote_name, result->profile_name, strategy
+        &ctx, repo, remote_name, result->profile, strategy
     );
     if (err) {
         output_error(
@@ -828,7 +828,7 @@ static error_t *resolve_and_push_divergence(
         snprintf(
             reason, sizeof(reason), "%s verification failure", strategy_name
         );
-        return attempt_rollback(&ctx, result->profile_name, reason, out);
+        return attempt_rollback(&ctx, result->profile, reason, out);
     }
 
     output_success(
@@ -840,7 +840,7 @@ static error_t *resolve_and_push_divergence(
         output_info(out, OUTPUT_NORMAL, "     Push skipped (--no-push)");
     } else {
         /* Push resolved commits */
-        err = gitops_push_branch(repo, remote_name, result->profile_name, xfer);
+        err = gitops_push_branch(repo, remote_name, result->profile, xfer);
         if (err) {
             output_error(
                 out, "     ✗ Push after %s failed: %s",
@@ -853,7 +853,7 @@ static error_t *resolve_and_push_divergence(
                 strategy_name
             );
             return attempt_rollback(
-                &ctx, result->profile_name, "push failure", out
+                &ctx, result->profile, "push failure", out
             );
         }
 
@@ -872,7 +872,7 @@ static error_t *resolve_and_push_divergence(
 
     /* Sync manifest with changes from resolution */
     sync_manifest_and_report(
-        repo, state, result->profile_name, &ctx.saved_oid,
+        repo, state, result->profile, &ctx.saved_oid,
         &new_oid, enabled_profiles, out
     );
 
@@ -906,7 +906,7 @@ static error_t *handle_diverged_ours(
             prompt, sizeof(prompt),
             "Warning: This will force push local '%s' and overwrite remote.\n"
             "Remote commits will be permanently lost. Continue?",
-            result->profile_name
+            result->profile
         );
         if (!output_confirm_or_default(out, prompt, false, false)) {
             output_info(out, OUTPUT_NORMAL, "     Operation cancelled by user");
@@ -915,7 +915,7 @@ static error_t *handle_diverged_ours(
     }
 
     /* Force push local to remote (local branch stays unchanged) */
-    error_t *err = force_push_branch(repo, remote_name, result->profile_name, xfer);
+    error_t *err = force_push_branch(repo, remote_name, result->profile, xfer);
     if (err) {
         output_error(out, "     ✗ Force push failed: %s", error_message(err));
         mark_result_failed(result, results, err);
@@ -954,7 +954,7 @@ static error_t *handle_diverged_theirs(
         snprintf(
             prompt, sizeof(prompt),
             "Warning: This will reset '%s' to remote and discard local commits.\n"
-            "Local changes will be lost. Continue?", result->profile_name
+            "Local changes will be lost. Continue?", result->profile
         );
         if (!output_confirm_or_default(out, prompt, false, false)) {
             output_info(
@@ -967,7 +967,7 @@ static error_t *handle_diverged_theirs(
     /* Initialize divergence context (saves current state for rollback) */
     resolve_context_t ctx;
     error_t *err = resolve_init(
-        &ctx, repo, remote_name, result->profile_name, RESOLVE_STRATEGY_THEIRS
+        &ctx, repo, remote_name, result->profile, RESOLVE_STRATEGY_THEIRS
     );
     if (err) {
         output_error(
@@ -1008,7 +1008,7 @@ static error_t *handle_diverged_theirs(
 
     /* Sync manifest with changes from reset */
     sync_manifest_and_report(
-        repo, state, result->profile_name, &ctx.saved_oid,
+        repo, state, result->profile, &ctx.saved_oid,
         &new_oid, enabled_profiles, out
     );
 
@@ -1035,7 +1035,7 @@ static error_t *handle_diverged(
 ) {
     output_warning(
         out, OUTPUT_NORMAL, "  ⚠ {red}%s{reset}: diverged (%zu local, %zu remote commits)",
-        result->profile_name, result->ahead, result->behind
+        result->profile, result->ahead, result->behind
     );
 
     switch (strategy) {
@@ -1130,7 +1130,7 @@ static error_t *sync_push_phase(
 
         /* Skip failed analysis */
         if (result->failed) {
-            output_error(out, "  %s: %s", result->profile_name, result->error_message);
+            output_error(out, "  %s: %s", result->profile, result->error_message);
             continue;
         }
 
@@ -1139,7 +1139,7 @@ static error_t *sync_push_phase(
             case UPSTREAM_UP_TO_DATE: {
                 output_info(
                     out, OUTPUT_VERBOSE, "  = {green}%s{reset}: up-to-date",
-                    result->profile_name
+                    result->profile
                 );
                 break;
             }
@@ -1150,7 +1150,7 @@ static error_t *sync_push_phase(
                 if (diverged_strategy == DIVERGE_THEIRS && !no_pull) {
                     output_info(
                         out, OUTPUT_NORMAL, "  ↑ {yellow}%s{reset}: %zu commit%s ahead of remote",
-                        result->profile_name, result->ahead, result->ahead == 1 ? "" : "s"
+                        result->profile, result->ahead, result->ahead == 1 ? "" : "s"
                     );
                     error_t *err = handle_diverged_theirs(
                         repo, remote_name, result, results, out, confirm_destructive,
@@ -1164,7 +1164,7 @@ static error_t *sync_push_phase(
                     output_info(
                         out, OUTPUT_NORMAL,
                         "  ↑ {yellow}%s{reset}: %zu commit%s ahead (push skipped: --no-push)",
-                        result->profile_name, result->ahead, result->ahead == 1 ? "" : "s"
+                        result->profile, result->ahead, result->ahead == 1 ? "" : "s"
                     );
                     break;
                 }
@@ -1172,14 +1172,14 @@ static error_t *sync_push_phase(
                 /* Safe to push - local has new commits */
                 output_info(
                     out, OUTPUT_VERBOSE, "  Pushing %s (%zu commit%s)...",
-                    result->profile_name, result->ahead, result->ahead == 1 ? "" : "s"
+                    result->profile, result->ahead, result->ahead == 1 ? "" : "s"
                 );
 
-                error_t *err = gitops_push_branch(repo, remote_name, result->profile_name, xfer);
+                error_t *err = gitops_push_branch(repo, remote_name, result->profile, xfer);
                 if (err) {
                     output_error(
                         out, "  ✗ %s: push failed - %s",
-                        result->profile_name, error_message(err)
+                        result->profile, error_message(err)
                     );
                     mark_result_failed(result, results, err);
                 } else {
@@ -1188,7 +1188,7 @@ static error_t *sync_push_phase(
 
                     output_success(
                         out, OUTPUT_NORMAL, "  {green}%s{reset}: pushed %zu commit%s",
-                        result->profile_name, result->ahead, result->ahead == 1 ? "" : "s"
+                        result->profile, result->ahead, result->ahead == 1 ? "" : "s"
                     );
                 }
                 break;
@@ -1198,7 +1198,7 @@ static error_t *sync_push_phase(
                 if (no_push) {
                     output_info(
                         out, OUTPUT_NORMAL, "  • %s: local only (push skipped: --no-push)",
-                        result->profile_name
+                        result->profile
                     );
                     break;
                 }
@@ -1206,14 +1206,14 @@ static error_t *sync_push_phase(
                 /* Remote branch doesn't exist - create it */
                 output_info(
                     out, OUTPUT_VERBOSE, "  Creating remote branch %s...",
-                    result->profile_name
+                    result->profile
                 );
 
-                error_t *err = gitops_push_branch(repo, remote_name, result->profile_name, xfer);
+                error_t *err = gitops_push_branch(repo, remote_name, result->profile, xfer);
                 if (err) {
                     output_error(
                         out, "  ✗ %s: failed to create remote branch - %s",
-                        result->profile_name, error_message(err)
+                        result->profile, error_message(err)
                     );
                     mark_result_failed(result, results, err);
                 } else {
@@ -1221,7 +1221,7 @@ static error_t *sync_push_phase(
                     results->pushed_count++;
                     output_success(
                         out, OUTPUT_NORMAL, "  {green}%s{reset}: created remote branch",
-                        result->profile_name
+                        result->profile
                     );
                 }
                 break;
@@ -1233,7 +1233,7 @@ static error_t *sync_push_phase(
 
                     output_info(
                         out, OUTPUT_NORMAL, "  ↓ {yellow}%s{reset}: %zu remote commit%s ahead",
-                        result->profile_name, result->behind, result->behind == 1 ? "" : "s"
+                        result->profile, result->behind, result->behind == 1 ? "" : "s"
                     );
                     output_warning(
                         out, OUTPUT_NORMAL,
@@ -1269,7 +1269,7 @@ static error_t *sync_push_phase(
                     output_warning(
                         out, OUTPUT_NORMAL,
                         "  ⚠ {red}%s{reset}: diverged (%zu local, %zu remote commits)",
-                        result->profile_name, result->ahead, result->behind
+                        result->profile, result->ahead, result->behind
                     );
                     const char *name = diverged_strategy == DIVERGE_REBASE ? "rebase" :
                         diverged_strategy == DIVERGE_MERGE ? "merge" : "theirs";
@@ -1291,7 +1291,7 @@ static error_t *sync_push_phase(
             }
 
             case UPSTREAM_UNKNOWN: {
-                output_warning(out, OUTPUT_NORMAL, "  ? %s: state unknown", result->profile_name);
+                output_warning(out, OUTPUT_NORMAL, "  ? %s: state unknown", result->profile);
                 break;
             }
         }
@@ -1634,44 +1634,44 @@ error_t *cmd_sync(
         for (size_t i = 0; i < results->count; i++) {
             profile_sync_result_t *r = &results->profiles[i];
             if (r->failed) {
-                output_error(out, "  ✗ %s: %s", r->profile_name, r->error_message);
+                output_error(out, "  ✗ %s: %s", r->profile, r->error_message);
                 continue;
             }
             switch (r->state) {
                 case UPSTREAM_UP_TO_DATE:
                     output_info(
                         out, OUTPUT_NORMAL, "  = %s: up-to-date",
-                        r->profile_name
+                        r->profile
                     );
                     break;
                 case UPSTREAM_LOCAL_AHEAD:
                     output_info(
                         out, OUTPUT_NORMAL, "  ↑ %s: %zu commit%s to push",
-                        r->profile_name, r->ahead, r->ahead == 1 ? "" : "s"
+                        r->profile, r->ahead, r->ahead == 1 ? "" : "s"
                     );
                     break;
                 case UPSTREAM_REMOTE_AHEAD:
                     output_info(
                         out, OUTPUT_NORMAL, "  ↓ %s: %zu commit%s to pull",
-                        r->profile_name, r->behind, r->behind == 1 ? "" : "s"
+                        r->profile, r->behind, r->behind == 1 ? "" : "s"
                     );
                     break;
                 case UPSTREAM_DIVERGED:
                     output_warning(
                         out, OUTPUT_NORMAL, "  ↕ %s: diverged (%zu local, %zu remote)",
-                        r->profile_name, r->ahead, r->behind
+                        r->profile, r->ahead, r->behind
                     );
                     break;
                 case UPSTREAM_NO_REMOTE:
                     output_info(
                         out, OUTPUT_NORMAL, "  • %s: local only (no remote branch)",
-                        r->profile_name
+                        r->profile
                     );
                     break;
                 case UPSTREAM_UNKNOWN:
                     output_warning(
                         out, OUTPUT_NORMAL, "  ? %s: unknown state",
-                        r->profile_name
+                        r->profile
                     );
                     break;
             }

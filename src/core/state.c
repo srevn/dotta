@@ -841,11 +841,11 @@ error_t *state_get_profiles(const state_t *state, string_array_t **out) {
  * whether a profile is enabled.
  *
  * @param state State (must not be NULL)
- * @param profile_name Profile name to check (must not be NULL)
+ * @param profile Profile name to check (must not be NULL)
  * @return true if profile is enabled, false otherwise
  */
-bool state_has_profile(const state_t *state, const char *profile_name) {
-    if (!state || !profile_name) {
+bool state_has_profile(const state_t *state, const char *profile) {
+    if (!state || !profile) {
         return false;
     }
 
@@ -858,7 +858,7 @@ bool state_has_profile(const state_t *state, const char *profile_name) {
 
     /* Check if profile exists in enabled list */
     for (size_t i = 0; i < state->profiles->count; i++) {
-        if (strcmp(state->profiles->items[i], profile_name) == 0) {
+        if (strcmp(state->profiles->items[i], profile) == 0) {
             return true;
         }
     }
@@ -871,14 +871,14 @@ bool state_has_profile(const state_t *state, const char *profile_name) {
  */
 error_t *state_enable_profile(
     state_t *state,
-    const char *profile_name,
+    const char *profile,
     const char *custom_prefix
 ) {
     CHECK_NULL(state);
-    CHECK_NULL(profile_name);
+    CHECK_NULL(profile);
     CHECK_NULL(state->db);
 
-    if (profile_name[0] == '\0') {
+    if (profile[0] == '\0') {
         return ERROR(ERR_INVALID_ARG, "Profile name cannot be empty");
     }
 
@@ -901,7 +901,7 @@ error_t *state_enable_profile(
     }
 
     /* Bind parameters */
-    sqlite3_bind_text(stmt, 1, profile_name, -1, SQLITE_STATIC);
+    sqlite3_bind_text(stmt, 1, profile, -1, SQLITE_STATIC);
     if (custom_prefix && custom_prefix[0] != '\0') {
         sqlite3_bind_text(stmt, 2, custom_prefix, -1, SQLITE_STATIC);
     } else {
@@ -927,10 +927,10 @@ error_t *state_enable_profile(
  */
 error_t *state_disable_profile(
     state_t *state,
-    const char *profile_name
+    const char *profile
 ) {
     CHECK_NULL(state);
-    CHECK_NULL(profile_name);
+    CHECK_NULL(profile);
     CHECK_NULL(state->db);
 
     const char *sql = "DELETE FROM enabled_profiles WHERE name = ?1";
@@ -941,7 +941,7 @@ error_t *state_disable_profile(
         return sqlite_error(state->db, "Failed to prepare disable profile statement");
     }
 
-    sqlite3_bind_text(stmt, 1, profile_name, -1, SQLITE_STATIC);
+    sqlite3_bind_text(stmt, 1, profile, -1, SQLITE_STATIC);
 
     rc = sqlite3_step(stmt);
     sqlite3_finalize(stmt);
@@ -1039,11 +1039,11 @@ error_t *state_get_prefix_map(
  */
 error_t *state_get_profile_prefix(
     const state_t *state,
-    const char *profile_name,
+    const char *profile,
     char **out_prefix
 ) {
     CHECK_NULL(state);
-    CHECK_NULL(profile_name);
+    CHECK_NULL(profile);
     CHECK_NULL(out_prefix);
 
     *out_prefix = NULL;
@@ -1062,7 +1062,7 @@ error_t *state_get_profile_prefix(
         return sqlite_error(state->db, "Failed to prepare profile prefix query");
     }
 
-    rc = sqlite3_bind_text(stmt, 1, profile_name, -1, SQLITE_STATIC);
+    rc = sqlite3_bind_text(stmt, 1, profile, -1, SQLITE_STATIC);
     if (rc != SQLITE_OK) {
         sqlite3_finalize(stmt);
         return sqlite_error(state->db, "Failed to bind profile name");
@@ -1841,20 +1841,20 @@ error_t *state_clear_files(state_t *state) {
  * Derives filesystem_path from metadata's storage_path using path_from_storage().
  *
  * @param meta_item Metadata item (must not be NULL, must be DIRECTORY kind)
- * @param profile_name Source profile name (must not be NULL)
+ * @param profile Source profile name (must not be NULL)
  * @param custom_prefix Custom prefix for this profile (NULL for home/root)
  * @param out State directory entry (must not be NULL, caller must free)
  * @return Error or NULL on success
  */
 error_t *state_directory_entry_create_from_metadata(
     const metadata_item_t *meta_item,
-    const char *profile_name,
+    const char *profile,
     const char *custom_prefix,
     arena_t *arena,
     state_directory_entry_t **out
 ) {
     CHECK_NULL(meta_item);
-    CHECK_NULL(profile_name);
+    CHECK_NULL(profile);
     CHECK_NULL(out);
 
     /* Validate that this is a directory item */
@@ -1899,7 +1899,7 @@ error_t *state_directory_entry_create_from_metadata(
     }
 
     entry->storage_path = DUP(meta_item->key);
-    entry->profile = DUP(profile_name);
+    entry->profile = DUP(profile);
     entry->mode = meta_item->mode;
     entry->owner = DUP_OPT(meta_item->owner);
     entry->group = DUP_OPT(meta_item->group);
@@ -3414,18 +3414,18 @@ error_t *state_set_file_state(
  * - manifest_repair_stale (after repairing entries)
  *
  * @param state State (must not be NULL, must have active transaction)
- * @param profile_name Profile name (must not be NULL)
+ * @param profile Profile name (must not be NULL)
  * @param commit_oid New commit OID for profile HEAD (must not be NULL)
  * @return Error or NULL on success
  */
 error_t *state_set_profile_commit_oid(
     state_t *state,
-    const char *profile_name,
+    const char *profile,
     const git_oid *commit_oid
 ) {
     CHECK_NULL(state);
     CHECK_NULL(state->db);
-    CHECK_NULL(profile_name);
+    CHECK_NULL(profile);
     CHECK_NULL(commit_oid);
 
     const char *sql = "UPDATE enabled_profiles SET commit_oid = ?1 WHERE name = ?2";
@@ -3441,7 +3441,7 @@ error_t *state_set_profile_commit_oid(
 
     /* Bind parameters (20-byte BLOB for the OID column) */
     sqlite3_bind_blob(stmt, 1, commit_oid->id, GIT_OID_RAWSZ, SQLITE_TRANSIENT);
-    sqlite3_bind_text(stmt, 2, profile_name, -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 2, profile, -1, SQLITE_TRANSIENT);
 
     /* Execute */
     rc = sqlite3_step(stmt);
@@ -3450,7 +3450,7 @@ error_t *state_set_profile_commit_oid(
     if (rc != SQLITE_DONE) {
         return ERROR(
             ERR_STATE_INVALID, "Failed to set commit_oid for profile '%s': %s",
-            profile_name, sqlite3_errmsg(state->db)
+            profile, sqlite3_errmsg(state->db)
         );
     }
 
@@ -3461,22 +3461,22 @@ error_t *state_set_profile_commit_oid(
  * Read a profile's stored commit_oid from enabled_profiles
  *
  * @param state State (must not be NULL)
- * @param profile_name Profile name (must not be NULL)
+ * @param profile Profile name (must not be NULL)
  * @param out_commit_oid Output: the stored commit OID (must not be NULL)
  * @return Error or NULL on success (ERR_NOT_FOUND if profile not in enabled_profiles)
  */
 error_t *state_get_profile_commit_oid(
     const state_t *state,
-    const char *profile_name,
+    const char *profile,
     git_oid *out_commit_oid
 ) {
     CHECK_NULL(state);
-    CHECK_NULL(profile_name);
+    CHECK_NULL(profile);
     CHECK_NULL(out_commit_oid);
 
     if (!state->db) {
         return ERROR(
-            ERR_NOT_FOUND, "No database — profile '%s' not enabled", profile_name
+            ERR_NOT_FOUND, "No database — profile '%s' not enabled", profile
         );
     }
 
@@ -3488,7 +3488,7 @@ error_t *state_get_profile_commit_oid(
         return sqlite_error(state->db, "Failed to prepare commit_oid query");
     }
 
-    sqlite3_bind_text(stmt, 1, profile_name, -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 1, profile, -1, SQLITE_TRANSIENT);
 
     rc = sqlite3_step(stmt);
     if (rc != SQLITE_ROW) {
@@ -3496,7 +3496,7 @@ error_t *state_get_profile_commit_oid(
         if (rc == SQLITE_DONE) {
             return ERROR(
                 ERR_NOT_FOUND,
-                "Profile '%s' not found in enabled_profiles", profile_name
+                "Profile '%s' not found in enabled_profiles", profile
             );
         }
         return sqlite_error(state->db, "Failed to query commit_oid");
@@ -3677,11 +3677,11 @@ error_t *state_get_entries_by_profile(
  * Queries the maximum deployed_at timestamp for files from the specified profile.
  *
  * @param state State (must not be NULL)
- * @param profile_name Profile name (must not be NULL)
+ * @param profile Profile name (must not be NULL)
  * @return Timestamp (0 if profile has no deployed files)
  */
-time_t state_get_profile_timestamp(const state_t *state, const char *profile_name) {
-    if (!state || !profile_name || !state->db) {
+time_t state_get_profile_timestamp(const state_t *state, const char *profile) {
+    if (!state || !profile || !state->db) {
         return 0;
     }
 
@@ -3693,7 +3693,7 @@ time_t state_get_profile_timestamp(const state_t *state, const char *profile_nam
         return 0;
     }
 
-    sqlite3_bind_text(stmt, 1, profile_name, -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 1, profile, -1, SQLITE_TRANSIENT);
 
     time_t timestamp = 0;
     rc = sqlite3_step(stmt);

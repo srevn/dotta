@@ -166,12 +166,12 @@ error_t *profile_validate_filter(
  *
  * NULL name semantics: Returns false (defensive, NULL name never matches).
  *
- * @param profile_name Profile name to check (NULL returns false)
+ * @param profile Profile name to check (NULL returns false)
  * @param filter Profile names to match against (NULL = match all)
  * @return true if profile matches filter, false otherwise
  */
 bool profile_filter_matches(
-    const char *profile_name,
+    const char *profile,
     const string_array_t *filter
 );
 
@@ -207,13 +207,13 @@ bool profile_exists(git_repository *repo, const char *profile);
  * storage paths. Tree is freed before return.
  *
  * @param repo Repository (must not be NULL)
- * @param profile_name Profile name (must not be NULL)
+ * @param profile Profile name (must not be NULL)
  * @param out String array of storage paths (must not be NULL, caller must free)
  * @return Error or NULL on success
  */
 error_t *profile_list_files(
     git_repository *repo,
-    const char *profile_name,
+    const char *profile,
     string_array_t **out
 );
 
@@ -224,13 +224,13 @@ error_t *profile_list_files(
  * Used by command layer to validate --prefix requirement.
  *
  * @param repo Repository (must not be NULL)
- * @param profile_name Profile name (must not be NULL)
+ * @param profile Profile name (must not be NULL)
  * @param out_has_custom Output flag (must not be NULL)
  * @return Error or NULL on success
  */
 error_t *profile_has_custom_files(
     git_repository *repo,
-    const char *profile_name,
+    const char *profile,
     bool *out_has_custom
 );
 

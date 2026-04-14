@@ -139,10 +139,10 @@ error_t *interactive_state_create(git_repository *repo, interactive_state_t **ou
     /* First: Add profiles from state in their saved order (enabled) */
     if (state_profiles) {
         for (size_t i = 0; i < state_profiles->count; i++) {
-            const char *profile_name = state_profiles->items[i];
+            const char *profile = state_profiles->items[i];
 
             /* O(1) lookup to verify profile still exists */
-            void *idx_ptr = hashmap_get(profile_map, profile_name);
+            void *idx_ptr = hashmap_get(profile_map, profile);
             if (!idx_ptr) {
                 /* Profile in state but doesn't exist locally anymore - skip */
                 continue;
@@ -153,7 +153,7 @@ error_t *interactive_state_create(git_repository *repo, interactive_state_t **ou
             used[profile_idx] = true;
 
             /* Add to items */
-            state->items[item_idx].name = strdup(profile_name);
+            state->items[item_idx].name = strdup(profile);
             if (!state->items[item_idx].name) {
                 err = error_create(ERR_MEMORY, "failed to duplicate profile name");
                 goto cleanup;

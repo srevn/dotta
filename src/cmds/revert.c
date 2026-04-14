@@ -37,7 +37,7 @@
  *
  * @param repo Repository (must not be NULL)
  * @param storage_path Storage path (must not be NULL)
- * @param profile_name Profile name (must not be NULL)
+ * @param profile Profile name (must not be NULL)
  * @param out Output context (must not be NULL)
  * @param out_profile Output profile name (must not be NULL, caller must free)
  * @param out_resolved_path Output storage path (must not be NULL, caller must free)
@@ -46,14 +46,14 @@
 static error_t *discover_file_in_history(
     git_repository *repo,
     const char *storage_path,
-    const char *profile_name,
+    const char *profile,
     const output_ctx_t *out,
     char **out_profile,
     char **out_resolved_path
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(storage_path);
-    CHECK_NULL(profile_name);
+    CHECK_NULL(profile);
     CHECK_NULL(out);
     CHECK_NULL(out_profile);
     CHECK_NULL(out_resolved_path);
@@ -61,13 +61,13 @@ static error_t *discover_file_in_history(
     /* Inform user about expensive operation */
     output_info(
         out, OUTPUT_NORMAL, "File not found in current HEAD, "
-        "searching history of '%s' profile...\n", profile_name
+        "searching history of '%s' profile...\n", profile
     );
 
     /* Use stats module to get file history */
     file_history_t *history = NULL;
     error_t *err = stats_get_file_history(
-        repo, profile_name, storage_path, &history
+        repo, profile, storage_path, &history
     );
     if (err) {
         return error_wrap(err, "Failed to search history");
@@ -80,7 +80,7 @@ static error_t *discover_file_in_history(
             ERR_NOT_FOUND, "File '%s' has no history in profile '%s'\n"
             "The file was never tracked in this profile.\n"
             "Hint: Use 'dotta list --profile %s' to see tracked files",
-            storage_path, profile_name, profile_name
+            storage_path, profile, profile
         );
     }
 
@@ -96,7 +96,7 @@ static error_t *discover_file_in_history(
     stats_free_file_history(history);
 
     /* Return profile and path */
-    *out_profile = strdup(profile_name);
+    *out_profile = strdup(profile);
     *out_resolved_path = strdup(storage_path);
 
     if (!*out_profile || !*out_resolved_path) {
@@ -266,7 +266,7 @@ static error_t *discover_file(
 static error_t *show_diff_preview(
     git_repository *repo,
     const char *file_path,
-    const char *profile_name,
+    const char *profile,
     bool current_encrypted,
     bool target_encrypted,
     keymanager_t *km,
@@ -276,7 +276,7 @@ static error_t *show_diff_preview(
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(file_path);
-    CHECK_NULL(profile_name);
+    CHECK_NULL(profile);
     CHECK_NULL(current_oid);
     CHECK_NULL(target_oid);
     CHECK_NULL(out);
@@ -300,7 +300,7 @@ static error_t *show_diff_preview(
         repo,
         current_oid,
         file_path,
-        profile_name,
+        profile,
         current_encrypted,
         km,
         &current_plaintext
@@ -314,7 +314,7 @@ static error_t *show_diff_preview(
         repo,
         target_oid,
         file_path,
-        profile_name,
+        profile,
         target_encrypted,
         km,
         &target_plaintext
@@ -393,23 +393,23 @@ static error_t *show_diff_preview(
  * the branch between showing the preview and performing the revert.
  *
  * @param repo Repository (must not be NULL)
- * @param profile_name Profile branch to check (must not be NULL)
+ * @param profile Profile branch to check (must not be NULL)
  * @param expected_oid Expected HEAD OID (must not be NULL)
  * @return Error if branch was modified, NULL if unchanged
  */
 static error_t *verify_branch_unchanged(
     git_repository *repo,
-    const char *profile_name,
+    const char *profile,
     const git_oid *expected_oid
 ) {
     CHECK_NULL(repo);
-    CHECK_NULL(profile_name);
+    CHECK_NULL(profile);
     CHECK_NULL(expected_oid);
 
     git_oid current_oid;
     git_commit *commit = NULL;
     error_t *err = gitops_resolve_commit_in_branch(
-        repo, profile_name, "HEAD", &current_oid, &commit
+        repo, profile, "HEAD", &current_oid, &commit
     );
     if (commit) git_commit_free(commit);
     if (err) return error_wrap(err, "Failed to verify branch state");
@@ -422,7 +422,7 @@ static error_t *verify_branch_unchanged(
             ERR_CONFLICT,
             "Profile '%s' was modified concurrently (expected %s, now %s)\n"
             "Another operation changed the branch since the preview.",
-            profile_name, expected_str, current_str
+            profile, expected_str, current_str
         );
     }
 
@@ -472,7 +472,7 @@ static error_t *load_metadata_graceful(
  * This centralizes message generation logic for reuse across revert operations.
  *
  * @param config Configuration (must not be NULL)
- * @param profile_name Profile name (must not be NULL)
+ * @param profile Profile name (must not be NULL)
  * @param file_path File path (must not be NULL)
  * @param target_commit_oid Target commit OID (must not be NULL)
  * @param custom_message Custom message (can be NULL for template generation)
@@ -480,7 +480,7 @@ static error_t *load_metadata_graceful(
  */
 static char *build_revert_commit_message(
     const config_t *config,
-    const char *profile_name,
+    const char *profile,
     const char *file_path,
     const git_oid *target_commit_oid,
     const char *custom_message
@@ -497,7 +497,7 @@ static char *build_revert_commit_message(
     char *files[] = { (char *) file_path };
     commit_message_context_t ctx = {
         .action        = COMMIT_ACTION_REVERT,
-        .profile       = profile_name,
+        .profile       = profile,
         .files         = files,
         .file_count    = 1,
         .custom_msg    = NULL,
@@ -589,14 +589,14 @@ cleanup:
 static error_t *revert_file_in_branch(
     git_repository *repo,
     const config_t *config,
-    const char *profile_name,
+    const char *profile,
     const char *file_path,
     const git_oid *target_commit_oid,
     const char *commit_message,
     const output_ctx_t *out
 ) {
     CHECK_NULL(repo);
-    CHECK_NULL(profile_name);
+    CHECK_NULL(profile);
     CHECK_NULL(file_path);
     CHECK_NULL(target_commit_oid);
     CHECK_NULL(out);
@@ -727,11 +727,11 @@ static error_t *revert_file_in_branch(
 
     git_oid head_oid;
     err = gitops_resolve_commit_in_branch(
-        repo, profile_name, "HEAD", &head_oid, &head_commit
+        repo, profile, "HEAD", &head_oid, &head_commit
     );
     if (err) {
         err = error_wrap(
-            err, "Failed to resolve HEAD of profile '%s'", profile_name
+            err, "Failed to resolve HEAD of profile '%s'", profile
         );
         goto cleanup;
     }
@@ -776,7 +776,7 @@ static error_t *revert_file_in_branch(
 
     /* Build commit message */
     msg = build_revert_commit_message(
-        config, profile_name, file_path, target_commit_oid, commit_message
+        config, profile, file_path, target_commit_oid, commit_message
     );
     if (!msg) {
         err = ERROR(ERR_MEMORY, "Failed to allocate commit message");
@@ -793,7 +793,7 @@ static error_t *revert_file_in_branch(
     git_oid_cpy(&updates[1].blob_oid, &metadata_blob_oid);
 
     err = gitops_commit_tree_updates_safe(
-        repo, profile_name, updates, 2, NULL, 0, msg, NULL
+        repo, profile, updates, 2, NULL, 0, msg, NULL
     );
 
 cleanup:
@@ -825,7 +825,7 @@ error_t *cmd_revert(
     CHECK_NULL(opts->commit);
 
     error_t *err = NULL;
-    char *profile_name = NULL;
+    char *profile = NULL;
     char *resolved_path = NULL;
     git_oid current_oid = { { 0 } };
     git_oid target_oid = { { 0 } };
@@ -851,7 +851,7 @@ error_t *cmd_revert(
     bool found_in_history = false;
     err = discover_file(
         repo, opts->file_path, opts->profile, out, &found_in_history,
-        &profile_name, &resolved_path
+        &profile, &resolved_path
     );
     if (err) goto cleanup;
 
@@ -864,7 +864,7 @@ error_t *cmd_revert(
 
     output_print(
         out, OUTPUT_VERBOSE, "Found file in profile '%s': %s\n",
-        profile_name, resolved_path
+        profile, resolved_path
     );
 
     /* Step 3: Resolve target commit */
@@ -874,13 +874,13 @@ error_t *cmd_revert(
     );
 
     err = gitops_resolve_commit_in_branch(
-        repo, profile_name, opts->commit, &target_oid, &target_commit
+        repo, profile, opts->commit, &target_oid, &target_commit
     );
     if (err) goto cleanup;
 
     /* Step 4: Get current HEAD commit for comparison */
     err = gitops_resolve_commit_in_branch(
-        repo, profile_name, "HEAD", &current_oid, &current_commit
+        repo, profile, "HEAD", &current_oid, &current_commit
     );
     if (err) goto cleanup;
 
@@ -981,7 +981,7 @@ error_t *cmd_revert(
 
     output_styled(
         out, OUTPUT_NORMAL, "  Profile: {cyan}%s{reset}\n",
-        profile_name
+        profile
     );
     output_print(
         out, OUTPUT_NORMAL, "  File: %s\n",
@@ -1004,7 +1004,7 @@ error_t *cmd_revert(
          * Load metadata from both current HEAD and target commit separately
          * to handle encryption state changes between commits correctly. */
         metadata_t *current_meta = NULL;
-        err = load_metadata_graceful(repo, profile_name, &current_meta);
+        err = load_metadata_graceful(repo, profile, &current_meta);
         if (err) goto cleanup;
 
         metadata_t *target_meta = NULL;
@@ -1023,7 +1023,7 @@ error_t *cmd_revert(
         km = keymanager_get_global(config);
 
         err = show_diff_preview(
-            repo, resolved_path, profile_name, current_encrypted, target_encrypted,
+            repo, resolved_path, profile, current_encrypted, target_encrypted,
             km, current_blob_oid, target_blob_oid, out
         );
         if (err) {
@@ -1069,7 +1069,7 @@ error_t *cmd_revert(
 
     /* Verify branch hasn't been modified concurrently since preview */
     if (!opts->force) {
-        err = verify_branch_unchanged(repo, profile_name, &current_oid);
+        err = verify_branch_unchanged(repo, profile, &current_oid);
         if (err) goto cleanup;
     }
 
@@ -1079,7 +1079,7 @@ error_t *cmd_revert(
     err = revert_file_in_branch(
         repo,
         config,
-        profile_name,
+        profile,
         resolved_path,
         &target_oid,
         opts->message,
@@ -1102,7 +1102,7 @@ error_t *cmd_revert(
 
     err = state_load(repo, &read_state);
     if (!err && read_state) {
-        profile_enabled = state_has_profile(read_state, profile_name);
+        profile_enabled = state_has_profile(read_state, profile);
         state_free(read_state);
         read_state = NULL;
     } else if (err) {
@@ -1115,11 +1115,11 @@ error_t *cmd_revert(
         /* Profile not enabled - manifest update not needed */
         output_success(
             out, OUTPUT_NORMAL, "Reverted %s in profile '%s'",
-            resolved_path, profile_name
+            resolved_path, profile
         );
         output_info(
             out, OUTPUT_NORMAL, "\nNote: Profile '%s' is not enabled on this machine",
-            profile_name
+            profile
         );
         goto cleanup;
     }
@@ -1128,7 +1128,7 @@ error_t *cmd_revert(
     git_oid new_head_oid;
     git_commit *new_head_commit = NULL;
     err = gitops_resolve_commit_in_branch(
-        repo, profile_name, "HEAD", &new_head_oid, &new_head_commit
+        repo, profile, "HEAD", &new_head_oid, &new_head_commit
     );
     if (err) {
         /* Non-fatal: Git succeeded, manifest can recover */
@@ -1183,7 +1183,7 @@ error_t *cmd_revert(
     error_t *manifest_err = manifest_sync_diff(
         repo,
         state,
-        profile_name,
+        profile,
         &current_oid,       /* Before revert (captured at step 3) */
         &new_head_oid,      /* After revert */
         enabled_profiles,
@@ -1230,7 +1230,7 @@ error_t *cmd_revert(
 success:
     /* Display success message */
     output_success(
-        out, OUTPUT_NORMAL, "Reverted %s in profile '%s'", resolved_path, profile_name
+        out, OUTPUT_NORMAL, "Reverted %s in profile '%s'", resolved_path, profile
     );
 
     /* Show manifest sync results if available */
@@ -1253,7 +1253,7 @@ cleanup:
     if (target_tree) git_tree_free(target_tree);
     if (current_commit) git_commit_free(current_commit);
     if (target_commit) git_commit_free(target_commit);
-    if (profile_name) free(profile_name);
+    if (profile) free(profile);
     if (resolved_path) free(resolved_path);
 
     /* Don't return error if user aborted */

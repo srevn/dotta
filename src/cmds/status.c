@@ -38,14 +38,14 @@ static void display_enabled_profiles(
     output_section(out, OUTPUT_NORMAL, "Enabled profiles");
 
     for (size_t i = 0; i < profiles->count; i++) {
-        const char *profile_name = profiles->items[i];
+        const char *profile = profiles->items[i];
 
         /* Format profile name */
-        output_styled(out, OUTPUT_NORMAL, "  {cyan}%s{reset}", profile_name);
+        output_styled(out, OUTPUT_NORMAL, "  {cyan}%s{reset}", profile);
 
         /* Show per-profile last deployed timestamp */
         if (state) {
-            time_t profile_deploy_time = state_get_profile_timestamp(state, profile_name);
+            time_t profile_deploy_time = state_get_profile_timestamp(state, profile);
             if (profile_deploy_time > 0) {
                 char relative_buf[64];
                 format_relative_time(
@@ -64,8 +64,8 @@ static void display_enabled_profiles(
         if (output_is_verbose(out) && manifest) {
             size_t profile_file_count = 0;
             for (size_t j = 0; j < manifest->count; j++) {
-                if (manifest->entries[j].profile_name &&
-                    strcmp(manifest->entries[j].profile_name, profile_name) == 0) {
+                if (manifest->entries[j].profile &&
+                    strcmp(manifest->entries[j].profile, profile) == 0) {
                     profile_file_count++;
                 }
             }
@@ -121,9 +121,9 @@ static void display_workspace_status(
         /* Count total managed files from manifest for filtered profile(s) */
         if (manifest) {
             for (size_t i = 0; i < manifest->count; i++) {
-                if (manifest->entries[i].profile_name &&
+                if (manifest->entries[i].profile &&
                     profile_filter_matches(
-                    manifest->entries[i].profile_name, filter
+                    manifest->entries[i].profile, filter
                     )) {
                     profile_file_count++;
                 }
@@ -613,14 +613,14 @@ static error_t *display_remote_status(
     size_t no_remote = 0;
 
     for (size_t i = 0; i < check->count; i++) {
-        const char *profile_name = check->items[i];
+        const char *profile = check->items[i];
 
         /* Analyze upstream state */
         upstream_info_t *info = NULL;
-        err = upstream_analyze_profile(repo, remote_name, profile_name, &info);
+        err = upstream_analyze_profile(repo, remote_name, profile, &info);
         if (err) {
             /* Show error for this profile but continue */
-            output_error(out, "  %s: %s", profile_name, error_message(err));
+            output_error(out, "  %s: %s", profile, error_message(err));
             error_free(err);
             continue;
         }
@@ -684,12 +684,12 @@ static error_t *display_remote_status(
         if (verbose && info->state != UPSTREAM_NO_REMOTE && info->state != UPSTREAM_UNKNOWN) {
             /* Verbose mode: show detailed commit info */
             output_newline(out, OUTPUT_VERBOSE);
-            output_print(out, OUTPUT_VERBOSE, "Profile: %s\n", profile_name);
+            output_print(out, OUTPUT_VERBOSE, "Profile: %s\n", profile);
 
             /* Get local commit info */
             char local_ref[DOTTA_REFNAME_MAX];
             error_t *local_ref_err = gitops_build_refname(
-                local_ref, sizeof(local_ref), "refs/heads/%s", profile_name
+                local_ref, sizeof(local_ref), "refs/heads/%s", profile
             );
             git_commit *local_commit = NULL;
             error_t *commit_err = local_ref_err ? local_ref_err
@@ -724,7 +724,7 @@ static error_t *display_remote_status(
                 char remote_ref[DOTTA_REFNAME_MAX];
                 error_t *remote_ref_err = gitops_build_refname(
                     remote_ref, sizeof(remote_ref), "refs/remotes/%s/%s",
-                    remote_name, profile_name
+                    remote_name, profile
                 );
                 git_commit *remote_commit = NULL;
                 commit_err = remote_ref_err ? remote_ref_err
@@ -752,7 +752,7 @@ static error_t *display_remote_status(
             }
         } else {
             /* Compact mode: single line matching enabled profiles format */
-            output_styled(out, OUTPUT_NORMAL, "  {cyan}%s{reset}", profile_name);
+            output_styled(out, OUTPUT_NORMAL, "  {cyan}%s{reset}", profile);
             output_styled(out, OUTPUT_NORMAL, "  {dim}(%s){reset}\n", status_str);
         }
 

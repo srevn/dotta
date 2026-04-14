@@ -437,14 +437,14 @@ error_t *encryption_derive_master_key(
 
 error_t *encryption_derive_profile_key(
     const uint8_t master_key[ENCRYPTION_MASTER_KEY_SIZE],
-    const char *profile_name,
+    const char *profile,
     uint8_t out_profile_key[ENCRYPTION_PROFILE_KEY_SIZE]
 ) {
     CHECK_NULL(master_key);
-    CHECK_NULL(profile_name);
+    CHECK_NULL(profile);
     CHECK_NULL(out_profile_key);
 
-    if (profile_name[0] == '\0') {
+    if (profile[0] == '\0') {
         return ERROR(ERR_INVALID_ARG, "Profile name cannot be empty");
     }
 
@@ -462,12 +462,12 @@ error_t *encryption_derive_profile_key(
      * This approach is more direct than hydro_kdf_derive_from_key() which
      * requires numeric subkey_id (not suitable for variable-length names).
      */
-    size_t name_len = strlen(profile_name);
+    size_t name_len = strlen(profile);
 
     int result = hydro_hash_hash(
         out_profile_key,
         ENCRYPTION_PROFILE_KEY_SIZE,
-        profile_name,
+        profile,
         name_len,
         ENCRYPTION_CTX_KDF,  /* Context: "profile " */
         master_key           /* Master key as keying material */
@@ -476,7 +476,7 @@ error_t *encryption_derive_profile_key(
     if (result != 0) {
         return ERROR(
             ERR_CRYPTO, "Failed to derive profile key for: %s",
-            profile_name
+            profile
         );
     }
 

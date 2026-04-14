@@ -1080,8 +1080,8 @@ error_t *cmd_apply(
         const file_entry_t *entry = &manifest->entries[i];
 
         /* Filter by operation profiles (skip files not in filter) */
-        if (entry->profile_name &&
-            !profile_filter_matches(entry->profile_name, filter)) {
+        if (entry->profile &&
+            !profile_filter_matches(entry->profile, filter)) {
             continue;
         }
 
@@ -1135,8 +1135,8 @@ error_t *cmd_apply(
             const file_entry_t *entry = &manifest->entries[i];
 
             /* Filter by operation profiles (skip files not in filter) */
-            if (entry->profile_name &&
-                !profile_filter_matches(entry->profile_name, filter)) {
+            if (entry->profile &&
+                !profile_filter_matches(entry->profile, filter)) {
                 continue;
             }
 

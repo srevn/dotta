@@ -167,7 +167,7 @@ static error_t *show_file_diff_from_workspace(
     /* Show file header */
     output_styled(
         out, OUTPUT_NORMAL, "{dim}# Profile:{reset} %s\n",
-        entry->profile_name
+        entry->profile
     );
     output_styled(
         out, OUTPUT_NORMAL, "{dim}# Path:{reset}    %s\n",
@@ -213,7 +213,7 @@ static error_t *show_file_diff_from_workspace(
     /* Get content from cache via VWD-cached blob_oid (borrowed reference - don't free) */
     const buffer_t *content = NULL;
     error_t *err = content_cache_get_from_blob_oid(
-        cache, &entry->blob_oid, entry->storage_path, entry->profile_name,
+        cache, &entry->blob_oid, entry->storage_path, entry->profile,
         entry->encrypted, &content
     );
     if (err) {
@@ -377,7 +377,7 @@ static error_t *present_diffs_for_direction(
  * @param commit_ref Commit reference (must not be NULL)
  * @param out_oid Resolved commit OID (must not be NULL)
  * @param out_commit Resolved commit object (can be NULL, caller must free)
- * @param out_profile_name Found profile name (can be NULL, caller must free)
+ * @param out_profile Found profile name (can be NULL, caller must free)
  * @return Error or NULL on success
  */
 static error_t *resolve_commit_in_profiles(
@@ -386,7 +386,7 @@ static error_t *resolve_commit_in_profiles(
     const char *commit_ref,
     git_oid *out_oid,
     git_commit **out_commit,
-    char **out_profile_name
+    char **out_profile
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(profiles);
@@ -397,18 +397,18 @@ static error_t *resolve_commit_in_profiles(
 
     /* Search profiles in order */
     for (size_t i = 0; i < profiles->count; i++) {
-        const char *profile_name = profiles->items[i];
+        const char *profile = profiles->items[i];
 
         error_t *err = gitops_resolve_commit_in_branch(
-            repo, profile_name, commit_ref, out_oid, out_commit
+            repo, profile, commit_ref, out_oid, out_commit
         );
 
         if (!err) {
             /* Found it! */
-            if (out_profile_name) {
-                *out_profile_name = strdup(profile_name);
+            if (out_profile) {
+                *out_profile = strdup(profile);
 
-                if (!*out_profile_name) {
+                if (!*out_profile) {
                     if (out_commit && *out_commit) {
                         git_commit_free(*out_commit);
                         *out_commit = NULL;
@@ -453,7 +453,7 @@ static void print_commit_header(
     output_ctx_t *out,
     const git_commit *commit,
     const git_oid *commit_oid,
-    const char *profile_name
+    const char *profile
 ) {
     char oid_str[8];
     git_oid_tostr(oid_str, sizeof(oid_str), commit_oid);
@@ -476,10 +476,10 @@ static void print_commit_header(
         out, OUTPUT_NORMAL, "{yellow}commit %s{reset}",
         oid_str
     );
-    if (profile_name) {
+    if (profile) {
         output_styled(
             out, OUTPUT_NORMAL, " {cyan}(%s){reset}",
-            profile_name
+            profile
         );
     }
     output_newline(out, OUTPUT_NORMAL);
@@ -622,7 +622,7 @@ static int print_diff_line_cb(
  * @param repo Repository (must not be NULL)
  * @param manifest Historical manifest to compare (must not be NULL)
  * @param metadata Metadata from historical commit (must not be NULL)
- * @param profile_name Profile name (must not be NULL)
+ * @param profile Profile name (must not be NULL)
  * @param file_filter File filter for CLI (can be NULL for no filter)
  * @param opts Command options (must not be NULL)
  * @param out Output context (must not be NULL)
@@ -633,7 +633,7 @@ static error_t *compare_manifest_to_filesystem(
     git_repository *repo,
     const manifest_t *manifest,
     const metadata_t *metadata,
-    const char *profile_name,
+    const char *profile,
     const path_filter_t *file_filter,
     const cmd_diff_options_t *opts,
     const config_t *config,
@@ -643,7 +643,7 @@ static error_t *compare_manifest_to_filesystem(
     CHECK_NULL(repo);
     CHECK_NULL(manifest);
     CHECK_NULL(metadata);
-    CHECK_NULL(profile_name);
+    CHECK_NULL(profile);
     CHECK_NULL(opts);
     CHECK_NULL(out);
     CHECK_NULL(diff_count);
@@ -692,7 +692,7 @@ static error_t *compare_manifest_to_filesystem(
             /* Get content from historical commit (cached) */
             const buffer_t *hist_content = NULL;
             err = content_cache_get_from_blob_oid(
-                cache, &entry->blob_oid, storage_path, profile_name,
+                cache, &entry->blob_oid, storage_path, profile,
                 encrypted, &hist_content
             );
             if (err) {
@@ -722,7 +722,7 @@ static error_t *compare_manifest_to_filesystem(
         /* Full diff output */
         const buffer_t *hist_content = NULL;
         err = content_cache_get_from_blob_oid(
-            cache, &entry->blob_oid, storage_path, profile_name, encrypted,
+            cache, &entry->blob_oid, storage_path, profile, encrypted,
             &hist_content
         );
         if (err) {
@@ -759,7 +759,7 @@ static error_t *compare_manifest_to_filesystem(
         /* Show file header */
         output_styled(
             out, OUTPUT_NORMAL, "{dim}# Profile:{reset} %s\n",
-            profile_name
+            profile
         );
         output_styled(
             out, OUTPUT_NORMAL, "{dim}# Path:{reset}    %s\n",
@@ -935,7 +935,7 @@ static error_t *diff_commit_to_workspace(
     error_t *err = NULL;
     git_oid commit_oid;
     git_commit *commit = NULL;
-    char *profile_name = NULL;
+    char *profile = NULL;
     git_tree *tree = NULL;
     manifest_t *manifest = NULL;
     metadata_t *metadata = NULL;
@@ -943,7 +943,7 @@ static error_t *diff_commit_to_workspace(
 
     /* Step 1: Resolve commit to find which profile contains it */
     err = resolve_commit_in_profiles(
-        repo, profiles, commit_ref, &commit_oid, &commit, &profile_name
+        repo, profiles, commit_ref, &commit_oid, &commit, &profile
     );
     if (err) {
         goto cleanup;
@@ -958,7 +958,7 @@ static error_t *diff_commit_to_workspace(
     if (profiles->count > 1) {
         output_info(
             out, OUTPUT_NORMAL, "Note: comparing commit against profile '%s' only "
-            "(commit-to-workspace compares one profile at a time)\n", profile_name
+            "(commit-to-workspace compares one profile at a time)\n", profile
         );
         output_newline(out, OUTPUT_NORMAL);
     }
@@ -968,7 +968,7 @@ static error_t *diff_commit_to_workspace(
         oid_str
     );
 
-    print_commit_header(out, commit, &commit_oid, profile_name);
+    print_commit_header(out, commit, &commit_oid, profile);
 
     /* Step 3: Get tree from THE HISTORICAL COMMIT (not HEAD!) */
     int git_err = git_commit_tree(&tree, commit);
@@ -979,7 +979,7 @@ static error_t *diff_commit_to_workspace(
     }
 
     /* Step 4: Load metadata from that historical tree */
-    err = metadata_load_from_tree(repo, tree, profile_name, &metadata);
+    err = metadata_load_from_tree(repo, tree, profile, &metadata);
     if (err) {
         /* Graceful: if no metadata in commit, use empty metadata */
         error_free(err);
@@ -992,7 +992,7 @@ static error_t *diff_commit_to_workspace(
     const char *custom_prefix = NULL;
     err = profile_get_custom_prefixes(
         repo, state,
-        &(string_array_t){ .items = (char **) &profile_name, .count = 1 },
+        &(string_array_t){ .items = (char **) &profile, .count = 1 },
         &prefixes
     );
     if (err) {
@@ -1002,7 +1002,7 @@ static error_t *diff_commit_to_workspace(
         custom_prefix = prefixes->items[0];
     }
 
-    err = manifest_build_from_tree(tree, profile_name, custom_prefix, &manifest);
+    err = manifest_build_from_tree(tree, profile, custom_prefix, &manifest);
     if (err) {
         err = error_wrap(err, "Failed to build manifest from commit");
         goto cleanup;
@@ -1011,7 +1011,7 @@ static error_t *diff_commit_to_workspace(
     /* Step 6: Compare historical manifest against current filesystem */
     size_t diff_count = 0;
     err = compare_manifest_to_filesystem(
-        repo, manifest, metadata, profile_name, file_filter, opts,
+        repo, manifest, metadata, profile, file_filter, opts,
         config, out, &diff_count
     );
     if (err) {
@@ -1039,7 +1039,7 @@ cleanup:
     manifest_free(manifest);
     git_tree_free(tree);
     git_commit_free(commit);
-    free(profile_name);
+    free(profile);
 
     return err;
 }

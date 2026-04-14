@@ -393,7 +393,7 @@ void state_free_all_files(state_file_entry_t *entries, size_t count);
  *
  * Preconditions:
  *   - state MUST have active transaction (via state_load_for_update)
- *   - profile_name MUST NOT be NULL or empty
+ *   - profile MUST NOT be NULL or empty
  *
  * Postconditions:
  *   - Profile added to enabled_profiles or existing entry updated
@@ -402,13 +402,13 @@ void state_free_all_files(state_file_entry_t *entries, size_t count);
  *   - Transaction remains open (caller commits)
  *
  * @param state State handle (must not be NULL, must have active transaction)
- * @param profile_name Profile name (must not be NULL)
+ * @param profile Profile name (must not be NULL)
  * @param custom_prefix Custom prefix or NULL for home/root profiles
  * @return Error or NULL on success
  */
 error_t *state_enable_profile(
     state_t *state,
-    const char *profile_name,
+    const char *profile,
     const char *custom_prefix
 );
 
@@ -426,18 +426,18 @@ error_t *state_enable_profile(
  *   - Not an error if profile wasn't enabled
  *
  * @param state State handle (must not be NULL, must have active transaction)
- * @param profile_name Profile name (must not be NULL)
+ * @param profile Profile name (must not be NULL)
  * @return Error or NULL on success (not found is OK)
  */
 error_t *state_disable_profile(
     state_t *state,
-    const char *profile_name
+    const char *profile
 );
 
 /**
  * Get custom prefix map
  *
- * Builds a hashmap of profile_name → custom_prefix for all enabled profiles
+ * Builds a hashmap of profile → custom_prefix for all enabled profiles
  * that have a custom prefix set (WHERE custom_prefix IS NOT NULL).
  *
  * Returns empty map if no custom prefixes exist (not an error).
@@ -468,14 +468,14 @@ error_t *state_get_prefix_map(
  * prefix is needed — avoids allocating and populating the full map.
  *
  * @param state State handle (must not be NULL)
- * @param profile_name Profile to query (must not be NULL)
+ * @param profile Profile to query (must not be NULL)
  * @param out_prefix Output prefix string (must not be NULL; *out_prefix set to
  *                   NULL if no custom prefix, otherwise caller must free)
  * @return Error or NULL on success (NULL prefix is not an error)
  */
 error_t *state_get_profile_prefix(
     const state_t *state,
-    const char *profile_name,
+    const char *profile,
     char **out_prefix
 );
 
@@ -538,10 +538,10 @@ error_t *state_get_profiles(const state_t *state, string_array_t **out);
  * whether a profile is enabled.
  *
  * @param state State (must not be NULL)
- * @param profile_name Profile name to check (must not be NULL)
+ * @param profile Profile name to check (must not be NULL)
  * @return true if profile is enabled, false otherwise
  */
-bool state_has_profile(const state_t *state, const char *profile_name);
+bool state_has_profile(const state_t *state, const char *profile);
 
 /**
  * Get last deployed timestamp for a profile
@@ -549,10 +549,10 @@ bool state_has_profile(const state_t *state, const char *profile_name);
  * Returns the most recent deployment timestamp for files from the specified profile.
  *
  * @param state State (must not be NULL)
- * @param profile_name Profile name (must not be NULL)
+ * @param profile Profile name (must not be NULL)
  * @return Timestamp (0 if profile has no deployed files)
  */
-time_t state_get_profile_timestamp(const state_t *state, const char *profile_name);
+time_t state_get_profile_timestamp(const state_t *state, const char *profile);
 
 /**
  * Clear all file entries (keeps profiles)
@@ -708,13 +708,13 @@ error_t *state_set_file_state(
  * - manifest_rebuild (after full repopulation)
  *
  * @param state State (must not be NULL, must have active transaction)
- * @param profile_name Profile name (must not be NULL)
+ * @param profile Profile name (must not be NULL)
  * @param commit_oid New commit OID for profile HEAD (must not be NULL)
  * @return Error or NULL on success
  */
 error_t *state_set_profile_commit_oid(
     state_t *state,
-    const char *profile_name,
+    const char *profile,
     const git_oid *commit_oid
 );
 
@@ -725,13 +725,13 @@ error_t *state_set_profile_commit_oid(
  * to compare stored vs current branch HEAD.
  *
  * @param state State (must not be NULL)
- * @param profile_name Profile name (must not be NULL)
+ * @param profile Profile name (must not be NULL)
  * @param out_commit_oid Output OID (must not be NULL)
  * @return Error or NULL on success (ERR_NOT_FOUND if profile not enabled)
  */
 error_t *state_get_profile_commit_oid(
     const state_t *state,
-    const char *profile_name,
+    const char *profile,
     git_oid *out_commit_oid
 );
 
@@ -766,14 +766,14 @@ error_t *state_get_entries_by_profile(
  * Derives filesystem_path from metadata's storage_path using path_from_storage().
  *
  * @param meta_item Metadata item (must not be NULL, must be DIRECTORY kind)
- * @param profile_name Source profile name (must not be NULL)
+ * @param profile Source profile name (must not be NULL)
  * @param custom_prefix Custom prefix for this profile (NULL for home/root)
  * @param out State directory entry (must not be NULL, caller must free)
  * @return Error or NULL on success
  */
 error_t *state_directory_entry_create_from_metadata(
     const metadata_item_t *meta_item,
-    const char *profile_name,
+    const char *profile,
     const char *custom_prefix,
     arena_t *arena,
     state_directory_entry_t **out

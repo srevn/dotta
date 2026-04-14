@@ -63,18 +63,18 @@ static error_t *match_hierarchical_profiles(
     }
 
     for (size_t i = 0; i < available->count; i++) {
-        const char *profile_name = available->items[i];
+        const char *profile = available->items[i];
 
         /* Check if branch starts with prefix */
-        if (!str_starts_with(profile_name, prefix)) {
+        if (!str_starts_with(profile, prefix)) {
             continue;
         }
 
-        const char *suffix = profile_name + prefix_len;
+        const char *suffix = profile + prefix_len;
 
         if (suffix[0] == '\0') {
             /* Exact match: base profile — add directly to output */
-            err = string_array_push(out, profile_name);
+            err = string_array_push(out, profile);
             if (err) {
                 goto cleanup;
             }
@@ -82,7 +82,7 @@ static error_t *match_hierarchical_profiles(
             const char *variant = suffix + 1;
             /* One level deep only: non-empty variant with no further '/' */
             if (variant[0] != '\0' && strchr(variant, '/') == NULL) {
-                err = string_array_push(sub_profiles, profile_name);
+                err = string_array_push(sub_profiles, profile);
                 if (err) {
                     goto cleanup;
                 }
@@ -310,15 +310,15 @@ static error_t *validate_state_profiles(
 
     /* Check each profile */
     for (size_t i = 0; i < state_profiles->count; i++) {
-        const char *profile_name = state_profiles->items[i];
+        const char *profile = state_profiles->items[i];
 
-        if (profile_exists(repo, profile_name)) {
-            err = string_array_push(valid, profile_name);
+        if (profile_exists(repo, profile)) {
+            err = string_array_push(valid, profile);
             if (err) goto cleanup;
         } else {
             /* Profile doesn't exist */
             if (missing) {
-                err = string_array_push(missing, profile_name);
+                err = string_array_push(missing, profile);
                 if (err) goto cleanup;
             }
         }
@@ -550,11 +550,11 @@ error_t *profile_validate_filter(
  * NULL name never matches.
  */
 bool profile_filter_matches(
-    const char *profile_name,
+    const char *profile,
     const string_array_t *filter
 ) {
-    /* NULL name never matches (defensive) */
-    if (!profile_name) {
+    /* NULL profile never matches (defensive) */
+    if (!profile) {
         return false;
     }
 
@@ -563,9 +563,9 @@ bool profile_filter_matches(
         return true;
     }
 
-    /* Check if name is in filter list */
+    /* Check if profile is in filter list */
     for (size_t i = 0; i < filter->count; i++) {
-        if (strcmp(profile_name, filter->items[i]) == 0) {
+        if (strcmp(profile, filter->items[i]) == 0) {
             return true;
         }
     }
@@ -702,19 +702,18 @@ static error_t *profile_list_tree_files(
  */
 error_t *profile_list_files(
     git_repository *repo,
-    const char *profile_name,
+    const char *profile,
     string_array_t **out
 ) {
     CHECK_NULL(repo);
-    CHECK_NULL(profile_name);
+    CHECK_NULL(profile);
     CHECK_NULL(out);
 
     git_tree *tree = NULL;
-    error_t *err = gitops_load_branch_tree(repo, profile_name, &tree, NULL);
+    error_t *err = gitops_load_branch_tree(repo, profile, &tree, NULL);
     if (err) {
         return error_wrap(
-            err, "Failed to load tree for profile '%s'",
-            profile_name
+            err, "Failed to load tree for profile '%s'", profile
         );
     }
 
@@ -731,21 +730,20 @@ error_t *profile_list_files(
  */
 error_t *profile_has_custom_files(
     git_repository *repo,
-    const char *profile_name,
+    const char *profile,
     bool *out_has_custom
 ) {
     CHECK_NULL(repo);
-    CHECK_NULL(profile_name);
+    CHECK_NULL(profile);
     CHECK_NULL(out_has_custom);
 
     *out_has_custom = false;
 
     git_tree *tree = NULL;
-    error_t *err = gitops_load_branch_tree(repo, profile_name, &tree, NULL);
+    error_t *err = gitops_load_branch_tree(repo, profile, &tree, NULL);
     if (err) {
         return error_wrap(
-            err, "Failed to load tree for profile '%s'",
-            profile_name
+            err, "Failed to load tree for profile '%s'", profile
         );
     }
 

@@ -543,21 +543,21 @@ static error_t *edit_baseline_dottaignore(
  */
 static error_t *edit_profile_dottaignore(
     git_repository *repo,
-    const char *profile_name,
+    const char *profile,
     output_ctx_t *out
 ) {
     CHECK_NULL(repo);
-    CHECK_NULL(profile_name);
+    CHECK_NULL(profile);
 
     /* Check if profile branch exists */
     bool branch_exists = false;
-    error_t *err = gitops_branch_exists(repo, profile_name, &branch_exists);
+    error_t *err = gitops_branch_exists(repo, profile, &branch_exists);
     if (err) return err;
 
     if (!branch_exists) {
         return ERROR(
             ERR_INVALID_ARG, "Profile '%s' does not exist",
-            profile_name
+            profile
         );
     }
 
@@ -579,13 +579,13 @@ static error_t *edit_profile_dottaignore(
     /* Build ref name */
     char ref_name[DOTTA_REFNAME_MAX];
     err = gitops_build_refname(
-        ref_name, sizeof(ref_name), "refs/heads/%s", profile_name
+        ref_name, sizeof(ref_name), "refs/heads/%s", profile
     );
     if (err) {
         close(fd);
         unlink(tmpfile);
         free(tmpfile);
-        return error_wrap(err, "Invalid profile name '%s'", profile_name);
+        return error_wrap(err, "Invalid profile name '%s'", profile);
     }
 
     /* Load existing .dottaignore content from profile */
@@ -680,7 +680,7 @@ static error_t *edit_profile_dottaignore(
 
     /* Update .dottaignore in profile branch */
     char *commit_msg = str_format(
-        "Update .dottaignore for profile '%s'", profile_name
+        "Update .dottaignore for profile '%s'", profile
     );
     if (!commit_msg) {
         free(new_content);
@@ -690,7 +690,7 @@ static error_t *edit_profile_dottaignore(
     bool was_modified = false;
     err = gitops_update_file(
         repo,
-        profile_name,
+        profile,
         ".dottaignore",
         new_content,
         read_size,
@@ -709,14 +709,14 @@ static error_t *edit_profile_dottaignore(
     if (!was_modified) {
         output_info(
             out, OUTPUT_NORMAL, "No changes to .dottaignore for profile '%s'",
-            profile_name
+            profile
         );
         return NULL;
     }
 
     output_success(
         out, OUTPUT_NORMAL, "Updated .dottaignore for profile '%s'",
-        profile_name
+        profile
     );
 
     return NULL;
@@ -964,7 +964,7 @@ static error_t *modify_baseline_dottaignore(
  */
 static error_t *modify_profile_dottaignore(
     git_repository *repo,
-    const char *profile_name,
+    const char *profile,
     char **add_patterns,
     size_t add_count,
     char **remove_patterns,
@@ -972,28 +972,28 @@ static error_t *modify_profile_dottaignore(
     output_ctx_t *out
 ) {
     CHECK_NULL(repo);
-    CHECK_NULL(profile_name);
+    CHECK_NULL(profile);
 
     /* Check if profile branch exists */
     bool branch_exists = false;
-    error_t *err = gitops_branch_exists(repo, profile_name, &branch_exists);
+    error_t *err = gitops_branch_exists(repo, profile, &branch_exists);
     if (err) {
         return err;
     }
 
     if (!branch_exists) {
         return ERROR(
-            ERR_INVALID_ARG, "Profile '%s' does not exist", profile_name
+            ERR_INVALID_ARG, "Profile '%s' does not exist", profile
         );
     }
 
     /* Build ref name */
     char ref_name[DOTTA_REFNAME_MAX];
     err = gitops_build_refname(
-        ref_name, sizeof(ref_name), "refs/heads/%s", profile_name
+        ref_name, sizeof(ref_name), "refs/heads/%s", profile
     );
     if (err) {
-        return error_wrap(err, "Invalid profile name '%s'", profile_name);
+        return error_wrap(err, "Invalid profile name '%s'", profile);
     }
 
     /* Load existing .dottaignore content from profile */
@@ -1024,7 +1024,7 @@ static error_t *modify_profile_dottaignore(
 
         output_info(
             out, OUTPUT_NORMAL, "No .dottaignore file exists in profile '%s'",
-            profile_name
+            profile
         );
         return NULL;
     }
@@ -1114,17 +1114,17 @@ static error_t *modify_profile_dottaignore(
     if (total_added > 0 && total_removed > 0) {
         commit_msg = str_format(
             "Update .dottaignore for profile '%s' (added %zu, removed %zu patterns)",
-            profile_name, total_added, total_removed
+            profile, total_added, total_removed
         );
     } else if (total_added > 0) {
         commit_msg = str_format(
             "Add %zu pattern%s to .dottaignore for profile '%s'",
-            total_added, total_added == 1 ? "" : "s", profile_name
+            total_added, total_added == 1 ? "" : "s", profile
         );
     } else {
         commit_msg = str_format(
             "Remove %zu pattern%s from .dottaignore for profile '%s'",
-            total_removed, total_removed == 1 ? "" : "s", profile_name
+            total_removed, total_removed == 1 ? "" : "s", profile
         );
     }
 
@@ -1139,7 +1139,7 @@ static error_t *modify_profile_dottaignore(
     /* Update .dottaignore in profile branch */
     err = gitops_update_file(
         repo,
-        profile_name,
+        profile,
         ".dottaignore",
         new_content,
         strlen(new_content),
@@ -1163,14 +1163,14 @@ static error_t *modify_profile_dottaignore(
         output_success(
             out, OUTPUT_NORMAL,
             "Added %zu pattern%s to profile '%s' .dottaignore",
-            total_added, total_added == 1 ? "" : "s", profile_name
+            total_added, total_added == 1 ? "" : "s", profile
         );
     }
     if (total_removed > 0) {
         output_success(
             out, OUTPUT_NORMAL,
             "Removed %zu pattern%s from profile '%s' .dottaignore",
-            total_removed, total_removed == 1 ? "" : "s", profile_name
+            total_removed, total_removed == 1 ? "" : "s", profile
         );
     }
     if (total_not_found > 0) {
@@ -1336,16 +1336,16 @@ static error_t *test_path_ignore(
 
     bool any_ignored = false;
     for (size_t i = 0; i < profiles->count; i++) {
-        const char *profile_name = profiles->items[i];
+        const char *profile = profiles->items[i];
 
         /* Create ignore context for this profile */
         ignore_context_t *ctx = NULL;
-        err = ignore_context_create(repo, config, profile_name, NULL, 0, &ctx);
+        err = ignore_context_create(repo, config, profile, NULL, 0, &ctx);
         if (err) {
             string_array_free(profiles);
             return error_wrap(
                 err, "Failed to create ignore context for profile '%s'",
-                profile_name
+                profile
             );
         }
 
@@ -1358,7 +1358,7 @@ static error_t *test_path_ignore(
             string_array_free(profiles);
             return error_wrap(
                 err, "Failed to test path against profile '%s'",
-                profile_name
+                profile
             );
         }
 
@@ -1366,7 +1366,7 @@ static error_t *test_path_ignore(
         if (result.ignored) {
             output_styled(
                 out, OUTPUT_NORMAL, "{red}✗{reset} Profile '%s': IGNORED\n",
-                profile_name
+                profile
             );
             if (output_is_verbose(out)) {
                 output_info(
@@ -1378,7 +1378,7 @@ static error_t *test_path_ignore(
         } else {
             output_success(
                 out, OUTPUT_NORMAL, "Profile '%s': NOT IGNORED",
-                profile_name
+                profile
             );
         }
     }

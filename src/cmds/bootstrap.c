@@ -71,11 +71,11 @@ static const char *BOOTSTRAP_TEMPLATE =
  */
 static error_t *bootstrap_create_template(
     git_repository *repo,
-    const char *profile_name,
+    const char *profile,
     const char *script_name
 ) {
     CHECK_NULL(repo);
-    CHECK_NULL(profile_name);
+    CHECK_NULL(profile);
 
     if (!script_name) {
         script_name = BOOTSTRAP_DEFAULT_SCRIPT_NAME;
@@ -83,7 +83,7 @@ static error_t *bootstrap_create_template(
 
     /* Check if profile exists */
     bool exists = false;
-    error_t *err = gitops_branch_exists(repo, profile_name, &exists);
+    error_t *err = gitops_branch_exists(repo, profile, &exists);
     if (err) {
         return error_wrap(err, "Failed to check if profile exists");
     }
@@ -91,21 +91,21 @@ static error_t *bootstrap_create_template(
     if (!exists) {
         return ERROR(
             ERR_NOT_FOUND, "Profile '%s' does not exist",
-            profile_name
+            profile
         );
     }
 
     /* Check if script already exists in Git */
-    if (bootstrap_exists(repo, profile_name, script_name)) {
+    if (bootstrap_exists(repo, profile, script_name)) {
         return ERROR(
             ERR_EXISTS, "Bootstrap script already exists for profile '%s'",
-            profile_name
+            profile
         );
     }
 
     /* Generate template content */
     char *content = str_format(
-        BOOTSTRAP_TEMPLATE, profile_name, profile_name, profile_name
+        BOOTSTRAP_TEMPLATE, profile, profile, profile
     );
     if (!content) {
         return ERROR(ERR_MEMORY, "Failed to generate bootstrap template");
@@ -114,7 +114,7 @@ static error_t *bootstrap_create_template(
 
     /* Create commit */
     char *commit_message = str_format(
-        "Add bootstrap script for %s profile", profile_name
+        "Add bootstrap script for %s profile", profile
     );
     if (!commit_message) {
         free(content);
@@ -124,7 +124,7 @@ static error_t *bootstrap_create_template(
     /* Create bootstrap script in Git (atomic: blob + tree + commit) */
     err = gitops_update_file(
         repo,
-        profile_name,
+        profile,
         script_name,
         content,
         content_len,
@@ -151,11 +151,11 @@ static error_t *bootstrap_create_template(
  */
 static error_t *bootstrap_edit(
     git_repository *repo,
-    const char *profile_name,
+    const char *profile,
     output_ctx_t *out
 ) {
     CHECK_NULL(repo);
-    CHECK_NULL(profile_name);
+    CHECK_NULL(profile);
 
     const char *script_name = BOOTSTRAP_DEFAULT_SCRIPT_NAME;
     error_t *err = NULL;
@@ -164,8 +164,8 @@ static error_t *bootstrap_edit(
     char *commit_msg = NULL;
 
     /* Create script if it doesn't exist */
-    if (!bootstrap_exists(repo, profile_name, script_name)) {
-        err = bootstrap_create_template(repo, profile_name, script_name);
+    if (!bootstrap_exists(repo, profile, script_name)) {
+        err = bootstrap_create_template(repo, profile, script_name);
         if (err) {
             return error_wrap(
                 err, "Failed to create bootstrap template"
@@ -173,12 +173,12 @@ static error_t *bootstrap_edit(
         }
         output_success(
             out, OUTPUT_NORMAL, "Created bootstrap script for profile '%s'",
-            profile_name
+            profile
         );
     }
 
     /* Extract script to temporary file for editing */
-    err = bootstrap_extract_to_temp(repo, profile_name, script_name, &temp_path);
+    err = bootstrap_extract_to_temp(repo, profile, script_name, &temp_path);
     if (err) {
         return error_wrap(err, "Failed to extract bootstrap script");
     }
@@ -210,7 +210,7 @@ static error_t *bootstrap_edit(
     }
 
     /* Auto-commit the changes */
-    commit_msg = str_format("Update bootstrap script for %s profile", profile_name);
+    commit_msg = str_format("Update bootstrap script for %s profile", profile);
     if (!commit_msg) {
         err = ERROR(ERR_MEMORY, "Failed to allocate commit message");
         goto cleanup;
@@ -218,7 +218,7 @@ static error_t *bootstrap_edit(
 
     bool was_modified = false;
     err = gitops_update_file(
-        repo, profile_name, script_name, (const char *) content_buf.data,
+        repo, profile, script_name, (const char *) content_buf.data,
         content_buf.size, commit_msg, GIT_FILEMODE_BLOB_EXECUTABLE,
         &was_modified
     );
@@ -232,7 +232,7 @@ static error_t *bootstrap_edit(
     if (was_modified) {
         output_success(
             out, OUTPUT_NORMAL, "Updated and committed bootstrap script for profile '%s'",
-            profile_name
+            profile
         );
     } else {
         output_info(
@@ -260,29 +260,29 @@ cleanup:
  */
 static error_t *bootstrap_show(
     git_repository *repo,
-    const char *profile_name,
+    const char *profile,
     const char *script_name,
     output_ctx_t *out
 ) {
     CHECK_NULL(repo);
-    CHECK_NULL(profile_name);
+    CHECK_NULL(profile);
 
     if (!script_name) {
         script_name = BOOTSTRAP_DEFAULT_SCRIPT_NAME;
     }
 
     /* Check if script exists */
-    if (!bootstrap_exists(repo, profile_name, script_name)) {
+    if (!bootstrap_exists(repo, profile, script_name)) {
         return ERROR(
             ERR_NOT_FOUND, "No bootstrap script found for profile '%s'",
-            profile_name
+            profile
         );
     }
 
     /* Read content from Git blob */
     buffer_t content = BUFFER_INIT;
     error_t *err = bootstrap_read_content(
-        repo, profile_name, script_name, &content
+        repo, profile, script_name, &content
     );
     if (err) {
         return error_wrap(err, "Failed to read bootstrap script");
@@ -322,20 +322,20 @@ static error_t *bootstrap_list(
         output_section(out, OUTPUT_NORMAL, "Bootstrap scripts");
 
         for (size_t i = 0; i < profiles->count; i++) {
-            const char *profile_name = profiles->items[i];
-            bool exists = bootstrap_exists(repo, profile_name, script_name);
+            const char *profile = profiles->items[i];
+            bool exists = bootstrap_exists(repo, profile, script_name);
 
             if (exists) {
                 output_styled(
                     out, OUTPUT_NORMAL,
                     "  {green}✓{reset} %-15s %s/%s\n",
-                    profile_name, profile_name, script_name
+                    profile, profile, script_name
                 );
             } else {
                 output_styled(
                     out, OUTPUT_NORMAL,
                     "  {red}✗{reset} %-15s (no bootstrap script)\n",
-                    profile_name
+                    profile
                 );
             }
         }

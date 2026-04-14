@@ -69,7 +69,7 @@ struct workspace {
     state_t *state;                  /* Deployment state (owned or borrowed) */
     bool owns_state;                 /* True if state is owned, false if borrowed */
     const string_array_t *profiles;  /* Borrowed from caller — valid for workspace lifetime */
-    hashmap_t *profile_index;        /* Maps profile_name -> NULL (membership set, O(1) lookup) */
+    hashmap_t *profile_index;        /* Maps profile -> NULL (membership set, O(1) lookup) */
 
     /* Cached state query (shared between workspace_build_manifest_from_state
      * and analyze_orphaned_files to avoid redundant full-table scan) */
@@ -79,7 +79,7 @@ struct workspace {
     /* Encryption and caching infrastructure */
     keymanager_t *keymanager;        /* Borrowed from global */
     content_cache_t *content_cache;  /* Owned - caches decrypted content */
-    hashmap_t *metadata_cache;       /* Owned - maps profile_name -> metadata_t* */
+    hashmap_t *metadata_cache;       /* Owned - maps profile -> metadata_t* */
 
     /* Cached directory state (shared between analyze_orphaned_directories
      * and analyze_directory_metadata_divergence to avoid redundant table scans) */
@@ -96,7 +96,7 @@ struct workspace {
     bool manifest_stale;             /* True if any profile's stored HEAD was stale */
     hashmap_t *stale_paths;          /* Patched entries (NULL if no staleness) */
     hashmap_t *released_paths;       /* Entries removed from Git (NULL if no staleness) */
-    hashmap_t *stale_profiles;       /* profile_name -> sentinel for stale profiles (NULL if none) */
+    hashmap_t *stale_profiles;       /* profile -> sentinel for stale profiles (NULL if none) */
     const hashmap_t *repaired_paths; /* From manifest_repair_stale: path -> old_blob_oid (borrowed) */
 
     /* Stat cache updates (accumulated during divergence analysis) */
@@ -115,17 +115,17 @@ struct workspace {
  * Returns NULL if profile has no metadata (non-fatal).
  *
  * @param ws Workspace (must not be NULL)
- * @param profile_name Profile name (must not be NULL)
+ * @param profile Profile (must not be NULL)
  * @return Metadata or NULL if not available
  */
 static const metadata_t *ws_get_metadata(
     const workspace_t *ws,
-    const char *profile_name
+    const char *profile
 ) {
-    if (!ws || !ws->metadata_cache || !profile_name) {
+    if (!ws || !ws->metadata_cache || !profile) {
         return NULL;
     }
-    return hashmap_get(ws->metadata_cache, profile_name);
+    return hashmap_get(ws->metadata_cache, profile);
 }
 
 /**
@@ -408,7 +408,7 @@ static error_t *analyze_file_divergence(
 
     const char *fs_path = manifest_entry->filesystem_path;
     const char *storage_path = manifest_entry->storage_path;
-    const char *profile = manifest_entry->profile_name;
+    const char *profile = manifest_entry->profile;
 
     /* Determine if entry came from state database using VWD cache
      *
@@ -1650,18 +1650,18 @@ static error_t *analyze_untracked_files(
 
     /* Scan tracked directories from each enabled profile's state database */
     for (size_t p = 0; p < ws->profiles->count; p++) {
-        const char *profile_name = ws->profiles->items[p];
+        const char *profile = ws->profiles->items[p];
 
         /* Get tracked directories from state database for this profile */
         state_directory_entry_t *directories = NULL;
         size_t dir_count = 0;
         err = state_get_directories_by_profile(
-            ws->state, profile_name, ws->arena, &directories, &dir_count
+            ws->state, profile, ws->arena, &directories, &dir_count
         );
         if (err) {
             fprintf(
                 stderr, "warning: failed to load directories for profile '%s': %s\n",
-                profile_name, err->message
+                profile, err->message
             );
             error_free(err);
             err = NULL;
@@ -1678,7 +1678,7 @@ static error_t *analyze_untracked_files(
         err = ignore_context_create(
             ws->repo,
             config,
-            profile_name,
+            profile,
             NULL,
             0,
             &ignore_ctx
@@ -1688,7 +1688,7 @@ static error_t *analyze_untracked_files(
             /* Non-fatal: continue without ignore filtering */
             fprintf(
                 stderr, "warning: failed to load ignore patterns for profile '%s': %s\n",
-                profile_name, err->message
+                profile, err->message
             );
             error_free(err);
             err = NULL;
@@ -1744,7 +1744,7 @@ static error_t *analyze_untracked_files(
             err = scan_directory_for_untracked(
                 filesystem_path,           /* Already resolved filesystem path */
                 dir_entry->storage_path,   /* Portable storage path */
-                profile_name,
+                profile,
                 ignore_ctx,
                 ws,
                 0                          /* Initial depth */
@@ -1754,7 +1754,7 @@ static error_t *analyze_untracked_files(
                 /* Non-fatal: continue with other directories */
                 fprintf(
                     stderr, "warning: failed to scan directory '%s' in profile '%s': %s\n",
-                    filesystem_path, profile_name, err->message
+                    filesystem_path, profile, err->message
                 );
                 error_free(err);
                 err = NULL;
@@ -1840,7 +1840,7 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
          * All strings are arena-allocated — no explicit free needed. */
         const char *filesystem_path = dir_entry->filesystem_path;
         const char *storage_path = dir_entry->storage_path;
-        const char *profile_name = dir_entry->profile;
+        const char *profile = dir_entry->profile;
 
         /* Stat directory to get current metadata
          *
@@ -1856,7 +1856,7 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
                     ws,
                     filesystem_path,
                     storage_path,
-                    profile_name,
+                    profile,
                     NULL,                     /* No old_profile for directories */
                     WORKSPACE_STATE_DELETED,  /* State: was in profile, removed from filesystem */
                     DIVERGENCE_NONE,          /* Divergence: none (file is gone) */
@@ -1899,7 +1899,7 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
                 ws,
                 filesystem_path,
                 storage_path,
-                profile_name,
+                profile,
                 NULL,                      /* No old_profile for directories */
                 WORKSPACE_STATE_DEPLOYED,  /* Path exists, just wrong type */
                 DIVERGENCE_TYPE,           /* Type changed (dir -> file/symlink) */
@@ -1949,7 +1949,7 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
                 ws,
                 filesystem_path,
                 storage_path,
-                profile_name,
+                profile,
                 NULL,                      /* No old_profile for directories */
                 WORKSPACE_STATE_DEPLOYED,  /* State: directory exists as expected */
                 divergence,                /* Divergence: mode/ownership flags */
@@ -2018,7 +2018,7 @@ static error_t *analyze_encryption_policy_mismatch(
     for (size_t i = 0; i < ws->manifest->count; i++) {
         const file_entry_t *manifest_entry = &ws->manifest->entries[i];
         const char *storage_path = manifest_entry->storage_path;
-        const char *profile_name = manifest_entry->profile_name;
+        const char *profile = manifest_entry->profile;
 
         /* Check if file should be auto-encrypted */
         bool should_auto_encrypt = false;
@@ -2053,7 +2053,7 @@ static error_t *analyze_encryption_policy_mismatch(
             /* Non-fatal: can't read blob - skip this file */
             fprintf(
                 stderr, "warning: failed to read blob for '%s' in profile '%s': %s\n",
-                storage_path, profile_name,
+                storage_path, profile,
                 view_err->message ? view_err->message : "unknown error"
             );
             error_free(view_err);
@@ -2079,10 +2079,10 @@ static error_t *analyze_encryption_policy_mismatch(
                 "  VWD expected state says: %s\n"
                 "  Using actual state from blob content. To fix, run:\n"
                 "    dotta update -p %s '%s'\n",
-                storage_path, profile_name,
+                storage_path, profile,
                 is_encrypted ? "encrypted" : "plaintext",
                 is_encrypted ? "plaintext" : "encrypted",
-                profile_name, storage_path
+                profile, storage_path
             );
         }
 
@@ -2124,7 +2124,7 @@ static error_t *analyze_encryption_policy_mismatch(
                     ws,
                     manifest_entry->filesystem_path,
                     storage_path,
-                    profile_name,
+                    profile,
                     NULL,
                     item_state,            /* State: deployed or undeployed */
                     DIVERGENCE_ENCRYPTION, /* Divergence: encryption policy violated */
@@ -2223,12 +2223,12 @@ static error_t *patch_entry_from_fresh(
      *
      * Arena-strdup the name so the VWD entry is self-contained — the fresh
      * manifest may be freed before the workspace. */
-    if (fresh_entry->profile_name &&
-        strcmp(vwd_entry->profile_name, fresh_entry->profile_name) != 0) {
-        vwd_entry->profile_name = arena_strdup(arena, fresh_entry->profile_name);
-        if (!vwd_entry->profile_name) {
+    if (fresh_entry->profile &&
+        strcmp(vwd_entry->profile, fresh_entry->profile) != 0) {
+        vwd_entry->profile = arena_strdup(arena, fresh_entry->profile);
+        if (!vwd_entry->profile) {
             return ERROR(
-                ERR_MEMORY, "Failed to allocate profile name for '%s'",
+                ERR_MEMORY, "Failed to allocate profile for '%s'",
                 fresh_entry->storage_path
             );
         }
@@ -2353,10 +2353,10 @@ static error_t *workspace_build_manifest_from_state(
         }
 
         for (size_t i = 0; i < ws->profiles->count; i++) {
-            const char *profile_name = ws->profiles->items[i];
+            const char *profile = ws->profiles->items[i];
             metadata_t *metadata = NULL;
 
-            error_t *meta_err = metadata_load_from_branch(ws->repo, profile_name, &metadata);
+            error_t *meta_err = metadata_load_from_branch(ws->repo, profile, &metadata);
             if (meta_err) {
                 /* Graceful fallback: create empty metadata if loading fails.
                  * This ensures content layer always has metadata for validation.
@@ -2369,18 +2369,18 @@ static error_t *workspace_build_manifest_from_state(
                     hashmap_free(stale_profiles, NULL);
                     return error_wrap(
                         create_err, "Failed to create metadata for profile '%s'",
-                        profile_name
+                        profile
                     );
                 }
             }
 
-            error_t *set_err = hashmap_set(ws->metadata_cache, profile_name, metadata);
+            error_t *set_err = hashmap_set(ws->metadata_cache, profile, metadata);
             if (set_err) {
                 metadata_free(metadata);
                 hashmap_free(stale_profiles, NULL);
                 return error_wrap(
                     set_err, "Failed to cache metadata for profile '%s'",
-                    profile_name
+                    profile
                 );
             }
         }
@@ -2463,8 +2463,8 @@ static error_t *workspace_build_manifest_from_state(
             continue;
         }
 
-        /* Borrow profile name from state entry (same arena lifetime as workspace) */
-        entry->profile_name = state_entry->profile;
+        /* Borrow profile from state entry (same arena lifetime as workspace) */
+        entry->profile = state_entry->profile;
 
         /* Borrow paths from arena-backed state entries (same lifetime) */
         entry->storage_path = state_entry->storage_path;
@@ -2527,7 +2527,7 @@ static error_t *workspace_build_manifest_from_state(
                  * blob_oid unchanged, left at STAT_CACHE_UNSET when changed */
 
                 /* Now overwrite stale fields from fresh manifest */
-                const metadata_t *meta = ws_get_metadata(ws, fresh_entry->profile_name);
+                const metadata_t *meta = ws_get_metadata(ws, fresh_entry->profile);
                 err = patch_entry_from_fresh(entry, fresh_entry, meta, ws->arena);
                 if (err) {
                     err = error_wrap(
@@ -2971,9 +2971,9 @@ const workspace_item_t *workspace_get_item(
  */
 const metadata_t *workspace_get_metadata(
     const workspace_t *ws,
-    const char *profile_name
+    const char *profile
 ) {
-    return ws_get_metadata(ws, profile_name);
+    return ws_get_metadata(ws, profile);
 }
 
 /**

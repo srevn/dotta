@@ -496,14 +496,14 @@ error_t *metadata_load_from_branch(
  *
  * @param repo Repository (must not be NULL)
  * @param tree Git tree to load from (must not be NULL)
- * @param profile_name Profile name for error messages (must not be NULL)
+ * @param profile Profile name for error messages (must not be NULL)
  * @param out Metadata (must not be NULL, caller must free with metadata_free)
  * @return Error or NULL on success (ERR_NOT_FOUND if file doesn't exist in tree)
  */
 error_t *metadata_load_from_tree(
     git_repository *repo,
     git_tree *tree,
-    const char *profile_name,
+    const char *profile,
     metadata_t **out
 );
 

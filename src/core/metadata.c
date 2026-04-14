@@ -1501,19 +1501,19 @@ cleanup:
  *
  * @param repo Repository (must not be NULL)
  * @param tree Git tree to load from (must not be NULL)
- * @param profile_name Profile name for error messages (must not be NULL)
+ * @param profile Profile name for error messages (must not be NULL)
  * @param out Metadata (must not be NULL, caller must free with metadata_free)
  * @return Error or NULL on success (ERR_NOT_FOUND if file doesn't exist in tree)
  */
 error_t *metadata_load_from_tree(
     git_repository *repo,
     git_tree *tree,
-    const char *profile_name,
+    const char *profile,
     metadata_t **out
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(tree);
-    CHECK_NULL(profile_name);
+    CHECK_NULL(profile);
     CHECK_NULL(out);
 
     error_t *err = NULL;
@@ -1527,7 +1527,7 @@ error_t *metadata_load_from_tree(
         if (git_err == GIT_ENOTFOUND) {
             err = ERROR(
                 ERR_NOT_FOUND, "Metadata file not found in profile: %s",
-                profile_name
+                profile
             );
         } else {
             err = error_from_git(git_err);
@@ -1547,7 +1547,7 @@ error_t *metadata_load_from_tree(
     if (err) {
         err = error_wrap(
             err, "Failed to parse metadata from profile: %s",
-            profile_name
+            profile
         );
         goto cleanup;
     }
@@ -1707,10 +1707,10 @@ error_t *metadata_load_from_profiles(
 
     /* Load metadata from each profile (in order for proper layering) */
     for (size_t i = 0; i < profile_count; i++) {
-        const char *profile_name = profiles->items[i];
+        const char *profile = profiles->items[i];
         metadata_t *meta = NULL;
 
-        error_t *load_err = metadata_load_from_branch(repo, profile_name, &meta);
+        error_t *load_err = metadata_load_from_branch(repo, profile, &meta);
         if (load_err) {
             if (load_err->code == ERR_NOT_FOUND) {
                 /* Profile or metadata file doesn't exist - skip gracefully */
@@ -1726,7 +1726,7 @@ error_t *metadata_load_from_profiles(
                 free(profile_metadata);
                 return error_wrap(
                     load_err, "Failed to load metadata from profile '%s'",
-                    profile_name
+                    profile
                 );
             }
         }

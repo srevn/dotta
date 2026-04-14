@@ -247,7 +247,7 @@ static error_t *load_baseline_dottaignore(
  */
 static error_t *load_profile_dottaignore(
     git_repository *repo,
-    const char *profile_name,
+    const char *profile,
     char **out_content
 ) {
     CHECK_NULL(repo);
@@ -256,13 +256,13 @@ static error_t *load_profile_dottaignore(
     *out_content = NULL;
 
     /* If no profile specified, return without error */
-    if (!profile_name || profile_name[0] == '\0') {
+    if (!profile || profile[0] == '\0') {
         return NULL;
     }
 
     /* Check if profile branch exists */
     bool branch_exists = false;
-    error_t *err = gitops_branch_exists(repo, profile_name, &branch_exists);
+    error_t *err = gitops_branch_exists(repo, profile, &branch_exists);
     if (err) {
         return err;
     }
@@ -275,13 +275,10 @@ static error_t *load_profile_dottaignore(
     /* Build ref name */
     char ref_name[DOTTA_REFNAME_MAX];
     err = gitops_build_refname(
-        ref_name, sizeof(ref_name), "refs/heads/%s", profile_name
+        ref_name, sizeof(ref_name), "refs/heads/%s", profile
     );
     if (err) {
-        return error_wrap(
-            err, "Invalid profile name '%s'",
-            profile_name
-        );
+        return error_wrap(err, "Invalid profile name '%s'", profile);
     }
 
     /* Load tree from profile branch
@@ -292,7 +289,7 @@ static error_t *load_profile_dottaignore(
     if (err) {
         return error_wrap(
             err, "Failed to load tree for profile '%s'",
-            profile_name
+            profile
         );
     }
 
@@ -618,7 +615,7 @@ static error_t *matches_source_gitignore(
 error_t *ignore_context_create(
     git_repository *repo,
     const config_t *config,
-    const char *profile_name,
+    const char *profile,
     char **cli_excludes,
     size_t cli_exclude_count,
     ignore_context_t **out
@@ -677,11 +674,9 @@ error_t *ignore_context_create(
     }
 
     /* Load profile-specific .dottaignore (if profile specified) */
-    if (repo && profile_name) {
+    if (repo && profile) {
         error_t *err = load_profile_dottaignore(
-            repo,
-            profile_name,
-            &ctx->profile_dottaignore_content
+            repo, profile, &ctx->profile_dottaignore_content
         );
         if (err) {
             /* Non-fatal - continue without profile .dottaignore */

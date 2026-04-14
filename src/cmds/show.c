@@ -59,7 +59,7 @@ static error_t *print_blob_content(
     git_repository *repo,
     const git_oid *blob_oid,
     const char *storage_path,
-    const char *profile_name,
+    const char *profile,
     const metadata_t *metadata,
     keymanager_t *km,
     git_filemode_t filemode,
@@ -69,7 +69,7 @@ static error_t *print_blob_content(
     CHECK_NULL(repo);
     CHECK_NULL(blob_oid);
     CHECK_NULL(storage_path);
-    CHECK_NULL(profile_name);
+    CHECK_NULL(profile);
     CHECK_NULL(metadata);
     CHECK_NULL(out);
 
@@ -78,7 +78,7 @@ static error_t *print_blob_content(
 
     buffer_t content = BUFFER_INIT;
     error_t *err = content_get_from_blob_oid(
-        repo, blob_oid, storage_path, profile_name, encrypted, km, &content
+        repo, blob_oid, storage_path, profile, encrypted, km, &content
     );
     if (err) {
         return error_wrap(err, "Failed to get file content");
@@ -197,7 +197,7 @@ static error_t *print_blob_content(
  */
 static error_t *show_file(
     git_repository *repo,
-    const char *profile_name,
+    const char *profile,
     const char *file_path,
     const char *commit_ref,
     bool raw,
@@ -221,7 +221,7 @@ static error_t *show_file(
     keymanager_t *km = keymanager_get_global(config);
 
     /* Load metadata for encryption state validation */
-    err = metadata_load_from_branch(repo, profile_name, &metadata);
+    err = metadata_load_from_branch(repo, profile, &metadata);
     if (err) {
         /* Non-fatal: metadata file might not exist yet (new profile) */
         /* Create empty metadata for validation (won't have file entries) */
@@ -239,7 +239,7 @@ static error_t *show_file(
     if (commit_ref) {
         /* Resolve commit and load its tree */
         err = gitops_resolve_commit_in_branch(
-            repo, profile_name, commit_ref, &commit_oid, &commit
+            repo, profile, commit_ref, &commit_oid, &commit
         );
         if (err) goto cleanup;
 
@@ -293,16 +293,16 @@ static error_t *show_file(
         /* Load from branch HEAD */
         char ref_name_buf[DOTTA_REFNAME_MAX];
         err = gitops_build_refname(
-            ref_name_buf, sizeof(ref_name_buf), "refs/heads/%s", profile_name
+            ref_name_buf, sizeof(ref_name_buf), "refs/heads/%s", profile
         );
         if (err) {
-            err = error_wrap(err, "Invalid profile name '%s'", profile_name);
+            err = error_wrap(err, "Invalid profile name '%s'", profile);
             goto cleanup;
         }
 
         err = gitops_load_tree(repo, ref_name_buf, &tree);
         if (err) {
-            err = error_wrap(err, "Failed to load tree for profile '%s'", profile_name);
+            err = error_wrap(err, "Failed to load tree for profile '%s'", profile);
             goto cleanup;
         }
     }
@@ -323,12 +323,12 @@ static error_t *show_file(
          * Print file content with transparent decryption
          *
          * file_path is the storage_path (e.g., "home/.bashrc")
-         * profile_name is used for key derivation
+         * profile is used for key derivation
          * metadata is used for encryption state validation
          * km will prompt for password only if file is encrypted
          */
         err = print_blob_content(
-            repo, entry_oid, file_path, profile_name, metadata, km, filemode, raw, out
+            repo, entry_oid, file_path, profile, metadata, km, filemode, raw, out
         );
     } else if (entry_type == GIT_OBJECT_TREE) {
         err = ERROR(ERR_INVALID_ARG, "'%s' is a directory", file_path);
@@ -409,13 +409,13 @@ static int print_diff_line_cb(
 static error_t *show_commit(
     git_repository *repo,
     const char *commit_ref,
-    const char *profile_name,
+    const char *profile,
     bool raw,
     output_ctx_t *out
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(commit_ref);
-    CHECK_NULL(profile_name);
+    CHECK_NULL(profile);
     CHECK_NULL(out);
 
     error_t *err = NULL;
@@ -428,12 +428,12 @@ static error_t *show_commit(
 
     /* Resolve commit in profile */
     err = gitops_resolve_commit_in_branch(
-        repo, profile_name, commit_ref, &commit_oid, &commit
+        repo, profile, commit_ref, &commit_oid, &commit
     );
     if (err) {
         err = error_wrap(
             err, "Commit '%s' not found in profile '%s'",
-            commit_ref, profile_name
+            commit_ref, profile
         );
         goto cleanup;
     }
@@ -479,7 +479,7 @@ static error_t *show_commit(
 
         output_styled(
             out, OUTPUT_NORMAL, "{yellow}commit %s{reset} {cyan}(%s){reset}\n",
-            oid_str, profile_name
+            oid_str, profile
         );
 
         output_styled(
@@ -587,9 +587,9 @@ error_t *cmd_show(
         CHECK_NULL(opts->commit);
 
         /* Determine which profile to search */
-        const char *profile_name = opts->profile;
+        const char *profile = opts->profile;
 
-        if (!profile_name) {
+        if (!profile) {
             /* No profile specified - use enabled profiles */
             err = profile_resolve_enabled(repo, NULL, &profiles);
             if (err) {
@@ -612,9 +612,9 @@ error_t *cmd_show(
 
             /* Try to find commit in enabled profiles (in order) */
             for (size_t i = 0; i < profiles->count; i++) {
-                profile_name = profiles->items[i];
+                profile = profiles->items[i];
                 error_t *try_err = show_commit(
-                    repo, opts->commit, profile_name, opts->raw, out
+                    repo, opts->commit, profile, opts->raw, out
                 );
 
                 /* If found, we're done */
@@ -640,14 +640,14 @@ error_t *cmd_show(
 
         /* Profile specified - show commit from that profile */
         bool exists = false;
-        err = gitops_branch_exists(repo, profile_name, &exists);
+        err = gitops_branch_exists(repo, profile, &exists);
         if (err) goto cleanup;
         if (!exists) {
-            err = ERROR(ERR_NOT_FOUND, "Profile '%s' not found", profile_name);
+            err = ERROR(ERR_NOT_FOUND, "Profile '%s' not found", profile);
             goto cleanup;
         }
 
-        err = show_commit(repo, opts->commit, profile_name, opts->raw, out);
+        err = show_commit(repo, opts->commit, profile, opts->raw, out);
         goto cleanup;
     }
 

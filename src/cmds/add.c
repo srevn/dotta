@@ -609,7 +609,7 @@ static error_t *create_commit(
  * enable + sync succeed together or fail together (automatic rollback on error).
  *
  * @param repo Git repository (must not be NULL)
- * @param profile_name Profile to auto-enable (must not be NULL, must exist in Git)
+ * @param profile Profile to auto-enable (must not be NULL, must exist in Git)
  * @param custom_prefix Custom prefix for custom/ files (can be NULL)
  * @param added_files Filesystem paths that were added (must not be NULL)
  * @param out_updated Output flag: true if successful (must not be NULL)
@@ -618,14 +618,14 @@ static error_t *create_commit(
  */
 static error_t *auto_enable_and_sync_profile(
     git_repository *repo,
-    const char *profile_name,
+    const char *profile,
     const char *custom_prefix,
     const string_array_t *added_files,
     bool *out_updated,
     size_t *out_synced
 ) {
     CHECK_NULL(repo);
-    CHECK_NULL(profile_name);
+    CHECK_NULL(profile);
     CHECK_NULL(added_files);
     CHECK_NULL(out_updated);
 
@@ -666,7 +666,7 @@ static error_t *auto_enable_and_sync_profile(
 
     /* STEP 2: Check if already enabled (defensive) */
     for (size_t i = 0; i < enabled_profiles->count; i++) {
-        if (strcmp(enabled_profiles->items[i], profile_name) == 0) {
+        if (strcmp(enabled_profiles->items[i], profile) == 0) {
             /* Already enabled - idempotent success */
             string_array_free(enabled_profiles);
             *out_updated = true;
@@ -675,7 +675,7 @@ static error_t *auto_enable_and_sync_profile(
     }
 
     /* STEP 3: Add new profile to enabled list (in-memory) */
-    err = string_array_push(enabled_profiles, profile_name);
+    err = string_array_push(enabled_profiles, profile);
     if (err) {
         string_array_free(enabled_profiles);
         return error_wrap(err, "Failed to add profile to enabled list");
@@ -697,7 +697,7 @@ static error_t *auto_enable_and_sync_profile(
      *
      * Transaction Safety: If manifest sync (STEP 6) fails, state_free()
      * automatically rolls back this change (see cleanup handler). */
-    err = state_enable_profile(state, profile_name, custom_prefix);
+    err = state_enable_profile(state, profile, custom_prefix);
     if (err) {
         err = error_wrap(err, "Failed to enable profile in state");
         goto cleanup;
@@ -714,7 +714,7 @@ static error_t *auto_enable_and_sync_profile(
     err = manifest_add_files(
         repo,
         state,
-        profile_name,
+        profile,
         added_files,
         enabled_profiles,
         &synced_count
@@ -807,7 +807,7 @@ cleanup:
  * Performance: O(M + N) where M = total files in all profiles, N = files added
  *
  * @param repo Git repository
- * @param profile_name Profile that files were added to
+ * @param profile Profile that files were added to
  * @param custom_prefix Custom prefix for custom/ files (can be NULL)
  * @param added_files Filesystem paths that were added
  * @param out_updated Output flag: true if manifest was updated (must not be NULL)
@@ -816,14 +816,14 @@ cleanup:
  */
 static error_t *update_manifest_after_add(
     git_repository *repo,
-    const char *profile_name,
+    const char *profile,
     const char *custom_prefix,
     const string_array_t *added_files,
     bool *out_updated,
     size_t *out_synced
 ) {
     CHECK_NULL(repo);
-    CHECK_NULL(profile_name);
+    CHECK_NULL(profile);
     CHECK_NULL(added_files);
     CHECK_NULL(out_updated);
 
@@ -854,7 +854,7 @@ static error_t *update_manifest_after_add(
     /* Check if this profile is enabled */
     bool is_enabled = false;
     for (size_t i = 0; i < enabled_profiles->count; i++) {
-        if (strcmp(enabled_profiles->items[i], profile_name) == 0) {
+        if (strcmp(enabled_profiles->items[i], profile) == 0) {
             is_enabled = true;
             break;
         }
@@ -888,7 +888,7 @@ static error_t *update_manifest_after_add(
      * existing prefix when adding home/ or root/ files.
      * state_enable_profile() uses UPSERT - safe on already-enabled profiles. */
     if (custom_prefix) {
-        err = state_enable_profile(state, profile_name, custom_prefix);
+        err = state_enable_profile(state, profile, custom_prefix);
         if (err) {
             err = error_wrap(err, "Failed to update custom prefix for profile");
             goto cleanup;
@@ -900,7 +900,7 @@ static error_t *update_manifest_after_add(
     err = manifest_add_files(
         repo,
         state,
-        profile_name,
+        profile,
         added_files,
         enabled_profiles,
         &synced_count

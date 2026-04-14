@@ -27,21 +27,21 @@
  * Count files in profile
  *
  * @param repo Repository (must not be NULL)
- * @param profile_name Profile name (must not be NULL)
+ * @param profile Profile name (must not be NULL)
  * @param count Output file count (must not be NULL)
  * @return Error or NULL on success
  */
 static error_t *count_profile_files(
     git_repository *repo,
-    const char *profile_name,
+    const char *profile,
     size_t *count
 ) {
     CHECK_NULL(repo);
-    CHECK_NULL(profile_name);
+    CHECK_NULL(profile);
     CHECK_NULL(count);
 
     string_array_t *files = NULL;
-    error_t *err = profile_list_files(repo, profile_name, &files);
+    error_t *err = profile_list_files(repo, profile, &files);
     if (err) {
         return error_wrap(err, "Failed to list files");
     }
@@ -59,7 +59,7 @@ static error_t *count_profile_files(
  */
 static void print_manifest_enable_stats(
     const output_ctx_t *out,
-    const char *profile_name,
+    const char *profile,
     const manifest_enable_stats_t *stats
 ) {
     if (!stats || stats->total_files == 0) return;
@@ -69,7 +69,7 @@ static void print_manifest_enable_stats(
         output_section(out, OUTPUT_VERBOSE, "Manifest Analysis");
         output_print(
             out, OUTPUT_VERBOSE, "  Profile: %s\n",
-            profile_name
+            profile
         );
         output_print(
             out, OUTPUT_VERBOSE, "  Total files: %zu\n",
@@ -138,7 +138,7 @@ static void print_manifest_enable_stats(
  */
 static void print_manifest_disable_stats(
     const output_ctx_t *out,
-    const char *profile_name,
+    const char *profile,
     const manifest_disable_stats_t *stats
 ) {
     if (!stats || stats->total_files == 0) return;
@@ -146,7 +146,7 @@ static void print_manifest_disable_stats(
     if (output_is_verbose(out)) {
         /* Detailed breakdown */
         output_section(out, OUTPUT_VERBOSE, "Manifest Analysis");
-        output_print(out, OUTPUT_VERBOSE, "  Profile: %s\n", profile_name);
+        output_print(out, OUTPUT_VERBOSE, "  Profile: %s\n", profile);
 
         output_print(
             out, OUTPUT_VERBOSE,
@@ -243,24 +243,24 @@ static error_t *profile_list(
     }
 
     for (size_t i = 0; i < all_branches->count; i++) {
-        const char *profile_name = all_branches->items[i];
+        const char *profile = all_branches->items[i];
 
         /* Skip dotta-worktree */
-        if (strcmp(profile_name, "dotta-worktree") == 0) {
+        if (strcmp(profile, "dotta-worktree") == 0) {
             continue;
         }
 
         /* Check if enabled */
         bool is_enabled = false;
         for (size_t j = 0; j < enabled_profiles->count; j++) {
-            if (strcmp(enabled_profiles->items[j], profile_name) == 0) {
+            if (strcmp(enabled_profiles->items[j], profile) == 0) {
                 is_enabled = true;
                 break;
             }
         }
 
         if (!is_enabled) {
-            err = string_array_push(available, profile_name);
+            err = string_array_push(available, profile);
             if (err) {
                 err = error_wrap(
                     err, "Failed to add profile to available list"
@@ -274,21 +274,21 @@ static error_t *profile_list(
     if (enabled_profiles->count > 0) {
         output_section(out, OUTPUT_NORMAL, "Enabled profiles (in layering order)");
         for (size_t i = 0; i < enabled_profiles->count; i++) {
-            const char *profile_name = enabled_profiles->items[i];
+            const char *profile = enabled_profiles->items[i];
             size_t file_count = 0;
-            error_t *count_err = count_profile_files(repo, profile_name, &file_count);
+            error_t *count_err = count_profile_files(repo, profile, &file_count);
 
             /* Show file counts if available, otherwise indicate error */
             if (count_err) {
                 output_styled(
                     out, OUTPUT_NORMAL, "  %zu. {cyan}%s{reset} (file count unavailable)\n",
-                    i + 1, profile_name
+                    i + 1, profile
                 );
                 error_free(count_err);
             } else {
                 output_styled(
                     out, OUTPUT_NORMAL, "  %zu. {cyan}%s{reset} (%zu file%s)\n",
-                    i + 1, profile_name, file_count, file_count == 1 ? "" : "s"
+                    i + 1, profile, file_count, file_count == 1 ? "" : "s"
                 );
             }
         }
@@ -301,21 +301,21 @@ static error_t *profile_list(
     if (available->count > 0 && opts->show_available) {
         output_section(out, OUTPUT_NORMAL, "Available (disabled)");
         for (size_t i = 0; i < available->count; i++) {
-            const char *profile_name = available->items[i];
+            const char *profile = available->items[i];
             size_t file_count = 0;
-            error_t *count_err = count_profile_files(repo, profile_name, &file_count);
+            error_t *count_err = count_profile_files(repo, profile, &file_count);
 
             /* Show file counts if available, otherwise indicate error */
             if (count_err) {
                 output_styled(
                     out, OUTPUT_NORMAL, "  • {cyan}%s{reset} (file count unavailable)\n",
-                    profile_name
+                    profile
                 );
                 error_free(count_err);
             } else {
                 output_styled(
                     out, OUTPUT_NORMAL, "  • {cyan}%s{reset} (%zu file%s)\n",
-                    profile_name, file_count, file_count == 1 ? "" : "s"
+                    profile, file_count, file_count == 1 ? "" : "s"
                 );
             }
         }
@@ -516,12 +516,12 @@ static error_t *profile_fetch(
         /* Validate requested profiles exist on remote */
         bool has_missing = false;
         for (size_t i = 0; i < opts->profile_count; i++) {
-            const char *profile_name = opts->profiles[i];
+            const char *profile = opts->profiles[i];
             bool found = false;
 
             /* Check if profile exists on remote */
             for (size_t j = 0; j < available_remote->count; j++) {
-                if (strcmp(available_remote->items[j], profile_name) == 0) {
+                if (strcmp(available_remote->items[j], profile) == 0) {
                     found = true;
                     break;
                 }
@@ -530,7 +530,7 @@ static error_t *profile_fetch(
             if (!found) {
                 output_error(
                     out, "Profile '%s' does not exist on remote '%s'",
-                    profile_name, remote_name
+                    profile, remote_name
                 );
                 has_missing = true;
             }
@@ -558,22 +558,22 @@ static error_t *profile_fetch(
         string_array_free(available_remote);
 
         for (size_t i = 0; i < opts->profile_count; i++) {
-            const char *profile_name = opts->profiles[i];
+            const char *profile = opts->profiles[i];
 
             /* Check if already exists locally */
-            bool already_exists = profile_exists(repo, profile_name);
+            bool already_exists = profile_exists(repo, profile);
             if (already_exists) {
                 output_info(
                     out, OUTPUT_VERBOSE, "  %s already exists locally (updating...)",
-                    profile_name
+                    profile
                 );
             }
 
-            error_t *fetch_err = gitops_fetch_branch(repo, remote_name, profile_name, xfer);
+            error_t *fetch_err = gitops_fetch_branch(repo, remote_name, profile, xfer);
             if (fetch_err) {
                 output_error(
                     out, "Failed to fetch '%s': %s",
-                    profile_name, error_message(fetch_err)
+                    profile, error_message(fetch_err)
                 );
                 error_free(fetch_err);
                 failed_count++;
@@ -586,21 +586,21 @@ static error_t *profile_fetch(
                 fetched_count++;
                 output_styled(
                     out, OUTPUT_VERBOSE, "  {green}✓{reset} Updated %s\n",
-                    profile_name
+                    profile
                 );
             } else {
-                fetch_err = upstream_create_tracking_branch(repo, remote_name, profile_name);
+                fetch_err = upstream_create_tracking_branch(repo, remote_name, profile);
                 if (fetch_err) {
                     output_warning(
                         out, OUTPUT_NORMAL, "Failed to create local branch '%s': %s",
-                        profile_name, error_message(fetch_err)
+                        profile, error_message(fetch_err)
                     );
                     error_free(fetch_err);
                 } else {
                     fetched_count++;
                     output_styled(
                         out, OUTPUT_VERBOSE, "  {green}✓{reset} Fetched %s\n",
-                        profile_name
+                        profile
                     );
                 }
             }
@@ -707,9 +707,9 @@ static error_t *profile_enable(
         }
 
         for (size_t i = 0; i < all_branches->count; i++) {
-            const char *profile_name = all_branches->items[i];
-            if (strcmp(profile_name, "dotta-worktree") != 0) {
-                err = string_array_push(to_enable, profile_name);
+            const char *profile = all_branches->items[i];
+            if (strcmp(profile, "dotta-worktree") != 0) {
+                err = string_array_push(to_enable, profile);
                 if (err) {
                     err = error_wrap(err, "Failed to add profile to enable list");
                     goto cleanup;
@@ -752,12 +752,12 @@ static error_t *profile_enable(
 
     /* Process each profile */
     for (size_t i = 0; i < to_enable->count; i++) {
-        const char *profile_name = to_enable->items[i];
+        const char *profile = to_enable->items[i];
 
         /* Check if already enabled */
         bool is_enabled = false;
         for (size_t j = 0; j < enabled->count; j++) {
-            if (strcmp(enabled->items[j], profile_name) == 0) {
+            if (strcmp(enabled->items[j], profile) == 0) {
                 is_enabled = true;
                 break;
             }
@@ -766,21 +766,21 @@ static error_t *profile_enable(
         if (is_enabled) {
             output_info(
                 out, OUTPUT_VERBOSE, "  %s already enabled",
-                profile_name
+                profile
             );
             already_enabled++;
             continue;
         }
 
         /* Check if profile exists */
-        if (!profile_exists(repo, profile_name)) {
+        if (!profile_exists(repo, profile)) {
             output_warning(
                 out, OUTPUT_NORMAL, "Profile '%s' does not exist locally",
-                profile_name
+                profile
             );
             output_hint(
                 out, OUTPUT_NORMAL, "Run 'dotta profile fetch %s' first",
-                profile_name
+                profile
             );
             not_found++;
             continue;
@@ -788,7 +788,7 @@ static error_t *profile_enable(
 
         /* Check if profile contains custom/ files */
         bool has_custom = false;
-        err = profile_has_custom_files(repo, profile_name, &has_custom);
+        err = profile_has_custom_files(repo, profile, &has_custom);
         if (err) {
             /* Non-fatal: assume no custom files */
             error_free(err);
@@ -799,11 +799,11 @@ static error_t *profile_enable(
         if (has_custom && !opts->custom_prefix) {
             output_error(
                 out, "Profile '%s' contains custom/ files but --prefix not provided",
-                profile_name
+                profile
             );
             output_hint(
                 out, OUTPUT_NORMAL, "dotta profile enable %s --prefix /path/to/target",
-                profile_name
+                profile
             );
             not_found++;
             continue;
@@ -825,14 +825,14 @@ static error_t *profile_enable(
         }
 
         /* Enable profile in state with custom prefix */
-        err = state_enable_profile(state, profile_name, opts->custom_prefix);
+        err = state_enable_profile(state, profile, opts->custom_prefix);
         if (err) {
             err = error_wrap(err, "Failed to enable profile in state");
             goto cleanup;
         }
 
         /* Add to enabled list (for manifest building) */
-        err = string_array_push(enabled, profile_name);
+        err = string_array_push(enabled, profile);
         if (err) {
             err = error_wrap(err, "Failed to add profile to enabled list");
             goto cleanup;
@@ -842,12 +842,12 @@ static error_t *profile_enable(
         /* Sync profile to manifest and capture stats */
         manifest_enable_stats_t stats = { 0 };
         err = manifest_enable_profile(
-            repo, state, profile_name, enabled, &stats
+            repo, state, profile, enabled, &stats
         );
         if (err) {
             err = error_wrap(
                 err, "Failed to sync profile '%s' to manifest",
-                profile_name
+                profile
             );
             goto cleanup;
         }
@@ -855,9 +855,9 @@ static error_t *profile_enable(
         /* Show manifest analysis (verbose: detailed, normal: compact) */
         output_styled(
             out, OUTPUT_NORMAL, "  {green}✓{reset} Enabled %s\n",
-            profile_name
+            profile
         );
-        print_manifest_enable_stats(out, profile_name, &stats);
+        print_manifest_enable_stats(out, profile, &stats);
     }
 
     /* Save state (profiles already updated via state_enable_profile in loop) */
@@ -1001,12 +1001,12 @@ static error_t *profile_disable(
 
     /* Build new_enabled list (for manifest_disable_profile) and count */
     for (size_t i = 0; i < enabled->count; i++) {
-        const char *profile_name = enabled->items[i];
+        const char *profile = enabled->items[i];
 
         /* Check if this profile should be disabled */
         bool should_disable = false;
         for (size_t j = 0; j < to_disable->count; j++) {
-            if (strcmp(to_disable->items[j], profile_name) == 0) {
+            if (strcmp(to_disable->items[j], profile) == 0) {
                 should_disable = true;
                 disabled_count++;
                 break;
@@ -1015,7 +1015,7 @@ static error_t *profile_disable(
 
         /* Add to new_enabled if NOT being disabled (needed for manifest fallback) */
         if (!should_disable) {
-            err = string_array_push(new_enabled, profile_name);
+            err = string_array_push(new_enabled, profile);
             if (err) {
                 err = error_wrap(err, "Failed to build remaining profiles list");
                 goto cleanup;
@@ -1025,18 +1025,18 @@ static error_t *profile_disable(
 
     /* Check for profiles that weren't enabled */
     for (size_t i = 0; i < to_disable->count; i++) {
-        const char *profile_name = to_disable->items[i];
+        const char *profile = to_disable->items[i];
 
         bool was_enabled = false;
         for (size_t j = 0; j < enabled->count; j++) {
-            if (strcmp(enabled->items[j], profile_name) == 0) {
+            if (strcmp(enabled->items[j], profile) == 0) {
                 was_enabled = true;
                 break;
             }
         }
 
         if (!was_enabled) {
-            output_info(out, OUTPUT_VERBOSE, "  %s was not enabled", profile_name);
+            output_info(out, OUTPUT_VERBOSE, "  %s was not enabled", profile);
             not_enabled++;
         }
     }
@@ -1051,11 +1051,11 @@ static error_t *profile_disable(
                 disabled_count == 1 ? "" : "s"
             );
             for (size_t i = 0; i < to_disable->count; i++) {
-                const char *profile_name = to_disable->items[i];
+                const char *profile = to_disable->items[i];
                 /* Check if it was actually enabled */
                 bool was_enabled = false;
                 for (size_t j = 0; j < enabled->count; j++) {
-                    if (strcmp(enabled->items[j], profile_name) == 0) {
+                    if (strcmp(enabled->items[j], profile) == 0) {
                         was_enabled = true;
                         break;
                     }
@@ -1063,7 +1063,7 @@ static error_t *profile_disable(
                 if (was_enabled) {
                     output_print(
                         out, OUTPUT_NORMAL, "  - %s\n",
-                        profile_name
+                        profile
                     );
                 }
             }
@@ -1077,12 +1077,12 @@ static error_t *profile_disable(
     if (disabled_count > 0) {
         /* Process each disabled profile */
         for (size_t i = 0; i < to_disable->count; i++) {
-            const char *profile_name = to_disable->items[i];
+            const char *profile = to_disable->items[i];
 
             /* Check if this profile was actually enabled */
             bool was_enabled = false;
             for (size_t j = 0; j < enabled->count; j++) {
-                if (strcmp(enabled->items[j], profile_name) == 0) {
+                if (strcmp(enabled->items[j], profile) == 0) {
                     was_enabled = true;
                     break;
                 }
@@ -1092,12 +1092,12 @@ static error_t *profile_disable(
                 /* Unsync from manifest (updates to fallback or marks for removal) */
                 manifest_disable_stats_t stats = { 0 };
                 err = manifest_disable_profile(
-                    repo, state, profile_name, new_enabled, &stats
+                    repo, state, profile, new_enabled, &stats
                 );
                 if (err) {
                     err = error_wrap(
                         err, "Failed to unsync profile '%s' from manifest",
-                        profile_name
+                        profile
                     );
                     goto cleanup;
                 }
@@ -1105,16 +1105,16 @@ static error_t *profile_disable(
                 /* Show manifest analysis (verbose: detailed, normal: compact) */
                 output_styled(
                     out, OUTPUT_NORMAL, "  {green}✓{reset} Disabled %s\n",
-                    profile_name
+                    profile
                 );
-                print_manifest_disable_stats(out, profile_name, &stats);
+                print_manifest_disable_stats(out, profile, &stats);
 
                 /* Remove from state */
-                err = state_disable_profile(state, profile_name);
+                err = state_disable_profile(state, profile);
                 if (err) {
                     err = error_wrap(
                         err, "Failed to remove profile '%s' from state",
-                        profile_name
+                        profile
                     );
                     goto cleanup;
                 }
@@ -1444,10 +1444,10 @@ static error_t *profile_validate(
     }
 
     for (size_t i = 0; i < enabled->count; i++) {
-        const char *profile_name = enabled->items[i];
+        const char *profile = enabled->items[i];
 
-        if (!profile_exists(repo, profile_name)) {
-            err = string_array_push(missing, profile_name);
+        if (!profile_exists(repo, profile)) {
+            err = string_array_push(missing, profile);
             if (err) {
                 err = error_wrap(err, "Failed to add profile to missing list");
                 goto cleanup;
@@ -1469,12 +1469,12 @@ static error_t *profile_validate(
         if (opts->fix) {
             /* Remove missing profiles from state */
             for (size_t i = 0; i < missing->count; i++) {
-                const char *profile_name = missing->items[i];
-                err = state_disable_profile(state, profile_name);
+                const char *profile = missing->items[i];
+                err = state_disable_profile(state, profile);
                 if (err) {
                     err = error_wrap(
                         err, "Failed to remove missing profile '%s' from state",
-                        profile_name
+                        profile
                     );
                     goto cleanup;
                 }
@@ -1502,8 +1502,8 @@ static error_t *profile_validate(
     }
 
     for (size_t i = 0; i < state_file_count; i++) {
-        const char *profile_name = state_files[i].profile;
-        if (!profile_exists(repo, profile_name)) {
+        const char *profile = state_files[i].profile;
+        if (!profile_exists(repo, profile)) {
             orphaned_files++;
             has_issues = true;
             has_orphaned_files = true;

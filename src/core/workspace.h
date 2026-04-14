@@ -287,12 +287,12 @@ const workspace_item_t *workspace_get_item(
  * external consumer (update.c) already follows this pattern.
  *
  * @param ws Workspace (must not be NULL)
- * @param profile_name Profile name (must not be NULL)
+ * @param profile Profile name (must not be NULL)
  * @return Metadata or NULL if not cached (borrowed reference, valid until workspace_free)
  */
 const metadata_t *workspace_get_metadata(
     const workspace_t *ws,
-    const char *profile_name
+    const char *profile
 );
 
 /**

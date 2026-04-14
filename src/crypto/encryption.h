@@ -132,13 +132,13 @@ error_t *encryption_derive_master_key(
  * This is a fast operation (no expensive hashing).
  *
  * @param master_key Master key (32 bytes, must not be NULL)
- * @param profile_name Profile name (must not be NULL)
+ * @param profile Profile name (must not be NULL)
  * @param out_profile_key Output buffer for 32-byte profile key (must be pre-allocated)
  * @return Error or NULL on success
  */
 error_t *encryption_derive_profile_key(
     const uint8_t master_key[ENCRYPTION_MASTER_KEY_SIZE],
-    const char *profile_name,
+    const char *profile,
     uint8_t out_profile_key[ENCRYPTION_PROFILE_KEY_SIZE]
 );
 

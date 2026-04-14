@@ -238,21 +238,21 @@ static error_t *list_profiles(
 
     /* List profiles */
     for (size_t i = 0; i < branches->count; i++) {
-        const char *profile_name = branches->items[i];
+        const char *profile = branches->items[i];
 
         /* Skip dotta-worktree branch */
-        if (strcmp(profile_name, "dotta-worktree") == 0) {
+        if (strcmp(profile, "dotta-worktree") == 0) {
             continue;
         }
 
-        bool is_enabled = state && state_has_profile(state, profile_name);
+        bool is_enabled = state && state_has_profile(state, profile);
         const char *indicator = is_enabled ? "* " : "  ";
 
         /* Simple mode: Just name with enabled indicator */
         if (!verbose && !show_remote) {
             output_styled(
                 out, OUTPUT_NORMAL, "  %s{cyan}%s{reset}\n",
-                indicator, profile_name
+                indicator, profile
             );
             continue;
         }
@@ -260,11 +260,11 @@ static error_t *list_profiles(
         /* Verbose: Load tree for stats */
         git_tree *tree = NULL;
         if (verbose) {
-            err = gitops_load_branch_tree(repo, profile_name, &tree, NULL);
+            err = gitops_load_branch_tree(repo, profile, &tree, NULL);
             if (err) {
                 output_warning(
                     out, OUTPUT_NORMAL, "Failed to load profile '%s': %s",
-                    profile_name, error_message(err)
+                    profile, error_message(err)
                 );
                 error_free(err);
                 err = NULL;
@@ -275,7 +275,7 @@ static error_t *list_profiles(
         /* Start line with indicator and name */
         output_styled(
             out, OUTPUT_NORMAL, "  %s{cyan}%-*s{reset}",
-            indicator, (int) max_name_len, profile_name
+            indicator, (int) max_name_len, profile
         );
 
         /* Verbose: Add stats (requires successfully loaded tree) */
@@ -298,7 +298,7 @@ static error_t *list_profiles(
         if (verbose) {
             char refname[DOTTA_REFNAME_MAX];
             error_t *ref_err = gitops_build_refname(
-                refname, sizeof(refname), "refs/heads/%s", profile_name
+                refname, sizeof(refname), "refs/heads/%s", profile
             );
             if (!ref_err) {
                 git_commit *last_commit = NULL;
@@ -336,7 +336,7 @@ static error_t *list_profiles(
         /* Remote: Add tracking state */
         if (show_remote) {
             upstream_info_t *info = NULL;
-            error_t *upstream_err = upstream_analyze_profile(repo, remote_name, profile_name, &info);
+            error_t *upstream_err = upstream_analyze_profile(repo, remote_name, profile, &info);
             if (!upstream_err && info) {
                 print_upstream_state(out, info);
                 upstream_info_free(info);
@@ -639,9 +639,9 @@ static error_t *list_file_history(
     }
 
     /* Resolve owning profile: explicit from user or implicit via manifest */
-    const char *profile_name = opts->profile;
+    const char *profile = opts->profile;
 
-    if (!profile_name) {
+    if (!profile) {
         string_array_t *matches = NULL;
         err = profile_discover_file(repo, NULL, storage_path, true, &matches);
         if (err) {
@@ -663,16 +663,16 @@ static error_t *list_file_history(
             free(storage_path);
             return ERROR(ERR_MEMORY, "Failed to allocate profile name");
         }
-        profile_name = discovered_profile;
+        profile = discovered_profile;
     }
 
     /* Verify profile exists and check if file is in current tree (fast pre-check).
      * This validates the profile early and gives a clear hint for typos/deleted files
      * before the expensive O(total_commits) history walk. */
     git_tree *tree = NULL;
-    err = gitops_load_branch_tree(repo, profile_name, &tree, NULL);
+    err = gitops_load_branch_tree(repo, profile, &tree, NULL);
     if (err) {
-        error_t *wrapped = error_wrap(err, "Profile '%s' not found", profile_name);
+        error_t *wrapped = error_wrap(err, "Profile '%s' not found", profile);
         free(discovered_profile);
         free(storage_path);
         return wrapped;
@@ -688,11 +688,11 @@ static error_t *list_file_history(
 
     /* Get file history */
     file_history_t *history = NULL;
-    err = stats_get_file_history(repo, profile_name, storage_path, &history);
+    err = stats_get_file_history(repo, profile, storage_path, &history);
     if (err) {
         error_t *wrapped = error_wrap(
             err, "Failed to get history for '%s' in profile '%s'",
-            storage_path, profile_name
+            storage_path, profile
         );
         free(discovered_profile);
         free(storage_path);
@@ -702,7 +702,7 @@ static error_t *list_file_history(
     /* Print header */
     output_section(
         out, OUTPUT_NORMAL, "History of '%s' in profile '%s'",
-        storage_path, profile_name
+        storage_path, profile
     );
     output_newline(out, OUTPUT_NORMAL);
 

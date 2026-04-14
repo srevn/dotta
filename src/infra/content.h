@@ -79,7 +79,7 @@ typedef struct content_cache content_cache_t;
  * @param blob_oid Blob OID (must not be NULL)
  * @param storage_path Path in profile (must not be NULL)
  *          SECURITY: Used as AAD in encryption. Must match Git tree path.
- * @param profile_name Profile name for key derivation (must not be NULL)
+ * @param profile Profile name for key derivation (must not be NULL)
  * @param expected_encrypted Expected encryption state (for validation)
  * @param km Key manager (can be NULL if file is known to be plaintext)
  * @param out_content Output buffer (CALLER OWNS - must free with buffer_free)
@@ -96,7 +96,7 @@ error_t *content_get_from_blob_oid(
     git_repository *repo,
     const git_oid *blob_oid,
     const char *storage_path,
-    const char *profile_name,
+    const char *profile,
     bool expected_encrypted,
     keymanager_t *km,
     buffer_t *out_content
@@ -134,7 +134,7 @@ content_cache_t *content_cache_create(
  * @param cache Content cache (must not be NULL)
  * @param blob_oid Blob OID (must not be NULL)
  * @param storage_path Path in profile (must not be NULL, used as AAD for encryption)
- * @param profile_name Profile name (must not be NULL)
+ * @param profile Profile name (must not be NULL)
  * @param expected_encrypted Expected encryption state (for validation)
  * @param out_content Output buffer (BORROWED - cache owns, don't free)
  * @return Error or NULL on success
@@ -143,7 +143,7 @@ error_t *content_cache_get_from_blob_oid(
     content_cache_t *cache,
     const git_oid *blob_oid,
     const char *storage_path,
-    const char *profile_name,
+    const char *profile,
     bool expected_encrypted,
     const buffer_t **out_content
 );
@@ -182,7 +182,7 @@ void content_cache_free(content_cache_t *cache);
  * @param plaintext Plaintext buffer to store (must not be NULL)
  * @param storage_path Storage path (must not be NULL)
  *                     SECURITY: Used as AAD in encryption. Must match Git tree path.
- * @param profile_name Profile name (for key derivation, must not be NULL)
+ * @param profile Profile name (for key derivation, must not be NULL)
  * @param km Key manager (for profile key derivation, can be NULL if should_encrypt=false)
  * @param should_encrypt Policy decision from caller (true = encrypt, false = plaintext)
  * @param out_oid Output OID of created blob (must not be NULL)
@@ -198,7 +198,7 @@ error_t *content_store_to_blob(
     git_repository *repo,
     const buffer_t *plaintext,
     const char *storage_path,
-    const char *profile_name,
+    const char *profile,
     keymanager_t *km,
     bool should_encrypt,
     git_oid *out_oid
@@ -225,7 +225,7 @@ error_t *content_store_to_blob(
  * @param filesystem_path Path to source file on filesystem (must not be NULL)
  * @param worktree_path Destination path in worktree (must not be NULL)
  * @param storage_path Storage path in profile (must not be NULL, used as AAD for encryption)
- * @param profile_name Profile name (for key derivation, must not be NULL)
+ * @param profile Profile name (for key derivation, must not be NULL)
  * @param km Key manager (can be NULL if should_encrypt=false)
  * @param should_encrypt Policy decision from caller (true = encrypt, false = plaintext)
  * @param out_stat Output stat data from source file (optional, can be NULL)
@@ -242,7 +242,7 @@ error_t *content_store_file_to_worktree(
     const char *filesystem_path,
     const char *worktree_path,
     const char *storage_path,
-    const char *profile_name,
+    const char *profile,
     keymanager_t *km,
     bool should_encrypt,
     struct stat *out_stat

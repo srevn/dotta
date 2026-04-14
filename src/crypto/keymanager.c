@@ -70,7 +70,7 @@ struct keymanager {
     time_t cached_at;         /* When was key cached (monotonic time, 0 if not cached) */
     bool mlocked;             /* Is memory locked with mlock()? */
 
-    /* Profile key cache (profile_name → uint8_t[32]) */
+    /* Profile key cache (profile → uint8_t[32]) */
     hashmap_t *profile_keys;  /* Owned - each value is malloc'd ENCRYPTION_PROFILE_KEY_SIZE */
 };
 
@@ -1166,11 +1166,11 @@ error_t *keymanager_get_key(
  */
 error_t *keymanager_get_profile_key(
     keymanager_t *mgr,
-    const char *profile_name,
+    const char *profile,
     uint8_t out_profile_key[ENCRYPTION_PROFILE_KEY_SIZE]
 ) {
     CHECK_NULL(mgr);
-    CHECK_NULL(profile_name);
+    CHECK_NULL(profile);
     CHECK_NULL(out_profile_key);
 
     /* Check cache first, but only if master key is still valid.
@@ -1183,7 +1183,7 @@ error_t *keymanager_get_profile_key(
             /* Master key expired — invalidate all derived profile keys */
             hashmap_clear(mgr->profile_keys, secure_free_profile_key);
         } else {
-            uint8_t *cached_key = hashmap_get(mgr->profile_keys, profile_name);
+            uint8_t *cached_key = hashmap_get(mgr->profile_keys, profile);
             if (cached_key) {
                 /* Cache hit - copy and return */
                 memcpy(out_profile_key, cached_key, ENCRYPTION_PROFILE_KEY_SIZE);
@@ -1215,7 +1215,7 @@ error_t *keymanager_get_profile_key(
     }
 
     /* Derive profile key from master key */
-    err = encryption_derive_profile_key(master_key, profile_name, profile_key);
+    err = encryption_derive_profile_key(master_key, profile, profile_key);
 
     /* Clear master key immediately */
     hydro_memzero(master_key, sizeof(master_key));
@@ -1224,7 +1224,7 @@ error_t *keymanager_get_profile_key(
         munlock(profile_key, ENCRYPTION_PROFILE_KEY_SIZE);
         hydro_memzero(profile_key, ENCRYPTION_PROFILE_KEY_SIZE);
         free(profile_key);
-        return error_wrap(err, "Failed to derive profile key for '%s'", profile_name);
+        return error_wrap(err, "Failed to derive profile key for '%s'", profile);
     }
 
     /* Create cache hashmap if it doesn't exist yet (lazy initialization) */
@@ -1245,12 +1245,12 @@ error_t *keymanager_get_profile_key(
     }
 
     /* Store in cache */
-    err = hashmap_set(mgr->profile_keys, profile_name, profile_key);
+    err = hashmap_set(mgr->profile_keys, profile, profile_key);
     if (err) {
         /* Non-fatal: continue without caching */
         fprintf(
             stderr, "Warning: Failed to cache profile key for '%s': %s\n",
-            profile_name, error_message(err)
+            profile, error_message(err)
         );
         error_free(err);
 

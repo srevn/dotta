@@ -85,7 +85,7 @@ static error_t *get_branch_head_oid(
  * @param repo Git repository
  * @param state State handle (with active transaction)
  * @param manifest_entry Entry from in-memory manifest (borrowed); MUST have
- *                       tree entry and profile_name set (guaranteed for entries
+ *                       tree entry and profile set (guaranteed for entries
  *                       from manifest_build)
  * @param metadata Merged metadata from all profiles
  * @param deployed_at Caller-determined lifecycle timestamp (NOT modified):
@@ -105,7 +105,7 @@ static error_t *sync_entry_to_state(
     CHECK_NULL(repo);
     CHECK_NULL(state);
     CHECK_NULL(manifest_entry);
-    CHECK_NULL(manifest_entry->profile_name);
+    CHECK_NULL(manifest_entry->profile);
 
     error_t *err = NULL;
     metadata_item_t *meta_item = NULL;
@@ -150,7 +150,7 @@ static error_t *sync_entry_to_state(
     state_file_entry_t state_entry = {
         .storage_path    = manifest_entry->storage_path,
         .filesystem_path = manifest_entry->filesystem_path,
-        .profile         = (char *) manifest_entry->profile_name,
+        .profile         = (char *) manifest_entry->profile,
         .old_profile     = (char *) old_profile,
         .type            = file_type,
         .blob_oid        = *blob_oid_obj,
@@ -193,13 +193,13 @@ static error_t *sync_entry_to_state(
 error_t *manifest_enable_profile(
     git_repository *repo,
     state_t *state,
-    const char *profile_name,
+    const char *profile,
     const string_array_t *enabled_profiles,
     manifest_enable_stats_t *out_stats
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(state);
-    CHECK_NULL(profile_name);
+    CHECK_NULL(profile);
     CHECK_NULL(enabled_profiles);
 
     /* Initialize output stats (access_errors is incremented inline, must start at 0) */
@@ -253,7 +253,7 @@ error_t *manifest_enable_profile(
         file_entry_t *entry = &manifest->entries[i];
 
         /* Only process files owned by this profile */
-        if (strcmp(entry->profile_name, profile_name) != 0) {
+        if (strcmp(entry->profile, profile) != 0) {
             continue;
         }
 
@@ -317,14 +317,14 @@ error_t *manifest_enable_profile(
      * state_enable_profile inserts with zeroblob(20); this replaces the
      * sentinel with the real HEAD. */
     git_oid head_oid;
-    err = get_branch_head_oid(repo, profile_name, &head_oid);
+    err = get_branch_head_oid(repo, profile, &head_oid);
     if (err) {
-        err = error_wrap(err, "Failed to get HEAD for profile '%s'", profile_name);
+        err = error_wrap(err, "Failed to get HEAD for profile '%s'", profile);
         goto cleanup;
     }
-    err = state_set_profile_commit_oid(state, profile_name, &head_oid);
+    err = state_set_profile_commit_oid(state, profile, &head_oid);
     if (err) {
-        err = error_wrap(err, "Failed to set commit_oid for profile '%s'", profile_name);
+        err = error_wrap(err, "Failed to set commit_oid for profile '%s'", profile);
         goto cleanup;
     }
 
@@ -510,13 +510,13 @@ cleanup:
 error_t *manifest_disable_profile(
     git_repository *repo,
     state_t *state,
-    const char *profile_name,
+    const char *profile,
     const string_array_t *remaining_enabled,
     manifest_disable_stats_t *out_stats
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(state);
-    CHECK_NULL(profile_name);
+    CHECK_NULL(profile);
     CHECK_NULL(remaining_enabled);
 
     error_t *err = NULL;
@@ -534,10 +534,10 @@ error_t *manifest_disable_profile(
     size_t removed_count = 0;
 
     /* 1. Get all entries from disabled profile */
-    err = state_get_entries_by_profile(state, profile_name, arena, &entries, &count);
+    err = state_get_entries_by_profile(state, profile, arena, &entries, &count);
     if (err) {
         arena_destroy(arena);
-        return error_wrap(err, "Failed to get entries for profile '%s'", profile_name);
+        return error_wrap(err, "Failed to get entries for profile '%s'", profile);
     }
 
     if (count == 0) {
@@ -617,7 +617,7 @@ error_t *manifest_disable_profile(
              * ARCHITECTURE: Separation of concerns for orphan cleanup.
              *
              * The entry is marked STATE_INACTIVE and remains in state for orphan detection:
-             *   1. Entry marked inactive with profile=<disabled_profile_name>
+             *   1. Entry marked inactive with profile=<disabled_profile>
              *   2. Workspace skips inactive entries during manifest building (no Git validation)
              *   3. Workspace orphan detection loads inactive entries → marks as ORPHANED
              *   4. Apply removes: file from filesystem + entry from state
@@ -678,11 +678,11 @@ error_t *manifest_disable_profile(
     state_directory_entry_t *dir_entries = NULL;
     size_t dir_count = 0;
     hashmap_t *fallback_dirs = NULL;          /* storage_path -> metadata_item_t* */
-    hashmap_t *fallback_dir_profiles = NULL;  /* storage_path -> profile_name */
+    hashmap_t *fallback_dir_profiles = NULL;  /* storage_path -> profile */
     metadata_t **loaded_metadata = NULL;      /* Array of loaded metadata (for cleanup) */
     size_t loaded_metadata_count = 0;
 
-    err = state_get_directories_by_profile(state, profile_name, arena, &dir_entries, &dir_count);
+    err = state_get_directories_by_profile(state, profile, arena, &dir_entries, &dir_count);
     if (err) {
         goto directory_cleanup;
     }
@@ -783,7 +783,7 @@ error_t *manifest_disable_profile(
              * ARCHITECTURE: Explicit state tracking for directory lifecycle.
              *
              * The entry is marked STATE_INACTIVE and remains in state:
-             *   1. Entry marked inactive with profile=<disabled_profile_name>
+             *   1. Entry marked inactive with profile=<disabled_profile>
              *   2. Workspace skips inactive entries during manifest building
              *   3. Workspace orphan detection loads inactive entries → ORPHANED
              *   4. Apply removes: directory from filesystem + entry from state
@@ -1000,8 +1000,7 @@ error_t *manifest_remove_files(
                 state_free_entry(current_entry);
                 free(filesystem_path);
                 err = error_wrap(
-                    err, "Failed to sync fallback for %s",
-                    filesystem_path
+                    err, "Failed to sync fallback for %s", filesystem_path
                 );
                 goto cleanup;
             }
@@ -1054,7 +1053,9 @@ error_t *manifest_remove_files(
     git_oid head_oid;
     err = get_branch_head_oid(repo, removed_profile, &head_oid);
     if (err) {
-        err = error_wrap(err, "Failed to get HEAD for profile '%s'", removed_profile);
+        err = error_wrap(
+            err, "Failed to get HEAD for profile '%s'", removed_profile
+        );
         goto cleanup;
     }
     err = state_set_profile_commit_oid(state, removed_profile, &head_oid);
@@ -1180,7 +1181,7 @@ error_t *manifest_rebuild(
     for (size_t i = 0; i < manifest->count; i++) {
         file_entry_t *entry = &manifest->entries[i];
 
-        /* Check if entry existed before rebuild (preserve deployed_at for lifecycle tracking) */
+        /* Check if entry existed before rebuild (preserve deployed_at) */
         state_file_entry_t *old_entry = hashmap_get(old_map, entry->filesystem_path);
 
         time_t deployed_at;
@@ -1258,7 +1259,7 @@ cleanup:
  * @param state State handle (must not be NULL)
  * @param profile_scope Profile scope filter (must not be NULL). Keys are
  *                      in-scope profile names; values are ignored (NULL sentinels).
- * @param out_stale Output: hashmap of profile_name -> (void*)1 sentinel for
+ * @param out_stale Output: hashmap of profile -> (void*)1 sentinel for
  *                  stale profiles. NULL if none stale. Caller frees with
  *                  hashmap_free(map, NULL).
  * @return Error or NULL on success
@@ -1504,7 +1505,7 @@ error_t *manifest_repair_stale(
 
             /* deployed_at preserved by SQL UPSERT, old_profile auto-captured
              * by SQL when the owning profile shifts during repair. */
-            bool profile_shifted = strcmp(fresh_entry->profile_name, entry->profile) != 0;
+            bool profile_shifted = strcmp(fresh_entry->profile, entry->profile) != 0;
 
             err = sync_entry_to_state(repo, state, fresh_entry, metadata, 0, NULL);
             if (err) {
@@ -1685,8 +1686,7 @@ error_t *manifest_reorder_profiles(
             }
         } else {
             /* Existing entry - check if owner changed */
-            bool owner_changed =
-                strcmp(old_entry->profile, new_entry->profile_name) != 0;
+            bool owner_changed = strcmp(old_entry->profile, new_entry->profile) != 0;
 
             if (owner_changed) {
                 /* Owner changed — sync with new owner. deployed_at preserved
@@ -1937,8 +1937,7 @@ error_t *manifest_update_files(
             }
 
             /* Check precedence matches */
-            if (entry->profile_name &&
-                strcmp(entry->profile_name, item->profile) != 0) {
+            if (entry->profile && strcmp(entry->profile, item->profile) != 0) {
                 /* Different profile won precedence - skip this file
                  * (higher precedence profile will handle it) */
                 continue;
@@ -2056,7 +2055,7 @@ cleanup:
  *   - state MUST have active transaction (via state_load_for_update)
  *   - Git commits MUST be completed (branches at final state)
  *   - filesystem_paths MUST be valid, canonical paths
- *   - profile_name SHOULD be enabled (function gracefully handles if not)
+ *   - profile SHOULD be enabled (function gracefully handles if not)
  *
  * Postconditions:
  *   - Files synced to manifest with deployed_at = time(NULL)
@@ -2076,7 +2075,7 @@ cleanup:
  *
  * @param repo Git repository (must not be NULL)
  * @param state State handle (with active transaction, must not be NULL)
- * @param profile_name Profile files were added to (must not be NULL)
+ * @param profile Profile files were added to (must not be NULL)
  * @param filesystem_paths Array of filesystem paths (must not be NULL)
  * @param enabled_profiles All enabled profiles (must not be NULL)
  * @param out_synced Output: count of files synced (must not be NULL)
@@ -2085,14 +2084,14 @@ cleanup:
 error_t *manifest_add_files(
     git_repository *repo,
     state_t *state,
-    const char *profile_name,
+    const char *profile,
     const string_array_t *filesystem_paths,
     const string_array_t *enabled_profiles,
     size_t *out_synced
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(state);
-    CHECK_NULL(profile_name);
+    CHECK_NULL(profile);
     CHECK_NULL(filesystem_paths);
     CHECK_NULL(enabled_profiles);
     CHECK_NULL(out_synced);
@@ -2159,17 +2158,17 @@ error_t *manifest_add_files(
         }
 
         /* Defensive: Verify entry has profile name (should never be NULL) */
-        if (!entry->profile_name) {
+        if (!entry->profile) {
             /* Should never happen - indicates data corruption or manifest bug */
             err = ERROR(
-                ERR_INTERNAL, "Manifest entry '%s' has NULL profile_name",
+                ERR_INTERNAL, "Manifest entry '%s' has NULL profile",
                 filesystem_path
             );
             goto cleanup;
         }
 
         /* Check precedence matches */
-        if (strcmp(entry->profile_name, profile_name) != 0) {
+        if (strcmp(entry->profile, profile) != 0) {
             /* Different profile won precedence - skip this file
              * (higher precedence profile owns it) */
             continue;
@@ -2196,15 +2195,17 @@ error_t *manifest_add_files(
     /* After adding files, the profile's branch HEAD has moved to a new commit.
      * Update the per-profile commit_oid in enabled_profiles. */
     git_oid head_oid;
-    err = get_branch_head_oid(repo, profile_name, &head_oid);
-    if (err) {
-        err = error_wrap(err, "Failed to get HEAD for profile '%s'", profile_name);
-        goto cleanup;
-    }
-    err = state_set_profile_commit_oid(state, profile_name, &head_oid);
+    err = get_branch_head_oid(repo, profile, &head_oid);
     if (err) {
         err = error_wrap(
-            err, "Failed to sync commit_oid for profile '%s'", profile_name
+            err, "Failed to get HEAD for profile '%s'", profile
+        );
+        goto cleanup;
+    }
+    err = state_set_profile_commit_oid(state, profile, &head_oid);
+    if (err) {
+        err = error_wrap(
+            err, "Failed to sync commit_oid for profile '%s'", profile
         );
         goto cleanup;
     }
@@ -2262,7 +2263,7 @@ cleanup:
  *
  * @param repo Repository (must not be NULL)
  * @param state State with active transaction (must not be NULL)
- * @param profile_name Profile being synced (must not be NULL)
+ * @param profile Profile being synced (must not be NULL)
  * @param old_oid Old commit before sync (must not be NULL)
  * @param new_oid New commit after sync (must not be NULL)
  * @param enabled_profiles All enabled profiles for precedence (must not be NULL)
@@ -2275,7 +2276,7 @@ cleanup:
 error_t *manifest_sync_diff(
     git_repository *repo,
     state_t *state,
-    const char *profile_name,
+    const char *profile,
     const git_oid *old_oid,
     const git_oid *new_oid,
     const string_array_t *enabled_profiles,
@@ -2286,7 +2287,7 @@ error_t *manifest_sync_diff(
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(state);
-    CHECK_NULL(profile_name);
+    CHECK_NULL(profile);
     CHECK_NULL(old_oid);
     CHECK_NULL(new_oid);
     CHECK_NULL(enabled_profiles);
@@ -2359,9 +2360,9 @@ error_t *manifest_sync_diff(
     /* PHASE 3: PROCESS DELTAS (O(D)) */
 
     /* Lookup custom prefix for the synced profile */
-    err = state_get_profile_prefix(state, profile_name, &synced_custom_prefix);
+    err = state_get_profile_prefix(state, profile, &synced_custom_prefix);
     if (err) {
-        err = error_wrap(err, "Failed to get prefix for profile '%s'", profile_name);
+        err = error_wrap(err, "Failed to get prefix for profile '%s'", profile);
         goto cleanup;
     }
 
@@ -2415,13 +2416,12 @@ error_t *manifest_sync_diff(
                 continue;
             }
 
-            /* Check precedence: Does profile_name win?
+            /* Check precedence: does the synced profile win?
              *
              * This is critical: if a different profile won precedence for this file,
              * we should NOT update the manifest entry. The winning profile will handle
              * it when its changes are synced. */
-            if (entry->profile_name &&
-                strcmp(entry->profile_name, profile_name) != 0) {
+            if (entry->profile && strcmp(entry->profile, profile) != 0) {
                 /* Different profile won precedence - skip this file */
                 free(filesystem_path);
                 continue;
@@ -2457,8 +2457,7 @@ error_t *manifest_sync_diff(
                 entry = &fresh_manifest->entries[idx];
             }
 
-            if (entry && entry->profile_name &&
-                strcmp(entry->profile_name, profile_name) != 0) {
+            if (entry && entry->profile && strcmp(entry->profile, profile) != 0) {
                 /* Fallback found — update manifest to the new profile owner.
                  * deployed_at preserved by SQL UPSERT, old_profile auto-captured
                  * by SQL when the owning profile changes. */
@@ -2494,8 +2493,8 @@ error_t *manifest_sync_diff(
                     goto cleanup;
                 }
 
-                /* Check if profile_name owns this file */
-                if (strcmp(state_entry->profile, profile_name) == 0) {
+                /* Check if this profile owns this file */
+                if (strcmp(state_entry->profile, profile) == 0) {
                     /* We own it and no fallback exists - mark as inactive
                      *
                      * File deleted from Git during sync (pull/rebase/merge), with no
@@ -2540,11 +2539,10 @@ error_t *manifest_sync_diff(
     /* Update the per-profile commit_oid in enabled_profiles to match the new HEAD.
      * Use new_oid directly — it's the explicit sync target passed by the caller,
      * and matches the branch HEAD that get_branch_head_oid would resolve. */
-    err = state_set_profile_commit_oid(state, profile_name, new_oid);
+    err = state_set_profile_commit_oid(state, profile, new_oid);
     if (err) {
         err = error_wrap(
-            err, "Failed to sync commit_oid for profile '%s'",
-            profile_name
+            err, "Failed to sync commit_oid for profile '%s'", profile
         );
         goto cleanup;
     }
@@ -2643,14 +2641,14 @@ error_t *manifest_sync_directories(
 
     /* 3. Rebuild from each enabled profile */
     for (size_t i = 0; i < enabled_profiles->count; i++) {
-        const char *profile_name = enabled_profiles->items[i];
+        const char *profile = enabled_profiles->items[i];
 
         /* Reset per-iteration state */
         metadata = NULL;
         directories = NULL;
 
         /* Load metadata (may not exist for old profiles - gracefully skip) */
-        err = metadata_load_from_branch(repo, profile_name, &metadata);
+        err = metadata_load_from_branch(repo, profile, &metadata);
         if (err) {
             if (err->code == ERR_NOT_FOUND) {
                 /* No metadata file - old profile or no directories tracked */
@@ -2660,7 +2658,7 @@ error_t *manifest_sync_directories(
             }
             err = error_wrap(
                 err, "Failed to load metadata for profile '%s'",
-                profile_name
+                profile
             );
             goto cleanup;
         }
@@ -2668,7 +2666,7 @@ error_t *manifest_sync_directories(
         /* Lookup custom prefix for this profile */
         const char *custom_prefix = NULL;
         if (prefix_map) {
-            custom_prefix = (const char *) hashmap_get(prefix_map, profile_name);
+            custom_prefix = (const char *) hashmap_get(prefix_map, profile);
         }
 
         /* Extract directories from metadata */
@@ -2696,7 +2694,7 @@ error_t *manifest_sync_directories(
 
             err = state_directory_entry_create_from_metadata(
                 directories[j],
-                profile_name,  /* Profile attribution */
+                profile,       /* Profile attribution */
                 custom_prefix, /* Custom prefix for path resolution */
                 arena,
                 &state_dir
@@ -2806,7 +2804,7 @@ struct manifest_build_ctx {
     manifest_t *manifest;       /* Target manifest (modified by callback) */
     size_t capacity;            /* Current entries capacity (updated on growth) */
     hashmap_t *path_map;        /* For O(1) dedup/override detection */
-    const char *profile_name;   /* Profile name for entries and error messages */
+    const char *profile;        /* Profile name for entries and error messages */
     const char *custom_prefix;  /* For path_from_storage (can be NULL) */
     arena_t *arena;             /* Arena for string allocations (NULL = heap) */
     error_t *error;             /* Error propagation (set on failure) */
@@ -2902,7 +2900,7 @@ static int manifest_build_callback(
         if (err) {
             ctx->error = error_wrap(
                 err, "Failed to convert path '%s' from profile '%s'",
-                storage_path, ctx->profile_name
+                storage_path, ctx->profile
             );
             return -1;
         }
@@ -2950,7 +2948,7 @@ static int manifest_build_callback(
         file_entry_t *override = &ctx->manifest->entries[existing_idx];
         override->storage_path = dup_storage_path;
         override->filesystem_path = filesystem_path;
-        override->profile_name = ctx->profile_name;
+        override->profile = ctx->profile;
 
         /* Extract identity from borrowed tree entry (blob_oid, type, mode).
          * The overriding profile may differ in filemode (e.g., executable bit). */
@@ -3016,7 +3014,7 @@ static int manifest_build_callback(
         memset(new_entry, 0, sizeof(*new_entry));
         new_entry->storage_path = dup_storage_path;
         new_entry->filesystem_path = filesystem_path;
-        new_entry->profile_name = ctx->profile_name;
+        new_entry->profile = ctx->profile;
 
         /* Extract identity from borrowed tree entry (blob_oid, type, mode) */
         git_oid_cpy(&new_entry->blob_oid, git_tree_entry_id(entry));
@@ -3141,12 +3139,12 @@ error_t *manifest_build(
          * borrowed tree entries, converts paths, handles precedence override,
          * and populates file_entry_t directly—all in O(N) time.
          *
-         * profile_name borrows from caller's profiles array — must outlive manifest */
+         * profile borrows from caller's profiles array — must outlive manifest */
         struct manifest_build_ctx ctx = {
             .manifest      = manifest,
             .capacity      = capacity,
             .path_map      = path_map,
-            .profile_name  = profile,
+            .profile       = profile,
             .custom_prefix = prefix_map
                 ? (const char *) hashmap_get(prefix_map, profile)
                 : NULL,
@@ -3196,19 +3194,19 @@ cleanup:
  * where we need to build a manifest from a past commit's tree.
  *
  * @param tree Git tree to build manifest from (must not be NULL)
- * @param profile_name Profile name for entries (must not be NULL)
+ * @param profile Profile name for entries (must not be NULL)
  * @param custom_prefix Custom prefix for custom/ paths (NULL for graceful degradation)
  * @param out Manifest (must not be NULL, caller must free with manifest_free)
  * @return Error or NULL on success
  */
 error_t *manifest_build_from_tree(
     git_tree *tree,
-    const char *profile_name,
+    const char *profile,
     const char *custom_prefix,
     manifest_t **out
 ) {
     CHECK_NULL(tree);
-    CHECK_NULL(profile_name);
+    CHECK_NULL(profile);
     CHECK_NULL(out);
 
     error_t *err = NULL;
@@ -3239,10 +3237,10 @@ error_t *manifest_build_from_tree(
     }
 
     /* Own copy of profile name for entry borrowing.
-     * Entries set profile_name to this pointer —
+     * Entries set profile to this pointer —
      * manifest lifetime guarantees it remains valid until manifest_free(). */
-    manifest->owned_profile_name = strdup(profile_name);
-    if (!manifest->owned_profile_name) {
+    manifest->owned_profile = strdup(profile);
+    if (!manifest->owned_profile) {
         err = ERROR(ERR_MEMORY, "Failed to duplicate profile name");
         goto cleanup;
     }
@@ -3258,7 +3256,7 @@ error_t *manifest_build_from_tree(
         .manifest      = manifest,
         .capacity      = capacity,
         .path_map      = path_map,
-        .profile_name  = manifest->owned_profile_name,
+        .profile       = manifest->owned_profile,
         .custom_prefix = custom_prefix,
         .arena         = NULL,
         .error         = NULL
@@ -3315,7 +3313,7 @@ void manifest_free(manifest_t *manifest) {
     }
 
     /* Free owned profile name (used by tree-based manifests, NULL otherwise) */
-    free(manifest->owned_profile_name);
+    free(manifest->owned_profile);
 
     free(manifest);
 }

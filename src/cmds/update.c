@@ -45,7 +45,7 @@ static error_t *copy_file_to_worktree(
     worktree_handle_t *wt,
     const char *filesystem_path,
     const char *storage_path,
-    const char *profile_name,
+    const char *profile,
     keymanager_t *km,
     const config_t *config,
     const metadata_t *metadata,
@@ -155,7 +155,7 @@ static error_t *copy_file_to_worktree(
             filesystem_path,
             dest_path,
             storage_path,
-            profile_name,
+            profile,
             km,
             should_encrypt,
             &file_stat  /* Capture stat for metadata - eliminates race condition */
@@ -453,7 +453,7 @@ static error_t *filter_items_for_update(
 /**
  * Group workspace items by profile
  *
- * Creates a hashmap: profile_name -> item_array_t*
+ * Creates a hashmap: profile -> item_array_t*
  * Each profile gets an array of items that belong to it.
  *
  * Uses item->profile string for grouping.
@@ -478,15 +478,15 @@ static error_t *group_items_by_profile(
 
     for (size_t i = 0; i < count; i++) {
         const workspace_item_t *item = items[i];
-        const char *profile_name = item->profile;
+        const char *profile = item->profile;
 
-        if (!profile_name) {
+        if (!profile) {
             /* Defensive: skip items with no profile name */
             continue;
         }
 
         /* Get or create array for this profile */
-        item_array_t *array = hashmap_get(groups, profile_name);
+        item_array_t *array = hashmap_get(groups, profile);
 
         if (!array) {
             /* Create new array for this profile */
@@ -504,7 +504,7 @@ static error_t *group_items_by_profile(
                 return ERROR(ERR_MEMORY, "Failed to allocate items array");
             }
 
-            error_t *err = hashmap_set(groups, profile_name, array);
+            error_t *err = hashmap_set(groups, profile, array);
             if (err) {
                 free(array->items);
                 free(array);
@@ -825,7 +825,7 @@ static error_t *update_metadata_for_profile(
  */
 static error_t *update_profile(
     worktree_handle_t *wt,
-    const char *profile_name,
+    const char *profile,
     const workspace_item_t **items,
     size_t item_count,
     const cmd_update_options_t *opts,
@@ -835,7 +835,7 @@ static error_t *update_profile(
     size_t *out_processed
 ) {
     CHECK_NULL(wt);
-    CHECK_NULL(profile_name);
+    CHECK_NULL(profile);
     CHECK_NULL(items);
     CHECK_NULL(opts);
     CHECK_NULL(out);
@@ -865,7 +865,7 @@ static error_t *update_profile(
 
     /* Try to get metadata from workspace cache first */
     if (ws) {
-        existing_metadata = (metadata_t *) workspace_get_metadata(ws, profile_name);
+        existing_metadata = (metadata_t *) workspace_get_metadata(ws, profile);
         if (existing_metadata) {
             owns_metadata = false;  /* Borrowed from workspace */
         }
@@ -873,7 +873,7 @@ static error_t *update_profile(
 
     /* Fallback: load from Git if not in cache */
     if (!existing_metadata) {
-        err = metadata_load_from_branch(wt_repo, profile_name, &existing_metadata);
+        err = metadata_load_from_branch(wt_repo, profile, &existing_metadata);
         if (err) {
             if (err->code == ERR_NOT_FOUND) {
                 error_free(err);
@@ -884,7 +884,7 @@ static error_t *update_profile(
             } else {
                 return error_wrap(
                     err, "Failed to load metadata from profile '%s'",
-                    profile_name
+                    profile
                 );
             }
         }
@@ -992,7 +992,7 @@ static error_t *update_profile(
                     wt,
                     item->filesystem_path,
                     item->storage_path,
-                    profile_name,
+                    profile,
                     key_mgr,
                     config,
                     existing_metadata,
@@ -1068,7 +1068,7 @@ static error_t *update_profile(
     /* Build commit message context */
     commit_message_context_t ctx = {
         .action        = COMMIT_ACTION_UPDATE,
-        .profile       = profile_name,
+        .profile       = profile,
         .files         = storage_paths,
         .file_count    = path_count,
         .custom_msg    = opts->message,
@@ -1082,7 +1082,7 @@ static error_t *update_profile(
     }
 
     /* Create commit */
-    err = worktree_commit(wt, profile_name, message, NULL);
+    err = worktree_commit(wt, profile, message, NULL);
     if (err) {
         err = error_wrap(err, "Failed to create commit");
         goto cleanup;
@@ -1190,7 +1190,7 @@ static error_t *flatten_items_to_array(
  *
  * Preconditions:
  *   - All profile updates already succeeded (Git commits done)
- *   - items_by_profile contains profile_name → item_array_t mappings
+ *   - items_by_profile contains profile → item_array_t mappings
  *   - ws contains valid workspace
  *
  * Postconditions:
@@ -1207,7 +1207,7 @@ static error_t *flatten_items_to_array(
  *
  * @param repo Git repository (must not be NULL)
  * @param ws Workspace for accessing km and metadata cache (must not be NULL)
- * @param items_by_profile Hashmap: profile_name → item_array_t* (must not be NULL)
+ * @param items_by_profile Hashmap: profile → item_array_t* (must not be NULL)
  * @param opts Update options for verbose flag (must not be NULL)
  * @param out Output context for verbose logging (can be NULL)
  * @param out_updated Output flag: true if manifest was updated (must not be NULL)
@@ -1411,10 +1411,10 @@ static error_t *update_execute_for_all_profiles(
      * against the enabled profile set during workspace_load. */
     hashmap_iter_t iter;
     hashmap_iter_init(&iter, by_profile);
-    const char *profile_name;
+    const char *profile;
     void *value;
 
-    while (hashmap_iter_next(&iter, &profile_name, &value)) {
+    while (hashmap_iter_next(&iter, &profile, &value)) {
         item_array_t *array = (item_array_t *) value;
 
         if (array->count == 0) {
@@ -1424,15 +1424,15 @@ static error_t *update_execute_for_all_profiles(
         /* Display profile header */
         output_info(
             out, OUTPUT_NORMAL, "Updating profile '{cyan}%s{reset}':",
-            profile_name
+            profile
         );
 
         /* Checkout profile branch in shared worktree */
-        err = worktree_checkout_branch(wt, profile_name);
+        err = worktree_checkout_branch(wt, profile);
         if (err) {
             err = error_wrap(
                 err, "Failed to checkout profile '%s'",
-                profile_name
+                profile
             );
             break;
         }
@@ -1440,14 +1440,14 @@ static error_t *update_execute_for_all_profiles(
         /* Update this profile using shared worktree */
         size_t processed = 0;
         err = update_profile(
-            wt, profile_name, array->items, array->count, opts,
+            wt, profile, array->items, array->count, opts,
             out, config, ws, &processed
         );
 
         if (err) {
             err = error_wrap(
                 err, "Failed to update profile '%s'",
-                profile_name
+                profile
             );
             break;
         }

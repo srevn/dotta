@@ -88,23 +88,23 @@ static void free_profile_cache(void *entry) {
  *
  * @param repo Git repository
  * @param cache Profile existence cache
- * @param profile_name Profile to check
+ * @param profile Profile to check
  * @param out_exists Output: true if branch exists, false otherwise
  * @return Error on failure (memory or Git lookup), NULL on success
  */
 static error_t *check_profile_exists(
     git_repository *repo,
     hashmap_t *cache,
-    const char *profile_name,
+    const char *profile,
     bool *out_exists
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(cache);
-    CHECK_NULL(profile_name);
+    CHECK_NULL(profile);
     CHECK_NULL(out_exists);
 
     /* Check cache first */
-    profile_cache_t *cached = hashmap_get(cache, profile_name);
+    profile_cache_t *cached = hashmap_get(cache, profile);
     if (cached) {
         *out_exists = cached->exists;
         return NULL;
@@ -112,7 +112,7 @@ static error_t *check_profile_exists(
 
     /* Not cached - check branch existence via ref lookup */
     bool exists = false;
-    error_t *err = gitops_branch_exists(repo, profile_name, &exists);
+    error_t *err = gitops_branch_exists(repo, profile, &exists);
     if (err) {
         /* Propagate Git errors — caller emits CANNOT_VERIFY.
          * Don't cache failures (transient errors should be retryable). */
@@ -128,7 +128,7 @@ static error_t *check_profile_exists(
     entry->exists = exists;
 
     /* Insert into cache */
-    err = hashmap_set(cache, profile_name, entry);
+    err = hashmap_set(cache, profile, entry);
     if (err) {
         free_profile_cache(entry);
         return err;
@@ -152,7 +152,7 @@ static error_t *check_profile_exists(
  *
  * @param repo Git repository
  * @param cache Profile cache (tree loaded lazily and cached)
- * @param profile_name Profile to check
+ * @param profile Profile to check
  * @param storage_path Storage path to look up (e.g., "home/.bashrc")
  * @param out_in_tree Output: true if file exists in tree
  * @return Error on failure (Git or memory), NULL on success
@@ -160,20 +160,20 @@ static error_t *check_profile_exists(
 static error_t *check_file_in_tree(
     git_repository *repo,
     hashmap_t *cache,
-    const char *profile_name,
+    const char *profile,
     const char *storage_path,
     bool *out_in_tree
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(cache);
-    CHECK_NULL(profile_name);
+    CHECK_NULL(profile);
     CHECK_NULL(storage_path);
     CHECK_NULL(out_in_tree);
 
     *out_in_tree = false;
 
     /* Get cached profile entry */
-    profile_cache_t *cached = hashmap_get(cache, profile_name);
+    profile_cache_t *cached = hashmap_get(cache, profile);
     if (!cached || !cached->exists) {
         /* Profile doesn't exist or not cached — file can't be in tree */
         return NULL;
@@ -185,7 +185,7 @@ static error_t *check_file_in_tree(
         /* Resolve branch HEAD to tree */
         char refname[DOTTA_REFNAME_MAX];
         error_t *err = gitops_build_refname(
-            refname, sizeof(refname), "refs/heads/%s", profile_name
+            refname, sizeof(refname), "refs/heads/%s", profile
         );
         if (err) {
             return err;

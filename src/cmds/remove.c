@@ -74,7 +74,7 @@ static error_t *validate_options(const cmd_remove_options_t *opts) {
  */
 static error_t *resolve_paths_to_remove(
     git_repository *repo,
-    const char *profile_name,
+    const char *profile,
     char **input_paths,
     size_t path_count,
     string_array_t **storage_paths_out,
@@ -84,7 +84,7 @@ static error_t *resolve_paths_to_remove(
     state_t *state
 ) {
     CHECK_NULL(repo);
-    CHECK_NULL(profile_name);
+    CHECK_NULL(profile);
     CHECK_NULL(input_paths);
     CHECK_NULL(storage_paths_out);
     CHECK_NULL(filesystem_paths_out);
@@ -103,7 +103,7 @@ static error_t *resolve_paths_to_remove(
     if (state) {
         error_t *map_err = state_get_prefix_map(state, &prefix_map);
         if (!map_err && prefix_map) {
-            custom_prefix = (const char *) hashmap_get(prefix_map, profile_name);
+            custom_prefix = (const char *) hashmap_get(prefix_map, profile);
         } else if (map_err) {
             /* Non-fatal: if prefix map loading fails,
              * just degrade to showing storage paths */
@@ -120,7 +120,7 @@ static error_t *resolve_paths_to_remove(
     }
 
     /* Get list of files in profile */
-    err = profile_list_files(repo, profile_name, &profile_files);
+    err = profile_list_files(repo, profile, &profile_files);
     if (err) {
         err = error_wrap(err, "Failed to list files in profile");
         goto cleanup;
@@ -267,7 +267,7 @@ static error_t *resolve_paths_to_remove(
                 err = ERROR(
                     ERR_NOT_FOUND, "File '%s' not found in profile '%s'\n"
                     "Hint: Use 'dotta list --profile %s' to see tracked files",
-                    error_storage_path, profile_name, profile_name
+                    error_storage_path, profile, profile
                 );
                 goto cleanup;
             }
@@ -286,7 +286,7 @@ static error_t *resolve_paths_to_remove(
     if (storage_paths->count == 0) {
         err = ERROR(
             ERR_NOT_FOUND, "No files found to remove from profile '%s'",
-            profile_name
+            profile
         );
         goto cleanup;
     }
@@ -625,13 +625,13 @@ static bool confirm_removal(
  * Confirm profile deletion
  */
 static bool confirm_profile_deletion(
-    const char *profile_name,
+    const char *profile,
     size_t file_count,
     const cmd_remove_options_t *opts,
     const config_t *config,
     output_ctx_t *out
 ) {
-    if (!profile_name || !out) {
+    if (!profile || !out) {
         return false;
     }
 
@@ -643,7 +643,7 @@ static bool confirm_profile_deletion(
     output_newline(out, OUTPUT_NORMAL);
     output_warning(
         out, OUTPUT_NORMAL, "This will delete profile '%s' (%zu file%s)",
-        profile_name, file_count, file_count == 1 ? "" : "s"
+        profile, file_count, file_count == 1 ? "" : "s"
     );
     if (opts->delete_files) {
         output_info(

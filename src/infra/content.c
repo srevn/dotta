@@ -92,7 +92,7 @@ static void buffer_destroy_secure(void *ptr) {
  * @param blob_data Raw blob bytes (must not be NULL unless blob_size == 0)
  * @param blob_size Raw blob size in bytes
  * @param storage_path File path in profile
- * @param profile_name Profile name
+ * @param profile Profile name
  * @param expected_encrypted Expected encryption state (from VWD cache or metadata)
  * @param km Key manager (can be NULL for plaintext files)
  * @param out_content Output buffer (caller owns)
@@ -102,13 +102,13 @@ static error_t *get_plaintext_from_blob(
     const unsigned char *blob_data,
     size_t blob_size,
     const char *storage_path,
-    const char *profile_name,
+    const char *profile,
     bool expected_encrypted,
     keymanager_t *km,
     buffer_t *out_content
 ) {
     CHECK_NULL(storage_path);
-    CHECK_NULL(profile_name);
+    CHECK_NULL(profile);
     CHECK_NULL(out_content);
 
     *out_content = (buffer_t){ 0 };
@@ -136,7 +136,7 @@ static error_t *get_plaintext_from_blob(
             "To fix, run: dotta update -p %s '%s'",
             storage_path, is_encrypted ? "encrypted" : "plaintext",
             expected_encrypted ? "encrypted" : "plaintext",
-            profile_name, storage_path
+            profile, storage_path
         );
     }
 
@@ -155,9 +155,9 @@ static error_t *get_plaintext_from_blob(
 
         /* Get profile key */
         uint8_t profile_key[ENCRYPTION_PROFILE_KEY_SIZE];
-        error_t *err = keymanager_get_profile_key(km, profile_name, profile_key);
+        error_t *err = keymanager_get_profile_key(km, profile, profile_key);
         if (err) {
-            return error_wrap(err, "Failed to get profile key for '%s'", profile_name);
+            return error_wrap(err, "Failed to get profile key for '%s'", profile);
         }
 
         /* Decrypt */
@@ -196,7 +196,7 @@ error_t *content_get_from_blob_oid(
     git_repository *repo,
     const git_oid *blob_oid,
     const char *storage_path,
-    const char *profile_name,
+    const char *profile,
     bool expected_encrypted,
     keymanager_t *km,
     buffer_t *out_content
@@ -204,7 +204,7 @@ error_t *content_get_from_blob_oid(
     CHECK_NULL(repo);
     CHECK_NULL(blob_oid);
     CHECK_NULL(storage_path);
-    CHECK_NULL(profile_name);
+    CHECK_NULL(profile);
     CHECK_NULL(out_content);
 
     /* Open zero-copy view onto the blob */
@@ -216,7 +216,7 @@ error_t *content_get_from_blob_oid(
 
     /* Get plaintext content (view bytes valid until close) */
     err = get_plaintext_from_blob(
-        view.data, view.size, storage_path, profile_name,
+        view.data, view.size, storage_path, profile,
         expected_encrypted, km, out_content
     );
 
@@ -255,14 +255,14 @@ error_t *content_cache_get_from_blob_oid(
     content_cache_t *cache,
     const git_oid *blob_oid,
     const char *storage_path,
-    const char *profile_name,
+    const char *profile,
     bool expected_encrypted,
     const buffer_t **out_content
 ) {
     CHECK_NULL(cache);
     CHECK_NULL(blob_oid);
     CHECK_NULL(storage_path);
-    CHECK_NULL(profile_name);
+    CHECK_NULL(profile);
     CHECK_NULL(out_content);
 
     /* Convert OID to hex string (cache key) */
@@ -295,7 +295,7 @@ error_t *content_cache_get_from_blob_oid(
 
     /* Get plaintext content (view bytes valid until close) */
     err = get_plaintext_from_blob(
-        view.data, view.size, storage_path, profile_name,
+        view.data, view.size, storage_path, profile,
         expected_encrypted, cache->km, content
     );
 
@@ -338,7 +338,7 @@ error_t *content_store_to_blob(
     git_repository *repo,
     const buffer_t *plaintext,
     const char *storage_path,
-    const char *profile_name,
+    const char *profile,
     keymanager_t *km,
     bool should_encrypt,
     git_oid *out_oid
@@ -346,7 +346,7 @@ error_t *content_store_to_blob(
     CHECK_NULL(repo);
     CHECK_NULL(plaintext);
     CHECK_NULL(storage_path);
-    CHECK_NULL(profile_name);
+    CHECK_NULL(profile);
     CHECK_NULL(out_oid);
 
     const unsigned char *data = (const unsigned char *) plaintext->data;
@@ -376,10 +376,10 @@ error_t *content_store_to_blob(
 
         /* Get profile key (cached in keymanager for performance) */
         uint8_t profile_key[ENCRYPTION_PROFILE_KEY_SIZE];
-        error_t *err = keymanager_get_profile_key(km, profile_name, profile_key);
+        error_t *err = keymanager_get_profile_key(km, profile, profile_key);
         if (err) {
             return error_wrap(
-                err, "Failed to get profile key for '%s'", profile_name
+                err, "Failed to get profile key for '%s'", profile
             );
         }
 
@@ -421,7 +421,7 @@ error_t *content_store_file_to_worktree(
     const char *filesystem_path,
     const char *worktree_path,
     const char *storage_path,
-    const char *profile_name,
+    const char *profile,
     keymanager_t *km,
     bool should_encrypt,
     struct stat *out_stat
@@ -429,7 +429,7 @@ error_t *content_store_file_to_worktree(
     CHECK_NULL(filesystem_path);
     CHECK_NULL(worktree_path);
     CHECK_NULL(storage_path);
-    CHECK_NULL(profile_name);
+    CHECK_NULL(profile);
 
     /* Step 1: Validate file type (security: prevent symlink/special file confusion) */
     struct stat st;
@@ -498,13 +498,12 @@ error_t *content_store_file_to_worktree(
 
         /* Get profile key (cached in keymanager) */
         uint8_t profile_key[ENCRYPTION_PROFILE_KEY_SIZE];
-        err = keymanager_get_profile_key(km, profile_name, profile_key);
+        err = keymanager_get_profile_key(km, profile, profile_key);
         if (err) {
             if (content.data) hydro_memzero(content.data, content.size);
             buffer_free(&content);
             return error_wrap(
-                err, "Failed to get profile key for '%s'",
-                profile_name
+                err, "Failed to get profile key for '%s'", profile
             );
         }
 

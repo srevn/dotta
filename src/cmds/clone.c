@@ -116,37 +116,37 @@ static error_t *fetch_profiles(
     error_t *err = NULL;
 
     for (size_t i = 0; i < count; i++) {
-        const char *profile_name = profiles[i];
+        const char *profile = profiles[i];
 
         if (output_is_tty(out)) {
-            output_info(out, OUTPUT_NORMAL, "  Fetching %s...", profile_name);
+            output_info(out, OUTPUT_NORMAL, "  Fetching %s...", profile);
         }
 
         /* Fetch the profile branch */
-        err = gitops_fetch_branch(repo, remote_name, profile_name, xfer);
+        err = gitops_fetch_branch(repo, remote_name, profile, xfer);
         if (err) {
             output_warning(
                 out, OUTPUT_NORMAL, "Failed to fetch '%s': %s",
-                profile_name, error_message(err)
+                profile, error_message(err)
             );
             error_free(err);
             continue;
         }
 
         /* Create local tracking branch if it doesn't already exist */
-        bool already_exists = profile_exists(repo, profile_name);
+        bool already_exists = profile_exists(repo, profile);
         if (already_exists) {
             /* Branch already exists (e.g., from git_clone) - skip creation */
             local_count++;
         } else {
             /* Create new local tracking branch */
             err = upstream_create_tracking_branch(
-                repo, remote_name, profile_name
+                repo, remote_name, profile
             );
             if (err) {
                 output_warning(
                     out, OUTPUT_NORMAL, "Failed to create local branch '%s': %s",
-                    profile_name, error_message(err)
+                    profile, error_message(err)
                 );
                 error_free(err);
                 continue;
@@ -156,7 +156,7 @@ static error_t *fetch_profiles(
 
         /* Add to fetched names array if provided */
         if (fetched_profiles) {
-            string_array_push(fetched_profiles, profile_name);
+            string_array_push(fetched_profiles, profile);
         }
     }
 
@@ -522,28 +522,28 @@ error_t *cmd_clone(
         }
 
         for (size_t i = 0; i < fetched_profiles->count; i++) {
-            const char *profile_name = fetched_profiles->items[i];
+            const char *profile = fetched_profiles->items[i];
             bool has_custom = false;
 
-            error_t *check_err = profile_has_custom_files(repo, profile_name, &has_custom);
+            error_t *check_err = profile_has_custom_files(repo, profile, &has_custom);
             if (check_err) {
                 error_free(check_err);
                 /* Can't determine — include it to avoid silently dropping profiles */
-                string_array_push(profiles, profile_name);
+                string_array_push(profiles, profile);
                 continue;
             }
 
             if (has_custom) {
                 output_warning(
                     out, OUTPUT_NORMAL, "Profile '%s' requires --prefix (not enabled)",
-                    profile_name
+                    profile
                 );
                 output_hint(
                     out, OUTPUT_NORMAL, "Run: dotta profile enable --prefix <path> %s",
-                    profile_name
+                    profile
                 );
             } else {
-                string_array_push(profiles, profile_name);
+                string_array_push(profiles, profile);
             }
         }
 
@@ -612,8 +612,8 @@ error_t *cmd_clone(
     if (!opts->no_bootstrap && fetched_profiles->count > 0) {
         /* Check if any fetched profiles have bootstrap scripts */
         for (size_t i = 0; i < fetched_profiles->count; i++) {
-            const char *profile_name = fetched_profiles->items[i];
-            if (bootstrap_exists(repo, profile_name, NULL)) {
+            const char *profile = fetched_profiles->items[i];
+            if (bootstrap_exists(repo, profile, NULL)) {
                 bootstrap_available = true;
                 break;
             }
@@ -623,11 +623,11 @@ error_t *cmd_clone(
             output_section(out, OUTPUT_NORMAL, "Bootstrap scripts available");
 
             for (size_t i = 0; i < fetched_profiles->count; i++) {
-                const char *profile_name = fetched_profiles->items[i];
-                if (bootstrap_exists(repo, profile_name, NULL)) {
+                const char *profile = fetched_profiles->items[i];
+                if (bootstrap_exists(repo, profile, NULL)) {
                     output_styled(
                         out, OUTPUT_NORMAL, "  {green}✓{reset} %s/.bootstrap\n",
-                        profile_name
+                        profile
                     );
                 }
             }

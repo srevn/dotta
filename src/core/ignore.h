@@ -72,7 +72,7 @@ typedef struct {
  *   - Only ONE ignore_context_t may be active per git_repository* at a time.
  *     The context mutates the repository's internal ignore rules (via libgit2).
  *     Creating a second context before freeing the first produces incorrect results.
- *   - The config and profile_name are copied internally and can be freed after
+ *   - The config and profile are copied internally and can be freed after
  *     this function returns.
  *   - CLI exclude patterns are copied internally and can be freed after this
  *     function returns.
@@ -85,7 +85,7 @@ typedef struct {
  *
  * @param repo Repository (for accessing .dottaignore files) - BORROWED, must outlive context
  * @param config Configuration (for config patterns and settings, can be NULL)
- * @param profile_name Profile name (for profile-specific .dottaignore, can be NULL)
+ * @param profile Profile name (for profile-specific .dottaignore, can be NULL)
  * @param cli_excludes CLI --exclude patterns (can be NULL)
  * @param cli_exclude_count Number of CLI patterns
  * @param out Ignore context (must not be NULL)
@@ -94,7 +94,7 @@ typedef struct {
 error_t *ignore_context_create(
     git_repository *repo,
     const config_t *config,
-    const char *profile_name,
+    const char *profile,
     char **cli_excludes,
     size_t cli_exclude_count,
     ignore_context_t **out

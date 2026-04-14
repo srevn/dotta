@@ -102,13 +102,13 @@ error_t *keymanager_get_key(
  * Cache lifetime: Same as master key (cleared when master key expires/cleared)
  *
  * @param mgr Key manager (must not be NULL)
- * @param profile_name Profile name (must not be NULL)
+ * @param profile Profile name (must not be NULL)
  * @param out_profile_key Output buffer for 32-byte profile key (must be pre-allocated)
  * @return Error or NULL on success
  */
 error_t *keymanager_get_profile_key(
     keymanager_t *mgr,
-    const char *profile_name,
+    const char *profile,
     uint8_t out_profile_key[32]
 );
 

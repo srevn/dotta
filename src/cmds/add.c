@@ -594,17 +594,16 @@ static error_t *create_commit(
  * - Matches VWD architecture specification
  *
  * Algorithm:
- *   1. Load current enabled profiles (or create empty list if no state)
- *   2. Check if already enabled (defensive, shouldn't happen)
- *   3. Add new profile to enabled list (in-memory only)
- *   4. Open transaction
- *   5. Enable profile in state with custom prefix (makes prefix available)
- *   6. Sync files to manifest with DEPLOYED status (uses custom_prefix)
- *   7. Record stat cache for added files
- *   8. Commit transaction atomically
+ *   1. Open write transaction (creates DB if missing)
+ *   2. Read enabled profiles under the transaction snapshot
+ *   3. If already enabled: commit (no-op) and return
+ *   4. Enable profile in state with custom prefix (makes prefix available)
+ *   5. Sync files to manifest with DEPLOYED status (uses custom_prefix)
+ *   6. Record stat cache for added files
+ *   7. Commit transaction atomically
  *
- * CRITICAL ORDER: Step 5 must precede step 6. The custom_prefix stored in step 5
- * is required by manifest_add_files() in step 6 (which loads the prefix map
+ * CRITICAL ORDER: Step 4 must precede step 5. The custom_prefix stored in step 4
+ * is required by manifest_add_files() in step 5 (which loads the prefix map
  * internally) to resolve custom/ storage paths. Transaction atomicity ensures:
  * enable + sync succeed together or fail together (automatic rollback on error).
  *
@@ -639,63 +638,44 @@ static error_t *auto_enable_and_sync_profile(
         *out_synced = 0;
     }
 
-    /* STEP 1: Load current enabled profiles (read-only, no transaction) */
-    err = state_load(repo, &state);
-    if (err) {
-        if (err->code == ERR_NOT_FOUND) {
-            /* No state file yet - create empty enabled list */
-            error_free(err);
-            err = NULL;
-            enabled_profiles = string_array_new(0);
-            if (!enabled_profiles) {
-                return ERROR(ERR_MEMORY, "Failed to create enabled profiles list");
-            }
-        } else {
-            return error_wrap(err, "Failed to load state");
-        }
-    } else {
-        /* State exists - get enabled profiles */
-        err = state_get_profiles(state, &enabled_profiles);
-        if (err) {
-            state_free(state);
-            return error_wrap(err, "Failed to get enabled profiles");
-        }
-        state_free(state);
-        state = NULL;
-    }
-
-    /* STEP 2: Check if already enabled (defensive) */
-    for (size_t i = 0; i < enabled_profiles->count; i++) {
-        if (strcmp(enabled_profiles->items[i], profile) == 0) {
-            /* Already enabled - idempotent success */
-            string_array_free(enabled_profiles);
-            *out_updated = true;
-            return NULL;
-        }
-    }
-
-    /* STEP 3: Add new profile to enabled list (in-memory) */
-    err = string_array_push(enabled_profiles, profile);
-    if (err) {
-        string_array_free(enabled_profiles);
-        return error_wrap(err, "Failed to add profile to enabled list");
-    }
-
-    /* STEP 4: Open write transaction */
+    /* STEP 1: Open write transaction (creates DB on first add) */
     err = state_load_for_update(repo, &state);
     if (err) {
-        err = error_wrap(err, "Failed to open transaction");
+        return error_wrap(err, "Failed to open transaction");
+    }
+
+    /* STEP 2: Read enabled profiles under the transaction snapshot */
+    err = state_get_profiles(state, &enabled_profiles);
+    if (err) {
+        err = error_wrap(err, "Failed to get enabled profiles");
         goto cleanup;
     }
 
-    /* STEP 5: Enable profile in state with custom prefix (if provided)
+    /* STEP 3: Check if already enabled (defensive) */
+    for (size_t i = 0; i < enabled_profiles->count; i++) {
+        if (strcmp(enabled_profiles->items[i], profile) == 0) {
+            /* Already enabled - idempotent success. Rollback the no-op
+             * transaction via state_free (no writes to preserve). */
+            *out_updated = true;
+            goto cleanup;
+        }
+    }
+
+    /* Append new profile to enabled list for manifest_add_files precedence */
+    err = string_array_push(enabled_profiles, profile);
+    if (err) {
+        err = error_wrap(err, "Failed to add profile to enabled list");
+        goto cleanup;
+    }
+
+    /* STEP 4: Enable profile in state with custom prefix (if provided)
      *
      * CRITICAL ORDER: Must enable BEFORE manifest sync so custom_prefix
      * is available in state for path resolution during manifest_add_files().
      * The custom prefix is stored in the enabled_profiles table and loaded
      * internally by the manifest layer to resolve custom/ storage paths.
      *
-     * Transaction Safety: If manifest sync (STEP 6) fails, state_free()
+     * Transaction Safety: If manifest sync (STEP 5) fails, state_free()
      * automatically rolls back this change (see cleanup handler). */
     err = state_enable_profile(state, profile, custom_prefix);
     if (err) {
@@ -703,10 +683,10 @@ static error_t *auto_enable_and_sync_profile(
         goto cleanup;
     }
 
-    /* STEP 6: Sync files to manifest with DEPLOYED status
+    /* STEP 5: Sync files to manifest with DEPLOYED status
      *
      * manifest_add_files() loads the prefix map internally to build the
-     * manifest. The custom_prefix stored in STEP 5 is now available for
+     * manifest. The custom_prefix stored in STEP 4 is now available for
      * resolving custom/ storage paths via path_from_storage().
      *
      * Precedence: If this profile has lower precedence than existing enabled
@@ -724,7 +704,7 @@ static error_t *auto_enable_and_sync_profile(
         goto cleanup;
     }
 
-    /* STEP 7: Record stat cache for added files
+    /* STEP 6: Record stat cache for added files
      *
      * Files were just captured from filesystem — content matches blob_oid.
      * lstat() is cheap (kernel cache hot from recent content_store_file_to_worktree).
@@ -740,7 +720,7 @@ static error_t *auto_enable_and_sync_profile(
         }
     }
 
-    /* STEP 8: Commit transaction atomically */
+    /* STEP 7: Commit transaction atomically */
     err = state_save(repo, state);
     if (err) {
         err = error_wrap(err, "Failed to commit transaction");
@@ -774,19 +754,18 @@ cleanup:
  * ensuring all newly-added files are found during precedence checks.
  *
  * Algorithm:
- *   1. Check if profile is enabled (read-only check)
- *   2. If not enabled: return NULL (skip manifest update)
- *   3. If enabled:
- *      a. Open transaction (state_load_for_update)
- *      b. If custom_prefix provided: update prefix in state (UPSERT)
- *      c. Call manifest_add_files() (builds fresh manifest internally)
- *      d. Record stat cache for added files
- *      e. Commit transaction (state_save)
+ *   1. Open write transaction (state_load_for_update)
+ *   2. Read enabled profiles under the transaction snapshot
+ *   3. If profile not enabled: rollback via state_free (no writes to preserve)
+ *   4. If custom_prefix provided: update prefix in state (UPSERT)
+ *   5. Call manifest_add_files() (builds fresh manifest internally)
+ *   6. Record stat cache for added files
+ *   7. Commit transaction (state_save)
  *
  * Custom Prefix Update:
  *   When adding custom/ files to an already-enabled profile, the custom_prefix
  *   must be stored in state BEFORE manifest_add_files(). This is the same
- *   ordering constraint as auto_enable_and_sync_profile() (STEP 5 → STEP 6).
+ *   ordering constraint as auto_enable_and_sync_profile() (STEP 4 → STEP 5).
  *   Only called when custom_prefix is non-NULL to avoid clearing an existing
  *   prefix when adding home/ or root/ files.
  *
@@ -796,8 +775,7 @@ cleanup:
  *   is set to indicate dotta knows about them.
  *
  * Error Handling:
- *   - State doesn't exist → treat as "not enabled" (return NULL)
- *   - Profile not enabled → return NULL (success, no update)
+ *   - Profile not enabled → rollback transaction, return NULL (success, no update)
  *   - Manifest sync fails → rollback, return error
  *
  * Non-Fatal Integration:
@@ -834,24 +812,21 @@ static error_t *update_manifest_after_add(
     /* Initialize output */
     *out_updated = false;
 
-    /* STEP 1: Check if profile is enabled (read-only check) */
-    err = state_load(repo, &state);
+    /* STEP 1: Open transaction (creates DB if missing, but this helper is only
+     * called after a successful Git commit, so the repo exists) */
+    err = state_load_for_update(repo, &state);
     if (err) {
-        if (err->code == ERR_NOT_FOUND) {
-            /* State file doesn't exist yet - profile can't be enabled */
-            error_free(err);
-            return NULL;
-        }
-        return error_wrap(err, "Failed to load state for manifest check");
+        return error_wrap(err, "Failed to open state transaction for manifest update");
     }
 
+    /* STEP 2: Read enabled profiles under the transaction snapshot */
     err = state_get_profiles(state, &enabled_profiles);
     if (err) {
-        state_free(state);
-        return error_wrap(err, "Failed to get enabled profiles");
+        err = error_wrap(err, "Failed to get enabled profiles");
+        goto cleanup;
     }
 
-    /* Check if this profile is enabled */
+    /* STEP 3: Check if this profile is enabled */
     bool is_enabled = false;
     for (size_t i = 0; i < enabled_profiles->count; i++) {
         if (strcmp(enabled_profiles->items[i], profile) == 0) {
@@ -860,29 +835,18 @@ static error_t *update_manifest_after_add(
         }
     }
 
-    /* Free read-only state */
-    state_free(state);
-    state = NULL;
-
     if (!is_enabled) {
-        /* Profile not enabled - skip manifest update (this is success) */
-        string_array_free(enabled_profiles);
-        return NULL;
-    }
-
-    /* STEP 2: Open transaction */
-    err = state_load_for_update(repo, &state);
-    if (err) {
-        err = error_wrap(err, "Failed to open state transaction for manifest update");
+        /* Profile not enabled - skip manifest update (this is success).
+         * state_free rolls back the no-op transaction. */
         goto cleanup;
     }
 
-    /* STEP 3: Update custom prefix in state if adding custom/ files
+    /* STEP 4: Update custom prefix in state if adding custom/ files
      *
      * CRITICAL ORDER: Must store prefix BEFORE manifest_add_files() so
      * the prefix map (loaded internally) can resolve custom/ storage paths
      * during manifest building. Same ordering constraint as
-     * auto_enable_and_sync_profile() (STEP 5 → STEP 6).
+     * auto_enable_and_sync_profile() (STEP 4 → STEP 5).
      *
      * Only called when custom_prefix is non-NULL to avoid clearing an
      * existing prefix when adding home/ or root/ files.
@@ -895,7 +859,7 @@ static error_t *update_manifest_after_add(
         }
     }
 
-    /* STEP 4: Bulk sync operation (O(M+N)) */
+    /* STEP 5: Bulk sync operation (O(M+N)) */
     size_t synced_count = 0;
     err = manifest_add_files(
         repo,
@@ -911,7 +875,7 @@ static error_t *update_manifest_after_add(
         goto cleanup;
     }
 
-    /* STEP 5: Record stat cache for added files */
+    /* STEP 6: Record stat cache for added files */
     for (size_t i = 0; i < added_files->count; i++) {
         const char *path = added_files->items[i];
         struct stat st;
@@ -921,7 +885,7 @@ static error_t *update_manifest_after_add(
         }
     }
 
-    /* STEP 6: Commit transaction */
+    /* STEP 7: Commit transaction */
     err = state_save(repo, state);
     if (err) {
         err = error_wrap(err, "Failed to save manifest updates");

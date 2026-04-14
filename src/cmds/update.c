@@ -1180,32 +1180,36 @@ static error_t *flatten_items_to_array(
  *   - Deleted files: handled by bulk function (entries remain for orphan detection or fallback)
  *
  * Algorithm:
- *   1. Check if any profiles enabled (read-only, upfront optimization)
+ *   1. Read enabled profiles from caller's state handle
  *   2. If none enabled: return NULL (skip manifest update gracefully)
- *   3. Open transaction (state_load_for_update)
+ *   3. Begin write transaction on caller's handle
  *   4. Flatten items_by_profile hashmap into single array
  *   5. Call manifest_update_files() ONCE (O(M+N))
- *   6. Commit transaction (state_save)
+ *   6. Commit transaction
  *   7. Set *out_updated = true
  *
  * Preconditions:
  *   - All profile updates already succeeded (Git commits done)
+ *   - state is a live handle (non-NULL, DB open) owned by caller
  *   - items_by_profile contains profile → item_array_t mappings
  *   - ws contains valid workspace
  *
  * Postconditions:
  *   - Manifest entries synced for enabled profiles only
- *   - Transaction committed or rolled back atomically
+ *   - Transaction committed or rolled back atomically; state handle left clean
  *   - out_updated flag reflects whether manifest was updated
  *
  * Error Handling:
  *   - Non-fatal: Git commits succeeded, manifest is a cache
+ *   - On any error after begin_transaction, explicit rollback keeps state clean
+ *     so the caller can continue to post-update hook and cleanup deterministically
  *   - Caller should warn user and suggest repair options
  *
  * Performance: O(M + N) where M = total files in profiles, N = updated files
  * Old implementation: O(N × M) - up to 833x slower!
  *
  * @param repo Git repository (must not be NULL)
+ * @param state Caller's state handle (must not be NULL, must have open DB)
  * @param ws Workspace for accessing km and metadata cache (must not be NULL)
  * @param items_by_profile Hashmap: profile → item_array_t* (must not be NULL)
  * @param opts Update options for verbose flag (must not be NULL)
@@ -1215,6 +1219,7 @@ static error_t *flatten_items_to_array(
  */
 static error_t *update_manifest_after_update(
     git_repository *repo,
+    state_t *state,
     workspace_t *ws,
     const hashmap_t *items_by_profile,
     const cmd_update_options_t *opts,
@@ -1222,51 +1227,42 @@ static error_t *update_manifest_after_update(
     bool *out_updated
 ) {
     CHECK_NULL(repo);
+    CHECK_NULL(state);
     CHECK_NULL(ws);
     CHECK_NULL(items_by_profile);
     CHECK_NULL(opts);
     CHECK_NULL(out_updated);
 
     error_t *err = NULL;
-    state_t *state = NULL;
     string_array_t *enabled_profiles = NULL;
     const workspace_item_t **all_items = NULL;
     size_t item_count = 0;
+    bool in_transaction = false;
 
     /* Initialize output */
     *out_updated = false;
 
-    /* Check if ANY profiles enabled (upfront optimization) */
-    err = state_load(repo, &state);
-    if (err) {
-        if (err->code == ERR_NOT_FOUND) {
-            error_free(err);
-            return NULL;  /* No state file - nothing to do */
-        }
-        return error_wrap(err, "Failed to load state for manifest check");
-    }
-
+    /* Read enabled profiles from the caller's handle. cmd_update already
+     * enforced count > 0 before reaching this helper, but re-check defensively
+     * so future callers can't misuse the helper. */
     err = state_get_profiles(state, &enabled_profiles);
     if (err) {
-        state_free(state);
         return error_wrap(err, "Failed to get enabled profiles");
     }
 
     if (enabled_profiles->count == 0) {
+        /* No profiles enabled - nothing to do */
         string_array_free(enabled_profiles);
-        state_free(state);
-        return NULL;  /* No profiles enabled - nothing to do */
+        return NULL;
     }
 
-    state_free(state);
-    state = NULL;
-
-    /* Open transaction for manifest updates */
-    err = state_load_for_update(repo, &state);
+    /* Begin write transaction on caller's handle */
+    err = state_begin_transaction(state);
     if (err) {
         string_array_free(enabled_profiles);
-        return error_wrap(err, "Failed to open state transaction");
+        return error_wrap(err, "Failed to begin manifest update transaction");
     }
+    in_transaction = true;
 
     /* Flatten items_by_profile into single array */
     err = flatten_items_to_array(items_by_profile, &all_items, &item_count);
@@ -1275,8 +1271,8 @@ static error_t *update_manifest_after_update(
     }
 
     if (item_count == 0) {
-        /* No items to sync */
-        goto cleanup;
+        /* No items to sync - commit the no-op transaction */
+        goto commit;
     }
 
     /* Use bulk sync operation (O(M + N) - optimal!) */
@@ -1314,16 +1310,7 @@ static error_t *update_manifest_after_update(
         }
     }
 
-    /* Commit transaction */
-    err = state_save(repo, state);
-    if (err) {
-        err = error_wrap(err, "Failed to save manifest updates");
-        goto cleanup;
-    }
-
-    *out_updated = true;
-
-    /* Verbose summary */
+    /* Verbose summary (emit before commit so failure diagnostics still have it) */
     if (synced > 0 || removed > 0 || fallbacks > 0) {
         output_info(
             out, OUTPUT_VERBOSE,
@@ -1332,13 +1319,25 @@ static error_t *update_manifest_after_update(
         );
     }
 
+commit:
+    err = state_commit_transaction(state);
+    if (err) {
+        err = error_wrap(err, "Failed to save manifest updates");
+        goto cleanup;
+    }
+    in_transaction = false;
+
+    *out_updated = true;
+
 cleanup:
+    /* Leave state handle clean for the caller by rolling back any uncommitted
+     * transaction. state_rollback_transaction is a no-op if already committed. */
+    if (in_transaction) {
+        state_rollback_transaction(state);
+    }
     free(all_items);  /* Free array, not items (borrowed) */
     if (enabled_profiles) {
         string_array_free(enabled_profiles);
-    }
-    if (state) {
-        state_free(state);  /* Rolls back if err != NULL */
     }
 
     return err;
@@ -2279,7 +2278,7 @@ error_t *cmd_update(
      */
     bool manifest_updated = false;
     error_t *manifest_err = update_manifest_after_update(
-        repo, ws, by_profile, opts, out, &manifest_updated
+        repo, state, ws, by_profile, opts, out, &manifest_updated
     );
 
     /* Free by_profile hashmap after manifest sync */

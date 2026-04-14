@@ -940,12 +940,11 @@ static error_t *remove_files_from_profile(
         goto cleanup;
     }
 
-    /* Capture profile-enabled status and release read-only state early.
-     * State was only needed for path resolution and conflict analysis above. */
+    /* Capture profile-enabled status. Keep the state handle alive — the
+     * manifest-update phase below upgrades it to a write transaction via
+     * state_begin_transaction rather than reopening the database. */
     if (state) {
         profile_enabled = state_has_profile(state, opts->profile);
-        state_free(state);
-        state = NULL;
     }
 
     /* Display multi-profile warnings BEFORE any operation */
@@ -1133,44 +1132,47 @@ static error_t *remove_files_from_profile(
      * deletion of files still needed by higher-priority profiles).
      */
 
-    /* Update manifest if profile is enabled */
+    /* Update manifest if profile is enabled.
+     *
+     * profile_enabled==true implies state was successfully loaded with a live DB
+     * (state_has_profile returns false for NULL/empty state), so
+     * state_begin_transaction is safe without an additional guard. The handle
+     * is reused — no second state_load_for_update that would re-prepare
+     * statements and re-query enabled_profiles from scratch. */
     size_t manifest_removed_count = 0, manifest_fallback_count = 0;
 
     if (profile_enabled) {
         /* Open transaction for manifest update */
-        state_t *update_state = NULL;
-        err = state_load_for_update(repo, &update_state);
-        if (err) {
+        error_t *manifest_err = state_begin_transaction(state);
+        if (manifest_err) {
             /* Non-fatal */
             output_warning(
                 out, OUTPUT_NORMAL, "Failed to open transaction for manifest update: %s",
-                error_message(err)
+                error_message(manifest_err)
             );
             output_hint(
                 out, OUTPUT_NORMAL, "Run 'dotta status' or 'dotta apply' to resync manifest"
             );
-            error_free(err);
-            err = NULL;
+            error_free(manifest_err);
         } else {
             /* Get enabled profiles for manifest sync */
             string_array_t *enabled_profiles = NULL;
-            err = state_get_profiles(update_state, &enabled_profiles);
-            if (err) {
+            manifest_err = state_get_profiles(state, &enabled_profiles);
+            if (manifest_err) {
                 output_warning(
                     out, OUTPUT_NORMAL, "Failed to get enabled profiles: %s",
-                    error_message(err)
+                    error_message(manifest_err)
                 );
                 output_hint(
                     out, OUTPUT_NORMAL, "Run 'dotta status' or 'dotta apply' to resync"
                 );
-                error_free(err);
-                err = NULL;
-                state_free(update_state);
+                error_free(manifest_err);
+                state_rollback_transaction(state);
             } else {
                 /* Update manifest with fallback logic */
-                error_t *manifest_err = manifest_remove_files(
+                manifest_err = manifest_remove_files(
                     repo,
-                    update_state,
+                    state,
                     opts->profile,
                     removed_paths,
                     enabled_profiles,
@@ -1188,6 +1190,7 @@ static error_t *remove_files_from_profile(
                         out, OUTPUT_NORMAL, "Run 'dotta status' or 'dotta apply' to resync"
                     );
                     error_free(manifest_err);
+                    state_rollback_transaction(state);
                 } else {
                     /* manifest_remove_files() marks entries STATE_DELETED.
                      * With --delete-files: leave them for apply to clean up.
@@ -1196,14 +1199,14 @@ static error_t *remove_files_from_profile(
                         state_file_entry_t *delete_entries = NULL;
                         size_t delete_count = 0;
                         error_t *delete_err = state_get_entries_by_profile(
-                            update_state, opts->profile, NULL, &delete_entries, &delete_count
+                            state, opts->profile, NULL, &delete_entries, &delete_count
                         );
                         if (!delete_err) {
                             for (size_t di = 0; di < delete_count; di++) {
                                 if (delete_entries[di].state &&
                                     strcmp(delete_entries[di].state, STATE_DELETED) == 0) {
                                     error_t *rm_err = state_remove_file(
-                                        update_state, delete_entries[di].filesystem_path
+                                        state, delete_entries[di].filesystem_path
                                     );
                                     if (rm_err) {
                                         error_free(rm_err);
@@ -1217,40 +1220,36 @@ static error_t *remove_files_from_profile(
                     }
 
                     /* Commit transaction */
-                    err = state_save(repo, update_state);
-                    if (err) {
+                    error_t *commit_err = state_commit_transaction(state);
+                    if (commit_err) {
                         output_warning(
                             out, OUTPUT_NORMAL, "Failed to save manifest updates: %s",
-                            error_message(err)
+                            error_message(commit_err)
                         );
                         output_hint(
                             out, OUTPUT_NORMAL, "Run 'dotta status' or 'dotta apply' to resync"
                         );
-                        error_free(err);
-                        err = NULL;
-                    } else {
-                        /* Display manifest sync results */
-                        if (manifest_removed_count > 0 || manifest_fallback_count > 0) {
-                            if (opts->delete_files) {
-                                output_info(
-                                    out, OUTPUT_VERBOSE,
-                                    "Manifest: %zu staged for removal, %zu fallback%s",
-                                    manifest_removed_count, manifest_fallback_count,
-                                    manifest_fallback_count == 1 ? "" : "s"
-                                );
-                            } else {
-                                output_info(
-                                    out, OUTPUT_VERBOSE,
-                                    "Manifest: %zu released, %zu fallback%s",
-                                    manifest_removed_count, manifest_fallback_count,
-                                    manifest_fallback_count == 1 ? "" : "s"
-                                );
-                            }
+                        error_free(commit_err);
+                        state_rollback_transaction(state);
+                    } else if (manifest_removed_count > 0 || manifest_fallback_count > 0) {
+                        if (opts->delete_files) {
+                            output_info(
+                                out, OUTPUT_VERBOSE,
+                                "Manifest: %zu staged for removal, %zu fallback%s",
+                                manifest_removed_count, manifest_fallback_count,
+                                manifest_fallback_count == 1 ? "" : "s"
+                            );
+                        } else {
+                            output_info(
+                                out, OUTPUT_VERBOSE,
+                                "Manifest: %zu released, %zu fallback%s",
+                                manifest_removed_count, manifest_fallback_count,
+                                manifest_fallback_count == 1 ? "" : "s"
+                            );
                         }
                     }
                 }
 
-                state_free(update_state);
                 string_array_free(enabled_profiles);
             }
         }

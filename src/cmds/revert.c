@@ -836,6 +836,7 @@ error_t *cmd_revert(
     git_tree_entry *current_entry = NULL;
     git_tree_entry *target_entry = NULL;
     keymanager_t *km = NULL;
+    state_t *state = NULL;
     bool user_aborted = false;
 
     /* CLI flags override config */
@@ -1096,15 +1097,14 @@ error_t *cmd_revert(
     /* Initialize manifest sync counters */
     size_t synced = 0, removed = 0, fallbacks = 0;
 
-    /* Check if profile is enabled */
-    state_t *read_state = NULL;
+    /* Check if profile is enabled. Keep the state handle alive — the manifest
+     * sync below upgrades it to a write transaction via state_begin_transaction
+     * rather than closing and reopening the database. */
     bool profile_enabled = false;
 
-    err = state_load(repo, &read_state);
-    if (!err && read_state) {
-        profile_enabled = state_has_profile(read_state, profile);
-        state_free(read_state);
-        read_state = NULL;
+    err = state_load(repo, &state);
+    if (!err && state) {
+        profile_enabled = state_has_profile(state, profile);
     } else if (err) {
         /* State doesn't exist - treat as not enabled */
         error_free(err);
@@ -1148,9 +1148,10 @@ error_t *cmd_revert(
         new_head_commit = NULL;
     }
 
-    /* Open transaction for manifest update */
-    state_t *state = NULL;
-    err = state_load_for_update(repo, &state);
+    /* Upgrade existing handle to a write transaction. profile_enabled==true
+     * proved state has a live DB (state_has_profile returns false for NULL
+     * state), so state_begin_transaction is safe without an additional guard. */
+    err = state_begin_transaction(state);
     if (err) {
         /* Non-fatal */
         output_warning(
@@ -1173,7 +1174,7 @@ error_t *cmd_revert(
             out, OUTPUT_NORMAL, "Failed to get enabled profiles: %s",
             error_message(err)
         );
-        state_free(state);
+        state_rollback_transaction(state);
         error_free(err);
         err = NULL;
         goto success;
@@ -1203,14 +1204,13 @@ error_t *cmd_revert(
             out, OUTPUT_NORMAL, "Run 'dotta status' or 'dotta apply' to resync manifest"
         );
         error_free(manifest_err);
-        state_free(state);
+        state_rollback_transaction(state);
         string_array_free(enabled_profiles);
         goto success;
     }
 
     /* Commit transaction */
-    err = state_save(repo, state);
-    state_free(state);
+    err = state_commit_transaction(state);
     string_array_free(enabled_profiles);
 
     if (err) {
@@ -1224,6 +1224,7 @@ error_t *cmd_revert(
         );
         error_free(err);
         err = NULL;
+        state_rollback_transaction(state);
         goto success;
     }
 
@@ -1255,6 +1256,7 @@ cleanup:
     if (target_commit) git_commit_free(target_commit);
     if (profile) free(profile);
     if (resolved_path) free(resolved_path);
+    if (state) state_free(state);
 
     /* Don't return error if user aborted */
     if (user_aborted) {

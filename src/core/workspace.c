@@ -17,7 +17,6 @@
 #include <dirent.h>
 #include <errno.h>
 #include <grp.h>
-#include <limits.h>
 #include <pwd.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -417,7 +416,7 @@ static error_t *analyze_file_divergence(
      * workspace_build_manifest_from_state), so blob_oid is always a real OID
      * here. The zero-check is a defensive guard — not a type discriminant.
      *
-     * Note: Git-built manifests (from profile_build_manifest) now also carry
+     * Note: Git-built manifests (from manifest_build) now also carry
      * non-zero blob_oid, but those manifests are transient and never enter the
      * workspace divergence pipeline. */
     bool in_state = !git_oid_is_zero(&manifest_entry->blob_oid);
@@ -2155,7 +2154,7 @@ static error_t *analyze_encryption_policy_mismatch(
  * Metadata comes from the workspace's pre-loaded metadata cache.
  *
  * @param vwd_entry Manifest entry to patch (VWD cache fields will be replaced)
- * @param fresh_entry Fresh entry from profile_build_manifest (has tree entry)
+ * @param fresh_entry Fresh entry from manifest_build (has tree entry)
  * @param metadata Pre-loaded metadata for the profile (can be NULL)
  * @return Error or NULL on success
  */
@@ -2248,7 +2247,7 @@ static error_t *patch_entry_from_fresh(
  * Staleness Detection and In-Memory Patching:
  * After loading state entries, compares each profile's stored HEAD against
  * the branch's current HEAD. If any profile is stale (external Git changes):
- *   - Builds a fresh manifest from Git via profile_build_manifest()
+ *   - Builds a fresh manifest from Git via manifest_build()
  *   - Patches VWD cache fields for stale entries found in fresh manifest
  *   - Marks entries removed from Git in ws->released_paths (for orphan analysis)
  *   - Tracks patched entries in ws->stale_paths (for DIVERGENCE_STALE flag)
@@ -2387,7 +2386,7 @@ static error_t *workspace_build_manifest_from_state(
         }
 
         /* Build fresh manifest from current Git state for stale comparison */
-        err = profile_build_manifest(ws->repo, ws->profiles, ws->state, NULL, &fresh_manifest);
+        err = manifest_build(ws->repo, ws->profiles, ws->state, NULL, &fresh_manifest);
         if (err) {
             hashmap_free(stale_profiles, NULL);
             return error_wrap(err, "Failed to build fresh manifest for stale repair");
@@ -2729,7 +2728,7 @@ error_t *workspace_load(
     }
 
     /* Build manifest from state (Virtual Working Directory architecture)
-     * This replaces the old profile_build_manifest() which walked Git trees.
+     * This replaces the old manifest_build() which walked Git trees.
      * Now we read from the manifest table (expected state cache) for O(M) performance
      * where M = entries in manifest, not O(N) where N = all files in Git. */
     err = workspace_build_manifest_from_state(ws, resolved_opts.repair_completed);

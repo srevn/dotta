@@ -6,19 +6,16 @@
 
 #include <ctype.h>
 #include <git2.h>
-#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/utsname.h>
 #include <unistd.h>
 
-#include "base/arena.h"
 #include "base/array.h"
 #include "base/error.h"
 #include "base/hashmap.h"
 #include "base/string.h"
 #include "core/state.h"
-#include "infra/path.h"
 #include "sys/gitops.h"
 
 /**
@@ -295,14 +292,18 @@ static error_t *validate_state_profiles(
 
     valid = string_array_new(0);
     if (!valid) {
-        err = ERROR(ERR_MEMORY, "Failed to allocate valid profiles array");
+        err = ERROR(
+            ERR_MEMORY, "Failed to allocate valid profiles array"
+        );
         goto cleanup;
     }
 
     if (out_missing_profiles) {
         missing = string_array_new(0);
         if (!missing) {
-            err = ERROR(ERR_MEMORY, "Failed to allocate missing profiles array");
+            err = ERROR(
+                ERR_MEMORY, "Failed to allocate missing profiles array"
+            );
             goto cleanup;
         }
     }
@@ -371,7 +372,9 @@ error_t *profile_resolve_enabled(
     if (!effective_state) {
         err = state_load(repo, &local_state);
         if (err) {
-            return error_wrap(err, "Failed to load state for profile resolution");
+            return error_wrap(
+                err, "Failed to load state for profile resolution"
+            );
         }
         effective_state = local_state;
     }
@@ -406,7 +409,9 @@ error_t *profile_resolve_enabled(
      * modules (deploy.c, workspace.c) that also write diagnostic warnings to stderr.
      */
     if (missing_profiles && missing_profiles->count > 0) {
-        fprintf(stderr, "Warning: State references non-existent profiles:\n");
+        fprintf(
+            stderr, "Warning: State references non-existent profiles:\n"
+        );
         for (size_t i = 0; i < missing_profiles->count; i++) {
             fprintf(stderr, "  • %s\n", missing_profiles->items[i]);
         }
@@ -460,13 +465,17 @@ error_t *profile_resolve_filter(
     CHECK_NULL(out);
 
     if (cli_count == 0) {
-        return ERROR(ERR_INVALID_ARG, "CLI profile count cannot be zero");
+        return ERROR(
+            ERR_INVALID_ARG, "CLI profile count cannot be zero"
+        );
     }
 
     error_t *err = NULL;
     string_array_t *validated = string_array_new(cli_count);
     if (!validated) {
-        return ERROR(ERR_MEMORY, "Failed to allocate validated profiles");
+        return ERROR(
+            ERR_MEMORY, "Failed to allocate validated profiles"
+        );
     }
 
     for (size_t i = 0; i < cli_count; i++) {
@@ -474,7 +483,9 @@ error_t *profile_resolve_filter(
             err = string_array_push(validated, cli_profiles[i]);
             if (err) {
                 string_array_free(validated);
-                return error_wrap(err, "Failed to add profile '%s'", cli_profiles[i]);
+                return error_wrap(
+                    err, "Failed to add profile '%s'", cli_profiles[i]
+                );
             }
         } else if (strict_mode) {
             string_array_free(validated);
@@ -583,22 +594,6 @@ error_t *profile_list_all_local(
 }
 
 /**
- * Check if a storage path is profile metadata (not a user file)
- *
- * These are internal files maintained by dotta within each profile branch.
- * They should be excluded when listing user-deployable files.
- */
-static bool profile_is_metadata_path(const char *path) {
-    return strcmp(path, ".dottaignore") == 0 ||
-           strcmp(path, ".bootstrap") == 0 ||
-           strcmp(path, ".gitignore") == 0 ||
-           strcmp(path, "README.md") == 0 ||
-           strcmp(path, "README") == 0 ||
-           str_starts_with(path, ".git/") ||
-           str_starts_with(path, ".dotta/");
-}
-
-/**
  * Tree walk callback data
  */
 struct walk_data {
@@ -648,7 +643,13 @@ static int tree_walk_callback(
     }
 
     /* Skip repository metadata files */
-    if (profile_is_metadata_path(full_path)) {
+    if (strcmp(full_path, ".dottaignore") == 0 ||
+        strcmp(full_path, ".bootstrap") == 0 ||
+        strcmp(full_path, ".gitignore") == 0 ||
+        strcmp(full_path, "README.md") == 0 ||
+        strcmp(full_path, "README") == 0 ||
+        str_starts_with(full_path, ".git/") ||
+        str_starts_with(full_path, ".dotta/")) {
         return 0;
     }
 
@@ -673,7 +674,10 @@ static int tree_walk_callback(
  * @param out String array of storage paths (must not be NULL, caller must free)
  * @return Error or NULL on success
  */
-static error_t *profile_list_tree_files(git_tree *tree, string_array_t **out) {
+static error_t *profile_list_tree_files(
+    git_tree *tree,
+    string_array_t **out
+) {
     struct walk_data data = {
         .paths = string_array_new(0),
         .error = NULL
@@ -694,270 +698,6 @@ static error_t *profile_list_tree_files(git_tree *tree, string_array_t **out) {
 }
 
 /**
- * Context for manifest building callback
- *
- * Passed to gitops_tree_walk() to build manifest entries directly during
- * tree traversal, eliminating O(N×D) two-pass overhead. The callback
- * extracts identity fields from borrowed tree entries at O(1) per file.
- *
- * Memory ownership:
- * - manifest: borrowed, caller retains ownership
- * - path_map: borrowed, caller retains ownership
- * - custom_prefix: borrowed, can be NULL (used for path_from_storage only)
- * - error: owned by callback, caller must free on error
- */
-struct manifest_build_ctx {
-    manifest_t *manifest;       /* Target manifest (modified by callback) */
-    size_t capacity;            /* Current entries capacity (updated on growth) */
-    hashmap_t *path_map;        /* For O(1) dedup/override detection */
-    const char *profile_name;   /* Profile name for entries and error messages */
-    const char *custom_prefix;  /* For path_from_storage (can be NULL) */
-    arena_t *arena;             /* Arena for string allocations (NULL = heap) */
-    error_t *error;             /* Error propagation (set on failure) */
-};
-
-/**
- * Tree walk callback that builds manifest entries directly
- *
- * Performance optimization: Instead of collecting paths in pass 1 then
- * re-traversing via git_tree_entry_bypath() in pass 2 (O(N×D)), this
- * callback builds file_entry_t directly in O(N) time.
- *
- * Extracts identity fields (blob_oid, type, mode) from the borrowed tree
- * entry at the callback boundary — no git_tree_entry_dup needed, no opaque
- * handle stored on file_entry_t.
- *
- * Handles:
- * - Metadata file filtering (.dotta/, .bootstrap, etc.)
- * - Storage path to filesystem path conversion
- * - Profile precedence override (higher precedence wins)
- * - Array growth on demand
- * - File identity extraction from Git tree entry
- *
- * @param root Directory path within tree (empty string for root level)
- * @param entry Git tree entry (borrowed — valid for callback duration only)
- * @param payload Pointer to manifest_build_ctx
- * @return 0 to continue walk, -1 to stop on error
- */
-static int manifest_build_callback(
-    const char *root,
-    const git_tree_entry *entry,
-    void *payload
-) {
-    struct manifest_build_ctx *ctx = (struct manifest_build_ctx *) payload;
-
-    /* Only process blobs (files), skip directories */
-    if (git_tree_entry_type(entry) != GIT_OBJECT_BLOB) {
-        return 0;
-    }
-
-    /* Build full storage path from root + entry name */
-    const char *name = git_tree_entry_name(entry);
-    char storage_path[1024];
-    int ret;
-
-    if (root && root[0] != '\0') {
-        ret = snprintf(
-            storage_path, sizeof(storage_path), "%s%s",
-            root, name
-        );
-    } else {
-        ret = snprintf(
-            storage_path, sizeof(storage_path), "%s",
-            name
-        );
-    }
-
-    /* Check for path truncation */
-    if (ret < 0 || (size_t) ret >= sizeof(storage_path)) {
-        ctx->error = ERROR(
-            ERR_INTERNAL, "Path exceeds maximum length: %s%s",
-            root ? root : "", name
-        );
-        return -1;
-    }
-
-    /* Skip repository metadata files */
-    if (profile_is_metadata_path(storage_path)) {
-        return 0;
-    }
-
-    /* Convert storage path to filesystem path */
-    char *filesystem_path = NULL;
-    error_t *err = NULL;
-
-    if (str_starts_with(storage_path, "custom/") && !ctx->custom_prefix) {
-        /* Skip custom/ files when deployment prefix is unknown.
-         *
-         * Custom prefix is machine-specific configuration (e.g., /jails/proxy/root)
-         * stored in the per-machine state database. During clone or when a profile is
-         * enabled without --prefix, we can't resolve where these files belong on disk.
-         */
-        return 0;  /* Skip, continue walk */
-    } else {
-        char *heap_path = NULL;
-        err = path_from_storage(storage_path, ctx->custom_prefix, &heap_path);
-        if (err) {
-            ctx->error = error_wrap(
-                err, "Failed to convert path '%s' from profile '%s'",
-                storage_path, ctx->profile_name
-            );
-            return -1;
-        }
-        if (ctx->arena) {
-            filesystem_path = arena_strdup(ctx->arena, heap_path);
-            free(heap_path);
-            if (!filesystem_path) {
-                ctx->error = ERROR(ERR_MEMORY, "Failed to arena-copy filesystem path");
-                return -1;
-            }
-        } else {
-            filesystem_path = heap_path;
-        }
-    }
-
-    /* Check for existing entry (profile precedence override) */
-    void *idx_ptr = hashmap_get(ctx->path_map, filesystem_path);
-
-    if (idx_ptr) {
-        /* Override existing entry (profile with higher precedence) */
-        /*
-         * Convert pointer back to index. We offset by 1 when storing to
-         * distinguish NULL (not found) from index 0.
-         * Safe because: indices are always << SIZE_MAX, uintptr_t can hold
-         * any valid pointer value, and we never store actual pointers here.
-         */
-        size_t existing_idx = (size_t) (uintptr_t) idx_ptr - 1;
-
-        /* Duplicate storage path */
-        char *dup_storage_path = ctx->arena ? arena_strdup(ctx->arena, storage_path)
-                                            : strdup(storage_path);
-        if (!dup_storage_path) {
-            if (!ctx->arena) free(filesystem_path);
-            ctx->error = ERROR(ERR_MEMORY, "Failed to duplicate storage path");
-            return -1;
-        }
-
-        /* Free old resources — strings abandoned when arena-backed */
-        if (!ctx->arena) {
-            free(ctx->manifest->entries[existing_idx].storage_path);
-            free(ctx->manifest->entries[existing_idx].filesystem_path);
-        }
-
-        /* Update with new values from higher-precedence profile */
-        file_entry_t *override = &ctx->manifest->entries[existing_idx];
-        override->storage_path = dup_storage_path;
-        override->filesystem_path = filesystem_path;
-        override->profile_name = ctx->profile_name;
-
-        /* Extract identity from borrowed tree entry (blob_oid, type, mode).
-         * The overriding profile may differ in filemode (e.g., executable bit). */
-        git_oid_cpy(&override->blob_oid, git_tree_entry_id(entry));
-        switch (git_tree_entry_filemode(entry)) {
-            case GIT_FILEMODE_BLOB_EXECUTABLE:
-                override->type = STATE_FILE_EXECUTABLE;
-                override->mode = 0755;
-                break;
-            case GIT_FILEMODE_LINK:
-                override->type = STATE_FILE_SYMLINK;
-                override->mode = 0;
-                break;
-            default:
-                override->type = STATE_FILE_REGULAR;
-                override->mode = 0644;
-                break;
-        }
-
-        /* Other VWD fields remain NULL/0 (not populated for Git-based manifests).
-         * The existing entry already has these initialized from initial creation. */
-    } else {
-        /* Add new entry - grow array if needed */
-        if (ctx->manifest->count >= ctx->capacity) {
-            if (ctx->capacity > SIZE_MAX / 2) {
-                if (!ctx->arena) free(filesystem_path);
-                ctx->error = ERROR(ERR_INTERNAL, "Manifest capacity overflow");
-                return -1;
-            }
-            size_t new_capacity = ctx->capacity * 2;
-
-            file_entry_t *new_entries = realloc(
-                ctx->manifest->entries,
-                new_capacity * sizeof(file_entry_t)
-            );
-            if (!new_entries) {
-                if (!ctx->arena) free(filesystem_path);
-                ctx->error = ERROR(ERR_MEMORY, "Failed to grow manifest");
-                return -1;
-            }
-            ctx->manifest->entries = new_entries;
-            ctx->capacity = new_capacity;
-        }
-
-        /* Duplicate storage path */
-        char *dup_storage_path = ctx->arena
-            ? arena_strdup(ctx->arena, storage_path)
-            : strdup(storage_path);
-        if (!dup_storage_path) {
-            if (!ctx->arena) free(filesystem_path);
-            ctx->error = ERROR(ERR_MEMORY, "Failed to duplicate storage path");
-            return -1;
-        }
-
-        /* Initialize entry.
-         *
-         * realloc() does NOT zero new memory. Zero the whole slot first so
-         * every VWD cache field starts clean; then overwrite the fields this
-         * Git-built path actually sets. Deployment context fields (deployed_at,
-         * stat_cache, encrypted, owner, group) remain zero — they are only
-         * populated for state-built entries. */
-        file_entry_t *new_entry = &ctx->manifest->entries[ctx->manifest->count];
-        memset(new_entry, 0, sizeof(*new_entry));
-        new_entry->storage_path = dup_storage_path;
-        new_entry->filesystem_path = filesystem_path;
-        new_entry->profile_name = ctx->profile_name;
-
-        /* Extract identity from borrowed tree entry (blob_oid, type, mode) */
-        git_oid_cpy(&new_entry->blob_oid, git_tree_entry_id(entry));
-        switch (git_tree_entry_filemode(entry)) {
-            case GIT_FILEMODE_BLOB_EXECUTABLE:
-                new_entry->type = STATE_FILE_EXECUTABLE;
-                new_entry->mode = 0755;
-                break;
-            case GIT_FILEMODE_LINK:
-                new_entry->type = STATE_FILE_SYMLINK;
-                new_entry->mode = 0;
-                break;
-            default:
-                /* Should never happen (we filtered to blobs above) */
-                new_entry->type = STATE_FILE_REGULAR;
-                new_entry->mode = 0644;
-                break;
-        }
-
-        /* Store index in hashmap (offset by 1 to distinguish from NULL) */
-        err = hashmap_set(
-            ctx->path_map, filesystem_path, (void *) (uintptr_t) (ctx->manifest->count + 1)
-        );
-        if (err) {
-            /* Entry already added to manifest, but hashmap failed.
-             * Clean up the entry (strings abandoned when arena-backed). */
-            if (!ctx->arena) {
-                free(new_entry->storage_path);
-                free(new_entry->filesystem_path);
-            }
-            new_entry->storage_path = NULL;
-            new_entry->filesystem_path = NULL;
-            ctx->error = error_wrap(err, "Failed to update hashmap");
-            return -1;
-        }
-
-        ctx->manifest->count++;
-    }
-
-    return 0;  /* Continue walk */
-}
-
-/**
  * List files in profile
  */
 error_t *profile_list_files(
@@ -972,7 +712,10 @@ error_t *profile_list_files(
     git_tree *tree = NULL;
     error_t *err = gitops_load_branch_tree(repo, profile_name, &tree, NULL);
     if (err) {
-        return error_wrap(err, "Failed to load tree for profile '%s'", profile_name);
+        return error_wrap(
+            err, "Failed to load tree for profile '%s'",
+            profile_name
+        );
     }
 
     err = profile_list_tree_files(tree, out);
@@ -1016,136 +759,6 @@ error_t *profile_has_custom_files(
 
     git_tree_free(tree);
     return NULL;
-}
-
-/**
- * Build manifest from profile names
- *
- * Performance: O(N) where N is total files across all profiles.
- * Uses manifest_build_callback for single-pass tree traversal.
- * One Git tree alive per iteration (loaded, walked, freed).
- */
-error_t *profile_build_manifest(
-    git_repository *repo,
-    const string_array_t *profiles,
-    const state_t *state,
-    arena_t *arena,
-    manifest_t **out
-) {
-    CHECK_NULL(repo);
-    CHECK_NULL(profiles);
-    CHECK_NULL(out);
-
-    error_t *err = NULL;
-    manifest_t *manifest = NULL;
-    hashmap_t *path_map = NULL;
-    hashmap_t *prefix_map = NULL;
-
-    /* Load custom prefix map from state (internalized — callers no longer manage this) */
-    if (state) {
-        err = state_get_prefix_map(state, &prefix_map);
-        if (err) {
-            return error_wrap(err, "Failed to get custom prefix map");
-        }
-    }
-
-    /* Allocate manifest */
-    manifest = calloc(1, sizeof(manifest_t));
-    if (!manifest) {
-        err = ERROR(ERR_MEMORY, "Failed to allocate manifest");
-        goto cleanup;
-    }
-
-    /* Allocate entries array */
-    size_t capacity = 64;
-    manifest->entries = calloc(capacity, sizeof(file_entry_t));
-    if (!manifest->entries) {
-        err = ERROR(ERR_MEMORY, "Failed to allocate manifest entries");
-        goto cleanup;
-    }
-    manifest->count = 0;
-
-    /*
-     * Create hash map for O(1) duplicate detection
-     * Maps: filesystem_path -> index in entries array
-     *
-     * Borrow keys when arena-backed (arena outlives hashmap).
-     * In non-arena mode, manifest_free() frees entry strings before
-     * the hashmap, so keys must be owned copies.
-     */
-    path_map = arena ? hashmap_borrow(128) : hashmap_create(128);
-    if (!path_map) {
-        err = ERROR(ERR_MEMORY, "Failed to create hashmap");
-        goto cleanup;
-    }
-
-    /* Process each profile in order (later profiles override earlier) */
-    for (size_t i = 0; i < profiles->count; i++) {
-        const char *profile = profiles->items[i];
-
-        /* Load tree for this profile (scoped to iteration) */
-        git_tree *tree = NULL;
-        err = gitops_load_branch_tree(repo, profile, &tree, NULL);
-        if (err) {
-            err = error_wrap(
-                err, "Failed to load tree for profile '%s'",
-                profile
-            );
-            goto cleanup;
-        }
-
-        /* Build manifest entries via single-pass tree traversal
-         *
-         * The callback extracts identity fields (blob_oid, type, mode) from
-         * borrowed tree entries, converts paths, handles precedence override,
-         * and populates file_entry_t directly—all in O(N) time.
-         *
-         * profile_name borrows from caller's profiles array — must outlive manifest */
-        struct manifest_build_ctx ctx = {
-            .manifest      = manifest,
-            .capacity      = capacity,
-            .path_map      = path_map,
-            .profile_name  = profile,
-            .custom_prefix = prefix_map
-                ? (const char *) hashmap_get(prefix_map, profile)
-                : NULL,
-            .arena         = arena,
-            .error         = NULL
-        };
-
-        err = gitops_tree_walk(tree, manifest_build_callback, &ctx);
-        git_tree_free(tree);
-
-        if (err || ctx.error) {
-            err = ctx.error ? ctx.error : err;
-            err = error_wrap(
-                err, "Failed to build manifest for profile '%s'",
-                profile
-            );
-            goto cleanup;
-        }
-
-        /* Update capacity (may have grown during callback) */
-        capacity = ctx.capacity;
-    }
-
-    /* prefix_map no longer needed — all per-profile lookups are done */
-    hashmap_free(prefix_map, free);
-    prefix_map = NULL;
-
-    /* Success - transfer index ownership to manifest */
-    manifest->index = path_map;
-    manifest->arena_backed = (arena != NULL);
-    *out = manifest;
-
-    return NULL;
-
-cleanup:
-    hashmap_free(prefix_map, free);
-    hashmap_free(path_map, NULL);
-    if (err) manifest_free(manifest);
-
-    return err;
 }
 
 /**
@@ -1199,7 +812,13 @@ static int file_index_callback(
         return -1;
     }
 
-    if (profile_is_metadata_path(full_path)) {
+    if (strcmp(full_path, ".dottaignore") == 0 ||
+        strcmp(full_path, ".bootstrap") == 0 ||
+        strcmp(full_path, ".gitignore") == 0 ||
+        strcmp(full_path, "README.md") == 0 ||
+        strcmp(full_path, "README") == 0 ||
+        str_starts_with(full_path, ".git/") ||
+        str_starts_with(full_path, ".dotta/")) {
         return 0;
     }
 
@@ -1465,136 +1084,4 @@ error_t *profile_discover_file(
     *out_profiles = result;
 
     return NULL;
-}
-
-/**
- * Build manifest from a single Git tree
- *
- * Creates a manifest from a specific Git tree. This is used for historical diffs
- * where we need to build a manifest from a past commit's tree.
- *
- * @param tree Git tree to build manifest from (must not be NULL)
- * @param profile_name Profile name for entries (must not be NULL)
- * @param custom_prefix Custom prefix for custom/ paths (NULL for graceful degradation)
- * @param out Manifest (must not be NULL, caller must free with manifest_free)
- * @return Error or NULL on success
- */
-error_t *profile_build_manifest_from_tree(
-    git_tree *tree,
-    const char *profile_name,
-    const char *custom_prefix,
-    manifest_t **out
-) {
-    CHECK_NULL(tree);
-    CHECK_NULL(profile_name);
-    CHECK_NULL(out);
-
-    error_t *err = NULL;
-    manifest_t *manifest = NULL;
-    hashmap_t *path_map = NULL;
-
-    /* Allocate manifest */
-    manifest = calloc(1, sizeof(manifest_t));
-    if (!manifest) {
-        err = ERROR(ERR_MEMORY, "Failed to allocate manifest");
-        goto cleanup;
-    }
-
-    /* Allocate entries array */
-    size_t capacity = 64;
-    manifest->entries = calloc(capacity, sizeof(file_entry_t));
-    if (!manifest->entries) {
-        err = ERROR(ERR_MEMORY, "Failed to allocate manifest entries");
-        goto cleanup;
-    }
-    manifest->count = 0;
-
-    /* Create hash map for O(1) duplicate detection */
-    path_map = hashmap_create(128);
-    if (!path_map) {
-        err = ERROR(ERR_MEMORY, "Failed to create hashmap");
-        goto cleanup;
-    }
-
-    /* Own copy of profile name for entry borrowing.
-     * Entries set profile_name to this pointer —
-     * manifest lifetime guarantees it remains valid until manifest_free(). */
-    manifest->owned_profile_name = strdup(profile_name);
-    if (!manifest->owned_profile_name) {
-        err = ERROR(ERR_MEMORY, "Failed to duplicate profile name");
-        goto cleanup;
-    }
-
-    /* Build manifest entries via single-pass tree traversal
-     *
-     * The callback extracts identity fields (blob_oid, type, mode) from
-     * borrowed tree entries, converts paths, and populates file_entry_t
-     * directly—all in O(N) time.
-     *
-     * custom_prefix borrows from function parameter — outlives tree walk. */
-    struct manifest_build_ctx ctx = {
-        .manifest      = manifest,
-        .capacity      = capacity,
-        .path_map      = path_map,
-        .profile_name  = manifest->owned_profile_name,
-        .custom_prefix = custom_prefix,
-        .arena         = NULL,
-        .error         = NULL
-    };
-
-    err = gitops_tree_walk(tree, manifest_build_callback, &ctx);
-
-    if (err || ctx.error) {
-        err = ctx.error ? ctx.error : err;
-        err = error_wrap(err, "Failed to build manifest from tree");
-        goto cleanup;
-    }
-
-    /* Success - transfer index ownership to manifest */
-    manifest->index = path_map;
-    *out = manifest;
-    return NULL;
-
-cleanup:
-    hashmap_free(path_map, NULL);
-    if (err) {
-        manifest_free(manifest);
-    }
-
-    return err;
-}
-
-
-/**
- * Free manifest
- */
-void manifest_free(manifest_t *manifest) {
-    if (!manifest) {
-        return;
-    }
-
-    for (size_t i = 0; i < manifest->count; i++) {
-        /* Skip string field frees when arena-backed.
-         * blob_oid is an inline binary field — no free. */
-        if (!manifest->arena_backed) {
-            free(manifest->entries[i].storage_path);
-            free(manifest->entries[i].filesystem_path);
-            free(manifest->entries[i].old_profile);
-            free(manifest->entries[i].owner);
-            free(manifest->entries[i].group);
-        }
-    }
-
-    /* entries array, index, owned strings, and manifest struct are always heap */
-    free(manifest->entries);
-
-    /* Free index if present */
-    if (manifest->index) {
-        hashmap_free(manifest->index, NULL);
-    }
-
-    /* Free owned profile name (used by tree-based manifests, NULL otherwise) */
-    free(manifest->owned_profile_name);
-
-    free(manifest);
 }

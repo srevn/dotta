@@ -14,6 +14,7 @@
 #include "base/error.h"
 #include "base/output.h"
 #include "base/timeutil.h"
+#include "core/manifest.h"
 #include "core/profiles.h"
 #include "core/state.h"
 #include "sys/upstream.h"

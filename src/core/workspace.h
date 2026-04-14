@@ -24,9 +24,7 @@
 
 #include "base/output.h"
 #include "core/metadata.h"
-#include "core/profiles.h"
 #include "core/state.h"
-#include "crypto/keymanager.h"
 #include "infra/content.h"
 
 /* Maximum number of display tags that can be extracted from a workspace item */
@@ -72,6 +70,11 @@ typedef struct {
  * Contains all three states and divergence analysis results.
  */
 typedef struct workspace workspace_t;
+
+/**
+ * Forward declarations
+ */
+typedef struct manifest manifest_t;
 
 /**
  * Workspace cleanliness status

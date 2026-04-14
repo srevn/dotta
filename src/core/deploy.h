@@ -17,8 +17,8 @@
 #include <git2.h>
 #include <types.h>
 
+#include "core/manifest.h"
 #include "core/metadata.h"
-#include "core/profiles.h"
 
 /* Forward declarations */
 typedef struct hashmap hashmap_t;

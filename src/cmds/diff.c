@@ -17,6 +17,7 @@
 #include "base/match.h"
 #include "base/output.h"
 #include "base/timeutil.h"
+#include "core/manifest.h"
 #include "core/metadata.h"
 #include "core/profiles.h"
 #include "core/workspace.h"
@@ -990,7 +991,9 @@ static error_t *diff_commit_to_workspace(
      * Query custom_prefix for the matched profile from state. */
     const char *custom_prefix = NULL;
     err = profile_get_custom_prefixes(
-        repo, state, &(string_array_t){ .items = (char **) &profile_name, .count = 1 }, &prefixes
+        repo, state,
+        &(string_array_t){ .items = (char **) &profile_name, .count = 1 },
+        &prefixes
     );
     if (err) {
         error_free(err);  /* Non-fatal — custom/ paths degrade gracefully */
@@ -999,9 +1002,7 @@ static error_t *diff_commit_to_workspace(
         custom_prefix = prefixes->items[0];
     }
 
-    err = profile_build_manifest_from_tree(
-        tree, profile_name, custom_prefix, &manifest
-    );
+    err = manifest_build_from_tree(tree, profile_name, custom_prefix, &manifest);
     if (err) {
         err = error_wrap(err, "Failed to build manifest from commit");
         goto cleanup;

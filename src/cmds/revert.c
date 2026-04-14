@@ -142,11 +142,13 @@ static error_t *discover_file(
     /* Initialize output flag */
     *found_in_history = false;
 
-    /* Resolve input path to storage format (flexible mode - file need not exist)
-     *
-     * Note: No custom prefix context available for revert command - users must use
-     * storage format (custom/etc/nginx.conf) for custom/ paths */
-    err = path_resolve_input(file_path, false, NULL, &storage_path);
+    /* Load custom prefixes for path resolution (non-fatal) */
+    string_array_t *prefixes STRING_ARRAY_CLEANUP = NULL;
+    error_t *prefix_err = profile_get_custom_prefixes(repo, NULL, NULL, &prefixes);
+    if (prefix_err) error_free(prefix_err);
+
+    /* Resolve input path to storage format (flexible mode - file need not exist) */
+    err = path_resolve_input(file_path, false, prefixes, &storage_path);
     if (err) {
         return err;
     }

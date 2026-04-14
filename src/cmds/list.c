@@ -629,16 +629,17 @@ static error_t *list_file_history(
     CHECK_NULL(out);
 
     bool verbose = output_is_verbose(out);
-
     char *discovered_profile = NULL;
 
+    /* Load custom prefixes for path resolution (non-fatal) */
+    string_array_t *prefixes STRING_ARRAY_CLEANUP = NULL;
+    error_t *prefix_err = profile_get_custom_prefixes(repo, NULL, NULL, &prefixes);
+    if (prefix_err) error_free(prefix_err);
+
     /* Resolve input path to storage format (handles absolute, tilde, relative,
-     * and storage paths). Flexible mode - file need not exist on disk.
-     *
-     * Note: No custom prefix context available for list command - users must use
-     * storage format (custom/etc/nginx.conf) for custom/ paths */
+     * and storage paths). Flexible mode - file need not exist on disk. */
     char *storage_path = NULL;
-    error_t *err = path_resolve_input(opts->file_path, false, NULL, &storage_path);
+    error_t *err = path_resolve_input(opts->file_path, false, prefixes, &storage_path);
     if (err) {
         return error_wrap(err, "Failed to resolve path '%s'", opts->file_path);
     }

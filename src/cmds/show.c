@@ -578,6 +578,7 @@ error_t *cmd_show(
     error_t *err = NULL;
     string_array_t *profiles = NULL;
     string_array_t *matches = NULL;
+    string_array_t *prefixes = NULL;
     char *converted = NULL;
     const char *found_profile = NULL;
 
@@ -653,12 +654,13 @@ error_t *cmd_show(
     /* Handle SHOW_FILE mode */
     CHECK_NULL(opts->file_path);
 
-    /* Resolve file path to storage format (common to both explicit and implicit paths)
-     *
-     * Note: No custom prefix context available for show command - users must use
-     * storage format (custom/etc/nginx.conf) for custom/ paths */
+    /* Load custom prefixes for path resolution (non-fatal) */
+    error_t *prefix_err = profile_get_custom_prefixes(repo, NULL, NULL, &prefixes);
+    if (prefix_err) error_free(prefix_err);
+
+    /* Resolve file path to storage format (common to both explicit and implicit paths) */
     const char *search_path = opts->file_path;
-    error_t *convert_err = path_resolve_input(opts->file_path, false, NULL, &converted);
+    error_t *convert_err = path_resolve_input(opts->file_path, false, prefixes, &converted);
     if (convert_err) {
         error_free(convert_err);
         /* Fall back to original path (may be a partial match pattern) */
@@ -727,6 +729,7 @@ error_t *cmd_show(
 
 cleanup:
     string_array_free(profiles);
+    string_array_free(prefixes);
     if (matches) string_array_free(matches);
     if (converted) free(converted);
 

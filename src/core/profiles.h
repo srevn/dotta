@@ -266,14 +266,13 @@ error_t *profile_resolve_enabled(
  * profile names. Returns only non-NULL prefixes (profiles with standard
  * home/root deployment are omitted).
  *
- * Used by commands that need custom prefix information for path resolution
- * (apply, update, diff). Commands that only filter by name (status, sync)
- * do not need this.
+ * Used by commands that need custom prefix information for path resolution.
  *
  * @param repo Repository (only used when state==NULL)
  * @param state State handle for connection reuse (NULL = load internally)
  *              When non-NULL, only reads from the handle (const).
- * @param names Profile names to query (must not be NULL)
+ * @param names Profile names to query (NULL = all enabled profiles with
+ *              custom prefixes; iteration order is undefined)
  * @param out_prefixes Non-NULL custom prefixes (must not be NULL, caller frees)
  * @return Error or NULL on success (empty array if no custom prefixes)
  */

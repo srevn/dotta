@@ -409,7 +409,6 @@ error_t *profile_get_custom_prefixes(
     const string_array_t *names,
     string_array_t **out_prefixes
 ) {
-    CHECK_NULL(names);
     CHECK_NULL(out_prefixes);
 
     error_t *err = NULL;
@@ -445,17 +444,29 @@ error_t *profile_get_custom_prefixes(
         return error_wrap(err, "Failed to get custom prefix map");
     }
 
-    for (size_t i = 0; i < names->count; i++) {
-        const char *prefix = (const char *) hashmap_get(prefix_map, names->items[i]);
-        if (prefix) {
-            err = string_array_push(prefixes, prefix);
-            if (err) {
-                hashmap_free(prefix_map, free);
-                state_free(local_state);
-                string_array_free(prefixes);
-                return error_wrap(err, "Failed to collect custom prefix");
+    if (names) {
+        for (size_t i = 0; i < names->count; i++) {
+            const char *prefix = (const char *) hashmap_get(prefix_map, names->items[i]);
+            if (prefix) {
+                err = string_array_push(prefixes, prefix);
+                if (err) break;
             }
         }
+    } else {
+        hashmap_iter_t iter;
+        hashmap_iter_init(&iter, prefix_map);
+        void *value = NULL;
+        while (hashmap_iter_next(&iter, NULL, &value)) {
+            err = string_array_push(prefixes, (const char *) value);
+            if (err) break;
+        }
+    }
+
+    if (err) {
+        hashmap_free(prefix_map, free);
+        state_free(local_state);
+        string_array_free(prefixes);
+        return error_wrap(err, "Failed to collect custom prefix");
     }
 
     hashmap_free(prefix_map, free);

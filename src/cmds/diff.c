@@ -21,7 +21,7 @@
 #include "core/metadata.h"
 #include "core/profiles.h"
 #include "core/workspace.h"
-#include "crypto/keymanager.h"
+#include "crypto/keymgr.h"
 #include "infra/compare.h"
 #include "infra/content.h"
 #include "infra/path.h"
@@ -654,10 +654,10 @@ static error_t *compare_manifest_to_filesystem(
     file_diff_t *diff = NULL;
 
     /* Create content cache for efficient blob access.
-     * Pass config to ensure keymanager uses user's derivation parameters
+     * Pass config to ensure keymgr uses user's derivation parameters
      * (opslimit, memlimit) if this is the first call to create the singleton. */
-    keymanager_t *km = keymanager_get_global(config);
-    cache = content_cache_create(repo, km);
+    keymgr *keymgr = keymgr_get_global(config);
+    cache = content_cache_create(repo, keymgr);
     if (!cache) {
         return ERROR(ERR_MEMORY, "Failed to create content cache");
     }
@@ -992,7 +992,7 @@ static error_t *diff_commit_to_workspace(
     const char *custom_prefix = NULL;
     err = profile_get_custom_prefixes(
         repo, state,
-        &(string_array_t){ .items = (char **) &profile, .count = 1 },
+        &(string_array_t){ .items = &profile, .count = 1 },
         &prefixes
     );
     if (err) {
@@ -1508,7 +1508,7 @@ error_t *cmd_diff(
         }
 
         err = path_filter_create(
-            (const char **) opts->files, opts->file_count,
+            opts->files, opts->file_count,
             prefixes, &file_filter
         );
         string_array_free(prefixes);

@@ -145,7 +145,11 @@ error_t *profile_detect(
             *p = (char) tolower((unsigned char) *p);
         }
 
-        err = match_hierarchical_profiles(available_branches, os_name, profiles);
+        err = match_hierarchical_profiles(
+            available_branches,
+            os_name,
+            profiles
+        );
         if (err) {
             /* Non-fatal: skip OS profiles if detection fails */
             error_free(err);
@@ -160,9 +164,15 @@ error_t *profile_detect(
         hostname[sizeof(hostname) - 1] = '\0';
 
         char host_prefix[DOTTA_REFNAME_MAX];
-        int ret = snprintf(host_prefix, sizeof(host_prefix), "hosts/%s", hostname);
+        int ret = snprintf(
+            host_prefix, sizeof(host_prefix), "hosts/%s", hostname
+        );
         if (ret >= 0 && (size_t) ret < sizeof(host_prefix)) {
-            err = match_hierarchical_profiles(available_branches, host_prefix, profiles);
+            err = match_hierarchical_profiles(
+                available_branches,
+                host_prefix,
+                profiles
+            );
             if (err) {
                 /* Non-fatal: skip host profiles if detection fails */
                 error_free(err);
@@ -234,7 +244,10 @@ error_t *profile_get_custom_prefixes(
 
     if (profiles) {
         for (size_t i = 0; i < profiles->count; i++) {
-            const char *prefix = (const char *) hashmap_get(prefix_map, profiles->items[i]);
+            const char *prefix = (const char *) hashmap_get(
+                prefix_map,
+                profiles->items[i]
+            );
             if (prefix) {
                 err = string_array_push(prefixes, prefix);
                 if (err) break;
@@ -491,7 +504,7 @@ error_t *profile_resolve_filter(
             string_array_free(validated);
             return ERROR(
                 ERR_NOT_FOUND, "Profile not found: %s\n"
-                "Hint: Run 'dotta profile list' to see available profiles",
+                "Hint: Run 'dotta profile list' for available profiles",
                 cli_profiles[i]
             );
         }
@@ -974,7 +987,9 @@ error_t *profile_discover_file(
         if (!effective_state) {
             err = state_load(repo, &local_state);
             if (err) {
-                return error_wrap(err, "Failed to load state for file discovery");
+                return error_wrap(
+                    err, "Failed to load state for file discovery"
+                );
             }
             effective_state = local_state;
         }
@@ -1020,7 +1035,9 @@ error_t *profile_discover_file(
     string_array_t *all_branches = NULL;
     err = gitops_list_branches(repo, &all_branches);
     if (err) {
-        return error_wrap(err, "Failed to list branches for file discovery");
+        return error_wrap(
+            err, "Failed to list branches for file discovery"
+        );
     }
 
     string_array_t *result = string_array_new(0);

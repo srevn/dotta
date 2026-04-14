@@ -51,7 +51,7 @@ buffer_t *buffer_new(size_t capacity);
  *
  * @param buf Buffer to destroy (can be NULL)
  */
-void buffer_destroy(void *buf);
+void buffer_destroy(void *ptr);
 
 /**
  * Ensure buffer can hold at least alloc content bytes

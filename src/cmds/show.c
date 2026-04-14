@@ -18,7 +18,7 @@
 #include "base/timeutil.h"
 #include "core/metadata.h"
 #include "core/profiles.h"
-#include "crypto/keymanager.h"
+#include "crypto/keymgr.h"
 #include "infra/content.h"
 #include "infra/path.h"
 #include "sys/gitops.h"
@@ -61,7 +61,7 @@ static error_t *print_blob_content(
     const char *storage_path,
     const char *profile,
     const metadata_t *metadata,
-    keymanager_t *km,
+    keymgr *keymgr,
     git_filemode_t filemode,
     bool raw,
     output_ctx_t *out
@@ -78,7 +78,7 @@ static error_t *print_blob_content(
 
     buffer_t content = BUFFER_INIT;
     error_t *err = content_get_from_blob_oid(
-        repo, blob_oid, storage_path, profile, encrypted, km, &content
+        repo, blob_oid, storage_path, profile, encrypted, keymgr, &content
     );
     if (err) {
         return error_wrap(err, "Failed to get file content");
@@ -212,13 +212,13 @@ static error_t *show_file(
     metadata_t *metadata = NULL;
 
     /*
-     * Get global keymanager for decryption (if needed)
+     * Get global keymgr for decryption (if needed)
      *
      * This does NOT prompt for password yet. Password prompt only happens
      * if file is encrypted and key is not cached, when content layer calls
-     * keymanager_get_key().
+     * keymgr_get_key().
      */
-    keymanager_t *km = keymanager_get_global(config);
+    keymgr *keymgr = keymgr_get_global(config);
 
     /* Load metadata for encryption state validation */
     err = metadata_load_from_branch(repo, profile, &metadata);
@@ -325,10 +325,10 @@ static error_t *show_file(
          * file_path is the storage_path (e.g., "home/.bashrc")
          * profile is used for key derivation
          * metadata is used for encryption state validation
-         * km will prompt for password only if file is encrypted
+         * keymgr will prompt for password only if file is encrypted
          */
         err = print_blob_content(
-            repo, entry_oid, file_path, profile, metadata, km, filemode, raw, out
+            repo, entry_oid, file_path, profile, metadata, keymgr, filemode, raw, out
         );
     } else if (entry_type == GIT_OBJECT_TREE) {
         err = ERROR(ERR_INVALID_ARG, "'%s' is a directory", file_path);

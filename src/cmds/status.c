@@ -800,7 +800,7 @@ static error_t *display_remote_status(
  */
 static error_t *extract_elevation_paths_from_manifest(
     const manifest_t *manifest,
-    const char ***paths_out,
+    char ***paths_out,
     size_t *count_out
 ) {
     CHECK_NULL(manifest);
@@ -813,7 +813,7 @@ static error_t *extract_elevation_paths_from_manifest(
         return NULL;
     }
 
-    const char **paths = calloc(manifest->count, sizeof(char *));
+    char **paths = calloc(manifest->count, sizeof(char *));
     if (!paths) {
         return ERROR(ERR_MEMORY, "Failed to allocate storage paths array");
     }
@@ -926,7 +926,7 @@ error_t *cmd_status(
         workspace_load_t ws_opts = {
             .analyze_files       = true,
             .analyze_orphans     = true,
-            .analyze_untracked   = (config && config->auto_detect_new_files),
+            .analyze_untracked   = config->auto_detect_new_files,
             .analyze_directories = true,
             .analyze_encryption  = true
         };
@@ -954,7 +954,7 @@ error_t *cmd_status(
         /* Check privileges for complete status (may re-exec with sudo) */
         if (!opts->no_sudo && manifest->count > 0) {
             /* Extract paths that need elevation from manifest */
-            const char **storage_paths = NULL;
+            char **storage_paths = NULL;
             size_t path_count = 0;
 
             error_t *extract_err = extract_elevation_paths_from_manifest(
@@ -999,7 +999,7 @@ error_t *cmd_status(
                 error_free(extract_err);
             }
 
-            free((void *) storage_paths);
+            free(storage_paths);
         }
     }
 

@@ -679,7 +679,7 @@ static error_t *ensure_complete_apply_privileges(
     error_t *err = NULL;
     if (root_paths->count > 0) {
         err = privilege_ensure_for_operation(
-            (const char **) root_paths->items,
+            root_paths->items,
             root_paths->count,
             "apply",
             true,  /* interactive: prompt user if elevation needed */
@@ -851,13 +851,11 @@ error_t *cmd_apply(
     }
 
     /* Get repository directory for hooks */
-    if (config) {
-        err = config_get_repo_dir(config, &repo_dir);
-        if (err) goto cleanup;
-    }
+    err = config_get_repo_dir(config, &repo_dir);
+    if (err) goto cleanup;
 
     /* Load state (with locking for write transaction) */
-    err = state_load_for_update(repo, &state);
+    err = state_open(repo, &state);
     if (err) {
         err = error_wrap(err, "Failed to load state");
         goto cleanup;
@@ -987,7 +985,7 @@ error_t *cmd_apply(
         }
 
         err = path_filter_create(
-            (const char **) opts->files, opts->file_count,
+            opts->files, opts->file_count,
             prefixes, &file_filter
         );
         string_array_free(prefixes);
@@ -1625,7 +1623,7 @@ error_t *cmd_apply(
     }
 
     /* Execute pre-apply hook */
-    if (config && repo_dir) {
+    if (repo_dir) {
         profiles_str = string_array_join(active_profiles, " ");
 
         /* Create hook context with all profiles */

@@ -647,7 +647,7 @@ error_t *ignore_context_create(
 
         for (size_t i = 0; i < cli_exclude_count; i++) {
             /* Validate pattern length to prevent excessive memory use and DoS */
-            if (cli_excludes[i] && strlen(cli_excludes[i]) > MAX_PATTERN_LENGTH) {
+            if (strlen(cli_excludes[i]) > MAX_PATTERN_LENGTH) {
                 /* Clean up already allocated patterns */
                 for (size_t j = 0; j < i; j++) {
                     free(ctx->cli_patterns[j]);
@@ -751,8 +751,7 @@ error_t *ignore_context_create(
 
         for (size_t i = 0; i < config->ignore_pattern_count; i++) {
             /* Validate pattern length to prevent excessive memory use and DoS */
-            if (config->ignore_patterns[i] &&
-                strlen(config->ignore_patterns[i]) > MAX_PATTERN_LENGTH) {
+            if (strlen(config->ignore_patterns[i]) > MAX_PATTERN_LENGTH) {
                 /* Clean up - set to NULL to prevent double-free in ignore_context_free() */
                 for (size_t j = 0; j < i; j++) {
                     free(ctx->config_patterns[j]);

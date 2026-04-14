@@ -1,8 +1,8 @@
 /**
- * keymanager.c - Encryption key management implementation
+ * keymgr.c - Encryption key management implementation
  */
 
-#include "crypto/keymanager.h"
+#include "crypto/keymgr.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -58,7 +58,7 @@ struct session_cache_file {
 /**
  * Key manager structure
  */
-struct keymanager {
+struct keymgr {
     /* Configuration */
     uint64_t opslimit;        /* CPU cost for password hashing */
     size_t memlimit;          /* Memory cost for balloon hashing (0 = disabled) */
@@ -602,45 +602,45 @@ static time_t get_monotonic_time(void) {
     return ts.tv_sec;
 }
 
-error_t *keymanager_create(
+error_t *keymgr_create(
     const config_t *config,
-    keymanager_t **out
+    keymgr **out
 ) {
     CHECK_NULL(config);
     CHECK_NULL(out);
 
-    keymanager_t *mgr = calloc(1, sizeof(keymanager_t));
-    if (!mgr) {
+    keymgr *keymgr = calloc(1, sizeof(*keymgr));
+    if (!keymgr) {
         return ERROR(ERR_MEMORY, "Failed to allocate key manager");
     }
 
     /* Copy configuration (memlimit: convert MB from config to bytes for crypto) */
-    mgr->opslimit = config->encryption_opslimit;
-    mgr->memlimit = config->encryption_memlimit * 1024 * 1024;
-    mgr->session_timeout = config->session_timeout;
+    keymgr->opslimit = config->encryption_opslimit;
+    keymgr->memlimit = config->encryption_memlimit * 1024 * 1024;
+    keymgr->session_timeout = config->session_timeout;
 
     /* Initialize key state */
-    mgr->has_key = false;
-    mgr->cached_at = 0;
-    mgr->mlocked = false;
-    mgr->profile_keys = NULL;  /* Created lazily on first profile key request */
-    hydro_memzero(mgr->master_key, sizeof(mgr->master_key));
+    keymgr->has_key = false;
+    keymgr->cached_at = 0;
+    keymgr->mlocked = false;
+    keymgr->profile_keys = NULL;  /* Created lazily on first profile key request */
+    hydro_memzero(keymgr->master_key, sizeof(keymgr->master_key));
 
     /* Attempt to lock memory to prevent swapping to disk
      * This is a best-effort operation - if it fails, we log a warning
      * but continue operation (security enhancement, not requirement) */
-    if (mlock(mgr, sizeof(keymanager_t)) == 0) {
-        mgr->mlocked = true;
+    if (mlock(keymgr, sizeof(*keymgr)) == 0) {
+        keymgr->mlocked = true;
     } else {
         /* mlock failed - log warning but don't fail initialization
          * Common reasons: insufficient permissions, RLIMIT_MEMLOCK exceeded */
-        fprintf(stderr, "Warning: Failed to lock keymanager memory: %s\n", strerror(errno));
+        fprintf(stderr, "Warning: Failed to lock keymgr memory: %s\n", strerror(errno));
         fprintf(stderr, "         Master key may be swapped to disk.\n");
         fprintf(stderr, "         Consider running with elevated privileges\n");
         fprintf(stderr, "         or increasing RLIMIT_MEMLOCK for enhanced security.\n");
     }
 
-    *out = mgr;
+    *out = keymgr;
     return NULL;
 }
 
@@ -661,29 +661,29 @@ static void secure_free_profile_key(void *key_ptr) {
     }
 }
 
-void keymanager_free(keymanager_t *mgr) {
-    if (!mgr) {
+void keymgr_free(keymgr *keymgr) {
+    if (!keymgr) {
         return;
     }
 
     /* Securely zero master key before freeing */
-    hydro_memzero(mgr->master_key, sizeof(mgr->master_key));
-    mgr->has_key = false;
-    mgr->cached_at = 0;
+    hydro_memzero(keymgr->master_key, sizeof(keymgr->master_key));
+    keymgr->has_key = false;
+    keymgr->cached_at = 0;
 
     /* Securely clear and free profile key cache */
-    if (mgr->profile_keys) {
-        hashmap_free(mgr->profile_keys, secure_free_profile_key);
-        mgr->profile_keys = NULL;
+    if (keymgr->profile_keys) {
+        hashmap_free(keymgr->profile_keys, secure_free_profile_key);
+        keymgr->profile_keys = NULL;
     }
 
     /* Unlock memory if it was locked */
-    if (mgr->mlocked) {
-        munlock(mgr, sizeof(keymanager_t));
-        mgr->mlocked = false;
+    if (keymgr->mlocked) {
+        munlock(keymgr, sizeof(*keymgr));
+        keymgr->mlocked = false;
     }
 
-    free(mgr);
+    free(keymgr);
 }
 
 /**
@@ -692,71 +692,71 @@ void keymanager_free(keymanager_t *mgr) {
  * Uses monotonic clock to prevent cache lifetime manipulation via
  * system clock changes.
  *
- * @param mgr Key manager (must not be NULL)
+ * @param keymgr Key manager (must not be NULL)
  * @return true if key is cached and not expired
  */
-static bool is_key_valid(const keymanager_t *mgr) {
-    if (!mgr->has_key) {
+static bool is_key_valid(const keymgr *keymgr) {
+    if (!keymgr->has_key) {
         return false;
     }
 
     /* If timeout is 0, always prompt (no caching) */
-    if (mgr->session_timeout == 0) {
+    if (keymgr->session_timeout == 0) {
         return false;
     }
 
     /* If timeout is negative, key never expires */
-    if (mgr->session_timeout < 0) {
+    if (keymgr->session_timeout < 0) {
         return true;
     }
 
     /* Check if expired (positive timeout) using monotonic clock */
     time_t now = get_monotonic_time();
-    time_t elapsed = now - mgr->cached_at;
+    time_t elapsed = now - keymgr->cached_at;
 
-    return elapsed < mgr->session_timeout;
+    return elapsed < keymgr->session_timeout;
 }
 
-bool keymanager_has_key(const keymanager_t *mgr) {
-    if (!mgr) {
+bool keymgr_has_key(const keymgr *keymgr) {
+    if (!keymgr) {
         return false;
     }
 
-    return is_key_valid(mgr);
+    return is_key_valid(keymgr);
 }
 
-bool keymanager_probe_key(keymanager_t *mgr) {
-    if (!mgr) {
+bool keymgr_probe_key(keymgr *keymgr) {
+    if (!keymgr) {
         return false;
     }
 
     /* Check in-memory cache first */
-    if (is_key_valid(mgr)) {
+    if (is_key_valid(keymgr)) {
         return true;
     }
 
     /* Try disk session cache (skip if always-prompt mode) */
-    if (mgr->session_timeout == 0) {
+    if (keymgr->session_timeout == 0) {
         return false;
     }
 
-    error_t *err = session_cache_load(mgr->master_key);
+    error_t *err = session_cache_load(keymgr->master_key);
     if (err) {
         error_free(err);
         return false;
     }
 
     /* Disk cache loaded successfully - promote to in-memory */
-    mgr->has_key = true;
-    mgr->cached_at = get_monotonic_time();
+    keymgr->has_key = true;
+    keymgr->cached_at = get_monotonic_time();
     return true;
 }
 
-int64_t keymanager_time_until_expiry(
-    const keymanager_t *mgr,
+int64_t keymgrime_until_expiry(
+    const keymgr *keymgr,
     time_t *out_expires_at
 ) {
-    if (!mgr || !mgr->has_key) {
+    if (!keymgr || !keymgr->has_key) {
         if (out_expires_at) {
             *out_expires_at = 0;
         }
@@ -764,7 +764,7 @@ int64_t keymanager_time_until_expiry(
     }
 
     /* Negative timeout = never expires */
-    if (mgr->session_timeout < 0) {
+    if (keymgr->session_timeout < 0) {
         if (out_expires_at) {
             *out_expires_at = 0;
         }
@@ -772,7 +772,7 @@ int64_t keymanager_time_until_expiry(
     }
 
     /* Timeout of 0 = always prompt (key never valid, always expired) */
-    if (mgr->session_timeout == 0) {
+    if (keymgr->session_timeout == 0) {
         if (out_expires_at) {
             *out_expires_at = time(NULL);  /* Already expired */
         }
@@ -782,8 +782,8 @@ int64_t keymanager_time_until_expiry(
     /* Positive timeout = calculate remaining time using monotonic clock
      * This prevents cache lifetime manipulation via clock changes */
     time_t now_monotonic = get_monotonic_time();
-    time_t elapsed = now_monotonic - mgr->cached_at;
-    int64_t remaining = (int64_t) (mgr->session_timeout - elapsed);
+    time_t elapsed = now_monotonic - keymgr->cached_at;
+    int64_t remaining = (int64_t) (keymgr->session_timeout - elapsed);
 
     if (remaining < 0) {
         remaining = 0;
@@ -799,19 +799,19 @@ int64_t keymanager_time_until_expiry(
     return remaining;
 }
 
-void keymanager_clear(keymanager_t *mgr) {
-    if (!mgr) {
+void keymgr_clear(keymgr *keymgr) {
+    if (!keymgr) {
         return;
     }
 
     /* Securely zero master key */
-    hydro_memzero(mgr->master_key, sizeof(mgr->master_key));
-    mgr->has_key = false;
-    mgr->cached_at = 0;
+    hydro_memzero(keymgr->master_key, sizeof(keymgr->master_key));
+    keymgr->has_key = false;
+    keymgr->cached_at = 0;
 
     /* Clear profile key cache (keys derived from master key, must be cleared too) */
-    if (mgr->profile_keys) {
-        hashmap_clear(mgr->profile_keys, secure_free_profile_key);
+    if (keymgr->profile_keys) {
+        hashmap_clear(keymgr->profile_keys, secure_free_profile_key);
         /* Note: hashmap_clear clears entries but keeps the map structure.
          * This is intentional - we keep the map for future use. */
     }
@@ -820,12 +820,12 @@ void keymanager_clear(keymanager_t *mgr) {
     session_cache_clear();
 }
 
-error_t *keymanager_set_passphrase(
-    keymanager_t *mgr,
+error_t *keymgr_set_passphrase(
+    keymgr *keymgr,
     const char *passphrase,
     size_t passphrase_len
 ) {
-    CHECK_NULL(mgr);
+    CHECK_NULL(keymgr);
     CHECK_NULL(passphrase);
 
     if (passphrase_len == 0) {
@@ -844,33 +844,33 @@ error_t *keymanager_set_passphrase(
      * This is safe even if the same passphrase is entered - profile keys will simply
      * be re-derived on next use (negligible cost compared to master key derivation).
      */
-    if (mgr->profile_keys) {
-        hashmap_clear(mgr->profile_keys, secure_free_profile_key);
+    if (keymgr->profile_keys) {
+        hashmap_clear(keymgr->profile_keys, secure_free_profile_key);
     }
 
     /* Derive master key from passphrase */
     error_t *err = encryption_derive_master_key(
         passphrase,
         passphrase_len,
-        mgr->opslimit,
-        mgr->memlimit,
-        mgr->master_key
+        keymgr->opslimit,
+        keymgr->memlimit,
+        keymgr->master_key
     );
 
     if (err) {
         /* Clear key on error */
-        hydro_memzero(mgr->master_key, sizeof(mgr->master_key));
-        mgr->has_key = false;
+        hydro_memzero(keymgr->master_key, sizeof(keymgr->master_key));
+        keymgr->has_key = false;
         return error_wrap(err, "Failed to derive encryption key");
     }
 
     /* Mark key as cached (using monotonic time for expiry checks) */
-    mgr->has_key = true;
-    mgr->cached_at = get_monotonic_time();
+    keymgr->has_key = true;
+    keymgr->cached_at = get_monotonic_time();
 
     /* Save to file cache (non-fatal if fails) */
-    if (mgr->session_timeout != 0) {
-        error_t *save_err = session_cache_save(mgr->master_key, mgr->session_timeout);
+    if (keymgr->session_timeout != 0) {
+        error_t *save_err = session_cache_save(keymgr->master_key, keymgr->session_timeout);
         if (save_err) {
             /* Log warning but don't fail - in-memory cache still works */
             fprintf(
@@ -887,7 +887,7 @@ error_t *keymanager_set_passphrase(
 /* Maximum passphrase length - reasonable limit to prevent DoS */
 #define MAX_PASSPHRASE_LENGTH 4096
 
-error_t *keymanager_prompt_passphrase(
+error_t *keymgr_prompt_passphrase(
     const char *prompt,
     char **out_passphrase,
     size_t *out_len
@@ -1069,29 +1069,29 @@ static error_t *get_passphrase_from_env(
     return NULL;
 }
 
-error_t *keymanager_get_key(
-    keymanager_t *mgr,
+error_t *keymgr_get_key(
+    keymgr *keymgr,
     uint8_t out_master_key[32]
 ) {
-    CHECK_NULL(mgr);
+    CHECK_NULL(keymgr);
     CHECK_NULL(out_master_key);
 
     /* Step 1: Check in-memory cache */
-    if (is_key_valid(mgr)) {
-        memcpy(out_master_key, mgr->master_key, ENCRYPTION_MASTER_KEY_SIZE);
+    if (is_key_valid(keymgr)) {
+        memcpy(out_master_key, keymgr->master_key, ENCRYPTION_MASTER_KEY_SIZE);
         return NULL;
     }
 
     /* Step 2: Try file cache (skip if session_timeout == 0) */
-    if (mgr->session_timeout != 0) {
-        error_t *err = session_cache_load(mgr->master_key);
+    if (keymgr->session_timeout != 0) {
+        error_t *err = session_cache_load(keymgr->master_key);
         if (!err) {
             /* Cache hit! Update in-memory state with current monotonic time.
              * File cache has its own wall-clock expiry check - once loaded,
              * we switch to monotonic time for in-memory expiry. */
-            mgr->has_key = true;
-            mgr->cached_at = get_monotonic_time();
-            memcpy(out_master_key, mgr->master_key, ENCRYPTION_MASTER_KEY_SIZE);
+            keymgr->has_key = true;
+            keymgr->cached_at = get_monotonic_time();
+            memcpy(out_master_key, keymgr->master_key, ENCRYPTION_MASTER_KEY_SIZE);
             return NULL;
         }
 
@@ -1122,7 +1122,7 @@ error_t *keymanager_get_key(
         error_free(err);
         err = NULL;
 
-        err = keymanager_prompt_passphrase(
+        err = keymgr_prompt_passphrase(
             "Enter encryption passphrase: ",
             &passphrase,
             &passphrase_len
@@ -1142,10 +1142,10 @@ error_t *keymanager_get_key(
     }
 
     /* Derive master key */
-    err = keymanager_set_passphrase(mgr, passphrase, passphrase_len);
+    err = keymgr_set_passphrase(keymgr, passphrase, passphrase_len);
 
     /* Securely zero and free passphrase.
-     * Both keymanager_prompt_passphrase and get_passphrase_from_env
+     * Both keymgr_prompt_passphrase and get_passphrase_from_env
      * return a buffer of exactly passphrase_len+1 bytes with mlock. */
     munlock(passphrase, passphrase_len + 1);
     hydro_memzero(passphrase, passphrase_len + 1);
@@ -1156,7 +1156,7 @@ error_t *keymanager_get_key(
     }
 
     /* Copy to output */
-    memcpy(out_master_key, mgr->master_key, ENCRYPTION_MASTER_KEY_SIZE);
+    memcpy(out_master_key, keymgr->master_key, ENCRYPTION_MASTER_KEY_SIZE);
 
     return NULL;
 }
@@ -1164,12 +1164,12 @@ error_t *keymanager_get_key(
 /**
  * Get derived profile key (with caching)
  */
-error_t *keymanager_get_profile_key(
-    keymanager_t *mgr,
+error_t *keymgr_get_profile_key(
+    keymgr *keymgr,
     const char *profile,
     uint8_t out_profile_key[ENCRYPTION_PROFILE_KEY_SIZE]
 ) {
-    CHECK_NULL(mgr);
+    CHECK_NULL(keymgr);
     CHECK_NULL(profile);
     CHECK_NULL(out_profile_key);
 
@@ -1178,12 +1178,12 @@ error_t *keymanager_get_profile_key(
      * If the master key has expired (session timeout), cached profile keys
      * must not be served — doing so would bypass re-authentication.
      * Clear the cache and fall through to trigger a passphrase prompt. */
-    if (mgr->profile_keys) {
-        if (!is_key_valid(mgr)) {
+    if (keymgr->profile_keys) {
+        if (!is_key_valid(keymgr)) {
             /* Master key expired — invalidate all derived profile keys */
-            hashmap_clear(mgr->profile_keys, secure_free_profile_key);
+            hashmap_clear(keymgr->profile_keys, secure_free_profile_key);
         } else {
-            uint8_t *cached_key = hashmap_get(mgr->profile_keys, profile);
+            uint8_t *cached_key = hashmap_get(keymgr->profile_keys, profile);
             if (cached_key) {
                 /* Cache hit - copy and return */
                 memcpy(out_profile_key, cached_key, ENCRYPTION_PROFILE_KEY_SIZE);
@@ -1196,7 +1196,7 @@ error_t *keymanager_get_profile_key(
 
     /* Get master key (may prompt for passphrase) */
     uint8_t master_key[ENCRYPTION_MASTER_KEY_SIZE];
-    error_t *err = keymanager_get_key(mgr, master_key);
+    error_t *err = keymgr_get_key(keymgr, master_key);
     if (err) {
         return error_wrap(err, "Failed to get master key");
     }
@@ -1228,9 +1228,9 @@ error_t *keymanager_get_profile_key(
     }
 
     /* Create cache hashmap if it doesn't exist yet (lazy initialization) */
-    if (!mgr->profile_keys) {
-        mgr->profile_keys = hashmap_create(8);  /* Initial capacity: 8 profiles */
-        if (!mgr->profile_keys) {
+    if (!keymgr->profile_keys) {
+        keymgr->profile_keys = hashmap_create(8);  /* Initial capacity: 8 profiles */
+        if (!keymgr->profile_keys) {
             /* Non-fatal: continue without caching */
             fprintf(stderr, "Warning: Failed to create profile key cache\n");
             fprintf(stderr, "         Performance may be degraded for batch operations\n");
@@ -1245,7 +1245,7 @@ error_t *keymanager_get_profile_key(
     }
 
     /* Store in cache */
-    err = hashmap_set(mgr->profile_keys, profile, profile_key);
+    err = hashmap_set(keymgr->profile_keys, profile, profile_key);
     if (err) {
         /* Non-fatal: continue without caching */
         fprintf(
@@ -1270,30 +1270,30 @@ error_t *keymanager_get_profile_key(
 
 /* Global Keymanager Singleton
  *
- * Provides a process-wide keymanager instance to avoid repeatedly prompting
+ * Provides a process-wide keymgr instance to avoid repeatedly prompting
  * for passphrase across multiple commands in the same execution.
  *
  * Thread safety: Not thread-safe (dotta is single-threaded)
  * Lifecycle: Created on first access, cleaned up at program exit
  */
 
-static keymanager_t *global_keymanager = NULL;
+static keymgr *global_keymgr = NULL;
 
 /**
- * Get or create global keymanager
+ * Get or create global keymgr
  *
- * Creates the global keymanager on first access. Returns the same instance
+ * Creates the global keymgr on first access. Returns the same instance
  * on subsequent calls. If config is NULL, uses default config values.
  *
  * @param config Configuration (can be NULL for defaults)
- * @return Global keymanager instance or NULL on error
+ * @return Global keymgr instance or NULL on error
  */
-keymanager_t *keymanager_get_global(const config_t *config) {
-    if (global_keymanager) {
-        return global_keymanager;
+keymgr *keymgr_get_global(const config_t *config) {
+    if (global_keymgr) {
+        return global_keymgr;
     }
 
-    /* Create new keymanager */
+    /* Create new keymgr */
     const config_t *cfg = config;
     config_t *default_config = NULL;
 
@@ -1305,27 +1305,27 @@ keymanager_t *keymanager_get_global(const config_t *config) {
         cfg = default_config;
     }
 
-    error_t *err = keymanager_create(cfg, &global_keymanager);
+    error_t *err = keymgr_create(cfg, &global_keymgr);
 
     config_free(default_config);
 
     if (err) {
         fprintf(
-            stderr, "Failed to create global keymanager: %s\n",
+            stderr, "Failed to create global keymgr: %s\n",
             error_message(err)
         );
         error_free(err);
         return NULL;
     }
 
-    return global_keymanager;
+    return global_keymgr;
 }
 
 /**
- * Cleanup global keymanager
+ * Cleanup global keymgr
  *
- * Securely clears and frees the global keymanager instance.
- * Safe to call multiple times or if global keymanager doesn't exist.
+ * Securely clears and frees the global keymgr instance.
+ * Safe to call multiple times or if global keymgr doesn't exist.
  *
  * NOTE: This does NOT clear the file cache - the cache persists across
  * invocations until it expires (per session_timeout) or is explicitly
@@ -1333,10 +1333,10 @@ keymanager_t *keymanager_get_global(const config_t *config) {
  *
  * Should be called at program exit (e.g., via atexit() or explicit cleanup).
  */
-void keymanager_cleanup_global(void) {
-    if (global_keymanager) {
-        keymanager_free(global_keymanager);
-        global_keymanager = NULL;
+void keymgr_cleanup_global(void) {
+    if (global_keymgr) {
+        keymgr_free(global_keymgr);
+        global_keymgr = NULL;
     }
 
     /* Note: We intentionally do NOT clear the file cache here.

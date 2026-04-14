@@ -24,7 +24,7 @@
 #include "core/profiles.h"
 #include "core/state.h"
 #include "core/workspace.h"
-#include "crypto/keymanager.h"
+#include "crypto/keymgr.h"
 #include "crypto/policy.h"
 #include "infra/content.h"
 #include "infra/path.h"
@@ -46,7 +46,7 @@ static error_t *copy_file_to_worktree(
     const char *filesystem_path,
     const char *storage_path,
     const char *profile,
-    keymanager_t *km,
+    keymgr *keymgr,
     const config_t *config,
     const metadata_t *metadata,
     bool *out_was_encrypted,
@@ -156,7 +156,7 @@ static error_t *copy_file_to_worktree(
             dest_path,
             storage_path,
             profile,
-            km,
+            keymgr,
             should_encrypt,
             &file_stat  /* Capture stat for metadata - eliminates race condition */
         );
@@ -300,8 +300,7 @@ static bool is_update_candidate(
             /* New files - include if:
              * - Explicit flags set (--include-new or --only-new), OR
              * - Config auto_detect_new_files is enabled (for confirmation prompt) */
-            return (opts->include_new || opts->only_new ||
-                   (config && config->auto_detect_new_files));
+            return (opts->include_new || opts->only_new || config->auto_detect_new_files);
 
         case WORKSPACE_STATE_UNDEPLOYED:
         case WORKSPACE_STATE_ORPHANED:
@@ -860,7 +859,7 @@ static error_t *update_profile(
     error_t *err = NULL;
     metadata_t *existing_metadata = NULL;
     bool owns_metadata = false;
-    keymanager_t *key_mgr = NULL;
+    keymgr *keymgr = NULL;
     file_copy_result_t *copy_results = NULL;
 
     /* Try to get metadata from workspace cache first */
@@ -891,7 +890,7 @@ static error_t *update_profile(
         owns_metadata = true;
     }
 
-    /* Get keymanager if encryption may be needed */
+    /* Get keymgr if encryption may be needed */
     bool needs_encryption = false;
 
     if (existing_metadata && config && config->encryption_enabled) {
@@ -910,8 +909,8 @@ static error_t *update_profile(
     }
 
     if (needs_encryption && config && config->encryption_enabled) {
-        key_mgr = keymanager_get_global(config);
-        if (!key_mgr) {
+        keymgr = keymgr_get_global(config);
+        if (!keymgr) {
             if (owns_metadata && existing_metadata) metadata_free(existing_metadata);
             return ERROR(ERR_INTERNAL, "Failed to get encryption key manager");
         }
@@ -993,7 +992,7 @@ static error_t *update_profile(
                     item->filesystem_path,
                     item->storage_path,
                     profile,
-                    key_mgr,
+                    keymgr,
                     config,
                     existing_metadata,
                     &copy_results[i].encrypted,
@@ -1210,7 +1209,7 @@ static error_t *flatten_items_to_array(
  *
  * @param repo Git repository (must not be NULL)
  * @param state Caller's state handle (must not be NULL, must have open DB)
- * @param ws Workspace for accessing km and metadata cache (must not be NULL)
+ * @param ws Workspace for accessing keymgr and metadata cache (must not be NULL)
  * @param items_by_profile Hashmap: profile → item_array_t* (must not be NULL)
  * @param opts Update options for verbose flag (must not be NULL)
  * @param out Output context for verbose logging (can be NULL)
@@ -1257,7 +1256,7 @@ static error_t *update_manifest_after_update(
     }
 
     /* Begin write transaction on caller's handle */
-    err = state_begin_transaction(state);
+    err = state_begin(state);
     if (err) {
         string_array_free(enabled_profiles);
         return error_wrap(err, "Failed to begin manifest update transaction");
@@ -1320,7 +1319,7 @@ static error_t *update_manifest_after_update(
     }
 
 commit:
-    err = state_commit_transaction(state);
+    err = state_commit(state);
     if (err) {
         err = error_wrap(err, "Failed to save manifest updates");
         goto cleanup;
@@ -1331,9 +1330,9 @@ commit:
 
 cleanup:
     /* Leave state handle clean for the caller by rolling back any uncommitted
-     * transaction. state_rollback_transaction is a no-op if already committed. */
+     * transaction. state_rollback is a no-op if already committed. */
     if (in_transaction) {
-        state_rollback_transaction(state);
+        state_rollback(state);
     }
     free(all_items);  /* Free array, not items (borrowed) */
     if (enabled_profiles) {
@@ -2011,7 +2010,7 @@ error_t *cmd_update(
     }
 
     /* Execute pre-update hook (using operation profiles for context) */
-    if (config && repo_dir) {
+    if (repo_dir) {
         profiles_str = string_array_join(active_profiles, " ");
 
         if (profiles_str) {
@@ -2064,7 +2063,7 @@ error_t *cmd_update(
         .analyze_files       = true,                    /* Detect content and metadata changes */
         .analyze_orphans     = false,                   /* Update doesn't process orphaned files */
         .analyze_untracked   = (opts->include_new || opts->only_new ||
-            (config && config->auto_detect_new_files)), /* Explicit flags or config auto-detect */
+            config->auto_detect_new_files), /* Explicit flags or config auto-detect */
         .analyze_directories = true,                    /* Directory metadata change detection */
         .analyze_encryption  = true                     /* Encryption policy validation */
     };
@@ -2092,7 +2091,7 @@ error_t *cmd_update(
         }
 
         err = path_filter_create(
-            (const char **) opts->files, opts->file_count,
+            opts->files, opts->file_count,
             prefixes, &file_filter
         );
         string_array_free(prefixes);
@@ -2154,7 +2153,7 @@ error_t *cmd_update(
             /* Extract paths needing elevation from file items.
              * Uses privilege_needs_elevation() which considers whether each
              * entry's custom prefix is under $HOME. */
-            const char **storage_paths = calloc(file_count, sizeof(char *));
+            char **storage_paths = calloc(file_count, sizeof(char *));
             if (!storage_paths) {
                 err = ERROR(ERR_MEMORY, "Failed to allocate storage paths array");
                 goto cleanup;

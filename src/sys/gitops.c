@@ -1400,8 +1400,8 @@ error_t *gitops_fetch_branch(
         );
     }
 
-    const char *refspecs[] = { refspec };
-    git_strarray refs = { (char **) refspecs, 1 };
+    char *refspecs[] = { refspec };
+    git_strarray refs = { refspecs, 1 };
 
     err = git_remote_fetch(remote, &refs, &fetch_opts, NULL);
     git_remote_free(remote);
@@ -1572,8 +1572,8 @@ error_t *gitops_push_branch(
         );
     }
 
-    const char *refspecs[] = { refspec };
-    git_strarray refs = { (char **) refspecs, 1 };
+    char *refspecs[] = { refspec };
+    git_strarray refs = { refspecs, 1 };
 
     err = git_remote_push(remote, &refs, &push_opts);
     git_remote_free(remote);
@@ -1636,8 +1636,8 @@ error_t *gitops_delete_remote_branch(
         );
     }
 
-    const char *refspecs[] = { refspec };
-    git_strarray refs = { (char **) refspecs, 1 };
+    char *refspecs[] = { refspec };
+    git_strarray refs = { refspecs, 1 };
 
     err = git_remote_push(remote, &refs, &push_opts);
     git_remote_free(remote);

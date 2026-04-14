@@ -255,7 +255,7 @@ bool string_array_contains(const string_array_t *arr, const char *str) {
 /* --- Ordering --- */
 
 static int cmp_strings(const void *a, const void *b) {
-    return strcmp(*(const char **) a, *(const char **) b);
+    return strcmp(*(const char *const *) a, *(const char *const *) b);
 }
 
 void string_array_sort(string_array_t *arr) {

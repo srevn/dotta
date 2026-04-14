@@ -16,7 +16,7 @@
 #include "base/error.h"
 #include "base/hashmap.h"
 #include "crypto/encryption.h"
-#include "crypto/keymanager.h"
+#include "crypto/keymgr.h"
 #include "sys/filesystem.h"
 #include "sys/gitops.h"
 
@@ -38,7 +38,7 @@
  */
 struct content_cache {
     git_repository *repo;     /* Borrowed reference */
-    keymanager_t *km;         /* Borrowed reference (can be NULL) */
+    keymgr *keymgr;           /* Borrowed reference (can be NULL) */
     hashmap_t *cache_map;     /* OID hex -> buffer_t* (owned) */
 };
 
@@ -94,7 +94,7 @@ static void buffer_destroy_secure(void *ptr) {
  * @param storage_path File path in profile
  * @param profile Profile name
  * @param expected_encrypted Expected encryption state (from VWD cache or metadata)
- * @param km Key manager (can be NULL for plaintext files)
+ * @param keymgr Key manager (can be NULL for plaintext files)
  * @param out_content Output buffer (caller owns)
  * @return Error or NULL on success
  */
@@ -104,7 +104,7 @@ static error_t *get_plaintext_from_blob(
     const char *storage_path,
     const char *profile,
     bool expected_encrypted,
-    keymanager_t *km,
+    keymgr *keymgr,
     buffer_t *out_content
 ) {
     CHECK_NULL(storage_path);
@@ -142,8 +142,8 @@ static error_t *get_plaintext_from_blob(
 
     /* Step 3: Handle encrypted files */
     if (is_encrypted) {
-        /* Check we have keymanager */
-        if (!km) {
+        /* Check we have keymgr */
+        if (!keymgr) {
             return ERROR(
                 ERR_CRYPTO,
                 "File '%s' is encrypted but no key manager provided.\n\n"
@@ -155,7 +155,7 @@ static error_t *get_plaintext_from_blob(
 
         /* Get profile key */
         uint8_t profile_key[ENCRYPTION_PROFILE_KEY_SIZE];
-        error_t *err = keymanager_get_profile_key(km, profile, profile_key);
+        error_t *err = keymgr_get_profile_key(keymgr, profile, profile_key);
         if (err) {
             return error_wrap(err, "Failed to get profile key for '%s'", profile);
         }
@@ -198,7 +198,7 @@ error_t *content_get_from_blob_oid(
     const char *storage_path,
     const char *profile,
     bool expected_encrypted,
-    keymanager_t *km,
+    keymgr *keymgr,
     buffer_t *out_content
 ) {
     CHECK_NULL(repo);
@@ -217,7 +217,7 @@ error_t *content_get_from_blob_oid(
     /* Get plaintext content (view bytes valid until close) */
     err = get_plaintext_from_blob(
         view.data, view.size, storage_path, profile,
-        expected_encrypted, km, out_content
+        expected_encrypted, keymgr, out_content
     );
 
     gitops_blob_view_close(&view);
@@ -226,7 +226,7 @@ error_t *content_get_from_blob_oid(
 
 content_cache_t *content_cache_create(
     git_repository *repo,
-    keymanager_t *km
+    keymgr *keymgr
 ) {
     if (!repo) {
         return NULL;
@@ -238,7 +238,7 @@ content_cache_t *content_cache_create(
     }
 
     cache->repo = repo;
-    cache->km = km;
+    cache->keymgr = keymgr;
 
     /* Initial capacity: 64 entries */
     cache->cache_map = hashmap_create(64);
@@ -296,7 +296,7 @@ error_t *content_cache_get_from_blob_oid(
     /* Get plaintext content (view bytes valid until close) */
     err = get_plaintext_from_blob(
         view.data, view.size, storage_path, profile,
-        expected_encrypted, cache->km, content
+        expected_encrypted, cache->keymgr, content
     );
 
     gitops_blob_view_close(&view);
@@ -339,7 +339,7 @@ error_t *content_store_to_blob(
     const buffer_t *plaintext,
     const char *storage_path,
     const char *profile,
-    keymanager_t *km,
+    keymgr *keymgr,
     bool should_encrypt,
     git_oid *out_oid
 ) {
@@ -368,15 +368,15 @@ error_t *content_store_to_blob(
 
     /* Handle encryption if requested */
     if (should_encrypt) {
-        if (!km) {
+        if (!keymgr) {
             return ERROR(
-                ERR_CRYPTO, "Encryption requested but no keymanager provided"
+                ERR_CRYPTO, "Encryption requested but no keymgr provided"
             );
         }
 
-        /* Get profile key (cached in keymanager for performance) */
+        /* Get profile key (cached in keymgr for performance) */
         uint8_t profile_key[ENCRYPTION_PROFILE_KEY_SIZE];
-        error_t *err = keymanager_get_profile_key(km, profile, profile_key);
+        error_t *err = keymgr_get_profile_key(keymgr, profile, profile_key);
         if (err) {
             return error_wrap(
                 err, "Failed to get profile key for '%s'", profile
@@ -422,7 +422,7 @@ error_t *content_store_file_to_worktree(
     const char *worktree_path,
     const char *storage_path,
     const char *profile,
-    keymanager_t *km,
+    keymgr *keymgr,
     bool should_encrypt,
     struct stat *out_stat
 ) {
@@ -488,17 +488,17 @@ error_t *content_store_file_to_worktree(
     buffer_t ciphertext = BUFFER_INIT;
 
     if (should_encrypt) {
-        if (!km) {
+        if (!keymgr) {
             if (content.data) hydro_memzero(content.data, content.size);
             buffer_free(&content);
             return ERROR(
-                ERR_CRYPTO, "Encryption requested but no keymanager provided"
+                ERR_CRYPTO, "Encryption requested but no keymgr provided"
             );
         }
 
-        /* Get profile key (cached in keymanager) */
+        /* Get profile key (cached in keymgr) */
         uint8_t profile_key[ENCRYPTION_PROFILE_KEY_SIZE];
-        err = keymanager_get_profile_key(km, profile, profile_key);
+        err = keymgr_get_profile_key(keymgr, profile, profile_key);
         if (err) {
             if (content.data) hydro_memzero(content.data, content.size);
             buffer_free(&content);

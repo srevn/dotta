@@ -347,7 +347,7 @@ static error_t *configure_db(sqlite3 *db) {
  * Open database connection
  *
  * Opens or creates database, initializes schema, and configures pragmas.
- * Does NOT start a transaction - use state_load_for_update() for that.
+ * Does NOT start a transaction - use state_open() for that.
  *
  * @param db_path Path to database file (must not be NULL)
  * @param create_if_missing Create database if it doesn't exist
@@ -476,7 +476,8 @@ static error_t *prepare_statements(state_t *state) {
         "  storage_path = excluded.storage_path, "
         "  profile      = excluded.profile, "
         "  old_profile  = CASE "
-        "                   WHEN excluded.old_profile IS NOT NULL THEN excluded.old_profile "
+        "                   WHEN excluded.old_profile IS NOT NULL "
+        "                        THEN excluded.old_profile "
         "                   WHEN excluded.profile != virtual_manifest.profile "
         "                        THEN virtual_manifest.profile "
         "                   ELSE virtual_manifest.old_profile END, "
@@ -743,7 +744,7 @@ static error_t *load_profiles(state_t *state) {
     CHECK_NULL(state);
 
     /* Already loaded - return immediately.
-     * Must precede the db check: state_create_empty() sets
+     * Must precede the db check: state_empty() sets
      * profiles_loaded=true with db=NULL (empty state, no DB file). */
     if (state->profiles_loaded) return NULL;
 
@@ -1223,7 +1224,9 @@ error_t *state_set_profiles(
                 state->stmt_insert_profile, 4, preserved_oid->id, GIT_OID_RAWSZ, SQLITE_STATIC
             );
         } else {
-            sqlite3_bind_blob(state->stmt_insert_profile, 4, zero_oid, GIT_OID_RAWSZ, SQLITE_STATIC);
+            sqlite3_bind_blob(
+                state->stmt_insert_profile, 4, zero_oid, GIT_OID_RAWSZ, SQLITE_STATIC
+            );
         }
 
         /* Lookup and bind preserved custom_prefix (or NULL if not set) */
@@ -1343,9 +1346,7 @@ error_t *state_add_file(state_t *state, const state_file_entry_t *entry) {
     }
 
     /* 12. deployed_at */
-    sqlite3_bind_int64(
-        state->stmt_insert_file, 12, (sqlite3_int64) entry->deployed_at
-    );
+    sqlite3_bind_int64(state->stmt_insert_file, 12, (sqlite3_int64) entry->deployed_at);
 
     /* 13-15. stat cache (fast-path divergence detection) */
     sqlite3_bind_int64(state->stmt_insert_file, 13, entry->stat_cache.mtime);
@@ -1459,7 +1460,8 @@ error_t *state_get_file(
     if (rc != SQLITE_ROW) {
         if (rc == SQLITE_DONE) {
             return ERROR(
-                ERR_NOT_FOUND, "File not found in state: %s", filesystem_path
+                ERR_NOT_FOUND, "File not found in state: %s",
+                filesystem_path
             );
         }
         return sqlite_error(state->db, "Failed to query file");
@@ -1500,8 +1502,8 @@ error_t *state_get_file(
     /* Validate required string columns */
     if (!storage_path || !profile || !type_str) {
         return ERROR(
-            ERR_STATE_INVALID,
-            "NULL value in required column for file: %s", filesystem_path
+            ERR_STATE_INVALID, "NULL value in required column for file: %s",
+            filesystem_path
         );
     }
 
@@ -2742,7 +2744,7 @@ error_t *state_load(git_repository *repo, state_t **out) {
     /* If database doesn't exist, return empty state */
     if (!db) {
         free(db_path);
-        return state_create_empty(out);
+        return state_empty(out);
     }
 
     /* Allocate state */
@@ -2782,7 +2784,7 @@ error_t *state_load(git_repository *repo, state_t **out) {
  * @param out State structure (must not be NULL, caller must free with state_free)
  * @return Error or NULL on success
  */
-error_t *state_load_for_update(git_repository *repo, state_t **out) {
+error_t *state_open(git_repository *repo, state_t **out) {
     CHECK_NULL(repo);
     CHECK_NULL(out);
 
@@ -2851,7 +2853,7 @@ error_t *state_load_for_update(git_repository *repo, state_t **out) {
 /**
  * Save state to repository
  *
- * Commits the transaction started by state_load_for_update().
+ * Commits the transaction started by state_open().
  *
  * @param repo Repository (must not be NULL)
  * @param state State to save (must not be NULL)
@@ -2880,7 +2882,7 @@ error_t *state_save(git_repository *repo, state_t *state) {
         return NULL;
     }
 
-    /* Case 2: State created with state_create_empty() - need to open database and write */
+    /* Case 2: State created with state_empty() - need to open database and write */
     if (!state->db) {
         /* Get database path */
         char *db_path = NULL;
@@ -2957,7 +2959,7 @@ error_t *state_save(git_repository *repo, state_t *state) {
 /**
  * Begin an explicit transaction on a read-only state handle
  */
-error_t *state_begin_transaction(state_t *state) {
+error_t *state_begin(state_t *state) {
     CHECK_NULL(state);
     CHECK_NULL(state->db);
 
@@ -2981,9 +2983,9 @@ error_t *state_begin_transaction(state_t *state) {
 }
 
 /**
- * Commit a transaction started by state_begin_transaction()
+ * Commit a transaction started by state_begin()
  */
-error_t *state_commit_transaction(state_t *state) {
+error_t *state_commit(state_t *state) {
     CHECK_NULL(state);
     CHECK_NULL(state->db);
 
@@ -3007,9 +3009,9 @@ error_t *state_commit_transaction(state_t *state) {
 }
 
 /**
- * Roll back a transaction started by state_begin_transaction()
+ * Roll back a transaction started by state_begin()
  */
-void state_rollback_transaction(state_t *state) {
+void state_rollback(state_t *state) {
     if (!state || !state->db || !state->in_transaction) {
         return;
     }
@@ -3021,7 +3023,7 @@ void state_rollback_transaction(state_t *state) {
 /**
  * Check if state has an active transaction
  */
-bool state_in_transaction(const state_t *state) {
+bool state_locked(const state_t *state) {
     return state && state->in_transaction;
 }
 
@@ -3034,7 +3036,7 @@ bool state_in_transaction(const state_t *state) {
  * @param out State structure (must not be NULL, caller must free with state_free)
  * @return Error or NULL on success
  */
-error_t *state_create_empty(state_t **out) {
+error_t *state_empty(state_t **out) {
     CHECK_NULL(out);
 
     state_t *state = calloc(1, sizeof(state_t));
@@ -3343,7 +3345,7 @@ error_t *state_clear_old_profile(
  *   - STATE_DELETED  - Confirmed deletion via remove command
  *
  * Preconditions:
- *   - state MUST have active transaction (via state_load_for_update)
+ *   - state MUST have active transaction (via state_open)
  *   - filesystem_path MUST exist in virtual_manifest
  *   - new_state MUST be STATE_ACTIVE, STATE_INACTIVE, STATE_DELETED, etc
  *
@@ -3476,7 +3478,8 @@ error_t *state_get_profile_commit_oid(
 
     if (!state->db) {
         return ERROR(
-            ERR_NOT_FOUND, "No database — profile '%s' not enabled", profile
+            ERR_NOT_FOUND, "No database — profile '%s' not enabled",
+            profile
         );
     }
 
@@ -3495,8 +3498,8 @@ error_t *state_get_profile_commit_oid(
         sqlite3_finalize(stmt);
         if (rc == SQLITE_DONE) {
             return ERROR(
-                ERR_NOT_FOUND,
-                "Profile '%s' not found in enabled_profiles", profile
+                ERR_NOT_FOUND, "Profile '%s' not found in enabled_profiles",
+                profile
             );
         }
         return sqlite_error(state->db, "Failed to query commit_oid");

@@ -20,7 +20,7 @@
 #include "core/manifest.h"
 #include "core/metadata.h"
 #include "core/state.h"
-#include "crypto/keymanager.h"
+#include "crypto/keymgr.h"
 #include "crypto/policy.h"
 #include "infra/content.h"
 #include "infra/path.h"
@@ -212,7 +212,7 @@ static error_t *collect_files_from_dir(
  * @param filesystem_path Source path on filesystem
  * @param storage_path Pre-computed storage path (e.g., "home/.bashrc")
  * @param opts Command options
- * @param km Key manager (for encryption, can be NULL if encryption disabled)
+ * @param keymgr Key manager (for encryption, can be NULL if encryption disabled)
  * @param config Configuration (for auto-encrypt patterns only, can be NULL)
  * @param metadata Metadata collection (captured entry will be added here)
  * @param out Output context
@@ -223,7 +223,7 @@ static error_t *add_file_to_worktree(
     const char *filesystem_path,
     const char *storage_path,
     const cmd_add_options_t *opts,
-    keymanager_t *km,
+    keymgr *keymgr,
     const config_t *config,
     metadata_t *metadata,
     output_ctx_t *out
@@ -347,7 +347,7 @@ static error_t *add_file_to_worktree(
             dest_path,
             storage_path,
             opts->profile,
-            km,
+            keymgr,
             should_encrypt,
             &file_stat  /* Capture stat data */
         );
@@ -639,7 +639,7 @@ static error_t *auto_enable_and_sync_profile(
     }
 
     /* STEP 1: Open write transaction (creates DB on first add) */
-    err = state_load_for_update(repo, &state);
+    err = state_open(repo, &state);
     if (err) {
         return error_wrap(err, "Failed to open transaction");
     }
@@ -754,7 +754,7 @@ cleanup:
  * ensuring all newly-added files are found during precedence checks.
  *
  * Algorithm:
- *   1. Open write transaction (state_load_for_update)
+ *   1. Open write transaction (state_open)
  *   2. Read enabled profiles under the transaction snapshot
  *   3. If profile not enabled: rollback via state_free (no writes to preserve)
  *   4. If custom_prefix provided: update prefix in state (UPSERT)
@@ -814,7 +814,7 @@ static error_t *update_manifest_after_add(
 
     /* STEP 1: Open transaction (creates DB if missing, but this helper is only
      * called after a successful Git commit, so the repo exists) */
-    err = state_load_for_update(repo, &state);
+    err = state_open(repo, &state);
     if (err) {
         return error_wrap(err, "Failed to open state transaction for manifest update");
     }
@@ -933,10 +933,10 @@ error_t *cmd_add(
     size_t added_count = 0;
     bool profile_was_new = false;
     metadata_t *metadata = NULL;
-    keymanager_t *key_mgr = NULL;
+    keymgr *keymgr = NULL;
 
     /* Pre-flight privilege check arrays */
-    const char **preflight_storage_paths = NULL;
+    char **preflight_storage_paths = NULL;
     char **preflight_allocated_paths = NULL;
     size_t preflight_storage_count = 0;
 
@@ -1362,20 +1362,20 @@ error_t *cmd_add(
         }
     }
 
-    /* Get keymanager if encryption may be needed
+    /* Get keymgr if encryption may be needed
      *
      * Keymanager handles profile key caching internally, so files will reuse
      * the same derived key without redundant derivations (O(1) after first derivation).
      *
-     * Get keymanager if EITHER:
+     * Get keymgr if EITHER:
      *   1. Explicit encryption requested (--encrypt flag)
      *   2. Auto-encrypt patterns configured (files may match patterns)
      */
-    bool needs_encryption = opts->encrypt || (config && config->encryption_enabled &&
+    bool needs_encryption = opts->encrypt || (config->encryption_enabled &&
         config->auto_encrypt_patterns && config->auto_encrypt_pattern_count > 0);
 
     if (needs_encryption) {
-        if (!config || !config->encryption_enabled) {
+        if (!config->encryption_enabled) {
             err = ERROR(
                 ERR_INVALID_ARG,
                 "Encryption requested (--encrypt) but encryption is not enabled in config.\n"
@@ -1383,8 +1383,8 @@ error_t *cmd_add(
             );
             goto cleanup;
         }
-        key_mgr = keymanager_get_global(config);
-        if (!key_mgr) {
+        keymgr = keymgr_get_global(config);
+        if (!keymgr) {
             err = ERROR(ERR_INTERNAL, "Failed to get encryption key manager");
             goto cleanup;
         }
@@ -1414,7 +1414,7 @@ error_t *cmd_add(
          * ARCHITECTURE: add_file_to_worktree handles both operations atomically,
          * sharing stat() data between content and metadata layers to eliminate TOCTOU */
         err = add_file_to_worktree(
-            wt, file_path, storage_path, opts, key_mgr, config, metadata, out
+            wt, file_path, storage_path, opts, keymgr, config, metadata, out
         );
         if (err) {
             free(storage_path);

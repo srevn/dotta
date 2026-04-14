@@ -32,7 +32,7 @@
 #include "core/manifest.h"
 #include "core/profiles.h"
 #include "crypto/encryption.h"
-#include "crypto/keymanager.h"
+#include "crypto/keymgr.h"
 #include "crypto/policy.h"
 #include "infra/compare.h"
 #include "infra/content.h"
@@ -76,7 +76,7 @@ struct workspace {
     size_t cached_state_count;               /* Number of entries in cached_state_files */
 
     /* Encryption and caching infrastructure */
-    keymanager_t *keymanager;        /* Borrowed from global */
+    keymgr *keymgr;                  /* Borrowed from global */
     content_cache_t *content_cache;  /* Owned - caches decrypted content */
     hashmap_t *metadata_cache;       /* Owned - maps profile -> metadata_t* */
 
@@ -341,7 +341,9 @@ static error_t *workspace_add_diverged(
 
     /* Store array index in hashmap for O(1) lookup */
     error_t *err = hashmap_set(
-        ws->diverged_index, entry->filesystem_path, (void *) (uintptr_t) (ws->diverged_count + 1)
+        ws->diverged_index,
+        entry->filesystem_path,
+        (void *) (uintptr_t) (ws->diverged_count + 1)
     );
     if (err) {
         return error_wrap(err, "Failed to index diverged entry");
@@ -376,6 +378,7 @@ static void workspace_record_stat_update(
             new_cap * sizeof(stat_cache_update_t)
         );
         if (!new_arr) return;
+
         ws->stat_updates = new_arr;
         ws->stat_update_capacity = new_cap;
     }
@@ -436,8 +439,8 @@ static error_t *analyze_file_divergence(
             memset(&initial_stat, 0, sizeof(initial_stat));
         } else {
             return ERROR(
-                ERR_FS, "Failed to stat '%s': %s",
-                fs_path, strerror(errno)
+                ERR_FS, "Failed to stat '%s': %s", fs_path,
+                strerror(errno)
             );
         }
     } else {
@@ -726,7 +729,7 @@ static error_t *analyze_file_divergence(
          * Only check when content diverges (file ≠ new expected blob). If content
          * matches new blob, there's no divergence and no need for STALE flag.
          */
-        const git_oid *old_blob_oid = hashmap_get((hashmap_t *) ws->repaired_paths, fs_path);
+        const git_oid *old_blob_oid = hashmap_get(ws->repaired_paths, fs_path);
         if (old_blob_oid) {
             /* Compare file on disk against OLD blob (what dotta deployed).
              * Reuse the same verification strategy as Phase 1. */
@@ -2046,7 +2049,9 @@ static error_t *analyze_encryption_policy_mismatch(
          * so copying the full blob here would be wasteful. */
         gitops_blob_view_t blob_view;
         error_t *view_err = gitops_blob_view_open(
-            ws->repo, &manifest_entry->blob_oid, &blob_view
+            ws->repo,
+            &manifest_entry->blob_oid,
+            &blob_view
         );
         if (view_err) {
             /* Non-fatal: can't read blob - skip this file */
@@ -2320,7 +2325,10 @@ static error_t *workspace_build_manifest_from_state(
      */
     if (!skip_stale_detection) {
         err = manifest_detect_stale_profiles(
-            ws->repo, ws->state, ws->profile_index, &stale_profiles
+            ws->repo,
+            ws->state,
+            ws->profile_index,
+            &stale_profiles
         );
         if (err) {
             return error_wrap(err, "Failed to detect stale profiles");
@@ -2563,9 +2571,7 @@ static error_t *workspace_build_manifest_from_state(
 
                 if (blob_changed) {
                     error_t *track_err = hashmap_set(
-                        ws->stale_paths,
-                        entry->filesystem_path,
-                        (void *) (uintptr_t) 1
+                        ws->stale_paths, entry->filesystem_path, (void *) (uintptr_t) 1
                     );
                     if (track_err) {
                         manifest_idx++;  /* entry populated — track for cleanup */
@@ -2580,9 +2586,7 @@ static error_t *workspace_build_manifest_from_state(
                  * so analyze_orphaned_files emits WORKSPACE_STATE_RELEASED.
                  * Skip from manifest (file is no longer in scope). */
                 err = hashmap_set(
-                    ws->released_paths,
-                    state_entry->filesystem_path,
-                    (void *) (uintptr_t) 1
+                    ws->released_paths, state_entry->filesystem_path, (void *) (uintptr_t) 1
                 );
                 if (err) {
                     goto cleanup;
@@ -2617,7 +2621,7 @@ static error_t *workspace_build_manifest_from_state(
          * manifest_idx already holds the 1-based value after the increment above.
          * The cast through uintptr_t is safe: indices are much smaller than
          * SIZE_MAX, and we never dereference these "pointers". */
-        err = hashmap_set(path_map, entry->filesystem_path, (void *) (uintptr_t) (manifest_idx));
+        err = hashmap_set(path_map, entry->filesystem_path, (void *) (uintptr_t) manifest_idx);
         if (err) {
             err = error_wrap(err, "Failed to populate manifest index");
             goto cleanup;
@@ -2649,6 +2653,7 @@ cleanup:
     ws->manifest = NULL;
     manifest_free(fresh_manifest);
     hashmap_free(stale_profiles, NULL);
+
     return err;
 }
 
@@ -2700,10 +2705,10 @@ error_t *workspace_load(
     ws->repaired_paths = resolved_opts.repaired_paths;
 
     /* Initialize encryption infrastructure */
-    /* Note: keymanager can be NULL if encryption is not configured - this is valid */
-    ws->keymanager = keymanager_get_global(config);
+    /* Note: keymgr can be NULL if encryption is not configured - this is valid */
+    ws->keymgr = keymgr_get_global(config);
 
-    ws->content_cache = content_cache_create(ws->repo, ws->keymanager);
+    ws->content_cache = content_cache_create(ws->repo, ws->keymgr);
     if (!ws->content_cache) {
         workspace_free(ws);
         return ERROR(ERR_MEMORY, "Failed to create content cache");
@@ -2972,23 +2977,6 @@ const manifest_t *workspace_get_manifest(const workspace_t *ws) {
 }
 
 /**
- * Get keymanager from workspace
- *
- * Returns the keymanager borrowed from global configuration. This is used
- * for content hashing and encryption operations. Can be NULL if encryption
- * is not configured.
- *
- * @param ws Workspace (must not be NULL)
- * @return Keymanager (borrowed reference, do not free, can be NULL)
- */
-keymanager_t *workspace_get_keymanager(const workspace_t *ws) {
-    if (!ws) {
-        return NULL;
-    }
-    return ws->keymanager;
-}
-
-/**
  * Get content cache from workspace
  *
  * Returns the content cache used by the workspace for transparent
@@ -3246,6 +3234,7 @@ bool workspace_item_extract_display_info(
     }
 
     *tag_count_out = tag_count;
+
     return true;
 }
 
@@ -3270,12 +3259,12 @@ error_t *workspace_flush_stat_caches(workspace_t *ws) {
     }
 
     /* Begin our own transaction only when no external transaction is active:
-     *   - apply: state_load_for_update -> already in transaction -> skip
+     *   - apply: state_open -> already in transaction -> skip
      *   - status/diff/sync: state_load -> no transaction -> begin/commit */
-    bool needs_transaction = !state_in_transaction(ws->state);
+    bool needs_transaction = !state_locked(ws->state);
 
     if (needs_transaction) {
-        error_t *err = state_begin_transaction(ws->state);
+        error_t *err = state_begin(ws->state);
         if (err) {
             return error_wrap(
                 err, "Failed to begin stat cache transaction"
@@ -3291,7 +3280,7 @@ error_t *workspace_flush_stat_caches(workspace_t *ws) {
         );
         if (err) {
             if (needs_transaction) {
-                state_rollback_transaction(ws->state);
+                state_rollback(ws->state);
             }
             return error_wrap(
                 err, "Failed to flush stat cache for '%s'",
@@ -3301,7 +3290,7 @@ error_t *workspace_flush_stat_caches(workspace_t *ws) {
     }
 
     if (needs_transaction) {
-        error_t *err = state_commit_transaction(ws->state);
+        error_t *err = state_commit(ws->state);
         if (err) {
             return error_wrap(
                 err, "Failed to commit stat cache transaction"
@@ -3337,7 +3326,7 @@ void workspace_free(workspace_t *ws) {
         hashmap_free(ws->metadata_cache, metadata_free);
     }
     content_cache_free(ws->content_cache);
-    /* Don't free keymanager - it's global */
+    /* Don't free keymgr - it's global */
 
     /* Free staleness tracking (NULL-safe) */
     hashmap_free(ws->stale_paths, NULL);

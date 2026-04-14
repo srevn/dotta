@@ -2,7 +2,7 @@
  * key.h - Encryption key management command
  *
  * Manages encryption passphrases and key caching lifecycle.
- * Provides explicit control over the keymanager session state.
+ * Provides explicit control over the keymgr session state.
  */
 
 #ifndef DOTTA_CMD_KEY_H

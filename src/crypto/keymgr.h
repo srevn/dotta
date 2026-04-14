@@ -1,5 +1,5 @@
 /**
- * keymanager.h - Encryption key management and session caching
+ * keymgr.h - Encryption key management and session caching
  *
  * Manages the encryption master key lifecycle with session-based caching.
  * Prompts for passphrase when needed and caches the derived master key
@@ -19,7 +19,7 @@
  * - Master key stored in process memory and on disk (vulnerable to dumps/theft)
  * - Disk cache encrypted and machine-bound (verified via MAC)
  * - mlock() protection prevents swapping to disk (best-effort):
- *   * Master key in keymanager struct
+ *   * Master key in keymgr struct
  *   * Profile keys in hashmap cache
  *   * Passphrase buffers during input/derivation
  * - Graceful degradation if mlock fails (logs warning)
@@ -28,8 +28,8 @@
  * - Signal handlers recommended for cleanup on SIGINT/SIGTERM
  */
 
-#ifndef DOTTA_KEYMANAGER_H
-#define DOTTA_KEYMANAGER_H
+#ifndef DOTTA_KEYMGR_H
+#define DOTTA_KEYMGR_H
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -44,7 +44,7 @@ typedef struct config config_t;
  *
  * Maintains cached master key and session state.
  */
-typedef struct keymanager keymanager_t;
+typedef struct keymgr keymgr;
 
 /**
  * Create key manager
@@ -54,12 +54,12 @@ typedef struct keymanager keymanager_t;
  * requested on first key access (lazy initialization).
  *
  * @param config Configuration (for opslimit and session_timeout)
- * @param out Key manager (caller must free with keymanager_free)
+ * @param out Key manager (caller must free with keymgr_free)
  * @return Error or NULL on success
  */
-error_t *keymanager_create(
+error_t *keymgr_create(
     const config_t *config,
-    keymanager_t **out
+    keymgr **out
 );
 
 /**
@@ -73,12 +73,12 @@ error_t *keymanager_create(
  * 2. DOTTA_ENCRYPTION_PASSPHRASE environment variable
  * 3. Interactive prompt (with terminal echo disabled)
  *
- * @param mgr Key manager (must not be NULL)
+ * @param keymgr Key manager (must not be NULL)
  * @param out_master_key Output buffer for 32-byte key (must be pre-allocated)
  * @return Error or NULL on success
  */
-error_t *keymanager_get_key(
-    keymanager_t *mgr,
+error_t *keymgr_get_key(
+    keymgr *keymgr,
     uint8_t out_master_key[32]
 );
 
@@ -101,13 +101,13 @@ error_t *keymanager_get_key(
  * Performance: O(1) for cache hit, O(expensive) for cache miss
  * Cache lifetime: Same as master key (cleared when master key expires/cleared)
  *
- * @param mgr Key manager (must not be NULL)
+ * @param keymgr Key manager (must not be NULL)
  * @param profile Profile name (must not be NULL)
  * @param out_profile_key Output buffer for 32-byte profile key (must be pre-allocated)
  * @return Error or NULL on success
  */
-error_t *keymanager_get_profile_key(
-    keymanager_t *mgr,
+error_t *keymgr_get_profile_key(
+    keymgr *keymgr,
     const char *profile,
     uint8_t out_profile_key[32]
 );
@@ -118,13 +118,13 @@ error_t *keymanager_get_profile_key(
  * Derives key from passphrase and caches it. Used by `dotta key set`.
  * Does not prompt - passphrase must be provided by caller.
  *
- * @param mgr Key manager (must not be NULL)
+ * @param keymgr Key manager (must not be NULL)
  * @param passphrase Passphrase (must not be NULL, will be copied and zeroed)
  * @param passphrase_len Passphrase length
  * @return Error or NULL on success
  */
-error_t *keymanager_set_passphrase(
-    keymanager_t *mgr,
+error_t *keymgr_set_passphrase(
+    keymgr *keymgr,
     const char *passphrase,
     size_t passphrase_len
 );
@@ -137,20 +137,20 @@ error_t *keymanager_set_passphrase(
  *
  * Safe to call multiple times.
  *
- * @param mgr Key manager (must not be NULL)
+ * @param keymgr Key manager (must not be NULL)
  */
-void keymanager_clear(keymanager_t *mgr);
+void keymgr_clear(keymgr *keymgr);
 
 /**
  * Check if key is cached in memory and not expired
  *
  * Only checks in-memory state. Does not probe the disk cache.
- * Use keymanager_probe_key() for a full availability check.
+ * Use keymgr_probe_key() for a full availability check.
  *
- * @param mgr Key manager (must not be NULL)
+ * @param keymgr Key manager (must not be NULL)
  * @return true if key is available in memory (cached and not expired)
  */
-bool keymanager_has_key(const keymanager_t *mgr);
+bool keymgr_has_key(const keymgr *keymgr);
 
 /**
  * Probe for key availability without prompting
@@ -159,25 +159,25 @@ bool keymanager_has_key(const keymanager_t *mgr);
  * disk cache exists, loads it into memory. Does NOT prompt for
  * passphrase or check environment variables.
  *
- * This is the non-interactive counterpart to keymanager_get_key():
- *   - keymanager_has_key():   memory only (const, no side effects)
- *   - keymanager_probe_key(): memory + disk (may load from disk)
- *   - keymanager_get_key():   memory + disk + prompt (full resolution)
+ * This is the non-interactive counterpart to keymgr_get_key():
+ *   - keymgr_has_key():   memory only (const, no side effects)
+ *   - keymgr_probe_key(): memory + disk (may load from disk)
+ *   - keymgr_get_key():   memory + disk + prompt (full resolution)
  *
- * @param mgr Key manager (must not be NULL)
+ * @param keymgr Key manager (must not be NULL)
  * @return true if key is available (either from memory or disk cache)
  */
-bool keymanager_probe_key(keymanager_t *mgr);
+bool keymgr_probe_key(keymgr *keymgr);
 
 /**
  * Get time until cache expiration
  *
- * @param mgr Key manager (must not be NULL)
+ * @param keymgr Key manager (must not be NULL)
  * @param out_expires_at Optional output for absolute expiration timestamp
  * @return Seconds until expiration (0 if not cached, -1 if no timeout)
  */
-int64_t keymanager_time_until_expiry(
-    const keymanager_t *mgr,
+int64_t keymgrime_until_expiry(
+    const keymgr *keymgr,
     time_t *out_expires_at
 );
 
@@ -187,9 +187,9 @@ int64_t keymanager_time_until_expiry(
  * Securely zeros cached key before freeing memory.
  * Safe to call with NULL.
  *
- * @param mgr Key manager (can be NULL)
+ * @param keymgr Key manager (can be NULL)
  */
-void keymanager_free(keymanager_t *mgr);
+void keymgr_free(keymgr *keymgr);
 
 /**
  * Prompt for passphrase (with echo disabled)
@@ -208,34 +208,34 @@ void keymanager_free(keymanager_t *mgr);
  * @param out_len Passphrase length (excluding null terminator)
  * @return Error or NULL on success
  */
-error_t *keymanager_prompt_passphrase(
+error_t *keymgr_prompt_passphrase(
     const char *prompt,
     char **out_passphrase,
     size_t *out_len
 );
 
 /**
- * Get or create global keymanager
+ * Get or create global keymgr
  *
- * Returns a process-wide keymanager instance, creating it on first access.
+ * Returns a process-wide keymgr instance, creating it on first access.
  * This avoids repeatedly prompting for passphrase across multiple operations.
  *
- * The global keymanager uses the provided config (or defaults if NULL).
- * Once created, it persists until keymanager_cleanup_global() is called.
+ * The global keymgr uses the provided config (or defaults if NULL).
+ * Once created, it persists until keymgr_cleanup_global() is called.
  *
  * @param config Configuration (can be NULL for defaults)
- * @return Global keymanager instance or NULL on error
+ * @return Global keymgr instance or NULL on error
  */
-keymanager_t *keymanager_get_global(const config_t *config);
+keymgr *keymgr_get_global(const config_t *config);
 
 /**
- * Cleanup global keymanager
+ * Cleanup global keymgr
  *
- * Securely clears and frees the global keymanager instance.
+ * Securely clears and frees the global keymgr instance.
  * Should be called at program exit.
  *
  * Safe to call multiple times.
  */
-void keymanager_cleanup_global(void);
+void keymgr_cleanup_global(void);
 
-#endif /* DOTTA_KEYMANAGER_H */
+#endif /* DOTTA_KEYMGR_H */

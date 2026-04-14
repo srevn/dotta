@@ -319,7 +319,7 @@ static error_t *interactive_save_profile_order(
 
     /* Load state for update */
     state_t *deploy_state = NULL;
-    error_t *err = state_load_for_update(repo, &deploy_state);
+    error_t *err = state_open(repo, &deploy_state);
     if (err) {
         return err;
     }

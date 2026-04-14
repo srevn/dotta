@@ -171,8 +171,8 @@ static error_t *force_push_branch(
         );
     }
 
-    const char *refspecs[] = { refspec };
-    git_strarray refs = { (char **) refspecs, 1 };
+    char *refspecs[] = { refspec };
+    git_strarray refs = { refspecs, 1 };
 
     git_err = git_remote_push(remote, &refs, &push_opts);
     git_remote_free(remote);
@@ -1425,7 +1425,7 @@ error_t *cmd_sync(
         workspace_load_t ws_opts = {
             .analyze_files       = true,   /* Validate file state for uncommitted changes */
             .analyze_orphans     = false,  /* Orphans are apply's concern, not sync's */
-            .analyze_untracked   = (config && config->auto_detect_new_files), /* Respect config */
+            .analyze_untracked   = config->auto_detect_new_files, /* Respect config */
             .analyze_directories = false,  /* Directory metadata is apply's concern */
             .analyze_encryption  = false   /* Encryption is apply's concern */
         };
@@ -1683,7 +1683,7 @@ error_t *cmd_sync(
     }
 
     /* Open state transaction for manifest updates during sync */
-    err = state_load_for_update(repo, &state);
+    err = state_open(repo, &state);
     if (err) {
         err = error_wrap(err, "Failed to open state transaction");
         goto cleanup;

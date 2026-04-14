@@ -156,7 +156,7 @@ typedef struct {
  *
  * Preconditions:
  *   - profile MUST be in enabled_profiles
- *   - state MUST have active transaction (via state_load_for_update)
+ *   - state MUST have active transaction (via state_open)
  *   - Git branch for profile MUST exist
  *   - Custom prefix (if any) MUST already be stored via state_enable_profile()
  *
@@ -262,7 +262,7 @@ error_t *manifest_disable_profile(
  *   6. All operations within caller's transaction
  *
  * Preconditions:
- *   - state MUST have active transaction (via state_load_for_update)
+ *   - state MUST have active transaction (via state_open)
  *   - Git commits MUST be completed (branches at final state)
  *   - items MUST be FILE kind only (no directories)
  *   - enabled_profiles MUST be current enabled set
@@ -322,7 +322,7 @@ error_t *manifest_update_files(
  *   6. All operations within caller's transaction
  *
  * Preconditions:
- *   - state MUST have active transaction (via state_load_for_update)
+ *   - state MUST have active transaction (via state_open)
  *   - Git commits MUST be completed (branches at final state)
  *   - filesystem_paths MUST be valid, canonical paths
  *   - profile SHOULD be enabled (function gracefully handles if not)
@@ -519,7 +519,7 @@ error_t *manifest_detect_stale_profiles(
  *   5. Sync tracked directories for consistency.
  *
  * Preconditions:
- *   - state MUST have active transaction (via state_load_for_update)
+ *   - state MUST have active transaction (via state_open)
  *   - enabled_profiles MUST be current enabled set
  *
  * Postconditions:
@@ -574,7 +574,7 @@ error_t *manifest_repair_stale(
  * reordering profiles.
  *
  * Preconditions:
- *   - state MUST have active transaction (via state_load_for_update)
+ *   - state MUST have active transaction (via state_open)
  *   - new_profile_order MUST be valid enabled profiles
  *
  * Postconditions:
@@ -639,7 +639,7 @@ error_t *manifest_reorder_profiles(
  *     5. Otherwise: skip (file wasn't ours to begin with)
  *
  * Preconditions:
- *   - state MUST have active transaction (via state_load_for_update)
+ *   - state MUST have active transaction (via state_open)
  *   - old_oid and new_oid MUST be valid commits for profile's branch
  *   - profile MUST be in enabled_profiles
  *   - Branch HEAD for profile MUST point to new_oid (post-sync state)
@@ -713,7 +713,7 @@ error_t *manifest_sync_diff(
  *   3. All within caller's active transaction
  *
  * Preconditions:
- *   - state MUST have active transaction (via state_load_for_update)
+ *   - state MUST have active transaction (via state_open)
  *   - enabled_profiles MUST be current enabled set
  *
  * Postconditions:

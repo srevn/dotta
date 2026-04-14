@@ -108,7 +108,7 @@ static error_t *sync_entry_to_state(
     CHECK_NULL(manifest_entry->profile);
 
     error_t *err = NULL;
-    metadata_item_t *meta_item = NULL;
+    const metadata_item_t *meta_item = NULL;
 
     /* 1. Read blob_oid from pre-populated entry field (set during tree walk). */
     const git_oid *blob_oid_obj = &manifest_entry->blob_oid;
@@ -116,7 +116,7 @@ static error_t *sync_entry_to_state(
     /* 2. Get metadata item (may not exist for old profiles) */
     if (metadata) {
         err = metadata_get_item(
-            metadata, manifest_entry->storage_path, (const metadata_item_t **) &meta_item
+            metadata, manifest_entry->storage_path, &meta_item
         );
         /* Allow NOT_FOUND (old profiles without metadata) */
         if (err && err->code != ERR_NOT_FOUND) {
@@ -997,11 +997,11 @@ error_t *manifest_remove_files(
              * by SQL when the owning profile changes. */
             err = sync_entry_to_state(repo, state, fallback, metadata, 0, NULL);
             if (err) {
-                state_free_entry(current_entry);
-                free(filesystem_path);
                 err = error_wrap(
                     err, "Failed to sync fallback for %s", filesystem_path
                 );
+                state_free_entry(current_entry);
+                free(filesystem_path);
                 goto cleanup;
             }
 
@@ -1780,7 +1780,7 @@ cleanup:
  *   6. All operations within caller's transaction
  *
  * Preconditions:
- *   - state MUST have active transaction (via state_load_for_update)
+ *   - state MUST have active transaction (via state_open)
  *   - Git commits MUST be completed (branches at final state)
  *   - items MUST be FILE kind only (no directories)
  *   - enabled_profiles MUST be current enabled set
@@ -2052,7 +2052,7 @@ cleanup:
  *   6. All operations within caller's transaction
  *
  * Preconditions:
- *   - state MUST have active transaction (via state_load_for_update)
+ *   - state MUST have active transaction (via state_open)
  *   - Git commits MUST be completed (branches at final state)
  *   - filesystem_paths MUST be valid, canonical paths
  *   - profile SHOULD be enabled (function gracefully handles if not)
@@ -2253,7 +2253,7 @@ cleanup:
  *     - For deletions: check for fallbacks, entries remain for orphan detection if none
  *     - Handle precedence: only sync if profile won the file
  *
- * Transaction: Caller must open transaction (state_load_for_update) and commit
+ * Transaction: Caller must open transaction (state_open) and commit
  *              (state_save) after calling. This function works within an active
  *              transaction.
  *
@@ -2586,7 +2586,7 @@ cleanup:
  *   - Already idempotent via INSERT OR REPLACE
  *
  * Preconditions:
- *   - state MUST have active transaction (via state_load_for_update)
+ *   - state MUST have active transaction (via state_open)
  *   - enabled_profiles MUST be current enabled set
  *
  * Postconditions:

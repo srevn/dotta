@@ -593,7 +593,7 @@ static bool confirm_removal(
 
     /* Check config threshold */
     size_t threshold = 5; /* Default threshold */
-    if (config && config->confirm_destructive) {
+    if (config->confirm_destructive) {
         threshold = 1;    /* Always confirm in strict mode */
     }
 
@@ -942,7 +942,7 @@ static error_t *remove_files_from_profile(
 
     /* Capture profile-enabled status. Keep the state handle alive — the
      * manifest-update phase below upgrades it to a write transaction via
-     * state_begin_transaction rather than reopening the database. */
+     * state_begin rather than reopening the database. */
     if (state) {
         profile_enabled = state_has_profile(state, opts->profile);
     }
@@ -1136,14 +1136,14 @@ static error_t *remove_files_from_profile(
      *
      * profile_enabled==true implies state was successfully loaded with a live DB
      * (state_has_profile returns false for NULL/empty state), so
-     * state_begin_transaction is safe without an additional guard. The handle
-     * is reused — no second state_load_for_update that would re-prepare
+     * state_begin is safe without an additional guard. The handle
+     * is reused — no second state_open that would re-prepare
      * statements and re-query enabled_profiles from scratch. */
     size_t manifest_removed_count = 0, manifest_fallback_count = 0;
 
     if (profile_enabled) {
         /* Open transaction for manifest update */
-        error_t *manifest_err = state_begin_transaction(state);
+        error_t *manifest_err = state_begin(state);
         if (manifest_err) {
             /* Non-fatal */
             output_warning(
@@ -1167,7 +1167,7 @@ static error_t *remove_files_from_profile(
                     out, OUTPUT_NORMAL, "Run 'dotta status' or 'dotta apply' to resync"
                 );
                 error_free(manifest_err);
-                state_rollback_transaction(state);
+                state_rollback(state);
             } else {
                 /* Update manifest with fallback logic */
                 manifest_err = manifest_remove_files(
@@ -1190,7 +1190,7 @@ static error_t *remove_files_from_profile(
                         out, OUTPUT_NORMAL, "Run 'dotta status' or 'dotta apply' to resync"
                     );
                     error_free(manifest_err);
-                    state_rollback_transaction(state);
+                    state_rollback(state);
                 } else {
                     /* manifest_remove_files() marks entries STATE_DELETED.
                      * With --delete-files: leave them for apply to clean up.
@@ -1220,7 +1220,7 @@ static error_t *remove_files_from_profile(
                     }
 
                     /* Commit transaction */
-                    error_t *commit_err = state_commit_transaction(state);
+                    error_t *commit_err = state_commit(state);
                     if (commit_err) {
                         output_warning(
                             out, OUTPUT_NORMAL, "Failed to save manifest updates: %s",
@@ -1230,7 +1230,7 @@ static error_t *remove_files_from_profile(
                             out, OUTPUT_NORMAL, "Run 'dotta status' or 'dotta apply' to resync"
                         );
                         error_free(commit_err);
-                        state_rollback_transaction(state);
+                        state_rollback(state);
                     } else if (manifest_removed_count > 0 || manifest_fallback_count > 0) {
                         if (opts->delete_files) {
                             output_info(
@@ -1606,7 +1606,7 @@ static error_t *delete_profile_branch(
 
         /* Open transaction */
         state_t *manifest_state = NULL;
-        err = state_load_for_update(repo, &manifest_state);
+        err = state_open(repo, &manifest_state);
         if (err) {
             err = error_wrap(
                 err, "Failed to open transaction for profile disable"
@@ -1715,7 +1715,7 @@ static error_t *delete_profile_branch(
      * transaction — the branch must be deleted first.
      */
     state_t *delete_state = NULL;
-    error_t *delete_err = state_load_for_update(repo, &delete_state);
+    error_t *delete_err = state_open(repo, &delete_state);
     if (!delete_err && delete_state) {
         size_t released_count = 0;
 

@@ -116,7 +116,7 @@ static error_t *init_state(git_repository *repo) {
     CHECK_NULL(repo);
 
     state_t *state = NULL;
-    error_t *err = state_create_empty(&state);
+    error_t *err = state_empty(&state);
     if (err) {
         return err;
     }

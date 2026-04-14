@@ -326,18 +326,6 @@ error_t *check_item_metadata_divergence(
 const manifest_t *workspace_get_manifest(const workspace_t *ws);
 
 /**
- * Get keymanager from workspace
- *
- * Returns the keymanager borrowed from global configuration. This is used
- * for content hashing and encryption operations. Can be NULL if encryption
- * is not configured.
- *
- * @param ws Workspace (must not be NULL)
- * @return Keymanager (borrowed reference, do not free, can be NULL)
- */
-keymanager_t *workspace_get_keymanager(const workspace_t *ws);
-
-/**
  * Get content cache from workspace
  *
  * Returns the content cache used by the workspace for transparent

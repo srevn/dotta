@@ -551,8 +551,8 @@ error_t *deploy_file(
      * This is the ONLY place where ownership is applied - metadata layer only resolves. */
     err = fs_write_file_raw(
         entry->filesystem_path,
-        (const unsigned char *) content,
-        (size_t) size,
+        content,
+        size,
         file_mode,
         target_uid,
         target_gid
@@ -1163,7 +1163,7 @@ error_t *deploy_execute(
 
     for (size_t i = 0; i < manifest->count; i++) {
         /* Non-const: deploy_file may lazy-load git tree entry */
-        file_entry_t *entry = (file_entry_t *) &manifest->entries[i];
+        file_entry_t *entry = &manifest->entries[i];
 
         /* Check --skip-existing first (user explicitly chose not to overwrite) */
         if (opts->skip_existing && fs_exists(entry->filesystem_path) && !opts->force) {

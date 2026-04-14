@@ -529,27 +529,27 @@ error_t *encryption_encrypt(
     }
 
     /* Step 3: Generate deterministic keystream */
-    keystream = malloc(plaintext_len);
-    if (!keystream && plaintext_len > 0) {
-        err = ERROR(ERR_MEMORY, "Failed to allocate keystream buffer");
-        goto cleanup;
-    }
-
     if (plaintext_len > 0) {
+        keystream = malloc(plaintext_len);
+        if (!keystream) {
+            err = ERROR(ERR_MEMORY, "Failed to allocate keystream buffer");
+            goto cleanup;
+        }
         hydro_random_buf_deterministic(
             keystream, plaintext_len, stream_seed
         );
     }
 
     /* Step 4: Encrypt plaintext by XORing with keystream */
-    ciphertext = malloc(plaintext_len);
-    if (!ciphertext && plaintext_len > 0) {
-        err = ERROR(ERR_MEMORY, "Failed to allocate ciphertext buffer");
-        goto cleanup;
-    }
-
-    for (size_t i = 0; i < plaintext_len; i++) {
-        ciphertext[i] = plaintext[i] ^ keystream[i];
+    if (plaintext_len > 0) {
+        ciphertext = malloc(plaintext_len);
+        if (!ciphertext) {
+            err = ERROR(ERR_MEMORY, "Failed to allocate ciphertext buffer");
+            goto cleanup;
+        }
+        for (size_t i = 0; i < plaintext_len; i++) {
+            ciphertext[i] = plaintext[i] ^ keystream[i];
+        }
     }
 
     /* Step 5: Compute SIV/MAC over storage_path || ciphertext */
@@ -700,27 +700,27 @@ error_t *encryption_decrypt(
     }
 
     /* Step 8: Generate deterministic keystream */
-    keystream = malloc(plaintext_len);
-    if (!keystream && plaintext_len > 0) {
-        err = ERROR(ERR_MEMORY, "Failed to allocate keystream buffer");
-        goto cleanup;
-    }
-
     if (plaintext_len > 0) {
+        keystream = malloc(plaintext_len);
+        if (!keystream) {
+            err = ERROR(ERR_MEMORY, "Failed to allocate keystream buffer");
+            goto cleanup;
+        }
         hydro_random_buf_deterministic(
             keystream, plaintext_len, stream_seed
         );
     }
 
     /* Step 9: Decrypt ciphertext by XORing with keystream */
-    plaintext_data = malloc(plaintext_len);
-    if (!plaintext_data && plaintext_len > 0) {
-        err = ERROR(ERR_MEMORY, "Failed to allocate plaintext buffer");
-        goto cleanup;
-    }
-
-    for (size_t i = 0; i < plaintext_len; i++) {
-        plaintext_data[i] = ciphertext_body[i] ^ keystream[i];
+    if (plaintext_len > 0) {
+        plaintext_data = malloc(plaintext_len);
+        if (!plaintext_data) {
+            err = ERROR(ERR_MEMORY, "Failed to allocate plaintext buffer");
+            goto cleanup;
+        }
+        for (size_t i = 0; i < plaintext_len; i++) {
+            plaintext_data[i] = ciphertext_body[i] ^ keystream[i];
+        }
     }
 
     /* Step 10: Create output buffer */

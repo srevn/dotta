@@ -245,21 +245,16 @@ static int detect_home_prefix(
     const char *home_canonical,
     const char **out_relative
 ) {
-    const char *relative;
-    int match;
-
-    match = extract_relative_after_prefix(absolute, home, &relative);
+    int match = extract_relative_after_prefix(absolute, home, out_relative);
     if (match >= 0) {
-        *out_relative = relative;
         return match;
     }
 
     if (home_canonical && strcmp(home_canonical, home) != 0) {
         match = extract_relative_after_prefix(
-            absolute, home_canonical, &relative
+            absolute, home_canonical, out_relative
         );
         if (match >= 0) {
-            *out_relative = relative;
             return match;
         }
     }
@@ -1023,7 +1018,7 @@ cleanup:
  * Performance: Separates exact paths (O(1) lookup) from globs (O(G) iteration).
  */
 error_t *path_filter_create(
-    const char **inputs,
+    char *const *inputs,
     size_t count,
     const string_array_t *custom_prefixes,
     path_filter_t **out

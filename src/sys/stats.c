@@ -412,6 +412,7 @@ static error_t *walk_commits(
         git_err = git_commit_tree(&tree, commit);
         if (git_err < 0) {
             stats_free_commit_info(current_commit_info);
+            current_commit_info = NULL;
             git_commit_free(commit);
             err = error_from_git(git_err);
             goto cleanup;
@@ -427,6 +428,7 @@ static error_t *walk_commits(
                 git_commit_free(parent);
                 if (git_err < 0) {
                     stats_free_commit_info(current_commit_info);
+                    current_commit_info = NULL;
                     git_tree_free(tree);
                     git_commit_free(commit);
                     err = error_from_git(git_err);
@@ -446,6 +448,7 @@ static error_t *walk_commits(
 
         if (git_err < 0) {
             stats_free_commit_info(current_commit_info);
+            current_commit_info = NULL;
             git_commit_free(commit);
             err = error_from_git(git_err);
             goto cleanup;
@@ -475,6 +478,7 @@ static error_t *walk_commits(
                 if (!info) {
                     git_diff_free(diff);
                     stats_free_commit_info(current_commit_info);
+                    current_commit_info = NULL;
                     git_commit_free(commit);
                     err = ERROR(ERR_MEMORY, "Failed to allocate commit info");
                     goto cleanup;
@@ -486,6 +490,7 @@ static error_t *walk_commits(
                     free(info);
                     git_diff_free(diff);
                     stats_free_commit_info(current_commit_info);
+                    current_commit_info = NULL;
                     git_commit_free(commit);
                     err = ERROR(ERR_MEMORY, "Failed to duplicate commit summary");
                     goto cleanup;
@@ -498,6 +503,7 @@ static error_t *walk_commits(
                     stats_free_commit_info(info);
                     git_diff_free(diff);
                     stats_free_commit_info(current_commit_info);
+                    current_commit_info = NULL;
                     git_commit_free(commit);
                     goto cleanup;
                 }
@@ -531,6 +537,7 @@ static error_t *walk_commits(
                     } else if (ctx->commits_capacity >= COMMITS_MAX_CAPACITY) {
                         git_diff_free(diff);
                         stats_free_commit_info(current_commit_info);
+                        current_commit_info = NULL;
                         git_commit_free(commit);
                         err = ERROR(ERR_INTERNAL, "File history too large");
                         goto cleanup;

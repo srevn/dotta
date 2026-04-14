@@ -17,12 +17,12 @@
  *
  * Simple API (single-file operations):
  *   buffer_t *content;
- *   content_get_from_blob_oid(repo, &oid, path, profile, encrypted, km, &content);
+ *   content_get_from_blob_oid(repo, &oid, path, profile, encrypted, keymgr, &content);
  *   // ... use content ...
  *   buffer_free(content);  // Caller owns buffer
  *
  * Cached API (batch operations):
- *   content_cache_t *cache = content_cache_create(repo, km);
+ *   content_cache_t *cache = content_cache_create(repo, keymgr);
  *   for (each file) {
  *       const buffer_t *content;  // Note: const
  *       content_cache_get_from_blob_oid(cache, &oid, path, profile, encrypted, &content);
@@ -32,7 +32,7 @@
  *
  * Architectural placement:
  * - Layer: Infrastructure (src/infra/)
- * - Depends on: base (encryption, gitops), utils (buffer, hashmap, keymanager)
+ * - Depends on: base (encryption, gitops), utils (buffer, hashmap, keymgr)
  * - Used by: core (workspace), commands (show, diff)
  */
 
@@ -44,7 +44,7 @@
 #include <types.h>
 
 /* Forward declarations */
-typedef struct keymanager keymanager_t;
+typedef struct keymgr keymgr;
 typedef struct metadata metadata_t;
 
 /**
@@ -72,7 +72,7 @@ typedef struct content_cache content_cache_t;
  * 1. Load blob from OID
  * 2. Check magic header for encryption
  * 3. Validate encryption matches expectation (defense in depth)
- * 4. If encrypted: decrypt using profile key from keymanager
+ * 4. If encrypted: decrypt using profile key from keymgr
  * 5. If plaintext: return blob content
  *
  * @param repo Git repository (must not be NULL)
@@ -81,12 +81,12 @@ typedef struct content_cache content_cache_t;
  *          SECURITY: Used as AAD in encryption. Must match Git tree path.
  * @param profile Profile name for key derivation (must not be NULL)
  * @param expected_encrypted Expected encryption state (for validation)
- * @param km Key manager (can be NULL if file is known to be plaintext)
+ * @param keymgr Key manager (can be NULL if file is known to be plaintext)
  * @param out_content Output buffer (CALLER OWNS - must free with buffer_free)
  * @return Error or NULL on success
  *
  * Errors:
- * - ERR_CRYPTO: File is encrypted but no keymanager provided
+ * - ERR_CRYPTO: File is encrypted but no keymgr provided
  * - ERR_CRYPTO: Decryption failed (wrong key, corruption, or path mismatch)
  * - ERR_STATE_INVALID: Magic header doesn't match expected encryption state
  * - ERR_NOT_FOUND: Blob not found
@@ -98,7 +98,7 @@ error_t *content_get_from_blob_oid(
     const char *storage_path,
     const char *profile,
     bool expected_encrypted,
-    keymanager_t *km,
+    keymgr *keymgr,
     buffer_t *out_content
 );
 
@@ -110,12 +110,12 @@ error_t *content_get_from_blob_oid(
  * (e.g., one status command, one workspace analysis).
  *
  * @param repo Git repository (borrowed reference, must not be NULL)
- * @param km Key manager (borrowed reference, can be NULL)
+ * @param keymgr Key manager (borrowed reference, can be NULL)
  * @return Content cache or NULL on allocation failure
  */
 content_cache_t *content_cache_create(
     git_repository *repo,
-    keymanager_t *km
+    keymgr *keymgr
 );
 
 /**
@@ -167,7 +167,7 @@ void content_cache_free(content_cache_t *cache);
  *
  * Process:
  * 1. If should_encrypt=true:
- *    a. Get profile key from keymanager (uses cache for performance)
+ *    a. Get profile key from keymgr (uses cache for performance)
  *    b. Encrypt buffer using profile key
  *    c. Create git blob from encrypted data
  * 2. If should_encrypt=false:
@@ -183,13 +183,13 @@ void content_cache_free(content_cache_t *cache);
  * @param storage_path Storage path (must not be NULL)
  *                     SECURITY: Used as AAD in encryption. Must match Git tree path.
  * @param profile Profile name (for key derivation, must not be NULL)
- * @param km Key manager (for profile key derivation, can be NULL if should_encrypt=false)
+ * @param keymgr Key manager (for profile key derivation, can be NULL if should_encrypt=false)
  * @param should_encrypt Policy decision from caller (true = encrypt, false = plaintext)
  * @param out_oid Output OID of created blob (must not be NULL)
  * @return Error or NULL on success
  *
  * Errors:
- * - ERR_CRYPTO: Encryption requested but keymanager unavailable
+ * - ERR_CRYPTO: Encryption requested but keymgr unavailable
  * - ERR_CRYPTO: Encryption failed
  * - ERR_GIT: Git blob creation failed
  * - ERR_INVALID_ARG: Required arguments are NULL
@@ -199,7 +199,7 @@ error_t *content_store_to_blob(
     const buffer_t *plaintext,
     const char *storage_path,
     const char *profile,
-    keymanager_t *km,
+    keymgr *keymgr,
     bool should_encrypt,
     git_oid *out_oid
 );
@@ -213,7 +213,7 @@ error_t *content_store_to_blob(
  * Process:
  * 1. Read file from filesystem and capture stat data
  * 2. If should_encrypt=true:
- *    a. Get profile key from keymanager
+ *    a. Get profile key from keymgr
  *    b. Encrypt content
  *    c. Write encrypted content to worktree path
  * 3. If should_encrypt=false:
@@ -226,14 +226,14 @@ error_t *content_store_to_blob(
  * @param worktree_path Destination path in worktree (must not be NULL)
  * @param storage_path Storage path in profile (must not be NULL, used as AAD for encryption)
  * @param profile Profile name (for key derivation, must not be NULL)
- * @param km Key manager (can be NULL if should_encrypt=false)
+ * @param keymgr Key manager (can be NULL if should_encrypt=false)
  * @param should_encrypt Policy decision from caller (true = encrypt, false = plaintext)
  * @param out_stat Output stat data from source file (optional, can be NULL)
  * @return Error or NULL on success
  *
  * Errors:
  * - ERR_IO: Failed to read source file
- * - ERR_CRYPTO: Encryption requested but keymanager unavailable
+ * - ERR_CRYPTO: Encryption requested but keymgr unavailable
  * - ERR_CRYPTO: Encryption failed
  * - ERR_IO: Failed to write worktree file
  * - ERR_INVALID_ARG: Required arguments are NULL
@@ -243,7 +243,7 @@ error_t *content_store_file_to_worktree(
     const char *worktree_path,
     const char *storage_path,
     const char *profile,
-    keymanager_t *km,
+    keymgr *keymgr,
     bool should_encrypt,
     struct stat *out_stat
 );

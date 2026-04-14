@@ -18,7 +18,7 @@
 #include "core/metadata.h"
 #include "core/profiles.h"
 #include "core/state.h"
-#include "crypto/keymanager.h"
+#include "crypto/keymgr.h"
 #include "infra/content.h"
 #include "infra/path.h"
 #include "sys/gitops.h"
@@ -269,7 +269,7 @@ static error_t *show_diff_preview(
     const char *profile,
     bool current_encrypted,
     bool target_encrypted,
-    keymanager_t *km,
+    keymgr *keymgr,
     const git_oid *current_oid,
     const git_oid *target_oid,
     output_ctx_t *out
@@ -302,7 +302,7 @@ static error_t *show_diff_preview(
         file_path,
         profile,
         current_encrypted,
-        km,
+        keymgr,
         &current_plaintext
     );
     if (err) {
@@ -316,7 +316,7 @@ static error_t *show_diff_preview(
         file_path,
         profile,
         target_encrypted,
-        km,
+        keymgr,
         &target_plaintext
     );
     if (err) {
@@ -835,7 +835,7 @@ error_t *cmd_revert(
     git_tree *target_tree = NULL;
     git_tree_entry *current_entry = NULL;
     git_tree_entry *target_entry = NULL;
-    keymanager_t *km = NULL;
+    keymgr *keymgr = NULL;
     state_t *state = NULL;
     bool user_aborted = false;
 
@@ -1021,11 +1021,11 @@ error_t *cmd_revert(
         metadata_free(current_meta);
         metadata_free(target_meta);
 
-        km = keymanager_get_global(config);
+        keymgr = keymgr_get_global(config);
 
         err = show_diff_preview(
             repo, resolved_path, profile, current_encrypted, target_encrypted,
-            km, current_blob_oid, target_blob_oid, out
+            keymgr, current_blob_oid, target_blob_oid, out
         );
         if (err) {
             /* Non-fatal: the revert itself doesn't need decryption (copies blobs).
@@ -1098,7 +1098,7 @@ error_t *cmd_revert(
     size_t synced = 0, removed = 0, fallbacks = 0;
 
     /* Check if profile is enabled. Keep the state handle alive — the manifest
-     * sync below upgrades it to a write transaction via state_begin_transaction
+     * sync below upgrades it to a write transaction via state_begin
      * rather than closing and reopening the database. */
     bool profile_enabled = false;
 
@@ -1150,8 +1150,8 @@ error_t *cmd_revert(
 
     /* Upgrade existing handle to a write transaction. profile_enabled==true
      * proved state has a live DB (state_has_profile returns false for NULL
-     * state), so state_begin_transaction is safe without an additional guard. */
-    err = state_begin_transaction(state);
+     * state), so state_begin is safe without an additional guard. */
+    err = state_begin(state);
     if (err) {
         /* Non-fatal */
         output_warning(
@@ -1174,7 +1174,7 @@ error_t *cmd_revert(
             out, OUTPUT_NORMAL, "Failed to get enabled profiles: %s",
             error_message(err)
         );
-        state_rollback_transaction(state);
+        state_rollback(state);
         error_free(err);
         err = NULL;
         goto success;
@@ -1204,13 +1204,13 @@ error_t *cmd_revert(
             out, OUTPUT_NORMAL, "Run 'dotta status' or 'dotta apply' to resync manifest"
         );
         error_free(manifest_err);
-        state_rollback_transaction(state);
+        state_rollback(state);
         string_array_free(enabled_profiles);
         goto success;
     }
 
     /* Commit transaction */
-    err = state_commit_transaction(state);
+    err = state_commit(state);
     string_array_free(enabled_profiles);
 
     if (err) {
@@ -1224,7 +1224,7 @@ error_t *cmd_revert(
         );
         error_free(err);
         err = NULL;
-        state_rollback_transaction(state);
+        state_rollback(state);
         goto success;
     }
 

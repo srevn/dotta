@@ -678,7 +678,7 @@ static error_t *profile_enable(
     size_t not_found = 0;
 
     /* Load state (with locking for write transaction) */
-    err = state_load_for_update(repo, &state);
+    err = state_open(repo, &state);
     if (err) {
         err = error_wrap(err, "Failed to load state");
         goto cleanup;
@@ -944,7 +944,7 @@ static error_t *profile_disable(
     size_t not_enabled = 0;
 
     /* Load state (with locking for write transaction) */
-    err = state_load_for_update(repo, &state);
+    err = state_open(repo, &state);
     if (err) {
         err = error_wrap(err, "Failed to load state");
         goto cleanup;
@@ -1209,7 +1209,7 @@ static error_t *profile_reorder(
     }
 
     /* Load state (with locking for write transaction) */
-    err = state_load_for_update(repo, &state);
+    err = state_open(repo, &state);
     if (err) {
         err = error_wrap(err, "Failed to load state");
         goto cleanup;
@@ -1418,7 +1418,7 @@ static error_t *profile_validate(
 
     /* Load state (with locking if we're going to fix issues) */
     if (opts->fix) {
-        err = state_load_for_update(repo, &state);
+        err = state_open(repo, &state);
     } else {
         err = state_load(repo, &state);
     }

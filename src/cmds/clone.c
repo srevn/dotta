@@ -254,7 +254,7 @@ static error_t *initialize_state(
 
     /* Create state database (with or without profiles) */
     state_t *state = NULL;
-    error_t *err = state_load_for_update(repo, &state);
+    error_t *err = state_open(repo, &state);
     if (err) {
         return error_wrap(err, "Failed to initialize state database");
     }

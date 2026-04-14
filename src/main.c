@@ -36,7 +36,7 @@
 #include "cmds/sync.h"
 #include "cmds/update.h"
 #include "crypto/encryption.h"
-#include "crypto/keymanager.h"
+#include "crypto/keymgr.h"
 #include "utils/config.h"
 #include "utils/help.h"
 #include "utils/privilege.h"
@@ -2290,7 +2290,7 @@ static int cmd_completion_main(int argc, char **argv, const config_t *config) {
 /**
  * Signal handler for cleanup on SIGINT/SIGTERM
  *
- * Ensures that the global keymanager is properly cleaned up (master key
+ * Ensures that the global keymgr is properly cleaned up (master key
  * zeroed in memory) when the user interrupts the program with Ctrl+C
  * or when the process receives a termination signal.
  *
@@ -2306,8 +2306,8 @@ static int cmd_completion_main(int argc, char **argv, const config_t *config) {
  * which is more robust and handles all failure modes (Ctrl-C, crashes, kill -9).
  */
 static void signal_cleanup_handler(int signum) {
-    /* Clean up global keymanager (securely zero master key) */
-    keymanager_cleanup_global();
+    /* Clean up global keymgr (securely zero master key) */
+    keymgr_cleanup_global();
 
     /* Re-raise signal with default handler to ensure proper exit */
     signal(signum, SIG_DFL);
@@ -2335,7 +2335,7 @@ int main(int argc, char **argv) {
 
     /* Register cleanup handlers for graceful shutdown
      * This ensures encryption keys are cleared from memory on exit */
-    atexit(keymanager_cleanup_global);
+    atexit(keymgr_cleanup_global);
     signal(SIGINT, signal_cleanup_handler);   /* Ctrl+C */
     signal(SIGTERM, signal_cleanup_handler);  /* kill command */
 
@@ -2353,6 +2353,11 @@ int main(int argc, char **argv) {
     if (cfg_err) {
         error_free(cfg_err);
         config = config_create_default();
+    }
+    if (!config) {
+        fprintf(stderr, "Failed to create configuration\n");
+        git_libgit2_shutdown();
+        return 1;
     }
 
     /* Create output context once from config settings.

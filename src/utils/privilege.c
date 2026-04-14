@@ -335,9 +335,9 @@ error_t *privilege_get_actual_user(uid_t *uid, gid_t *gid) {
  * @return Error or NULL on success
  */
 static error_t *collect_privileged_paths(
-    const char **all_paths,
+    char *const *all_paths,
     size_t count,
-    const char ***priv_paths_out,
+    char ***priv_paths_out,
     size_t *priv_count_out
 ) {
     CHECK_NULL(all_paths);
@@ -360,7 +360,7 @@ static error_t *collect_privileged_paths(
     }
 
     /* Allocate array for privileged path pointers */
-    const char **priv_paths = calloc(priv_count, sizeof(char *));
+    char **priv_paths = calloc(priv_count, sizeof(char *));
     if (!priv_paths) {
         return ERROR(
             ERR_MEMORY, "Failed to allocate privileged paths array"
@@ -393,7 +393,7 @@ static error_t *collect_privileged_paths(
  */
 static void display_privilege_requirement(
     const char *operation,
-    const char **priv_paths,
+    char *const *priv_paths,
     size_t priv_count,
     output_ctx_t *out
 ) {
@@ -530,7 +530,7 @@ static error_t *reexec_with_sudo(int argc, char **argv) {
  * calling this function will be lost.
  */
 error_t *privilege_ensure_for_operation(
-    const char **storage_paths,
+    char *const *storage_paths,
     size_t count,
     const char *operation_name,
     bool interactive,
@@ -549,7 +549,7 @@ error_t *privilege_ensure_for_operation(
     }
 
     /* Collect paths requiring elevated privileges */
-    const char **priv_paths = NULL;
+    char **priv_paths = NULL;
     size_t priv_count = 0;
 
     error_t *err = collect_privileged_paths(
@@ -561,13 +561,13 @@ error_t *privilege_ensure_for_operation(
 
     /* Early exit: no privileged paths means no privilege check needed */
     if (priv_count == 0) {
-        free((void *) priv_paths);
+        free(priv_paths);
         return NULL;
     }
 
     /* Early exit: already elevated means we have required privileges */
     if (privilege_is_elevated()) {
-        free((void *) priv_paths);
+        free(priv_paths);
         return NULL;
     }
 
@@ -589,7 +589,7 @@ error_t *privilege_ensure_for_operation(
             result = reexec_with_sudo(argc, argv);
 
             /* If we reach here, re-exec failed */
-            free((void *) priv_paths);
+            free(priv_paths);
             return result;
         } else {
             /* User declined elevation */
@@ -606,6 +606,6 @@ error_t *privilege_ensure_for_operation(
         );
     }
 
-    free((void *) priv_paths);
+    free(priv_paths);
     return result;
 }

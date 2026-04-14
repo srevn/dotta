@@ -105,7 +105,7 @@ error_t *profile_resolve_filter(
  * @param repo Repository (must not be NULL)
  * @param state State handle for connection reuse (NULL = load internally)
  *              When non-NULL, only reads from the handle (const). Safe to
- *              pass a state_load_for_update() handle — only SELECTs executed.
+ *              pass a state_open() handle — only SELECTs executed.
  * @param out Validated profile names (must not be NULL, caller must free)
  * @return Error (ERR_NOT_FOUND if no enabled profiles) or NULL on success
  */

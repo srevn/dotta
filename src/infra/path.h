@@ -272,7 +272,7 @@ typedef struct {
  * @return Error or NULL on success
  */
 error_t *path_filter_create(
-    const char **inputs,
+    char *const *inputs,
     size_t count,
     const string_array_t *custom_prefixes,
     path_filter_t **out

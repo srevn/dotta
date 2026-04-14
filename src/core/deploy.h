@@ -23,7 +23,7 @@
 /* Forward declarations */
 typedef struct hashmap hashmap_t;
 typedef struct content_cache content_cache_t;
-typedef struct keymanager keymanager_t;
+typedef struct keymgr keymgr;
 typedef struct workspace workspace_t;
 
 /**

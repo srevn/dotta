@@ -176,7 +176,7 @@ error_t *privilege_get_actual_user(uid_t *uid, gid_t *gid);
  * @return NULL if OK to proceed, error otherwise (or does not return if re-exec)
  */
 error_t *privilege_ensure_for_operation(
-    const char **storage_paths,
+    char *const *storage_paths,
     size_t count,
     const char *operation_name,
     bool interactive,

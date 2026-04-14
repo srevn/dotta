@@ -14,7 +14,7 @@
 #include "base/error.h"
 #include "base/output.h"
 #include "core/state.h"
-#include "crypto/keymanager.h"
+#include "crypto/keymgr.h"
 
 /**
  * Count encrypted files in current profiles
@@ -60,7 +60,7 @@ static error_t *count_encrypted_files(
 /**
  * Execute key set action
  *
- * Prompts user for passphrase and caches it in the global keymanager.
+ * Prompts user for passphrase and caches it in the global keymgr.
  */
 static error_t *cmd_key_set(
     const config_t *config,
@@ -74,15 +74,15 @@ static error_t *cmd_key_set(
         );
     }
 
-    /* Get global keymanager */
-    keymanager_t *key_mgr = keymanager_get_global(config);
-    if (!key_mgr) {
+    /* Get global keymgr */
+    keymgr *keymgr = keymgr_get_global(config);
+    if (!keymgr) {
         return ERROR(ERR_INTERNAL, "Failed to initialize key manager");
     }
 
     /* Notify if key is already cached (check both memory and disk) */
-    if (keymanager_probe_key(key_mgr)) {
-        int64_t seconds_remaining = keymanager_time_until_expiry(key_mgr, NULL);
+    if (keymgr_probe_key(keymgr)) {
+        int64_t seconds_remaining = keymgrime_until_expiry(keymgr, NULL);
         if (seconds_remaining == -1) {
             output_info(
                 out, OUTPUT_NORMAL, "A passphrase is already cached (no expiration)"
@@ -100,18 +100,18 @@ static error_t *cmd_key_set(
     /* Prompt for passphrase */
     char *passphrase = NULL;
     size_t passphrase_len = 0;
-    error_t *err = keymanager_prompt_passphrase(
+    error_t *err = keymgr_prompt_passphrase(
         "Enter encryption passphrase: ", &passphrase, &passphrase_len
     );
     if (err) {
         return error_wrap(err, "Failed to read passphrase");
     }
 
-    /* Set passphrase in keymanager (derives and caches master key) */
-    err = keymanager_set_passphrase(key_mgr, passphrase, passphrase_len);
+    /* Set passphrase in keymgr (derives and caches master key) */
+    err = keymgr_set_passphrase(keymgr, passphrase, passphrase_len);
 
     /* Securely clear passphrase from memory.
-     * keymanager_prompt_passphrase returns a buffer of exactly passphrase_len+1
+     * keymgr_prompt_passphrase returns a buffer of exactly passphrase_len+1
      * bytes with mlock. Use hydro_memzero (not memset) to resist optimization. */
     if (passphrase) {
         munlock(passphrase, passphrase_len + 1);
@@ -151,7 +151,7 @@ static error_t *cmd_key_set(
 /**
  * Execute key clear action
  *
- * Clears the cached passphrase from the global keymanager.
+ * Clears the cached passphrase from the global keymgr.
  */
 static error_t *cmd_key_clear(
     const config_t *config,
@@ -165,17 +165,17 @@ static error_t *cmd_key_clear(
         );
     }
 
-    /* Get global keymanager */
-    keymanager_t *key_mgr = keymanager_get_global(config);
-    if (!key_mgr) {
+    /* Get global keymgr */
+    keymgr *keymgr = keymgr_get_global(config);
+    if (!keymgr) {
         return ERROR(ERR_INTERNAL, "Failed to initialize key manager");
     }
 
     /* Check if key is cached in memory */
-    bool had_key = keymanager_has_key(key_mgr);
+    bool had_key = keymgr_has_key(keymgr);
 
     /* Always clear both memory and file cache (even if no in-memory key) */
-    keymanager_clear(key_mgr);
+    keymgr_clear(keymgr);
 
     /* Display result */
     if (had_key) {
@@ -290,12 +290,12 @@ static error_t *cmd_key_status(
     /* Display key cache status */
     output_section(out, OUTPUT_NORMAL, "Key Cache Status");
 
-    keymanager_t *key_mgr = keymanager_get_global(config);
-    if (!key_mgr) {
+    keymgr *keymgr = keymgr_get_global(config);
+    if (!keymgr) {
         return ERROR(ERR_INTERNAL, "Failed to initialize key manager");
     }
 
-    bool key_cached = keymanager_probe_key(key_mgr);
+    bool key_cached = keymgr_probe_key(keymgr);
     output_print(
         out, OUTPUT_NORMAL, "  Key cached: "
     );
@@ -308,7 +308,7 @@ static error_t *cmd_key_status(
         /* Show time until expiry */
         time_t expires_at = 0;
         int64_t seconds_remaining =
-            keymanager_time_until_expiry(key_mgr, &expires_at);
+            keymgrime_until_expiry(keymgr, &expires_at);
 
         if (seconds_remaining == -1) {
             output_print(

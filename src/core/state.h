@@ -185,7 +185,7 @@ typedef struct state state_t;
  * If database is corrupt or wrong version, returns error.
  *
  * Use this function for read-only operations (status, list).
- * For operations that will modify and save state, use state_load_for_update().
+ * For operations that will modify and save state, use state_open().
  *
  * @param repo Repository (must not be NULL)
  * @param out State structure (must not be NULL, caller must free with state_free)
@@ -209,12 +209,12 @@ error_t *state_load(git_repository *repo, state_t **out);
  * @param out State structure (must not be NULL, caller must free with state_free)
  * @return Error or NULL on success
  */
-error_t *state_load_for_update(git_repository *repo, state_t **out);
+error_t *state_open(git_repository *repo, state_t **out);
 
 /**
  * Save state to repository
  *
- * Commits the transaction started by state_load_for_update().
+ * Commits the transaction started by state_open().
  * All modifications made since load are atomically committed.
  *
  * @param repo Repository (must not be NULL)
@@ -228,30 +228,30 @@ error_t *state_save(git_repository *repo, state_t *state);
  *
  * Acquires a write lock (BEGIN IMMEDIATE). Used by batch operations
  * that need atomicity on a state opened via state_load() (no inherent
- * transaction). Must be paired with state_commit_transaction() or
- * state_rollback_transaction().
+ * transaction). Must be paired with state_commit() or
+ * state_rollback().
  *
  * @param state State (must not be NULL, must have open database, must not be in transaction)
  * @return Error or NULL on success
  */
-error_t *state_begin_transaction(state_t *state);
+error_t *state_begin(state_t *state);
 
 /**
- * Commit a transaction started by state_begin_transaction()
+ * Commit a transaction started by state_begin()
  *
  * @param state State (must not be NULL, must be in transaction)
  * @return Error or NULL on success
  */
-error_t *state_commit_transaction(state_t *state);
+error_t *state_commit(state_t *state);
 
 /**
- * Roll back a transaction started by state_begin_transaction()
+ * Roll back a transaction started by state_begin()
  *
  * Safe to call on error paths. Silently succeeds if no transaction active.
  *
  * @param state State (must not be NULL)
  */
-void state_rollback_transaction(state_t *state);
+void state_rollback(state_t *state);
 
 /**
  * Check if state has an active transaction
@@ -263,7 +263,7 @@ void state_rollback_transaction(state_t *state);
  * @param state State handle (must not be NULL)
  * @return true if transaction is active
  */
-bool state_in_transaction(const state_t *state);
+bool state_locked(const state_t *state);
 
 /**
  * Create empty state
@@ -271,7 +271,7 @@ bool state_in_transaction(const state_t *state);
  * @param out State structure (must not be NULL, caller must free with state_free)
  * @return Error or NULL on success
  */
-error_t *state_create_empty(state_t **out);
+error_t *state_empty(state_t **out);
 
 /**
  * Free state structure
@@ -392,7 +392,7 @@ void state_free_all_files(state_file_entry_t *entries, size_t count);
  * Position assigned automatically as MAX(position) + 1 for new profiles.
  *
  * Preconditions:
- *   - state MUST have active transaction (via state_load_for_update)
+ *   - state MUST have active transaction (via state_open)
  *   - profile MUST NOT be NULL or empty
  *
  * Postconditions:
@@ -504,7 +504,7 @@ error_t *state_get_profile_prefix(
  * Only modifies enabled_profiles table (virtual_manifest table untouched).
  *
  * Preconditions:
- *   - state MUST have active transaction (via state_load_for_update)
+ *   - state MUST have active transaction (via state_open)
  *
  * Postconditions:
  *   - enabled_profiles table replaced with new profile list
@@ -678,7 +678,7 @@ error_t *state_clear_old_profile(
  *   - STATE_RELEASED    - File removed from Git externally, loss of authority
  *
  * Preconditions:
- *   - state MUST have active transaction (via state_load_for_update)
+ *   - state MUST have active transaction (via state_open)
  *   - filesystem_path MUST exist in virtual_manifest
  *   - new_state MUST be STATE_ACTIVE, STATE_INACTIVE, STATE_DELETED, or STATE_RELEASED
  *

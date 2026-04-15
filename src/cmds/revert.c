@@ -147,8 +147,8 @@ static error_t *discover_file(
     error_t *prefix_err = profile_get_custom_prefixes(repo, NULL, NULL, &prefixes);
     if (prefix_err) error_free(prefix_err);
 
-    /* Resolve input path to storage format (flexible mode - file need not exist) */
-    err = path_resolve_input(file_path, false, prefixes, &storage_path);
+    /* Resolve input path to storage format (file need not exist) */
+    err = path_resolve_input(file_path, prefixes, &storage_path);
     if (err) {
         return err;
     }

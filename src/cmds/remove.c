@@ -148,9 +148,9 @@ static error_t *resolve_paths_to_remove(
         char *storage_path = NULL;
         char *canonical = NULL;
 
-        /* Resolve input path to storage format (flexible mode - file need not exist) */
+        /* Resolve input path to storage format (file need not exist) */
         err = path_resolve_input(
-            input_path, false,
+            input_path,
             custom_prefix
                 ? &(string_array_t){ .items = (char **) &custom_prefix, .count = 1 }
                 : NULL,

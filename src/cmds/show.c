@@ -660,7 +660,7 @@ error_t *cmd_show(
 
     /* Resolve file path to storage format (common to both explicit and implicit paths) */
     const char *search_path = opts->file_path;
-    error_t *convert_err = path_resolve_input(opts->file_path, false, prefixes, &converted);
+    error_t *convert_err = path_resolve_input(opts->file_path, prefixes, &converted);
     if (convert_err) {
         error_free(convert_err);
         /* Fall back to original path (may be a partial match pattern) */

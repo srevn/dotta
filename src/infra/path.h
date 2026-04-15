@@ -164,14 +164,8 @@ error_t *path_get_home(char **out);
  *   resolves to 'home/.bashrc'. For single-component paths without '.', use
  *   explicit './' prefix to indicate relative path intent.
  *
- * Behavior modes:
- *   - require_exists=true: Paths MUST exist and will be canonicalized
- *                          (validates existence via lstat)
- *                          Critical for add/update to track correct files
- *
- *   - require_exists=false: Paths converted by pattern only
- *                           (file need not exist on disk)
- *                           Used for show/revert/remove/filters
+ * Pattern-based conversion: file need not exist on disk. Used by
+ * show/revert/remove/filter commands that query Git data, not the filesystem.
  *
  * Custom prefix detection:
  *   When custom_prefixes is provided (non-NULL with count > 0),
@@ -191,26 +185,23 @@ error_t *path_get_home(char **out);
  *   regardless of how the path is expressed.
  *
  * Examples:
- *   ~/.bashrc (exists=true)     -> canonicalized to home/.bashrc
- *   ~/.bashrc (exists=false)    -> pattern-converted to home/.bashrc
+ *   ~/.bashrc                   -> home/.bashrc
  *   ./config (in $HOME)         -> home/config
  *   ./config (in /etc)          -> root/etc/config
  *   .bashrc (in $HOME)          -> home/.bashrc (dotfile as relative path)
  *   ../file (in $HOME/project)  -> home/file (.. resolved)
- *   home/.bashrc (either mode)  -> validated and returned as home/.bashrc
- *   /etc/hosts (exists=true)    -> canonicalized to root/etc/hosts
+ *   home/.bashrc                -> validated and returned as home/.bashrc
+ *   /etc/hosts                  -> root/etc/hosts
  *   /mnt/jail/etc/nginx.conf    -> custom/etc/nginx.conf (if /mnt/jail in prefixes)
  *   config (no slash)           -> ERROR: ambiguous (use ./config)
  *
  * @param input User-provided path string (must not be NULL)
- * @param require_exists Whether to canonicalize and verify existence
  * @param custom_prefixes Custom prefixes to try (NULL = no custom prefixes)
  * @param out_storage_path Output in storage format (must not be NULL, caller must free)
  * @return Error or NULL on success
  */
 error_t *path_resolve_input(
     const char *input,
-    bool require_exists,
     const string_array_t *custom_prefixes,
     char **out_storage_path
 );

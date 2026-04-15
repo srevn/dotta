@@ -714,7 +714,6 @@ static bool path_is_relative(const char *input) {
  */
 error_t *path_resolve_input(
     const char *input,
-    bool require_exists,
     const string_array_t *custom_prefixes,
     char **out_storage_path
 ) {
@@ -776,37 +775,20 @@ error_t *path_resolve_input(
             }
         }
 
-        /* Make absolute (validates existence if require_exists) */
+        /* Make absolute */
         err = fs_make_absolute(expanded, &absolute);
         if (err) {
-            err = error_wrap(
-                err, "Failed to resolve path '%s'%s", input,
-                require_exists ? "\nHint: File must exist for this operation" : ""
-            );
+            err = error_wrap(err, "Failed to resolve path '%s'", input);
             goto cleanup;
         }
     }
     /* Case 3: Relative path (./foo, ../bar, or path/with/slash) */
     else if (path_is_relative(input)) {
-        if (require_exists) {
-            /* Strict mode: Use fs_make_absolute which validates existence */
-            err = fs_make_absolute(input, &absolute);
-            if (err) {
-                err = error_wrap(
-                    err, "Failed to resolve relative path '%s'\n"
-                    "Hint: File must exist for this operation", input
-                );
-                goto cleanup;
-            }
-        } else {
-            /* Flexible mode: Resolve via CWD without existence check */
-            err = path_resolve_relative(input, &absolute);
-            if (err) {
-                err = error_wrap(
-                    err, "Failed to resolve relative path '%s'", input
-                );
-                goto cleanup;
-            }
+        /* Resolve via CWD without existence check */
+        err = path_resolve_relative(input, &absolute);
+        if (err) {
+            err = error_wrap(err, "Failed to resolve relative path '%s'", input);
+            goto cleanup;
         }
     }
     /* Case 4: Invalid/ambiguous path */
@@ -827,142 +809,80 @@ error_t *path_resolve_input(
         goto cleanup;
     }
 
-    /* Convert to storage format */
-    if (require_exists) {
-        /* Mode A: Strict canonicalization (for add, update)
-         *
-         * Uses path_to_storage() which already supports custom prefix via its
-         * second parameter. However, path_to_storage() only accepts a single
-         * prefix and is designed for add/update operations where --prefix is
-         * explicit. For filter resolution, we try each prefix.
-         *
-         * Detection order:
-         * 1. Custom prefixes - Explicit user intent, first match wins
-         * 2. $HOME - Canonical for user files
-         * 3. Root - Fallback for system files
-         */
-        path_prefix_t prefix;
+    /* Convert to storage format - pattern-based, file need not exist */
 
-        /* First try with NULL (detects home/ and root/) */
-        err = path_to_storage(normalized, NULL, &storage_path, &prefix);
-        if (err) {
-            err = error_wrap(err, "Failed to convert path '%s'", input);
+    /* Get HOME directory for path classification */
+    err = path_get_home(&home);
+    if (err) goto cleanup;
+
+    /* Canonicalize HOME to handle symlinks (e.g., /tmp -> /private/tmp on macOS).
+     * For relative paths (Case 3), this is necessary because getcwd() returns
+     * canonical paths, but $HOME may contain symlinks. If canonicalization
+     * fails, fall back to the original HOME path. */
+    error_t *canon_err = fs_canonicalize_path(home, &home_canonical);
+    if (canon_err) {
+        error_free(canon_err);
+    }
+
+    /* Detection order:
+     * 1. Custom prefixes - Explicit user intent, first match wins
+     * 2. $HOME - Canonical for user files
+     * 3. Root - Fallback for system files
+     */
+
+    /* Try custom prefixes first (explicit user intent wins) */
+    if (custom_prefixes && custom_prefixes->count > 0) {
+        for (size_t i = 0; i < custom_prefixes->count; i++) {
+            if (!custom_prefixes->items[i]) continue;
+
+            const char *rel = path_relative_after_prefix(
+                normalized,
+                custom_prefixes->items[i]
+            );
+            if (rel && *rel) {
+                /* Found a matching custom prefix */
+                storage_path = str_format("custom/%s", rel);
+                if (!storage_path) {
+                    err = ERROR(
+                        ERR_MEMORY, "Failed to format custom storage path"
+                    );
+                    goto cleanup;
+                }
+                break;
+            }
+        }
+    }
+
+    /* Try $HOME if no custom prefix matched */
+    if (!storage_path) {
+        const char *relative_path = detect_home_relative(
+            normalized, home, home_canonical
+        );
+
+        if (relative_path && *relative_path == '\0') {
+            /* HOME directory itself - not allowed */
+            err = ERROR(
+                ERR_INVALID_ARG, "Cannot specify HOME directory itself"
+            );
             goto cleanup;
         }
 
-        /* If resolved to home/ or root/ but we have custom prefixes,
-         * check if any match (explicit prefix wins over implicit detection) */
-        if ((prefix == PREFIX_ROOT || prefix == PREFIX_HOME) &&
-            custom_prefixes && custom_prefixes->count > 0) {
-            /* Try each custom prefix to see if we should use custom/ instead */
-            for (size_t i = 0; i < custom_prefixes->count; i++) {
-                if (!custom_prefixes->items[i]) continue;
-
-                const char *relative = path_relative_after_prefix(
-                    normalized,
-                    custom_prefixes->items[i]
-                );
-                if (relative && *relative) {
-                    /* Found a matching custom prefix - rebuild as custom/ */
-                    char *new_path = str_format("custom/%s", relative);
-                    if (!new_path) {
-                        err = ERROR(ERR_MEMORY, "Failed to format custom storage path");
-                        goto cleanup;
-                    }
-                    err = path_validate_storage(new_path);
-                    if (err) {
-                        free(new_path);
-                        goto cleanup;
-                    }
-                    free(storage_path);
-                    storage_path = new_path;
-                    break;
-                }
-            }
-        }
-    } else {
-        /* Mode B: Pattern-based conversion (for show, revert, remove)
-         * File need not exist - used for querying Git data */
-
-        /* Get HOME directory for path classification */
-        err = path_get_home(&home);
-        if (err) goto cleanup;
-
-        /* Canonicalize HOME to handle symlinks (e.g., /tmp -> /private/tmp on macOS)
-         * This ensures consistent comparison with normalized paths.
-         *
-         * For relative paths (Case 3), this is necessary because getcwd() returns
-         * canonical paths, but $HOME may contain symlinks. If canonicalization
-         * fails (e.g., $HOME doesn't exist), fall back to the original HOME path.
-         */
-        error_t *canon_err = fs_canonicalize_path(home, &home_canonical);
-        if (canon_err) {
-            /* Canonicalization failed - free the error and continue with home_canonical = NULL */
-            error_free(canon_err);
-        }
-        /* If canonicalization succeeded, home_canonical now contains canonical path */
-        /* Keep original home as well for detection */
-
-        /* Detection order:
-         * 1. Custom prefixes - Explicit user intent, first match wins
-         * 2. $HOME - Canonical for user files
-         * 3. Root - Fallback for system files
-         */
-
-        /* Try custom prefixes first (explicit user intent wins) */
-        if (custom_prefixes && custom_prefixes->count > 0) {
-            for (size_t i = 0; i < custom_prefixes->count; i++) {
-                if (!custom_prefixes->items[i]) continue;
-
-                const char *rel = path_relative_after_prefix(
-                    normalized,
-                    custom_prefixes->items[i]
-                );
-                if (rel && *rel) {
-                    /* Found a matching custom prefix */
-                    storage_path = str_format("custom/%s", rel);
-                    if (!storage_path) {
-                        err = ERROR(
-                            ERR_MEMORY, "Failed to format custom storage path"
-                        );
-                        goto cleanup;
-                    }
-                    break;
-                }
-            }
-        }
-
-        /* Try $HOME if no custom prefix matched */
-        if (!storage_path) {
-            const char *relative_path = detect_home_relative(
-                normalized, home, home_canonical
-            );
-
-            if (relative_path && *relative_path == '\0') {
-                /* HOME directory itself - not allowed */
-                err = ERROR(
-                    ERR_INVALID_ARG, "Cannot specify HOME directory itself"
-                );
-                goto cleanup;
-            }
-
-            if (relative_path) {
-                /* Build storage path: home/... */
-                storage_path = str_format("home/%s", relative_path);
-                if (!storage_path) {
-                    err = ERROR(ERR_MEMORY, "Failed to format storage path");
-                    goto cleanup;
-                }
-            }
-        }
-
-        /* Fallback to root/ if neither custom nor HOME matched */
-        if (!storage_path) {
-            storage_path = str_format("root%s", normalized);
+        if (relative_path) {
+            /* Build storage path: home/... */
+            storage_path = str_format("home/%s", relative_path);
             if (!storage_path) {
                 err = ERROR(ERR_MEMORY, "Failed to format storage path");
                 goto cleanup;
             }
+        }
+    }
+
+    /* Fallback to root/ if neither custom nor HOME matched */
+    if (!storage_path) {
+        storage_path = str_format("root%s", normalized);
+        if (!storage_path) {
+            err = ERROR(ERR_MEMORY, "Failed to format storage path");
+            goto cleanup;
         }
     }
 
@@ -1079,9 +999,7 @@ error_t *path_filter_create(
 
         /* Case 2: Exact path - resolve and store in hashmap */
         char *resolved = NULL;
-        err = path_resolve_input(
-            input, false, custom_prefixes, &resolved
-        );
+        err = path_resolve_input(input, custom_prefixes, &resolved);
         if (err) {
             err = error_wrap(err, "Invalid path '%s'", input);
             goto cleanup;

@@ -631,9 +631,9 @@ static error_t *list_file_history(
     if (prefix_err) error_free(prefix_err);
 
     /* Resolve input path to storage format (handles absolute, tilde, relative,
-     * and storage paths). Flexible mode - file need not exist on disk. */
+     * and storage paths). File need not exist on disk. */
     char *storage_path = NULL;
-    error_t *err = path_resolve_input(opts->file_path, false, prefixes, &storage_path);
+    error_t *err = path_resolve_input(opts->file_path, prefixes, &storage_path);
     if (err) {
         return error_wrap(err, "Failed to resolve path '%s'", opts->file_path);
     }

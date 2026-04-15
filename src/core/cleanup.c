@@ -166,7 +166,6 @@ static error_t *prune_orphaned_files(
 
     const workspace_item_t **orphans = opts->orphaned_files;
     size_t orphan_count = opts->orphaned_files_count;
-    result->orphaned_files_found = orphan_count;
 
     /* Early exit if no orphaned files */
     if (orphan_count == 0) {
@@ -289,7 +288,6 @@ static error_t *prune_orphaned_files(
                  *
                  * The file is "released" from dotta's management.
                  */
-                result->orphaned_files_released++;
                 err = string_array_push(result->released_files, path);
                 if (err) {
                     err = error_wrap(err, "Failed to track released file");
@@ -300,7 +298,6 @@ static error_t *prune_orphaned_files(
             }
 
             /* Other violations (MODIFIED, MODE_CHANGED, etc.): full skip */
-            result->orphaned_files_skipped++;
             err = string_array_push(result->skipped_files, path);
             if (err) {
                 err = error_wrap(err, "Failed to track skipped file");
@@ -320,7 +317,6 @@ static error_t *prune_orphaned_files(
              * in the state database as "ghost orphans".
              */
             if (!dry_run) {
-                result->orphaned_files_removed++;
                 err = string_array_push(result->removed_files, path);
                 if (err) {
                     err = error_wrap(err, "Failed to track already-removed file");
@@ -342,7 +338,6 @@ static error_t *prune_orphaned_files(
         error_t *remove_err = fs_remove_file(path);
         if (remove_err) {
             /* Non-fatal: track failure and continue */
-            result->orphaned_files_failed++;
             err = string_array_push(result->failed_files, path);
             if (err) {
                 error_free(remove_err);
@@ -353,7 +348,6 @@ static error_t *prune_orphaned_files(
             error_free(remove_err);
         } else {
             /* File removed successfully */
-            result->orphaned_files_removed++;
             err = string_array_push(result->removed_files, path);
             if (err) {
                 err = error_wrap(err, "Failed to track removed file");
@@ -462,7 +456,6 @@ static error_t *prune_orphaned_directories(
     bool dry_run = opts->dry_run;
 
     const workspace_item_t **orphans = orphaned_dirs;
-    result->orphaned_directories_found = orphan_count;
 
     /* Early exit: no orphaned directories */
     if (orphan_count == 0) {
@@ -514,7 +507,6 @@ static error_t *prune_orphaned_directories(
                  */
                 states[i] = DIR_STATE_NONEXISTENT;
                 if (!dry_run) {
-                    result->orphaned_directories_removed++;
                     error_t *push_err = string_array_push(result->removed_dirs, dir_path);
                     if (push_err) {
                         free(states);
@@ -541,7 +533,6 @@ static error_t *prune_orphaned_directories(
              */
             if (fs_is_symlink(dir_path)) {
                 if (states[i] != DIR_STATE_NOT_EMPTY) {
-                    result->orphaned_directories_skipped++;
                     error_t *push_err = string_array_push(result->skipped_dirs, dir_path);
                     if (push_err) {
                         free(states);
@@ -557,9 +548,6 @@ static error_t *prune_orphaned_directories(
                 /* Safety violation: contains untracked files */
                 if (states[i] != DIR_STATE_NOT_EMPTY) {
                     /* First time seeing this violation - track it */
-                    result->orphaned_directories_skipped++;
-
-                    /* Populate skipped_dirs array for caller display */
                     error_t *push_err = string_array_push(result->skipped_dirs, dir_path);
                     if (push_err) {
                         /* Free resources and return fatal error */
@@ -583,7 +571,6 @@ static error_t *prune_orphaned_directories(
             error_t *remove_err = fs_remove_dir(dir_path, false);
             if (remove_err) {
                 /* Non-fatal: track failure, populate result array, and continue */
-                result->orphaned_directories_failed++;
                 states[i] = DIR_STATE_FAILED;
 
                 /* Populate failed_dirs array for caller display */
@@ -598,7 +585,6 @@ static error_t *prune_orphaned_directories(
                 error_free(remove_err);
             } else {
                 /* Directory removed successfully */
-                result->orphaned_directories_removed++;
                 states[i] = DIR_STATE_REMOVED;
                 made_progress = true;
 
@@ -657,14 +643,7 @@ error_t *cleanup_preflight_check(
         goto cleanup;
     }
 
-    /* Initialize all fields */
-    result->orphaned_files_count = file_orphan_count;
-    result->orphaned_files = NULL;
-    result->safety_violations = NULL;
-    result->orphaned_directories_count = dir_orphan_count;
-    result->orphaned_directories_nonempty = 0;
-    result->orphaned_directories = NULL;
-    result->has_blocking_violations = false;
+    /* Initialize all fields (calloc zeroed the rest) */
     result->will_prune_orphans = (file_orphan_count > 0);
     result->will_prune_directories = (dir_orphan_count > 0);
 

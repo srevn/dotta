@@ -1110,12 +1110,6 @@ error_t *deploy_execute(
     result->skipped_existing = string_array_new(0);
     result->failed = string_array_new(0);
 
-    result->deployed_count = 0;
-    result->adopted_count = 0;
-    result->unchanged_count = 0;
-    result->skipped_existing_count = 0;
-    result->error_message = NULL;
-
     if (!result->deployed || !result->adopted || !result->unchanged ||
         !result->skipped_existing || !result->failed) {
         deploy_result_free(result);
@@ -1172,7 +1166,6 @@ error_t *deploy_execute(
                 deploy_result_free(result);
                 return error_wrap(err, "Failed to record skipped file");
             }
-            result->skipped_existing_count++;
             continue;
         }
 
@@ -1206,7 +1199,6 @@ error_t *deploy_execute(
                         deploy_result_free(result);
                         return error_wrap(err, "Failed to record adopted file");
                     }
-                    result->adopted_count++;
                 } else {
                     /* UNCHANGED: File previously deployed, still correct.
                      * No state update needed - deployed_at already set.
@@ -1216,7 +1208,6 @@ error_t *deploy_execute(
                         deploy_result_free(result);
                         return error_wrap(err, "Failed to record unchanged file");
                     }
-                    result->unchanged_count++;
                 }
                 continue;
             }
@@ -1242,7 +1233,6 @@ error_t *deploy_execute(
             deploy_result_free(result);
             return error_wrap(err, "Failed to record deployed file");
         }
-        result->deployed_count++;
     }
 
     /* Success - return results */

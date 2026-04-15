@@ -83,12 +83,6 @@ typedef struct {
     string_array_t *skipped_existing;  /* --skip-existing flag applied */
     string_array_t *failed;            /* Deployment failures */
 
-    /* Summary counts */
-    size_t deployed_count;
-    size_t adopted_count;
-    size_t unchanged_count;
-    size_t skipped_existing_count;
-
     char *error_message;               /* Error message if deployment failed */
 } deploy_result_t;
 

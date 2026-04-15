@@ -155,43 +155,46 @@ static void print_deploy_results(
         }
     }
 
-    /* Non-verbose: summary counts only */
+    /* Non-verbose: summary counts only.
+     *
+     * Arrays may be NULL on the empty-result calloc path in apply (no deployment
+     * needed), so guard each read. arr->count is the authoritative source. */
     if (!output_is_verbose(out)) {
         /* Deployed count */
-        if (result->deployed_count > 0) {
+        if (result->deployed && result->deployed->count > 0) {
             output_styled(
                 out, OUTPUT_NORMAL, dry_run ? "Would deploy {green}%zu{reset} file%s\n"
                                             : "Deployed {green}%zu{reset} file%s\n",
-                result->deployed_count,
-                result->deployed_count == 1 ? "" : "s"
+                result->deployed->count,
+                result->deployed->count == 1 ? "" : "s"
             );
         }
 
         /* Adopted count */
-        if (result->adopted_count > 0) {
+        if (result->adopted && result->adopted->count > 0) {
             output_styled(
                 out, OUTPUT_NORMAL, dry_run ? "Would adopt {yellow}%zu{reset} file%s\n"
                                             : "Adopted {yellow}%zu{reset} file%s (now tracked)\n",
-                result->adopted_count,
-                result->adopted_count == 1 ? "" : "s"
+                result->adopted->count,
+                result->adopted->count == 1 ? "" : "s"
             );
         }
 
         /* Unchanged count */
-        if (result->unchanged_count > 0) {
+        if (result->unchanged && result->unchanged->count > 0) {
             output_styled(
                 out, OUTPUT_NORMAL, "Skipped {cyan}%zu{reset} file%s (unchanged)\n",
-                result->unchanged_count,
-                result->unchanged_count == 1 ? "" : "s"
+                result->unchanged->count,
+                result->unchanged->count == 1 ? "" : "s"
             );
         }
 
         /* Skipped existing count (only shown if --skip-existing was used) */
-        if (result->skipped_existing_count > 0) {
+        if (result->skipped_existing && result->skipped_existing->count > 0) {
             output_styled(
                 out, OUTPUT_NORMAL, "Skipped {cyan}%zu{reset} file%s (--skip-existing)\n",
-                result->skipped_existing_count,
-                result->skipped_existing_count == 1 ? "" : "s"
+                result->skipped_existing->count,
+                result->skipped_existing->count == 1 ? "" : "s"
             );
         }
     }
@@ -417,37 +420,40 @@ static void print_cleanup_results(
         }
     }
 
-    /* Print summaries if not verbose */
+    /* Print summaries if not verbose.
+     *
+     * Arrays may be NULL when cleanup_result allocation partially failed; guard
+     * each read. arr->count is the authoritative source. */
     if (!output_is_verbose(out)) {
-        if (result->orphaned_files_removed > 0) {
+        if (result->removed_files && result->removed_files->count > 0) {
             output_styled(
                 out, OUTPUT_NORMAL, "Pruned {yellow}%zu{reset} orphaned file%s\n",
-                result->orphaned_files_removed,
-                result->orphaned_files_removed == 1 ? "" : "s"
+                result->removed_files->count,
+                result->removed_files->count == 1 ? "" : "s"
             );
         }
 
-        if (result->orphaned_directories_removed > 0) {
+        if (result->removed_dirs && result->removed_dirs->count > 0) {
             output_styled(
                 out, OUTPUT_NORMAL, "Pruned {yellow}%zu{reset} orphaned director%s\n",
-                result->orphaned_directories_removed,
-                result->orphaned_directories_removed == 1 ? "y" : "ies"
+                result->removed_dirs->count,
+                result->removed_dirs->count == 1 ? "y" : "ies"
             );
         }
 
-        if (result->orphaned_files_released > 0) {
+        if (result->released_files && result->released_files->count > 0) {
             output_styled(
                 out, OUTPUT_NORMAL, "Released {cyan}%zu{reset} file%s from management\n",
-                result->orphaned_files_released,
-                result->orphaned_files_released == 1 ? "" : "s"
+                result->released_files->count,
+                result->released_files->count == 1 ? "" : "s"
             );
         }
 
-        if (result->orphaned_files_skipped > 0) {
+        if (result->skipped_files && result->skipped_files->count > 0) {
             output_warning(
                 out, OUTPUT_NORMAL, "Skipped %zu orphaned file%s (uncommitted changes)",
-                result->orphaned_files_skipped,
-                result->orphaned_files_skipped == 1 ? "" : "s"
+                result->skipped_files->count,
+                result->skipped_files->count == 1 ? "" : "s"
             );
             output_info(
                 out, OUTPUT_NORMAL, "Use --verbose to see which files were skipped."
@@ -457,22 +463,22 @@ static void print_cleanup_results(
             );
         }
 
-        if (result->orphaned_directories_skipped > 0) {
+        if (result->skipped_dirs && result->skipped_dirs->count > 0) {
             output_info(
                 out, OUTPUT_NORMAL, "Skipped %zu orphaned director%s (not empty)",
-                result->orphaned_directories_skipped,
-                result->orphaned_directories_skipped == 1 ? "y" : "ies"
+                result->skipped_dirs->count,
+                result->skipped_dirs->count == 1 ? "y" : "ies"
             );
             output_info(
-                out, OUTPUT_NORMAL,
-                "Use --verbose to see which directories were skipped."
+                out, OUTPUT_NORMAL, "Use --verbose to see which directories were skipped."
             );
         }
 
-        if (result->orphaned_files_failed > 0 || result->orphaned_directories_failed > 0) {
-            size_t total_failed =
-                result->orphaned_files_failed + result->orphaned_directories_failed;
+        size_t files_failed = result->failed_files ? result->failed_files->count : 0;
+        size_t dirs_failed = result->failed_dirs ? result->failed_dirs->count : 0;
 
+        if (files_failed > 0 || dirs_failed > 0) {
+            size_t total_failed = files_failed + dirs_failed;
             output_warning(
                 out, OUTPUT_NORMAL, "Failed to prune %zu item%s",
                 total_failed, total_failed == 1 ? "" : "s"
@@ -507,6 +513,7 @@ static void print_cleanup_preflight_results(
      * Released files are left on filesystem (not removed), so the "will be removed"
      * count must exclude them to avoid misleading the user.
      */
+    /* will_prune_orphans implies orphaned_files is non-NULL (see cleanup_preflight_check) */
     if (result->will_prune_orphans) {
         output_section(out, OUTPUT_NORMAL, "Orphaned files");
 
@@ -522,7 +529,8 @@ static void print_cleanup_preflight_results(
             }
         }
 
-        size_t removal_count = result->orphaned_files_count - released_count;
+        size_t removal_count = (result->orphaned_files->count > released_count)
+                             ? result->orphaned_files->count - released_count : 0;
 
         if (removal_count > 0) {
             output_styled(
@@ -541,10 +549,10 @@ static void print_cleanup_preflight_results(
         }
 
         /* Show individual paths in verbose mode */
-        if (result->orphaned_files && result->orphaned_files_count > 0) {
+        if (result->orphaned_files->count > 0) {
             size_t display_limit = 20;  /* Don't flood the terminal */
-            size_t display_count = result->orphaned_files_count < display_limit
-                                 ? result->orphaned_files_count : display_limit;
+            size_t display_count = result->orphaned_files->count < display_limit
+                                 ? result->orphaned_files->count : display_limit;
 
             for (size_t i = 0; i < display_count; i++) {
                 output_styled(
@@ -553,8 +561,8 @@ static void print_cleanup_preflight_results(
                 );
             }
 
-            if (result->orphaned_files_count > display_limit) {
-                size_t remaining = result->orphaned_files_count - display_limit;
+            if (result->orphaned_files->count > display_limit) {
+                size_t remaining = result->orphaned_files->count - display_limit;
                 output_print(
                     out, OUTPUT_VERBOSE, "    ... and %zu more\n",
                     remaining
@@ -568,19 +576,20 @@ static void print_cleanup_preflight_results(
         print_safety_violations(out, result->safety_violations);
     }
 
-    /* Case 4: Empty directories - only in verbose mode */
+    /* Case 4: Empty directories - only in verbose mode
+     * will_prune_directories implies orphaned_directories is non-NULL */
     if (result->will_prune_directories) {
         output_section(out, OUTPUT_VERBOSE, "Empty directories");
 
         output_styled(
             out, OUTPUT_VERBOSE, "  {cyan}%zu{reset} orphaned director%s will be pruned\n",
-            result->orphaned_directories_count,
-            result->orphaned_directories_count == 1 ? "y" : "ies"
+            result->orphaned_directories->count,
+            result->orphaned_directories->count == 1 ? "y" : "ies"
         );
 
         /* Show directory paths if not too many */
-        if (result->orphaned_directories && result->orphaned_directories_count <= 10) {
-            for (size_t i = 0; i < result->orphaned_directories_count; i++) {
+        if (result->orphaned_directories->count <= 10) {
+            for (size_t i = 0; i < result->orphaned_directories->count; i++) {
                 output_print(
                     out, OUTPUT_VERBOSE, "    • %s\n",
                     result->orphaned_directories->items[i]
@@ -1640,12 +1649,12 @@ error_t *cmd_apply(
          */
         size_t removal_count = 0;
         if (cleanup_preflight && cleanup_preflight->will_prune_orphans) {
-            size_t preflight_excluded = 0;
-            if (cleanup_preflight->safety_violations) {
-                preflight_excluded = cleanup_preflight->safety_violations->count;
-            }
-            removal_count = (cleanup_preflight->orphaned_files_count > preflight_excluded)
-                          ? cleanup_preflight->orphaned_files_count - preflight_excluded : 0;
+            /* will_prune_orphans implies orphaned_files is non-NULL */
+            size_t preflight_excluded = cleanup_preflight->safety_violations
+                                      ? cleanup_preflight->safety_violations->count : 0;
+
+            removal_count = (cleanup_preflight->orphaned_files->count > preflight_excluded)
+                          ? cleanup_preflight->orphaned_files->count - preflight_excluded : 0;
         }
 
         /* Build prompt based on pending actions */

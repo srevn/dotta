@@ -138,32 +138,17 @@ typedef struct {
  * Enables caller to present detailed feedback to user.
  */
 typedef struct {
-    /* Orphaned file statistics */
-    size_t orphaned_files_found;         /* Total orphaned files detected */
-    size_t orphaned_files_removed;       /* Successfully removed */
-    size_t orphaned_files_failed;        /* Failed to remove (I/O errors) */
-    size_t orphaned_files_skipped;       /* Skipped due to safety violations */
-    size_t orphaned_files_released;      /* Released (profile deleted externally) */
-
-    /* Orphaned directory statistics */
-    size_t orphaned_directories_found;   /* Total orphaned directories detected */
-    size_t orphaned_directories_removed; /* Successfully removed */
-    size_t orphaned_directories_skipped; /* Skipped (non-empty - safety) */
-    size_t orphaned_directories_failed;  /* Failed to remove (I/O errors) */
-
     /* Safety violation details (owned)
      *
      * Only populated when cleanup_execute runs its own safety check
      * (opts->preflight_violations was NULL). When preflight violations
      * are reused, this stays NULL — the caller already has the data.
      *
-     * For reliable skip tracking regardless of code path, use:
-     * - skipped_files array (always populated)
-     * - orphaned_files_skipped counter (always accurate)
+     * For skip tracking, use the skipped_files array (authoritative source).
      */
     safety_result_t *safety_violations;
 
-    /* Detailed file lists (execution-only: not populated in dry-run)
+    /* File path lists (count via arr->count; execution-only, not populated in dry-run)
      *
      * removed_files guarantees physical removal occurred (or file was already
      * absent). Callers use this to drive state database cleanup. For dry-run
@@ -174,7 +159,7 @@ typedef struct {
     string_array_t *failed_files;        /* Failed file paths (with errors) */
     string_array_t *released_files;      /* Released files (left on disk, state cleaned) */
 
-    /* Detailed directory lists (execution-only: not populated in dry-run) */
+    /* Directory path lists (execution-only, not populated in dry-run) */
     string_array_t *removed_dirs;        /* Successfully removed directory paths */
     string_array_t *skipped_dirs;        /* Skipped directory paths (non-empty/symlink) */
     string_array_t *failed_dirs;         /* Failed directory paths (with errors) */
@@ -199,22 +184,20 @@ typedef struct {
  * - Empty directories to be pruned (verbose mode)
  */
 typedef struct {
-    /* Orphaned file detection */
-    size_t orphaned_files_count;        /* Total files to be removed */
+    /* Orphaned file detection (count via orphaned_files->count) */
     string_array_t *orphaned_files;     /* File paths (for display) */
 
     /* Safety violations */
     safety_result_t *safety_violations; /* Blocking issues (NULL if none or force=true) */
 
-    /* Orphaned directory pruning preview */
-    size_t orphaned_directories_count;        /* Orphaned directories detected */
+    /* Orphaned directory pruning preview (count via orphaned_directories->count) */
     size_t orphaned_directories_nonempty;     /* Non-empty orphaned dirs (blocking) */
     string_array_t *orphaned_directories;     /* Directory paths (for display) */
 
     /* Summary flags */
     bool has_blocking_violations;       /* True if file safety violations present */
-    bool will_prune_orphans;            /* True if orphaned_files_count > 0 */
-    bool will_prune_directories;        /* True if orphaned_directories_count > 0 */
+    bool will_prune_orphans;            /* True if any orphaned files to prune */
+    bool will_prune_directories;        /* True if any orphaned directories to prune */
 } cleanup_preflight_result_t;
 
 /**
@@ -302,7 +285,7 @@ error_t *cleanup_preflight_check(
  * Safety Integration:
  * Before removing orphaned files, calls safety_check_orphans() to detect
  * uncommitted changes. Files with violations are:
- * - Counted in orphaned_files_skipped
+ * - Added to result->skipped_files
  * - Detailed in result->safety_violations
  * - NOT removed from filesystem
  * - Reported to user with guidance

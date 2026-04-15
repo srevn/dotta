@@ -63,14 +63,11 @@ error_t *path_normalize_input(
  * an already-resolved absolute filesystem path (use path_normalize_input()
  * first if working with raw user input).
  *
- * Detection order:
- * 1. Custom prefix (if explicitly provided and matches) - FIRST
- * 2. $HOME (canonical for user files) - SECOND
- * 3. Root (fallback for system files)
- *
- * Explicit user intent (--prefix) takes priority over implicit $HOME
- * detection. When no custom prefix is provided, $HOME is checked first
- * (no behavior change for the common case).
+ * Classification semantic (tightest container wins):
+ *   The candidate with the longest matching prefix is selected. An
+ *   explicit --prefix is typically more specific than $HOME and wins
+ *   naturally. When a prefix is a strict ancestor of $HOME, $HOME wins
+ *   (more portable storage paths). Root is the universal fallback.
  *
  * Examples:
  *   ("/home/user/.bashrc", NULL)           -> home/.bashrc (PREFIX_HOME)
@@ -169,15 +166,16 @@ error_t *path_get_home(char **out);
  *
  * Custom prefix detection:
  *   When custom_prefixes is provided (non-NULL with count > 0),
- *   filesystem paths are checked against each prefix BEFORE $HOME detection.
- *   First matching prefix wins. This enables proper resolution of paths
+ *   filesystem paths are classified against the union of custom prefixes,
+ *   $HOME, and the root fallback. This enables proper resolution of paths
  *   like /mnt/jail/etc/nginx.conf to custom/etc/nginx.conf when /mnt/jail
  *   is in the custom_prefixes array, even when the path is under $HOME.
  *
- *   Detection order:
- *   1. Custom prefixes - Explicit user intent, first match wins
- *   2. $HOME - Canonical for user files
- *   3. Root - Fallback for system files
+ *   Classification semantic (tightest container wins):
+ *   The candidate with the longest matching prefix is selected. When two
+ *   custom prefixes overlap (e.g. /opt and /opt/apps), the more specific
+ *   one wins regardless of enable order. When a custom prefix is a strict
+ *   ancestor of $HOME, $HOME wins (more portable storage paths).
  *
  * Path normalization:
  *   All paths are normalized to resolve '.' and '..' components before

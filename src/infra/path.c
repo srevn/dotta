@@ -219,28 +219,93 @@ static const char *path_relative_after_prefix(
 }
 
 /**
- * Return the relative part of `absolute` under HOME, considering both the
- * original and canonicalized HOME directories (to handle symlinks).
+ * Storage classification candidate.
  *
- * Returns the same three states as path_relative_after_prefix().
+ * The candidate list is logically a SET — classify picks the longest-
+ * matching prefix (the tightest container). Input order matters only as
+ * a stable tiebreaker when two candidates match with equal prefix length.
  *
- * @param absolute Absolute filesystem path
- * @param home Original HOME directory
- * @param home_canonical Canonicalized HOME (may be NULL or same as home)
+ * Borrowed pointers: `prefix`, `label`, and `display` must outlive the
+ * classify call. An empty prefix ("") matches any absolute path with
+ * length 0, serving as the universal root fallback.
  */
-static const char *detect_home_relative(
-    const char *absolute,
-    const char *home,
-    const char *home_canonical
+typedef struct {
+    const char *prefix;    /* filesystem prefix to match ("" for root) */
+    const char *label;     /* storage label: "custom", "home", "root" */
+    const char *display;   /* human label for errors: "custom prefix", "HOME", "root" */
+    path_prefix_t kind;
+} path_candidate_t;
+
+/**
+ * Classify an absolute filesystem path against a candidate set.
+ *
+ * Picks the longest matching prefix (tightest container wins — same
+ * semantic as filesystem mounts or URL routers). Ties on equal prefix
+ * length are broken by input order (stable, earlier wins). A match whose
+ * relative part is empty (path equals the winning prefix exactly) is
+ * rejected as "directory itself".
+ *
+ * The empty prefix ("") has length 0, so it always loses to any non-
+ * empty match and serves as the universal root fallback when no custom
+ * or HOME prefix contains the path.
+ *
+ * @param filesystem_path Absolute path to classify
+ * @param cands Candidate set (order affects only tiebreaks)
+ * @param count Number of candidates
+ * @param out_storage_path Allocated storage path on success (caller frees)
+ * @param out_kind Optional: receives winning candidate's kind
+ * @return Error or NULL on success
+ */
+static error_t *path_classify(
+    const char *filesystem_path,
+    const path_candidate_t *cands,
+    size_t count,
+    char **out_storage_path,
+    path_prefix_t *out_kind
 ) {
-    const char *relative = path_relative_after_prefix(absolute, home);
-    if (relative) {
-        return relative;
+    const path_candidate_t *candidate = NULL;
+    const char *candidate_relative = NULL;
+    size_t candidate_plen = 0;
+
+    for (size_t i = 0; i < count; i++) {
+        const path_candidate_t *c = &cands[i];
+        const char *relative = path_relative_after_prefix(
+            filesystem_path,
+            c->prefix
+        );
+        if (!relative) continue;
+
+        /* Strictly longer wins; equal length keeps the earlier candidate. */
+        size_t plen = strlen(c->prefix);
+        if (!candidate || plen > candidate_plen) {
+            candidate = c;
+            candidate_relative = relative;
+            candidate_plen = plen;
+        }
     }
 
-    if (home_canonical && strcmp(home_canonical, home) != 0) {
-        return path_relative_after_prefix(absolute, home_canonical);
+    if (!candidate) {
+        /* Unreachable when caller includes the empty-prefix root candidate
+         * (matches every absolute path). Kept as a defensive guard. */
+        return ERROR(
+            ERR_INTERNAL, "No classification candidate matched: %s",
+            filesystem_path
+        );
     }
+
+    if (*candidate_relative == '\0') {
+        return ERROR(
+            ERR_INVALID_ARG, "Cannot use the %s directory as a file path",
+            candidate->display
+        );
+    }
+
+    char *result = str_format("%s/%s", candidate->label, candidate_relative);
+    if (!result) {
+        return ERROR(ERR_MEMORY, "Failed to format storage path");
+    }
+    *out_storage_path = result;
+    if (out_kind) *out_kind = candidate->kind;
 
     return NULL;
 }
@@ -359,14 +424,13 @@ error_t *path_normalize_input(
  * Pure classifier — requires pre-normalized absolute path.
  * Callers must call path_normalize_input() first for raw user input.
  *
- * Detection order:
- *  1. Custom prefix (if explicitly provided and matches) - FIRST
- *  2. $HOME (canonical for user files) - SECOND
- *  3. Root (fallback for system files)
- *
- * Explicit user intent (--prefix) takes priority over implicit $HOME
- * detection. When no custom prefix is provided, $HOME is checked first
- * as before (no behavior change for the common case).
+ * Classification semantic: the tightest matching container wins. When
+ * the path lies under multiple candidate roots, the one with the longest
+ * matching prefix is selected. In the common case an explicit --prefix
+ * is more specific than HOME and wins naturally; when a prefix is a
+ * strict ancestor of HOME, HOME is preferred (more portable storage
+ * paths across machines). The empty-prefix root is the universal
+ * fallback.
  */
 error_t *path_to_storage(
     const char *filesystem_path,
@@ -385,136 +449,58 @@ error_t *path_to_storage(
         );
     }
 
-    /* Initialize all resources to NULL for safe cleanup */
-    error_t *err = NULL;
+    /* Existence gate: add/update callers require the file to be on disk. */
+    if (!fs_lexists(filesystem_path)) {
+        return ERROR(ERR_NOT_FOUND, "File not found: %s", filesystem_path);
+    }
+
     char *home = NULL;
     char *home_canonical = NULL;
     char *result = NULL;
-    path_prefix_t detected_prefix;
 
-    /* Try custom prefix first when explicitly provided (user intent wins)
-     *
-     * path_normalize_input already resolved the path within the prefix context
-     * (prepending prefix to absolute paths, joining with relative paths), so
-     * absolute is guaranteed to be under the prefix if the path is valid.
-     *
-     * This allows files under $HOME to use custom/ prefix when the user
-     * explicitly provides --prefix (e.g., managing remote system configs
-     * stored locally under $HOME).
-     */
-    if (custom_prefix && custom_prefix[0] != '\0') {
-        const char *relative = path_relative_after_prefix(
-            filesystem_path,
-            custom_prefix
-        );
-
-        if (relative && *relative) {
-            /* Custom prefix matched - validate file exists */
-            if (!fs_lexists(filesystem_path)) {
-                err = ERROR(ERR_NOT_FOUND, "File not found: %s", filesystem_path);
-                goto cleanup;
-            }
-
-            result = str_format("custom/%s", relative);
-            if (!result) {
-                err = ERROR(
-                    ERR_MEMORY, "Failed to format custom storage path"
-                );
-                goto cleanup;
-            }
-            detected_prefix = PREFIX_CUSTOM;
-            goto validate;
-
-        } else if (relative) {
-            /* Custom prefix directory itself - not supported */
-            err = ERROR(
-                ERR_INVALID_ARG, "Cannot store custom prefix directory itself"
-            );
-            goto cleanup;
-        }
-
-        /* No match - path not under prefix (e.g., tilde-expanded $HOME path) */
-        /* Fall through to HOME/root detection below */
-    }
-
-    /* Try $HOME prefix (canonical for user files without explicit prefix) */
-    err = path_get_home(&home);
+    error_t *err = path_get_home(&home);
     if (err) {
         goto cleanup;
     }
 
     /* Canonicalize HOME to handle symlinks (e.g., /tmp -> /private/tmp on macOS).
-     * getcwd() returns canonical paths, but $HOME may contain symlinks. */
+     * Best-effort: if it fails, fall back to the original HOME. */
     error_t *canon_err = fs_canonicalize_path(home, &home_canonical);
     if (canon_err) {
         error_free(canon_err);
     }
 
-    const char *home_relative = detect_home_relative(
-        filesystem_path,
-        home,
-        home_canonical
-    );
+    /* Build candidate set: explicit custom (if any), HOME (with canonical
+     * fallback for symlinks), and the root fallback. classify picks the
+     * tightest matching prefix — order only breaks length ties. */
+    path_candidate_t cands[4];
+    size_t n = 0;
+    if (custom_prefix && custom_prefix[0] != '\0') {
+        cands[n++] = (path_candidate_t){
+            custom_prefix, "custom", "custom prefix", PREFIX_CUSTOM
+        };
+    }
+    cands[n++] = (path_candidate_t){ home, "home", "HOME", PREFIX_HOME };
+    if (home_canonical && strcmp(home_canonical, home) != 0) {
+        cands[n++] = (path_candidate_t){
+            home_canonical, "home", "HOME", PREFIX_HOME
+        };
+    }
+    cands[n++] = (path_candidate_t){ "", "root", "root", PREFIX_ROOT };
 
-    if (home_relative && *home_relative) {
-        /* HOME prefix matched with non-empty relative part */
-        /* Validate file exists */
-        if (!fs_lexists(filesystem_path)) {
-            err = ERROR(ERR_NOT_FOUND, "File not found: %s", filesystem_path);
-            goto cleanup;
-        }
-
-        result = str_format("home/%s", home_relative);
-        if (!result) {
-            err = ERROR(ERR_MEMORY, "Failed to format home storage path");
-            goto cleanup;
-        }
-        detected_prefix = PREFIX_HOME;
-        goto validate;
-
-    } else if (home_relative) {
-        /* HOME directory itself - not supported */
-        err = ERROR(ERR_INVALID_ARG, "Cannot store HOME directory itself");
+    err = path_classify(filesystem_path, cands, n, &result, prefix_out);
+    if (err) {
         goto cleanup;
     }
 
-    /* Fallback to ROOT prefix for absolute paths */
-    /* Validate file exists before storing */
-    if (!fs_lexists(filesystem_path)) {
-        err = ERROR(ERR_NOT_FOUND, "File not found: %s", filesystem_path);
-        goto cleanup;
-    }
-
-    /* Empty prefix treats the filesystem root '/' as the boundary:
-     * "/etc/hosts" -> "etc/hosts", "/" -> "". */
-    const char *root_rel = path_relative_after_prefix(filesystem_path, "");
-    if (root_rel && *root_rel == '\0') {
-        err = ERROR(ERR_INVALID_ARG, "Cannot store root directory itself");
-        goto cleanup;
-    }
-
-    result = str_format("root/%s", root_rel);
-    if (!result) {
-        err = ERROR(ERR_MEMORY, "Failed to format root storage path");
-        goto cleanup;
-    }
-    detected_prefix = PREFIX_ROOT;
-
-validate:
     /* Validate generated storage path format */
     err = path_validate_storage(result);
     if (err) {
         free(result);
-        result = NULL;
         goto cleanup;
     }
 
-    /* Success: set outputs */
-    if (prefix_out) {
-        *prefix_out = detected_prefix;
-    }
     *storage_path = result;
-    err = NULL;
 
 cleanup:
     free(home);
@@ -728,6 +714,7 @@ error_t *path_resolve_input(
     char *normalized = NULL;
     char *home = NULL;
     char *home_canonical = NULL;
+    path_candidate_t *cands = NULL;
 
     if (input[0] == '\0') {
         return ERROR(ERR_INVALID_ARG, "Path cannot be empty");
@@ -809,82 +796,54 @@ error_t *path_resolve_input(
         goto cleanup;
     }
 
-    /* Convert to storage format - pattern-based, file need not exist */
+    /* Convert to storage format via shared classifier (no existence check). */
 
-    /* Get HOME directory for path classification */
     err = path_get_home(&home);
     if (err) goto cleanup;
 
     /* Canonicalize HOME to handle symlinks (e.g., /tmp -> /private/tmp on macOS).
-     * For relative paths (Case 3), this is necessary because getcwd() returns
-     * canonical paths, but $HOME may contain symlinks. If canonicalization
-     * fails, fall back to the original HOME path. */
+     * For relative paths (Case 3), this matters because getcwd() returns
+     * canonical paths, but $HOME may contain symlinks. Best-effort: on
+     * failure, fall back to the original HOME path. */
     error_t *canon_err = fs_canonicalize_path(home, &home_canonical);
     if (canon_err) {
         error_free(canon_err);
     }
 
-    /* Detection order:
-     * 1. Custom prefixes - Explicit user intent, first match wins
-     * 2. $HOME - Canonical for user files
-     * 3. Root - Fallback for system files
-     */
-
-    /* Try custom prefixes first (explicit user intent wins) */
-    if (custom_prefixes && custom_prefixes->count > 0) {
+    /* Build candidate set: each custom prefix, HOME (with canonical fallback
+     * for symlinks), and the root fallback. classify picks the tightest
+     * matching prefix — overlapping customs resolve by length, not by
+     * enable order. */
+    size_t cap = (custom_prefixes ? custom_prefixes->count : 0) + 3;
+    cands = calloc(cap, sizeof(*cands));
+    if (!cands) {
+        err = ERROR(ERR_MEMORY, "Failed to allocate classification candidates");
+        goto cleanup;
+    }
+    size_t n = 0;
+    if (custom_prefixes) {
         for (size_t i = 0; i < custom_prefixes->count; i++) {
-            if (!custom_prefixes->items[i]) continue;
-
-            const char *rel = path_relative_after_prefix(
-                normalized,
-                custom_prefixes->items[i]
-            );
-            if (rel && *rel) {
-                /* Found a matching custom prefix */
-                storage_path = str_format("custom/%s", rel);
-                if (!storage_path) {
-                    err = ERROR(
-                        ERR_MEMORY, "Failed to format custom storage path"
-                    );
-                    goto cleanup;
-                }
-                break;
+            const char *p = custom_prefixes->items[i];
+            if (p && p[0]) {
+                cands[n++] = (path_candidate_t){
+                    p, "custom", "custom prefix", PREFIX_CUSTOM
+                };
             }
         }
     }
-
-    /* Try $HOME if no custom prefix matched */
-    if (!storage_path) {
-        const char *relative_path = detect_home_relative(
-            normalized, home, home_canonical
-        );
-
-        if (relative_path && *relative_path == '\0') {
-            /* HOME directory itself - not allowed */
-            err = ERROR(
-                ERR_INVALID_ARG, "Cannot specify HOME directory itself"
-            );
-            goto cleanup;
-        }
-
-        if (relative_path) {
-            /* Build storage path: home/... */
-            storage_path = str_format("home/%s", relative_path);
-            if (!storage_path) {
-                err = ERROR(ERR_MEMORY, "Failed to format storage path");
-                goto cleanup;
-            }
-        }
+    cands[n++] = (path_candidate_t){ home, "home", "HOME", PREFIX_HOME };
+    if (home_canonical && strcmp(home_canonical, home) != 0) {
+        cands[n++] = (path_candidate_t){
+            home_canonical, "home", "HOME", PREFIX_HOME
+        };
     }
+    cands[n++] = (path_candidate_t){ "", "root", "root", PREFIX_ROOT };
 
-    /* Fallback to root/ if neither custom nor HOME matched */
-    if (!storage_path) {
-        storage_path = str_format("root%s", normalized);
-        if (!storage_path) {
-            err = ERROR(ERR_MEMORY, "Failed to format storage path");
-            goto cleanup;
-        }
-    }
+    err = path_classify(normalized, cands, n, &storage_path, NULL);
+    if (err) goto cleanup;
+
+    err = path_validate_storage(storage_path);
+    if (err) goto cleanup;
 
 cleanup:
     free(expanded);
@@ -892,6 +851,7 @@ cleanup:
     free(normalized);
     free(home);
     free(home_canonical);
+    free(cands);
 
     if (err) {
         free(storage_path);
@@ -1128,14 +1088,24 @@ error_t *path_validate_custom_prefix(const char *prefix) {
         );
     }
 
-    /* 2. No path traversal or redundant components */
+    /* 2. Reject the filesystem root — inert at classify time (boundary
+     * check rejects any match) but always a misconfiguration. */
+    if (prefix[1] == '\0') {
+        return ERROR(
+            ERR_INVALID_ARG,
+            "Custom prefix cannot be the filesystem root '/'\n"
+            "Choose a specific directory: --prefix /mnt/jails/web"
+        );
+    }
+
+    /* 3. No path traversal or redundant components */
     if (strstr(prefix, "//") != NULL) {
         return ERROR(
             ERR_INVALID_ARG, "Custom prefix contains '//': '%s'", prefix
         );
     }
 
-    /* 3. Validate each component (catches . and .. at any position) */
+    /* 4. Validate each component (catches . and .. at any position) */
     char *prefix_copy = strdup(prefix + 1);  /* skip leading / */
     if (!prefix_copy) {
         return ERROR(ERR_MEMORY, "Failed to allocate path copy");
@@ -1157,7 +1127,7 @@ error_t *path_validate_custom_prefix(const char *prefix) {
     }
     free(prefix_copy);
 
-    /* 4. Must not end with slash (normalize) */
+    /* 5. Must not end with slash (normalize) */
     size_t len = strlen(prefix);
     if (len > 1 && prefix[len - 1] == '/') {
         return ERROR(
@@ -1167,7 +1137,7 @@ error_t *path_validate_custom_prefix(const char *prefix) {
         );
     }
 
-    /* 5. Normalize and validate with realpath() */
+    /* 6. Normalize and validate with realpath() */
     char *resolved = realpath(prefix, NULL);
     if (!resolved) {
         if (errno == ENOENT) {
@@ -1185,7 +1155,7 @@ error_t *path_validate_custom_prefix(const char *prefix) {
         }
     }
 
-    /* 6. Verify it's a directory */
+    /* 7. Verify it's a directory */
     struct stat st;
     if (stat(resolved, &st) != 0) {
         free(resolved);

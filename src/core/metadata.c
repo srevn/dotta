@@ -15,6 +15,7 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "base/array.h"
 #include "base/buffer.h"
 #include "base/error.h"
 #include "base/hashmap.h"
@@ -783,52 +784,28 @@ const metadata_item_t **metadata_get_items_by_kind(
 ) {
     /* Handle invalid inputs */
     if (!metadata || !count) {
-        if (count) {
-            *count = 0;
-        }
+        if (count) *count = 0;
         return NULL;
     }
 
-    /* First pass: count matching items */
-    size_t matching = 0;
+    ptr_array_t matches PTR_ARRAY_AUTO = { 0 };
     for (size_t i = 0; i < metadata->count; i++) {
         if (metadata->items[i].kind == kind) {
-            matching++;
+            error_t *err = ptr_array_push(
+                &matches,
+                &metadata->items[i]
+            );
+            if (err) {
+                /* Surface NULL/0 to preserve the documented
+                 * "return == NULL <=> count == 0" invariant. */
+                error_free(err);
+                *count = 0;
+                return NULL;
+            }
         }
     }
 
-    *count = matching;
-
-    /* Handle empty result (no matches) */
-    if (matching == 0) {
-        return NULL;  /* Not an error - just no items of this kind */
-    }
-
-    /* Allocate pointer array (small allocation - just pointers) */
-    const metadata_item_t **result = malloc(matching * sizeof(metadata_item_t *));
-    if (!result) {
-        /* Allocation failed - set count to 0 to maintain invariant */
-        *count = 0;
-        return NULL;
-    }
-
-    /* Second pass: populate pointer array with matching items */
-    size_t idx = 0;
-    for (size_t i = 0; i < metadata->count; i++) {
-        if (metadata->items[i].kind == kind) {
-            result[idx++] = &metadata->items[i];
-        }
-    }
-
-    /* Verify we populated exactly the expected number of items */
-    if (idx != matching) {
-        /* This should never happen - indicates a bug in our logic */
-        free(result);
-        *count = 0;
-        return NULL;
-    }
-
-    return result;
+    return (const metadata_item_t **) ptr_array_steal(&matches, count);
 }
 
 /**

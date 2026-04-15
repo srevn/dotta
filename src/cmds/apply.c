@@ -830,6 +830,7 @@ error_t *cmd_apply(
     const string_array_t *filter = NULL;
     const manifest_t *manifest = NULL;
     manifest_t *deploy_manifest = NULL;
+    ptr_array_t divergent = { 0 };
     workspace_t *ws = NULL;
     const workspace_item_t **file_orphans = NULL;
     size_t file_orphan_count = 0;
@@ -1056,9 +1057,10 @@ error_t *cmd_apply(
 
     /* CONVERGENCE MODEL: Analyze files for divergence and build deployment list
      *
-     * Two-pass algorithm for exact memory allocation:
-     *   Pass 1: Count divergent files (O(N) with O(1) divergence lookups)
-     *   Pass 2: Allocate exact size and populate (O(D) where D = divergent count)
+     * Single-pass algorithm:
+     *   - Walk the manifest once, applying filters and divergence analysis
+     *   - Borrow divergent entries into a scratch ptr_array_t
+     *   - Materialize the deployment manifest by exact-size copy
      *
      * Architecture:
      * - workspace_load() already computed fresh divergence for ALL files
@@ -1068,8 +1070,6 @@ error_t *cmd_apply(
      */
     output_print(out, OUTPUT_VERBOSE, "\nAnalyzing files for convergence...\n");
 
-    /* Pass 1: Count divergent and clean files (with filters) */
-    size_t divergent_count = 0;
     size_t clean_count = 0;
     size_t excluded_deploy_count = 0;  /* Track deployment exclusions */
     size_t excluded_orphan_count = 0;  /* Track orphan exclusions */
@@ -1091,15 +1091,40 @@ error_t *cmd_apply(
         /* Filter by exclusion pattern (skip excluded files) */
         if (matches_exclude_pattern(entry->storage_path, opts)) {
             excluded_deploy_count++;
+            output_print(
+                out, OUTPUT_VERBOSE, "  Skipping (excluded): %s\n",
+                entry->filesystem_path
+            );
             continue;
         }
 
-        /* Query fresh divergence analysis (O(1) hashmap lookup) */
+        /* Query fresh divergence analysis (O(1) hashmap lookup)
+         *
+         * workspace_get_item() returns:
+         *   - NULL if file is clean (no divergence, not in index)
+         *   - workspace_item_t* if file has state/divergence issues
+         */
         const workspace_item_t *ws_item = workspace_get_item(ws, entry->filesystem_path);
 
         if (needs_deployment(ws_item)) {
-            /* File needs deployment (missing or divergent from Git) */
-            divergent_count++;
+            /* File needs deployment - either missing or has property divergence
+             *
+             * Missing files (state-based):
+             *   - UNDEPLOYED: File in Git, never deployed to filesystem
+             *   - DELETED: File in Git, was deployed, removed from filesystem
+             *
+             * Divergent files (property-based, bit flags can be combined):
+             *   - DIVERGENCE_CONTENT: File content differs from Git
+             *   - DIVERGENCE_MODE: Permissions changed
+             *   - DIVERGENCE_OWNERSHIP: Owner/group changed (root/ files)
+             *   - DIVERGENCE_TYPE: Type changed (file->symlink, etc.)
+             *   - DIVERGENCE_ENCRYPTION: Encryption policy violation
+             */
+            err = ptr_array_push(&divergent, entry);
+            if (err) {
+                err = error_wrap(err, "Failed to record divergent entry");
+                goto cleanup;
+            }
         } else {
             /* Clean file - matches Git perfectly */
             clean_count++;
@@ -1114,13 +1139,15 @@ error_t *cmd_apply(
     }
     deploy_manifest->count = 0;
 
-    /* Pass 2: Allocate entries array and populate (only if divergent files exist)
+    /* Materialize entries by exact-size copy. When zero divergent files exist,
+     * entries remains NULL — saves memory in the common (clean) case and
+     * preserves the consumer-facing contract that count==0 implies entries==NULL.
      *
-     * If no divergent files, entries remains NULL. This saves memory when
-     * workspace is clean (common case after initial apply).
+     * Shallow copy: all pointers inside file_entry_t (tree entries, profile
+     * pointers) are borrowed from workspace manifest; memory stays workspace-owned.
      */
-    if (divergent_count > 0) {
-        deploy_manifest->entries = calloc(divergent_count, sizeof(file_entry_t));
+    if (divergent.count > 0) {
+        deploy_manifest->entries = calloc(divergent.count, sizeof(file_entry_t));
         if (!deploy_manifest->entries) {
             free(deploy_manifest);
             deploy_manifest = NULL;
@@ -1128,59 +1155,10 @@ error_t *cmd_apply(
             goto cleanup;
         }
 
-        /* Populate with files that need deployment (with filters) */
-        for (size_t i = 0; i < manifest->count; i++) {
-            const file_entry_t *entry = &manifest->entries[i];
-
-            /* Filter by operation profiles (skip files not in filter) */
-            if (entry->profile &&
-                !profile_filter_matches(entry->profile, filter)) {
-                continue;
-            }
-
-            /* Filter by file filter (skip files not in CLI file list) */
-            if (!path_filter_matches(file_filter, entry->storage_path)) {
-                continue;
-            }
-
-            /* Filter by exclusion pattern (skip excluded files) */
-            if (matches_exclude_pattern(entry->storage_path, opts)) {
-                /* Already counted in Pass 1, just skip */
-                output_print(
-                    out, OUTPUT_VERBOSE, "  Skipping (excluded): %s\n",
-                    entry->filesystem_path
-                );
-                continue;
-            }
-
-            /* Query fresh divergence analysis (O(1) hashmap lookup)
-             *
-             * workspace_get_item() returns:
-             *   - NULL if file is clean (no divergence, not in index)
-             *   - workspace_item_t* if file has state/divergence issues
-             */
-            const workspace_item_t *ws_item = workspace_get_item(ws, entry->filesystem_path);
-
-            if (needs_deployment(ws_item)) {
-                /* File needs deployment - either missing or has property divergence
-                 *
-                 * Missing files (state-based):
-                 *   - UNDEPLOYED: File in Git, never deployed to filesystem
-                 *   - DELETED: File in Git, was deployed, removed from filesystem
-                 *
-                 * Divergent files (property-based, bit flags can be combined):
-                 *   - DIVERGENCE_CONTENT: File content differs from Git
-                 *   - DIVERGENCE_MODE: Permissions changed
-                 *   - DIVERGENCE_OWNERSHIP: Owner/group changed (root/ files)
-                 *   - DIVERGENCE_TYPE: Type changed (file->symlink, etc.)
-                 *   - DIVERGENCE_ENCRYPTION: Encryption policy violation
-                 *
-                 * Shallow copy: All pointers (tree entries, profile pointers) are
-                 * borrowed from workspace manifest. Memory owned by workspace.
-                 */
-                deploy_manifest->entries[deploy_manifest->count++] = *entry;
-            }
+        for (size_t i = 0; i < divergent.count; i++) {
+            deploy_manifest->entries[i] = *(const file_entry_t *) divergent.items[i];
         }
+        deploy_manifest->count = divergent.count;
     } else {
         /* No divergent files - entries array remains NULL (saves memory) */
         deploy_manifest->entries = NULL;
@@ -2236,6 +2214,7 @@ cleanup:
         free(deploy_manifest->entries);
         free(deploy_manifest);
     }
+    ptr_array_deinit(&divergent);
     if (cleanup_preflight) cleanup_preflight_result_free(cleanup_preflight);
     if (preflight) preflight_result_free(preflight);
     if (hook_ctx) hook_context_free(hook_ctx);

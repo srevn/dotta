@@ -24,6 +24,7 @@
 #include <string.h>
 #include <unistd.h>
 
+#include "base/array.h"
 #include "base/error.h"
 #include "base/string.h"
 #include "base/terminal.h"
@@ -344,39 +345,17 @@ static error_t *collect_privileged_paths(
     CHECK_NULL(priv_paths_out);
     CHECK_NULL(priv_count_out);
 
-    /* Count privileged paths first (two-pass for cleaner code) */
-    size_t priv_count = 0;
+    *priv_paths_out = NULL;
+    *priv_count_out = 0;
+
+    ptr_array_t matches PTR_ARRAY_AUTO = { 0 };
     for (size_t i = 0; i < count; i++) {
         if (privilege_path_requires_root(all_paths[i])) {
-            priv_count++;
+            RETURN_IF_ERROR(ptr_array_push(&matches, all_paths[i]));
         }
     }
 
-    /* If no privileged paths, return empty result */
-    if (priv_count == 0) {
-        *priv_paths_out = NULL;
-        *priv_count_out = 0;
-        return NULL;
-    }
-
-    /* Allocate array for privileged path pointers */
-    char **priv_paths = calloc(priv_count, sizeof(char *));
-    if (!priv_paths) {
-        return ERROR(
-            ERR_MEMORY, "Failed to allocate privileged paths array"
-        );
-    }
-
-    /* Populate array */
-    size_t idx = 0;
-    for (size_t i = 0; i < count; i++) {
-        if (privilege_path_requires_root(all_paths[i])) {
-            priv_paths[idx++] = all_paths[i];
-        }
-    }
-
-    *priv_paths_out = priv_paths;
-    *priv_count_out = priv_count;
+    *priv_paths_out = (char **) ptr_array_steal(&matches, priv_count_out);
     return NULL;
 }
 

@@ -25,6 +25,7 @@
 #include <unistd.h>
 
 #include "base/arena.h"
+#include "base/array.h"
 #include "base/error.h"
 #include "base/hashmap.h"
 #include "base/string.h"
@@ -2822,8 +2823,9 @@ const workspace_item_t *workspace_get_all_diverged(
 /**
  * Extract orphaned files and directories from workspace
  *
- * Two-pass extraction: count by kind, then populate both arrays.
- * Caller owns returned arrays; items are borrowed from workspace.
+ * Single-pass extraction: gathers each requested kind into its own
+ * borrowed-pointer array. Caller owns returned buffers; items are borrowed
+ * from workspace.
  *
  * Profile filtering: When profile_filter is non-NULL, only orphans from
  * matching profiles are extracted (Coherent Scope principle).
@@ -2847,86 +2849,38 @@ error_t *workspace_extract_orphans(
     /* Early exit if nothing requested */
     bool want_files = (out_file_orphans != NULL);
     bool want_dirs = (out_dir_orphans != NULL);
-    if (!want_files && !want_dirs) {
-        return NULL;
-    }
+    if (!want_files && !want_dirs) return NULL;
 
-    /* Pass 1: Count orphans by kind (with optional profile filter)
-     *
-     * When profile_filter is set, only count orphans from matching profiles.
-     * This enables coherent scope for profile-filtered operations.
-     */
-    size_t file_count = 0, dir_count = 0;
+    ptr_array_t files PTR_ARRAY_AUTO = { 0 };
+    ptr_array_t dirs PTR_ARRAY_AUTO = { 0 };
+
     for (size_t i = 0; i < ws->diverged_count; i++) {
-        if (ws->diverged[i].state == WORKSPACE_STATE_ORPHANED ||
-            ws->diverged[i].state == WORKSPACE_STATE_RELEASED) {
-            /* Apply profile filter if specified */
-            if (filter &&
-                !profile_filter_matches(ws->diverged[i].profile, filter)) {
-                continue;  /* Skip orphans from other profiles */
-            }
+        const workspace_item_t *item = &ws->diverged[i];
 
-            if (ws->diverged[i].item_kind == WORKSPACE_ITEM_FILE) {
-                file_count++;
-            } else {
-                dir_count++;
-            }
+        if (item->state != WORKSPACE_STATE_ORPHANED &&
+            item->state != WORKSPACE_STATE_RELEASED) {
+            continue;
+        }
+
+        if (filter && !profile_filter_matches(item->profile, filter)) {
+            continue;
+        }
+
+        if (item->item_kind == WORKSPACE_ITEM_FILE) {
+            if (want_files) RETURN_IF_ERROR(ptr_array_push(&files, item));
+        } else {
+            if (want_dirs) RETURN_IF_ERROR(ptr_array_push(&dirs, item));
         }
     }
 
-    /* Early exit if no orphans found */
-    if (file_count == 0 && dir_count == 0) {
-        return NULL;
+    if (out_file_orphans) {
+        *out_file_orphans =
+            (const workspace_item_t **) ptr_array_steal(&files, out_file_count);
     }
-
-    /* Allocate arrays for requested kinds */
-    const workspace_item_t **file_arr = NULL;
-    const workspace_item_t **dir_arr = NULL;
-
-    if (want_files && file_count > 0) {
-        file_arr = malloc(file_count * sizeof(workspace_item_t *));
-        if (!file_arr) {
-            return ERROR(ERR_MEMORY, "Failed to allocate file orphan array");
-        }
+    if (out_dir_orphans) {
+        *out_dir_orphans =
+            (const workspace_item_t **) ptr_array_steal(&dirs, out_dir_count);
     }
-
-    if (want_dirs && dir_count > 0) {
-        dir_arr = malloc(dir_count * sizeof(workspace_item_t *));
-        if (!dir_arr) {
-            free(file_arr);
-            return ERROR(ERR_MEMORY, "Failed to allocate directory orphan array");
-        }
-    }
-
-    /* Pass 2: Populate both arrays in single iteration (with same filter) */
-    size_t f_idx = 0, d_idx = 0;
-    for (size_t i = 0; i < ws->diverged_count; i++) {
-        if (ws->diverged[i].state == WORKSPACE_STATE_ORPHANED ||
-            ws->diverged[i].state == WORKSPACE_STATE_RELEASED) {
-            /* Apply same profile filter as Pass 1 */
-            if (filter &&
-                !profile_filter_matches(ws->diverged[i].profile, filter)) {
-                continue;
-            }
-
-            if (ws->diverged[i].item_kind == WORKSPACE_ITEM_FILE) {
-                if (file_arr) {
-                    file_arr[f_idx++] = &ws->diverged[i];
-                }
-            } else {
-                if (dir_arr) {
-                    dir_arr[d_idx++] = &ws->diverged[i];
-                }
-            }
-        }
-    }
-
-    /* Set outputs (use actual pass-2 indices, not pass-1 counts, to stay
-     * correct even if the two passes ever diverge due to future changes) */
-    if (out_file_orphans) *out_file_orphans = file_arr;
-    if (out_file_count) *out_file_count = f_idx;
-    if (out_dir_orphans) *out_dir_orphans = dir_arr;
-    if (out_dir_count) *out_dir_count = d_idx;
 
     return NULL;
 }

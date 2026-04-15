@@ -1,13 +1,14 @@
 /**
- * array.h - Dynamic string array
+ * array.h - Dynamic arrays
  *
- * Growable array of heap-allocated strings with ownership semantics.
- * The struct is transparent: direct field access (arr->count, arr->items[i])
- * is the intended usage pattern.
+ * Two flavors with different ownership semantics:
  *
- * Supports both stack and heap allocation:
- *   Stack:  string_array_t arr = {0};  ... string_array_deinit(&arr);
- *   Heap:   string_array_t *arr = string_array_new(0);  ... string_array_free(arr);
+ *   string_array_t — owns each element string (push duplicates, deinit frees).
+ *   ptr_array_t    — owns only the buffer; elements are borrowed pointers.
+ *
+ * Both structs are transparent (direct field access is the intended usage)
+ * and support stack and heap lifecycles via matching init/deinit and
+ * new/free pairs.
  */
 
 #ifndef DOTTA_ARRAY_H
@@ -158,5 +159,116 @@ static inline void cleanup_string_array_val(string_array_t *arr) {
 
 /** For stack/embedded: string_array_t arr STRING_ARRAY_AUTO = {0}; */
 #define STRING_ARRAY_AUTO __attribute__((cleanup(cleanup_string_array_val)))
+
+/* === ptr_array_t — borrowed-pointer dynamic array === */
+
+/**
+ * Initialize array to empty state.
+ * Equivalent to zero-initialization: ptr_array_t arr = {0};
+ */
+void ptr_array_init(ptr_array_t *arr);
+
+/**
+ * Initialize array with pre-allocated capacity.
+ *
+ * @param arr Array to initialize
+ * @param cap Desired initial capacity
+ * @return Error on allocation failure
+ */
+error_t *ptr_array_init_cap(ptr_array_t *arr, size_t cap);
+
+/**
+ * Release the backing buffer and reset to zero state.
+ *
+ * Pointed-to elements are NOT freed (they are borrowed). Safe on
+ * zero-initialized, already-deinitialized, or NULL arrays.
+ */
+void ptr_array_deinit(ptr_array_t *arr);
+
+/**
+ * Allocate and initialize a new array on the heap.
+ *
+ * @param cap Initial capacity (0 for no pre-allocation)
+ * @return New array, or NULL on allocation failure
+ */
+ptr_array_t *ptr_array_new(size_t cap);
+
+/**
+ * Deinitialize and free a heap-allocated array. No-op on NULL.
+ */
+void ptr_array_free(ptr_array_t *arr);
+
+/**
+ * Callback-compatible free for use with hashmap_free() and similar APIs.
+ * Casts void* to ptr_array_t* and calls ptr_array_free().
+ */
+void ptr_array_free_cb(void *ptr);
+
+/**
+ * Append a pointer to the array.
+ *
+ * NULL is a valid element value.
+ *
+ * @param arr Array (must not be NULL)
+ * @param p   Pointer to store (may be NULL)
+ * @return Error on allocation failure
+ */
+error_t *ptr_array_push(ptr_array_t *arr, const void *p);
+
+/**
+ * Ensure capacity for at least cap elements without reallocation.
+ *
+ * @return Error on allocation failure
+ */
+error_t *ptr_array_reserve(ptr_array_t *arr, size_t cap);
+
+/**
+ * Reset count to 0 without freeing the backing buffer.
+ * No-op on NULL.
+ */
+void ptr_array_clear(ptr_array_t *arr);
+
+/**
+ * Hand off the backing buffer to the caller and reset the array.
+ *
+ * On success:
+ *   - arr is reset to the empty state ({0}); safe to reuse or deinit.
+ *   - Caller owns the returned buffer and must free() it.
+ *
+ * Empty-array contract: if the array holds zero elements, the internal
+ * buffer (if any) is freed and NULL is returned. This guarantees the
+ * invariant (return == NULL) <=> (*out_count == 0).
+ *
+ * Invalid-input contract: if arr or out_count is NULL the transfer is
+ * refused — arr is left intact and NULL is returned. *out_count is set
+ * to 0 whenever non-NULL.
+ *
+ * @param arr       Array to drain (must not be NULL)
+ * @param out_count Receives element count (must not be NULL)
+ * @return Buffer of `count` pointers (caller frees), or NULL when empty
+ *         or on invalid input
+ */
+const void **ptr_array_steal(ptr_array_t *arr, size_t *out_count);
+
+/** Cleanup helper for heap-allocated arrays (ptr_array_t *) */
+static inline void cleanup_ptr_array(ptr_array_t **arr) {
+    if (arr && *arr) {
+        ptr_array_free(*arr);
+        *arr = NULL;
+    }
+}
+
+/** Cleanup helper for stack/embedded arrays (ptr_array_t) */
+static inline void cleanup_ptr_array_val(ptr_array_t *arr) {
+    if (arr) {
+        ptr_array_deinit(arr);
+    }
+}
+
+/** For heap-allocated: ptr_array_t *p PTR_ARRAY_CLEANUP = ...; */
+#define PTR_ARRAY_CLEANUP __attribute__((cleanup(cleanup_ptr_array)))
+
+/** For stack/embedded: ptr_array_t arr PTR_ARRAY_AUTO = {0}; */
+#define PTR_ARRAY_AUTO __attribute__((cleanup(cleanup_ptr_array_val)))
 
 #endif /* DOTTA_ARRAY_H */

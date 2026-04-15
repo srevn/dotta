@@ -48,6 +48,15 @@ typedef struct {
 } string_array_t;
 
 /**
+ * Pointer array - dynamic array of borrowed pointers
+ */
+typedef struct {
+    void **items;
+    size_t count;
+    size_t capacity;
+} ptr_array_t;
+
+/**
  * Buffer - dynamic byte buffer
  */
 typedef struct {

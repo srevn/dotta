@@ -11,6 +11,8 @@
 
 #define DEFAULT_CAP 8
 
+/* === string_array_t — owned-string dynamic array === */
+
 /* --- Lifecycle (stack / embedded) --- */
 
 void string_array_init(string_array_t *arr) {
@@ -92,7 +94,7 @@ void string_array_free_cb(void *ptr) {
 
 /* --- Internal --- */
 
-static error_t *ensure_capacity(string_array_t *arr) {
+static error_t *string_array_ensure_capacity(string_array_t *arr) {
     if (arr->count < arr->capacity) {
         return NULL;
     }
@@ -147,7 +149,7 @@ error_t *string_array_push_owned(string_array_t *arr, char *str) {
     CHECK_NULL(arr);
     CHECK_NULL(str);
 
-    RETURN_IF_ERROR(ensure_capacity(arr));
+    RETURN_IF_ERROR(string_array_ensure_capacity(arr));
     arr->items[arr->count++] = str;
 
     return NULL;
@@ -362,4 +364,189 @@ char *string_array_join(const string_array_t *arr, const char *delimiter) {
 overflow:
     if (arr->count > 64) free(lengths);
     return NULL;
+}
+
+/* === ptr_array_t — borrowed-pointer dynamic array === */
+
+/* --- Lifecycle (stack / embedded) --- */
+
+void ptr_array_init(ptr_array_t *arr) {
+    *arr = (ptr_array_t){ 0 };
+}
+
+error_t *ptr_array_init_cap(ptr_array_t *arr, size_t cap) {
+    CHECK_NULL(arr);
+
+    *arr = (ptr_array_t){ 0 };
+
+    if (cap == 0) {
+        return NULL;
+    }
+
+    if (cap > SIZE_MAX / sizeof(void *)) {
+        return ERROR(
+            ERR_MEMORY,
+            "Array capacity overflow"
+        );
+    }
+
+    arr->items = malloc(cap * sizeof(void *));
+    if (!arr->items) {
+        return ERROR(
+            ERR_MEMORY,
+            "Failed to allocate array"
+        );
+    }
+    arr->capacity = cap;
+
+    return NULL;
+}
+
+void ptr_array_deinit(ptr_array_t *arr) {
+    if (!arr) {
+        return;
+    }
+
+    free(arr->items);
+    *arr = (ptr_array_t){ 0 };
+}
+
+/* --- Lifecycle (heap) --- */
+
+ptr_array_t *ptr_array_new(size_t cap) {
+    ptr_array_t *arr = calloc(1, sizeof(*arr));
+    if (!arr) {
+        return NULL;
+    }
+
+    if (cap > 0) {
+        error_t *err = ptr_array_init_cap(arr, cap);
+        if (err) {
+            error_free(err);
+            free(arr);
+            return NULL;
+        }
+    }
+
+    return arr;
+}
+
+void ptr_array_free(ptr_array_t *arr) {
+    if (!arr) {
+        return;
+    }
+    ptr_array_deinit(arr);
+    free(arr);
+}
+
+void ptr_array_free_cb(void *ptr) {
+    ptr_array_free(ptr);
+}
+
+/* --- Internal --- */
+
+static error_t *ptr_array_ensure_capacity(ptr_array_t *arr) {
+    if (arr->count < arr->capacity) {
+        return NULL;
+    }
+
+    size_t new_cap = arr->capacity ? arr->capacity * 2 : DEFAULT_CAP;
+
+    if (new_cap < arr->capacity || new_cap > SIZE_MAX / sizeof(void *)) {
+        return ERROR(
+            ERR_MEMORY,
+            "Array too large to grow"
+        );
+    }
+
+    void **new_items = realloc(arr->items, new_cap * sizeof(void *));
+    if (!new_items) {
+        return ERROR(
+            ERR_MEMORY,
+            "Failed to grow array"
+        );
+    }
+
+    arr->items = new_items;
+    arr->capacity = new_cap;
+
+    return NULL;
+}
+
+/* --- Mutation --- */
+
+error_t *ptr_array_push(ptr_array_t *arr, const void *p) {
+    CHECK_NULL(arr);
+
+    RETURN_IF_ERROR(ptr_array_ensure_capacity(arr));
+    /* Storage is type-erased void *; the caller's const intent (if any) is
+     * re-applied at retrieval through their cast back to T ** / const T **. */
+    arr->items[arr->count++] = (void *) p;
+
+    return NULL;
+}
+
+error_t *ptr_array_reserve(ptr_array_t *arr, size_t cap) {
+    CHECK_NULL(arr);
+
+    if (cap <= arr->capacity) {
+        return NULL;
+    }
+
+    if (cap > SIZE_MAX / sizeof(void *)) {
+        return ERROR(
+            ERR_MEMORY,
+            "Array capacity overflow"
+        );
+    }
+
+    void **new_items = realloc(arr->items, cap * sizeof(void *));
+    if (!new_items) {
+        return ERROR(
+            ERR_MEMORY,
+            "Failed to reserve array capacity"
+        );
+    }
+
+    arr->items = new_items;
+    arr->capacity = cap;
+
+    return NULL;
+}
+
+void ptr_array_clear(ptr_array_t *arr) {
+    if (!arr) {
+        return;
+    }
+    arr->count = 0;
+}
+
+/* --- Transfer --- */
+
+const void **ptr_array_steal(ptr_array_t *arr, size_t *out_count) {
+    if (!arr || !out_count) {
+        if (out_count) {
+            *out_count = 0;
+        }
+        return NULL;
+    }
+
+    if (arr->count == 0) {
+        /* Collapse empty-but-reserved state to the NULL/0 contract.
+         * Callers passing the result through output parameters rely on
+         * "NULL means no results" — a zero-length non-NULL buffer would
+         * complicate that. */
+        free(arr->items);
+        *arr = (ptr_array_t){ 0 };
+        *out_count = 0;
+        return NULL;
+    }
+
+    /* Centralized cast: storage is type-erased void ** to remain universal
+     * across const and mutable callers; the return type advertises that
+     * callers should treat the stolen buffer as read-only references. */
+    const void **buf = (const void **) arr->items;
+    *out_count = arr->count;
+    *arr = (ptr_array_t){ 0 };
+    return buf;
 }

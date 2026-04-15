@@ -203,11 +203,11 @@ const workspace_item_t *workspace_get_all_diverged(
  * On-demand extraction that produces separated file and directory arrays.
  * Encapsulates orphan filtering logic within the workspace module.
  *
- * Algorithm:
- * - Pass 1: Count orphans by kind (file vs directory), applying profile filter
- * - Pass 2: Populate both arrays in single iteration
+ * Algorithm: Single pass over diverged items, pushing orphans into
+ * per-kind ptr_array_t accumulators, then stealing the buffers into
+ * the output arrays.
  *
- * Performance: O(N) where N = diverged count (2 passes total).
+ * Performance: O(N) where N = diverged count (single pass).
  * Memory: Caller owns returned arrays and must free them.
  *         Items in arrays are borrowed (point into workspace's diverged array).
  *

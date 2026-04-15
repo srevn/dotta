@@ -195,42 +195,6 @@ typedef enum {
 } confirm_result_t;
 
 /**
- * Item array for profile grouping
- *
- * Lightweight container for grouping workspace items by profile.
- * Contains only borrowed pointers to workspace-owned items - no duplication.
- *
- * Memory ownership:
- * - items: owned array of pointers (must free)
- * - items[i]: borrowed pointers from workspace (do not free)
- */
-typedef struct {
-    const workspace_item_t **items;  /* Borrowed pointers from workspace */
-    size_t count;
-    size_t capacity;
-} item_array_t;
-
-/**
- * Free item array
- *
- * Frees the array structure and pointer array, but NOT the pointed-to items
- * (which are owned by the workspace).
- *
- * Generic callback signature for use with containers (e.g., hashmap_free).
- * Accepts void* to match standard C cleanup callback pattern.
- *
- * @param ptr Array to free (can be NULL)
- */
-static void item_array_free(void *ptr) {
-    item_array_t *array = ptr;
-    if (!array) {
-        return;
-    }
-    free(array->items);  /* Free pointer array only */
-    free(array);
-}
-
-/**
  * Per-item result from file copy operations
  *
  * Tracks results from copy_file_to_worktree() for each workspace item.
@@ -380,8 +344,7 @@ static error_t *filter_items_for_update(
         return NULL;  /* No items - not an error */
     }
 
-    /* First pass: count items that match filter criteria */
-    size_t match_count = 0;
+    ptr_array_t matches PTR_ARRAY_AUTO = { 0 };
 
     for (size_t i = 0; i < all_count; i++) {
         const workspace_item_t *item = &all[i];
@@ -406,45 +369,10 @@ static error_t *filter_items_for_update(
             continue;
         }
 
-        match_count++;
+        RETURN_IF_ERROR(ptr_array_push(&matches, item));
     }
 
-    if (match_count == 0) {
-        return NULL;  /* No matches - not an error */
-    }
-
-    /* Second pass: allocate and populate result array */
-    const workspace_item_t **results = calloc(match_count, sizeof(workspace_item_t *));
-    if (!results) {
-        return ERROR(ERR_MEMORY, "Failed to allocate filter results array");
-    }
-
-    size_t result_idx = 0;
-
-    for (size_t i = 0; i < all_count; i++) {
-        const workspace_item_t *item = &all[i];
-
-        if (!is_update_candidate(item, opts, config)) {
-            continue;
-        }
-
-        /* Apply CLI file filter (using storage_path for canonical matching) */
-        if (!path_filter_matches(file_filter, item->storage_path)) {
-            continue;
-        }
-        if (matches_exclude_pattern(item->storage_path, opts)) {
-            continue;
-        }
-        /* Apply profile filter (CLI -p filtering) */
-        if (!profile_filter_matches(item->profile, filter)) {
-            continue;
-        }
-
-        results[result_idx++] = item;
-    }
-
-    *out_items = results;
-    *count_out = match_count;
+    *out_items = (const workspace_item_t **) ptr_array_steal(&matches, count_out);
 
     return NULL;
 }
@@ -452,14 +380,14 @@ static error_t *filter_items_for_update(
 /**
  * Group workspace items by profile
  *
- * Creates a hashmap: profile -> item_array_t*
- * Each profile gets an array of items that belong to it.
+ * Creates a hashmap: profile -> ptr_array_t*
+ * Each profile gets an array of borrowed item pointers.
  *
  * Uses item->profile string for grouping.
  *
  * @param items Array of workspace item pointers (must not be NULL)
  * @param count Number of items
- * @param out_groups Output hashmap (must not be NULL, caller must free)
+ * @param out_groups Output hashmap (must not be NULL, caller must free with ptr_array_free_cb)
  * @return Error or NULL on success
  */
 static error_t *group_items_by_profile(
@@ -485,50 +413,29 @@ static error_t *group_items_by_profile(
         }
 
         /* Get or create array for this profile */
-        item_array_t *array = hashmap_get(groups, profile);
+        ptr_array_t *array = hashmap_get(groups, profile);
 
         if (!array) {
             /* Create new array for this profile */
-            array = calloc(1, sizeof(item_array_t));
+            array = ptr_array_new(0);
             if (!array) {
-                hashmap_free(groups, item_array_free);
+                hashmap_free(groups, ptr_array_free_cb);
                 return ERROR(ERR_MEMORY, "Failed to allocate item array");
-            }
-
-            array->capacity = 16;
-            array->items = calloc(array->capacity, sizeof(workspace_item_t *));
-            if (!array->items) {
-                free(array);
-                hashmap_free(groups, item_array_free);
-                return ERROR(ERR_MEMORY, "Failed to allocate items array");
             }
 
             error_t *err = hashmap_set(groups, profile, array);
             if (err) {
-                free(array->items);
-                free(array);
-                hashmap_free(groups, item_array_free);
+                ptr_array_free(array);
+                hashmap_free(groups, ptr_array_free_cb);
                 return error_wrap(err, "Failed to add profile group to hashmap");
             }
         }
 
-        /* Grow array if needed */
-        if (array->count >= array->capacity) {
-            size_t new_capacity = array->capacity * 2;
-            const workspace_item_t **new_items = realloc(
-                array->items,
-                new_capacity * sizeof(workspace_item_t *)
-            );
-            if (!new_items) {
-                hashmap_free(groups, item_array_free);
-                return ERROR(ERR_MEMORY, "Failed to grow item array");
-            }
-            array->items = new_items;
-            array->capacity = new_capacity;
+        error_t *err = ptr_array_push(array, item);
+        if (err) {
+            hashmap_free(groups, ptr_array_free_cb);
+            return error_wrap(err, "Failed to grow item array");
         }
-
-        /* Add item pointer to array */
-        array->items[array->count++] = item;
     }
 
     *out_groups = groups;
@@ -1103,7 +1010,7 @@ cleanup:
 /**
  * Flatten items_by_profile hashmap into single array
  *
- * Converts hashmap<profile → item_array> into flat array of item pointers.
+ * Converts hashmap<profile → ptr_array_t*> into flat array of item pointers.
  * Items are borrowed references (valid while hashmap lives).
  *
  * @param items_by_profile Hashmap to flatten (must not be NULL)
@@ -1120,42 +1027,22 @@ static error_t *flatten_items_to_array(
     CHECK_NULL(out_items);
     CHECK_NULL(out_count);
 
-    /* First pass: count total items across all profiles */
-    size_t total_count = 0;
+    *out_items = NULL;
+    *out_count = 0;
+
+    ptr_array_t flat PTR_ARRAY_AUTO = { 0 };
     hashmap_iter_t iter;
     hashmap_iter_init(&iter, items_by_profile);
     void *value;
 
     while (hashmap_iter_next(&iter, NULL, &value)) {
-        item_array_t *arr = value;
-        total_count += arr->count;
-    }
-
-    if (total_count == 0) {
-        *out_items = NULL;
-        *out_count = 0;
-        return NULL;
-    }
-
-    /* Allocate array for flattened items */
-    const workspace_item_t **items = calloc(total_count, sizeof(workspace_item_t *));
-    if (!items) {
-        return ERROR(ERR_MEMORY, "Failed to allocate items array");
-    }
-
-    /* Second pass: collect all items into flat array */
-    size_t idx = 0;
-    hashmap_iter_init(&iter, items_by_profile);
-
-    while (hashmap_iter_next(&iter, NULL, &value)) {
-        item_array_t *arr = value;
+        ptr_array_t *arr = value;
         for (size_t i = 0; i < arr->count; i++) {
-            items[idx++] = arr->items[i];
+            RETURN_IF_ERROR(ptr_array_push(&flat, arr->items[i]));
         }
     }
 
-    *out_items = items;
-    *out_count = total_count;
+    *out_items = (const workspace_item_t **) ptr_array_steal(&flat, out_count);
 
     return NULL;
 }
@@ -1190,7 +1077,7 @@ static error_t *flatten_items_to_array(
  * Preconditions:
  *   - All profile updates already succeeded (Git commits done)
  *   - state is a live handle (non-NULL, DB open) owned by caller
- *   - items_by_profile contains profile → item_array_t mappings
+ *   - items_by_profile contains profile → ptr_array_t mappings
  *   - ws contains valid workspace
  *
  * Postconditions:
@@ -1210,7 +1097,7 @@ static error_t *flatten_items_to_array(
  * @param repo Git repository (must not be NULL)
  * @param state Caller's state handle (must not be NULL, must have open DB)
  * @param ws Workspace for accessing keymgr and metadata cache (must not be NULL)
- * @param items_by_profile Hashmap: profile → item_array_t* (must not be NULL)
+ * @param items_by_profile Hashmap: profile → ptr_array_t* (must not be NULL)
  * @param opts Update options for verbose flag (must not be NULL)
  * @param out Output context for verbose logging (can be NULL)
  * @param out_updated Output flag: true if manifest was updated (must not be NULL)
@@ -1413,7 +1300,7 @@ static error_t *update_execute_for_all_profiles(
     void *value;
 
     while (hashmap_iter_next(&iter, &profile, &value)) {
-        item_array_t *array = (item_array_t *) value;
+        ptr_array_t *array = value;
 
         if (array->count == 0) {
             continue;
@@ -1438,8 +1325,8 @@ static error_t *update_execute_for_all_profiles(
         /* Update this profile using shared worktree */
         size_t processed = 0;
         err = update_profile(
-            wt, profile, array->items, array->count, opts,
-            out, config, ws, &processed
+            wt, profile, (const workspace_item_t **) array->items, array->count,
+            opts, out, config, ws, &processed
         );
 
         if (err) {
@@ -1465,7 +1352,7 @@ cleanup:
     if (by_profile) {
         if (err) {
             /* Error path: free resources */
-            hashmap_free(by_profile, item_array_free);
+            hashmap_free(by_profile, ptr_array_free_cb);
         } else {
             /* Success path: pass to caller */
             *out_by_profile = by_profile;
@@ -2261,7 +2148,7 @@ error_t *cmd_update(
 
     if (err) {
         if (by_profile) {
-            hashmap_free(by_profile, item_array_free);
+            hashmap_free(by_profile, ptr_array_free_cb);
         }
         goto cleanup;
     }
@@ -2282,7 +2169,7 @@ error_t *cmd_update(
 
     /* Free by_profile hashmap after manifest sync */
     if (by_profile) {
-        hashmap_free(by_profile, item_array_free);
+        hashmap_free(by_profile, ptr_array_free_cb);
         by_profile = NULL;
     }
 

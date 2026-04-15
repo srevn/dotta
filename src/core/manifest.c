@@ -899,7 +899,6 @@ error_t *manifest_remove_files(
 
     error_t *err = NULL;
     manifest_t *fresh_manifest = NULL;
-    char *removed_custom_prefix = NULL;
     metadata_t *metadata = NULL;
     size_t removed_count = 0;
     size_t fallback_count = 0;
@@ -934,16 +933,15 @@ error_t *manifest_remove_files(
         err = NULL;
     }
 
-    /* 3. Lookup custom prefix for the removed profile */
-    err = state_get_profile_prefix(state, removed_profile, &removed_custom_prefix);
-    if (err) {
-        err = error_wrap(
-            err, "Failed to get prefix for profile '%s'", removed_profile
-        );
-        goto cleanup;
-    }
+    /* 3/4. Process each removed file.
+     *
+     * The peek below borrows a pointer into the state row cache. Per the
+     * state.h lifetime contract, state_set_profile_commit_oid (called
+     * after this loop) invalidates the cache and so the borrow. Scoping
+     * the peek inside a block that ends before the mutation keeps the
+     * lifetime contract enforced by the compiler. */
+    const char *removed_custom_prefix = state_peek_profile_prefix(state, removed_profile);
 
-    /* 4. Process each removed file */
     for (size_t i = 0; i < removed_storage_paths->count; i++) {
         const char *storage_path = removed_storage_paths->items[i];
         const char *custom_prefix = removed_custom_prefix;
@@ -1075,7 +1073,6 @@ error_t *manifest_remove_files(
 
 cleanup:
     if (metadata) metadata_free(metadata);
-    if (removed_custom_prefix) free(removed_custom_prefix);
     if (fresh_manifest) manifest_free(fresh_manifest);
     arena_destroy(arena);
 
@@ -1281,18 +1278,10 @@ error_t *manifest_detect_stale_profiles(
 
     const char *profile;
     while (hashmap_iter_next(&iter, &profile, NULL)) {
-        /* Read stored commit_oid for this profile */
-        git_oid stored_oid;
-        error_t *read_err = state_get_profile_commit_oid(state, profile, &stored_oid);
-        if (read_err) {
-            if (read_err->code == ERR_NOT_FOUND) {
-                /* Profile in scope but not in DB (race with disable) — skip */
-                error_free(read_err);
-                continue;
-            }
-            hashmap_free(stale_map, NULL);
-            return read_err;
-        }
+        /* Read stored commit_oid for this profile (borrowed from row cache).
+         * NULL = profile not enabled (e.g. race with disable) — skip. */
+        const git_oid *stored_oid = state_peek_profile_commit_oid(state, profile);
+        if (!stored_oid) continue;
 
         /* Fetch current branch HEAD via lightweight ref-to-OID lookup.
          *
@@ -1307,7 +1296,7 @@ error_t *manifest_detect_stale_profiles(
             continue;
         }
 
-        if (!git_oid_equal(&stored_oid, &head_oid)) {
+        if (!git_oid_equal(stored_oid, &head_oid)) {
             /* Profile is stale — HEAD moved since last dotta operation */
             if (!stale_map) {
                 stale_map = hashmap_borrow(16);
@@ -2296,7 +2285,6 @@ error_t *manifest_sync_diff(
 
     /* Resources to clean up */
     manifest_t *fresh_manifest = NULL;
-    char *synced_custom_prefix = NULL;
     metadata_t *metadata = NULL;
     git_tree *old_tree = NULL;
     git_tree *new_tree = NULL;
@@ -2357,14 +2345,14 @@ error_t *manifest_sync_diff(
 
     size_t num_deltas = git_diff_num_deltas(diff);
 
-    /* PHASE 3: PROCESS DELTAS (O(D)) */
-
-    /* Lookup custom prefix for the synced profile */
-    err = state_get_profile_prefix(state, profile, &synced_custom_prefix);
-    if (err) {
-        err = error_wrap(err, "Failed to get prefix for profile '%s'", profile);
-        goto cleanup;
-    }
+    /* PHASE 3: PROCESS DELTAS (O(D))
+     *
+     * The peek below borrows a pointer into the state row cache. Per the
+     * state.h lifetime contract, state_set_profile_commit_oid (called
+     * after this loop) invalidates the cache and so the borrow. Scoping
+     * the peek inside a block that ends before the mutation keeps the
+     * lifetime contract enforced by the compiler. */
+    const char *synced_custom_prefix = state_peek_profile_prefix(state, profile);
 
     for (size_t i = 0; i < num_deltas; i++) {
         const git_diff_delta *delta = git_diff_get_delta(diff, i);
@@ -2559,7 +2547,6 @@ cleanup:
     if (new_tree) git_tree_free(new_tree);
     if (old_tree) git_tree_free(old_tree);
     if (metadata) metadata_free(metadata);
-    if (synced_custom_prefix) free(synced_custom_prefix);
     if (fresh_manifest) manifest_free(fresh_manifest);
     arena_destroy(arena);
 
@@ -2612,7 +2599,6 @@ error_t *manifest_sync_directories(
     CHECK_NULL(enabled_profiles);
 
     error_t *err = NULL;
-    hashmap_t *prefix_map = NULL;
     metadata_t *metadata = NULL;
     const metadata_item_t **directories = NULL;
 
@@ -2632,14 +2618,7 @@ error_t *manifest_sync_directories(
         return error_wrap(err, "Failed to mark directories inactive");
     }
 
-    /* 2. Load prefix map from state for custom prefix resolution */
-    err = state_get_prefix_map(state, &prefix_map);
-    if (err) {
-        arena_destroy(arena);
-        return error_wrap(err, "Failed to load prefix map from state");
-    }
-
-    /* 3. Rebuild from each enabled profile */
+    /* 2. Rebuild from each enabled profile */
     for (size_t i = 0; i < enabled_profiles->count; i++) {
         const char *profile = enabled_profiles->items[i];
 
@@ -2663,11 +2642,8 @@ error_t *manifest_sync_directories(
             goto cleanup;
         }
 
-        /* Lookup custom prefix for this profile */
-        const char *custom_prefix = NULL;
-        if (prefix_map) {
-            custom_prefix = (const char *) hashmap_get(prefix_map, profile);
-        }
+        /* Lookup custom prefix for this profile (borrowed from row cache) */
+        const char *custom_prefix = state_peek_profile_prefix(state, profile);
 
         /* Extract directories from metadata */
         size_t dir_count = 0;
@@ -2774,7 +2750,6 @@ cleanup:
      * metadata_load_from_branch error before inner loop). */
     if (directories) free(directories);
     if (metadata) metadata_free(metadata);
-    if (prefix_map) hashmap_free(prefix_map, free);
     arena_destroy(arena);
 
     /* After rebuild, any directories still in STATE_INACTIVE are orphaned
@@ -3078,15 +3053,6 @@ error_t *manifest_build(
     error_t *err = NULL;
     manifest_t *manifest = NULL;
     hashmap_t *path_map = NULL;
-    hashmap_t *prefix_map = NULL;
-
-    /* Load custom prefix map from state (internalized — callers no longer manage this) */
-    if (state) {
-        err = state_get_prefix_map(state, &prefix_map);
-        if (err) {
-            return error_wrap(err, "Failed to get custom prefix map");
-        }
-    }
 
     /* Allocate manifest */
     manifest = calloc(1, sizeof(manifest_t));
@@ -3139,14 +3105,16 @@ error_t *manifest_build(
          * borrowed tree entries, converts paths, handles precedence override,
          * and populates file_entry_t directly—all in O(N) time.
          *
-         * profile borrows from caller's profiles array — must outlive manifest */
+         * profile borrows from caller's profiles array — must outlive manifest.
+         * custom_prefix is a borrowed pointer into the state row cache (stable
+         * for the lifetime of this call — no enabled_profiles mutation here). */
         struct manifest_build_ctx ctx = {
             .manifest      = manifest,
             .capacity      = capacity,
             .path_map      = path_map,
             .profile       = profile,
-            .custom_prefix = prefix_map
-                ? (const char *) hashmap_get(prefix_map, profile)
+            .custom_prefix = state
+                ? state_peek_profile_prefix(state, profile)
                 : NULL,
             .arena         = arena,
             .error         = NULL
@@ -3168,10 +3136,6 @@ error_t *manifest_build(
         capacity = ctx.capacity;
     }
 
-    /* prefix_map no longer needed — all per-profile lookups are done */
-    hashmap_free(prefix_map, free);
-    prefix_map = NULL;
-
     /* Success - transfer index ownership to manifest */
     manifest->index = path_map;
     manifest->arena_backed = (arena != NULL);
@@ -3180,7 +3144,6 @@ error_t *manifest_build(
     return NULL;
 
 cleanup:
-    hashmap_free(prefix_map, free);
     hashmap_free(path_map, NULL);
     if (err) manifest_free(manifest);
 

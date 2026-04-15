@@ -111,12 +111,16 @@ static error_t *init_branches(git_repository *repo, bool is_new_repo) {
 
 /**
  * Initialize state file
+ *
+ * Opens a write-locked handle, which creates .git/dotta.db with the schema
+ * if it does not already exist, then commits the empty transaction. A clean
+ * state file on disk means subsequent commands do not have to bootstrap it.
  */
 static error_t *init_state(git_repository *repo) {
     CHECK_NULL(repo);
 
     state_t *state = NULL;
-    error_t *err = state_empty(&state);
+    error_t *err = state_open(repo, &state);
     if (err) {
         return err;
     }

@@ -196,84 +196,65 @@ cleanup:
 }
 
 /**
- * Get custom deployment prefixes for named profiles
+ * Load every enabled profile's custom prefix from state
  *
- * Queries the state database for custom prefixes. Only profiles with
- * non-NULL custom prefixes are included in the output.
+ * Narrow adapter for read-only callers (list/show/revert) that need the
+ * full set of custom prefixes for path resolution but do not already hold
+ * a state handle. Opens state, peeks the row cache, filters to entries
+ * with a non-NULL custom_prefix, and returns them in position order.
+ *
+ * State-load failure is non-fatal: callers degrade to resolving paths
+ * without custom-prefix awareness, so we return an empty array instead
+ * of propagating the error. Matches the previous semantics of the
+ * deleted profile_get_custom_prefixes adapter.
  */
-error_t *profile_get_custom_prefixes(
+error_t *profile_load_custom_prefixes(
     git_repository *repo,
-    const state_t *state,
-    const string_array_t *profiles,
     string_array_t **out_prefixes
 ) {
+    CHECK_NULL(repo);
     CHECK_NULL(out_prefixes);
 
-    error_t *err = NULL;
     string_array_t *prefixes = string_array_new(0);
     if (!prefixes) {
         return ERROR(ERR_MEMORY, "Failed to allocate prefixes array");
     }
 
-    /* Use provided state or load internally */
-    state_t *local_state = NULL;
-    const state_t *effective_state = state;
+    state_t *state = NULL;
+    error_t *err = state_load(repo, &state);
+    if (err) {
+        /* State load failure is non-fatal — no custom prefixes available */
+        error_free(err);
+        *out_prefixes = prefixes;
+        return NULL;
+    }
+    if (!state) {
+        *out_prefixes = prefixes;
+        return NULL;
+    }
 
-    if (!effective_state) {
-        err = state_load(repo, &local_state);
+    const state_profile_entry_t *entries = NULL;
+    size_t count = 0;
+    err = state_peek_profiles(state, &entries, &count);
+    if (err) {
+        state_free(state);
+        string_array_free(prefixes);
+        return error_wrap(err, "Failed to peek profile rows");
+    }
+
+    for (size_t i = 0; i < count; i++) {
+        if (!entries[i].custom_prefix) continue;
+        err = string_array_push(prefixes, entries[i].custom_prefix);
         if (err) {
-            /* State load failure is non-fatal — no custom prefixes available */
-            error_free(err);
-            *out_prefixes = prefixes;
-            return NULL;
-        }
-        if (!local_state) {
-            *out_prefixes = prefixes;
-            return NULL;
-        }
-        effective_state = local_state;
-    }
-
-    hashmap_t *prefix_map = NULL;
-    err = state_get_prefix_map(effective_state, &prefix_map);
-    if (err) {
-        state_free(local_state);
-        string_array_free(prefixes);
-        return error_wrap(err, "Failed to get custom prefix map");
-    }
-
-    if (profiles) {
-        for (size_t i = 0; i < profiles->count; i++) {
-            const char *prefix = (const char *) hashmap_get(
-                prefix_map,
-                profiles->items[i]
-            );
-            if (prefix) {
-                err = string_array_push(prefixes, prefix);
-                if (err) break;
-            }
-        }
-    } else {
-        hashmap_iter_t iter;
-        hashmap_iter_init(&iter, prefix_map);
-        void *value = NULL;
-        while (hashmap_iter_next(&iter, NULL, &value)) {
-            err = string_array_push(prefixes, (const char *) value);
-            if (err) break;
+            state_free(state);
+            string_array_free(prefixes);
+            return error_wrap(err, "Failed to collect custom prefix");
         }
     }
 
-    if (err) {
-        hashmap_free(prefix_map, free);
-        state_free(local_state);
-        string_array_free(prefixes);
-        return error_wrap(err, "Failed to collect custom prefix");
-    }
-
-    hashmap_free(prefix_map, free);
-    state_free(local_state);
-
+    state_free(state);
     *out_prefixes = prefixes;
+
     return NULL;
 }
 

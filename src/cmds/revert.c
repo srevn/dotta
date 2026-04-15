@@ -144,11 +144,14 @@ static error_t *discover_file(
 
     /* Load custom prefixes for path resolution (non-fatal) */
     string_array_t *prefixes STRING_ARRAY_CLEANUP = NULL;
-    error_t *prefix_err = profile_get_custom_prefixes(repo, NULL, NULL, &prefixes);
+    error_t *prefix_err = profile_load_custom_prefixes(repo, &prefixes);
     if (prefix_err) error_free(prefix_err);
 
     /* Resolve input path to storage format (file need not exist) */
-    err = path_resolve_input(file_path, prefixes, &storage_path);
+    err = path_resolve_input(
+        file_path, prefixes ? (const char *const *) prefixes->items : NULL,
+        prefixes ? prefixes->count : 0, &storage_path
+    );
     if (err) {
         return err;
     }

@@ -1967,19 +1967,29 @@ error_t *cmd_update(
      * Without this, such paths would incorrectly resolve to root/mnt/jail/etc/nginx.conf.
      */
     if (opts->files && opts->file_count > 0) {
-        /* Extract custom prefixes from operation profiles */
-        string_array_t *prefixes = NULL;
-        err = profile_get_custom_prefixes(
-            repo, state, active_profiles, &prefixes
-        );
-        if (err) {
-            err = error_wrap(err, "Failed to get custom prefixes");
+        /* Extract custom prefixes from active profiles via the row cache */
+        string_array_t *prefixes = string_array_new(0);
+        if (!prefixes) {
+            err = ERROR(ERR_MEMORY, "Failed to allocate prefixes array");
             goto cleanup;
+        }
+        for (size_t i = 0; i < active_profiles->count; i++) {
+            const char *pfx =
+                state_peek_profile_prefix(state, active_profiles->items[i]);
+            if (pfx) {
+                err = string_array_push(prefixes, pfx);
+                if (err) {
+                    string_array_free(prefixes);
+                    err = error_wrap(err, "Failed to collect custom prefix");
+                    goto cleanup;
+                }
+            }
         }
 
         err = path_filter_create(
             opts->files, opts->file_count,
-            prefixes, &file_filter
+            (const char *const *) prefixes->items, prefixes->count,
+            &file_filter
         );
         string_array_free(prefixes);
 

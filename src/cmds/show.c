@@ -646,12 +646,15 @@ error_t *cmd_show(
     CHECK_NULL(opts->file_path);
 
     /* Load custom prefixes for path resolution (non-fatal) */
-    error_t *prefix_err = profile_get_custom_prefixes(repo, NULL, NULL, &prefixes);
+    error_t *prefix_err = profile_load_custom_prefixes(repo, &prefixes);
     if (prefix_err) error_free(prefix_err);
 
     /* Resolve file path to storage format (common to both explicit and implicit paths) */
     const char *search_path = opts->file_path;
-    error_t *convert_err = path_resolve_input(opts->file_path, prefixes, &converted);
+    error_t *convert_err = path_resolve_input(
+        opts->file_path, prefixes ? (const char *const *) prefixes->items : NULL,
+        prefixes ? prefixes->count : 0, &converted
+    );
     if (convert_err) {
         error_free(convert_err);
         /* Fall back to original path (may be a partial match pattern) */

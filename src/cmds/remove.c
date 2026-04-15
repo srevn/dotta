@@ -96,20 +96,12 @@ static error_t *resolve_paths_to_remove(
     string_array_t *filesystem_paths = NULL;
     string_array_t *profile_files = NULL;
     hashmap_t *profile_files_map = NULL;
-    hashmap_t *prefix_map = NULL;
-    const char *custom_prefix = NULL;
 
-    /* Load prefix map for custom/ path resolution (optional, improves UX) */
-    if (state) {
-        error_t *map_err = state_get_prefix_map(state, &prefix_map);
-        if (!map_err && prefix_map) {
-            custom_prefix = (const char *) hashmap_get(prefix_map, profile);
-        } else if (map_err) {
-            /* Non-fatal: if prefix map loading fails,
-             * just degrade to showing storage paths */
-            error_free(map_err);
-        }
-    }
+    /* Look up the profile's custom prefix for custom/ path resolution
+     * (optional, improves UX). Borrowed from the state row cache; stable
+     * for the duration of this call (no enabled_profiles mutation below). */
+    const char *custom_prefix =
+        state ? state_peek_profile_prefix(state, profile) : NULL;
 
     /* Allocate arrays */
     storage_paths = string_array_new(0);
@@ -150,11 +142,8 @@ static error_t *resolve_paths_to_remove(
 
         /* Resolve input path to storage format (file need not exist) */
         err = path_resolve_input(
-            input_path,
-            custom_prefix
-                ? &(string_array_t){ .items = (char **) &custom_prefix, .count = 1 }
-                : NULL,
-            &storage_path
+            input_path, custom_prefix ? &custom_prefix : NULL,
+            custom_prefix ? 1 : 0, &storage_path
         );
         if (err) {
             if (!opts->force) {
@@ -299,7 +288,6 @@ static error_t *resolve_paths_to_remove(
 
 cleanup:
     /* Free all resources */
-    if (prefix_map) hashmap_free(prefix_map, free);
     if (profile_files_map) hashmap_free(profile_files_map, NULL);
     if (profile_files) string_array_free(profile_files);
     if (storage_paths) string_array_free(storage_paths);
@@ -1488,17 +1476,10 @@ static error_t *delete_profile_branch(
             error_free(state_err);
         }
 
-        /* Save custom prefix for hook filesystem path conversion */
-        hashmap_t *pfx_map = NULL;
-        error_t *pfx_err = state_get_prefix_map(state, &pfx_map);
-
-        if (!pfx_err && pfx_map) {
-            const char *pfx = hashmap_get(pfx_map, opts->profile);
-            if (pfx) hook_custom_prefix = strdup(pfx);
-            hashmap_free(pfx_map, free);
-        } else if (pfx_err) {
-            error_free(pfx_err);
-        }
+        /* Save custom prefix for hook filesystem path conversion (own a copy
+         * because the state handle is about to be freed). */
+        const char *pfx = state_peek_profile_prefix(state, opts->profile);
+        if (pfx) hook_custom_prefix = strdup(pfx);
 
         state_free(state);
         state = NULL;

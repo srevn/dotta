@@ -116,26 +116,26 @@ error_t *profile_resolve_enabled(
 );
 
 /**
- * Get custom deployment prefixes for named profiles
+ * Load every enabled profile's custom prefix from state
  *
- * Queries the state database for custom prefixes associated with the given
- * profile names. Returns only non-NULL prefixes (profiles with standard
- * home/root deployment are omitted).
+ * Narrow adapter for read-only callers (list/show/revert) that need the
+ * full set of custom prefixes for path resolution but do not hold a state
+ * handle. Opens state internally, reads the row cache, and returns the
+ * non-NULL custom_prefix values in position order.
  *
- * Used by commands that need custom prefix information for path resolution.
+ * Callers that already hold a state handle should iterate active profiles
+ * directly and call state_peek_profile_prefix() — no adapter needed.
  *
- * @param repo Repository (only used when state==NULL)
- * @param state State handle for connection reuse (NULL = load internally)
- *              When non-NULL, only reads from the handle (const).
- * @param profiles Profile names to query (NULL = all enabled profiles with
- *                 custom prefixes; iteration order is undefined)
+ * State-load failure is non-fatal: callers degrade to resolving paths
+ * without custom-prefix awareness, so an empty array is returned instead
+ * of propagating the error.
+ *
+ * @param repo Repository (must not be NULL)
  * @param out_prefixes Non-NULL custom prefixes (must not be NULL, caller frees)
  * @return Error or NULL on success (empty array if no custom prefixes)
  */
-error_t *profile_get_custom_prefixes(
+error_t *profile_load_custom_prefixes(
     git_repository *repo,
-    const state_t *state,
-    const string_array_t *profiles,
     string_array_t **out_prefixes
 );
 

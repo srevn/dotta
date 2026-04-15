@@ -6,7 +6,7 @@
  * Key optimizations:
  * - Prepared statements cached for bulk operations
  * - WAL mode for concurrent access
- * - Profiles cached in memory (tiny, read frequently)
+ * - Enabled-profile rows cached in memory (tiny, read frequently)
  * - Files queried on-demand (large, read occasionally)
  * - Persistent B-tree indexes (no hashmap rebuilding)
  */
@@ -24,7 +24,6 @@
 #include "base/arena.h"
 #include "base/array.h"
 #include "base/error.h"
-#include "base/hashmap.h"
 #include "infra/path.h"
 #include "sys/filesystem.h"
 
@@ -38,9 +37,19 @@
  * State structure
  *
  * Maintains minimal in-memory cache for performance:
- * - Profiles cached (tiny, read frequently)
+ * - Enabled-profile rows cached (tiny, read frequently)
  * - Files queried on-demand (large, read occasionally)
  * - Prepared statements cached (eliminate preparation overhead)
+ *
+ * Row cache invariant:
+ *   The cache is the materialized view of enabled_profiles. It is populated
+ *   ONLY by lazy load_profile_entries(). Shape mutations (add / remove / bulk
+ *   replace) call invalidate_profile_entries() — never optimistically update
+ *   the in-memory layout — so that a subsequent rollback cannot leave the
+ *   cache out of sync with the DB. The one exception is commit_oid, which is
+ *   a fixed-width value column: state_set_profile_commit_oid() patches it in
+ *   place after a successful UPDATE. Rollback still invalidates defensively,
+ *   so the optimistic patch cannot outlive the transaction that produced it.
  */
 struct state {
     /* Database connection */
@@ -48,11 +57,12 @@ struct state {
     char *db_path;
 
     /* Transaction state */
-    bool in_transaction;     /* BEGIN IMMEDIATE executed */
+    bool in_transaction;                    /* BEGIN IMMEDIATE executed */
 
-    /* Cached enabled profiles (loaded lazily) */
-    string_array_t *profiles;
-    bool profiles_loaded;
+    /* Cached enabled_profiles rows (loaded lazily, position-ordered) */
+    state_profile_entry_t *profile_entries;
+    size_t profile_entry_count;
+    bool profile_entries_loaded;
 
     /* Prepared statements (initialized once, reused) */
     sqlite3_stmt *stmt_insert_file;         /* INSERT OR REPLACE virtual_manifest */
@@ -731,78 +741,228 @@ static void finalize_statements(state_t *state) {
 }
 
 /**
- * Load profiles into cache
+ * Free the row cache and mark it unloaded
  *
- * Lazy loading pattern - only loads once, then caches.
- * Profiles are tiny (~100 bytes) and read frequently, so caching
- * is beneficial.
- *
- * @param state State (must not be NULL)
- * @return Error or NULL on success
+ * Safe to call repeatedly. Invoked by shape-mutating paths
+ * (state_enable_profile, state_disable_profile, state_set_profiles) and by
+ * state_rollback / state_free. state_set_profile_commit_oid does NOT call
+ * this helper — it patches the cached row in place because only a single
+ * fixed-width value field changes. The cache must never outlive the last
+ * committed DB state it was built from.
  */
-static error_t *load_profiles(state_t *state) {
+static void invalidate_profile_entries(state_t *state) {
+    if (!state || !state->profile_entries) {
+        state->profile_entries_loaded = false;
+        state->profile_entry_count = 0;
+        return;
+    }
+
+    for (size_t i = 0; i < state->profile_entry_count; i++) {
+        free(state->profile_entries[i].name);
+        free(state->profile_entries[i].custom_prefix);
+    }
+    free(state->profile_entries);
+    state->profile_entries = NULL;
+    state->profile_entry_count = 0;
+    state->profile_entries_loaded = false;
+}
+
+/**
+ * Load the enabled_profiles row cache
+ *
+ * Lazy loader: performs one SELECT over enabled_profiles and materializes
+ * every row (name, custom_prefix, commit_oid) into the cache. Rows are
+ * ordered by position to match the user's precedence order.
+ *
+ * The cache replaces four previous query-shape functions (get_prefix_map,
+ * get_profile_prefix, get_profile_commit_oid, load_commit_oid_map) with a
+ * single lazy load + linear peek.
+ */
+static error_t *load_profile_entries(state_t *state) {
     CHECK_NULL(state);
 
-    /* Already loaded - return immediately.
-     * Must precede the db check: state_empty() sets
-     * profiles_loaded=true with db=NULL (empty state, no DB file). */
-    if (state->profiles_loaded) return NULL;
+    /* Already loaded — return immediately.
+     * Must precede the db check: state_empty() marks the cache loaded with
+     * db==NULL, representing a state with zero enabled profiles. */
+    if (state->profile_entries_loaded) return NULL;
 
     CHECK_NULL(state->db);
 
-    /* Create array if needed, or clear stale entries from a previous load.
-     *
-     * Invalidation points (state_enable_profile, state_disable_profile) only
-     * flip profiles_loaded=false; they do not clear the cached array. Without
-     * this clear, every reload would append on top of the previous contents
-     * and the cache would grow with stale entries forever. */
-    if (!state->profiles) {
-        state->profiles = string_array_new(0);
-        if (!state->profiles) {
-            return ERROR(ERR_MEMORY, "Failed to allocate profiles array");
+    /* Probe the row count first so we can allocate exactly once. */
+    sqlite3_stmt *count_stmt = NULL;
+    int rc = sqlite3_prepare_v2(
+        state->db, "SELECT COUNT(*) FROM enabled_profiles;", -1, &count_stmt, NULL
+    );
+    if (rc != SQLITE_OK) {
+        return sqlite_error(state->db, "Failed to prepare profile count query");
+    }
+    size_t row_count = 0;
+    if (sqlite3_step(count_stmt) == SQLITE_ROW) {
+        sqlite3_int64 n = sqlite3_column_int64(count_stmt, 0);
+        if (n > 0) row_count = (size_t) n;
+    }
+    sqlite3_finalize(count_stmt);
+
+    state_profile_entry_t *entries = NULL;
+    if (row_count > 0) {
+        entries = calloc(row_count, sizeof(*entries));
+        if (!entries) {
+            return ERROR(ERR_MEMORY, "Failed to allocate profile row cache");
         }
-    } else {
-        string_array_clear(state->profiles);
     }
 
-    /* Query profiles ordered by position */
-    const char *sql = "SELECT name FROM enabled_profiles ORDER BY position ASC;";
-    sqlite3_stmt *stmt = NULL;
+    /* Read all rows in position order. */
+    const char *sql =
+        "SELECT name, custom_prefix, commit_oid FROM enabled_profiles "
+        "ORDER BY position ASC;";
 
-    int rc = sqlite3_prepare_v2(state->db, sql, -1, &stmt, NULL);
+    sqlite3_stmt *stmt = NULL;
+    rc = sqlite3_prepare_v2(state->db, sql, -1, &stmt, NULL);
     if (rc != SQLITE_OK) {
+        free(entries);
         return sqlite_error(state->db, "Failed to prepare profile query");
     }
 
     error_t *err = NULL;
+    size_t i = 0;
     while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
-        const char *name = (const char *) sqlite3_column_text(stmt, 0);
-        if (!name) {
+        if (i >= row_count) {
+            /* Concurrent INSERT between COUNT and SELECT would be unusual
+             * under our write-lock discipline, but guard anyway. */
+            err = ERROR(ERR_STATE_INVALID, "Profile row count changed during load");
+            break;
+        }
+
+        const char *name_db = (const char *) sqlite3_column_text(stmt, 0);
+        const char *prefix_db = (const char *) sqlite3_column_text(stmt, 1);
+        const void *oid_blob = sqlite3_column_blob(stmt, 2);
+
+        if (!name_db) {
             err = ERROR(ERR_STATE_INVALID, "Profile name is NULL");
             break;
         }
 
-        err = string_array_push(state->profiles, name);
-        if (err) break;
+        /* Allocate the row's owned strings atomically. If either strdup
+         * fails, free whatever succeeded right here before breaking — the
+         * outer cleanup loop only walks rows [0, i), so a half-built row
+         * at index i would otherwise leak its successful allocations. */
+        state_profile_entry_t *row = &entries[i];
+        row->name = strdup(name_db);
+        row->custom_prefix = prefix_db ? strdup(prefix_db) : NULL;
+        if (oid_blob) memcpy(row->commit_oid.id, oid_blob, GIT_OID_RAWSZ);
+
+        if (!row->name || (prefix_db && !row->custom_prefix)) {
+            free(row->name);
+            free(row->custom_prefix);
+            err = ERROR(ERR_MEMORY, "Failed to copy enabled profile row");
+            break;
+        }
+
+        i++;
     }
 
     sqlite3_finalize(stmt);
 
-    if (err) return err;
-
-    if (rc != SQLITE_DONE) {
-        return sqlite_error(state->db, "Failed to query profiles");
+    if (!err && rc != SQLITE_DONE) {
+        err = sqlite_error(state->db, "Failed to query profiles");
     }
 
-    state->profiles_loaded = true;
+    if (err) {
+        for (size_t j = 0; j < i; j++) {
+            free(entries[j].name);
+            free(entries[j].custom_prefix);
+        }
+        free(entries);
+        return err;
+    }
+
+    state->profile_entries = entries;
+    state->profile_entry_count = i;
+    state->profile_entries_loaded = true;
+
     return NULL;
+}
+
+/**
+ * Linear lookup into the row cache (caller guarantees load)
+ *
+ * Row count is bounded by the user's enabled-profile list (typically < 10),
+ * so the linear scan is faster than a hash lookup and fits comfortably in L1.
+ */
+static const state_profile_entry_t *find_profile_entry(
+    const state_t *state,
+    const char *profile
+) {
+    for (size_t i = 0; i < state->profile_entry_count; i++) {
+        if (strcmp(state->profile_entries[i].name, profile) == 0) {
+            return &state->profile_entries[i];
+        }
+    }
+    return NULL;
+}
+
+/**
+ * Peek the cached enabled_profiles rows
+ */
+error_t *state_peek_profiles(
+    const state_t *state,
+    const state_profile_entry_t **out_entries,
+    size_t *out_count
+) {
+    CHECK_NULL(state);
+    CHECK_NULL(out_entries);
+    CHECK_NULL(out_count);
+
+    error_t *err = load_profile_entries((state_t *) state);
+    if (err) return err;
+
+    *out_entries = state->profile_entries;
+    *out_count = state->profile_entry_count;
+    return NULL;
+}
+
+/**
+ * Peek a single profile's custom prefix
+ */
+const char *state_peek_profile_prefix(
+    const state_t *state,
+    const char *profile
+) {
+    if (!state || !profile) return NULL;
+
+    error_t *err = load_profile_entries((state_t *) state);
+    if (err) {
+        error_free(err);
+        return NULL;
+    }
+
+    const state_profile_entry_t *entry = find_profile_entry(state, profile);
+    return entry ? entry->custom_prefix : NULL;
+}
+
+/**
+ * Peek a single profile's stored commit_oid
+ */
+const git_oid *state_peek_profile_commit_oid(
+    const state_t *state,
+    const char *profile
+) {
+    if (!state || !profile) return NULL;
+
+    error_t *err = load_profile_entries((state_t *) state);
+    if (err) {
+        error_free(err);
+        return NULL;
+    }
+
+    const state_profile_entry_t *entry = find_profile_entry(state, profile);
+    return entry ? &entry->commit_oid : NULL;
 }
 
 /**
  * Get enabled profiles
  *
- * Returns copy that caller must free.
- * Profiles are cached on first access.
+ * Returns copy that caller must free. Built from the row cache.
  *
  * @param state State (must not be NULL)
  * @param out Profile names (must not be NULL, caller must free)
@@ -812,18 +972,16 @@ error_t *state_get_profiles(const state_t *state, string_array_t **out) {
     CHECK_NULL(state);
     CHECK_NULL(out);
 
-    /* Load if not cached (cast away const for internal mutation) */
-    error_t *err = load_profiles((state_t *) state);
+    error_t *err = load_profile_entries((state_t *) state);
     if (err) return err;
 
-    /* Return copy (caller owns) */
     string_array_t *copy = string_array_new(0);
     if (!copy) {
         return ERROR(ERR_MEMORY, "Failed to allocate profiles array");
     }
 
-    for (size_t i = 0; i < state->profiles->count; i++) {
-        err = string_array_push(copy, state->profiles->items[i]);
+    for (size_t i = 0; i < state->profile_entry_count; i++) {
+        err = string_array_push(copy, state->profile_entries[i].name);
         if (err) {
             string_array_free(copy);
             return err;
@@ -850,21 +1008,13 @@ bool state_has_profile(const state_t *state, const char *profile) {
         return false;
     }
 
-    /* Load if not cached (cast away const for internal mutation) */
-    error_t *err = load_profiles((state_t *) state);
+    error_t *err = load_profile_entries((state_t *) state);
     if (err) {
         error_free(err);
         return false;
     }
 
-    /* Check if profile exists in enabled list */
-    for (size_t i = 0; i < state->profiles->count; i++) {
-        if (strcmp(state->profiles->items[i], profile) == 0) {
-            return true;
-        }
-    }
-
-    return false;
+    return find_profile_entry(state, profile) != NULL;
 }
 
 /**
@@ -917,9 +1067,7 @@ error_t *state_enable_profile(
         return sqlite_error(state->db, "Failed to enable profile");
     }
 
-    /* Invalidate cache */
-    state->profiles_loaded = false;
-
+    invalidate_profile_entries(state);
     return NULL;
 }
 
@@ -951,199 +1099,8 @@ error_t *state_disable_profile(
         return sqlite_error(state->db, "Failed to disable profile");
     }
 
-    /* Invalidate cache */
-    state->profiles_loaded = false;
-
+    invalidate_profile_entries(state);
     /* Not an error if profile wasn't enabled (DELETE with 0 rows affected is OK) */
-    return NULL;
-}
-
-/**
- * Get custom prefix map
- */
-error_t *state_get_prefix_map(
-    const state_t *state,
-    hashmap_t **out_map
-) {
-    CHECK_NULL(state);
-    CHECK_NULL(out_map);
-
-    /* Create map */
-    hashmap_t *map = hashmap_create(16);
-    if (!map) {
-        return ERROR(ERR_MEMORY, "Failed to create prefix map");
-    }
-
-    /* Empty state (no DB file) has no prefixes — return empty map */
-    if (!state->db) {
-        *out_map = map;
-        return NULL;
-    }
-
-    /* Query: Only select profiles with custom_prefix set
-     * This is efficient - most profiles won't have custom prefixes */
-    const char *sql =
-        "SELECT name, custom_prefix FROM enabled_profiles "
-        "WHERE custom_prefix IS NOT NULL ORDER BY position ASC";
-
-    sqlite3_stmt *stmt = NULL;
-    int rc = sqlite3_prepare_v2(state->db, sql, -1, &stmt, NULL);
-    if (rc != SQLITE_OK) {
-        hashmap_free(map, NULL);
-        return sqlite_error(state->db, "Failed to prepare prefix map query");
-    }
-
-    /* Populate map */
-    while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
-        const char *name_db = (const char *) sqlite3_column_text(stmt, 0);
-        const char *prefix_db = (const char *) sqlite3_column_text(stmt, 1);
-
-        /* Allocate owned copies (map owns these strings) */
-        char *name = strdup(name_db);
-        char *prefix = strdup(prefix_db);
-
-        if (!name || !prefix) {
-            free(name);
-            free(prefix);
-            sqlite3_finalize(stmt);
-            hashmap_free(map, free);  /* Free all allocated strings */
-            return ERROR(ERR_MEMORY, "Failed to allocate prefix map entry");
-        }
-
-        /* Store in map (prefix ownership transferred) */
-        error_t *err = hashmap_set(map, name, prefix);
-        if (err) {
-            free(name);
-            free(prefix);
-            sqlite3_finalize(stmt);
-            hashmap_free(map, free);
-            return err;
-        }
-
-        /* Free name - hashmap made its own copy of the key */
-        free(name);
-    }
-
-    if (rc != SQLITE_DONE) {
-        sqlite3_finalize(stmt);
-        hashmap_free(map, free);
-        return sqlite_error(state->db, "Failed to query prefix map");
-    }
-
-    sqlite3_finalize(stmt);
-    *out_map = map;
-    return NULL;
-}
-
-/**
- * Get custom prefix for a single profile
- */
-error_t *state_get_profile_prefix(
-    const state_t *state,
-    const char *profile,
-    char **out_prefix
-) {
-    CHECK_NULL(state);
-    CHECK_NULL(profile);
-    CHECK_NULL(out_prefix);
-
-    *out_prefix = NULL;
-
-    /* Empty state (no DB file) has no prefixes */
-    if (!state->db) {
-        return NULL;
-    }
-
-    const char *sql =
-        "SELECT custom_prefix FROM enabled_profiles WHERE name = ?";
-
-    sqlite3_stmt *stmt = NULL;
-    int rc = sqlite3_prepare_v2(state->db, sql, -1, &stmt, NULL);
-    if (rc != SQLITE_OK) {
-        return sqlite_error(state->db, "Failed to prepare profile prefix query");
-    }
-
-    rc = sqlite3_bind_text(stmt, 1, profile, -1, SQLITE_STATIC);
-    if (rc != SQLITE_OK) {
-        sqlite3_finalize(stmt);
-        return sqlite_error(state->db, "Failed to bind profile name");
-    }
-
-    rc = sqlite3_step(stmt);
-    if (rc == SQLITE_ROW) {
-        const char *prefix_db = (const char *) sqlite3_column_text(stmt, 0);
-        if (prefix_db) {
-            *out_prefix = strdup(prefix_db);
-            if (!*out_prefix) {
-                sqlite3_finalize(stmt);
-                return ERROR(ERR_MEMORY, "Failed to allocate profile prefix");
-            }
-        }
-    } else if (rc != SQLITE_DONE) {
-        sqlite3_finalize(stmt);
-        return sqlite_error(state->db, "Failed to query profile prefix");
-    }
-
-    sqlite3_finalize(stmt);
-    return NULL;
-}
-
-/**
- * Load commit_oid map from enabled_profiles (preservation helper)
- *
- * Returns a hashmap of name → heap-allocated git_oid. Caller frees with
- * hashmap_free(map, free). Used by state_set_profiles to preserve commit_oid
- * across DELETE → re-INSERT.
- */
-static error_t *load_commit_oid_map(state_t *state, hashmap_t **out_map) {
-    CHECK_NULL(state);
-    CHECK_NULL(state->db);
-    CHECK_NULL(out_map);
-
-    hashmap_t *map = hashmap_create(16);
-    if (!map) {
-        return ERROR(ERR_MEMORY, "Failed to create commit_oid map");
-    }
-
-    const char *sql = "SELECT name, commit_oid FROM enabled_profiles ORDER BY position ASC";
-
-    sqlite3_stmt *stmt = NULL;
-    int rc = sqlite3_prepare_v2(state->db, sql, -1, &stmt, NULL);
-    if (rc != SQLITE_OK) {
-        hashmap_free(map, NULL);
-        return sqlite_error(state->db, "Failed to prepare commit_oid map query");
-    }
-
-    while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
-        const char *name = (const char *) sqlite3_column_text(stmt, 0);
-        const void *blob = sqlite3_column_blob(stmt, 1);
-        if (!name || !blob) continue;
-
-        git_oid *oid = malloc(sizeof(git_oid));
-        if (!oid) {
-            sqlite3_finalize(stmt);
-            hashmap_free(map, free);
-            return ERROR(ERR_MEMORY, "Failed to allocate commit_oid copy");
-        }
-        memcpy(oid->id, blob, GIT_OID_RAWSZ);
-
-        error_t *err = hashmap_set(map, name, oid);
-        if (err) {
-            free(oid);
-            sqlite3_finalize(stmt);
-            hashmap_free(map, free);
-            return err;
-        }
-    }
-
-    if (rc != SQLITE_DONE) {
-        sqlite3_finalize(stmt);
-        hashmap_free(map, free);
-        return sqlite_error(state->db, "Failed to query commit_oid map");
-    }
-
-    sqlite3_finalize(stmt);
-    *out_map = map;
     return NULL;
 }
 
@@ -1160,6 +1117,11 @@ static error_t *load_commit_oid_map(state_t *state, hashmap_t **out_map) {
  * Hot path - must be fast even with 10,000 deployed files.
  * Only modifies enabled_profiles table (virtual_manifest untouched).
  *
+ * Preservation is driven by the row cache, which already holds every column
+ * we need to keep. Previously, this function queried enabled_profiles twice
+ * (once per column) to build two hashmaps; now a single cache load covers
+ * both lookups via find_profile_entry().
+ *
  * @param state State (must not be NULL)
  * @param profiles Profile names (must not be NULL)
  * @return Error or NULL on success
@@ -1172,28 +1134,28 @@ error_t *state_set_profiles(
     CHECK_NULL(profiles);
     CHECK_NULL(state->db);
 
-    /* Load current custom_prefix and commit_oid values before DELETE to preserve them.
-     * This enables safe profile reordering without losing associations.
-     * New profiles get NULL custom_prefix and zeroblob(20) commit_oid. */
-    hashmap_t *prefix_map = NULL;
-    error_t *err = state_get_prefix_map(state, &prefix_map);
-    if (err) {
-        return error_wrap(err, "Failed to load custom prefix map");
+    /* Transaction is a precondition — the DELETE below would auto-commit
+     * on an unguarded connection and leave no recovery path for errors
+     * in the INSERT loop. The caller must hold BEGIN IMMEDIATE (state_open
+     * or state_begin). */
+    if (!state->in_transaction) {
+        return ERROR(
+            ERR_STATE_INVALID, "state_set_profiles requires an active transaction"
+        );
     }
 
-    hashmap_t *oid_map = NULL;
-    err = load_commit_oid_map(state, &oid_map);
+    /* Ensure the row cache is populated — we read old rows from it to
+     * preserve custom_prefix and commit_oid across DELETE + re-INSERT. */
+    error_t *err = load_profile_entries(state);
     if (err) {
-        hashmap_free(prefix_map, free);
-        return error_wrap(err, "Failed to load commit_oid map");
+        return error_wrap(err, "Failed to load profile row cache");
     }
 
-    /* Delete all existing profiles */
+    /* Delete all existing rows under the caller's transaction. On failure,
+     * SQL is unchanged and the cache still matches — safe to return. */
     char *errmsg = NULL;
     int rc = sqlite3_exec(state->db, "DELETE FROM enabled_profiles;", NULL, NULL, &errmsg);
     if (rc != SQLITE_OK) {
-        hashmap_free(prefix_map, free);
-        hashmap_free(oid_map, free);
         err = ERROR(
             ERR_STATE_INVALID, "Failed to clear profiles: %s",
             errmsg ? errmsg : sqlite3_errstr(rc)
@@ -1202,69 +1164,55 @@ error_t *state_set_profiles(
         return err;
     }
 
-    /* 20-byte zero buffer for new profiles without existing commit_oid */
-    static const unsigned char zero_oid[GIT_OID_RAWSZ] = { 0 };
-
-    /* Insert new profiles with preserved custom_prefix and commit_oid values */
+    /* Insert rows. SQLITE_TRANSIENT on every binding means SQLite copies the
+     * value at bind time, so the cache pointers we pass below do not need to
+     * outlive sqlite3_step — future refactors that mutate the cache mid-loop
+     * stay safe. Cost is <100 bytes of memcpy per row; the table tops out
+     * around ten rows in practice. */
     time_t now = time(NULL);
     for (size_t i = 0; i < profiles->count; i++) {
+        const char *name = profiles->items[i];
+        const state_profile_entry_t *preserved = find_profile_entry(state, name);
+
+        /* Compose the OID to bind once: zero for new profiles, the cached
+         * value for profiles that remain enabled. One bind path, no static
+         * scratch buffer. */
+        git_oid preserved_oid = { 0 };
+        if (preserved) git_oid_cpy(&preserved_oid, &preserved->commit_oid);
+
         /* Reset and bind statement */
         sqlite3_reset(state->stmt_insert_profile);
         sqlite3_clear_bindings(state->stmt_insert_profile);
 
-        /* Bind parameters: position, name, enabled_at, commit_oid, custom_prefix */
+        /* Bind parameters: position, name, enabled_at, commit_oid, custom_prefix.
+         * SQLITE_TRANSIENT: SQLite copies immediately; source lifetimes are ours. */
         sqlite3_bind_int64(state->stmt_insert_profile, 1, (sqlite3_int64) i);
-        sqlite3_bind_text(state->stmt_insert_profile, 2, profiles->items[i], -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(
+            state->stmt_insert_profile, 2, name, -1, SQLITE_TRANSIENT
+        );
         sqlite3_bind_int64(state->stmt_insert_profile, 3, (sqlite3_int64) now);
-
-        /* Lookup and bind preserved commit_oid (or zeros for new profiles) */
-        const git_oid *preserved_oid = hashmap_get(oid_map, profiles->items[i]);
-        if (preserved_oid) {
-            sqlite3_bind_blob(
-                state->stmt_insert_profile, 4, preserved_oid->id, GIT_OID_RAWSZ, SQLITE_STATIC
+        sqlite3_bind_blob(
+            state->stmt_insert_profile, 4,
+            preserved_oid.id, GIT_OID_RAWSZ, SQLITE_TRANSIENT
+        );
+        if (preserved && preserved->custom_prefix) {
+            sqlite3_bind_text(
+                state->stmt_insert_profile, 5,
+                preserved->custom_prefix, -1, SQLITE_TRANSIENT
             );
-        } else {
-            sqlite3_bind_blob(
-                state->stmt_insert_profile, 4, zero_oid, GIT_OID_RAWSZ, SQLITE_STATIC
-            );
-        }
-
-        /* Lookup and bind preserved custom_prefix (or NULL if not set) */
-        const char *custom_prefix = (const char *) hashmap_get(prefix_map, profiles->items[i]);
-        if (custom_prefix) {
-            sqlite3_bind_text(state->stmt_insert_profile, 5, custom_prefix, -1, SQLITE_STATIC);
         } else {
             sqlite3_bind_null(state->stmt_insert_profile, 5);
         }
 
         rc = sqlite3_step(state->stmt_insert_profile);
         if (rc != SQLITE_DONE) {
-            hashmap_free(prefix_map, free);
-            hashmap_free(oid_map, free);
             return sqlite_error(state->db, "Failed to insert profile");
         }
     }
 
-    /* Free preservation maps */
-    hashmap_free(prefix_map, free);
-    hashmap_free(oid_map, free);
-
-    /* Update cache */
-    if (state->profiles) {
-        string_array_clear(state->profiles);
-    } else {
-        state->profiles = string_array_new(0);
-        if (!state->profiles) {
-            return ERROR(ERR_MEMORY, "Failed to allocate profiles array");
-        }
-    }
-
-    for (size_t i = 0; i < profiles->count; i++) {
-        err = string_array_push(state->profiles, profiles->items[i]);
-        if (err) return err;
-    }
-
-    state->profiles_loaded = true;
+    /* SQL now reflects the new set. Invalidate so the next peek reloads
+     * fresh rows in the new position order. */
+    invalidate_profile_entries(state);
     return NULL;
 }
 
@@ -2758,8 +2706,9 @@ error_t *state_load(git_repository *repo, state_t **out) {
     state->db = db;
     state->db_path = db_path;
     state->in_transaction = false;
-    state->profiles = NULL;
-    state->profiles_loaded = false;
+    state->profile_entries = NULL;
+    state->profile_entry_count = 0;
+    state->profile_entries_loaded = false;
 
     /* Prepare statements */
     err = prepare_statements(state);
@@ -2815,8 +2764,9 @@ error_t *state_open(git_repository *repo, state_t **out) {
     state->db = db;
     state->db_path = db_path;
     state->in_transaction = false;
-    state->profiles = NULL;
-    state->profiles_loaded = false;
+    state->profile_entries = NULL;
+    state->profile_entry_count = 0;
+    state->profile_entries_loaded = false;
 
     /* Prepare statements */
     err = prepare_statements(state);
@@ -2853,7 +2803,10 @@ error_t *state_open(git_repository *repo, state_t **out) {
 /**
  * Save state to repository
  *
- * Commits the transaction started by state_open().
+ * Commits the transaction started by state_open(). A state_empty() handle
+ * holds no DB connection; state_save() on such a handle is a no-op because
+ * state_empty() is only used by init_state(), which never writes profile
+ * rows before saving.
  *
  * @param repo Repository (must not be NULL)
  * @param state State to save (must not be NULL)
@@ -2863,14 +2816,11 @@ error_t *state_save(git_repository *repo, state_t *state) {
     CHECK_NULL(repo);
     CHECK_NULL(state);
 
-    error_t *err = NULL;
-
-    /* Case 1: State created with load_for_update() - just commit transaction */
     if (state->db && state->in_transaction) {
         char *errmsg = NULL;
         int rc = sqlite3_exec(state->db, "COMMIT;", NULL, NULL, &errmsg);
         if (rc != SQLITE_OK) {
-            err = ERROR(
+            error_t *err = ERROR(
                 ERR_STATE_INVALID, "Failed to commit transaction: %s",
                 errmsg ? errmsg : sqlite3_errstr(rc)
             );
@@ -2879,80 +2829,8 @@ error_t *state_save(git_repository *repo, state_t *state) {
         }
 
         state->in_transaction = false;
-        return NULL;
     }
 
-    /* Case 2: State created with state_empty() - need to open database and write */
-    if (!state->db) {
-        /* Get database path */
-        char *db_path = NULL;
-        err = get_db_path(repo, &db_path);
-        if (err) return err;
-
-        /* Open database (create if missing) */
-        sqlite3 *db = NULL;
-        err = open_db(db_path, true, &db);
-        if (err) {
-            free(db_path);
-            return err;
-        }
-
-        state->db = db;
-        state->db_path = db_path;
-
-        /* Prepare statements */
-        err = prepare_statements(state);
-        if (err) {
-            sqlite3_close(db);
-            state->db = NULL;
-            return err;
-        }
-
-        /* Begin transaction */
-        char *errmsg = NULL;
-        int rc = sqlite3_exec(db, "BEGIN IMMEDIATE;", NULL, NULL, &errmsg);
-        if (rc != SQLITE_OK) {
-            err = ERROR(
-                ERR_CONFLICT, "Failed to acquire write lock: %s",
-                errmsg ? errmsg : sqlite3_errstr(rc)
-            );
-            sqlite3_free(errmsg);
-            finalize_statements(state);
-            sqlite3_close(db);
-            state->db = NULL;
-            return err;
-        }
-
-        /* Write profiles if any */
-        if (state->profiles && state->profiles->count > 0) {
-            err = state_set_profiles(state, state->profiles);
-            if (err) {
-                sqlite3_exec(db, "ROLLBACK;", NULL, NULL, NULL);
-                finalize_statements(state);
-                sqlite3_close(db);
-                state->db = NULL;
-                return err;
-            }
-        }
-
-        /* Commit transaction */
-        rc = sqlite3_exec(db, "COMMIT;", NULL, NULL, &errmsg);
-        if (rc != SQLITE_OK) {
-            err = ERROR(
-                ERR_STATE_INVALID, "Failed to commit transaction: %s",
-                errmsg ? errmsg : sqlite3_errstr(rc)
-            );
-            sqlite3_free(errmsg);
-            finalize_statements(state);
-            sqlite3_close(db);
-            state->db = NULL;
-            return err;
-        }
-
-        return NULL;
-    }
-
-    /* Case 3: Database exists but no transaction active - nothing to do */
     return NULL;
 }
 
@@ -3010,6 +2888,12 @@ error_t *state_commit(state_t *state) {
 
 /**
  * Roll back a transaction started by state_begin()
+ *
+ * Invalidates the row cache defensively: mutation paths already invalidate
+ * before returning, so the cache should be consistent with the DB heading
+ * into rollback — but any future author who forgets the discipline would
+ * otherwise leave a stale cache behind. Invalidation is O(row_count) and
+ * the next peek repopulates from the rolled-back DB state.
  */
 void state_rollback(state_t *state) {
     if (!state || !state->db || !state->in_transaction) {
@@ -3018,6 +2902,7 @@ void state_rollback(state_t *state) {
 
     sqlite3_exec(state->db, "ROLLBACK;", NULL, NULL, NULL);
     state->in_transaction = false;
+    invalidate_profile_entries(state);
 }
 
 /**
@@ -3047,13 +2932,9 @@ error_t *state_empty(state_t **out) {
     state->db = NULL;
     state->db_path = NULL;
     state->in_transaction = false;
-    state->profiles = string_array_new(0);
-    state->profiles_loaded = true;  /* Empty array is loaded */
-
-    if (!state->profiles) {
-        free(state);
-        return ERROR(ERR_MEMORY, "Failed to allocate profiles array");
-    }
+    state->profile_entries = NULL;
+    state->profile_entry_count = 0;
+    state->profile_entries_loaded = true;  /* Zero rows is a valid loaded state */
 
     /* No database, no statements */
     state->stmt_insert_file = NULL;
@@ -3100,7 +2981,7 @@ void state_free(state_t *state) {
     }
 
     free(state->db_path);
-    string_array_free(state->profiles);
+    invalidate_profile_entries(state);
     free(state);
 }
 
@@ -3415,6 +3296,15 @@ error_t *state_set_file_state(
  * - manifest_rebuild (after syncing all entries)
  * - manifest_repair_stale (after repairing entries)
  *
+ * Cache discipline: this mutation patches the row cache *in place* rather
+ * than invalidating it. Only the commit_oid field of the matching row
+ * changes; name and custom_prefix allocations are preserved. Callers
+ * holding borrows obtained via state_peek_profile_prefix() or iterating
+ * state_peek_profiles()[i].name survive this call without reloading —
+ * see the lifetime contract in state.h. state_rollback remains the safety
+ * net: a rolled-back transaction discards the optimistic patch along with
+ * the uncommitted row.
+ *
  * @param state State (must not be NULL, must have active transaction)
  * @param profile Profile name (must not be NULL)
  * @param commit_oid New commit OID for profile HEAD (must not be NULL)
@@ -3456,57 +3346,18 @@ error_t *state_set_profile_commit_oid(
         );
     }
 
-    return NULL;
-}
-
-/**
- * Read a profile's stored commit_oid from enabled_profiles
- *
- * @param state State (must not be NULL)
- * @param profile Profile name (must not be NULL)
- * @param out_commit_oid Output: the stored commit OID (must not be NULL)
- * @return Error or NULL on success (ERR_NOT_FOUND if profile not in enabled_profiles)
- */
-error_t *state_get_profile_commit_oid(
-    const state_t *state,
-    const char *profile,
-    git_oid *out_commit_oid
-) {
-    CHECK_NULL(state);
-    CHECK_NULL(profile);
-    CHECK_NULL(out_commit_oid);
-
-    if (!state->db) {
-        return ERROR(
-            ERR_NOT_FOUND, "No database — profile '%s' not enabled",
-            profile
-        );
-    }
-
-    const char *sql = "SELECT commit_oid FROM enabled_profiles WHERE name = ?";
-
-    sqlite3_stmt *stmt = NULL;
-    int rc = sqlite3_prepare_v2(state->db, sql, -1, &stmt, NULL);
-    if (rc != SQLITE_OK) {
-        return sqlite_error(state->db, "Failed to prepare commit_oid query");
-    }
-
-    sqlite3_bind_text(stmt, 1, profile, -1, SQLITE_TRANSIENT);
-
-    rc = sqlite3_step(stmt);
-    if (rc != SQLITE_ROW) {
-        sqlite3_finalize(stmt);
-        if (rc == SQLITE_DONE) {
-            return ERROR(
-                ERR_NOT_FOUND, "Profile '%s' not found in enabled_profiles",
-                profile
-            );
+    /* In-place cache patch. Skipped when the cache isn't loaded yet — the
+     * next peek will read the updated row from the DB. Skipped when the
+     * profile is absent from the cache — the UPDATE matched zero rows, and
+     * cache and DB already agree (both have no entry for this name). */
+    if (state->profile_entries_loaded) {
+        for (size_t i = 0; i < state->profile_entry_count; i++) {
+            if (strcmp(state->profile_entries[i].name, profile) == 0) {
+                git_oid_cpy(&state->profile_entries[i].commit_oid, commit_oid);
+                break;
+            }
         }
-        return sqlite_error(state->db, "Failed to query commit_oid");
     }
-
-    memcpy(out_commit_oid->id, sqlite3_column_blob(stmt, 0), GIT_OID_RAWSZ);
-    sqlite3_finalize(stmt);
 
     return NULL;
 }

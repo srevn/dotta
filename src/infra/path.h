@@ -194,13 +194,15 @@ error_t *path_get_home(char **out);
  *   config (no slash)           -> ERROR: ambiguous (use ./config)
  *
  * @param input User-provided path string (must not be NULL)
- * @param custom_prefixes Custom prefixes to try (NULL = no custom prefixes)
+ * @param prefixes Borrowed custom-prefix strings (NULL if prefix_count == 0)
+ * @param prefix_count Number of entries in prefixes
  * @param out_storage_path Output in storage format (must not be NULL, caller must free)
  * @return Error or NULL on success
  */
 error_t *path_resolve_input(
     const char *input,
-    const string_array_t *custom_prefixes,
+    const char *const *prefixes,
+    size_t prefix_count,
     char **out_storage_path
 );
 
@@ -256,14 +258,16 @@ typedef struct {
  *
  * @param inputs User-provided path or pattern strings (can be NULL if count is 0)
  * @param count Number of inputs
- * @param custom_prefixes Custom prefixes for resolution (NULL = no custom prefixes)
+ * @param prefixes Borrowed custom-prefix strings (NULL if prefix_count == 0)
+ * @param prefix_count Number of entries in prefixes
  * @param out Path filter (must not be NULL, receives NULL if no filter)
  * @return Error or NULL on success
  */
 error_t *path_filter_create(
     char *const *inputs,
     size_t count,
-    const string_array_t *custom_prefixes,
+    const char *const *prefixes,
+    size_t prefix_count,
     path_filter_t **out
 );
 

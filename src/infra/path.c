@@ -700,7 +700,8 @@ static bool path_is_relative(const char *input) {
  */
 error_t *path_resolve_input(
     const char *input,
-    const string_array_t *custom_prefixes,
+    const char *const *prefixes,
+    size_t prefix_count,
     char **out_storage_path
 ) {
     CHECK_NULL(input);
@@ -814,21 +815,19 @@ error_t *path_resolve_input(
      * for symlinks), and the root fallback. classify picks the tightest
      * matching prefix — overlapping customs resolve by length, not by
      * enable order. */
-    size_t cap = (custom_prefixes ? custom_prefixes->count : 0) + 3;
+    size_t cap = prefix_count + 3;
     cands = calloc(cap, sizeof(*cands));
     if (!cands) {
         err = ERROR(ERR_MEMORY, "Failed to allocate classification candidates");
         goto cleanup;
     }
     size_t n = 0;
-    if (custom_prefixes) {
-        for (size_t i = 0; i < custom_prefixes->count; i++) {
-            const char *p = custom_prefixes->items[i];
-            if (p && p[0]) {
-                cands[n++] = (path_candidate_t){
-                    p, "custom", "custom prefix", PREFIX_CUSTOM
-                };
-            }
+    for (size_t i = 0; i < prefix_count; i++) {
+        const char *p = prefixes ? prefixes[i] : NULL;
+        if (p && p[0]) {
+            cands[n++] = (path_candidate_t){
+                p, "custom", "custom prefix", PREFIX_CUSTOM
+            };
         }
     }
     cands[n++] = (path_candidate_t){ home, "home", "HOME", PREFIX_HOME };
@@ -876,7 +875,8 @@ cleanup:
 error_t *path_filter_create(
     char *const *inputs,
     size_t count,
-    const string_array_t *custom_prefixes,
+    const char *const *prefixes,
+    size_t prefix_count,
     path_filter_t **out
 ) {
     CHECK_NULL(out);
@@ -959,7 +959,7 @@ error_t *path_filter_create(
 
         /* Case 2: Exact path - resolve and store in hashmap */
         char *resolved = NULL;
-        err = path_resolve_input(input, custom_prefixes, &resolved);
+        err = path_resolve_input(input, prefixes, prefix_count, &resolved);
         if (err) {
             err = error_wrap(err, "Invalid path '%s'", input);
             goto cleanup;

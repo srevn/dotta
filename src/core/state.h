@@ -158,6 +158,22 @@ typedef struct {
 } state_file_entry_t;
 
 /**
+ * Enabled profile entry
+ *
+ * One row from the enabled_profiles table, materialized as an in-memory record.
+ * The state handle holds a cached array of these entries that is populated lazily
+ * on first peek and invalidated whenever the table is mutated.
+ *
+ * Ownership: state handle owns the strings; callers that peek receive borrowed
+ * pointers valid until the next mutation (see state_peek_profiles).
+ */
+typedef struct {
+    char *name;              /* Profile name (owned) */
+    char *custom_prefix;     /* Custom deployment prefix (owned); NULL when unset */
+    git_oid commit_oid;      /* Last-synced HEAD OID (zero OID if never synced) */
+} state_profile_entry_t;
+
+/**
  * State directory entry
  */
 typedef struct {
@@ -435,51 +451,6 @@ error_t *state_disable_profile(
 );
 
 /**
- * Get custom prefix map
- *
- * Builds a hashmap of profile → custom_prefix for all enabled profiles
- * that have a custom prefix set (WHERE custom_prefix IS NOT NULL).
- *
- * Returns empty map if no custom prefixes exist (not an error).
- *
- * Map values are dynamically allocated strings (caller must free map with
- * hashmap_free(map, free) to free both keys and values).
- *
- * Performance: Single SQL query, O(N) where N = profiles with custom prefixes
- *
- * @param state State handle (must not be NULL)
- * @param out_map Output hashmap (caller must free with hashmap_free(..., free))
- * @return Error or NULL on success (empty map if no custom prefixes)
- */
-error_t *state_get_prefix_map(
-    const state_t *state,
-    hashmap_t **out_map
-);
-
-/**
- * Get custom prefix for a single profile
- *
- * Targeted single-row lookup for one profile's custom prefix.
- * Returns NULL via *out_prefix when the profile has no custom prefix
- * (standard home/root deployment), when the profile is not enabled,
- * or when the state has no database.
- *
- * Use this instead of state_get_prefix_map() when only one profile's
- * prefix is needed — avoids allocating and populating the full map.
- *
- * @param state State handle (must not be NULL)
- * @param profile Profile to query (must not be NULL)
- * @param out_prefix Output prefix string (must not be NULL; *out_prefix set to
- *                   NULL if no custom prefix, otherwise caller must free)
- * @return Error or NULL on success (NULL prefix is not an error)
- */
-error_t *state_get_profile_prefix(
-    const state_t *state,
-    const char *profile,
-    char **out_prefix
-);
-
-/**
  * Set enabled profiles (bulk operation)
  *
  * BULK API: For atomic profile list replacement (clone, reorder, interactive).
@@ -719,20 +690,70 @@ error_t *state_set_profile_commit_oid(
 );
 
 /**
- * Read a profile's stored commit_oid from enabled_profiles
+ * Peek the cached enabled_profiles rows
  *
- * Returns the last-synced HEAD OID for a profile. Used by stale detection
- * to compare stored vs current branch HEAD.
+ * Returns borrowed pointers to the in-memory row cache. Iteration order
+ * matches enabled_profiles.position (the user's precedence order).
+ *
+ * Lifetime — pointers into the row array and the strings it references
+ * (name, custom_prefix) remain valid until the next shape mutation on
+ * enabled_profiles:
+ *   - state_enable_profile
+ *   - state_disable_profile
+ *   - state_set_profiles
+ *   - state_rollback (any mutation could have happened in the transaction)
+ *   - state_free
+ *
+ * state_set_profile_commit_oid does NOT invalidate these borrows — it
+ * patches the commit_oid field of the matching row in place. The
+ * commit_oid *value* under a previously returned pointer may change as a
+ * result, but the pointer itself (and all name / custom_prefix pointers)
+ * stays valid.
+ *
+ * When the state has no database (state_empty), returns *out_entries = NULL,
+ * *out_count = 0.
  *
  * @param state State (must not be NULL)
- * @param profile Profile name (must not be NULL)
- * @param out_commit_oid Output OID (must not be NULL)
- * @return Error or NULL on success (ERR_NOT_FOUND if profile not enabled)
+ * @param out_entries Output: borrowed pointer to row array (must not be NULL)
+ * @param out_count Output: number of rows (must not be NULL)
+ * @return Error or NULL on success
  */
-error_t *state_get_profile_commit_oid(
+error_t *state_peek_profiles(
     const state_t *state,
-    const char *profile,
-    git_oid *out_commit_oid
+    const state_profile_entry_t **out_entries,
+    size_t *out_count
+);
+
+/**
+ * Peek a single profile's custom prefix
+ *
+ * Returns a borrowed pointer into the row cache. Same lifetime rules as
+ * state_peek_profiles.
+ *
+ * @param state State (must not be NULL)
+ * @param profile Profile name to look up (must not be NULL)
+ * @return Borrowed custom prefix string, or NULL when the profile has no
+ *         custom prefix, is not enabled, or the state has no database.
+ */
+const char *state_peek_profile_prefix(
+    const state_t *state,
+    const char *profile
+);
+
+/**
+ * Peek a single profile's stored commit_oid
+ *
+ * Returns a borrowed pointer into the row cache. Same lifetime rules as
+ * state_peek_profiles.
+ *
+ * @param state State (must not be NULL)
+ * @param profile Profile name to look up (must not be NULL)
+ * @return Borrowed commit OID, or NULL when the profile is not enabled or
+ *         the state has no database.
+ */
+const git_oid *state_peek_profile_commit_oid(
+    const state_t *state,
+    const char *profile
 );
 
 /**

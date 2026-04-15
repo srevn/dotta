@@ -627,13 +627,16 @@ static error_t *list_file_history(
 
     /* Load custom prefixes for path resolution (non-fatal) */
     string_array_t *prefixes STRING_ARRAY_CLEANUP = NULL;
-    error_t *prefix_err = profile_get_custom_prefixes(repo, NULL, NULL, &prefixes);
+    error_t *prefix_err = profile_load_custom_prefixes(repo, &prefixes);
     if (prefix_err) error_free(prefix_err);
 
     /* Resolve input path to storage format (handles absolute, tilde, relative,
      * and storage paths). File need not exist on disk. */
     char *storage_path = NULL;
-    error_t *err = path_resolve_input(opts->file_path, prefixes, &storage_path);
+    error_t *err = path_resolve_input(
+        opts->file_path, prefixes ? (const char *const *) prefixes->items : NULL,
+        prefixes ? prefixes->count : 0, &storage_path
+    );
     if (err) {
         return error_wrap(err, "Failed to resolve path '%s'", opts->file_path);
     }

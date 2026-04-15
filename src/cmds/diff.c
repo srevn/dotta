@@ -939,7 +939,6 @@ static error_t *diff_commit_to_workspace(
     git_tree *tree = NULL;
     manifest_t *manifest = NULL;
     metadata_t *metadata = NULL;
-    string_array_t *prefixes = NULL;
 
     /* Step 1: Resolve commit to find which profile contains it */
     err = resolve_commit_in_profiles(
@@ -987,20 +986,10 @@ static error_t *diff_commit_to_workspace(
         if (err) goto cleanup;
     }
 
-    /* Step 5: Build manifest from historical tree
-     * Query custom_prefix for the matched profile from state. */
-    const char *custom_prefix = NULL;
-    err = profile_get_custom_prefixes(
-        repo, state,
-        &(string_array_t){ .items = &profile, .count = 1 },
-        &prefixes
-    );
-    if (err) {
-        error_free(err);  /* Non-fatal — custom/ paths degrade gracefully */
-        err = NULL;
-    } else if (prefixes && prefixes->count > 0) {
-        custom_prefix = prefixes->items[0];
-    }
+    /* Step 5: Build manifest from historical tree.
+     * Borrow the profile's custom_prefix from the state row cache — stable
+     * for the duration of this call (no enabled_profiles mutation). */
+    const char *custom_prefix = state_peek_profile_prefix(state, profile);
 
     err = manifest_build_from_tree(tree, profile, custom_prefix, &manifest);
     if (err) {
@@ -1034,7 +1023,6 @@ static error_t *diff_commit_to_workspace(
     }
 
 cleanup:
-    string_array_free(prefixes);
     metadata_free(metadata);
     manifest_free(manifest);
     git_tree_free(tree);
@@ -1497,19 +1485,29 @@ error_t *cmd_diff(
 
     /* Create file filter from CLI arguments */
     if (opts->files && opts->file_count > 0) {
-        /* Collect custom prefixes from profiles for path resolution */
-        string_array_t *prefixes = NULL;
-        err = profile_get_custom_prefixes(
-            repo, state, active_profiles, &prefixes
-        );
-        if (err) {
-            err = error_wrap(err, "Failed to get custom prefixes");
+        /* Collect custom prefixes from active profiles via the row cache */
+        string_array_t *prefixes = string_array_new(0);
+        if (!prefixes) {
+            err = ERROR(ERR_MEMORY, "Failed to allocate prefixes array");
             goto cleanup;
+        }
+        for (size_t i = 0; i < active_profiles->count; i++) {
+            const char *pfx =
+                state_peek_profile_prefix(state, active_profiles->items[i]);
+            if (pfx) {
+                err = string_array_push(prefixes, pfx);
+                if (err) {
+                    string_array_free(prefixes);
+                    err = error_wrap(err, "Failed to collect custom prefix");
+                    goto cleanup;
+                }
+            }
         }
 
         err = path_filter_create(
             opts->files, opts->file_count,
-            prefixes, &file_filter
+            (const char *const *) prefixes->items, prefixes->count,
+            &file_filter
         );
         string_array_free(prefixes);
 

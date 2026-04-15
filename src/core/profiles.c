@@ -1053,18 +1053,8 @@ error_t *profile_discover_file(
             continue;
         }
 
-        char refname[DOTTA_REFNAME_MAX];
-        err = gitops_build_refname(
-            refname, sizeof(refname), "refs/heads/%s", branch
-        );
-        if (err) {
-            error_free(err);
-            err = NULL;
-            continue;
-        }
-
         git_tree *tree = NULL;
-        err = gitops_load_tree(repo, refname, &tree);
+        err = gitops_load_branch_tree(repo, branch, &tree, NULL);
         if (err) {
             error_free(err);
             err = NULL;

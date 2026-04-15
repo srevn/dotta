@@ -182,17 +182,8 @@ static error_t *check_file_in_tree(
     /* Lazy-load tree on first file-in-tree check for this profile.
      * Only set tree_loaded on success — failures allow retries. */
     if (!cached->tree_loaded) {
-        /* Resolve branch HEAD to tree */
-        char refname[DOTTA_REFNAME_MAX];
-        error_t *err = gitops_build_refname(
-            refname, sizeof(refname), "refs/heads/%s", profile
-        );
-        if (err) {
-            return err;
-        }
-
         git_tree *tree = NULL;
-        err = gitops_load_tree(repo, refname, &tree);
+        error_t *err = gitops_load_branch_tree(repo, profile, &tree, NULL);
         if (err) {
             return err;
         }

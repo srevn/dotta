@@ -291,16 +291,7 @@ static error_t *show_file(
         }
     } else {
         /* Load from branch HEAD */
-        char ref_name_buf[DOTTA_REFNAME_MAX];
-        err = gitops_build_refname(
-            ref_name_buf, sizeof(ref_name_buf), "refs/heads/%s", profile
-        );
-        if (err) {
-            err = error_wrap(err, "Invalid profile name '%s'", profile);
-            goto cleanup;
-        }
-
-        err = gitops_load_tree(repo, ref_name_buf, &tree);
+        err = gitops_load_branch_tree(repo, profile, &tree, NULL);
         if (err) {
             err = error_wrap(err, "Failed to load tree for profile '%s'", profile);
             goto cleanup;

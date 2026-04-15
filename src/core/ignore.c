@@ -272,20 +272,11 @@ static error_t *load_profile_dottaignore(
         return NULL;
     }
 
-    /* Build ref name */
-    char ref_name[DOTTA_REFNAME_MAX];
-    err = gitops_build_refname(
-        ref_name, sizeof(ref_name), "refs/heads/%s", profile
-    );
-    if (err) {
-        return error_wrap(err, "Invalid profile name '%s'", profile);
-    }
-
     /* Load tree from profile branch
      * Branch existence was verified above, so tree load failure
      * indicates a genuine error (I/O, corruption) not "branch missing" */
     git_tree *tree = NULL;
-    err = gitops_load_tree(repo, ref_name, &tree);
+    err = gitops_load_branch_tree(repo, profile, &tree, NULL);
     if (err) {
         return error_wrap(
             err, "Failed to load tree for profile '%s'",

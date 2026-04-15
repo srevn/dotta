@@ -172,94 +172,77 @@ error_t *path_expand_home(const char *path, char **out) {
 }
 
 /**
- * Extract relative path after stripping prefix
- *
- * Checks if absolute path starts with prefix (with proper boundary verification),
- * and extracts the relative part after the prefix.
+ * Return the relative part of `absolute` after stripping `prefix`, with
+ * path-component boundary verification (next character must be '/' or '\0').
  *
  * Boundary verification ensures prefix matches a complete path component:
  *   /home/user matches /home/user/.bashrc
  *   /home/user does NOT match /home/username/.bashrc
  *
  * Returns:
- *   >0 : Match succeeded, returns length of relative part, sets *out_relative
- *    0 : Prefix matched but relative part is empty (directory itself)
- *   -1 : No match (prefix doesn't match or boundary violation)
+ *   NULL    - prefix doesn't match or boundary violation
+ *   ""      - absolute == prefix exactly (points at '\0' in absolute)
+ *   "path"  - absolute is prefix/path (points into absolute)
+ *
+ * Returned pointer aliases into `absolute` and is valid for its lifetime.
  *
  * @param absolute Absolute filesystem path
  * @param prefix Prefix to match against
- * @param out_relative Output relative part (points into absolute, caller doesn't own)
- * @return Match status (see above)
  */
-static int extract_relative_after_prefix(
+static const char *path_relative_after_prefix(
     const char *absolute,
-    const char *prefix,
-    const char **out_relative
+    const char *prefix
 ) {
-    size_t prefix_len = strlen(prefix);
+    if (!absolute || !prefix) {
+        return NULL;
+    }
 
     /* Check if absolute starts with prefix */
-    if (!str_starts_with(absolute, prefix)) {
-        return -1;
+    size_t prefix_len = strlen(prefix);
+    if (strncmp(absolute, prefix, prefix_len) != 0) {
+        return NULL;
     }
 
     /* Verify boundary: next character must be '/' or '\0' */
     char boundary = absolute[prefix_len];
     if (boundary != '/' && boundary != '\0') {
-        return -1;  /* False match: /home/user vs /home/username */
+        return NULL;  /* False match: /home/user vs /home/username */
     }
 
     /* Extract relative part, skipping leading slash */
     const char *relative = absolute + prefix_len;
-    if (relative[0] == '/') {
+    if (*relative == '/') {
         relative++;
     }
 
-    /* Check if relative part is empty (would be storing directory itself) */
-    if (relative[0] == '\0') {
-        return 0;
-    }
-
-    *out_relative = relative;
-    return (int) strlen(relative);
+    return relative;  /* "" on exact match, non-empty otherwise */
 }
 
 /**
- * Detect if path is under HOME directory, considering both original
- * and canonicalized HOME (to handle symlinks).
+ * Return the relative part of `absolute` under HOME, considering both the
+ * original and canonicalized HOME directories (to handle symlinks).
  *
- * Returns:
- *   >0 : Match succeeded, returns length of relative part, sets *out_relative
- *    0 : Prefix matched but relative part is empty (directory itself)
- *   -1 : No match (prefix doesn't match or boundary violation)
+ * Returns the same three states as path_relative_after_prefix().
  *
  * @param absolute Absolute filesystem path
  * @param home Original HOME directory
  * @param home_canonical Canonicalized HOME (may be NULL or same as home)
- * @param out_relative Output relative part (points into absolute, caller doesn't own)
- * @return Match status (see above)
  */
-static int detect_home_prefix(
+static const char *detect_home_relative(
     const char *absolute,
     const char *home,
-    const char *home_canonical,
-    const char **out_relative
+    const char *home_canonical
 ) {
-    int match = extract_relative_after_prefix(absolute, home, out_relative);
-    if (match >= 0) {
-        return match;
+    const char *relative = path_relative_after_prefix(absolute, home);
+    if (relative) {
+        return relative;
     }
 
     if (home_canonical && strcmp(home_canonical, home) != 0) {
-        match = extract_relative_after_prefix(
-            absolute, home_canonical, out_relative
-        );
-        if (match >= 0) {
-            return match;
-        }
+        return path_relative_after_prefix(absolute, home_canonical);
     }
 
-    return -1;
+    return NULL;
 }
 
 /**
@@ -341,10 +324,7 @@ error_t *path_normalize_input(
             path_to_make_absolute = joined;
         } else {
             /* Absolute path: prepend prefix unless already under it */
-            const char *relative;
-            int match = extract_relative_after_prefix(path, custom_prefix, &relative);
-
-            if (match < 0) {
+            if (!path_relative_after_prefix(path, custom_prefix)) {
                 /* Not under prefix - prepend it (path is absolute within the virtual root) */
                 joined = str_format("%s%s", custom_prefix, path);
                 if (!joined) {
@@ -353,7 +333,7 @@ error_t *path_normalize_input(
                 }
                 path_to_make_absolute = joined;
             }
-            /* match >= 0: already under prefix, pass through unchanged */
+            /* Otherwise already under prefix, pass through unchanged */
         }
     }
 
@@ -412,9 +392,6 @@ error_t *path_to_storage(
     char *result = NULL;
     path_prefix_t detected_prefix;
 
-    const char *relative;
-    int match;
-
     /* Try custom prefix first when explicitly provided (user intent wins)
      *
      * path_normalize_input already resolved the path within the prefix context
@@ -426,11 +403,12 @@ error_t *path_to_storage(
      * stored locally under $HOME).
      */
     if (custom_prefix && custom_prefix[0] != '\0') {
-        match = extract_relative_after_prefix(
-            filesystem_path, custom_prefix, &relative
+        const char *relative = path_relative_after_prefix(
+            filesystem_path,
+            custom_prefix
         );
 
-        if (match > 0) {
+        if (relative && *relative) {
             /* Custom prefix matched - validate file exists */
             if (!fs_lexists(filesystem_path)) {
                 err = ERROR(ERR_NOT_FOUND, "File not found: %s", filesystem_path);
@@ -447,7 +425,7 @@ error_t *path_to_storage(
             detected_prefix = PREFIX_CUSTOM;
             goto validate;
 
-        } else if (match == 0) {
+        } else if (relative) {
             /* Custom prefix directory itself - not supported */
             err = ERROR(
                 ERR_INVALID_ARG, "Cannot store custom prefix directory itself"
@@ -472,9 +450,13 @@ error_t *path_to_storage(
         error_free(canon_err);
     }
 
-    match = detect_home_prefix(filesystem_path, home, home_canonical, &relative);
+    const char *home_relative = detect_home_relative(
+        filesystem_path,
+        home,
+        home_canonical
+    );
 
-    if (match > 0) {
+    if (home_relative && *home_relative) {
         /* HOME prefix matched with non-empty relative part */
         /* Validate file exists */
         if (!fs_lexists(filesystem_path)) {
@@ -482,7 +464,7 @@ error_t *path_to_storage(
             goto cleanup;
         }
 
-        result = str_format("home/%s", relative);
+        result = str_format("home/%s", home_relative);
         if (!result) {
             err = ERROR(ERR_MEMORY, "Failed to format home storage path");
             goto cleanup;
@@ -490,7 +472,7 @@ error_t *path_to_storage(
         detected_prefix = PREFIX_HOME;
         goto validate;
 
-    } else if (match == 0) {
+    } else if (home_relative) {
         /* HOME directory itself - not supported */
         err = ERROR(ERR_INVALID_ARG, "Cannot store HOME directory itself");
         goto cleanup;
@@ -503,19 +485,15 @@ error_t *path_to_storage(
         goto cleanup;
     }
 
-    /* Note: For root, we include the leading slash in the relative part */
-    relative = filesystem_path;
-    if (relative[0] == '/') {
-        relative++;  /* Skip leading slash for consistency */
-    }
-
-    /* Reject root directory itself (parallel to HOME directory rejection above) */
-    if (relative[0] == '\0') {
+    /* Empty prefix treats the filesystem root '/' as the boundary:
+     * "/etc/hosts" -> "etc/hosts", "/" -> "". */
+    const char *root_rel = path_relative_after_prefix(filesystem_path, "");
+    if (root_rel && *root_rel == '\0') {
         err = ERROR(ERR_INVALID_ARG, "Cannot store root directory itself");
         goto cleanup;
     }
 
-    result = str_format("root/%s", relative);
+    result = str_format("root/%s", root_rel);
     if (!result) {
         err = ERROR(ERR_MEMORY, "Failed to format root storage path");
         goto cleanup;
@@ -880,11 +858,11 @@ error_t *path_resolve_input(
             for (size_t i = 0; i < custom_prefixes->count; i++) {
                 if (!custom_prefixes->items[i]) continue;
 
-                const char *relative = NULL;
-                int match = extract_relative_after_prefix(
-                    normalized, custom_prefixes->items[i], &relative
+                const char *relative = path_relative_after_prefix(
+                    normalized,
+                    custom_prefixes->items[i]
                 );
-                if (match > 0) {
+                if (relative && *relative) {
                     /* Found a matching custom prefix - rebuild as custom/ */
                     char *new_path = str_format("custom/%s", relative);
                     if (!new_path) {
@@ -936,11 +914,11 @@ error_t *path_resolve_input(
             for (size_t i = 0; i < custom_prefixes->count; i++) {
                 if (!custom_prefixes->items[i]) continue;
 
-                const char *rel = NULL;
-                int cmatch = extract_relative_after_prefix(
-                    normalized, custom_prefixes->items[i], &rel
+                const char *rel = path_relative_after_prefix(
+                    normalized,
+                    custom_prefixes->items[i]
                 );
-                if (cmatch > 0) {
+                if (rel && *rel) {
                     /* Found a matching custom prefix */
                     storage_path = str_format("custom/%s", rel);
                     if (!storage_path) {
@@ -956,21 +934,19 @@ error_t *path_resolve_input(
 
         /* Try $HOME if no custom prefix matched */
         if (!storage_path) {
-            const char *relative_path = NULL;
-            int match = detect_home_prefix(
-                normalized, home, home_canonical, &relative_path
+            const char *relative_path = detect_home_relative(
+                normalized, home, home_canonical
             );
 
-            if (match >= 0) {
-                /* Under home directory (or is home directory itself) */
-                if (match == 0) {
-                    /* HOME directory itself - not allowed */
-                    err = ERROR(
-                        ERR_INVALID_ARG, "Cannot specify HOME directory itself"
-                    );
-                    goto cleanup;
-                }
+            if (relative_path && *relative_path == '\0') {
+                /* HOME directory itself - not allowed */
+                err = ERROR(
+                    ERR_INVALID_ARG, "Cannot specify HOME directory itself"
+                );
+                goto cleanup;
+            }
 
+            if (relative_path) {
                 /* Build storage path: home/... */
                 storage_path = str_format("home/%s", relative_path);
                 if (!storage_path) {

@@ -5,19 +5,15 @@
 #include "utils/hooks.h"
 
 #include <config.h>
-#include <errno.h>
-#include <fcntl.h>
-#include <signal.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/wait.h>
-#include <unistd.h>
 
 #include "base/error.h"
 #include "base/output.h"
 #include "base/string.h"
 #include "infra/path.h"
 #include "sys/filesystem.h"
+#include "sys/process.h"
 #include "utils/config.h"
 
 /* --- Internal types ------------------------------------------------------ */
@@ -45,14 +41,6 @@ typedef struct {
     size_t file_count;
     bool dry_run;
 } hook_context_t;
-
-/* Captured output and exit status from one hook invocation. Allocated
- * by hook_execute; freed by hook_result_free. */
-typedef struct {
-    int exit_code;
-    char *output;
-    bool aborted;
-} hook_result_t;
 
 /* --- Static dispatch tables --------------------------------------------- */
 
@@ -278,80 +266,42 @@ static void free_hook_env(char **env, size_t count) {
 }
 
 /**
- * Simple SIGALRM handler for hook timeout
- * Just needs to interrupt waitpid() - no action required
- */
-static void hook_timeout_handler(int sig) {
-    (void) sig;  /* Unused */
-    /* Handler does nothing - just interrupts waitpid() */
-}
-
-/**
- * Execute hook script with timeout and comprehensive error handling
+ * Execute hook script via the unified process primitive.
  *
- * Resource management:
- * - All resources initialized to safe values
- * - Single cleanup label ensures proper cleanup on all error paths
- * - Child process properly reaped even on timeout/error
+ * Builds the hook environment, then delegates fork/exec/timeout/reap
+ * to process_run(). Composes a domain-specific error from the result
+ * fields (exec failure, timeout, signal, non-zero exit). When the
+ * caller passes a non-NULL `result_out`, captured stdout/stderr is
+ * transferred into it for downstream printing on failure.
  *
- * Timeout behavior:
- * - Uses alarm() + SIGALRM to interrupt waitpid()
- * - On timeout: sends SIGTERM, waits 5s, then SIGKILL if needed
- * - Restores previous alarm and signal handler state
- *
- * Returns NULL on success or if hook is disabled/missing.
- * Returns error if hook fails or times out.
+ * Returns NULL on success or if the hook is disabled/missing.
+ * Returns error if the hook fails (exec, timeout, exit-code, signal)
+ * or if the primitive itself failed.
  */
 static error_t *hook_execute(
     const config_t *config,
     hook_type_t type,
     const hook_context_t *context,
-    hook_result_t **result
+    process_result_t *result_out
 ) {
     CHECK_NULL(config);
     CHECK_NULL(context);
 
-    /* Initialize result if requested */
-    if (result) {
-        *result = NULL;
-    }
-
-    /* Early check: hook enabled? */
     if (!hook_is_enabled(config, type)) {
         return NULL;  /* Disabled - skip silently */
     }
 
-    /*
-     * Initialize all resources to safe values
-     * This allows cleanup label to safely free/close everything
-     */
     char *hook_path = NULL;
     char **env = NULL;
     size_t env_count = 0;
-    int pipefd[2] = { -1, -1 };
-    char *output = NULL;
-    size_t output_size = 0;
-    size_t output_capacity = 0;
-    pid_t pid = -1;
-    hook_result_t *res = NULL;
     error_t *err = NULL;
-    struct sigaction sa_old, sa_new;
-    bool sigaction_installed = false;
-    unsigned int prev_alarm = 0;
 
-    /* Get hook script path */
     err = hook_get_path(config, type, &hook_path);
-    if (err) {
-        goto cleanup;
-    }
+    if (err) goto cleanup;
 
-    /* Check if hook script exists */
-    if (!fs_file_exists(hook_path)) {
-        /* Not an error - just doesn't exist */
-        goto cleanup;
-    }
+    /* Missing hook is not an error — silently skip. */
+    if (!fs_file_exists(hook_path)) goto cleanup;
 
-    /* Check if hook is executable */
     if (!fs_is_executable(hook_path)) {
         err = ERROR(
             ERR_PERMISSION,
@@ -360,7 +310,7 @@ static error_t *hook_execute(
         goto cleanup;
     }
 
-    /* Sanity check: prevent excessive file counts from creating huge environments */
+    /* Sanity check: bound DOTTA_FILE_N env explosion. */
     if (context->file_count > 10000) {
         err = ERROR(
             ERR_INVALID_ARG,
@@ -370,361 +320,76 @@ static error_t *hook_execute(
         goto cleanup;
     }
 
-    /* Build environment for hook */
     env = build_hook_env(context, &env_count);
     if (!env) {
         err = ERROR(ERR_MEMORY, "Failed to build environment for hook");
         goto cleanup;
     }
 
-    /* Create pipe for capturing hook output */
-    if (pipe(pipefd) == -1) {
+    char *argv[] = { hook_path, NULL };
+    process_spec_t spec = {
+        .argv              = argv,
+        .envp              = env,
+        .stdin_policy      = PROCESS_STDIN_DEVNULL,
+        .capture           = (result_out != NULL),
+        .stream_fd         = -1,
+        .work_dir          = NULL,
+        .work_dir_fallback = NULL,
+        .timeout_seconds   = config->hook_timeout > 0 ? config->hook_timeout : 0,
+        .pgrp_policy       = PROCESS_PGRP_NEW,
+    };
+
+    process_result_t result = { 0 };
+    err = process_run(&spec, &result);
+    if (err) {
+        process_result_dispose(&result);
+        goto cleanup;
+    }
+
+    /* Map result fields to a domain-specific error. exec_failed is
+     * checked first because it carries the most specific reason
+     * (errno from execve / chdir / dup2). The 126/127 special-cases
+     * present in the legacy implementation are intentionally absent:
+     * with exec_failed in place, those exit codes only signal the
+     * script's own internal failures, which fall through to the
+     * generic "exit code N" branch. */
+    if (result.exec_failed) {
         err = ERROR(
-            ERR_FS, "Failed to create pipe for hook output: %s",
-            strerror(errno)
+            ERR_INTERNAL, "Hook '%s' failed: exec error: %s",
+            hook_type_name(type), strerror(result.exec_errno)
         );
-        goto cleanup;
-    }
-
-    /* Set close-on-exec flags for security */
-    (void) fcntl(pipefd[0], F_SETFD, FD_CLOEXEC);
-    (void) fcntl(pipefd[1], F_SETFD, FD_CLOEXEC);
-
-    /* Fork to execute hook */
-    pid = fork();
-    if (pid == -1) {
-        err = ERROR(
-            ERR_FS, "Failed to fork for hook execution: %s",
-            strerror(errno)
-        );
-        goto cleanup;
-    }
-
-    if (pid == 0) {
-        /*
-         * Child process
-         * No cleanup needed here - execve replaces process
-         * If execve fails, _exit() terminates without cleanup
-         *
-         * Exit codes:
-         *   126 - Child setup failed (dup2, etc.)
-         *   127 - execve failed (hook not found, not executable, etc.)
-         */
-
-        /* Cancel any inherited alarms */
-        alarm(0);
-
-        /* Create new process group so timeout can kill all sub-processes */
-        setpgid(0, 0);
-
-        /* Redirect stdin to /dev/null to prevent hook from reading terminal */
-        int devnull = open("/dev/null", O_RDONLY);
-        if (devnull >= 0) {
-            if (dup2(devnull, STDIN_FILENO) == -1) {
-                /* stdin redirect failed - non-fatal, continue */
-                const char *msg = "dotta: warning: failed to redirect stdin\n";
-                (void) write(STDERR_FILENO, msg, strlen(msg));
-            }
-            close(devnull);
-        }
-
-        close(pipefd[0]);  /* Close read end */
-
-        /* Redirect stdout and stderr to pipe - critical for capturing hook output */
-        if (dup2(pipefd[1], STDOUT_FILENO) == -1) {
-            const char *msg = "dotta: error: failed to redirect stdout\n";
-            (void) write(STDERR_FILENO, msg, strlen(msg));
-            close(pipefd[1]);
-            _exit(126);
-        }
-        if (dup2(pipefd[1], STDERR_FILENO) == -1) {
-            /* stdout already redirected, write error there so parent captures it */
-            const char *msg = "dotta: error: failed to redirect stderr\n";
-            (void) write(STDOUT_FILENO, msg, strlen(msg));
-            close(pipefd[1]);
-            _exit(126);
-        }
-        close(pipefd[1]);
-
-        /* Close all inherited file descriptors to prevent leaks to hook */
-        long maxfd = sysconf(_SC_OPEN_MAX);
-        if (maxfd < 0 || maxfd > 65536) maxfd = 1024;
-        for (int fd = STDERR_FILENO + 1; fd < (int) maxfd; fd++) {
-            close(fd);
-        }
-
-        /* Execute hook with environment */
-        char *args[] = { hook_path, NULL };
-        execve(hook_path, args, env);
-
-        /* If execve returns, it failed */
-        perror("execve");
-        _exit(127);
-    }
-
-    /*
-     * Parent process continues
-     */
-
-    /* Ensure child's process group exists (races with child's setpgid) */
-    (void) setpgid(pid, pid);
-
-    /* Close write end of pipe (child owns it now) */
-    close(pipefd[1]);
-    pipefd[1] = -1;
-
-    /*
-     * The timeout must cover both the read phase (child generating output)
-     * and the wait phase (child doing work after closing output)
-     */
-    if (config->hook_timeout > 0) {
-        /* Install signal handler for timeout */
-        memset(&sa_new, 0, sizeof(sa_new));
-        sa_new.sa_handler = hook_timeout_handler;
-        sigemptyset(&sa_new.sa_mask);
-        sa_new.sa_flags = 0;  /* No SA_RESTART - we want EINTR */
-
-        if (sigaction(SIGALRM, &sa_new, &sa_old) == 0) {
-            sigaction_installed = true;
-        }
-
-        /* Start timeout countdown NOW (before reading) */
-        prev_alarm = alarm((unsigned int) config->hook_timeout);
-    }
-
-    /* Allocate buffer for reading hook output */
-    output_capacity = 4096;
-    output = malloc(output_capacity);
-    if (!output) {
-        err = ERROR(ERR_MEMORY, "Failed to allocate buffer for hook output");
-        goto cleanup;
-    }
-
-    /*
-     * Read output from pipe
-     * This may be interrupted by SIGALRM if hook times out during output
-     */
-    ssize_t n;
-    char buf[1024];
-    while ((n = read(pipefd[0], buf, sizeof(buf))) > 0) {
-        /* Expand buffer if needed */
-        if (output_size + (size_t) n + 1 > output_capacity) {
-            output_capacity *= 2;
-            char *new_output = realloc(output, output_capacity);
-            if (!new_output) {
-                err = ERROR(ERR_MEMORY, "Failed to resize hook output buffer");
-                goto cleanup;
-            }
-            output = new_output;
-        }
-        memcpy(output + output_size, buf, (size_t) n);
-        output_size += (size_t) n;
-    }
-
-    /*
-     * Check why read loop exited
-     * - n == 0: EOF (child closed its output normally)
-     * - n == -1 && errno == EINTR: Timeout during read
-     * - n == -1 && errno != EINTR: Read error
-     */
-    bool timed_out = false;
-    if (n == -1) {
-        if (errno == EINTR) {
-            /* Timeout occurred during read phase */
-            timed_out = true;
-        } else {
-            /* Real I/O error */
-            err = ERROR(
-                ERR_FS, "Failed to read hook output: %s",
-                strerror(errno)
-            );
-            goto cleanup;
-        }
-    }
-
-    /* Close read end of pipe */
-    close(pipefd[0]);
-    pipefd[0] = -1;
-
-    /* Null-terminate output */
-    output[output_size] = '\0';
-
-    /*
-     * Handle timeout or wait for child to complete
-     */
-    int status = 0;
-
-    if (timed_out) {
-        /*
-         * Hook timed out during read phase
-         * Kill child's process group and reap it
-         */
-        kill(-pid, SIGTERM);
-
-        /* Give it 5 seconds to exit gracefully */
-        alarm(5);
-        if (waitpid(pid, &status, 0) == -1) {
-            /* Still won't die - use SIGKILL on entire group */
-            kill(-pid, SIGKILL);
-            alarm(0);
-            waitpid(pid, &status, 0);  /* Must reap zombie */
-        }
-        alarm(0);
-
-        pid = -1;  /* Process reaped */
+    } else if (result.timed_out) {
         err = ERROR(
             ERR_INTERNAL, "Hook '%s' exceeded timeout of %d seconds",
             hook_type_name(type), config->hook_timeout
         );
-        goto cleanup;
+    } else if (result.signal_num) {
+        err = ERROR(
+            ERR_INTERNAL, "Hook '%s' terminated by signal %d",
+            hook_type_name(type), result.signal_num
+        );
+    } else if (result.exit_code != 0) {
+        err = ERROR(
+            ERR_INTERNAL, "Hook '%s' failed with exit code %d",
+            hook_type_name(type), result.exit_code
+        );
     }
 
-    /*
-     * Read completed normally (no timeout yet)
-     * Now wait for child to exit (alarm still active if configured)
-     */
-    if (config->hook_timeout > 0) {
-        /* Alarm is still counting - wait may be interrupted */
-        if (waitpid(pid, &status, 0) == -1) {
-            if (errno == EINTR) {
-                /* Timeout occurred during wait phase */
-                kill(-pid, SIGTERM);
-
-                alarm(5);
-                if (waitpid(pid, &status, 0) == -1) {
-                    kill(-pid, SIGKILL);
-                    alarm(0);
-                    waitpid(pid, &status, 0);
-                }
-                alarm(0);
-
-                pid = -1;
-                err = ERROR(
-                    ERR_INTERNAL,
-                    "Hook '%s' exceeded timeout of %d seconds",
-                    hook_type_name(type), config->hook_timeout
-                );
-                goto cleanup;
-            } else {
-                /* Other error */
-                err = ERROR(
-                    ERR_FS, "Failed to wait for hook process: %s",
-                    strerror(errno)
-                );
-                goto cleanup;
-            }
-        }
-
-        /* Success - fall through to cleanup which will restore signal handler */
-    } else {
-        /* No timeout configured - simple wait */
-        if (waitpid(pid, &status, 0) == -1) {
-            err = ERROR(
-                ERR_FS, "Failed to wait for hook process: %s",
-                strerror(errno)
-            );
-            goto cleanup;
-        }
+    /* Transfer ownership to caller if requested. Move the whole
+     * struct so the caller observes captured output even on failure
+     * (printed via print_hook_output). The local `result` is
+     * disposed afterwards; with output set NULL, dispose is a
+     * no-op on the buffer. */
+    if (result_out) {
+        *result_out = result;
+        result.output = NULL;
     }
-
-    pid = -1;  /* Process reaped */
-
-    /* Check exit status */
-    int exit_code;
-    if (WIFEXITED(status)) {
-        exit_code = WEXITSTATUS(status);
-    } else if (WIFSIGNALED(status)) {
-        exit_code = 128 + WTERMSIG(status);
-    } else {
-        exit_code = 1;
-    }
-
-    /* Create result structure if requested */
-    if (result) {
-        res = calloc(1, sizeof(hook_result_t));
-        if (res) {
-            res->exit_code = exit_code;
-            res->output = output;
-            res->aborted = (exit_code != 0);
-            *result = res;
-            output = NULL;  /* Ownership transferred to result */
-        } else {
-            err = ERROR(ERR_MEMORY, "Failed to allocate hook result");
-            goto cleanup;
-        }
-    }
-
-    /* Return error if hook failed */
-    if (exit_code != 0) {
-        if (exit_code == 126) {
-            err = ERROR(
-                ERR_INTERNAL,
-                "Hook '%s' failed: child process setup error (exit code %d)",
-                hook_type_name(type), exit_code
-            );
-        } else if (exit_code == 127) {
-            err = ERROR(
-                ERR_INTERNAL,
-                "Hook '%s' failed: command not found or not executable (exit code %d)",
-                hook_type_name(type), exit_code
-            );
-        } else {
-            err = ERROR(
-                ERR_INTERNAL,
-                "Hook '%s' failed with exit code %d",
-                hook_type_name(type), exit_code
-            );
-        }
-        goto cleanup;
-    }
+    process_result_dispose(&result);
 
 cleanup:
-    /* Cancel alarm and restore signal handler */
-    if (config->hook_timeout > 0) {
-        alarm(0);
-        if (sigaction_installed) {
-            sigaction(SIGALRM, &sa_old, NULL);
-        }
-        /* Best-effort restore of any previous alarm */
-        if (prev_alarm > 0) {
-            alarm(prev_alarm);
-        }
-    }
-
-    /* Close any open file descriptors */
-    if (pipefd[0] >= 0) close(pipefd[0]);
-    if (pipefd[1] >= 0) close(pipefd[1]);
-
-    /* Reap child if still running */
-    if (pid > 0) {
-        kill(-pid, SIGKILL);
-        waitpid(pid, NULL, 0);
-    }
-
-    /* Free memory */
-    if (env) {
-        free_hook_env(env, env_count);
-    }
+    if (env) free_hook_env(env, env_count);
     free(hook_path);
-
-    /* Free output only if not transferred to result */
-    if (output && !res) {
-        free(output);
-    }
-
     return err;
-}
-
-/**
- * Free hook result
- */
-static void hook_result_free(hook_result_t *result) {
-    if (!result) {
-        return;
-    }
-
-    free(result->output);
-    free(result);
 }
 
 /**
@@ -761,7 +426,7 @@ static hook_type_t post_type_for(hook_cmd_t cmd) {
 }
 
 static void print_hook_output(
-    output_ctx_t *out, const hook_result_t *result
+    output_ctx_t *out, const process_result_t *result
 ) {
     if (result && result->output && result->output[0]) {
         output_print(
@@ -772,15 +437,14 @@ static void print_hook_output(
 
 /**
  * Stack-build a context from the invocation, resolve the repo_dir, and
- * execute the hook. On any return path, *out_result may be NULL or a
- * valid result struct — caller owns it either way and must free with
- * hook_result_free().
+ * execute the hook. The caller stack-allocates `out_result` and is
+ * responsible for calling process_result_dispose() on every path.
  */
 static error_t *hook_fire(
     const config_t *config,
     const hook_invocation_t *inv,
     hook_type_t type,
-    hook_result_t **out_result
+    process_result_t *out_result
 ) {
     char *repo_dir = NULL;
     error_t *err = config_get_repo_dir(config, &repo_dir);
@@ -808,15 +472,15 @@ error_t *hook_fire_pre(
     CHECK_NULL(config);
     CHECK_NULL(inv);
 
-    hook_result_t *result = NULL;
+    process_result_t result = { 0 };
     error_t *err = hook_fire(config, inv, pre_type_for(inv->cmd), &result);
 
     if (err) {
-        print_hook_output(out, result);
-        hook_result_free(result);
+        print_hook_output(out, &result);
+        process_result_dispose(&result);
         return error_wrap(err, "Pre-%s hook failed", cmd_name(inv->cmd));
     }
-    hook_result_free(result);
+    process_result_dispose(&result);
     return NULL;
 }
 
@@ -828,7 +492,7 @@ void hook_fire_post(
     if (!config || !inv) return;
     if (inv->dry_run) return;
 
-    hook_result_t *result = NULL;
+    process_result_t result = { 0 };
     error_t *err = hook_fire(config, inv, post_type_for(inv->cmd), &result);
 
     if (err) {
@@ -836,8 +500,8 @@ void hook_fire_post(
             out, OUTPUT_NORMAL, "Post-%s hook failed: %s",
             cmd_name(inv->cmd), error_message(err)
         );
-        print_hook_output(out, result);
+        print_hook_output(out, &result);
         error_free(err);
     }
-    hook_result_free(result);
+    process_result_dispose(&result);
 }

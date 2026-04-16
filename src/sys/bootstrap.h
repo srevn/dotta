@@ -36,17 +36,6 @@ typedef struct {
 } bootstrap_context_t;
 
 /**
- * Bootstrap execution result
- *
- * Note: Output is printed directly to stdout/stderr in real-time during
- * execution. This struct only captures the exit status for programmatic use.
- */
-typedef struct {
-    int exit_code;                  /* Exit code from bootstrap script */
-    bool failed;                    /* Whether bootstrap failed */
-} bootstrap_result_t;
-
-/**
  * Check if bootstrap script exists for profile
  *
  * @param repo Repository (must not be NULL)
@@ -110,7 +99,9 @@ error_t *bootstrap_read_content(
 /**
  * Execute bootstrap script with environment
  *
- * Runs the bootstrap script with proper environment variables.
+ * Runs the bootstrap script with proper environment variables. Output
+ * streams to dotta's stdout in real time. Stdin is inherited so the
+ * script may prompt the user.
  *
  * Working directory: $HOME if accessible, otherwise repository root.
  * This provides a natural context for bootstrap operations (installing
@@ -124,15 +115,19 @@ error_t *bootstrap_read_content(
  * - DOTTA_DRY_RUN: "1" if dry-run, "0" otherwise
  * - HOME: User home directory (inherited)
  *
+ * Process group is shared with dotta so terminal-driven SIGINT
+ * (Ctrl+C) reaches both, killing them together.
+ *
  * @param script_path Path to bootstrap script (must not be NULL)
  * @param context Execution context (must not be NULL)
- * @param result Optional result struct (can be NULL)
+ * @param exit_code_out Optional out parameter for child exit code
+ *                      (set even on returned error). May be NULL.
  * @return Error or NULL on success
  */
 error_t *bootstrap_execute(
     const char *script_path,
     const bootstrap_context_t *context,
-    bootstrap_result_t **result
+    int *exit_code_out
 );
 
 /**
@@ -156,12 +151,5 @@ error_t *bootstrap_run_for_profiles(
     bool dry_run,
     bool stop_on_error
 );
-
-/**
- * Free bootstrap result
- *
- * @param result Result to free (can be NULL)
- */
-void bootstrap_result_free(bootstrap_result_t *result);
 
 #endif /* DOTTA_BOOTSTRAP_H */

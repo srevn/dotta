@@ -6,16 +6,10 @@
 
 #include <ctype.h>
 #include <errno.h>
-#include <fcntl.h>
-#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/select.h>
 #include <sys/stat.h>
-#include <sys/time.h>
-#include <sys/wait.h>
-#include <time.h>
 #include <unistd.h>
 
 #include "base/array.h"
@@ -23,17 +17,10 @@
 #include "base/error.h"
 #include "base/string.h"
 #include "sys/gitops.h"
-
-/* Exit codes for bootstrap script execution */
-#define EXIT_CODE_TIMEOUT 124              /* Standard timeout exit code */
-#define EXIT_CODE_CANNOT_EXECUTE 126       /* Command invoked cannot execute */
-#define EXIT_CODE_NOT_FOUND 127            /* Command not found */
+#include "sys/process.h"
 
 /* Bootstrap execution timeout (10 minutes) */
 #define BOOTSTRAP_TIMEOUT_SECONDS 600
-
-/* Poll interval for timeout checks (500ms) */
-#define TIMEOUT_POLL_INTERVAL_MS 500
 
 /**
  * Validate script name to prevent path traversal
@@ -560,9 +547,7 @@ static char **build_bootstrap_env(const bootstrap_context_t *context, size_t *en
 cleanup_error:
     /* Free all allocated strings on error */
     for (size_t i = 0; i < count; i++) {
-        if (env[i]) {
-            free(env[i]);
-        }
+        if (env[i]) free(env[i]);
     }
     free(env);
     *env_count = 0;
@@ -584,31 +569,25 @@ static void free_bootstrap_env(char **env, size_t count) {
 }
 
 /**
- * Execute bootstrap script with environment
+ * Execute bootstrap script via the unified process primitive.
  *
- * Executes a bootstrap script from a temporary file. The script is expected
- * to have already been extracted and validated by bootstrap_extract_to_temp().
- *
- * Working directory: $HOME if accessible, otherwise repository root (repo_dir).
- * This provides a natural context for bootstrap operations (package installation,
- * user environment setup) while ensuring robustness in edge cases.
- *
- * Environment: DOTTA_REPO_DIR, DOTTA_PROFILE, DOTTA_PROFILES, DOTTA_DRY_RUN
- *
- * @param script_path Path to bootstrap script (must not be NULL)
- * @param context Execution context (must not be NULL)
- * @param result Optional result struct (can be NULL)
- * @return Error or NULL on success
+ * Builds the bootstrap environment, then delegates fork/exec/timeout/reap
+ * to process_run(). Composes a domain-specific error from the result
+ * fields. The exit code (when produced) is returned via the optional
+ * out parameter regardless of whether the call succeeds or fails.
  */
 error_t *bootstrap_execute(
     const char *script_path,
     const bootstrap_context_t *context,
-    bootstrap_result_t **result
+    int *exit_code_out
 ) {
     CHECK_NULL(script_path);
     CHECK_NULL(context);
 
-    /* Build environment */
+    if (exit_code_out) {
+        *exit_code_out = 0;
+    }
+
     size_t env_count = 0;
     char **env = build_bootstrap_env(context, &env_count);
     if (!env) {
@@ -617,280 +596,63 @@ error_t *bootstrap_execute(
         );
     }
 
-    /* Create pipes for capturing output */
-    int pipefd[2];
-    if (pipe(pipefd) == -1) {
-        free_bootstrap_env(env, env_count);
-        return ERROR(ERR_FS, "Failed to create pipe for bootstrap output");
-    }
+    char *argv[] = { (char *) script_path, NULL };
+    process_spec_t spec = {
+        .argv              = argv,
+        .envp              = env,
+        .stdin_policy      = PROCESS_STDIN_INHERIT,
+        .capture           = false,
+        .stream_fd         = STDOUT_FILENO,
+        .work_dir          = getenv("HOME"),
+        .work_dir_fallback = context->repo_dir,
+        .timeout_seconds   = BOOTSTRAP_TIMEOUT_SECONDS,
+        .pgrp_policy       = PROCESS_PGRP_SHARED,
+    };
 
-    /* Working directory is repo root (not profile subdirectory) */
-    const char *work_dir = context->repo_dir;
+    /* Flush our own buffered prints (e.g., the "[N/M] Running…" line)
+     * so they reach stdout before the child's raw write() chunks land
+     * on the same fd. Without this, redirected stdout interleaves the
+     * child's output ahead of our progress line. */
+    fflush(stdout);
 
-    /* Fork and execute bootstrap */
-    pid_t pid = fork();
-    if (pid == -1) {
-        close(pipefd[0]);
-        close(pipefd[1]);
-        free_bootstrap_env(env, env_count);
-        return ERROR(ERR_FS, "Failed to fork for bootstrap execution");
-    }
-
-    if (pid == 0) {
-        /* Child process */
-        close(pipefd[0]); /* Close read end */
-
-        /* Redirect stdout and stderr to pipe */
-        if (dup2(pipefd[1], STDOUT_FILENO) < 0 ||
-            dup2(pipefd[1], STDERR_FILENO) < 0) {
-            /* Cannot use ERROR() here - we're in child process.
-             * Write directly to stderr before it's potentially redirected. */
-            const char *msg = "Error: Failed to redirect output\n";
-            (void) write(STDERR_FILENO, msg, strlen(msg));
-            _exit(EXIT_CODE_CANNOT_EXECUTE);
-        }
-        close(pipefd[1]);
-
-        /* Close all inherited file descriptors to prevent leaking
-         * parent's libgit2/SQLite handles to the bootstrap script */
-        int max_fd = (int) sysconf(_SC_OPEN_MAX);
-        if (max_fd < 0) max_fd = 1024;
-        for (int fd = 3; fd < max_fd; fd++) {
-            close(fd);
-        }
-
-        /* Change to working directory: HOME (preferred) or repo root (fallback)
-         *
-         * Rationale: Bootstrap scripts typically install packages, configure
-         * user environment, and create directories - operations that naturally
-         * assume $HOME as the starting point. If $HOME is unavailable (rare
-         * edge case: daemon context, broken environment), fall back to repo
-         * root for maximum robustness. */
-        const char *home = getenv("HOME");
-
-        if (home && chdir(home) == 0) {
-            /* Working from HOME - natural for bootstrap operations */
-        } else if (work_dir && chdir(work_dir) == 0) {
-            /* Fallback to repo root - guaranteed to exist */
-            /* Inform script about fallback by printing to stderr */
-            const char *msg = "Warning: HOME unavailable, using repository directory\n";
-            (void) write(STDERR_FILENO, msg, strlen(msg));
-        } else {
-            /* Critical: both HOME and repo_dir failed */
-            const char *msg = "Error: Failed to change to working directory\n";
-            (void) write(STDERR_FILENO, msg, strlen(msg));
-            _exit(EXIT_CODE_CANNOT_EXECUTE);
-        }
-
-        /* Execute bootstrap with environment */
-        char *args[] = { (char *) script_path, NULL };
-        execve(script_path, args, env);
-
-        /* If execve returns, it failed */
-        _exit(EXIT_CODE_NOT_FOUND);
-    }
-
-    /* Parent process */
-    close(pipefd[1]); /* Close write end */
-
-    /* Set pipe to non-blocking mode for timeout support */
-    int flags = fcntl(pipefd[0], F_GETFL, 0);
-    if (flags >= 0) {
-        fcntl(pipefd[0], F_SETFL, flags | O_NONBLOCK);
-    }
-
-    /* Track elapsed time for timeout (monotonic clock immune to NTP/clock adjustments) */
-    struct timespec start_time, current_time;
-    clock_gettime(CLOCK_MONOTONIC, &start_time);
-
-    ssize_t n;
-    char buf[8192];
-    int status = 0;                 /* Shared status variable for all wait paths */
-    bool timed_out = false;
-    bool process_exited = false;
-    bool process_reaped = false;    /* Track if process already reaped via waitpid */
-
-    while (!process_exited) {
-        /* Check for timeout */
-        clock_gettime(CLOCK_MONOTONIC, &current_time);
-        long elapsed_seconds = current_time.tv_sec - start_time.tv_sec;
-
-        if (elapsed_seconds >= BOOTSTRAP_TIMEOUT_SECONDS) {
-            timed_out = true;
-            fprintf(
-                stderr, "\nWarning: Bootstrap script exceeded timeout (%d seconds)\n",
-                BOOTSTRAP_TIMEOUT_SECONDS
-            );
-
-            /* Try graceful termination first */
-            kill(pid, SIGTERM);
-            sleep(2);
-
-            /* Check if process terminated */
-            pid_t wait_result = waitpid(pid, &status, WNOHANG);
-            if (wait_result > 0) {
-                /* Process reaped successfully */
-                process_reaped = true;
-            } else if (wait_result == 0) {
-                /* Still running - force kill */
-                fprintf(stderr, "Warning: Forcefully terminating bootstrap script\n");
-                kill(pid, SIGKILL);
-            }
-            /* If wait_result < 0, error will be caught by final wait below */
-            break;
-        }
-
-        /* Use select() to wait for data with timeout */
-        fd_set read_fds;
-        FD_ZERO(&read_fds);
-        FD_SET(pipefd[0], &read_fds);
-
-        /* Calculate remaining time until timeout deadline */
-        double remaining_seconds = BOOTSTRAP_TIMEOUT_SECONDS - elapsed_seconds;
-
-        struct timeval timeout;
-        if (remaining_seconds > 0) {
-            timeout.tv_sec = (long) remaining_seconds;
-            timeout.tv_usec = (long) ((remaining_seconds - timeout.tv_sec) * 1000000);
-        } else {
-            /* Should be caught by timeout check above, but handle defensively */
-            timeout.tv_sec = 0;
-            timeout.tv_usec = 1000;  /* 1ms minimum */
-        }
-
-        int select_result = select(pipefd[0] + 1, &read_fds, NULL, NULL, &timeout);
-
-        if (select_result < 0) {
-            if (errno == EINTR) {
-                continue;  /* Interrupted by signal, retry */
-            }
-            /* Real error */
-            fprintf(stderr, "Warning: select() failed: %s\n", strerror(errno));
-            break;
-        }
-
-        if (select_result == 0) {
-            /* Timeout - check if process is still running */
-            pid_t wait_result = waitpid(pid, &status, WNOHANG);
-            if (wait_result == pid) {
-                /* Process exited */
-                process_reaped = true;
-                process_exited = true;
-                break;
-            } else if (wait_result < 0) {
-                /* waitpid error */
-                break;
-            }
-            /* Otherwise, continue waiting */
-            continue;
-        }
-
-        /* Data available - read it */
-        n = read(pipefd[0], buf, sizeof(buf));
-        if (n < 0) {
-            if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                /* No data available right now */
-                continue;
-            }
-            if (errno == EINTR) {
-                continue;  /* Interrupted, retry */
-            }
-            /* Real error */
-            fprintf(
-                stderr, "Warning: Error reading bootstrap output: %s\n",
-                strerror(errno)
-            );
-            break;
-        }
-
-        if (n == 0) {
-            /* EOF - child process closed the pipe */
-            break;
-        }
-
-        /* Print output in real-time */
-        (void) write(STDOUT_FILENO, buf, (size_t) n);
-    }
-    close(pipefd[0]);
-
-    /* Wait for child process to fully terminate */
-    int exit_code = 0;
-    bool was_signaled = false;
-    int signal_num = 0;
-
-    if (!process_reaped) {
-        /* Process not yet reaped - do blocking wait */
-        int wait_result = waitpid(pid, &status, 0);
-        if (wait_result == -1) {
-            free_bootstrap_env(env, env_count);
-            if (timed_out) {
-                return ERROR(
-                    ERR_FS, "Bootstrap script timed out and failed to terminate"
-                );
-            } else {
-                return ERROR(
-                    ERR_FS, "Failed to wait for bootstrap process"
-                );
-            }
-        }
-    }
-
-    if (timed_out) {
-        /* Mark as timeout error */
-        exit_code = EXIT_CODE_TIMEOUT;
-    } else {
-        /* Check exit status - handle both normal exit and signal termination */
-        if (WIFEXITED(status)) {
-            /* Normal exit */
-            exit_code = WEXITSTATUS(status);
-        } else if (WIFSIGNALED(status)) {
-            /* Terminated by signal */
-            was_signaled = true;
-            signal_num = WTERMSIG(status);
-            exit_code = 128 + signal_num;  /* Standard convention */
-        } else {
-            /* Unknown termination */
-            exit_code = 1;
-        }
-    }
-
-    /* Create result if requested */
-    if (result) {
-        bootstrap_result_t *res = calloc(1, sizeof(bootstrap_result_t));
-        if (res) {
-            res->exit_code = exit_code;
-            res->failed = (exit_code != 0);
-            *result = res;
-        }
-    }
-
-    /* Cleanup */
+    process_result_t result = { 0 };
+    error_t *err = process_run(&spec, &result);
     free_bootstrap_env(env, env_count);
 
-    /* Return error if bootstrap failed */
-    if (exit_code != 0) {
-        if (timed_out) {
-            return ERROR(
-                ERR_INTERNAL,
-                "Bootstrap script exceeded timeout (%d seconds)",
-                BOOTSTRAP_TIMEOUT_SECONDS
-            );
-        } else if (was_signaled) {
-            return ERROR(
-                ERR_INTERNAL,
-                "Bootstrap script terminated by signal %d",
-                signal_num
-            );
-        } else {
-            return ERROR(
-                ERR_INTERNAL,
-                "Bootstrap script failed with exit code %d",
-                exit_code
-            );
-        }
+    if (exit_code_out) {
+        *exit_code_out = result.exit_code;
     }
 
-    return NULL;
+    if (err) {
+        process_result_dispose(&result);
+        return err;
+    }
+
+    error_t *script_err = NULL;
+    if (result.exec_failed) {
+        script_err = ERROR(
+            ERR_INTERNAL, "Failed to exec bootstrap script: %s",
+            strerror(result.exec_errno)
+        );
+    } else if (result.timed_out) {
+        script_err = ERROR(
+            ERR_INTERNAL, "Bootstrap script exceeded timeout (%d seconds)",
+            BOOTSTRAP_TIMEOUT_SECONDS
+        );
+    } else if (result.signal_num) {
+        script_err = ERROR(
+            ERR_INTERNAL, "Bootstrap script terminated by signal %d",
+            result.signal_num
+        );
+    } else if (result.exit_code != 0) {
+        script_err = ERROR(
+            ERR_INTERNAL, "Bootstrap script failed with exit code %d",
+            result.exit_code
+        );
+    }
+
+    process_result_dispose(&result);
+    return script_err;
 }
 
 /**
@@ -1018,8 +780,8 @@ error_t *bootstrap_run_for_profiles(
         };
 
         /* Execute bootstrap */
-        bootstrap_result_t *result = NULL;
-        err = bootstrap_execute(temp_path, &ctx, &result);
+        int exit_code = 0;
+        err = bootstrap_execute(temp_path, &ctx, &exit_code);
 
         /* Clean up temporary file */
         if (temp_path) {
@@ -1029,19 +791,13 @@ error_t *bootstrap_run_for_profiles(
 
         if (err) {
             printf("  ✗ Failed");
-
-            /* Show exit code if available from result */
-            if (result && result->exit_code != 0) {
-                printf(" (exit code %d)", result->exit_code);
+            if (exit_code != 0) {
+                printf(" (exit code %d)", exit_code);
             }
             printf("\n");
 
             /* Show error details */
             fprintf(stderr, "  Error: %s\n", error_message(err));
-
-            if (result) {
-                bootstrap_result_free(result);
-            }
 
             if (stop_on_error) {
                 free(all_profiles);
@@ -1059,10 +815,6 @@ error_t *bootstrap_run_for_profiles(
         }
 
         printf("  ✓ Complete\n");
-
-        if (result) {
-            bootstrap_result_free(result);
-        }
     }
 
     free(all_profiles);
@@ -1087,15 +839,4 @@ error_t *bootstrap_run_for_profiles(
     free(failed_profiles);
 
     return NULL;
-}
-
-/**
- * Free bootstrap result
- */
-void bootstrap_result_free(bootstrap_result_t *result) {
-    if (!result) {
-        return;
-    }
-
-    free(result);
 }

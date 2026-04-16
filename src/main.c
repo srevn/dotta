@@ -2339,6 +2339,12 @@ int main(int argc, char **argv) {
     signal(SIGINT, signal_cleanup_handler);   /* Ctrl+C */
     signal(SIGTERM, signal_cleanup_handler);  /* kill command */
 
+    /* Ignore SIGPIPE so writes to broken pipes return EPIPE instead of
+     * killing dotta. Required for any code path that streams output to a
+     * caller-controlled fd (e.g., bootstrap scripts whose stdout the user
+     * may pipe to a head/grep that closes early). */
+    signal(SIGPIPE, SIG_IGN);
+
     /* Parse command */
     if (argc < 2) {
         print_usage(argv[0]);

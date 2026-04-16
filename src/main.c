@@ -2287,6 +2287,20 @@ static int cmd_completion_main(int argc, char **argv, const config_t *config) {
     return 0;
 }
 
+/* Published by sys/process.c::process_run() while a PROCESS_PGRP_NEW
+ * child is alive; zero otherwise. The signal handler reads it to
+ * forward terminating signals to the child's process group before
+ * dotta dies, so a Ctrl+C kills both atomically rather than
+ * orphaning the spawned hook.
+ *
+ * PROCESS_PGRP_SHARED children leave this at zero — the kernel
+ * already delivers terminal SIGINT/SIGTERM to the entire foreground
+ * group, so parent and child receive it without forwarding.
+ *
+ * volatile sig_atomic_t is required for async-signal-safe access
+ * from the handler (POSIX). */
+volatile sig_atomic_t active_child_pgid = 0;
+
 /**
  * Signal handler for cleanup on SIGINT/SIGTERM
  *
@@ -2295,6 +2309,11 @@ static int cmd_completion_main(int argc, char **argv, const config_t *config) {
  * or when the process receives a termination signal.
  *
  * Cleanup Architecture:
+ * - Child propagation: If a PROCESS_PGRP_NEW child (e.g. a hook) is
+ *   alive, forward the signal to its process group BEFORE local
+ *   cleanup so the child dies atomically with dotta. SHARED children
+ *   get no forwarding — the kernel routes their copy via the
+ *   foreground process group directly.
  * - Keymanager: Cleaned here (security-critical, global state)
  * - Worktrees: Self-healing on next invocation
  * - Temp files: Minor impact, OS cleans eventually
@@ -2304,8 +2323,18 @@ static int cmd_completion_main(int argc, char **argv, const config_t *config) {
  * We cannot safely clean worktrees here (requires malloc/free via libgit2).
  * Instead, worktree.c implements transparent orphan cleanup on next run,
  * which is more robust and handles all failure modes (Ctrl-C, crashes, kill -9).
+ *
+ * AS-safety: kill(2), signal(), and raise() are AS-safe per POSIX
+ * SUSv4 §2.4.3; reading volatile sig_atomic_t is atomic by definition.
  */
 static void signal_cleanup_handler(int signum) {
+    /* Forward first, so the child group starts dying even if local
+     * cleanup takes non-trivial time. */
+    sig_atomic_t cpgid = active_child_pgid;
+    if (cpgid > 0) {
+        (void) kill(-(pid_t) cpgid, signum);
+    }
+
     /* Clean up global keymgr (securely zero master key) */
     keymgr_cleanup_global();
 

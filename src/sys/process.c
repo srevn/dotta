@@ -27,6 +27,12 @@
 
 #include "base/error.h"
 
+/* Defined in main.c. See sys/process.h "Threading and signal model"
+ * for the host-program contract. Updated only by process_run() —
+ * read by main.c's signal_cleanup_handler to forward terminating
+ * signals to a PROCESS_PGRP_NEW child's group before dotta dies. */
+extern volatile sig_atomic_t active_child_pgid;
+
 /* Initial capture buffer size; doubles on demand up to SIZE_MAX/2. */
 #define PROCESS_CAPTURE_INITIAL 4096
 
@@ -338,6 +344,12 @@ error_t *process_run(const process_spec_t *spec, process_result_t *result) {
      * exec'd) is acceptable because the child's own setpgid ran
      * before exec. */
     if (spec->pgrp_policy == PROCESS_PGRP_NEW) {
+        /* Publish before our own setpgid so the signal handler can
+         * forward to the child group during the sub-window where
+         * the child has setpgid'd but the parent has not. If neither
+         * side has called setpgid yet, the pgrp does not exist and
+         * kill(-pid) returns ESRCH — benign. */
+        active_child_pgid = (sig_atomic_t) pid;
         (void) setpgid(pid, pid);
         kill_target = -pid;
     } else {
@@ -549,6 +561,13 @@ error_t *process_run(const process_spec_t *spec, process_result_t *result) {
     }
 
 cleanup:
+    /* Stop the async signal handler from chasing this pgid before
+     * the synchronous orphan reap below fires its own kill(). Two
+     * scopes, one source of truth: the global is for the handler;
+     * kill_target is for in-function cleanup. Pre-fork failure paths
+     * write 0-over-0 — harmless. */
+    active_child_pgid = 0;
+
     if (pipefd[0] >= 0) close(pipefd[0]);
     if (pipefd[1] >= 0) close(pipefd[1]);
     if (errfd[0] >= 0) close(errfd[0]);

@@ -32,6 +32,16 @@
  * - The child resets SIGINT/SIGTERM/SIGPIPE/SIGALRM to SIG_DFL and
  *   clears its signal mask before exec — parent handlers do not
  *   leak into the new program image.
+ * - Terminating-signal forwarding (PROCESS_PGRP_NEW only): the
+ *   primitive publishes the child's pgid into the volatile
+ *   sig_atomic_t global `active_child_pgid` (defined in main.c)
+ *   for the duration of the child's lifetime, and clears it on
+ *   every exit path. The host program's SIGINT/SIGTERM handler
+ *   must read this and forward via kill(-pgid, signum) before its
+ *   own cleanup, so terminal Ctrl+C kills the parent and the spawned
+ *   child group atomically. PROCESS_PGRP_SHARED children leave the
+ *   global at zero — the kernel delivers terminal signals to the
+ *   entire foreground process group directly.
  */
 
 #ifndef DOTTA_PROCESS_H

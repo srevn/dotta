@@ -27,6 +27,7 @@
 #include "sys/gitops.h"
 #include "sys/transfer.h"
 #include "sys/upstream.h"
+#include "utils/bootstrap.h"
 
 /* Default repository name when URL parsing fails */
 #define DEFAULT_REPO_NAME "dotta-repo"
@@ -330,6 +331,7 @@ error_t *cmd_clone(
     transfer_context_t *xfer = NULL;
     string_array_t *fetched_profiles = NULL;
     string_array_t *detected_profiles = NULL;
+    string_array_t bootstrap_found STRING_ARRAY_AUTO = { 0 };
 
     if (opts->quiet) {
         output_set_verbosity(out, OUTPUT_QUIET);
@@ -358,8 +360,7 @@ error_t *cmd_clone(
             local_path = extract_repo_name(opts->url);
             if (!local_path) {
                 final_err = ERROR(
-                    ERR_MEMORY,
-                    "Failed to allocate repository name"
+                    ERR_MEMORY, "Failed to allocate repository name"
                 );
                 goto cleanup;
             }
@@ -413,8 +414,7 @@ error_t *cmd_clone(
 
         output_success(
             out, OUTPUT_NORMAL, "Fetched %zu of %zu specified profile%s",
-            fetched_count, opts->profile_count,
-            opts->profile_count == 1 ? "" : "s"
+            fetched_count, opts->profile_count, opts->profile_count == 1 ? "" : "s"
         );
 
     } else if (opts->fetch_all) {
@@ -436,7 +436,9 @@ error_t *cmd_clone(
 
     } else {
         /* Default: auto-detect profiles for this machine */
-        output_section(out, OUTPUT_NORMAL, "Auto-detecting profiles for this system");
+        output_section(
+            out, OUTPUT_NORMAL, "Auto-detecting profiles for this system"
+        );
 
         /* List all remote tracking branches (available after clone) */
         string_array_t *remote_branches = NULL;
@@ -493,7 +495,6 @@ error_t *cmd_clone(
         } else {
             /* No profiles detected — show available remote branches as guidance */
             output_warning(out, OUTPUT_NORMAL, "No profiles auto-detected for this system");
-
             if (remote_branches && remote_branches->count > 0) {
                 output_section(out, OUTPUT_NORMAL, "Available remote profiles");
                 for (size_t i = 0; i < remote_branches->count; i++) {
@@ -501,7 +502,6 @@ error_t *cmd_clone(
                 }
                 output_newline(out, OUTPUT_NORMAL);
             }
-
             output_info(out, OUTPUT_NORMAL, "Run 'dotta profile enable <name>' after setup");
         }
 
@@ -604,7 +604,12 @@ error_t *cmd_clone(
         goto cleanup;
     }
 
-    /* Bootstrap detection and execution */
+    /* Bootstrap detection and execution.
+     *
+     * Single-pass filter: walk fetched_profiles once, collect those
+     * with a .bootstrap script into `bootstrap_found`, then display,
+     * prompt, and (conditionally) fire. bootstrap_available is a
+     * simple derived flag used by the final "Next steps" hint. */
     bool run_bootstrap = false;
     bool bootstrap_available = false;
 
@@ -613,23 +618,27 @@ error_t *cmd_clone(
         /* Check if any fetched profiles have bootstrap scripts */
         for (size_t i = 0; i < fetched_profiles->count; i++) {
             const char *profile = fetched_profiles->items[i];
-            if (bootstrap_exists(repo, profile, NULL)) {
-                bootstrap_available = true;
-                break;
+            if (!bootstrap_exists(repo, profile)) continue;
+            err = string_array_push(&bootstrap_found, profile);
+            if (err) {
+                final_err = error_wrap(
+                    err, "Failed to collect bootstrap profiles"
+                );
+                goto cleanup;
             }
         }
 
-        if (bootstrap_available) {
-            output_section(out, OUTPUT_NORMAL, "Bootstrap scripts available");
+        bootstrap_available = (bootstrap_found.count > 0);
 
-            for (size_t i = 0; i < fetched_profiles->count; i++) {
-                const char *profile = fetched_profiles->items[i];
-                if (bootstrap_exists(repo, profile, NULL)) {
-                    output_styled(
-                        out, OUTPUT_NORMAL, "  {green}✓{reset} %s/.bootstrap\n",
-                        profile
-                    );
-                }
+        if (bootstrap_available) {
+            output_section(
+                out, OUTPUT_NORMAL, "Bootstrap scripts available"
+            );
+            for (size_t i = 0; i < bootstrap_found.count; i++) {
+                output_styled(
+                    out, OUTPUT_NORMAL, "  {green}✓{reset} %s/%s\n",
+                    bootstrap_found.items[i], BOOTSTRAP_SCRIPT_NAME
+                );
             }
             output_newline(out, OUTPUT_NORMAL);
 
@@ -640,23 +649,27 @@ error_t *cmd_clone(
             } else if (!opts->quiet) {
                 /* Prompt user */
                 run_bootstrap = output_confirm(
-                    out, "Would you like to execute bootstrap scripts now?",
-                    false
+                    out, "Execute bootstrap scripts?", false
                 );
             }
         }
     }
 
     /* Execute bootstrap if requested */
-    if (run_bootstrap && fetched_profiles->count > 0) {
+    if (run_bootstrap && bootstrap_found.count > 0) {
         output_newline(out, OUTPUT_NORMAL);
-        err = bootstrap_run_for_profiles(
-            repo, local_path, fetched_profiles, false, true
-        );
+        bootstrap_spec_t spec = {
+            .repo          = repo,
+            .repo_dir      = local_path,
+            .profiles      = &bootstrap_found,
+            .dry_run       = false,
+            .stop_on_error = true,
+        };
+        err = bootstrap_fire(out, &spec);
         if (err) {
             output_error(out, "Bootstrap failed: %s", error_message(err));
             error_free(err);
-            /* Non-fatal - continue */
+            /* Non-fatal — the clone itself succeeded. */
         }
     }
 

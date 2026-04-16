@@ -1759,6 +1759,26 @@ error_t *gitops_resolve_reference_oid(
     return NULL;
 }
 
+error_t *gitops_resolve_branch_head_oid(
+    git_repository *repo,
+    const char *branch_name,
+    git_oid *out
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(branch_name);
+    CHECK_NULL(out);
+
+    char refname[DOTTA_REFNAME_MAX];
+    error_t *err = gitops_build_refname(
+        refname, sizeof(refname), "refs/heads/%s", branch_name
+    );
+    if (err) {
+        return error_wrap(err, "Invalid branch name '%s'", branch_name);
+    }
+
+    return gitops_resolve_reference_oid(repo, refname, out);
+}
+
 /**
  * Index operations
  */

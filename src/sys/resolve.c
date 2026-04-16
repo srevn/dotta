@@ -28,19 +28,8 @@ error_t *resolve_init(
     CHECK_NULL(branch_name);
 
     /* Get current branch OID for rollback */
-    char refname[DOTTA_REFNAME_MAX];
-    error_t *err = gitops_build_refname(
-        refname, sizeof(refname), "refs/heads/%s", branch_name
-    );
-    if (err) {
-        return error_wrap(
-            err, "Invalid branch name '%s'", branch_name
-        );
-    }
-
-    /* Get current branch OID for rollback */
     git_oid saved_oid;
-    err = gitops_resolve_reference_oid(repo, refname, &saved_oid);
+    error_t *err = gitops_resolve_branch_head_oid(repo, branch_name, &saved_oid);
     if (err) {
         return err;
     }

@@ -617,6 +617,23 @@ error_t *gitops_resolve_reference_oid(
 );
 
 /**
+ * Resolve a branch's current HEAD OID
+ *
+ * Convenience for `refs/heads/<branch_name>` resolution. Builds the full
+ * refname and dispatches to gitops_resolve_reference_oid.
+ *
+ * @param repo Repository (must not be NULL)
+ * @param branch_name Branch name without refs/heads/ prefix (must not be NULL)
+ * @param out Target OID (must not be NULL)
+ * @return Error or NULL on success (ERR_NOT_FOUND if branch missing)
+ */
+error_t *gitops_resolve_branch_head_oid(
+    git_repository *repo,
+    const char *branch_name,
+    git_oid *out
+);
+
+/**
  * Validate and build a Git reference name
  *
  * Builds a reference name using printf-style formatting and validates

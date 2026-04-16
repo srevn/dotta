@@ -31,29 +31,6 @@
 #include "sys/gitops.h"
 
 /**
- * Get current HEAD oid for branch
- */
-static error_t *get_branch_head_oid(
-    git_repository *repo,
-    const char *branch_name,
-    git_oid *out_oid
-) {
-    CHECK_NULL(repo);
-    CHECK_NULL(branch_name);
-    CHECK_NULL(out_oid);
-
-    char refname[DOTTA_REFNAME_MAX];
-    error_t *err = gitops_build_refname(
-        refname, sizeof(refname), "refs/heads/%s", branch_name
-    );
-    if (err) {
-        return error_wrap(err, "Invalid branch name '%s'", branch_name);
-    }
-
-    return gitops_resolve_reference_oid(repo, refname, out_oid);
-}
-
-/**
  * Sync single entry from in-memory manifest to state
  *
  * Translates from in-memory manifest representation (file_entry_t) to
@@ -80,7 +57,7 @@ static error_t *get_branch_head_oid(
  *
  * Note: commit_oid is stored per-profile in enabled_profiles, not per-file.
  * Callers are responsible for calling state_set_profile_commit_oid after syncing,
- * using get_branch_head_oid() to resolve the current HEAD.
+ * using gitops_resolve_branch_head_oid() to resolve the current HEAD.
  *
  * @param repo Git repository
  * @param state State handle (with active transaction)
@@ -146,7 +123,7 @@ static error_t *sync_entry_to_state(
     /* 5. Build state entry. blob_oid is an inline struct copy from the
      * pre-populated entry field. commit_oid lives in enabled_profiles
      * (per-profile, not per-file) and is set via state_set_profile_commit_oid
-     * using get_branch_head_oid() to resolve the current HEAD. */
+     * using gitops_resolve_branch_head_oid() to resolve the current HEAD. */
     state_file_entry_t state_entry = {
         .storage_path    = manifest_entry->storage_path,
         .filesystem_path = manifest_entry->filesystem_path,
@@ -317,7 +294,7 @@ error_t *manifest_enable_profile(
      * state_enable_profile inserts with zeroblob(20); this replaces the
      * sentinel with the real HEAD. */
     git_oid head_oid;
-    err = get_branch_head_oid(repo, profile, &head_oid);
+    err = gitops_resolve_branch_head_oid(repo, profile, &head_oid);
     if (err) {
         err = error_wrap(err, "Failed to get HEAD for profile '%s'", profile);
         goto cleanup;
@@ -1049,7 +1026,7 @@ error_t *manifest_remove_files(
     /* After removing files, the profile's branch HEAD has moved to a new commit.
      * Update the per-profile commit_oid in enabled_profiles. */
     git_oid head_oid;
-    err = get_branch_head_oid(repo, removed_profile, &head_oid);
+    err = gitops_resolve_branch_head_oid(repo, removed_profile, &head_oid);
     if (err) {
         err = error_wrap(
             err, "Failed to get HEAD for profile '%s'", removed_profile
@@ -1208,7 +1185,7 @@ error_t *manifest_rebuild(
      * profiles (clone path) and refreshes the value for existing profiles. */
     for (size_t p = 0; p < enabled_profiles->count; p++) {
         git_oid head_oid;
-        err = get_branch_head_oid(repo, enabled_profiles->items[p], &head_oid);
+        err = gitops_resolve_branch_head_oid(repo, enabled_profiles->items[p], &head_oid);
         if (err) {
             err = error_wrap(
                 err, "Failed to get HEAD for profile '%s'",
@@ -1288,7 +1265,7 @@ error_t *manifest_detect_stale_profiles(
          * profile_scope is a membership set (NULL values) — both callers
          * (workspace and manifest_repair_stale) pass profile sets. */
         git_oid head_oid;
-        err = get_branch_head_oid(repo, profile, &head_oid);
+        err = gitops_resolve_branch_head_oid(repo, profile, &head_oid);
         if (err) {
             /* Branch may have been deleted — skip (safety handles this) */
             error_free(err);
@@ -1544,7 +1521,7 @@ error_t *manifest_repair_stale(
     const char *stale_name;
     while (hashmap_iter_next(&stale_iter, &stale_name, NULL)) {
         git_oid head_oid;
-        err = get_branch_head_oid(repo, stale_name, &head_oid);
+        err = gitops_resolve_branch_head_oid(repo, stale_name, &head_oid);
         if (err) {
             err = error_wrap(err, "Failed to get HEAD for profile '%s'", stale_name);
             goto cleanup;
@@ -1984,7 +1961,7 @@ error_t *manifest_update_files(
     for (size_t i = 0; i < updated_profiles->count; i++) {
         const char *prof = updated_profiles->items[i];
         git_oid head_oid;
-        err = get_branch_head_oid(repo, prof, &head_oid);
+        err = gitops_resolve_branch_head_oid(repo, prof, &head_oid);
         if (err) {
             string_array_free(updated_profiles);
             err = error_wrap(err, "Failed to get HEAD for profile '%s'", prof);
@@ -2184,7 +2161,7 @@ error_t *manifest_add_files(
     /* After adding files, the profile's branch HEAD has moved to a new commit.
      * Update the per-profile commit_oid in enabled_profiles. */
     git_oid head_oid;
-    err = get_branch_head_oid(repo, profile, &head_oid);
+    err = gitops_resolve_branch_head_oid(repo, profile, &head_oid);
     if (err) {
         err = error_wrap(
             err, "Failed to get HEAD for profile '%s'", profile
@@ -2526,7 +2503,7 @@ error_t *manifest_sync_diff(
 
     /* Update the per-profile commit_oid in enabled_profiles to match the new HEAD.
      * Use new_oid directly — it's the explicit sync target passed by the caller,
-     * and matches the branch HEAD that get_branch_head_oid would resolve. */
+     * and matches the branch HEAD that gitops_resolve_branch_head_oid would resolve. */
     err = state_set_profile_commit_oid(state, profile, new_oid);
     if (err) {
         err = error_wrap(

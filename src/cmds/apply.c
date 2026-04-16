@@ -831,7 +831,6 @@ error_t *cmd_apply(
 
     /* Declare all resources at the top, initialized to NULL */
     error_t *err = NULL;
-    char *repo_dir = NULL;
     state_t *state = NULL;
     string_array_t *enabled_profiles = NULL;
     string_array_t *filter_profiles = NULL;
@@ -849,7 +848,6 @@ error_t *cmd_apply(
     preflight_result_t *preflight = NULL;
     cleanup_preflight_result_t *cleanup_preflight = NULL;
     hashmap_t *repaired_paths = NULL;
-    hook_context_t *hook_ctx = NULL;
     char *profiles_str = NULL;
     deploy_result_t *deploy_res = NULL;
     path_filter_t *file_filter = NULL;
@@ -859,10 +857,6 @@ error_t *cmd_apply(
     if (opts->verbose) {
         output_set_verbosity(out, OUTPUT_VERBOSE);
     }
-
-    /* Get repository directory for hooks */
-    err = config_get_repo_dir(config, &repo_dir);
-    if (err) goto cleanup;
 
     /* Load state (with locking for write transaction) */
     err = state_open(repo, &state);
@@ -1621,33 +1615,23 @@ error_t *cmd_apply(
         }
     }
 
-    /* Execute pre-apply hook */
-    if (repo_dir) {
-        profiles_str = string_array_join(active_profiles, " ");
-
-        /* Create hook context with all profiles */
-        hook_ctx = hook_context_create(repo_dir, "apply", profiles_str);
-        if (hook_ctx) {
-            hook_ctx->dry_run = opts->dry_run;
-
-            hook_result_t *hook_result = NULL;
-            err = hook_execute(config, HOOK_PRE_APPLY, hook_ctx, &hook_result);
-
-            if (err) {
-                /* Hook failed - abort operation */
-                if (hook_result && hook_result->output && hook_result->output[0]) {
-                    output_print(
-                        out, OUTPUT_NORMAL, "Hook output:\n%s\n",
-                        hook_result->output
-                    );
-                }
-                hook_result_free(hook_result);
-                err = error_wrap(err, "Pre-apply hook failed");
-                goto cleanup;
-            }
-            hook_result_free(hook_result);
-        }
+    /* Build hook invocation with all active profiles */
+    profiles_str = string_array_join(active_profiles, " ");
+    if (!profiles_str) {
+        err = ERROR(ERR_MEMORY, "Failed to join profile names for hook");
+        goto cleanup;
     }
+    const hook_invocation_t hook_inv = {
+        .cmd        = HOOK_CMD_APPLY,
+        .profile    = profiles_str,
+        .files      = NULL,
+        .file_count = 0,
+        .dry_run    = opts->dry_run,
+    };
+
+    /* Execute pre-apply hook */
+    err = hook_fire_pre(config, out, &hook_inv);
+    if (err) goto cleanup;
 
     /* Confirm before deployment if configured (unless --force or --dry-run) */
     if (config->confirm_destructive && !opts->force && !opts->dry_run) {
@@ -2203,26 +2187,7 @@ error_t *cmd_apply(
     }
 
     /* Execute post-apply hook */
-    if (hook_ctx && !opts->dry_run) {
-        hook_result_t *hook_result = NULL;
-        error_t *hook_err = hook_execute(config, HOOK_POST_APPLY, hook_ctx, &hook_result);
-
-        if (hook_err) {
-            /* Hook failed - warn but don't abort (already deployed) */
-            output_warning(
-                out, OUTPUT_NORMAL, "Post-apply hook failed: %s",
-                error_message(hook_err)
-            );
-            if (hook_result && hook_result->output && hook_result->output[0]) {
-                output_print(
-                    out, OUTPUT_NORMAL, "Hook output:\n%s\n",
-                    hook_result->output
-                );
-            }
-            error_free(hook_err);
-        }
-        hook_result_free(hook_result);
-    }
+    hook_fire_post(config, out, &hook_inv);
 
     /* Success - fall through to cleanup */
     err = NULL;
@@ -2238,7 +2203,6 @@ cleanup:
     ptr_array_deinit(&divergent);
     if (cleanup_preflight) cleanup_preflight_result_free(cleanup_preflight);
     if (preflight) preflight_result_free(preflight);
-    if (hook_ctx) hook_context_free(hook_ctx);
     if (profiles_str) free(profiles_str);
     if (file_filter) path_filter_free(file_filter);
     if (dir_orphans) free(dir_orphans);
@@ -2248,7 +2212,6 @@ cleanup:
     if (filter_profiles) string_array_free(filter_profiles);
     if (enabled_profiles) string_array_free(enabled_profiles);
     if (state) state_free(state);
-    if (repo_dir) free(repo_dir);
 
     return err;
 }

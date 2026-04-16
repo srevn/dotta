@@ -1,122 +1,83 @@
 /**
  * hooks.h - Hook execution system
  *
- * Provides pre/post command hooks for extensibility.
- * Hooks are shell scripts that run before or after commands.
+ * Provides pre/post command hooks for extensibility. Hooks are shell
+ * scripts that run before or after commands. The entire public surface
+ * is two functions — hook_fire_pre and hook_fire_post — plus the value
+ * type used to describe one invocation.
  */
 
 #ifndef DOTTA_HOOKS_H
 #define DOTTA_HOOKS_H
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <types.h>
 
 /**
- * Hook types
+ * Hook-bearing command
+ *
+ * The four commands that invoke pre/post hooks. Maps internally to a
+ * pre_<cmd> / post_<cmd> hook script pair.
  */
 typedef enum {
-    HOOK_PRE_ADD,
-    HOOK_POST_ADD,
-    HOOK_PRE_REMOVE,
-    HOOK_POST_REMOVE,
-    HOOK_PRE_APPLY,
-    HOOK_POST_APPLY,
-    HOOK_PRE_UPDATE,
-    HOOK_POST_UPDATE
-} hook_type_t;
+    HOOK_CMD_ADD,
+    HOOK_CMD_REMOVE,
+    HOOK_CMD_APPLY,
+    HOOK_CMD_UPDATE,
+} hook_cmd_t;
 
 /**
- * Hook context - information passed to hooks
+ * Hook invocation description
  *
- * All strings are owned by the context and freed by hook_context_free().
+ * Describes one pre/post hook pair. Value type — callers allocate on
+ * the stack and populate via designated initializers. All pointer
+ * fields are borrowed; callers must keep them valid for the span
+ * between hook_fire_pre() and hook_fire_post().
+ *
+ * Fields:
+ *   cmd        Which command is firing (ADD/REMOVE/APPLY/UPDATE).
+ *   profile    NULL → no DOTTA_PROFILE env. Single profile name for
+ *              add/remove; space-joined profile list for apply/update.
+ *   files      NULL → no DOTTA_FILE_* env. Otherwise borrowed array.
+ *   file_count Number of entries in files (0 if files is NULL).
+ *   dry_run    Sets DOTTA_DRY_RUN for pre-hook; suppresses post-hook.
  */
 typedef struct {
-    char *repo_dir;              /* Repository directory (owned) */
-    char *command;               /* Command being executed (owned) */
-    char *profile;               /* Profile name (owned, if applicable) */
-    char **files;                /* Array of file paths (owned, if applicable) */
-    size_t file_count;           /* Number of files */
-    bool dry_run;                /* Is this a dry-run? */
-} hook_context_t;
+    hook_cmd_t cmd;
+    const char *profile;
+    char *const *files;
+    size_t file_count;
+    bool dry_run;
+} hook_invocation_t;
 
 /**
- * Hook result
- */
-typedef struct {
-    int exit_code;               /* Exit code from hook script */
-    char *output;                /* Captured stdout/stderr */
-    bool aborted;                /* Whether hook aborted the operation */
-} hook_result_t;
-
-/**
- * Check if a hook is enabled in config
- */
-bool hook_is_enabled(const config_t *config, hook_type_t type);
-
-/**
- * Check if hook script exists
- */
-bool hook_exists(const config_t *config, hook_type_t type);
-
-/**
- * Get hook script path
- */
-error_t *hook_get_path(
-    const config_t *config,
-    hook_type_t type,
-    char **out
-);
-
-/**
- * Execute hook
+ * Fire a pre-command hook
  *
- * Returns NULL if hook succeeds or doesn't exist.
- * Returns error if hook fails with non-zero exit code.
- *
- * @param config Configuration (contains hooks_dir and enabled flags)
- * @param type Hook type to execute
- * @param context Hook context (command, files, etc.)
- * @param result Optional result struct (can be NULL)
- * @return Error or NULL on success
+ * Resolves DOTTA_REPO_DIR, builds a hook environment from inv, and
+ * runs the pre_<cmd> hook script (if configured and present). On
+ * failure, prints captured hook output (if any) at OUTPUT_NORMAL and
+ * returns a wrapped error "Pre-<cmd> hook failed". Callers should
+ * goto-cleanup on non-NULL return.
  */
-error_t *hook_execute(
+error_t *hook_fire_pre(
     const config_t *config,
-    hook_type_t type,
-    const hook_context_t *context,
-    hook_result_t **result
+    output_ctx_t *out,
+    const hook_invocation_t *inv
 );
 
 /**
- * Free hook result
+ * Fire a post-command hook
+ *
+ * No-op if inv->dry_run is true. Otherwise builds a hook environment
+ * from inv and runs the post_<cmd> hook script (if configured and
+ * present). Failures never propagate: on error, prints a warning and
+ * any captured hook output, then swallows the error.
  */
-void hook_result_free(hook_result_t *result);
-
-/**
- * Get hook name as string
- */
-const char *hook_type_name(hook_type_t type);
-
-/**
- * Helper: Create hook context
- */
-hook_context_t *hook_context_create(
-    const char *repo_dir,
-    const char *command,
-    const char *profile
+void hook_fire_post(
+    const config_t *config,
+    output_ctx_t *out,
+    const hook_invocation_t *inv
 );
-
-/**
- * Helper: Add files to hook context
- */
-error_t *hook_context_add_files(
-    hook_context_t *ctx,
-    char **files,
-    size_t count
-);
-
-/**
- * Free hook context
- */
-void hook_context_free(hook_context_t *ctx);
 
 #endif /* DOTTA_HOOKS_H */

@@ -923,8 +923,6 @@ error_t *cmd_add(
 
     /* Initialize all resources to NULL for safe cleanup */
     ignore_context_t *ignore_ctx = NULL;
-    char *repo_dir = NULL;
-    hook_context_t *hook_ctx = NULL;
     worktree_handle_t *wt = NULL;
     string_array_t *all_files = NULL;
     tracked_dir_t *tracked_dirs = NULL;
@@ -1092,35 +1090,18 @@ error_t *cmd_add(
         err = NULL;
     }
 
-    /* Get repository directory */
-    err = config_get_repo_dir(config, &repo_dir);
-    if (err) {
-        goto cleanup;
-    }
+    /* Build hook invocation */
+    const hook_invocation_t hook_inv = {
+        .cmd        = HOOK_CMD_ADD,
+        .profile    = opts->profile,
+        .files      = opts->files,
+        .file_count = opts->file_count,
+        .dry_run    = false,
+    };
 
     /* Execute pre-add hook */
-    hook_ctx = hook_context_create(repo_dir, "add", opts->profile);
-    if (hook_ctx) {
-        err = hook_context_add_files(hook_ctx, opts->files, opts->file_count);
-        if (err) goto cleanup;
-
-        hook_result_t *hook_result = NULL;
-        err = hook_execute(config, HOOK_PRE_ADD, hook_ctx, &hook_result);
-
-        if (err) {
-            /* Hook failed - abort operation */
-            if (hook_result && hook_result->output && hook_result->output[0]) {
-                output_print(
-                    out, OUTPUT_NORMAL, "Hook output:\n%s\n",
-                    hook_result->output
-                );
-            }
-            hook_result_free(hook_result);
-            err = error_wrap(err, "Pre-add hook failed");
-            goto cleanup;
-        }
-        hook_result_free(hook_result);
-    }
+    err = hook_fire_pre(config, out, &hook_inv);
+    if (err) goto cleanup;
 
     /* Create temporary worktree */
     err = worktree_create_temp(repo, &wt);
@@ -1602,26 +1583,7 @@ error_t *cmd_add(
     worktree_cleanup(&wt);
 
     /* Execute post-add hook */
-    if (hook_ctx) {
-        hook_result_t *hook_result = NULL;
-        error_t *hook_err = hook_execute(config, HOOK_POST_ADD, hook_ctx, &hook_result);
-
-        if (hook_err) {
-            /* Hook failed - warn but don't abort (files already added) */
-            output_warning(
-                out, OUTPUT_NORMAL, "Post-add hook failed: %s",
-                error_message(hook_err)
-            );
-            if (hook_result && hook_result->output && hook_result->output[0]) {
-                output_print(
-                    out, OUTPUT_NORMAL, "Hook output:\n%s\n",
-                    hook_result->output
-                );
-            }
-            error_free(hook_err);
-        }
-        hook_result_free(hook_result);
-    }
+    hook_fire_post(config, out, &hook_inv);
 
     /* Show summary on success */
     if ((added_count > 0 || dir_tracked_count > 0)) {
@@ -1748,8 +1710,6 @@ cleanup:
     if (metadata) metadata_free(metadata);
     if (all_files) string_array_free(all_files);
     if (wt) worktree_cleanup(&wt);
-    if (hook_ctx) hook_context_free(hook_ctx);
-    if (repo_dir) free(repo_dir);
     if (ignore_ctx) ignore_context_free(ignore_ctx);
     if (preflight_allocated_paths) {
         for (size_t i = 0; i < preflight_storage_count; i++) {

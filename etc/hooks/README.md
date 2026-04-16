@@ -41,7 +41,7 @@ Hooks allow you to run custom scripts before and after dotta operations.
 **Environment Variables:**
 - `DOTTA_REPO_DIR` - Path to dotta repository
 - `DOTTA_COMMAND` - Always "apply"
-- `DOTTA_PROFILE` - Comma-separated list of profiles being applied
+- `DOTTA_PROFILE` - Space-separated list of profiles being applied
 - `DOTTA_DRY_RUN` - "1" if dry-run, "0" otherwise
 
 **Exit Behavior:**
@@ -63,7 +63,7 @@ Hooks allow you to run custom scripts before and after dotta operations.
 **Environment Variables:**
 - `DOTTA_REPO_DIR` - Path to dotta repository
 - `DOTTA_COMMAND` - Always "apply"
-- `DOTTA_PROFILE` - Comma-separated list of profiles being applied
+- `DOTTA_PROFILE` - Space-separated list of profiles being applied
 - `DOTTA_DRY_RUN` - "1" if dry-run, "0" otherwise
 
 **Exit Behavior:**
@@ -175,7 +175,7 @@ Hooks allow you to run custom scripts before and after dotta operations.
 **Environment Variables:**
 - `DOTTA_REPO_DIR` - Path to dotta repository
 - `DOTTA_COMMAND` - Always "update"
-- `DOTTA_PROFILE` - Comma-separated list of profiles being updated
+- `DOTTA_PROFILE` - Space-separated list of profiles being updated
 - `DOTTA_FILE_COUNT` - Number of files (if specific files given)
 - `DOTTA_FILE_0`, `DOTTA_FILE_1`, ... - Individual file paths (0-indexed)
 - `DOTTA_DRY_RUN` - "1" if dry-run, "0" otherwise
@@ -198,7 +198,7 @@ Hooks allow you to run custom scripts before and after dotta operations.
 **Environment Variables:**
 - `DOTTA_REPO_DIR` - Path to dotta repository
 - `DOTTA_COMMAND` - Always "update"
-- `DOTTA_PROFILE` - Comma-separated list of profiles that were updated
+- `DOTTA_PROFILE` - Space-separated list of profiles that were updated
 - `DOTTA_FILE_COUNT` - Number of files
 - `DOTTA_FILE_0`, `DOTTA_FILE_1`, ... - Individual file paths (0-indexed)
 - `DOTTA_DRY_RUN` - "1" if dry-run, "0" otherwise

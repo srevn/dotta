@@ -880,8 +880,6 @@ static error_t *remove_files_from_profile(
     string_array_t *filesystem_paths = NULL;
     string_array_t **other_profiles = NULL;
     size_t multi_profile_count = 0;
-    char *repo_dir = NULL;
-    hook_context_t *hook_ctx = NULL;
     worktree_handle_t *wt = NULL;
     string_array_t *removed_paths = NULL;
     state_t *state = NULL;
@@ -986,38 +984,21 @@ static error_t *remove_files_from_profile(
     free_multi_profile_tracking(other_profiles, storage_paths->count);
     other_profiles = NULL;
 
-    /* Get repository directory for hooks */
-    err = config_get_repo_dir(config, &repo_dir);
-    if (err) {
-        goto cleanup;
-    }
+    /* Build hook invocation with filesystem paths (resolved by
+     * resolve_paths_to_remove). Reached only on non-dry-run: the dry-run
+     * branch above early-cleanups before this point, so dry_run is
+     * always false here in practice — still passed for honesty. */
+    const hook_invocation_t hook_inv = {
+        .cmd        = HOOK_CMD_REMOVE,
+        .profile    = opts->profile,
+        .files      = filesystem_paths->items,
+        .file_count = filesystem_paths->count,
+        .dry_run    = opts->dry_run,
+    };
 
     /* Execute pre-remove hook */
-    hook_ctx = hook_context_create(repo_dir, "remove", opts->profile);
-    if (hook_ctx) {
-        /* Add paths to hook context */
-        err = hook_context_add_files(
-            hook_ctx, filesystem_paths->items, filesystem_paths->count
-        );
-        if (err) goto cleanup;
-
-        hook_result_t *hook_result = NULL;
-        err = hook_execute(config, HOOK_PRE_REMOVE, hook_ctx, &hook_result);
-
-        if (err) {
-            /* Hook failed - abort operation */
-            if (hook_result && hook_result->output && hook_result->output[0]) {
-                output_print(
-                    out, OUTPUT_NORMAL, "Hook output:\n%s\n",
-                    hook_result->output
-                );
-            }
-            hook_result_free(hook_result);
-            err = error_wrap(err, "Pre-remove hook failed");
-            goto cleanup;
-        }
-        hook_result_free(hook_result);
-    }
+    err = hook_fire_pre(config, out, &hook_inv);
+    if (err) goto cleanup;
 
     /* Create temporary worktree */
     err = worktree_create_temp(repo, &wt);
@@ -1246,28 +1227,7 @@ static error_t *remove_files_from_profile(
     }
 
     /* Execute post-remove hook */
-    if (hook_ctx && !opts->dry_run) {
-        hook_result_t *hook_result = NULL;
-        err = hook_execute(config, HOOK_POST_REMOVE, hook_ctx, &hook_result);
-
-        if (err) {
-            /* Hook failed - warn but don't abort (files already removed) */
-            output_warning(
-                out, OUTPUT_NORMAL, "Post-remove hook failed: %s",
-                error_message(err)
-            );
-
-            if (hook_result && hook_result->output && hook_result->output[0]) {
-                output_print(
-                    out, OUTPUT_NORMAL, "Hook output:\n%s\n",
-                    hook_result->output
-                );
-            }
-            error_free(err);
-            err = NULL;
-        }
-        hook_result_free(hook_result);
-    }
+    hook_fire_post(config, out, &hook_inv);
 
     /* Success */
     if (!opts->quiet) {
@@ -1291,8 +1251,6 @@ cleanup:
     /* Free all resources in reverse order of allocation */
     if (removed_paths) string_array_free(removed_paths);
     if (wt) worktree_cleanup(&wt);
-    if (hook_ctx) hook_context_free(hook_ctx);
-    if (repo_dir) free(repo_dir);
     if (other_profiles) free_multi_profile_tracking(
         other_profiles, storage_paths->count
     );
@@ -1320,8 +1278,6 @@ static error_t *delete_profile_branch(
     char *remote_name = NULL;
     upstream_info_t *upstream_info = NULL;
     state_t *state = NULL;
-    char *repo_dir = NULL;
-    hook_context_t *hook_ctx = NULL;
     string_array_t *all_profiles = NULL;
     string_array_t *files = NULL;
     string_array_t *hook_fs_paths = NULL;
@@ -1516,12 +1472,6 @@ static error_t *delete_profile_branch(
         goto cleanup;  /* err is NULL, will return success */
     }
 
-    /* Get repository directory for hooks */
-    err = config_get_repo_dir(config, &repo_dir);
-    if (err) {
-        goto cleanup;
-    }
-
     /* Convert storage paths to filesystem paths for hook consistency.
      * The file removal path passes filesystem paths to hooks; do the same here. */
     if (files) {
@@ -1544,33 +1494,21 @@ static error_t *delete_profile_branch(
         }
     }
 
+    /* Build hook invocation. Prefer filesystem paths (consistent with the
+     * file-removal subcommand); fall back to storage paths if synthesis
+     * was skipped. Both arrays live until cleanup. */
+    const string_array_t *hook_files = hook_fs_paths ? hook_fs_paths : files;
+    const hook_invocation_t hook_inv = {
+        .cmd        = HOOK_CMD_REMOVE,
+        .profile    = opts->profile,
+        .files      = hook_files ? hook_files->items : NULL,
+        .file_count = hook_files ? hook_files->count : 0,
+        .dry_run    = opts->dry_run,
+    };
+
     /* Execute pre-remove hook */
-    hook_ctx = hook_context_create(repo_dir, "remove", opts->profile);
-    if (hook_ctx) {
-        /* Pass filesystem paths to hook (consistent with file removal hooks) */
-        string_array_t *hook_files = hook_fs_paths ? hook_fs_paths : files;
-        if (hook_files) {
-            err = hook_context_add_files(hook_ctx, hook_files->items, hook_files->count);
-            if (err) goto cleanup;
-        }
-
-        hook_result_t *hook_result = NULL;
-        err = hook_execute(config, HOOK_PRE_REMOVE, hook_ctx, &hook_result);
-
-        if (err) {
-            /* Hook failed - abort operation */
-            if (hook_result && hook_result->output && hook_result->output[0]) {
-                output_print(
-                    out, OUTPUT_NORMAL, "Hook output:\n%s\n",
-                    hook_result->output
-                );
-            }
-            hook_result_free(hook_result);
-            err = error_wrap(err, "Pre-remove hook failed");
-            goto cleanup;
-        }
-        hook_result_free(hook_result);
-    }
+    err = hook_fire_pre(config, out, &hook_inv);
+    if (err) goto cleanup;
 
     /*
      * Architectural note: We do NOT delete files from the filesystem here.
@@ -1846,27 +1784,7 @@ static error_t *delete_profile_branch(
      */
 
     /* Execute post-remove hook */
-    if (hook_ctx && !opts->dry_run) {
-        hook_result_t *hook_result = NULL;
-        err = hook_execute(config, HOOK_POST_REMOVE, hook_ctx, &hook_result);
-
-        if (err) {
-            /* Hook failed - warn but don't abort (profile already deleted) */
-            output_warning(
-                out, OUTPUT_NORMAL, "Post-remove hook failed: %s",
-                error_message(err)
-            );
-            if (hook_result && hook_result->output && hook_result->output[0]) {
-                output_print(
-                    out, OUTPUT_NORMAL, "Hook output:\n%s\n",
-                    hook_result->output
-                );
-            }
-            error_free(err);
-            err = NULL;
-        }
-        hook_result_free(hook_result);
-    }
+    hook_fire_post(config, out, &hook_inv);
 
     /* Success message (only on actual deletion, not dry-run/cancel/error) */
     if (performed && !opts->quiet) {
@@ -1890,8 +1808,6 @@ cleanup:
     /* Free all resources in reverse order of allocation */
     if (hook_fs_paths) string_array_free(hook_fs_paths);
     if (hook_custom_prefix) free(hook_custom_prefix);
-    if (hook_ctx) hook_context_free(hook_ctx);
-    if (repo_dir) free(repo_dir);
     if (state) state_free(state);
     if (upstream_info) upstream_info_free(upstream_info);
     if (remote_name) free(remote_name);

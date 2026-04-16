@@ -8,16 +8,54 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <signal.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
 #include "base/error.h"
+#include "base/output.h"
 #include "base/string.h"
 #include "infra/path.h"
 #include "sys/filesystem.h"
+#include "utils/config.h"
 
-/* Hook script names */
+/* --- Internal types ------------------------------------------------------ */
+
+/* Hook script name lookup. Also drives the pre/post mapping below. */
+typedef enum {
+    HOOK_PRE_ADD,
+    HOOK_POST_ADD,
+    HOOK_PRE_REMOVE,
+    HOOK_POST_REMOVE,
+    HOOK_PRE_APPLY,
+    HOOK_POST_APPLY,
+    HOOK_PRE_UPDATE,
+    HOOK_POST_UPDATE,
+} hook_type_t;
+
+/* Hook environment. Pointers are borrowed from the invocation and its
+ * backing strings; this struct is stack-allocated in hook_fire and
+ * lives only for the duration of one hook_execute call. */
+typedef struct {
+    const char *repo_dir;
+    const char *command;
+    const char *profile;
+    char *const *files;
+    size_t file_count;
+    bool dry_run;
+} hook_context_t;
+
+/* Captured output and exit status from one hook invocation. Allocated
+ * by hook_execute; freed by hook_result_free. */
+typedef struct {
+    int exit_code;
+    char *output;
+    bool aborted;
+} hook_result_t;
+
+/* --- Static dispatch tables --------------------------------------------- */
+
 static const char *HOOK_NAMES[] = {
     [HOOK_PRE_ADD] = "pre-add",
     [HOOK_POST_ADD] = "post-add",
@@ -26,13 +64,10 @@ static const char *HOOK_NAMES[] = {
     [HOOK_PRE_APPLY] = "pre-apply",
     [HOOK_POST_APPLY] = "post-apply",
     [HOOK_PRE_UPDATE] = "pre-update",
-    [HOOK_POST_UPDATE] = "post-update"
+    [HOOK_POST_UPDATE] = "post-update",
 };
 
-/**
- * Get hook name as string
- */
-const char *hook_type_name(hook_type_t type) {
+static const char *hook_type_name(hook_type_t type) {
     if (type >= 0 && type < (sizeof(HOOK_NAMES) / sizeof(HOOK_NAMES[0]))) {
         return HOOK_NAMES[type];
     }
@@ -40,39 +75,30 @@ const char *hook_type_name(hook_type_t type) {
 }
 
 /**
- * Check if a hook is enabled in config
+ * Check whether the given hook type is enabled in config.
  */
-bool hook_is_enabled(const config_t *config, hook_type_t type) {
+static bool hook_is_enabled(const config_t *config, hook_type_t type) {
     if (!config) {
         return false;
     }
 
     switch (type) {
-        case HOOK_PRE_ADD:
-            return config->pre_add;
-        case HOOK_POST_ADD:
-            return config->post_add;
-        case HOOK_PRE_REMOVE:
-            return config->pre_remove;
-        case HOOK_POST_REMOVE:
-            return config->post_remove;
-        case HOOK_PRE_APPLY:
-            return config->pre_apply;
-        case HOOK_POST_APPLY:
-            return config->post_apply;
-        case HOOK_PRE_UPDATE:
-            return config->pre_update;
-        case HOOK_POST_UPDATE:
-            return config->post_update;
-        default:
-            return false;
+        case HOOK_PRE_ADD:     return config->pre_add;
+        case HOOK_POST_ADD:    return config->post_add;
+        case HOOK_PRE_REMOVE:  return config->pre_remove;
+        case HOOK_POST_REMOVE: return config->post_remove;
+        case HOOK_PRE_APPLY:   return config->pre_apply;
+        case HOOK_POST_APPLY:  return config->post_apply;
+        case HOOK_PRE_UPDATE:  return config->pre_update;
+        case HOOK_POST_UPDATE: return config->post_update;
     }
+    return false;
 }
 
 /**
  * Get hook script path
  */
-error_t *hook_get_path(
+static error_t *hook_get_path(
     const config_t *config,
     hook_type_t type,
     char **out
@@ -105,24 +131,6 @@ error_t *hook_get_path(
     free(hooks_dir);
 
     return err;
-}
-
-/**
- * Check if hook script exists
- */
-bool hook_exists(const config_t *config, hook_type_t type) {
-    char *hook_path = NULL;
-
-    error_t *err = hook_get_path(config, type, &hook_path);
-    if (err) {
-        error_free(err);
-        return false;
-    }
-
-    bool exists = fs_file_exists(hook_path);
-    free(hook_path);
-
-    return exists;
 }
 
 /**
@@ -294,7 +302,7 @@ static void hook_timeout_handler(int sig) {
  * Returns NULL on success or if hook is disabled/missing.
  * Returns error if hook fails or times out.
  */
-error_t *hook_execute(
+static error_t *hook_execute(
     const config_t *config,
     hook_type_t type,
     const hook_context_t *context,
@@ -710,7 +718,7 @@ cleanup:
 /**
  * Free hook result
  */
-void hook_result_free(hook_result_t *result) {
+static void hook_result_free(hook_result_t *result) {
     if (!result) {
         return;
     }
@@ -720,94 +728,116 @@ void hook_result_free(hook_result_t *result) {
 }
 
 /**
- * Helper: Create hook context
- *
- * All strings are copied - the context owns its data.
+ * Invocation-based API (hook_fire_pre / hook_fire_post)
  */
-hook_context_t *hook_context_create(
-    const char *repo_dir,
-    const char *command,
-    const char *profile
+static const char *cmd_name(hook_cmd_t cmd) {
+    switch (cmd) {
+        case HOOK_CMD_ADD:    return "add";
+        case HOOK_CMD_REMOVE: return "remove";
+        case HOOK_CMD_APPLY:  return "apply";
+        case HOOK_CMD_UPDATE: return "update";
+    }
+    return "unknown";
+}
+
+static hook_type_t pre_type_for(hook_cmd_t cmd) {
+    switch (cmd) {
+        case HOOK_CMD_ADD:    return HOOK_PRE_ADD;
+        case HOOK_CMD_REMOVE: return HOOK_PRE_REMOVE;
+        case HOOK_CMD_APPLY:  return HOOK_PRE_APPLY;
+        case HOOK_CMD_UPDATE: return HOOK_PRE_UPDATE;
+    }
+    return HOOK_PRE_ADD;
+}
+
+static hook_type_t post_type_for(hook_cmd_t cmd) {
+    switch (cmd) {
+        case HOOK_CMD_ADD:    return HOOK_POST_ADD;
+        case HOOK_CMD_REMOVE: return HOOK_POST_REMOVE;
+        case HOOK_CMD_APPLY:  return HOOK_POST_APPLY;
+        case HOOK_CMD_UPDATE: return HOOK_POST_UPDATE;
+    }
+    return HOOK_POST_ADD;
+}
+
+static void print_hook_output(
+    output_ctx_t *out, const hook_result_t *result
 ) {
-    hook_context_t *ctx = calloc(1, sizeof(hook_context_t));
-    if (!ctx) {
-        return NULL;
+    if (result && result->output && result->output[0]) {
+        output_print(
+            out, OUTPUT_NORMAL, "Hook output:\n%s\n", result->output
+        );
     }
-
-    if (repo_dir) {
-        ctx->repo_dir = strdup(repo_dir);
-        if (!ctx->repo_dir) goto cleanup;
-    }
-    if (command) {
-        ctx->command = strdup(command);
-        if (!ctx->command) goto cleanup;
-    }
-    if (profile) {
-        ctx->profile = strdup(profile);
-        if (!ctx->profile) goto cleanup;
-    }
-
-    return ctx;
-
-cleanup:
-    hook_context_free(ctx);
-    return NULL;
 }
 
 /**
- * Helper: Add files to hook context
- *
- * Deep-copies the file array - the context owns its data.
+ * Stack-build a context from the invocation, resolve the repo_dir, and
+ * execute the hook. On any return path, *out_result may be NULL or a
+ * valid result struct — caller owns it either way and must free with
+ * hook_result_free().
  */
-error_t *hook_context_add_files(
-    hook_context_t *ctx,
-    char **files,
-    size_t count
+static error_t *hook_fire(
+    const config_t *config,
+    const hook_invocation_t *inv,
+    hook_type_t type,
+    hook_result_t **out_result
 ) {
-    CHECK_NULL(ctx);
+    char *repo_dir = NULL;
+    error_t *err = config_get_repo_dir(config, &repo_dir);
+    if (err) return err;
 
-    if (!files || count == 0) {
-        return NULL;
+    const hook_context_t ctx = {
+        .repo_dir   = repo_dir,
+        .command    = cmd_name(inv->cmd),
+        .profile    = inv->profile,
+        .files      = inv->files,
+        .file_count = inv->file_count,
+        .dry_run    = inv->dry_run,
+    };
+
+    err = hook_execute(config, type, &ctx, out_result);
+    free(repo_dir);
+    return err;
+}
+
+error_t *hook_fire_pre(
+    const config_t *config,
+    output_ctx_t *out,
+    const hook_invocation_t *inv
+) {
+    CHECK_NULL(config);
+    CHECK_NULL(inv);
+
+    hook_result_t *result = NULL;
+    error_t *err = hook_fire(config, inv, pre_type_for(inv->cmd), &result);
+
+    if (err) {
+        print_hook_output(out, result);
+        hook_result_free(result);
+        return error_wrap(err, "Pre-%s hook failed", cmd_name(inv->cmd));
     }
-
-    ctx->files = calloc(count, sizeof(char *));
-    if (!ctx->files) {
-        return ERROR(ERR_MEMORY, "Failed to allocate hook file array");
-    }
-
-    for (size_t i = 0; i < count; i++) {
-        ctx->files[i] = strdup(files[i]);
-        if (!ctx->files[i]) {
-            for (size_t j = 0; j < i; j++) free(ctx->files[j]);
-            free(ctx->files);
-            ctx->files = NULL;
-            ctx->file_count = 0;
-            return ERROR(ERR_MEMORY, "Failed to copy hook file path");
-        }
-    }
-
-    ctx->file_count = count;
+    hook_result_free(result);
     return NULL;
 }
 
-/**
- * Free hook context
- */
-void hook_context_free(hook_context_t *ctx) {
-    if (!ctx) {
-        return;
+void hook_fire_post(
+    const config_t *config,
+    output_ctx_t *out,
+    const hook_invocation_t *inv
+) {
+    if (!config || !inv) return;
+    if (inv->dry_run) return;
+
+    hook_result_t *result = NULL;
+    error_t *err = hook_fire(config, inv, post_type_for(inv->cmd), &result);
+
+    if (err) {
+        output_warning(
+            out, OUTPUT_NORMAL, "Post-%s hook failed: %s",
+            cmd_name(inv->cmd), error_message(err)
+        );
+        print_hook_output(out, result);
+        error_free(err);
     }
-
-    free(ctx->repo_dir);
-    free(ctx->command);
-    free(ctx->profile);
-
-    if (ctx->files) {
-        for (size_t i = 0; i < ctx->file_count; i++) {
-            free(ctx->files[i]);
-        }
-        free(ctx->files);
-    }
-
-    free(ctx);
+    hook_result_free(result);
 }

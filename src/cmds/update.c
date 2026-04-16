@@ -1825,8 +1825,6 @@ error_t *cmd_update(
     string_array_t *filter_profiles = NULL;
     const string_array_t *active_profiles = NULL;
     const string_array_t *filter = NULL;
-    hook_context_t *hook_ctx = NULL;
-    char *repo_dir = NULL;
     char *profiles_str = NULL;
     path_filter_t *file_filter = NULL;
     const workspace_item_t **update_items = NULL;
@@ -1890,43 +1888,23 @@ error_t *cmd_update(
         active_profiles = enabled_profiles;
     }
 
-    /* Get repository directory for hooks */
-    err = config_get_repo_dir(config, &repo_dir);
-    if (err) {
+    /* Build hook invocation using operation profiles for context */
+    profiles_str = string_array_join(active_profiles, " ");
+    if (!profiles_str) {
+        err = ERROR(ERR_MEMORY, "Failed to join profile names for hook");
         goto cleanup;
     }
+    const hook_invocation_t hook_inv = {
+        .cmd        = HOOK_CMD_UPDATE,
+        .profile    = profiles_str,
+        .files      = opts->files,
+        .file_count = opts->file_count,
+        .dry_run    = opts->dry_run,
+    };
 
-    /* Execute pre-update hook (using operation profiles for context) */
-    if (repo_dir) {
-        profiles_str = string_array_join(active_profiles, " ");
-
-        if (profiles_str) {
-            /* Create hook context with operation profiles */
-            hook_ctx = hook_context_create(repo_dir, "update", profiles_str);
-            if (hook_ctx) {
-                hook_ctx->dry_run = opts->dry_run;
-                err = hook_context_add_files(hook_ctx, opts->files, opts->file_count);
-                if (err) goto cleanup;
-
-                hook_result_t *hook_result = NULL;
-                err = hook_execute(config, HOOK_PRE_UPDATE, hook_ctx, &hook_result);
-
-                if (err) {
-                    /* Hook failed - abort operation */
-                    if (hook_result && hook_result->output && hook_result->output[0]) {
-                        output_print(
-                            out, OUTPUT_NORMAL, "Hook output:\n%s\n",
-                            hook_result->output
-                        );
-                    }
-                    hook_result_free(hook_result);
-                    err = error_wrap(err, "Pre-update hook failed");
-                    goto cleanup;
-                }
-                hook_result_free(hook_result);
-            }
-        }
-    }
+    /* Execute pre-update hook */
+    err = hook_fire_pre(config, out, &hook_inv);
+    if (err) goto cleanup;
 
     /* Load workspace for update analysis
      *
@@ -2201,28 +2179,7 @@ error_t *cmd_update(
     }
 
     /* Execute post-update hook */
-    if (hook_ctx && !opts->dry_run) {
-        hook_result_t *hook_result = NULL;
-        error_t *hook_err = hook_execute(
-            config, HOOK_POST_UPDATE, hook_ctx, &hook_result
-        );
-
-        if (hook_err) {
-            /* Hook failed - warn but don't abort (files already updated) */
-            output_warning(
-                out, OUTPUT_NORMAL, "Post-update hook failed: %s",
-                error_message(hook_err)
-            );
-            if (hook_result && hook_result->output && hook_result->output[0]) {
-                output_print(
-                    out, OUTPUT_NORMAL, "Hook output:\n%s\n",
-                    hook_result->output
-                );
-            }
-            error_free(hook_err);
-        }
-        hook_result_free(hook_result);
-    }
+    hook_fire_post(config, out, &hook_inv);
 
     /* Summary (report updated profile count) */
     output_newline(out, OUTPUT_NORMAL);
@@ -2259,12 +2216,10 @@ cleanup:
     /* Free all resources in reverse order.
      * state_free after workspace_free — workspace borrows state. */
     if (update_items) free(update_items);
-    if (hook_ctx) hook_context_free(hook_ctx);
     if (ws) workspace_free(ws);
     if (state) state_free(state);
     if (profiles_str) free(profiles_str);
     if (file_filter) path_filter_free(file_filter);
-    if (repo_dir) free(repo_dir);
     if (filter_profiles) string_array_free(filter_profiles);
     if (enabled_profiles) string_array_free(enabled_profiles);
 

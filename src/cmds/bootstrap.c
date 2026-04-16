@@ -11,6 +11,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include "base/args.h"
 #include "base/array.h"
 #include "base/buffer.h"
 #include "base/error.h"
@@ -334,13 +335,12 @@ static error_t *bootstrap_list(
 /**
  * Execute bootstrap command
  */
-error_t *cmd_bootstrap(
-    const config_t *config,
-    output_ctx_t *out,
-    const cmd_bootstrap_options_t *opts
-) {
-    CHECK_NULL(config);
+error_t *cmd_bootstrap(const args_ctx_t *ctx, const cmd_bootstrap_options_t *opts) {
+    CHECK_NULL(ctx);
     CHECK_NULL(opts);
+
+    const config_t *config = ctx->config;
+    output_ctx_t *out = ctx->out;
 
     error_t *err = NULL;
     git_repository *repo = NULL;
@@ -551,3 +551,112 @@ cleanup:
 
     return err;
 }
+
+/* ══════════════════════════════════════════════════════════════════
+ * Spec-engine integration
+ * ══════════════════════════════════════════════════════════════════ */
+
+static error_t *bootstrap_dispatch(const args_ctx_t *ctx, void *opts_v) {
+    return cmd_bootstrap(ctx, (const cmd_bootstrap_options_t *) opts_v);
+}
+
+static const args_opt_t bootstrap_opts[] = {
+    ARGS_GROUP("Options:"),
+    ARGS_APPEND(
+        "p profile",            "<name>",
+        cmd_bootstrap_options_t,profiles,          profile_count,
+        "Filter to profile(s) (repeatable)"
+    ),
+    ARGS_FLAG(
+        "all",
+        cmd_bootstrap_options_t,all_profiles,
+        "Run every available bootstrap script"
+    ),
+    ARGS_FLAG(
+        "e edit",
+        cmd_bootstrap_options_t,edit,
+        "Edit the script (requires --profile)"
+    ),
+    ARGS_FLAG(
+        "show",
+        cmd_bootstrap_options_t,show,
+        "Print the script (requires --profile)"
+    ),
+    ARGS_FLAG(
+        "l list",
+        cmd_bootstrap_options_t,list,
+        "List all bootstrap scripts"
+    ),
+    ARGS_FLAG(
+        "n dry-run",
+        cmd_bootstrap_options_t,dry_run,
+        "Preview execution without running"
+    ),
+    ARGS_FLAG(
+        "y yes no-confirm",
+        cmd_bootstrap_options_t,yes,
+        "Skip confirmation prompts"
+    ),
+    ARGS_FLAG(
+        "continue-on-error",
+        cmd_bootstrap_options_t,continue_on_error,
+        "Continue after a script failure"
+    ),
+    /* Bare profile positionals funnel into the same APPEND field. */
+    ARGS_POSITIONAL_ANY(
+        cmd_bootstrap_options_t,profiles,          profile_count
+    ),
+    ARGS_END,
+};
+
+const args_command_t spec_bootstrap = {
+    .name        = "bootstrap",
+    .summary     = "Execute profile bootstrap scripts",
+    .usage       =
+        "%s bootstrap [options] [profile]...",
+    .description =
+        "Run the per-profile .bootstrap shell script, typically invoked\n"
+        "once after clone to install dependencies and prepare the\n"
+        "system. Without a positional, auto-detects profiles by\n"
+        "resolution order.\n",
+    .notes       =
+        "Execution Order:\n"
+        "  Scripts run in profile resolution order:\n"
+        "    1. global/.bootstrap\n"
+        "    2. <os>/.bootstrap (darwin, linux, freebsd)\n"
+        "    3. hosts/<hostname>/.bootstrap\n"
+        "\n"
+        "Environment Variables:\n"
+        "  DOTTA_REPO_DIR    Path to the dotta repository.\n"
+        "  DOTTA_PROFILE     Current profile name.\n"
+        "  DOTTA_PROFILES    Space-separated list of all active profiles.\n"
+        "  HOME              User home directory.\n"
+        "\n"
+        "Bootstrap Script Location:\n"
+        "  <repo>/<profile>/.bootstrap. Version-controlled; travels with\n"
+        "  the profile.\n"
+        "\n"
+        "Editor Selection (--edit):\n"
+        "  $DOTTA_EDITOR, then $VISUAL, then $EDITOR, then nano.\n",
+    .examples    =
+        "  %s bootstrap                          # Auto-detected profiles\n"
+        "  %s bootstrap darwin                   # Single profile\n"
+        "  %s bootstrap darwin global            # Multiple profiles\n"
+        "  %s bootstrap darwin --edit            # Edit darwin/.bootstrap\n"
+        "  %s bootstrap --list                   # List available scripts\n"
+        "  %s bootstrap darwin --show            # Print the script\n"
+        "  %s bootstrap -n                       # Preview without running\n"
+        "  %s bootstrap --yes                    # No prompts\n",
+    .epilogue    =
+        "Clone integration:\n"
+        "  %s clone <url>                    # Prompts to run bootstrap\n"
+        "  %s clone <url> --bootstrap        # Run without prompting\n"
+        "  %s clone <url> --no-bootstrap     # Skip the check entirely\n"
+        "\n"
+        "See also:\n"
+        "  %s apply                          # Deploy files after bootstrap\n",
+    .opts_size   = sizeof(cmd_bootstrap_options_t),
+    .opts        = bootstrap_opts,
+    .repo_mode   = ARGS_REPO_NONE,
+    .dispatch    = bootstrap_dispatch,
+};

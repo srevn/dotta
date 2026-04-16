@@ -1,20 +1,40 @@
-# Dotta Fish Completions
-# Shell completions for the dotta dotfile manager
+# Dotta Fish Completions — entry point
+#
+# Fish looks for completions under ~/.config/fish/completions (and other
+# XDG paths) and auto-sources this file by command name. It holds every
+# piece of the completion set that cannot be derived from the spec-engine
+# registry, then sources the auto-generated schema at the bottom.
+#
+# What lives here (hand-maintained):
+#
+#   1. Dynamic helpers that shell out to `dotta __complete <mode>` for
+#      data depending on the user's repo (profiles, files, commits,
+#      remotes). These must run at completion time, not build time.
+#
+#   2. Condition helpers (__dotta_using_command et al.) referenced by
+#      both this file and the generated schema.
+#
+#   3. Subcommand entries for commands whose router parses positionals
+#      into an enum (remote, key) instead of declaring a
+#      `.subcommands` tree. The generator can only project the spec's
+#      declared subcommand table; router-internal routing stays here.
+#
+#   4. Positional completions and flag-value completions. The spec
+#      engine carries no classifier for "this positional is a profile
+#      name" vs "this positional is a managed file" — those rules are
+#      command-specific and live here.
+#
+# What lives in dotta-completions.fish (auto-generated, sourced at the
+# bottom of this file): root flags, command list, per-command flag
+# tables, declared subcommand trees, and the `__dotta_value_flags` set
+# used by the positional-arg counter below. Regenerate with
+# `make completions` after editing any command spec; never hand-edit
+# that file.
 #
 # Installation:
 #   make install-completions
-#   # or manually:
-#   cp etc/completions/dotta.fish ~/.config/fish/completions/
-#
-# These completions use `dotta __complete` for dynamic data.
-
-# =============================================================================
-# Constants
-# =============================================================================
-
-# Flags that consume the next token as their value (used by positional arg counting)
-set -g __dotta_value_flags -p --profile --profiles -m --message -e --exclude \
-                           --prefix --diverged --add --remove --test
+#   # or, manually, copy both *.fish files into
+#   #   ~/.config/fish/completions/
 
 # =============================================================================
 # Helper Functions - Dynamic Completion via dotta __complete
@@ -293,96 +313,57 @@ function __dotta_is_nth_arg
 end
 
 # =============================================================================
-# Disable Default File Completion
+# Subcommand Lists for Router-Based Commands
+#
+# `remote` and `key` parse their subcommand from a positional bucket in
+# post_parse rather than declaring it via `.subcommands` on the spec.
+# The generator can only project declared trees, so the subcommand
+# names need to be listed here. If either command is converted to a
+# declared subcommand tree in the future, delete the corresponding
+# block below and regenerate.
 # =============================================================================
 
-complete -c dotta -f
-
-# =============================================================================
-# Global Options (available for all commands)
-# =============================================================================
-
-complete -c dotta -s h -l help -d "Show help"
-complete -c dotta -s v -l version -d "Show version"
-complete -c dotta -s i -l interactive -d "Interactive mode"
-
-# =============================================================================
-# Main Commands
-# =============================================================================
-
-complete -c dotta -n __dotta_needs_command -a init -d "Initialize repository"
-complete -c dotta -n __dotta_needs_command -a clone -d "Clone remote repository"
-complete -c dotta -n __dotta_needs_command -a add -d "Add files to profile"
-complete -c dotta -n __dotta_needs_command -a remove -d "Remove files from profile"
-complete -c dotta -n __dotta_needs_command -a apply -d "Deploy files to filesystem"
-complete -c dotta -n __dotta_needs_command -a status -d "Show repository status"
-complete -c dotta -n __dotta_needs_command -a list -d "List profiles or files"
-complete -c dotta -n __dotta_needs_command -a profile -d "Profile management"
-complete -c dotta -n __dotta_needs_command -a diff -d "Show differences"
-complete -c dotta -n __dotta_needs_command -a show -d "Show file or commit"
-complete -c dotta -n __dotta_needs_command -a revert -d "Revert file to previous state"
-complete -c dotta -n __dotta_needs_command -a update -d "Update profiles with modified files"
-complete -c dotta -n __dotta_needs_command -a sync -d "Synchronize with remote"
-complete -c dotta -n __dotta_needs_command -a remote -d "Manage remotes"
-complete -c dotta -n __dotta_needs_command -a ignore -d "Manage ignore patterns"
-complete -c dotta -n __dotta_needs_command -a bootstrap -d "Execute bootstrap scripts"
-complete -c dotta -n __dotta_needs_command -a key -d "Encryption key management"
-complete -c dotta -n __dotta_needs_command -a git -d "Git passthrough"
-
-# =============================================================================
-# Profile Subcommands
-# =============================================================================
-
-complete -c dotta -n "__dotta_using_command profile; and __dotta_needs_subcommand profile" -a list -d "List profiles"
-complete -c dotta -n "__dotta_using_command profile; and __dotta_needs_subcommand profile" -a fetch -d "Fetch remote profiles"
-complete -c dotta -n "__dotta_using_command profile; and __dotta_needs_subcommand profile" -a enable -d "Enable profile"
-complete -c dotta -n "__dotta_using_command profile; and __dotta_needs_subcommand profile" -a disable -d "Disable profile"
-complete -c dotta -n "__dotta_using_command profile; and __dotta_needs_subcommand profile" -a reorder -d "Reorder profiles"
-complete -c dotta -n "__dotta_using_command profile; and __dotta_needs_subcommand profile" -a validate -d "Validate profiles"
-
-# Profile subcommand arguments
-complete -c dotta -n "__dotta_using_subcommand profile enable" -xa "(__dotta_profiles_all)"
-complete -c dotta -n "__dotta_using_subcommand profile disable" -xa "(__dotta_profiles)"
-complete -c dotta -n "__dotta_using_subcommand profile fetch" -xa "(__dotta_profiles_all)"
-complete -c dotta -n "__dotta_using_subcommand profile reorder" -xa "(__dotta_profiles)"
-
-# =============================================================================
-# Remote Subcommands
-# =============================================================================
-
-complete -c dotta -n "__dotta_using_command remote; and __dotta_needs_subcommand remote" -a list -d "List remotes"
-complete -c dotta -n "__dotta_using_command remote; and __dotta_needs_subcommand remote" -a add -d "Add remote"
-complete -c dotta -n "__dotta_using_command remote; and __dotta_needs_subcommand remote" -a remove -d "Remove remote"
+# --- remote subcommands ---
+complete -c dotta -n "__dotta_using_command remote; and __dotta_needs_subcommand remote" -a list    -d "List remotes"
+complete -c dotta -n "__dotta_using_command remote; and __dotta_needs_subcommand remote" -a add     -d "Add remote"
+complete -c dotta -n "__dotta_using_command remote; and __dotta_needs_subcommand remote" -a remove  -d "Remove remote"
 complete -c dotta -n "__dotta_using_command remote; and __dotta_needs_subcommand remote" -a set-url -d "Set remote URL"
-complete -c dotta -n "__dotta_using_command remote; and __dotta_needs_subcommand remote" -a rename -d "Rename remote"
-complete -c dotta -n "__dotta_using_command remote; and __dotta_needs_subcommand remote" -a show -d "Show remote"
+complete -c dotta -n "__dotta_using_command remote; and __dotta_needs_subcommand remote" -a rename  -d "Rename remote"
+complete -c dotta -n "__dotta_using_command remote; and __dotta_needs_subcommand remote" -a show    -d "Show remote"
 
-# =============================================================================
-# Key Subcommands
-# =============================================================================
-
-complete -c dotta -n "__dotta_using_command key; and __dotta_needs_subcommand key" -a set -d "Set encryption passphrase"
-complete -c dotta -n "__dotta_using_command key; and __dotta_needs_subcommand key" -a clear -d "Clear cached passphrase"
+# --- key subcommands ---
+complete -c dotta -n "__dotta_using_command key; and __dotta_needs_subcommand key" -a set    -d "Set encryption passphrase"
+complete -c dotta -n "__dotta_using_command key; and __dotta_needs_subcommand key" -a clear  -d "Clear cached passphrase"
 complete -c dotta -n "__dotta_using_command key; and __dotta_needs_subcommand key" -a status -d "Show key status"
 
 # =============================================================================
-# Profile Flag (-p/--profile) - Available for many commands
+# Flag-Value Completions
+#
+# The generator emits each flag's name + description; these rules
+# augment specific flags with value candidates or file completion.
+# Fish merges rules for the same flag, so -d is omitted here to avoid
+# duplicate description rendering.
 # =============================================================================
 
-complete -c dotta -n "__dotta_using_command add; or __dotta_using_command apply; or __dotta_using_command status; or __dotta_using_command list; or __dotta_using_command diff; or __dotta_using_command show; or __dotta_using_command update; or __dotta_using_command remove; or __dotta_using_command revert" -s p -l profile -xa "(__dotta_profiles)" -d "Profile name"
+# -p/--profile: every command that offers it wants profile-name completion.
+complete -c dotta -n "__dotta_using_command add; or __dotta_using_command apply; or __dotta_using_command status; or __dotta_using_command list; or __dotta_using_command diff; or __dotta_using_command show; or __dotta_using_command update; or __dotta_using_command remove; or __dotta_using_command revert; or __dotta_using_command sync; or __dotta_using_command ignore; or __dotta_using_command bootstrap" -s p -l profile -xa "(__dotta_profiles)"
+
+# clone's --profiles wants available (not enabled) profiles.
+complete -c dotta -n "__dotta_using_command clone" -s p -l profiles -xa "(__dotta_profiles_all)"
+
+# sync's --diverged takes one of a fixed strategy set.
+complete -c dotta -n "__dotta_using_command sync" -l diverged -xa "warn rebase merge ours theirs"
+
+# ignore --test takes a filesystem path, not a profile/file token.
+complete -c dotta -n "__dotta_using_command ignore" -l test -F
 
 # =============================================================================
-# Positional Arguments - Commands with Profile/File Arguments
+# Positional Arguments
 #
-# Critical: dotta commands have specific positional argument semantics:
-#
-# add <profile> <file>...     - First positional MUST be profile
-# remove <profile> [<path>...] - First positional MUST be profile
-# apply [<profile>|<file>]... - Can be profile OR file (heuristic-based)
-# update [<profile>|<file>]... - Can be profile OR file (heuristic-based)
-#
-# For add/remove: offer profiles first, then files
-# For apply/update: offer both profiles and files (fish filters by prefix)
+# Per-command positional semantics (first arg is a profile, second is
+# a managed file, etc.) are classifier-driven and can't be derived
+# from the spec's opt table. Keep them aligned with each command's
+# post_parse logic.
 # =============================================================================
 
 # add: First positional is profile (required), remaining are filesystem paths
@@ -432,139 +413,25 @@ complete -c dotta -n "__dotta_using_command revert" -xa "(__dotta_files)"
 complete -c dotta -n "__dotta_using_command revert" -xa "(__dotta_commits)"
 complete -c dotta -n "__dotta_using_command revert" -xa "(__dotta_refspec_commits)"
 
-# =============================================================================
-# Command-Specific Options
-# =============================================================================
+# profile subcommand argument values
+complete -c dotta -n "__dotta_using_subcommand profile enable"  -xa "(__dotta_profiles_all)"
+complete -c dotta -n "__dotta_using_subcommand profile disable" -xa "(__dotta_profiles)"
+complete -c dotta -n "__dotta_using_subcommand profile fetch"   -xa "(__dotta_profiles_all)"
+complete -c dotta -n "__dotta_using_subcommand profile reorder" -xa "(__dotta_profiles)"
 
-# --- init ---
-complete -c dotta -n "__dotta_using_command init" -s q -l quiet -d "Suppress output"
-
-# --- clone ---
-complete -c dotta -n "__dotta_using_command clone" -l bootstrap -d "Run bootstrap"
-complete -c dotta -n "__dotta_using_command clone" -l no-bootstrap -d "Skip bootstrap"
-complete -c dotta -n "__dotta_using_command clone" -l all -d "Fetch all profiles"
-complete -c dotta -n "__dotta_using_command clone" -s p -l profiles -xa "(__dotta_profiles_all)" -d "Specific profiles"
-complete -c dotta -n "__dotta_using_command clone" -s q -l quiet -d "Suppress output"
-complete -c dotta -n "__dotta_using_command clone" -s v -l verbose -d "Verbose output"
-
-# --- add ---
-complete -c dotta -n "__dotta_using_command add" -s m -l message -d "Commit message"
-complete -c dotta -n "__dotta_using_command add" -s e -l exclude -d "Exclude pattern"
-complete -c dotta -n "__dotta_using_command add" -s f -l force -d "Overwrite existing"
-complete -c dotta -n "__dotta_using_command add" -l encrypt -d "Force encryption"
-complete -c dotta -n "__dotta_using_command add" -l no-encrypt -d "Skip encryption"
-complete -c dotta -n "__dotta_using_command add" -l prefix -d "Custom prefix"
-complete -c dotta -n "__dotta_using_command add" -s v -l verbose -d "Verbose output"
-
-# --- remove ---
-complete -c dotta -n "__dotta_using_command remove" -s m -l message -d "Commit message"
-complete -c dotta -n "__dotta_using_command remove" -l delete-profile -d "Delete entire profile"
-complete -c dotta -n "__dotta_using_command remove" -l delete-files -d "Delete deployed files on next apply"
-complete -c dotta -n "__dotta_using_command remove" -s n -l dry-run -d "Preview only"
-complete -c dotta -n "__dotta_using_command remove" -s f -l force -d "Skip confirmation"
-complete -c dotta -n "__dotta_using_command remove" -s i -l interactive -d "Interactive mode"
-complete -c dotta -n "__dotta_using_command remove" -s v -l verbose -d "Verbose output"
-complete -c dotta -n "__dotta_using_command remove" -s q -l quiet -d "Quiet output"
-
-# --- apply ---
-complete -c dotta -n "__dotta_using_command apply" -s f -l force -d "Overwrite modified"
-complete -c dotta -n "__dotta_using_command apply" -s n -l dry-run -d "Preview only"
-complete -c dotta -n "__dotta_using_command apply" -l keep-orphans -d "Keep orphaned files"
-complete -c dotta -n "__dotta_using_command apply" -l skip-existing -d "Skip existing files"
-complete -c dotta -n "__dotta_using_command apply" -l no-skip-unchanged -d "Disable smart skipping"
-complete -c dotta -n "__dotta_using_command apply" -s e -l exclude -d "Exclude pattern"
-complete -c dotta -n "__dotta_using_command apply" -s v -l verbose -d "Verbose output"
-
-# --- status ---
-complete -c dotta -n "__dotta_using_command status" -l local -d "Local status only"
-complete -c dotta -n "__dotta_using_command status" -l remote -d "Remote status only"
-complete -c dotta -n "__dotta_using_command status" -l no-fetch -d "Skip fetch"
-complete -c dotta -n "__dotta_using_command status" -l no-sudo -d "Skip privilege elevation"
-complete -c dotta -n "__dotta_using_command status" -l all -d "All profiles"
-complete -c dotta -n "__dotta_using_command status" -s v -l verbose -d "Verbose output"
-
-# --- diff ---
-complete -c dotta -n "__dotta_using_command diff" -l upstream -d "Repo to filesystem"
-complete -c dotta -n "__dotta_using_command diff" -l downstream -d "Filesystem to repo"
-complete -c dotta -n "__dotta_using_command diff" -s a -l all -d "Both directions"
-complete -c dotta -n "__dotta_using_command diff" -l name-only -d "Names only"
-complete -c dotta -n "__dotta_using_command diff" -s v -l verbose -d "Verbose output"
-
-# --- list ---
-complete -c dotta -n "__dotta_using_command list" -l remote -d "Show remote tracking"
-complete -c dotta -n "__dotta_using_command list" -s v -l verbose -d "Verbose output"
-
-# --- sync ---
-complete -c dotta -n "__dotta_using_command sync" -s n -l dry-run -d "Preview only"
-complete -c dotta -n "__dotta_using_command sync" -l no-push -d "Fetch only"
-complete -c dotta -n "__dotta_using_command sync" -l no-pull -d "Push only"
-complete -c dotta -n "__dotta_using_command sync" -s f -l force -d "Force with changes"
-complete -c dotta -n "__dotta_using_command sync" -l diverged -xa "warn rebase merge ours theirs" -d "Divergence strategy"
-complete -c dotta -n "__dotta_using_command sync" -s v -l verbose -d "Verbose output"
-
-# --- update ---
-complete -c dotta -n "__dotta_using_command update" -s m -l message -d "Commit message"
-complete -c dotta -n "__dotta_using_command update" -s e -l exclude -d "Exclude pattern"
-complete -c dotta -n "__dotta_using_command update" -s n -l dry-run -d "Preview only"
-complete -c dotta -n "__dotta_using_command update" -l include-new -d "Include new files"
-complete -c dotta -n "__dotta_using_command update" -l only-new -d "Only new files"
-complete -c dotta -n "__dotta_using_command update" -s i -l interactive -d "Interactive mode"
-complete -c dotta -n "__dotta_using_command update" -s v -l verbose -d "Verbose output"
-
-# --- revert ---
-complete -c dotta -n "__dotta_using_command revert" -s m -l message -d "Commit message"
-complete -c dotta -n "__dotta_using_command revert" -s f -l force -d "Skip confirmation"
-complete -c dotta -n "__dotta_using_command revert" -s n -l dry-run -d "Preview only"
-complete -c dotta -n "__dotta_using_command revert" -s v -l verbose -d "Verbose output"
-
-# --- show ---
-complete -c dotta -n "__dotta_using_command show" -l raw -d "Raw content"
-
-# --- ignore ---
-complete -c dotta -n "__dotta_using_command ignore" -l add -d "Add pattern"
-complete -c dotta -n "__dotta_using_command ignore" -l remove -d "Remove pattern"
-complete -c dotta -n "__dotta_using_command ignore" -l test -rF -d "Test if path is ignored"
-complete -c dotta -n "__dotta_using_command ignore" -s v -l verbose -d "Verbose output"
-
-# --- bootstrap ---
-complete -c dotta -n "__dotta_using_command bootstrap" -l all -d "All profiles"
-complete -c dotta -n "__dotta_using_command bootstrap" -s e -l edit -d "Edit script"
-complete -c dotta -n "__dotta_using_command bootstrap" -l show -d "Show script"
-complete -c dotta -n "__dotta_using_command bootstrap" -s l -l list -d "List scripts"
-complete -c dotta -n "__dotta_using_command bootstrap" -s n -l dry-run -d "Preview only"
-complete -c dotta -n "__dotta_using_command bootstrap" -s y -l yes -l no-confirm -d "Skip confirmation"
-complete -c dotta -n "__dotta_using_command bootstrap" -l continue-on-error -d "Continue on error"
-complete -c dotta -n "__dotta_using_command bootstrap" -s v -l verbose -d "Verbose output"
-
-# --- git ---
-complete -c dotta -n "__dotta_using_command git" -xa "(__fish_complete_subcommand --command git)"
-
-# --- profile ---
-complete -c dotta -n "__dotta_using_subcommand profile list" -l all -d "All profiles"
-complete -c dotta -n "__dotta_using_subcommand profile list" -l remote -d "Show remote tracking"
-complete -c dotta -n "__dotta_using_subcommand profile list" -s v -l verbose -d "Verbose output"
-complete -c dotta -n "__dotta_using_subcommand profile enable" -l all -d "Enable all local profiles"
-complete -c dotta -n "__dotta_using_subcommand profile enable" -l prefix -d "Custom prefix"
-complete -c dotta -n "__dotta_using_subcommand profile enable" -s n -l dry-run -d "Preview only"
-complete -c dotta -n "__dotta_using_subcommand profile enable" -s q -l quiet -d "Suppress output"
-complete -c dotta -n "__dotta_using_subcommand profile enable" -s v -l verbose -d "Verbose output"
-complete -c dotta -n "__dotta_using_subcommand profile disable" -l all -d "Disable all enabled profiles"
-complete -c dotta -n "__dotta_using_subcommand profile disable" -s n -l dry-run -d "Preview only"
-complete -c dotta -n "__dotta_using_subcommand profile disable" -s f -l force -d "Force disable"
-complete -c dotta -n "__dotta_using_subcommand profile disable" -s q -l quiet -d "Suppress output"
-complete -c dotta -n "__dotta_using_subcommand profile disable" -s v -l verbose -d "Verbose output"
-complete -c dotta -n "__dotta_using_subcommand profile fetch" -l all -d "Fetch all remote profiles"
-complete -c dotta -n "__dotta_using_subcommand profile fetch" -s v -l verbose -d "Verbose output"
-complete -c dotta -n "__dotta_using_subcommand profile reorder" -s q -l quiet -d "Suppress output"
-complete -c dotta -n "__dotta_using_subcommand profile reorder" -s v -l verbose -d "Verbose output"
-complete -c dotta -n "__dotta_using_subcommand profile validate" -l fix -d "Auto-fix issues"
-
-# --- remote ---
-complete -c dotta -n "__dotta_using_subcommand remote list" -s v -l verbose -d "Show URLs"
-complete -c dotta -n "__dotta_using_subcommand remote remove" -xa "(__dotta_remotes)"
+# remote subcommand argument values (subcommand itself is not in .subcommands)
+complete -c dotta -n "__dotta_using_subcommand remote remove"  -xa "(__dotta_remotes)"
 complete -c dotta -n "__dotta_using_subcommand remote set-url" -xa "(__dotta_remotes)"
-complete -c dotta -n "__dotta_using_subcommand remote rename" -xa "(__dotta_remotes)"
-complete -c dotta -n "__dotta_using_subcommand remote show" -xa "(__dotta_remotes)"
+complete -c dotta -n "__dotta_using_subcommand remote rename"  -xa "(__dotta_remotes)"
+complete -c dotta -n "__dotta_using_subcommand remote show"    -xa "(__dotta_remotes)"
 
-# --- key ---
-complete -c dotta -n "__dotta_using_subcommand key status" -s v -l verbose -d "Show detailed information"
+# =============================================================================
+# Auto-generated schema
+#
+# Sourced last so the condition helpers defined above are already in
+# scope (fish resolves `-n "..."` expressions at completion time, but
+# defining helpers first keeps load-order reasoning local to this file).
+# =============================================================================
+
+set -l __dotta_comp_dir (status dirname)
+source "$__dotta_comp_dir/dotta-completions.fish"

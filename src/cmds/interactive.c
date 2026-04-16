@@ -10,6 +10,7 @@
 #include <string.h>
 #include <unistd.h>
 
+#include "base/args.h"
 #include "base/array.h"
 #include "base/error.h"
 #include "base/hashmap.h"
@@ -689,3 +690,41 @@ error_t *interactive_run(git_repository *repo) {
 
     return NULL;
 }
+
+/* ══════════════════════════════════════════════════════════════════
+ * Spec-engine integration
+ * ══════════════════════════════════════════════════════════════════ */
+
+static error_t *interactive_dispatch(const args_ctx_t *ctx, void *opts_v) {
+    (void) opts_v;
+    return interactive_run(ctx->repo);
+}
+
+const args_command_t spec_interactive = {
+    .name         = "interactive",
+    .summary      = "Interactive profile management and ordering",
+    /* Root-level flag aliases: `dotta --interactive` and `dotta -i`
+     * both dispatch here. The bare `dotta interactive` form is served
+     * by `.name`; `.root_aliases` covers only the flag-prefixed forms.
+     * Short-first order matches the project convention for `flags`
+     * strings (e.g., `"p profile"` → `-p, --profile`). */
+    .root_aliases = "i interactive",
+    .usage        =
+        "%s interactive\n"
+        "   or: %s --interactive\n"
+        "   or: %s -i",
+    .description  =
+        "Keybindings:\n"
+        "  ↑↓, j/k, g/G    Navigate profiles\n"
+        "  space           Enable/disable profiles\n"
+        "  J/K             Move profile up/down\n"
+        "  w               Save profile order and choice\n"
+        "  q, ESC          Quit\n"
+        "\n"
+        "Notes:\n"
+        "  - Enabled profiles are saved to state in the displayed order\n"
+        "  - Profile order determines layering (later overrides earlier)\n"
+        "  - Use regular commands (apply, update, sync) after enabling profiles\n",
+    .repo_mode    = ARGS_REPO_REQUIRED,
+    .dispatch     = interactive_dispatch,
+};

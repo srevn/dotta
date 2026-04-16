@@ -9,6 +9,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "base/args.h"
 #include "base/error.h"
 #include "base/output.h"
 #include "core/ignore.h"
@@ -172,9 +173,12 @@ static error_t *init_dottaignore(git_repository *repo) {
 /**
  * Initialize command implementation
  */
-error_t *cmd_init(const config_t *config, output_ctx_t *out, const cmd_init_options_t *opts) {
-    CHECK_NULL(config);
+error_t *cmd_init(const args_ctx_t *ctx, const cmd_init_options_t *opts) {
+    CHECK_NULL(ctx);
     CHECK_NULL(opts);
+
+    const config_t *config = ctx->config;
+    output_ctx_t *out = ctx->out;
 
     git_repository *repo = NULL;
     error_t *err = NULL;
@@ -260,3 +264,48 @@ cleanup:
 
     return err;
 }
+
+/* ══════════════════════════════════════════════════════════════════
+ * Spec-engine integration
+ * ══════════════════════════════════════════════════════════════════ */
+
+static error_t *init_dispatch(const args_ctx_t *ctx, void *opts_v) {
+    return cmd_init(ctx, (const cmd_init_options_t *) opts_v);
+}
+
+static const args_opt_t init_opts[] = {
+    ARGS_GROUP("Options:"),
+    ARGS_FLAG(
+        "q quiet",
+        cmd_init_options_t,quiet,
+        "Suppress output"
+    ),
+    ARGS_POSITIONAL_ANY_ARG(
+        "[path]",
+        cmd_init_options_t,repo_path,
+        "Repository location (default: system default)"
+    ),
+    ARGS_END
+};
+
+const args_command_t spec_init = {
+    .name        = "init",
+    .summary     = "Initialize a new dotta repository",
+    .usage       = "%s init [options] [path]",
+    .description =
+        "Create an empty Git repository wired for dotta profiles. The\n"
+        "repository path defaults to $DOTTA_REPO_DIR, then the path\n"
+        "configured in config.toml, then the per-user default directory.\n",
+    .examples    =
+        "  %s init                    # Default location\n"
+        "  %s init ~/dotfiles         # Custom path\n"
+        "  %s init --quiet            # No progress output\n",
+    .epilogue    =
+        "See also:\n"
+        "  %s add <profile> <file>    # Create and populate a profile\n"
+        "  %s apply                   # Deploy enabled profiles\n",
+    .opts_size   = sizeof(cmd_init_options_t),
+    .opts        = init_opts,
+    .repo_mode   = ARGS_REPO_NONE,
+    .dispatch    = init_dispatch,
+};

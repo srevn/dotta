@@ -836,14 +836,14 @@ static error_t *extract_elevation_paths_from_manifest(
 /**
  * Status command implementation
  */
-error_t *cmd_status(
-    git_repository *repo,
-    const config_t *config,
-    output_ctx_t *out,
-    const cmd_status_options_t *opts
-) {
-    CHECK_NULL(repo);
+error_t *cmd_status(const args_ctx_t *ctx, const cmd_status_options_t *opts) {
+    CHECK_NULL(ctx);
+    CHECK_NULL(ctx->repo);
     CHECK_NULL(opts);
+
+    git_repository *repo = ctx->repo;
+    const config_t *config = ctx->config;
+    output_ctx_t *out = ctx->out;
 
     /* Declare all resources at top and initialize to NULL */
     error_t *err = NULL;
@@ -968,8 +968,8 @@ error_t *cmd_status(
                     path_count,
                     "status",
                     true,  /* interactive mode (prompt allowed) */
-                    opts->argc,
-                    opts->argv,
+                    ctx->argc,
+                    ctx->argv,
                     out
                 );
 
@@ -1040,3 +1040,117 @@ cleanup:
 
     return err;
 }
+
+/* ══════════════════════════════════════════════════════════════════
+ * Spec-engine integration
+ * ══════════════════════════════════════════════════════════════════ */
+
+/**
+ * Resolve the --local / --remote intent pair into show_local /
+ * show_remote. Legacy default: both true when neither flag given.
+ * Explicit flags reduce to their own scope; giving both is identical
+ * to the default.
+ */
+static error_t *status_post_parse(
+    void *opts_v, arena_t *arena, const args_command_t *cmd
+) {
+    (void) arena;
+    (void) cmd;
+    cmd_status_options_t *o = opts_v;
+
+    if (!o->want_local && !o->want_remote) {
+        o->show_local = true;
+        o->show_remote = true;
+    } else {
+        o->show_local = o->want_local != 0;
+        o->show_remote = o->want_remote != 0;
+    }
+    return NULL;
+}
+
+static error_t *status_dispatch(const args_ctx_t *ctx, void *opts_v) {
+    return cmd_status(ctx, (const cmd_status_options_t *) opts_v);
+}
+
+static const args_opt_t status_opts[] = {
+    ARGS_GROUP("Options:"),
+    ARGS_APPEND(
+        "p profile",         "<name>",
+        cmd_status_options_t,profiles,     profile_count,
+        "Filter status to profile(s) (repeatable)"
+    ),
+    ARGS_FLAG(
+        "local",
+        cmd_status_options_t,want_local,
+        "Restrict to filesystem status"
+    ),
+    ARGS_FLAG(
+        "remote",
+        cmd_status_options_t,want_remote,
+        "Restrict to remote sync status"
+    ),
+    ARGS_FLAG(
+        "no-fetch",
+        cmd_status_options_t,no_fetch,
+        "Skip remote fetch; use cached refs"
+    ),
+    ARGS_FLAG(
+        "all",
+        cmd_status_options_t,all_profiles,
+        "Include non-enabled profiles"
+    ),
+    ARGS_FLAG(
+        "no-sudo",
+        cmd_status_options_t,no_sudo,
+        "Skip sudo; disables ownership checks"
+    ),
+    ARGS_FLAG(
+        "v verbose",
+        cmd_status_options_t,verbose,
+        "Verbose output"
+    ),
+    /* Positional profile filters share the `profiles` APPEND field. */
+    ARGS_POSITIONAL_ANY(
+        cmd_status_options_t,profiles,     profile_count
+    ),
+    ARGS_END,
+};
+
+const args_command_t spec_status = {
+    .name        = "status",
+    .summary     = "Show workspace status and remote sync state",
+    .usage       = "%s status [options] [profile]...",
+    .description =
+        "Report divergence between enabled profiles and the filesystem,\n"
+        "plus each profile's push/pull state against its remote. Default\n"
+        "scope covers both; --local and --remote restrict it.\n",
+    .notes       =
+        "Privilege Requirements:\n"
+        "  Ownership checks on root/ files require root privileges. When\n"
+        "  invoked without root, dotta prompts for sudo. --no-sudo skips\n"
+        "  the prompt; ownership divergence will not be detected.\n"
+        "\n"
+        "Remote State Indicators:\n"
+        "  =    up-to-date with remote\n"
+        "  ^n   n commits ahead of remote (ready to push)\n"
+        "  vn   n commits behind remote (run '%s sync' to pull)\n"
+        "  <>   diverged from remote (needs resolution)\n"
+        "  .    no remote tracking branch\n",
+    .examples    =
+        "  %s status                         # Local + remote\n"
+        "  %s status --local                 # Filesystem only\n"
+        "  %s status --remote                # Remote only\n"
+        "  %s status --no-fetch              # Skip fetch (cached refs)\n"
+        "  %s status -p work -p home         # Named profiles only\n"
+        "  %s status --all                   # Include non-enabled profiles\n",
+    .epilogue    =
+        "See also:\n"
+        "  %s apply           # Deploy the pending filesystem changes\n"
+        "  %s update          # Commit local filesystem changes\n"
+        "  %s sync            # Reconcile with remote\n",
+    .opts_size   = sizeof(cmd_status_options_t),
+    .opts        = status_opts,
+    .post_parse  = status_post_parse,
+    .repo_mode   = ARGS_REPO_REQUIRED,
+    .dispatch    = status_dispatch,
+};

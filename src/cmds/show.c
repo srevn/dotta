@@ -11,10 +11,13 @@
 #include <string.h>
 #include <time.h>
 
+#include "base/args.h"
 #include "base/array.h"
 #include "base/buffer.h"
 #include "base/error.h"
 #include "base/output.h"
+#include "base/refspec.h"
+#include "base/string.h"
 #include "base/timeutil.h"
 #include "core/metadata.h"
 #include "core/profiles.h"
@@ -557,14 +560,14 @@ cleanup:
 /**
  * Show command implementation
  */
-error_t *cmd_show(
-    git_repository *repo,
-    const config_t *config,
-    output_ctx_t *out,
-    const cmd_show_options_t *opts
-) {
-    CHECK_NULL(repo);
+error_t *cmd_show(const args_ctx_t *ctx, const cmd_show_options_t *opts) {
+    CHECK_NULL(ctx);
+    CHECK_NULL(ctx->repo);
     CHECK_NULL(opts);
+
+    git_repository *repo = ctx->repo;
+    const config_t *config = ctx->config;
+    output_ctx_t *out = ctx->out;
 
     error_t *err = NULL;
     string_array_t *profiles = NULL;
@@ -729,3 +732,161 @@ cleanup:
 
     return err;
 }
+
+/* ══════════════════════════════════════════════════════════════════
+ * Spec-engine integration
+ * ══════════════════════════════════════════════════════════════════ */
+
+/**
+ * Interpret the 0-3 raw positionals into `profile`, `file_path`,
+ * `commit`, and `mode`.
+ *
+ * Allocation model: all refspec strings are allocated in `arena`.
+ * Pure positional pointers borrow argv. cmd_show does not free any of
+ * these pointers — the engine's arena owns their lifetime.
+ */
+static error_t *show_post_parse(
+    void *opts_v, arena_t *arena, const args_command_t *cmd
+) {
+    (void) cmd;
+    cmd_show_options_t *o = opts_v;
+
+    if (o->positional_count == 0) {
+        return ERROR(
+            ERR_INVALID_ARG,
+            "target argument is required (profile, file, or commit)"
+        );
+    }
+
+    char **args = o->positional_args;
+
+    if (o->positional_count == 1) {
+        const char *arg = args[0];
+
+        /* Pure commit ref: git ref without path separators. */
+        if (str_looks_like_git_ref(arg) && !strchr(arg, '/') &&
+            !strchr(arg, '.')) {
+            o->mode = SHOW_COMMIT;
+            o->commit = arg;
+            return NULL;
+        }
+
+        /* File mode: parse [profile:]file[@commit] into arena. */
+        o->mode = SHOW_FILE;
+        char *profile = NULL;
+        char *file = NULL;
+        char *commit = NULL;
+        error_t *err = parse_refspec(arena, arg, &profile, &file, &commit);
+        if (err != NULL) {
+            return error_wrap(err, "Failed to parse file specification");
+        }
+        /* A refspec-supplied profile overrides any -p/--profile flag. */
+        if (profile != NULL) o->profile = profile;
+        o->file_path = file;
+        if (commit != NULL) o->commit = commit;
+        return NULL;
+    }
+
+    if (o->positional_count == 2) {
+        o->mode = SHOW_FILE;
+
+        if (str_looks_like_git_ref(args[1])) {
+            /* <file> <commit> */
+            o->file_path = args[0];
+            o->commit = args[1];
+            return NULL;
+        }
+
+        /* <profile> <file[@commit]> — refspec profile wins if present. */
+        o->profile = args[0];
+        char *profile = NULL;
+        char *file = NULL;
+        char *commit = NULL;
+        error_t *err = parse_refspec(arena, args[1], &profile, &file, &commit);
+        if (err != NULL) {
+            return error_wrap(err, "Failed to parse file specification");
+        }
+        if (profile != NULL) o->profile = profile;
+        o->file_path = file;
+        if (commit != NULL) o->commit = commit;
+        return NULL;
+    }
+
+    if (o->positional_count == 3) {
+        o->mode = SHOW_FILE;
+        o->profile = args[0];
+        o->file_path = args[1];
+        o->commit = args[2];
+        return NULL;
+    }
+
+    /* Max=3 is enforced by POSITIONAL_RAW; this branch is unreachable. */
+    return ERROR(ERR_INTERNAL, "show: too many positionals");
+}
+
+static error_t *show_dispatch(const args_ctx_t *ctx, void *opts_v) {
+    return cmd_show(ctx, (const cmd_show_options_t *) opts_v);
+}
+
+static const args_opt_t show_opts[] = {
+    ARGS_GROUP("Options:"),
+    ARGS_STRING(
+        "p profile",       "<name>",
+        cmd_show_options_t,profile,
+        "Override profile for file or commit lookup"
+    ),
+    ARGS_FLAG(
+        "raw",
+        cmd_show_options_t,raw,
+        "Print raw file content without formatting"
+    ),
+    ARGS_POSITIONAL_RAW(
+        cmd_show_options_t,positional_args, positional_count,
+        0,                 3
+    ),
+    ARGS_END,
+};
+
+const args_command_t spec_show = {
+    .name        = "show",
+    .summary     = "Show file content or commit details",
+    .usage       =
+        "%s show [options] <target>\n"
+        "   or: %s show [options] <commit>\n"
+        "   or: %s show [options] <file> <commit>\n"
+        "   or: %s show [options] <profile>:<file>@<commit>\n"
+        "   or: %s show [options] <profile> <file> <commit>",
+    .description =
+        "Inspect a single profile object: a commit, a file at HEAD, or a\n"
+        "file at a specific commit. Mode is inferred from the positional\n"
+        "shape; refspec forms pack the same selection into one token.\n",
+    .notes       =
+        "Commit Mode:\n"
+        "  Triggered when the first positional parses as a Git ref (SHA,\n"
+        "  HEAD, HEAD~N). Prints commit metadata, file change statistics,\n"
+        "  and the full unified diff (equivalent to 'git show').\n"
+        "\n"
+        "File Mode:\n"
+        "  Prints file content from the profile branch. Without -p, the\n"
+        "  search runs across enabled profiles for an exact path match.\n"
+        "  Paths accept either form: filesystem (~/.bashrc, /etc/hosts)\n"
+        "  or storage (home/.bashrc, root/etc/hosts).\n",
+    .examples    =
+        "  %s show a4f2c8e                          # Commit from enabled profiles\n"
+        "  %s show -p global a4f2c8e                # Commit from a specific profile\n"
+        "  %s show home/.bashrc                     # File at HEAD, search profiles\n"
+        "  %s show -p global home/.bashrc           # File at HEAD, specific profile\n"
+        "  %s show global:home/.bashrc              # File at HEAD via refspec\n"
+        "  %s show darwin home/.bashrc a4f2c8e      # File at commit, positional\n"
+        "  %s show home/.bashrc@a4f2c8e             # File at commit via refspec\n"
+        "  %s show global:home/.bashrc@a4f2c8e      # File at commit, full refspec\n",
+    .epilogue    =
+        "See also:\n"
+        "  %s list <profile> <file>   # Commit history for a file\n"
+        "  %s diff <commit> <commit>  # Compare two commits\n",
+    .opts_size   = sizeof(cmd_show_options_t),
+    .opts        = show_opts,
+    .post_parse  = show_post_parse,
+    .repo_mode   = ARGS_REPO_REQUIRED,
+    .dispatch    = show_dispatch,
+};

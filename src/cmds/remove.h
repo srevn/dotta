@@ -17,10 +17,16 @@
 #include <git2.h>
 #include <types.h>
 
+#include "base/args.h"
+
 /**
  * Command options
+ *
+ * `profile` and `paths` are populated from the raw positional bucket
+ * by `remove_post_parse`. Consumers read only the user-facing fields.
  */
 typedef struct {
+    /* User-facing (read by cmd_remove). */
     const char *profile;        /* Profile name (required) */
     char **paths;               /* Paths to remove (can be NULL for --delete-profile) */
     size_t path_count;          /* Number of paths */
@@ -40,6 +46,10 @@ typedef struct {
 
     /* Git flags */
     const char *message;        /* Custom commit message (optional) */
+
+    /* Raw positional bucket (engine-populated; interpreted in post_parse). */
+    char **positional_args;
+    size_t positional_count;
 } cmd_remove_options_t;
 
 /**
@@ -56,17 +66,18 @@ typedef struct {
  * Uses temporary worktree to safely modify profile branches.
  * Executes hooks but does not modify deployed files or state file entries.
  *
- * @param repo Repository (must not be NULL)
- * @param config Configuration (must not be NULL)
- * @param out Output context (must not be NULL)
+ * @param ctx Dispatch context (must not be NULL)
  * @param opts Command options (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *cmd_remove(
-    git_repository *repo,
-    const config_t *config,
-    output_ctx_t *out,
-    const cmd_remove_options_t *opts
-);
+error_t *cmd_remove(const args_ctx_t *ctx, const cmd_remove_options_t *opts);
+
+/**
+ * Spec-engine command specification for `dotta remove`.
+ *
+ * Registered in cmds/registry.c. Defined in remove.c beside the
+ * post_parse and dispatch wrappers.
+ */
+extern const args_command_t spec_remove;
 
 #endif /* DOTTA_CMD_REMOVE_H */

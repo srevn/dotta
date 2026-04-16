@@ -10,6 +10,8 @@
 #include <git2.h>
 #include <types.h>
 
+#include "base/args.h"
+
 /**
  * Command options
  */
@@ -24,11 +26,18 @@ typedef struct {
  * Creates or opens a git repository and sets up dotta branch structure.
  * Creates initial empty state file.
  *
- * @param config Configuration (must not be NULL)
- * @param out Output context (must not be NULL)
+ * @param ctx Dispatch context (must not be NULL)
  * @param opts Command options (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *cmd_init(const config_t *config, output_ctx_t *out, const cmd_init_options_t *opts);
+error_t *cmd_init(const args_ctx_t *ctx, const cmd_init_options_t *opts);
+
+/**
+ * Spec-engine command specification for `dotta init`.
+ *
+ * Registered in cmds/registry.c. Defined in init.c beside the
+ * dispatch wrapper.
+ */
+extern const args_command_t spec_init;
 
 #endif /* DOTTA_CMD_INIT_H */

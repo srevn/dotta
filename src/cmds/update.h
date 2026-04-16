@@ -11,10 +11,18 @@
 #include <git2.h>
 #include <types.h>
 
+#include "base/args.h"
+
 /**
  * Update command options
+ *
+ * `files` and `profiles` are populated from the raw positional bucket
+ * by `update_post_parse`. The first positional is classified as a file
+ * path or profile name via `str_looks_like_file_path`; remaining
+ * positionals are always file paths.
  */
 typedef struct {
+    /* User-facing (read by cmd_update). */
     char **files;                   /* Specific files to update (NULL = all) */
     size_t file_count;              /* Number of files */
     char **profiles;                /* Specific profiles (NULL = use state/config) */
@@ -28,9 +36,9 @@ typedef struct {
     bool include_new;               /* Include new files from tracked directories */
     bool only_new;                  /* Only process new files (ignore modified) */
 
-    /* Privilege re-exec support */
-    int argc;                       /* Original argc (for privilege re-exec) */
-    char **argv;                    /* Original argv (for privilege re-exec) */
+    /* Raw positional bucket (engine-populated; interpreted in post_parse). */
+    char **positional_args;
+    size_t positional_count;
 } cmd_update_options_t;
 
 /**
@@ -38,17 +46,18 @@ typedef struct {
  *
  * Finds modified files and updates their source profiles with the changes.
  *
- * @param repo Repository (must not be NULL)
- * @param config Configuration (must not be NULL)
- * @param out Output context (must not be NULL)
+ * @param ctx Dispatch context (must not be NULL)
  * @param opts Command options (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *cmd_update(
-    git_repository *repo,
-    const config_t *config,
-    output_ctx_t *out,
-    const cmd_update_options_t *opts
-);
+error_t *cmd_update(const args_ctx_t *ctx, const cmd_update_options_t *opts);
+
+/**
+ * Spec-engine command specification for `dotta update`.
+ *
+ * Registered in cmds/registry.c. Defined in update.c beside the
+ * post_parse and dispatch wrappers.
+ */
+extern const args_command_t spec_update;
 
 #endif /* DOTTA_CMD_UPDATE_H */

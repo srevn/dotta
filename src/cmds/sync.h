@@ -12,6 +12,7 @@
 #include <git2.h>
 #include <types.h>
 
+#include "base/args.h"
 #include "sys/upstream.h"
 
 /* Use upstream module's state tracking */
@@ -55,17 +56,18 @@ typedef struct {
  * Requires workspace to be clean (no uncommitted changes) unless --force is used.
  * Run 'update' command first to commit local changes to profile branches.
  *
- * @param repo Repository (must not be NULL)
- * @param config Configuration (must not be NULL)
- * @param out Output context (must not be NULL)
+ * @param ctx Dispatch context (must not be NULL)
  * @param opts Command options (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *cmd_sync(
-    git_repository *repo,
-    const config_t *config,
-    output_ctx_t *out,
-    const cmd_sync_options_t *opts
-);
+error_t *cmd_sync(const args_ctx_t *ctx, const cmd_sync_options_t *opts);
+
+/**
+ * Spec-engine command specification for `dotta sync`.
+ *
+ * Registered in cmds/registry.c. Defined in sync.c beside the
+ * dispatch wrapper.
+ */
+extern const args_command_t spec_sync;
 
 #endif /* DOTTA_CMD_SYNC_H */

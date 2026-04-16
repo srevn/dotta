@@ -10,8 +10,15 @@
 #include <git2.h>
 #include <types.h>
 
+#include "base/args.h"
+
 /**
  * Command options
+ *
+ * `skip_unchanged` is an int (not bool) because the spec engine's
+ * `ARGS_FLAG_SET` writes int-sized values. `--no-skip-unchanged` sets
+ * it to 0; `init_defaults` seeds it to 1. Consumers test truthiness,
+ * which works transparently for both int and bool.
  */
 typedef struct {
     char **profiles;            /* Profile names (NULL = use state/config) */
@@ -23,13 +30,9 @@ typedef struct {
     bool keep_orphans;          /* Don't remove orphaned files (opt-out from default cleanup) */
     bool verbose;               /* Print verbose output */
     bool skip_existing;         /* Skip files that already exist */
-    bool skip_unchanged;        /* Skip files that match profile content (default: true) */
+    int skip_unchanged;         /* Skip files matching profile content (default: 1) */
     char **exclude_patterns;    /* Exclude patterns (glob) - read-only */
     size_t exclude_count;       /* Number of exclude patterns */
-
-    /* Privilege re-exec support */
-    int argc;                   /* Original argc (for privilege re-exec) */
-    char **argv;                /* Original argv (for privilege re-exec) */
 } cmd_apply_options_t;
 
 /**
@@ -38,17 +41,18 @@ typedef struct {
  * Orchestrates profile detection/loading, manifest building,
  * pre-flight checks, and deployment.
  *
- * @param repo Repository (must not be NULL)
- * @param out Output context (must not be NULL)
- * @param config Configuration (must not be NULL)
+ * @param ctx Dispatch context (must not be NULL)
  * @param opts Command options (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *cmd_apply(
-    git_repository *repo,
-    const config_t *config,
-    output_ctx_t *out,
-    const cmd_apply_options_t *opts
-);
+error_t *cmd_apply(const args_ctx_t *ctx, const cmd_apply_options_t *opts);
+
+/**
+ * Spec-engine command specification for `dotta apply`.
+ *
+ * Registered in cmds/registry.c. Defined in apply.c beside the
+ * dispatch wrapper.
+ */
+extern const args_command_t spec_apply;
 
 #endif /* DOTTA_CMD_APPLY_H */

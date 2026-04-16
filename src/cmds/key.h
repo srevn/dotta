@@ -12,6 +12,8 @@
 #include <stdbool.h>
 #include <types.h>
 
+#include "base/args.h"
+
 /**
  * Key command actions
  */
@@ -23,12 +25,18 @@ typedef enum {
 
 /**
  * Key command options
+ *
+ * `action` is derived by `key_post_parse` from the first positional
+ * token (set | clear | status).
  */
 typedef struct {
+    /* User-facing (read by cmd_key). */
     key_action_t action;
-
-    /* Common options */
     bool verbose;
+
+    /* Raw positional bucket (engine-populated; interpreted in post_parse). */
+    char **positional_args;
+    size_t positional_count;
 } cmd_key_options_t;
 
 /**
@@ -39,17 +47,18 @@ typedef struct {
  * - clear: Securely clears cached passphrase
  * - status: Shows encryption configuration and key cache status
  *
- * @param repo Repository (must not be NULL)
- * @param config Configuration (must not be NULL)
- * @param out Output context (must not be NULL)
+ * @param ctx Dispatch context (must not be NULL)
  * @param opts Command options (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *cmd_key(
-    git_repository *repo,
-    const config_t *config,
-    output_ctx_t *out,
-    const cmd_key_options_t *opts
-);
+error_t *cmd_key(const args_ctx_t *ctx, const cmd_key_options_t *opts);
+
+/**
+ * Spec-engine command specification for `dotta key`.
+ *
+ * Registered in cmds/registry.c. Defined in key.c beside the
+ * post_parse and dispatch wrappers.
+ */
+extern const args_command_t spec_key;
 
 #endif /* DOTTA_CMD_KEY_H */

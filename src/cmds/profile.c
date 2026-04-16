@@ -12,6 +12,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "base/args.h"
 #include "base/array.h"
 #include "base/error.h"
 #include "base/output.h"
@@ -1574,9 +1575,13 @@ cleanup:
 /**
  * Profile command dispatcher
  */
-error_t *cmd_profile(git_repository *repo, output_ctx_t *out, const cmd_profile_options_t *opts) {
-    CHECK_NULL(repo);
+error_t *cmd_profile(const args_ctx_t *ctx, const cmd_profile_options_t *opts) {
+    CHECK_NULL(ctx);
+    CHECK_NULL(ctx->repo);
     CHECK_NULL(opts);
+
+    git_repository *repo = ctx->repo;
+    output_ctx_t *out = ctx->out;
 
     /* Override verbosity from CLI */
     if (opts->verbose) {
@@ -1622,3 +1627,280 @@ error_t *cmd_profile(git_repository *repo, output_ctx_t *out, const cmd_profile_
 
     return result;
 }
+
+/* ══════════════════════════════════════════════════════════════════
+ * Spec-engine integration
+ * ══════════════════════════════════════════════════════════════════ */
+
+/**
+ * Single dispatch wrapper shared by every subcommand.
+ *
+ * Each sub's `init_defaults` already set the `subcommand` discriminator,
+ * so `cmd_profile`'s switch routes the call.
+ */
+static error_t *profile_dispatch(const args_ctx_t *ctx, void *opts_v) {
+    return cmd_profile(ctx, (const cmd_profile_options_t *) opts_v);
+}
+
+/* --- list --- */
+
+static void profile_list_defaults(void *o) {
+    cmd_profile_options_t *opts = o;
+    opts->subcommand = PROFILE_LIST;
+    opts->show_available = true;
+}
+
+static const args_opt_t profile_list_opts[] = {
+    ARGS_GROUP("Options:"),
+    ARGS_FLAG(
+        "all",             cmd_profile_options_t,show_remote,
+        "Show all available and remote profiles"
+    ),
+    ARGS_END,
+};
+
+static const args_command_t spec_profile_list = {
+    .name          = "profile list",
+    .summary       = "Show all profiles and their enabled status",
+    .usage         = "%s profile list [--all]",
+    .opts_size     = sizeof(cmd_profile_options_t),
+    .opts          = profile_list_opts,
+    .init_defaults = profile_list_defaults,
+    .repo_mode     = ARGS_REPO_REQUIRED,
+    .dispatch      = profile_dispatch,
+};
+
+/* --- fetch --- */
+
+static void profile_fetch_defaults(void *o) {
+    ((cmd_profile_options_t *) o)->subcommand = PROFILE_FETCH;
+}
+
+static const args_opt_t profile_fetch_opts[] = {
+    ARGS_GROUP("Options:"),
+    ARGS_FLAG(
+        "all",                cmd_profile_options_t,  fetch_all,
+        "Fetch all remote profiles"
+    ),
+    ARGS_FLAG(
+        "v verbose",          cmd_profile_options_t,  verbose,
+        "Show detailed progress"
+    ),
+    ARGS_POSITIONAL_ANY(
+        cmd_profile_options_t,
+        profiles,             profile_count
+    ),
+    ARGS_END,
+};
+
+static const args_command_t spec_profile_fetch = {
+    .name          = "profile fetch",
+    .summary       = "Download profiles from a remote without enabling them",
+    .usage         = "%s profile fetch [--all] [-v] [<name>...]",
+    .opts_size     = sizeof(cmd_profile_options_t),
+    .opts          = profile_fetch_opts,
+    .init_defaults = profile_fetch_defaults,
+    .repo_mode     = ARGS_REPO_REQUIRED,
+    .dispatch      = profile_dispatch,
+};
+
+/* --- enable --- */
+
+static void profile_enable_defaults(void *o) {
+    ((cmd_profile_options_t *) o)->subcommand = PROFILE_ENABLE;
+}
+
+static const args_opt_t profile_enable_opts[] = {
+    ARGS_GROUP("Options:"),
+    ARGS_FLAG(
+        "all",
+        cmd_profile_options_t,all_profiles,
+        "Enable all local profiles"
+    ),
+    ARGS_STRING(
+        "prefix",             "<path>",
+        cmd_profile_options_t,custom_prefix,
+        "Custom prefix for profiles with custom/ files"
+    ),
+    ARGS_FLAG(
+        "v verbose",
+        cmd_profile_options_t,verbose,
+        "Show detailed progress"
+    ),
+    ARGS_FLAG(
+        "q quiet",
+        cmd_profile_options_t,quiet,
+        "Suppress non-error output"
+    ),
+    ARGS_POSITIONAL_ANY(
+        cmd_profile_options_t,profiles, profile_count
+    ),
+    ARGS_END,
+};
+
+static const args_command_t spec_profile_enable = {
+    .name          = "profile enable",
+    .summary       = "Enable profiles for deployment",
+    .usage         = "%s profile enable [--all] [--prefix <path>] [-v|-q] [<name>...]",
+    .description   =
+        "Enables one or more profiles so that 'dotta apply' deploys their files.\n"
+        "\n"
+        "  --prefix <path> attaches a custom mount point for profiles that contain\n"
+        "  custom/ files (e.g. --prefix /mnt/jails/web). Only valid for a single\n"
+        "  profile per invocation.\n",
+    .opts_size     = sizeof(cmd_profile_options_t),
+    .opts          = profile_enable_opts,
+    .init_defaults = profile_enable_defaults,
+    .repo_mode     = ARGS_REPO_REQUIRED,
+    .dispatch      = profile_dispatch,
+};
+
+/* --- disable --- */
+
+static void profile_disable_defaults(void *o) {
+    ((cmd_profile_options_t *) o)->subcommand = PROFILE_DISABLE;
+}
+
+static const args_opt_t profile_disable_opts[] = {
+    ARGS_GROUP("Options:"),
+    ARGS_FLAG(
+        "all",
+        cmd_profile_options_t,all_profiles,
+        "Disable all currently enabled profiles"
+    ),
+    ARGS_FLAG(
+        "n dry-run",
+        cmd_profile_options_t,dry_run,
+        "Show what would change without modifying state"
+    ),
+    ARGS_FLAG(
+        "v verbose",
+        cmd_profile_options_t,verbose,
+        "Show detailed progress"
+    ),
+    ARGS_FLAG(
+        "q quiet",
+        cmd_profile_options_t,quiet,
+        "Suppress non-error output"
+    ),
+    ARGS_POSITIONAL_ANY(
+        cmd_profile_options_t,profiles, profile_count
+    ),
+    ARGS_END,
+};
+
+static const args_command_t spec_profile_disable = {
+    .name          = "profile disable",
+    .summary       = "Disable profiles, mark for removal on next apply",
+    .usage         = "%s profile disable [--all] [-n] [-v|-q] [<name>...]",
+    .opts_size     = sizeof(cmd_profile_options_t),
+    .opts          = profile_disable_opts,
+    .init_defaults = profile_disable_defaults,
+    .repo_mode     = ARGS_REPO_REQUIRED,
+    .dispatch      = profile_dispatch,
+};
+
+/* --- reorder --- */
+
+static void profile_reorder_defaults(void *o) {
+    ((cmd_profile_options_t *) o)->subcommand = PROFILE_REORDER;
+}
+
+static const args_opt_t profile_reorder_opts[] = {
+    ARGS_GROUP("Options:"),
+    ARGS_FLAG(
+        "v verbose",
+        cmd_profile_options_t,verbose,
+        "Show the profile order before and after the change"
+    ),
+    ARGS_FLAG(
+        "q quiet",
+        cmd_profile_options_t,quiet,
+        "Suppress non-error output"
+    ),
+    ARGS_POSITIONAL_ANY(
+        cmd_profile_options_t,profiles, profile_count
+    ),
+    ARGS_END,
+};
+
+static const args_command_t spec_profile_reorder = {
+    .name          = "profile reorder",
+    .summary       = "Change the layering order of enabled profiles",
+    .usage         = "%s profile reorder [-v|-q] <name>...",
+    .description   =
+        "Provide every enabled profile in the desired order. Later profiles\n"
+        "override earlier ones during layering.\n",
+    .opts_size     = sizeof(cmd_profile_options_t),
+    .opts          = profile_reorder_opts,
+    .init_defaults = profile_reorder_defaults,
+    .repo_mode     = ARGS_REPO_REQUIRED,
+    .dispatch      = profile_dispatch,
+};
+
+/* --- validate --- */
+
+static void profile_validate_defaults(void *o) {
+    ((cmd_profile_options_t *) o)->subcommand = PROFILE_VALIDATE;
+}
+
+static const args_opt_t profile_validate_opts[] = {
+    ARGS_GROUP("Options:"),
+    ARGS_FLAG(
+        "fix",
+        cmd_profile_options_t,fix,
+        "Automatically fix any detected inconsistencies"
+    ),
+    ARGS_END,
+};
+
+static const args_command_t spec_profile_validate = {
+    .name          = "profile validate",
+    .summary       = "Check for and fix inconsistencies in the profile state",
+    .usage         = "%s profile validate [--fix]",
+    .opts_size     = sizeof(cmd_profile_options_t),
+    .opts          = profile_validate_opts,
+    .init_defaults = profile_validate_defaults,
+    .repo_mode     = ARGS_REPO_REQUIRED,
+    .dispatch      = profile_dispatch,
+};
+
+/* --- parent: subcommand index + spec --- */
+
+static const args_subcommand_t profile_subs[] = {
+    { "list",     &spec_profile_list,     false },
+    { "fetch",    &spec_profile_fetch,    false },
+    { "enable",   &spec_profile_enable,   false },
+    { "disable",  &spec_profile_disable,  false },
+    { "reorder",  &spec_profile_reorder,  false },
+    { "validate", &spec_profile_validate, false },
+    { NULL,       NULL,                   false }
+};
+
+const args_command_t spec_profile = {
+    .name               = "profile",
+    .summary            = "Profile management and layering",
+    .usage              = "%s profile <subcommand> [options]",
+    .description        =
+        "Manage which profiles are used in your current workspace.\n"
+        "\n"
+        "Profile States:\n"
+        "  • Available  - Profiles that exist locally but are not enabled\n"
+        "  • Enabled    - Profiles that will be deployed by 'dotta apply'\n"
+        "  • Remote     - Profiles on a remote that have not been fetched yet\n"
+        "\n"
+        "Enabling a profile is a persistent choice that marks it for deployment.\n"
+        "Run 'dotta apply' to synchronize the workspace with the set of enabled profiles.\n"
+        "\n"
+        "Run '%s profile <subcommand> --help' for per-subcommand options.\n",
+    .examples           =
+        "  %s profile list --all              # Show local and remote profiles\n"
+        "  %s profile fetch darwin            # Download a profile\n"
+        "  %s profile enable darwin           # Enable a profile for deployment\n"
+        "  %s profile disable --all           # Disable all enabled profiles\n"
+        "  %s profile reorder global darwin   # Change layering priority\n"
+        "  %s profile validate --fix          # Fix state inconsistencies\n",
+    .opts_size          = sizeof(cmd_profile_options_t),
+    .subcommands        = profile_subs,
+    .default_subcommand = &spec_profile_list,
+};

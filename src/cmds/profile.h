@@ -12,6 +12,8 @@
 #include <stdbool.h>
 #include <types.h>
 
+#include "base/args.h"
+
 /**
  * Profile command subcommands
  */
@@ -59,11 +61,20 @@ typedef struct {
 /**
  * Execute profile command
  *
- * @param repo Repository (must not be NULL)
- * @param out Output context (must not be NULL)
+ * @param ctx Dispatch context (must not be NULL)
  * @param opts Command options (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *cmd_profile(git_repository *repo, output_ctx_t *out, const cmd_profile_options_t *opts);
+error_t *cmd_profile(const args_ctx_t *ctx, const cmd_profile_options_t *opts);
+
+/**
+ * Spec-engine command specification for `dotta profile`.
+ *
+ * Subcommand tree: list / fetch / enable / disable / reorder / validate.
+ * All subs share `cmd_profile_options_t` and dispatch through a single
+ * wrapper that calls cmd_profile(). Registered in cmds/registry.c;
+ * defined in profile.c beside the dispatch wrapper.
+ */
+extern const args_command_t spec_profile;
 
 #endif /* DOTTA_CMD_PROFILE_H */

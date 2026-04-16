@@ -27,11 +27,13 @@ DEBUG_FLAGS := -g -O0 -fsanitize=address,undefined -fno-omit-frame-pointer -DDEB
 
 # Version information (captured at build time)
 GIT_COMMIT := $(shell git rev-parse --short=7 HEAD 2>/dev/null || echo "unknown")
-GIT_COMMIT_FULL := $(shell git rev-parse HEAD 2>/dev/null || echo "unknown")
 GIT_DIRTY := $(shell git diff-index --quiet HEAD -- 2>/dev/null || echo "-dirty")
 GIT_BRANCH := $(shell git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
 BUILD_ARCH := $(shell uname -m)
 CC_VERSION := $(shell $(CC) --version | head -n1)
+
+# Build type is part of the version banner and varies per target
+BUILD_TYPE ?= release
 
 # Vendor libraries
 LIB_DIR := lib
@@ -43,13 +45,13 @@ LIB_INCLUDES := -I$(LIB_DIR)/cjson -I$(LIB_DIR)/toml -I$(LIB_DIR)/hydrogen
 # Include paths
 INCLUDES := -Iinclude -Isrc $(LIB_INCLUDES)
 
-# Version build flags
-VERSION_FLAGS := -DDOTTA_BUILD_COMMIT="\"$(GIT_COMMIT)$(GIT_DIRTY)\"" \
-                 -DDOTTA_BUILD_COMMIT_FULL="\"$(GIT_COMMIT_FULL)\"" \
-                 -DDOTTA_BUILD_BRANCH="\"$(GIT_BRANCH)\"" \
-                 -DDOTTA_BUILD_OS="\"$(BUILD_OS)\"" \
-                 -DDOTTA_BUILD_ARCH="\"$(BUILD_ARCH)\"" \
-                 -DDOTTA_BUILD_CC="\"$(CC_VERSION)\""
+# Version build flags (recursive expansion so target-specific BUILD_TYPE wins)
+VERSION_FLAGS = -DDOTTA_BUILD_COMMIT="\"$(GIT_COMMIT)$(GIT_DIRTY)\"" \
+                -DDOTTA_BUILD_BRANCH="\"$(GIT_BRANCH)\"" \
+                -DDOTTA_BUILD_OS="\"$(BUILD_OS)\"" \
+                -DDOTTA_BUILD_ARCH="\"$(BUILD_ARCH)\"" \
+                -DDOTTA_BUILD_TYPE="\"$(BUILD_TYPE)\"" \
+                -DDOTTA_BUILD_CC="\"$(CC_VERSION)\""
 
 # Dependencies
 LIBGIT2_CFLAGS := $(shell pkg-config --cflags libgit2)
@@ -85,6 +87,7 @@ FISHDIR ?= $(PREFIX)/share/fish/vendor_completions.d
 
 # Source files by layer
 BASE_SRC := $(wildcard $(SRC_DIR)/base/*.c)
+BASE_OBJ := $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(BASE_SRC))
 SYS_SRC := $(wildcard $(SRC_DIR)/sys/*.c)
 INFRA_SRC := $(wildcard $(SRC_DIR)/infra/*.c)
 CRYPTO_SRC := $(wildcard $(SRC_DIR)/crypto/*.c)
@@ -157,6 +160,7 @@ $(TARGET): $(LIB_OBJ) $(MAIN_OBJ) | $(BIN_DIR)
 # Debug build
 .PHONY: debug
 debug: CFLAGS := -std=c11 -Wall -Wextra -Wpedantic -Werror $(DEBUG_FLAGS) $(FEATURE_MACROS)
+debug: BUILD_TYPE := debug
 debug: clean $(TARGET)
 
 # Static build (with libgit2 statically linked for portability)
@@ -182,11 +186,31 @@ static:
 	@$(MAKE) clean
 	@$(MAKE) LIBGIT2_LIBS="$(LIBGIT2_STATIC_LIBS)" $(TARGET)
 
+# Tests
+TESTS_DIR     := tests
+TESTS_BIN_DIR := $(TESTS_DIR)/bin
+TESTS_SRC     := $(wildcard $(TESTS_DIR)/*_test.c)
+TESTS_BIN     := $(patsubst $(TESTS_DIR)/%.c,$(TESTS_BIN_DIR)/%,$(TESTS_SRC))
+
+$(TESTS_BIN_DIR):
+	@mkdir -p $@
+
+$(TESTS_BIN_DIR)/%: $(TESTS_DIR)/%.c $(BASE_OBJ) | $(TESTS_BIN_DIR)
+	@echo "CC TEST $<"
+	@$(CC) $(CFLAGS) $(INCLUDES) $< $(BASE_OBJ) -o $@
+
+.PHONY: test
+test: $(TESTS_BIN)
+	@for t in $(TESTS_BIN); do \
+	    echo "== $$t =="; \
+	    "./$$t" || exit 1; \
+	done
+
 # Clean build artifacts
 .PHONY: clean
 clean:
 	@echo "Cleaning..."
-	@rm -rf $(BUILD_DIR) $(BIN_DIR)
+	@rm -rf $(BUILD_DIR) $(BIN_DIR) $(TESTS_BIN_DIR)
 
 # Install
 .PHONY: install
@@ -220,11 +244,24 @@ uninstall:
 	@echo "  Removed: $(BINDIR)/dotta"
 	@rm -rf $(DATADIR)
 	@echo "  Removed: $(DATADIR)"
-	@rm -f $(FISHDIR)/dotta.fish
-	@echo "  Removed: $(FISHDIR)/dotta.fish"
+	@rm -f $(FISHDIR)/dotta.fish \
+	       $(FISHDIR)/dotta-completions.fish
+	@echo "  Removed: $(FISHDIR)/dotta*.fish"
 	@echo ""
 	@echo "Note: User configurations in ~/.config/dotta were not removed"
 	@echo "To remove user configs: rm -rf ~/.config/dotta"
+
+# Fish completion directories
+COMPLETIONS_DIR := $(ETC_DIR)/completions
+COMPLETIONS_ENTRY := $(COMPLETIONS_DIR)/dotta.fish
+COMPLETIONS_GEN := $(COMPLETIONS_DIR)/dotta-completions.fish
+
+# Regenerate the auto-generated fish schema from the current binary
+.PHONY: completions
+completions: $(TARGET)
+	@echo "GEN $(COMPLETIONS_GEN)"
+	@$(TARGET) __complete spec fish > $(COMPLETIONS_GEN).tmp
+	@mv $(COMPLETIONS_GEN).tmp $(COMPLETIONS_GEN)
 
 # Install shell completions
 .PHONY: install-completions
@@ -232,8 +269,10 @@ install-completions:
 	@echo "Installing shell completions..."
 	@if [ -d "$(FISHDIR)" ] || [ ! -e "$(FISHDIR)" ]; then \
 		install -d "$(FISHDIR)" && \
-		install -m 644 $(ETC_DIR)/completions/dotta.fish "$(FISHDIR)/dotta.fish" && \
-		echo "  Installed: $(FISHDIR)/dotta.fish"; \
+		install -m 644 $(COMPLETIONS_ENTRY) "$(FISHDIR)/dotta.fish" && \
+		install -m 644 $(COMPLETIONS_GEN)   "$(FISHDIR)/dotta-completions.fish" && \
+		echo "  Installed: $(FISHDIR)/dotta.fish" && \
+		echo "  Installed: $(FISHDIR)/dotta-completions.fish"; \
 	else \
 		echo "  Skipped fish completions ($(FISHDIR) exists but is not a directory)"; \
 	fi
@@ -242,8 +281,10 @@ install-completions:
 .PHONY: uninstall-completions
 uninstall-completions:
 	@echo "Removing shell completions..."
-	@rm -f "$(FISHDIR)/dotta.fish"
+	@rm -f "$(FISHDIR)/dotta.fish" \
+	       "$(FISHDIR)/dotta-completions.fish"
 	@echo "  Removed: $(FISHDIR)/dotta.fish"
+	@echo "  Removed: $(FISHDIR)/dotta-completions.fish"
 
 # Install all (binary + completions)
 .PHONY: install-all
@@ -285,7 +326,9 @@ help:
 	@echo "  all                   - Build main executable (default)"
 	@echo "  debug                 - Build with debug symbols"
 	@echo "  static                - Build with libgit2 statically linked (portable)"
+	@echo "  test                  - Build and run unit tests"
 	@echo "  clean                 - Remove build artifacts"
+	@echo "  completions           - Regenerate dotta-completions.fish from current binary"
 	@echo "  install               - Install binary, configs, and hooks to $(PREFIX)"
 	@echo "  install-completions   - Install fish shell completions"
 	@echo "  install-all           - Install binary, configs, hooks, and completions"

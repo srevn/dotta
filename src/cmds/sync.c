@@ -11,6 +11,7 @@
 #include <string.h>
 #include <unistd.h>
 
+#include "base/args.h"
 #include "base/array.h"
 #include "base/error.h"
 #include "base/output.h"
@@ -1303,14 +1304,14 @@ static error_t *sync_push_phase(
 /**
  * Sync command implementation
  */
-error_t *cmd_sync(
-    git_repository *repo,
-    const config_t *config,
-    output_ctx_t *out,
-    const cmd_sync_options_t *opts
-) {
-    CHECK_NULL(repo);
+error_t *cmd_sync(const args_ctx_t *ctx, const cmd_sync_options_t *opts) {
+    CHECK_NULL(ctx);
+    CHECK_NULL(ctx->repo);
     CHECK_NULL(opts);
+
+    git_repository *repo = ctx->repo;
+    const config_t *config = ctx->config;
+    output_ctx_t *out = ctx->out;
 
     /* Declare all resources, initialized to NULL */
     error_t *err = NULL;
@@ -1862,3 +1863,88 @@ cleanup:
 
     return err;
 }
+
+/* ══════════════════════════════════════════════════════════════════
+ * Spec-engine integration
+ * ══════════════════════════════════════════════════════════════════ */
+
+static error_t *sync_dispatch(const args_ctx_t *ctx, void *opts_v) {
+    return cmd_sync(ctx, (const cmd_sync_options_t *) opts_v);
+}
+
+static const args_opt_t sync_opts[] = {
+    ARGS_GROUP("Options:"),
+    ARGS_APPEND(
+        "p profile",       "<name>",
+        cmd_sync_options_t,profiles,     profile_count,
+        "Filter sync to profile(s) (repeatable)"
+    ),
+    ARGS_FLAG(
+        "n dry-run",
+        cmd_sync_options_t,dry_run,
+        "Preview without writing"
+    ),
+    ARGS_FLAG(
+        "no-push",
+        cmd_sync_options_t,no_push,
+        "Fetch and analyze only; skip push"
+    ),
+    ARGS_FLAG(
+        "no-pull",
+        cmd_sync_options_t,no_pull,
+        "Push only; skip pull"
+    ),
+    ARGS_FLAG(
+        "f force",
+        cmd_sync_options_t,force,
+        "Sync even with uncommitted local changes"
+    ),
+    ARGS_STRING(
+        "diverged",        "<strategy>",
+        cmd_sync_options_t,diverged,
+        "Diverged-branch strategy (see notes)"
+    ),
+    ARGS_FLAG(
+        "v verbose",
+        cmd_sync_options_t,verbose,
+        "Verbose output"
+    ),
+    /* Bare profile positionals funnel into the same APPEND field. */
+    ARGS_POSITIONAL_ANY(
+        cmd_sync_options_t,profiles,     profile_count
+    ),
+    ARGS_END,
+};
+
+const args_command_t spec_sync = {
+    .name        = "sync",
+    .summary     = "Synchronize profiles with remote repository",
+    .usage       = "%s sync [options] [profile]...",
+    .description =
+        "Fetch, analyze, and reconcile enabled profiles with their\n"
+        "remote counterparts. Requires a clean workspace; run '%s\n"
+        "update' to commit pending filesystem changes first.\n",
+    .notes       =
+        "Diverged Strategies:\n"
+        "  warn          Report and stop (default).\n"
+        "  rebase        Replay local commits atop remote.\n"
+        "  merge         Create a merge commit.\n"
+        "  ours          Keep local side; overwrite remote on push.\n"
+        "  theirs        Keep remote side; drop local commits.\n",
+    .examples    =
+        "  %s sync                    # All enabled profiles\n"
+        "  %s sync global             # Single profile\n"
+        "  %s sync global darwin      # Multiple profiles\n"
+        "  %s sync -n                 # Preview without writing\n"
+        "  %s sync -f                 # Bypass clean-workspace check\n"
+        "  %s sync --no-pull          # Push only\n"
+        "  %s sync --diverged rebase  # Override divergence strategy\n",
+    .epilogue    =
+        "See also:\n"
+        "  %s update          # Commit local changes first\n"
+        "  %s status --remote # Inspect remote state before syncing\n",
+    .opts_size   = sizeof(cmd_sync_options_t),
+    .opts        = sync_opts,
+    .repo_mode   = ARGS_REPO_REQUIRED,
+    .dispatch    = sync_dispatch,
+};

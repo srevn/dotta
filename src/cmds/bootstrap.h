@@ -10,6 +10,8 @@
 #include <stdbool.h>
 #include <types.h>
 
+#include "base/args.h"
+
 /**
  * Bootstrap command options
  */
@@ -28,15 +30,18 @@ typedef struct {
 /**
  * Execute bootstrap command
  *
- * @param config Configuration (must not be NULL)
- * @param out Output context (must not be NULL)
+ * @param ctx Dispatch context (must not be NULL)
  * @param opts Bootstrap options (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *cmd_bootstrap(
-    const config_t *config,
-    output_ctx_t *out,
-    const cmd_bootstrap_options_t *opts
-);
+error_t *cmd_bootstrap(const args_ctx_t *ctx, const cmd_bootstrap_options_t *opts);
+
+/**
+ * Spec-engine command specification for `dotta bootstrap`.
+ *
+ * Registered in cmds/registry.c. Defined in bootstrap.c beside the
+ * dispatch wrapper.
+ */
+extern const args_command_t spec_bootstrap;
 
 #endif /* DOTTA_CMD_BOOTSTRAP_H */

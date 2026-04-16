@@ -11,6 +11,7 @@
 #include <string.h>
 #include <sys/mman.h>
 
+#include "base/args.h"
 #include "base/error.h"
 #include "base/output.h"
 #include "core/state.h"
@@ -380,14 +381,14 @@ static error_t *cmd_key_status(
 /**
  * Execute key command
  */
-error_t *cmd_key(
-    git_repository *repo,
-    const config_t *config,
-    output_ctx_t *out,
-    const cmd_key_options_t *opts
-) {
-    CHECK_NULL(repo);
+error_t *cmd_key(const args_ctx_t *ctx, const cmd_key_options_t *opts) {
+    CHECK_NULL(ctx);
+    CHECK_NULL(ctx->repo);
     CHECK_NULL(opts);
+
+    git_repository *repo = ctx->repo;
+    const config_t *config = ctx->config;
+    output_ctx_t *out = ctx->out;
 
     /* CLI flags override config */
     if (opts->verbose) {
@@ -419,3 +420,128 @@ error_t *cmd_key(
 
     return err;
 }
+
+/* ══════════════════════════════════════════════════════════════════
+ * Spec-engine integration
+ * ══════════════════════════════════════════════════════════════════ */
+
+/**
+ * Map the mandatory first positional into `action`.
+ *
+ * Preserves the legacy error phrasing on unknown actions. The engine
+ * renders the usage line after the post_parse error, so the message
+ * body doesn't need to repeat it.
+ */
+static error_t *key_post_parse(
+    void *opts_v, arena_t *arena, const args_command_t *cmd
+) {
+    (void) arena;
+    (void) cmd;
+    cmd_key_options_t *o = opts_v;
+
+    if (o->positional_count == 0) {
+        return ERROR(
+            ERR_INVALID_ARG, "key action is required (set, clear, or status)"
+        );
+    }
+
+    const char *action = o->positional_args[0];
+    if (strcmp(action, "set") == 0) {
+        o->action = KEY_ACTION_SET;
+    } else if (strcmp(action, "clear") == 0) {
+        o->action = KEY_ACTION_CLEAR;
+    } else if (strcmp(action, "status") == 0) {
+        o->action = KEY_ACTION_STATUS;
+    } else {
+        return ERROR(
+            ERR_INVALID_ARG,
+            "Unknown key action '%s'\nValid actions: set, clear, status",
+            action
+        );
+    }
+    return NULL;
+}
+
+static error_t *key_dispatch(const args_ctx_t *ctx, void *opts_v) {
+    return cmd_key(ctx, (const cmd_key_options_t *) opts_v);
+}
+
+static const args_opt_t key_opts[] = {
+    ARGS_GROUP("Options:"),
+    ARGS_FLAG(
+        "v verbose",
+        cmd_key_options_t, verbose,
+        "Verbose output (status: show auto-encrypt patterns)"
+    ),
+    ARGS_POSITIONAL_RAW(
+        cmd_key_options_t, positional_args, positional_count,
+        1,                 1
+    ),
+    ARGS_END,
+};
+
+const args_command_t spec_key = {
+    .name        = "key",
+    .summary     = "Manage encryption keys and passphrases",
+    .usage       = "%s key [options] <set|clear|status>",
+    .description =
+        "Manage the encryption passphrase that derives the per-file keys\n"
+        "used for at-rest encryption in profile branches. A single page\n"
+        "documents all three subcommands.\n"
+        "\n"
+        "Subcommands:\n"
+        "  set       Cache the passphrase for the current session.\n"
+        "  clear     Clear the cached key from memory and disk.\n"
+        "  status    Show encryption config and cache state.\n",
+    .notes       =
+        "Key Management:\n"
+        "  The passphrase derives a master key via KDF. The derived key\n"
+        "  is held in memory and mirrored to disk for the configured\n"
+        "  session timeout (default 1 hour) so repeated commands do not\n"
+        "  re-prompt.\n"
+        "\n"
+        "Subcommand Details:\n"
+        "  %s key set\n"
+        "    Prompt for the passphrase and cache the derived key. The\n"
+        "    cache expires after session_timeout. Use before a batch of\n"
+        "    encrypt/decrypt-heavy commands.\n"
+        "\n"
+        "  %s key clear\n"
+        "    Zeroize and delete the cached key from memory and disk. The\n"
+        "    next encryption/decryption operation will prompt.\n"
+        "\n"
+        "  %s key status\n"
+        "    Report encryption.enabled, KDF opslimit, session_timeout,\n"
+        "    whether a key is cached, time-to-expiry, count of encrypted\n"
+        "    files in current profiles, and (with -v) auto-encrypt\n"
+        "    patterns from config.\n"
+        "\n"
+        "Configuration:\n"
+        "  Set in the [encryption] section of config.toml:\n"
+        "    [encryption]\n"
+        "    enabled         = true\n"
+        "    session_timeout = 3600      # 1 hour\n"
+        "    opslimit        = 10000     # KDF CPU cost\n"
+        "\n"
+        "Security Notes:\n"
+        "  - The passphrase is never stored on disk.\n"
+        "  - The derived key is cached on disk at ~/.cache/dotta/session,\n"
+        "    machine-bound, and expires per session_timeout.\n"
+        "  - Keys are zeroized on timeout and on 'key clear'.\n"
+        "  - A forgotten passphrase cannot be recovered; encrypted files\n"
+        "    become unrecoverable.\n",
+    .examples    =
+        "  %s key set               # Cache passphrase for the session\n"
+        "  %s key status            # Show cache state and config\n"
+        "  %s key status -v         # Include auto-encrypt patterns\n"
+        "  %s key clear             # Drop cached key\n",
+    .epilogue    =
+        "See also:\n"
+        "  %s add --encrypt       # Encrypt a file on add\n"
+        "  %s apply               # Decrypts on deployment\n",
+    .opts_size   = sizeof(cmd_key_options_t),
+    .opts        = key_opts,
+    .post_parse  = key_post_parse,
+    .repo_mode   = ARGS_REPO_REQUIRED,
+    .dispatch    = key_dispatch,
+};

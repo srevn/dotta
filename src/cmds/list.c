@@ -18,6 +18,7 @@
 #include "base/array.h"
 #include "base/error.h"
 #include "base/output.h"
+#include "base/string.h"
 #include "base/timeutil.h"
 #include "core/metadata.h"
 #include "core/profiles.h"
@@ -780,13 +781,13 @@ static error_t *list_file_history(
 /**
  * List command implementation
  */
-error_t *cmd_list(
-    git_repository *repo,
-    output_ctx_t *out,
-    const cmd_list_options_t *opts
-) {
-    CHECK_NULL(repo);
+error_t *cmd_list(const args_ctx_t *ctx, const cmd_list_options_t *opts) {
+    CHECK_NULL(ctx);
+    CHECK_NULL(ctx->repo);
     CHECK_NULL(opts);
+
+    git_repository *repo = ctx->repo;
+    output_ctx_t *out = ctx->out;
 
     error_t *err = NULL;
 
@@ -813,3 +814,139 @@ error_t *cmd_list(
 
     return err;
 }
+
+/* ══════════════════════════════════════════════════════════════════
+ * Spec-engine integration
+ * ══════════════════════════════════════════════════════════════════ */
+
+/**
+ * Infer list mode from positionals and derive `profile` / `file_path`.
+ *
+ * Legacy form:
+ *   - No positional:           mode = LIST_PROFILES
+ *   - 1 positional (file path): mode = LIST_FILE_HISTORY (profile inferred)
+ *   - 1 positional (profile):   mode = LIST_FILES
+ *   - 2 positionals:            mode = LIST_FILE_HISTORY (profile, file)
+ *
+ * Classification uses str_looks_like_file_path to distinguish a bare
+ * profile name from a file path.
+ */
+static error_t *list_post_parse(
+    void *opts_v, arena_t *arena, const args_command_t *cmd
+) {
+    (void) arena;
+    (void) cmd;
+    cmd_list_options_t *o = opts_v;
+
+    if (o->positional_count == 0) {
+        o->mode = LIST_PROFILES;
+        return NULL;
+    }
+
+    if (o->positional_count == 1) {
+        const char *arg = o->positional_args[0];
+        if (str_looks_like_file_path(arg)) {
+            o->mode = LIST_FILE_HISTORY;
+            o->file_path = arg;
+        } else {
+            o->mode = LIST_FILES;
+            o->profile = arg;
+        }
+        return NULL;
+    }
+
+    if (o->positional_count == 2) {
+        o->mode = LIST_FILE_HISTORY;
+        o->profile = o->positional_args[0];
+        o->file_path = o->positional_args[1];
+        return NULL;
+    }
+
+    /* Max=2 enforced by POSITIONAL_RAW — unreachable. */
+    return ERROR(ERR_INTERNAL, "list: too many positionals");
+}
+
+static error_t *list_dispatch(const args_ctx_t *ctx, void *opts_v) {
+    return cmd_list(ctx, (const cmd_list_options_t *) opts_v);
+}
+
+static const args_opt_t list_opts[] = {
+    ARGS_GROUP("Options:"),
+    ARGS_STRING(
+        "p profile",       "<name>",
+        cmd_list_options_t,profile,
+        "Profile name (alternative to positional)"
+    ),
+    ARGS_FLAG(
+        "remote",
+        cmd_list_options_t,remote,
+        "Show remote tracking state (Level 1 only)"
+    ),
+    ARGS_FLAG(
+        "v verbose",
+        cmd_list_options_t,verbose,
+        "Show detailed output"
+    ),
+    ARGS_POSITIONAL_RAW(
+        cmd_list_options_t,positional_args, positional_count,
+        0,                 2
+    ),
+    ARGS_END,
+};
+
+const args_command_t spec_list = {
+    .name        = "list",
+    .summary     = "List profiles, files, and commit history",
+    .usage       =
+        "%s list [options]\n"
+        "   or: %s list [options] <profile>\n"
+        "   or: %s list [options] <file>\n"
+        "   or: %s list [options] <profile> <file>",
+    .description =
+        "Hierarchical listing across three levels. Mode is inferred from\n"
+        "the positional shape.\n"
+        "\n"
+        "Levels:\n"
+        "  Level 1    Profiles               (no positional)\n"
+        "  Level 2    Files in a profile     (<profile>)\n"
+        "  Level 3    File commit history    (<file> or <profile> <file>)\n",
+    .notes       =
+        "Mode Inference:\n"
+        "  No positional              Level 1: all profiles.\n"
+        "  1 arg, looks like a path   Level 3: file history, profile inferred.\n"
+        "  1 arg, looks like a name   Level 2: files in that profile.\n"
+        "  2 args                     Level 3: file history in profile.\n"
+        "\n"
+        "  A bare name is classified as a path when it starts with '/', '~',\n"
+        "  '.', 'home/', 'root/', 'custom/', or contains glob metacharacters.\n"
+        "\n"
+        "Verbose Mode Details:\n"
+        "  Level 1    File count, total size, and last commit per profile.\n"
+        "  Level 2    File sizes and per-file last commits.\n"
+        "  Level 3    Full commit messages instead of oneline format.\n"
+        "\n"
+        "Remote State Indicators (with --remote):\n"
+        "  [=]    up-to-date with remote\n"
+        "  [^n]   n commits ahead of remote (run '%s sync' to push)\n"
+        "  [vn]   n commits behind remote (run '%s sync' to pull)\n"
+        "  [<>]   diverged from remote (manual resolution needed)\n"
+        "  [.]    no remote tracking branch (created on first sync)\n",
+    .examples    =
+        "  %s list                           # L1 profiles: names only\n"
+        "  %s list -v                        # L1 profiles: stats + last commit\n"
+        "  %s list --remote                  # L1 profiles: remote tracking state\n"
+        "  %s list -v --remote               # L1 profiles: full details + remote\n"
+        "  %s list global                    # L2 files: paths only\n"
+        "  %s list global -v                 # L2 files: sizes + commits\n"
+        "  %s list home/.bashrc              # L3 history: oneline commits\n"
+        "  %s list global home/.bashrc -v    # L3 history: full commit messages\n",
+    .epilogue    =
+        "See also:\n"
+        "  %s show <commit>          # Show commit with diff\n"
+        "  %s diff <commit> <commit> # Compare two commits\n",
+    .opts_size   = sizeof(cmd_list_options_t),
+    .opts        = list_opts,
+    .post_parse  = list_post_parse,
+    .repo_mode   = ARGS_REPO_REQUIRED,
+    .dispatch    = list_dispatch,
+};

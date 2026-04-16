@@ -12,8 +12,10 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "base/args.h"
 #include "base/array.h"
 #include "base/error.h"
+#include "cmds/registry.h"
 #include "core/state.h"
 #include "sys/gitops.h"
 #include "sys/upstream.h"
@@ -198,7 +200,7 @@ static void complete_files(
 static void complete_commits(
     git_repository *repo,
     const char *profile,
-    int limit
+    long limit
 ) {
     /* Clamp limit to reasonable bounds */
     if (limit <= 0) {
@@ -267,7 +269,7 @@ static void complete_commits(
 
     /* Walk commits and output */
     git_oid oid;
-    int count = 0;
+    long count = 0;
     while (git_revwalk_next(&oid, walker) == 0 && count < limit) {
         git_commit *commit = NULL;
         if (git_commit_lookup(&commit, repo, &oid) != 0) {
@@ -309,17 +311,23 @@ static void complete_commits(
  * Dispatches to appropriate completion function based on mode.
  * Always returns NULL (success) - errors result in no output.
  */
-error_t *cmd_completion(
-    git_repository *repo,
-    const cmd_completion_options_t *opts
-) {
-    if (!opts) {
+error_t *cmd_completion(const args_ctx_t *ctx, const cmd_completion_options_t *opts) {
+    if (!ctx || !opts) {
         return NULL;  /* Silent failure */
     }
 
+    git_repository *repo = ctx->repo;
+
     switch (opts->mode) {
         case COMPLETE_CHECK:
-            /* Check mode handled in cmd_completion_main before we're called */
+            /* The dispatcher opens the repo in OPTIONAL_SILENT mode.
+             * Repo presence is the signal; silent_failure turns a
+             * missing repo into exit 1 with no output. */
+            if (!repo) {
+                return error_create(
+                    ERR_NOT_FOUND, "not in a dotta repository"
+                );
+            }
             break;
 
         case COMPLETE_PROFILES:
@@ -354,6 +362,13 @@ error_t *cmd_completion(
             complete_remotes(repo);
             break;
 
+        case COMPLETE_SPEC_FISH:
+            /* Build-time emission: projects the root registry into the
+             * fish-completion dialect. Stable, repo-independent, invoked
+             * by `make completions` to refresh the committed snapshot. */
+            args_export_completion_fish(stdout, dotta_root_commands);
+            break;
+
         default:
             /* Unknown mode - silent failure */
             break;
@@ -361,3 +376,127 @@ error_t *cmd_completion(
 
     return NULL;
 }
+
+/* ══════════════════════════════════════════════════════════════════
+ * Spec-engine integration
+ * ══════════════════════════════════════════════════════════════════ */
+
+/**
+ * Seed the legacy default: commits mode returns up to 20 rows when
+ * `--limit` isn't supplied.
+ */
+static void completion_init_defaults(void *opts_v) {
+    cmd_completion_options_t *o = opts_v;
+    o->limit = COMPLETE_COMMIT_DEFAULT_LIMIT;
+}
+
+/**
+ * Map the mandatory first positional into `mode`.
+ *
+ * Silent-failure semantics (suppressed by the dispatcher when
+ * `silent_failure = true`): a missing or unknown mode returns exit 1
+ * with no stderr output — this preserves shell-completion contract
+ * with fish scripts that invoke `dotta __complete ...`.
+ *
+ * `spec` mode takes a second positional naming the output dialect
+ * (currently only `fish`). All other modes require exactly one
+ * positional — we reject extras explicitly so a typo like
+ * `dotta __complete profiles all` doesn't silently ignore `all`.
+ */
+static error_t *completion_post_parse(
+    void *opts_v, arena_t *arena, const args_command_t *cmd
+) {
+    (void) arena;
+    (void) cmd;
+    cmd_completion_options_t *o = opts_v;
+
+    if (o->positional_count == 0) {
+        return error_create(ERR_INVALID_ARG, "completion mode is required");
+    }
+
+    const char *mode = o->positional_args[0];
+    if (strcmp(mode, "check") == 0) {
+        o->mode = COMPLETE_CHECK;
+    } else if (strcmp(mode, "profiles") == 0) {
+        o->mode = COMPLETE_PROFILES;
+    } else if (strcmp(mode, "files") == 0) {
+        o->mode = COMPLETE_FILES;
+    } else if (strcmp(mode, "commits") == 0) {
+        o->mode = COMPLETE_COMMITS;
+    } else if (strcmp(mode, "remotes") == 0) {
+        o->mode = COMPLETE_REMOTES;
+    } else if (strcmp(mode, "spec") == 0) {
+        if (o->positional_count < 2) {
+            return error_create(
+                ERR_INVALID_ARG,
+                "'spec' mode requires a dialect (e.g. 'fish')"
+            );
+        }
+        const char *dialect = o->positional_args[1];
+        if (strcmp(dialect, "fish") == 0) {
+            o->mode = COMPLETE_SPEC_FISH;
+        } else {
+            return error_create(
+                ERR_INVALID_ARG, "unknown spec dialect '%s'", dialect
+            );
+        }
+        return NULL;
+    } else {
+        return error_create(ERR_INVALID_ARG, "unknown completion mode '%s'", mode);
+    }
+
+    /* Non-spec modes take exactly one positional. */
+    if (o->positional_count > 1) {
+        return error_create(
+            ERR_INVALID_ARG,
+            "'%s' mode takes no additional positional arguments", mode
+        );
+    }
+    return NULL;
+}
+
+static error_t *completion_dispatch(const args_ctx_t *ctx, void *opts_v) {
+    return cmd_completion(ctx, (const cmd_completion_options_t *) opts_v);
+}
+
+static const args_opt_t completion_opts[] = {
+    ARGS_FLAG(
+        "a all",
+        cmd_completion_options_t,all,
+        "Include all available profiles (not just enabled)"
+    ),
+    ARGS_FLAG(
+        "s storage",
+        cmd_completion_options_t,storage_paths,
+        "Output storage paths instead of filesystem paths"
+    ),
+    ARGS_STRING(
+        "p profile",             "<name>",
+        cmd_completion_options_t,profile,
+        "Filter by profile"
+    ),
+    ARGS_INT(
+        "l limit",               "<N>",
+        cmd_completion_options_t,limit,           1,                 1000,
+        "Maximum number of commits to list (default: 20)"
+    ),
+    ARGS_POSITIONAL_RAW(
+        cmd_completion_options_t,positional_args, positional_count,
+        1,                       2
+    ),
+    ARGS_END,
+};
+
+const args_command_t spec_completion = {
+    .name           = "__complete",
+    .summary        = "Shell completion helper (hidden)",
+    .usage          = "%s __complete <mode> [<arg>] [options]",
+    .opts_size      = sizeof(cmd_completion_options_t),
+    .opts           = completion_opts,
+    .init_defaults  = completion_init_defaults,
+    .post_parse     = completion_post_parse,
+    .repo_mode      = ARGS_REPO_OPTIONAL_SILENT,
+    .dispatch       = completion_dispatch,
+    .silent_failure = true,
+    .hidden         = true,
+};

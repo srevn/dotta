@@ -16,6 +16,7 @@
 #include "base/hashmap.h"
 #include "base/match.h"
 #include "base/output.h"
+#include "base/string.h"
 #include "base/timeutil.h"
 #include "core/manifest.h"
 #include "core/metadata.h"
@@ -1417,14 +1418,14 @@ cleanup:
 /**
  * Diff command implementation
  */
-error_t *cmd_diff(
-    git_repository *repo,
-    const config_t *config,
-    output_ctx_t *out,
-    const cmd_diff_options_t *opts
-) {
-    CHECK_NULL(repo);
+error_t *cmd_diff(const args_ctx_t *ctx, const cmd_diff_options_t *opts) {
+    CHECK_NULL(ctx);
+    CHECK_NULL(ctx->repo);
     CHECK_NULL(opts);
+
+    git_repository *repo = ctx->repo;
+    const config_t *config = ctx->config;
+    output_ctx_t *out = ctx->out;
 
     error_t *err = NULL;
     state_t *state = NULL;
@@ -1552,3 +1553,168 @@ cleanup:
 
     return err;
 }
+
+/* ══════════════════════════════════════════════════════════════════
+ * Spec-engine integration
+ * ══════════════════════════════════════════════════════════════════ */
+
+/* Command-local positional classes. Start at 1 to reserve 0 for the
+ * engine's "unclassified" sentinel (see args.h:args_class_t). */
+enum diff_class { DIFF_CLASS_FILE = 1, DIFF_CLASS_GIT_REF, DIFF_CLASS_PROFILE, };
+
+/**
+ * Positional classifier for diff.
+ *
+ * Three-way split:
+ *   - File paths → files[] bucket (workspace file filter).
+ *   - Git refs   → git_refs[] bucket (diff mode selector).
+ *   - Else       → profiles[] bucket (profile filter).
+ *
+ * Mode (workspace vs commit-to-workspace vs commit-to-commit) is
+ * inferred from the number of git refs in diff_post_parse.
+ */
+static args_class_t diff_classify(const char *tok) {
+    if (str_looks_like_file_path(tok)) return DIFF_CLASS_FILE;
+    if (str_looks_like_git_ref(tok))   return DIFF_CLASS_GIT_REF;
+    return DIFF_CLASS_PROFILE;
+}
+
+/**
+ * Infer mode from git_refs count, validate direction flag only fires
+ * in workspace mode. Zero-default on `direction` (DIFF_DIR_UNSET) is
+ * the signal that no direction flag was seen; it resolves to
+ * DIFF_UPSTREAM as the legacy default.
+ */
+static error_t *diff_post_parse(
+    void *opts_v, arena_t *arena, const args_command_t *cmd
+) {
+    (void) arena;
+    (void) cmd;
+    cmd_diff_options_t *o = opts_v;
+
+    switch (o->git_ref_count) {
+        case 0:
+            o->mode = DIFF_WORKSPACE;
+            break;
+        case 1:
+            o->mode = DIFF_COMMIT_TO_WORKSPACE;
+            o->commit1 = o->git_refs[0];
+            break;
+        case 2:
+            o->mode = DIFF_COMMIT_TO_COMMIT;
+            o->commit1 = o->git_refs[0];
+            o->commit2 = o->git_refs[1];
+            break;
+        default:
+            return ERROR(
+                ERR_INVALID_ARG,
+                "too many commit references (max 2, got %zu)",
+                o->git_ref_count
+            );
+    }
+
+    bool direction_explicit = (o->direction != DIFF_DIR_UNSET);
+    if (direction_explicit && o->mode != DIFF_WORKSPACE) {
+        return ERROR(
+            ERR_INVALID_ARG,
+            "direction flags (--upstream, --downstream, --all) "
+            "only apply to workspace diffs"
+        );
+    }
+    if (!direction_explicit) {
+        o->direction = DIFF_UPSTREAM;  /* Legacy default. */
+    }
+    return NULL;
+}
+
+static error_t *diff_dispatch(const args_ctx_t *ctx, void *opts_v) {
+    return cmd_diff(ctx, (const cmd_diff_options_t *) opts_v);
+}
+
+static const args_opt_t diff_opts[] = {
+    ARGS_GROUP("Options:"),
+    ARGS_APPEND(
+        "p profile",       "<name>",
+        cmd_diff_options_t,profiles,           profile_count,
+        "Filter diff to profile(s) (repeatable)"
+    ),
+    /* Three direction flags, each writing its enum into the same
+     * int. Default (no flag): direction stays at DIFF_DIR_UNSET (0)
+     * which diff_post_parse resolves to DIFF_UPSTREAM. */
+    ARGS_FLAG_SET(
+        "upstream",
+        cmd_diff_options_t,direction,          DIFF_UPSTREAM,
+        "Preview apply: -/+ is filesystem/repo (default)"
+    ),
+    ARGS_FLAG_SET(
+        "downstream",
+        cmd_diff_options_t,direction,          DIFF_DOWNSTREAM,
+        "Preview update: -/+ is repo/filesystem"
+    ),
+    ARGS_FLAG_SET(
+        "a all",
+        cmd_diff_options_t,direction,          DIFF_BOTH,
+        "Show both directions in labelled sections"
+    ),
+    ARGS_FLAG(
+        "name-only",
+        cmd_diff_options_t,name_only,
+        "Print changed file names only"
+    ),
+    /* Classified positionals: files go to files[], git refs to
+     * git_refs[], everything else to profiles[]. The classify()
+     * function above decides. */
+    ARGS_POSITIONAL(
+        DIFF_CLASS_FILE,   cmd_diff_options_t, files, file_count
+    ),
+    ARGS_POSITIONAL(
+        DIFF_CLASS_GIT_REF,cmd_diff_options_t, git_refs, git_ref_count
+    ),
+    ARGS_POSITIONAL(
+        DIFF_CLASS_PROFILE,cmd_diff_options_t, profiles, profile_count
+    ),
+    ARGS_END,
+};
+
+const args_command_t spec_diff = {
+    .name        = "diff",
+    .summary     = "Show differences between profiles and filesystem",
+    .usage       = "%s diff [options] [<commit>] [<commit>] [<file>...]",
+    .description =
+        "Diff profile content against other commits or the filesystem.\n"
+        "Mode is inferred from the number of commit-shaped positionals;\n"
+        "files further restrict the output.\n",
+    .notes       =
+        "Modes:\n"
+        "  No commit             Workspace diff (profile <-> filesystem).\n"
+        "  1 commit              Commit -> workspace.\n"
+        "  2 commits             Commit -> commit (must share a profile).\n"
+        "  [<file>...]           Restrict any mode to the named files.\n"
+        "\n"
+        "Direction (workspace mode only):\n"
+        "  --upstream            Preview apply. '-' is filesystem, '+' is\n"
+        "                        the repo state that apply would write.\n"
+        "  --downstream          Preview update. '-' is repo, '+' is the\n"
+        "                        local state that update would commit.\n"
+        "  -a, --all             Both directions in labelled sections.\n",
+    .examples    =
+        "  %s diff                             # Preview apply (default)\n"
+        "  %s diff --downstream                # Preview update\n"
+        "  %s diff --all                       # Both directions\n"
+        "  %s diff home/.bashrc                # Workspace, single file\n"
+        "  %s diff HEAD~1                      # Commit -> workspace\n"
+        "  %s diff HEAD~2 HEAD                 # Commit -> commit\n"
+        "  %s diff HEAD~1 home/.bashrc         # File at commit vs workspace\n"
+        "  %s diff a4f2c8e b3e1f9a home/.bashrc  # File between two commits\n"
+        "  %s diff --name-only                 # Only changed file names\n",
+    .epilogue    =
+        "See also:\n"
+        "  %s list <profile> <file>   # Find commit hashes for a file\n"
+        "  %s show <commit>           # View commit with diff\n",
+    .opts_size   = sizeof(cmd_diff_options_t),
+    .opts        = diff_opts,
+    .classify    = diff_classify,
+    .post_parse  = diff_post_parse,
+    .repo_mode   = ARGS_REPO_REQUIRED,
+    .dispatch    = diff_dispatch,
+};

@@ -19,6 +19,10 @@
  *   dotta __complete commits            # Recent commits from first enabled profile
  *   dotta __complete commits -p <profile>  # Recent commits from specific profile
  *   dotta __complete commits --limit <n>   # Limit number of commits
+ *   dotta __complete spec fish          # Emit the fish completion script for
+ *                                       #   the entire root registry. Used by
+ *                                       #   the Makefile to regenerate the
+ *                                       #   dotta-completions.fish snapshot.
  */
 
 #ifndef DOTTA_CMD_COMPLETION_H
@@ -27,8 +31,15 @@
 #include <git2.h>
 #include <types.h>
 
+#include "base/args.h"
+
 /**
- * Completion mode
+ * Completion mode.
+ *
+ * Runtime modes (check / profiles / files / commits / remotes) emit
+ * data that depends on the user's repo state. `spec` modes emit the
+ * build-time fish script derived from the root command registry — no
+ * repo required, output is deterministic on a given binary.
  */
 typedef enum {
     COMPLETE_CHECK,           /* Check if in dotta repo (exit 0/1) */
@@ -36,17 +47,26 @@ typedef enum {
     COMPLETE_FILES,           /* List managed files */
     COMPLETE_COMMITS,         /* List recent commits */
     COMPLETE_REMOTES,         /* List git remotes */
+    COMPLETE_SPEC_FISH,       /* Emit fish completion script (build-time) */
 } completion_mode_t;
 
 /**
  * Completion options
+ *
+ * `mode` is derived by `completion_post_parse` from the first positional
+ * token (check | profiles | files | commits | remotes).
  */
 typedef struct {
+    /* User-facing (read by cmd_completion). */
     completion_mode_t mode;   /* What to complete */
     const char *profile;      /* Optional: filter by profile */
     bool all;                 /* For profiles: include all (not just enabled) */
     bool storage_paths;       /* For files: output storage_path instead of filesystem_path */
-    int limit;                /* For commits: max results (default 20) */
+    long limit;               /* For commits: max results (default 20) */
+
+    /* Raw positional bucket (engine-populated; interpreted in post_parse). */
+    char **positional_args;
+    size_t positional_count;
 } cmd_completion_options_t;
 
 /**
@@ -56,13 +76,19 @@ typedef struct {
  * Returns NULL on success (even if no results).
  * Never outputs to stderr - silent failure model.
  *
- * @param repo Repository (can be NULL for COMPLETE_CHECK mode)
+ * @param ctx Dispatch context (ctx->repo may be NULL for COMPLETE_CHECK mode)
  * @param opts Command options (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *cmd_completion(
-    git_repository *repo,
-    const cmd_completion_options_t *opts
-);
+error_t *cmd_completion(const args_ctx_t *ctx, const cmd_completion_options_t *opts);
+
+/**
+ * Spec-engine command specification for `dotta __complete`.
+ *
+ * Hidden from top-level help and from the fish completion export.
+ * Registered in cmds/registry.c; defined in completion.c beside the
+ * post_parse and dispatch wrappers.
+ */
+extern const args_command_t spec_completion;
 
 #endif /* DOTTA_CMD_COMPLETION_H */

@@ -15,6 +15,8 @@
 #include <git2.h>
 #include <types.h>
 
+#include "base/args.h"
+
 /**
  * List mode (determined by arguments)
  */
@@ -26,23 +28,39 @@ typedef enum {
 
 /**
  * Command options
+ *
+ * `mode`, `profile`, and `file_path` are derived by `list_post_parse`
+ * from the raw positional bucket. Consumers read only the user-facing
+ * fields.
  */
 typedef struct {
+    /* User-facing (read by cmd_list). */
     list_mode_t mode;        /* What to list (auto-determined) */
     const char *profile;     /* Profile name (for LIST_FILES or LIST_FILE_HISTORY) */
     const char *file_path;   /* File path (for LIST_FILE_HISTORY) */
     bool verbose;            /* Print detailed output */
     bool remote;             /* Show remote tracking state */
+
+    /* Raw positional bucket (engine-populated; interpreted in post_parse). */
+    char **positional_args;
+    size_t positional_count;
 } cmd_list_options_t;
 
 /**
  * List profiles or files
  *
- * @param repo Repository (must not be NULL)
- * @param out Output context (must not be NULL)
+ * @param ctx Dispatch context (must not be NULL)
  * @param opts Command options (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *cmd_list(git_repository *repo, output_ctx_t *out, const cmd_list_options_t *opts);
+error_t *cmd_list(const args_ctx_t *ctx, const cmd_list_options_t *opts);
+
+/**
+ * Spec-engine command specification for `dotta list`.
+ *
+ * Registered in cmds/registry.c. Defined in list.c beside the
+ * post_parse and dispatch wrappers.
+ */
+extern const args_command_t spec_list;
 
 #endif /* DOTTA_CMD_LIST_H */

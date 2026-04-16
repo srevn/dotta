@@ -1820,14 +1820,14 @@ cleanup:
 /**
  * Remove command implementation
  */
-error_t *cmd_remove(
-    git_repository *repo,
-    const config_t *config,
-    output_ctx_t *out,
-    const cmd_remove_options_t *opts
-) {
-    CHECK_NULL(repo);
+error_t *cmd_remove(const args_ctx_t *ctx, const cmd_remove_options_t *opts) {
+    CHECK_NULL(ctx);
+    CHECK_NULL(ctx->repo);
     CHECK_NULL(opts);
+
+    git_repository *repo = ctx->repo;
+    const config_t *config = ctx->config;
+    output_ctx_t *out = ctx->out;
 
     /* Validate options */
     error_t *err = validate_options(opts);
@@ -1842,3 +1842,148 @@ error_t *cmd_remove(
 
     return remove_files_from_profile(repo, config, out, opts);
 }
+
+/* ══════════════════════════════════════════════════════════════════
+ * Spec-engine integration
+ * ══════════════════════════════════════════════════════════════════ */
+
+/**
+ * Route the raw positional bucket into `profile` and `paths[]`.
+ *
+ * Legacy-compatible rules:
+ *   1. -p/--profile was given: every positional is a path.
+ *   2. -p not given: first positional is the profile, rest are paths.
+ *   3. --delete-profile: paths must be empty (mutually exclusive).
+ *   4. Without --delete-profile: at least one path is required.
+ */
+static error_t *remove_post_parse(
+    void *opts_v, arena_t *arena, const args_command_t *cmd
+) {
+    (void) arena;
+    (void) cmd;
+    cmd_remove_options_t *o = opts_v;
+
+    if (o->profile != NULL) {
+        o->paths = o->positional_args;
+        o->path_count = o->positional_count;
+    } else {
+        if (o->positional_count == 0) {
+            return ERROR(
+                ERR_INVALID_ARG,
+                "profile name is required (as first positional or via -p)"
+            );
+        }
+        o->profile = o->positional_args[0];
+        o->paths = o->positional_args + 1;
+        o->path_count = o->positional_count - 1;
+    }
+
+    if (o->delete_profile && o->path_count > 0) {
+        return ERROR(
+            ERR_INVALID_ARG,
+            "cannot specify paths when using --delete-profile"
+        );
+    }
+    if (!o->delete_profile && o->path_count == 0) {
+        return ERROR(
+            ERR_INVALID_ARG,
+            "at least one path is required (or use --delete-profile)"
+        );
+    }
+    return NULL;
+}
+
+static error_t *remove_dispatch(const args_ctx_t *ctx, void *opts_v) {
+    return cmd_remove(ctx, (const cmd_remove_options_t *) opts_v);
+}
+
+static const args_opt_t remove_opts[] = {
+    ARGS_GROUP("Options:"),
+    ARGS_STRING(
+        "p profile",         "<name>",
+        cmd_remove_options_t,profile,
+        "Profile name (alternative to positional)"
+    ),
+    ARGS_STRING(
+        "m message",         "<msg>",
+        cmd_remove_options_t,message,
+        "Commit message"
+    ),
+    ARGS_FLAG(
+        "delete-profile",
+        cmd_remove_options_t,delete_profile,
+        "Delete the entire profile branch"
+    ),
+    ARGS_FLAG(
+        "delete-files",
+        cmd_remove_options_t,delete_files,
+        "Stage deployed copies for removal on next apply"
+    ),
+    ARGS_FLAG(
+        "n dry-run",
+        cmd_remove_options_t,dry_run,
+        "Preview without writing"
+    ),
+    ARGS_FLAG(
+        "f force",
+        cmd_remove_options_t,force,
+        "Skip confirmation prompts"
+    ),
+    ARGS_FLAG(
+        "i interactive",
+        cmd_remove_options_t,interactive,
+        "Prompt for each file"
+    ),
+    ARGS_FLAG(
+        "v verbose",
+        cmd_remove_options_t,verbose,
+        "Verbose output"
+    ),
+    ARGS_FLAG(
+        "q quiet",
+        cmd_remove_options_t,quiet,
+        "Minimal output"
+    ),
+    /* <profile> [<path>...]. -p promotes positionals to all-paths. */
+    ARGS_POSITIONAL_RAW(
+        cmd_remove_options_t,positional_args, positional_count,
+        0,                   0
+    ),
+    ARGS_END,
+};
+
+const args_command_t spec_remove = {
+    .name        = "remove",
+    .summary     = "Remove files from a profile or delete profile",
+    .usage       =
+        "%s remove [options] <profile> <path>...\n"
+        "   or: %s remove [options] <profile> --delete-profile\n"
+        "   or: %s remove [options] --profile <name> <path>...",
+    .description =
+        "Untrack files from a profile, optionally scheduling removal of\n"
+        "the deployed copies, or delete the profile branch outright.\n",
+    .notes       =
+        "Operation Modes:\n"
+        "  (default)           Remove files from the profile branch. Deployed\n"
+        "                      copies are released from management and stay\n"
+        "                      on the filesystem untouched.\n"
+        "  --delete-files      Same as default, plus stage the deployed\n"
+        "                      copies for removal on the next '%s apply'.\n"
+        "  --delete-profile    Delete the entire profile branch. No paths\n"
+        "                      may be given; cannot be combined with\n"
+        "                      --delete-files.\n",
+    .examples    =
+        "  %s remove global ~/.bashrc                  # Untrack, keep on disk\n"
+        "  %s remove darwin ~/.config/nvim -n          # Preview removal\n"
+        "  %s remove darwin ~/.config/nvim --delete-files  # Remove on apply\n"
+        "  %s remove staging --delete-profile          # Delete whole profile\n",
+    .epilogue    =
+        "See also:\n"
+        "  %s profile disable <name>  # Stop deploying without deleting\n"
+        "  %s apply                   # Carry out staged file removals\n",
+    .opts_size   = sizeof(cmd_remove_options_t),
+    .opts        = remove_opts,
+    .post_parse  = remove_post_parse,
+    .repo_mode   = ARGS_REPO_REQUIRED,
+    .dispatch    = remove_dispatch,
+};

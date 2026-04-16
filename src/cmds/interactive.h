@@ -25,6 +25,7 @@
 #include <stdbool.h>
 #include <types.h>
 
+#include "base/args.h"
 #include "base/terminal.h"
 
 /**
@@ -180,5 +181,16 @@ interactive_result_t interactive_handle_key(
  * @param item Item to free (can be NULL)
  */
 void profile_item_free(profile_item_t *item);
+
+/**
+ * Spec-engine command specification for `dotta interactive`.
+ *
+ * Also dispatched at root via `dotta --interactive` / `dotta -i`,
+ * declared through the spec's `.root_aliases = "i interactive"` field
+ * and resolved by `args_resolve_root()` in the main dispatcher.
+ * Registered in cmds/registry.c; defined in interactive.c beside the
+ * dispatch wrapper.
+ */
+extern const args_command_t spec_interactive;
 
 #endif /* DOTTA_CMD_INTERACTIVE_H */

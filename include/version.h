@@ -1,255 +1,113 @@
 /**
- * version.h - Version information for dotta
+ * version.h - Version information for dotta.
  *
- * This file defines version constants and helper functions.
- * Version numbers follow Semantic Versioning (https://semver.org/)
+ * Defines the project's semantic version (https://semver.org/) and the
+ * compile-time constants describing the build environment. All values
+ * are string/integer literals — there is no runtime accessor layer; the
+ * banner renderer in `src/utils/version.c` uses these macros directly.
  *
- * Version format: MAJOR.MINOR.PATCH[-PRERELEASE][+BUILD]
+ * Version format: MAJOR.MINOR.PATCH[-PRERELEASE]
  *
- * MAJOR: Incompatible API changes
- * MINOR: Backwards-compatible functionality additions
- * PATCH: Backwards-compatible bug fixes
- * PRERELEASE: Pre-release identifier (e.g., "alpha", "beta", "rc.1")
- * BUILD: Build metadata (e.g., git commit hash, build date)
+ *   MAJOR      Incompatible API changes
+ *   MINOR      Backwards-compatible functionality additions
+ *   PATCH      Backwards-compatible bug fixes
+ *   PRERELEASE Pre-release identifier (e.g., "dev", "rc.1"); empty on a
+ *              stable release. Stored with its leading dash so it can
+ *              be concatenated unconditionally into the version string.
+ *
+ * Release workflow: bump the numeric components below and toggle
+ * DOTTA_VERSION_PRERELEASE between "-dev" (or similar) and "".
+ * DOTTA_VERSION_STRING is derived — never edit it by hand.
  */
 
 #ifndef DOTTA_VERSION_H
 #define DOTTA_VERSION_H
 
 /**
- * Version number components
+ * Semantic version components.
  *
- * These can be compared numerically for version checks.
+ * Integer literals so they can participate in arithmetic or
+ * preprocessor comparisons if a call site ever needs to.
  */
 #define DOTTA_VERSION_MAJOR 0
-#define DOTTA_VERSION_MINOR 65
-#define DOTTA_VERSION_PATCH 1
+#define DOTTA_VERSION_MINOR 66
+#define DOTTA_VERSION_PATCH 0
 
 /**
- * Pre-release identifier (empty string for release versions)
+ * Pre-release suffix, including a leading dash when present.
  *
- * Examples: "dev", "alpha", "beta.1", "rc.2"
+ * Examples:
+ *   ""       stable release        → "0.65.1"
+ *   "-dev"   in-development build   → "0.65.1-dev"
+ *   "-rc.1"  release candidate      → "0.65.1-rc.1"
+ *   "-alpha" alpha                  → "0.65.1-alpha"
+ *
+ * The leading dash lives in the suffix itself rather than being
+ * emitted conditionally; `#if` cannot inspect string-literal contents,
+ * so unconditional concatenation is the only clean option.
  */
-#define DOTTA_VERSION_PRERELEASE "dev"
+#define DOTTA_VERSION_PRERELEASE "-dev"
 
 /**
- * Full version string
+ * Full version string, derived from the components above.
  *
- * Format: "MAJOR.MINOR.PATCH[-PRERELEASE]"
+ * Produced with the two-level stringize idiom: `#` in a function-like
+ * macro stringizes the argument's *name*, not its expansion, so a
+ * single level would yield "DOTTA_VERSION_MAJOR" rather than "0". The
+ * outer macro forces expansion first, then the inner one applies `#`.
+ * Adjacent string literals are concatenated by the translator
+ * (C11 §5.1.1.2 phase 6), so the result is a single literal with no
+ * runtime cost.
  */
-#define DOTTA_VERSION_STRING "0.65.1-dev"
+#define DOTTA_STRINGIFY_(x) #x
+#define DOTTA_STRINGIFY(x)  DOTTA_STRINGIFY_(x)
+
+#define DOTTA_VERSION_STRING \
+    DOTTA_STRINGIFY(DOTTA_VERSION_MAJOR) "." \
+    DOTTA_STRINGIFY(DOTTA_VERSION_MINOR) "." \
+    DOTTA_STRINGIFY(DOTTA_VERSION_PATCH) \
+    DOTTA_VERSION_PRERELEASE
 
 /**
- * Numeric version for comparisons
+ * Build metadata injected by the Makefile via `-D` flags.
  *
- * Format: (MAJOR * 10000) + (MINOR * 100) + PATCH
- * Example: 0.1.0 = 100, 1.2.3 = 10203
- */
-#define DOTTA_VERSION_NUM \
-    ((DOTTA_VERSION_MAJOR * 10000) + \
-     (DOTTA_VERSION_MINOR * 100) + \
-     DOTTA_VERSION_PATCH)
-
-/**
- * Build metadata (set by build system)
+ * Each value is a string literal defined by the build system:
  *
- * Can be defined via compiler flags:
- *   -DDOTTA_BUILD_COMMIT="abc123"
- *   -DDOTTA_BUILD_DATE="2025-01-15"
- *   -DDOTTA_BUILD_TIME="10:30:00"
- *   -DDOTTA_BUILD_OS="darwin"
- *   -DDOTTA_BUILD_ARCH="arm64"
- *   -DDOTTA_BUILD_TYPE="release"
- *   -DDOTTA_BUILD_BRANCH="main"
- *   -DDOTTA_BUILD_CC="clang version 15.0.0"
+ *   -DDOTTA_BUILD_COMMIT="abc1234-dirty"   short git SHA + dirty flag
+ *   -DDOTTA_BUILD_BRANCH="main"            current git branch
+ *   -DDOTTA_BUILD_OS="darwin"              kernel name (lowercased)
+ *   -DDOTTA_BUILD_ARCH="arm64"             machine architecture
+ *   -DDOTTA_BUILD_TYPE="release"           "release" | "debug"
+ *   -DDOTTA_BUILD_CC="clang version ..."   compiler identity
+ *
+ * The `#ifndef` fallbacks below keep the header self-contained when
+ * the translation unit is built outside the project Makefile (e.g.,
+ * by an IDE's language server). `BUILD_DATE` and `BUILD_TIME` fall
+ * back to the standard `__DATE__` / `__TIME__` predefined macros.
  */
 #ifndef DOTTA_BUILD_COMMIT
 #define DOTTA_BUILD_COMMIT "unknown"
 #endif
-
-#ifndef DOTTA_BUILD_COMMIT_FULL
-#define DOTTA_BUILD_COMMIT_FULL "unknown"
-#endif
-
 #ifndef DOTTA_BUILD_BRANCH
 #define DOTTA_BUILD_BRANCH "unknown"
 #endif
-
-#ifndef DOTTA_BUILD_DATE
-#define DOTTA_BUILD_DATE __DATE__
-#endif
-
-#ifndef DOTTA_BUILD_TIME
-#define DOTTA_BUILD_TIME __TIME__
-#endif
-
 #ifndef DOTTA_BUILD_OS
 #define DOTTA_BUILD_OS "unknown"
 #endif
-
 #ifndef DOTTA_BUILD_ARCH
 #define DOTTA_BUILD_ARCH "unknown"
 #endif
-
 #ifndef DOTTA_BUILD_TYPE
-#define DOTTA_BUILD_TYPE "dev"
+#define DOTTA_BUILD_TYPE "release"
 #endif
-
 #ifndef DOTTA_BUILD_CC
 #define DOTTA_BUILD_CC "unknown"
 #endif
-
-/**
- * Get version string
- *
- * Returns the full version string (e.g., "0.1.0-dev")
- *
- * @return Version string (static, do not free)
- */
-static inline const char *dotta_version_string(void) {
-    return DOTTA_VERSION_STRING;
-}
-
-/**
- * Get version number
- *
- * Returns numeric version for comparisons.
- * Higher numbers indicate newer versions.
- *
- * @return Numeric version
- */
-static inline int dotta_version_num(void) {
-    return DOTTA_VERSION_NUM;
-}
-
-/**
- * Get major version
- *
- * @return Major version number
- */
-static inline int dotta_version_major(void) {
-    return DOTTA_VERSION_MAJOR;
-}
-
-/**
- * Get minor version
- *
- * @return Minor version number
- */
-static inline int dotta_version_minor(void) {
-    return DOTTA_VERSION_MINOR;
-}
-
-/**
- * Get patch version
- *
- * @return Patch version number
- */
-static inline int dotta_version_patch(void) {
-    return DOTTA_VERSION_PATCH;
-}
-
-/**
- * Get pre-release identifier
- *
- * @return Pre-release string (empty for release versions)
- */
-static inline const char *dotta_version_prerelease(void) {
-    return DOTTA_VERSION_PRERELEASE;
-}
-
-/**
- * Get build commit hash
- *
- * @return Git commit hash or "unknown"
- */
-static inline const char *dotta_version_commit(void) {
-    return DOTTA_BUILD_COMMIT;
-}
-
-/**
- * Get build date
- *
- * @return Build date string
- */
-static inline const char *dotta_version_build_date(void) {
-    return DOTTA_BUILD_DATE;
-}
-
-/**
- * Get build time
- *
- * @return Build time string
- */
-static inline const char *dotta_version_build_time(void) {
-    return DOTTA_BUILD_TIME;
-}
-
-/**
- * Get full commit hash
- *
- * @return Full Git commit hash or "unknown"
- */
-static inline const char *dotta_version_commit_full(void) {
-    return DOTTA_BUILD_COMMIT_FULL;
-}
-
-/**
- * Get build branch
- *
- * @return Git branch name or "unknown"
- */
-static inline const char *dotta_version_branch(void) {
-    return DOTTA_BUILD_BRANCH;
-}
-
-/**
- * Get build OS
- *
- * @return Build operating system (darwin, linux, freebsd, etc.)
- */
-static inline const char *dotta_version_build_os(void) {
-    return DOTTA_BUILD_OS;
-}
-
-/**
- * Get build architecture
- *
- * @return Build architecture (x86_64, arm64, etc.)
- */
-static inline const char *dotta_version_build_arch(void) {
-    return DOTTA_BUILD_ARCH;
-}
-
-/**
- * Get build type
- *
- * @return Build type (release, debug, etc.)
- */
-static inline const char *dotta_version_build_type(void) {
-    return DOTTA_BUILD_TYPE;
-}
-
-/**
- * Get compiler version
- *
- * @return Compiler version string
- */
-static inline const char *dotta_version_build_cc(void) {
-    return DOTTA_BUILD_CC;
-}
-
-/**
- * Check if version is at least the specified version
- *
- * @param major Major version to check
- * @param minor Minor version to check
- * @param patch Patch version to check
- * @return true if current version >= specified version
- */
-static inline int dotta_version_at_least(int major, int minor, int patch) {
-    int required = (major * 10000) + (minor * 100) + patch;
-    return DOTTA_VERSION_NUM >= required;
-}
+#ifndef DOTTA_BUILD_DATE
+#define DOTTA_BUILD_DATE __DATE__
+#endif
+#ifndef DOTTA_BUILD_TIME
+#define DOTTA_BUILD_TIME __TIME__
+#endif
 
 #endif /* DOTTA_VERSION_H */

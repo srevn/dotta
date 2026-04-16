@@ -314,14 +314,13 @@ static error_t *initialize_state(
 /**
  * Clone command implementation
  */
-error_t *cmd_clone(
-    const config_t *config,
-    output_ctx_t *out,
-    const cmd_clone_options_t *opts
-) {
-    CHECK_NULL(config);
+error_t *cmd_clone(const args_ctx_t *ctx, const cmd_clone_options_t *opts) {
+    CHECK_NULL(ctx);
     CHECK_NULL(opts);
     CHECK_NULL(opts->url);
+
+    const config_t *config = ctx->config;
+    output_ctx_t *out = ctx->out;
 
     error_t *err = NULL;
     error_t *final_err = NULL;
@@ -614,7 +613,8 @@ error_t *cmd_clone(
     bool bootstrap_available = false;
 
     /* Check bootstrap scripts in all fetched profiles */
-    if (!opts->no_bootstrap && fetched_profiles->count > 0) {
+    if (opts->bootstrap_mode != CLONE_BOOTSTRAP_SKIP &&
+        fetched_profiles->count > 0) {
         /* Check if any fetched profiles have bootstrap scripts */
         for (size_t i = 0; i < fetched_profiles->count; i++) {
             const char *profile = fetched_profiles->items[i];
@@ -643,7 +643,7 @@ error_t *cmd_clone(
             output_newline(out, OUTPUT_NORMAL);
 
             /* Determine if we should run bootstrap */
-            if (opts->bootstrap) {
+            if (opts->bootstrap_mode == CLONE_BOOTSTRAP_FORCE) {
                 /* --bootstrap flag set, run automatically */
                 run_bootstrap = true;
             } else if (!opts->quiet) {
@@ -706,3 +706,141 @@ cleanup:
 
     return final_err;
 }
+
+/* ══════════════════════════════════════════════════════════════════
+ * Spec-engine integration
+ * ══════════════════════════════════════════════════════════════════ */
+
+/**
+ * Interpret the 1-2 raw positionals: first is the URL, optional second
+ * is the local path. Ordering matters (URL must precede path), so the
+ * engine's classifier (position-agnostic by design) isn't expressive
+ * enough; a raw bucket plus this post_parse hook keeps the logic local
+ * and linear.
+ */
+static error_t *clone_post_parse(
+    void *opts_v, arena_t *arena, const args_command_t *cmd
+) {
+    (void) arena;
+    (void) cmd;
+    cmd_clone_options_t *o = opts_v;
+
+    /* POSITIONAL_RAW enforces min=1, max=2 — count is 1 or 2 here. */
+    o->url = o->positional_args[0];
+    if (o->positional_count >= 2) {
+        o->path = o->positional_args[1];
+    }
+    return NULL;
+}
+
+/**
+ * Mutual-exclusion check: `--all` and `-p/--profile(s)` cannot both
+ * constrain the fetch set. Everything else has already been validated
+ * by the engine's per-row rules.
+ */
+static error_t *clone_validate(
+    void *opts_v, const args_command_t *cmd
+) {
+    (void) cmd;
+    const cmd_clone_options_t *o = opts_v;
+    if (o->fetch_all && o->profile_count > 0) {
+        return ERROR(
+            ERR_INVALID_ARG,
+            "--all and --profile are mutually exclusive"
+        );
+    }
+    return NULL;
+}
+
+static error_t *clone_dispatch(const args_ctx_t *ctx, void *opts_v) {
+    return cmd_clone(ctx, (const cmd_clone_options_t *) opts_v);
+}
+
+static const args_opt_t clone_opts[] = {
+    ARGS_GROUP("Options:"),
+    /* Three aliases on one flag, matching the legacy parser's
+     * `-p || --profile || --profiles` chain. Peer-list order is the
+     * display order in help output: "-p, --profile, --profiles". */
+    ARGS_APPEND(
+        "p profile profiles", "<name>",
+        cmd_clone_options_t,  profiles,        profile_count,
+        "Fetch specific profile(s) (repeatable)"
+    ),
+    ARGS_FLAG(
+        "all",
+        cmd_clone_options_t,  fetch_all,
+        "Fetch every remote profile (hub/backup workflow)"
+    ),
+    ARGS_FLAG_SET(
+        "bootstrap",
+        cmd_clone_options_t,  bootstrap_mode,
+        CLONE_BOOTSTRAP_FORCE,
+        "Run bootstrap scripts without prompting"
+    ),
+    ARGS_FLAG_SET(
+        "no-bootstrap",
+        cmd_clone_options_t,  bootstrap_mode,  CLONE_BOOTSTRAP_SKIP,
+        "Skip bootstrap scripts entirely"
+    ),
+    ARGS_FLAG(
+        "q quiet",
+        cmd_clone_options_t,  quiet,
+        "Suppress output"
+    ),
+    ARGS_FLAG(
+        "v verbose",
+        cmd_clone_options_t,  verbose,
+        "Verbose output"
+    ),
+    /* <url> [<path>] — order-dependent. Classifier has no position
+     * awareness, so a raw bucket with post_parse assignment is cleaner
+     * than two POSITIONAL_ONE rows differentiated by ad-hoc classes. */
+    ARGS_POSITIONAL_RAW(
+        cmd_clone_options_t,  positional_args, positional_count,
+        1,                    2
+    ),
+    ARGS_END,
+};
+
+const args_command_t spec_clone = {
+    .name        = "clone",
+    .summary     = "Clone an existing dotta repository",
+    .usage       = "%s clone [options] <url> [path]",
+    .description =
+        "Fetch a dotta repository and auto-detect the profiles that\n"
+        "apply to this system. Fetched profiles are enabled immediately\n"
+        "and recorded in state.\n",
+    .notes       =
+        "Profile Selection:\n"
+        "  (default)       Auto-detect profiles for this system\n"
+        "                  (global, <os>, hosts/<hostname> and variants).\n"
+        "  --all           Hub mode: fetch every remote profile.\n"
+        "  -p <name>       Fetch specific profiles explicitly (repeatable).\n"
+        "\n"
+        "Profile Behavior:\n"
+        "  Fetched profiles are enabled automatically. Run '%s profile\n"
+        "  list' to inspect enabled vs available profiles, and '%s\n"
+        "  profile enable <name>' to add one later.\n"
+        "\n"
+        "Bootstrap Integration:\n"
+        "  After cloning, dotta checks fetched profiles for a .bootstrap\n"
+        "  script. The default prompts before executing. --bootstrap runs\n"
+        "  them without confirmation; --no-bootstrap skips the check.\n",
+    .examples    =
+        "  %s clone git@github.com:user/dotfiles.git    # Auto-detect profiles\n"
+        "  %s clone <url> --all                         # Hub mode\n"
+        "  %s clone <url> -p global -p darwin           # Explicit profiles\n"
+        "  %s clone <url> --bootstrap                   # Run bootstrap scripts\n",
+    .epilogue    =
+        "Next steps:\n"
+        "  %s profile list             # View enabled profiles\n"
+        "  %s profile enable <name>    # Enable additional profiles\n"
+        "  %s bootstrap                # Run bootstrap scripts manually\n"
+        "  %s apply                    # Deploy profiles to the filesystem\n",
+    .opts_size   = sizeof(cmd_clone_options_t),
+    .opts        = clone_opts,
+    .post_parse  = clone_post_parse,
+    .validate    = clone_validate,
+    .repo_mode   = ARGS_REPO_NONE,
+    .dispatch    = clone_dispatch,
+};

@@ -4,16 +4,20 @@
 
 #include "cmds/revert.h"
 
+#include <config.h>
 #include <git2.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
 
+#include "base/args.h"
 #include "base/array.h"
 #include "base/buffer.h"
 #include "base/error.h"
 #include "base/output.h"
+#include "base/refspec.h"
+#include "base/string.h"
 #include "core/manifest.h"
 #include "core/metadata.h"
 #include "core/profiles.h"
@@ -816,16 +820,16 @@ cleanup:
 /**
  * Revert command implementation
  */
-error_t *cmd_revert(
-    git_repository *repo,
-    const config_t *config,
-    output_ctx_t *out,
-    const cmd_revert_options_t *opts
-) {
-    CHECK_NULL(repo);
+error_t *cmd_revert(const args_ctx_t *ctx, const cmd_revert_options_t *opts) {
+    CHECK_NULL(ctx);
+    CHECK_NULL(ctx->repo);
     CHECK_NULL(opts);
     CHECK_NULL(opts->file_path);
     CHECK_NULL(opts->commit);
+
+    git_repository *repo = ctx->repo;
+    const config_t *config = ctx->config;
+    output_ctx_t *out = ctx->out;
 
     error_t *err = NULL;
     char *profile = NULL;
@@ -1268,3 +1272,161 @@ cleanup:
 
     return err;
 }
+
+/* ══════════════════════════════════════════════════════════════════
+ * Spec-engine integration
+ * ══════════════════════════════════════════════════════════════════ */
+
+/**
+ * Interpret the 1-3 raw positionals into `profile`, `file_path`, and
+ * `commit`.
+ *
+ * Forms (POSITIONAL_RAW min=0, max=3; commit is always required):
+ *   0 args        → error "file specification is required"
+ *   1 arg         → parse [profile:]<file>[@commit] via parse_refspec
+ *   2 args        → <file> <commit>         when arg[1] is a git ref;
+ *                   <profile> <file[@commit]> otherwise (refspec on 2nd)
+ *   3 args        → <profile> <file> <commit>
+ *
+ * Allocation model: refspec substrings are arena-allocated; pure
+ * positional pointers borrow argv. cmd_revert does not free any of
+ * these pointers — the engine's arena owns their lifetime.
+ *
+ * A refspec that yields an explicit profile always overrides a
+ * previously-set one (from -p or a positional).
+ */
+static error_t *revert_post_parse(
+    void *opts_v, arena_t *arena, const args_command_t *cmd
+) {
+    (void) cmd;
+    cmd_revert_options_t *o = opts_v;
+    char **args = o->positional_args;
+
+    if (o->positional_count == 0) {
+        return ERROR(
+            ERR_INVALID_ARG, "file specification is required"
+        );
+    }
+
+    if (o->positional_count == 1) {
+        /* [profile:]<file>[@commit] */
+        char *profile = NULL, *file = NULL, *commit = NULL;
+        error_t *err = parse_refspec(arena, args[0], &profile, &file, &commit);
+        if (err != NULL) {
+            return error_wrap(err, "Failed to parse file specification");
+        }
+        if (profile != NULL) o->profile = profile;
+        o->file_path = file;
+        if (commit != NULL) o->commit = commit;
+    } else if (o->positional_count == 2) {
+        if (str_looks_like_git_ref(args[1])) {
+            /* <file> <commit> */
+            o->file_path = args[0];
+            o->commit = args[1];
+        } else {
+            /* <profile> <file[@commit]> — refspec profile wins if present. */
+            o->profile = args[0];
+            char *profile = NULL, *file = NULL, *commit = NULL;
+            error_t *err = parse_refspec(
+                arena, args[1], &profile, &file, &commit
+            );
+            if (err != NULL) {
+                return error_wrap(err, "Failed to parse file specification");
+            }
+            if (profile != NULL) o->profile = profile;
+            o->file_path = file;
+            if (commit != NULL) o->commit = commit;
+        }
+    } else if (o->positional_count == 3) {
+        o->profile = args[0];
+        o->file_path = args[1];
+        o->commit = args[2];
+    } else {
+        /* Max=3 is enforced by POSITIONAL_RAW; this branch is unreachable. */
+        return ERROR(ERR_INTERNAL, "revert: too many positionals");
+    }
+
+    /* A commit is required by the command; file_path is guaranteed set
+     * by successful refspec parsing or explicit positional assignment. */
+    if (o->commit == NULL) {
+        return ERROR(
+            ERR_INVALID_ARG, "commit reference is required"
+        );
+    }
+    return NULL;
+}
+
+static error_t *revert_dispatch(const args_ctx_t *ctx, void *opts_v) {
+    return cmd_revert(ctx, (const cmd_revert_options_t *) opts_v);
+}
+
+static const args_opt_t revert_opts[] = {
+    ARGS_GROUP("Options:"),
+    ARGS_STRING(
+        "p profile",         "<name>",
+        cmd_revert_options_t,profile,
+        "Disambiguate profile when file is ambiguous"
+    ),
+    ARGS_STRING(
+        "m message",         "<msg>",
+        cmd_revert_options_t,message,
+        "Commit message"
+    ),
+    ARGS_FLAG(
+        "f force",
+        cmd_revert_options_t,force,
+        "Skip confirmation and override conflicts"
+    ),
+    ARGS_FLAG(
+        "n dry-run",
+        cmd_revert_options_t,dry_run,
+        "Preview without writing"
+    ),
+    ARGS_FLAG(
+        "v verbose",
+        cmd_revert_options_t,verbose,
+        "Verbose output"
+    ),
+    ARGS_POSITIONAL_RAW(
+        cmd_revert_options_t,positional_args, positional_count,
+        0,                   3
+    ),
+    ARGS_END,
+};
+
+const args_command_t spec_revert = {
+    .name        = "revert",
+    .summary     = "Revert a file to a previous version",
+    .usage       =
+        "%s revert [options] <file@commit>\n"
+        "   or: %s revert [options] <file> <commit>\n"
+        "   or: %s revert [options] <profile>:<file@commit>\n"
+        "   or: %s revert [options] <profile> <file> <commit>",
+    .description =
+        "Restore a file's content and metadata to its state at a past\n"
+        "commit. Only the Git repository is modified; run '%s apply'\n"
+        "afterward to propagate to the filesystem.\n",
+    .notes       =
+        "Execution Order:\n"
+        "  1. Locate the file in enabled profiles (exact path or basename).\n"
+        "  2. Resolve the target commit in the profile's history.\n"
+        "  3. Show a diff between current and target state.\n"
+        "  4. Prompt for confirmation (bypassed by --force).\n"
+        "  5. Write file and metadata back to the target state.\n"
+        "  6. Create a commit capturing the restoration.\n",
+    .examples    =
+        "  %s revert home/.bashrc HEAD~3              # Profile inferred\n"
+        "  %s revert darwin home/.bashrc a4f2c8e      # Explicit profile\n"
+        "  %s revert darwin:home/.bashrc@a4f2c8e      # Compact refspec\n"
+        "  %s revert -m \"Fix config\" home/.bashrc HEAD~1   # Custom message\n"
+        "  %s revert -n darwin home/.config/nvim/init.lua HEAD~2  # Preview\n",
+    .epilogue    =
+        "See also:\n"
+        "  %s list <profile> <file>   # Find commit refs for a file\n"
+        "  %s apply                   # Deploy the restored content\n",
+    .opts_size   = sizeof(cmd_revert_options_t),
+    .opts        = revert_opts,
+    .post_parse  = revert_post_parse,
+    .repo_mode   = ARGS_REPO_REQUIRED,
+    .dispatch    = revert_dispatch,
+};

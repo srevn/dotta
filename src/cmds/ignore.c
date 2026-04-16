@@ -10,6 +10,7 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+#include "base/args.h"
 #include "base/array.h"
 #include "base/error.h"
 #include "base/output.h"
@@ -1382,15 +1383,15 @@ static error_t *test_path_ignore(
 /**
  * Main command implementation
  */
-error_t *cmd_ignore(
-    git_repository *repo,
-    const config_t *config,
-    output_ctx_t *out,
-    const cmd_ignore_options_t *opts
-) {
-    CHECK_NULL(repo);
-    CHECK_NULL(config);
+error_t *cmd_ignore(const args_ctx_t *ctx, const cmd_ignore_options_t *opts) {
+    CHECK_NULL(ctx);
+    CHECK_NULL(ctx->repo);
+    CHECK_NULL(ctx->config);
     CHECK_NULL(opts);
+
+    git_repository *repo = ctx->repo;
+    const config_t *config = ctx->config;
+    output_ctx_t *out = ctx->out;
 
     /* CLI flags override config */
     if (opts->verbose) {
@@ -1438,3 +1439,113 @@ error_t *cmd_ignore(
 
     return err;
 }
+
+/* ══════════════════════════════════════════════════════════════════
+ * Spec-engine integration
+ * ══════════════════════════════════════════════════════════════════ */
+
+/**
+ * Route the optional positional profile into `opts->profile`.
+ *
+ * POSITIONAL_RAW with max=1 gives us the "too many positionals" error
+ * for free. When a positional is present, it wins over a preceding
+ * -p/--profile flag (matches the legacy precedence — positional sets
+ * profile unconditionally when present).
+ */
+static error_t *ignore_post_parse(
+    void *opts_v, arena_t *arena, const args_command_t *cmd
+) {
+    (void) arena;
+    (void) cmd;
+    cmd_ignore_options_t *o = opts_v;
+
+    if (o->positional_count == 1) {
+        o->profile = o->positional_args[0];
+    }
+    return NULL;
+}
+
+static error_t *ignore_dispatch(const args_ctx_t *ctx, void *opts_v) {
+    return cmd_ignore(ctx, (const cmd_ignore_options_t *) opts_v);
+}
+
+static const args_opt_t ignore_opts[] = {
+    ARGS_GROUP("Options:"),
+    ARGS_STRING(
+        "p profile",         "<name>",
+        cmd_ignore_options_t,profile,
+        "Profile name (alternative to positional)"
+    ),
+    ARGS_APPEND(
+        "add",               "<pattern>",
+        cmd_ignore_options_t,add_patterns,    add_count,
+        "Append pattern to .dottaignore (repeatable)"
+    ),
+    ARGS_APPEND(
+        "remove",            "<pattern>",
+        cmd_ignore_options_t,remove_patterns, remove_count,
+        "Delete pattern from .dottaignore (repeatable)"
+    ),
+    ARGS_STRING(
+        "test",              "<path>",
+        cmd_ignore_options_t,test_path,
+        "Report whether path is ignored"
+    ),
+    ARGS_FLAG(
+        "v verbose",
+        cmd_ignore_options_t,verbose,
+        "Verbose output (test mode: show matches)"
+    ),
+    ARGS_POSITIONAL_RAW(
+        cmd_ignore_options_t,positional_args, positional_count,
+        0,                   1
+    ),
+    ARGS_END,
+};
+
+const args_command_t spec_ignore = {
+    .name        = "ignore",
+    .summary     = "Manage ignore patterns",
+    .usage       =
+        "%s ignore [options] [profile]",
+    .description =
+        "View or edit .dottaignore files. Without a positional, operates\n"
+        "on the baseline; with one, on that profile's .dottaignore which\n"
+        "extends the baseline.\n",
+    .notes       =
+        "Ignore Pattern Layers (highest precedence first):\n"
+        "  1. CLI --exclude patterns (command-specific).\n"
+        "  2. Combined .dottaignore:\n"
+        "     - Baseline (dotta-worktree branch, applies to every profile).\n"
+        "     - Profile .dottaignore (extends baseline, can override with !).\n"
+        "  3. Config file patterns.\n"
+        "  4. Source .gitignore (lowest precedence).\n"
+        "\n"
+        "Pattern Syntax:\n"
+        "  *.log          Match all .log files.\n"
+        "  node_modules/  Match directory.\n"
+        "  !debug.log     Negate a prior match.\n"
+        "  .cache/        Match .cache directories.\n"
+        "\n"
+        "Profile .dottaignore Behavior:\n"
+        "  Profile files start empty and inherit all baseline patterns.\n"
+        "  Use negation (!) to override baseline in specific profiles.\n"
+        "  Example: baseline '*.log' + profile '!important.log' keeps\n"
+        "  important.log in the profile.\n"
+        "\n"
+        "Editor Selection (edit mode):\n"
+        "  $DOTTA_EDITOR, then $VISUAL, then $EDITOR, then vi.\n",
+    .examples    =
+        "  %s ignore                                 # Edit baseline\n"
+        "  %s ignore global                          # Edit profile file\n"
+        "  %s ignore --add '*.tmp' --add '*.log'     # Append patterns\n"
+        "  %s ignore global --remove '.DS_Store'     # Remove a pattern\n"
+        "  %s ignore --add 'new' --remove 'old'      # Add + remove\n"
+        "  %s ignore --test ~/.config/nvim/node_modules  # Enabled profiles\n"
+        "  %s ignore global --test ~/.bashrc         # Single profile\n",
+    .opts_size   = sizeof(cmd_ignore_options_t),
+    .opts        = ignore_opts,
+    .post_parse  = ignore_post_parse,
+    .repo_mode   = ARGS_REPO_REQUIRED,
+    .dispatch    = ignore_dispatch,
+};

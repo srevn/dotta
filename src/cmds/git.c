@@ -10,6 +10,8 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include "base/args.h"
+
 /**
  * Execute git command with passthrough
  *
@@ -106,3 +108,47 @@ int cmd_git(const char *repo_path, const cmd_git_options_t *opts) {
 
     return 1;
 }
+
+/* ══════════════════════════════════════════════════════════════════
+ * Spec-engine integration
+ * ══════════════════════════════════════════════════════════════════ */
+
+/**
+ * Passthrough dispatch: the engine hands us the full argv untouched.
+ *
+ * Exit-code preservation: `cmd_git` returns git's own status (0, 1, 2,
+ * 128+n). That status IS the user-visible contract — `git diff
+ * --exit-code`, merge-base probes, CI scripts all branch on it. We
+ * can't funnel it through `error_t *` (which collapses to 0 or 1), so
+ * we write through `*ctx->exit_code`; `run_spec` honors that when
+ * dispatch returns NULL. See `struct args_ctx` docs for the channel.
+ */
+static error_t *git_dispatch(const args_ctx_t *ctx, void *opts_v) {
+    (void) opts_v;
+    cmd_git_options_t opts = {
+        .args      = &ctx->argv[2],
+        .arg_count = ctx->argc - 2,
+    };
+    *ctx->exit_code = cmd_git(ctx->repo_path, &opts);
+    return NULL;
+}
+
+const args_command_t spec_git = {
+    .name        = "git",
+    .summary     = "Execute git commands within repository",
+    .usage       = "%s git <git-command> [args...]",
+    .description =
+        "Pure passthrough to git, scoped to the dotta repository.\n"
+        "No interception or modification — all standard git commands and\n"
+        "options are supported. Git's exit status is preserved verbatim\n"
+        "so scripts depending on codes like 1 (diffs found) or 128\n"
+        "(fatal) continue to work under `dotta git`.\n",
+    .examples    =
+        "  %s git status\n"
+        "  %s git log --oneline\n"
+        "  %s git show HEAD:home/.bashrc\n"
+        "  %s git reflog\n",
+    .repo_mode   = ARGS_REPO_PATH_ONLY,
+    .dispatch    = git_dispatch,
+    .passthrough = true,
+};

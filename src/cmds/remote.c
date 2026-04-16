@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "base/args.h"
 #include "base/error.h"
 #include "base/output.h"
 
@@ -456,13 +457,13 @@ static error_t *remote_show(
 /**
  * Remote command implementation
  */
-error_t *cmd_remote(
-    git_repository *repo,
-    output_ctx_t *out,
-    const cmd_remote_options_t *opts
-) {
-    CHECK_NULL(repo);
+error_t *cmd_remote(const args_ctx_t *ctx, const cmd_remote_options_t *opts) {
+    CHECK_NULL(ctx);
+    CHECK_NULL(ctx->repo);
     CHECK_NULL(opts);
+
+    git_repository *repo = ctx->repo;
+    output_ctx_t *out = ctx->out;
 
     switch (opts->subcommand) {
         case REMOTE_LIST:
@@ -508,3 +509,155 @@ error_t *cmd_remote(
             return ERROR(ERR_INVALID_ARG, "Unknown remote subcommand");
     }
 }
+
+/* ══════════════════════════════════════════════════════════════════
+ * Spec-engine integration
+ * ══════════════════════════════════════════════════════════════════ */
+
+/**
+ * Map (positional_count, args[0]) onto the subcommand discriminator.
+ *
+ * Single spec + post_parse instead of a seven-node subcommand tree:
+ * every "subcommand" shares the same options struct and the same flag
+ * set, and the bareword fallback (`dotta remote <name>` → show <name>)
+ * cannot be expressed by an args_subcommand_t entry — `<name>` would
+ * trigger "unknown subcommand". Two lines of post_parse handle it.
+ */
+static error_t *remote_post_parse(
+    void *opts_v, arena_t *arena, const args_command_t *cmd
+) {
+    (void) arena;
+    (void) cmd;
+    cmd_remote_options_t *opts = opts_v;
+    char *const *args = opts->positional_args;
+    size_t n = opts->positional_count;
+
+    if (n == 0) {
+        opts->subcommand = REMOTE_LIST;
+        return NULL;
+    }
+
+    const char *sub = args[0];
+
+    if (strcmp(sub, "list") == 0) {
+        if (n != 1) {
+            return error_create(
+                ERR_INVALID_ARG, "'remote list' takes no arguments"
+            );
+        }
+        opts->subcommand = REMOTE_LIST;
+        return NULL;
+    }
+
+    if (strcmp(sub, "add") == 0) {
+        if (n != 3) {
+            return error_create(
+                ERR_INVALID_ARG, "'remote add' requires <name> and <url>"
+            );
+        }
+        opts->subcommand = REMOTE_ADD;
+        opts->name = args[1];
+        opts->url = args[2];
+        return NULL;
+    }
+
+    if (strcmp(sub, "remove") == 0 || strcmp(sub, "rm") == 0) {
+        if (n != 2) {
+            return error_create(
+                ERR_INVALID_ARG, "'remote remove' requires <name>"
+            );
+        }
+        opts->subcommand = REMOTE_REMOVE;
+        opts->name = args[1];
+        return NULL;
+    }
+
+    if (strcmp(sub, "set-url") == 0) {
+        if (n != 3) {
+            return error_create(
+                ERR_INVALID_ARG, "'remote set-url' requires <name> and <url>"
+            );
+        }
+        opts->subcommand = REMOTE_SET_URL;
+        opts->name = args[1];
+        opts->url = args[2];
+        return NULL;
+    }
+
+    if (strcmp(sub, "rename") == 0) {
+        if (n != 3) {
+            return error_create(
+                ERR_INVALID_ARG, "'remote rename' requires <old> and <new>"
+            );
+        }
+        opts->subcommand = REMOTE_RENAME;
+        opts->name = args[1];
+        opts->new_name = args[2];
+        return NULL;
+    }
+
+    if (strcmp(sub, "show") == 0) {
+        if (n != 2) {
+            return error_create(
+                ERR_INVALID_ARG, "'remote show' requires <name>"
+            );
+        }
+        opts->subcommand = REMOTE_SHOW;
+        opts->name = args[1];
+        return NULL;
+    }
+
+    /* Bareword fallback: `dotta remote <name>` → show <name>. */
+    if (n == 1) {
+        opts->subcommand = REMOTE_SHOW;
+        opts->name = sub;
+        return NULL;
+    }
+
+    return error_create(
+        ERR_INVALID_ARG, "unknown 'remote' subcommand '%s'", sub
+    );
+}
+
+static error_t *remote_dispatch(const args_ctx_t *ctx, void *opts_v) {
+    return cmd_remote(ctx, (const cmd_remote_options_t *) opts_v);
+}
+
+static const args_opt_t remote_opts[] = {
+    ARGS_GROUP("Options:"),
+    ARGS_FLAG(
+        "v verbose",
+        cmd_remote_options_t,verbose,
+        "Show URLs (for list)"
+    ),
+    ARGS_POSITIONAL_RAW(
+        cmd_remote_options_t,positional_args, positional_count,
+        0,                   0
+    ),
+    ARGS_END,
+};
+
+const args_command_t spec_remote = {
+    .name        = "remote",
+    .summary     = "Manage remote repositories",
+    .usage       = "%s remote [options] [<subcommand> [args...]]",
+    .description =
+        "Subcommands:\n"
+        "  (none) | list            List remotes\n"
+        "  add <name> <url>         Add a new remote\n"
+        "  remove | rm <name>       Remove a remote\n"
+        "  set-url <name> <url>     Change remote URL\n"
+        "  rename <old> <new>       Rename a remote\n"
+        "  show <name>              Show remote details\n"
+        "  <name>                   Shorthand for 'show <name>'\n",
+    .examples    =
+        "  %s remote\n"
+        "  %s remote -v\n"
+        "  %s remote add origin git@github.com:user/dotfiles.git\n"
+        "  %s remote set-url origin https://github.com/user/dotfiles.git\n",
+    .opts_size   = sizeof(cmd_remote_options_t),
+    .opts        = remote_opts,
+    .post_parse  = remote_post_parse,
+    .repo_mode   = ARGS_REPO_REQUIRED,
+    .dispatch    = remote_dispatch,
+};

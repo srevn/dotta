@@ -327,8 +327,8 @@ static error_t *add_file_to_worktree(
         err = encryption_policy_should_encrypt(
             config,
             storage_path,
-            opts->encrypt,
-            opts->no_encrypt,
+            opts->encrypt_mode == ADD_ENCRYPT_FORCE_ON,
+            opts->encrypt_mode == ADD_ENCRYPT_FORCE_OFF,
             metadata,  /* Existing metadata (preserves encryption state on --force re-add) */
             &should_encrypt
         );
@@ -910,13 +910,13 @@ cleanup:
 /**
  * Add command implementation
  */
-error_t *cmd_add(
-    git_repository *repo,
-    const config_t *config,
-    output_ctx_t *out,
-    const cmd_add_options_t *opts
-) {
-    CHECK_NULL(repo);
+error_t *cmd_add(const args_ctx_t *ctx, const cmd_add_options_t *opts) {
+    CHECK_NULL(ctx);
+    CHECK_NULL(ctx->repo);
+
+    git_repository *repo = ctx->repo;
+    const config_t *config = ctx->config;
+    output_ctx_t *out = ctx->out;
 
     error_t *err = validate_options(opts);
     if (err) return err;
@@ -1065,7 +1065,7 @@ error_t *cmd_add(
      */
     err = privilege_ensure_for_operation(
         preflight_storage_paths, preflight_storage_count, "add",
-        true, opts->argc, opts->argv, out
+        true, ctx->argc, ctx->argv, out
     );
 
     if (err) {
@@ -1352,8 +1352,9 @@ error_t *cmd_add(
      *   1. Explicit encryption requested (--encrypt flag)
      *   2. Auto-encrypt patterns configured (files may match patterns)
      */
-    bool needs_encryption = opts->encrypt || (config->encryption_enabled &&
-        config->auto_encrypt_patterns && config->auto_encrypt_pattern_count > 0);
+    bool needs_encryption = opts->encrypt_mode == ADD_ENCRYPT_FORCE_ON ||
+        (config->encryption_enabled && config->auto_encrypt_patterns &&
+        config->auto_encrypt_pattern_count > 0);
 
     if (needs_encryption) {
         if (!config->encryption_enabled) {
@@ -1721,3 +1722,148 @@ cleanup:
 
     return err;
 }
+
+/* ══════════════════════════════════════════════════════════════════
+ * Spec-engine integration
+ * ══════════════════════════════════════════════════════════════════ */
+
+/**
+ * Route the raw positional bucket into `profile` and `files[]`.
+ *
+ * Two legacy-compatible cases:
+ *   1. -p/--profile was given: every positional is a file path.
+ *   2. -p not given: first positional is the profile, rest are files.
+ *
+ * All validation lives here (not in a separate `validate` hook) so
+ * the error message can reference the effective invariant rather
+ * than a raw count.
+ */
+static error_t *add_post_parse(
+    void *opts_v, arena_t *arena, const args_command_t *cmd
+) {
+    (void) arena;
+    (void) cmd;
+    cmd_add_options_t *o = opts_v;
+
+    if (o->profile != NULL) {
+        o->files = o->positional_args;
+        o->file_count = o->positional_count;
+    } else {
+        if (o->positional_count == 0) {
+            return ERROR(
+                ERR_INVALID_ARG,
+                "profile name is required (as first positional or via -p)"
+            );
+        }
+        o->profile = o->positional_args[0];
+        o->files = o->positional_args + 1;
+        o->file_count = o->positional_count - 1;
+    }
+
+    if (o->file_count == 0) {
+        return ERROR(
+            ERR_INVALID_ARG, "at least one file is required"
+        );
+    }
+    return NULL;
+}
+
+static error_t *add_dispatch(const args_ctx_t *ctx, void *opts_v) {
+    return cmd_add(ctx, (const cmd_add_options_t *) opts_v);
+}
+
+static const args_opt_t add_opts[] = {
+    ARGS_GROUP("Options:"),
+    ARGS_STRING(
+        "p profile",          "<name>",
+        cmd_add_options_t,    profile,
+        "Profile name (alternative to positional)"
+    ),
+    ARGS_STRING(
+        "prefix",             "<path>",
+        cmd_add_options_t,    custom_prefix,
+        "Storage root for custom/ paths (e.g. /mnt/jails/web)"
+    ),
+    ARGS_STRING(
+        "m message",          "<msg>",
+        cmd_add_options_t,    message,
+        "Commit message"
+    ),
+    ARGS_APPEND(
+        "e exclude",          "<pattern>",
+        cmd_add_options_t,    exclude_patterns, exclude_count,
+        "Skip matching files (glob, repeatable)"
+    ),
+    ARGS_FLAG(
+        "f force",
+        cmd_add_options_t,    force,
+        "Overwrite existing entries in the profile"
+    ),
+    ARGS_FLAG(
+        "v verbose",
+        cmd_add_options_t,    verbose,
+        "Verbose output"
+    ),
+    ARGS_FLAG_SET(
+        "encrypt",
+        cmd_add_options_t,    encrypt_mode,
+        ADD_ENCRYPT_FORCE_ON,
+        "Force encryption for the given files"
+    ),
+    ARGS_FLAG_SET(
+        "no-encrypt",
+        cmd_add_options_t,    encrypt_mode,
+        ADD_ENCRYPT_FORCE_OFF,
+        "Bypass auto-encrypt patterns"
+    ),
+    /* <profile> <file|dir>... — order-dependent, first is profile.
+     * Mirrors clone's raw-bucket-plus-post_parse approach. */
+    ARGS_POSITIONAL_RAW(
+        cmd_add_options_t,    positional_args,  positional_count,
+        0,                    0
+    ),
+    ARGS_END,
+};
+
+const args_command_t spec_add = {
+    .name        = "add",
+    .summary     = "Add files or directories to a profile",
+    .usage       =
+        "%s add [options] <profile> <file|dir>...\n"
+        "   or: %s add [options] --profile <name> <file|dir>...",
+    .description =
+        "Import files or directories into a profile branch. Storage\n"
+        "prefix is inferred from the source path (home/, root/, or\n"
+        "custom/ with --prefix); metadata (mode, owner) is captured.\n",
+    .notes       =
+        "Exclude Patterns:\n"
+        "  Glob syntax with *, ?, [abc]. Flag is repeatable.\n"
+        "    --exclude '*.log'                    # Skip .log files\n"
+        "    --exclude '.git/*'                   # Skip .git directory\n"
+        "    --exclude '*.log' --exclude '*.tmp'  # Multiple patterns\n"
+        "\n"
+        "Custom Prefix:\n"
+        "  --prefix <path> stores files under 'custom/<path>' so sources\n"
+        "  outside of $HOME and / can be versioned (e.g. /mnt/jails/web).\n"
+        "\n"
+        "Encryption:\n"
+        "    1. Explicit --encrypt (forces encryption for given files)\n"
+        "    2. Auto-encrypt patterns in config (e.g. .ssh/id_*, *.key)\n"
+        "    3. --no-encrypt (disables auto-encryption for given files)\n",
+    .examples    =
+        "  %s add global ~/.bashrc                      # Basic add\n"
+        "  %s add darwin ~/.config/nvim                 # Directory\n"
+        "  %s add global ~/.ssh/config -e '*.pub'       # With exclude\n"
+        "  %s add global ~/.ssh/id_rsa --encrypt        # Force encrypt\n"
+        "  %s add global ~/.aws/credentials --no-encrypt  # Bypass patterns\n"
+        "  %s add web /mnt/jails/web/nginx.conf --prefix /mnt/jails/web\n",
+    .epilogue    =
+        "See also:\n"
+        "  %s key set                 # Set encryption passphrase\n"
+        "  %s apply                   # Deploy the new entries\n",
+    .opts_size   = sizeof(cmd_add_options_t),
+    .opts        = add_opts,
+    .post_parse  = add_post_parse,
+    .repo_mode   = ARGS_REPO_REQUIRED,
+    .dispatch    = add_dispatch,
+};

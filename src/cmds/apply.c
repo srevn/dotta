@@ -9,10 +9,12 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "base/args.h"
 #include "base/array.h"
 #include "base/error.h"
 #include "base/match.h"
 #include "base/output.h"
+#include "base/string.h"
 #include "core/cleanup.h"
 #include "core/deploy.h"
 #include "core/manifest.h"
@@ -618,6 +620,7 @@ static void print_cleanup_preflight_results(
  * @return NULL if OK to proceed, error otherwise (or does not return if re-exec with sudo)
  */
 static error_t *ensure_complete_apply_privileges(
+    const args_ctx_t *ctx,
     const manifest_t *manifest,
     const workspace_item_t **file_orphans,
     size_t file_orphan_count,
@@ -626,6 +629,7 @@ static error_t *ensure_complete_apply_privileges(
     const cmd_apply_options_t *opts,
     output_ctx_t *out
 ) {
+    CHECK_NULL(ctx);
     CHECK_NULL(manifest);
     CHECK_NULL(opts);
     CHECK_NULL(out);
@@ -692,8 +696,8 @@ static error_t *ensure_complete_apply_privileges(
             root_paths->count,
             "apply",
             true,  /* interactive: prompt user if elevation needed */
-            opts->argc,
-            opts->argv,
+            ctx->argc,
+            ctx->argv,
             out
         );
     }
@@ -820,14 +824,14 @@ static bool needs_deployment(const workspace_item_t *ws_item) {
 /**
  * Apply command implementation
  */
-error_t *cmd_apply(
-    git_repository *repo,
-    const config_t *config,
-    output_ctx_t *out,
-    const cmd_apply_options_t *opts
-) {
-    CHECK_NULL(repo);
+error_t *cmd_apply(const args_ctx_t *ctx, const cmd_apply_options_t *opts) {
+    CHECK_NULL(ctx);
+    CHECK_NULL(ctx->repo);
     CHECK_NULL(opts);
+
+    git_repository *repo = ctx->repo;
+    const config_t *config = ctx->config;
+    output_ctx_t *out = ctx->out;
 
     /* Declare all resources at the top, initialized to NULL */
     error_t *err = NULL;
@@ -1482,7 +1486,7 @@ error_t *cmd_apply(
         output_print(out, OUTPUT_VERBOSE, "\nChecking privilege requirements...\n");
 
         err = ensure_complete_apply_privileges(
-            deploy_manifest, file_orphans, file_orphan_count, dir_orphans,
+            ctx, deploy_manifest, file_orphans, file_orphan_count, dir_orphans,
             dir_orphan_count, opts, out
         );
         if (err) {
@@ -2215,3 +2219,128 @@ cleanup:
 
     return err;
 }
+
+/* ══════════════════════════════════════════════════════════════════
+ * Spec-engine integration
+ * ══════════════════════════════════════════════════════════════════ */
+
+/* Command-local positional classes. Start at 1 to reserve 0 for the
+ * engine's "unclassified" sentinel (see args.h:args_class_t). */
+enum apply_class { APPLY_CLASS_FILE = 1, APPLY_CLASS_PROFILE, };
+
+/**
+ * Positional classifier: file-like tokens go to files[]; everything
+ * else is treated as a profile name.
+ */
+static args_class_t apply_classify(const char *tok) {
+    return str_looks_like_file_path(tok) ? APPLY_CLASS_FILE
+                                         : APPLY_CLASS_PROFILE;
+}
+
+/**
+ * Seed non-zero defaults. `skip_unchanged` is true by default — the
+ * user opts out with `--no-skip-unchanged`, which writes 0 via
+ * ARGS_FLAG_SET.
+ */
+static void apply_defaults(void *opts_v) {
+    cmd_apply_options_t *o = opts_v;
+    o->skip_unchanged = 1;
+}
+
+static error_t *apply_dispatch(const args_ctx_t *ctx, void *opts_v) {
+    return cmd_apply(ctx, (const cmd_apply_options_t *) opts_v);
+}
+
+static const args_opt_t apply_opts[] = {
+    ARGS_GROUP("Options:"),
+    ARGS_APPEND(
+        "p profile",        "<name>",
+        cmd_apply_options_t,profiles,         profile_count,
+        "Filter deployment to profile(s) (repeatable)"
+    ),
+    ARGS_APPEND(
+        "e exclude",        "<pattern>",
+        cmd_apply_options_t,exclude_patterns, exclude_count,
+        "Skip matching files (no deploy, no removal)"
+    ),
+    ARGS_FLAG(
+        "f force",
+        cmd_apply_options_t,force,
+        "Overwrite modified files"
+    ),
+    ARGS_FLAG(
+        "n dry-run",
+        cmd_apply_options_t,dry_run,
+        "Preview without writing"
+    ),
+    ARGS_FLAG(
+        "keep-orphans",
+        cmd_apply_options_t,keep_orphans,
+        "Leave orphaned files in place (advanced)"
+    ),
+    ARGS_FLAG(
+        "skip-existing",
+        cmd_apply_options_t,skip_existing,
+        "Skip files that already exist"
+    ),
+    ARGS_FLAG_SET(
+        "no-skip-unchanged",
+        cmd_apply_options_t,skip_unchanged,   0,
+        "Redeploy every file, even if unchanged"
+    ),
+    ARGS_FLAG(
+        "v verbose",
+        cmd_apply_options_t,verbose,
+        "Verbose output"
+    ),
+    /* Positionals: bare `<file>` tokens append to files[]; bare
+     * `<profile>` tokens append to profiles[]. The -p/--profile flag
+     * above targets the same profiles[] array, so `-p darwin foo`
+     * and `darwin foo` produce the same list in argv order. */
+    ARGS_POSITIONAL(
+        APPLY_CLASS_FILE,
+        cmd_apply_options_t,files,            file_count
+    ),
+    ARGS_POSITIONAL(
+        APPLY_CLASS_PROFILE,
+        cmd_apply_options_t,profiles,         profile_count
+    ),
+    ARGS_END,
+};
+
+const args_command_t spec_apply = {
+    .name          = "apply",
+    .summary       = "Deploy enabled profiles to the filesystem",
+    .usage         = "%s apply [options] [profile|file]...",
+    .description   =
+        "Converge the filesystem with enabled profiles: deploy new and\n"
+        "updated files, remove files orphaned by disabled profiles, and\n"
+        "update the deployment state.\n",
+    .notes         =
+        "Smart Skipping:\n"
+        "  Files whose content already matches the profile are skipped\n"
+        "  by default. Pass --no-skip-unchanged to force redeployment.\n"
+        "\n"
+        "Exclusion Patterns:\n"
+        "  Excluded files are protected from both deployment and removal.\n"
+        "  Patterns follow gitignore glob syntax. Flag is repeatable.\n",
+    .examples      =
+        "  %s apply                              # Deploy all enabled profiles\n"
+        "  %s apply -p work                      # Filter to 'work' profile\n"
+        "  %s apply -p work ~/.bashrc            # Profile + file filter\n"
+        "  %s apply ~/.bashrc ~/.zshrc           # Deploy specific files only\n"
+        "  %s apply -n                           # Preview without writing\n"
+        "  %s apply --exclude 'home/.ssh/*'      # Protect matched files\n"
+        "  %s apply --no-skip-unchanged          # Force-deploy every file\n",
+    .epilogue      =
+        "See also:\n"
+        "  %s status          # Preview pending deployment\n"
+        "  %s update          # Commit filesystem changes back\n"
+        "  %s profile enable  # Stage a profile for deployment\n",
+    .opts_size     = sizeof(cmd_apply_options_t),
+    .opts          = apply_opts,
+    .classify      = apply_classify,
+    .init_defaults = apply_defaults,
+    .repo_mode     = ARGS_REPO_REQUIRED,
+    .dispatch      = apply_dispatch,
+};

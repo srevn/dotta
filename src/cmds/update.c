@@ -13,6 +13,8 @@
 #include <string.h>
 #include <sys/stat.h>
 
+#include "base/arena.h"
+#include "base/args.h"
 #include "base/array.h"
 #include "base/error.h"
 #include "base/hashmap.h"
@@ -1807,15 +1809,15 @@ static error_t *update_confirm_operation(
 /**
  * Update command implementation
  */
-error_t *cmd_update(
-    git_repository *repo,
-    const config_t *config,
-    output_ctx_t *out,
-    const cmd_update_options_t *opts
-) {
-    CHECK_NULL(repo);
-    CHECK_NULL(config);
+error_t *cmd_update(const args_ctx_t *ctx, const cmd_update_options_t *opts) {
+    CHECK_NULL(ctx);
+    CHECK_NULL(ctx->repo);
+    CHECK_NULL(ctx->config);
     CHECK_NULL(opts);
+
+    git_repository *repo = ctx->repo;
+    const config_t *config = ctx->config;
+    output_ctx_t *out = ctx->out;
 
     /* Declare all resources at top, initialized to NULL */
     error_t *err = NULL;
@@ -2060,8 +2062,8 @@ error_t *cmd_update(
                 elevation_count,
                 "update",
                 opts->interactive,  /* Use existing interactive flag */
-                opts->argc,
-                opts->argv,
+                ctx->argc,
+                ctx->argv,
                 out
             );
 
@@ -2225,3 +2227,154 @@ cleanup:
 
     return err;
 }
+
+/* ══════════════════════════════════════════════════════════════════
+ * Spec-engine integration
+ * ══════════════════════════════════════════════════════════════════ */
+
+/**
+ * Route the raw positional bucket into `files[]` and `profiles[]`.
+ *
+ * Positional rule (differs from add — position-dependent):
+ *   - First positional: classified as a file path or a profile name via
+ *     `str_looks_like_file_path`. A file path lands in `files`; a bare
+ *     name lands in `profiles`.
+ *   - Remaining positionals: always file paths.
+ *
+ * Profiles from `-p` are already populated in `profiles` by the APPEND
+ * row; a positional profile appends onto that list. Files go into a
+ * fresh arena-backed array.
+ */
+static error_t *update_post_parse(
+    void *opts_v, arena_t *arena, const args_command_t *cmd
+) {
+    (void) cmd;
+    cmd_update_options_t *o = opts_v;
+
+    if (o->positional_count == 0) {
+        return NULL;
+    }
+
+    /* Worst case: every positional becomes a file. */
+    char **files = arena_calloc(arena, o->positional_count, sizeof(char *));
+    if (files == NULL) {
+        return ERROR(ERR_MEMORY, "Failed to allocate file list");
+    }
+    size_t file_count = 0;
+
+    for (size_t i = 0; i < o->positional_count; i++) {
+        char *arg = o->positional_args[i];
+
+        /* Only the first positional is ambiguous (profile or file).
+         * It becomes a profile only if -p was not given AND it doesn't
+         * look like a file path. */
+        if (i == 0 && o->profile_count == 0 &&
+            !str_looks_like_file_path(arg)) {
+            /* Arena-backed 1-slot profile array for the positional. */
+            char **profiles = arena_calloc(arena, 1, sizeof(char *));
+            if (profiles == NULL) {
+                return ERROR(ERR_MEMORY, "Failed to allocate profile list");
+            }
+            profiles[0] = arg;
+            o->profiles = profiles;
+            o->profile_count = 1;
+            continue;
+        }
+
+        files[file_count++] = arg;
+    }
+
+    if (file_count > 0) {
+        o->files = files;
+        o->file_count = file_count;
+    }
+
+    return NULL;
+}
+
+static error_t *update_dispatch(const args_ctx_t *ctx, void *opts_v) {
+    return cmd_update(ctx, (const cmd_update_options_t *) opts_v);
+}
+
+static const args_opt_t update_opts[] = {
+    ARGS_GROUP("Options:"),
+    ARGS_STRING(
+        "m message",         "<msg>",
+        cmd_update_options_t,message,
+        "Commit message"
+    ),
+    ARGS_APPEND(
+        "p profile",         "<name>",
+        cmd_update_options_t,profiles,         profile_count,
+        "Filter update to profile(s) (repeatable)"
+    ),
+    ARGS_APPEND(
+        "e exclude",         "<pattern>",
+        cmd_update_options_t,exclude_patterns, exclude_count,
+        "Skip matching files (glob, repeatable)"
+    ),
+    ARGS_FLAG(
+        "n dry-run",
+        cmd_update_options_t,dry_run,
+        "Preview without writing"
+    ),
+    ARGS_FLAG(
+        "i interactive",
+        cmd_update_options_t,interactive,
+        "Prompt per file before committing"
+    ),
+    ARGS_FLAG(
+        "v verbose",
+        cmd_update_options_t,verbose,
+        "Verbose output"
+    ),
+    ARGS_FLAG(
+        "include-new",
+        cmd_update_options_t,include_new,
+        "Also stage new files inside tracked directories"
+    ),
+    ARGS_FLAG(
+        "only-new",
+        cmd_update_options_t,only_new,
+        "Stage only new files; skip modifications"
+    ),
+    ARGS_POSITIONAL_RAW(
+        cmd_update_options_t,positional_args,  positional_count,
+        0,                   0
+    ),
+    ARGS_END,
+};
+
+const args_command_t spec_update = {
+    .name        = "update",
+    .summary     = "Commit filesystem changes back to profiles",
+    .usage       = "%s update [options] [file]...",
+    .description =
+        "Commit filesystem modifications to the matching profile branches\n"
+        "(the reverse direction of 'apply'). Metadata changes on root/\n"
+        "files are captured alongside content.\n",
+    .notes       =
+        "File Detection:\n"
+        "  New files inside tracked directories are included based on\n"
+        "  config: core.auto_detect_new_files toggles detection,\n"
+        "  security.confirm_new_files toggles the prompt. --include-new\n"
+        "  and --only-new override both for this invocation.\n",
+    .examples    =
+        "  %s update                             # All modified files\n"
+        "  %s update ~/.bashrc                   # Specific file\n"
+        "  %s update -p global                   # Filter to 'global'\n"
+        "  %s update --include-new               # Modified + new files\n"
+        "  %s update --only-new                  # New files only\n"
+        "  %s update -n                          # Preview without writing\n"
+        "  %s update --exclude '*.log'           # Skip log files\n"
+        "  %s update -m \"Update shell config\"    # Custom commit message\n",
+    .epilogue    =
+        "See also:\n"
+        "  %s status          # See what will be committed\n"
+        "  %s sync            # Publish committed changes to remote\n",
+    .opts_size   = sizeof(cmd_update_options_t),
+    .opts        = update_opts,
+    .post_parse  = update_post_parse,
+    .repo_mode   = ARGS_REPO_REQUIRED,
+    .dispatch    = update_dispatch,
+};

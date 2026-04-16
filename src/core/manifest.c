@@ -31,6 +31,42 @@
 #include "sys/gitops.h"
 
 /**
+ * Resolve a profile's current branch HEAD and persist it as the
+ * stored commit_oid in enabled_profiles.
+ *
+ * Composes gitops_resolve_branch_head_oid + state_set_profile_commit_oid.
+ * Used by every manifest operation that must refresh a profile's stored
+ * HEAD after the branch has moved (add/remove/update) or after the profile
+ * has entered scope (enable/rebuild/repair_stale/reorder).
+ *
+ * Sites that bypass this helper:
+ *   - manifest_detect_stale_profiles: read-only HEAD comparison.
+ *   - manifest_sync_diff: caller passes the new HEAD explicitly as new_oid.
+ */
+static error_t *manifest_persist_profile_head(
+    git_repository *repo,
+    state_t *state,
+    const char *profile
+) {
+    git_oid head_oid;
+    error_t *err = gitops_resolve_branch_head_oid(repo, profile, &head_oid);
+    if (err) {
+        return error_wrap(
+            err, "Failed to get HEAD for profile '%s'", profile
+        );
+    }
+
+    err = state_set_profile_commit_oid(state, profile, &head_oid);
+    if (err) {
+        return error_wrap(
+            err, "Failed to record commit_oid for profile '%s'", profile
+        );
+    }
+
+    return NULL;
+}
+
+/**
  * Sync single entry from in-memory manifest to state
  *
  * Translates from in-memory manifest representation (file_entry_t) to
@@ -56,8 +92,8 @@
  *   - Write to state database (INSERT OR REPLACE)
  *
  * Note: commit_oid is stored per-profile in enabled_profiles, not per-file.
- * Callers are responsible for calling state_set_profile_commit_oid after syncing,
- * using gitops_resolve_branch_head_oid() to resolve the current HEAD.
+ * Callers are responsible for calling manifest_persist_profile_head() after
+ * syncing to refresh the per-profile commit_oid from the branch's HEAD.
  *
  * @param repo Git repository
  * @param state State handle (with active transaction)
@@ -122,8 +158,7 @@ static error_t *sync_entry_to_state(
 
     /* 5. Build state entry. blob_oid is an inline struct copy from the
      * pre-populated entry field. commit_oid lives in enabled_profiles
-     * (per-profile, not per-file) and is set via state_set_profile_commit_oid
-     * using gitops_resolve_branch_head_oid() to resolve the current HEAD. */
+     * (per-profile, not per-file) and is refreshed via manifest_persist_profile_head(). */
     state_file_entry_t state_entry = {
         .storage_path    = manifest_entry->storage_path,
         .filesystem_path = manifest_entry->filesystem_path,
@@ -293,17 +328,8 @@ error_t *manifest_enable_profile(
      *
      * state_enable_profile inserts with zeroblob(20); this replaces the
      * sentinel with the real HEAD. */
-    git_oid head_oid;
-    err = gitops_resolve_branch_head_oid(repo, profile, &head_oid);
-    if (err) {
-        err = error_wrap(err, "Failed to get HEAD for profile '%s'", profile);
-        goto cleanup;
-    }
-    err = state_set_profile_commit_oid(state, profile, &head_oid);
-    if (err) {
-        err = error_wrap(err, "Failed to set commit_oid for profile '%s'", profile);
-        goto cleanup;
-    }
+    err = manifest_persist_profile_head(repo, state, profile);
+    if (err) goto cleanup;
 
     /* 6. Sync tracked directories */
     err = manifest_sync_directories(repo, state, enabled_profiles);
@@ -910,13 +936,7 @@ error_t *manifest_remove_files(
         err = NULL;
     }
 
-    /* 3/4. Process each removed file.
-     *
-     * The peek below borrows a pointer into the state row cache. Per the
-     * state.h lifetime contract, state_set_profile_commit_oid (called
-     * after this loop) invalidates the cache and so the borrow. Scoping
-     * the peek inside a block that ends before the mutation keeps the
-     * lifetime contract enforced by the compiler. */
+    /* 3/4. Process each removed file. */
     const char *removed_custom_prefix = state_peek_profile_prefix(state, removed_profile);
 
     for (size_t i = 0; i < removed_storage_paths->count; i++) {
@@ -1025,22 +1045,8 @@ error_t *manifest_remove_files(
 
     /* After removing files, the profile's branch HEAD has moved to a new commit.
      * Update the per-profile commit_oid in enabled_profiles. */
-    git_oid head_oid;
-    err = gitops_resolve_branch_head_oid(repo, removed_profile, &head_oid);
-    if (err) {
-        err = error_wrap(
-            err, "Failed to get HEAD for profile '%s'", removed_profile
-        );
-        goto cleanup;
-    }
-    err = state_set_profile_commit_oid(state, removed_profile, &head_oid);
-    if (err) {
-        err = error_wrap(
-            err, "Failed to sync commit_oid for profile '%s'",
-            removed_profile
-        );
-        goto cleanup;
-    }
+    err = manifest_persist_profile_head(repo, state, removed_profile);
+    if (err) goto cleanup;
 
     /* 5. Sync tracked directories */
     err = manifest_sync_directories(repo, state, enabled_profiles);
@@ -1184,25 +1190,8 @@ error_t *manifest_rebuild(
      * This replaces the zero sentinel that state_set_profiles wrote for new
      * profiles (clone path) and refreshes the value for existing profiles. */
     for (size_t p = 0; p < enabled_profiles->count; p++) {
-        git_oid head_oid;
-        err = gitops_resolve_branch_head_oid(repo, enabled_profiles->items[p], &head_oid);
-        if (err) {
-            err = error_wrap(
-                err, "Failed to get HEAD for profile '%s'",
-                enabled_profiles->items[p]
-            );
-            goto cleanup;
-        }
-        err = state_set_profile_commit_oid(
-            state, enabled_profiles->items[p], &head_oid
-        );
-        if (err) {
-            err = error_wrap(
-                err, "Failed to set commit_oid for profile '%s'",
-                enabled_profiles->items[p]
-            );
-            goto cleanup;
-        }
+        err = manifest_persist_profile_head(repo, state, enabled_profiles->items[p]);
+        if (err) goto cleanup;
     }
 
     /* 7. Sync tracked directories */
@@ -1520,20 +1509,8 @@ error_t *manifest_repair_stale(
 
     const char *stale_name;
     while (hashmap_iter_next(&stale_iter, &stale_name, NULL)) {
-        git_oid head_oid;
-        err = gitops_resolve_branch_head_oid(repo, stale_name, &head_oid);
-        if (err) {
-            err = error_wrap(err, "Failed to get HEAD for profile '%s'", stale_name);
-            goto cleanup;
-        }
-        err = state_set_profile_commit_oid(state, stale_name, &head_oid);
-        if (err) {
-            err = error_wrap(
-                err, "Failed to sync commit_oid for repaired profile '%s'",
-                stale_name
-            );
-            goto cleanup;
-        }
+        err = manifest_persist_profile_head(repo, state, stale_name);
+        if (err) goto cleanup;
     }
 
     /* Phase 5: Sync tracked directories to reflect current Git state.
@@ -1959,18 +1936,9 @@ error_t *manifest_update_files(
 
     /* 6. Set stored commit_oid for each profile whose HEAD moved */
     for (size_t i = 0; i < updated_profiles->count; i++) {
-        const char *prof = updated_profiles->items[i];
-        git_oid head_oid;
-        err = gitops_resolve_branch_head_oid(repo, prof, &head_oid);
+        err = manifest_persist_profile_head(repo, state, updated_profiles->items[i]);
         if (err) {
             string_array_free(updated_profiles);
-            err = error_wrap(err, "Failed to get HEAD for profile '%s'", prof);
-            goto cleanup;
-        }
-        err = state_set_profile_commit_oid(state, prof, &head_oid);
-        if (err) {
-            string_array_free(updated_profiles);
-            err = error_wrap(err, "Failed to sync commit_oid for profile '%s'", prof);
             goto cleanup;
         }
     }
@@ -2160,21 +2128,8 @@ error_t *manifest_add_files(
 
     /* After adding files, the profile's branch HEAD has moved to a new commit.
      * Update the per-profile commit_oid in enabled_profiles. */
-    git_oid head_oid;
-    err = gitops_resolve_branch_head_oid(repo, profile, &head_oid);
-    if (err) {
-        err = error_wrap(
-            err, "Failed to get HEAD for profile '%s'", profile
-        );
-        goto cleanup;
-    }
-    err = state_set_profile_commit_oid(state, profile, &head_oid);
-    if (err) {
-        err = error_wrap(
-            err, "Failed to sync commit_oid for profile '%s'", profile
-        );
-        goto cleanup;
-    }
+    err = manifest_persist_profile_head(repo, state, profile);
+    if (err) goto cleanup;
 
     /* 5. Sync tracked directories */
     err = manifest_sync_directories(repo, state, enabled_profiles);
@@ -2322,13 +2277,7 @@ error_t *manifest_sync_diff(
 
     size_t num_deltas = git_diff_num_deltas(diff);
 
-    /* PHASE 3: PROCESS DELTAS (O(D))
-     *
-     * The peek below borrows a pointer into the state row cache. Per the
-     * state.h lifetime contract, state_set_profile_commit_oid (called
-     * after this loop) invalidates the cache and so the borrow. Scoping
-     * the peek inside a block that ends before the mutation keeps the
-     * lifetime contract enforced by the compiler. */
+    /* PHASE 3: PROCESS DELTAS (O(D)) */
     const char *synced_custom_prefix = state_peek_profile_prefix(state, profile);
 
     for (size_t i = 0; i < num_deltas; i++) {

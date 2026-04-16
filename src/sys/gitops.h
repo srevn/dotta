@@ -634,6 +634,25 @@ error_t *gitops_resolve_branch_head_oid(
 );
 
 /**
+ * Resolve a remote-tracking branch's current OID
+ *
+ * Convenience for `refs/remotes/<remote_name>/<branch_name>` resolution.
+ * Builds the full refname and dispatches to gitops_resolve_reference_oid.
+ *
+ * @param repo Repository (must not be NULL)
+ * @param remote_name Remote name (must not be NULL)
+ * @param branch_name Branch name without refs/remotes/<remote>/ prefix (must not be NULL)
+ * @param out Target OID (must not be NULL)
+ * @return Error or NULL on success (ERR_NOT_FOUND if remote branch missing)
+ */
+error_t *gitops_resolve_remote_branch_oid(
+    git_repository *repo,
+    const char *remote_name,
+    const char *branch_name,
+    git_oid *out
+);
+
+/**
  * Validate and build a Git reference name
  *
  * Builds a reference name using printf-style formatting and validates

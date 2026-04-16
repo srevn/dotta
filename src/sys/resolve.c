@@ -54,21 +54,10 @@ static error_t *resolve_rebase_inmemory(
     CHECK_NULL(ctx);
 
     /* Get remote commit OID (local OID already captured in ctx->saved_oid) */
-    char remote_refname[DOTTA_REFNAME_MAX];
-    error_t *err = gitops_build_refname(
-        remote_refname, sizeof(remote_refname), "refs/remotes/%s/%s",
-        ctx->remote_name, ctx->branch_name
-    );
-    if (err) {
-        return error_wrap(
-            err, "Invalid remote/branch name '%s/%s'",
-            ctx->remote_name, ctx->branch_name
-        );
-    }
-
-    /* Get remote commit OID */
     git_oid remote_oid;
-    err = gitops_resolve_reference_oid(ctx->repo, remote_refname, &remote_oid);
+    error_t *err = gitops_resolve_remote_branch_oid(
+        ctx->repo, ctx->remote_name, ctx->branch_name, &remote_oid
+    );
     if (err) {
         return err;
     }
@@ -120,21 +109,10 @@ static error_t *resolve_merge_trees(
     CHECK_NULL(ctx);
 
     /* Get remote commit OID (local OID already captured in ctx->saved_oid) */
-    char remote_refname[DOTTA_REFNAME_MAX];
-    error_t *err = gitops_build_refname(
-        remote_refname, sizeof(remote_refname), "refs/remotes/%s/%s",
-        ctx->remote_name, ctx->branch_name
-    );
-    if (err) {
-        return error_wrap(
-            err, "Invalid remote/branch name '%s/%s'",
-            ctx->remote_name, ctx->branch_name
-        );
-    }
-
-    /* Get remote commit OID */
     git_oid remote_oid;
-    err = gitops_resolve_reference_oid(ctx->repo, remote_refname, &remote_oid);
+    error_t *err = gitops_resolve_remote_branch_oid(
+        ctx->repo, ctx->remote_name, ctx->branch_name, &remote_oid
+    );
     if (err) {
         return err;
     }
@@ -268,22 +246,11 @@ static error_t *resolve_ours(resolve_context_t *ctx, git_oid *out_oid) {
 static error_t *resolve_theirs(resolve_context_t *ctx, git_oid *out_oid) {
     CHECK_NULL(ctx);
 
-    /* Get remote reference */
-    char remote_refname[DOTTA_REFNAME_MAX];
-    error_t *err = gitops_build_refname(
-        remote_refname, sizeof(remote_refname), "refs/remotes/%s/%s",
-        ctx->remote_name, ctx->branch_name
-    );
-    if (err) {
-        return error_wrap(
-            err, "Invalid remote/branch name '%s/%s'",
-            ctx->remote_name, ctx->branch_name
-        );
-    }
-
     /* Get remote commit OID */
     git_oid remote_oid;
-    err = gitops_resolve_reference_oid(ctx->repo, remote_refname, &remote_oid);
+    error_t *err = gitops_resolve_remote_branch_oid(
+        ctx->repo, ctx->remote_name, ctx->branch_name, &remote_oid
+    );
     if (err) {
         return err;
     }

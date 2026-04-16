@@ -1779,6 +1779,32 @@ error_t *gitops_resolve_branch_head_oid(
     return gitops_resolve_reference_oid(repo, refname, out);
 }
 
+error_t *gitops_resolve_remote_branch_oid(
+    git_repository *repo,
+    const char *remote_name,
+    const char *branch_name,
+    git_oid *out
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(remote_name);
+    CHECK_NULL(branch_name);
+    CHECK_NULL(out);
+
+    char refname[DOTTA_REFNAME_MAX];
+    error_t *err = gitops_build_refname(
+        refname, sizeof(refname), "refs/remotes/%s/%s",
+        remote_name, branch_name
+    );
+    if (err) {
+        return error_wrap(
+            err, "Invalid remote/branch name '%s/%s'",
+            remote_name, branch_name
+        );
+    }
+
+    return gitops_resolve_reference_oid(repo, refname, out);
+}
+
 /**
  * Index operations
  */

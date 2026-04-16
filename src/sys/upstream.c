@@ -412,25 +412,12 @@ error_t *upstream_create_tracking_branch(
     CHECK_NULL(branch_name);
 
     /* Get remote ref */
-    char remote_refname[DOTTA_REFNAME_MAX];
-    error_t *err = gitops_build_refname(
-        remote_refname, sizeof(remote_refname), "refs/remotes/%s/%s",
-        remote_name, branch_name
+    git_oid target_oid;
+    error_t *err = gitops_resolve_remote_branch_oid(
+        repo, remote_name, branch_name, &target_oid
     );
     if (err) {
-        return error_wrap(
-            err, "Invalid remote/branch name '%s/%s'",
-            remote_name, branch_name
-        );
-    }
-
-    git_oid target_oid;
-    err = gitops_resolve_reference_oid(repo, remote_refname, &target_oid);
-    if (err) {
-        return error_wrap(
-            err, "Failed to resolve remote ref '%s'",
-            remote_refname
-        );
+        return err;
     }
 
     /* Create local branch pointing to the same commit */

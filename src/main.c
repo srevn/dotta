@@ -1705,7 +1705,7 @@ static int cmd_show_main(int argc, char **argv, const config_t *config, output_c
             char *profile = NULL;
             char *file = NULL;
             char *commit = NULL;
-            err = parse_refspec(arg, &profile, &file, &commit);
+            err = parse_refspec(NULL, arg, &profile, &file, &commit);
             if (err) {
                 fprintf(stderr, "Error parsing file specification: ");
                 error_print(err, stderr);
@@ -1744,7 +1744,7 @@ static int cmd_show_main(int argc, char **argv, const config_t *config, output_c
             char *profile = NULL;
             char *file = NULL;
             char *commit = NULL;
-            err = parse_refspec(positional_args[1], &profile, &file, &commit);
+            err = parse_refspec(NULL, positional_args[1], &profile, &file, &commit);
             if (err) {
                 fprintf(stderr, "Error parsing file specification: ");
                 error_print(err, stderr);
@@ -1884,7 +1884,7 @@ static int cmd_revert_main(int argc, char **argv, const config_t *config, output
         char *profile = NULL;
         char *file = NULL;
         char *commit = NULL;
-        err = parse_refspec(positional_args[0], &profile, &file, &commit);
+        err = parse_refspec(NULL, positional_args[0], &profile, &file, &commit);
         if (err) {
             fprintf(stderr, "Error parsing file specification: ");
             error_print(err, stderr);
@@ -1919,7 +1919,7 @@ static int cmd_revert_main(int argc, char **argv, const config_t *config, output
             char *profile = NULL;
             char *file = NULL;
             char *commit = NULL;
-            err = parse_refspec(positional_args[1], &profile, &file, &commit);
+            err = parse_refspec(NULL, positional_args[1], &profile, &file, &commit);
             if (err) {
                 fprintf(stderr, "Error parsing file specification: ");
                 error_print(err, stderr);

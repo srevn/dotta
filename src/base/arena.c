@@ -115,6 +115,20 @@ char *arena_strdup(arena_t *arena, const char *str) {
     return dst;
 }
 
+char *arena_strndup(arena_t *arena, const char *str, size_t n) {
+    if (!str) return NULL;
+
+    /* Guard against overflow when we add the null terminator. */
+    if (n > SIZE_MAX - 1) return NULL;
+
+    char *dst = arena_alloc(arena, n + 1);
+    if (!dst) return NULL;
+
+    if (n > 0) memcpy(dst, str, n);
+    dst[n] = '\0';
+    return dst;
+}
+
 void arena_reset(arena_t *arena) {
     if (!arena) return;
 

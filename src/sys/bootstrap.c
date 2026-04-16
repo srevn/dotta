@@ -224,20 +224,9 @@ bool bootstrap_exists(
         return false;
     }
 
-    /* Build ref name */
-    char ref_name[DOTTA_REFNAME_MAX];
-    err = gitops_build_refname(
-        ref_name, sizeof(ref_name), "refs/heads/%s", profile_name
-    );
-    if (err) {
-        error_free(err);
-        return false;
-    }
-
     /* Load tree from profile branch */
     git_tree *tree = NULL;
-    err = gitops_load_tree(repo, ref_name, &tree);
-
+    err = gitops_load_branch_tree(repo, profile_name, &tree, NULL);
     if (err) {
         error_free(err);
         return false;
@@ -296,19 +285,8 @@ error_t *bootstrap_extract_to_temp(
     char *temp_path = NULL;
     int fd = -1;
 
-    /* Build ref name */
-    char ref_name[DOTTA_REFNAME_MAX];
-    err = gitops_build_refname(
-        ref_name, sizeof(ref_name), "refs/heads/%s", profile_name
-    );
-    if (err) {
-        return error_wrap(
-            err, "Invalid profile name '%s'", profile_name
-        );
-    }
-
     /* Load tree from profile branch */
-    err = gitops_load_tree(repo, ref_name, &tree);
+    err = gitops_load_branch_tree(repo, profile_name, &tree, NULL);
     if (err) {
         err = error_wrap(
             err, "Failed to load tree from profile '%s'",
@@ -447,17 +425,8 @@ error_t *bootstrap_read_content(
     void *raw_content = NULL;
     buffer_t content_buf = BUFFER_INIT;
 
-    /* Build ref name */
-    char ref_name[DOTTA_REFNAME_MAX];
-    err = gitops_build_refname(
-        ref_name, sizeof(ref_name), "refs/heads/%s", profile_name
-    );
-    if (err) {
-        return error_wrap(err, "Invalid profile name '%s'", profile_name);
-    }
-
     /* Load tree from profile branch */
-    err = gitops_load_tree(repo, ref_name, &tree);
+    err = gitops_load_branch_tree(repo, profile_name, &tree, NULL);
     if (err) {
         err = error_wrap(
             err, "Failed to load tree from profile '%s'",

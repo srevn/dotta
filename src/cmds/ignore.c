@@ -576,22 +576,9 @@ static error_t *edit_profile_dottaignore(
         return ERROR(ERR_FS, "Failed to create temporary file");
     }
 
-    /* Build ref name */
-    char ref_name[DOTTA_REFNAME_MAX];
-    err = gitops_build_refname(
-        ref_name, sizeof(ref_name), "refs/heads/%s", profile
-    );
-    if (err) {
-        close(fd);
-        unlink(tmpfile);
-        free(tmpfile);
-        return error_wrap(err, "Invalid profile name '%s'", profile);
-    }
-
     /* Load existing .dottaignore content from profile */
     git_tree *tree = NULL;
-    err = gitops_load_tree(repo, ref_name, &tree);
-
+    err = gitops_load_branch_tree(repo, profile, &tree, NULL);
     if (err) {
         close(fd);
         unlink(tmpfile);
@@ -987,20 +974,10 @@ static error_t *modify_profile_dottaignore(
         );
     }
 
-    /* Build ref name */
-    char ref_name[DOTTA_REFNAME_MAX];
-    err = gitops_build_refname(
-        ref_name, sizeof(ref_name), "refs/heads/%s", profile
-    );
-    if (err) {
-        return error_wrap(err, "Invalid profile name '%s'", profile);
-    }
-
     /* Load existing .dottaignore content from profile */
     char *existing_content = NULL;
     git_tree *tree = NULL;
-    err = gitops_load_tree(repo, ref_name, &tree);
-
+    err = gitops_load_branch_tree(repo, profile, &tree, NULL);
     if (err) {
         return error_wrap(err, "Failed to load profile tree");
     }

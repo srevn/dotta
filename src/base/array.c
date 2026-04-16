@@ -311,22 +311,27 @@ char *string_array_join(const string_array_t *arr, const char *delimiter) {
 
     size_t delim_len = delimiter ? strlen(delimiter) : 0;
 
-    /* Measure total length, caching individual lengths to avoid double strlen */
-    size_t *lengths = NULL;
+    /* Measure total length, caching individual lengths to avoid double strlen.
+     * Small arrays use stack; larger arrays fall back to heap. */
+    size_t stack_lengths[64];
+    size_t *heap_lengths = NULL;
+    size_t *lengths;
     if (arr->count <= 64) {
-        lengths = (size_t [64]){ 0 };
+        lengths = stack_lengths;
     } else {
-        lengths = calloc(arr->count, sizeof(size_t));
-        if (!lengths) {
+        heap_lengths = calloc(arr->count, sizeof(size_t));
+        if (!heap_lengths) {
             return NULL;
         }
+        lengths = heap_lengths;
     }
 
+    char *result = NULL;
     size_t total = 0;
     for (size_t i = 0; i < arr->count; i++) {
         lengths[i] = strlen(arr->items[i]);
         if (total + lengths[i] < total) {
-            goto overflow;
+            goto cleanup;
         }
         total += lengths[i];
     }
@@ -334,16 +339,15 @@ char *string_array_join(const string_array_t *arr, const char *delimiter) {
         size_t delim_total = delim_len * (arr->count - 1);
         if (delim_total / delim_len != (arr->count - 1) ||
             total + delim_total < total) {
-            goto overflow;
+            goto cleanup;
         }
         total += delim_total;
     }
 
     /* Allocate result */
-    char *result = malloc(total + 1);
+    result = malloc(total + 1);
     if (!result) {
-        if (arr->count > 64) free(lengths);
-        return NULL;
+        goto cleanup;
     }
 
     /* Build result */
@@ -358,12 +362,9 @@ char *string_array_join(const string_array_t *arr, const char *delimiter) {
     }
     *p = '\0';
 
-    if (arr->count > 64) free(lengths);
+cleanup:
+    free(heap_lengths);
     return result;
-
-overflow:
-    if (arr->count > 64) free(lengths);
-    return NULL;
 }
 
 /* === ptr_array_t — borrowed-pointer dynamic array === */

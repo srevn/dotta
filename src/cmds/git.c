@@ -123,7 +123,8 @@ int cmd_git(const char *repo_path, const cmd_git_options_t *opts) {
  * we write through `*ctx->exit_code`; `run_spec` honors that when
  * dispatch returns NULL. See `struct args_ctx` docs for the channel.
  */
-static error_t *git_dispatch(const args_ctx_t *ctx, void *opts_v) {
+static error_t *git_dispatch(const void *ctx_v, void *opts_v) {
+    const dotta_ctx_t *ctx = ctx_v;
     (void) opts_v;
     cmd_git_options_t opts = {
         .args      = &ctx->argv[2],
@@ -148,7 +149,7 @@ const args_command_t spec_git = {
         "  %s git log --oneline\n"
         "  %s git show HEAD:home/.bashrc\n"
         "  %s git reflog\n",
-    .repo_mode   = ARGS_REPO_PATH_ONLY,
+    .user_data   = &dotta_ext_path_only,
     .dispatch    = git_dispatch,
     .passthrough = true,
 };

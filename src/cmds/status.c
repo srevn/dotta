@@ -836,7 +836,7 @@ static error_t *extract_elevation_paths_from_manifest(
 /**
  * Status command implementation
  */
-error_t *cmd_status(const args_ctx_t *ctx, const cmd_status_options_t *opts) {
+error_t *cmd_status(const dotta_ctx_t *ctx, const cmd_status_options_t *opts) {
     CHECK_NULL(ctx);
     CHECK_NULL(ctx->repo);
     CHECK_NULL(opts);
@@ -1068,7 +1068,8 @@ static error_t *status_post_parse(
     return NULL;
 }
 
-static error_t *status_dispatch(const args_ctx_t *ctx, void *opts_v) {
+static error_t *status_dispatch(const void *ctx_v, void *opts_v) {
+    const dotta_ctx_t *ctx = ctx_v;
     return cmd_status(ctx, (const cmd_status_options_t *) opts_v);
 }
 
@@ -1151,6 +1152,6 @@ const args_command_t spec_status = {
     .opts_size   = sizeof(cmd_status_options_t),
     .opts        = status_opts,
     .post_parse  = status_post_parse,
-    .repo_mode   = ARGS_REPO_REQUIRED,
+    .user_data   = &dotta_ext_required,
     .dispatch    = status_dispatch,
 };

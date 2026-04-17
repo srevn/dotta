@@ -59,7 +59,7 @@ enum token_kind {
  * Classify a token into one of the kinds above.
  *
  * Handles a handful of POSIX subtleties:
- *   - lone `-`      → positional (stdin sentinel; no dotta command
+ *   - lone `-`      → positional (stdin sentinel; no command
  *                     reads stdin today, but the classification is
  *                     forward-compatible);
  *   - `-<digit>`    → positional (negative-number), never a flag;
@@ -1196,7 +1196,7 @@ void args_render_help(
 
 /**
  * True if this opt kind takes a value (and hence should appear in the
- * `__dotta_value_flags` list so fish's positional counter can skip it).
+ * `__<prog>_value_flags` list so fish's positional counter can skip it).
  */
 static bool opt_takes_value(const args_opt_t *o) {
     switch (o->kind) {
@@ -1212,7 +1212,7 @@ static bool opt_takes_value(const args_opt_t *o) {
 /**
  * Write `s` into `out` with fish double-quoted-string escaping. Fish
  * treats `"`, `$`, and `\` as special inside double quotes, and a raw
- * `\n` (newline) would break a `complete -c dotta ... -d "..."` line
+ * `\n` (newline) would break a `complete -c <prog> ... -d "..."` line
  * mid-description. Defensive — current help strings don't contain any
  * of these, but the generated script is user-facing; a future `Cost:
  * $5`, `"quoted"`, or multi-line help must not break the output.
@@ -1236,8 +1236,8 @@ static void fputs_fish_escaped(FILE *out, const char *s) {
 }
 
 /**
- * Emit a `complete -c dotta ...` line for one opt row. `condition_fish`
- * is the fish `-n` guard expression (e.g., `__dotta_using_command init`).
+ * Emit a `complete -c <prog> ...` line for one opt row. `condition_fish`
+ * is the fish `-n` guard expression (e.g., `__<prog>_using_command init`).
  *
  * Every short-form token in the opt's `flags` becomes a `-s X`; every
  * long-form token becomes a `-l XXX`. Fish renders the aliases as
@@ -1248,6 +1248,7 @@ static void fputs_fish_escaped(FILE *out, const char *s) {
  */
 static void emit_complete_line(
     FILE *out,
+    const char *prog,
     const char *condition_fish,
     const args_opt_t *opt
 ) {
@@ -1257,7 +1258,7 @@ static void emit_complete_line(
         opt->kind == ARGS_KIND_POSITIONAL_ARG ||
         opt->kind == ARGS_KIND_POSITIONAL_RAW) return;
 
-    fprintf(out, "complete -c dotta -n \"%s\"", condition_fish);
+    fprintf(out, "complete -c %s -n \"%s\"", prog, condition_fish);
 
     /* Walk space-separated names in `flags`, emitting -s or -l. */
     for (const char *p = opt->flags ? opt->flags : ""; *p;) {
@@ -1288,7 +1289,7 @@ static void emit_complete_line(
 }
 
 /**
- * Emit a root-level `complete -c dotta` line for a command's flag
+ * Emit a root-level `complete -c <prog>` line for a command's flag
  * aliases — no `-n` guard, since root options are valid at the start
  * of argv regardless of what follows. Each space-separated token in
  * `aliases` becomes a `-s X` (single-char) or `-l XXX` (multi-char)
@@ -1296,10 +1297,11 @@ static void emit_complete_line(
  * aliases of the same completion.
  */
 static void emit_root_alias_complete(
-    FILE *out, const char *aliases, const char *summary
+    FILE *out, const char *prog,
+    const char *aliases, const char *summary
 ) {
     if (aliases == NULL) return;
-    fputs("complete -c dotta", out);
+    fprintf(out, "complete -c %s", prog);
     for (const char *p = aliases; *p;) {
         while (*p == ' ') p++;
         if (*p == '\0') break;
@@ -1322,11 +1324,12 @@ static void emit_root_alias_complete(
 }
 
 /**
- * Emit a `complete -c dotta ... -a NAME -d "SUMMARY"` line for a
+ * Emit a `complete -c <prog> ... -a NAME -d "SUMMARY"` line for a
  * subcommand entry. NAME is the first alias (canonical form).
  */
 static void emit_sub_row(
-    FILE *out, const char *condition_fish, const args_subcommand_t *sub
+    FILE *out, const char *prog,
+    const char *condition_fish, const args_subcommand_t *sub
 ) {
     if (sub->hidden) return;
 
@@ -1340,8 +1343,8 @@ static void emit_sub_row(
         (sub->command && sub->command->summary) ? sub->command->summary : "";
 
     fprintf(
-        out, "complete -c dotta -n \"%s\" -a %.*s -d \"",
-        condition_fish, (int) len, p
+        out, "complete -c %s -n \"%s\" -a %.*s -d \"",
+        prog, condition_fish, (int) len, p
     );
     fputs_fish_escaped(out, summary);
     fputs("\"\n", out);
@@ -1349,7 +1352,7 @@ static void emit_sub_row(
 
 /* Value-flag deduplication. Many commands share the same value-bearing
  * flag (e.g. `--profile` appears on 9+ specs); emitting one token per
- * occurrence makes the generated `__dotta_value_flags` list grow
+ * occurrence makes the generated `__<prog>_value_flags` list grow
  * quadratically in N (commands) × F (flags) and adds no information.
  */
 typedef struct value_flag_set {
@@ -1480,25 +1483,26 @@ static bool command_has_completions(const args_command_t *cmd) {
 /**
  * Walk a command and its subcommand tree, emitting completion lines.
  * `parent_fish` is the fish `-n` condition fragment identifying the
- * caller's context; for root commands it's `__dotta_using_command NAME`.
+ * caller's context; for root commands it's `__<prog>_using_command NAME`.
  */
 static void emit_command(
     FILE *out,
+    const char *prog,
     const args_command_t *cmd,
     const char *parent_fish
 ) {
     if (cmd == NULL || cmd->hidden) return;
 
     /* Passthrough commands hand the tail of argv to an external tool
-     * (e.g. `dotta git <git-args...>` forwards everything after `git`
+     * (e.g. `<prog> git <git-args...>` forwards everything after `git`
      * to a spawned git process). Delegate completion for the entire
      * tail to that tool's fish integration — there are no flags or
      * subs to emit on our side, since the spec is intentionally empty. */
     if (cmd->passthrough) {
         fprintf(
             out,
-            "complete -c dotta -n \"%s\" -xa \"(__fish_complete_subcommand --command %s)\"\n",
-            parent_fish, cmd->name
+            "complete -c %s -n \"%s\" -xa \"(__fish_complete_subcommand --command %s)\"\n",
+            prog, parent_fish, cmd->name
         );
         return;
     }
@@ -1506,7 +1510,7 @@ static void emit_command(
     /* Flag rows. */
     if (cmd->opts != NULL) {
         for (const args_opt_t *o = cmd->opts; o->kind != ARGS_KIND_END; o++) {
-            emit_complete_line(out, parent_fish, o);
+            emit_complete_line(out, prog, parent_fish, o);
         }
     }
 
@@ -1518,17 +1522,17 @@ static void emit_command(
         char needs_sub[256];
         snprintf(
             needs_sub, sizeof(needs_sub),
-            "%s; and __dotta_needs_subcommand %s",
-            parent_fish, cmd->name
+            "%s; and __%s_needs_subcommand %s",
+            parent_fish, prog, cmd->name
         );
 
         for (const args_subcommand_t *s = cmd->subcommands;
             s->name != NULL; s++) {
-            emit_sub_row(out, needs_sub, s);
+            emit_sub_row(out, prog, needs_sub, s);
         }
 
-        /* Parse accepts `dotta <cmd> --flag` as a shorthand for
-         * `dotta <cmd> <default-sub> --flag` when a default_subcommand
+        /* Parse accepts `<prog> <cmd> --flag` as a shorthand for
+         * `<prog> <cmd> <default-sub> --flag` when a default_subcommand
          * is set. Mirror that in completion: at the pre-sub position
          * (parent ctx AND no sub chosen yet), offer the default sub's
          * flags so tab-complete matches the parser's behavior. */
@@ -1536,11 +1540,11 @@ static void emit_command(
             cmd->default_subcommand->opts != NULL) {
             for (const args_opt_t *o = cmd->default_subcommand->opts;
                 o->kind != ARGS_KIND_END; o++) {
-                emit_complete_line(out, needs_sub, o);
+                emit_complete_line(out, prog, needs_sub, o);
             }
         }
 
-        /* Each sub's own flags live under __dotta_using_subcommand. */
+        /* Each sub's own flags live under __<prog>_using_subcommand. */
         for (const args_subcommand_t *s = cmd->subcommands;
             s->name != NULL; s++) {
             if (s->hidden || s->command == NULL) continue;
@@ -1554,14 +1558,14 @@ static void emit_command(
             char sub_cond[256];
             snprintf(
                 sub_cond, sizeof(sub_cond),
-                "__dotta_using_subcommand %s %.*s",
-                cmd->name, (int) (q - p), p
+                "__%s_using_subcommand %s %.*s",
+                prog, cmd->name, (int) (q - p), p
             );
 
             if (s->command->opts != NULL) {
                 for (const args_opt_t *o = s->command->opts;
                     o->kind != ARGS_KIND_END; o++) {
-                    emit_complete_line(out, sub_cond, o);
+                    emit_complete_line(out, prog, sub_cond, o);
                 }
             }
         }
@@ -1570,16 +1574,17 @@ static void emit_command(
 
 void args_export_completion_fish(
     FILE *out,
-    const args_command_t *const *commands
+    const args_command_t *const *commands,
+    const char *prog
 ) {
-    fputs("# Auto-generated by `dotta __complete spec fish`.\n", out);
-    fputs("# Dynamic completion helpers live in dotta.fish.\n\n", out);
+    fprintf(out, "# Auto-generated by `%s __complete spec fish`.\n", prog);
+    fprintf(out, "# Dynamic completion helpers live in %s.fish.\n\n", prog);
 
-    /* Disable fish's default file completion for `dotta` — our commands
+    /* Disable fish's default file completion for `<prog>` — our commands
      * use explicit rules (or helper-provided value completions) and
      * letting the shell fall back to filenames creates noisy TAB
      * expansions for commands that accept profile names, not paths. */
-    fputs("complete -c dotta -f\n\n", out);
+    fprintf(out, "complete -c %s -f\n\n", prog);
 
     /* Token storage and the dedup set both live in a local scratch
      * arena so no stdlib heap is touched. Arena is destroyed at the
@@ -1610,8 +1615,8 @@ void args_export_completion_fish(
     }
 
     /* Value-taking flags: used by fish's positional-arg counter in
-     * dotta.fish to know which tokens are "flag + value" pairs. */
-    fputs("set -g __dotta_value_flags", out);
+     * <prog>.fish to know which tokens are "flag + value" pairs. */
+    fprintf(out, "set -g __%s_value_flags", prog);
     for (size_t i = 0; i < vset.count; i++) {
         fprintf(out, " %s", vset.tokens[i]);
     }
@@ -1623,12 +1628,12 @@ void args_export_completion_fish(
      * stay hardcoded here; command-declared root aliases are projected
      * from the registry so the data flows from one source of truth. */
     fputs("# Root options\n", out);
-    fputs("complete -c dotta -s h -l help -d \"Show help\"\n", out);
-    fputs("complete -c dotta -s v -l version -d \"Show version\"\n", out);
+    fprintf(out, "complete -c %s -s h -l help -d \"Show help\"\n", prog);
+    fprintf(out, "complete -c %s -s v -l version -d \"Show version\"\n", prog);
     for (size_t i = 0; commands[i] != NULL; i++) {
         const args_command_t *c = commands[i];
         if (c->hidden || c->root_aliases == NULL) continue;
-        emit_root_alias_complete(out, c->root_aliases, c->summary);
+        emit_root_alias_complete(out, prog, c->root_aliases, c->summary);
     }
     fputc('\n', out);
 
@@ -1637,7 +1642,10 @@ void args_export_completion_fish(
     for (size_t i = 0; commands[i] != NULL; i++) {
         const args_command_t *c = commands[i];
         if (c->hidden) continue;
-        fprintf(out, "complete -c dotta -n __dotta_needs_command -a %s -d \"", c->name);
+        fprintf(
+            out, "complete -c %s -n __%s_needs_command -a %s -d \"",
+            prog, prog, c->name
+        );
         fputs_fish_escaped(out, c->summary ? c->summary : "");
         fputs("\"\n", out);
     }
@@ -1652,10 +1660,10 @@ void args_export_completion_fish(
         if (!command_has_completions(c)) continue;
 
         char cond[128];
-        snprintf(cond, sizeof(cond), "__dotta_using_command %s", c->name);
+        snprintf(cond, sizeof(cond), "__%s_using_command %s", prog, c->name);
 
         fprintf(out, "# %s\n", c->name);
-        emit_command(out, c, cond);
+        emit_command(out, prog, c, cond);
         fputc('\n', out);
     }
 }

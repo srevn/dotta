@@ -314,7 +314,7 @@ static error_t *initialize_state(
 /**
  * Clone command implementation
  */
-error_t *cmd_clone(const args_ctx_t *ctx, const cmd_clone_options_t *opts) {
+error_t *cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
     CHECK_NULL(ctx);
     CHECK_NULL(opts);
     CHECK_NULL(opts->url);
@@ -752,7 +752,8 @@ static error_t *clone_validate(
     return NULL;
 }
 
-static error_t *clone_dispatch(const args_ctx_t *ctx, void *opts_v) {
+static error_t *clone_dispatch(const void *ctx_v, void *opts_v) {
+    const dotta_ctx_t *ctx = ctx_v;
     return cmd_clone(ctx, (const cmd_clone_options_t *) opts_v);
 }
 
@@ -841,6 +842,6 @@ const args_command_t spec_clone = {
     .opts        = clone_opts,
     .post_parse  = clone_post_parse,
     .validate    = clone_validate,
-    .repo_mode   = ARGS_REPO_NONE,
+    .user_data   = &dotta_ext_none,
     .dispatch    = clone_dispatch,
 };

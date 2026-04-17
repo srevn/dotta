@@ -1418,7 +1418,7 @@ cleanup:
 /**
  * Diff command implementation
  */
-error_t *cmd_diff(const args_ctx_t *ctx, const cmd_diff_options_t *opts) {
+error_t *cmd_diff(const dotta_ctx_t *ctx, const cmd_diff_options_t *opts) {
     CHECK_NULL(ctx);
     CHECK_NULL(ctx->repo);
     CHECK_NULL(opts);
@@ -1627,7 +1627,8 @@ static error_t *diff_post_parse(
     return NULL;
 }
 
-static error_t *diff_dispatch(const args_ctx_t *ctx, void *opts_v) {
+static error_t *diff_dispatch(const void *ctx_v, void *opts_v) {
+    const dotta_ctx_t *ctx = ctx_v;
     return cmd_diff(ctx, (const cmd_diff_options_t *) opts_v);
 }
 
@@ -1715,6 +1716,6 @@ const args_command_t spec_diff = {
     .opts        = diff_opts,
     .classify    = diff_classify,
     .post_parse  = diff_post_parse,
-    .repo_mode   = ARGS_REPO_REQUIRED,
+    .user_data   = &dotta_ext_required,
     .dispatch    = diff_dispatch,
 };

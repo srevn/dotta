@@ -28,10 +28,9 @@
 #ifndef DOTTA_CMD_COMPLETION_H
 #define DOTTA_CMD_COMPLETION_H
 
-#include <git2.h>
 #include <types.h>
 
-#include "base/args.h"
+#include "cmds/runtime.h"
 
 /**
  * Completion mode.
@@ -80,14 +79,14 @@ typedef struct {
  * @param opts Command options (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *cmd_completion(const args_ctx_t *ctx, const cmd_completion_options_t *opts);
+error_t *cmd_completion(const dotta_ctx_t *ctx, const cmd_completion_options_t *opts);
 
 /**
  * Spec-engine command specification for `dotta __complete`.
  *
  * Hidden from top-level help and from the fish completion export.
- * Registered in cmds/registry.c; defined in completion.c beside the
- * post_parse and dispatch wrappers.
+ * Registered in main.c's static `dotta_commands[]`; defined in
+ * completion.c beside the post_parse and dispatch wrappers.
  */
 extern const args_command_t spec_completion;
 

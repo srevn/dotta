@@ -12,7 +12,7 @@
 #include <stdbool.h>
 #include <types.h>
 
-#include "base/args.h"
+#include "cmds/runtime.h"
 
 /**
  * Key command actions
@@ -51,7 +51,7 @@ typedef struct {
  * @param opts Command options (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *cmd_key(const args_ctx_t *ctx, const cmd_key_options_t *opts);
+error_t *cmd_key(const dotta_ctx_t *ctx, const cmd_key_options_t *opts);
 
 /**
  * Spec-engine command specification for `dotta key`.

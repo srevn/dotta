@@ -173,7 +173,7 @@ static error_t *init_dottaignore(git_repository *repo) {
 /**
  * Initialize command implementation
  */
-error_t *cmd_init(const args_ctx_t *ctx, const cmd_init_options_t *opts) {
+error_t *cmd_init(const dotta_ctx_t *ctx, const cmd_init_options_t *opts) {
     CHECK_NULL(ctx);
     CHECK_NULL(opts);
 
@@ -269,7 +269,8 @@ cleanup:
  * Spec-engine integration
  * ══════════════════════════════════════════════════════════════════ */
 
-static error_t *init_dispatch(const args_ctx_t *ctx, void *opts_v) {
+static error_t *init_dispatch(const void *ctx_v, void *opts_v) {
+    const dotta_ctx_t *ctx = ctx_v;
     return cmd_init(ctx, (const cmd_init_options_t *) opts_v);
 }
 
@@ -306,6 +307,6 @@ const args_command_t spec_init = {
         "  %s apply                   # Deploy enabled profiles\n",
     .opts_size   = sizeof(cmd_init_options_t),
     .opts        = init_opts,
-    .repo_mode   = ARGS_REPO_NONE,
+    .user_data   = &dotta_ext_none,
     .dispatch    = init_dispatch,
 };

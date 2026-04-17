@@ -15,7 +15,27 @@
 #include "base/args.h"
 #include "base/error.h"
 #include "base/output.h"
-#include "cmds/registry.h"
+#include "cmds/add.h"
+#include "cmds/apply.h"
+#include "cmds/bootstrap.h"
+#include "cmds/clone.h"
+#include "cmds/completion.h"
+#include "cmds/diff.h"
+#include "cmds/git.h"
+#include "cmds/ignore.h"
+#include "cmds/init.h"
+#include "cmds/interactive.h"
+#include "cmds/key.h"
+#include "cmds/list.h"
+#include "cmds/profile.h"
+#include "cmds/remote.h"
+#include "cmds/remove.h"
+#include "cmds/revert.h"
+#include "cmds/runtime.h"
+#include "cmds/show.h"
+#include "cmds/status.h"
+#include "cmds/sync.h"
+#include "cmds/update.h"
 #include "crypto/encryption.h"
 #include "crypto/keymgr.h"
 #include "utils/config.h"
@@ -24,18 +44,46 @@
 #include "utils/version.h"
 
 /**
+ * Root command registry — every user-facing top-level command.
+ *
+ * The single place that names every command the CLI exposes. Two
+ * consumers project this array into behavior:
+ *
+ *   - `args_resolve_root` / `args_render_root_usage` — direct calls
+ *     from main, resolving argv[1] and rendering top-level help;
+ *   - the fish completion exporter in `cmds/completion.c` — receives
+ *     the array as `dotta_ctx_t::commands` (one of the fields below)
+ *     so the cmds layer never imports the registry symbol.
+ *
+ * Ordered for root-help readability: setup → file ops → deploy/undo →
+ * inspect → remote → profile/remote mgmt → config → passthrough →
+ * special. Every projection (dispatch, help, fish export) walks this
+ * array, so the order is the display order everywhere. NULL-terminated
+ * for `for (size_t i = 0; reg[i] != NULL; i++)` loops.
+ */
+static const args_command_t *const dotta_commands[] = {
+    &spec_init,        &spec_clone,      &spec_add,
+    &spec_remove,      &spec_update,     &spec_apply,
+    &spec_revert,      &spec_status,     &spec_diff,
+    &spec_list,        &spec_show,       &spec_sync,
+    &spec_profile,     &spec_remote,     &spec_ignore,
+    &spec_bootstrap,   &spec_key,        &spec_git,
+    &spec_interactive, &spec_completion, NULL
+};
+
+/**
  * Open a repository handle according to the command's declared mode.
  *
  * Returns 0 on success, 1 on unrecoverable error (error is printed).
  * On success, `*repo_out` and `*path_out` are set per mode:
  *
- *   ARGS_REPO_NONE            → both NULL
- *   ARGS_REPO_REQUIRED        → repo set, path NULL
- *   ARGS_REPO_OPTIONAL_SILENT → repo maybe NULL, path NULL, no errors
- *   ARGS_REPO_PATH_ONLY       → repo NULL (released), path set
+ *   DOTTA_REPO_NONE            → both NULL
+ *   DOTTA_REPO_REQUIRED        → repo set, path NULL
+ *   DOTTA_REPO_OPTIONAL_SILENT → repo maybe NULL, path NULL, no errors
+ *   DOTTA_REPO_PATH_ONLY       → repo NULL (released), path set
  */
 static int open_repo_for_mode(
-    args_repo_mode_t mode,
+    dotta_repo_mode_t mode,
     const config_t *config,
     git_repository **repo_out,
     char **path_out
@@ -44,10 +92,10 @@ static int open_repo_for_mode(
     *path_out = NULL;
 
     switch (mode) {
-        case ARGS_REPO_NONE:
+        case DOTTA_REPO_NONE:
             return 0;
 
-        case ARGS_REPO_REQUIRED: {
+        case DOTTA_REPO_REQUIRED: {
             error_t *err = repo_open(config, repo_out, NULL);
             if (err != NULL) {
                 error_print(err, stderr);
@@ -57,7 +105,7 @@ static int open_repo_for_mode(
             return 0;
         }
 
-        case ARGS_REPO_OPTIONAL_SILENT: {
+        case DOTTA_REPO_OPTIONAL_SILENT: {
             error_t *err = repo_open(config, repo_out, NULL);
             if (err != NULL) {
                 error_free(err);
@@ -66,7 +114,7 @@ static int open_repo_for_mode(
             return 0;
         }
 
-        case ARGS_REPO_PATH_ONLY: {
+        case DOTTA_REPO_PATH_ONLY: {
             git_repository *repo = NULL;
             error_t *err = repo_open(config, &repo, path_out);
             if (err != NULL) {
@@ -147,15 +195,21 @@ static int run_spec(
         }
     }
 
+    /* Each command's spec stashes its repo-open contract in `user_data`
+     * via a `dotta_spec_ext_t` constant. NULL falls back to NONE so a
+     * spec that omits user_data simply gets no repo (safe default). */
+    const dotta_spec_ext_t *ext = resolved->user_data;
+    dotta_repo_mode_t mode = ext != NULL ? ext->repo_mode : DOTTA_REPO_NONE;
+
     git_repository *repo = NULL;
     char *repo_path = NULL;
-    if (open_repo_for_mode(resolved->repo_mode, config, &repo, &repo_path) != 0) {
+    if (open_repo_for_mode(mode, config, &repo, &repo_path) != 0) {
         arena_destroy(arena);
         return 1;
     }
 
     int exit_override = 0;
-    args_ctx_t ctx = {
+    dotta_ctx_t ctx = {
         .repo      = repo,
         .repo_path = repo_path,
         .config    = config,
@@ -164,6 +218,7 @@ static int run_spec(
         .argc      = argc,
         .argv      = argv,
         .exit_code = &exit_override,
+        .commands  = dotta_commands,
     };
 
     error_t *err = resolved->dispatch(&ctx, opts);
@@ -274,13 +329,13 @@ int main(int argc, char **argv) {
      * resolve first and let those branches exit early without paying
      * for config loading. */
     const args_command_t *spec = NULL;
-    switch (args_resolve_root(dotta_root_commands, argc, argv, &spec)) {
+    switch (args_resolve_root(dotta_commands, argc, argv, &spec)) {
         case ARGS_ROOT_NONE:
-            args_render_root_usage(stderr, dotta_root_commands, argv[0]);
+            args_render_root_usage(stderr, dotta_commands, argv[0]);
             git_libgit2_shutdown();
             return 1;
         case ARGS_ROOT_HELP:
-            args_render_root_usage(stdout, dotta_root_commands, argv[0]);
+            args_render_root_usage(stdout, dotta_commands, argv[0]);
             git_libgit2_shutdown();
             return 0;
         case ARGS_ROOT_VERSION:
@@ -289,7 +344,7 @@ int main(int argc, char **argv) {
             return 0;
         case ARGS_ROOT_UNKNOWN:
             fprintf(stderr, "Error: Unknown command '%s'\n", argv[1]);
-            args_render_root_usage(stderr, dotta_root_commands, argv[0]);
+            args_render_root_usage(stderr, dotta_commands, argv[0]);
             git_libgit2_shutdown();
             return 1;
         case ARGS_ROOT_COMMAND:
@@ -349,7 +404,7 @@ int main(int argc, char **argv) {
                 /* Non-fatal: warn user but don't fail the command
                  * The command itself succeeded, ownership fix is just cleanup */
                 fprintf(stderr, "\nWarning: Failed to fix repository ownership\n");
-                fprintf(stderr, "The repository may be inaccessible to your normal user.\n");
+                fprintf(stderr, "The repository may be inaccessible without sudo.\n");
                 fprintf(stderr, "To fix manually, run:\n");
                 fprintf(stderr, "  sudo chown -R $USER:$GROUP %s/.git\n\n", repo_path);
                 error_print(err, stderr);

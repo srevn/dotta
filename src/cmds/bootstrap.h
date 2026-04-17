@@ -10,7 +10,7 @@
 #include <stdbool.h>
 #include <types.h>
 
-#include "base/args.h"
+#include "cmds/runtime.h"
 
 /**
  * Bootstrap command options
@@ -34,7 +34,7 @@ typedef struct {
  * @param opts Bootstrap options (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *cmd_bootstrap(const args_ctx_t *ctx, const cmd_bootstrap_options_t *opts);
+error_t *cmd_bootstrap(const dotta_ctx_t *ctx, const cmd_bootstrap_options_t *opts);
 
 /**
  * Spec-engine command specification for `dotta bootstrap`.

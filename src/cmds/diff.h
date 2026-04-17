@@ -17,7 +17,7 @@
 #include <git2.h>
 #include <types.h>
 
-#include "base/args.h"
+#include "cmds/runtime.h"
 
 /**
  * Diff mode
@@ -75,7 +75,7 @@ typedef struct {
  * @param opts Command options (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *cmd_diff(const args_ctx_t *ctx, const cmd_diff_options_t *opts);
+error_t *cmd_diff(const dotta_ctx_t *ctx, const cmd_diff_options_t *opts);
 
 /**
  * Spec-engine command specification for `dotta diff`.

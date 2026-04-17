@@ -781,7 +781,7 @@ static error_t *list_file_history(
 /**
  * List command implementation
  */
-error_t *cmd_list(const args_ctx_t *ctx, const cmd_list_options_t *opts) {
+error_t *cmd_list(const dotta_ctx_t *ctx, const cmd_list_options_t *opts) {
     CHECK_NULL(ctx);
     CHECK_NULL(ctx->repo);
     CHECK_NULL(opts);
@@ -866,7 +866,8 @@ static error_t *list_post_parse(
     return ERROR(ERR_INTERNAL, "list: too many positionals");
 }
 
-static error_t *list_dispatch(const args_ctx_t *ctx, void *opts_v) {
+static error_t *list_dispatch(const void *ctx_v, void *opts_v) {
+    const dotta_ctx_t *ctx = ctx_v;
     return cmd_list(ctx, (const cmd_list_options_t *) opts_v);
 }
 
@@ -947,6 +948,6 @@ const args_command_t spec_list = {
     .opts_size   = sizeof(cmd_list_options_t),
     .opts        = list_opts,
     .post_parse  = list_post_parse,
-    .repo_mode   = ARGS_REPO_REQUIRED,
+    .user_data   = &dotta_ext_required,
     .dispatch    = list_dispatch,
 };

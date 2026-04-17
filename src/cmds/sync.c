@@ -1304,7 +1304,7 @@ static error_t *sync_push_phase(
 /**
  * Sync command implementation
  */
-error_t *cmd_sync(const args_ctx_t *ctx, const cmd_sync_options_t *opts) {
+error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
     CHECK_NULL(ctx);
     CHECK_NULL(ctx->repo);
     CHECK_NULL(opts);
@@ -1868,7 +1868,8 @@ cleanup:
  * Spec-engine integration
  * ══════════════════════════════════════════════════════════════════ */
 
-static error_t *sync_dispatch(const args_ctx_t *ctx, void *opts_v) {
+static error_t *sync_dispatch(const void *ctx_v, void *opts_v) {
+    const dotta_ctx_t *ctx = ctx_v;
     return cmd_sync(ctx, (const cmd_sync_options_t *) opts_v);
 }
 
@@ -1945,6 +1946,6 @@ const args_command_t spec_sync = {
         "  %s status --remote # Inspect remote state before syncing\n",
     .opts_size   = sizeof(cmd_sync_options_t),
     .opts        = sync_opts,
-    .repo_mode   = ARGS_REPO_REQUIRED,
+    .user_data   = &dotta_ext_required,
     .dispatch    = sync_dispatch,
 };

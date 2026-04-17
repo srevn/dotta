@@ -560,7 +560,7 @@ cleanup:
 /**
  * Show command implementation
  */
-error_t *cmd_show(const args_ctx_t *ctx, const cmd_show_options_t *opts) {
+error_t *cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
     CHECK_NULL(ctx);
     CHECK_NULL(ctx->repo);
     CHECK_NULL(opts);
@@ -824,7 +824,8 @@ static error_t *show_post_parse(
     return ERROR(ERR_INTERNAL, "show: too many positionals");
 }
 
-static error_t *show_dispatch(const args_ctx_t *ctx, void *opts_v) {
+static error_t *show_dispatch(const void *ctx_v, void *opts_v) {
+    const dotta_ctx_t *ctx = ctx_v;
     return cmd_show(ctx, (const cmd_show_options_t *) opts_v);
 }
 
@@ -887,6 +888,6 @@ const args_command_t spec_show = {
     .opts_size   = sizeof(cmd_show_options_t),
     .opts        = show_opts,
     .post_parse  = show_post_parse,
-    .repo_mode   = ARGS_REPO_REQUIRED,
+    .user_data   = &dotta_ext_required,
     .dispatch    = show_dispatch,
 };

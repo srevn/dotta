@@ -910,7 +910,7 @@ cleanup:
 /**
  * Add command implementation
  */
-error_t *cmd_add(const args_ctx_t *ctx, const cmd_add_options_t *opts) {
+error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     CHECK_NULL(ctx);
     CHECK_NULL(ctx->repo);
 
@@ -1768,7 +1768,8 @@ static error_t *add_post_parse(
     return NULL;
 }
 
-static error_t *add_dispatch(const args_ctx_t *ctx, void *opts_v) {
+static error_t *add_dispatch(const void *ctx_v, void *opts_v) {
+    const dotta_ctx_t *ctx = ctx_v;
     return cmd_add(ctx, (const cmd_add_options_t *) opts_v);
 }
 
@@ -1864,6 +1865,6 @@ const args_command_t spec_add = {
     .opts_size   = sizeof(cmd_add_options_t),
     .opts        = add_opts,
     .post_parse  = add_post_parse,
-    .repo_mode   = ARGS_REPO_REQUIRED,
+    .user_data   = &dotta_ext_required,
     .dispatch    = add_dispatch,
 };

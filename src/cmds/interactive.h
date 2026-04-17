@@ -25,7 +25,7 @@
 #include <stdbool.h>
 #include <types.h>
 
-#include "base/args.h"
+#include "cmds/runtime.h"
 #include "base/terminal.h"
 
 /**

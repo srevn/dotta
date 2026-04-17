@@ -1809,7 +1809,7 @@ static error_t *update_confirm_operation(
 /**
  * Update command implementation
  */
-error_t *cmd_update(const args_ctx_t *ctx, const cmd_update_options_t *opts) {
+error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
     CHECK_NULL(ctx);
     CHECK_NULL(ctx->repo);
     CHECK_NULL(ctx->config);
@@ -2292,7 +2292,8 @@ static error_t *update_post_parse(
     return NULL;
 }
 
-static error_t *update_dispatch(const args_ctx_t *ctx, void *opts_v) {
+static error_t *update_dispatch(const void *ctx_v, void *opts_v) {
+    const dotta_ctx_t *ctx = ctx_v;
     return cmd_update(ctx, (const cmd_update_options_t *) opts_v);
 }
 
@@ -2375,6 +2376,6 @@ const args_command_t spec_update = {
     .opts_size   = sizeof(cmd_update_options_t),
     .opts        = update_opts,
     .post_parse  = update_post_parse,
-    .repo_mode   = ARGS_REPO_REQUIRED,
+    .user_data   = &dotta_ext_required,
     .dispatch    = update_dispatch,
 };

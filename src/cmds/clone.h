@@ -7,7 +7,7 @@
 
 #include <types.h>
 
-#include "base/args.h"
+#include "cmds/runtime.h"
 
 /**
  * Bootstrap behavior selector.
@@ -54,7 +54,7 @@ typedef struct {
  * @param opts Clone options (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *cmd_clone(const args_ctx_t *ctx, const cmd_clone_options_t *opts);
+error_t *cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts);
 
 /**
  * Spec-engine command specification for `dotta clone`.

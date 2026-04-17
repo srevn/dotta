@@ -1575,7 +1575,7 @@ cleanup:
 /**
  * Profile command dispatcher
  */
-error_t *cmd_profile(const args_ctx_t *ctx, const cmd_profile_options_t *opts) {
+error_t *cmd_profile(const dotta_ctx_t *ctx, const cmd_profile_options_t *opts) {
     CHECK_NULL(ctx);
     CHECK_NULL(ctx->repo);
     CHECK_NULL(opts);
@@ -1638,7 +1638,8 @@ error_t *cmd_profile(const args_ctx_t *ctx, const cmd_profile_options_t *opts) {
  * Each sub's `init_defaults` already set the `subcommand` discriminator,
  * so `cmd_profile`'s switch routes the call.
  */
-static error_t *profile_dispatch(const args_ctx_t *ctx, void *opts_v) {
+static error_t *profile_dispatch(const void *ctx_v, void *opts_v) {
+    const dotta_ctx_t *ctx = ctx_v;
     return cmd_profile(ctx, (const cmd_profile_options_t *) opts_v);
 }
 
@@ -1666,7 +1667,7 @@ static const args_command_t spec_profile_list = {
     .opts_size     = sizeof(cmd_profile_options_t),
     .opts          = profile_list_opts,
     .init_defaults = profile_list_defaults,
-    .repo_mode     = ARGS_REPO_REQUIRED,
+    .user_data     = &dotta_ext_required,
     .dispatch      = profile_dispatch,
 };
 
@@ -1700,7 +1701,7 @@ static const args_command_t spec_profile_fetch = {
     .opts_size     = sizeof(cmd_profile_options_t),
     .opts          = profile_fetch_opts,
     .init_defaults = profile_fetch_defaults,
-    .repo_mode     = ARGS_REPO_REQUIRED,
+    .user_data     = &dotta_ext_required,
     .dispatch      = profile_dispatch,
 };
 
@@ -1751,7 +1752,7 @@ static const args_command_t spec_profile_enable = {
     .opts_size     = sizeof(cmd_profile_options_t),
     .opts          = profile_enable_opts,
     .init_defaults = profile_enable_defaults,
-    .repo_mode     = ARGS_REPO_REQUIRED,
+    .user_data     = &dotta_ext_required,
     .dispatch      = profile_dispatch,
 };
 
@@ -1796,7 +1797,7 @@ static const args_command_t spec_profile_disable = {
     .opts_size     = sizeof(cmd_profile_options_t),
     .opts          = profile_disable_opts,
     .init_defaults = profile_disable_defaults,
-    .repo_mode     = ARGS_REPO_REQUIRED,
+    .user_data     = &dotta_ext_required,
     .dispatch      = profile_dispatch,
 };
 
@@ -1834,7 +1835,7 @@ static const args_command_t spec_profile_reorder = {
     .opts_size     = sizeof(cmd_profile_options_t),
     .opts          = profile_reorder_opts,
     .init_defaults = profile_reorder_defaults,
-    .repo_mode     = ARGS_REPO_REQUIRED,
+    .user_data     = &dotta_ext_required,
     .dispatch      = profile_dispatch,
 };
 
@@ -1861,7 +1862,7 @@ static const args_command_t spec_profile_validate = {
     .opts_size     = sizeof(cmd_profile_options_t),
     .opts          = profile_validate_opts,
     .init_defaults = profile_validate_defaults,
-    .repo_mode     = ARGS_REPO_REQUIRED,
+    .user_data     = &dotta_ext_required,
     .dispatch      = profile_dispatch,
 };
 

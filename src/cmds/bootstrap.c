@@ -335,7 +335,7 @@ static error_t *bootstrap_list(
 /**
  * Execute bootstrap command
  */
-error_t *cmd_bootstrap(const args_ctx_t *ctx, const cmd_bootstrap_options_t *opts) {
+error_t *cmd_bootstrap(const dotta_ctx_t *ctx, const cmd_bootstrap_options_t *opts) {
     CHECK_NULL(ctx);
     CHECK_NULL(opts);
 
@@ -556,7 +556,8 @@ cleanup:
  * Spec-engine integration
  * ══════════════════════════════════════════════════════════════════ */
 
-static error_t *bootstrap_dispatch(const args_ctx_t *ctx, void *opts_v) {
+static error_t *bootstrap_dispatch(const void *ctx_v, void *opts_v) {
+    const dotta_ctx_t *ctx = ctx_v;
     return cmd_bootstrap(ctx, (const cmd_bootstrap_options_t *) opts_v);
 }
 
@@ -657,6 +658,6 @@ const args_command_t spec_bootstrap = {
         "  %s apply                          # Deploy files after bootstrap\n",
     .opts_size   = sizeof(cmd_bootstrap_options_t),
     .opts        = bootstrap_opts,
-    .repo_mode   = ARGS_REPO_NONE,
+    .user_data   = &dotta_ext_none,
     .dispatch    = bootstrap_dispatch,
 };

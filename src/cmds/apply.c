@@ -620,7 +620,7 @@ static void print_cleanup_preflight_results(
  * @return NULL if OK to proceed, error otherwise (or does not return if re-exec with sudo)
  */
 static error_t *ensure_complete_apply_privileges(
-    const args_ctx_t *ctx,
+    const dotta_ctx_t *ctx,
     const manifest_t *manifest,
     const workspace_item_t **file_orphans,
     size_t file_orphan_count,
@@ -824,7 +824,7 @@ static bool needs_deployment(const workspace_item_t *ws_item) {
 /**
  * Apply command implementation
  */
-error_t *cmd_apply(const args_ctx_t *ctx, const cmd_apply_options_t *opts) {
+error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     CHECK_NULL(ctx);
     CHECK_NULL(ctx->repo);
     CHECK_NULL(opts);
@@ -2247,7 +2247,8 @@ static void apply_defaults(void *opts_v) {
     o->skip_unchanged = 1;
 }
 
-static error_t *apply_dispatch(const args_ctx_t *ctx, void *opts_v) {
+static error_t *apply_dispatch(const void *ctx_v, void *opts_v) {
+    const dotta_ctx_t *ctx = ctx_v;
     return cmd_apply(ctx, (const cmd_apply_options_t *) opts_v);
 }
 
@@ -2341,6 +2342,6 @@ const args_command_t spec_apply = {
     .opts          = apply_opts,
     .classify      = apply_classify,
     .init_defaults = apply_defaults,
-    .repo_mode     = ARGS_REPO_REQUIRED,
+    .user_data     = &dotta_ext_required,
     .dispatch      = apply_dispatch,
 };

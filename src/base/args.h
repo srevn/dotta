@@ -85,20 +85,21 @@
 #ifndef DOTTA_ARGS_H
 #define DOTTA_ARGS_H
 
+#include <stdbool.h>
+#include <stddef.h>
 #include <stdio.h>
-#include <types.h>
 
-/* Forward declaration for libgit2's opaque repo type. Consumers of
- * `args_ctx_t::repo` must `#include <git2.h>` to call any libgit2
- * API on the pointer; args.h itself stays free of that dependency so
- * the base layer can compile without it. */
-struct git_repository;
+/* Local forward declarations of base-layer types. Defined as typedefs
+ * in <types.h>; we re-declare here (compatible since the struct tags
+ * match) so args.h has zero domain dependencies and can compile as a
+ * standalone parser engine. */
+typedef struct error error_t;
+typedef struct arena arena_t;
 
 /* Forward declarations for types fully defined below. */
 typedef struct args_opt args_opt_t;
 typedef struct args_command args_command_t;
 typedef struct args_subcommand args_subcommand_t;
-typedef struct args_ctx args_ctx_t;
 typedef struct args_error args_error_t;
 typedef struct args_errors args_errors_t;
 
@@ -162,16 +163,6 @@ typedef enum args_root_outcome {
     ARGS_ROOT_UNKNOWN          /* argv[1] matched nothing in the registry */
 } args_root_outcome_t;
 
-/**
- * Repository-opening contract for the dispatcher.
- */
-typedef enum args_repo_mode {
-    ARGS_REPO_NONE,            /* Command does not need a repo handle */
-    ARGS_REPO_REQUIRED,        /* Error to caller if repo_open fails */
-    ARGS_REPO_OPTIONAL_SILENT, /* NULL on failure; no error reported */
-    ARGS_REPO_PATH_ONLY        /* Resolve path, pass in ctx->repo_path */
-} args_repo_mode_t;
-
 /* ══════════════════════════════════════════════════════════════════
  * Function pointer types
  * ══════════════════════════════════════════════════════════════════ */
@@ -224,11 +215,13 @@ typedef error_t *(*args_validate)(
 /**
  * Command entry point. Called by the dispatcher after successful parse.
  *
- * The ctx bundle holds the opened repository (if `repo_mode` required
- * one), config, output stream, command-scoped arena, and the untouched
- * argc/argv for sudo re-exec of privilege-sensitive commands.
+ * `ctx` is opaque to the engine — it is whatever the caller wants to
+ * thread through to the command (typically a domain-specific dispatch
+ * bundle holding repo handle, config, output stream, arena, etc.).
+ * Each command's dispatch wrapper casts `ctx` to its expected type on
+ * the first line. `opts` points to the parsed options struct.
  */
-typedef error_t *(*args_dispatch)(const args_ctx_t *ctx, void *opts);
+typedef error_t *(*args_dispatch)(const void *ctx, void *opts);
 
 /* ══════════════════════════════════════════════════════════════════
  * Core structures
@@ -281,43 +274,6 @@ struct args_subcommand {
 };
 
 /**
- * Dispatch context — populated by the dispatcher, read by the command.
- *
- * Bundling is deliberate: future additions (signal cancellation, state
- * cache handle, etc.) land as struct members, not dispatch-signature
- * churn across every command.
- *
- * Exit-code override
- * ------------------
- * Dispatch returns `error_t *` — dotta's native failure channel. For
- * native commands a non-NULL error collapses to process exit `1` and a
- * NULL error collapses to `0`; the single bit is enough.
- *
- * Pass-through commands (e.g. `dotta git`) run an external tool whose
- * *exact* exit status is the contract users rely on (`git diff
- * --exit-code` returns 1 on diffs, 128+n on signals, etc.). They
- * assign `*ctx->exit_code` to the value they want dotta to exit with
- * and return `NULL` from dispatch. Main honors that value when no
- * error is reported; otherwise the error path wins.
- *
- * The runner owns the int: `run_spec` allocates it on its frame,
- * initializes it to 0, and points `exit_code` at it. This keeps `ctx`
- * const-honest — the struct's pointer field never mutates, only the
- * pointee does, which was never const. Native commands that never
- * touch the pointer leave the runner at 0 and exit cleanly.
- */
-struct args_ctx {
-    struct git_repository *repo; /* NULL unless repo_mode opens */
-    const char *repo_path;       /* Set iff ARGS_REPO_PATH_ONLY */
-    const config_t *config;
-    output_ctx_t *out;
-    arena_t *arena;              /* Command-scoped; parser-owned */
-    int argc;                    /* Original process argc */
-    char **argv;                 /* Original process argv */
-    int *exit_code;              /* Non-NULL; *exit_code overrides exit when err==NULL */
-};
-
-/**
  * A command as a first-class value.
  *
  * All projections (parser, help renderer, completion exporter,
@@ -351,7 +307,7 @@ struct args_command {
     args_validate validate;      /* Cross-field invariant check; runs after post_parse */
 
     /* Execution  */
-    args_repo_mode_t repo_mode;  /* Repo open policy (none/required/optional/path-only) */
+    const void *user_data;       /* Domain-extension payload (opaque to engine) */
     args_dispatch dispatch;      /* Command entry point */
 
     /* Root-level flag aliases */
@@ -541,7 +497,7 @@ void args_render_errors(
 /**
  * Emit a fish-shell completion script body for the command registry.
  *
- * The generated output is plain fish script lines (`complete -c dotta
+ * The generated output is plain fish script lines (`complete -c <prog>
  * ...`) — consumable via `source` or concatenation into a checked-in
  * file. The emitter handles:
  *
@@ -551,23 +507,28 @@ void args_render_errors(
  *   - one option row per non-hidden flag/string/int/append,
  *   - one subcommand row per non-hidden subcommand,
  *   - one option row per subcommand's own flags,
- *   - a `__dotta_value_flags` variable listing all value-taking flags
+ *   - a `__<prog>_value_flags` variable listing all value-taking flags
  *     across the entire registry (used by fish's positional-arg scan).
  *
  * Dynamic completions (profile names, file names, commit SHAs) are
- * NOT emitted here — they depend on runtime repository state and
- * live in the hand-maintained `dotta.fish` entry point that sources
- * this output.
+ * NOT emitted here — they depend on runtime repository state and live
+ * in a hand-maintained `<prog>.fish` entry point that sources this
+ * output.
  *
  * Positional-class hints are NOT emitted either; fish offers a union
  * (profiles ∪ files) for polymorphic positionals and filters by prefix.
  *
  * @param out      Output stream (fully buffered writes are fine).
  * @param commands NULL-terminated registry of top-level commands.
+ * @param prog     Program name used for `complete -c <prog>` lines and
+ *                 `__<prog>_*` helper-function references. Must match
+ *                 the prefix used in the hand-maintained fish entry
+ *                 point that sources the generated script.
  */
 void args_export_completion_fish(
     FILE *out,
-    const args_command_t *const *commands
+    const args_command_t *const *commands,
+    const char *prog
 );
 
 /* ══════════════════════════════════════════════════════════════════

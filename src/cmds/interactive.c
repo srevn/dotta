@@ -695,7 +695,8 @@ error_t *interactive_run(git_repository *repo) {
  * Spec-engine integration
  * ══════════════════════════════════════════════════════════════════ */
 
-static error_t *interactive_dispatch(const args_ctx_t *ctx, void *opts_v) {
+static error_t *interactive_dispatch(const void *ctx_v, void *opts_v) {
+    const dotta_ctx_t *ctx = ctx_v;
     (void) opts_v;
     return interactive_run(ctx->repo);
 }
@@ -725,6 +726,6 @@ const args_command_t spec_interactive = {
         "  - Enabled profiles are saved to state in the displayed order\n"
         "  - Profile order determines layering (later overrides earlier)\n"
         "  - Use regular commands (apply, update, sync) after enabling profiles\n",
-    .repo_mode    = ARGS_REPO_REQUIRED,
+    .user_data    = &dotta_ext_required,
     .dispatch     = interactive_dispatch,
 };

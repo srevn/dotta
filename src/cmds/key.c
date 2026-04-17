@@ -381,7 +381,7 @@ static error_t *cmd_key_status(
 /**
  * Execute key command
  */
-error_t *cmd_key(const args_ctx_t *ctx, const cmd_key_options_t *opts) {
+error_t *cmd_key(const dotta_ctx_t *ctx, const cmd_key_options_t *opts) {
     CHECK_NULL(ctx);
     CHECK_NULL(ctx->repo);
     CHECK_NULL(opts);
@@ -462,7 +462,8 @@ static error_t *key_post_parse(
     return NULL;
 }
 
-static error_t *key_dispatch(const args_ctx_t *ctx, void *opts_v) {
+static error_t *key_dispatch(const void *ctx_v, void *opts_v) {
+    const dotta_ctx_t *ctx = ctx_v;
     return cmd_key(ctx, (const cmd_key_options_t *) opts_v);
 }
 
@@ -542,6 +543,6 @@ const args_command_t spec_key = {
     .opts_size   = sizeof(cmd_key_options_t),
     .opts        = key_opts,
     .post_parse  = key_post_parse,
-    .repo_mode   = ARGS_REPO_REQUIRED,
+    .user_data   = &dotta_ext_required,
     .dispatch    = key_dispatch,
 };

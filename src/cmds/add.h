@@ -10,7 +10,7 @@
 #include <git2.h>
 #include <types.h>
 
-#include "base/args.h"
+#include "cmds/runtime.h"
 
 /**
  * Encryption policy selector.
@@ -60,7 +60,7 @@ typedef struct {
  * @param opts Command options (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *cmd_add(const args_ctx_t *ctx, const cmd_add_options_t *opts);
+error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts);
 
 /**
  * Spec-engine command specification for `dotta add`.

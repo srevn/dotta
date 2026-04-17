@@ -15,7 +15,6 @@
 #include "base/args.h"
 #include "base/array.h"
 #include "base/error.h"
-#include "cmds/registry.h"
 #include "core/state.h"
 #include "sys/gitops.h"
 #include "sys/upstream.h"
@@ -311,7 +310,7 @@ static void complete_commits(
  * Dispatches to appropriate completion function based on mode.
  * Always returns NULL (success) - errors result in no output.
  */
-error_t *cmd_completion(const args_ctx_t *ctx, const cmd_completion_options_t *opts) {
+error_t *cmd_completion(const dotta_ctx_t *ctx, const cmd_completion_options_t *opts) {
     if (!ctx || !opts) {
         return NULL;  /* Silent failure */
     }
@@ -365,8 +364,10 @@ error_t *cmd_completion(const args_ctx_t *ctx, const cmd_completion_options_t *o
         case COMPLETE_SPEC_FISH:
             /* Build-time emission: projects the root registry into the
              * fish-completion dialect. Stable, repo-independent, invoked
-             * by `make completions` to refresh the committed snapshot. */
-            args_export_completion_fish(stdout, dotta_root_commands);
+             * by `make completions` to refresh the committed snapshot.
+             * Registry is borrowed from main.c via the dispatch ctx so
+             * the cmds/ layer never names the registry symbol. */
+            args_export_completion_fish(stdout, ctx->commands, "dotta");
             break;
 
         default:
@@ -455,7 +456,8 @@ static error_t *completion_post_parse(
     return NULL;
 }
 
-static error_t *completion_dispatch(const args_ctx_t *ctx, void *opts_v) {
+static error_t *completion_dispatch(const void *ctx_v, void *opts_v) {
+    const dotta_ctx_t *ctx = ctx_v;
     return cmd_completion(ctx, (const cmd_completion_options_t *) opts_v);
 }
 
@@ -495,7 +497,7 @@ const args_command_t spec_completion = {
     .opts           = completion_opts,
     .init_defaults  = completion_init_defaults,
     .post_parse     = completion_post_parse,
-    .repo_mode      = ARGS_REPO_OPTIONAL_SILENT,
+    .user_data      = &dotta_ext_optional_silent,
     .dispatch       = completion_dispatch,
     .silent_failure = true,
     .hidden         = true,

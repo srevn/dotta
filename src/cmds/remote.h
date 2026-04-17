@@ -11,7 +11,7 @@
 #include <git2.h>
 #include <types.h>
 
-#include "base/args.h"
+#include "cmds/runtime.h"
 
 /**
  * Remote subcommand type
@@ -54,7 +54,7 @@ typedef struct {
  * @param opts Command options (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *cmd_remote(const args_ctx_t *ctx, const cmd_remote_options_t *opts);
+error_t *cmd_remote(const dotta_ctx_t *ctx, const cmd_remote_options_t *opts);
 
 /**
  * Spec-engine command specification for `dotta remote`.

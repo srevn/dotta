@@ -1383,7 +1383,7 @@ static error_t *test_path_ignore(
 /**
  * Main command implementation
  */
-error_t *cmd_ignore(const args_ctx_t *ctx, const cmd_ignore_options_t *opts) {
+error_t *cmd_ignore(const dotta_ctx_t *ctx, const cmd_ignore_options_t *opts) {
     CHECK_NULL(ctx);
     CHECK_NULL(ctx->repo);
     CHECK_NULL(ctx->config);
@@ -1465,7 +1465,8 @@ static error_t *ignore_post_parse(
     return NULL;
 }
 
-static error_t *ignore_dispatch(const args_ctx_t *ctx, void *opts_v) {
+static error_t *ignore_dispatch(const void *ctx_v, void *opts_v) {
+    const dotta_ctx_t *ctx = ctx_v;
     return cmd_ignore(ctx, (const cmd_ignore_options_t *) opts_v);
 }
 
@@ -1546,6 +1547,6 @@ const args_command_t spec_ignore = {
     .opts_size   = sizeof(cmd_ignore_options_t),
     .opts        = ignore_opts,
     .post_parse  = ignore_post_parse,
-    .repo_mode   = ARGS_REPO_REQUIRED,
+    .user_data   = &dotta_ext_required,
     .dispatch    = ignore_dispatch,
 };

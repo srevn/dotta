@@ -23,7 +23,6 @@
 #include "sys/filesystem.h"
 #include "sys/gitops.h"
 #include "utils/bootstrap.h"
-#include "utils/repo.h"
 
 /* Bootstrap script template */
 static const char *BOOTSTRAP_TEMPLATE =
@@ -337,40 +336,16 @@ static error_t *bootstrap_list(
  */
 error_t *cmd_bootstrap(const dotta_ctx_t *ctx, const cmd_bootstrap_options_t *opts) {
     CHECK_NULL(ctx);
+    CHECK_NULL(ctx->repo);
     CHECK_NULL(opts);
 
-    const config_t *config = ctx->config;
+    git_repository *repo = ctx->repo;
+    const char *repo_path = ctx->repo_path;
     output_ctx_t *out = ctx->out;
 
     error_t *err = NULL;
-    git_repository *repo = NULL;
-    char *repo_path = NULL;
     string_array_t *profiles = NULL;
     string_array_t found STRING_ARRAY_AUTO = { 0 };
-
-    /* Resolve repository path */
-    err = resolve_repo_path(config, &repo_path);
-    if (err) {
-        err = error_wrap(err, "Failed to resolve repository path");
-        goto cleanup;
-    }
-
-    /* Check if repository exists */
-    if (!gitops_is_repository(repo_path)) {
-        err = ERROR(
-            ERR_NOT_FOUND, "No dotta repository found at: %s\n"
-            "Run 'dotta init' to create a new repository or "
-            "'dotta clone' to clone an existing one", repo_path
-        );
-        goto cleanup;
-    }
-
-    /* Open repository */
-    err = gitops_open_repository(&repo, repo_path);
-    if (err) {
-        err = error_wrap(err, "Failed to open repository");
-        goto cleanup;
-    }
 
     /* Handle --edit flag */
     if (opts->edit) {
@@ -546,9 +521,6 @@ error_t *cmd_bootstrap(const dotta_ctx_t *ctx, const cmd_bootstrap_options_t *op
 
 cleanup:
     if (profiles) string_array_free(profiles);
-    if (repo) gitops_close_repository(repo);
-    if (repo_path) free(repo_path);
-
     return err;
 }
 
@@ -658,6 +630,6 @@ const args_command_t spec_bootstrap = {
         "  %s apply                          # Deploy files after bootstrap\n",
     .opts_size   = sizeof(cmd_bootstrap_options_t),
     .opts        = bootstrap_opts,
-    .user_data   = &dotta_ext_none,
+    .user_data   = &dotta_ext_required,
     .dispatch    = bootstrap_dispatch,
 };

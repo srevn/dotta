@@ -78,9 +78,15 @@ static const args_command_t *const dotta_commands[] = {
  * On success, `*repo_out` and `*path_out` are set per mode:
  *
  *   DOTTA_REPO_NONE            → both NULL
- *   DOTTA_REPO_REQUIRED        → repo set, path NULL
+ *   DOTTA_REPO_REQUIRED        → repo set, path set
  *   DOTTA_REPO_OPTIONAL_SILENT → repo maybe NULL, path NULL, no errors
  *   DOTTA_REPO_PATH_ONLY       → repo NULL (released), path set
+ *
+ * Invariant: whenever `*repo_out` is non-NULL on return, `*path_out` is
+ * non-NULL too. `repo_open` already resolves the path to open the repo;
+ * threading it out costs nothing and gives commands that need both
+ * (e.g. bootstrap, which exports DOTTA_REPO_DIR to child scripts) a
+ * single source of truth instead of a second `resolve_repo_path` call.
  */
 static int open_repo_for_mode(
     dotta_repo_mode_t mode,
@@ -96,7 +102,7 @@ static int open_repo_for_mode(
             return 0;
 
         case DOTTA_REPO_REQUIRED: {
-            error_t *err = repo_open(config, repo_out, NULL);
+            error_t *err = repo_open(config, repo_out, path_out);
             if (err != NULL) {
                 error_print(err, stderr);
                 error_free(err);

@@ -45,7 +45,7 @@ struct git_repository;
  */
 typedef enum dotta_repo_mode {
     DOTTA_REPO_NONE,            /* No repo handle needed */
-    DOTTA_REPO_REQUIRED,        /* Error if repo_open fails */
+    DOTTA_REPO_REQUIRED,        /* Error if repo_open fails; sets repo + repo_path */
     DOTTA_REPO_OPTIONAL_SILENT, /* NULL on failure; no error reported */
     DOTTA_REPO_PATH_ONLY        /* Resolve path, hand it via ctx->repo_path */
 } dotta_repo_mode_t;
@@ -101,7 +101,7 @@ typedef struct dotta_spec_ext {
  */
 typedef struct dotta_ctx {
     struct git_repository *repo;        /* NULL unless repo_mode opens */
-    const char *repo_path;              /* Set iff DOTTA_REPO_PATH_ONLY */
+    const char *repo_path;              /* Set by REQUIRED and PATH_ONLY modes */
     const config_t *config;
     output_ctx_t *out;
     arena_t *arena;                        /* Command-scoped; parser-owned */

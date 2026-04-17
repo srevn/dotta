@@ -1905,7 +1905,7 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
     };
 
     /* Execute pre-update hook */
-    err = hook_fire_pre(config, out, &hook_inv);
+    err = hook_fire_pre(config, out, ctx->repo_path, &hook_inv);
     if (err) goto cleanup;
 
     /* Load workspace for update analysis
@@ -2181,7 +2181,7 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
     }
 
     /* Execute post-update hook */
-    hook_fire_post(config, out, &hook_inv);
+    hook_fire_post(config, out, ctx->repo_path, &hook_inv);
 
     /* Summary (report updated profile count) */
     output_newline(out, OUTPUT_NORMAL);

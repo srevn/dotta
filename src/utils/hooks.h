@@ -54,15 +54,21 @@ typedef struct {
 /**
  * Fire a pre-command hook
  *
- * Resolves DOTTA_REPO_DIR, builds a hook environment from inv, and
- * runs the pre_<cmd> hook script (if configured and present). On
- * failure, prints captured hook output (if any) at OUTPUT_NORMAL and
- * returns a wrapped error "Pre-<cmd> hook failed". Callers should
- * goto-cleanup on non-NULL return.
+ * Builds a hook environment from inv and runs the pre_<cmd> hook
+ * script (if configured and present). On failure, prints captured hook
+ * output (if any) at OUTPUT_NORMAL and returns a wrapped error
+ * "Pre-<cmd> hook failed". Callers should goto-cleanup on non-NULL
+ * return.
+ *
+ * `repo_dir` is exported to the hook as DOTTA_REPO_DIR. Expected to
+ * come from ctx->repo_path — the dispatcher already resolved it when
+ * opening the repo, so callers borrow the string rather than re-
+ * resolving. NULL suppresses the DOTTA_REPO_DIR export.
  */
 error_t *hook_fire_pre(
     const config_t *config,
     output_ctx_t *out,
+    const char *repo_dir,
     const hook_invocation_t *inv
 );
 
@@ -73,10 +79,13 @@ error_t *hook_fire_pre(
  * from inv and runs the post_<cmd> hook script (if configured and
  * present). Failures never propagate: on error, prints a warning and
  * any captured hook output, then swallows the error.
+ *
+ * `repo_dir` is exported as DOTTA_REPO_DIR (see hook_fire_pre).
  */
 void hook_fire_post(
     const config_t *config,
     output_ctx_t *out,
+    const char *repo_dir,
     const hook_invocation_t *inv
 );
 

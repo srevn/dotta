@@ -869,6 +869,7 @@ static error_t *remove_files_from_profile(
     git_repository *repo,
     const config_t *config,
     output_ctx_t *out,
+    const char *repo_path,
     const cmd_remove_options_t *opts
 ) {
     CHECK_NULL(repo);
@@ -997,7 +998,7 @@ static error_t *remove_files_from_profile(
     };
 
     /* Execute pre-remove hook */
-    err = hook_fire_pre(config, out, &hook_inv);
+    err = hook_fire_pre(config, out, repo_path, &hook_inv);
     if (err) goto cleanup;
 
     /* Create temporary worktree */
@@ -1227,7 +1228,7 @@ static error_t *remove_files_from_profile(
     }
 
     /* Execute post-remove hook */
-    hook_fire_post(config, out, &hook_inv);
+    hook_fire_post(config, out, repo_path, &hook_inv);
 
     /* Success */
     if (!opts->quiet) {
@@ -1268,6 +1269,7 @@ static error_t *delete_profile_branch(
     git_repository *repo,
     const config_t *config,
     output_ctx_t *out,
+    const char *repo_path,
     const cmd_remove_options_t *opts
 ) {
     CHECK_NULL(repo);
@@ -1507,7 +1509,7 @@ static error_t *delete_profile_branch(
     };
 
     /* Execute pre-remove hook */
-    err = hook_fire_pre(config, out, &hook_inv);
+    err = hook_fire_pre(config, out, repo_path, &hook_inv);
     if (err) goto cleanup;
 
     /*
@@ -1784,7 +1786,7 @@ static error_t *delete_profile_branch(
      */
 
     /* Execute post-remove hook */
-    hook_fire_post(config, out, &hook_inv);
+    hook_fire_post(config, out, repo_path, &hook_inv);
 
     /* Success message (only on actual deletion, not dry-run/cancel/error) */
     if (performed && !opts->quiet) {
@@ -1837,10 +1839,10 @@ error_t *cmd_remove(const dotta_ctx_t *ctx, const cmd_remove_options_t *opts) {
 
     /* Branch: Delete profile or remove files */
     if (opts->delete_profile) {
-        return delete_profile_branch(repo, config, out, opts);
+        return delete_profile_branch(repo, config, out, ctx->repo_path, opts);
     }
 
-    return remove_files_from_profile(repo, config, out, opts);
+    return remove_files_from_profile(repo, config, out, ctx->repo_path, opts);
 }
 
 /* ══════════════════════════════════════════════════════════════════

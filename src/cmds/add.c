@@ -1100,7 +1100,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     };
 
     /* Execute pre-add hook */
-    err = hook_fire_pre(config, out, &hook_inv);
+    err = hook_fire_pre(config, out, ctx->repo_path, &hook_inv);
     if (err) goto cleanup;
 
     /* Create temporary worktree */
@@ -1584,7 +1584,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     worktree_cleanup(&wt);
 
     /* Execute post-add hook */
-    hook_fire_post(config, out, &hook_inv);
+    hook_fire_post(config, out, ctx->repo_path, &hook_inv);
 
     /* Show summary on success */
     if ((added_count > 0 || dir_tracked_count > 0)) {

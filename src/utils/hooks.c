@@ -14,7 +14,6 @@
 #include "infra/path.h"
 #include "sys/filesystem.h"
 #include "sys/process.h"
-#include "utils/config.h"
 
 /* --- Internal types ------------------------------------------------------ */
 
@@ -436,20 +435,18 @@ static void print_hook_output(
 }
 
 /**
- * Stack-build a context from the invocation, resolve the repo_dir, and
- * execute the hook. The caller stack-allocates `out_result` and is
- * responsible for calling process_result_dispose() on every path.
+ * Stack-build a context from the invocation and execute the hook.
+ * `repo_dir` is borrowed from the caller (ctx->repo_path in normal
+ * flow). The caller stack-allocates `out_result` and is responsible
+ * for calling process_result_dispose() on every path.
  */
 static error_t *hook_fire(
     const config_t *config,
+    const char *repo_dir,
     const hook_invocation_t *inv,
     hook_type_t type,
     process_result_t *out_result
 ) {
-    char *repo_dir = NULL;
-    error_t *err = config_get_repo_dir(config, &repo_dir);
-    if (err) return err;
-
     const hook_context_t ctx = {
         .repo_dir   = repo_dir,
         .command    = cmd_name(inv->cmd),
@@ -459,21 +456,22 @@ static error_t *hook_fire(
         .dry_run    = inv->dry_run,
     };
 
-    err = hook_execute(config, type, &ctx, out_result);
-    free(repo_dir);
-    return err;
+    return hook_execute(config, type, &ctx, out_result);
 }
 
 error_t *hook_fire_pre(
     const config_t *config,
     output_ctx_t *out,
+    const char *repo_dir,
     const hook_invocation_t *inv
 ) {
     CHECK_NULL(config);
     CHECK_NULL(inv);
 
     process_result_t result = { 0 };
-    error_t *err = hook_fire(config, inv, pre_type_for(inv->cmd), &result);
+    error_t *err = hook_fire(
+        config, repo_dir, inv, pre_type_for(inv->cmd), &result
+    );
 
     if (err) {
         print_hook_output(out, &result);
@@ -487,13 +485,16 @@ error_t *hook_fire_pre(
 void hook_fire_post(
     const config_t *config,
     output_ctx_t *out,
+    const char *repo_dir,
     const hook_invocation_t *inv
 ) {
     if (!config || !inv) return;
     if (inv->dry_run) return;
 
     process_result_t result = { 0 };
-    error_t *err = hook_fire(config, inv, post_type_for(inv->cmd), &result);
+    error_t *err = hook_fire(
+        config, repo_dir, inv, post_type_for(inv->cmd), &result
+    );
 
     if (err) {
         output_warning(

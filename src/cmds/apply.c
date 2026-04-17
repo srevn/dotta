@@ -1634,7 +1634,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     };
 
     /* Execute pre-apply hook */
-    err = hook_fire_pre(config, out, &hook_inv);
+    err = hook_fire_pre(config, out, ctx->repo_path, &hook_inv);
     if (err) goto cleanup;
 
     /* Confirm before deployment if configured (unless --force or --dry-run) */
@@ -2191,7 +2191,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     }
 
     /* Execute post-apply hook */
-    hook_fire_post(config, out, &hook_inv);
+    hook_fire_post(config, out, ctx->repo_path, &hook_inv);
 
     /* Success - fall through to cleanup */
     err = NULL;

@@ -866,31 +866,31 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     /* Persistent stale manifest repair
      *
      * Detect and fix state entries whose commit_oid no longer matches the
-     * profile branch HEAD (caused by external Git operations). This runs
-     * BEFORE workspace_load() so the workspace sees accurate state.
+     * profile branch HEAD (caused by external Git operations). Runs BEFORE
+     * workspace_load() so the workspace sees accurate state. After repair,
+     * workspace_load's in-memory patching path won't trigger (commit_oid
+     * matches HEAD), eliminating redundant fresh manifest builds.
      *
-     * Algorithm:
-     * - Quick check: O(P) per-profile commit_oid comparison (zero cost if clean)
-     * - If stale: build fresh Git manifest, update or release state entries
-     *
-     * After repair, workspace_load's in-memory patching path won't trigger
-     * (commit_oid matches HEAD), eliminating redundant fresh manifest builds.
-     *
-     * Uses the raw DB list (state_get_profiles), then frees and re-populates
-     * enabled_profiles with the validated list below for Phase 1.
+     * Uses the raw DB list (state_get_profiles, no branch validation)
+     * because branch-validation failures must not block in-place repair.
+     * Block-scoped so the raw list's lifetime is visibly minimal;
+     * STRING_ARRAY_CLEANUP frees it on every exit path.
      */
-    err = state_get_profiles(state, &enabled_profiles);
+    size_t enabled_raw_count = 0;
+    string_array_t *raw_profiles STRING_ARRAY_CLEANUP = NULL;
+    err = state_get_profiles(state, &raw_profiles);
     if (err) {
         err = error_wrap(err, "Failed to get enabled profiles for stale repair");
         goto cleanup;
     }
 
-    if (enabled_profiles && enabled_profiles->count > 0) {
+    enabled_raw_count = raw_profiles ? raw_profiles->count : 0;
+
+    if (enabled_raw_count > 0) {
         manifest_repair_stats_t repair_stats = { 0 };
         err = manifest_repair_stale(
-            repo, state, enabled_profiles, &repair_stats, &repaired_paths
+            repo, state, raw_profiles, &repair_stats, &repaired_paths
         );
-
         if (err) {
             err = error_wrap(err, "Failed to repair stale manifest");
             goto cleanup;
@@ -911,27 +911,31 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         }
     }
 
-    /* Resolve enabled profile names for workspace scope.
+    /* Resolve enabled profile names (validated) for workspace scope.
      *
      * Separate workspace scope (persistent) from operation filter (temporary):
      *   - enabled_profiles: ALWAYS persistent enabled profile names (VWD scope)
      *   - filter_profiles / active_profiles: CLI filter for operations
      *
-     * Zero profiles is a valid convergence target: the VWD is empty, all state
-     * entries become orphans, and apply cleans them up. This enables the
-     * "disable last profile, then apply" workflow.
+     * Zero profiles is a valid convergence target: the VWD is empty, all
+     * state entries become orphans, and apply cleans them up. This enables
+     * the "disable last profile, then apply" workflow.
      *
-     * The stale repair phase already queried state_get_profiles. If that returned
-     * zero, skip profile_resolve_enabled — no branches to validate. If non-empty,
-     * re-resolve for branch validation and missing-profile warnings. */
-    if (enabled_profiles->count > 0) {
-        string_array_free(enabled_profiles);
-        enabled_profiles = NULL;
-
+     * Skip resolution when the raw enabled set was empty — no branches to
+     * validate, no missing-profile warnings to emit. Allocate an empty
+     * array to preserve the downstream "enabled_profiles is non-NULL"
+     * invariant. */
+    if (enabled_raw_count > 0) {
         output_print(out, OUTPUT_VERBOSE, "Loading profiles...\n");
         err = profile_resolve_enabled(repo, state, &enabled_profiles);
         if (err) {
             err = error_wrap(err, "Failed to resolve enabled profiles");
+            goto cleanup;
+        }
+    } else {
+        enabled_profiles = string_array_new(0);
+        if (!enabled_profiles) {
+            err = ERROR(ERR_MEMORY, "Failed to allocate empty profile array");
             goto cleanup;
         }
     }

@@ -389,7 +389,7 @@ error_t *cmd_bootstrap(const dotta_ctx_t *ctx, const cmd_bootstrap_options_t *op
         }
     } else {
         /* Use enabled profiles from state */
-        err = profile_resolve_enabled(repo, NULL, &profiles);
+        err = profile_resolve_enabled(repo, ctx->state, &profiles);
         if (err) {
             if (error_code(err) == ERR_NOT_FOUND) {
                 /* No profiles enabled — expected case, show guidance */

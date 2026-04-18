@@ -566,6 +566,7 @@ error_t *cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
     CHECK_NULL(opts);
 
     git_repository *repo = ctx->repo;
+    const state_t *state = ctx->state;  /* Borrowed from dispatcher; do not free */
     const config_t *config = ctx->config;
     output_ctx_t *out = ctx->out;
 
@@ -585,7 +586,7 @@ error_t *cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
 
         if (!profile) {
             /* No profile specified - use enabled profiles */
-            err = profile_resolve_enabled(repo, NULL, &profiles);
+            err = profile_resolve_enabled(repo, state, &profiles);
             if (err) {
                 if (error_code(err) == ERR_NOT_FOUND) {
                     error_free(err);
@@ -649,7 +650,7 @@ error_t *cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
     CHECK_NULL(opts->file_path);
 
     /* Load custom prefixes for path resolution (non-fatal) */
-    error_t *prefix_err = profile_load_custom_prefixes(repo, &prefixes);
+    error_t *prefix_err = profile_load_custom_prefixes(repo, state, &prefixes);
     if (prefix_err) error_free(prefix_err);
 
     /* Resolve file path to storage format (common to both explicit and implicit paths) */
@@ -695,7 +696,7 @@ error_t *cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
     }
 
     /* Discover owning profile via manifest (O(1) indexed lookup) */
-    err = profile_discover_file(repo, NULL, search_path, true, &matches);
+    err = profile_discover_file(repo, state, search_path, true, &matches);
     if (err) {
         if (error_code(err) == ERR_NOT_FOUND) {
             error_free(err);

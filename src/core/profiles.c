@@ -196,63 +196,44 @@ cleanup:
 }
 
 /**
- * Load every enabled profile's custom prefix from state
+ * Collect every enabled profile's custom prefix from state
  *
  * Narrow adapter for read-only callers (list/show/revert) that need the
- * full set of custom prefixes for path resolution but do not already hold
- * a state handle. Opens state, peeks the row cache, filters to entries
- * with a non-NULL custom_prefix, and returns them in position order.
- *
- * State-load failure is non-fatal: callers degrade to resolving paths
- * without custom-prefix awareness, so we return an empty array instead
- * of propagating the error. Matches the previous semantics of the
- * deleted profile_get_custom_prefixes adapter.
+ * full set of custom prefixes for path resolution. Peeks the row cache
+ * on the borrowed state handle, filters to entries with a non-NULL
+ * custom_prefix, and packages them into a fresh string_array_t in
+ * position order.
  */
 error_t *profile_load_custom_prefixes(
     git_repository *repo,
+    const state_t *state,
     string_array_t **out_prefixes
 ) {
     CHECK_NULL(repo);
+    CHECK_NULL(state);
     CHECK_NULL(out_prefixes);
+
+    const state_profile_entry_t *entries = NULL;
+    size_t count = 0;
+    error_t *err = state_peek_profiles(state, &entries, &count);
+    if (err) {
+        return error_wrap(err, "Failed to peek profile rows");
+    }
 
     string_array_t *prefixes = string_array_new(0);
     if (!prefixes) {
         return ERROR(ERR_MEMORY, "Failed to allocate prefixes array");
     }
 
-    state_t *state = NULL;
-    error_t *err = state_load(repo, &state);
-    if (err) {
-        /* State load failure is non-fatal — no custom prefixes available */
-        error_free(err);
-        *out_prefixes = prefixes;
-        return NULL;
-    }
-    if (!state) {
-        *out_prefixes = prefixes;
-        return NULL;
-    }
-
-    const state_profile_entry_t *entries = NULL;
-    size_t count = 0;
-    err = state_peek_profiles(state, &entries, &count);
-    if (err) {
-        state_free(state);
-        string_array_free(prefixes);
-        return error_wrap(err, "Failed to peek profile rows");
-    }
-
     for (size_t i = 0; i < count; i++) {
         if (!entries[i].custom_prefix) continue;
         err = string_array_push(prefixes, entries[i].custom_prefix);
         if (err) {
-            state_free(state);
             string_array_free(prefixes);
             return error_wrap(err, "Failed to collect custom prefix");
         }
     }
 
-    state_free(state);
     *out_prefixes = prefixes;
 
     return NULL;
@@ -335,15 +316,12 @@ cleanup:
  * Resolve enabled profile names from state database
  *
  * Lightweight name-only resolution — no Git ref resolution or tree loading.
- * Loads state, validates that referenced profiles exist as
- * branches, and returns the validated names. Warns on stderr about
- * missing profiles.
- *
- * When state is non-NULL, reads from the provided handle without taking
- * ownership. When NULL, opens and closes a private read-only state handle.
+ * Reads enabled profiles from the borrowed state handle, validates that
+ * each still exists as a branch, and returns the validated names. Warns
+ * on stderr about missing profiles.
  *
  * @param repo Repository (must not be NULL)
- * @param state State handle for connection reuse (NULL = load internally)
+ * @param state Borrowed state handle (must not be NULL)
  * @param out Validated profile names (must not be NULL, caller frees)
  * @return Error (ERR_NOT_FOUND if no enabled profiles) or NULL on success
  */
@@ -353,37 +331,23 @@ error_t *profile_resolve_enabled(
     string_array_t **out
 ) {
     CHECK_NULL(repo);
+    CHECK_NULL(state);
     CHECK_NULL(out);
 
     error_t *err = NULL;
-    state_t *local_state = NULL;
-    const state_t *effective_state = state;
     string_array_t *state_profiles = NULL;
     string_array_t *valid_profiles = NULL;
     string_array_t *missing_profiles = NULL;
 
-    /* Use provided state or load internally */
-    if (!effective_state) {
-        err = state_load(repo, &local_state);
-        if (err) {
-            return error_wrap(
-                err, "Failed to load state for profile resolution"
-            );
-        }
-        effective_state = local_state;
-    }
-
     /* Get profile names from state */
-    err = state_get_profiles(effective_state, &state_profiles);
+    err = state_get_profiles(state, &state_profiles);
     if (err) {
         error_free(err);
-        state_free(local_state);
         return ERROR(ERR_NOT_FOUND, "No enabled profiles found");
     }
 
     if (!state_profiles || state_profiles->count == 0) {
         string_array_free(state_profiles);
-        state_free(local_state);
         return ERROR(ERR_NOT_FOUND, "No enabled profiles found");
     }
 
@@ -421,13 +385,11 @@ error_t *profile_resolve_enabled(
     if (valid_profiles->count == 0) {
         string_array_free(valid_profiles);
         string_array_free(state_profiles);
-        state_free(local_state);
         return ERROR(ERR_NOT_FOUND, "No enabled profiles found");
     }
 
     /* Success */
     *out = valid_profiles;
-    state_free(local_state);
     string_array_free(state_profiles);
 
     return NULL;
@@ -436,7 +398,6 @@ cleanup:
     string_array_free(valid_profiles);
     string_array_free(missing_profiles);
     string_array_free(state_profiles);
-    state_free(local_state);
 
     return err;
 }
@@ -950,6 +911,7 @@ error_t *profile_discover_file(
     string_array_t **out_profiles
 ) {
     CHECK_NULL(repo);
+    CHECK_NULL(state);
     CHECK_NULL(storage_path);
     CHECK_NULL(out_profiles);
 
@@ -958,28 +920,11 @@ error_t *profile_discover_file(
 
     if (enabled_only) {
         /* Manifest fast path: O(1) via state DB index.
-         * Returns the single owning profile (precedence already resolved).
-         *
-         * Reuse the caller's handle when provided; otherwise open a
-         * short-lived read-only handle for this lookup. */
-        state_t *local_state = NULL;
-        const state_t *effective_state = state;
-
-        if (!effective_state) {
-            err = state_load(repo, &local_state);
-            if (err) {
-                return error_wrap(
-                    err, "Failed to load state for file discovery"
-                );
-            }
-            effective_state = local_state;
-        }
-
+         * Returns the single owning profile (precedence already resolved). */
         state_file_entry_t *entry = NULL;
-        err = state_get_file_by_storage(effective_state, storage_path, &entry);
+        err = state_get_file_by_storage(state, storage_path, &entry);
 
         if (err) {
-            state_free(local_state);
             if (error_code(err) == ERR_NOT_FOUND) {
                 error_free(err);
                 return ERROR(
@@ -993,13 +938,11 @@ error_t *profile_discover_file(
         string_array_t *profiles = string_array_new(0);
         if (!profiles) {
             state_free_entry(entry);
-            state_free(local_state);
             return ERROR(ERR_MEMORY, "Failed to allocate profile array");
         }
 
         err = string_array_push(profiles, entry->profile);
         state_free_entry(entry);
-        state_free(local_state);
 
         if (err) {
             string_array_free(profiles);

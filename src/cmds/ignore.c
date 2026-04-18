@@ -1167,12 +1167,14 @@ static error_t *modify_profile_dottaignore(
  */
 static error_t *test_path_ignore(
     git_repository *repo,
+    const state_t *state,
     const config_t *config,
     const char *test_path,
     const char *specific_profile,
     output_ctx_t *out
 ) {
     CHECK_NULL(repo);
+    CHECK_NULL(state);
     CHECK_NULL(test_path);
     CHECK_NULL(out);
 
@@ -1259,7 +1261,7 @@ static error_t *test_path_ignore(
 
     /* Test against all enabled profiles */
     string_array_t *profiles = NULL;
-    error_t *err = profile_resolve_enabled(repo, NULL, &profiles);
+    error_t *err = profile_resolve_enabled(repo, state, &profiles);
 
     if (err) {
         if (error_code(err) != ERR_NOT_FOUND) {
@@ -1413,7 +1415,7 @@ error_t *cmd_ignore(const dotta_ctx_t *ctx, const cmd_ignore_options_t *opts) {
     if (has_test) {
         /* Test mode */
         err = test_path_ignore(
-            repo, config, opts->test_path, opts->profile, out
+            repo, ctx->state, config, opts->test_path, opts->profile, out
         );
     } else if (has_modify) {
         /* Add/remove mode */

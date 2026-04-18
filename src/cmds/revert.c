@@ -126,6 +126,7 @@ static error_t *discover_file_in_history(
  */
 static error_t *discover_file(
     git_repository *repo,
+    const state_t *state,
     const char *file_path,
     const char *profile_hint,
     const output_ctx_t *out,
@@ -134,6 +135,7 @@ static error_t *discover_file(
     char **out_resolved_path
 ) {
     CHECK_NULL(repo);
+    CHECK_NULL(state);
     CHECK_NULL(file_path);
     CHECK_NULL(out);
     CHECK_NULL(found_in_history);
@@ -148,7 +150,7 @@ static error_t *discover_file(
 
     /* Load custom prefixes for path resolution (non-fatal) */
     string_array_t *prefixes STRING_ARRAY_CLEANUP = NULL;
-    error_t *prefix_err = profile_load_custom_prefixes(repo, &prefixes);
+    error_t *prefix_err = profile_load_custom_prefixes(repo, state, &prefixes);
     if (prefix_err) error_free(prefix_err);
 
     /* Resolve input path to storage format (file need not exist) */
@@ -208,7 +210,7 @@ static error_t *discover_file(
 
     /* Search across all local branches for the file */
     string_array_t *matches = NULL;
-    err = profile_discover_file(repo, NULL, storage_path, false, &matches);
+    err = profile_discover_file(repo, state, storage_path, false, &matches);
 
     if (err) {
         if (error_code(err) == ERR_NOT_FOUND) {
@@ -858,7 +860,7 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
 
     bool found_in_history = false;
     err = discover_file(
-        repo, opts->file_path, opts->profile, out, &found_in_history,
+        repo, state, opts->file_path, opts->profile, out, &found_in_history,
         &profile, &resolved_path
     );
     if (err) goto cleanup;

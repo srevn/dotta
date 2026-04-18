@@ -609,10 +609,12 @@ static bool format_time(git_time_t timestamp, char *buf, size_t buf_size) {
  */
 static error_t *list_file_history(
     git_repository *repo,
+    const state_t *state,
     const cmd_list_options_t *opts,
     output_ctx_t *out
 ) {
     CHECK_NULL(repo);
+    CHECK_NULL(state);
     CHECK_NULL(opts);
     CHECK_NULL(opts->file_path);
     CHECK_NULL(out);
@@ -622,7 +624,7 @@ static error_t *list_file_history(
 
     /* Load custom prefixes for path resolution (non-fatal) */
     string_array_t *prefixes STRING_ARRAY_CLEANUP = NULL;
-    error_t *prefix_err = profile_load_custom_prefixes(repo, &prefixes);
+    error_t *prefix_err = profile_load_custom_prefixes(repo, state, &prefixes);
     if (prefix_err) error_free(prefix_err);
 
     /* Resolve input path to storage format (handles absolute, tilde, relative,
@@ -641,7 +643,7 @@ static error_t *list_file_history(
 
     if (!profile) {
         string_array_t *matches = NULL;
-        err = profile_discover_file(repo, NULL, storage_path, true, &matches);
+        err = profile_discover_file(repo, state, storage_path, true, &matches);
         if (err) {
             if (error_code(err) == ERR_NOT_FOUND) {
                 error_free(err);
@@ -801,7 +803,7 @@ error_t *cmd_list(const dotta_ctx_t *ctx, const cmd_list_options_t *opts) {
     } else if (opts->mode == LIST_FILES) {
         err = list_files(repo, opts, out);
     } else if (opts->mode == LIST_FILE_HISTORY) {
-        err = list_file_history(repo, opts, out);
+        err = list_file_history(repo, ctx->state, opts, out);
     } else {
         err = ERROR(ERR_INVALID_ARG, "Invalid list mode");
     }

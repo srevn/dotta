@@ -103,9 +103,8 @@ error_t *profile_resolve_filter(
  * Does NOT resolve Git references or load profile trees.
  *
  * @param repo Repository (must not be NULL)
- * @param state State handle for connection reuse (NULL = load internally)
- *              When non-NULL, only reads from the handle (const). Safe to
- *              pass a state_open() handle — only SELECTs executed.
+ * @param state State handle (must not be NULL; borrowed, not freed).
+ *              Only SELECTs are executed — safe to pass a state_open() handle.
  * @param out Validated profile names (must not be NULL, caller must free)
  * @return Error (ERR_NOT_FOUND if no enabled profiles) or NULL on success
  */
@@ -116,26 +115,22 @@ error_t *profile_resolve_enabled(
 );
 
 /**
- * Load every enabled profile's custom prefix from state
+ * Collect every enabled profile's custom prefix from state
  *
  * Narrow adapter for read-only callers (list/show/revert) that need the
- * full set of custom prefixes for path resolution but do not hold a state
- * handle. Opens state internally, reads the row cache, and returns the
- * non-NULL custom_prefix values in position order.
- *
- * Callers that already hold a state handle should iterate active profiles
- * directly and call state_peek_profile_prefix() — no adapter needed.
- *
- * State-load failure is non-fatal: callers degrade to resolving paths
- * without custom-prefix awareness, so an empty array is returned instead
- * of propagating the error.
+ * full set of custom prefixes for path resolution. Reads the row cache
+ * and packages the non-NULL custom_prefix values into a fresh
+ * string_array_t in position order. An empty array is a valid result
+ * when no enabled profile has set a custom prefix.
  *
  * @param repo Repository (must not be NULL)
+ * @param state State handle (must not be NULL; borrowed, not freed)
  * @param out_prefixes Non-NULL custom prefixes (must not be NULL, caller frees)
  * @return Error or NULL on success (empty array if no custom prefixes)
  */
 error_t *profile_load_custom_prefixes(
     git_repository *repo,
+    const state_t *state,
     string_array_t **out_prefixes
 );
 
@@ -279,9 +274,10 @@ error_t *profile_build_file_index(
  * The storage_path must already be resolved (use path_resolve_input() first).
  *
  * @param repo Repository (must not be NULL)
- * @param state Optional borrowed state handle for connection reuse.
- *              NULL to load internally. Ignored when enabled_only is false
- *              (the branch-scan path does not touch state).
+ * @param state State handle (must not be NULL; borrowed, not freed).
+ *              Required on both paths for signature consistency, but
+ *              read only on the enabled_only=true (manifest) path; the
+ *              branch-scan path does not touch state.
  * @param storage_path Storage path (e.g., "home/.bashrc")
  * @param enabled_only If true, only search manifest (enabled profiles).
  *                     If false, search all local branches.

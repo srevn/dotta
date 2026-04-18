@@ -17,11 +17,12 @@
 #include "base/timeutil.h"
 #include "core/manifest.h"
 #include "core/profiles.h"
+#include "core/scope.h"
 #include "core/state.h"
-#include "sys/upstream.h"
 #include "core/workspace.h"
 #include "sys/gitops.h"
 #include "sys/transfer.h"
+#include "sys/upstream.h"
 #include "utils/privilege.h"
 
 /**
@@ -92,14 +93,13 @@ static void display_enabled_profiles(
  * profile is clean but other enabled profiles have divergence.
  *
  * @param ws Workspace (must not be NULL, borrowed from caller)
- * @param profile_filter Optional profile filter (NULL = show all items)
+ * @param scope Operation scope (must not be NULL; its filter dimension drives display)
  * @param manifest Manifest for file counting (can be NULL, used with profile filter)
  * @param out Output context (must not be NULL)
- * @param verbose Verbose output flag
  */
 static void display_workspace_status(
     workspace_t *ws,
-    const string_array_t *filter,
+    const scope_t *scope,
     const manifest_t *manifest,
     output_ctx_t *out
 ) {
@@ -118,14 +118,11 @@ static void display_workspace_status(
     size_t filtered_diverged = 0;
     size_t hidden_count = 0;
 
-    if (filter) {
+    if (scope_has_filter(scope)) {
         /* Count total managed files from manifest for filtered profile(s) */
         if (manifest) {
             for (size_t i = 0; i < manifest->count; i++) {
-                if (manifest->entries[i].profile &&
-                    profile_filter_matches(
-                    manifest->entries[i].profile, filter
-                    )) {
+                if (scope_accepts_profile(scope, manifest->entries[i].profile)) {
                     profile_file_count++;
                 }
             }
@@ -133,7 +130,7 @@ static void display_workspace_status(
 
         /* Partition diverged items into filtered vs hidden */
         for (size_t i = 0; i < all_count; i++) {
-            if (profile_filter_matches(all_items[i].profile, filter)) {
+            if (scope_accepts_profile(scope, all_items[i].profile)) {
                 filtered_diverged++;
             } else {
                 hidden_count++;
@@ -146,8 +143,9 @@ static void display_workspace_status(
      * - Clean with hidden divergence from other profiles: always show
      * - Clean with no divergence anywhere: show only with verbose
      */
-    bool has_divergence = filter ? (filtered_diverged > 0)
-                                       : (ws_status != WORKSPACE_CLEAN);
+    bool has_divergence = scope_has_filter(scope) ? (filtered_diverged > 0)
+                                                  : (ws_status != WORKSPACE_CLEAN);
+
     if (!has_divergence && hidden_count == 0 && !output_is_verbose(out)) {
         return;
     }
@@ -155,7 +153,7 @@ static void display_workspace_status(
     output_section(out, OUTPUT_NORMAL, "Workspace status");
 
     /* Display status line */
-    if (filter) {
+    if (scope_has_filter(scope)) {
         /* Profile-scoped status: reflects the filtered profile */
         if (filtered_diverged == 0) {
             if (profile_file_count > 0) {
@@ -222,7 +220,7 @@ static void display_workspace_status(
     /* Show sectioned output for dirty/invalid workspace */
     if (ws_status != WORKSPACE_CLEAN) {
         /* When filter active and filtered profile is clean, skip detailed sections */
-        if (!filter || filtered_diverged > 0) {
+        if (!scope_has_filter(scope) || filtered_diverged > 0) {
 
             /* Single allocation for all category pointers (5 categories × all_count slots)
              * Memory layout: [uncommitted][undeployed][new_files][orphaned][reassigned]
@@ -257,8 +255,7 @@ static void display_workspace_status(
                  * When profile filter is active, only show items from matching
                  * profiles. This ensures status output matches what apply would do.
                  */
-                if (filter &&
-                    !profile_filter_matches(item->profile, filter)) {
+                if (!scope_accepts_profile(scope, item->profile)) {
                     continue;  /* Skip items from other profiles */
                 }
 
@@ -480,9 +477,9 @@ static void display_workspace_status(
         }
 
         /* Show hidden items note when profile filter is active */
-        if (filter && hidden_count > 0) {
+        if (scope_has_filter(scope) && hidden_count > 0) {
             output_styled(
-                out, OUTPUT_NORMAL, "  {dim}(%zu item%s from other profiles hidden){reset}\n",
+                out, OUTPUT_NORMAL, "  {dim}(%zu item%s hidden){reset}\n",
                 hidden_count, hidden_count == 1 ? "" : "s"
             );
         }
@@ -851,64 +848,30 @@ error_t *cmd_status(const dotta_ctx_t *ctx, const cmd_status_options_t *opts) {
     workspace_t *ws = NULL;
     state_t *state = ctx->state;  /* Borrowed from dispatcher; do not free */
     const manifest_t *manifest = NULL;
-    string_array_t *enabled_profiles = NULL;
-    string_array_t *filter_profiles = NULL;
-    const string_array_t *active_profiles = NULL;
-    const string_array_t *filter = NULL;
-    bool has_profile_filter = (opts->profiles != NULL && opts->profile_count > 0);
+    scope_t *scope = NULL;
 
     /* CLI flags override config */
     if (opts->verbose) {
         output_set_verbosity(out, OUTPUT_VERBOSE);
     }
 
-    /* Load profiles
+    /* Build operation scope
      *
-     * Separate workspace scope (persistent) from display filter (temporary):
-     *   - enabled_profiles: Persistent enabled profile names (VWD scope)
-     *   - filter_profiles / active_profiles: CLI filter names or workspace names (for display)
+     *   scope_enabled — persistent VWD scope (passed to workspace_load for
+     *                   accurate orphan detection).
+     *   scope_active  — display face (enabled profile list, remote status).
      *
-     * Workspace always loads with persistent profiles to maintain accurate
-     * orphan detection. Display operations filter by CLI profiles if specified.
-     *
-     * Zero profiles is a valid state: workspace classifies all state entries as
-     * orphaned. This enables the "disable last profile, then status" workflow. */
-    err = profile_resolve_enabled(repo, state, &enabled_profiles);
-    if (err) {
-        if (err->code == ERR_NOT_FOUND) {
-            /* Zero enabled profiles — show orphan state.
-             * Workspace classifies all state entries as orphaned. */
-            error_free(err);
-            err = NULL;
-            enabled_profiles = string_array_new(0);
-            if (!enabled_profiles) {
-                err = ERROR(ERR_MEMORY, "Failed to create empty profile array");
-                goto cleanup;
-            }
-        } else {
-            err = error_wrap(err, "Failed to resolve enabled profiles");
-            goto cleanup;
-        }
-    }
-
-    /* Resolve display profile names */
-    if (has_profile_filter) {
-        err = profile_resolve_filter(
-            repo, opts->profiles, opts->profile_count, config->strict_mode, &filter_profiles
-        );
-        if (err) {
-            err = error_wrap(err, "Failed to resolve display profiles");
-            goto cleanup;
-        }
-
-        err = profile_validate_filter(enabled_profiles, filter_profiles);
-        if (err) goto cleanup;
-
-        filter = filter_profiles;
-        active_profiles = filter_profiles;
-    } else {
-        active_profiles = enabled_profiles;
-    }
+     * Zero enabled profiles is a valid state: workspace classifies all
+     * state entries as orphaned. This enables the "disable last profile,
+     * then status" workflow. scope_build returns success with an empty
+     * enabled set — no special handling needed here. */
+    scope_inputs_t scope_inputs = {
+        .profiles      = opts->profiles,
+        .profile_count = opts->profile_count,
+        .strict_mode   = config->strict_mode,
+    };
+    err = scope_build(repo, state, &scope_inputs, &scope);
+    if (err) goto cleanup;
 
     /* Load workspace for divergence analysis (only needed for local status)
      *
@@ -923,7 +886,7 @@ error_t *cmd_status(const dotta_ctx_t *ctx, const cmd_status_options_t *opts) {
             .analyze_directories = true,
             .analyze_encryption  = true
         };
-        err = workspace_load(repo, state, enabled_profiles, config, &ws_opts, &ws);
+        err = workspace_load(repo, state, scope_enabled(scope), config, &ws_opts, &ws);
         if (err) {
             err = error_wrap(err, "Failed to load workspace");
             goto cleanup;
@@ -997,24 +960,23 @@ error_t *cmd_status(const dotta_ctx_t *ctx, const cmd_status_options_t *opts) {
     }
 
     /* Display enabled profiles and last deployment info */
-    display_enabled_profiles(out, active_profiles, manifest, state);
+    display_enabled_profiles(out, scope_active(scope), manifest, state);
 
     /* Display workspace status (with profile filtering for Coherent Scope)
      *
-     * The workspace was loaded with persistent profiles (enabled_profiles)
-     * for accurate divergence analysis. When CLI filter is specified,
-     * we pass the filter to display_workspace_status to show only items
-     * from those profiles. This ensures `dotta status -p work` matches
-     * `dotta apply -p work` behavior.
+     * The workspace was loaded with the persistent enabled set
+     * (scope_enabled) for accurate divergence analysis. display_workspace_status
+     * then applies the CLI filter dimension via scope_accepts_profile so
+     * `dotta status -p work` matches `dotta apply -p work` behavior.
      */
     if (opts->show_local) {
-        display_workspace_status(ws, filter, manifest, out);
+        display_workspace_status(ws, scope, manifest, out);
     }
 
     /* Show remote sync status (if requested) */
     if (opts->show_remote) {
         err = display_remote_status(
-            repo, active_profiles, out, opts->all_profiles, opts->no_fetch
+            repo, scope_active(scope), out, opts->all_profiles, opts->no_fetch
         );
         if (err) {
             /* Non-fatal: might not have remote configured */
@@ -1024,10 +986,8 @@ error_t *cmd_status(const dotta_ctx_t *ctx, const cmd_status_options_t *opts) {
     }
 
 cleanup:
-    /* Free all resources (safe with NULL pointers) */
     if (ws) workspace_free(ws);
-    if (filter_profiles) string_array_free(filter_profiles);
-    if (enabled_profiles) string_array_free(enabled_profiles);
+    if (scope) scope_free(scope);
 
     return err;
 }

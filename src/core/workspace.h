@@ -75,6 +75,7 @@ typedef struct workspace workspace_t;
  * Forward declarations
  */
 typedef struct manifest manifest_t;
+typedef struct scope scope_t;
 
 /**
  * Workspace cleanliness status
@@ -214,33 +215,45 @@ const workspace_item_t *workspace_get_all_diverged(
  * Selective extraction: Pass NULL for out_file_orphans or out_dir_orphans
  * to skip that extraction. The corresponding count will be set to 0.
  *
- * Profile filtering: When profile_filter is non-NULL, only orphans from
- * matching profiles are extracted. This enables `apply -p <profile>`
- * to only remove orphans from the specified profile.
+ * Scope filtering: When `scope` is non-NULL, the full operation-scope
+ * triplet (profile filter ∧ path filter ∧ ¬exclude) is applied. Orphans
+ * rejected by the profile/path dimensions are dropped silently; orphans
+ * rejected by the exclude dimension are counted via `out_excluded_count`
+ * and optionally collected into `out_excluded` so the caller can emit a
+ * per-item verbose trace and the "N orphaned files not removed" summary
+ * without re-walking the workspace. A NULL scope is treated as match-all.
  *
  * Edge cases:
- * - No orphans: Returns success with count=0, arrays=NULL
- * - analyze_orphans=false during load: Returns success with count=0
+ * - No orphans: Returns success with counts=0, arrays=NULL
+ * - analyze_orphans=false during load: Returns success with counts=0
  * - Memory failure: Returns error, no partial allocation
- * - profile_filter with no matches: Returns success with count=0
+ * - scope filter with no matches: Returns success with counts=0
  *
  * @param ws Workspace (must not be NULL)
- * @param filter Optional profile name filter (NULL = all orphans)
- *               When non-NULL, only extracts orphans from profiles
- *               matching the filter (uses profile_filter_matches)
+ * @param scope Optional operation scope (NULL = all orphans). When
+ *              non-NULL, applies scope_accepts_profile ∧ scope_accepts_path
+ *              ∧ ¬scope_is_excluded.
  * @param out_file_orphans Output file array (caller frees, NULL to skip)
  * @param out_file_count Output file count (set to 0 if out_file_orphans is NULL)
  * @param out_dir_orphans Output directory array (caller frees, NULL to skip)
  * @param out_dir_count Output directory count (set to 0 if out_dir_orphans is NULL)
+ * @param out_excluded Optional: array of orphans dropped by the exclude
+ *                     dimension (caller frees the array; items are
+ *                     borrowed from workspace). NULL to skip collection.
+ * @param out_excluded_count Optional: count of orphans preserved because the
+ *                           exclude dimension matched (NULL to skip).
+ *                           Populated whether or not out_excluded is asked for.
  * @return Error or NULL on success
  */
 error_t *workspace_extract_orphans(
     const workspace_t *ws,
-    const string_array_t *filter,
+    const scope_t *scope,
     const workspace_item_t ***out_file_orphans,
     size_t *out_file_count,
     const workspace_item_t ***out_dir_orphans,
-    size_t *out_dir_count
+    size_t *out_dir_count,
+    const workspace_item_t ***out_excluded,
+    size_t *out_excluded_count
 );
 
 /**

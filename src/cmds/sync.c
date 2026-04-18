@@ -16,7 +16,7 @@
 #include "base/error.h"
 #include "base/output.h"
 #include "core/manifest.h"
-#include "core/profiles.h"
+#include "core/scope.h"
 #include "core/state.h"
 #include "core/workspace.h"
 #include "sys/credentials.h"
@@ -1318,15 +1318,13 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
     /* Declare all resources, initialized to NULL */
     error_t *err = NULL;
     workspace_t *ws = NULL;
-    string_array_t *enabled_profiles = NULL;
-    string_array_t *filter_profiles = NULL;
-    const string_array_t *active_profiles = NULL;
+    scope_t *scope = NULL;
+    string_array_t *push_profiles = NULL;
     sync_results_t *results = NULL;
     char *remote_name = NULL;
     char *remote_url = NULL;
     transfer_context_t *xfer = NULL;
     char *current_branch = NULL;
-    bool has_profile_filter = (opts->profiles != NULL && opts->profile_count > 0);
 
     /* Verify main worktree is on dotta-worktree branch */
     err = gitops_current_branch(repo, &current_branch);
@@ -1352,19 +1350,20 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
         output_set_verbosity(out, OUTPUT_VERBOSE);
     }
 
-    /* Load profiles
-     * - enabled_profiles: ALWAYS persistent enabled profile names (for VWD scope)
-     * - filter_profiles / active_profiles: CLI filter names or workspace names (for sync operations)
+    /* Build operation scope
+     *
+     *   scope_enabled — persistent VWD scope (passed to workspace_load).
+     *   scope_active  — sync operation face (fetch / analyze / pull targets).
      */
+    scope_inputs_t scope_inputs = {
+        .profiles      = opts->profiles,
+        .profile_count = opts->profile_count,
+        .strict_mode   = config->strict_mode,
+    };
+    err = scope_build(repo, state, &scope_inputs, &scope);
+    if (err) goto cleanup;
 
-    /* Phase 1: Resolve enabled profile names (persistent) */
-    err = profile_resolve_enabled(repo, state, &enabled_profiles);
-    if (err) {
-        err = error_wrap(err, "Failed to resolve enabled profiles");
-        goto cleanup;
-    }
-
-    if (enabled_profiles->count == 0) {
+    if (scope_enabled(scope)->count == 0) {
         err = ERROR(
             ERR_NOT_FOUND, "No enabled profiles to sync\n"
             "Hint: Run 'dotta profile enable <name>' to enable profiles\n"
@@ -1373,27 +1372,8 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
         goto cleanup;
     }
 
-    /* Phase 2: Resolve sync profile names */
-    if (has_profile_filter) {
-        err = profile_resolve_filter(
-            repo, opts->profiles, opts->profile_count, config->strict_mode, &filter_profiles
-        );
-        if (err) {
-            err = error_wrap(err, "Failed to resolve sync profiles");
-            goto cleanup;
-        }
-
-        /* Validate: filter profiles must be enabled in workspace */
-        err = profile_validate_filter(enabled_profiles, filter_profiles);
-        if (err) goto cleanup;
-
-        active_profiles = filter_profiles;
-    } else {
-        active_profiles = enabled_profiles;
-    }
-
     /* Create results tracker */
-    results = sync_results_create(active_profiles->count);
+    results = sync_results_create(scope_active(scope)->count);
     if (!results) {
         err = ERROR(ERR_MEMORY, "Failed to create results");
         goto cleanup;
@@ -1409,9 +1389,6 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
      *
      * Skip entirely when --force is used: the clean check result is unused, and
      * workspace_load can be expensive (filesystem analysis, directory scanning).
-     *
-     * CRITICAL: Use enabled_profiles (persistent) for VWD scope, NOT active_profiles.
-     * This ensures manifest scope matches state scope for accurate divergence detection.
      */
     if (!opts->force) {
         workspace_load_t ws_opts = {
@@ -1421,7 +1398,7 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
             .analyze_directories = false,  /* Directory metadata is apply's concern */
             .analyze_encryption  = false   /* Encryption is apply's concern */
         };
-        err = workspace_load(repo, state, enabled_profiles, config, &ws_opts, &ws);
+        err = workspace_load(repo, state, scope_enabled(scope), config, &ws_opts, &ws);
         if (err) {
             err = error_wrap(err, "Failed to load workspace");
             goto cleanup;
@@ -1606,7 +1583,7 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
 
     /* Phase 1: Fetch enabled profiles from remote */
     err = sync_fetch_enabled_profiles(
-        repo, remote_name, active_profiles, results, out, xfer
+        repo, remote_name, scope_active(scope), results, out, xfer
     );
     if (err) {
         goto cleanup;
@@ -1614,7 +1591,7 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
 
     /* Phase 2: Analyze branch states */
     err = sync_analyze_phase(
-        repo, remote_name, active_profiles, results, out
+        repo, remote_name, scope_active(scope), results, out
     );
     if (err) {
         goto cleanup;
@@ -1684,13 +1661,10 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
         goto cleanup;
     }
 
-    /* Stale repair and push see the transaction snapshot. active_profiles
-     * was a borrowed pointer into enabled_profiles — nothing reads it after this point. */
-    string_array_free(enabled_profiles);
-    enabled_profiles = NULL;
-
-    /* Build enabled profiles array for manifest operations */
-    err = state_get_profiles(state, &enabled_profiles);
+    /* Stale repair and push operate on a fresh post-transaction view of
+     * state — scope's enabled set was resolved pre-transaction and could
+     * be narrowed by CLI filter, which is not the right set here. */
+    err = state_get_profiles(state, &push_profiles);
     if (err) {
         err = error_wrap(err, "Failed to get enabled profiles");
         goto cleanup;
@@ -1701,7 +1675,7 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
      * If external Git changes moved a branch HEAD since the last dotta operation,
      * state entries have stale blob_oid values. manifest_sync_diff() computes
      * a diff between old_oid (local HEAD before fetch) and new_oid (after merge). It
-     * then updates the per-profile commit_oid in enabled_profiles to match the new HEAD.
+     * then updates the per-profile commit_oid in push_profiles to match the new HEAD.
      * This masks pre-existing staleness: files changed between the stale state and the
      * pre-fetch HEAD would have their commit_oid updated (now matching HEAD) but blob_oid
      * unchanged (still from the stale commit). These entries become permanently invisible
@@ -1709,9 +1683,9 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
      *
      * Running repair first brings state in sync with the current local HEAD. Then
      * sync_diff operates on accurate state and only handles the remote changes. */
-    if (enabled_profiles && enabled_profiles->count > 0) {
+    if (push_profiles && push_profiles->count > 0) {
         manifest_repair_stats_t repair_stats = { 0 };
-        err = manifest_repair_stale(repo, state, enabled_profiles, &repair_stats, NULL);
+        err = manifest_repair_stale(repo, state, push_profiles, &repair_stats, NULL);
         if (err) {
             err = error_wrap(err, "Failed to repair stale manifest before sync");
             goto cleanup;
@@ -1748,9 +1722,9 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
     }
 
     err = sync_push_phase(
-        repo, remote_name, results, out, sync_ephemeral, auto_pull,
-        opts->no_pull, no_push, diverged_strategy, xfer, config->confirm_destructive,
-        state, enabled_profiles
+        repo, remote_name, results, out, sync_ephemeral, auto_pull, opts->no_pull,
+        no_push, diverged_strategy, xfer, config->confirm_destructive,
+        state, push_profiles
     );
 
     if (sync_ephemeral) {
@@ -1840,9 +1814,10 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
 
 cleanup:
     /* Free resources in reverse order of allocation. state is borrowed
-     * from the dispatcher; workspace borrows state, so free workspace
-     * first. state_rollback is a no-op if no transaction is active
-     * closing any partially-begun mutation-phase transaction on error paths. */
+     * from the dispatcher; workspace borrows scope_enabled(scope), so free
+     * workspace first, then scope. state_rollback is a no-op if no
+     * transaction is active, closing any partially-begun mutation-phase
+     * transaction on error paths. */
     state_rollback(state);
 
     if (current_branch) free(current_branch);
@@ -1851,8 +1826,8 @@ cleanup:
     if (remote_url) free(remote_url);
     if (remote_name) free(remote_name);
     if (results) sync_results_free(results);
-    if (filter_profiles) string_array_free(filter_profiles);
-    if (enabled_profiles) string_array_free(enabled_profiles);
+    if (push_profiles) string_array_free(push_profiles);
+    if (scope) scope_free(scope);
 
     return err;
 }

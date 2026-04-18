@@ -19,18 +19,16 @@
 #include "base/array.h"
 #include "base/error.h"
 #include "base/hashmap.h"
-#include "base/match.h"
 #include "base/output.h"
 #include "base/string.h"
 #include "core/manifest.h"
 #include "core/metadata.h"
-#include "core/profiles.h"
+#include "core/scope.h"
 #include "core/state.h"
 #include "core/workspace.h"
 #include "crypto/keymgr.h"
 #include "crypto/policy.h"
 #include "infra/content.h"
-#include "infra/path.h"
 #include "infra/worktree.h"
 #include "sys/filesystem.h"
 #include "utils/commit.h"
@@ -212,29 +210,6 @@ typedef struct {
 } file_copy_result_t;
 
 /**
- * Check if storage path should be excluded by CLI patterns
- *
- * Helper function for filter_items_for_update(). Matches against storage
- * paths (VWD namespace) for portable, machine-independent patterns.
- */
-static bool matches_exclude_pattern(
-    const char *path,
-    const cmd_update_options_t *opts
-) {
-    if (!path || !opts->exclude_patterns || opts->exclude_count == 0) {
-        return false;
-    }
-
-    /* Use match module for gitignore-style pattern matching */
-    return match_any(
-        opts->exclude_patterns,
-        opts->exclude_count,
-        path,
-        MATCH_DOUBLESTAR  /* Enable ** support */
-    );
-}
-
-/**
  * Check if a workspace item's state/divergence qualifies for update
  *
  * Pure predicate — no side effects, no filtering by path/profile/exclusion.
@@ -312,8 +287,7 @@ static bool is_update_candidate(
  *
  * @param ws Workspace (must not be NULL)
  * @param opts Update options (must not be NULL)
- * @param file_filter Pre-resolved file filter (NULL = all files, matches by storage_path)
- * @param operation_profiles Profile filter (NULL = all profiles, filters by item->profile)
+ * @param scope Operation scope (must not be NULL)
  * @param config Configuration (can be NULL, used for auto_detect_new_files)
  * @param out Output context (for verbose logging, can be NULL)
  * @param out_items Output array of pointers to workspace_item_t (must not be NULL, caller must free array)
@@ -323,8 +297,7 @@ static bool is_update_candidate(
 static error_t *filter_items_for_update(
     const workspace_t *ws,
     const cmd_update_options_t *opts,
-    const path_filter_t *file_filter,
-    const string_array_t *filter,
+    const scope_t *scope,
     const config_t *config,
     output_ctx_t *out,
     const workspace_item_t ***out_items,
@@ -332,6 +305,7 @@ static error_t *filter_items_for_update(
 ) {
     CHECK_NULL(ws);
     CHECK_NULL(opts);
+    CHECK_NULL(scope);
     CHECK_NULL(out_items);
     CHECK_NULL(count_out);
 
@@ -356,18 +330,18 @@ static error_t *filter_items_for_update(
         }
 
         /* Apply CLI file filter (using storage_path for canonical matching) */
-        if (!path_filter_matches(file_filter, item->storage_path)) {
+        if (!scope_accepts_path(scope, item->storage_path)) {
             continue;
         }
 
-        /* Apply exclusion patterns */
-        if (matches_exclude_pattern(item->storage_path, opts)) {
+        /* Apply exclusion patterns (granular: preserves verbose "Excluded" log) */
+        if (scope_is_excluded(scope, item->storage_path)) {
             output_info(out, OUTPUT_VERBOSE, "Excluded: %s", item->filesystem_path);
             continue;
         }
 
         /* Apply profile filter (CLI -p filtering) */
-        if (!profile_filter_matches(item->profile, filter)) {
+        if (!scope_accepts_profile(scope, item->profile)) {
             continue;
         }
 
@@ -1823,38 +1797,36 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
     error_t *err = NULL;
     state_t *state = ctx->state;  /* Borrowed from dispatcher; do not free */
     workspace_t *ws = NULL;
-    string_array_t *enabled_profiles = NULL;
-    string_array_t *filter_profiles = NULL;
-    const string_array_t *active_profiles = NULL;
-    const string_array_t *filter = NULL;
+    scope_t *scope = NULL;
     char *profiles_str = NULL;
-    path_filter_t *file_filter = NULL;
     const workspace_item_t **update_items = NULL;
     size_t update_count = 0;
     size_t total_updated = 0;
-
-    bool has_profile_filter = (opts->profiles != NULL && opts->profile_count > 0);
 
     /* CLI flags override config */
     if (opts->verbose) {
         output_set_verbosity(out, OUTPUT_VERBOSE);
     }
 
-    /* Load profiles
+    /* Build operation scope
      *
-     * Dual-list pattern ensures workspace scope consistency:
-     * - enabled_profiles: Persistent enabled profile names for VWD scope
-     * - filter_profiles / active_profiles: CLI filter names or workspace names for update operations
+     *   scope_enabled — persistent VWD scope (passed to workspace_load).
+     *   scope_active  — update operation face (hook context string).
+     *   scope_paths / scope_is_excluded — per-item gates in filter_items_for_update
      */
+    scope_inputs_t scope_inputs = {
+        .profiles         = opts->profiles,
+        .profile_count    = opts->profile_count,
+        .files            = opts->files,
+        .file_count       = opts->file_count,
+        .exclude_patterns = opts->exclude_patterns,
+        .exclude_count    = opts->exclude_count,
+        .strict_mode      = config->strict_mode,
+    };
+    err = scope_build(repo, state, &scope_inputs, &scope);
+    if (err) goto cleanup;
 
-    /* Phase 1: Resolve enabled profile names (persistent) */
-    err = profile_resolve_enabled(repo, state, &enabled_profiles);
-    if (err) {
-        err = error_wrap(err, "Failed to resolve enabled profiles");
-        goto cleanup;
-    }
-
-    if (enabled_profiles->count == 0) {
+    if (scope_enabled(scope)->count == 0) {
         err = ERROR(
             ERR_NOT_FOUND, "No enabled profiles found\n"
             "Hint: Run 'dotta profile enable <name>' to enable profiles"
@@ -1862,28 +1834,8 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
         goto cleanup;
     }
 
-    /* Phase 2: Resolve operation profile names */
-    if (has_profile_filter) {
-        err = profile_resolve_filter(
-            repo, opts->profiles, opts->profile_count, config->strict_mode, &filter_profiles
-        );
-        if (err) {
-            err = error_wrap(err, "Failed to resolve operation profiles");
-            goto cleanup;
-        }
-
-        /* Validate: filter profiles must be enabled in workspace */
-        err = profile_validate_filter(enabled_profiles, filter_profiles);
-        if (err) goto cleanup;
-
-        filter = filter_profiles;
-        active_profiles = filter_profiles;
-    } else {
-        active_profiles = enabled_profiles;
-    }
-
-    /* Build hook invocation using operation profiles for context */
-    profiles_str = string_array_join(active_profiles, " ");
+    /* Build hook invocation using active profile names for context */
+    profiles_str = string_array_join(scope_active(scope), " ");
     if (!profiles_str) {
         err = ERROR(ERR_MEMORY, "Failed to join profile names for hook");
         goto cleanup;
@@ -1926,59 +1878,16 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
         .analyze_directories = true,                    /* Directory metadata change detection */
         .analyze_encryption  = true                     /* Encryption policy validation */
     };
-    err = workspace_load(repo, state, enabled_profiles, config, &ws_opts, &ws);
+    err = workspace_load(repo, state, scope_enabled(scope), config, &ws_opts, &ws);
     if (err) {
         err = error_wrap(err, "Failed to analyze workspace");
         goto cleanup;
     }
 
-    /* Create file filter from CLI arguments (pre-resolve to storage paths)
-     *
-     * Extract custom prefixes from operation profiles to enable proper resolution
-     * of filesystem paths like /mnt/jail/etc/nginx.conf to custom/etc/nginx.conf.
-     * Without this, such paths would incorrectly resolve to root/mnt/jail/etc/nginx.conf.
-     */
-    if (opts->files && opts->file_count > 0) {
-        /* Extract custom prefixes from active profiles via the row cache */
-        string_array_t *prefixes = string_array_new(0);
-        if (!prefixes) {
-            err = ERROR(ERR_MEMORY, "Failed to allocate prefixes array");
-            goto cleanup;
-        }
-        for (size_t i = 0; i < active_profiles->count; i++) {
-            const char *pfx =
-                state_peek_profile_prefix(state, active_profiles->items[i]);
-            if (pfx) {
-                err = string_array_push(prefixes, pfx);
-                if (err) {
-                    string_array_free(prefixes);
-                    err = error_wrap(err, "Failed to collect custom prefix");
-                    goto cleanup;
-                }
-            }
-        }
-
-        err = path_filter_create(
-            opts->files, opts->file_count,
-            (const char *const *) prefixes->items, prefixes->count,
-            &file_filter
-        );
-        string_array_free(prefixes);
-
-        if (err) {
-            err = error_wrap(err, "Failed to create file filter");
-            goto cleanup;
-        }
-    }
-
-    /* Filter items for update (handles all flags and edge cases internally)
-     *
-     * Uses operation_profiles for CLI -p filtering. This ensures display
-     * matches execution - only items from specified profiles are shown.
-     */
+    /* Filter items for update (handles all flags and edge cases internally).
+     * scope_t carries the path/profile/exclude filter dimensions. */
     err = filter_items_for_update(
-        ws, opts, file_filter, filter, config, out,
-        &update_items, &update_count
+        ws, opts, scope, config, out, &update_items, &update_count
     );
     if (err) {
         err = error_wrap(err, "Failed to filter items for update");
@@ -2207,13 +2116,10 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
     }
 
 cleanup:
-    /* Free all resources in reverse order */
     if (update_items) free(update_items);
     if (ws) workspace_free(ws);
     if (profiles_str) free(profiles_str);
-    if (file_filter) path_filter_free(file_filter);
-    if (filter_profiles) string_array_free(filter_profiles);
-    if (enabled_profiles) string_array_free(enabled_profiles);
+    if (scope) scope_free(scope);
 
     return err;
 }

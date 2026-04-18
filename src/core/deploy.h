@@ -25,6 +25,7 @@ typedef struct hashmap hashmap_t;
 typedef struct content_cache content_cache_t;
 typedef struct keymgr keymgr;
 typedef struct workspace workspace_t;
+typedef struct scope scope_t;
 
 /**
  * Profile reassignment entry
@@ -58,18 +59,26 @@ typedef struct {
     bool skip_existing;       /* Skip files that already exist (don't overwrite) */
     bool skip_unchanged;      /* Skip files that match profile content (smart skip) */
     bool strict_ownership;    /* Fail if ownership cannot be resolved (strict_mode) */
-    bool targeted_mode;       /* Scope directory processing to manifest file ancestors */
 
     /**
-     * Profile scope for directory processing (name filter)
+     * Operation scope for directory processing.
      *
-     * When non-NULL, directory processing is scoped to:
-     * 1. Directories that are ancestors of files being deployed
-     * 2. Directories owned by profiles matching this filter
+     * NULL means full-sync (process all tracked directories). Non-NULL
+     * activates scoped directory processing:
      *
-     * NULL = process all directories (full sync mode)
+     *   scope_has_paths(scope)  → strictly-ancestor mode: only directories
+     *                             that are ancestors of the requested files.
+     *   scope_has_filter(scope) → inclusive mode: ancestors of in-scope
+     *                             files AND directories owned by profiles
+     *                             matching the CLI -p filter.
+     *   Neither → ownership of the scope handle without active filtering;
+     *             behaves like full sync.
+     *
+     * The path dimension (strict) takes precedence over the profile
+     * dimension (inclusive) when both are active, mirroring the CLI's
+     * "targeted files override profile scope" semantics.
      */
-    const string_array_t *scope;
+    const scope_t *scope;
 } deploy_options_t;
 
 /**

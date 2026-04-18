@@ -13,18 +13,17 @@
 #include "base/args.h"
 #include "base/array.h"
 #include "base/error.h"
-#include "base/match.h"
+#include "base/hashmap.h"
 #include "base/output.h"
 #include "base/string.h"
 #include "core/cleanup.h"
 #include "core/deploy.h"
 #include "core/manifest.h"
-#include "core/profiles.h"
 #include "core/safety.h"
+#include "core/scope.h"
 #include "core/state.h"
 #include "core/workspace.h"
 #include "infra/content.h"
-#include "infra/path.h"
 #include "utils/hooks.h"
 #include "utils/privilege.h"
 
@@ -708,40 +707,6 @@ static error_t *ensure_complete_apply_privileges(
 }
 
 /**
- * Check if storage path should be excluded by CLI patterns
- *
- * Helper function for manifest filtering during convergence analysis
- * and orphan removal. Uses gitignore-style pattern matching against
- * storage paths (VWD namespace), ensuring patterns are portable across machines.
- *
- * @param path Storage path (VWD format, e.g., "home/.bashrc", "root/etc/hosts")
- * @param opts Command options containing exclusion patterns
- * @return true if path matches any exclusion pattern, false otherwise
- */
-static bool matches_exclude_pattern(
-    const char *path,
-    const cmd_apply_options_t *opts
-) {
-    if (!path || !opts->exclude_patterns || opts->exclude_count == 0) {
-        return false;
-    }
-
-    /* Use match module for gitignore-style pattern matching
-     *
-     * MATCH_DOUBLESTAR enables doublestar recursive wildcards:
-     *   home/.config/doublestar         -> matches all descendants
-     *   *.conf                          -> matches any .conf file
-     *   home/.*                         -> matches dotfiles in home/
-     */
-    return match_any(
-        opts->exclude_patterns,
-        opts->exclude_count,
-        path,
-        MATCH_DOUBLESTAR  /* Enable doublestar support */
-    );
-}
-
-/**
  * Check if file needs deployment
  *
  * Determines whether a file requires deployment based on workspace analysis.
@@ -837,10 +802,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     /* Declare all resources at the top, initialized to NULL */
     error_t *err = NULL;
     state_t *state = ctx->state;  /* Borrowed from dispatcher (WRITE) */
-    string_array_t *enabled_profiles = NULL;
-    string_array_t *filter_profiles = NULL;
-    const string_array_t *active_profiles = NULL;
-    const string_array_t *filter = NULL;
+    scope_t *scope = NULL;
     const manifest_t *manifest = NULL;
     manifest_t *deploy_manifest = NULL;
     ptr_array_t divergent = { 0 };
@@ -849,14 +811,13 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     size_t file_orphan_count = 0;
     const workspace_item_t **dir_orphans = NULL;
     size_t dir_orphan_count = 0;
+    const workspace_item_t **excluded_orphans = NULL;
     content_cache_t *cache = NULL;
     preflight_result_t *preflight = NULL;
     cleanup_preflight_result_t *cleanup_preflight = NULL;
     hashmap_t *repaired_paths = NULL;
     char *profiles_str = NULL;
     deploy_result_t *deploy_res = NULL;
-    path_filter_t *file_filter = NULL;
-    bool has_profile_filter = (opts->profiles != NULL && opts->profile_count > 0);
 
     /* CLI flags override config */
     if (opts->verbose) {
@@ -876,7 +837,6 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * Block-scoped so the raw list's lifetime is visibly minimal;
      * STRING_ARRAY_CLEANUP frees it on every exit path.
      */
-    size_t enabled_raw_count = 0;
     string_array_t *raw_profiles STRING_ARRAY_CLEANUP = NULL;
     err = state_get_profiles(state, &raw_profiles);
     if (err) {
@@ -884,9 +844,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         goto cleanup;
     }
 
-    enabled_raw_count = raw_profiles ? raw_profiles->count : 0;
-
-    if (enabled_raw_count > 0) {
+    if (raw_profiles && raw_profiles->count > 0) {
         manifest_repair_stats_t repair_stats = { 0 };
         err = manifest_repair_stale(
             repo, state, raw_profiles, &repair_stats, &repaired_paths
@@ -911,114 +869,54 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         }
     }
 
-    /* Resolve enabled profile names (validated) for workspace scope.
+    /* Build operation scope
      *
-     * Separate workspace scope (persistent) from operation filter (temporary):
-     *   - enabled_profiles: ALWAYS persistent enabled profile names (VWD scope)
-     *   - filter_profiles / active_profiles: CLI filter for operations
+     *   scope_enabled — persistent VWD scope (passed to workspace_load).
+     *                   Empty is a valid convergence target: all state
+     *                   entries become orphans and apply cleans them up.
+     *                   Enables the "disable last profile, then apply"
+     *                   workflow.
+     *   scope_active  — operation face (hook context).
+     *   scope_paths / scope_is_excluded / scope_accepts_profile —
+     *     per-iteration filter gates below.
      *
-     * Zero profiles is a valid convergence target: the VWD is empty, all
-     * state entries become orphans, and apply cleans them up. This enables
-     * the "disable last profile, then apply" workflow.
-     *
-     * Skip resolution when the raw enabled set was empty — no branches to
-     * validate, no missing-profile warnings to emit. Allocate an empty
-     * array to preserve the downstream "enabled_profiles is non-NULL"
-     * invariant. */
-    if (enabled_raw_count > 0) {
-        output_print(out, OUTPUT_VERBOSE, "Loading profiles...\n");
-        err = profile_resolve_enabled(repo, state, &enabled_profiles);
-        if (err) {
-            err = error_wrap(err, "Failed to resolve enabled profiles");
-            goto cleanup;
-        }
-    } else {
-        enabled_profiles = string_array_new(0);
-        if (!enabled_profiles) {
-            err = ERROR(ERR_MEMORY, "Failed to allocate empty profile array");
-            goto cleanup;
-        }
-    }
+     * Scope_build resolves enabled (lenient on empty), resolves and
+     * validates the CLI filter, harvests custom prefixes from the active
+     * set, builds the path filter, and deep-copies excludes. The
+     * pre-scope stale-repair phase above used the raw DB list; scope's
+     * resolved enabled set is validated against existing branches. */
+    output_print(out, OUTPUT_VERBOSE, "Loading profiles...\n");
 
-    /* Phase 2: Resolve operation profile names
-     *
-     * CLI filter path: validate names exist as branches (lightweight, no Git ref resolution)
-     * No-filter path: use workspace names directly
-     */
-    if (has_profile_filter) {
-        err = profile_resolve_filter(
-            repo, opts->profiles, opts->profile_count, config->strict_mode, &filter_profiles
-        );
-        if (err) {
-            err = error_wrap(err, "Failed to resolve operation profiles");
-            goto cleanup;
-        }
-
-        /* Validate: filter profiles must be enabled in workspace */
-        err = profile_validate_filter(enabled_profiles, filter_profiles);
-        if (err) goto cleanup;
-
-        filter = filter_profiles;
-        active_profiles = filter_profiles;
-    } else {
-        active_profiles = enabled_profiles;
-    }
+    scope_inputs_t scope_inputs = {
+        .profiles         = opts->profiles,
+        .profile_count    = opts->profile_count,
+        .files            = opts->files,
+        .file_count       = opts->file_count,
+        .exclude_patterns = opts->exclude_patterns,
+        .exclude_count    = opts->exclude_count,
+        .strict_mode      = config->strict_mode,
+    };
+    err = scope_build(repo, state, &scope_inputs, &scope);
+    if (err) goto cleanup;
 
     output_print(
         out, OUTPUT_VERBOSE, "Using %zu profile%s:\n",
-        active_profiles->count, active_profiles->count == 1 ? "" : "s"
+        scope_active(scope)->count,
+        scope_active(scope)->count == 1 ? "" : "s"
     );
-    for (size_t i = 0; i < active_profiles->count; i++) {
+    for (size_t i = 0; i < scope_active(scope)->count; i++) {
         output_styled(
             out, OUTPUT_VERBOSE, "  {cyan}•{reset} %s\n",
-            active_profiles->items[i]
+            scope_active(scope)->items[i]
         );
     }
 
-    /* Create file filter from CLI arguments
-     *
-     * Query custom prefixes from state to enable proper resolution of filesystem
-     * paths like /mnt/jail/etc/nginx.conf to custom/etc/nginx.conf.
-     * Without this, such paths would incorrectly resolve to root/mnt/jail/etc/nginx.conf.
-     */
-    if (opts->files && opts->file_count > 0) {
-        /* Extract custom prefixes from active profiles via the row cache */
-        string_array_t *prefixes = string_array_new(0);
-        if (!prefixes) {
-            err = ERROR(ERR_MEMORY, "Failed to allocate prefixes array");
-            goto cleanup;
-        }
-        for (size_t i = 0; i < active_profiles->count; i++) {
-            const char *pfx =
-                state_peek_profile_prefix(state, active_profiles->items[i]);
-            if (pfx) {
-                err = string_array_push(prefixes, pfx);
-                if (err) {
-                    string_array_free(prefixes);
-                    err = error_wrap(err, "Failed to collect custom prefix");
-                    goto cleanup;
-                }
-            }
-        }
-
-        err = path_filter_create(
-            opts->files, opts->file_count,
-            (const char *const *) prefixes->items, prefixes->count,
-            &file_filter
+    if (scope_has_paths(scope)) {
+        output_print(
+            out, OUTPUT_VERBOSE, "\nFile filter: %zu file%s specified\n",
+            scope_paths(scope)->count,
+            scope_paths(scope)->count == 1 ? "" : "s"
         );
-        string_array_free(prefixes);
-
-        if (err) {
-            err = error_wrap(err, "Failed to create file filter");
-            goto cleanup;
-        }
-
-        if (file_filter) {
-            output_print(
-                out, OUTPUT_VERBOSE, "\nFile filter: %zu file%s specified\n",
-                file_filter->count, file_filter->count == 1 ? "" : "s"
-            );
-        }
     }
 
     /* Load workspace (includes manifest building and metadata loading)
@@ -1032,11 +930,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      */
     output_print(out, OUTPUT_VERBOSE, "\nLoading workspace...\n");
 
-    /* Apply needs file divergence + orphan detection for deployment and cleanup
-     *
-     * Use enabled_profiles (persistent) for VWD scope, NOT filter_profiles/active_profiles.
-     * This ensures manifest scope matches state scope for accurate orphan detection.
-     */
+    /* Apply needs file divergence + orphan detection for deployment and cleanup. */
     workspace_load_t ws_opts = {
         .analyze_files       = true,
         .analyze_orphans     = true,
@@ -1046,7 +940,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         .repaired_paths      = repaired_paths,    /* From stale repair: path → old_blob_oid */
         .repair_completed    = true               /* manifest_repair_stale ran above */
     };
-    err = workspace_load(repo, state, enabled_profiles, config, &ws_opts, &ws);
+    err = workspace_load(repo, state, scope_enabled(scope), config, &ws_opts, &ws);
     if (err) {
         err = error_wrap(err, "Failed to load workspace");
         goto cleanup;
@@ -1095,18 +989,17 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         const file_entry_t *entry = &manifest->entries[i];
 
         /* Filter by operation profiles (skip files not in filter) */
-        if (entry->profile &&
-            !profile_filter_matches(entry->profile, filter)) {
+        if (entry->profile && !scope_accepts_profile(scope, entry->profile)) {
             continue;
         }
 
         /* Filter by file filter (skip files not in CLI file list) */
-        if (!path_filter_matches(file_filter, entry->storage_path)) {
+        if (!scope_accepts_path(scope, entry->storage_path)) {
             continue;
         }
 
-        /* Filter by exclusion pattern (skip excluded files) */
-        if (matches_exclude_pattern(entry->storage_path, opts)) {
+        /* Filter by exclusion pattern (skip excluded files; count by reason) */
+        if (scope_is_excluded(scope, entry->storage_path)) {
             excluded_deploy_count++;
             output_print(
                 out, OUTPUT_VERBOSE, "  Skipping (excluded): %s\n",
@@ -1191,7 +1084,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     );
 
     /* Warn if file filter was specified but no files matched */
-    if (file_filter && deploy_manifest->count == 0 && clean_count == 0) {
+    if (scope_has_paths(scope) && deploy_manifest->count == 0 && clean_count == 0) {
         output_warning(out, OUTPUT_NORMAL, "No matching files found in enabled profiles");
         output_hint(out, OUTPUT_NORMAL, "Check if the file path is correct and profile is enabled");
     }
@@ -1229,67 +1122,34 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      *
      * This eliminates redundant orphan detection in cleanup module (performance gain).
      */
-    if (!opts->keep_orphans && file_filter == NULL) {
+    if (!opts->keep_orphans && !scope_has_paths(scope)) {
         output_print(out, OUTPUT_VERBOSE, "\nExtracting orphans from workspace...\n");
 
-        /* Extract orphans via workspace API (2-pass internally: count, then populate)
+        /* Extract orphans via workspace API (single pass internally).
          *
-         * Coherent Scope principle: When profile filter is active, only extract
-         * orphans from the specified profiles. Orphans from other profiles are
-         * preserved, implementing scoped cleanup behavior.
-         */
-        const workspace_item_t **all_file_orphans = NULL;
-        const workspace_item_t **all_dir_orphans = NULL;
-        size_t total_file_orphans = 0, total_dir_orphans = 0;
-
+         * Coherent Scope principle: the workspace applies the full
+         * operation-scope triplet — orphans outside the profile/path
+         * dimensions are silently skipped, and orphans matched by an
+         * --exclude pattern are counted via excluded_orphan_count so the
+         * post-run summary can report them by reason. */
         err = workspace_extract_orphans(
-            ws, filter, &all_file_orphans, &total_file_orphans,
-            &all_dir_orphans, &total_dir_orphans
+            ws, scope, &file_orphans, &file_orphan_count, &dir_orphans, &dir_orphan_count,
+            &excluded_orphans, &excluded_orphan_count
         );
         if (err) {
             err = error_wrap(err, "Failed to extract orphans from workspace");
             goto cleanup;
         }
 
-        /* Apply exclusion filter: single-pass in-place compaction */
-        if (opts->exclude_count > 0 && (total_file_orphans > 0 || total_dir_orphans > 0)) {
-            /* Single-pass in-place compaction: shift non-excluded items forward.
-             * The all_* arrays are malloc'd pointer arrays — safe to compact.
-             * Excluded items are counted and logged, then overwritten. */
-            size_t f_idx = 0;
-            for (size_t i = 0; i < total_file_orphans; i++) {
-                if (matches_exclude_pattern(all_file_orphans[i]->storage_path, opts)) {
-                    excluded_orphan_count++;
-                    output_print(
-                        out, OUTPUT_VERBOSE, "  Preserving orphan (excluded): %s\n",
-                        all_file_orphans[i]->filesystem_path
-                    );
-                } else {
-                    all_file_orphans[f_idx++] = all_file_orphans[i];
-                }
-            }
-            total_file_orphans = f_idx;
-
-            size_t d_idx = 0;
-            for (size_t i = 0; i < total_dir_orphans; i++) {
-                if (matches_exclude_pattern(all_dir_orphans[i]->storage_path, opts)) {
-                    excluded_orphan_count++;
-                    output_print(
-                        out, OUTPUT_VERBOSE, "  Preserving orphan (excluded): %s\n",
-                        all_dir_orphans[i]->filesystem_path
-                    );
-                } else {
-                    all_dir_orphans[d_idx++] = all_dir_orphans[i];
-                }
-            }
-            total_dir_orphans = d_idx;
+        /* Mirror the deployment-loop trace: for each orphan held back by
+         * --exclude, emit a per-file line. output_print gates on the
+         * verbosity level, so non-verbose runs pay only the loop cost. */
+        for (size_t i = 0; i < excluded_orphan_count; i++) {
+            output_print(
+                out, OUTPUT_VERBOSE, "  Preserving orphan (excluded): %s\n",
+                excluded_orphans[i]->filesystem_path
+            );
         }
-
-        /* Transfer ownership: both paths unify here */
-        file_orphans = all_file_orphans;
-        file_orphan_count = total_file_orphans;
-        dir_orphans = all_dir_orphans;
-        dir_orphan_count = total_dir_orphans;
 
         if (file_orphan_count > 0) {
             output_print(
@@ -1338,7 +1198,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
                 );
             }
         }
-    } else if (file_filter != NULL && !opts->keep_orphans) {
+    } else if (scope_has_paths(scope) && !opts->keep_orphans) {
         /* File filter active: skip orphan cleanup (targeted operation) */
         output_print(out, OUTPUT_VERBOSE, "\nSkipping orphan cleanup (file filter active)\n");
     }
@@ -1371,22 +1231,16 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         }
 
         /* Coherent Scope: same filters as deployment pipeline */
-        if (!profile_filter_matches(all_items[i].profile, filter)) {
-            continue;
-        }
-        if (!path_filter_matches(file_filter, all_items[i].storage_path)) {
-            continue;
-        }
-        if (matches_exclude_pattern(all_items[i].storage_path, opts)) {
+        if (!scope_accepts_entry(scope, all_items[i].profile, all_items[i].storage_path)) {
             continue;
         }
         acknowledged_count++;
     }
 
     /* Check if there's anything to do */
-    bool no_orphan_work = opts->keep_orphans || (file_orphan_count == 0 && dir_orphan_count == 0);
+    bool no_orphans = opts->keep_orphans || (file_orphan_count == 0 && dir_orphan_count == 0);
 
-    if (deploy_manifest->count == 0 && acknowledged_count == 0 && no_orphan_work) {
+    if (deploy_manifest->count == 0 && acknowledged_count == 0 && no_orphans) {
         /* Nothing to deploy, acknowledge, or clean */
         size_t total_excluded = excluded_deploy_count + excluded_orphan_count;
         if (total_excluded > 0) {
@@ -1414,7 +1268,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * When only profile bookkeeping is pending (no deployment, no orphans),
      * skip privilege checks, preflight, hooks, and confirmation — none apply
      * to pure state bookkeeping that doesn't touch the filesystem. */
-    if (deploy_manifest->count == 0 && no_orphan_work) {
+    if (deploy_manifest->count == 0 && no_orphans) {
         if (!opts->dry_run) {
             size_t cleared = 0;
 
@@ -1423,13 +1277,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
                     continue;
                 }
 
-                if (!profile_filter_matches(all_items[i].profile, filter)) {
-                    continue;
-                }
-                if (!path_filter_matches(file_filter, all_items[i].storage_path)) {
-                    continue;
-                }
-                if (matches_exclude_pattern(all_items[i].storage_path, opts)) {
+                if (!scope_accepts_entry(scope, all_items[i].profile, all_items[i].storage_path)) {
                     continue;
                 }
 
@@ -1524,8 +1372,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         .skip_existing    = opts->skip_existing,
         .skip_unchanged   = opts->skip_unchanged,
         .strict_ownership = config->strict_mode,
-        .targeted_mode    = (file_filter != NULL),
-        .scope            = filter
+        .scope            = scope
     };
 
     err = deploy_workspace_preflight(ws, deploy_manifest, &deploy_opts, &preflight);
@@ -1618,7 +1465,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     }
 
     /* Build hook invocation with all active profiles */
-    profiles_str = string_array_join(active_profiles, " ");
+    profiles_str = string_array_join(scope_active(scope), " ");
     if (!profiles_str) {
         err = ERROR(ERR_MEMORY, "Failed to join profile names for hook");
         goto cleanup;
@@ -2140,13 +1987,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
                 continue;
             }
 
-            if (!profile_filter_matches(all_items[i].profile, filter)) {
-                continue;
-            }
-            if (!path_filter_matches(file_filter, all_items[i].storage_path)) {
-                continue;
-            }
-            if (matches_exclude_pattern(all_items[i].storage_path, opts)) {
+            if (!scope_accepts_entry(scope, all_items[i].profile, all_items[i].storage_path)) {
                 continue;
             }
 
@@ -2195,7 +2036,6 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     err = NULL;
 
 cleanup:
-    /* Free resources in reverse order of allocation */
     if (deploy_res) deploy_result_free(deploy_res);
     if (deploy_manifest) {
         /* Free deploy_manifest structure */
@@ -2206,13 +2046,12 @@ cleanup:
     if (cleanup_preflight) cleanup_preflight_result_free(cleanup_preflight);
     if (preflight) preflight_result_free(preflight);
     if (profiles_str) free(profiles_str);
-    if (file_filter) path_filter_free(file_filter);
+    if (excluded_orphans) free(excluded_orphans);
     if (dir_orphans) free(dir_orphans);
     if (file_orphans) free(file_orphans);
     if (repaired_paths) hashmap_free(repaired_paths, free);
     if (ws) workspace_free(ws);
-    if (filter_profiles) string_array_free(filter_profiles);
-    if (enabled_profiles) string_array_free(enabled_profiles);
+    if (scope) scope_free(scope);
 
     return err;
 }

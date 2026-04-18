@@ -426,7 +426,7 @@ cleanup:
  */
 error_t *profile_resolve_filter(
     git_repository *repo,
-    char **cli_profiles,
+    char *const *cli_profiles,
     size_t cli_count,
     bool strict_mode,
     string_array_t **out
@@ -512,36 +512,6 @@ error_t *profile_validate_filter(
     }
 
     return NULL;
-}
-
-/**
- * Check if profile name matches operation filter
- *
- * Helper for filtering operations by profile. NULL filter matches all,
- * NULL name never matches.
- */
-bool profile_filter_matches(
-    const char *profile,
-    const string_array_t *filter
-) {
-    /* NULL profile never matches (defensive) */
-    if (!profile) {
-        return false;
-    }
-
-    /* NULL filter matches all (no filter = match all) */
-    if (!filter) {
-        return true;
-    }
-
-    /* Check if profile is in filter list */
-    for (size_t i = 0; i < filter->count; i++) {
-        if (strcmp(profile, filter->items[i]) == 0) {
-            return true;
-        }
-    }
-
-    return false;
 }
 
 /**

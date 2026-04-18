@@ -87,7 +87,7 @@ error_t *profile_detect(
  */
 error_t *profile_resolve_filter(
     git_repository *repo,
-    char **cli_profiles,
+    char *const *cli_profiles,
     size_t cli_count,
     bool strict_mode,
     string_array_t **out
@@ -156,26 +156,6 @@ error_t *profile_load_custom_prefixes(
  */
 error_t *profile_validate_filter(
     const string_array_t *enabled_profiles,
-    const string_array_t *filter
-);
-
-/**
- * Check if profile name matches operation filter
- *
- * Helper for filtering operations by profile. Use in loops to skip
- * items not matching the filter.
- *
- * NULL filter semantics: Returns true (no filter = match all profiles).
- * This enables clean code: if (!profile_filter_matches(...)) continue;
- *
- * NULL name semantics: Returns false (defensive, NULL name never matches).
- *
- * @param profile Profile name to check (NULL returns false)
- * @param filter Profile names to match against (NULL = match all)
- * @return true if profile matches filter, false otherwise
- */
-bool profile_filter_matches(
-    const char *profile,
     const string_array_t *filter
 );
 

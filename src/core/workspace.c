@@ -31,7 +31,7 @@
 #include "base/string.h"
 #include "core/ignore.h"
 #include "core/manifest.h"
-#include "core/profiles.h"
+#include "core/scope.h"
 #include "crypto/encryption.h"
 #include "crypto/keymgr.h"
 #include "crypto/policy.h"
@@ -2827,16 +2827,20 @@ const workspace_item_t *workspace_get_all_diverged(
  * borrowed-pointer array. Caller owns returned buffers; items are borrowed
  * from workspace.
  *
- * Profile filtering: When profile_filter is non-NULL, only orphans from
- * matching profiles are extracted (Coherent Scope principle).
+ * Scope filtering: When `scope` is non-NULL, orphans that fail the
+ * profile or path dimensions are dropped silently; orphans that match
+ * those two but are excluded (-e) are counted via `out_excluded_count`
+ * and optionally collected into `out_excluded` for per-item reporting.
  */
 error_t *workspace_extract_orphans(
     const workspace_t *ws,
-    const string_array_t *filter,
+    const scope_t *scope,
     const workspace_item_t ***out_file_orphans,
     size_t *out_file_count,
     const workspace_item_t ***out_dir_orphans,
-    size_t *out_dir_count
+    size_t *out_dir_count,
+    const workspace_item_t ***out_excluded,
+    size_t *out_excluded_count
 ) {
     CHECK_NULL(ws);
 
@@ -2845,14 +2849,19 @@ error_t *workspace_extract_orphans(
     if (out_file_count) *out_file_count = 0;
     if (out_dir_orphans) *out_dir_orphans = NULL;
     if (out_dir_count) *out_dir_count = 0;
+    if (out_excluded) *out_excluded = NULL;
+    if (out_excluded_count) *out_excluded_count = 0;
 
     /* Early exit if nothing requested */
     bool want_files = (out_file_orphans != NULL);
     bool want_dirs = (out_dir_orphans != NULL);
-    if (!want_files && !want_dirs) return NULL;
+    bool want_excluded = (out_excluded != NULL);
+    if (!want_files && !want_dirs && !want_excluded) return NULL;
 
     ptr_array_t files PTR_ARRAY_AUTO = { 0 };
     ptr_array_t dirs PTR_ARRAY_AUTO = { 0 };
+    ptr_array_t excluded_items PTR_ARRAY_AUTO = { 0 };
+    size_t excluded = 0;
 
     for (size_t i = 0; i < ws->diverged_count; i++) {
         const workspace_item_t *item = &ws->diverged[i];
@@ -2862,8 +2871,22 @@ error_t *workspace_extract_orphans(
             continue;
         }
 
-        if (filter && !profile_filter_matches(item->profile, filter)) {
-            continue;
+        if (scope) {
+            /* Profile / path dimensions: silent rejection — the orphan
+             * is outside the user's declared operation scope. */
+            if (!scope_accepts_profile(scope, item->profile) ||
+                !scope_accepts_path(scope, item->storage_path)) {
+                continue;
+            }
+            /* Exclude dimension: count, and optionally collect for
+             * per-item reporting by the caller. */
+            if (scope_is_excluded(scope, item->storage_path)) {
+                excluded++;
+                if (want_excluded) {
+                    RETURN_IF_ERROR(ptr_array_push(&excluded_items, item));
+                }
+                continue;
+            }
         }
 
         if (item->item_kind == WORKSPACE_ITEM_FILE) {
@@ -2880,6 +2903,19 @@ error_t *workspace_extract_orphans(
     if (out_dir_orphans) {
         *out_dir_orphans =
             (const workspace_item_t **) ptr_array_steal(&dirs, out_dir_count);
+    }
+    if (want_excluded) {
+        /* ptr_array_steal requires a non-NULL count pointer; use a
+         * local when the caller didn't request out_excluded_count. */
+        size_t stolen = 0;
+        *out_excluded =
+            (const workspace_item_t **) ptr_array_steal(&excluded_items, &stolen);
+
+        if (out_excluded_count) {
+            *out_excluded_count = stolen;
+        }
+    } else if (out_excluded_count) {
+        *out_excluded_count = excluded;
     }
 
     return NULL;

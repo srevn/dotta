@@ -15,7 +15,7 @@
 #include "base/hashmap.h"
 #include "base/string.h"
 #include "core/metadata.h"
-#include "core/profiles.h"
+#include "core/scope.h"
 #include "core/workspace.h"
 #include "infra/content.h"
 #include "sys/filesystem.h"
@@ -597,9 +597,10 @@ cleanup:
 /**
  * Calculate directories required for deploying manifest files
  *
- * When targeted_mode is active, only directories that are ancestors of files
- * in the manifest should be processed. This function builds a hashmap of
- * tracked directory paths that are ancestors of any file being deployed.
+ * When the caller passes a path-scoped operation (scope_has_paths), only
+ * directories that are ancestors of files in the manifest should be
+ * processed. This function builds a hashmap of tracked directory paths
+ * that are ancestors of any file being deployed.
  *
  * Performance: O(F * D) where F = files in manifest, D = average path depth
  * Memory: Caller owns returned hashmap and must free with hashmap_free(h, NULL)
@@ -751,9 +752,12 @@ static error_t *deploy_tracked_directories(
         return NULL;  /* No tracked directories */
     }
 
-    /* Verbose output: differentiate scoped vs full sync mode */
+    /* Verbose output: differentiate scoped vs full sync mode.
+     *
+     * Path-scope (scope_has_paths) is strictly ancestor-only and trumps
+     * profile-scope (scope_has_filter), which is inclusive. */
     if (opts->verbose) {
-        if (opts->targeted_mode) {
+        if (opts->scope && scope_has_paths(opts->scope)) {
             /* File filter: strictly ancestors only */
             size_t required_count = required_dirs ? hashmap_size(required_dirs) : 0;
             if (required_count > 0) {
@@ -763,7 +767,7 @@ static error_t *deploy_tracked_directories(
                 );
             }
             /* If required_count == 0, no directories to process - skip message */
-        } else if (opts->scope) {
+        } else if (opts->scope && scope_has_filter(opts->scope)) {
             /* Profile filter: ancestors + profile-owned directories */
             printf(
                 "Processing tracked directories (scoped to profile)...\n"
@@ -781,26 +785,24 @@ static error_t *deploy_tracked_directories(
     for (size_t i = 0; i < dir_count; i++) {
         const state_directory_entry_t *dir_entry = &directories[i];
 
-        /* Scope filtering: targeted_mode and/or profile_scope
+        /* Scope filtering: path-scoped (strict) and/or profile-scoped (inclusive)
          *
          * Composition rules (Inclusive Ancestry principle):
          *
-         * 1. targeted_mode (file filter): STRICT - only required ancestors
-         *    - required_dirs contains ancestors of specific files
-         *    - Skip ALL directories not in required_dirs
+         * 1. path-scoped (scope_has_paths): STRICT — only required ancestors.
+         *    Skip ALL directories not in required_dirs.
          *
-         * 2. profile_scope (profile filter): INCLUSIVE
-         *    - Process if in required_dirs (ancestor of profile's files)
-         *    - OR process if matches profile_scope (owned by filtered profile)
-         *    - Skip if neither condition met
+         * 2. profile-scoped (scope_has_filter): INCLUSIVE — process if in
+         *    required_dirs (ancestor of in-scope file) OR owned by a
+         *    profile matching the CLI -p filter.
          *
-         * 3. Both filters: targeted_mode takes precedence (more restrictive)
-         *    - Only ancestors of specific files, regardless of profile ownership
+         * 3. Both active: path-scoped wins (more restrictive) — only
+         *    ancestors of specific files, regardless of profile ownership.
          */
         bool in_required = required_dirs &&
             hashmap_has(required_dirs, dir_entry->filesystem_path);
 
-        if (opts->targeted_mode) {
+        if (opts->scope && scope_has_paths(opts->scope)) {
             /* Strict ancestor-only mode (file filter active) */
             if (!in_required) {
                 if (opts->verbose) {
@@ -811,14 +813,14 @@ static error_t *deploy_tracked_directories(
                 }
                 continue;
             }
-        } else if (opts->scope) {
-            /* Profile scope: ancestors OR profile-owned directories
+        } else if (opts->scope && scope_has_filter(opts->scope)) {
+            /* Profile scope: ancestors OR profile-owned directories.
              *
              * Inclusive Ancestry: ancestor directories are always processed
-             * to ensure file deployment succeeds, even if owned by different profile.
-             */
+             * to ensure file deployment succeeds, even if owned by a
+             * different profile than the one the user filtered to. */
             if (!in_required &&
-                !profile_filter_matches(dir_entry->profile, opts->scope)) {
+                !scope_accepts_profile(opts->scope, dir_entry->profile)) {
                 if (opts->verbose) {
                     printf(
                         "  Skipped: %s (outside profile scope)\n",
@@ -1122,14 +1124,18 @@ error_t *deploy_execute(
      * be processed regardless of profile ownership to ensure file deployment.
      *
      * Scope filters:
-     * - targeted_mode (file filter): Strictly process only ancestors
-     * - profile_scope (profile filter): Process ancestors AND profile-owned dirs
+     * - scope_has_paths (file filter): Strictly process only ancestors
+     * - scope_has_filter (profile filter): Process ancestors AND profile-owned dirs
      *
-     * When either filter is active, we need the required_dirs hashmap to
-     * determine which directories are ancestors of files being deployed.
+     * When either dimension is active we build the required_dirs hashmap so
+     * the per-directory loop can tell "ancestor of a targeted file" apart
+     * from "owned by a filtered-out profile". A scope with neither dimension
+     * active (i.e. the user passed nothing) behaves like full sync.
      */
     hashmap_t *required_dirs = NULL;
-    if ((opts->targeted_mode || opts->scope) && manifest->count > 0 && state) {
+    bool scope_narrows = opts->scope &&
+        (scope_has_paths(opts->scope) || scope_has_filter(opts->scope));
+    if (scope_narrows && manifest->count > 0 && state) {
         err = calculate_required_directories(manifest, state, &required_dirs);
         if (err) {
             deploy_result_free(result);

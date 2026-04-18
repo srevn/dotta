@@ -12,7 +12,6 @@
 #include <time.h>
 
 #include "base/args.h"
-#include "base/array.h"
 #include "base/error.h"
 #include "base/hashmap.h"
 #include "base/match.h"
@@ -21,7 +20,8 @@
 #include "base/timeutil.h"
 #include "core/manifest.h"
 #include "core/metadata.h"
-#include "core/profiles.h"
+#include "core/scope.h"
+#include "core/state.h"
 #include "core/workspace.h"
 #include "crypto/keymgr.h"
 #include "infra/compare.h"
@@ -270,8 +270,7 @@ static error_t *show_file_diff_from_workspace(
  * @param content_cache Content cache for blob access (must not be NULL)
  * @param repo Repository (must not be NULL)
  * @param direction Diff direction (UPSTREAM or DOWNSTREAM)
- * @param filter_profiles Profile filter for CLI (can be NULL for no filter)
- * @param file_filter File filter for CLI (can be NULL for no filter)
+ * @param scope Operation scope (profile + path dimensions; diff has no excludes)
  * @param opts Command options (must not be NULL)
  * @param out Output context (must not be NULL)
  * @param diff_count Output: number of diffs shown (must not be NULL)
@@ -284,8 +283,7 @@ static error_t *present_diffs_for_direction(
     content_cache_t *content_cache,
     git_repository *repo,
     diff_direction_t direction,
-    const string_array_t *filter,
-    const path_filter_t *file_filter,
+    const scope_t *scope,
     const cmd_diff_options_t *opts,
     output_ctx_t *out,
     size_t *diff_count
@@ -293,6 +291,7 @@ static error_t *present_diffs_for_direction(
     CHECK_NULL(manifest);
     CHECK_NULL(content_cache);
     CHECK_NULL(repo);
+    CHECK_NULL(scope);
     CHECK_NULL(opts);
     CHECK_NULL(out);
     CHECK_NULL(diff_count);
@@ -314,7 +313,7 @@ static error_t *present_diffs_for_direction(
         }
 
         /* Filter 2: Check file filter (user-specified files) */
-        if (!path_filter_matches(file_filter, item->storage_path)) {
+        if (!scope_accepts_path(scope, item->storage_path)) {
             continue;
         }
 
@@ -324,7 +323,7 @@ static error_t *present_diffs_for_direction(
         }
 
         /* Filter 4: Profile filter (CLI filtering) */
-        if (!profile_filter_matches(item->profile, filter)) {
+        if (!scope_accepts_profile(scope, item->profile)) {
             continue;
         }
 
@@ -1283,15 +1282,13 @@ cleanup:
 static error_t *diff_workspace(
     git_repository *repo,
     state_t *state,
-    const string_array_t *profiles,
-    const string_array_t *filter,
-    const path_filter_t *file_filter,
+    const scope_t *scope,
     const config_t *config,
     const cmd_diff_options_t *opts,
     output_ctx_t *out
 ) {
     CHECK_NULL(repo);
-    CHECK_NULL(profiles);
+    CHECK_NULL(scope);
     CHECK_NULL(opts);
     CHECK_NULL(out);
 
@@ -1308,7 +1305,7 @@ static error_t *diff_workspace(
         .analyze_encryption  = false  /* Not needed for diff */
     };
 
-    err = workspace_load(repo, state, profiles, config, &ws_opts, &ws);
+    err = workspace_load(repo, state, scope_enabled(scope), config, &ws_opts, &ws);
     if (err) {
         return error_wrap(err, "Failed to load workspace");
     }
@@ -1329,6 +1326,7 @@ static error_t *diff_workspace(
     const manifest_t *manifest = workspace_get_manifest(ws);
 
     /* Step 4: Validate file filter paths against manifest */
+    const path_filter_t *file_filter = scope_paths(scope);
     if (file_filter) {
         size_t unmatched = validate_filter_paths(file_filter, manifest, out);
         if (unmatched > 0) {
@@ -1366,7 +1364,7 @@ static error_t *diff_workspace(
 
         err = present_diffs_for_direction(
             diverged, diverged_count, manifest, cache, repo, DIFF_UPSTREAM,
-            filter, file_filter, opts, out, &upstream_count
+            scope, opts, out, &upstream_count
         );
         if (err) goto cleanup;
 
@@ -1380,7 +1378,7 @@ static error_t *diff_workspace(
 
         err = present_diffs_for_direction(
             diverged, diverged_count, manifest, cache, repo, DIFF_DOWNSTREAM,
-            filter, file_filter, opts, out, &downstream_count
+            scope, opts, out, &downstream_count
         );
         if (err) goto cleanup;
 
@@ -1394,7 +1392,7 @@ static error_t *diff_workspace(
         /* Single direction */
         err = present_diffs_for_direction(
             diverged, diverged_count, manifest, cache, repo, opts->direction,
-            filter, file_filter, opts, out, &total_diff_count
+            scope, opts, out, &total_diff_count
         );
         if (err) goto cleanup;
 
@@ -1430,118 +1428,60 @@ error_t *cmd_diff(const dotta_ctx_t *ctx, const cmd_diff_options_t *opts) {
 
     error_t *err = NULL;
     state_t *state = ctx->state;  /* Borrowed from dispatcher; do not free */
-    string_array_t *enabled_profiles = NULL;
-    string_array_t *filter_profiles = NULL;
-    const string_array_t *active_profiles = NULL;
-    const string_array_t *filter = NULL;
-    path_filter_t *file_filter = NULL;
-    bool has_profile_filter = (opts->profiles != NULL && opts->profile_count > 0);
+    scope_t *scope = NULL;
 
-    /* Load profiles
+    /* Build operation scope
      *
-     * Separate workspace scope (persistent) from diff filter (temporary):
-     *   - enabled_profiles: Persistent enabled profile names (VWD scope)
-     *   - filter_profiles / active_profiles: CLI filter names or workspace names
-     *
-     * Workspace operations use persistent profiles. Diff operations filter
-     * by CLI profiles when specified.
+     *   scope_enabled — persistent VWD scope (workspace_load, historical-
+     *                   mode branch resolution search).
+     *   scope_active  — diff display face.
+     *   scope_paths   — CLI positional file filter (threaded into
+     *                   historical modes and diff_workspace).
      */
-    err = profile_resolve_enabled(repo, state, &enabled_profiles);
-    if (err) {
-        err = error_wrap(err, "Failed to resolve enabled profiles");
-        goto cleanup;
-    }
+    scope_inputs_t scope_inputs = {
+        .profiles      = opts->profiles,
+        .profile_count = opts->profile_count,
+        .files         = opts->files,
+        .file_count    = opts->file_count,
+        .strict_mode   = config->strict_mode,
+    };
+    err = scope_build(repo, state, &scope_inputs, &scope);
+    if (err) goto cleanup;
 
-    if (enabled_profiles->count == 0) {
+    if (scope_enabled(scope)->count == 0) {
         output_info(out, OUTPUT_NORMAL, "No enabled profiles found");
         output_hint(out, OUTPUT_NORMAL, "Run 'dotta profile enable <name>'");
         goto cleanup;
     }
 
-    /* Load diff profiles (CLI filter or workspace names directly) */
-    if (has_profile_filter) {
-        err = profile_resolve_filter(
-            repo, opts->profiles, opts->profile_count, config->strict_mode, &filter_profiles
-        );
-        if (err) {
-            err = error_wrap(err, "Failed to resolve diff profiles");
-            goto cleanup;
-        }
-
-        err = profile_validate_filter(enabled_profiles, filter_profiles);
-        if (err) goto cleanup;
-
-        filter = filter_profiles;
-        active_profiles = filter_profiles;
-    } else {
-        active_profiles = enabled_profiles;
-    }
-
-    /* Create file filter from CLI arguments */
-    if (opts->files && opts->file_count > 0) {
-        /* Collect custom prefixes from active profiles via the row cache */
-        string_array_t *prefixes = string_array_new(0);
-        if (!prefixes) {
-            err = ERROR(ERR_MEMORY, "Failed to allocate prefixes array");
-            goto cleanup;
-        }
-        for (size_t i = 0; i < active_profiles->count; i++) {
-            const char *pfx =
-                state_peek_profile_prefix(state, active_profiles->items[i]);
-            if (pfx) {
-                err = string_array_push(prefixes, pfx);
-                if (err) {
-                    string_array_free(prefixes);
-                    err = error_wrap(err, "Failed to collect custom prefix");
-                    goto cleanup;
-                }
-            }
-        }
-
-        err = path_filter_create(
-            opts->files, opts->file_count,
-            (const char *const *) prefixes->items, prefixes->count,
-            &file_filter
-        );
-        string_array_free(prefixes);
-
-        if (err) {
-            err = error_wrap(err, "Failed to create file filter");
-            goto cleanup;
-        }
-    }
-
     /* Route to diff implementation based on mode */
     switch (opts->mode) {
         case DIFF_COMMIT_TO_COMMIT:
-            /* Diff two commits — search workspace profiles for branch resolution */
+            /* Diff two commits — historical mode, path filter only */
             err = diff_commits(
-                repo, opts->commit1, opts->commit2, enabled_profiles,
-                file_filter, opts, out
+                repo, opts->commit1, opts->commit2, scope_enabled(scope),
+                scope_paths(scope), opts, out
             );
             goto cleanup;
 
         case DIFF_COMMIT_TO_WORKSPACE:
-            /* Commit-to-workspace — search workspace profiles for branch resolution */
+            /* Commit-to-workspace — historical mode, path filter only */
             err = diff_commit_to_workspace(
-                repo, state, opts->commit1, enabled_profiles, file_filter,
-                opts, config, out
+                repo, state, opts->commit1, scope_enabled(scope),
+                scope_paths(scope), opts, config, out
             );
             goto cleanup;
 
         case DIFF_WORKSPACE:
-            /* Workspace diff uses workspace_profiles for accurate analysis */
+            /* Workspace diff — full scope (profile + path dimensions) */
             err = diff_workspace(
-                repo, state, enabled_profiles, filter,
-                file_filter, config, opts, out
+                repo, state, scope, config, opts, out
             );
             goto cleanup;
     }
 
 cleanup:
-    if (file_filter) path_filter_free(file_filter);
-    if (filter_profiles) string_array_free(filter_profiles);
-    if (enabled_profiles) string_array_free(enabled_profiles);
+    if (scope) scope_free(scope);
 
     return err;
 }

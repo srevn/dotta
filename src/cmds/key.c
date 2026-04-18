@@ -24,26 +24,18 @@
  * cached per entry, so no Git tree walks or metadata parsing needed.
  */
 static error_t *count_encrypted_files(
-    git_repository *repo,
+    state_t *state,
     size_t *out_count
 ) {
-    CHECK_NULL(repo);
+    CHECK_NULL(state);
     CHECK_NULL(out_count);
 
     *out_count = 0;
 
-    /* Load state to get enabled profiles */
-    state_t *state = NULL;
-    error_t *err = state_load(repo, &state);
-    if (err) return error_wrap(err, "Failed to load state");
-
     state_file_entry_t *entries = NULL;
     size_t count = 0;
-    err = state_get_all_files(state, NULL, &entries, &count);
-    if (err) {
-        state_free(state);
-        return error_wrap(err, "Failed to get manifest entries");
-    }
+    error_t *err = state_get_all_files(state, NULL, &entries, &count);
+    if (err) return error_wrap(err, "Failed to get manifest entries");
 
     for (size_t i = 0; i < count; i++) {
         if (entries[i].encrypted &&
@@ -53,8 +45,6 @@ static error_t *count_encrypted_files(
     }
 
     state_free_all_files(entries, count);
-    state_free(state);
-
     return NULL;
 }
 
@@ -205,7 +195,7 @@ static error_t *cmd_key_clear(
  * Displays encryption configuration and key cache status.
  */
 static error_t *cmd_key_status(
-    git_repository *repo,
+    state_t *state,
     const config_t *config,
     output_ctx_t *out
 ) {
@@ -351,7 +341,7 @@ static error_t *cmd_key_status(
     output_section(out, OUTPUT_NORMAL, "Encrypted Files");
 
     size_t encrypted_count = 0;
-    error_t *err = count_encrypted_files(repo, &encrypted_count);
+    error_t *err = count_encrypted_files(state, &encrypted_count);
     if (err) {
         /* Non-fatal error - concise at normal, detail at verbose */
         output_print(
@@ -384,9 +374,9 @@ static error_t *cmd_key_status(
 error_t *cmd_key(const dotta_ctx_t *ctx, const cmd_key_options_t *opts) {
     CHECK_NULL(ctx);
     CHECK_NULL(ctx->repo);
+    CHECK_NULL(ctx->state);
     CHECK_NULL(opts);
 
-    git_repository *repo = ctx->repo;
     const config_t *config = ctx->config;
     output_ctx_t *out = ctx->out;
 
@@ -407,7 +397,7 @@ error_t *cmd_key(const dotta_ctx_t *ctx, const cmd_key_options_t *opts) {
             break;
 
         case KEY_ACTION_STATUS:
-            err = cmd_key_status(repo, config, out);
+            err = cmd_key_status(ctx->state, config, out);
             break;
 
         default:
@@ -543,6 +533,6 @@ const args_command_t spec_key = {
     .opts_size   = sizeof(cmd_key_options_t),
     .opts        = key_opts,
     .post_parse  = key_post_parse,
-    .payload     = &dotta_ext_required,
+    .payload     = &dotta_ext_read,
     .dispatch    = key_dispatch,
 };

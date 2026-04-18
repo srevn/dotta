@@ -1821,7 +1821,7 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
 
     /* Declare all resources at top, initialized to NULL */
     error_t *err = NULL;
-    state_t *state = NULL;
+    state_t *state = ctx->state;  /* Borrowed from dispatcher; do not free */
     workspace_t *ws = NULL;
     string_array_t *enabled_profiles = NULL;
     string_array_t *filter_profiles = NULL;
@@ -1846,14 +1846,6 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
      * - enabled_profiles: Persistent enabled profile names for VWD scope
      * - filter_profiles / active_profiles: CLI filter names or workspace names for update operations
      */
-
-    /* Load state once for the command's lifetime.
-     * Shared across profile resolution, prefix queries, and workspace loading. */
-    err = state_load(repo, &state);
-    if (err) {
-        err = error_wrap(err, "Failed to load state");
-        goto cleanup;
-    }
 
     /* Phase 1: Resolve enabled profile names (persistent) */
     err = profile_resolve_enabled(repo, state, &enabled_profiles);
@@ -1923,7 +1915,7 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
      * (files from enabled profiles) and new files. Orphaned files (in state but not
      * in any enabled profile) are out of scope for update operations.
      *
-     * State is borrowed from the command-level state_load(). Read-only analysis.
+     * State is borrowed from the dispatcher (ctx->state). Read-only analysis.
      * The transaction for manifest updates opens later in update_manifest_after_update().
      */
     workspace_load_t ws_opts = {
@@ -2215,11 +2207,9 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
     }
 
 cleanup:
-    /* Free all resources in reverse order.
-     * state_free after workspace_free — workspace borrows state. */
+    /* Free all resources in reverse order */
     if (update_items) free(update_items);
     if (ws) workspace_free(ws);
-    if (state) state_free(state);
     if (profiles_str) free(profiles_str);
     if (file_filter) path_filter_free(file_filter);
     if (filter_profiles) string_array_free(filter_profiles);
@@ -2376,6 +2366,6 @@ const args_command_t spec_update = {
     .opts_size   = sizeof(cmd_update_options_t),
     .opts        = update_opts,
     .post_parse  = update_post_parse,
-    .payload     = &dotta_ext_required,
+    .payload     = &dotta_ext_read,
     .dispatch    = update_dispatch,
 };

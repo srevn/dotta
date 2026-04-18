@@ -167,10 +167,12 @@ static void print_upstream_state(
  */
 static error_t *list_profiles(
     git_repository *repo,
+    state_t *state,
     const cmd_list_options_t *opts,
     output_ctx_t *out
 ) {
     CHECK_NULL(repo);
+    CHECK_NULL(state);
     CHECK_NULL(opts);
     CHECK_NULL(out);
 
@@ -204,14 +206,6 @@ static error_t *list_profiles(
         } else {
             show_remote = true;
         }
-    }
-
-    /* Load state for enabled profile indicators (non-fatal) */
-    state_t *state = NULL;
-    err = state_load(repo, &state);
-    if (err) {
-        error_free(err);
-        err = NULL;
     }
 
     /* Calculate max branch name length for column alignment */
@@ -373,7 +367,6 @@ static error_t *list_profiles(
     }
 
     /* Cleanup */
-    state_free(state);
     free(remote_name);
     string_array_free(branches);
 
@@ -804,7 +797,7 @@ error_t *cmd_list(const dotta_ctx_t *ctx, const cmd_list_options_t *opts) {
 
     /* Dispatch to appropriate list function based on mode */
     if (opts->mode == LIST_PROFILES) {
-        err = list_profiles(repo, opts, out);
+        err = list_profiles(repo, ctx->state, opts, out);
     } else if (opts->mode == LIST_FILES) {
         err = list_files(repo, opts, out);
     } else if (opts->mode == LIST_FILE_HISTORY) {
@@ -949,6 +942,6 @@ const args_command_t spec_list = {
     .opts_size   = sizeof(cmd_list_options_t),
     .opts        = list_opts,
     .post_parse  = list_post_parse,
-    .payload     = &dotta_ext_required,
+    .payload     = &dotta_ext_read,
     .dispatch    = list_dispatch,
 };

@@ -54,15 +54,18 @@ static void free_profile_items(profile_item_t *items, size_t count) {
 
 /* State Management */
 
-error_t *interactive_state_create(git_repository *repo, interactive_state_t **out) {
-    if (!repo || !out) {
-        return error_create(ERR_INVALID_ARG, "repo and out cannot be NULL");
+error_t *interactive_state_create(
+    git_repository *repo,
+    state_t *deploy_state,
+    interactive_state_t **out
+) {
+    if (!repo || !deploy_state || !out) {
+        return error_create(ERR_INVALID_ARG, "repo, deploy_state and out cannot be NULL");
     }
 
     error_t *err = NULL;
     interactive_state_t *state = NULL;
     string_array_t *all_profiles = NULL;
-    state_t *deploy_state = NULL;
     string_array_t *state_profiles = NULL;
     hashmap_t *profile_map = NULL;
     bool *used = NULL;
@@ -90,19 +93,15 @@ error_t *interactive_state_create(git_repository *repo, interactive_state_t **ou
         goto cleanup;
     }
 
-    /* Load current enabled profiles from state */
-    err = state_load(repo, &deploy_state);
+    /* Read current enabled profiles from the borrowed state handle. A
+     * missing DB already resolves to state_empty under spec-driven READ,
+     * so state_get_profiles either returns an empty list or a populated
+     * one — never an error for first-run. */
+    err = state_get_profiles(deploy_state, &state_profiles);
     if (err) {
-        /* State load failure is not fatal - might be first run */
         error_free(err);
         err = NULL;
-    } else {
-        err = state_get_profiles(deploy_state, &state_profiles);
-        if (err) {
-            error_free(err);
-            err = NULL;
-            state_profiles = NULL;
-        }
+        state_profiles = NULL;
     }
 
     /* Build hashmap for O(1) profile lookups: name -> (index + 1) in all_profiles
@@ -193,11 +192,11 @@ error_t *interactive_state_create(git_repository *repo, interactive_state_t **ou
         }
     }
 
-    /* Success - cleanup temporary resources and return */
+    /* Success - cleanup temporary resources and return.
+     * deploy_state is borrowed from the caller; do not free it. */
     if (state_profiles) {
         string_array_free(state_profiles);
     }
-    state_free(deploy_state);
     string_array_free(all_profiles);
     hashmap_free(profile_map, NULL);
     free(used);
@@ -206,11 +205,11 @@ error_t *interactive_state_create(git_repository *repo, interactive_state_t **ou
     return NULL;
 
 cleanup:
-    /* Error path - free all resources */
+    /* Error path - free all resources.
+     * deploy_state is borrowed from the caller; do not free it. */
     if (state_profiles) {
         string_array_free(state_profiles);
     }
-    state_free(deploy_state);
     string_array_free(all_profiles);
     hashmap_free(profile_map, NULL);
     free(used);
@@ -291,13 +290,17 @@ static void interactive_move_profile_down(interactive_state_t *state) {
  * Save current profile management and order to state
  *
  * Saves which profiles are enabled and their display order. This is a silent
- * operation that doesn't require terminal restoration.
+ * operation that doesn't require terminal restoration. Takes a scoped write
+ * transaction on the borrowed READ handle — declaring WRITE at the spec
+ * level would hold BEGIN IMMEDIATE for the whole TUI session, blocking
+ * other dotta processes on the write lock while the user interacts.
  */
 static error_t *interactive_save_profile_order(
     git_repository *repo,
+    state_t *deploy_state,
     interactive_state_t *state
 ) {
-    if (!state || !repo) {
+    if (!state || !repo || !deploy_state) {
         return error_create(ERR_INVALID_ARG, "invalid arguments");
     }
 
@@ -318,9 +321,10 @@ static error_t *interactive_save_profile_order(
         }
     }
 
-    /* Load state for update */
-    state_t *deploy_state = NULL;
-    error_t *err = state_open(repo, &deploy_state);
+    /* Promote the borrowed READ handle to a write transaction for the
+     * duration of this save. state_rollback on any error path is
+     * idempotent. */
+    error_t *err = state_begin(deploy_state);
     if (err) {
         return err;
     }
@@ -328,7 +332,7 @@ static error_t *interactive_save_profile_order(
     /* Set profiles in new order (updates enabled_profiles table) */
     err = state_set_profiles(deploy_state, &profiles);
     if (err) {
-        state_free(deploy_state);
+        state_rollback(deploy_state);
         return error_wrap(
             err, "Failed to update profile order in state"
         );
@@ -341,23 +345,23 @@ static error_t *interactive_save_profile_order(
      * files whose assignment remains unchanged preserve their existing entry. */
     err = manifest_reorder_profiles(repo, deploy_state, &profiles);
     if (err) {
-        state_free(deploy_state);
+        state_rollback(deploy_state);
         return error_wrap(
             err, "Failed to update manifest with new precedence"
         );
     }
 
     /* Commit transaction */
-    err = state_save(repo, deploy_state);
-
-    state_free(deploy_state);
-
-    /* Update interactive state on success */
-    if (!err) {
-        state->modified = false;
+    err = state_commit(deploy_state);
+    if (err) {
+        state_rollback(deploy_state);
+        return err;
     }
 
-    return err;
+    /* Update interactive state on success */
+    state->modified = false;
+
+    return NULL;
 }
 
 /* UI Rendering */
@@ -461,11 +465,12 @@ int interactive_render(const interactive_state_t *state) {
 interactive_result_t interactive_handle_key(
     interactive_state_t *state,
     git_repository *repo,
+    state_t *deploy_state,
     int key,
     terminal_t **term_ptr,
     error_t **out_err
 ) {
-    if (!state || !repo || !term_ptr || !out_err) {
+    if (!state || !repo || !deploy_state || !term_ptr || !out_err) {
         return INTERACTIVE_EXIT_ERROR;
     }
 
@@ -532,7 +537,7 @@ interactive_result_t interactive_handle_key(
                 return INTERACTIVE_CONTINUE;
             }
 
-            error_t *err = interactive_save_profile_order(repo, state);
+            error_t *err = interactive_save_profile_order(repo, deploy_state, state);
             if (err) {
                 /* Exit and return error to caller */
                 *out_err = err;
@@ -557,10 +562,10 @@ interactive_result_t interactive_handle_key(
 
 /* Main Entry Point */
 
-error_t *interactive_run(git_repository *repo) {
-    if (!repo) {
+error_t *interactive_run(git_repository *repo, state_t *deploy_state) {
+    if (!repo || !deploy_state) {
         return error_create(
-            ERR_INVALID_ARG, "repo cannot be NULL"
+            ERR_INVALID_ARG, "repo and deploy_state cannot be NULL"
         );
     }
 
@@ -588,7 +593,7 @@ error_t *interactive_run(git_repository *repo) {
 
     /* Create interactive state */
     interactive_state_t *state = NULL;
-    err = interactive_state_create(repo, &state);
+    err = interactive_state_create(repo, deploy_state, &state);
     if (err) {
         terminal_restore(term);
         return err;
@@ -653,7 +658,7 @@ error_t *interactive_run(git_repository *repo) {
         int key = terminal_read_key();
 
         /* Handle key */
-        result = interactive_handle_key(state, repo, key, &term, &loop_err);
+        result = interactive_handle_key(state, repo, deploy_state, key, &term, &loop_err);
 
         /* Re-render: move cursor up, then redraw */
         if (result == INTERACTIVE_CONTINUE) {
@@ -697,8 +702,9 @@ error_t *interactive_run(git_repository *repo) {
 
 static error_t *interactive_dispatch(const void *ctx_v, void *opts_v) {
     const dotta_ctx_t *ctx = ctx_v;
+    CHECK_NULL(ctx->state);
     (void) opts_v;
-    return interactive_run(ctx->repo);
+    return interactive_run(ctx->repo, ctx->state);
 }
 
 const args_command_t spec_interactive = {
@@ -726,6 +732,6 @@ const args_command_t spec_interactive = {
         "  - Enabled profiles are saved to state in the displayed order\n"
         "  - Profile order determines layering (later overrides earlier)\n"
         "  - Use regular commands (apply, update, sync) after enabling profiles\n",
-    .payload      = &dotta_ext_required,
+    .payload      = &dotta_ext_read,
     .dispatch     = interactive_dispatch,
 };

@@ -29,20 +29,16 @@
  * Output enabled profiles from state database
  *
  * Queries the enabled_profiles table and outputs profile names.
+ *
+ * @param state Borrowed state handle; NULL when running outside a repo
  */
-static void complete_enabled_profiles(git_repository *repo) {
-    state_t *state = NULL;
-    error_t *err = state_load(repo, &state);
-    if (err) {
-        error_free(err);
-        return;
-    }
+static void complete_enabled_profiles(state_t *state) {
+    if (!state) return;
 
     string_array_t *profiles = NULL;
-    err = state_get_profiles(state, &profiles);
+    error_t *err = state_get_profiles(state, &profiles);
     if (err) {
         error_free(err);
-        state_free(state);
         return;
     }
 
@@ -57,7 +53,6 @@ static void complete_enabled_profiles(git_repository *repo) {
     }
 
     string_array_free(profiles);
-    state_free(state);
 }
 
 /**
@@ -130,24 +125,20 @@ static void complete_remotes(git_repository *repo) {
 /**
  * Output managed files from state database
  *
- * @param repo Repository
+ * @param state Borrowed state handle; NULL when running outside a repo
  * @param profile Optional profile filter (NULL for all files)
  * @param storage_paths If true, output storage_path; if false, filesystem_path
  */
 static void complete_files(
-    git_repository *repo,
+    state_t *state,
     const char *profile,
     bool storage_paths
 ) {
-    state_t *state = NULL;
-    error_t *err = state_load(repo, &state);
-    if (err) {
-        error_free(err);
-        return;
-    }
+    if (!state) return;
 
     state_file_entry_t *entries = NULL;
     size_t count = 0;
+    error_t *err = NULL;
 
     if (profile) {
         err = state_get_entries_by_profile(
@@ -161,7 +152,6 @@ static void complete_files(
 
     if (err) {
         error_free(err);
-        state_free(state);
         return;
     }
 
@@ -183,7 +173,6 @@ static void complete_files(
     }
 
     state_free_all_files(entries, count);
-    state_free(state);
 }
 
 /**
@@ -192,12 +181,14 @@ static void complete_files(
  * Outputs commits in tab-separated format: <short_oid>\t<summary>
  * This allows fish to display the summary as a description.
  *
- * @param repo Repository
+ * @param repo Repository (borrowed)
+ * @param state Borrowed state handle; NULL when running outside a repo
  * @param profile Profile to get commits from (NULL uses first enabled profile)
  * @param limit Maximum number of commits to output
  */
 static void complete_commits(
     git_repository *repo,
+    state_t *state,
     const char *profile,
     long limit
 ) {
@@ -213,17 +204,11 @@ static void complete_commits(
     const char *target_profile = profile;
     string_array_t *profiles STRING_ARRAY_CLEANUP = NULL;
 
-    /* If no profile specified, use first enabled profile */
+    /* If no profile specified, use first enabled profile from state */
     if (!profile) {
-        state_t *state = NULL;
-        error_t *err = state_load(repo, &state);
-        if (err) {
-            error_free(err);
-            return;
-        }
+        if (!state) return;
 
-        err = state_get_profiles(state, &profiles);
-        state_free(state);
+        error_t *err = state_get_profiles(state, &profiles);
         if (err) {
             error_free(err);
             return;
@@ -234,9 +219,7 @@ static void complete_commits(
         }
     }
 
-    if (!target_profile) {
-        return;
-    }
+    if (!target_profile) return;
 
     /* Resolve reference using DWIM (handles branches, tags, remotes) */
     git_reference *ref = NULL;
@@ -316,6 +299,9 @@ error_t *cmd_completion(const dotta_ctx_t *ctx, const cmd_completion_options_t *
     }
 
     git_repository *repo = ctx->repo;
+    /* OPTIONAL_SILENT + READ: the dispatcher skips state acquisition when
+     * no repo is available, so state may legitimately be NULL here */
+    state_t *state = ctx->state;
 
     switch (opts->mode) {
         case COMPLETE_CHECK:
@@ -336,7 +322,7 @@ error_t *cmd_completion(const dotta_ctx_t *ctx, const cmd_completion_options_t *
             if (opts->all) {
                 complete_all_profiles(repo);
             } else {
-                complete_enabled_profiles(repo);
+                complete_enabled_profiles(state);
             }
             break;
 
@@ -344,14 +330,14 @@ error_t *cmd_completion(const dotta_ctx_t *ctx, const cmd_completion_options_t *
             if (!repo) {
                 return NULL;
             }
-            complete_files(repo, opts->profile, opts->storage_paths);
+            complete_files(state, opts->profile, opts->storage_paths);
             break;
 
         case COMPLETE_COMMITS:
             if (!repo) {
                 return NULL;
             }
-            complete_commits(repo, opts->profile, opts->limit);
+            complete_commits(repo, state, opts->profile, opts->limit);
             break;
 
         case COMPLETE_REMOTES:
@@ -497,7 +483,7 @@ const args_command_t spec_completion = {
     .opts           = completion_opts,
     .init_defaults  = completion_init_defaults,
     .post_parse     = completion_post_parse,
-    .payload        = &dotta_ext_optional_silent,
+    .payload        = &dotta_ext_read_silent,
     .dispatch       = completion_dispatch,
     .silent_failure = true,
     .hidden         = true,

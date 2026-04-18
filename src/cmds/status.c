@@ -849,7 +849,7 @@ error_t *cmd_status(const dotta_ctx_t *ctx, const cmd_status_options_t *opts) {
     /* Declare all resources at top and initialize to NULL */
     error_t *err = NULL;
     workspace_t *ws = NULL;
-    state_t *state = NULL;
+    state_t *state = ctx->state;  /* Borrowed from dispatcher; do not free */
     const manifest_t *manifest = NULL;
     string_array_t *enabled_profiles = NULL;
     string_array_t *filter_profiles = NULL;
@@ -860,14 +860,6 @@ error_t *cmd_status(const dotta_ctx_t *ctx, const cmd_status_options_t *opts) {
     /* CLI flags override config */
     if (opts->verbose) {
         output_set_verbosity(out, OUTPUT_VERBOSE);
-    }
-
-    /* Load state once for the command's lifetime.
-     * Shared across profile resolution, workspace loading, and display. */
-    err = state_load(repo, &state);
-    if (err) {
-        err = error_wrap(err, "Failed to load state");
-        goto cleanup;
     }
 
     /* Load profiles
@@ -1032,10 +1024,8 @@ error_t *cmd_status(const dotta_ctx_t *ctx, const cmd_status_options_t *opts) {
     }
 
 cleanup:
-    /* Free all resources (safe with NULL pointers).
-     * state_free after workspace_free — workspace borrows state. */
+    /* Free all resources (safe with NULL pointers) */
     if (ws) workspace_free(ws);
-    if (state) state_free(state);
     if (filter_profiles) string_array_free(filter_profiles);
     if (enabled_profiles) string_array_free(enabled_profiles);
 
@@ -1153,6 +1143,6 @@ const args_command_t spec_status = {
     .opts_size   = sizeof(cmd_status_options_t),
     .opts        = status_opts,
     .post_parse  = status_post_parse,
-    .payload     = &dotta_ext_required,
+    .payload     = &dotta_ext_read,
     .dispatch    = status_dispatch,
 };

@@ -868,12 +868,14 @@ static error_t *cleanup_metadata(
  */
 static error_t *remove_files_from_profile(
     git_repository *repo,
+    state_t *state,
     const config_t *config,
     output_ctx_t *out,
     const char *repo_path,
     const cmd_remove_options_t *opts
 ) {
     CHECK_NULL(repo);
+    CHECK_NULL(state);
     CHECK_NULL(opts);
 
     /* Initialize all resources to NULL for safe cleanup */
@@ -884,7 +886,6 @@ static error_t *remove_files_from_profile(
     size_t multi_profile_count = 0;
     worktree_handle_t *wt = NULL;
     string_array_t *removed_paths = NULL;
-    state_t *state = NULL;
     bool profile_enabled = false;
 
     /* CLI flags override config */
@@ -892,14 +893,6 @@ static error_t *remove_files_from_profile(
         output_set_verbosity(out, OUTPUT_VERBOSE);
     } else if (opts->quiet) {
         output_set_verbosity(out, OUTPUT_QUIET);
-    }
-
-    /* Load state for custom prefix resolution (read-only, optional for UX) */
-    error_t *state_err = state_load(repo, &state);
-    if (state_err) {
-        /* Non-fatal: if state loading fails, path resolution degrades gracefully */
-        error_free(state_err);
-        state = NULL;
     }
 
     /* Resolve paths */
@@ -928,12 +921,10 @@ static error_t *remove_files_from_profile(
         goto cleanup;
     }
 
-    /* Capture profile-enabled status. Keep the state handle alive — the
-     * manifest-update phase below upgrades it to a write transaction via
-     * state_begin rather than reopening the database. */
-    if (state) {
-        profile_enabled = state_has_profile(state, opts->profile);
-    }
+    /* Capture profile-enabled status. The manifest-update phase below
+     * promotes the borrowed read handle to a write transaction via
+     * state_begin; no reopen needed. */
+    profile_enabled = state_has_profile(state, opts->profile);
 
     /* Display multi-profile warnings BEFORE any operation */
     display_multi_profile_warnings(
@@ -1250,7 +1241,11 @@ static error_t *remove_files_from_profile(
     }
 
 cleanup:
-    /* Free all resources in reverse order of allocation */
+    /* Free all resources in reverse order of allocation. state is borrowed
+     * from the dispatcher — do not free it. state_rollback is a no-op if
+     * no transaction is active (state.c:2898-2906), so it safely closes
+     * any partially-begun manifest-update transaction on error paths. */
+    state_rollback(state);
     if (removed_paths) string_array_free(removed_paths);
     if (wt) worktree_cleanup(&wt);
     if (other_profiles) free_multi_profile_tracking(
@@ -1258,7 +1253,6 @@ cleanup:
     );
     if (filesystem_paths) string_array_free(filesystem_paths);
     if (storage_paths) string_array_free(storage_paths);
-    if (state) state_free(state);
 
     return err;
 }
@@ -1268,19 +1262,20 @@ cleanup:
  */
 static error_t *delete_profile_branch(
     git_repository *repo,
+    state_t *state,
     const config_t *config,
     output_ctx_t *out,
     const char *repo_path,
     const cmd_remove_options_t *opts
 ) {
     CHECK_NULL(repo);
+    CHECK_NULL(state);
     CHECK_NULL(opts);
 
     /* Initialize all resources to NULL for safe cleanup */
     error_t *err = NULL;
     char *remote_name = NULL;
     upstream_info_t *upstream_info = NULL;
-    state_t *state = NULL;
     string_array_t *all_profiles = NULL;
     string_array_t *files = NULL;
     string_array_t *hook_fs_paths = NULL;
@@ -1401,48 +1396,36 @@ static error_t *delete_profile_branch(
         upstream_info = NULL;
     }
 
-    /* Load state for informational queries and enabled check (single read-only load) */
-    bool profile_was_enabled = false;
+    /* Informational queries and enabled check on the borrowed state. Under
+     * spec-driven READ the handle is always non-NULL here (CHECK_NULL at
+     * entry), and state_load for a missing DB already resolves to
+     * state_empty — no defensive fallback needed. */
+    bool profile_was_enabled = state_has_profile(state, opts->profile);
     size_t deployed_count = 0;
 
-    err = state_load(repo, &state);
-    if (err) {
-        /* Non-fatal */
-        error_free(err);
-        err = NULL;
-        state = NULL;
-    }
-
-    if (state) {
-        /* Check if profile is enabled */
-        profile_was_enabled = state_has_profile(state, opts->profile);
-
-        /* Count deployed files for informational display */
-        size_t state_file_count = 0;
-        state_file_entry_t *state_files = NULL;
-        error_t *state_err = state_get_all_files(
-            state, NULL, &state_files, &state_file_count
-        );
-        if (!state_err && state_files) {
-            for (size_t i = 0; i < state_file_count; i++) {
-                if (strcmp(state_files[i].profile, opts->profile) == 0) {
-                    deployed_count++;
-                }
+    /* Count deployed files for informational display */
+    size_t state_file_count = 0;
+    state_file_entry_t *state_files = NULL;
+    error_t *state_err = state_get_all_files(
+        state, NULL, &state_files, &state_file_count
+    );
+    if (!state_err && state_files) {
+        for (size_t i = 0; i < state_file_count; i++) {
+            if (strcmp(state_files[i].profile, opts->profile) == 0) {
+                deployed_count++;
             }
-            state_free_all_files(state_files, state_file_count);
         }
-        if (state_err) {
-            error_free(state_err);
-        }
-
-        /* Save custom prefix for hook filesystem path conversion (own a copy
-         * because the state handle is about to be freed). */
-        const char *pfx = state_peek_profile_prefix(state, opts->profile);
-        if (pfx) hook_custom_prefix = strdup(pfx);
-
-        state_free(state);
-        state = NULL;
+        state_free_all_files(state_files, state_file_count);
     }
+    if (state_err) {
+        error_free(state_err);
+    }
+
+    /* Save custom prefix for hook filesystem path conversion. The peek
+     * returns a borrowed pointer into the state row cache; copy it so hook
+     * formatting survives independent of any later state mutation. */
+    const char *pfx = state_peek_profile_prefix(state, opts->profile);
+    if (pfx) hook_custom_prefix = strdup(pfx);
 
     /* Inform about deployed files (informational, not a warning) */
     if (deployed_count > 0) {
@@ -1526,9 +1509,10 @@ static error_t *delete_profile_branch(
             out, OUTPUT_VERBOSE, "Disabling profile in manifest before deletion...\n"
         );
 
-        /* Open transaction */
-        state_t *manifest_state = NULL;
-        err = state_open(repo, &manifest_state);
+        /* Promote the borrowed read handle to a write transaction.
+         * state_rollback in cleanup (idempotent) closes it on any error
+         * path that bails via goto cleanup. */
+        err = state_begin(state);
         if (err) {
             err = error_wrap(
                 err, "Failed to open transaction for profile disable"
@@ -1538,9 +1522,8 @@ static error_t *delete_profile_branch(
 
         /* Get enabled profiles */
         string_array_t *enabled_profiles = NULL;
-        err = state_get_profiles(manifest_state, &enabled_profiles);
+        err = state_get_profiles(state, &enabled_profiles);
         if (err) {
-            state_free(manifest_state);
             err = error_wrap(err, "Failed to get enabled profiles");
             goto cleanup;
         }
@@ -1549,7 +1532,6 @@ static error_t *delete_profile_branch(
         string_array_t *remaining = string_array_new(0);
         if (!remaining) {
             err = ERROR(ERR_MEMORY, "Failed to allocate remaining profiles array");
-            state_free(manifest_state);
             string_array_free(enabled_profiles);
             goto cleanup;
         }
@@ -1560,7 +1542,6 @@ static error_t *delete_profile_branch(
                 err = string_array_push(remaining, enabled);
                 if (err) {
                     err = error_wrap(err, "Failed to build remaining profiles list");
-                    state_free(manifest_state);
                     string_array_free(enabled_profiles);
                     string_array_free(remaining);
                     goto cleanup;
@@ -1574,7 +1555,7 @@ static error_t *delete_profile_branch(
          * detect fallbacks */
         err = manifest_disable_profile(
             repo,
-            manifest_state,
+            state,
             opts->profile,
             remaining,
             NULL  /* No stats needed for remove command */
@@ -1582,25 +1563,22 @@ static error_t *delete_profile_branch(
 
         if (err) {
             err = error_wrap(err, "Failed to disable profile in manifest");
-            state_free(manifest_state);
             string_array_free(enabled_profiles);
             string_array_free(remaining);
             goto cleanup;
         }
 
         /* Remove from enabled_profiles in state */
-        err = state_disable_profile(manifest_state, opts->profile);
+        err = state_disable_profile(state, opts->profile);
         if (err) {
             err = error_wrap(err, "Failed to remove profile from state");
-            state_free(manifest_state);
             string_array_free(enabled_profiles);
             string_array_free(remaining);
             goto cleanup;
         }
 
         /* Commit transaction */
-        err = state_save(repo, manifest_state);
-        state_free(manifest_state);
+        err = state_commit(state);
         string_array_free(enabled_profiles);
         string_array_free(remaining);
 
@@ -1636,16 +1614,15 @@ static error_t *delete_profile_branch(
      * This is a SEPARATE transaction from the earlier manifest_disable_profile
      * transaction — the branch must be deleted first.
      */
-    state_t *delete_state = NULL;
-    error_t *delete_err = state_open(repo, &delete_state);
-    if (!delete_err && delete_state) {
+    error_t *delete_err = state_begin(state);
+    if (!delete_err) {
         size_t released_count = 0;
 
         /* Handle file entries */
         state_file_entry_t *file_entries = NULL;
         size_t entry_count = 0;
         delete_err = state_get_entries_by_profile(
-            delete_state, opts->profile, NULL, &file_entries, &entry_count
+            state, opts->profile, NULL, &file_entries, &entry_count
         );
         if (!delete_err) {
             for (size_t i = 0; i < entry_count; i++) {
@@ -1658,11 +1635,11 @@ static error_t *delete_profile_branch(
 
                 if (opts->delete_files) {
                     file_err = state_set_file_state(
-                        delete_state, file_entries[i].filesystem_path, STATE_DELETED
+                        state, file_entries[i].filesystem_path, STATE_DELETED
                     );
                 } else {
                     file_err = state_remove_file(
-                        delete_state, file_entries[i].filesystem_path
+                        state, file_entries[i].filesystem_path
                     );
                 }
                 if (file_err) {
@@ -1681,7 +1658,7 @@ static error_t *delete_profile_branch(
         state_directory_entry_t *dir_entries = NULL;
         size_t dir_count = 0;
         delete_err = state_get_directories_by_profile(
-            delete_state, opts->profile, NULL, &dir_entries, &dir_count
+            state, opts->profile, NULL, &dir_entries, &dir_count
         );
         if (!delete_err) {
             for (size_t i = 0; i < dir_count; i++) {
@@ -1693,11 +1670,11 @@ static error_t *delete_profile_branch(
                 error_t *dir_err = NULL;
                 if (opts->delete_files) {
                     dir_err = state_set_directory_state(
-                        delete_state, dir_entries[i].filesystem_path, STATE_DELETED
+                        state, dir_entries[i].filesystem_path, STATE_DELETED
                     );
                 } else {
                     dir_err = state_remove_directory(
-                        delete_state, dir_entries[i].filesystem_path
+                        state, dir_entries[i].filesystem_path
                     );
                 }
                 if (dir_err) {
@@ -1711,13 +1688,14 @@ static error_t *delete_profile_branch(
         }
 
         /* Commit transaction */
-        delete_err = state_save(repo, delete_state);
+        delete_err = state_commit(state);
         if (delete_err) {
             output_warning(
                 out, OUTPUT_NORMAL, "Failed to update state after branch deletion: %s",
                 error_message(delete_err)
             );
             error_free(delete_err);
+            state_rollback(state);
         } else if (released_count > 0) {
             if (opts->delete_files) {
                 output_info(
@@ -1731,12 +1709,10 @@ static error_t *delete_profile_branch(
                 );
             }
         }
-
-        state_free(delete_state);
-    } else if (delete_err) {
+    } else {
         /* Non-fatal: safety module will handle this conservatively */
         output_warning(
-            out, OUTPUT_NORMAL, "Failed to open state for post-deletion update: %s",
+            out, OUTPUT_NORMAL, "Failed to begin transaction for post-deletion update: %s",
             error_message(delete_err)
         );
         error_free(delete_err);
@@ -1808,10 +1784,14 @@ static error_t *delete_profile_branch(
     }
 
 cleanup:
-    /* Free all resources in reverse order of allocation */
+    /* Free all resources in reverse order of allocation. state is borrowed
+     * from the dispatcher — do not free it. state_rollback is a no-op if
+     * no transaction is active; this safely closes any partially-begun
+     * manifest-update or post-deletion transaction on an error path. */
+    state_rollback(state);
+
     if (hook_fs_paths) string_array_free(hook_fs_paths);
     if (hook_custom_prefix) free(hook_custom_prefix);
-    if (state) state_free(state);
     if (upstream_info) upstream_info_free(upstream_info);
     if (remote_name) free(remote_name);
     if (files) string_array_free(files);
@@ -1826,9 +1806,11 @@ cleanup:
 error_t *cmd_remove(const dotta_ctx_t *ctx, const cmd_remove_options_t *opts) {
     CHECK_NULL(ctx);
     CHECK_NULL(ctx->repo);
+    CHECK_NULL(ctx->state);
     CHECK_NULL(opts);
 
     git_repository *repo = ctx->repo;
+    state_t *state = ctx->state;
     const config_t *config = ctx->config;
     output_ctx_t *out = ctx->out;
 
@@ -1840,10 +1822,10 @@ error_t *cmd_remove(const dotta_ctx_t *ctx, const cmd_remove_options_t *opts) {
 
     /* Branch: Delete profile or remove files */
     if (opts->delete_profile) {
-        return delete_profile_branch(repo, config, out, ctx->repo_path, opts);
+        return delete_profile_branch(repo, state, config, out, ctx->repo_path, opts);
     }
 
-    return remove_files_from_profile(repo, config, out, ctx->repo_path, opts);
+    return remove_files_from_profile(repo, state, config, out, ctx->repo_path, opts);
 }
 
 /* ══════════════════════════════════════════════════════════════════
@@ -1988,6 +1970,6 @@ const args_command_t spec_remove = {
     .opts_size   = sizeof(cmd_remove_options_t),
     .opts        = remove_opts,
     .post_parse  = remove_post_parse,
-    .payload     = &dotta_ext_required,
+    .payload     = &dotta_ext_read,
     .dispatch    = remove_dispatch,
 };

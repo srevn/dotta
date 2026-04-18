@@ -843,7 +843,7 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
     git_tree_entry *current_entry = NULL;
     git_tree_entry *target_entry = NULL;
     keymgr *keymgr = NULL;
-    state_t *state = NULL;
+    state_t *state = ctx->state;  /* Borrowed from dispatcher; do not free */
     bool user_aborted = false;
 
     /* CLI flags override config */
@@ -1104,19 +1104,10 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
     /* Initialize manifest sync counters */
     size_t synced = 0, removed = 0, fallbacks = 0;
 
-    /* Check if profile is enabled. Keep the state handle alive — the manifest
-     * sync below upgrades it to a write transaction via state_begin
-     * rather than closing and reopening the database. */
-    bool profile_enabled = false;
-
-    err = state_load(repo, &state);
-    if (!err && state) {
-        profile_enabled = state_has_profile(state, profile);
-    } else if (err) {
-        /* State doesn't exist - treat as not enabled */
-        error_free(err);
-        err = NULL;
-    }
+    /* Check if profile is enabled. The state handle is borrowed from the
+     * dispatcher (READ); the manifest sync below upgrades it to a write
+     * transaction via state_begin rather than closing and reopening the db. */
+    bool profile_enabled = state_has_profile(state, profile);
 
     if (!profile_enabled) {
         /* Profile not enabled - manifest update not needed */
@@ -1263,12 +1254,9 @@ cleanup:
     if (target_commit) git_commit_free(target_commit);
     if (profile) free(profile);
     if (resolved_path) free(resolved_path);
-    if (state) state_free(state);
 
     /* Don't return error if user aborted */
-    if (user_aborted) {
-        return NULL;
-    }
+    if (user_aborted) return NULL;
 
     return err;
 }
@@ -1426,6 +1414,6 @@ const args_command_t spec_revert = {
     .opts_size   = sizeof(cmd_revert_options_t),
     .opts        = revert_opts,
     .post_parse  = revert_post_parse,
-    .payload     = &dotta_ext_required,
+    .payload     = &dotta_ext_read,
     .dispatch    = revert_dispatch,
 };

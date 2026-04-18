@@ -197,15 +197,16 @@ static void print_manifest_disable_stats(
  */
 static error_t *profile_list(
     git_repository *repo,
+    state_t *state,
     const cmd_profile_options_t *opts,
     output_ctx_t *out
 ) {
     CHECK_NULL(repo);
+    CHECK_NULL(state);
     CHECK_NULL(opts);
     CHECK_NULL(out);
 
     /* Resource tracking for cleanup */
-    state_t *state = NULL;
     string_array_t *enabled_profiles = NULL;
     string_array_t *all_branches = NULL;
     string_array_t *available = NULL;
@@ -215,13 +216,6 @@ static error_t *profile_list(
     string_array_t *remote_branches = NULL;
     string_array_t *remote_only = NULL;
     error_t *err = NULL;
-
-    /* Load state to get enabled profiles */
-    err = state_load(repo, &state);
-    if (err) {
-        err = error_wrap(err, "Failed to load state");
-        goto cleanup;
-    }
 
     err = state_get_profiles(state, &enabled_profiles);
     if (err) {
@@ -391,7 +385,6 @@ cleanup:
     string_array_free(available);
     string_array_free(all_branches);
     string_array_free(enabled_profiles);
-    state_free(state);
 
     return err;
 }
@@ -659,15 +652,16 @@ cleanup:
  */
 static error_t *profile_enable(
     git_repository *repo,
+    state_t *state,
     const cmd_profile_options_t *opts,
     output_ctx_t *out
 ) {
     CHECK_NULL(repo);
+    CHECK_NULL(state);
     CHECK_NULL(opts);
     CHECK_NULL(out);
 
     /* Resource tracking for cleanup */
-    state_t *state = NULL;
     string_array_t *enabled = NULL;
     string_array_t *to_enable = NULL;
     string_array_t *all_branches = NULL;
@@ -677,13 +671,6 @@ static error_t *profile_enable(
     size_t enabled_count = 0;
     size_t already_enabled = 0;
     size_t not_found = 0;
-
-    /* Load state (with locking for write transaction) */
-    err = state_open(repo, &state);
-    if (err) {
-        err = error_wrap(err, "Failed to load state");
-        goto cleanup;
-    }
 
     /* Get current enabled profiles */
     err = state_get_profiles(state, &enabled);
@@ -875,12 +862,9 @@ cleanup:
     string_array_free(all_branches);
     string_array_free(to_enable);
     string_array_free(enabled);
-    state_free(state);
 
     /* If there's an error, return it now */
-    if (err) {
-        return err;
-    }
+    if (err) return err;
 
     /* Summary (only shown on success) */
     if (!output_is_verbose(out)) {
@@ -926,15 +910,16 @@ cleanup:
  */
 static error_t *profile_disable(
     git_repository *repo,
+    state_t *state,
     const cmd_profile_options_t *opts,
     output_ctx_t *out
 ) {
     CHECK_NULL(repo);
+    CHECK_NULL(state);
     CHECK_NULL(opts);
     CHECK_NULL(out);
 
     /* Resource tracking for cleanup */
-    state_t *state = NULL;
     string_array_t *enabled = NULL;
     string_array_t *to_disable = NULL;
     string_array_t *new_enabled = NULL;
@@ -943,13 +928,6 @@ static error_t *profile_disable(
     /* Counters for summary (not cleaned up) */
     size_t disabled_count = 0;
     size_t not_enabled = 0;
-
-    /* Load state (with locking for write transaction) */
-    err = state_open(repo, &state);
-    if (err) {
-        err = error_wrap(err, "Failed to load state");
-        goto cleanup;
-    }
 
     /* Get current enabled profiles */
     err = state_get_profiles(state, &enabled);
@@ -1135,7 +1113,6 @@ cleanup:
     string_array_free(new_enabled);
     string_array_free(to_disable);
     string_array_free(enabled);
-    state_free(state);
 
     /* If there's an error, return it now */
     if (err) return err;
@@ -1187,15 +1164,16 @@ cleanup:
  */
 static error_t *profile_reorder(
     git_repository *repo,
+    state_t *state,
     const cmd_profile_options_t *opts,
     output_ctx_t *out
 ) {
     CHECK_NULL(repo);
+    CHECK_NULL(state);
     CHECK_NULL(opts);
     CHECK_NULL(out);
 
     /* Resource tracking for cleanup */
-    state_t *state = NULL;
     string_array_t *current_enabled = NULL;
     error_t *err = NULL;
 
@@ -1206,13 +1184,6 @@ static error_t *profile_reorder(
             "Hint: Provide profiles in desired order: "
             "dotta profile reorder <p1> <p2> ..."
         );
-        goto cleanup;
-    }
-
-    /* Load state (with locking for write transaction) */
-    err = state_open(repo, &state);
-    if (err) {
-        err = error_wrap(err, "Failed to load state");
         goto cleanup;
     }
 
@@ -1386,7 +1357,6 @@ static error_t *profile_reorder(
 cleanup:
     /* Cleanup all resources */
     string_array_free(current_enabled);
-    state_free(state);
 
     return err;
 }
@@ -1398,15 +1368,16 @@ cleanup:
  */
 static error_t *profile_validate(
     git_repository *repo,
+    state_t *state,
     const cmd_profile_options_t *opts,
     output_ctx_t *out
 ) {
     CHECK_NULL(repo);
+    CHECK_NULL(state);
     CHECK_NULL(opts);
     CHECK_NULL(out);
 
     /* Resource tracking for cleanup */
-    state_t *state = NULL;
     string_array_t *enabled = NULL;
     string_array_t *missing = NULL;
     error_t *err = NULL;
@@ -1417,15 +1388,13 @@ static error_t *profile_validate(
     bool has_orphaned_files = false;      /* Track issues we can't fix */
     size_t orphaned_files = 0;
 
-    /* Load state (with locking if we're going to fix issues) */
+    /* Promote to a write transaction when we intend to mutate */
     if (opts->fix) {
-        err = state_open(repo, &state);
-    } else {
-        err = state_load(repo, &state);
-    }
-    if (err) {
-        err = error_wrap(err, "Failed to load state");
-        goto cleanup;
+        err = state_begin(state);
+        if (err) {
+            err = error_wrap(err, "Failed to begin state transaction");
+            goto cleanup;
+        }
     }
 
     /* Get enabled profiles from state */
@@ -1481,9 +1450,9 @@ static error_t *profile_validate(
                 }
             }
 
-            err = state_save(repo, state);
+            err = state_commit(state);
             if (err) {
-                err = error_wrap(err, "Failed to save state");
+                err = error_wrap(err, "Failed to commit state transaction");
                 goto cleanup;
             }
 
@@ -1522,15 +1491,15 @@ static error_t *profile_validate(
     }
 
 cleanup:
-    /* Cleanup all resources */
+    /* Cleanup all resources. state_rollback is a no-op if no transaction
+     * is active, so it's safe to call unconditionally on the borrowed handle */
+    state_rollback(state);
+
     string_array_free(missing);
     string_array_free(enabled);
-    state_free(state);
 
     /* If there's an error, return it now */
-    if (err) {
-        return err;
-    }
+    if (err) return err;
 
     /* Summary (only shown on success) */
     output_newline(out, OUTPUT_NORMAL);
@@ -1581,6 +1550,7 @@ error_t *cmd_profile(const dotta_ctx_t *ctx, const cmd_profile_options_t *opts) 
     CHECK_NULL(opts);
 
     git_repository *repo = ctx->repo;
+    state_t *state = ctx->state;  /* NULL for fetch (repo_only); set for list/validate/enable/disable/reorder */
     output_ctx_t *out = ctx->out;
 
     /* Override verbosity from CLI */
@@ -1595,7 +1565,7 @@ error_t *cmd_profile(const dotta_ctx_t *ctx, const cmd_profile_options_t *opts) 
     error_t *result = NULL;
     switch (opts->subcommand) {
         case PROFILE_LIST:
-            result = profile_list(repo, opts, out);
+            result = profile_list(repo, state, opts, out);
             break;
 
         case PROFILE_FETCH:
@@ -1603,19 +1573,19 @@ error_t *cmd_profile(const dotta_ctx_t *ctx, const cmd_profile_options_t *opts) 
             break;
 
         case PROFILE_ENABLE:
-            result = profile_enable(repo, opts, out);
+            result = profile_enable(repo, state, opts, out);
             break;
 
         case PROFILE_DISABLE:
-            result = profile_disable(repo, opts, out);
+            result = profile_disable(repo, state, opts, out);
             break;
 
         case PROFILE_REORDER:
-            result = profile_reorder(repo, opts, out);
+            result = profile_reorder(repo, state, opts, out);
             break;
 
         case PROFILE_VALIDATE:
-            result = profile_validate(repo, opts, out);
+            result = profile_validate(repo, state, opts, out);
             break;
 
         default:
@@ -1667,7 +1637,7 @@ static const args_command_t spec_profile_list = {
     .opts_size     = sizeof(cmd_profile_options_t),
     .opts          = profile_list_opts,
     .init_defaults = profile_list_defaults,
-    .payload       = &dotta_ext_required,
+    .payload       = &dotta_ext_read,
     .dispatch      = profile_dispatch,
 };
 
@@ -1701,7 +1671,7 @@ static const args_command_t spec_profile_fetch = {
     .opts_size     = sizeof(cmd_profile_options_t),
     .opts          = profile_fetch_opts,
     .init_defaults = profile_fetch_defaults,
-    .payload       = &dotta_ext_required,
+    .payload       = &dotta_ext_repo_only,
     .dispatch      = profile_dispatch,
 };
 
@@ -1752,7 +1722,7 @@ static const args_command_t spec_profile_enable = {
     .opts_size     = sizeof(cmd_profile_options_t),
     .opts          = profile_enable_opts,
     .init_defaults = profile_enable_defaults,
-    .payload       = &dotta_ext_required,
+    .payload       = &dotta_ext_write,
     .dispatch      = profile_dispatch,
 };
 
@@ -1797,7 +1767,7 @@ static const args_command_t spec_profile_disable = {
     .opts_size     = sizeof(cmd_profile_options_t),
     .opts          = profile_disable_opts,
     .init_defaults = profile_disable_defaults,
-    .payload       = &dotta_ext_required,
+    .payload       = &dotta_ext_write,
     .dispatch      = profile_dispatch,
 };
 
@@ -1835,7 +1805,7 @@ static const args_command_t spec_profile_reorder = {
     .opts_size     = sizeof(cmd_profile_options_t),
     .opts          = profile_reorder_opts,
     .init_defaults = profile_reorder_defaults,
-    .payload       = &dotta_ext_required,
+    .payload       = &dotta_ext_write,
     .dispatch      = profile_dispatch,
 };
 
@@ -1862,7 +1832,7 @@ static const args_command_t spec_profile_validate = {
     .opts_size     = sizeof(cmd_profile_options_t),
     .opts          = profile_validate_opts,
     .init_defaults = profile_validate_defaults,
-    .payload       = &dotta_ext_required,
+    .payload       = &dotta_ext_read,
     .dispatch      = profile_dispatch,
 };
 

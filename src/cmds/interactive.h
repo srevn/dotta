@@ -27,6 +27,7 @@
 #include <types.h>
 
 #include "base/terminal.h"
+#include "core/state.h"
 
 /**
  * Profile item in UI list
@@ -63,11 +64,11 @@ typedef enum {
  *
  * Workflow:
  * 1. Load available profiles from repository
- * 2. Load current state to determine enabled profiles
+ * 2. Read current enabled profiles from the borrowed state handle
  * 3. Enter interactive loop:
  *    - Render UI
  *    - Read user input
- *    - Update state
+ *    - Persist changes via scoped state_begin/state_commit on 'w'
  * 4. Clean up and exit
  *
  * Terminal requirements:
@@ -75,21 +76,25 @@ typedef enum {
  * - Must support ANSI escape sequences
  *
  * @param repo Repository (must not be NULL)
+ * @param state Borrowed state handle from the dispatcher (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *interactive_run(git_repository *repo);
+error_t *interactive_run(git_repository *repo, state_t *state);
 
 /**
  * Create interactive state
  *
- * Loads all profiles and current enabled state.
+ * Loads all profiles and reads current enabled state from the borrowed
+ * state handle.
  *
  * @param repo Repository (must not be NULL)
+ * @param state Borrowed state handle (must not be NULL)
  * @param out State (must not be NULL, caller must free)
  * @return Error or NULL on success
  */
 error_t *interactive_state_create(
     git_repository *repo,
+    state_t *state,
     interactive_state_t **out
 );
 
@@ -160,8 +165,9 @@ int interactive_get_required_lines(const interactive_state_t *state);
  *
  * Processes user input and updates state or executes commands.
  *
- * @param state State (must not be NULL)
+ * @param state UI state (must not be NULL)
  * @param repo Repository (must not be NULL)
+ * @param deploy_state Borrowed state handle for scoped saves (must not be NULL)
  * @param key Key code
  * @param term_ptr Terminal pointer (for restoring during commands, must not be NULL)
  * @param out_err Error output (must not be NULL, set on INTERACTIVE_EXIT_ERROR)
@@ -170,6 +176,7 @@ int interactive_get_required_lines(const interactive_state_t *state);
 interactive_result_t interactive_handle_key(
     interactive_state_t *state,
     git_repository *repo,
+    state_t *deploy_state,
     int key,
     terminal_t **term_ptr,
     error_t **out_err

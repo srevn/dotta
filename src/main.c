@@ -36,6 +36,7 @@
 #include "cmds/status.h"
 #include "cmds/sync.h"
 #include "cmds/update.h"
+#include "core/state.h"
 #include "crypto/encryption.h"
 #include "crypto/keymgr.h"
 #include "utils/config.h"
@@ -71,21 +72,35 @@ static const args_command_t *const dotta_commands[] = {
     &spec_interactive, &spec_completion, NULL
 };
 
-/* Per-mode dispatch payloads — one const per repo mode. Each command's
- * spec sets `.payload = &dotta_ext_X` for the matching mode; the
- * dispatcher reads it back in `run_spec` to decide how to open the
- * repository before calling the handler. */
+/* Per-combination dispatch payloads — one const per (repo_mode,
+ * state_mode) pair actually used by the registry. Each command's spec
+ * sets `.payload = &dotta_ext_X` for its needed pair; the dispatcher
+ * reads it back in `run_spec` to decide how to acquire the repository
+ * and state handles before calling the handler. Only the combinations
+ * used in the registry are defined; new pairings earn new constants. */
 const dotta_spec_ext_t dotta_ext_none = {
-    .repo_mode = DOTTA_REPO_NONE
-};
-const dotta_spec_ext_t dotta_ext_required = {
-    .repo_mode = DOTTA_REPO_REQUIRED
-};
-const dotta_spec_ext_t dotta_ext_optional_silent = {
-    .repo_mode = DOTTA_REPO_OPTIONAL_SILENT
+    .repo_mode  = DOTTA_REPO_NONE,
+    .state_mode = DOTTA_STATE_NONE,
 };
 const dotta_spec_ext_t dotta_ext_path_only = {
-    .repo_mode = DOTTA_REPO_PATH_ONLY
+    .repo_mode  = DOTTA_REPO_PATH_ONLY,
+    .state_mode = DOTTA_STATE_NONE,
+};
+const dotta_spec_ext_t dotta_ext_repo_only = {
+    .repo_mode  = DOTTA_REPO_REQUIRED,
+    .state_mode = DOTTA_STATE_NONE,
+};
+const dotta_spec_ext_t dotta_ext_read = {
+    .repo_mode  = DOTTA_REPO_REQUIRED,
+    .state_mode = DOTTA_STATE_READ,
+};
+const dotta_spec_ext_t dotta_ext_write = {
+    .repo_mode  = DOTTA_REPO_REQUIRED,
+    .state_mode = DOTTA_STATE_WRITE,
+};
+const dotta_spec_ext_t dotta_ext_read_silent = {
+    .repo_mode  = DOTTA_REPO_OPTIONAL_SILENT,
+    .state_mode = DOTTA_STATE_READ,
 };
 
 /**
@@ -168,6 +183,45 @@ static int open_repo_for_mode(
 }
 
 /**
+ * Acquire a state handle according to the command's declared mode.
+ *
+ * Returns 0 on success, 1 on unrecoverable error (error is printed).
+ * On success, `*state_out` is set per mode:
+ *
+ *   DOTTA_STATE_NONE   → NULL
+ *   DOTTA_STATE_READ   → state_load handle (may be state_empty on missing DB)
+ *   DOTTA_STATE_WRITE  → state_open handle (BEGIN IMMEDIATE held)
+ *
+ * Parallel in shape to `open_repo_for_mode`. No state is acquired when
+ * `repo == NULL`: DOTTA_REPO_NONE commands and DOTTA_REPO_OPTIONAL_SILENT
+ * commands that found no repo silently skip the mode — the missing repo
+ * is a valid dispatch outcome, not an error condition for state.
+ *
+ * On WRITE acquisition, the transaction lives for the full dispatch;
+ * the command calls `state_save` when its mutation is complete. On
+ * failure paths or uncommitted exits, `state_free` in the dispatcher
+ * auto-rolls-back per state.h's teardown contract.
+ */
+static int open_state_for_mode(
+    dotta_state_mode_t mode,
+    git_repository *repo,
+    state_t **state_out
+) {
+    *state_out = NULL;
+
+    if (mode == DOTTA_STATE_NONE || repo == NULL) return 0;
+
+    error_t *err = (mode == DOTTA_STATE_WRITE) ? state_open(repo, state_out)
+                                               : state_load(repo, state_out);
+    if (err != NULL) {
+        error_print(err, stderr);
+        error_free(err);
+        return 1;
+    }
+    return 0;
+}
+
+/**
  * Parse, dispatch, and cleanup for one spec-engine command.
  *
  * Owns a command-scoped arena (destroyed before return). Follows the
@@ -231,15 +285,25 @@ static int run_spec(
         }
     }
 
-    /* Each command's spec stashes its repo-open contract in `payload`
-     * via a `dotta_spec_ext_t` constant. NULL falls back to NONE so a
-     * spec that omits payload simply gets no repo (safe default). */
+    /* Each command's spec stashes its dispatch preconditions in
+     * `payload` via a `dotta_spec_ext_t` constant. NULL falls back to
+     * NONE/NONE so a spec that omits payload simply gets no repo and
+     * no state (safe default). */
     const dotta_spec_ext_t *ext = resolved->payload;
-    dotta_repo_mode_t mode = ext != NULL ? ext->repo_mode : DOTTA_REPO_NONE;
+    dotta_repo_mode_t repo_mode = ext != NULL ? ext->repo_mode : DOTTA_REPO_NONE;
+    dotta_state_mode_t state_mode = ext != NULL ? ext->state_mode : DOTTA_STATE_NONE;
 
     git_repository *repo = NULL;
     char *repo_path = NULL;
-    if (open_repo_for_mode(mode, config, &repo, &repo_path) != 0) {
+    state_t *state = NULL;
+
+    if (open_repo_for_mode(repo_mode, config, &repo, &repo_path) != 0) {
+        arena_destroy(arena);
+        return 1;
+    }
+    if (open_state_for_mode(state_mode, repo, &state) != 0) {
+        if (repo != NULL) git_repository_free(repo);
+        free(repo_path);
         arena_destroy(arena);
         return 1;
     }
@@ -248,6 +312,7 @@ static int run_spec(
     dotta_ctx_t ctx = {
         .repo      = repo,
         .repo_path = repo_path,
+        .state     = state,
         .config    = config,
         .out       = out,
         .arena     = arena,
@@ -258,6 +323,9 @@ static int run_spec(
 
     error_t *err = resolved->dispatch(&ctx, opts);
 
+    /* LIFO teardown. `state_free` auto-rolls-back any uncommitted transaction
+     * per state.h's contract, so error paths don't need explicit rollback. */
+    state_free(state);
     if (repo != NULL) git_repository_free(repo);
     free(repo_path);
     arena_destroy(arena);

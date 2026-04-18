@@ -1429,21 +1429,13 @@ error_t *cmd_diff(const dotta_ctx_t *ctx, const cmd_diff_options_t *opts) {
     output_ctx_t *out = ctx->out;
 
     error_t *err = NULL;
-    state_t *state = NULL;
+    state_t *state = ctx->state;  /* Borrowed from dispatcher; do not free */
     string_array_t *enabled_profiles = NULL;
     string_array_t *filter_profiles = NULL;
     const string_array_t *active_profiles = NULL;
     const string_array_t *filter = NULL;
     path_filter_t *file_filter = NULL;
     bool has_profile_filter = (opts->profiles != NULL && opts->profile_count > 0);
-
-    /* Load state once for the command's lifetime.
-     * Shared across profile resolution, prefix queries, and workspace loading. */
-    err = state_load(repo, &state);
-    if (err) {
-        err = error_wrap(err, "Failed to load state");
-        goto cleanup;
-    }
 
     /* Load profiles
      *
@@ -1548,7 +1540,6 @@ error_t *cmd_diff(const dotta_ctx_t *ctx, const cmd_diff_options_t *opts) {
 
 cleanup:
     if (file_filter) path_filter_free(file_filter);
-    if (state) state_free(state);
     if (filter_profiles) string_array_free(filter_profiles);
     if (enabled_profiles) string_array_free(enabled_profiles);
 
@@ -1717,6 +1708,6 @@ const args_command_t spec_diff = {
     .opts        = diff_opts,
     .classify    = diff_classify,
     .post_parse  = diff_post_parse,
-    .payload     = &dotta_ext_required,
+    .payload     = &dotta_ext_read,
     .dispatch    = diff_dispatch,
 };

@@ -4,23 +4,25 @@
  * Declares the types every command handler reads, the payloads every
  * command spec declares, and the accessor through which the cmds/ layer
  * reaches the root registry without naming its storage symbol. The
- * dispatch *implementation* (registry array, run_spec, repo-acquisition
+ * dispatch *implementation* (registry array, run_spec, resource-acquisition
  * helpers) stays file-local in main.c; this header is the typed surface
  * it exposes.
  *
  * Contents:
- *   - `dotta_repo_mode_t` — repo-open contract honored by the dispatcher;
- *   - `dotta_spec_ext_t`  — payload referenced by `args_command_t::payload`,
- *                           letting each command declare its repo mode in
- *                           a typed way without the base/args engine
- *                           learning the enum;
- *   - `dotta_ctx_t`       — bundle handed to each command's dispatch
- *                           handler (repo, config, output, arena, ...);
- *   - `dotta_ext_*`       — one per repo mode; commands point
- *                           `payload` at the constant matching their need;
- *   - `dotta_registry()`  — typed accessor for the root registry,
- *                           consumed by `cmds/completion.c` when exporting
- *                           the fish completion script.
+ *   - `dotta_repo_mode_t`  — repo-open contract honored by the dispatcher;
+ *   - `dotta_state_mode_t` — state-open contract honored by the dispatcher;
+ *   - `dotta_spec_ext_t`   — payload referenced by `args_command_t::payload`,
+ *                            letting each command declare its dispatch
+ *                            preconditions in a typed way without the
+ *                            base/args engine learning the enums;
+ *   - `dotta_ctx_t`        — bundle handed to each command's dispatch
+ *                            handler (repo, state, config, output, arena, ...);
+ *   - `dotta_ext_*`        — one per (repo_mode, state_mode) combination
+ *                            actually used; commands point `payload` at
+ *                            the constant matching their need;
+ *   - `dotta_registry()`   — typed accessor for the root registry,
+ *                            consumed by `cmds/completion.c` when exporting
+ *                            the fish completion script.
  */
 
 #ifndef DOTTA_RUNTIME_H
@@ -34,20 +36,20 @@
  * forcing every TU through git2.h. */
 struct git_repository;
 
+/* Core state handle. The full API lives in `src/core/state.h`; consumers
+ * that call state functions include that header. Redeclaring the typedef
+ * here keeps the contract typed without pulling core/ into every TU that
+ * reaches ctx. C11 §6.7p3 permits a typedef name to be redeclared to the
+ * same type, so this coexists with core/state.h's identical typedef in
+ * any TU that includes both. Mirrors the struct-tag forward decl above. */
+typedef struct state state_t;
+
 /* Spec-engine command descriptor. Forward-declared (rather than pulling
  * `base/args.h`) so that every TU that transitively includes
  * `runtime.h` does not drag the full `args_command_t` definition
  * through its compile. Same rationale as the `struct git_repository`
  * forward decl above, and the pattern `include/types.h` uses for
- * `error_t` / `arena_t`.
- *
- * The `args_command_t` alias is provided here so consumers that only
- * need to declare `extern const args_command_t spec_foo;` can work off
- * `<runtime.h>` alone. The full struct definition still lives in
- * `base/args.h`; files that need to access members or initialize a
- * `spec_foo` literal include that header directly. The typedef is
- * redeclared (not re-defined) — C11 §6.7p3 permits identical typedef
- * redeclarations, so both this header and `base/args.h` may coexist. */
+ * `error_t` / `arena_t`. */
 typedef struct args_command args_command_t;
 
 /**
@@ -65,38 +67,74 @@ typedef enum dotta_repo_mode {
 } dotta_repo_mode_t;
 
 /**
+ * State-opening contract honored by the dispatcher.
+ *
+ * Each command declares its state needs alongside its repo needs on the
+ * same `dotta_spec_ext_t` payload. Main.c reads the mode in `run_spec`
+ * *after* opening the repo and acquires the handle accordingly. If
+ * `repo_mode` produces no repo handle (NONE, or OPTIONAL_SILENT with a
+ * missing repo), state_mode is silently skipped and `ctx->state` stays
+ * NULL.
+ *
+ * Commands that declare READ may still take scoped write transactions
+ * via `state_begin` / `state_commit` on the borrowed handle — mirroring
+ * today's update.c / revert.c / remove.c pattern. Commands that declare
+ * WRITE hold `BEGIN IMMEDIATE` for the lifetime of dispatch and call
+ * `state_save` when their mutation is complete; `state_free` in the
+ * dispatcher rolls back any uncommitted transaction.
+ *
+ * CREATE-style commands (init, clone) declare NONE and open state
+ * themselves, because the database file does not exist before dispatch
+ * runs — there is nothing for `run_spec` to acquire. This parallels
+ * their `DOTTA_REPO_NONE` declaration: both resources are self-owned
+ * during creation.
+ */
+typedef enum dotta_state_mode {
+    DOTTA_STATE_NONE,   /* No state handle acquired */
+    DOTTA_STATE_READ,   /* state_load; scoped writes via state_begin/state_commit */
+    DOTTA_STATE_WRITE   /* state_open (BEGIN IMMEDIATE); command calls state_save */
+} dotta_state_mode_t;
+
+/**
  * Per-command extension payload referenced by `args_command_t::payload`.
  *
- * Today this only carries the repo-open mode, but it exists as a struct
- * (rather than a bare enum cast) so future per-command dispatch flags
- * (privilege escalation, quiet-stderr override, etc.) land here as
- * additional fields without touching the engine.
+ * Carries the declarative dispatch preconditions each command has.
+ * Additional fields (privilege escalation, verbosity override, etc.)
+ * land here as new members without touching the engine — this is the
+ * extension point `main.c::run_spec` reads.
  */
 typedef struct dotta_spec_ext {
     dotta_repo_mode_t repo_mode;
+    dotta_state_mode_t state_mode;
 } dotta_spec_ext_t;
 
 /**
  * Dispatch context — populated by the dispatcher, read by each command.
  *
- * Bundling is deliberate: future additions (signal cancellation, state
- * cache handle, etc.) land as struct members, not dispatch-signature
+ * Bundling is deliberate: future additions (signal cancellation,
+ * verbosity override, etc.) land as struct members, not dispatch-signature
  * churn across every command.
  *
  * Field lifetimes
  * ---------------
- *   `repo`/`repo_path`/`arena`  — command-scoped (created in
- *                                 run_spec, destroyed on return).
- *   `config`/`out`              — process-scoped (created in main).
- *   `argc`/`argv`               — process-scoped (kernel-supplied).
- *   `exit_code`                 — points to a stack int in run_spec;
- *                                 command-scoped lifetime.
+ *   `repo`/`repo_path`/`state`/`arena`  — command-scoped (acquired in
+ *                                         run_spec, released on return).
+ *   `config`/`out`                      — process-scoped (created in main).
+ *   `argc`/`argv`                       — process-scoped (kernel-supplied).
+ *   `exit_code`                         — points to a stack int in run_spec;
+ *                                         command-scoped lifetime.
  *
- * Invariant: whenever `repo` is non-NULL, `repo_path` is non-NULL too.
- * `repo_open` already resolves the path to open the repo; threading it
- * out costs nothing and gives commands that need both (e.g. bootstrap,
- * which exports DOTTA_REPO_DIR to child scripts) a single source of
- * truth instead of a second `resolve_repo_path` call.
+ * Invariants
+ * ----------
+ *   - `repo != NULL`  iff  `repo_path != NULL`. `repo_open` already
+ *     resolves the path to open the repo; threading it out costs
+ *     nothing and gives commands that need both (e.g. bootstrap, which
+ *     exports DOTTA_REPO_DIR to child scripts) a single source of truth
+ *     instead of a second `resolve_repo_path` call.
+ *   - `state != NULL`  iff  `state_mode != NONE AND repo != NULL`. A
+ *     spec declaring STATE_READ or STATE_WRITE on a repo_mode that
+ *     produced a handle receives a borrowed state; dispatch closes it
+ *     on return. Commands never free `ctx->state`.
  *
  * Exit-code override
  * ------------------
@@ -120,6 +158,7 @@ typedef struct dotta_spec_ext {
 typedef struct dotta_ctx {
     struct git_repository *repo;        /* NULL unless repo_mode opens */
     const char *repo_path;              /* Set by REQUIRED and PATH_ONLY modes */
+    state_t *state;                     /* NULL unless state_mode acquires; borrowed */
     const config_t *config;
     output_ctx_t *out;
     arena_t *arena;                     /* Command-scoped; parser-owned */
@@ -128,14 +167,18 @@ typedef struct dotta_ctx {
     int *exit_code;                     /* Non-NULL; *exit_code overrides exit when err==NULL */
 } dotta_ctx_t;
 
-/* Per-mode payloads. Each command's spec sets `.payload = &dotta_ext_X`
- * for the matching mode; main.c reads it back in run_spec. The four
- * constants are defined in main.c beside the dispatcher that consumes
- * them — referenced from every command file but defined exactly once. */
-extern const dotta_spec_ext_t dotta_ext_none;
-extern const dotta_spec_ext_t dotta_ext_required;
-extern const dotta_spec_ext_t dotta_ext_optional_silent;
-extern const dotta_spec_ext_t dotta_ext_path_only;
+/* Per-combination payloads. Each command's spec sets `.payload =
+ * &dotta_ext_X` for its needed (repo_mode, state_mode) pair; main.c
+ * reads it back in run_spec. The constants are defined in main.c beside
+ * the dispatcher that consumes them — referenced from every command
+ * file but defined exactly once. Only the combinations actually used
+ * in the registry are declared; new pairings earn new constants. */
+extern const dotta_spec_ext_t dotta_ext_none;         /* NONE,            NONE  */
+extern const dotta_spec_ext_t dotta_ext_path_only;    /* PATH_ONLY,       NONE  */
+extern const dotta_spec_ext_t dotta_ext_repo_only;    /* REQUIRED,        NONE  */
+extern const dotta_spec_ext_t dotta_ext_read;         /* REQUIRED,        READ  */
+extern const dotta_spec_ext_t dotta_ext_write;        /* REQUIRED,        WRITE */
+extern const dotta_spec_ext_t dotta_ext_read_silent;  /* OPTIONAL_SILENT, READ  */
 
 /**
  * Accessor for the root command registry.

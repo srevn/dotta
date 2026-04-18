@@ -1307,16 +1307,16 @@ static error_t *sync_push_phase(
 error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
     CHECK_NULL(ctx);
     CHECK_NULL(ctx->repo);
+    CHECK_NULL(ctx->state);
     CHECK_NULL(opts);
 
     git_repository *repo = ctx->repo;
+    state_t *state = ctx->state;
     const config_t *config = ctx->config;
     output_ctx_t *out = ctx->out;
 
     /* Declare all resources, initialized to NULL */
     error_t *err = NULL;
-    state_t *state = NULL;
-    state_t *read_state = NULL;
     workspace_t *ws = NULL;
     string_array_t *enabled_profiles = NULL;
     string_array_t *filter_profiles = NULL;
@@ -1357,17 +1357,8 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
      * - filter_profiles / active_profiles: CLI filter names or workspace names (for sync operations)
      */
 
-    /* Load state once for the validation phase.
-     * Shared across profile resolution and workspace loading.
-     * Freed after validation, before the write transaction opens. */
-    err = state_load(repo, &read_state);
-    if (err) {
-        err = error_wrap(err, "Failed to load state");
-        goto cleanup;
-    }
-
     /* Phase 1: Resolve enabled profile names (persistent) */
-    err = profile_resolve_enabled(repo, read_state, &enabled_profiles);
+    err = profile_resolve_enabled(repo, state, &enabled_profiles);
     if (err) {
         err = error_wrap(err, "Failed to resolve enabled profiles");
         goto cleanup;
@@ -1430,7 +1421,7 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
             .analyze_directories = false,  /* Directory metadata is apply's concern */
             .analyze_encryption  = false   /* Encryption is apply's concern */
         };
-        err = workspace_load(repo, read_state, enabled_profiles, config, &ws_opts, &ws);
+        err = workspace_load(repo, state, enabled_profiles, config, &ws_opts, &ws);
         if (err) {
             err = error_wrap(err, "Failed to load workspace");
             goto cleanup;
@@ -1683,17 +1674,18 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
         goto cleanup;
     }
 
-    /* Open state transaction for manifest updates during sync */
-    err = state_open(repo, &state);
+    /* Promote the borrowed READ handle to a write transaction for the
+     * mutation phase. Dry-run exits above, so the lock is only held when
+     * we're actually going to push/pull — shorter lock window than
+     * declaring WRITE on the whole dispatch. */
+    err = state_begin(state);
     if (err) {
         err = error_wrap(err, "Failed to open state transaction");
         goto cleanup;
     }
 
-    /* Release phase-1 validated list (populated via read_state) and re-query
-     * under the write transaction so stale repair and push see the transaction
-     * snapshot. active_profiles was a borrowed pointer into enabled_profiles —
-     * nothing reads it after this point. */
+    /* Stale repair and push see the transaction snapshot. active_profiles
+     * was a borrowed pointer into enabled_profiles — nothing reads it after this point. */
     string_array_free(enabled_profiles);
     enabled_profiles = NULL;
 
@@ -1770,7 +1762,7 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
     }
 
     /* Commit manifest changes */
-    err = state_save(repo, state);
+    err = state_commit(state);
     if (err) {
         err = error_wrap(err, "Failed to save manifest changes");
         goto cleanup;
@@ -1847,13 +1839,14 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
     err = NULL;
 
 cleanup:
-    /* Free resources in reverse order of allocation.
-     * workspace borrows read_state — free workspace first, then read_state.
-     * state (write handle) is independent of workspace. */
+    /* Free resources in reverse order of allocation. state is borrowed
+     * from the dispatcher; workspace borrows state, so free workspace
+     * first. state_rollback is a no-op if no transaction is active
+     * closing any partially-begun mutation-phase transaction on error paths. */
+    state_rollback(state);
+
     if (current_branch) free(current_branch);
-    if (state) state_free(state);
     if (ws) workspace_free(ws);
-    if (read_state) state_free(read_state);
     if (xfer) transfer_context_free(xfer);
     if (remote_url) free(remote_url);
     if (remote_name) free(remote_name);
@@ -1946,6 +1939,6 @@ const args_command_t spec_sync = {
         "  %s status --remote # Inspect remote state before syncing\n",
     .opts_size   = sizeof(cmd_sync_options_t),
     .opts        = sync_opts,
-    .payload     = &dotta_ext_required,
+    .payload     = &dotta_ext_read,
     .dispatch    = sync_dispatch,
 };

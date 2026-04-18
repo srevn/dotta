@@ -827,6 +827,7 @@ static bool needs_deployment(const workspace_item_t *ws_item) {
 error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     CHECK_NULL(ctx);
     CHECK_NULL(ctx->repo);
+    CHECK_NULL(ctx->state);
     CHECK_NULL(opts);
 
     git_repository *repo = ctx->repo;
@@ -835,7 +836,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
 
     /* Declare all resources at the top, initialized to NULL */
     error_t *err = NULL;
-    state_t *state = NULL;
+    state_t *state = ctx->state;  /* Borrowed from dispatcher (WRITE) */
     string_array_t *enabled_profiles = NULL;
     string_array_t *filter_profiles = NULL;
     const string_array_t *active_profiles = NULL;
@@ -860,13 +861,6 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     /* CLI flags override config */
     if (opts->verbose) {
         output_set_verbosity(out, OUTPUT_VERBOSE);
-    }
-
-    /* Load state (with locking for write transaction) */
-    err = state_open(repo, &state);
-    if (err) {
-        err = error_wrap(err, "Failed to load state");
-        goto cleanup;
     }
 
     /* Persistent stale manifest repair
@@ -2215,7 +2209,6 @@ cleanup:
     if (ws) workspace_free(ws);
     if (filter_profiles) string_array_free(filter_profiles);
     if (enabled_profiles) string_array_free(enabled_profiles);
-    if (state) state_free(state);
 
     return err;
 }
@@ -2342,6 +2335,6 @@ const args_command_t spec_apply = {
     .opts          = apply_opts,
     .classify      = apply_classify,
     .init_defaults = apply_defaults,
-    .payload       = &dotta_ext_required,
+    .payload       = &dotta_ext_write,
     .dispatch      = apply_dispatch,
 };

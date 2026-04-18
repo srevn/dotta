@@ -207,30 +207,46 @@ cleanup:
 error_t *profile_load_custom_prefixes(
     git_repository *repo,
     const state_t *state,
+    const string_array_t *names,
     string_array_t **out_prefixes
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(state);
     CHECK_NULL(out_prefixes);
 
-    const state_profile_entry_t *entries = NULL;
-    size_t count = 0;
-    error_t *err = state_peek_profiles(state, &entries, &count);
-    if (err) {
-        return error_wrap(err, "Failed to peek profile rows");
-    }
-
     string_array_t *prefixes = string_array_new(0);
     if (!prefixes) {
         return ERROR(ERR_MEMORY, "Failed to allocate prefixes array");
     }
 
-    for (size_t i = 0; i < count; i++) {
-        if (!entries[i].custom_prefix) continue;
-        err = string_array_push(prefixes, entries[i].custom_prefix);
+    if (names) {
+        /* Narrowed: per-name peek. Non-enabled names yield NULL and skip. */
+        for (size_t i = 0; i < names->count; i++) {
+            const char *pfx =
+                state_peek_profile_prefix(state, names->items[i]);
+            if (!pfx) continue;
+            error_t *err = string_array_push(prefixes, pfx);
+            if (err) {
+                string_array_free(prefixes);
+                return error_wrap(err, "Failed to collect custom prefix");
+            }
+        }
+    } else {
+        /* All enabled: row-cache scan, position order. */
+        const state_profile_entry_t *entries = NULL;
+        size_t count = 0;
+        error_t *err = state_peek_profiles(state, &entries, &count);
         if (err) {
             string_array_free(prefixes);
-            return error_wrap(err, "Failed to collect custom prefix");
+            return error_wrap(err, "Failed to peek profile rows");
+        }
+        for (size_t i = 0; i < count; i++) {
+            if (!entries[i].custom_prefix) continue;
+            err = string_array_push(prefixes, entries[i].custom_prefix);
+            if (err) {
+                string_array_free(prefixes);
+                return error_wrap(err, "Failed to collect custom prefix");
+            }
         }
     }
 

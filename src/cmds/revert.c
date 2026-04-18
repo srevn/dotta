@@ -150,7 +150,7 @@ static error_t *discover_file(
 
     /* Load custom prefixes for path resolution (non-fatal) */
     string_array_t *prefixes STRING_ARRAY_CLEANUP = NULL;
-    error_t *prefix_err = profile_load_custom_prefixes(repo, state, &prefixes);
+    error_t *prefix_err = profile_load_custom_prefixes(repo, state, NULL, &prefixes);
     if (prefix_err) error_free(prefix_err);
 
     /* Resolve input path to storage format (file need not exist) */

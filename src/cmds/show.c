@@ -650,7 +650,7 @@ error_t *cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
     CHECK_NULL(opts->file_path);
 
     /* Load custom prefixes for path resolution (non-fatal) */
-    error_t *prefix_err = profile_load_custom_prefixes(repo, state, &prefixes);
+    error_t *prefix_err = profile_load_custom_prefixes(repo, state, NULL, &prefixes);
     if (prefix_err) error_free(prefix_err);
 
     /* Resolve file path to storage format (common to both explicit and implicit paths) */

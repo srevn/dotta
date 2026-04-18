@@ -115,22 +115,31 @@ error_t *profile_resolve_enabled(
 );
 
 /**
- * Collect every enabled profile's custom prefix from state
+ * Collect custom prefixes from state for a set of profiles
  *
- * Narrow adapter for read-only callers (list/show/revert) that need the
- * full set of custom prefixes for path resolution. Reads the row cache
- * and packages the non-NULL custom_prefix values into a fresh
- * string_array_t in position order. An empty array is a valid result
- * when no enabled profile has set a custom prefix.
+ * Reads the row cache and packages the non-NULL custom_prefix values into
+ * a fresh string_array_t. An empty array is a valid result when none of
+ * the selected profiles has set a custom prefix.
+ *
+ * Two modes:
+ *   - names == NULL: collect prefixes from every enabled profile (full
+ *     row-cache scan, in position order). Used by read-only callers
+ *     (list/show/revert) that need the complete set for path resolution.
+ *   - names != NULL: collect prefixes only for the named profiles
+ *     (per-name peek, in the caller's order). Used when path resolution
+ *     is narrowed to a filter's active set. Names outside the enabled set
+ *     yield no prefix (peek returns NULL) and are silently skipped.
  *
  * @param repo Repository (must not be NULL)
  * @param state State handle (must not be NULL; borrowed, not freed)
+ * @param names Profile names to collect prefixes for, or NULL for all enabled
  * @param out_prefixes Non-NULL custom prefixes (must not be NULL, caller frees)
  * @return Error or NULL on success (empty array if no custom prefixes)
  */
 error_t *profile_load_custom_prefixes(
     git_repository *repo,
     const state_t *state,
+    const string_array_t *names,
     string_array_t **out_prefixes
 );
 

@@ -4,6 +4,7 @@
 
 #include "core/scope.h"
 
+#include <config.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -97,11 +98,13 @@ error_t *scope_build(
     git_repository *repo,
     const state_t *state,
     const scope_inputs_t *in,
+    const config_t *config,
     scope_t **out
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(state);
     CHECK_NULL(in);
+    CHECK_NULL(config);
     CHECK_NULL(out);
 
     *out = NULL;
@@ -120,7 +123,7 @@ error_t *scope_build(
     /* 2. Resolve and validate CLI filter, if any. */
     if (in->profile_count > 0) {
         err = profile_resolve_filter(
-            repo, in->profiles, in->profile_count, in->strict_mode, &s->filter
+            repo, in->profiles, in->profile_count, config->strict_mode, &s->filter
         );
         if (err) {
             err = error_wrap(err, "Failed to resolve filter profiles");

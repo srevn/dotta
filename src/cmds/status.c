@@ -860,9 +860,8 @@ error_t *cmd_status(const dotta_ctx_t *ctx, const cmd_status_options_t *opts) {
     scope_inputs_t scope_inputs = {
         .profiles      = opts->profiles,
         .profile_count = opts->profile_count,
-        .strict_mode   = config->strict_mode,
     };
-    err = scope_build(repo, state, &scope_inputs, &scope);
+    err = scope_build(repo, state, &scope_inputs, config, &scope);
     if (err) goto cleanup;
 
     /* Load workspace for divergence analysis (only needed for local status)

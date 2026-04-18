@@ -846,9 +846,8 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         .file_count       = opts->file_count,
         .exclude_patterns = opts->exclude_patterns,
         .exclude_count    = opts->exclude_count,
-        .strict_mode      = config->strict_mode,
     };
-    err = scope_build(repo, state, &scope_inputs, &scope);
+    err = scope_build(repo, state, &scope_inputs, config, &scope);
     if (err) goto cleanup;
 
     output_print(

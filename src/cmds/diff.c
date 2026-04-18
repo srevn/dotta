@@ -1443,9 +1443,8 @@ error_t *cmd_diff(const dotta_ctx_t *ctx, const cmd_diff_options_t *opts) {
         .profile_count = opts->profile_count,
         .files         = opts->files,
         .file_count    = opts->file_count,
-        .strict_mode   = config->strict_mode,
     };
-    err = scope_build(repo, state, &scope_inputs, &scope);
+    err = scope_build(repo, state, &scope_inputs, config, &scope);
     if (err) goto cleanup;
 
     if (scope_enabled(scope)->count == 0) {

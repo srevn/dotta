@@ -91,9 +91,10 @@ typedef struct scope scope_t;
 /**
  * Aggregated build inputs.
  *
- * A command-agnostic view of the three CLI-derived filter dimensions
- * plus the one config-derived flag (strict_mode). All array fields may
- * be NULL when the corresponding count is zero.
+ * A command-agnostic view of the three CLI-derived filter dimensions.
+ * All array fields may be NULL when the corresponding count is zero.
+ * Config-derived behavior (strict_mode) is read from the config handle
+ * passed separately to scope_build, keeping this struct a pure CLI bundle.
  *
  * Ownership: borrowed. scope_build deep-copies everything it needs; the
  * caller may free the backing arrays immediately after scope_build
@@ -106,7 +107,6 @@ typedef struct scope_inputs {
     size_t file_count;
     char *const *exclude_patterns;  /* -e exclude patterns (raw CLI) */
     size_t exclude_count;
-    bool strict_mode;               /* config->strict_mode */
 } scope_inputs_t;
 
 /**
@@ -117,22 +117,25 @@ typedef struct scope_inputs {
  *      and converts to empty set — see "Empty-enabled policy" above).
  *   2. If in->profile_count > 0, resolve and validate the CLI filter
  *      against the enabled set (error if any filter name is not enabled).
+ *      Strictness of the filter resolution is read from config->strict_mode.
  *   3. Harvest custom prefixes from the ACTIVE set (filter if present,
  *      else enabled) — narrowing the filter narrows prefix harvest for
  *      path resolution.
  *   4. If in->file_count > 0, build the path filter using those prefixes.
  *   5. If in->exclude_count > 0, deep-copy the exclude patterns.
  *
- * @param repo  Repository (must not be NULL)
- * @param state State handle (must not be NULL, borrowed for the call)
- * @param in    Inputs (must not be NULL)
- * @param out   Scope (must not be NULL, caller frees with scope_free)
+ * @param repo   Repository (must not be NULL)
+ * @param state  State handle (must not be NULL, borrowed for the call)
+ * @param in     Inputs (must not be NULL)
+ * @param config Configuration (must not be NULL, read for strict_mode)
+ * @param out    Scope (must not be NULL, caller frees with scope_free)
  * @return Error or NULL on success
  */
 error_t *scope_build(
     git_repository *repo,
     const state_t *state,
     const scope_inputs_t *in,
+    const config_t *config,
     scope_t **out
 );
 

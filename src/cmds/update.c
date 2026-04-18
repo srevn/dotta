@@ -1865,6 +1865,19 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
         goto cleanup;
     }
 
+    /* Flush verified stat caches to database (self-healing optimization).
+     * Seeds the fast path for subsequent status/apply/update calls, including
+     * this command's post-privilege re-exec if one occurs. Non-fatal on failure
+     * — update still proceeds; just won't seed the fast path.
+     *
+     * Files actually updated by this command get their stat cache recorded
+     * separately inside update_manifest_after_update(); this flush covers the
+     * clean files the analysis verified but didn't modify. */
+    error_t *flush_err = workspace_flush_stat_caches(ws);
+    if (flush_err) {
+        error_free(flush_err);
+    }
+
     /* Filter items for update (handles all flags and edge cases internally).
      * scope_t carries the path/profile/exclude filter dimensions. */
     err = filter_items_for_update(

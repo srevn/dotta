@@ -115,20 +115,25 @@ typedef struct {
  * Additionally scans tracked directories for untracked files (new files
  * that appeared in directories previously added via 'dotta add').
  *
- * The workspace is scoped to the provided profile names. State entries
- * and tracked directories from profiles NOT in the list are ignored. This ensures
- * that operations like `dotta status -p global` only report divergence for the
- * specified profile, not the entire repository.
+ * The workspace is scoped to the caller's operation scope — specifically,
+ * `scope_enabled(scope)`, the persistent VWD profile set. State entries
+ * and tracked directories from profiles NOT in the enabled set are
+ * ignored. This enforces the VWD invariant that workspace loading uses
+ * the persistent enabled set rather than any CLI filter (operations like
+ * `dotta status -p global` still load the full workspace and apply the
+ * filter at display time via scope_accepts_profile).
  *
- * Profile loading: The workspace borrows the provided name array (caller
- * must keep it alive until workspace_free). Git tree loading is deferred
- * to the rare stale repair path. In the common (non-stale) case,
- * workspace_load performs zero Git tree operations for profile loading.
+ * Profile loading: The workspace borrows the enabled name array from
+ * the scope (caller must keep the scope alive until workspace_free).
+ * Git tree loading is deferred to the rare stale repair path. In the
+ * common (non-stale) case, workspace_load performs zero Git tree
+ * operations for profile loading.
  *
  * @param repo Git repository (must not be NULL)
  * @param state State handle (must not be NULL, borrowed from caller;
  *              caller retains ownership and must free it after workspace_free)
- * @param profiles Validated profile names in precedence order (must not be NULL)
+ * @param scope Operation scope (must not be NULL; workspace reads
+ *              scope_enabled(scope) as its profile set)
  * @param config Configuration (for ignore patterns, can be NULL)
  * @param options Analysis options (must not be NULL)
  * @param out Workspace (must not be NULL, caller must free with workspace_free)
@@ -137,7 +142,7 @@ typedef struct {
 error_t *workspace_load(
     git_repository *repo,
     state_t *state,
-    const string_array_t *profiles,
+    const scope_t *scope,
     const struct config *config,
     const workspace_load_t *options,
     workspace_t **out

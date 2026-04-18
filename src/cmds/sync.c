@@ -1397,7 +1397,7 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
             .analyze_directories = false,  /* Directory metadata is apply's concern */
             .analyze_encryption  = false   /* Encryption is apply's concern */
         };
-        err = workspace_load(repo, state, scope_enabled(scope), config, &ws_opts, &ws);
+        err = workspace_load(repo, state, scope, config, &ws_opts, &ws);
         if (err) {
             err = error_wrap(err, "Failed to load workspace");
             goto cleanup;
@@ -1813,10 +1813,10 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
 
 cleanup:
     /* Free resources in reverse order of allocation. state is borrowed
-     * from the dispatcher; workspace borrows scope_enabled(scope), so free
-     * workspace first, then scope. state_rollback is a no-op if no
-     * transaction is active, closing any partially-begun mutation-phase
-     * transaction on error paths. */
+     * from the dispatcher; workspace borrows scope's enabled array
+     * internally, so free workspace first, then scope. state_rollback
+     * is a no-op if no transaction is active, closing any partially-begun
+     * mutation-phase transaction on error paths. */
     state_rollback(state);
 
     if (current_branch) free(current_branch);

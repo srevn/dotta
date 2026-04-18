@@ -1305,7 +1305,7 @@ static error_t *diff_workspace(
         .analyze_encryption  = false  /* Not needed for diff */
     };
 
-    err = workspace_load(repo, state, scope_enabled(scope), config, &ws_opts, &ws);
+    err = workspace_load(repo, state, scope, config, &ws_opts, &ws);
     if (err) {
         return error_wrap(err, "Failed to load workspace");
     }

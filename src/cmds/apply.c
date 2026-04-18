@@ -889,7 +889,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         .analyze_directories = true,             /* Directory metadata convergence */
         .analyze_encryption  = false             /* Not needed for deployment */
     };
-    err = workspace_load(repo, state, scope_enabled(scope), config, &ws_opts, &ws);
+    err = workspace_load(repo, state, scope, config, &ws_opts, &ws);
     if (err) {
         err = error_wrap(err, "Failed to load workspace");
         goto cleanup;

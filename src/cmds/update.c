@@ -1859,7 +1859,7 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
         .analyze_directories = true,                    /* Directory metadata change detection */
         .analyze_encryption  = true                     /* Encryption policy validation */
     };
-    err = workspace_load(repo, state, scope_enabled(scope), config, &ws_opts, &ws);
+    err = workspace_load(repo, state, scope, config, &ws_opts, &ws);
     if (err) {
         err = error_wrap(err, "Failed to analyze workspace");
         goto cleanup;

@@ -16,8 +16,9 @@
  * Vocabulary
  * ----------
  *   enabled — persistent enabled profile names, always non-NULL, may be
- *             empty. Workspace scope (VWD invariant): pass THIS (and only
- *             this) to workspace_load.
+ *             empty. Workspace scope (VWD invariant): workspace_load
+ *             reads this via scope_enabled internally; callers pass the
+ *             whole scope_t to workspace_load.
  *   active  — display/hook face of the scope. Equal to the CLI filter
  *             names when one was given, else equal to enabled. "What the
  *             user asked for, not the underlying world."
@@ -29,8 +30,9 @@
  *
  * The CRITICAL invariant previously expressed as prose comments in
  * apply.c / sync.c ("use enabled, not active, for workspace_load") is
- * now type-enforced: scope_enabled is the only accessor whose return
- * value makes sense as workspace_load's `profiles` argument.
+ * now type-enforced: workspace_load takes `const scope_t *` and reads
+ * the enabled set internally. Callers cannot pass the wrong array by
+ * mistake.
  *
  * Lifetime and ownership
  * ----------------------
@@ -41,12 +43,13 @@
  *
  * Lifetime ordering at command cleanup:
  *
- *     workspace_free(ws)   // borrows scope_enabled(s) — free FIRST
+ *     workspace_free(ws)   // borrows scope's enabled array — free FIRST
  *     scope_free(scope)    // releases the enabled array — free SECOND
  *
  * scope_enabled's underlying array is owned by scope_t; workspace_t
- * borrows it via its `profiles` field. Freeing in the wrong order is a
- * use-after-free in workspace_free's teardown.
+ * borrows it via its `profiles` field (resolved inside workspace_load).
+ * Freeing in the wrong order is a use-after-free in workspace_free's
+ * teardown.
  *
  * Empty-enabled policy
  * --------------------

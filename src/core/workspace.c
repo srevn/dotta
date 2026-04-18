@@ -2276,16 +2276,22 @@ cleanup:
 error_t *workspace_load(
     git_repository *repo,
     state_t *state,
-    const string_array_t *profiles,
+    const scope_t *scope,
     const config_t *config,
     const workspace_load_t *options,
     workspace_t **out
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(state);
-    CHECK_NULL(profiles);
+    CHECK_NULL(scope);
     CHECK_NULL(options);
     CHECK_NULL(out);
+
+    /* Workspace scope is the persistent VWD enabled set — never the CLI
+     * filter. The scope accessor type-enforces this invariant (see
+     * scope.h's "Vocabulary" section). The pointer is borrowed from scope,
+     * which must outlive the returned workspace. */
+    const string_array_t *profiles = scope_enabled(scope);
 
     /* Copy provided options */
     workspace_load_t resolved_opts = *options;

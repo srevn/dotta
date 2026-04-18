@@ -1041,6 +1041,8 @@ static error_t *flatten_items_to_array(
  * Preconditions:
  *   - All profile updates already succeeded (Git commits done)
  *   - state is a live handle (non-NULL, DB open) owned by caller
+ *   - scope is the command's operation scope (caller guarantees
+ *     scope_enabled(scope)->count > 0 via its top-level guard)
  *   - items_by_profile contains profile → ptr_array_t mappings
  *   - ws contains valid workspace
  *
@@ -1059,6 +1061,8 @@ static error_t *flatten_items_to_array(
  *
  * @param repo Git repository (must not be NULL)
  * @param state Caller's state handle (must not be NULL, must have open DB)
+ * @param scope Operation scope (must not be NULL); scope_enabled drives
+ *              precedence resolution for manifest_update_files
  * @param items_by_profile Hashmap: profile → ptr_array_t* (must not be NULL)
  * @param opts Update options for verbose flag (must not be NULL)
  * @param out Output context for verbose logging (can be NULL)
@@ -1068,6 +1072,7 @@ static error_t *flatten_items_to_array(
 static error_t *update_manifest_after_update(
     git_repository *repo,
     state_t *state,
+    const scope_t *scope,
     const hashmap_t *items_by_profile,
     const cmd_update_options_t *opts,
     output_ctx_t *out,
@@ -1075,12 +1080,18 @@ static error_t *update_manifest_after_update(
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(state);
+    CHECK_NULL(scope);
     CHECK_NULL(items_by_profile);
     CHECK_NULL(opts);
     CHECK_NULL(out_updated);
 
+    /* Precedence resolution uses the validated enabled set owned by scope
+     * (profile_resolve_enabled has already filtered missing-branch entries).
+     * cmd_update enforces scope_enabled(scope)->count > 0 at its top-level
+     * guard; no defensive re-check here. */
+    const string_array_t *enabled_profiles = scope_enabled(scope);
+
     error_t *err = NULL;
-    string_array_t *enabled_profiles = NULL;
     const workspace_item_t **all_items = NULL;
     size_t item_count = 0;
     bool in_transaction = false;
@@ -1088,24 +1099,9 @@ static error_t *update_manifest_after_update(
     /* Initialize output */
     *out_updated = false;
 
-    /* Read enabled profiles from the caller's handle. cmd_update already
-     * enforced count > 0 before reaching this helper, but re-check defensively
-     * so future callers can't misuse the helper. */
-    err = state_get_profiles(state, &enabled_profiles);
-    if (err) {
-        return error_wrap(err, "Failed to get enabled profiles");
-    }
-
-    if (enabled_profiles->count == 0) {
-        /* No profiles enabled - nothing to do */
-        string_array_free(enabled_profiles);
-        return NULL;
-    }
-
     /* Begin write transaction on caller's handle */
     err = state_begin(state);
     if (err) {
-        string_array_free(enabled_profiles);
         return error_wrap(err, "Failed to begin manifest update transaction");
     }
     in_transaction = true;
@@ -1182,9 +1178,6 @@ cleanup:
         state_rollback(state);
     }
     free(all_items);  /* Free array, not items (borrowed) */
-    if (enabled_profiles) {
-        string_array_free(enabled_profiles);
-    }
 
     return err;
 }
@@ -2048,7 +2041,7 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
      */
     bool manifest_updated = false;
     error_t *manifest_err = update_manifest_after_update(
-        repo, state, by_profile, opts, out, &manifest_updated
+        repo, state, scope, by_profile, opts, out, &manifest_updated
     );
 
     /* Free by_profile hashmap after manifest sync */

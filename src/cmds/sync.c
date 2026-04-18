@@ -12,7 +12,6 @@
 #include <unistd.h>
 
 #include "base/args.h"
-#include "base/array.h"
 #include "base/error.h"
 #include "base/output.h"
 #include "core/manifest.h"
@@ -317,21 +316,28 @@ static error_t *pull_branch_ff(
 }
 
 /**
- * Phase 1: Fetch enabled profiles from remote
+ * Phase 1: Fetch profiles in sync scope from remote
+ *
+ * Operates on the active set (scope_active): fetching is driven by what the
+ * user asked for. `dotta sync -p work` fetches only `work`, not every
+ * enabled profile. Precedence-adjacent work (push phase) still uses the
+ * full enabled set — different role, different accessor.
  */
-static error_t *sync_fetch_enabled_profiles(
+static error_t *sync_fetch_phase(
     git_repository *repo,
     const char *remote_name,
-    const string_array_t *profiles,
+    const scope_t *scope,
     sync_results_t *results,
     output_ctx_t *out,
     transfer_context_t *xfer
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(remote_name);
-    CHECK_NULL(profiles);
+    CHECK_NULL(scope);
     CHECK_NULL(results);
     CHECK_NULL(out);
+
+    const string_array_t *profiles = scope_active(scope);
 
     /* Check if remote exists */
     git_remote *remote = NULL;
@@ -449,20 +455,26 @@ static error_t *sync_fetch_enabled_profiles(
 }
 
 /**
- * Phase 2: Analyze branch states
+ * Phase 2: Analyze branch states for profiles in sync scope
+ *
+ * Operates on the active set (scope_active), matching sync_fetch_phase:
+ * analyze only what the user asked for. results is sized from
+ * scope_active(scope)->count by the caller; the two counts agree.
  */
 static error_t *sync_analyze_phase(
     git_repository *repo,
     const char *remote_name,
-    const string_array_t *profiles,
+    const scope_t *scope,
     sync_results_t *results,
     output_ctx_t *out
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(remote_name);
-    CHECK_NULL(profiles);
+    CHECK_NULL(scope);
     CHECK_NULL(results);
     CHECK_NULL(out);
+
+    const string_array_t *profiles = scope_active(scope);
 
     for (size_t i = 0; i < profiles->count; i++) {
         profile_sync_result_t *result = &results->profiles[i];
@@ -1319,7 +1331,6 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
     error_t *err = NULL;
     workspace_t *ws = NULL;
     scope_t *scope = NULL;
-    string_array_t *push_profiles = NULL;
     sync_results_t *results = NULL;
     char *remote_name = NULL;
     char *remote_url = NULL;
@@ -1580,9 +1591,9 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
         goto cleanup;
     }
 
-    /* Phase 1: Fetch enabled profiles from remote */
-    err = sync_fetch_enabled_profiles(
-        repo, remote_name, scope_active(scope), results, out, xfer
+    /* Phase 1: Fetch profiles in sync scope from remote */
+    err = sync_fetch_phase(
+        repo, remote_name, scope, results, out, xfer
     );
     if (err) {
         goto cleanup;
@@ -1590,7 +1601,7 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
 
     /* Phase 2: Analyze branch states */
     err = sync_analyze_phase(
-        repo, remote_name, scope_active(scope), results, out
+        repo, remote_name, scope, results, out
     );
     if (err) {
         goto cleanup;
@@ -1660,15 +1671,6 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
         goto cleanup;
     }
 
-    /* Push operates on a fresh post-transaction view of state — scope's
-     * enabled set was resolved pre-transaction and could be narrowed by a
-     * CLI filter, which is not the right set here. */
-    err = state_get_profiles(state, &push_profiles);
-    if (err) {
-        err = error_wrap(err, "Failed to get enabled profiles");
-        goto cleanup;
-    }
-
     /* Reconcile manifest with current Git state before sync operations.
      *
      * If external Git changes moved a branch HEAD since the last dotta
@@ -1720,10 +1722,18 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
         fflush(out->stream);
     }
 
+    /* sync_push_phase's enabled_profiles parameter drives precedence
+     * resolution in manifest_sync_diff. scope_enabled is exactly the right
+     * set: validated by profile_resolve_enabled (missing branches already
+     * filtered and warned about at scope_build time) and filter-independent
+     * by construction (CLI -p narrows scope_active, never scope_enabled).
+     * Nothing between scope_build and here mutates the enabled_profiles
+     * table (state_set_profiles / state_enable_profile / state_disable_profile
+     * are confined to add/remove/profile/clone/interactive). */
     err = sync_push_phase(
         repo, remote_name, results, out, sync_ephemeral, auto_pull, opts->no_pull,
         no_push, diverged_strategy, xfer, config->confirm_destructive,
-        state, push_profiles
+        state, scope_enabled(scope)
     );
 
     if (sync_ephemeral) {
@@ -1825,7 +1835,6 @@ cleanup:
     if (remote_url) free(remote_url);
     if (remote_name) free(remote_name);
     if (results) sync_results_free(results);
-    if (push_profiles) string_array_free(push_profiles);
     if (scope) scope_free(scope);
 
     return err;

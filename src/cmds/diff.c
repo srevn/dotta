@@ -909,11 +909,17 @@ static size_t validate_filter_paths(
  * When multiple profiles are enabled, this function compares only the
  * profile that contains the specified commit (first match in precedence order)
  *
+ * Type-enforced VWD invariant: historical commit search walks the persistent
+ * enabled set via scope_enabled — the CLI filter must not hide commits
+ * belonging to other enabled profiles. The path filter is derived from
+ * scope_paths (raw CLI positional args, never narrowed).
+ *
  * @param repo Repository (must not be NULL)
+ * @param state State handle (must not be NULL)
  * @param commit_ref Commit reference to compare (must not be NULL)
- * @param profiles Profile list (must not be NULL)
- * @param file_filter File filter (can be NULL)
+ * @param scope Operation scope (must not be NULL)
  * @param opts Command options (must not be NULL)
+ * @param config Configuration (can be NULL)
  * @param out Output context (must not be NULL)
  * @return Error or NULL on success
  */
@@ -921,17 +927,19 @@ static error_t *diff_commit_to_workspace(
     git_repository *repo,
     const state_t *state,
     const char *commit_ref,
-    const string_array_t *profiles,
-    const path_filter_t *file_filter,
+    const scope_t *scope,
     const cmd_diff_options_t *opts,
     const config_t *config,
     output_ctx_t *out
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(commit_ref);
-    CHECK_NULL(profiles);
+    CHECK_NULL(scope);
     CHECK_NULL(opts);
     CHECK_NULL(out);
+
+    const string_array_t *profiles = scope_enabled(scope);
+    const path_filter_t *file_filter = scope_paths(scope);
 
     error_t *err = NULL;
     git_oid commit_oid;
@@ -1117,22 +1125,29 @@ static error_t *build_diff_pathspec(
 
 /**
  * Diff two commits
+ *
+ * Type-enforced VWD invariant: historical commit search walks the persistent
+ * enabled set via scope_enabled — hiding commits behind the CLI filter would
+ * make legitimately-referenceable commits unreachable. The path filter is
+ * derived from scope_paths (raw CLI positional args, never narrowed).
  */
 static error_t *diff_commits(
     git_repository *repo,
     const char *commit1_ref,
     const char *commit2_ref,
-    const string_array_t *profiles,
-    const path_filter_t *file_filter,
+    const scope_t *scope,
     const cmd_diff_options_t *opts,
     output_ctx_t *out
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(commit1_ref);
     CHECK_NULL(commit2_ref);
-    CHECK_NULL(profiles);
+    CHECK_NULL(scope);
     CHECK_NULL(opts);
     CHECK_NULL(out);
+
+    const string_array_t *profiles = scope_enabled(scope);
+    const path_filter_t *file_filter = scope_paths(scope);
 
     error_t *err = NULL;
     git_oid commit1_oid, commit2_oid;
@@ -1458,16 +1473,14 @@ error_t *cmd_diff(const dotta_ctx_t *ctx, const cmd_diff_options_t *opts) {
         case DIFF_COMMIT_TO_COMMIT:
             /* Diff two commits — historical mode, path filter only */
             err = diff_commits(
-                repo, opts->commit1, opts->commit2, scope_enabled(scope),
-                scope_paths(scope), opts, out
+                repo, opts->commit1, opts->commit2, scope, opts, out
             );
             goto cleanup;
 
         case DIFF_COMMIT_TO_WORKSPACE:
             /* Commit-to-workspace — historical mode, path filter only */
             err = diff_commit_to_workspace(
-                repo, state, opts->commit1, scope_enabled(scope),
-                scope_paths(scope), opts, config, out
+                repo, state, opts->commit1, scope, opts, config, out
             );
             goto cleanup;
 

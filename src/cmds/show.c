@@ -773,17 +773,15 @@ static error_t *show_post_parse(
 
         /* File mode: parse [profile:]file[@commit] into arena. */
         o->mode = SHOW_FILE;
-        char *profile = NULL;
-        char *file = NULL;
-        char *commit = NULL;
-        error_t *err = parse_refspec(arena, arg, &profile, &file, &commit);
+        refspec_t rs = { 0 };
+        error_t *err = parse_refspec(arena, arg, &rs);
         if (err != NULL) {
             return error_wrap(err, "Failed to parse file specification");
         }
         /* A refspec-supplied profile overrides any -p/--profile flag. */
-        if (profile != NULL) o->profile = profile;
-        o->file_path = file;
-        if (commit != NULL) o->commit = commit;
+        if (rs.profile != NULL) o->profile = rs.profile;
+        o->file_path = rs.file;
+        if (rs.commit != NULL) o->commit = rs.commit;
         return NULL;
     }
 
@@ -799,16 +797,14 @@ static error_t *show_post_parse(
 
         /* <profile> <file[@commit]> — refspec profile wins if present. */
         o->profile = args[0];
-        char *profile = NULL;
-        char *file = NULL;
-        char *commit = NULL;
-        error_t *err = parse_refspec(arena, args[1], &profile, &file, &commit);
+        refspec_t rs = { 0 };
+        error_t *err = parse_refspec(arena, args[1], &rs);
         if (err != NULL) {
             return error_wrap(err, "Failed to parse file specification");
         }
-        if (profile != NULL) o->profile = profile;
-        o->file_path = file;
-        if (commit != NULL) o->commit = commit;
+        if (rs.profile != NULL) o->profile = rs.profile;
+        o->file_path = rs.file;
+        if (rs.commit != NULL) o->commit = rs.commit;
         return NULL;
     }
 

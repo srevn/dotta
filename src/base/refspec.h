@@ -11,42 +11,44 @@
 #include <types.h>
 
 /**
+ * Parsed refspec components.
+ *
+ * String fields point into the arena supplied to parse_refspec, which
+ * owns their storage — the caller MUST NOT free them individually. A
+ * field is NULL when the corresponding component is absent from the
+ * input (except `file`, which is always set on success).
+ */
+typedef struct {
+    const char *profile;    /* Profile name, or NULL if not specified */
+    const char *file;       /* File path (always set on success) */
+    const char *commit;     /* Commit reference, or NULL if not specified */
+} refspec_t;
+
+/**
  * Parse refspec: [profile:]<path>[@commit]
  *
- * Extracts profile, file path, and commit from a refspec string.
+ * Splits the input into profile, file path, and commit components.
  * The ':' separator for profile is optional (profile defaults to NULL).
  * The '@' separator is only recognized when followed by a valid git reference.
  *
- * Allocator selection:
- *   - When @arena is NULL, outputs are allocated with malloc/strdup.
- *     The caller owns each non-NULL output and must free() it.
- *   - When @arena is non-NULL, outputs are bump-allocated in the arena.
- *     The caller MUST NOT free() them — the arena owns their lifetime.
- *
- * All output parameters are set to NULL on error.
+ * Output slices are bump-allocated in the provided arena and share its
+ * lifetime. On error, *out is left unchanged; callers should only read
+ * *out after the returned error is NULL.
  *
  * Examples:
- *   "home/.bashrc"                  -> profile=NULL, file="home/.bashrc", commit=NULL
- *   "global:home/.bashrc"           -> profile="global", file="home/.bashrc", commit=NULL
- *   "home/.bashrc@a4f2c8e"          -> profile=NULL, file="home/.bashrc", commit="a4f2c8e"
- *   "home/.bashrc@HEAD~1"           -> profile=NULL, file="home/.bashrc", commit="HEAD~1"
- *   "global:home/.bashrc@a4f2c8e"   -> profile="global", file="home/.bashrc", commit="a4f2c8e"
- *   "darwin/work:home/.bashrc"      -> profile="darwin/work", file="home/.bashrc", commit=NULL
- *   "foo@bar.txt"                   -> profile=NULL, file="foo@bar.txt", commit=NULL (not a git ref)
+ *   "home/.bashrc"                  -> {NULL,         "home/.bashrc", NULL}
+ *   "global:home/.bashrc"           -> {"global",     "home/.bashrc", NULL}
+ *   "home/.bashrc@a4f2c8e"          -> {NULL,         "home/.bashrc", "a4f2c8e"}
+ *   "home/.bashrc@HEAD~1"           -> {NULL,         "home/.bashrc", "HEAD~1"}
+ *   "global:home/.bashrc@a4f2c8e"   -> {"global",     "home/.bashrc", "a4f2c8e"}
+ *   "darwin/work:home/.bashrc"      -> {"darwin/work","home/.bashrc", NULL}
+ *   "foo@bar.txt"                   -> {NULL,         "foo@bar.txt",  NULL}  (not a git ref)
  *
- * @param arena Optional arena for allocations (NULL = heap / caller frees).
- * @param input Refspec string (must not be NULL)
- * @param out_profile Profile name or NULL if not specified
- * @param out_file File path (always set on success)
- * @param out_commit Commit ref or NULL if not specified
- * @return Error or NULL on success
+ * @param arena Arena for output allocations (must not be NULL).
+ * @param input Refspec string (must not be NULL).
+ * @param out   Parsed components. Untouched on error.
+ * @return Error or NULL on success.
  */
-error_t *parse_refspec(
-    arena_t *arena,
-    const char *input,
-    char **out_profile,
-    char **out_file,
-    char **out_commit
-);
+error_t *parse_refspec(arena_t *arena, const char *input, refspec_t *out);
 
 #endif /* DOTTA_REFSPEC_H */

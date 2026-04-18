@@ -1310,14 +1310,14 @@ static error_t *revert_post_parse(
 
     if (o->positional_count == 1) {
         /* [profile:]<file>[@commit] */
-        char *profile = NULL, *file = NULL, *commit = NULL;
-        error_t *err = parse_refspec(arena, args[0], &profile, &file, &commit);
+        refspec_t rs = { 0 };
+        error_t *err = parse_refspec(arena, args[0], &rs);
         if (err != NULL) {
             return error_wrap(err, "Failed to parse file specification");
         }
-        if (profile != NULL) o->profile = profile;
-        o->file_path = file;
-        if (commit != NULL) o->commit = commit;
+        if (rs.profile != NULL) o->profile = rs.profile;
+        o->file_path = rs.file;
+        if (rs.commit != NULL) o->commit = rs.commit;
     } else if (o->positional_count == 2) {
         if (str_looks_like_git_ref(args[1])) {
             /* <file> <commit> */
@@ -1326,16 +1326,14 @@ static error_t *revert_post_parse(
         } else {
             /* <profile> <file[@commit]> — refspec profile wins if present. */
             o->profile = args[0];
-            char *profile = NULL, *file = NULL, *commit = NULL;
-            error_t *err = parse_refspec(
-                arena, args[1], &profile, &file, &commit
-            );
+            refspec_t rs = { 0 };
+            error_t *err = parse_refspec(arena, args[1], &rs);
             if (err != NULL) {
                 return error_wrap(err, "Failed to parse file specification");
             }
-            if (profile != NULL) o->profile = profile;
-            o->file_path = file;
-            if (commit != NULL) o->commit = commit;
+            if (rs.profile != NULL) o->profile = rs.profile;
+            o->file_path = rs.file;
+            if (rs.commit != NULL) o->commit = rs.commit;
         }
     } else if (o->positional_count == 3) {
         o->profile = args[0];

@@ -759,9 +759,12 @@ static error_t *clone_dispatch(const void *ctx_v, void *opts_v) {
 
 static const args_opt_t clone_opts[] = {
     ARGS_GROUP("Options:"),
-    /* Three aliases on one flag, matching the legacy parser's
-     * `-p || --profile || --profiles` chain. Peer-list order is the
-     * display order in help output: "-p, --profile, --profiles". */
+    /* Three aliases — `-p`, `--profile`, `--profiles` — preserving
+     * the flag names the legacy parser accepted. Arity differs:
+     * ARGS_APPEND binds one value per occurrence, whereas the legacy
+     * parser consumed every bare token until the next flag. Users
+     * must write `-p a -p b` (not `-p a b`). Peer-list order is the
+     * help display order: "-p, --profile, --profiles". */
     ARGS_APPEND(
         "p profile profiles", "<name>",
         cmd_clone_options_t,  profiles,        profile_count,

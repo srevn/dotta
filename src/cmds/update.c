@@ -701,7 +701,6 @@ static error_t *update_metadata_for_profile(
  * @param opts Update options (must not be NULL)
  * @param out Output context (must not be NULL)
  * @param config Configuration (can be NULL)
- * @param ws Workspace for metadata cache access (can be NULL)
  * @param out_processed Output: number of items committed (must not be NULL)
  * @return Error or NULL on success
  */
@@ -713,7 +712,6 @@ static error_t *update_profile(
     const cmd_update_options_t *opts,
     output_ctx_t *out,
     const config_t *config,
-    workspace_t *ws,
     size_t *out_processed
 ) {
     CHECK_NULL(wt);
@@ -745,33 +743,23 @@ static error_t *update_profile(
     keymgr *keymgr = NULL;
     file_copy_result_t *copy_results = NULL;
 
-    /* Try to get metadata from workspace cache first */
-    if (ws) {
-        existing_metadata = (metadata_t *) workspace_get_metadata(ws, profile);
-        if (existing_metadata) {
-            owns_metadata = false;  /* Borrowed from workspace */
-        }
-    }
-
-    /* Fallback: load from Git if not in cache */
-    if (!existing_metadata) {
-        err = metadata_load_from_branch(wt_repo, profile, &existing_metadata);
-        if (err) {
-            if (err->code == ERR_NOT_FOUND) {
-                error_free(err);
-                err = metadata_create_empty(&existing_metadata);
-                if (err) {
-                    return error_wrap(err, "Failed to create empty metadata");
-                }
-            } else {
-                return error_wrap(
-                    err, "Failed to load metadata from profile '%s'",
-                    profile
-                );
+    /* Load metadata from Git branch */
+    err = metadata_load_from_branch(wt_repo, profile, &existing_metadata);
+    if (err) {
+        if (err->code == ERR_NOT_FOUND) {
+            error_free(err);
+            err = metadata_create_empty(&existing_metadata);
+            if (err) {
+                return error_wrap(err, "Failed to create empty metadata");
             }
+        } else {
+            return error_wrap(
+                err, "Failed to load metadata from profile '%s'",
+                profile
+            );
         }
-        owns_metadata = true;
     }
+    owns_metadata = true;
 
     /* Get keymgr if encryption may be needed */
     bool needs_encryption = false;
@@ -1068,11 +1056,9 @@ static error_t *flatten_items_to_array(
  *   - Caller should warn user and suggest repair options
  *
  * Performance: O(M + N) where M = total files in profiles, N = updated files
- * Old implementation: O(N × M) - up to 833x slower!
  *
  * @param repo Git repository (must not be NULL)
  * @param state Caller's state handle (must not be NULL, must have open DB)
- * @param ws Workspace for accessing keymgr and metadata cache (must not be NULL)
  * @param items_by_profile Hashmap: profile → ptr_array_t* (must not be NULL)
  * @param opts Update options for verbose flag (must not be NULL)
  * @param out Output context for verbose logging (can be NULL)
@@ -1082,7 +1068,6 @@ static error_t *flatten_items_to_array(
 static error_t *update_manifest_after_update(
     git_repository *repo,
     state_t *state,
-    workspace_t *ws,
     const hashmap_t *items_by_profile,
     const cmd_update_options_t *opts,
     output_ctx_t *out,
@@ -1090,7 +1075,6 @@ static error_t *update_manifest_after_update(
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(state);
-    CHECK_NULL(ws);
     CHECK_NULL(items_by_profile);
     CHECK_NULL(opts);
     CHECK_NULL(out_updated);
@@ -1219,7 +1203,6 @@ cleanup:
  * @param opts Update options (must not be NULL)
  * @param out Output context (must not be NULL)
  * @param config Configuration (can be NULL)
- * @param ws Workspace for metadata cache access (can be NULL)
  * @param total_updated Output: total items updated across all profiles (must not be NULL)
  * @param out_by_profile Output: hashmap of items grouped by profile (must not be NULL, freed by caller)
  * @return Error or NULL on success
@@ -1231,7 +1214,6 @@ static error_t *update_execute_for_all_profiles(
     const cmd_update_options_t *opts,
     output_ctx_t *out,
     const config_t *config,
-    workspace_t *ws,
     size_t *total_updated,
     hashmap_t **out_by_profile
 ) {
@@ -1302,7 +1284,7 @@ static error_t *update_execute_for_all_profiles(
         size_t processed = 0;
         err = update_profile(
             wt, profile, (const workspace_item_t **) array->items, array->count,
-            opts, out, config, ws, &processed
+            opts, out, config, &processed
         );
 
         if (err) {
@@ -2026,11 +2008,10 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
             break;
     }
 
-    /* Execute profile updates - workspace provides metadata cache for O(1) lookups.
-     * Items are already filtered to operation scope by filter_items_for_update. */
+    /* Execute profile updates. Filtered to operation scope */
     hashmap_t *by_profile = NULL;
     err = update_execute_for_all_profiles(
-        repo, update_items, update_count, opts, out, config, ws,
+        repo, update_items, update_count, opts, out, config,
         &total_updated, &by_profile
     );
 
@@ -2055,7 +2036,7 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
      */
     bool manifest_updated = false;
     error_t *manifest_err = update_manifest_after_update(
-        repo, state, ws, by_profile, opts, out, &manifest_updated
+        repo, state, by_profile, opts, out, &manifest_updated
     );
 
     /* Free by_profile hashmap after manifest sync */

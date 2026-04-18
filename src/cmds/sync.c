@@ -1661,50 +1661,50 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
         goto cleanup;
     }
 
-    /* Stale repair and push operate on a fresh post-transaction view of
-     * state — scope's enabled set was resolved pre-transaction and could
-     * be narrowed by CLI filter, which is not the right set here. */
+    /* Push operates on a fresh post-transaction view of state — scope's
+     * enabled set was resolved pre-transaction and could be narrowed by a
+     * CLI filter, which is not the right set here. */
     err = state_get_profiles(state, &push_profiles);
     if (err) {
         err = error_wrap(err, "Failed to get enabled profiles");
         goto cleanup;
     }
 
-    /* Repair stale manifest before sync operations.
+    /* Reconcile manifest with current Git state before sync operations.
      *
-     * If external Git changes moved a branch HEAD since the last dotta operation,
-     * state entries have stale blob_oid values. manifest_sync_diff() computes
-     * a diff between old_oid (local HEAD before fetch) and new_oid (after merge). It
-     * then updates the per-profile commit_oid in push_profiles to match the new HEAD.
-     * This masks pre-existing staleness: files changed between the stale state and the
-     * pre-fetch HEAD would have their commit_oid updated (now matching HEAD) but blob_oid
-     * unchanged (still from the stale commit). These entries become permanently invisible
-     * to staleness detection — ghost entries with wrong blob_oid.
+     * If external Git changes moved a branch HEAD since the last dotta
+     * operation, state entries have stale blob_oid values. manifest_sync_diff
+     * (downstream of push) computes a diff between old_oid (local HEAD before
+     * fetch) and new_oid (after merge), then advances the per-profile
+     * commit_oid to match the new HEAD. That masks pre-existing staleness:
+     * files changed between the stale state and the pre-fetch HEAD get their
+     * commit_oid updated (now matching HEAD) while blob_oid stays at the
+     * stale value — ghost entries permanently invisible to staleness detection.
      *
-     * Running repair first brings state in sync with the current local HEAD. Then
-     * sync_diff operates on accurate state and only handles the remote changes. */
-    if (push_profiles && push_profiles->count > 0) {
-        manifest_repair_stats_t repair_stats = { 0 };
-        err = manifest_repair_stale(repo, state, push_profiles, &repair_stats, NULL);
-        if (err) {
-            err = error_wrap(err, "Failed to repair stale manifest before sync");
-            goto cleanup;
-        }
+     * Reconciling first brings state in sync with the current local HEAD so
+     * sync_diff operates on accurate state and only handles the remote
+     * changes. manifest_reconcile detects sync's already-held transaction via
+     * state_locked() and writes directly (no nested begin/commit). */
+    manifest_repair_stats_t repair_stats = { 0 };
+    err = manifest_reconcile(repo, state, &repair_stats, NULL);
+    if (err) {
+        err = error_wrap(err, "Failed to reconcile manifest before sync");
+        goto cleanup;
+    }
 
-        if (repair_stats.updated > 0 || repair_stats.released > 0) {
-            output_info(
-                out, OUTPUT_NORMAL, "Synchronized %zu file%s, released %zu from management",
-                repair_stats.updated, repair_stats.updated == 1 ? "" : "s",
-                repair_stats.released
-            );
-        }
-        if (repair_stats.reassigned > 0) {
-            output_info(
-                out, OUTPUT_NORMAL, "Detected %zu profile reassignment%s from external changes",
-                repair_stats.reassigned,
-                repair_stats.reassigned == 1 ? "" : "s"
-            );
-        }
+    if (repair_stats.updated > 0 || repair_stats.released > 0) {
+        output_info(
+            out, OUTPUT_NORMAL, "Synchronized %zu file%s, released %zu from management",
+            repair_stats.updated, repair_stats.updated == 1 ? "" : "s",
+            repair_stats.released
+        );
+    }
+    if (repair_stats.reassigned > 0) {
+        output_info(
+            out, OUTPUT_NORMAL, "Detected %zu profile reassignment%s from external changes",
+            repair_stats.reassigned,
+            repair_stats.reassigned == 1 ? "" : "s"
+        );
     }
 
     /* Phase 3: Sync with remote (push/pull/divergence handling)

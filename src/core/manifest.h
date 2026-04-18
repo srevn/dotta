@@ -473,82 +473,59 @@ error_t *manifest_rebuild(
 );
 
 /**
- * Detect which enabled profiles have stale manifest entries
+ * Reconcile manifest with current Git state (drift repair)
  *
- * Compares each in-scope profile's stored commit_oid (from enabled_profiles)
- * against its branch's current HEAD via lightweight ref-to-OID lookups.
- * Mismatch means external Git operations occurred since the last dotta
- * operation.
+ * The single public entry point for drift-based VWD repair. Brings the
+ * manifest into sync with Git by detecting profiles whose stored commit_oid
+ * no longer matches the branch HEAD and updating affected state entries.
+ * Used by workspace_load at load-start and by sync before push.
  *
- * Performance: O(P) state queries + O(P) ref lookups where P = profile count.
+ * Complements manifest_sync_diff(): reconcile is drift-driven ("don't know
+ * what changed, figure it out"), while sync_diff applies a known old→new
+ * diff. Both write the manifest; this function is the one callers reach for
+ * when they only know "something in Git may have moved."
  *
- * @param repo Git repository (must not be NULL)
- * @param state State handle (must not be NULL)
- * @param profile_scope Name-only membership set (must not be NULL). Keys are
- *                      in-scope profile names; values are ignored (NULL).
- * @param out_stale Output: hashmap of profile -> sentinel for stale profiles.
- *                  NULL if no profiles are stale. Caller frees with hashmap_free(map, NULL).
- * @return Error or NULL on success
- */
-error_t *manifest_detect_stale_profiles(
-    git_repository *repo,
-    const state_t *state,
-    const hashmap_t *profile_scope,
-    hashmap_t **out_stale
-);
-
-/**
- * Repair stale manifest entries from external Git changes
+ * Transaction management
+ * ----------------------
+ * This function handles transactions internally by inspecting state_locked():
+ *   - Caller already holds a transaction (apply's dotta_ext_write, sync's
+ *     state_begin) → writes commit with the caller's transaction.
+ *   - Caller doesn't hold one (workspace loading from status/diff/update) →
+ *     opens a scoped BEGIN IMMEDIATE, commits on success, rolls back on
+ *     failure.
  *
- * Detects and repairs state entries whose commit_oid no longer matches the
- * profile branch's current HEAD. This happens when Git operations occur
- * outside dotta (git commit, git rebase, git rm, etc.).
+ * Callers never need to pre-open a transaction for this function.
  *
- * This is the persistent counterpart to workspace's in-memory patching.
- * After repair, subsequent workspace_load() calls see accurate state
- * with zero overhead (no stale detection needed).
- *
- * Algorithm:
- *   1. Quick staleness check: O(P) — one state query per enabled profile,
- *      compare commit_oid against branch HEAD. If all current: return (zero cost).
- *   2. For stale profiles: load all state entries and build fresh manifest.
- *   3. For each ACTIVE state entry from stale profiles:
- *      - Found in fresh manifest: update entry (new blob_oid, metadata)
- *      - Not in fresh manifest: mark STATE_RELEASED (loss of authority)
- *   4. Sync enabled_profiles.commit_oid for each repaired profile.
- *   5. Sync tracked directories for consistency.
+ * Profile scope
+ * -------------
+ * Current enabled profiles are fetched internally. Callers that have already
+ * fetched the list for their own reasons need not pass it; the primitive
+ * reads under whatever transaction is active. Empty enabled set is a valid
+ * no-op (reconcile early-returns).
  *
  * Preconditions:
- *   - state MUST have active transaction (via state_open)
- *   - enabled_profiles MUST be current enabled set
+ *   - state MUST be opened (read or write; transaction optional)
  *
  * Postconditions:
- *   - Updated entries have current blob_oid and metadata
- *   - Released entries marked STATE_RELEASED (orphan pipeline handles cleanup)
- *   - Tracked directories synced to reflect current Git state
- *   - Transaction remains open (caller commits)
+ *   - Drift repaired; manifest entries reflect current Git HEAD
+ *   - Caller's transaction state is unchanged (kept outer lock, or
+ *     committed our scoped one)
  *
  * Performance:
  *   Common case (no staleness): O(P) state queries + O(P) ref lookups
  *   Stale case: O(M) fresh manifest build, M = total files in Git
  *
  * @param repo Git repository (must not be NULL)
- * @param state State handle with active transaction (must not be NULL)
- * @param enabled_profiles Current enabled profiles (must not be NULL)
- * @param out_stats Output repair statistics (must not be NULL)
- * @param out_repaired_paths Optional output: hashmap of filesystem_path → old_blob_oid
- *            for entries whose blob actually changed. Entries with only commit_oid
- *            refresh (same blob) are excluded — they won't trigger content
- *            divergence in workspace, so Path B's guard would skip them anyway.
- *            Caller must free with hashmap_free(map, free). NULL to skip.
- *            Used by workspace to verify old content before allowing deployment
- *            (prevents overwriting user modifications during stale repair).
+ * @param state State handle (must not be NULL)
+ * @param out_stats Optional: repair statistics (NULL = don't care)
+ * @param out_repaired_paths Optional: hashmap of filesystem_path → old_blob_oid
+ *            for content-changed entries. Caller frees with
+ *            hashmap_free(map, free). NULL to skip.
  * @return Error or NULL on success
  */
-error_t *manifest_repair_stale(
+error_t *manifest_reconcile(
     git_repository *repo,
     state_t *state,
-    const string_array_t *enabled_profiles,
     manifest_repair_stats_t *out_stats,
     hashmap_t **out_repaired_paths
 );

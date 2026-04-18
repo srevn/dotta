@@ -23,7 +23,6 @@
 #include <types.h>
 
 #include "base/output.h"
-#include "core/metadata.h"
 #include "core/state.h"
 #include "infra/content.h"
 
@@ -103,33 +102,6 @@ typedef struct {
     bool analyze_untracked;    /* Directory scanning for new files (EXPENSIVE!) */
     bool analyze_directories;  /* Directory metadata checks */
     bool analyze_encryption;   /* Encryption policy validation */
-
-    /* Stale repair context (from manifest_repair_stale)
-     *
-     * When non-NULL, maps filesystem_path -> git_oid * (old blob OID, binary)
-     * for entries that were persistently repaired before workspace_load(). Used
-     * to set DIVERGENCE_STALE on items whose file content matches the old
-     * (deployed) blob, enabling preflight to distinguish "expected state
-     * changed" from "user modified."
-     *
-     * Borrowed reference — workspace does NOT free this. Caller owns it.
-     */
-    const hashmap_t *repaired_paths;
-
-    /* Set by callers that have already run manifest_repair_stale() to persist
-     * fresh Git state into the manifest before this load. When true, the
-     * workspace trusts the state to be current and skips its own
-     * manifest_detect_stale_profiles() pass plus the in-memory patching path.
-     *
-     * Only apply.c sets this — it repairs inside its write transaction, then
-     * loads the workspace. Read-only commands (status, diff) cannot repair
-     * persistently and must leave this false. Sync also leaves it false: its
-     * workspace load precedes the repair call.
-     *
-     * Orthogonal to repaired_paths, which is still consulted for display
-     * tagging of freshly-repaired entries.
-     */
-    bool repair_completed;
 } workspace_load_t;
 
 /**
@@ -277,26 +249,6 @@ const workspace_item_t *workspace_get_item(
 );
 
 /**
- * Get cached metadata for profile
- *
- * Returns metadata from the workspace cache (O(1) lookup). The cache is
- * populated only when staleness was detected during workspace_load() — in
- * the common (non-stale) case, this returns NULL for all profiles.
- *
- * Callers should treat this as an opportunistic cache: use the result when
- * non-NULL, fall back to metadata_load_from_branch() otherwise. The only
- * external consumer (update.c) already follows this pattern.
- *
- * @param ws Workspace (must not be NULL)
- * @param profile Profile name (must not be NULL)
- * @return Metadata or NULL if not cached (borrowed reference, valid until workspace_free)
- */
-const metadata_t *workspace_get_metadata(
-    const workspace_t *ws,
-    const char *profile
-);
-
-/**
  * Check for metadata (mode and ownership) divergence (data-centric design)
  *
  * Compares filesystem metadata with expected values to detect changes in
@@ -394,19 +346,6 @@ bool workspace_item_extract_display_info(
     char *metadata_buf,
     size_t metadata_size
 );
-
-/**
- * Check if workspace detected stale manifest entries
- *
- * Returns true if any profile's VWD cache was stale due to external Git
- * operations. Stale entries are patched in-memory during workspace load,
- * but the state database is NOT modified. Use this to inform the user
- * and suggest running 'dotta apply' for persistent repair.
- *
- * @param ws Workspace (must not be NULL)
- * @return true if staleness was detected and patched
- */
-bool workspace_is_stale(const workspace_t *ws);
 
 /**
  * Flush accumulated stat cache updates to the state database

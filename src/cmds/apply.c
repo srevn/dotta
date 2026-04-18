@@ -815,58 +815,12 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     content_cache_t *cache = NULL;
     preflight_result_t *preflight = NULL;
     cleanup_preflight_result_t *cleanup_preflight = NULL;
-    hashmap_t *repaired_paths = NULL;
     char *profiles_str = NULL;
     deploy_result_t *deploy_res = NULL;
 
     /* CLI flags override config */
     if (opts->verbose) {
         output_set_verbosity(out, OUTPUT_VERBOSE);
-    }
-
-    /* Persistent stale manifest repair
-     *
-     * Detect and fix state entries whose commit_oid no longer matches the
-     * profile branch HEAD (caused by external Git operations). Runs BEFORE
-     * workspace_load() so the workspace sees accurate state. After repair,
-     * workspace_load's in-memory patching path won't trigger (commit_oid
-     * matches HEAD), eliminating redundant fresh manifest builds.
-     *
-     * Uses the raw DB list (state_get_profiles, no branch validation)
-     * because branch-validation failures must not block in-place repair.
-     * Block-scoped so the raw list's lifetime is visibly minimal;
-     * STRING_ARRAY_CLEANUP frees it on every exit path.
-     */
-    string_array_t *raw_profiles STRING_ARRAY_CLEANUP = NULL;
-    err = state_get_profiles(state, &raw_profiles);
-    if (err) {
-        err = error_wrap(err, "Failed to get enabled profiles for stale repair");
-        goto cleanup;
-    }
-
-    if (raw_profiles && raw_profiles->count > 0) {
-        manifest_repair_stats_t repair_stats = { 0 };
-        err = manifest_repair_stale(
-            repo, state, raw_profiles, &repair_stats, &repaired_paths
-        );
-        if (err) {
-            err = error_wrap(err, "Failed to repair stale manifest");
-            goto cleanup;
-        }
-
-        if (repair_stats.updated > 0 || repair_stats.released > 0) {
-            output_info(
-                out, OUTPUT_NORMAL, "Synchronized %zu file%s, released %zu from management",
-                repair_stats.updated, repair_stats.updated == 1 ? "" : "s",
-                repair_stats.released
-            );
-        }
-        if (repair_stats.reassigned > 0) {
-            output_info(
-                out, OUTPUT_NORMAL, "Detected %zu profile reassignment%s from external changes",
-                repair_stats.reassigned, repair_stats.reassigned == 1 ? "" : "s"
-            );
-        }
     }
 
     /* Build operation scope
@@ -882,9 +836,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      *
      * Scope_build resolves enabled (lenient on empty), resolves and
      * validates the CLI filter, harvests custom prefixes from the active
-     * set, builds the path filter, and deep-copies excludes. The
-     * pre-scope stale-repair phase above used the raw DB list; scope's
-     * resolved enabled set is validated against existing branches. */
+     * set, builds the path filter, and deep-copies excludes. */
     output_print(out, OUTPUT_VERBOSE, "Loading profiles...\n");
 
     scope_inputs_t scope_inputs = {
@@ -934,11 +886,9 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     workspace_load_t ws_opts = {
         .analyze_files       = true,
         .analyze_orphans     = true,
-        .analyze_untracked   = false,             /* Skip expensive directory scan */
-        .analyze_directories = true,              /* Directory metadata convergence */
-        .analyze_encryption  = false,             /* Not needed for deployment */
-        .repaired_paths      = repaired_paths,    /* From stale repair: path → old_blob_oid */
-        .repair_completed    = true               /* manifest_repair_stale ran above */
+        .analyze_untracked   = false,            /* Skip expensive directory scan */
+        .analyze_directories = true,             /* Directory metadata convergence */
+        .analyze_encryption  = false             /* Not needed for deployment */
     };
     err = workspace_load(repo, state, scope_enabled(scope), config, &ws_opts, &ws);
     if (err) {
@@ -2049,7 +1999,6 @@ cleanup:
     if (excluded_orphans) free(excluded_orphans);
     if (dir_orphans) free(dir_orphans);
     if (file_orphans) free(file_orphans);
-    if (repaired_paths) hashmap_free(repaired_paths, free);
     if (ws) workspace_free(ws);
     if (scope) scope_free(scope);
 

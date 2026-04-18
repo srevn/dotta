@@ -30,14 +30,14 @@
  * preprocessor comparisons if a call site ever needs to.
  */
 #define DOTTA_VERSION_MAJOR 0
-#define DOTTA_VERSION_MINOR 68
+#define DOTTA_VERSION_MINOR 69
 #define DOTTA_VERSION_PATCH 0
 
 /**
  * Pre-release suffix, including a leading dash when present.
  *
  * Examples:
- *   ""       stable release        → "0.65.1"
+ *   ""       stable release         → "0.65.1"
  *   "-dev"   in-development build   → "0.65.1-dev"
  *   "-rc.1"  release candidate      → "0.65.1-rc.1"
  *   "-alpha" alpha                  → "0.65.1-alpha"

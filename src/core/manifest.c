@@ -1218,16 +1218,10 @@ cleanup:
  *
  * O(P) state queries + O(P) ref lookups where P = profile count.
  *
- * @param repo Git repository (must not be NULL)
- * @param state State handle (must not be NULL)
- * @param profile_scope Profile scope filter (must not be NULL). Keys are
- *                      in-scope profile names; values are ignored (NULL sentinels).
- * @param out_stale Output: hashmap of profile -> (void*)1 sentinel for
- *                  stale profiles. NULL if none stale. Caller frees with
- *                  hashmap_free(map, NULL).
- * @return Error or NULL on success
+ * Internal helper for manifest_repair_stale. Not part of the public API —
+ * callers reach drift repair through manifest_reconcile.
  */
-error_t *manifest_detect_stale_profiles(
+static error_t *manifest_detect_stale_profiles(
     git_repository *repo,
     const state_t *state,
     const hashmap_t *profile_scope,
@@ -1251,8 +1245,8 @@ error_t *manifest_detect_stale_profiles(
 
         /* Fetch current branch HEAD via lightweight ref-to-OID lookup.
          *
-         * profile_scope is a membership set (NULL values) — both callers
-         * (workspace and manifest_repair_stale) pass profile sets. */
+         * profile_scope is a membership set (NULL values) — manifest_repair_stale
+         * populates it from the enabled-profile list before calling us. */
         git_oid head_oid;
         err = gitops_resolve_branch_head_oid(repo, profile, &head_oid);
         if (err) {
@@ -1286,14 +1280,16 @@ error_t *manifest_detect_stale_profiles(
 /**
  * Repair stale manifest entries from external Git changes
  *
- * Persistent repair: detects state entries whose commit_oid no longer matches
- * the profile branch HEAD, then either updates them from fresh Git state
- * or marks them STATE_RELEASED for release.
+ * Persistent repair: detects state entries whose commit_oid no longer
+ * matches the profile branch HEAD, then either updates them from fresh Git
+ * state or marks them STATE_RELEASED for release.
  *
- * Complements workspace's in-memory patching. After this function runs,
- * workspace_load() sees accurate state with zero staleness overhead.
+ * Internal algorithm implementation. manifest_reconcile is the public entry
+ * point — it owns profile-list fetching, transaction scoping, and empty-
+ * scope handling; this helper runs the repair algorithm assuming a ready
+ * transaction and validated inputs.
  */
-error_t *manifest_repair_stale(
+static error_t *manifest_repair_stale(
     git_repository *repo,
     state_t *state,
     const string_array_t *enabled_profiles,
@@ -1537,6 +1533,75 @@ cleanup:
     if (repaired_paths) hashmap_free(repaired_paths, free);
     arena_destroy(arena);
 
+    return err;
+}
+
+/**
+ * Reconcile manifest with current Git state (public entry point)
+ *
+ * Self-contained drift repair: fetches enabled profiles, scopes a write
+ * transaction when needed, delegates the repair algorithm to
+ * manifest_repair_stale, and commits. Callers supply only the repo and
+ * state — everything else is derived.
+ */
+error_t *manifest_reconcile(
+    git_repository *repo,
+    state_t *state,
+    manifest_repair_stats_t *out_stats,
+    hashmap_t **out_repaired_paths
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(state);
+
+    string_array_t *profiles = NULL;
+    error_t *err = state_get_profiles(state, &profiles);
+    if (err) {
+        return error_wrap(err, "Failed to fetch enabled profiles for reconcile");
+    }
+
+    /* Normalize outputs for every early-return path */
+    if (out_stats) memset(out_stats, 0, sizeof(*out_stats));
+    if (out_repaired_paths) *out_repaired_paths = NULL;
+
+    /* Empty enabled set — no scope to reconcile. Consistent with the
+     * "disable last profile, then apply" workflow: nothing to sync. */
+    if (!profiles || profiles->count == 0) {
+        string_array_free(profiles);
+        return NULL;
+    }
+
+    /* Scope a write transaction only when the caller doesn't already hold
+     * one. Apply runs under dotta_ext_write; sync calls us after its own
+     * state_begin. Workspace (from status/diff/update) holds no transaction
+     * and needs the scoped one. */
+    bool needs_tx = !state_locked(state);
+    if (needs_tx) {
+        err = state_begin(state);
+        if (err) {
+            string_array_free(profiles);
+            return error_wrap(err, "Failed to begin reconcile transaction");
+        }
+    }
+
+    /* manifest_repair_stale requires a non-NULL out_stats; route to a local
+     * sink when the caller doesn't care so the internal contract stays hidden. */
+    manifest_repair_stats_t local_stats;
+    manifest_repair_stats_t *stats_target = out_stats ? out_stats : &local_stats;
+
+    err = manifest_repair_stale(repo, state, profiles, stats_target, out_repaired_paths);
+
+    if (needs_tx) {
+        if (err) {
+            state_rollback(state);
+        } else {
+            error_t *commit_err = state_commit(state);
+            if (commit_err) {
+                err = error_wrap(commit_err, "Failed to commit reconcile transaction");
+            }
+        }
+    }
+
+    string_array_free(profiles);
     return err;
 }
 

@@ -209,14 +209,6 @@ static void display_workspace_status(
         }
     }
 
-    /* Staleness warning — external Git changes detected */
-    if (workspace_is_stale(ws)) {
-        output_warning(
-            out, OUTPUT_NORMAL, "External Git changes detected — manifest is stale\n"
-            "  Hint: Run 'dotta apply' to synchronize state"
-        );
-    }
-
     /* Show sectioned output for dirty/invalid workspace */
     if (ws_status != WORKSPACE_CLEAN) {
         /* When filter active and filtered profile is clean, skip detailed sections */

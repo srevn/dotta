@@ -726,6 +726,6 @@ const args_command_t spec_interactive = {
         "  - Enabled profiles are saved to state in the displayed order\n"
         "  - Profile order determines layering (later overrides earlier)\n"
         "  - Use regular commands (apply, update, sync) after enabling profiles\n",
-    .user_data    = &dotta_ext_required,
+    .payload      = &dotta_ext_required,
     .dispatch     = interactive_dispatch,
 };

@@ -1426,6 +1426,6 @@ const args_command_t spec_revert = {
     .opts_size   = sizeof(cmd_revert_options_t),
     .opts        = revert_opts,
     .post_parse  = revert_post_parse,
-    .user_data   = &dotta_ext_required,
+    .payload     = &dotta_ext_required,
     .dispatch    = revert_dispatch,
 };

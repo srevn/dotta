@@ -10,6 +10,7 @@
 #include <string.h>
 #include <time.h>
 
+#include "base/args.h"
 #include "base/array.h"
 #include "base/error.h"
 #include "base/output.h"
@@ -1152,6 +1153,6 @@ const args_command_t spec_status = {
     .opts_size   = sizeof(cmd_status_options_t),
     .opts        = status_opts,
     .post_parse  = status_post_parse,
-    .user_data   = &dotta_ext_required,
+    .payload     = &dotta_ext_required,
     .dispatch    = status_dispatch,
 };

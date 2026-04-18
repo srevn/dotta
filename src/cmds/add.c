@@ -4,6 +4,7 @@
 
 #include "cmds/add.h"
 
+#include <config.h>
 #include <dirent.h>
 #include <errno.h>
 #include <git2.h>
@@ -11,6 +12,7 @@
 #include <string.h>
 #include <sys/stat.h>
 
+#include "base/args.h"
 #include "base/array.h"
 #include "base/buffer.h"
 #include "base/error.h"
@@ -28,7 +30,6 @@
 #include "sys/filesystem.h"
 #include "sys/gitops.h"
 #include "utils/commit.h"
-#include "utils/config.h"
 #include "utils/hooks.h"
 #include "utils/privilege.h"
 
@@ -1865,6 +1866,6 @@ const args_command_t spec_add = {
     .opts_size   = sizeof(cmd_add_options_t),
     .opts        = add_opts,
     .post_parse  = add_post_parse,
-    .user_data   = &dotta_ext_required,
+    .payload     = &dotta_ext_required,
     .dispatch    = add_dispatch,
 };

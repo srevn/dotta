@@ -8,7 +8,7 @@
 #ifndef DOTTA_CMD_GIT_H
 #define DOTTA_CMD_GIT_H
 
-#include "cmds/runtime.h"
+#include <runtime.h>
 
 /**
  * Git command options

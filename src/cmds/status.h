@@ -8,9 +8,8 @@
 #define DOTTA_CMD_STATUS_H
 
 #include <git2.h>
+#include <runtime.h>
 #include <types.h>
-
-#include "cmds/runtime.h"
 
 /**
  * Command options

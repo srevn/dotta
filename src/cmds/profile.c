@@ -1667,7 +1667,7 @@ static const args_command_t spec_profile_list = {
     .opts_size     = sizeof(cmd_profile_options_t),
     .opts          = profile_list_opts,
     .init_defaults = profile_list_defaults,
-    .user_data     = &dotta_ext_required,
+    .payload       = &dotta_ext_required,
     .dispatch      = profile_dispatch,
 };
 
@@ -1701,7 +1701,7 @@ static const args_command_t spec_profile_fetch = {
     .opts_size     = sizeof(cmd_profile_options_t),
     .opts          = profile_fetch_opts,
     .init_defaults = profile_fetch_defaults,
-    .user_data     = &dotta_ext_required,
+    .payload       = &dotta_ext_required,
     .dispatch      = profile_dispatch,
 };
 
@@ -1752,7 +1752,7 @@ static const args_command_t spec_profile_enable = {
     .opts_size     = sizeof(cmd_profile_options_t),
     .opts          = profile_enable_opts,
     .init_defaults = profile_enable_defaults,
-    .user_data     = &dotta_ext_required,
+    .payload       = &dotta_ext_required,
     .dispatch      = profile_dispatch,
 };
 
@@ -1797,7 +1797,7 @@ static const args_command_t spec_profile_disable = {
     .opts_size     = sizeof(cmd_profile_options_t),
     .opts          = profile_disable_opts,
     .init_defaults = profile_disable_defaults,
-    .user_data     = &dotta_ext_required,
+    .payload       = &dotta_ext_required,
     .dispatch      = profile_dispatch,
 };
 
@@ -1835,7 +1835,7 @@ static const args_command_t spec_profile_reorder = {
     .opts_size     = sizeof(cmd_profile_options_t),
     .opts          = profile_reorder_opts,
     .init_defaults = profile_reorder_defaults,
-    .user_data     = &dotta_ext_required,
+    .payload       = &dotta_ext_required,
     .dispatch      = profile_dispatch,
 };
 
@@ -1862,7 +1862,7 @@ static const args_command_t spec_profile_validate = {
     .opts_size     = sizeof(cmd_profile_options_t),
     .opts          = profile_validate_opts,
     .init_defaults = profile_validate_defaults,
-    .user_data     = &dotta_ext_required,
+    .payload       = &dotta_ext_required,
     .dispatch      = profile_dispatch,
 };
 

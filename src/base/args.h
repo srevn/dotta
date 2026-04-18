@@ -307,8 +307,8 @@ struct args_command {
     args_validate validate;      /* Cross-field invariant check; runs after post_parse */
 
     /* Execution  */
-    const void *user_data;       /* Domain-extension payload (opaque to engine) */
-    args_dispatch dispatch;      /* Command entry point */
+    const void *payload;       /* Domain-extension payload (opaque to engine) */
+    args_dispatch dispatch;    /* Command entry point */
 
     /* Root-level flag aliases */
     const char *root_aliases;    /* argv[1] match dispatches command; NULL = none */

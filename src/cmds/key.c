@@ -543,6 +543,6 @@ const args_command_t spec_key = {
     .opts_size   = sizeof(cmd_key_options_t),
     .opts        = key_opts,
     .post_parse  = key_post_parse,
-    .user_data   = &dotta_ext_required,
+    .payload     = &dotta_ext_required,
     .dispatch    = key_dispatch,
 };

@@ -7,10 +7,9 @@
 #ifndef DOTTA_CMD_BOOTSTRAP_H
 #define DOTTA_CMD_BOOTSTRAP_H
 
+#include <runtime.h>
 #include <stdbool.h>
 #include <types.h>
-
-#include "cmds/runtime.h"
 
 /**
  * Bootstrap command options

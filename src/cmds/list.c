@@ -15,6 +15,7 @@
 #include <string.h>
 #include <time.h>
 
+#include "base/args.h"
 #include "base/array.h"
 #include "base/error.h"
 #include "base/output.h"
@@ -948,6 +949,6 @@ const args_command_t spec_list = {
     .opts_size   = sizeof(cmd_list_options_t),
     .opts        = list_opts,
     .post_parse  = list_post_parse,
-    .user_data   = &dotta_ext_required,
+    .payload     = &dotta_ext_required,
     .dispatch    = list_dispatch,
 };

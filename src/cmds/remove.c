@@ -4,6 +4,7 @@
 
 #include "cmds/remove.h"
 
+#include <config.h>
 #include <git2.h>
 #include <limits.h>
 #include <stdio.h>
@@ -11,6 +12,7 @@
 #include <string.h>
 #include <unistd.h>
 
+#include "base/args.h"
 #include "base/array.h"
 #include "base/error.h"
 #include "base/hashmap.h"
@@ -26,7 +28,6 @@
 #include "sys/gitops.h"
 #include "sys/upstream.h"
 #include "utils/commit.h"
-#include "utils/config.h"
 #include "utils/hooks.h"
 
 /**
@@ -1987,6 +1988,6 @@ const args_command_t spec_remove = {
     .opts_size   = sizeof(cmd_remove_options_t),
     .opts        = remove_opts,
     .post_parse  = remove_post_parse,
-    .user_data   = &dotta_ext_required,
+    .payload     = &dotta_ext_required,
     .dispatch    = remove_dispatch,
 };

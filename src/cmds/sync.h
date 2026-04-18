@@ -10,9 +10,9 @@
 #define DOTTA_CMD_SYNC_H
 
 #include <git2.h>
+#include <runtime.h>
 #include <types.h>
 
-#include "cmds/runtime.h"
 #include "sys/upstream.h"
 
 /* Use upstream module's state tracking */

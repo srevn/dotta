@@ -4,6 +4,7 @@
 
 #include "cmds/apply.h"
 
+#include <config.h>
 #include <git2.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -24,7 +25,6 @@
 #include "core/workspace.h"
 #include "infra/content.h"
 #include "infra/path.h"
-#include "utils/config.h"
 #include "utils/hooks.h"
 #include "utils/privilege.h"
 
@@ -2342,6 +2342,6 @@ const args_command_t spec_apply = {
     .opts          = apply_opts,
     .classify      = apply_classify,
     .init_defaults = apply_defaults,
-    .user_data     = &dotta_ext_required,
+    .payload       = &dotta_ext_required,
     .dispatch      = apply_dispatch,
 };

@@ -11,6 +11,7 @@
 #include <string.h>
 #include <time.h>
 
+#include "base/args.h"
 #include "base/array.h"
 #include "base/error.h"
 #include "base/hashmap.h"
@@ -1716,6 +1717,6 @@ const args_command_t spec_diff = {
     .opts        = diff_opts,
     .classify    = diff_classify,
     .post_parse  = diff_post_parse,
-    .user_data   = &dotta_ext_required,
+    .payload     = &dotta_ext_required,
     .dispatch    = diff_dispatch,
 };

@@ -5,9 +5,8 @@
 #ifndef DOTTA_CMD_CLONE_H
 #define DOTTA_CMD_CLONE_H
 
+#include <runtime.h>
 #include <types.h>
-
-#include "cmds/runtime.h"
 
 /**
  * Bootstrap behavior selector.

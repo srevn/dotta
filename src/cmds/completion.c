@@ -365,9 +365,9 @@ error_t *cmd_completion(const dotta_ctx_t *ctx, const cmd_completion_options_t *
             /* Build-time emission: projects the root registry into the
              * fish-completion dialect. Stable, repo-independent, invoked
              * by `make completions` to refresh the committed snapshot.
-             * Registry is borrowed from main.c via the dispatch ctx so
-             * the cmds/ layer never names the registry symbol. */
-            args_export_completion_fish(stdout, ctx->commands, "dotta");
+             * Registry is borrowed from main.c via the typed accessor
+             * so the cmds/ layer never names the registry symbol. */
+            args_export_completion_fish(stdout, dotta_registry(), "dotta");
             break;
 
         default:
@@ -497,7 +497,7 @@ const args_command_t spec_completion = {
     .opts           = completion_opts,
     .init_defaults  = completion_init_defaults,
     .post_parse     = completion_post_parse,
-    .user_data      = &dotta_ext_optional_silent,
+    .payload        = &dotta_ext_optional_silent,
     .dispatch       = completion_dispatch,
     .silent_failure = true,
     .hidden         = true,

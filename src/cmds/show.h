@@ -6,9 +6,8 @@
 #define DOTTA_CMD_SHOW_H
 
 #include <git2.h>
+#include <runtime.h>
 #include <types.h>
-
-#include "cmds/runtime.h"
 
 /**
  * Show mode

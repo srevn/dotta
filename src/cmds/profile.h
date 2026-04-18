@@ -9,10 +9,9 @@
 #define DOTTA_CMD_PROFILE_H
 
 #include <git2.h>
+#include <runtime.h>
 #include <stdbool.h>
 #include <types.h>
-
-#include "cmds/runtime.h"
 
 /**
  * Profile command subcommands

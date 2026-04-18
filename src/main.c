@@ -5,6 +5,7 @@
  */
 
 #include <git2.h>
+#include <runtime.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -31,7 +32,6 @@
 #include "cmds/remote.h"
 #include "cmds/remove.h"
 #include "cmds/revert.h"
-#include "cmds/runtime.h"
 #include "cmds/show.h"
 #include "cmds/status.h"
 #include "cmds/sync.h"
@@ -49,11 +49,11 @@
  * The single place that names every command the CLI exposes. Two
  * consumers project this array into behavior:
  *
- *   - `args_resolve_root` / `args_render_root_usage` — direct calls
+ *   - args_resolve_root / args_render_root_usage — direct calls
  *     from main, resolving argv[1] and rendering top-level help;
- *   - the fish completion exporter in `cmds/completion.c` — receives
- *     the array as `dotta_ctx_t::commands` (one of the fields below)
- *     so the cmds layer never imports the registry symbol.
+ *   - the fish completion exporter in cmds/completion.c — reaches
+ *     the array through dotta_registry() so the cmds layer never
+ *     names the registry symbol.
  *
  * Ordered for root-help readability: setup → file ops → deploy/undo →
  * inspect → remote → profile/remote mgmt → config → passthrough →
@@ -70,6 +70,36 @@ static const args_command_t *const dotta_commands[] = {
     &spec_bootstrap,   &spec_key,        &spec_git,
     &spec_interactive, &spec_completion, NULL
 };
+
+/* Per-mode dispatch payloads — one const per repo mode. Each command's
+ * spec sets `.payload = &dotta_ext_X` for the matching mode; the
+ * dispatcher reads it back in `run_spec` to decide how to open the
+ * repository before calling the handler. */
+const dotta_spec_ext_t dotta_ext_none = {
+    .repo_mode = DOTTA_REPO_NONE
+};
+const dotta_spec_ext_t dotta_ext_required = {
+    .repo_mode = DOTTA_REPO_REQUIRED
+};
+const dotta_spec_ext_t dotta_ext_optional_silent = {
+    .repo_mode = DOTTA_REPO_OPTIONAL_SILENT
+};
+const dotta_spec_ext_t dotta_ext_path_only = {
+    .repo_mode = DOTTA_REPO_PATH_ONLY
+};
+
+/**
+ * Typed public face of the file-local `dotta_commands` registry.
+ *
+ * Only consumer today is `cmds/completion.c`, which projects the
+ * registry into the fish-completion dialect when the build emits
+ * `etc/completions/dotta-completions.fish`. Keeping the storage
+ * `static` and exposing it through this accessor lets the cmds/
+ * layer read the array without compile-depending on the symbol.
+ */
+const args_command_t *const *dotta_registry(void) {
+    return dotta_commands;
+}
 
 /**
  * Open a repository handle according to the command's declared mode.
@@ -201,10 +231,10 @@ static int run_spec(
         }
     }
 
-    /* Each command's spec stashes its repo-open contract in `user_data`
+    /* Each command's spec stashes its repo-open contract in `payload`
      * via a `dotta_spec_ext_t` constant. NULL falls back to NONE so a
-     * spec that omits user_data simply gets no repo (safe default). */
-    const dotta_spec_ext_t *ext = resolved->user_data;
+     * spec that omits payload simply gets no repo (safe default). */
+    const dotta_spec_ext_t *ext = resolved->payload;
     dotta_repo_mode_t mode = ext != NULL ? ext->repo_mode : DOTTA_REPO_NONE;
 
     git_repository *repo = NULL;
@@ -224,7 +254,6 @@ static int run_spec(
         .argc      = argc,
         .argv      = argv,
         .exit_code = &exit_override,
-        .commands  = dotta_commands,
     };
 
     error_t *err = resolved->dispatch(&ctx, opts);

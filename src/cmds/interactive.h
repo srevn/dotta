@@ -22,10 +22,10 @@
 #define DOTTA_CMD_INTERACTIVE_H
 
 #include <git2.h>
+#include <runtime.h>
 #include <stdbool.h>
 #include <types.h>
 
-#include "cmds/runtime.h"
 #include "base/terminal.h"
 
 /**

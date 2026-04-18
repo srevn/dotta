@@ -307,6 +307,6 @@ const args_command_t spec_init = {
         "  %s apply                   # Deploy enabled profiles\n",
     .opts_size   = sizeof(cmd_init_options_t),
     .opts        = init_opts,
-    .user_data   = &dotta_ext_none,
+    .payload     = &dotta_ext_none,
     .dispatch    = init_dispatch,
 };

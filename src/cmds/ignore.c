@@ -1547,6 +1547,6 @@ const args_command_t spec_ignore = {
     .opts_size   = sizeof(cmd_ignore_options_t),
     .opts        = ignore_opts,
     .post_parse  = ignore_post_parse,
-    .user_data   = &dotta_ext_required,
+    .payload     = &dotta_ext_required,
     .dispatch    = ignore_dispatch,
 };

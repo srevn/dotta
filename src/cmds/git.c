@@ -149,7 +149,7 @@ const args_command_t spec_git = {
         "  %s git log --oneline\n"
         "  %s git show HEAD:home/.bashrc\n"
         "  %s git reflog\n",
-    .user_data   = &dotta_ext_path_only,
+    .payload     = &dotta_ext_path_only,
     .dispatch    = git_dispatch,
     .passthrough = true,
 };

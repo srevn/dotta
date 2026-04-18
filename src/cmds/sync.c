@@ -1946,6 +1946,6 @@ const args_command_t spec_sync = {
         "  %s status --remote # Inspect remote state before syncing\n",
     .opts_size   = sizeof(cmd_sync_options_t),
     .opts        = sync_opts,
-    .user_data   = &dotta_ext_required,
+    .payload     = &dotta_ext_required,
     .dispatch    = sync_dispatch,
 };

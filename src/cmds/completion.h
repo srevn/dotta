@@ -28,9 +28,8 @@
 #ifndef DOTTA_CMD_COMPLETION_H
 #define DOTTA_CMD_COMPLETION_H
 
+#include <runtime.h>
 #include <types.h>
-
-#include "cmds/runtime.h"
 
 /**
  * Completion mode.

@@ -16,6 +16,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "base/args.h"
 #include "base/array.h"
 #include "base/error.h"
 #include "base/output.h"
@@ -845,6 +846,6 @@ const args_command_t spec_clone = {
     .opts        = clone_opts,
     .post_parse  = clone_post_parse,
     .validate    = clone_validate,
-    .user_data   = &dotta_ext_none,
+    .payload     = &dotta_ext_none,
     .dispatch    = clone_dispatch,
 };

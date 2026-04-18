@@ -659,6 +659,6 @@ const args_command_t spec_remote = {
     .opts_size   = sizeof(cmd_remote_options_t),
     .opts        = remote_opts,
     .post_parse  = remote_post_parse,
-    .user_data   = &dotta_ext_required,
+    .payload     = &dotta_ext_required,
     .dispatch    = remote_dispatch,
 };

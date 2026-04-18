@@ -630,6 +630,6 @@ const args_command_t spec_bootstrap = {
         "  %s apply                          # Deploy files after bootstrap\n",
     .opts_size   = sizeof(cmd_bootstrap_options_t),
     .opts        = bootstrap_opts,
-    .user_data   = &dotta_ext_required,
+    .payload     = &dotta_ext_required,
     .dispatch    = bootstrap_dispatch,
 };

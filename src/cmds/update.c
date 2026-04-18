@@ -4,6 +4,7 @@
 
 #include "cmds/update.h"
 
+#include <config.h>
 #include <dirent.h>
 #include <errno.h>
 #include <git2.h>
@@ -33,7 +34,6 @@
 #include "infra/worktree.h"
 #include "sys/filesystem.h"
 #include "utils/commit.h"
-#include "utils/config.h"
 #include "utils/hooks.h"
 #include "utils/privilege.h"
 
@@ -2376,6 +2376,6 @@ const args_command_t spec_update = {
     .opts_size   = sizeof(cmd_update_options_t),
     .opts        = update_opts,
     .post_parse  = update_post_parse,
-    .user_data   = &dotta_ext_required,
+    .payload     = &dotta_ext_required,
     .dispatch    = update_dispatch,
 };

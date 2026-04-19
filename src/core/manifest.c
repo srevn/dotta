@@ -79,26 +79,21 @@ static error_t *manifest_persist_profile_head(
  *   Callers needing to advance the anchor must follow with
  *   state_update_anchor(), which is the sole legitimate anchor writer.
  *
- *   On INSERT of a new row, the VALUES clause carries an initial anchor
- *   lifecycle timestamp (deployed_at parameter below) but anchor.blob_oid
- *   and anchor.stat remain zero — the row is "never confirmed on disk"
- *   until some later anchor-advancing call site establishes the
- *   disk-matches-blob relationship.
- *
- *   On UPDATE (row already exists), the UPSERT preserves anchor columns
- *   unconditionally, so the deployed_at parameter only matters on INSERT.
+ *   Reassignment tracking is automatic: the UPSERT's old_profile CASE
+ *   captures the prior profile into old_profile when the profile column
+ *   changes, and preserves the existing value otherwise. Clearing is a
+ *   separate concern, handled by state_clear_old_profile() once the
+ *   user has been shown the reassignment.
  *
  * Callers must use entries from manifest_build (or equivalent) where
  * the blob_oid is pre-populated.
  *
- * Pure VWD-cache writer. Writes the identity and cache columns
- * (storage_path, profile, blob_oid, type, mode, owner, group, encrypted,
- * state) via the UPSERT. The anchor columns (deployed_blob_oid,
- * deployed_at, stat_*) are left untouched — the UPSERT preserves them
- * on UPDATE, and on INSERT they start at zero. Lifecycle stamping is
- * state_update_anchor's job; capture-from-disk callers (manifest_add_files,
- * manifest_update_files) pair this call with a state_update_anchor(..., now)
- * that stamps deployed_at on both INSERT and UPDATE paths.
+ * The anchor columns (deployed_blob_oid, deployed_at, stat_*) are left
+ * untouched — the UPSERT preserves them on UPDATE, and on INSERT they
+ * start at zero. Lifecycle stamping is state_update_anchor's job;
+ * capture-from-disk callers (manifest_add_files, manifest_update_files)
+ * pair this call with a state_update_anchor(..., now) that stamps
+ * deployed_at on both INSERT and UPDATE paths.
  *
  * Note: commit_oid is stored per-profile in enabled_profiles, not per-file.
  * Callers are responsible for calling manifest_persist_profile_head() after
@@ -110,17 +105,13 @@ static error_t *manifest_persist_profile_head(
  *                       blob_oid and profile set (guaranteed for entries
  *                       from manifest_build)
  * @param metadata Merged metadata from all profiles
- * @param old_profile Previous profile name for reassignment tracking, or
- *                    NULL to let state_add_file's UPSERT auto-capture it
- *                    when the profile column changes.
  * @return Error or NULL on success
  */
 static error_t *sync_entry_to_state(
     git_repository *repo,
     state_t *state,
     const file_entry_t *manifest_entry,
-    const metadata_t *metadata,
-    const char *old_profile
+    const metadata_t *metadata
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(state);
@@ -176,7 +167,7 @@ static error_t *sync_entry_to_state(
         .storage_path    = manifest_entry->storage_path,
         .filesystem_path = manifest_entry->filesystem_path,
         .profile         = (char *) manifest_entry->profile,
-        .old_profile     = (char *) old_profile,
+        .old_profile     = NULL,
         .type            = file_type,
         .blob_oid        = *blob_oid_obj,
         .mode            = mode,
@@ -188,11 +179,12 @@ static error_t *sync_entry_to_state(
         .anchor          = DEPLOYMENT_ANCHOR_UNSET,
     };
 
-    /* 6. Write entry to state (INSERT OR REPLACE)
+    /* 6. Write entry to state (UPSERT).
      *
-     * Uses INSERT OR REPLACE for atomic upsert. The SQL's COALESCE on
-     * old_profile preserves existing values when NULL, overrides when
-     * non-NULL — enabling atomic reassignment tracking in one operation.
+     * With old_profile bound to NULL, state_add_file's ON CONFLICT CASE
+     * auto-captures the prior profile when the profile column changes
+     * and preserves existing values otherwise — reassignment tracking
+     * happens in a single atomic operation without a read-before-write.
      */
     err = state_add_file(state, &state_entry);
     if (err) {
@@ -316,7 +308,7 @@ error_t *manifest_enable_profile(
         }
 
         /* Sync entry */
-        err = sync_entry_to_state(repo, state, entry, metadata, NULL);
+        err = sync_entry_to_state(repo, state, entry, metadata);
         if (err) goto cleanup;
     }
 
@@ -606,7 +598,7 @@ error_t *manifest_disable_profile(
             /* File exists in lower-precedence profile — update to fallback.
              * deployed_at preserved by SQL UPSERT (lifecycle history unchanged),
              * old_profile auto-captured by SQL (profile is changing). */
-            err = sync_entry_to_state(repo, state, fallback, fallback_metadata, NULL);
+            err = sync_entry_to_state(repo, state, fallback, fallback_metadata);
             if (err) {
                 err = error_wrap(
                     err, "Failed to sync entry to fallback for %s",
@@ -993,7 +985,7 @@ error_t *manifest_remove_files(
             /* Fallback found — sync complete entry from fallback profile.
              * deployed_at preserved by SQL UPSERT, old_profile auto-captured
              * by SQL when the owning profile changes. */
-            err = sync_entry_to_state(repo, state, fallback, metadata, NULL);
+            err = sync_entry_to_state(repo, state, fallback, metadata);
             if (err) {
                 err = error_wrap(
                     err, "Failed to sync fallback for %s", filesystem_path
@@ -1142,7 +1134,7 @@ error_t *manifest_populate(
      * sync_entry_to_state docstring for details). */
     for (size_t i = 0; i < manifest->count; i++) {
         file_entry_t *entry = &manifest->entries[i];
-        err = sync_entry_to_state(repo, state, entry, metadata, NULL);
+        err = sync_entry_to_state(repo, state, entry, metadata);
         if (err) goto cleanup;
     }
 
@@ -1378,7 +1370,7 @@ static error_t *manifest_repair_stale(
              * by SQL when the owning profile shifts during repair. */
             bool profile_shifted = strcmp(fresh_entry->profile, entry->profile) != 0;
 
-            err = sync_entry_to_state(repo, state, fresh_entry, metadata, NULL);
+            err = sync_entry_to_state(repo, state, fresh_entry, metadata);
             if (err) {
                 err = error_wrap(
                     err, "Failed to repair stale entry '%s'",
@@ -1599,7 +1591,7 @@ error_t *manifest_reorder_profiles(
             /* New file (rare in reorder, but handle it) */
 
             /* New file - deployed_at = 0 (never deployed) */
-            err = sync_entry_to_state(repo, state, new_entry, metadata, NULL);
+            err = sync_entry_to_state(repo, state, new_entry, metadata);
             if (err) {
                 goto cleanup;
             }
@@ -1610,7 +1602,7 @@ error_t *manifest_reorder_profiles(
             if (owner_changed) {
                 /* Owner changed — sync with new owner. deployed_at preserved
                  * by SQL UPSERT, old_profile auto-captured by SQL. */
-                err = sync_entry_to_state(repo, state, new_entry, metadata, NULL);
+                err = sync_entry_to_state(repo, state, new_entry, metadata);
                 if (err) {
                     goto cleanup;
                 }
@@ -1805,7 +1797,7 @@ error_t *manifest_update_files(
                 /* Fallback found — update manifest to the fallback profile.
                  * deployed_at preserved by SQL UPSERT, old_profile auto-captured
                  * by SQL when the owning profile changes. */
-                err = sync_entry_to_state(repo, state, fallback, metadata, NULL);
+                err = sync_entry_to_state(repo, state, fallback, metadata);
                 if (err) {
                     err = error_wrap(
                         err, "Failed to sync fallback for '%s'",
@@ -1866,7 +1858,7 @@ error_t *manifest_update_files(
              * Lifecycle stamping is the paired state_update_anchor's job below —
              * the UPSERT preserves deployed_at on UPDATE regardless of what we
              * pass here, so a non-zero value would be silently ineffective. */
-            err = sync_entry_to_state(repo, state, entry, metadata, NULL);
+            err = sync_entry_to_state(repo, state, entry, metadata);
             if (err) {
                 err = error_wrap(
                     err, "Failed to sync '%s' to manifest", item->filesystem_path
@@ -2110,7 +2102,7 @@ error_t *manifest_add_files(
          * Lifecycle stamping is the paired state_update_anchor's job below —
          * the UPSERT preserves deployed_at on UPDATE regardless of what we
          * pass here, so a non-zero value would be silently ineffective. */
-        err = sync_entry_to_state(repo, state, entry, metadata, NULL);
+        err = sync_entry_to_state(repo, state, entry, metadata);
 
         if (err) {
             err = error_wrap(
@@ -2364,7 +2356,7 @@ error_t *manifest_sync_diff(
             /* Sync entry to state. deployed_at is preserved by SQL UPSERT on
              * UPDATE; 0 is used for INSERT (new file, never deployed). old_profile
              * auto-captured by SQL when the owning profile changes. */
-            err = sync_entry_to_state(repo, state, entry, metadata, NULL);
+            err = sync_entry_to_state(repo, state, entry, metadata);
             if (err) {
                 err = error_wrap(
                     err, "Failed to sync '%s' to manifest",
@@ -2395,7 +2387,7 @@ error_t *manifest_sync_diff(
                 /* Fallback found — update manifest to the new profile owner.
                  * deployed_at preserved by SQL UPSERT, old_profile auto-captured
                  * by SQL when the owning profile changes. */
-                err = sync_entry_to_state(repo, state, entry, metadata, NULL);
+                err = sync_entry_to_state(repo, state, entry, metadata);
                 if (err) {
                     err = error_wrap(
                         err, "Failed to sync fallback for '%s'",

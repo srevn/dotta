@@ -341,7 +341,20 @@ static error_t *workspace_add_diverged(
  * persist it via state_update_anchor(). The blob_oid is required because the
  * anchor binds its fast-path witness to a specific blob.
  *
- * Best-effort: silently skips on OOM rather than failing the analysis.
+ * OOM asymmetry — returns void on realloc failure. Every other path in
+ * workspace analysis propagates ERR_MEMORY; this one deliberately does not.
+ * The anchor advance is a pure performance optimization — it converts the
+ * NEXT slow-path CMP_EQUAL into a fast-path short-circuit — not a correctness
+ * invariant of the current analysis (which is already complete by the time
+ * this is called). Dropping the record on realloc failure:
+ *   - Preserves the caller's already-correct divergence result.
+ *   - Self-heals on the next status: the slow-path CMP_EQUAL re-confirms
+ *     and re-records the anchor (assuming memory pressure has cleared).
+ *   - Never produces an incorrect classification — worst case is one extra
+ *     slow-path verification per dropped record.
+ * Failing here to surface OOM would abort a workspace load that had already
+ * succeeded in every respect that affects user-visible output — strictly
+ * worse UX for zero correctness gain.
  *
  * @param ws Workspace (must not be NULL)
  * @param filesystem_path Path (borrowed from manifest, valid for workspace lifetime)
@@ -668,28 +681,29 @@ static error_t *analyze_file_divergence(
 
     /* PHASE 2: Reality-based classification
      *
-     * SCOPE-BASED ARCHITECTURE:
-     * Use anchor.deployed_at to distinguish lifecycle states.
+     * Use anchor.deployed_at to distinguish lifecycle states. The anchor is
+     * advanced only on confirmation events (apply deploy/adopt, add/update
+     * capture-from-disk, workspace slow-path witness seeding — see
+     * state.h's deployment_anchor_t invariants).
      *
      * anchor.deployed_at semantics:
-     * - 0  -> File never deployed by dotta (and not observed at enable time)
-     * - >0 -> File known to dotta (deployed, adopted, or observed at enable)
+     * - 0  -> File has never been actively deployed or adopted by dotta
+     *         (mere scope membership from profile enable/populate does NOT
+     *         advance deployed_at — lstat is not a confirmation event)
+     * - >0 -> File was deployed, adopted, added, or sync-captured by dotta
      *
      * Classification:
      * 1. File missing + anchor.deployed_at = 0 -> UNDEPLOYED (needs initial deployment)
-     * 2. File missing + anchor.deployed_at > 0 -> DELETED (was known, needs restoration)
+     * 2. File missing + anchor.deployed_at > 0 -> DELETED (was managed, needs restoration)
      * 3. File present -> DEPLOYED (may have divergence)
      */
     if (!on_filesystem) {
         /* File in manifest but missing from filesystem */
 
-        /* Use anchor.deployed_at from VWD cache to distinguish never-deployed vs deleted
-         *
-         * The VWD cache stores the lifecycle timestamp:
-         * - deployed_at = 0: File never deployed by dotta
-         * - deployed_at > 0: File was deployed or known to dotta */
+        /* Use anchor.deployed_at to distinguish never-managed vs deleted
+         * (see classification table above for the full decision matrix). */
         if (in_state && manifest_entry->anchor.deployed_at > 0) {
-            /* File was deployed/known (anchor.deployed_at > 0), now deleted */
+            /* File was actively managed (anchor.deployed_at > 0), now deleted */
             state = WORKSPACE_STATE_DELETED;
         } else {
             /* File never deployed (anchor.deployed_at = 0) or not in state (manifest from Git) */

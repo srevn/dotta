@@ -111,10 +111,15 @@ static error_t *manifest_persist_profile_head(
  *                    UPDATE (existing row), the UPSERT preserves the row's
  *                    current deployed_at regardless of this value. Typical
  *                    values:
- *       - 0: Row is new and dotta has not yet confirmed disk presence
- *            (enable-with-missing-file, post-sync new file).
- *       - time(NULL): Row is new and dotta observed the file on disk
- *            (enable-with-existing-file, add/update capture-from-disk).
+ *       - 0: Row is new and dotta has not yet confirmed disk content
+ *            (enable/populate, post-sync new file). The anchor advances
+ *            later on paths that prove disk matches the profile blob.
+ *       - time(NULL): Row is new and this call site is itself a
+ *            capture-from-disk lifecycle event (add/update). Callers on
+ *            this path MUST follow with state_update_anchor() to seed
+ *            anchor.blob_oid and anchor.stat — passing time(NULL) here
+ *            without a paired anchor advance produces an incoherent row
+ *            that violates state.h's anchor invariants.
  * @return Error or NULL on success
  */
 static error_t *sync_entry_to_state(
@@ -266,10 +271,17 @@ error_t *manifest_enable_profile(
 
     /* 4. Sync entries owned by this profile (highest precedence)
      *
-     * deployed_at for INSERT (new files) is determined by lstat: time(NULL) if
-     * the file exists on disk, 0 if it doesn't. For UPDATE (existing entries),
-     * deployed_at is preserved by the SQL UPSERT — the caller-provided value
-     * is only used on the INSERT path. */
+     * The row is inserted with deployed_at = 0 (never confirmed). lstat drives
+     * the user-visible stats only — it is not a confirmation event. The
+     * anchor (blob_oid, stat, deployed_at) advances later on the paths that
+     * actually prove disk matches the profile blob: workspace slow-path
+     * CMP_EQUAL (seeds the stat witness) and apply's deploy/adopt path
+     * (mints the lifecycle timestamp). Treating lstat-sees-a-file as a
+     * deployment event would write an incoherent row (deployed_at > 0 with
+     * anchor.blob_oid == 0) and violates the anchor invariants in state.h.
+     *
+     * For UPDATE (existing entries): SQL UPSERT preserves the existing
+     * anchor columns regardless of the values passed here. */
 
     /* Track counts for user feedback */
     size_t total_files = 0;
@@ -286,39 +298,22 @@ error_t *manifest_enable_profile(
 
         total_files++;
 
-        /* Determine deployed_at and count statistics via lstat.
-         *
-         * For UPDATE (existing entries): SQL UPSERT preserves the existing
-         * deployed_at regardless of the value passed here.
-         * For INSERT (new entries): lstat determines the initial value.
-         *   time(NULL) = file exists on disk ("known to dotta")
-         *   0          = file missing or inaccessible ("never deployed") */
-        time_t deployed_at;
+        /* lstat populates user-visible stats; does NOT influence deployed_at. */
         struct stat st;
 
         /* New entry - check if file exists on filesystem */
         if (lstat(entry->filesystem_path, &st) == 0) {
-            /* File exists - mark as "known to dotta" */
-            deployed_at = time(NULL);
+            /* File present on disk (match vs profile blob pending verification
+             * by status/apply via workspace divergence analysis). */
             already_deployed++;
         } else if (errno == ENOENT) {
-            /* File doesn't exist - mark as "never deployed" */
-            deployed_at = 0;
+            /* File absent — apply will deploy from the profile blob. */
             needs_deployment++;
         } else {
-            /* Unexpected error (permission denied, I/O error, etc.)
-             *
-             * Non-fatal approach: Use conservative default (deployed_at = 0) and
-             * count as needs_deployment rather than blocking the entire operation.
-             * This maintains the VWD scope invariant (all profile files in manifest)
-             * while deferring deployment decisions to runtime convergence.
-             *
-             * Rationale: The deployed_at timestamp is only an initial guess for
-             * statistics. The real divergence is determined at runtime during
-             * status/apply commands via workspace divergence analysis. Using a
-             * conservative default (0) allows the operation to proceed while
-             * signaling to the user that these files need attention. */
-            deployed_at = 0;
+            /* Inaccessible (permission denied, I/O error, etc.): degrade
+             * gracefully rather than abort. The row is still managed; the
+             * failure surfaces to the user via access_errors, and runtime
+             * divergence analysis re-evaluates on the next status/apply. */
             needs_deployment++;
 
             /* Track access errors for user feedback */
@@ -327,8 +322,8 @@ error_t *manifest_enable_profile(
             }
         }
 
-        /* Sync entry with deployed_at timestamp */
-        err = sync_entry_to_state(repo, state, entry, metadata, deployed_at, NULL);
+        /* Sync entry */
+        err = sync_entry_to_state(repo, state, entry, metadata, 0, NULL);
         if (err) goto cleanup;
     }
 
@@ -1094,8 +1089,8 @@ cleanup:
  * Algorithm:
  *   1. Build manifest from enabled profiles (precedence oracle, single pass)
  *   2. Load merged metadata from all profiles
- *   3. Insert one row per manifest entry; deployed_at = time(NULL) if the
- *      target file already exists on disk, else 0
+ *   3. Insert one row per manifest entry with deployed_at = 0 and anchor
+ *      unset (populate is a VWD-cache writer, not a confirmation event)
  *   4. Replace the per-profile commit_oid sentinel with the real branch HEAD
  *   5. Sync tracked directories from metadata
  *
@@ -1140,21 +1135,21 @@ error_t *manifest_populate(
         err = NULL;
     }
 
-    /* 3. Insert one row per manifest entry.
+    /* 3. Insert one row per manifest entry with deployed_at = 0 (never
+     * confirmed). The empty-starting-state precondition means every call
+     * hits the INSERT path; the SQL UPSERT clause would preserve the
+     * deployment anchor (deployed_at, deployed_blob_oid, stat_*) automatically
+     * if any pre-existing row were ever encountered.
      *
-     * deployed_at is lstat()-derived: time(NULL) if the target file already
-     * exists on disk, 0 otherwise. The empty-starting-state precondition
-     * means every call hits the INSERT path; the SQL UPSERT clause would
-     * preserve the deployment anchor (deployed_at, deployed_blob_oid,
-     * stat_*) automatically if any pre-existing row were ever encountered. */
+     * The anchor advances later on the paths that actually prove disk
+     * matches the profile blob: workspace slow-path CMP_EQUAL (seeds the
+     * stat witness) and apply's deploy/adopt path (mints the lifecycle
+     * timestamp). lstat-sees-a-file is not a confirmation event — pretending
+     * otherwise would violate state.h's anchor invariants (see the
+     * sync_entry_to_state docstring for details). */
     for (size_t i = 0; i < manifest->count; i++) {
         file_entry_t *entry = &manifest->entries[i];
-
-        struct stat st;
-        time_t deployed_at = (lstat(entry->filesystem_path, &st) == 0) ? time(NULL) : 0;
-
-        /* Sync to state with preserved/computed deployed_at */
-        err = sync_entry_to_state(repo, state, entry, metadata, deployed_at, NULL);
+        err = sync_entry_to_state(repo, state, entry, metadata, 0, NULL);
         if (err) goto cleanup;
     }
 

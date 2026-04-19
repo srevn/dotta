@@ -111,12 +111,16 @@ typedef struct manifest {
 
 /**
  * Statistics from profile enable operation
+ *
+ * Reflects what lstat observed at enable time; NOT a verification result.
+ * Whether a file present on disk actually matches the profile blob is
+ * decided later by workspace divergence analysis (status/diff/apply).
  */
 typedef struct {
     size_t total_files;         /* Total files owned by profile (after precedence) */
-    size_t already_deployed;    /* Files that exist on filesystem (deployed_at set) */
-    size_t needs_deployment;    /* Files that don't exist on filesystem (deployed_at = 0) */
-    size_t access_errors;       /* Files with lstat errors (counted in needs_deployment) */
+    size_t already_deployed;    /* Files present on filesystem at enable time (unverified) */
+    size_t needs_deployment;    /* Files absent or inaccessible (need deployment by apply) */
+    size_t access_errors;       /* Files with non-ENOENT lstat errors (counted in needs_deployment) */
 } manifest_enable_stats_t;
 
 /**
@@ -167,8 +171,10 @@ typedef struct {
  * Postconditions:
  *   - All files from profile added/updated in manifest
  *   - Higher precedence files override lower precedence
- *   - Existing entries updated if profile has higher precedence
- *   - New entries inserted with deployed_at based on lstat() check
+ *   - Existing entries updated if profile has higher precedence (anchor preserved)
+ *   - New entries inserted with deployed_at = 0 and anchor unset; the
+ *     deployment anchor advances later on paths that prove disk matches the
+ *     profile blob (workspace slow-path CMP_EQUAL or apply deploy/adopt)
  *   - Transaction remains open (caller commits)
  *
  * Error Conditions:
@@ -451,8 +457,7 @@ error_t *manifest_remove_files(
  * Algorithm:
  *   1. Build manifest from enabled profiles (precedence oracle, O(M))
  *   2. Load merged metadata from all profiles
- *   3. Insert one row per manifest entry; deployed_at = time(NULL) if the
- *      target file already exists on disk, else 0
+ *   3. Insert one row per manifest entry with deployed_at = 0 and anchor unset
  *   4. Replace the per-profile commit_oid sentinel with the real branch HEAD
  *   5. Sync tracked directories from metadata
  *
@@ -470,7 +475,11 @@ error_t *manifest_remove_files(
  *
  * Postconditions:
  *   - virtual_manifest contains one row per file in the precedence-resolved
- *     manifest, with state='active' and deployed_at set per lstat()
+ *     manifest, with state='active', deployed_at = 0, and the deployment
+ *     anchor unset. The anchor advances later on paths that prove disk
+ *     matches the profile blob (workspace slow-path CMP_EQUAL or apply
+ *     deploy/adopt) — populate is a pure VWD-cache writer, not a
+ *     confirmation event.
  *   - Each enabled profile's commit_oid reflects its current branch HEAD
  *   - Empty profile list results in empty manifest
  *   - Transaction remains open (caller commits via state_save)

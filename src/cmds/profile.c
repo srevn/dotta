@@ -80,7 +80,7 @@ static void print_manifest_enable_stats(
         if (stats->already_deployed > 0) {
             output_styled(
                 out, OUTPUT_VERBOSE,
-                "    - {green}%zu{reset} already deployed and correct\n",
+                "    - {green}%zu{reset} already deployed\n",
                 stats->already_deployed
             );
         }
@@ -115,7 +115,7 @@ static void print_manifest_enable_stats(
         }
         if (stats->already_deployed > 0) {
             output_print(
-                out, OUTPUT_NORMAL, "  Found %zu file%s already up-to-date\n",
+                out, OUTPUT_NORMAL, "  Found %zu file%s already deployed\n",
                 stats->already_deployed, stats->already_deployed == 1 ? "" : "s"
             );
         }

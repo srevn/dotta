@@ -563,28 +563,6 @@ static void print_cleanup_preflight_results(
 }
 
 /**
- * Look up the Git-expected blob_oid for a path via the workspace manifest
- *
- * The post-deploy / post-adoption anchor writers need the blob dotta just
- * confirmed on disk. The workspace manifest carries that blob (populated by
- * workspace_build_manifest_from_state), indexed by filesystem_path for O(1)
- * lookup — cheaper than a second state query.
- *
- * Returns NULL when the path isn't in the manifest (shouldn't happen for
- * just-deployed files but callers treat the anchor write as non-fatal).
- */
-static const git_oid *apply_expected_blob_oid(
-    const manifest_t *manifest,
-    const char *filesystem_path
-) {
-    if (!manifest || !manifest->index) return NULL;
-    void *idx_ptr = hashmap_get(manifest->index, filesystem_path);
-    if (!idx_ptr) return NULL;
-    size_t idx = (size_t) (uintptr_t) idx_ptr - 1;
-    return &manifest->entries[idx].blob_oid;
-}
-
-/**
  * Check privileges for complete apply operation
  *
  * Examines manifest (files being deployed), file orphans (files being removed),
@@ -879,7 +857,15 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
 
     /* Persist deployment-anchor advances for files verified clean via the
      * slow path. Within apply's transaction — committed atomically with
-     * deployment changes. */
+     * deployment changes.
+     *
+     * In-memory anchor staleness: ws->manifest entries retain the load-time
+     * anchor snapshot; the state DB is the source of truth past this point.
+     * By contract this flush preserves deployed_at (see workspace_flush_anchor_updates
+     * and state_update_anchor's preserve-on-zero sentinel), so the adoption
+     * loop below can still read entry->anchor.deployed_at as an ownership
+     * probe. Any future reader of entry->anchor past this call must account
+     * for the snapshot being stale relative to the DB. */
     err = workspace_flush_anchor_updates(ws);
     if (err) {
         err = error_wrap(err, "Failed to flush anchor updates");
@@ -920,8 +906,9 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     for (size_t i = 0; i < manifest->count; i++) {
         const file_entry_t *entry = &manifest->entries[i];
 
-        /* Filter by operation profiles (skip files not in filter) */
-        if (entry->profile && !scope_accepts_profile(scope, entry->profile)) {
+        /* Filter by operation profiles (skip files not in filter).
+         * scope_accepts_profile already rejects NULL profiles. */
+        if (!scope_accepts_profile(scope, entry->profile)) {
             continue;
         }
 
@@ -1026,13 +1013,21 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      *
      * A clean in-scope entry with anchor.deployed_at == 0 represents a file
      * the user declared scope over (via profile enable or add/update) AND
-     * that dotta just confirmed matches the profile blob — either via the
-     * fast-path stat witness or via the slow-path CMP_EQUAL seeded above
-     * by workspace_flush_anchor_updates. Apply is the ownership moment:
-     * running it is how the user claims the in-scope set. Stamping here
-     * collapses the "enable → apply on a pre-existing matching file" flow
-     * to a coherent (blob, now, stat), so a later `rm file` is classified
-     * as [deleted] and `update` commits the deletion.
+     * that analyze_file_divergence just classified as clean — i.e.,
+     * workspace_get_item returns NULL because neither the Phase 1 fast-path
+     * nor the Phase 3 slow-path produced a divergence verdict. Apply is the
+     * ownership moment: running it is how the user claims the in-scope set.
+     * Stamping here collapses the "enable → apply on a pre-existing matching
+     * file" flow to a coherent (blob, now, stat), so a later `rm file` is
+     * classified as [deleted] and `update` commits the deletion.
+     *
+     * Independence from the earlier flush: workspace_flush_anchor_updates
+     * above persists slow-path witnesses for the *next* run's fast path.
+     * It is not what proves this run's match — that proof comes from
+     * analyze_file_divergence leaving the entry out of ws->diverged. The
+     * flush preserves deployed_at by contract, which is why reading
+     * entry->anchor.deployed_at here remains a valid ownership probe
+     * despite the DB having been written since workspace_load.
      *
      * Placement rationale: MUST run before the Nothing-to-deploy fast-path
      * early-exit below, otherwise the canonical case (clean manifest, no
@@ -1043,10 +1038,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * Write gated by !dry_run: stamping deployed_at is a write-effect that
      * contradicts dry-run's read-only ownership contract, so the
      * state_update_anchor call is skipped. Classification runs regardless,
-     * so --dry-run previews "Would adopt N file(s)". The earlier
-     * workspace_flush_anchor_updates is witness-only and runs regardless —
-     * it cannot stamp deployed_at (state_update_anchor's preserve-on-zero
-     * sentinel treats deployed_at == 0 as "keep existing"). */
+     * so --dry-run previews "Would adopt N file(s)". */
     size_t adopted_count = 0;
     time_t adopt_now = time(NULL);
     for (size_t i = 0; i < manifest->count; i++) {
@@ -1908,10 +1900,12 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
             for (size_t i = 0; i < deploy_res->deployed->count; i++) {
                 const char *path = deploy_res->deployed->items[i];
 
-                /* Expected blob — what deploy_file() just wrote to disk. Sourced
-                 * from the workspace manifest index (O(1) lookup, no DB query). */
-                const git_oid *blob_oid = apply_expected_blob_oid(manifest, path);
-                if (!blob_oid) {
+                /* Resolve path -> workspace manifest entry via the index (O(1),
+                 * no DB query). The index is an architectural invariant of the
+                 * workspace manifest — see workspace.c. The offset-by-1 encoding
+                 * distinguishes a real index-0 entry from a hashmap miss. */
+                void *idx_ptr = hashmap_get(manifest->index, path);
+                if (!idx_ptr) {
                     /* Shouldn't happen for just-deployed files, but guard defensively. */
                     output_warning(
                         out, OUTPUT_NORMAL,
@@ -1919,12 +1913,16 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
                     );
                     continue;
                 }
+                const file_entry_t *entry =
+                    &manifest->entries[(size_t) (uintptr_t) idx_ptr - 1];
 
                 /* Snapshot disk state (mtime/size/ino) for the fast-path witness.
                  * The file was just written and fsynced by deploy_file(); lstat()
                  * is a cheap inode-cache read. If lstat fails, the anchor is still
                  * advanced with a zero stat (slow-path fallback on next run). */
-                deployment_anchor_t anchor = capture_anchor_from_disk(path, blob_oid, now);
+                deployment_anchor_t anchor = capture_anchor_from_disk(
+                    path, &entry->blob_oid, now
+                );
 
                 err = state_update_anchor(state, path, &anchor);
                 if (err) {

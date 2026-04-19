@@ -2110,17 +2110,23 @@ static error_t *analyze_encryption_policy_mismatch(
             } else {
                 /* File has NO other divergence — encryption policy is the only issue.
                  *
-                 * Use anchor.deployed_at from VWD cache to determine lifecycle state.
-                 * Manifest is built from state (workspace_build_manifest_from_state),
-                 * so the anchor is always populated:
-                 *   > 0  -> file known/deployed
-                 *   == 0 -> file never deployed */
-                workspace_state_t item_state = manifest_entry->anchor.deployed_at > 0
-                    ? WORKSPACE_STATE_DEPLOYED
-                    : WORKSPACE_STATE_UNDEPLOYED;
-
+                 * Classify lifecycle state from presence + ownership anchor,
+                 * mirroring analyze_file_divergence Phase 2. on_filesystem is
+                 * checked first: a file on disk is DEPLOYED regardless of
+                 * whether dotta has claimed ownership yet (pre-apply, the
+                 * anchor may still be 0). A missing file is DELETED if ever
+                 * owned (deployed_at > 0), else UNDEPLOYED. */
                 struct stat enc_stat;
                 bool on_filesystem = (lstat(manifest_entry->filesystem_path, &enc_stat) == 0);
+
+                workspace_state_t item_state;
+                if (on_filesystem) {
+                    item_state = WORKSPACE_STATE_DEPLOYED;
+                } else if (manifest_entry->anchor.deployed_at > 0) {
+                    item_state = WORKSPACE_STATE_DELETED;
+                } else {
+                    item_state = WORKSPACE_STATE_UNDEPLOYED;
+                }
 
                 err = workspace_add_diverged(
                     ws,
@@ -2128,7 +2134,7 @@ static error_t *analyze_encryption_policy_mismatch(
                     storage_path,
                     profile,
                     NULL,
-                    item_state,            /* State: deployed or undeployed */
+                    item_state,
                     DIVERGENCE_ENCRYPTION, /* Divergence: encryption policy violated */
                     WORKSPACE_ITEM_FILE,
                     on_filesystem,

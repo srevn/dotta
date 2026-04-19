@@ -599,9 +599,9 @@ static error_t *create_commit(
  *   2. Read enabled profiles under the transaction snapshot
  *   3. If already enabled: commit (no-op) and return
  *   4. Enable profile in state with custom prefix (makes prefix available)
- *   5. Sync files to manifest with DEPLOYED status (uses custom_prefix)
- *   6. Record stat cache for added files
- *   7. Commit transaction atomically
+ *   5. Sync files to manifest with DEPLOYED status (uses custom_prefix;
+ *      advances deployment anchor for synced entries)
+ *   6. Commit transaction atomically
  *
  * CRITICAL ORDER: Step 4 must precede step 5. The custom_prefix stored in step 4
  * is required by manifest_add_files() in step 5 (which loads the prefix map
@@ -682,11 +682,17 @@ static error_t *auto_enable_and_sync_profile(
     /* STEP 4: Sync files to manifest with DEPLOYED status
      *
      * manifest_add_files() loads the prefix map internally to build the
-     * manifest. The custom_prefix stored in STEP 4 is now available for
+     * manifest. The custom_prefix stored in STEP 3 is now available for
      * resolving custom/ storage paths via path_from_storage().
      *
+     * manifest_add_files advances the deployment anchor internally for
+     * synced entries, so the next status can short-circuit on the fast
+     * path without an extra pass here.
+     *
      * Precedence: If this profile has lower precedence than existing enabled
-     * profiles, some files may be skipped (synced_count < added_files). */
+     * profiles, some files may be skipped (synced_count < added_files). Those
+     * skipped entries correctly receive no anchor advance — any disk stat
+     * captured at this site would misattribute to the winner's blob_oid. */
     err = manifest_add_files(
         repo,
         state,
@@ -700,36 +706,7 @@ static error_t *auto_enable_and_sync_profile(
         goto cleanup;
     }
 
-    /* STEP 5: Advance deployment anchor for added files
-     *
-     * Files were just captured from filesystem — disk content matches the
-     * freshly-committed blob_oid. Advance the anchor so the next status
-     * short-circuits via the fast path (and tags STALE directly if Git moves
-     * ahead before apply). The freshly-committed blob_oid is now in state
-     * (manifest_add_files just wrote it); look it up to avoid re-deriving
-     * it from the just-built fresh manifest.
-     *
-     * deployed_at=0 preserves the row's INSERT-time lifecycle timestamp
-     * (time(NULL) from manifest_add_files' sync_entry_to_state).
-     *
-     * Non-fatal: skip files filtered by precedence (not in state), and
-     * swallow anchor-write errors — the row's VWD cache is already committed */
-    for (size_t i = 0; i < added_files->count; i++) {
-        const char *path = added_files->items[i];
-
-        state_file_entry_t *entry = NULL;
-        error_t *lookup_err = state_get_file(state, path, &entry);
-        if (lookup_err) {
-            error_free(lookup_err);
-            continue;
-        }
-        deployment_anchor_t anchor = capture_anchor_from_disk(path, &entry->blob_oid, 0);
-        error_t *anchor_err = state_update_anchor(state, path, &anchor);
-        if (anchor_err) error_free(anchor_err);
-        state_free_entry(entry);
-    }
-
-    /* STEP 6: Commit transaction atomically */
+    /* STEP 5: Commit transaction atomically */
     err = state_save(repo, state);
     if (err) {
         err = error_wrap(err, "Failed to commit transaction");
@@ -763,14 +740,14 @@ cleanup:
  *   1. Read enabled profiles under the borrowed write transaction
  *   2. If profile not enabled: return (dispatcher's state_free rolls back)
  *   3. If custom_prefix provided: update prefix in state (UPSERT)
- *   4. Call manifest_add_files() (builds fresh manifest internally)
- *   5. Record stat cache for added files
- *   6. Commit transaction (state_save)
+ *   4. Call manifest_add_files() (builds fresh manifest internally;
+ *      advances deployment anchor for synced entries)
+ *   5. Commit transaction (state_save)
  *
  * Custom Prefix Update:
  *   When adding custom/ files to an already-enabled profile, the custom_prefix
  *   must be stored in state BEFORE manifest_add_files(). This is the same
- *   ordering constraint as auto_enable_and_sync_profile() (STEP 4 → STEP 5).
+ *   prefix-before-sync ordering enforced by auto_enable_and_sync_profile().
  *   Only called when custom_prefix is non-NULL to avoid clearing an existing
  *   prefix when adding home/ or root/ files.
  *
@@ -845,8 +822,8 @@ static error_t *update_manifest_after_add(
      *
      * CRITICAL ORDER: Must store prefix BEFORE manifest_add_files() so
      * the prefix map (loaded internally) can resolve custom/ storage paths
-     * during manifest building. Same ordering constraint as
-     * auto_enable_and_sync_profile() (STEP 4 → STEP 5).
+     * during manifest building. Same prefix-before-sync ordering as
+     * auto_enable_and_sync_profile().
      *
      * Only called when custom_prefix is non-NULL to avoid clearing an
      * existing prefix when adding home/ or root/ files.
@@ -859,7 +836,12 @@ static error_t *update_manifest_after_add(
         }
     }
 
-    /* STEP 4: Bulk sync operation (O(M+N)) */
+    /* STEP 4: Bulk sync operation (O(M+N))
+     *
+     * manifest_add_files advances the deployment anchor internally for
+     * synced entries. Entries skipped by precedence correctly receive
+     * no anchor advance, so the winning profile's anchor stays
+     * untouched. */
     size_t synced_count = 0;
     err = manifest_add_files(
         repo,
@@ -875,28 +857,7 @@ static error_t *update_manifest_after_add(
         goto cleanup;
     }
 
-    /* STEP 5: Advance deployment anchor for added files
-     *
-     * Mirrors auto_enable_and_sync_profile's STEP 5: disk content matches the
-     * freshly-committed blob_oid, so advance the anchor for fast-path short-
-     * circuit on the next status. deployed_at=0 preserves the INSERT-time
-     * timestamp. Non-fatal on failure (VWD cache is already committed). */
-    for (size_t i = 0; i < added_files->count; i++) {
-        const char *path = added_files->items[i];
-
-        state_file_entry_t *entry = NULL;
-        error_t *lookup_err = state_get_file(state, path, &entry);
-        if (lookup_err) {
-            error_free(lookup_err);
-            continue;
-        }
-        deployment_anchor_t anchor = capture_anchor_from_disk(path, &entry->blob_oid, 0);
-        error_t *anchor_err = state_update_anchor(state, path, &anchor);
-        if (anchor_err) error_free(anchor_err);
-        state_free_entry(entry);
-    }
-
-    /* STEP 6: Commit transaction */
+    /* STEP 5: Commit transaction */
     err = state_save(repo, state);
     if (err) {
         err = error_wrap(err, "Failed to save manifest updates");

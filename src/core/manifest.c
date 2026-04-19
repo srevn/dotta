@@ -1926,17 +1926,32 @@ error_t *manifest_update_files(
              *
              * Key insight: UPDATE captures files FROM filesystem, so they're
              * already deployed. We set deployed_at to mark them as known. */
-
             err = sync_entry_to_state(repo, state, entry, metadata, time(NULL), NULL);
             if (err) {
                 err = error_wrap(
-                    err, "Failed to sync '%s' to manifest",
-                    item->filesystem_path
+                    err, "Failed to sync '%s' to manifest", item->filesystem_path
                 );
                 goto cleanup;
             }
 
             (*out_synced)++;
+
+            /* Advance deployment anchor: UPDATE captures files FROM the filesystem,
+             * so the just-committed blob_oid equals disk content. Only advance
+             * the anchor for entries that reached this branch (precedence matched,
+             * entry sourced from the fresh manifest); skipped entries receive
+             * no anchor update, preventing the winning profile's anchor from being
+             * poisoned with a disk stat that does not correspond to its blob_oid.
+             *
+             * Anchor-write failures are non-fatal: the VWD cache is already
+             * committed and the next status self-heals via the slow-path CMP_EQUAL */
+            deployment_anchor_t anchor = capture_anchor_from_disk(
+                entry->filesystem_path, &entry->blob_oid, 0
+            );
+            error_t *anchor_err = state_update_anchor(
+                state, entry->filesystem_path, &anchor
+            );
+            if (anchor_err) error_free(anchor_err);
         }
     }
 
@@ -2148,18 +2163,37 @@ error_t *manifest_add_files(
          *
          * Key insight: ADD captures files FROM filesystem, so they're
          * already deployed. We set deployed_at to mark them as known. */
-
         err = sync_entry_to_state(repo, state, entry, metadata, time(NULL), NULL);
 
         if (err) {
             err = error_wrap(
-                err, "Failed to sync '%s' to manifest",
-                filesystem_path
+                err, "Failed to sync '%s' to manifest", filesystem_path
             );
             goto cleanup;
         }
 
         (*out_synced)++;
+
+        /* Capture-from-disk sync: ADD captures files FROM the filesystem,
+         * so the just-committed blob_oid equals disk content. Pair the
+         * VWD UPSERT with an anchor advance so the next status will
+         * short-circuit on the fast path.
+         *
+         * Only advance the anchor for entries that reached this point
+         * (precedence matched, entry sourced from the fresh manifest);
+         * skipped entries correctly receive no anchor update,
+         * preventing the winning profile's anchor from being poisoned
+         * with a disk stat that does not correspond to its blob_oid.
+         *
+         * Anchor-write failures are non-fatal: the VWD cache is already
+         * committed and the next status self-heals via the slow-path */
+        deployment_anchor_t anchor = capture_anchor_from_disk(
+            entry->filesystem_path, &entry->blob_oid, 0
+        );
+        error_t *anchor_err = state_update_anchor(
+            state, entry->filesystem_path, &anchor
+        );
+        if (anchor_err) error_free(anchor_err);
     }
 
     /* After adding files, the profile's branch HEAD has moved to a new commit.

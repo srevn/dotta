@@ -1135,39 +1135,11 @@ static error_t *update_manifest_after_update(
         goto cleanup;
     }
 
-    /* Advance deployment anchor for updated files
-     *
-     * Files were just captured from filesystem — disk content matches the
-     * freshly-committed blob_oid (which manifest_update_files just wrote to
-     * state). Advance the anchor so the next status short-circuits via the
-     * fast path. Look up blob_oid from state (cheap prepared statement).
-     *
-     * Skip deleted items (file doesn't exist) and directories (no anchor).
-     * deployed_at=0 preserves the row's existing lifecycle timestamp —
-     * this sync doesn't create a new deployment event.
-     *
-     * Non-fatal on failure: the VWD cache is already committed, only the
-     * fast-path witness is optional. */
-    for (size_t i = 0; i < item_count; i++) {
-        const workspace_item_t *item = all_items[i];
-        if (item->item_kind != WORKSPACE_ITEM_FILE ||
-            item->state == WORKSPACE_STATE_DELETED) {
-            continue;
-        }
-
-        state_file_entry_t *entry = NULL;
-        error_t *lookup_err = state_get_file(state, item->filesystem_path, &entry);
-        if (lookup_err) {
-            error_free(lookup_err);
-            continue;
-        }
-        deployment_anchor_t anchor = capture_anchor_from_disk(
-            item->filesystem_path, &entry->blob_oid, 0
-        );
-        error_t *anchor_err = state_update_anchor(state, item->filesystem_path, &anchor);
-        if (anchor_err) error_free(anchor_err);
-        state_free_entry(entry);
-    }
+    /* manifest_update_files advances the deployment anchor internally for
+     * synced (modified/new) entries. Deleted items and fallback resolutions
+     * correctly receive no anchor advance: there is no disk confirmation
+     * for a deleted path, and a fallback's disk stat may not correspond
+     * to the fallback blob_oid. */
 
     /* Verbose summary (emit before commit so failure diagnostics still have it) */
     if (synced > 0 || removed > 0 || fallbacks > 0) {

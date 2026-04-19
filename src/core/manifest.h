@@ -273,7 +273,12 @@ error_t *manifest_disable_profile(
  *
  * Postconditions:
  *   - Modified/new files synced with deployed_at = time(NULL) (files captured from filesystem)
- *   - Deleted files fallback (deployed_at preserved) or marked STATE_INACTIVE
+ *   - Modified/new files also have their deployment anchor advanced
+ *     (blob_oid + fresh disk stat, lifecycle timestamp preserved). Anchor-write
+ *     failures are non-fatal — the VWD cache is already committed and the next
+ *     status falls through to the slow path, which self-heals the anchor.
+ *   - Deleted files fallback (deployed_at preserved) or marked STATE_INACTIVE;
+ *     anchor left untouched (no disk confirmation for deleted/fallback paths)
  *   - Tracked directories synced from all enabled profiles
  *   - Transaction remains open (caller commits)
  *
@@ -333,7 +338,13 @@ error_t *manifest_update_files(
  *
  * Postconditions:
  *   - Files synced to manifest with deployed_at = time(NULL)
- *   - Lower-precedence files skipped (not an error)
+ *   - Synced entries also have their deployment anchor advanced
+ *     (blob_oid + fresh disk stat, lifecycle timestamp preserved). Anchor-write
+ *     failures are non-fatal — the VWD cache is already committed and the next
+ *     status falls through to the slow path, which self-heals the anchor.
+ *   - Lower-precedence files skipped (no sync, no anchor advance — prevents
+ *     poisoning the winning profile's anchor with a disk stat that may not
+ *     correspond to the winner's blob_oid)
  *   - Filtered files skipped (not an error)
  *   - Tracked directories synced from all enabled profiles
  *   - Transaction remains open (caller commits via state_save)

@@ -2902,6 +2902,57 @@ bool workspace_item_extract_display_info(
 }
 
 /**
+ * Advance the deployment anchor with in-memory consistency
+ *
+ * Single workspace-scope writer for anchor advances: persists via
+ * state_update_anchor, then patches ws->manifest's entry so the two
+ * views cannot drift. Mirrors state_update_anchor's preserve-on-zero
+ * semantic on deployed_at — a zero timestamp preserves the in-memory
+ * value just as the DB preserves its column.
+ *
+ * DB write runs first; on error we return without touching memory so a
+ * failed write cannot leave the in-memory view ahead of reality.
+ */
+error_t *workspace_advance_anchor(
+    workspace_t *ws,
+    const char *filesystem_path,
+    const deployment_anchor_t *anchor
+) {
+    CHECK_NULL(ws);
+    CHECK_NULL(filesystem_path);
+    CHECK_NULL(anchor);
+
+    error_t *err = state_update_anchor(ws->state, filesystem_path, anchor);
+    if (err) {
+        return err;
+    }
+
+    /* Patch the in-memory manifest entry to match what the DB now holds.
+     * Not-found is tolerated: the DB write already no-op'd for rows
+     * filtered by precedence / disabled profile, and the in-memory
+     * manifest may likewise not carry the path. */
+    if (!ws->manifest || !ws->manifest->index) {
+        return NULL;
+    }
+
+    void *idx_ptr = hashmap_get(ws->manifest->index, filesystem_path);
+    if (!idx_ptr) {
+        return NULL;
+    }
+
+    size_t idx = (size_t) (uintptr_t) idx_ptr - 1;
+    deployment_anchor_t *in_mem = &ws->manifest->entries[idx].anchor;
+
+    in_mem->blob_oid = anchor->blob_oid;
+    in_mem->stat = anchor->stat;
+    if (anchor->deployed_at != 0) {
+        in_mem->deployed_at = anchor->deployed_at;
+    }
+
+    return NULL;
+}
+
+/**
  * Flush accumulated anchor updates to the state database
  *
  * Advances the deployment anchor for entries that hit CMP_EQUAL on the
@@ -2913,6 +2964,10 @@ bool workspace_item_extract_display_info(
  * deployed_at is passed as 0 so state_update_anchor preserves the row's
  * existing timestamp — this flush confirms the anchor witness but does
  * not create a new deployment lifecycle event (apply owns that).
+ *
+ * Routed through workspace_advance_anchor so each persisted update also
+ * patches ws->manifest's in-memory anchor; no staleness window opens
+ * between DB and memory for downstream readers in the same run.
  *
  * Begins its own transaction only when state isn't already in one
  * (status/diff/sync). Apply always passes state already-in-transaction.
@@ -2945,8 +3000,8 @@ error_t *workspace_flush_anchor_updates(workspace_t *ws) {
             .deployed_at = 0,   /* preserve — flush is a witness advance, not a deploy */
             .stat        = update->stat,
         };
-        error_t *err = state_update_anchor(
-            ws->state, update->filesystem_path, &anchor
+        error_t *err = workspace_advance_anchor(
+            ws, update->filesystem_path, &anchor
         );
         if (err) {
             if (needs_transaction) {

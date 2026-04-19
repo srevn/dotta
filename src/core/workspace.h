@@ -353,6 +353,40 @@ bool workspace_item_extract_display_info(
 );
 
 /**
+ * Advance the deployment anchor with in-memory consistency
+ *
+ * Unified writer for workspace-scope anchor advances. Wraps
+ * state_update_anchor so callers cannot drift the DB ahead of
+ * ws->manifest: every successful DB write is mirrored onto the in-memory
+ * manifest entry's anchor, preserving state_update_anchor's
+ * preserve-on-zero semantic on deployed_at.
+ *
+ * This is the single entry point for workspace-scope anchor advances:
+ *   - workspace_flush_anchor_updates (witness advance from slow-path)
+ *   - apply's adoption loop (ownership advance on first claim)
+ *   - apply's post-deploy loop (ownership advance after write)
+ *
+ * Manifest-layer writers (manifest_add_files / manifest_update_files)
+ * continue to call state_update_anchor directly — they run without a
+ * live workspace and have no in-memory manifest to patch.
+ *
+ * Not-found tolerance matches state_update_anchor: if the DB row is
+ * absent (filtered by precedence, disabled profile) the write silently
+ * no-ops; if the path isn't in the in-memory index, the patch step is
+ * skipped. Neither case is an error.
+ *
+ * @param ws Workspace (must not be NULL, state must be open)
+ * @param filesystem_path File path (must not be NULL)
+ * @param anchor New anchor (must not be NULL; blob_oid must be non-zero)
+ * @return Error from state_update_anchor, or NULL on success
+ */
+error_t *workspace_advance_anchor(
+    workspace_t *ws,
+    const char *filesystem_path,
+    const deployment_anchor_t *anchor
+);
+
+/**
  * Flush accumulated deployment-anchor advances to the state database
  *
  * During workspace_load(), files verified CMP_EQUAL via the slow path
@@ -361,6 +395,10 @@ bool workspace_item_extract_display_info(
  * short-circuit via the fast-path stat witness AND — if Git advances
  * blob_oid in the meantime — classify the file as stale directly from the
  * fast path instead of re-hashing.
+ *
+ * Routes through workspace_advance_anchor, so each persisted update also
+ * patches the in-memory manifest entry's anchor — DB and memory stay
+ * consistent for downstream readers in the same run.
  *
  * Self-healing: the first status/apply after profile enable verifies all
  * files via the slow path and seeds the anchor. The second call hits the

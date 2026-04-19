@@ -857,15 +857,9 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
 
     /* Persist deployment-anchor advances for files verified clean via the
      * slow path. Within apply's transaction — committed atomically with
-     * deployment changes.
-     *
-     * In-memory anchor staleness: ws->manifest entries retain the load-time
-     * anchor snapshot; the state DB is the source of truth past this point.
-     * By contract this flush preserves deployed_at (see workspace_flush_anchor_updates
-     * and state_update_anchor's preserve-on-zero sentinel), so the adoption
-     * loop below can still read entry->anchor.deployed_at as an ownership
-     * probe. Any future reader of entry->anchor past this call must account
-     * for the snapshot being stale relative to the DB. */
+     * deployment changes. Routed through workspace_advance_anchor, so each
+     * persisted update also patches ws->manifest's in-memory anchor —
+     * downstream readers in this run see DB and memory agreeing. */
     err = workspace_flush_anchor_updates(ws);
     if (err) {
         err = error_wrap(err, "Failed to flush anchor updates");
@@ -1025,9 +1019,9 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * above persists slow-path witnesses for the *next* run's fast path.
      * It is not what proves this run's match — that proof comes from
      * analyze_file_divergence leaving the entry out of ws->diverged. The
-     * flush preserves deployed_at by contract, which is why reading
-     * entry->anchor.deployed_at here remains a valid ownership probe
-     * despite the DB having been written since workspace_load.
+     * flush preserves deployed_at by contract, so entry->anchor.deployed_at
+     * here remains a valid ownership probe; DB and in-memory views are
+     * kept coherent by workspace_advance_anchor.
      *
      * Placement rationale: MUST run before the Nothing-to-deploy fast-path
      * early-exit below, otherwise the canonical case (clean manifest, no
@@ -1058,8 +1052,8 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
                 &entry->blob_oid,
                 adopt_now
             );
-            error_t *adopt_err = state_update_anchor(
-                state, entry->filesystem_path, &anchor
+            error_t *adopt_err = workspace_advance_anchor(
+                ws, entry->filesystem_path, &anchor
             );
             if (adopt_err) {
                 /* Non-fatal: file is correct on disk; next status's slow-path
@@ -1924,7 +1918,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
                     path, &entry->blob_oid, now
                 );
 
-                err = state_update_anchor(state, path, &anchor);
+                err = workspace_advance_anchor(ws, path, &anchor);
                 if (err) {
                     /* Non-fatal warning - deployment succeeded, just anchor update failed.
                      * The file is already on the filesystem with correct content.

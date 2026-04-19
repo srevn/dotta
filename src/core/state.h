@@ -129,10 +129,23 @@ static inline stat_cache_t stat_cache_from_stat(const struct stat *st) {
  *   - blob_oid ≠ virtual_manifest.blob_oid iff the Git-expected value
  *     has advanced past the last disk confirmation — i.e., stale.
  *
- * The anchor is written only by state_update_anchor() (post-deploy,
- * post-adoption, workspace flush on CMP_EQUAL, post-commit capture).
- * Manifest-layer writes (reconcile/sync/rebuild) leave the anchor
- * untouched via the UPSERT's preserve-on-zero sentinel.
+ * Witness vs. ownership split:
+ *   - (blob_oid, stat) is witness data — cheap, observational, updated
+ *     whenever dotta confirms disk matches (including from status/diff/sync
+ *     via workspace_flush_anchor_updates). Witness writes pass
+ *     deployed_at = 0 to preserve the ownership flag.
+ *   - deployed_at > 0 is the ownership flag — dotta actively committed to
+ *     managing this file's disk presence. Written by explicit user acts:
+ *     apply (deploy or adoption), add, update. Workspace classification
+ *     reads deployed_at > 0 to separate DELETED (was owned, now missing)
+ *     from UNDEPLOYED (never owned); consumers are analyze_file_divergence
+ *     and analyze_encryption_policy_mismatch.
+ *
+ * The anchor is written only by state_update_anchor() — the sole writer
+ * of deployed_blob_oid, deployed_at, and stat_*. Manifest-layer writes
+ * (reconcile/sync/rebuild via sync_entry_to_state) leave every anchor
+ * column untouched: the UPSERT's preserve-on-zero sentinel on
+ * deployed_blob_oid and unconditional preserve on deployed_at + stat_*.
  */
 typedef struct {
     git_oid blob_oid;         /* Blob whose on-disk presence dotta confirmed */

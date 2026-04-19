@@ -85,10 +85,11 @@ static void print_preflight_results(
  *
  * Categories (each semantically distinct):
  * - deployed: Files written to disk (green)
- * - adopted: Existing files now managed by dotta (yellow - draws attention)
- * - unchanged: Already tracked, no changes needed (cyan)
  * - skipped_existing: --skip-existing flag applied (cyan)
  * - failed: Deployment failures (red, always shown)
+ *
+ * Adoption (ownership stamping for pre-existing matching files) is an
+ * apply-level concern and its summary is printed by cmd_apply directly.
  */
 static void print_deploy_results(
     const output_ctx_t *out,
@@ -104,28 +105,6 @@ static void print_deploy_results(
             output_styled(
                 out, OUTPUT_VERBOSE, "  {green}✓{reset} %s\n",
                 result->deployed->items[i]
-            );
-        }
-    }
-
-    /* Adopted files - existing files now managed by dotta */
-    if (result->adopted && result->adopted->count > 0) {
-        output_section(out, OUTPUT_VERBOSE, dry_run ? "Would adopt" : "Adopted files");
-        for (size_t i = 0; i < result->adopted->count; i++) {
-            output_styled(
-                out, OUTPUT_VERBOSE, "  {yellow}⊕{reset} %s\n",
-                result->adopted->items[i]
-            );
-        }
-    }
-
-    /* Unchanged files - already tracked, still correct */
-    if (result->unchanged && result->unchanged->count > 0) {
-        output_section(out, OUTPUT_VERBOSE, "Unchanged files");
-        for (size_t i = 0; i < result->unchanged->count; i++) {
-            output_styled(
-                out, OUTPUT_VERBOSE, "  {cyan}⊘{reset} %s\n",
-                result->unchanged->items[i]
             );
         }
     }
@@ -168,25 +147,6 @@ static void print_deploy_results(
                                             : "Deployed {green}%zu{reset} file%s\n",
                 result->deployed->count,
                 result->deployed->count == 1 ? "" : "s"
-            );
-        }
-
-        /* Adopted count */
-        if (result->adopted && result->adopted->count > 0) {
-            output_styled(
-                out, OUTPUT_NORMAL, dry_run ? "Would adopt {yellow}%zu{reset} file%s\n"
-                                            : "Adopted {yellow}%zu{reset} file%s (now tracked)\n",
-                result->adopted->count,
-                result->adopted->count == 1 ? "" : "s"
-            );
-        }
-
-        /* Unchanged count */
-        if (result->unchanged && result->unchanged->count > 0) {
-            output_styled(
-                out, OUTPUT_NORMAL, "Skipped {cyan}%zu{reset} file%s (unchanged)\n",
-                result->unchanged->count,
-                result->unchanged->count == 1 ? "" : "s"
             );
         }
 
@@ -1061,6 +1021,77 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         output_hint(out, OUTPUT_NORMAL, "Check if the file path is correct and profile is enabled");
     }
 
+    /* Apply-level adoption: stamp ownership for in-scope clean files that
+     * dotta has never claimed.
+     *
+     * A clean in-scope entry with anchor.deployed_at == 0 represents a file
+     * the user declared scope over (via profile enable or add/update) AND
+     * that dotta just confirmed matches the profile blob — either via the
+     * fast-path stat witness or via the slow-path CMP_EQUAL seeded above
+     * by workspace_flush_anchor_updates. Apply is the ownership moment:
+     * running it is how the user claims the in-scope set. Stamping here
+     * collapses the "enable → apply on a pre-existing matching file" flow
+     * to a coherent (blob, now, stat), so a later `rm file` is classified
+     * as [deleted] and `update` commits the deletion.
+     *
+     * Placement rationale: MUST run before the Nothing-to-deploy fast-path
+     * early-exit below, otherwise the canonical case (clean manifest, no
+     * orphans) never reaches any anchor-writer. Adoption writes land in
+     * the open transaction; both the fast-path state_save and the main-path
+     * state_save commit them.
+     *
+     * Write gated by !dry_run: stamping deployed_at is a write-effect that
+     * contradicts dry-run's read-only ownership contract, so the
+     * state_update_anchor call is skipped. Classification runs regardless,
+     * so --dry-run previews "Would adopt N file(s)". The earlier
+     * workspace_flush_anchor_updates is witness-only and runs regardless —
+     * it cannot stamp deployed_at (state_update_anchor's preserve-on-zero
+     * sentinel treats deployed_at == 0 as "keep existing"). */
+    size_t adopted_count = 0;
+    time_t adopt_now = time(NULL);
+    for (size_t i = 0; i < manifest->count; i++) {
+        const file_entry_t *entry = &manifest->entries[i];
+
+        if (entry->anchor.deployed_at > 0) continue;
+        if (!scope_accepts_entry(scope, entry->profile, entry->storage_path)) {
+            continue;
+        }
+
+        const workspace_item_t *ws_item = workspace_get_item(ws, entry->filesystem_path);
+        if (needs_deployment(ws_item)) continue;  /* handled by deploy path */
+
+        if (!opts->dry_run) {
+            deployment_anchor_t anchor = capture_anchor_from_disk(
+                entry->filesystem_path,
+                &entry->blob_oid,
+                adopt_now
+            );
+            error_t *adopt_err = state_update_anchor(
+                state, entry->filesystem_path, &anchor
+            );
+            if (adopt_err) {
+                /* Non-fatal: file is correct on disk; next status's slow-path
+                 * CMP_EQUAL re-seeds the witness, and the row will be
+                 * re-adopted on the next apply. */
+                output_warning(
+                    out, OUTPUT_NORMAL, "Failed to record adoption anchor for %s: %s",
+                    entry->filesystem_path, error_message(adopt_err)
+                );
+                error_free(adopt_err);
+                continue;  /* Failed writes don't count — preview still accurate */
+            }
+        }
+        adopted_count++;
+    }
+    if (adopted_count > 0) {
+        output_styled(
+            out, OUTPUT_NORMAL,
+            opts->dry_run ? "Would adopt {yellow}%zu{reset} file%s\n"
+                          : "Adopted {yellow}%zu{reset} file%s (now tracked)\n",
+            adopted_count, adopted_count == 1 ? "" : "s"
+        );
+    }
+
     /* Extract orphans from workspace (unless --keep-orphans or file filter active)
      *
      * Architecture: workspace_load() already detected ALL orphans (enabled + disabled
@@ -1356,7 +1387,6 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         .dry_run          = opts->dry_run,
         .verbose          = opts->verbose,
         .skip_existing    = opts->skip_existing,
-        .skip_unchanged   = opts->skip_unchanged,
         .strict_ownership = config->strict_mode,
         .scope            = scope
     };
@@ -1817,8 +1847,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
                 cleanup_res->removed_dirs->count > 0) {
 
                 output_print(
-                    out, OUTPUT_VERBOSE,
-                    "\nRemoving orphaned directory entries from state...\n"
+                    out, OUTPUT_VERBOSE, "\nRemoving orphaned directory entries from state...\n"
                 );
 
                 for (size_t i = 0; i < cleanup_res->removed_dirs->count; i++) {
@@ -1915,58 +1944,6 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
                 out, OUTPUT_VERBOSE, "  Updated %zu anchor%s\n",
                 deploy_res->deployed->count,
                 deploy_res->deployed->count == 1 ? "" : "s"
-            );
-        }
-
-        /* Advance the deployment anchor for adopted files
-         *
-         * Adopted files are those that:
-         * - Existed on filesystem with correct content
-         * - Were never tracked by dotta (anchor.deployed_at == 0)
-         * - Were added to deploy_res->adopted by deploy_execute
-         *
-         * The anchor advance is identical in shape to the deployed case: record
-         * (blob_oid, now, stat). Adoption just means the content was already there.
-         */
-        if (deploy_res->adopted && deploy_res->adopted->count > 0) {
-            time_t now = time(NULL);
-
-            output_print(out, OUTPUT_VERBOSE, "\nRecording adopted files in state...\n");
-
-            for (size_t i = 0; i < deploy_res->adopted->count; i++) {
-                const char *path = deploy_res->adopted->items[i];
-
-                const git_oid *blob_oid = apply_expected_blob_oid(manifest, path);
-                if (!blob_oid) {
-                    output_warning(
-                        out, OUTPUT_NORMAL,
-                        "No manifest entry found for %s — skipping anchor advance", path
-                    );
-                    continue;
-                }
-
-                /* Adopted files already exist with correct content — lstat() is
-                 * guaranteed to succeed (deploy_execute verified existence). */
-                deployment_anchor_t anchor = capture_anchor_from_disk(path, blob_oid, now);
-
-                err = state_update_anchor(state, path, &anchor);
-                if (err) {
-                    /* Non-fatal: file is already correct on filesystem.
-                     * Log warning and continue - the important fact (file exists
-                     * with correct content) is true regardless of database state. */
-                    output_warning(
-                        out, OUTPUT_NORMAL, "Failed to record adoption for %s: %s",
-                        path, error_message(err)
-                    );
-                    error_free(err);
-                    err = NULL;
-                }
-            }
-
-            output_print(
-                out, OUTPUT_VERBOSE, "  Recorded %zu adopted file%s\n",
-                deploy_res->adopted->count,
-                deploy_res->adopted->count == 1 ? "" : "s"
             );
         }
 
@@ -2070,16 +2047,6 @@ static args_class_t apply_classify(const char *tok) {
                                          : APPLY_CLASS_PROFILE;
 }
 
-/**
- * Seed non-zero defaults. `skip_unchanged` is true by default — the
- * user opts out with `--no-skip-unchanged`, which writes 0 via
- * ARGS_FLAG_SET.
- */
-static void apply_defaults(void *opts_v) {
-    cmd_apply_options_t *o = opts_v;
-    o->skip_unchanged = 1;
-}
-
 static error_t *apply_dispatch(const void *ctx_v, void *opts_v) {
     const dotta_ctx_t *ctx = ctx_v;
     return cmd_apply(ctx, (const cmd_apply_options_t *) opts_v);
@@ -2117,11 +2084,6 @@ static const args_opt_t apply_opts[] = {
         cmd_apply_options_t,skip_existing,
         "Skip files that already exist"
     ),
-    ARGS_FLAG_SET(
-        "no-skip-unchanged",
-        cmd_apply_options_t,skip_unchanged,   0,
-        "Redeploy every file, even if unchanged"
-    ),
     ARGS_FLAG(
         "v verbose",
         cmd_apply_options_t,verbose,
@@ -2143,38 +2105,33 @@ static const args_opt_t apply_opts[] = {
 };
 
 const args_command_t spec_apply = {
-    .name          = "apply",
-    .summary       = "Deploy enabled profiles to the filesystem",
-    .usage         = "%s apply [options] [profile|file]...",
-    .description   =
+    .name        = "apply",
+    .summary     = "Deploy enabled profiles to the filesystem",
+    .usage       = "%s apply [options] [profile|file]...",
+    .description =
         "Converge the filesystem with enabled profiles: deploy new and\n"
         "updated files, remove files orphaned by disabled profiles, and\n"
         "update the deployment state.\n",
-    .notes         =
-        "Smart Skipping:\n"
-        "  Files whose content already matches the profile are skipped\n"
-        "  by default. Pass --no-skip-unchanged to force redeployment.\n"
-        "\n"
+    .notes       =
         "Exclusion Patterns:\n"
         "  Excluded files are protected from both deployment and removal.\n"
         "  Patterns follow gitignore glob syntax. Flag is repeatable.\n",
-    .examples      =
-        "  %s apply                              # Deploy all enabled profiles\n"
-        "  %s apply -p work                      # Filter to 'work' profile\n"
-        "  %s apply -p work ~/.bashrc            # Profile + file filter\n"
-        "  %s apply ~/.bashrc ~/.zshrc           # Deploy specific files only\n"
-        "  %s apply -n                           # Preview without writing\n"
-        "  %s apply --exclude 'home/.ssh/*'      # Protect matched files\n"
-        "  %s apply --no-skip-unchanged          # Force-deploy every file\n",
-    .epilogue      =
+    .examples    =
+        "  %s apply                            # Deploy all enabled profiles\n"
+        "  %s apply --force                    # Force overwrite of modifications\n"
+        "  %s apply -p work                    # Filter to 'work' profile\n"
+        "  %s apply -p work ~/.bashrc          # Profile + file filter\n"
+        "  %s apply ~/.bashrc ~/.zshrc         # Deploy specific files only\n"
+        "  %s apply -n                         # Preview without writing\n"
+        "  %s apply --exclude 'home/.ssh/*'    # Protect matched files\n",
+    .epilogue    =
         "See also:\n"
         "  %s status          # Preview pending deployment\n"
         "  %s update          # Commit filesystem changes back\n"
         "  %s profile enable  # Stage a profile for deployment\n",
-    .opts_size     = sizeof(cmd_apply_options_t),
-    .opts          = apply_opts,
-    .classify      = apply_classify,
-    .init_defaults = apply_defaults,
-    .payload       = &dotta_ext_write,
-    .dispatch      = apply_dispatch,
+    .opts_size   = sizeof(cmd_apply_options_t),
+    .opts        = apply_opts,
+    .classify    = apply_classify,
+    .payload     = &dotta_ext_write,
+    .dispatch    = apply_dispatch,
 };

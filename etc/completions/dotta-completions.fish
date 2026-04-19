@@ -80,7 +80,6 @@ complete -c dotta -n "__dotta_using_command apply" -s f -l force -d "Overwrite m
 complete -c dotta -n "__dotta_using_command apply" -s n -l dry-run -d "Preview without writing"
 complete -c dotta -n "__dotta_using_command apply" -l keep-orphans -d "Leave orphaned files in place (advanced)"
 complete -c dotta -n "__dotta_using_command apply" -l skip-existing -d "Skip files that already exist"
-complete -c dotta -n "__dotta_using_command apply" -l no-skip-unchanged -d "Redeploy every file, even if unchanged"
 complete -c dotta -n "__dotta_using_command apply" -s v -l verbose -d "Verbose output"
 
 # revert

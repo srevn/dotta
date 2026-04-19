@@ -1107,13 +1107,10 @@ error_t *deploy_execute(
     }
 
     result->deployed = string_array_new(0);
-    result->adopted = string_array_new(0);
-    result->unchanged = string_array_new(0);
     result->skipped_existing = string_array_new(0);
     result->failed = string_array_new(0);
 
-    if (!result->deployed || !result->adopted || !result->unchanged ||
-        !result->skipped_existing || !result->failed) {
+    if (!result->deployed || !result->skipped_existing || !result->failed) {
         deploy_result_free(result);
         return ERROR(ERR_MEMORY, "Failed to allocate result arrays");
     }
@@ -1175,49 +1172,12 @@ error_t *deploy_execute(
             continue;
         }
 
-        /* Smart skip - file already up-to-date
-         *
-         * Query workspace for pre-computed divergence (O(1) hashmap lookup).
-         * ws_item == NULL means file is CLEAN (no divergence from expected state).
-         *
-         * For CLEAN files, distinguish based on deployed_at:
-         * - deployed_at == 0: ADOPTION (file exists correctly, never tracked)
-         * - deployed_at > 0: UNCHANGED (file previously tracked, still correct)
-         *
-         * All other divergence types (MODIFIED, MODE_DIFF, OWNERSHIP, DELETED)
-         * naturally fall through to deployment, ensuring metadata is always fixed.
-         */
-        if (opts->skip_unchanged && !opts->force) {
-            const workspace_item_t *ws_item = workspace_get_item(ws, entry->filesystem_path);
-
-            if (ws_item == NULL) {
-                /* File is CLEAN - no divergence from expected state */
-                if (entry->anchor.deployed_at == 0) {
-                    /* ADOPTION: File exists with correct content but never tracked.
-                     *
-                     * This typically happens when:
-                     * - User manually created file before enabling profile
-                     * - Content happens to match Git
-                     * - File needs dotta's acknowledgment (anchor advance)
-                     */
-                    err = string_array_push(result->adopted, entry->filesystem_path);
-                    if (err) {
-                        deploy_result_free(result);
-                        return error_wrap(err, "Failed to record adopted file");
-                    }
-                } else {
-                    /* UNCHANGED: File previously deployed, still correct.
-                     * No state update needed - deployed_at already set.
-                     */
-                    err = string_array_push(result->unchanged, entry->filesystem_path);
-                    if (err) {
-                        deploy_result_free(result);
-                        return error_wrap(err, "Failed to record unchanged file");
-                    }
-                }
-                continue;
-            }
-        }
+        /* Every entry reaching this loop is divergent by construction:
+         * cmd_apply's needs_deployment() filter drops clean entries before
+         * building deploy_manifest, so deploy_execute never sees a
+         * ws_item == NULL case. Clean in-scope entries with deployed_at == 0
+         * are handled by cmd_apply's adoption step, which stamps the
+         * lifecycle anchor without invoking deploy_file. */
 
         /* Deploy the file */
         err = deploy_file(repo, cache, entry, opts);
@@ -1279,8 +1239,6 @@ void deploy_result_free(deploy_result_t *result) {
     }
 
     string_array_free(result->deployed);
-    string_array_free(result->adopted);
-    string_array_free(result->unchanged);
     string_array_free(result->skipped_existing);
     string_array_free(result->failed);
     free(result->error_message);

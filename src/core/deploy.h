@@ -57,7 +57,6 @@ typedef struct {
     bool dry_run;             /* Don't actually deploy */
     bool verbose;             /* Print verbose output */
     bool skip_existing;       /* Skip files that already exist (don't overwrite) */
-    bool skip_unchanged;      /* Skip files that match profile content (smart skip) */
     bool strict_ownership;    /* Fail if ownership cannot be resolved (strict_mode) */
 
     /**
@@ -83,12 +82,15 @@ typedef struct {
 
 /**
  * Deployment result
+ *
+ * Tracks only the categories that deploy_execute actually produces. Clean
+ * in-scope entries never reach deploy_execute (apply's needs_deployment
+ * filter drops them upstream) and apply's own adoption step handles their
+ * lifecycle stamp.
  */
 typedef struct {
     /* Result arrays */
     string_array_t *deployed;          /* Files written to disk */
-    string_array_t *adopted;           /* Existing files claimed by dotta */
-    string_array_t *unchanged;         /* Already tracked, no changes needed */
     string_array_t *skipped_existing;  /* --skip-existing flag applied */
     string_array_t *failed;            /* Deployment failures */
 

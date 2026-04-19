@@ -585,16 +585,6 @@ bool state_has_profile(const state_t *state, const char *profile);
 time_t state_get_profile_timestamp(const state_t *state, const char *profile);
 
 /**
- * Clear all file entries (keeps profiles)
- *
- * Efficiently truncates virtual_manifest table.
- *
- * @param state State (must not be NULL)
- * @return Error or NULL on success
- */
-error_t *state_clear_files(state_t *state);
-
-/**
  * Helper: Create file entry
  *
  * Allocates a state_file_entry_t and populates its identity and VWD-cache
@@ -728,7 +718,7 @@ error_t *state_set_file_state(
  * - manifest_update_files (after commit)
  * - manifest_remove_files (after commit)
  * - manifest_enable_profile (after initial population)
- * - manifest_rebuild (after full repopulation)
+ * - manifest_populate (after clone-time population)
  *
  * @param state State (must not be NULL, must have active transaction)
  * @param profile Profile name (must not be NULL)

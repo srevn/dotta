@@ -1775,32 +1775,6 @@ void state_free_all_files(state_file_entry_t *entries, size_t count) {
 }
 
 /**
- * Clear all file entries (keeps profiles and timestamp)
- *
- * Efficiently truncates virtual_manifest table.
- *
- * @param state State (must not be NULL)
- * @return Error or NULL on success
- */
-error_t *state_clear_files(state_t *state) {
-    CHECK_NULL(state);
-    CHECK_NULL(state->db);
-
-    char *errmsg = NULL;
-    int rc = sqlite3_exec(state->db, "DELETE FROM virtual_manifest;", NULL, NULL, &errmsg);
-    if (rc != SQLITE_OK) {
-        error_t *err = ERROR(
-            ERR_STATE_INVALID, "Failed to clear virtual manifest: %s",
-            errmsg ? errmsg : sqlite3_errstr(rc)
-        );
-        sqlite3_free(errmsg);
-        return err;
-    }
-
-    return NULL;
-}
-
-/**
  * Create state directory entry from metadata item
  *
  * Converts portable metadata (storage_path) to state entry (both paths).
@@ -3263,7 +3237,7 @@ error_t *state_set_file_state(
  * - manifest_update_files (after commit)
  * - manifest_remove_files (after commit)
  * - manifest_enable_profile (after populating entries)
- * - manifest_rebuild (after syncing all entries)
+ * - manifest_populate (after clone-time population)
  * - manifest_repair_stale (after repairing entries)
  *
  * Cache discipline: this mutation patches the row cache *in place* rather

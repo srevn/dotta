@@ -275,7 +275,7 @@ static error_t *initialize_state(
          * enabled profiles and adding their files with correct precedence.
          * Without this, the manifest would be empty and 'dotta apply' would
          * have nothing to deploy. */
-        err = manifest_rebuild(repo, state, profiles);
+        err = manifest_populate(repo, state, profiles);
         if (err) {
             state_free(state);
             return error_wrap(err, "Failed to populate manifest");

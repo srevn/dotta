@@ -1078,23 +1078,30 @@ cleanup:
 }
 
 /**
- * Rebuild manifest from scratch
+ * Populate manifest from enabled profiles
  *
- * Nuclear option for recovery operations. Clears all manifest state and
- * rebuilds from Git by building a complete manifest once and syncing all
- * entries.
+ * Builds the virtual_manifest table from a set of enabled profiles in a
+ * single pass: walks each profile's tree once via the precedence oracle,
+ * resolves overrides, then writes one row per file.
+ *
+ * Sole caller is cmd_clone, which invokes this immediately after
+ * state_set_profiles against a freshly created (and therefore empty)
+ * virtual_manifest. Not a general-purpose repair primitive — it does not
+ * detect or remove orphans. For incremental drift repair use
+ * manifest_reconcile; for profile-scoped sync use manifest_enable_profile
+ * or manifest_disable_profile.
  *
  * Algorithm:
- *   1. Clear all file entries from state
- *   2. Build manifest ONCE from all enabled profiles (precedence oracle)
- *   3. Build profile→oid map for commit_oid field
- *   4. Load merged metadata from all profiles
- *   5. Sync ALL entries from manifest to state (single pass, no filtering)
- *   6. Sync tracked directories
+ *   1. Build manifest from enabled profiles (precedence oracle, single pass)
+ *   2. Load merged metadata from all profiles
+ *   3. Insert one row per manifest entry; deployed_at = time(NULL) if the
+ *      target file already exists on disk, else 0
+ *   4. Replace the per-profile commit_oid sentinel with the real branch HEAD
+ *   5. Sync tracked directories from metadata
  *
  * Performance: O(M) where M = total files across all enabled profiles
  */
-error_t *manifest_rebuild(
+error_t *manifest_populate(
     git_repository *repo,
     state_t *state,
     const string_array_t *enabled_profiles
@@ -1105,118 +1112,63 @@ error_t *manifest_rebuild(
 
     error_t *err = NULL;
     manifest_t *manifest = NULL;
-    state_file_entry_t *old_entries = NULL;
-    size_t old_count = 0;
-    hashmap_t *old_map = NULL;
     metadata_t *metadata = NULL;
 
     arena_t *arena = arena_create(64 * 1024);
     if (!arena) return ERROR(ERR_MEMORY, "Failed to create manifest arena");
 
-    /* 1. Snapshot existing entries BEFORE clearing (for deployed_at preservation) */
-    err = state_get_all_files(state, arena, &old_entries, &old_count);
-    if (err) {
-        arena_destroy(arena);
-        return error_wrap(err, "Failed to snapshot manifest for rebuild");
-    }
-
-    /* Build hashmap for O(1) old entry lookups */
-    old_map = hashmap_borrow(old_count > 0 ? old_count : 16);
-    if (!old_map) {
-        arena_destroy(arena);
-        return ERROR(ERR_MEMORY, "Failed to create old entries hashmap");
-    }
-
-    for (size_t i = 0; i < old_count; i++) {
-        err = hashmap_set(old_map, old_entries[i].filesystem_path, &old_entries[i]);
-        if (err) {
-            err = error_wrap(err, "Failed to populate old entries hashmap");
-            hashmap_free(old_map, NULL);  /* Don't free values - they're in old_entries */
-            arena_destroy(arena);
-            return err;
-        }
-    }
-
-    /* 2. Clear all file entries (snapshot is independent) */
-    err = state_clear_files(state);
-    if (err) {
-        err = error_wrap(err, "Failed to clear manifest for rebuild");
-        goto cleanup;
-    }
-
-    /* Early exit if no profiles (only sync directories which will be empty) */
+    /* No profiles → no files to populate. Sync directories for symmetry
+     * (no-op on the empty starting state this function requires). */
     if (enabled_profiles->count == 0) {
         err = manifest_sync_directories(repo, state, enabled_profiles);
         goto cleanup;
     }
 
-    /* 3. Build manifest ONCE from all enabled profiles (precedence oracle) */
+    /* 1. Build manifest from all enabled profiles (precedence oracle, single pass) */
     err = manifest_build(repo, enabled_profiles, state, arena, &manifest);
     if (err) {
-        err = error_wrap(err, "Failed to build manifest for rebuild");
+        err = error_wrap(err, "Failed to build manifest for populate");
         goto cleanup;
     }
 
-    /* 4. Load merged metadata from all profiles */
+    /* 2. Load merged metadata from all profiles */
     err = metadata_load_from_profiles(repo, enabled_profiles, &metadata);
     if (err) {
         /* Metadata may not exist for old profiles - continue with NULL */
-        if (err->code != ERR_NOT_FOUND) {
-            goto cleanup;
-        }
+        if (err->code != ERR_NOT_FOUND) goto cleanup;
         error_free(err);
         err = NULL;
     }
 
-    /* 5. Sync ALL entries from manifest to state (single pass, no filtering)
+    /* 3. Insert one row per manifest entry.
      *
-     * Key difference from manifest_enable_profile: We sync ALL entries because
-     * the state is empty (cleared in step 1). No filtering needed - every file
-     * in the manifest belongs in the rebuilt state. */
+     * deployed_at is lstat()-derived: time(NULL) if the target file already
+     * exists on disk, 0 otherwise. The empty-starting-state precondition
+     * means every call hits the INSERT path; the SQL UPSERT clause would
+     * preserve the deployment anchor (deployed_at, deployed_blob_oid,
+     * stat_*) automatically if any pre-existing row were ever encountered. */
     for (size_t i = 0; i < manifest->count; i++) {
         file_entry_t *entry = &manifest->entries[i];
 
-        /* Check if entry existed before rebuild (preserve deployed_at) */
-        state_file_entry_t *old_entry = hashmap_get(old_map, entry->filesystem_path);
-
-        time_t deployed_at;
-        if (old_entry) {
-            /* Existing entry - preserve deployed_at (lifecycle history) */
-            deployed_at = old_entry->anchor.deployed_at;
-        } else {
-            /* New entry - check filesystem for initial deployed_at value */
-            struct stat st;
-            if (lstat(entry->filesystem_path, &st) == 0) {
-                /* File exists - mark as known to dotta */
-                deployed_at = time(NULL);
-            } else {
-                /* File doesn't exist - mark as never deployed */
-                deployed_at = 0;
-            }
-        }
+        struct stat st;
+        time_t deployed_at = (lstat(entry->filesystem_path, &st) == 0) ? time(NULL) : 0;
 
         /* Sync to state with preserved/computed deployed_at */
         err = sync_entry_to_state(repo, state, entry, metadata, deployed_at, NULL);
         if (err) goto cleanup;
     }
 
-    /* 6. Record each profile's current HEAD in enabled_profiles.commit_oid.
-     *
-     * This replaces the zero sentinel that state_set_profiles wrote for new
-     * profiles (clone path) and refreshes the value for existing profiles. */
+    /* 4. Replace the zero sentinel state_set_profiles wrote with the real HEAD. */
     for (size_t p = 0; p < enabled_profiles->count; p++) {
         err = manifest_persist_profile_head(repo, state, enabled_profiles->items[p]);
         if (err) goto cleanup;
     }
 
-    /* 7. Sync tracked directories */
+    /* 5. Sync tracked directories */
     err = manifest_sync_directories(repo, state, enabled_profiles);
-    if (err) {
-        goto cleanup;
-    }
+    if (err) goto cleanup;
 
 cleanup:
-    if (old_map) hashmap_free(old_map, NULL);
     if (metadata) metadata_free(metadata);
     if (manifest) manifest_free(manifest);
     arena_destroy(arena);

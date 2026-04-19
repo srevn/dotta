@@ -435,44 +435,51 @@ error_t *manifest_remove_files(
 );
 
 /**
- * Rebuild manifest from scratch
+ * Populate manifest from enabled profiles
  *
- * Nuclear option: Clear and rebuild entire manifest from Git.
- * Used for repair/recovery operations only.
+ * Builds the virtual_manifest table from a set of enabled profiles in a
+ * single pass: walks each profile's tree once via the precedence oracle,
+ * resolves overrides, then writes one row per file.
  *
- * Algorithm (optimized O(M) approach):
- *   1. Clear all file entries from manifest
- *   2. Build manifest ONCE from all enabled profiles (precedence oracle)
- *   3. Sync commit_oid in enabled_profiles after entry sync
- *   4. Load merged metadata from all profiles
- *   5. Sync ALL entries from manifest to state (single pass, no filtering)
- *   6. Sync tracked directories
+ * Sole caller is cmd_clone, which invokes this immediately after
+ * state_set_profiles against a freshly created (and therefore empty)
+ * virtual_manifest. Not a general-purpose repair primitive — it does not
+ * detect or remove orphans. For incremental drift repair use
+ * manifest_reconcile; for profile-scoped sync use manifest_enable_profile
+ * or manifest_disable_profile.
+ *
+ * Algorithm:
+ *   1. Build manifest from enabled profiles (precedence oracle, O(M))
+ *   2. Load merged metadata from all profiles
+ *   3. Insert one row per manifest entry; deployed_at = time(NULL) if the
+ *      target file already exists on disk, else 0
+ *   4. Replace the per-profile commit_oid sentinel with the real branch HEAD
+ *   5. Sync tracked directories from metadata
  *
  * Key optimization: Builds manifest once and syncs all entries directly,
  * rather than calling manifest_enable_profile() N times (which would rebuild
  * the manifest N times). This reduces complexity from O(N × M) to O(M).
  *
- * WARNING: This is a destructive operation that clears all manifest entries.
- * However, lifecycle tracking is preserved: existing entries retain their deployed_at,
- * new entries use lstat() to check filesystem (deployed_at = time(NULL) if exists, else 0).
- *
  * Preconditions:
- *   - state MUST have active transaction
- *   - enabled_profiles MUST be current enabled set
- *   - Empty profile list supported (clears manifest, syncs empty directories)
+ *   - state MUST have active transaction (state_open or state_begin)
+ *   - virtual_manifest is empty (caller's responsibility — if violated,
+ *     existing rows are upserted with the deployment anchor preserved by
+ *     SQL, but orphans are NOT removed and inactive rows are silently
+ *     reactivated)
+ *   - Empty profile list supported (no-op on files, syncs empty directory set)
  *
  * Postconditions:
- *   - Manifest cleared and rebuilt from enabled profiles
- *   - Existing entries preserve deployed_at (lifecycle history maintained)
- *   - New entries set deployed_at based on filesystem lstat() check
+ *   - virtual_manifest contains one row per file in the precedence-resolved
+ *     manifest, with state='active' and deployed_at set per lstat()
+ *   - Each enabled profile's commit_oid reflects its current branch HEAD
  *   - Empty profile list results in empty manifest
- *   - Transaction remains open (caller commits)
+ *   - Transaction remains open (caller commits via state_save)
  *
  * Error Conditions:
- *   - ERR_STATE: Database clear failed
- *   - ERR_GIT: Git operation failed
+ *   - ERR_GIT: Git operation failed (tree walk, branch resolution)
  *   - ERR_CRYPTO: Encrypted file but key unavailable
- *   - ERR_NOMEM: Memory allocation failed
+ *   - ERR_STATE_INVALID: Database operation failed
+ *   - ERR_MEMORY: Memory allocation failed
  *
  * Performance: O(M) where M = total files across all enabled profiles
  *
@@ -481,7 +488,7 @@ error_t *manifest_remove_files(
  * @param enabled_profiles Enabled profiles to build from
  * @return Error or NULL on success
  */
-error_t *manifest_rebuild(
+error_t *manifest_populate(
     git_repository *repo,
     state_t *state,
     const string_array_t *enabled_profiles
@@ -562,9 +569,8 @@ error_t *manifest_reconcile(
  *      - If owner unchanged: skip (preserve existing entry)
  *   4. For files in old manifest but not new: remain for orphan detection (apply removes)
  *
- * Key Benefit: Unlike manifest_rebuild(), this preserves deployed_at timestamps
- * for files whose profile assignment doesn't change, providing better UX when
- * reordering profiles.
+ * Note: deployed_at is preserved by SQL UPSERT for files whose profile
+ * assignment doesn't change, so reordering does not reset lifecycle state.
  *
  * Preconditions:
  *   - state MUST have active transaction (via state_open)

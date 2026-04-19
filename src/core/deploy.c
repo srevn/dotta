@@ -1192,13 +1192,13 @@ error_t *deploy_execute(
 
             if (ws_item == NULL) {
                 /* File is CLEAN - no divergence from expected state */
-                if (entry->deployed_at == 0) {
+                if (entry->anchor.deployed_at == 0) {
                     /* ADOPTION: File exists with correct content but never tracked.
                      *
                      * This typically happens when:
                      * - User manually created file before enabling profile
                      * - Content happens to match Git
-                     * - File needs dotta's acknowledgment (deployed_at update)
+                     * - File needs dotta's acknowledgment (anchor advance)
                      */
                     err = string_array_push(result->adopted, entry->filesystem_path);
                     if (err) {

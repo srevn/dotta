@@ -1414,10 +1414,11 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
             goto cleanup;
         }
 
-        /* Flush verified stat caches to database (self-healing optimization).
-         * Seeds the fast path for subsequent status/apply calls. Non-fatal on failure
-         * — sync's workspace validation still works correctly. */
-        error_t *flush_err = workspace_flush_stat_caches(ws);
+        /* Persist deployment-anchor advances from slow-path CMP_EQUAL checks
+         * (self-healing optimization). Seeds the fast path for subsequent
+         * status/apply calls. Non-fatal on failure — sync's workspace
+         * validation still works correctly. */
+        error_t *flush_err = workspace_flush_anchor_updates(ws);
         if (flush_err) {
             error_free(flush_err);
         }
@@ -1687,7 +1688,7 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
      * changes. manifest_reconcile detects sync's already-held transaction via
      * state_locked() and writes directly (no nested begin/commit). */
     manifest_repair_stats_t repair_stats = { 0 };
-    err = manifest_reconcile(repo, state, &repair_stats, NULL);
+    err = manifest_reconcile(repo, state, &repair_stats);
     if (err) {
         err = error_wrap(err, "Failed to reconcile manifest before sync");
         goto cleanup;

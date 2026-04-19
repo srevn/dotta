@@ -77,11 +77,13 @@ static inline git_filemode_t state_type_to_git_filemode(state_file_type_t type) 
 }
 
 /**
- * Stat cache for fast-path divergence detection
+ * Stat cache — fast-path witness of a deployment anchor
  *
- * Captures filesystem stat fields at a point when the file is known to match
- * the manifest's blob_oid. If the current stat matches, content comparison
- * can be skipped entirely — the same approach Git uses with its index.
+ * Witness field of a deployment_anchor_t: the (mtime, size, ino) triple
+ * captured at the moment dotta confirmed disk content equals
+ * anchor.blob_oid. If a later live stat matches all three fields, disk
+ * is still equal to anchor.blob_oid without re-hashing — the same
+ * approach Git uses with its index.
  *
  * Sentinel: All-zero state means unset — forces the slow path (safe default).
  * mtime == 0 acts as validity gate: a file with genuine mtime=0 (epoch)
@@ -98,9 +100,10 @@ typedef struct {
 /**
  * Populate stat cache from a struct stat
  *
- * Captures the three fields used for fast-path validation.
- * Call this after a filesystem write or verification confirms
- * the file matches the current blob_oid.
+ * Captures the three fields used for fast-path validation. Call this
+ * immediately after a deploy, adoption, post-commit capture, or slow-path
+ * CMP_EQUAL confirmation — the stat returned must correspond to the blob
+ * the caller just confirmed disk matches.
  */
 static inline stat_cache_t stat_cache_from_stat(const struct stat *st) {
     return (stat_cache_t){
@@ -111,50 +114,106 @@ static inline stat_cache_t stat_cache_from_stat(const struct stat *st) {
 }
 
 /**
- * State file entry (virtual manifest entry)
+ * Deployment anchor — dotta's record of "disk was confirmed to equal this"
  *
- * Represents the manifest (scope definition) - which files should exist
- * based on enabled profiles. The manifest defines scope, not operations.
+ * Three fields, one concept: the blob dotta last confirmed was present on
+ * disk, when that confirmation happened, and the stat triple that proves
+ * it is still there without re-hashing.
  *
- * SCOPE-BASED ARCHITECTURE:
- * - Manifest existence = file should be managed
- * - deployed_at = lifecycle tracking
- *   - 0 = file never deployed by dotta (shows as [undeployed] if missing)
- *   - > 0 = file known to dotta (either deployed or existed when profile enabled)
+ * Invariants:
+ *   - blob_oid is non-zero iff dotta has at some point confirmed disk
+ *     content matched that blob. Zero means "never confirmed" (e.g.,
+ *     newly enabled profile whose files predate dotta).
+ *   - stat matching live stat is a fast-path witness that disk still
+ *     equals blob_oid.
+ *   - blob_oid ≠ virtual_manifest.blob_oid iff the Git-expected value
+ *     has advanced past the last disk confirmation — i.e., stale.
  *
- * Key fields:
- * - blob_oid: Blob OID for file content identity (binary)
- * - owner/group: For root/ files
- * - encrypted: Encryption flag
- * - state: Lifecycle state (STATE_ACTIVE or STATE_INACTIVE)
- * - deployed_at: Lifecycle tracking timestamp (NOT operational control)
+ * The anchor is written only by state_update_anchor() (post-deploy,
+ * post-adoption, workspace flush on CMP_EQUAL, post-commit capture).
+ * Manifest-layer writes (reconcile/sync/rebuild) leave the anchor
+ * untouched via the UPSERT's preserve-on-zero sentinel.
  */
 typedef struct {
-    /* Paths */
+    git_oid blob_oid;         /* Blob whose on-disk presence dotta confirmed */
+    time_t deployed_at;       /* When confirmation happened (0 = never) */
+    stat_cache_t stat;        /* Fast-path witness for the confirmation */
+} deployment_anchor_t;
+
+#define DEPLOYMENT_ANCHOR_UNSET ((deployment_anchor_t){0})
+
+/**
+ * Build a deployment anchor by snapshotting disk stat
+ *
+ * Convenience wrapper around lstat() + stat_cache_from_stat(). Callers should
+ * invoke this only after they have verified the file on disk matches
+ * blob_oid — this is an anchor advance, not a probe.
+ *
+ * If lstat fails (rare: file removed in the small window between content
+ * confirmation and anchor recording), the stat witness is left zeroed. The
+ * blob_oid and deployed_at fields are still populated so the row's anchor
+ * advances correctly; the fast path just can't short-circuit on next read
+ * and will fall through to the slow path.
+ */
+static inline deployment_anchor_t capture_anchor_from_disk(
+    const char *filesystem_path,
+    const git_oid *blob_oid,
+    time_t deployed_at
+) {
+    deployment_anchor_t anchor = {
+        .blob_oid    = *blob_oid,
+        .deployed_at = deployed_at,
+        .stat        = STAT_CACHE_UNSET,
+    };
+
+    struct stat st;
+    if (lstat(filesystem_path, &st) == 0) {
+        anchor.stat = stat_cache_from_stat(&st);
+    }
+    return anchor;
+}
+
+/**
+ * State file entry (virtual_manifest row)
+ *
+ * Carries two distinct domains that share a primary key (filesystem_path)
+ * and 1:1 cardinality:
+ *
+ *   VWD cache         — git-derived expected state maintained by the
+ *                       manifest layer (reconcile/sync/rebuild). Fields:
+ *                       blob_oid, type, mode, owner, group, encrypted, state.
+ *   Deployment anchor — dotta's record of "disk was confirmed to equal
+ *                       this blob, at this time, with this stat." Advanced
+ *                       only by state_update_anchor() after a disk-matches-
+ *                       blob confirmation (deploy, adoption, workspace flush
+ *                       on CMP_EQUAL, post-commit capture).
+ *
+ * The two domains differ on anchor.blob_oid vs blob_oid iff Git-expected has
+ * advanced past the last disk confirmation — i.e., the row is stale.
+ *
+ * SCOPE-BASED ARCHITECTURE:
+ * - manifest existence = file should be managed
+ * - state (lifecycle string) tracks active/inactive/deleted/released
+ * - anchor.deployed_at is the lifecycle timestamp (0 = never confirmed)
+ */
+typedef struct {
+    /* Identity */
     char *storage_path;         /* Path in profile (home/.bashrc) */
     char *filesystem_path;      /* Deployed path (/home/user/.bashrc) */
     char *profile;              /* Source profile name */
     char *old_profile;          /* Previous profile if reassigned, NULL otherwise */
 
-    /* Type */
-    state_file_type_t type;     /* File type */
-
-    /* Git tracking (binary OID — mirrors the BLOB column in virtual_manifest).
-     * Hex conversion lives only at display boundaries, never on the hot path. */
-    git_oid blob_oid;           /* Blob OID for file content identity */
-
-    /* Metadata */
+    /* VWD cache (git-derived, reconcile-maintained) */
+    state_file_type_t type;     /* File type (REGULAR, SYMLINK, EXECUTABLE) */
+    git_oid blob_oid;           /* Blob the composed profile layer expects on disk */
     mode_t mode;                /* Permission mode (e.g., 0644), 0 if no metadata tracked */
     char *owner;                /* Owner username (root/ files only, can be NULL) */
     char *group;                /* Group name (root/ files only, can be NULL) */
     bool encrypted;             /* Encryption flag */
+    char *state;                /* Lifecycle state (STATE_ACTIVE/STATE_INACTIVE/...) */
 
-    /* Lifecycle tracking */
-    char *state;                /* Lifecycle state (STATE_ACTIVE/STATE_INACTIVE etc.) */
-    time_t deployed_at;         /* Lifecycle timestamp (0 = never deployed, >0 = known) */
-
-    /* Stat cache */
-    stat_cache_t stat_cache;    /* Filesystem stat at last known-good state (all-zero = unset) */
+    /* Deployment anchor (dotta-authored, advances only via state_update_anchor) */
+    deployment_anchor_t anchor;
 } state_file_entry_t;
 
 /**
@@ -273,7 +332,7 @@ void state_rollback(state_t *state);
  * Check if state has an active transaction
  *
  * Returns true if BEGIN IMMEDIATE has been executed and not yet
- * committed or rolled back. Used by workspace_flush_stat_caches()
+ * committed or rolled back. Used by workspace_flush_anchor_updates()
  * to decide whether to manage its own transaction.
  *
  * @param state State handle (must not be NULL)
@@ -538,6 +597,10 @@ error_t *state_clear_files(state_t *state);
 /**
  * Helper: Create file entry
  *
+ * Allocates a state_file_entry_t and populates its identity and VWD-cache
+ * fields from the arguments. The deployment anchor is zero-initialized;
+ * hydration callers populate entry->anchor afterward from their row data.
+ *
  * The blob_oid parameter is named explicitly (not `git_oid`) because C treats
  * a prior parameter name as in scope for subsequent parameters.
  *
@@ -552,7 +615,6 @@ error_t *state_clear_files(state_t *state);
  * @param group Group name (can be NULL)
  * @param encrypted Encryption flag
  * @param state Lifecycle state (can be NULL for default)
- * @param deployed_at Lifecycle timestamp (0 = never deployed, >0 = known)
  * @param out Entry (must not be NULL, caller must free with state_free_entry)
  * @return Error or NULL on success
  */
@@ -568,7 +630,6 @@ error_t *state_create_entry(
     const char *group,
     bool encrypted,
     const char *state,
-    time_t deployed_at,
     state_file_entry_t **out
 );
 
@@ -580,44 +641,35 @@ error_t *state_create_entry(
 void state_free_entry(state_file_entry_t *entry);
 
 /**
- * Update post-deploy state (optimized hot path for apply)
+ * Advance a manifest entry's deployment anchor
  *
- * Updates deployed_at timestamp and stat cache for a manifest entry.
- * Used during apply after successful deployment to record lifecycle state
- * and cache filesystem stat for fast-path divergence detection.
+ * The sole writer of the deployment columns (deployed_blob_oid, deployed_at,
+ * stat_*). Call after confirming disk content matches anchor->blob_oid.
  *
- * @param state State (must not be NULL, must have active transaction)
- * @param filesystem_path File path to update (must not be NULL)
- * @param deployed_at New deployed_at timestamp (use time(NULL) for current time)
- * @param stat_cache Stat cache to record (NULL writes zeros, clearing the cache)
- * @return Error or NULL on success (not found is an error)
- */
-error_t *state_update_post_deploy(
-    state_t *state,
-    const char *filesystem_path,
-    time_t deployed_at,
-    const stat_cache_t *stat_cache
-);
-
-/**
- * Update stat cache only (fast-path divergence optimization)
+ * Semantics:
+ *   - anchor->blob_oid must be non-zero. A zero blob_oid is only valid as
+ *     the "never confirmed" initial row state written by the UPSERT on
+ *     first INSERT; it is never a legal advance target.
+ *   - anchor->deployed_at == 0 → preserve the existing timestamp
+ *     (add/update/workspace-flush case — first observation advances
+ *     the anchor witness without claiming a new deployment event).
+ *   - anchor->deployed_at != 0 → write the new value
+ *     (apply post-deploy/adoption case — stamps the deployment event).
+ *   - anchor->stat is always written.
  *
- * Records filesystem stat for a manifest entry without changing deployed_at.
- * Used by:
- * - workspace_flush_stat_caches(): persists verified stats from analysis
- * - add/update/enable paths: records stat after sync_entry_to_state()
- *
- * Works in both transactional (apply) and auto-commit (status) modes.
+ * Not-found is not an error: the entry may not exist if the profile is
+ * disabled or the file was filtered by precedence. Callers do not need
+ * to check existence before calling.
  *
  * @param state State (must not be NULL, must have open database)
  * @param filesystem_path File path to update (must not be NULL)
- * @param stat_cache Stat cache to record (must not be NULL)
- * @return Error or NULL on success (not found is not an error — returns NULL)
+ * @param anchor Deployment anchor to write (must not be NULL, blob_oid non-zero)
+ * @return Error or NULL on success
  */
-error_t *state_update_stat_cache(
+error_t *state_update_anchor(
     state_t *state,
     const char *filesystem_path,
-    const stat_cache_t *stat_cache
+    const deployment_anchor_t *anchor
 );
 
 /**

@@ -42,18 +42,24 @@
 #include "utils/privilege.h"
 
 /**
- * Pending stat cache update (internal type)
+ * Pending anchor update (internal type)
  *
  * Accumulated during analyze_file_divergence() when the slow path confirms
- * CMP_EQUAL. The verified filesystem stat should be persisted so subsequent
- * runs benefit from the fast path.
+ * CMP_EQUAL. The verified (blob_oid, stat) pair should be persisted so the
+ * next run can both short-circuit via the fast-path stat witness and, if
+ * Git advances blob_oid in the meantime, classify the file as stale from
+ * the fast path instead of re-hashing.
+ *
+ * blob_oid is carried alongside stat because the anchor ties its witness to
+ * a specific blob — a stat triple without a blob pointer is meaningless.
  *
  * Path is borrowed from the manifest entry (valid for workspace lifetime).
  */
 typedef struct {
     const char *filesystem_path;     /* Target path (borrowed from manifest entry) */
-    stat_cache_t stat;               /* Captured stat triple for cache seeding */
-} stat_cache_update_t;
+    git_oid blob_oid;                /* Blob dotta just verified disk matches */
+    stat_cache_t stat;               /* Captured stat triple (fast-path witness) */
+} anchor_update_t;
 
 /**
  * Workspace structure
@@ -91,20 +97,10 @@ struct workspace {
     size_t diverged_capacity;        /* Allocated capacity of diverged array */
     hashmap_t *diverged_index;       /* Maps filesystem_path -> array index+1 (as void*) */
 
-    /* Drift-repair output from manifest_reconcile (workspace_load prelude).
-     *
-     * Maps filesystem_path → heap-allocated git_oid* holding the old blob OID
-     * for entries whose content actually changed in Git (not just a HEAD
-     * refresh). analyze_file_divergence uses this to verify the on-disk
-     * content still matches what dotta previously deployed before setting
-     * DIVERGENCE_STALE — protecting user modifications from being silently
-     * overwritten. NULL when reconcile found nothing to repair. */
-    hashmap_t *repaired_paths;         /* Owned: freed with hashmap_free(map, free) */
-
-    /* Stat cache updates (accumulated during divergence analysis) */
-    stat_cache_update_t *stat_updates; /* Pending slow-path updates (owned) */
-    size_t stat_update_count;          /* Number of pending updates */
-    size_t stat_update_capacity;       /* Allocated capacity of updates array */
+    /* Anchor updates (accumulated during divergence analysis) */
+    anchor_update_t *anchor_updates;   /* Pending slow-path updates (owned) */
+    size_t anchor_update_count;        /* Number of pending updates */
+    size_t anchor_update_capacity;     /* Allocated capacity of updates array */
 
     /* Status cache */
     workspace_status_t status;         /* Cached cleanliness assessment */
@@ -338,36 +334,41 @@ static error_t *workspace_add_diverged(
 }
 
 /**
- * Record a stat cache update for later flushing
+ * Record an anchor advance for later flushing
  *
  * Called from analyze_file_divergence() when the slow path confirms CMP_EQUAL.
- * Accumulates the verified stat so workspace_flush_stat_caches() can persist it.
+ * Accumulates the (blob_oid, stat) pair so workspace_flush_anchor_updates() can
+ * persist it via state_update_anchor(). The blob_oid is required because the
+ * anchor binds its fast-path witness to a specific blob.
  *
  * Best-effort: silently skips on OOM rather than failing the analysis.
  *
  * @param ws Workspace (must not be NULL)
  * @param filesystem_path Path (borrowed from manifest, valid for workspace lifetime)
+ * @param blob_oid Blob dotta just confirmed disk matches (must not be NULL)
  * @param st Verified filesystem stat
  */
-static void workspace_record_stat_update(
+static void workspace_record_anchor_update(
     workspace_t *ws,
     const char *filesystem_path,
+    const git_oid *blob_oid,
     const struct stat *st
 ) {
-    if (ws->stat_update_count >= ws->stat_update_capacity) {
-        size_t new_cap = ws->stat_update_capacity ? ws->stat_update_capacity * 2 : 16;
-        stat_cache_update_t *new_arr = realloc(
-            ws->stat_updates,
-            new_cap * sizeof(stat_cache_update_t)
+    if (ws->anchor_update_count >= ws->anchor_update_capacity) {
+        size_t new_cap = ws->anchor_update_capacity ? ws->anchor_update_capacity * 2 : 16;
+        anchor_update_t *new_arr = realloc(
+            ws->anchor_updates,
+            new_cap * sizeof(anchor_update_t)
         );
         if (!new_arr) return;
 
-        ws->stat_updates = new_arr;
-        ws->stat_update_capacity = new_cap;
+        ws->anchor_updates = new_arr;
+        ws->anchor_update_capacity = new_cap;
     }
 
-    ws->stat_updates[ws->stat_update_count++] = (stat_cache_update_t){
+    ws->anchor_updates[ws->anchor_update_count++] = (anchor_update_t){
         .filesystem_path = filesystem_path,
+        .blob_oid = *blob_oid,
         .stat = stat_cache_from_stat(st),
     };
 }
@@ -471,28 +472,48 @@ static error_t *analyze_file_divergence(
         compare_result_t cmp_result;
         error_t *err = NULL;
 
-        /* STAT CACHE FAST PATH
+        /* ANCHOR FAST PATH (safety-grade)
          *
-         * If the filesystem stat matches the cached stat from when content was
-         * last verified/deployed, skip content comparison entirely. This is the
-         * same approach Git uses with its index.
+         * The deployment anchor binds three pieces of information: the blob
+         * dotta last confirmed on disk (anchor.blob_oid), the stat triple
+         * captured at that confirmation (anchor.stat), and the time of
+         * confirmation (anchor.deployed_at). If the live stat matches
+         * anchor.stat, the following invariant holds by construction:
          *
-         * The stat cache is valid if the filesystem file was last verified or
-         * deployed to match the current blob_oid. On match, we know content is
-         * unchanged — set CMP_EQUAL and use initial_stat for permission checks.
+         *     stat_match  ⟹  disk == anchor.blob_oid
          *
-         * On miss (stat differs or cache unset), fall through to the existing
-         * content comparison. False misses are harmless (just slower). False
-         * positives cannot occur through normal filesystem operations because
-         * the mtime+size+ino triple catches all content-changing operations.
-         */
-        const stat_cache_t *cached = &manifest_entry->stat_cache;
-        if (cached->mtime != 0
-            && cached->mtime == (int64_t) initial_stat.st_mtime
-            && cached->size == (int64_t) initial_stat.st_size
-            && cached->ino == (uint64_t) initial_stat.st_ino) {
-            cmp_result = CMP_EQUAL;
+         * The anchor is advanced only by state_update_anchor() after dotta
+         * has verified disk content. The UPSERT never clobbers it. So a
+         * stat match is a cryptographically-grade witness that disk still
+         * equals anchor.blob_oid — no re-hash needed.
+         *
+         * Cross-check anchor.blob_oid against the Git-expected blob_oid
+         * (manifest_entry->blob_oid) to classify:
+         *   - equal   → CMP_EQUAL.  disk == anchor == expected (clean).
+         *   - differ  → CMP_DIFFERENT + DIVERGENCE_STALE.
+         *                disk == anchor ≠ expected (external Git drift;
+         *                file is still at the last-deployed blob).
+         *
+         * This is the key Stage-A win: STALE is tagged directly from the
+         * fast path, without loading blobs or hashing. The slow-path
+         * straggler case (touch(1) / editor rename-write invalidated the
+         * stat witness) is still handled by Phase 3. */
+        const deployment_anchor_t *anchor = &manifest_entry->anchor;
+        if (anchor->stat.mtime != 0
+            && anchor->stat.mtime == (int64_t) initial_stat.st_mtime
+            && anchor->stat.size == (int64_t) initial_stat.st_size
+            && anchor->stat.ino == (uint64_t) initial_stat.st_ino) {
+            /* stat match ⟹ disk == anchor.blob_oid */
             file_stat = initial_stat;
+            if (git_oid_equal(&anchor->blob_oid, blob_oid_ptr)) {
+                cmp_result = CMP_EQUAL;
+            } else {
+                /* disk == anchor ≠ expected — file is still at the blob
+                 * dotta last deployed; Git has since advanced expected.
+                 * Tag STALE here; Phase 3 is a no-op for this file. */
+                cmp_result = CMP_DIFFERENT;
+                divergence |= DIVERGENCE_STALE;
+            }
         } else {
             /* SLOW PATH: Full content comparison
              *
@@ -539,10 +560,11 @@ static error_t *analyze_file_divergence(
                 return error_wrap(err, "Failed to verify '%s'", fs_path);
             }
 
-            /* Slow path verified content — seed stat cache for fast path.
-             * On next run, the stat cache check above will hit and skip comparison. */
+            /* Slow path confirmed disk == expected blob — seed the anchor
+             * with the current (blob_oid, stat) pair so the next run can
+             * short-circuit via the fast path above. */
             if (cmp_result == CMP_EQUAL) {
-                workspace_record_stat_update(ws, fs_path, &file_stat);
+                workspace_record_anchor_update(ws, fs_path, blob_oid_ptr, &file_stat);
             }
         }
 
@@ -647,30 +669,30 @@ static error_t *analyze_file_divergence(
     /* PHASE 2: Reality-based classification
      *
      * SCOPE-BASED ARCHITECTURE:
-     * Use deployed_at timestamp to distinguish lifecycle states.
+     * Use anchor.deployed_at to distinguish lifecycle states.
      *
-     * deployed_at semantics (from SCOPE_BASED_ARCHITECTURE_PLAN.md Annex A):
-     * - deployed_at = 0 -> File never deployed by dotta
-     * - deployed_at > 0 -> File known to dotta (deployed or pre-existing)
+     * anchor.deployed_at semantics:
+     * - 0  -> File never deployed by dotta (and not observed at enable time)
+     * - >0 -> File known to dotta (deployed, adopted, or observed at enable)
      *
      * Classification:
-     * 1. File missing + deployed_at = 0 -> UNDEPLOYED (needs initial deployment)
-     * 2. File missing + deployed_at > 0 -> DELETED (was deployed, needs restoration)
+     * 1. File missing + anchor.deployed_at = 0 -> UNDEPLOYED (needs initial deployment)
+     * 2. File missing + anchor.deployed_at > 0 -> DELETED (was known, needs restoration)
      * 3. File present -> DEPLOYED (may have divergence)
      */
     if (!on_filesystem) {
         /* File in manifest but missing from filesystem */
 
-        /* Use deployed_at from VWD cache to distinguish never-deployed vs deleted
+        /* Use anchor.deployed_at from VWD cache to distinguish never-deployed vs deleted
          *
          * The VWD cache stores the lifecycle timestamp:
          * - deployed_at = 0: File never deployed by dotta
          * - deployed_at > 0: File was deployed or known to dotta */
-        if (in_state && manifest_entry->deployed_at > 0) {
-            /* File was deployed/known (deployed_at > 0), now deleted */
+        if (in_state && manifest_entry->anchor.deployed_at > 0) {
+            /* File was deployed/known (anchor.deployed_at > 0), now deleted */
             state = WORKSPACE_STATE_DELETED;
         } else {
-            /* File never deployed (deployed_at = 0) or not in state (manifest from Git) */
+            /* File never deployed (anchor.deployed_at = 0) or not in state (manifest from Git) */
             state = WORKSPACE_STATE_UNDEPLOYED;
         }
 
@@ -682,72 +704,85 @@ static error_t *analyze_file_divergence(
         /* Keep accumulated divergence flags from Phase 1 */
     }
 
-    /* PHASE 3: Staleness flag
+    /* PHASE 3: Staleness flag (slow-path straggler)
      *
-     * manifest_reconcile (run from workspace_load's prelude) already brought
-     * state into sync with Git. For entries whose blob actually changed in
-     * Git, reconcile emitted repaired_paths[fs_path] = old_blob_oid. Here we
-     * verify the on-disk content still matches what dotta previously deployed
-     * before tagging DIVERGENCE_STALE, so apply can safely overwrite:
-     *   - File matches old blob: DIVERGENCE_STALE (safe to deploy new content)
-     *   - File matches neither:  DIVERGENCE_CONTENT only (user modified, block)
+     * The fast path in Phase 1 already tagged DIVERGENCE_STALE for the common
+     * case where the anchor's stat witness is still valid (disk untouched since
+     * dotta last confirmed it). This phase handles the slow-path straggler:
+     * the stat witness was invalidated (touch(1), editor rename-write, fresh
+     * checkout) but disk content may still match the blob dotta last deployed.
+     *
+     * Source of truth: the persistent deployment anchor (manifest_entry->anchor),
+     * populated from the virtual_manifest.deployed_blob_oid column. Cross-process
+     * correct by construction — every invocation sees the same answer.
+     *
+     * Activation conditions (all must hold):
+     *   1. File exists on disk.
+     *   2. Content diverges from the current expected blob (else no staleness question).
+     *   3. STALE not already tagged by the fast path.
+     *   4. Anchor blob is set (dotta has a deployed reference to compare against).
+     *   5. Anchor blob ≠ current expected blob (Git has advanced past the anchor).
+     *
+     * When all conditions hold, hash-compare disk against anchor.blob_oid to
+     * confirm "disk is still at the last-deployed blob." On match, tag STALE
+     * so the preflight gate allows overwrite. On mismatch, leave flags
+     * unchanged — the existing DIVERGENCE_CONTENT causes preflight to block.
      *
      * DIVERGENCE_STALE can combine with other flags:
      *   [stale]              — expected state changed, content matches new state
      *   [stale, modified]    — expected state changed, file has old deployed content
      */
-    if (ws->repaired_paths && on_filesystem && (divergence & DIVERGENCE_CONTENT)) {
-        /* Only verify when content diverges (file ≠ new expected blob). If
-         * content matches the new blob there's no divergence to tag. */
-        const git_oid *old_blob_oid = hashmap_get(ws->repaired_paths, fs_path);
-        if (old_blob_oid) {
-            /* Compare file on disk against OLD blob (what dotta deployed).
-             * Reuse the same verification strategy as Phase 1. */
-            git_filemode_t expected_mode = state_type_to_git_filemode(manifest_entry->type);
-            struct stat verify_stat;
-            compare_result_t verify_result;
+    if (on_filesystem && (divergence & DIVERGENCE_CONTENT) && !(divergence & DIVERGENCE_STALE)
+        && !git_oid_is_zero(&manifest_entry->anchor.blob_oid)
+        && !git_oid_equal(&manifest_entry->anchor.blob_oid, &manifest_entry->blob_oid)) {
 
-            if (!manifest_entry->encrypted) {
-                error_t *verify_err = compare_oid_to_disk(
-                    old_blob_oid,
+        git_filemode_t expected_mode = state_type_to_git_filemode(manifest_entry->type);
+        compare_result_t verify_result = CMP_UNVERIFIED;
+
+        struct stat verify_stat;
+        error_t *verify_err = NULL;
+
+        /* Unified verification: load the anchor blob through the same path
+         * for both encrypted and non-encrypted files (content_cache handles
+         * decryption transparently), then byte-compare against disk.
+         * compare_oid_to_disk is the shorter route for non-encrypted blobs
+         * (avoids the content_cache buffer allocation) - fast branch. */
+        if (!manifest_entry->encrypted) {
+            verify_err = compare_oid_to_disk(
+                &manifest_entry->anchor.blob_oid,
+                fs_path,
+                expected_mode,
+                &initial_stat,
+                &verify_result,
+                &verify_stat
+            );
+        } else {
+            const buffer_t *anchor_content = NULL;
+            verify_err = content_cache_get_from_blob_oid(
+                ws->content_cache,
+                &manifest_entry->anchor.blob_oid,
+                storage_path,
+                profile,
+                manifest_entry->encrypted,
+                &anchor_content
+            );
+            if (!verify_err && anchor_content) {
+                verify_err = compare_buffer_to_disk(
+                    anchor_content,
                     fs_path,
                     expected_mode,
                     &initial_stat,
                     &verify_result,
                     &verify_stat
                 );
-                if (!verify_err && verify_result == CMP_EQUAL) {
-                    /* File matches old deployed content — stale repair is safe */
-                    divergence |= DIVERGENCE_STALE;
-                }
-                if (verify_err) error_free(verify_err);
-            } else {
-                /* Encrypted: compare decrypted content */
-                const buffer_t *old_content = NULL;
-                error_t *verify_err = content_cache_get_from_blob_oid(
-                    ws->content_cache,
-                    old_blob_oid,
-                    storage_path,
-                    profile,
-                    manifest_entry->encrypted,
-                    &old_content
-                );
-                if (!verify_err && old_content) {
-                    verify_err = compare_buffer_to_disk(
-                        old_content,
-                        fs_path,
-                        expected_mode,
-                        &initial_stat,
-                        &verify_result,
-                        &verify_stat
-                    );
-                    if (!verify_err && verify_result == CMP_EQUAL) {
-                        divergence |= DIVERGENCE_STALE;
-                    }
-                }
-                if (verify_err) error_free(verify_err);
             }
         }
+
+        if (!verify_err && verify_result == CMP_EQUAL) {
+            /* File matches old deployed content — stale repair is safe */
+            divergence |= DIVERGENCE_STALE;
+        }
+        if (verify_err) error_free(verify_err);
     }
 
     /* PHASE 4: Profile reassignment detection
@@ -2061,12 +2096,12 @@ static error_t *analyze_encryption_policy_mismatch(
             } else {
                 /* File has NO other divergence — encryption policy is the only issue.
                  *
-                 * Use deployed_at from VWD cache to determine lifecycle state.
+                 * Use anchor.deployed_at from VWD cache to determine lifecycle state.
                  * Manifest is built from state (workspace_build_manifest_from_state),
-                 * so deployed_at is always populated:
+                 * so the anchor is always populated:
                  *   > 0  -> file known/deployed
                  *   == 0 -> file never deployed */
-                workspace_state_t item_state = manifest_entry->deployed_at > 0
+                workspace_state_t item_state = manifest_entry->anchor.deployed_at > 0
                     ? WORKSPACE_STATE_DEPLOYED
                     : WORKSPACE_STATE_UNDEPLOYED;
 
@@ -2217,7 +2252,7 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
             continue;  /* Don't increment manifest_idx */
         }
 
-        /* Borrow VWD cache from arena-backed state entries.
+        /* Borrow VWD cache and anchor from arena-backed state entries.
          *
          * These fields enable O(1) divergence checking without N database queries.
          * They represent the cached expected state that workspace divergence
@@ -2231,8 +2266,7 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
         entry->owner = state_entry->owner;
         entry->group = state_entry->group;
         entry->encrypted = state_entry->encrypted;
-        entry->deployed_at = state_entry->deployed_at;
-        entry->stat_cache = state_entry->stat_cache;
+        entry->anchor = state_entry->anchor;
 
         /* Track entry for cleanup — must precede any further fallible operations
          * so the centralized cleanup loop (j < manifest_idx) covers this entry. */
@@ -2306,36 +2340,30 @@ error_t *workspace_load(
 
     workspace_t *ws = NULL;
     error_t *err = NULL;
-    hashmap_t *repaired_paths = NULL;
 
     /* Reconcile VWD with Git before loading.
      *
      * External Git operations (git commit, rebase, rm, etc.) between dotta
      * runs leave the manifest's commit_oid references behind the branch HEAD.
      * manifest_reconcile detects drift per profile and persists corrections
-     * in state — updated blob_oid for entries whose content changed,
-     * STATE_RELEASED for entries removed from Git. Transaction scoping is
-     * internal: uses the caller's transaction when locked, opens a scoped
-     * BEGIN IMMEDIATE otherwise. Common case (no drift) is O(P) and zero
-     * writes.
+     * in state — advances blob_oid for entries whose content changed and
+     * marks externally-removed entries STATE_RELEASED. The deployment anchor
+     * is preserved by the UPSERT across this repair, so analyze_file_divergence
+     * can classify staleness from the persistent (anchor, blob_oid) pair
+     * regardless of whether reconcile actually ran on this invocation.
      *
-     * The returned repaired_paths map is consumed by analyze_file_divergence
-     * (Path B) to verify that on-disk content still matches what dotta
-     * previously deployed before flagging DIVERGENCE_STALE. */
-    err = manifest_reconcile(repo, state, NULL, &repaired_paths);
+     * Transaction scoping is internal to manifest_reconcile: uses the
+     * caller's transaction when locked, opens a scoped BEGIN IMMEDIATE
+     * otherwise. Common case (no drift) is O(P) and zero writes. */
+    err = manifest_reconcile(repo, state, NULL);
     if (err) {
-        if (repaired_paths) hashmap_free(repaired_paths, free);
         return error_wrap(err, "Failed to reconcile manifest with Git");
     }
 
     err = workspace_create_empty(repo, profiles, &ws);
     if (err) {
-        if (repaired_paths) hashmap_free(repaired_paths, free);
         return err;
     }
-
-    /* Transfer ownership of the reconcile output to the workspace */
-    ws->repaired_paths = repaired_paths;
 
     /* Initialize encryption infrastructure */
     /* Note: keymgr can be NULL if encryption is not configured - this is valid */
@@ -2854,15 +2882,25 @@ bool workspace_item_extract_display_info(
 }
 
 /**
- * Flush accumulated stat cache updates to the state database
+ * Flush accumulated anchor updates to the state database
+ *
+ * Advances the deployment anchor for entries that hit CMP_EQUAL on the
+ * slow path during analyze_file_divergence. The anchor carries both the
+ * fast-path stat witness and the blob_oid it witnesses — persisting them
+ * lets the next run short-circuit (fast path) or tag STALE directly
+ * (fast path with Git-advanced blob_oid).
+ *
+ * deployed_at is passed as 0 so state_update_anchor preserves the row's
+ * existing timestamp — this flush confirms the anchor witness but does
+ * not create a new deployment lifecycle event (apply owns that).
  *
  * Begins its own transaction only when state isn't already in one
  * (status/diff/sync). Apply always passes state already-in-transaction.
  */
-error_t *workspace_flush_stat_caches(workspace_t *ws) {
+error_t *workspace_flush_anchor_updates(workspace_t *ws) {
     CHECK_NULL(ws);
 
-    if (ws->stat_update_count == 0) {
+    if (ws->anchor_update_count == 0) {
         return NULL;
     }
 
@@ -2875,24 +2913,28 @@ error_t *workspace_flush_stat_caches(workspace_t *ws) {
         error_t *err = state_begin(ws->state);
         if (err) {
             return error_wrap(
-                err, "Failed to begin stat cache transaction"
+                err, "Failed to begin anchor flush transaction"
             );
         }
     }
 
-    for (size_t i = 0; i < ws->stat_update_count; i++) {
-        error_t *err = state_update_stat_cache(
-            ws->state,
-            ws->stat_updates[i].filesystem_path,
-            &ws->stat_updates[i].stat
+    for (size_t i = 0; i < ws->anchor_update_count; i++) {
+        const anchor_update_t *update = &ws->anchor_updates[i];
+        deployment_anchor_t anchor = {
+            .blob_oid    = update->blob_oid,
+            .deployed_at = 0,   /* preserve — flush is a witness advance, not a deploy */
+            .stat        = update->stat,
+        };
+        error_t *err = state_update_anchor(
+            ws->state, update->filesystem_path, &anchor
         );
         if (err) {
             if (needs_transaction) {
                 state_rollback(ws->state);
             }
             return error_wrap(
-                err, "Failed to flush stat cache for '%s'",
-                ws->stat_updates[i].filesystem_path
+                err, "Failed to flush anchor for '%s'",
+                update->filesystem_path
             );
         }
     }
@@ -2901,12 +2943,12 @@ error_t *workspace_flush_stat_caches(workspace_t *ws) {
         error_t *err = state_commit(ws->state);
         if (err) {
             return error_wrap(
-                err, "Failed to commit stat cache transaction"
+                err, "Failed to commit anchor flush transaction"
             );
         }
     }
 
-    ws->stat_update_count = 0;
+    ws->anchor_update_count = 0;
 
     return NULL;
 }
@@ -2922,8 +2964,8 @@ void workspace_free(workspace_t *ws) {
     /* Free diverged array (string fields are arena-backed, not freed individually) */
     free(ws->diverged);
 
-    /* Free stat cache updates (paths are borrowed, stat is plain data) */
-    free(ws->stat_updates);
+    /* Free anchor updates (paths are borrowed, anchor is plain data) */
+    free(ws->anchor_updates);
 
     /* Free indices (values are borrowed, so pass NULL for value free function) */
     hashmap_free(ws->profile_index, NULL);
@@ -2932,10 +2974,6 @@ void workspace_free(workspace_t *ws) {
     /* Free encryption infrastructure */
     content_cache_free(ws->content_cache);
     /* Don't free keymgr - it's global */
-
-    /* Free drift-repair output from manifest_reconcile.
-     * Values are heap-allocated git_oid copies owned by the workspace. */
-    if (ws->repaired_paths) hashmap_free(ws->repaired_paths, free);
 
     /* Free manifest (arena_backed mode: frees git_tree_entry objects,
      * entries array, hashmap, and struct — all heap-allocated) */

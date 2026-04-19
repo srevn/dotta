@@ -28,7 +28,7 @@
 #include "sys/filesystem.h"
 
 /* Schema version - must match database */
-#define STATE_SCHEMA_VERSION "9"
+#define STATE_SCHEMA_VERSION "10"
 
 /* Database file name */
 #define STATE_DB_NAME "dotta.db"
@@ -66,8 +66,7 @@ struct state {
 
     /* Prepared statements (initialized once, reused) */
     sqlite3_stmt *stmt_insert_file;         /* INSERT OR REPLACE virtual_manifest */
-    sqlite3_stmt *stmt_update_post_deploy;  /* UPDATE virtual_manifest SET deployed_at + stat cache */
-    sqlite3_stmt *stmt_update_stat_cache;   /* UPDATE virtual_manifest SET stat cache only */
+    sqlite3_stmt *stmt_update_anchor;       /* UPDATE virtual_manifest SET deployment anchor */
     sqlite3_stmt *stmt_remove_file;         /* DELETE FROM virtual_manifest */
     sqlite3_stmt *stmt_file_exists;         /* SELECT 1 FROM virtual_manifest */
     sqlite3_stmt *stmt_get_file;            /* SELECT * FROM virtual_manifest */
@@ -184,6 +183,8 @@ static error_t *initialize_schema(sqlite3 *db) {
         "    "
         "    state TEXT NOT NULL DEFAULT 'active'"
         "      CHECK(state IN ('active', 'inactive', 'deleted', 'released')),"
+        "    "
+        "    deployed_blob_oid BLOB NOT NULL DEFAULT (zeroblob(20)),"
         "    deployed_at INTEGER NOT NULL DEFAULT 0,"
         "    "
         "    stat_mtime INTEGER NOT NULL DEFAULT 0,"
@@ -453,13 +454,14 @@ static error_t *prepare_statements(state_t *state) {
 
     /* Insert/update file (used by manifest sync operations - hot path)
      *
+     * Column order mirrors the virtual_manifest layout:
+     *   identity (1-4) | VWD cache (5-11) | deployment anchor (12-16)
+     *
      * UPDATE-path field preservation (ON CONFLICT clause):
      *
-     * deployed_at: Always preserved from existing row. No manifest operation
-     * needs to overwrite deployed_at on UPDATE — Git-side changes don't move
-     * the deployment timestamp. INSERT uses the caller-provided value (0 for
-     * undeployed, time(NULL) for files captured from filesystem). Deployed_at
-     * is only modified post-INSERT via state_update_post_deploy() after apply.
+     * VWD cache (storage_path, profile, blob_oid, type, mode, owner, group,
+     * encrypted, state): always replaced from excluded — manifest operations
+     * are the authoritative writer of this domain.
      *
      * old_profile: Three-branch CASE:
      *   1. Explicit non-NULL from caller — takes precedence (direct override)
@@ -468,20 +470,24 @@ static error_t *prepare_statements(state_t *state) {
      *   3. Profile unchanged, caller passes NULL — preserves existing old_profile
      * Clearing is done separately via state_clear_old_profile().
      *
-     * stat_cache: When blob_oid is unchanged (same content), preserves the
-     * existing stat cache rather than zeroing it. This avoids forcing the slow
-     * path (full content hash) for files whose content hasn't changed — common
-     * during sync, fallback, reorder, and repair operations. When blob_oid
-     * changes, stat cache is replaced with incoming values (zeros from
-     * sync_entry_to_state), correctly invalidating the cache.
+     * Deployment anchor (deployed_blob_oid, deployed_at, stat_*): on UPDATE
+     * the existing anchor is preserved; this UPSERT is the sole entry point
+     * for non-anchor writers (reconcile/sync/add/rebuild) and they MUST NOT
+     * clobber the anchor. State_update_anchor is the only legitimate advancer.
      *
-     * Uses IS NOT for NULL-safe comparison (IS NOT treats NULL = NULL). */
+     * The preserve-on-zero-sentinel on deployed_blob_oid lets an INSERT that
+     * establishes a never-confirmed row (zero-anchor) coexist with later
+     * UPDATEs: a non-zero excluded.deployed_blob_oid would be a bug (writers
+     * already go through state_update_anchor), so the CASE defensively
+     * preserves. deployed_at and stat_* are unconditionally preserved on
+     * UPDATE — anchor.deployed_at set on INSERT is the initial lifecycle
+     * value (e.g., file existed when profile was enabled). */
     const char *sql_insert =
         "INSERT INTO virtual_manifest "
-        "(filesystem_path, storage_path, profile, old_profile, blob_oid, "
-        " type, mode, owner, \"group\", encrypted, state, deployed_at, "
-        " stat_mtime, stat_size, stat_ino) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+        "(filesystem_path, storage_path, profile, old_profile, "
+        " blob_oid, type, mode, owner, \"group\", encrypted, state, "
+        " deployed_blob_oid, deployed_at, stat_mtime, stat_size, stat_ino) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
         "ON CONFLICT(filesystem_path) DO UPDATE SET "
         "  storage_path = excluded.storage_path, "
         "  profile      = excluded.profile, "
@@ -498,46 +504,50 @@ static error_t *prepare_statements(state_t *state) {
         "  \"group\"    = excluded.\"group\", "
         "  encrypted    = excluded.encrypted, "
         "  state        = excluded.state, "
+        "  deployed_blob_oid = CASE "
+        "                        WHEN excluded.deployed_blob_oid = zeroblob(20) "
+        "                          THEN virtual_manifest.deployed_blob_oid "
+        "                        ELSE excluded.deployed_blob_oid "
+        "                      END, "
         "  deployed_at  = virtual_manifest.deployed_at, "
-        "  stat_mtime   = CASE WHEN excluded.blob_oid IS NOT virtual_manifest.blob_oid "
-        "                 THEN excluded.stat_mtime ELSE virtual_manifest.stat_mtime END, "
-        "  stat_size    = CASE WHEN excluded.blob_oid IS NOT virtual_manifest.blob_oid "
-        "                 THEN excluded.stat_size ELSE virtual_manifest.stat_size END, "
-        "  stat_ino     = CASE WHEN excluded.blob_oid IS NOT virtual_manifest.blob_oid "
-        "                 THEN excluded.stat_ino ELSE virtual_manifest.stat_ino END;";
+        "  stat_mtime   = virtual_manifest.stat_mtime, "
+        "  stat_size    = virtual_manifest.stat_size, "
+        "  stat_ino     = virtual_manifest.stat_ino;";
 
     rc = sqlite3_prepare_v2(state->db, sql_insert, -1, &state->stmt_insert_file, NULL);
     if (rc != SQLITE_OK) {
         return sqlite_error(state->db, "Failed to prepare insert statement");
     }
 
-    /* Update deployed_at + stat cache (used by apply - hot path) */
-    const char *sql_update_post_deploy =
-        "UPDATE virtual_manifest "
-        "SET deployed_at = ?, stat_mtime = ?, stat_size = ?, stat_ino = ? "
-        "WHERE filesystem_path = ?;";
+    /* Advance deployment anchor (sole writer of the anchor columns)
+     *
+     * Bind order (numbered placeholders):
+     *   ?1 deployed_blob_oid
+     *   ?2 deployed_at — reused in both CASE branches so the sentinel test
+     *                    and the replacement value cannot drift apart
+     *   ?3 stat_mtime
+     *   ?4 stat_size
+     *   ?5 stat_ino
+     *   ?6 filesystem_path
+     *
+     * The CASE on deployed_at preserves the existing timestamp when the
+     * caller passes 0 (first-observation / workspace-flush case) and writes
+     * a new timestamp otherwise (apply post-deploy / adoption case). */
+    const char *sql_update_anchor =
+        "UPDATE virtual_manifest SET "
+        "  deployed_blob_oid = ?1, "
+        "  deployed_at       = CASE WHEN ?2 = 0 THEN deployed_at ELSE ?2 END, "
+        "  stat_mtime        = ?3, "
+        "  stat_size         = ?4, "
+        "  stat_ino          = ?5 "
+        "WHERE filesystem_path = ?6;";
 
     rc = sqlite3_prepare_v2(
-        state->db, sql_update_post_deploy, -1, &state->stmt_update_post_deploy, NULL
+        state->db, sql_update_anchor, -1, &state->stmt_update_anchor, NULL
     );
     if (rc != SQLITE_OK) {
         sqlite3_finalize(state->stmt_insert_file);
-        return sqlite_error(state->db, "Failed to prepare update post-deploy statement");
-    }
-
-    /* Update stat cache only (used by add/update/enable after sync_entry_to_state) */
-    const char *sql_update_stat_cache =
-        "UPDATE virtual_manifest "
-        "SET stat_mtime = ?, stat_size = ?, stat_ino = ? "
-        "WHERE filesystem_path = ?;";
-
-    rc = sqlite3_prepare_v2(
-        state->db, sql_update_stat_cache, -1, &state->stmt_update_stat_cache, NULL
-    );
-    if (rc != SQLITE_OK) {
-        sqlite3_finalize(state->stmt_insert_file);
-        sqlite3_finalize(state->stmt_update_post_deploy);
-        return sqlite_error(state->db, "Failed to prepare update stat cache statement");
+        return sqlite_error(state->db, "Failed to prepare update anchor statement");
     }
 
     /* File exists check (used in status - hot path) */
@@ -547,32 +557,30 @@ static error_t *prepare_statements(state_t *state) {
     rc = sqlite3_prepare_v2(state->db, sql_exists, -1, &state->stmt_file_exists, NULL);
     if (rc != SQLITE_OK) {
         sqlite3_finalize(state->stmt_insert_file);
-        sqlite3_finalize(state->stmt_update_post_deploy);
-        sqlite3_finalize(state->stmt_update_stat_cache);
+        sqlite3_finalize(state->stmt_update_anchor);
         return sqlite_error(state->db, "Failed to prepare exists statement");
     }
 
     /* Get file (used in workspace analysis) */
     const char *sql_get =
-        "SELECT storage_path, profile, old_profile, blob_oid, "
-        "type, mode, owner, \"group\", encrypted, state, deployed_at, "
-        "stat_mtime, stat_size, stat_ino "
+        "SELECT storage_path, profile, old_profile, "
+        "blob_oid, type, mode, owner, \"group\", encrypted, state, "
+        "deployed_blob_oid, deployed_at, stat_mtime, stat_size, stat_ino "
         "FROM virtual_manifest WHERE filesystem_path = ?;";
 
     rc = sqlite3_prepare_v2(state->db, sql_get, -1, &state->stmt_get_file, NULL);
     if (rc != SQLITE_OK) {
         sqlite3_finalize(state->stmt_insert_file);
-        sqlite3_finalize(state->stmt_update_post_deploy);
-        sqlite3_finalize(state->stmt_update_stat_cache);
+        sqlite3_finalize(state->stmt_update_anchor);
         sqlite3_finalize(state->stmt_file_exists);
         return sqlite_error(state->db, "Failed to prepare get statement");
     }
 
     /* Get file by storage path (used by profile discovery) */
     const char *sql_get_by_storage =
-        "SELECT filesystem_path, profile, old_profile, blob_oid, "
-        "type, mode, owner, \"group\", encrypted, state, deployed_at, "
-        "stat_mtime, stat_size, stat_ino "
+        "SELECT filesystem_path, profile, old_profile, "
+        "blob_oid, type, mode, owner, \"group\", encrypted, state, "
+        "deployed_blob_oid, deployed_at, stat_mtime, stat_size, stat_ino "
         "FROM virtual_manifest WHERE storage_path = ? AND state = 'active' LIMIT 1;";
 
     rc = sqlite3_prepare_v2(
@@ -580,8 +588,7 @@ static error_t *prepare_statements(state_t *state) {
     );
     if (rc != SQLITE_OK) {
         sqlite3_finalize(state->stmt_insert_file);
-        sqlite3_finalize(state->stmt_update_post_deploy);
-        sqlite3_finalize(state->stmt_update_stat_cache);
+        sqlite3_finalize(state->stmt_update_anchor);
         sqlite3_finalize(state->stmt_file_exists);
         sqlite3_finalize(state->stmt_get_file);
         return sqlite_error(state->db, "Failed to prepare get by storage statement");
@@ -589,15 +596,15 @@ static error_t *prepare_statements(state_t *state) {
 
     /* Get entries by profile (used by profile disable) */
     const char *sql_by_profile =
-        "SELECT filesystem_path, storage_path, profile, old_profile, blob_oid, "
-        "type, mode, owner, \"group\", encrypted, state, deployed_at, "
-        "stat_mtime, stat_size, stat_ino FROM virtual_manifest WHERE profile = ?;";
+        "SELECT filesystem_path, storage_path, profile, old_profile, "
+        "blob_oid, type, mode, owner, \"group\", encrypted, state, "
+        "deployed_blob_oid, deployed_at, stat_mtime, stat_size, stat_ino "
+        "FROM virtual_manifest WHERE profile = ?;";
 
     rc = sqlite3_prepare_v2(state->db, sql_by_profile, -1, &state->stmt_get_by_profile, NULL);
     if (rc != SQLITE_OK) {
         sqlite3_finalize(state->stmt_insert_file);
-        sqlite3_finalize(state->stmt_update_post_deploy);
-        sqlite3_finalize(state->stmt_update_stat_cache);
+        sqlite3_finalize(state->stmt_update_anchor);
         sqlite3_finalize(state->stmt_file_exists);
         sqlite3_finalize(state->stmt_get_file);
         sqlite3_finalize(state->stmt_get_file_by_storage);
@@ -611,8 +618,7 @@ static error_t *prepare_statements(state_t *state) {
     rc = sqlite3_prepare_v2(state->db, sql_remove, -1, &state->stmt_remove_file, NULL);
     if (rc != SQLITE_OK) {
         sqlite3_finalize(state->stmt_insert_file);
-        sqlite3_finalize(state->stmt_update_post_deploy);
-        sqlite3_finalize(state->stmt_update_stat_cache);
+        sqlite3_finalize(state->stmt_update_anchor);
         sqlite3_finalize(state->stmt_file_exists);
         sqlite3_finalize(state->stmt_get_file);
         sqlite3_finalize(state->stmt_get_file_by_storage);
@@ -628,8 +634,7 @@ static error_t *prepare_statements(state_t *state) {
     rc = sqlite3_prepare_v2(state->db, sql_profile, -1, &state->stmt_insert_profile, NULL);
     if (rc != SQLITE_OK) {
         sqlite3_finalize(state->stmt_insert_file);
-        sqlite3_finalize(state->stmt_update_post_deploy);
-        sqlite3_finalize(state->stmt_update_stat_cache);
+        sqlite3_finalize(state->stmt_update_anchor);
         sqlite3_finalize(state->stmt_file_exists);
         sqlite3_finalize(state->stmt_get_file);
         sqlite3_finalize(state->stmt_get_file_by_storage);
@@ -657,14 +662,9 @@ static void finalize_statements(state_t *state) {
         state->stmt_insert_file = NULL;
     }
 
-    if (state->stmt_update_post_deploy) {
-        sqlite3_finalize(state->stmt_update_post_deploy);
-        state->stmt_update_post_deploy = NULL;
-    }
-
-    if (state->stmt_update_stat_cache) {
-        sqlite3_finalize(state->stmt_update_stat_cache);
-        state->stmt_update_stat_cache = NULL;
+    if (state->stmt_update_anchor) {
+        sqlite3_finalize(state->stmt_update_anchor);
+        state->stmt_update_anchor = NULL;
     }
 
     if (state->stmt_file_exists) {
@@ -1293,13 +1293,19 @@ error_t *state_add_file(state_t *state, const state_file_entry_t *entry) {
         sqlite3_bind_text(state->stmt_insert_file, 11, STATE_ACTIVE, -1, SQLITE_STATIC);
     }
 
-    /* 12. deployed_at */
-    sqlite3_bind_int64(state->stmt_insert_file, 12, (sqlite3_int64) entry->deployed_at);
+    /* 12. deployed_blob_oid — 20 bytes. Zero sentinel is legitimate (never
+     * confirmed); the UPSERT's preserve-on-zero CASE keeps any prior anchor. */
+    sqlite3_bind_blob(
+        state->stmt_insert_file, 12, entry->anchor.blob_oid.id, GIT_OID_RAWSZ, SQLITE_TRANSIENT
+    );
 
-    /* 13-15. stat cache (fast-path divergence detection) */
-    sqlite3_bind_int64(state->stmt_insert_file, 13, entry->stat_cache.mtime);
-    sqlite3_bind_int64(state->stmt_insert_file, 14, entry->stat_cache.size);
-    sqlite3_bind_int64(state->stmt_insert_file, 15, (sqlite3_int64) entry->stat_cache.ino);
+    /* 13. deployed_at (anchor) */
+    sqlite3_bind_int64(state->stmt_insert_file, 13, (sqlite3_int64) entry->anchor.deployed_at);
+
+    /* 14-16. stat cache (anchor fast-path witness on deployed_blob_oid) */
+    sqlite3_bind_int64(state->stmt_insert_file, 14, entry->anchor.stat.mtime);
+    sqlite3_bind_int64(state->stmt_insert_file, 15, entry->anchor.stat.size);
+    sqlite3_bind_int64(state->stmt_insert_file, 16, (sqlite3_int64) entry->anchor.stat.ino);
 
     /* Execute (don't finalize - statement is reused) */
     int rc = sqlite3_step(state->stmt_insert_file);
@@ -1415,8 +1421,10 @@ error_t *state_get_file(
         return sqlite_error(state->db, "Failed to query file");
     }
 
-    /* Extract columns from scope-based schema
-     * Columns 0-10: core fields, 11-13: stat cache */
+    /* Extract columns. Layout matches sql_get:
+     *   0-2:  storage_path, profile, old_profile   (identity; filesystem_path is WHERE)
+     *   3-9:  blob_oid, type, mode, owner, group, encrypted, state  (VWD cache)
+     *   10-14: deployed_blob_oid, deployed_at, stat_mtime, stat_size, stat_ino  (anchor) */
     const char *storage_path = (const char *) sqlite3_column_text(stmt, 0);
     const char *profile = (const char *) sqlite3_column_text(stmt, 1);
     const char *old_profile = (const char *) sqlite3_column_text(stmt, 2);
@@ -1438,13 +1446,15 @@ error_t *state_get_file(
     const char *group = (const char *) sqlite3_column_text(stmt, 7);
     int encrypted = sqlite3_column_int(stmt, 8);
     const char *state_str = (const char *) sqlite3_column_text(stmt, 9);
-    sqlite3_int64 deployed_at = sqlite3_column_int64(stmt, 10);
 
-    /* Stat cache (fast-path divergence detection) */
-    stat_cache_t stat_cache = {
-        .mtime = sqlite3_column_int64(stmt,            11),
-        .size  = sqlite3_column_int64(stmt,            12),
-        .ino   = (uint64_t) sqlite3_column_int64(stmt, 13),
+    /* Deployment anchor (column 10: deployed_blob_oid BLOB NOT NULL, always 20 bytes) */
+    deployment_anchor_t anchor = { 0 };
+    memcpy(anchor.blob_oid.id, sqlite3_column_blob(stmt, 10), GIT_OID_RAWSZ);
+    anchor.deployed_at = (time_t) sqlite3_column_int64(stmt, 11);
+    anchor.stat = (stat_cache_t){
+        .mtime = sqlite3_column_int64(stmt, 12),
+        .size = sqlite3_column_int64(stmt, 13),
+        .ino = (uint64_t) sqlite3_column_int64(stmt, 14),
     };
 
     /* Validate required string columns */
@@ -1467,12 +1477,12 @@ error_t *state_get_file(
     state_file_entry_t *entry = NULL;
     error_t *err = state_create_entry(
         storage_path, filesystem_path, profile, old_profile, type, &blob_oid,
-        mode, owner, group, encrypted != 0, state_str, (time_t) deployed_at, &entry
+        mode, owner, group, encrypted != 0, state_str, &entry
     );
 
     if (err) return err;
 
-    entry->stat_cache = stat_cache;
+    entry->anchor = anchor;
 
     *out = entry;
     return NULL;
@@ -1507,9 +1517,11 @@ error_t *state_get_file_by_storage(
         return sqlite_error(state->db, "Failed to query file by storage path");
     }
 
-    /* Extract columns:
-     * 0: filesystem_path (not the WHERE key here, must be read from result)
-     * 1-13: same layout as state_get_file columns 1-13 */
+    /* Extract columns. Layout matches sql_get_by_storage (same shape as
+     * state_get_file but column 0 is filesystem_path, not storage_path):
+     *   0-2:  filesystem_path, profile, old_profile  (identity; storage_path is WHERE)
+     *   3-9:  blob_oid, type, mode, owner, group, encrypted, state
+     *   10-14: deployed_blob_oid, deployed_at, stat_mtime, stat_size, stat_ino */
     const char *filesystem_path = (const char *) sqlite3_column_text(stmt, 0);
     const char *profile = (const char *) sqlite3_column_text(stmt, 1);
     const char *old_profile = (const char *) sqlite3_column_text(stmt, 2);
@@ -1530,12 +1542,15 @@ error_t *state_get_file_by_storage(
     const char *group = (const char *) sqlite3_column_text(stmt, 7);
     int encrypted = sqlite3_column_int(stmt, 8);
     const char *state_str = (const char *) sqlite3_column_text(stmt, 9);
-    sqlite3_int64 deployed_at = sqlite3_column_int64(stmt, 10);
 
-    stat_cache_t stat_cache = {
-        .mtime = sqlite3_column_int64(stmt,            11),
-        .size  = sqlite3_column_int64(stmt,            12),
-        .ino   = (uint64_t) sqlite3_column_int64(stmt, 13),
+    /* Deployment anchor */
+    deployment_anchor_t anchor = { 0 };
+    memcpy(anchor.blob_oid.id, sqlite3_column_blob(stmt, 10), GIT_OID_RAWSZ);
+    anchor.deployed_at = (time_t) sqlite3_column_int64(stmt, 11);
+    anchor.stat = (stat_cache_t){
+        .mtime = sqlite3_column_int64(stmt, 12),
+        .size = sqlite3_column_int64(stmt, 13),
+        .ino = (uint64_t) sqlite3_column_int64(stmt, 14),
     };
 
     if (!filesystem_path || !profile || !type_str) {
@@ -1555,12 +1570,12 @@ error_t *state_get_file_by_storage(
     state_file_entry_t *entry = NULL;
     error_t *err = state_create_entry(
         storage_path, filesystem_path, profile, old_profile, type, &blob_oid,
-        mode, owner, group, encrypted != 0, state_str, (time_t) deployed_at, &entry
+        mode, owner, group, encrypted != 0, state_str, &entry
     );
 
     if (err) return err;
 
-    entry->stat_cache = stat_cache;
+    entry->anchor = anchor;
 
     *out = entry;
     return NULL;
@@ -1630,11 +1645,11 @@ error_t *state_get_all_files(
     #define DUP(s)      (arena ? arena_strdup(arena, (s)) : strdup((s)))
     #define DUP_OPT(s)  ((s) ? DUP(s) : NULL)
 
-    /* Query all files (15 columns: 12 core + 3 stat cache) */
+    /* Query all files (16 columns: 4 identity + 7 VWD cache + 5 anchor) */
     const char *sql_files =
-        "SELECT filesystem_path, storage_path, profile, old_profile, blob_oid, "
-        "type, mode, owner, \"group\", encrypted, state, deployed_at, "
-        "stat_mtime, stat_size, stat_ino "
+        "SELECT filesystem_path, storage_path, profile, old_profile, "
+        "blob_oid, type, mode, owner, \"group\", encrypted, state, "
+        "deployed_blob_oid, deployed_at, stat_mtime, stat_size, stat_ino "
         "FROM virtual_manifest ORDER BY filesystem_path;";
 
     sqlite3_stmt *stmt = NULL;
@@ -1646,8 +1661,10 @@ error_t *state_get_all_files(
 
     size_t i = 0;
     while ((rc = sqlite3_step(stmt)) == SQLITE_ROW && i < file_count) {
-        /* Get columns with NULL checking (scope-based schema)
-         * Columns 0-11: core fields, 12-14: stat cache */
+        /* Column layout matches sql_files:
+         *   0-3:  identity (filesystem_path, storage_path, profile, old_profile)
+         *   4-10: VWD cache (blob_oid, type, mode, owner, group, encrypted, state)
+         *   11-15: anchor (deployed_blob_oid, deployed_at, stat_mtime, stat_size, stat_ino) */
         const char *fs_path = (const char *) sqlite3_column_text(stmt, 0);
         const char *storage_path = (const char *) sqlite3_column_text(stmt, 1);
         const char *profile = (const char *) sqlite3_column_text(stmt, 2);
@@ -1668,13 +1685,14 @@ error_t *state_get_all_files(
         const char *group = (const char *) sqlite3_column_text(stmt, 8);
         int encrypted = sqlite3_column_int(stmt, 9);
         const char *state_str = (const char *) sqlite3_column_text(stmt, 10);
-        sqlite3_int64 deployed_at = sqlite3_column_int64(stmt, 11);
 
-        /* Stat cache (fast-path divergence detection) */
-        stat_cache_t stat_cache = {
-            .mtime = sqlite3_column_int64(stmt,            12),
-            .size  = sqlite3_column_int64(stmt,            13),
-            .ino   = (uint64_t) sqlite3_column_int64(stmt, 14),
+        /* Deployment anchor */
+        memcpy(entries[i].anchor.blob_oid.id, sqlite3_column_blob(stmt, 11), GIT_OID_RAWSZ);
+        entries[i].anchor.deployed_at = (time_t) sqlite3_column_int64(stmt, 12);
+        entries[i].anchor.stat = (stat_cache_t){
+            .mtime = sqlite3_column_int64(stmt, 13),
+            .size = sqlite3_column_int64(stmt, 14),
+            .ino = (uint64_t) sqlite3_column_int64(stmt, 15),
         };
 
         /* Validate non-nullable string columns (OIDs already validated above) */
@@ -1705,8 +1723,6 @@ error_t *state_get_all_files(
         /* Set other fields */
         entries[i].encrypted = (encrypted != 0);
         entries[i].state = state_str ? DUP(state_str) : DUP(STATE_ACTIVE);
-        entries[i].deployed_at = (time_t) deployed_at;
-        entries[i].stat_cache = stat_cache;
 
         /* Check allocation success */
         if (!entries[i].filesystem_path || !entries[i].storage_path ||
@@ -2990,16 +3006,21 @@ void state_free(state_t *state) {
  *
  * Helper function to allocate and initialize a file entry.
  *
+ * Populates identity and VWD-cache fields only. entry->anchor is
+ * zero-initialized by calloc; hydration callers populate it afterward
+ * from row data (anchor is never a caller-supplied field).
+ *
  * @param storage_path Storage path (must not be NULL)
  * @param filesystem_path Filesystem path (must not be NULL)
  * @param profile Profile name (must not be NULL)
+ * @param old_profile Previous profile (can be NULL)
  * @param type File type
  * @param blob_oid Blob OID for content identity (must not be NULL, copied)
  * @param mode Permission mode (can be NULL)
  * @param owner Owner username (can be NULL)
  * @param group Group name (can be NULL)
  * @param encrypted Encryption flag
- * @param deployed_at Lifecycle timestamp (0 = never deployed, >0 = known)
+ * @param state_value Lifecycle state (can be NULL for STATE_ACTIVE default)
  * @param out Entry (must not be NULL, caller must free with state_free_entry)
  * @return Error or NULL on success
  */
@@ -3015,7 +3036,6 @@ error_t *state_create_entry(
     const char *group,
     bool encrypted,
     const char *state_value,
-    time_t deployed_at,
     state_file_entry_t **out
 ) {
     CHECK_NULL(storage_path);
@@ -3047,7 +3067,7 @@ error_t *state_create_entry(
     entry->mode = mode;
     entry->type = type;
     entry->encrypted = encrypted;
-    entry->deployed_at = deployed_at;
+    entry->anchor = DEPLOYMENT_ANCHOR_UNSET;
 
     /* Validate required allocations */
     if (!entry->storage_path || !entry->filesystem_path ||
@@ -3061,112 +3081,62 @@ error_t *state_create_entry(
 }
 
 /**
- * Update post-deploy state (optimized hot path for apply)
+ * Advance a manifest entry's deployment anchor
  *
- * Updates deployed_at and stat cache fields after successful deployment.
- * Hot path - called during apply for all deployed and adopted files.
+ * The sole writer of the deployment columns (deployed_blob_oid, deployed_at,
+ * stat_*). Call after confirming disk content matches anchor->blob_oid.
  *
- * @param state State (must not be NULL, must have active transaction)
- * @param filesystem_path File path to update (must not be NULL)
- * @param deployed_at New deployed_at timestamp (use time(NULL) for current time)
- * @param stat_cache Stat cache to record (NULL writes zeros, clearing the cache)
- * @return Error or NULL on success (not found is an error)
+ * See state.h for the full contract. In brief:
+ *   - anchor->blob_oid must be non-zero.
+ *   - anchor->deployed_at == 0 preserves the existing timestamp
+ *     (add/update/workspace-flush case).
+ *   - anchor->deployed_at != 0 writes the new value
+ *     (apply post-deploy / adoption case).
+ *   - anchor->stat is always written.
+ *   - Not-found is not an error.
  */
-error_t *state_update_post_deploy(
+error_t *state_update_anchor(
     state_t *state,
     const char *filesystem_path,
-    time_t deployed_at,
-    const stat_cache_t *stat_cache
+    const deployment_anchor_t *anchor
 ) {
     CHECK_NULL(state);
     CHECK_NULL(filesystem_path);
+    CHECK_NULL(anchor);
     CHECK_NULL(state->db);
-    CHECK_NULL(state->stmt_update_post_deploy);
+    CHECK_NULL(state->stmt_update_anchor);
+
+    /* A zero blob_oid here would misclassify the entry as "never confirmed"
+     * and strand it in the stale path. Reject rather than silently poison. */
+    if (git_oid_is_zero(&anchor->blob_oid)) {
+        return ERROR(
+            ERR_STATE_INVALID,
+            "state_update_anchor called with zero blob_oid for '%s'",
+            filesystem_path
+        );
+    }
+
+    sqlite3_stmt *stmt = state->stmt_update_anchor;
 
     /* Reset and bind */
-    sqlite3_reset(state->stmt_update_post_deploy);
-    sqlite3_clear_bindings(state->stmt_update_post_deploy);
+    sqlite3_reset(stmt);
+    sqlite3_clear_bindings(stmt);
 
-    /* SQL: SET deployed_at = ?, stat_mtime = ?, stat_size = ?, stat_ino = ?
-     *      WHERE filesystem_path = ? */
-    sqlite3_bind_int64(state->stmt_update_post_deploy, 1, (sqlite3_int64) deployed_at);
-
-    if (stat_cache) {
-        sqlite3_bind_int64(state->stmt_update_post_deploy, 2, stat_cache->mtime);
-        sqlite3_bind_int64(state->stmt_update_post_deploy, 3, stat_cache->size);
-        sqlite3_bind_int64(state->stmt_update_post_deploy, 4, (sqlite3_int64) stat_cache->ino);
-    } else {
-        sqlite3_bind_int64(state->stmt_update_post_deploy, 2, 0);
-        sqlite3_bind_int64(state->stmt_update_post_deploy, 3, 0);
-        sqlite3_bind_int64(state->stmt_update_post_deploy, 4, 0);
-    }
-
-    sqlite3_bind_text(state->stmt_update_post_deploy, 5, filesystem_path, -1, SQLITE_TRANSIENT);
+    /* Bind order mirrors sql_update_anchor. ?2 (deployed_at) is used twice */
+    sqlite3_bind_blob(stmt, 1, anchor->blob_oid.id, GIT_OID_RAWSZ, SQLITE_TRANSIENT);
+    sqlite3_bind_int64(stmt, 2, (sqlite3_int64) anchor->deployed_at);
+    sqlite3_bind_int64(stmt, 3, anchor->stat.mtime);
+    sqlite3_bind_int64(stmt, 4, anchor->stat.size);
+    sqlite3_bind_int64(stmt, 5, (sqlite3_int64) anchor->stat.ino);
+    sqlite3_bind_text(stmt, 6, filesystem_path, -1, SQLITE_TRANSIENT);
 
     /* Execute */
-    int rc = sqlite3_step(state->stmt_update_post_deploy);
-
+    int rc = sqlite3_step(stmt);
     if (rc != SQLITE_DONE) {
-        return sqlite_error(state->db, "Failed to update post-deploy state");
-    }
-
-    /* Check if row was actually updated */
-    int changes = sqlite3_changes(state->db);
-    if (changes == 0) {
-        return ERROR(ERR_NOT_FOUND, "File '%s' not found in manifest", filesystem_path);
-    }
-
-    return NULL;
-}
-
-/**
- * Update stat cache only (fast-path divergence optimization)
- *
- * Records filesystem stat for a manifest entry without changing deployed_at.
- * Used by add/update/enable paths where the file is known to match blob_oid
- * but the entry was just synced via sync_entry_to_state() (which always
- * writes STAT_CACHE_UNSET).
- *
- * Not-found is not an error: the entry may not exist if the profile
- * is disabled or the file was filtered by precedence. Callers should
- * not need to check existence before calling.
- *
- * @param state State (must not be NULL, must have active transaction)
- * @param filesystem_path File path to update (must not be NULL)
- * @param stat_cache Stat cache to record (must not be NULL)
- * @return Error or NULL on success
- */
-error_t *state_update_stat_cache(
-    state_t *state,
-    const char *filesystem_path,
-    const stat_cache_t *stat_cache
-) {
-    CHECK_NULL(state);
-    CHECK_NULL(filesystem_path);
-    CHECK_NULL(stat_cache);
-    CHECK_NULL(state->db);
-    CHECK_NULL(state->stmt_update_stat_cache);
-
-    /* Reset and bind */
-    sqlite3_reset(state->stmt_update_stat_cache);
-    sqlite3_clear_bindings(state->stmt_update_stat_cache);
-
-    /* SQL: SET stat_mtime = ?, stat_size = ?, stat_ino = ?
-     *      WHERE filesystem_path = ? */
-    sqlite3_bind_int64(state->stmt_update_stat_cache, 1, stat_cache->mtime);
-    sqlite3_bind_int64(state->stmt_update_stat_cache, 2, stat_cache->size);
-    sqlite3_bind_int64(state->stmt_update_stat_cache, 3, (sqlite3_int64) stat_cache->ino);
-    sqlite3_bind_text(state->stmt_update_stat_cache, 4, filesystem_path, -1, SQLITE_TRANSIENT);
-
-    /* Execute */
-    int rc = sqlite3_step(state->stmt_update_stat_cache);
-
-    if (rc != SQLITE_DONE) {
-        return sqlite_error(state->db, "Failed to update stat cache");
+        return sqlite_error(state->db, "Failed to update deployment anchor");
     }
 
     /* Not-found is OK — entry may not exist (disabled profile, filtered by precedence) */
-
     return NULL;
 }
 
@@ -3440,7 +3410,8 @@ error_t *state_get_entries_by_profile(
     sqlite3_clear_bindings(stmt);
     sqlite3_bind_text(stmt, 1, profile, -1, SQLITE_TRANSIENT);
 
-    /* Fetch all entries */
+    /* Fetch all entries. Column layout matches sql_by_profile:
+     *   0-3:  identity, 4-10: VWD cache, 11-15: deployment anchor (same as sql_files). */
     size_t i = 0;
     while ((rc = sqlite3_step(stmt)) == SQLITE_ROW && i < entry_count) {
         const char *fs_path = (const char *) sqlite3_column_text(stmt, 0);
@@ -3463,13 +3434,14 @@ error_t *state_get_entries_by_profile(
         const char *group = (const char *) sqlite3_column_text(stmt, 8);
         int encrypted = sqlite3_column_int(stmt, 9);
         const char *state_str = (const char *) sqlite3_column_text(stmt, 10);
-        sqlite3_int64 deployed_at = sqlite3_column_int64(stmt, 11);
 
-        /* Stat cache (fast-path divergence detection) */
-        stat_cache_t stat_cache = {
-            .mtime = sqlite3_column_int64(stmt,            12),
-            .size  = sqlite3_column_int64(stmt,            13),
-            .ino   = (uint64_t) sqlite3_column_int64(stmt, 14),
+        /* Deployment anchor */
+        memcpy(entries[i].anchor.blob_oid.id, sqlite3_column_blob(stmt, 11), GIT_OID_RAWSZ);
+        entries[i].anchor.deployed_at = (time_t) sqlite3_column_int64(stmt, 12);
+        entries[i].anchor.stat = (stat_cache_t){
+            .mtime = sqlite3_column_int64(stmt, 13),
+            .size = sqlite3_column_int64(stmt, 14),
+            .ino = (uint64_t) sqlite3_column_int64(stmt, 15),
         };
 
         if (!fs_path || !storage_path || !profile || !type_str) {
@@ -3496,8 +3468,6 @@ error_t *state_get_entries_by_profile(
 
         entries[i].encrypted = (encrypted != 0);
         entries[i].state = state_str ? DUP(state_str) : DUP(STATE_ACTIVE);
-        entries[i].deployed_at = (time_t) deployed_at;
-        entries[i].stat_cache = stat_cache;
 
         if (!entries[i].filesystem_path || !entries[i].storage_path ||
             !entries[i].profile || !entries[i].state) {

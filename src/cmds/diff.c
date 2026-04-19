@@ -1325,10 +1325,11 @@ static error_t *diff_workspace(
         return error_wrap(err, "Failed to load workspace");
     }
 
-    /* Flush verified stat caches to database (self-healing optimization).
-     * Seeds the fast path for subsequent status/apply calls. Non-fatal on failure
-     * — diff still renders correctly, just won't seed the fast path. */
-    error_t *flush_err = workspace_flush_stat_caches(ws);
+    /* Persist deployment-anchor advances from slow-path CMP_EQUAL checks
+     * (self-healing optimization). Seeds the fast path for subsequent
+     * status/apply calls. Non-fatal on failure — diff still renders correctly,
+     * just won't seed the fast path. */
+    error_t *flush_err = workspace_flush_anchor_updates(ws);
     if (flush_err) {
         error_free(flush_err);
     }

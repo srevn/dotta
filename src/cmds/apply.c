@@ -603,6 +603,28 @@ static void print_cleanup_preflight_results(
 }
 
 /**
+ * Look up the Git-expected blob_oid for a path via the workspace manifest
+ *
+ * The post-deploy / post-adoption anchor writers need the blob dotta just
+ * confirmed on disk. The workspace manifest carries that blob (populated by
+ * workspace_build_manifest_from_state), indexed by filesystem_path for O(1)
+ * lookup — cheaper than a second state query.
+ *
+ * Returns NULL when the path isn't in the manifest (shouldn't happen for
+ * just-deployed files but callers treat the anchor write as non-fatal).
+ */
+static const git_oid *apply_expected_blob_oid(
+    const manifest_t *manifest,
+    const char *filesystem_path
+) {
+    if (!manifest || !manifest->index) return NULL;
+    void *idx_ptr = hashmap_get(manifest->index, filesystem_path);
+    if (!idx_ptr) return NULL;
+    size_t idx = (size_t) (uintptr_t) idx_ptr - 1;
+    return &manifest->entries[idx].blob_oid;
+}
+
+/**
  * Check privileges for complete apply operation
  *
  * Examines manifest (files being deployed), file orphans (files being removed),
@@ -895,11 +917,12 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         goto cleanup;
     }
 
-    /* Flush stat caches for files verified clean during workspace analysis.
-     * Within apply's transaction — committed atomically with deployment changes. */
-    err = workspace_flush_stat_caches(ws);
+    /* Persist deployment-anchor advances for files verified clean via the
+     * slow path. Within apply's transaction — committed atomically with
+     * deployment changes. */
+    err = workspace_flush_anchor_updates(ws);
     if (err) {
-        err = error_wrap(err, "Failed to flush stat caches");
+        err = error_wrap(err, "Failed to flush anchor updates");
         goto cleanup;
     }
 
@@ -1818,12 +1841,12 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
             cleanup_result_free(cleanup_res);
         }
 
-        /* Update deployed_at timestamp for successfully deployed files
+        /* Advance the deployment anchor for successfully deployed files
          *
-         * CRITICAL: This marks files as "known to dotta" and records deployment time.
-         * The deployed_at field is used for lifecycle tracking:
-         *   - 0 = file never deployed by dotta
-         *   - > 0 = file known to dotta (deployed or pre-existing)
+         * CRITICAL: This records disk-confirmation for each deployed file — the
+         * blob dotta just wrote, the lifecycle timestamp, and the stat witness
+         * used by the fast path on subsequent runs. The anchor is the
+         * authoritative "dotta confirmed disk == this blob" record.
          *
          * IMPORTANT: This operation runs REGARDLESS of cleanup success/failure.
          * - Deployment succeeded (files are physically on filesystem)
@@ -1832,36 +1855,41 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
          * - This prevents state desynchronization (deployed files marked as undeployed)
          *
          * Non-critical operation: deployment already succeeded physically, so
-         * timestamp update failures are non-fatal warnings (preserve consistency).
+         * anchor advance failures are non-fatal warnings (preserve consistency).
          */
         if (deploy_res && deploy_res->deployed && deploy_res->deployed->count > 0) {
             time_t now = time(NULL);
 
-            output_print(out, OUTPUT_VERBOSE, "\nUpdating deployment timestamps...\n");
+            output_print(out, OUTPUT_VERBOSE, "\nUpdating deployment anchors...\n");
 
             for (size_t i = 0; i < deploy_res->deployed->count; i++) {
                 const char *path = deploy_res->deployed->items[i];
 
-                /* Capture stat from just-deployed file for fast-path cache.
-                 *
-                 * The file was just written and fsynced by deploy_file() — lstat()
-                 * is a cheap inode lookup from kernel cache. If lstat fails (rare:
-                 * file removed between deploy and here), pass NULL to clear cache. */
-                struct stat post_stat;
-                const stat_cache_t sc = (lstat(path, &post_stat) == 0)
-                    ? stat_cache_from_stat(&post_stat) : STAT_CACHE_UNSET;
-
-                /* Update deployed_at and stat cache */
-                err = state_update_post_deploy(state, path, now, &sc);
-                if (err) {
-                    /* Non-fatal warning - deployment succeeded, just timestamp update failed
-                     *
-                     * The file is already on the filesystem with correct content.
-                     * The timestamp is metadata for display and lifecycle tracking.
-                     * Failure here should not abort the entire operation.
-                     */
+                /* Expected blob — what deploy_file() just wrote to disk. Sourced
+                 * from the workspace manifest index (O(1) lookup, no DB query). */
+                const git_oid *blob_oid = apply_expected_blob_oid(manifest, path);
+                if (!blob_oid) {
+                    /* Shouldn't happen for just-deployed files, but guard defensively. */
                     output_warning(
-                        out, OUTPUT_NORMAL, "Failed to update timestamp for %s: %s",
+                        out, OUTPUT_NORMAL,
+                        "No manifest entry found for %s — skipping anchor advance", path
+                    );
+                    continue;
+                }
+
+                /* Snapshot disk state (mtime/size/ino) for the fast-path witness.
+                 * The file was just written and fsynced by deploy_file(); lstat()
+                 * is a cheap inode-cache read. If lstat fails, the anchor is still
+                 * advanced with a zero stat (slow-path fallback on next run). */
+                deployment_anchor_t anchor = capture_anchor_from_disk(path, blob_oid, now);
+
+                err = state_update_anchor(state, path, &anchor);
+                if (err) {
+                    /* Non-fatal warning - deployment succeeded, just anchor update failed.
+                     * The file is already on the filesystem with correct content.
+                     * Failure here should not abort the entire operation. */
+                    output_warning(
+                        out, OUTPUT_NORMAL, "Failed to update anchor for %s: %s",
                         path, error_message(err)
                     );
                     error_free(err);
@@ -1870,18 +1898,21 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
             }
 
             output_print(
-                out, OUTPUT_VERBOSE, "  Updated %zu timestamp%s\n",
+                out, OUTPUT_VERBOSE, "  Updated %zu anchor%s\n",
                 deploy_res->deployed->count,
                 deploy_res->deployed->count == 1 ? "" : "s"
             );
         }
 
-        /* Update deployed_at for adopted files
+        /* Advance the deployment anchor for adopted files
          *
          * Adopted files are those that:
          * - Existed on filesystem with correct content
-         * - Were never tracked by dotta (deployed_at == 0)
+         * - Were never tracked by dotta (anchor.deployed_at == 0)
          * - Were added to deploy_res->adopted by deploy_execute
+         *
+         * The anchor advance is identical in shape to the deployed case: record
+         * (blob_oid, now, stat). Adoption just means the content was already there.
          */
         if (deploy_res->adopted && deploy_res->adopted->count > 0) {
             time_t now = time(NULL);
@@ -1891,20 +1922,24 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
             for (size_t i = 0; i < deploy_res->adopted->count; i++) {
                 const char *path = deploy_res->adopted->items[i];
 
-                /* Capture stat from adopted file for fast-path cache.
-                 *
-                 * Adopted files already existed with correct content — lstat()
-                 * is guaranteed to succeed (deploy_execute verified existence). */
-                struct stat adopted_stat;
-                const stat_cache_t sc = (lstat(path, &adopted_stat) == 0)
-                    ? stat_cache_from_stat(&adopted_stat) : STAT_CACHE_UNSET;
+                const git_oid *blob_oid = apply_expected_blob_oid(manifest, path);
+                if (!blob_oid) {
+                    output_warning(
+                        out, OUTPUT_NORMAL,
+                        "No manifest entry found for %s — skipping anchor advance", path
+                    );
+                    continue;
+                }
 
-                err = state_update_post_deploy(state, path, now, &sc);
+                /* Adopted files already exist with correct content — lstat() is
+                 * guaranteed to succeed (deploy_execute verified existence). */
+                deployment_anchor_t anchor = capture_anchor_from_disk(path, blob_oid, now);
+
+                err = state_update_anchor(state, path, &anchor);
                 if (err) {
                     /* Non-fatal: file is already correct on filesystem.
                      * Log warning and continue - the important fact (file exists
-                     * with correct content) is true regardless of database state.
-                     */
+                     * with correct content) is true regardless of database state. */
                     output_warning(
                         out, OUTPUT_NORMAL, "Failed to record adoption for %s: %s",
                         path, error_message(err)

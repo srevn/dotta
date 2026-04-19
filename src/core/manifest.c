@@ -72,24 +72,30 @@ static error_t *manifest_persist_profile_head(
  * Translates from in-memory manifest representation (file_entry_t) to
  * persistent state representation (state_file_entry_t in SQLite).
  *
- * RESPONSIBILITY CONTRACT ("Dumb Writer" Pattern):
- *   - Caller MUST determine the correct deployed_at value
- *   - Function writes exactly what caller provides (no preservation)
- *   - Uses INSERT OR REPLACE for atomic upsert
+ * SCOPE ("Pure VWD-cache writer"):
+ *   This function is authoritative for the VWD-cache columns (storage_path,
+ *   profile, blob_oid, type, mode, owner, group, encrypted, state). It NEVER
+ *   advances the deployment anchor (deployed_blob_oid, deployed_at, stat_*).
+ *   Callers needing to advance the anchor must follow with
+ *   state_update_anchor(), which is the sole legitimate anchor writer.
  *
- * To preserve existing deployed_at:
- *   1. Caller calls state_get_file() to fetch existing entry
- *   2. Caller passes existing->deployed_at to this function
- *   3. Function writes that exact value
+ *   On INSERT of a new row, the VALUES clause carries an initial anchor
+ *   lifecycle timestamp (deployed_at parameter below) but anchor.blob_oid
+ *   and anchor.stat remain zero — the row is "never confirmed on disk"
+ *   until some later anchor-advancing call site establishes the
+ *   disk-matches-blob relationship.
+ *
+ *   On UPDATE (row already exists), the UPSERT preserves anchor columns
+ *   unconditionally, so the deployed_at parameter only matters on INSERT.
  *
  * Callers must use entries from manifest_build (or equivalent) where
- * the tree entry is pre-populated (needed for blob_oid extraction).
+ * the blob_oid is pre-populated.
  *
  * Responsibilities:
- *   - Extract blob_oid from tree entry
+ *   - Read blob_oid from pre-populated entry field
  *   - Extract metadata (mode, owner, group, encrypted flag)
- *   - Build state entry structure with caller-provided deployed_at
- *   - Write to state database (INSERT OR REPLACE)
+ *   - Build state entry structure with caller-provided initial deployed_at
+ *   - Write to state database via the prepared UPSERT
  *
  * Note: commit_oid is stored per-profile in enabled_profiles, not per-file.
  * Callers are responsible for calling manifest_persist_profile_head() after
@@ -98,13 +104,17 @@ static error_t *manifest_persist_profile_head(
  * @param repo Git repository
  * @param state State handle (with active transaction)
  * @param manifest_entry Entry from in-memory manifest (borrowed); MUST have
- *                       tree entry and profile set (guaranteed for entries
+ *                       blob_oid and profile set (guaranteed for entries
  *                       from manifest_build)
  * @param metadata Merged metadata from all profiles
- * @param deployed_at Caller-determined lifecycle timestamp (NOT modified):
- *       - 0: File never deployed (shows as [undeployed] if missing)
- *       - time(NULL): File exists on filesystem (initial capture)
- *       - existing->deployed_at: Preserve history (caller must fetch)
+ * @param deployed_at Initial lifecycle timestamp for INSERT path only. On
+ *                    UPDATE (existing row), the UPSERT preserves the row's
+ *                    current deployed_at regardless of this value. Typical
+ *                    values:
+ *       - 0: Row is new and dotta has not yet confirmed disk presence
+ *            (enable-with-missing-file, post-sync new file).
+ *       - time(NULL): Row is new and dotta observed the file on disk
+ *            (enable-with-existing-file, add/update capture-from-disk).
  * @return Error or NULL on success
  */
 static error_t *sync_entry_to_state(
@@ -158,7 +168,12 @@ static error_t *sync_entry_to_state(
 
     /* 5. Build state entry. blob_oid is an inline struct copy from the
      * pre-populated entry field. commit_oid lives in enabled_profiles
-     * (per-profile, not per-file) and is refreshed via manifest_persist_profile_head(). */
+     * (per-profile, not per-file) and is refreshed via manifest_persist_profile_head().
+     *
+     * anchor.blob_oid and anchor.stat stay zero-initialized — sync_entry_to_state
+     * is a pure VWD-cache writer and does not advance the deployment anchor.
+     * anchor.deployed_at carries the INSERT-time lifecycle value only; the
+     * UPSERT preserves existing anchor columns on UPDATE. */
     state_file_entry_t state_entry = {
         .storage_path    = manifest_entry->storage_path,
         .filesystem_path = manifest_entry->filesystem_path,
@@ -172,7 +187,7 @@ static error_t *sync_entry_to_state(
         .encrypted       = (meta_item && meta_item->kind == METADATA_ITEM_FILE)
                          ? meta_item->file.encrypted : false,
         .state           = STATE_ACTIVE,
-        .deployed_at     = deployed_at
+        .anchor          = { .deployed_at = deployed_at },
     };
 
     /* 6. Write entry to state (INSERT OR REPLACE)
@@ -1167,7 +1182,7 @@ error_t *manifest_rebuild(
         time_t deployed_at;
         if (old_entry) {
             /* Existing entry - preserve deployed_at (lifecycle history) */
-            deployed_at = old_entry->deployed_at;
+            deployed_at = old_entry->anchor.deployed_at;
         } else {
             /* New entry - check filesystem for initial deployed_at value */
             struct stat st;
@@ -1282,7 +1297,12 @@ static error_t *manifest_detect_stale_profiles(
  *
  * Persistent repair: detects state entries whose commit_oid no longer
  * matches the profile branch HEAD, then either updates them from fresh Git
- * state or marks them STATE_RELEASED for release.
+ * state or marks them STATE_RELEASED for release. The deployment anchor
+ * (deployed_blob_oid, deployed_at, stat_*) is preserved by the UPSERT
+ * across repair — reconcile advances the VWD cache's blob_oid to track Git
+ * while leaving the anchor pinned to dotta's last disk confirmation. The
+ * divergence between the two is how workspace Phase 1/3 classifies
+ * staleness from persistent state (no hashmap escape needed).
  *
  * Internal algorithm implementation. manifest_reconcile is the public entry
  * point — it owns profile-list fetching, transaction scoping, and empty-
@@ -1293,8 +1313,7 @@ static error_t *manifest_repair_stale(
     git_repository *repo,
     state_t *state,
     const string_array_t *enabled_profiles,
-    manifest_repair_stats_t *out_stats,
-    hashmap_t **out_repaired_paths
+    manifest_repair_stats_t *out_stats
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(state);
@@ -1302,9 +1321,6 @@ static error_t *manifest_repair_stale(
     CHECK_NULL(out_stats);
 
     memset(out_stats, 0, sizeof(*out_stats));
-    if (out_repaired_paths) {
-        *out_repaired_paths = NULL;
-    }
 
     error_t *err = NULL;
     size_t all_count = 0;
@@ -1312,7 +1328,6 @@ static error_t *manifest_repair_stale(
     hashmap_t *profile_scope = NULL;
     hashmap_t *stale_profiles = NULL;
     manifest_t *fresh_manifest = NULL;
-    hashmap_t *repaired_paths = NULL;
     metadata_t *metadata = NULL;
 
     arena_t *arena = arena_create(64 * 1024);
@@ -1350,15 +1365,6 @@ static error_t *manifest_repair_stale(
     if (err) {
         err = error_wrap(err, "Failed to load state entries for stale repair");
         goto cleanup;
-    }
-
-    /* Create repaired_paths map if caller wants it */
-    if (out_repaired_paths) {
-        repaired_paths = hashmap_create(64);
-        if (!repaired_paths) {
-            err = ERROR(ERR_MEMORY, "Failed to create repaired paths map");
-            goto cleanup;
-        }
     }
 
     /* Phase 2: Build fresh manifest from current Git state.
@@ -1418,41 +1424,15 @@ static error_t *manifest_repair_stale(
             /* Determine if file content actually changed (blob_oid differs).
              *
              * A profile HEAD can move without changing this file's blob
-             * (other files in the commit changed). Distinguishing content
-             * changes from HEAD-only refreshes enables:
-             *   - Accurate repaired_paths (Path B only verifies content-changed files)
-             *   - Accurate stats (user sees real content changes, not bookkeeping)
+             * (other files in the commit changed). The flag drives the
+             * updated/refreshed stat distinction below so users see real
+             * content changes, not bookkeeping.
              *
-             * Mirrors the blob_changed check in workspace_build_manifest_from_state()
-             * (Path A) for symmetric treatment across both staleness paths.
+             * Staleness detection itself no longer consumes this signal —
+             * workspace Phase 1/3 reads the persistent deployment anchor
+             * directly, comparing anchor.blob_oid against the new Git blob.
              */
             bool blob_changed = !git_oid_equal(&entry->blob_oid, &fresh_entry->blob_oid);
-
-            /* Save old blob_oid for content-changed entries BEFORE updating.
-             *
-             * The caller (apply's Path B) uses this to verify that files on disk
-             * still match what dotta deployed (old blob), preventing user
-             * modifications from being silently overwritten.
-             *
-             * Only tracked when blob actually changed — unchanged-blob entries
-             * won't trigger DIVERGENCE_CONTENT in workspace, so Path B's
-             * content-divergence guard would skip them anyway.
-             */
-            if (repaired_paths && blob_changed) {
-                /* Heap-allocate a standalone git_oid: the map outlives this arena
-                 * (it escapes to apply.c) and hashmap_free(..., free) releases it. */
-                git_oid *old_blob = malloc(sizeof(git_oid));
-                if (!old_blob) {
-                    err = ERROR(ERR_MEMORY, "Failed to save old blob_oid");
-                    goto cleanup;
-                }
-                git_oid_cpy(old_blob, &entry->blob_oid);
-                err = hashmap_set(repaired_paths, entry->filesystem_path, old_blob);
-                if (err) {
-                    free(old_blob);
-                    goto cleanup;
-                }
-            }
 
             /* deployed_at preserved by SQL UPSERT, old_profile auto-captured
              * by SQL when the owning profile shifts during repair. */
@@ -1519,18 +1499,11 @@ static error_t *manifest_repair_stale(
         goto cleanup;
     }
 
-    /* Transfer repaired_paths ownership to caller on success */
-    if (out_repaired_paths && repaired_paths) {
-        *out_repaired_paths = repaired_paths;
-        repaired_paths = NULL;  /* Prevent cleanup from freeing */
-    }
-
 cleanup:
     if (stale_profiles) hashmap_free(stale_profiles, NULL);
     if (profile_scope) hashmap_free(profile_scope, NULL);
     if (metadata) metadata_free(metadata);
     if (fresh_manifest) manifest_free(fresh_manifest);
-    if (repaired_paths) hashmap_free(repaired_paths, free);
     arena_destroy(arena);
 
     return err;
@@ -1547,8 +1520,7 @@ cleanup:
 error_t *manifest_reconcile(
     git_repository *repo,
     state_t *state,
-    manifest_repair_stats_t *out_stats,
-    hashmap_t **out_repaired_paths
+    manifest_repair_stats_t *out_stats
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(state);
@@ -1561,7 +1533,6 @@ error_t *manifest_reconcile(
 
     /* Normalize outputs for every early-return path */
     if (out_stats) memset(out_stats, 0, sizeof(*out_stats));
-    if (out_repaired_paths) *out_repaired_paths = NULL;
 
     /* Empty enabled set — no scope to reconcile. Consistent with the
      * "disable last profile, then apply" workflow: nothing to sync. */
@@ -1588,7 +1559,7 @@ error_t *manifest_reconcile(
     manifest_repair_stats_t local_stats;
     manifest_repair_stats_t *stats_target = out_stats ? out_stats : &local_stats;
 
-    err = manifest_repair_stale(repo, state, profiles, stats_target, out_repaired_paths);
+    err = manifest_repair_stale(repo, state, profiles, stats_target);
 
     if (needs_tx) {
         if (err) {

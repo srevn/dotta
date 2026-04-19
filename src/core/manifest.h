@@ -43,6 +43,17 @@
  * Virtual Working Directory (VWD) cache, storing both Git tree information
  * and expected state from the database for efficient divergence detection.
  *
+ * Two-domain layout (mirrors state_file_entry_t):
+ *   VWD cache    — git-derived expected state (blob_oid, type, mode,
+ *                  owner, group, encrypted). Maintained by the manifest
+ *                  layer (reconcile/sync/rebuild).
+ *   Deployment   — dotta's record of "disk was confirmed to equal this
+ *     anchor       blob, at this time, with this stat." Advanced only by
+ *                  state_update_anchor() after a disk-matches-blob confirmation.
+ *
+ * The two domains differ on anchor.blob_oid vs blob_oid iff Git-expected has
+ * advanced past the last disk confirmation — i.e., the entry is stale.
+ *
  * VWD Architecture:
  * - The manifest is the authoritative cache of expected state
  * - Fields are populated from state database during workspace load
@@ -64,23 +75,16 @@ typedef struct file_entry {
     const char *profile;             /* Profile name (borrowed, used for all name-based operations) */
     char *old_profile;               /* Previous owner if changed, NULL otherwise (VWD cache) */
 
-    /* Identity */
-    git_oid blob_oid;                /* Blob OID for content identity (always populated) */
-
-    /* Type */
+    /* VWD cache (git-derived, reconcile-maintained) */
+    git_oid blob_oid;                /* Blob the composed profile layer expects on disk */
     state_file_type_t type;          /* File type (REGULAR, SYMLINK, EXECUTABLE) */
-
-    /* Metadata */
     mode_t mode;                     /* Permission mode (e.g., 0644), 0 if no metadata tracked */
     char *owner;                     /* Owner username (root/ files only, can be NULL) */
     char *group;                     /* Group name (root/ files only, can be NULL) */
     bool encrypted;                  /* Encryption flag */
 
-    /* Lifecycle tracking */
-    time_t deployed_at;              /* Lifecycle timestamp (0 = never deployed, >0 = known) */
-
-    /* Stat cache */
-    stat_cache_t stat_cache;         /* Filesystem stat at last known-good state (all-zero = unset) */
+    /* Deployment anchor (dotta-authored, advances only via state_update_anchor) */
+    deployment_anchor_t anchor;
 } file_entry_t;
 
 /**
@@ -507,7 +511,12 @@ error_t *manifest_rebuild(
  *   - state MUST be opened (read or write; transaction optional)
  *
  * Postconditions:
- *   - Drift repaired; manifest entries reflect current Git HEAD
+ *   - Drift repaired; manifest entries' VWD cache (blob_oid, type, mode, …)
+ *     reflects current Git HEAD for each profile
+ *   - The deployment anchor is left untouched — reconcile is a VWD-cache
+ *     writer, not an anchor writer. Workspace divergence analysis reads
+ *     anchor.blob_oid from persistent state to classify staleness; cross-
+ *     process correct by construction
  *   - Caller's transaction state is unchanged (kept outer lock, or
  *     committed our scoped one)
  *
@@ -518,16 +527,12 @@ error_t *manifest_rebuild(
  * @param repo Git repository (must not be NULL)
  * @param state State handle (must not be NULL)
  * @param out_stats Optional: repair statistics (NULL = don't care)
- * @param out_repaired_paths Optional: hashmap of filesystem_path → old_blob_oid
- *            for content-changed entries. Caller frees with
- *            hashmap_free(map, free). NULL to skip.
  * @return Error or NULL on success
  */
 error_t *manifest_reconcile(
     git_repository *repo,
     state_t *state,
-    manifest_repair_stats_t *out_stats,
-    hashmap_t **out_repaired_paths
+    manifest_repair_stats_t *out_stats
 );
 
 /**

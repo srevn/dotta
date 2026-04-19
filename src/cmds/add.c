@@ -700,20 +700,33 @@ static error_t *auto_enable_and_sync_profile(
         goto cleanup;
     }
 
-    /* STEP 5: Record stat cache for added files
+    /* STEP 5: Advance deployment anchor for added files
      *
-     * Files were just captured from filesystem — content matches blob_oid.
-     * lstat() is cheap (kernel cache hot from recent content_store_file_to_worktree).
-     * state_update_stat_cache returns success on not-found (file may have been
-     * filtered by precedence, so not all added_files end up in manifest). */
+     * Files were just captured from filesystem — disk content matches the
+     * freshly-committed blob_oid. Advance the anchor so the next status
+     * short-circuits via the fast path (and tags STALE directly if Git moves
+     * ahead before apply). The freshly-committed blob_oid is now in state
+     * (manifest_add_files just wrote it); look it up to avoid re-deriving
+     * it from the just-built fresh manifest.
+     *
+     * deployed_at=0 preserves the row's INSERT-time lifecycle timestamp
+     * (time(NULL) from manifest_add_files' sync_entry_to_state).
+     *
+     * Non-fatal: skip files filtered by precedence (not in state), and
+     * swallow anchor-write errors — the row's VWD cache is already committed */
     for (size_t i = 0; i < added_files->count; i++) {
         const char *path = added_files->items[i];
-        struct stat st;
-        if (lstat(path, &st) == 0) {
-            stat_cache_t sc = stat_cache_from_stat(&st);
-            state_update_stat_cache(state, path, &sc);
-            /* Non-fatal: ignore errors (optimization only) */
+
+        state_file_entry_t *entry = NULL;
+        error_t *lookup_err = state_get_file(state, path, &entry);
+        if (lookup_err) {
+            error_free(lookup_err);
+            continue;
         }
+        deployment_anchor_t anchor = capture_anchor_from_disk(path, &entry->blob_oid, 0);
+        error_t *anchor_err = state_update_anchor(state, path, &anchor);
+        if (anchor_err) error_free(anchor_err);
+        state_free_entry(entry);
     }
 
     /* STEP 6: Commit transaction atomically */
@@ -862,14 +875,25 @@ static error_t *update_manifest_after_add(
         goto cleanup;
     }
 
-    /* STEP 5: Record stat cache for added files */
+    /* STEP 5: Advance deployment anchor for added files
+     *
+     * Mirrors auto_enable_and_sync_profile's STEP 5: disk content matches the
+     * freshly-committed blob_oid, so advance the anchor for fast-path short-
+     * circuit on the next status. deployed_at=0 preserves the INSERT-time
+     * timestamp. Non-fatal on failure (VWD cache is already committed). */
     for (size_t i = 0; i < added_files->count; i++) {
         const char *path = added_files->items[i];
-        struct stat st;
-        if (lstat(path, &st) == 0) {
-            stat_cache_t sc = stat_cache_from_stat(&st);
-            state_update_stat_cache(state, path, &sc);
+
+        state_file_entry_t *entry = NULL;
+        error_t *lookup_err = state_get_file(state, path, &entry);
+        if (lookup_err) {
+            error_free(lookup_err);
+            continue;
         }
+        deployment_anchor_t anchor = capture_anchor_from_disk(path, &entry->blob_oid, 0);
+        error_t *anchor_err = state_update_anchor(state, path, &anchor);
+        if (anchor_err) error_free(anchor_err);
+        state_free_entry(entry);
     }
 
     /* STEP 6: Commit transaction */

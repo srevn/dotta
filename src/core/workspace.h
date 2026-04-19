@@ -353,15 +353,23 @@ bool workspace_item_extract_display_info(
 );
 
 /**
- * Flush accumulated stat cache updates to the state database
+ * Flush accumulated deployment-anchor advances to the state database
  *
- * During workspace_load(), files verified clean via the slow path (content
- * comparison) accumulate stat cache updates. This function persists those
- * updates so subsequent runs benefit from the fast path.
+ * During workspace_load(), files verified CMP_EQUAL via the slow path
+ * (content hash comparison) accumulate (blob_oid, stat) pairs. This function
+ * persists them as deployment-anchor advances so subsequent runs can both
+ * short-circuit via the fast-path stat witness AND — if Git advances
+ * blob_oid in the meantime — classify the file as stale directly from the
+ * fast path instead of re-hashing.
  *
- * This makes the stat cache self-healing: the first status/apply after
- * profile enable verifies all files via the slow path and seeds the cache.
- * The second call hits the fast path for unchanged files.
+ * Self-healing: the first status/apply after profile enable verifies all
+ * files via the slow path and seeds the anchor. The second call hits the
+ * fast path for unchanged files and tags STALE directly for externally-
+ * modified profiles.
+ *
+ * The deployed_at timestamp is intentionally not advanced here — this
+ * flush is a witness advance, not a deployment event. Apply remains the
+ * sole writer of anchor.deployed_at.
  *
  * Safe to call on any workspace — returns immediately if no updates pending.
  * Uses the workspace's internal state handle for database writes.
@@ -369,7 +377,7 @@ bool workspace_item_extract_display_info(
  * @param ws Workspace (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *workspace_flush_stat_caches(workspace_t *ws);
+error_t *workspace_flush_anchor_updates(workspace_t *ws);
 
 /**
  * Free workspace

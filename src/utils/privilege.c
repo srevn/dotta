@@ -374,7 +374,7 @@ static void display_privilege_requirement(
     const char *operation,
     char *const *priv_paths,
     size_t priv_count,
-    output_ctx_t *out
+    output_t *out
 ) {
     /* Header */
     output_error(
@@ -515,7 +515,7 @@ error_t *privilege_ensure_for_operation(
     bool interactive,
     int argc,
     char **argv,
-    output_ctx_t *out
+    output_t *out
 ) {
     CHECK_NULL(storage_paths);
     CHECK_NULL(operation_name);

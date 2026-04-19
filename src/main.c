@@ -232,7 +232,7 @@ static int run_spec(
     const args_command_t *cmd,
     int argc, char **argv,
     const config_t *config,
-    output_ctx_t *out
+    output_t *out
 ) {
     const char *prog = argv[0];
 
@@ -285,10 +285,9 @@ static int run_spec(
         }
     }
 
-    /* Each command's spec stashes its dispatch preconditions in
-     * `payload` via a `dotta_spec_ext_t` constant. NULL falls back to
-     * NONE/NONE so a spec that omits payload simply gets no repo and
-     * no state (safe default). */
+    /* Each command's spec stashes its dispatch preconditions in `payload`
+     * via a `dotta_spec_ext_t` constant. NULL falls back to NONE/NONE
+     * so a spec that omits payload simply gets no repo and no state. */
     const dotta_spec_ext_t *ext = resolved->payload;
     dotta_repo_mode_t repo_mode = ext != NULL ? ext->repo_mode : DOTTA_REPO_NONE;
     dotta_state_mode_t state_mode = ext != NULL ? ext->state_mode : DOTTA_STATE_NONE;
@@ -470,7 +469,7 @@ int main(int argc, char **argv) {
 
     /* Create output context once from config settings.
      * All commands share this context and may override verbosity via CLI flags. */
-    output_ctx_t *out = output_create(
+    output_t *out = output_create(
         stdout,
         output_parse_verbosity(config->verbosity),
         output_parse_color_mode(config->color)

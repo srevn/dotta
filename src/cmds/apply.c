@@ -31,7 +31,7 @@
  * Print pre-flight results
  */
 static void print_preflight_results(
-    const output_ctx_t *out,
+    const output_t *out,
     const preflight_result_t *result
 ) {
     if (!result) return;
@@ -92,7 +92,7 @@ static void print_preflight_results(
  * apply-level concern and its summary is printed by cmd_apply directly.
  */
 static void print_deploy_results(
-    const output_ctx_t *out,
+    const output_t *out,
     const deploy_result_t *result,
     bool dry_run
 ) {
@@ -165,7 +165,7 @@ static void print_deploy_results(
  * Print safety violations
  */
 static void print_safety_violations(
-    const output_ctx_t *out,
+    const output_t *out,
     const safety_result_t *safety_result
 ) {
     if (!safety_result || safety_result->count == 0) {
@@ -299,7 +299,7 @@ static void print_safety_violations(
  * Print cleanup results
  */
 static void print_cleanup_results(
-    const output_ctx_t *out,
+    const output_t *out,
     const cleanup_result_t *result
 ) {
     if (!result) return;
@@ -455,7 +455,7 @@ static void print_cleanup_results(
  * This enables informed consent by revealing the full impact of orphan cleanup.
  */
 static void print_cleanup_preflight_results(
-    const output_ctx_t *out,
+    const output_t *out,
     const cleanup_preflight_result_t *result
 ) {
     if (!result) return;
@@ -586,7 +586,7 @@ static error_t *ensure_complete_apply_privileges(
     const workspace_item_t **dir_orphans,
     size_t dir_orphan_count,
     const cmd_apply_options_t *opts,
-    output_ctx_t *out
+    output_t *out
 ) {
     CHECK_NULL(ctx);
     CHECK_NULL(manifest);
@@ -757,7 +757,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
 
     git_repository *repo = ctx->repo;
     const config_t *config = ctx->config;
-    output_ctx_t *out = ctx->out;
+    output_t *out = ctx->out;
 
     /* Declare all resources at the top, initialized to NULL */
     error_t *err = NULL;
@@ -1035,6 +1035,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * so --dry-run previews "Would adopt N file(s)". */
     size_t adopted_count = 0;
     time_t adopt_now = time(NULL);
+
     for (size_t i = 0; i < manifest->count; i++) {
         const file_entry_t *entry = &manifest->entries[i];
 
@@ -1048,9 +1049,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
 
         if (!opts->dry_run) {
             deployment_anchor_t anchor = capture_anchor_from_disk(
-                entry->filesystem_path,
-                &entry->blob_oid,
-                adopt_now
+                entry->filesystem_path, &entry->blob_oid, adopt_now
             );
             error_t *adopt_err = workspace_advance_anchor(
                 ws, entry->filesystem_path, &anchor

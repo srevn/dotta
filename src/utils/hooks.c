@@ -425,7 +425,7 @@ static hook_type_t post_type_for(hook_cmd_t cmd) {
 }
 
 static void print_hook_output(
-    output_ctx_t *out, const process_result_t *result
+    output_t *out, const process_result_t *result
 ) {
     if (result && result->output && result->output[0]) {
         output_print(
@@ -461,7 +461,7 @@ static error_t *hook_fire(
 
 error_t *hook_fire_pre(
     const config_t *config,
-    output_ctx_t *out,
+    output_t *out,
     const char *repo_dir,
     const hook_invocation_t *inv
 ) {
@@ -484,7 +484,7 @@ error_t *hook_fire_pre(
 
 void hook_fire_post(
     const config_t *config,
-    output_ctx_t *out,
+    output_t *out,
     const char *repo_dir,
     const hook_invocation_t *inv
 ) {

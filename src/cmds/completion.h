@@ -10,19 +10,19 @@
  * - Simple output: Newline-separated for fish consumption
  *
  * Usage:
- *   dotta __complete check              # Exit 0 if in repo, 1 otherwise
- *   dotta __complete profiles           # Enabled profiles
- *   dotta __complete profiles --all     # All available profiles (branches)
- *   dotta __complete files              # All managed files
- *   dotta __complete files -p <profile> # Files in specific profile
- *   dotta __complete files --storage    # Storage paths instead of filesystem
- *   dotta __complete commits            # Recent commits from first enabled profile
+ *   dotta __complete check                 # Exit 0 if in repo, 1 otherwise
+ *   dotta __complete profiles              # Enabled profiles
+ *   dotta __complete profiles --all        # All available profiles (branches)
+ *   dotta __complete files                 # All managed files
+ *   dotta __complete files -p <profile>    # Files in specific profile
+ *   dotta __complete files --storage       # Storage paths instead of filesystem
+ *   dotta __complete commits               # Recent commits from first enabled profile
  *   dotta __complete commits -p <profile>  # Recent commits from specific profile
  *   dotta __complete commits --limit <n>   # Limit number of commits
- *   dotta __complete spec fish          # Emit the fish completion script for
- *                                       #   the entire root registry. Used by
- *                                       #   the Makefile to regenerate the
- *                                       #   dotta-completions.fish snapshot.
+ *   dotta __complete spec fish             # Emit the fish completion script for
+ *                                          #   the entire root registry. Used by
+ *                                          #   the Makefile to regenerate the
+ *                                          #   dotta-completions.fish snapshot.
  */
 
 #ifndef DOTTA_CMD_COMPLETION_H

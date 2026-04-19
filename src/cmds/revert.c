@@ -51,7 +51,7 @@ static error_t *discover_file_in_history(
     git_repository *repo,
     const char *storage_path,
     const char *profile,
-    const output_ctx_t *out,
+    const output_t *out,
     char **out_profile,
     char **out_resolved_path
 ) {
@@ -129,7 +129,7 @@ static error_t *discover_file(
     const state_t *state,
     const char *file_path,
     const char *profile_hint,
-    const output_ctx_t *out,
+    const output_t *out,
     bool *found_in_history,
     char **out_profile,
     char **out_resolved_path
@@ -281,7 +281,7 @@ static error_t *show_diff_preview(
     keymgr *keymgr,
     const git_oid *current_oid,
     const git_oid *target_oid,
-    output_ctx_t *out
+    output_t *out
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(file_path);
@@ -602,7 +602,7 @@ static error_t *revert_file_in_branch(
     const char *file_path,
     const git_oid *target_commit_oid,
     const char *commit_message,
-    const output_ctx_t *out
+    const output_t *out
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(profile);
@@ -831,7 +831,7 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
 
     git_repository *repo = ctx->repo;
     const config_t *config = ctx->config;
-    output_ctx_t *out = ctx->out;
+    output_t *out = ctx->out;
 
     error_t *err = NULL;
     char *profile = NULL;
@@ -1397,7 +1397,7 @@ const args_command_t spec_revert = {
         "afterward to propagate to the filesystem.\n",
     .notes       =
         "Execution Order:\n"
-        "  1. Locate the file in enabled profiles (exact path or basename).\n"
+        "  1. Locate the file in enabled profiles (exact path).\n"
         "  2. Resolve the target commit in the profile's history.\n"
         "  3. Show a diff between current and target state.\n"
         "  4. Prompt for confirmation (bypassed by --force).\n"

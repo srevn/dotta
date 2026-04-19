@@ -29,7 +29,7 @@
  * Display enabled profiles and last deployment info
  */
 static void display_enabled_profiles(
-    output_ctx_t *out,
+    output_t *out,
     const string_array_t *profiles,
     const manifest_t *manifest,
     const state_t *state
@@ -101,7 +101,7 @@ static void display_workspace_status(
     workspace_t *ws,
     const scope_t *scope,
     const manifest_t *manifest,
-    output_ctx_t *out
+    output_t *out
 ) {
     if (!ws || !out) return;
 
@@ -487,7 +487,7 @@ static void display_workspace_status(
 static error_t *display_remote_status(
     git_repository *repo,
     const string_array_t *profiles,
-    output_ctx_t *out,
+    output_t *out,
     bool show_all_profiles,
     bool no_fetch
 ) {
@@ -833,7 +833,7 @@ error_t *cmd_status(const dotta_ctx_t *ctx, const cmd_status_options_t *opts) {
 
     git_repository *repo = ctx->repo;
     const config_t *config = ctx->config;
-    output_ctx_t *out = ctx->out;
+    output_t *out = ctx->out;
 
     /* Declare all resources at top and initialize to NULL */
     error_t *err = NULL;

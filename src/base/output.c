@@ -400,12 +400,12 @@ static bool should_enable_colors(output_color_mode_t mode, FILE *stream) {
  * Context Management
  * ═══════════════════════════════════════════════════════════════════ */
 
-output_ctx_t *output_create(
+output_t *output_create(
     FILE *stream,
     output_verbosity_t verbosity,
     output_color_mode_t color_mode
 ) {
-    output_ctx_t *ctx = calloc(1, sizeof(output_ctx_t));
+    output_t *ctx = calloc(1, sizeof(output_t));
     if (!ctx) {
         return NULL;
     }
@@ -419,13 +419,13 @@ output_ctx_t *output_create(
     return ctx;
 }
 
-void output_free(output_ctx_t *ctx) {
+void output_free(output_t *ctx) {
     if (ctx) {
         free(ctx);
     }
 }
 
-void output_set_verbosity(output_ctx_t *ctx, output_verbosity_t verbosity) {
+void output_set_verbosity(output_t *ctx, output_verbosity_t verbosity) {
     if (ctx) {
         ctx->verbosity = verbosity;
     }
@@ -457,18 +457,18 @@ output_color_mode_t output_parse_color_mode(const char *str) {
  * Color Support
  * ═══════════════════════════════════════════════════════════════════ */
 
-bool output_colors_enabled(const output_ctx_t *ctx) {
+bool output_colors_enabled(const output_t *ctx) {
     return ctx ? ctx->color_enabled : false;
 }
 
-bool output_is_tty(const output_ctx_t *ctx) {
+bool output_is_tty(const output_t *ctx) {
     if (!ctx || !ctx->stream)
         return false;
 
     return isatty(fileno(ctx->stream));
 }
 
-const char *output_color_code(const output_ctx_t *ctx, output_color_t color) {
+const char *output_color_code(const output_t *ctx, output_color_t color) {
     if (!ctx || !ctx->color_enabled)
         return EMPTY;
 
@@ -483,7 +483,7 @@ const char *output_color_code(const output_ctx_t *ctx, output_color_t color) {
  * ═══════════════════════════════════════════════════════════════════ */
 
 void output_print(
-    const output_ctx_t *ctx,
+    const output_t *ctx,
     output_verbosity_t min_level,
     const char *fmt,
     ...
@@ -498,7 +498,7 @@ void output_print(
 }
 
 void output_styled(
-    const output_ctx_t *ctx,
+    const output_t *ctx,
     output_verbosity_t min_level,
     const char *fmt,
     ...
@@ -513,7 +513,7 @@ void output_styled(
 }
 
 void output_colored(
-    const output_ctx_t *ctx,
+    const output_t *ctx,
     output_verbosity_t min_level,
     output_color_t color,
     const char *fmt,
@@ -535,7 +535,7 @@ void output_colored(
     if (apply_color) fputs(ANSI_RESET, ctx->stream);
 }
 
-void output_error(const output_ctx_t *ctx, const char *fmt, ...) {
+void output_error(const output_t *ctx, const char *fmt, ...) {
     if (!ctx || !fmt) return;
 
     styled_fputs(
@@ -552,7 +552,7 @@ void output_error(const output_ctx_t *ctx, const char *fmt, ...) {
 }
 
 void output_warning(
-    const output_ctx_t *ctx,
+    const output_t *ctx,
     output_verbosity_t min_level,
     const char *fmt,
     ...
@@ -574,7 +574,7 @@ void output_warning(
 }
 
 void output_success(
-    const output_ctx_t *ctx,
+    const output_t *ctx,
     output_verbosity_t min_level,
     const char *fmt,
     ...
@@ -596,7 +596,7 @@ void output_success(
 }
 
 void output_info(
-    const output_ctx_t *ctx,
+    const output_t *ctx,
     output_verbosity_t min_level,
     const char *fmt,
     ...
@@ -613,7 +613,7 @@ void output_info(
 }
 
 void output_hint(
-    const output_ctx_t *ctx,
+    const output_t *ctx,
     output_verbosity_t min_level,
     const char *fmt,
     ...
@@ -643,7 +643,7 @@ void output_hint(
 }
 
 void output_hintline(
-    const output_ctx_t *ctx,
+    const output_t *ctx,
     output_verbosity_t min_level,
     const char *fmt,
     ...
@@ -662,13 +662,13 @@ void output_hintline(
     fputc('\n', ctx->stream);
 }
 
-void output_newline(const output_ctx_t *ctx, output_verbosity_t min_level) {
+void output_newline(const output_t *ctx, output_verbosity_t min_level) {
     if (!ctx || ctx->verbosity < min_level) return;
     fputc('\n', ctx->stream);
 }
 
 void output_section(
-    const output_ctx_t *ctx,
+    const output_t *ctx,
     output_verbosity_t min_level,
     const char *fmt,
     ...
@@ -680,7 +680,7 @@ void output_section(
     if (ctx->has_content) {
         fputc('\n', ctx->stream);
     }
-    ((output_ctx_t *) ctx)->has_content = true;
+    ((output_t *) ctx)->has_content = true;
 
     const char *bold = output_color_code(ctx, OUTPUT_COLOR_BOLD);
     const char *reset = output_color_code(ctx, OUTPUT_COLOR_RESET);
@@ -694,7 +694,7 @@ void output_section(
     fputc('\n', ctx->stream);
 }
 
-void output_clear_line(const output_ctx_t *ctx) {
+void output_clear_line(const output_t *ctx) {
     if (!ctx) return;
 
     if (isatty(fileno(ctx->stream)))
@@ -709,7 +709,7 @@ void output_clear_line(const output_ctx_t *ctx) {
  * Diff Output
  * ═══════════════════════════════════════════════════════════════════ */
 
-void output_print_diff(const output_ctx_t *ctx, const char *diff_text) {
+void output_print_diff(const output_t *ctx, const char *diff_text) {
     if (!ctx || !diff_text) return;
 
     if (!ctx->color_enabled) {
@@ -797,7 +797,7 @@ static bool read_user_response(bool default_value) {
 }
 
 bool output_confirm(
-    const output_ctx_t *ctx,
+    const output_t *ctx,
     const char *message,
     bool default_value
 ) {
@@ -816,7 +816,7 @@ bool output_confirm(
 }
 
 bool output_confirm_or_default(
-    const output_ctx_t *ctx,
+    const output_t *ctx,
     const char *message,
     bool default_value,
     bool non_interactive_default
@@ -852,7 +852,7 @@ bool output_confirm_or_default(
 }
 
 bool output_confirm_destructive(
-    const output_ctx_t *ctx,
+    const output_t *ctx,
     bool confirm_destructive,
     const char *message,
     bool force_flag
@@ -895,12 +895,12 @@ typedef struct {
 } list_item_t;
 
 struct output_list {
-    output_ctx_t *ctx;     /* Borrowed reference (caller owns) */
-    char *title;           /* Owned section title */
-    char *hint;            /* Owned hint text (nullable) */
-    list_item_t *items;    /* Dynamic array of items */
-    size_t count;          /* Current item count */
-    size_t capacity;       /* Allocated capacity */
+    output_t *ctx;      /* Borrowed reference (caller owns) */
+    char *title;        /* Owned section title */
+    char *hint;         /* Owned hint text (nullable) */
+    list_item_t *items; /* Dynamic array of items */
+    size_t count;       /* Current item count */
+    size_t capacity;    /* Allocated capacity */
 };
 
 static void free_list_item(list_item_t *item) {
@@ -959,7 +959,7 @@ static void format_tags_with_brackets(
 }
 
 output_list_t *output_list_create(
-    output_ctx_t *ctx,
+    output_t *ctx,
     const char *title,
     const char *hint
 ) {
@@ -1048,7 +1048,7 @@ error:
 void output_list_render(output_list_t *list) {
     if (!list || list->count == 0) return;
 
-    output_ctx_t *ctx = list->ctx;
+    output_t *ctx = list->ctx;
     if (ctx->verbosity < OUTPUT_NORMAL) return;
 
     /* Automatic section separator */

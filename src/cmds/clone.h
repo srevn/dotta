@@ -17,9 +17,9 @@
  * and hands the consumer a closed enum to switch on.
  */
 typedef enum {
-    CLONE_BOOTSTRAP_DEFAULT = 0, /* No flag given: prompt if scripts exist. */
-    CLONE_BOOTSTRAP_FORCE,       /* --bootstrap:    auto-run.              */
-    CLONE_BOOTSTRAP_SKIP         /* --no-bootstrap: never run.             */
+    CLONE_BOOTSTRAP_DEFAULT = 0, /* No flag given: prompt if scripts exist */
+    CLONE_BOOTSTRAP_FORCE,       /* --bootstrap:    auto-run */
+    CLONE_BOOTSTRAP_SKIP         /* --no-bootstrap: never run */
 } clone_bootstrap_mode_t;
 
 /**

@@ -81,7 +81,7 @@ static error_t *resolve_paths_to_remove(
     string_array_t **storage_paths_out,
     string_array_t **filesystem_paths_out,
     const cmd_remove_options_t *opts,
-    output_ctx_t *out,
+    output_t *out,
     state_t *state
 ) {
     CHECK_NULL(repo);
@@ -304,7 +304,7 @@ static error_t *remove_file_from_worktree(
     worktree_handle_t *wt,
     const char *storage_path,
     const cmd_remove_options_t *opts,
-    output_ctx_t *out
+    output_t *out
 ) {
     CHECK_NULL(wt);
     CHECK_NULL(storage_path);
@@ -479,7 +479,7 @@ static error_t *analyze_multi_profile_conflicts(
  * Shows which files exist in multiple profiles and explains the implications.
  */
 static void display_multi_profile_warnings(
-    output_ctx_t *out,
+    output_t *out,
     const string_array_t *filesystem_paths,
     string_array_t **other_profiles,
     size_t file_count,
@@ -562,7 +562,7 @@ static bool confirm_removal(
     const string_array_t *storage_paths,
     const cmd_remove_options_t *opts,
     const config_t *config,
-    output_ctx_t *out
+    output_t *out
 ) {
     if (!storage_paths || !opts || !out) {
         return false;
@@ -618,7 +618,7 @@ static bool confirm_profile_deletion(
     size_t file_count,
     const cmd_remove_options_t *opts,
     const config_t *config,
-    output_ctx_t *out
+    output_t *out
 ) {
     if (!profile || !out) {
         return false;
@@ -702,7 +702,7 @@ static error_t *create_removal_commit(
 static error_t *cleanup_metadata(
     worktree_handle_t *wt,
     const string_array_t *removed_paths,
-    output_ctx_t *out
+    output_t *out
 ) {
     CHECK_NULL(wt);
     CHECK_NULL(removed_paths);
@@ -870,7 +870,7 @@ static error_t *remove_files_from_profile(
     git_repository *repo,
     state_t *state,
     const config_t *config,
-    output_ctx_t *out,
+    output_t *out,
     const char *repo_path,
     const cmd_remove_options_t *opts
 ) {
@@ -1264,7 +1264,7 @@ static error_t *delete_profile_branch(
     git_repository *repo,
     state_t *state,
     const config_t *config,
-    output_ctx_t *out,
+    output_t *out,
     const char *repo_path,
     const cmd_remove_options_t *opts
 ) {
@@ -1812,7 +1812,7 @@ error_t *cmd_remove(const dotta_ctx_t *ctx, const cmd_remove_options_t *opts) {
     git_repository *repo = ctx->repo;
     state_t *state = ctx->state;
     const config_t *config = ctx->config;
-    output_ctx_t *out = ctx->out;
+    output_t *out = ctx->out;
 
     /* Validate options */
     error_t *err = validate_options(opts);
@@ -1903,7 +1903,7 @@ static const args_opt_t remove_opts[] = {
     ARGS_FLAG(
         "delete-files",
         cmd_remove_options_t,delete_files,
-        "Stage deployed copies for removal on next apply"
+        "Stage deployed items for removal on next apply"
     ),
     ARGS_FLAG(
         "n dry-run",
@@ -1951,10 +1951,10 @@ const args_command_t spec_remove = {
     .notes       =
         "Operation Modes:\n"
         "  (default)           Remove files from the profile branch. Deployed\n"
-        "                      copies are released from management and stay\n"
+        "                      items are released from management and stay\n"
         "                      on the filesystem untouched.\n"
         "  --delete-files      Same as default, plus stage the deployed\n"
-        "                      copies for removal on the next '%s apply'.\n"
+        "                      items for removal on the next '%s apply'.\n"
         "  --delete-profile    Delete the entire profile branch. No paths\n"
         "                      may be given; cannot be combined with\n"
         "                      --delete-files.\n",

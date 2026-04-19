@@ -328,7 +328,7 @@ static error_t *sync_fetch_phase(
     const char *remote_name,
     const scope_t *scope,
     sync_results_t *results,
-    output_ctx_t *out,
+    output_t *out,
     transfer_context_t *xfer
 ) {
     CHECK_NULL(repo);
@@ -466,7 +466,7 @@ static error_t *sync_analyze_phase(
     const char *remote_name,
     const scope_t *scope,
     sync_results_t *results,
-    output_ctx_t *out
+    output_t *out
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(remote_name);
@@ -562,7 +562,7 @@ static bool sync_manifest(
     const git_oid *old_oid,
     const git_oid *new_oid,
     const string_array_t *enabled_profiles,
-    output_ctx_t *out,
+    output_t *out,
     size_t *out_synced,
     size_t *out_removed,
     size_t *out_fallbacks,
@@ -607,7 +607,7 @@ static void sync_manifest_and_report(
     const git_oid *old_oid,
     const git_oid *new_oid,
     const string_array_t *enabled_profiles,
-    output_ctx_t *out
+    output_t *out
 ) {
     size_t synced = 0, removed = 0, fallbacks = 0, skipped = 0;
     bool ok = sync_manifest(
@@ -644,7 +644,7 @@ static error_t *attempt_rollback(
     resolve_context_t *ctx,
     const char *profile,
     const char *failure_reason,
-    output_ctx_t *out
+    output_t *out
 ) {
     error_t *err = resolve_rollback(ctx);
     if (err) {
@@ -671,7 +671,7 @@ static void handle_remote_ahead(
     const char *remote_name,
     profile_sync_result_t *result,
     sync_results_t *results,
-    output_ctx_t *out,
+    output_t *out,
     bool auto_pull,
     bool no_pull,
     state_t *state,
@@ -781,7 +781,7 @@ static error_t *resolve_and_push_divergence(
     const char *remote_name,
     profile_sync_result_t *result,
     sync_results_t *results,
-    output_ctx_t *out,
+    output_t *out,
     resolve_strategy_t strategy,
     const char *strategy_name,
     transfer_context_t *xfer,
@@ -900,7 +900,7 @@ static error_t *handle_diverged_ours(
     const char *remote_name,
     profile_sync_result_t *result,
     sync_results_t *results,
-    output_ctx_t *out,
+    output_t *out,
     bool confirm_destructive,
     transfer_context_t *xfer,
     bool no_push
@@ -952,7 +952,7 @@ static error_t *handle_diverged_theirs(
     const char *remote_name,
     profile_sync_result_t *result,
     sync_results_t *results,
-    output_ctx_t *out,
+    output_t *out,
     bool confirm_destructive,
     state_t *state,
     const string_array_t *enabled_profiles
@@ -1038,7 +1038,7 @@ static error_t *handle_diverged(
     const char *remote_name,
     profile_sync_result_t *result,
     sync_results_t *results,
-    output_ctx_t *out,
+    output_t *out,
     sync_strategy_t strategy,
     transfer_context_t *xfer,
     bool confirm_destructive,
@@ -1116,7 +1116,7 @@ static error_t *sync_push_phase(
     git_repository *repo,
     const char *remote_name,
     sync_results_t *results,
-    output_ctx_t *out,
+    output_t *out,
     bool ephemeral,
     bool auto_pull,
     bool no_pull,
@@ -1325,7 +1325,7 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
     git_repository *repo = ctx->repo;
     state_t *state = ctx->state;
     const config_t *config = ctx->config;
-    output_ctx_t *out = ctx->out;
+    output_t *out = ctx->out;
 
     /* Declare all resources, initialized to NULL */
     error_t *err = NULL;

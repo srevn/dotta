@@ -59,7 +59,7 @@ static error_t *count_profile_files(
  * Verbose mode shows detailed breakdown, normal mode shows summary.
  */
 static void print_manifest_enable_stats(
-    const output_ctx_t *out,
+    const output_t *out,
     const char *profile,
     const manifest_enable_stats_t *stats
 ) {
@@ -138,7 +138,7 @@ static void print_manifest_enable_stats(
  * Shows impact analysis from manifest disable operation.
  */
 static void print_manifest_disable_stats(
-    const output_ctx_t *out,
+    const output_t *out,
     const char *profile,
     const manifest_disable_stats_t *stats
 ) {
@@ -199,7 +199,7 @@ static error_t *profile_list(
     git_repository *repo,
     state_t *state,
     const cmd_profile_options_t *opts,
-    output_ctx_t *out
+    output_t *out
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(state);
@@ -397,7 +397,7 @@ cleanup:
 static error_t *profile_fetch(
     git_repository *repo,
     const cmd_profile_options_t *opts,
-    output_ctx_t *out
+    output_t *out
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(opts);
@@ -654,7 +654,7 @@ static error_t *profile_enable(
     git_repository *repo,
     state_t *state,
     const cmd_profile_options_t *opts,
-    output_ctx_t *out
+    output_t *out
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(state);
@@ -912,7 +912,7 @@ static error_t *profile_disable(
     git_repository *repo,
     state_t *state,
     const cmd_profile_options_t *opts,
-    output_ctx_t *out
+    output_t *out
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(state);
@@ -1166,7 +1166,7 @@ static error_t *profile_reorder(
     git_repository *repo,
     state_t *state,
     const cmd_profile_options_t *opts,
-    output_ctx_t *out
+    output_t *out
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(state);
@@ -1370,7 +1370,7 @@ static error_t *profile_validate(
     git_repository *repo,
     state_t *state,
     const cmd_profile_options_t *opts,
-    output_ctx_t *out
+    output_t *out
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(state);
@@ -1551,7 +1551,7 @@ error_t *cmd_profile(const dotta_ctx_t *ctx, const cmd_profile_options_t *opts) 
 
     git_repository *repo = ctx->repo;
     state_t *state = ctx->state;  /* NULL for fetch (repo_only); set for list/validate/enable/disable/reorder */
-    output_ctx_t *out = ctx->out;
+    output_t *out = ctx->out;
 
     /* Override verbosity from CLI */
     if (opts->verbose) {
@@ -1763,7 +1763,7 @@ static const args_opt_t profile_disable_opts[] = {
 static const args_command_t spec_profile_disable = {
     .name          = "profile disable",
     .summary       = "Disable profiles, mark for removal on next apply",
-    .usage         = "%s profile disable [--all] [-n] [-v|-q] [<name>...]",
+    .usage         = "%s profile disable [options] [<name>...]",
     .opts_size     = sizeof(cmd_profile_options_t),
     .opts          = profile_disable_opts,
     .init_defaults = profile_disable_defaults,
@@ -1798,7 +1798,7 @@ static const args_opt_t profile_reorder_opts[] = {
 static const args_command_t spec_profile_reorder = {
     .name          = "profile reorder",
     .summary       = "Change the layering order of enabled profiles",
-    .usage         = "%s profile reorder [-v|-q] <name>...",
+    .usage         = "%s profile reorder [options] [<name>...]",
     .description   =
         "Provide every enabled profile in the desired order. Later profiles\n"
         "override earlier ones during layering.\n",
@@ -1853,17 +1853,14 @@ const args_command_t spec_profile = {
     .summary            = "Profile management and layering",
     .usage              = "%s profile <subcommand> [options]",
     .description        =
+        "Enabling a profile is a persistent choice that marks it for deployment.\n"
+        "Run 'dotta apply' to synchronize the workspace with the set of enabled profiles.\n",
+    .notes              =
         "Manage which profiles are used in your current workspace.\n"
-        "\n"
         "Profile States:\n"
         "  • Available  - Profiles that exist locally but are not enabled\n"
         "  • Enabled    - Profiles that will be deployed by 'dotta apply'\n"
-        "  • Remote     - Profiles on a remote that have not been fetched yet\n"
-        "\n"
-        "Enabling a profile is a persistent choice that marks it for deployment.\n"
-        "Run 'dotta apply' to synchronize the workspace with the set of enabled profiles.\n"
-        "\n"
-        "Run '%s profile <subcommand> --help' for per-subcommand options.\n",
+        "  • Remote     - Profiles on a remote that have not been fetched yet\n",
     .examples           =
         "  %s profile list --all              # Show local and remote profiles\n"
         "  %s profile fetch darwin            # Download a profile\n"

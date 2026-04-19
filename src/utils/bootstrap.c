@@ -230,7 +230,7 @@ static error_t *run_dry(git_repository *repo, const char *profile) {
     return err;
 }
 
-error_t *bootstrap_fire(output_ctx_t *out, const bootstrap_spec_t *spec) {
+error_t *bootstrap_fire(output_t *out, const bootstrap_spec_t *spec) {
     CHECK_NULL(out);
     CHECK_NULL(spec);
     CHECK_NULL(spec->repo);

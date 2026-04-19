@@ -299,7 +299,7 @@ static error_t *filter_items_for_update(
     const cmd_update_options_t *opts,
     const scope_t *scope,
     const config_t *config,
-    output_ctx_t *out,
+    output_t *out,
     const workspace_item_t ***out_items,
     size_t *count_out
 ) {
@@ -439,7 +439,7 @@ static error_t *update_metadata_for_profile(
     size_t item_count,
     const file_copy_result_t *copy_results,
     const cmd_update_options_t *opts,
-    output_ctx_t *out
+    output_t *out
 ) {
     CHECK_NULL(wt);
     CHECK_NULL(items);
@@ -710,7 +710,7 @@ static error_t *update_profile(
     const workspace_item_t **items,
     size_t item_count,
     const cmd_update_options_t *opts,
-    output_ctx_t *out,
+    output_t *out,
     const config_t *config,
     size_t *out_processed
 ) {
@@ -1075,7 +1075,7 @@ static error_t *update_manifest_after_update(
     const scope_t *scope,
     const hashmap_t *items_by_profile,
     const cmd_update_options_t *opts,
-    output_ctx_t *out,
+    output_t *out,
     bool *out_updated
 ) {
     CHECK_NULL(repo);
@@ -1194,7 +1194,7 @@ static error_t *update_execute_for_all_profiles(
     const workspace_item_t **update_items,
     size_t update_count,
     const cmd_update_options_t *opts,
-    output_ctx_t *out,
+    output_t *out,
     const config_t *config,
     size_t *total_updated,
     hashmap_t **out_by_profile
@@ -1313,7 +1313,7 @@ cleanup:
  * @return Error or NULL on success
  */
 static error_t *update_display_summary(
-    output_ctx_t *out,
+    output_t *out,
     const workspace_item_t **items,
     size_t item_count,
     const cmd_update_options_t *opts
@@ -1652,7 +1652,7 @@ static error_t *update_display_summary(
  * @return Error or NULL on success
  */
 static error_t *update_confirm_operation(
-    output_ctx_t *out,
+    output_t *out,
     const cmd_update_options_t *opts,
     const workspace_item_t **items,
     size_t item_count,
@@ -1755,7 +1755,7 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
 
     git_repository *repo = ctx->repo;
     const config_t *config = ctx->config;
-    output_ctx_t *out = ctx->out;
+    output_t *out = ctx->out;
 
     /* Declare all resources at top, initialized to NULL */
     error_t *err = NULL;
@@ -2221,7 +2221,7 @@ static const args_opt_t update_opts[] = {
 const args_command_t spec_update = {
     .name        = "update",
     .summary     = "Commit filesystem changes back to profiles",
-    .usage       = "%s update [options] [file]...",
+    .usage       = "%s update [options] [profile|file]...",
     .description =
         "Commit filesystem modifications to the matching profile branches\n"
         "(the reverse direction of 'apply'). Metadata changes on root/\n"

@@ -96,7 +96,7 @@ typedef struct {
  *     correct only when `out` also routes to stdout.
  */
 error_t *bootstrap_fire(
-    output_ctx_t *out,
+    output_t *out,
     const bootstrap_spec_t *spec
 );
 

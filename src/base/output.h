@@ -48,14 +48,14 @@ typedef enum {
 /**
  * Output context
  */
-typedef struct output_ctx {
+typedef struct output {
     FILE *stream;
     output_verbosity_t verbosity;
     output_color_mode_t color_mode;
     bool color_enabled;         /* Computed from color_mode for stream */
     bool stderr_color_enabled;  /* Computed from color_mode for stderr */
     bool has_content;           /* Section/list rendered — drives automatic spacing */
-} output_ctx_t;
+} output_t;
 
 /**
  * Parse verbosity string from config
@@ -76,7 +76,7 @@ output_color_mode_t output_parse_color_mode(const char *str);
 /**
  * Create output context
  */
-output_ctx_t *output_create(
+output_t *output_create(
     FILE *stream,
     output_verbosity_t verbosity,
     output_color_mode_t color_mode
@@ -85,26 +85,26 @@ output_ctx_t *output_create(
 /**
  * Free output context
  */
-void output_free(output_ctx_t *ctx);
+void output_free(output_t *ctx);
 
 /**
  * Set verbosity level
  */
-void output_set_verbosity(output_ctx_t *ctx, output_verbosity_t verbosity);
+void output_set_verbosity(output_t *ctx, output_verbosity_t verbosity);
 
 /**
  * Check if verbose output is enabled
  *
  * NULL-safe: returns false if ctx is NULL.
  */
-static inline bool output_is_verbose(const output_ctx_t *ctx) {
+static inline bool output_is_verbose(const output_t *ctx) {
     return ctx && ctx->verbosity >= OUTPUT_VERBOSE;
 }
 
 /**
  * Check if colors are enabled for the given context
  */
-bool output_colors_enabled(const output_ctx_t *ctx);
+bool output_colors_enabled(const output_t *ctx);
 
 /**
  * Check if the output stream is a TTY
@@ -120,18 +120,18 @@ bool output_colors_enabled(const output_ctx_t *ctx);
  * @param ctx Output context (returns false if NULL)
  * @return true if ctx->stream is a terminal
  */
-bool output_is_tty(const output_ctx_t *ctx);
+bool output_is_tty(const output_t *ctx);
 
 /**
  * Get color code string
  */
-const char *output_color_code(const output_ctx_t *ctx, output_color_t color);
+const char *output_color_code(const output_t *ctx, output_color_t color);
 
 /**
  * Print with verbosity check
  */
 void output_print(
-    const output_ctx_t *ctx,
+    const output_t *ctx,
     output_verbosity_t min_level,
     const char *fmt,
     ...
@@ -162,7 +162,7 @@ void output_print(
  *   output_styled(out, OUTPUT_NORMAL, "  {cyan}%s{reset} → {cyan}%s{reset}\n", old, new);
  */
 void output_styled(
-    const output_ctx_t *ctx,
+    const output_t *ctx,
     output_verbosity_t min_level,
     const char *fmt,
     ...
@@ -181,7 +181,7 @@ void output_styled(
  * The format string also supports {tag} markup (routes through the style engine).
  */
 void output_colored(
-    const output_ctx_t *ctx,
+    const output_t *ctx,
     output_verbosity_t min_level,
     output_color_t color,
     const char *fmt,
@@ -191,14 +191,14 @@ void output_colored(
 /**
  * Print error message
  */
-void output_error(const output_ctx_t *ctx, const char *fmt, ...)
+void output_error(const output_t *ctx, const char *fmt, ...)
 __attribute__((format(printf, 2, 3)));
 
 /**
  * Print warning message
  */
 void output_warning(
-    const output_ctx_t *ctx,
+    const output_t *ctx,
     output_verbosity_t min_level,
     const char *fmt,
     ...
@@ -208,7 +208,7 @@ void output_warning(
  * Print success message
  */
 void output_success(
-    const output_ctx_t *ctx,
+    const output_t *ctx,
     output_verbosity_t min_level,
     const char *fmt,
     ...
@@ -218,7 +218,7 @@ void output_success(
  * Print info message
  */
 void output_info(
-    const output_ctx_t *ctx,
+    const output_t *ctx,
     output_verbosity_t min_level,
     const char *fmt,
     ...
@@ -243,7 +243,7 @@ void output_info(
  *   → "  Hint: Run 'dotta profile fetch foo' first" (dimmed, indented)
  */
 void output_hint(
-    const output_ctx_t *ctx,
+    const output_t *ctx,
     output_verbosity_t min_level,
     const char *fmt,
     ...
@@ -268,7 +268,7 @@ void output_hint(
  *   "  dotta bootstrap --profile <profile> --edit" (dimmed)
  */
 void output_hintline(
-    const output_ctx_t *ctx,
+    const output_t *ctx,
     output_verbosity_t min_level,
     const char *fmt,
     ...
@@ -283,7 +283,7 @@ void output_hintline(
  * @param ctx Output context
  * @param min_level Minimum verbosity level
  */
-void output_newline(const output_ctx_t *ctx, output_verbosity_t min_level);
+void output_newline(const output_t *ctx, output_verbosity_t min_level);
 
 /**
  * Print section header
@@ -301,7 +301,7 @@ void output_newline(const output_ctx_t *ctx, output_verbosity_t min_level);
  *   output_section(out, OUTPUT_NORMAL, "Second Section");
  */
 void output_section(
-    const output_ctx_t *ctx,
+    const output_t *ctx,
     output_verbosity_t min_level,
     const char *fmt,
     ...
@@ -319,7 +319,7 @@ void output_section(
  *
  * @param ctx Output context
  */
-void output_clear_line(const output_ctx_t *ctx);
+void output_clear_line(const output_t *ctx);
 
 /**
  * Print diff text with line-by-line colorization
@@ -335,7 +335,7 @@ void output_clear_line(const output_ctx_t *ctx);
  * @param ctx Output context (must not be NULL)
  * @param diff_text Unified diff text (NULL-safe, no-op)
  */
-void output_print_diff(const output_ctx_t *ctx, const char *diff_text);
+void output_print_diff(const output_t *ctx, const char *diff_text);
 
 /**
  * Format file size in human-readable form
@@ -361,7 +361,7 @@ void output_format_size(size_t bytes, char *buffer, size_t buffer_size);
  * @return true if user confirms (y/Y), false otherwise
  */
 bool output_confirm(
-    const output_ctx_t *ctx,
+    const output_t *ctx,
     const char *message,
     bool default_value
 );
@@ -380,7 +380,7 @@ bool output_confirm(
  * @return true if confirmed or non_interactive_default if not a TTY
  */
 bool output_confirm_or_default(
-    const output_ctx_t *ctx,
+    const output_t *ctx,
     const char *message,
     bool default_value,
     bool non_interactive_default
@@ -399,7 +399,7 @@ bool output_confirm_or_default(
  * @return true if should proceed, false if user declined
  */
 bool output_confirm_destructive(
-    const output_ctx_t *ctx,
+    const output_t *ctx,
     bool confirm_destructive,
     const char *message,
     bool force_flag
@@ -431,7 +431,7 @@ typedef struct output_list output_list_t;
  * @return List builder or NULL on allocation failure
  */
 output_list_t *output_list_create(
-    output_ctx_t *ctx,
+    output_t *ctx,
     const char *title,
     const char *hint
 );

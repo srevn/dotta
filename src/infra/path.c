@@ -424,13 +424,10 @@ error_t *path_normalize_input(
  * Pure classifier — requires pre-normalized absolute path.
  * Callers must call path_normalize_input() first for raw user input.
  *
- * Classification semantic: the tightest matching container wins. When
- * the path lies under multiple candidate roots, the one with the longest
- * matching prefix is selected. In the common case an explicit --prefix
- * is more specific than HOME and wins naturally; when a prefix is a
- * strict ancestor of HOME, HOME is preferred (more portable storage
- * paths across machines). The empty-prefix root is the universal
- * fallback.
+ * Selection is delegated to path_classify: longest matching prefix
+ * wins. An explicit --prefix naturally wins over HOME when it is
+ * more specific, and loses to HOME when HOME is more specific. The
+ * empty-prefix root is the universal fallback.
  */
 error_t *path_to_storage(
     const char *filesystem_path,

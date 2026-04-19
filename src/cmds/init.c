@@ -178,7 +178,7 @@ error_t *cmd_init(const dotta_ctx_t *ctx, const cmd_init_options_t *opts) {
     CHECK_NULL(opts);
 
     const config_t *config = ctx->config;
-    output_ctx_t *out = ctx->out;
+    output_t *out = ctx->out;
 
     git_repository *repo = NULL;
     error_t *err = NULL;

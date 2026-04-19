@@ -360,7 +360,7 @@ static error_t *remove_patterns_from_content(
 static error_t *edit_baseline_dottaignore(
     git_repository *repo,
     const config_t *config,
-    output_ctx_t *out
+    output_t *out
 ) {
     CHECK_NULL(repo);
     (void) config;  /* Reserved for future use */
@@ -545,7 +545,7 @@ static error_t *edit_baseline_dottaignore(
 static error_t *edit_profile_dottaignore(
     git_repository *repo,
     const char *profile,
-    output_ctx_t *out
+    output_t *out
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(profile);
@@ -719,7 +719,7 @@ static error_t *modify_baseline_dottaignore(
     size_t add_count,
     char **remove_patterns,
     size_t remove_count,
-    output_ctx_t *out
+    output_t *out
 ) {
     CHECK_NULL(repo);
 
@@ -957,7 +957,7 @@ static error_t *modify_profile_dottaignore(
     size_t add_count,
     char **remove_patterns,
     size_t remove_count,
-    output_ctx_t *out
+    output_t *out
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(profile);
@@ -1171,7 +1171,7 @@ static error_t *test_path_ignore(
     const config_t *config,
     const char *test_path,
     const char *specific_profile,
-    output_ctx_t *out
+    output_t *out
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(state);
@@ -1393,7 +1393,7 @@ error_t *cmd_ignore(const dotta_ctx_t *ctx, const cmd_ignore_options_t *opts) {
 
     git_repository *repo = ctx->repo;
     const config_t *config = ctx->config;
-    output_ctx_t *out = ctx->out;
+    output_t *out = ctx->out;
 
     /* CLI flags override config */
     if (opts->verbose) {
@@ -1509,35 +1509,28 @@ static const args_opt_t ignore_opts[] = {
 const args_command_t spec_ignore = {
     .name        = "ignore",
     .summary     = "Manage ignore patterns",
-    .usage       =
-        "%s ignore [options] [profile]",
+    .usage       = "%s ignore [options] [profile]",
     .description =
         "View or edit .dottaignore files. Without a positional, operates\n"
         "on the baseline; with one, on that profile's .dottaignore which\n"
         "extends the baseline.\n",
     .notes       =
-        "Ignore Pattern Layers (highest precedence first):\n"
-        "  1. CLI --exclude patterns (command-specific).\n"
+        "Ignore Pattern Layers:\n"
+        "  1. CLI --exclude patterns (command-specific)\n"
         "  2. Combined .dottaignore:\n"
-        "     - Baseline (dotta-worktree branch, applies to every profile).\n"
-        "     - Profile .dottaignore (extends baseline, can override with !).\n"
-        "  3. Config file patterns.\n"
-        "  4. Source .gitignore (lowest precedence).\n"
+        "     - Baseline (dotta-worktree branch, applies to every profile)\n"
+        "     - Profile .dottaignore (extends baseline, can override with !)\n"
+        "  3. Config file patterns\n"
+        "  4. Source .gitignore (lowest precedence)\n"
         "\n"
         "Pattern Syntax:\n"
-        "  *.log          Match all .log files.\n"
-        "  node_modules/  Match directory.\n"
-        "  !debug.log     Negate a prior match.\n"
-        "  .cache/        Match .cache directories.\n"
+        "  *.log             # Match all .log files\n"
+        "  node_modules/     # Match directory\n"
+        "  !debug.log        # Negate a prior match\n"
+        "  .cache/           # Match .cache directories\n"
         "\n"
-        "Profile .dottaignore Behavior:\n"
-        "  Profile files start empty and inherit all baseline patterns.\n"
-        "  Use negation (!) to override baseline in specific profiles.\n"
-        "  Example: baseline '*.log' + profile '!important.log' keeps\n"
-        "  important.log in the profile.\n"
-        "\n"
-        "Editor Selection (edit mode):\n"
-        "  $DOTTA_EDITOR, then $VISUAL, then $EDITOR, then vi.\n",
+        "Editor Selection:\n"
+        "  $DOTTA_EDITOR, then $VISUAL, then $EDITOR, then vi\n",
     .examples    =
         "  %s ignore                                 # Edit baseline\n"
         "  %s ignore global                          # Edit profile file\n"

@@ -379,7 +379,7 @@ error_t *profile_resolve_enabled(
     /* Warn about missing profiles (diagnostic message)
      *
      * Note: We use fprintf(stderr) here because this is a low-level core module
-     * without access to an output_ctx_t. This is consistent with other core
+     * without access to an output_t. This is consistent with other core
      * modules (deploy.c, workspace.c) that also write diagnostic warnings to stderr.
      */
     if (missing_profiles && missing_profiles->count > 0) {

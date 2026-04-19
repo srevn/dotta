@@ -28,7 +28,7 @@
 #ifndef DOTTA_RUNTIME_H
 #define DOTTA_RUNTIME_H
 
-#include <types.h>          /* error_t, arena_t, config_t, output_ctx_t */
+#include <types.h>          /* error_t, arena_t, config_t, output_t */
 
 /* libgit2's opaque repo type. Consumers that touch the pointer must
  * `#include <git2.h>` for the API; this header stays free of the
@@ -160,7 +160,7 @@ typedef struct dotta_ctx {
     const char *repo_path;              /* Set by REQUIRED and PATH_ONLY modes */
     state_t *state;                     /* NULL unless state_mode acquires; borrowed */
     const config_t *config;
-    output_ctx_t *out;
+    output_t *out;
     arena_t *arena;                     /* Command-scoped; parser-owned */
     int argc;                           /* Original process argc */
     char **argv;                        /* Original process argv */

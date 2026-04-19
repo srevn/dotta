@@ -94,7 +94,7 @@ static bool validate_remote_url(const char *url) {
  */
 static error_t *remote_list(
     git_repository *repo,
-    output_ctx_t *out,
+    output_t *out,
     bool verbose
 ) {
     CHECK_NULL(repo);
@@ -167,7 +167,7 @@ static error_t *remote_list(
  */
 static error_t *remote_add(
     git_repository *repo,
-    output_ctx_t *out,
+    output_t *out,
     const char *name,
     const char *url
 ) {
@@ -232,7 +232,7 @@ static error_t *remote_add(
  */
 static error_t *remote_remove(
     git_repository *repo,
-    output_ctx_t *out,
+    output_t *out,
     const char *name
 ) {
     CHECK_NULL(repo);
@@ -268,7 +268,7 @@ static error_t *remote_remove(
  */
 static error_t *remote_set_url(
     git_repository *repo,
-    output_ctx_t *out,
+    output_t *out,
     const char *name,
     const char *new_url
 ) {
@@ -315,7 +315,7 @@ static error_t *remote_set_url(
  */
 static error_t *remote_rename(
     git_repository *repo,
-    output_ctx_t *out,
+    output_t *out,
     const char *old_name,
     const char *new_name
 ) {
@@ -389,7 +389,7 @@ static error_t *remote_rename(
  */
 static error_t *remote_show(
     git_repository *repo,
-    output_ctx_t *out,
+    output_t *out,
     const char *name
 ) {
     CHECK_NULL(repo);
@@ -463,7 +463,7 @@ error_t *cmd_remote(const dotta_ctx_t *ctx, const cmd_remote_options_t *opts) {
     CHECK_NULL(opts);
 
     git_repository *repo = ctx->repo;
-    output_ctx_t *out = ctx->out;
+    output_t *out = ctx->out;
 
     switch (opts->subcommand) {
         case REMOTE_LIST:
@@ -644,13 +644,13 @@ const args_command_t spec_remote = {
     .usage       = "%s remote [options] [<subcommand> [args...]]",
     .description =
         "Subcommands:\n"
-        "  (none) | list            List remotes\n"
-        "  add <name> <url>         Add a new remote\n"
-        "  remove | rm <name>       Remove a remote\n"
-        "  set-url <name> <url>     Change remote URL\n"
-        "  rename <old> <new>       Rename a remote\n"
-        "  show <name>              Show remote details\n"
-        "  <name>                   Shorthand for 'show <name>'\n",
+        "  (none) | list              # List remotes\n"
+        "  add <name> <url>           # Add a new remote\n"
+        "  remove | rm <name>         # Remove a remote\n"
+        "  set-url <name> <url>       # Change remote URL\n"
+        "  rename <old> <new>         # Rename a remote\n"
+        "  show <name>                # Show remote details\n"
+        "  <name>                     # Shorthand for 'show <name>'\n",
     .examples    =
         "  %s remote\n"
         "  %s remote -v\n"

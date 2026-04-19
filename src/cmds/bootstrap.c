@@ -149,7 +149,7 @@ static error_t *bootstrap_create_template(
 static error_t *bootstrap_edit(
     git_repository *repo,
     const char *profile,
-    output_ctx_t *out
+    output_t *out
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(profile);
@@ -259,7 +259,7 @@ cleanup:
 static error_t *bootstrap_show(
     git_repository *repo,
     const char *profile,
-    output_ctx_t *out
+    output_t *out
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(profile);
@@ -299,7 +299,7 @@ static error_t *bootstrap_show(
 static error_t *bootstrap_list(
     git_repository *repo,
     const string_array_t *profiles,
-    output_ctx_t *out
+    output_t *out
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(profiles);
@@ -341,7 +341,7 @@ error_t *cmd_bootstrap(const dotta_ctx_t *ctx, const cmd_bootstrap_options_t *op
 
     git_repository *repo = ctx->repo;
     const char *repo_path = ctx->repo_path;
-    output_ctx_t *out = ctx->out;
+    output_t *out = ctx->out;
 
     error_t *err = NULL;
     string_array_t *profiles = NULL;
@@ -585,32 +585,21 @@ static const args_opt_t bootstrap_opts[] = {
 const args_command_t spec_bootstrap = {
     .name        = "bootstrap",
     .summary     = "Execute profile bootstrap scripts",
-    .usage       =
-        "%s bootstrap [options] [profile]...",
+    .usage       = "%s bootstrap [options] [profile]...",
     .description =
-        "Run the per-profile .bootstrap shell script, typically invoked\n"
-        "once after clone to install dependencies and prepare the\n"
-        "system. Without a positional, auto-detects profiles by\n"
-        "resolution order.\n",
-    .notes       =
-        "Execution Order:\n"
-        "  Scripts run in profile resolution order:\n"
-        "    1. global/.bootstrap\n"
-        "    2. <os>/.bootstrap (darwin, linux, freebsd)\n"
-        "    3. hosts/<hostname>/.bootstrap\n"
-        "\n"
         "Environment Variables:\n"
         "  DOTTA_REPO_DIR    Path to the dotta repository.\n"
         "  DOTTA_PROFILE     Current profile name.\n"
         "  DOTTA_PROFILES    Space-separated list of all active profiles.\n"
-        "  HOME              User home directory.\n"
-        "\n"
-        "Bootstrap Script Location:\n"
-        "  <repo>/<profile>/.bootstrap. Version-controlled; travels with\n"
-        "  the profile.\n"
+        "  HOME              User home directory.\n",
+    .notes       =
+        "Clone integration:\n"
+        "  %s clone <url>                    # Prompts to run bootstrap\n"
+        "  %s clone <url> --bootstrap        # Run without prompting\n"
+        "  %s clone <url> --no-bootstrap     # Skip the check entirely\n"
         "\n"
         "Editor Selection (--edit):\n"
-        "  $DOTTA_EDITOR, then $VISUAL, then $EDITOR, then nano.\n",
+        "  $DOTTA_EDITOR, then $VISUAL, then $EDITOR, then vi.\n",
     .examples    =
         "  %s bootstrap                          # Auto-detected profiles\n"
         "  %s bootstrap darwin                   # Single profile\n"
@@ -621,11 +610,6 @@ const args_command_t spec_bootstrap = {
         "  %s bootstrap -n                       # Preview without running\n"
         "  %s bootstrap --yes                    # No prompts\n",
     .epilogue    =
-        "Clone integration:\n"
-        "  %s clone <url>                    # Prompts to run bootstrap\n"
-        "  %s clone <url> --bootstrap        # Run without prompting\n"
-        "  %s clone <url> --no-bootstrap     # Skip the check entirely\n"
-        "\n"
         "See also:\n"
         "  %s apply                          # Deploy files after bootstrap\n",
     .opts_size   = sizeof(cmd_bootstrap_options_t),

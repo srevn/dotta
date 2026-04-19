@@ -182,7 +182,7 @@ error_t *privilege_ensure_for_operation(
     bool interactive,
     int argc,
     char **argv,
-    output_ctx_t *out
+    output_t *out
 );
 
 #endif /* DOTTA_PRIVILEGE_H */

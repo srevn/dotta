@@ -28,8 +28,8 @@
  * for Git network operations (clone, fetch, push).
  */
 typedef struct transfer_context_s {
-    credential_context_t *cred;    /* Credential context (owned) */
-    output_ctx_t *output;          /* Output context (borrowed) */
+    credential_context_t *cred; /* Credential context (owned) */
+    output_t *output;           /* Output context (borrowed) */
 
     /* Progress tracking state */
     bool progress_active;          /* Whether progress is currently being displayed */
@@ -55,7 +55,7 @@ typedef struct transfer_context_s {
  * @param url Remote URL for credential handling (may be NULL)
  * @return Transfer context or NULL on allocation failure
  */
-transfer_context_t *transfer_context_create(output_ctx_t *output, const char *url);
+transfer_context_t *transfer_context_create(output_t *output, const char *url);
 
 /**
  * Free transfer context

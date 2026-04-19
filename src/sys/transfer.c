@@ -33,7 +33,7 @@ static void finalize_progress(transfer_context_t *ctx, const char *completion) {
 /**
  * Create transfer context
  */
-transfer_context_t *transfer_context_create(output_ctx_t *output, const char *url) {
+transfer_context_t *transfer_context_create(output_t *output, const char *url) {
     transfer_context_t *ctx = calloc(1, sizeof(transfer_context_t));
     if (!ctx) {
         return NULL;

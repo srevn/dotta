@@ -105,7 +105,7 @@ static error_t *fetch_profiles(
     const char *remote_name,
     char **profiles,
     size_t count,
-    output_ctx_t *out,
+    output_t *out,
     transfer_context_t *xfer,
     size_t *fetched_count,
     string_array_t *fetched_profiles
@@ -182,7 +182,7 @@ static error_t *fetch_profiles(
 static error_t *fetch_all_profiles(
     git_repository *repo,
     const char *remote_name,
-    output_ctx_t *out,
+    output_t *out,
     transfer_context_t *xfer,
     string_array_t **fetched_profiles
 ) {
@@ -248,7 +248,7 @@ static error_t *fetch_all_profiles(
 static error_t *initialize_state(
     git_repository *repo,
     const string_array_t *profiles,
-    output_ctx_t *out
+    output_t *out
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(profiles);
@@ -321,7 +321,7 @@ error_t *cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
     CHECK_NULL(opts->url);
 
     const config_t *config = ctx->config;
-    output_ctx_t *out = ctx->out;
+    output_t *out = ctx->out;
 
     error_t *err = NULL;
     error_t *final_err = NULL;
@@ -767,7 +767,7 @@ static const args_opt_t clone_opts[] = {
      * must write `-p a -p b` (not `-p a b`). Peer-list order is the
      * help display order: "-p, --profile, --profiles". */
     ARGS_APPEND(
-        "p profile profiles", "<name>",
+        "p profile",          "<name>",
         cmd_clone_options_t,  profiles,        profile_count,
         "Fetch specific profile(s) (repeatable)"
     ),
@@ -812,25 +812,16 @@ const args_command_t spec_clone = {
     .summary     = "Clone an existing dotta repository",
     .usage       = "%s clone [options] <url> [path]",
     .description =
-        "Fetch a dotta repository and auto-detect the profiles that\n"
-        "apply to this system. Fetched profiles are enabled immediately\n"
-        "and recorded in state.\n",
-    .notes       =
         "Profile Selection:\n"
         "  (default)       Auto-detect profiles for this system\n"
         "                  (global, <os>, hosts/<hostname> and variants).\n"
         "  --all           Hub mode: fetch every remote profile.\n"
-        "  -p <name>       Fetch specific profiles explicitly (repeatable).\n"
-        "\n"
+        "  -p <name>       Fetch specific profiles explicitly (repeatable).\n",
+    .notes       =
         "Profile Behavior:\n"
         "  Fetched profiles are enabled automatically. Run '%s profile\n"
         "  list' to inspect enabled vs available profiles, and '%s\n"
-        "  profile enable <name>' to add one later.\n"
-        "\n"
-        "Bootstrap Integration:\n"
-        "  After cloning, dotta checks fetched profiles for a .bootstrap\n"
-        "  script. The default prompts before executing. --bootstrap runs\n"
-        "  them without confirmation; --no-bootstrap skips the check.\n",
+        "  profile enable <name>' to add one later.\n",
     .examples    =
         "  %s clone git@github.com:user/dotfiles.git    # Auto-detect profiles\n"
         "  %s clone <url> --all                         # Hub mode\n"

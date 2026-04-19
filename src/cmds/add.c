@@ -59,7 +59,7 @@ static bool is_excluded(
     const char *path,
     bool is_directory,
     ignore_context_t *ignore_ctx,
-    output_ctx_t *out
+    output_t *out
 ) {
     if (!path) return false;
 
@@ -98,7 +98,7 @@ static error_t *collect_files_from_dir(
     const char *dir_path,
     const cmd_add_options_t *opts,
     ignore_context_t *ignore_ctx,
-    output_ctx_t *out,
+    output_t *out,
     string_array_t **out_files
 ) {
     CHECK_NULL(dir_path);
@@ -227,7 +227,7 @@ static error_t *add_file_to_worktree(
     keymgr *keymgr,
     const config_t *config,
     metadata_t *metadata,
-    output_ctx_t *out
+    output_t *out
 ) {
     CHECK_NULL(wt);
     CHECK_NULL(filesystem_path);
@@ -440,7 +440,7 @@ static error_t *add_file_to_worktree(
 static error_t *init_profile_dottaignore(
     worktree_handle_t *wt,
     const cmd_add_options_t *opts,
-    output_ctx_t *out
+    output_t *out
 ) {
     CHECK_NULL(wt);
     CHECK_NULL(opts);
@@ -889,7 +889,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
 
     git_repository *repo = ctx->repo;
     const config_t *config = ctx->config;
-    output_ctx_t *out = ctx->out;
+    output_t *out = ctx->out;
 
     error_t *err = validate_options(opts);
     if (err) return err;
@@ -1756,7 +1756,7 @@ static const args_opt_t add_opts[] = {
     ARGS_STRING(
         "prefix",             "<path>",
         cmd_add_options_t,    custom_prefix,
-        "Storage root for custom/ paths (e.g. /mnt/jails/web)"
+        "Declare a relocatable storage root"
     ),
     ARGS_STRING(
         "m message",          "<msg>",
@@ -1788,7 +1788,7 @@ static const args_opt_t add_opts[] = {
         "no-encrypt",
         cmd_add_options_t,    encrypt_mode,
         ADD_ENCRYPT_FORCE_OFF,
-        "Bypass auto-encrypt patterns"
+        "Bypass auto-encryption patterns"
     ),
     /* <profile> <file|dir>... — order-dependent, first is profile.
      * Mirrors clone's raw-bucket-plus-post_parse approach. */
@@ -1806,30 +1806,22 @@ const args_command_t spec_add = {
         "%s add [options] <profile> <file|dir>...\n"
         "   or: %s add [options] --profile <name> <file|dir>...",
     .description =
-        "Import files or directories into a profile branch. Storage\n"
-        "prefix is inferred from the source path (home/, root/, or\n"
-        "custom/ with --prefix); metadata (mode, owner) is captured.\n",
+        "Import files or directories into a profile branch. The storage\n"
+        "prefix derives from the source path — home/ under $HOME, root/\n"
+        "otherwise — unless --prefix declares a relocatable root, in\n"
+        "which case files are stored as custom/<path-relative-to-root>.\n"
+        "Metadata (mode, owner) is captured outside HOME.\n",
     .notes       =
         "Exclude Patterns:\n"
         "  Glob syntax with *, ?, [abc]. Flag is repeatable.\n"
         "    --exclude '*.log'                    # Skip .log files\n"
         "    --exclude '.git/*'                   # Skip .git directory\n"
-        "    --exclude '*.log' --exclude '*.tmp'  # Multiple patterns\n"
-        "\n"
-        "Custom Prefix:\n"
-        "  --prefix <path> stores files under 'custom/<path>' so sources\n"
-        "  outside of $HOME and / can be versioned (e.g. /mnt/jails/web).\n"
-        "\n"
-        "Encryption:\n"
-        "    1. Explicit --encrypt (forces encryption for given files)\n"
-        "    2. Auto-encrypt patterns in config (e.g. .ssh/id_*, *.key)\n"
-        "    3. --no-encrypt (disables auto-encryption for given files)\n",
+        "    --exclude '*.log' --exclude '*.tmp'  # Multiple patterns\n",
     .examples    =
-        "  %s add global ~/.bashrc                      # Basic add\n"
-        "  %s add darwin ~/.config/nvim                 # Directory\n"
-        "  %s add global ~/.ssh/config -e '*.pub'       # With exclude\n"
-        "  %s add global ~/.ssh/id_rsa --encrypt        # Force encrypt\n"
-        "  %s add global ~/.aws/credentials --no-encrypt  # Bypass patterns\n"
+        "  %s add global ~/.bashrc                   # Basic add\n"
+        "  %s add darwin ~/.config/nvim              # Directory\n"
+        "  %s add global ~/.ssh/config -e '*.pub'    # With exclude\n"
+        "  %s add global ~/.ssh/id_rsa --encrypt     # Force encryption\n"
         "  %s add web /mnt/jails/web/nginx.conf --prefix /mnt/jails/web\n",
     .epilogue    =
         "See also:\n"

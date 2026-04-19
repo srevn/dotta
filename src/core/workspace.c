@@ -368,7 +368,9 @@ static void workspace_record_anchor_update(
     const struct stat *st
 ) {
     if (ws->anchor_update_count >= ws->anchor_update_capacity) {
-        size_t new_cap = ws->anchor_update_capacity ? ws->anchor_update_capacity * 2 : 16;
+        size_t new_cap = ws->anchor_update_capacity
+                       ? ws->anchor_update_capacity * 2 : 16;
+
         anchor_update_t *new_arr = realloc(
             ws->anchor_updates,
             new_cap * sizeof(anchor_update_t)

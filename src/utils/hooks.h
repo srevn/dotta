@@ -67,7 +67,7 @@ typedef struct {
  */
 error_t *hook_fire_pre(
     const config_t *config,
-    output_ctx_t *out,
+    output_t *out,
     const char *repo_dir,
     const hook_invocation_t *inv
 );
@@ -84,7 +84,7 @@ error_t *hook_fire_pre(
  */
 void hook_fire_post(
     const config_t *config,
-    output_ctx_t *out,
+    output_t *out,
     const char *repo_dir,
     const hook_invocation_t *inv
 );

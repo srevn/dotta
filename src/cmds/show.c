@@ -67,7 +67,7 @@ static error_t *print_blob_content(
     keymgr *keymgr,
     git_filemode_t filemode,
     bool raw,
-    output_ctx_t *out
+    output_t *out
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(blob_oid);
@@ -205,7 +205,7 @@ static error_t *show_file(
     const char *commit_ref,
     bool raw,
     const config_t *config,
-    output_ctx_t *out
+    output_t *out
 ) {
     error_t *err = NULL;
     git_tree *tree = NULL;
@@ -351,7 +351,7 @@ static int print_diff_line_cb(
     const git_diff_line *line,
     void *payload
 ) {
-    output_ctx_t *out = (output_ctx_t *) payload;
+    output_t *out = (output_t *) payload;
     (void) delta;
     (void) hunk;
 
@@ -405,7 +405,7 @@ static error_t *show_commit(
     const char *commit_ref,
     const char *profile,
     bool raw,
-    output_ctx_t *out
+    output_t *out
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(commit_ref);
@@ -568,7 +568,7 @@ error_t *cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
     git_repository *repo = ctx->repo;
     const state_t *state = ctx->state;  /* Borrowed from dispatcher; do not free */
     const config_t *config = ctx->config;
-    output_ctx_t *out = ctx->out;
+    output_t *out = ctx->out;
 
     error_t *err = NULL;
     string_array_t *profiles = NULL;

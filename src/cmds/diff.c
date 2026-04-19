@@ -151,7 +151,7 @@ static error_t *show_file_diff_from_workspace(
     git_repository *repo,
     diff_direction_t direction,
     const cmd_diff_options_t *opts,
-    output_ctx_t *out
+    output_t *out
 ) {
     CHECK_NULL(item);
     CHECK_NULL(entry);
@@ -285,7 +285,7 @@ static error_t *present_diffs_for_direction(
     diff_direction_t direction,
     const scope_t *scope,
     const cmd_diff_options_t *opts,
-    output_ctx_t *out,
+    output_t *out,
     size_t *diff_count
 ) {
     CHECK_NULL(manifest);
@@ -451,7 +451,7 @@ static error_t *resolve_commit_in_profiles(
  * Print commit header with metadata
  */
 static void print_commit_header(
-    output_ctx_t *out,
+    output_t *out,
     const git_commit *commit,
     const git_oid *commit_oid,
     const char *profile
@@ -516,7 +516,7 @@ static void print_commit_header(
  * Print diff statistics
  */
 static error_t *print_diff_stats(
-    output_ctx_t *out,
+    output_t *out,
     git_diff *diff
 ) {
     CHECK_NULL(out);
@@ -568,7 +568,7 @@ static int print_diff_line_cb(
     const git_diff_line *line,
     void *payload
 ) {
-    output_ctx_t *out = (output_ctx_t *) payload;
+    output_t *out = (output_t *) payload;
     (void) delta;
     (void) hunk;
 
@@ -638,7 +638,7 @@ static error_t *compare_manifest_to_filesystem(
     const path_filter_t *file_filter,
     const cmd_diff_options_t *opts,
     const config_t *config,
-    output_ctx_t *out,
+    output_t *out,
     size_t *diff_count
 ) {
     CHECK_NULL(repo);
@@ -839,7 +839,7 @@ cleanup:
 static size_t validate_filter_paths(
     const path_filter_t *file_filter,
     const manifest_t *manifest,
-    output_ctx_t *out
+    output_t *out
 ) {
     if (!file_filter || !manifest) return 0;
 
@@ -930,7 +930,7 @@ static error_t *diff_commit_to_workspace(
     const scope_t *scope,
     const cmd_diff_options_t *opts,
     const config_t *config,
-    output_ctx_t *out
+    output_t *out
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(commit_ref);
@@ -1137,7 +1137,7 @@ static error_t *diff_commits(
     const char *commit2_ref,
     const scope_t *scope,
     const cmd_diff_options_t *opts,
-    output_ctx_t *out
+    output_t *out
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(commit1_ref);
@@ -1300,7 +1300,7 @@ static error_t *diff_workspace(
     const scope_t *scope,
     const config_t *config,
     const cmd_diff_options_t *opts,
-    output_ctx_t *out
+    output_t *out
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(scope);
@@ -1440,7 +1440,7 @@ error_t *cmd_diff(const dotta_ctx_t *ctx, const cmd_diff_options_t *opts) {
 
     git_repository *repo = ctx->repo;
     const config_t *config = ctx->config;
-    output_ctx_t *out = ctx->out;
+    output_t *out = ctx->out;
 
     error_t *err = NULL;
     state_t *state = ctx->state;  /* Borrowed from dispatcher; do not free */
@@ -1627,32 +1627,20 @@ const args_command_t spec_diff = {
     .summary     = "Show differences between profiles and filesystem",
     .usage       = "%s diff [options] [<commit>] [<commit>] [<file>...]",
     .description =
-        "Diff profile content against other commits or the filesystem.\n"
-        "Mode is inferred from the number of commit-shaped positionals;\n"
-        "files further restrict the output.\n",
-    .notes       =
         "Modes:\n"
-        "  No commit             Workspace diff (profile <-> filesystem).\n"
-        "  1 commit              Commit -> workspace.\n"
-        "  2 commits             Commit -> commit (must share a profile).\n"
-        "  [<file>...]           Restrict any mode to the named files.\n"
-        "\n"
-        "Direction (workspace mode only):\n"
-        "  --upstream            Preview apply. '-' is filesystem, '+' is\n"
-        "                        the repo state that apply would write.\n"
-        "  --downstream          Preview update. '-' is repo, '+' is the\n"
-        "                        local state that update would commit.\n"
-        "  -a, --all             Both directions in labelled sections.\n",
+        "  (no args)             Workspace diff (profile <-> filesystem).\n"
+        "  <commit>              Commit -> workspace.\n"
+        "  <commit> <commit>     Commit -> commit (must share a profile).\n"
+        "  [<file>...]           Restrict any mode to the named files.\n",
     .examples    =
-        "  %s diff                             # Preview apply (default)\n"
-        "  %s diff --downstream                # Preview update\n"
-        "  %s diff --all                       # Both directions\n"
-        "  %s diff home/.bashrc                # Workspace, single file\n"
-        "  %s diff HEAD~1                      # Commit -> workspace\n"
-        "  %s diff HEAD~2 HEAD                 # Commit -> commit\n"
-        "  %s diff HEAD~1 home/.bashrc         # File at commit vs workspace\n"
-        "  %s diff a4f2c8e b3e1f9a home/.bashrc  # File between two commits\n"
-        "  %s diff --name-only                 # Only changed file names\n",
+        "  %s diff                          # Preview apply (default)\n"
+        "  %s diff --name-only              # Only changed file names\n"
+        "  %s diff --downstream             # Preview update\n"
+        "  %s diff --all                    # Both directions\n"
+        "  %s diff home/.bashrc             # Workspace, single file\n"
+        "  %s diff b3e1f9a                  # Commit -> workspace\n"
+        "  %s diff HEAD~2 HEAD              # Commit -> commit\n"
+        "  %s diff HEAD~1 home/.bashrc      # File at commit vs workspace\n",
     .epilogue    =
         "See also:\n"
         "  %s list <profile> <file>   # Find commit hashes for a file\n"

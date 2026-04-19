@@ -55,7 +55,7 @@ static error_t *count_encrypted_files(
  */
 static error_t *cmd_key_set(
     const config_t *config,
-    output_ctx_t *out
+    output_t *out
 ) {
     /* Check if encryption is enabled */
     if (!config->encryption_enabled) {
@@ -146,7 +146,7 @@ static error_t *cmd_key_set(
  */
 static error_t *cmd_key_clear(
     const config_t *config,
-    output_ctx_t *out
+    output_t *out
 ) {
     /* Check if encryption is enabled */
     if (!config->encryption_enabled) {
@@ -197,7 +197,7 @@ static error_t *cmd_key_clear(
 static error_t *cmd_key_status(
     state_t *state,
     const config_t *config,
-    output_ctx_t *out
+    output_t *out
 ) {
     /* Display encryption status */
     output_section(out, OUTPUT_NORMAL, "Encryption Configuration");
@@ -378,7 +378,7 @@ error_t *cmd_key(const dotta_ctx_t *ctx, const cmd_key_options_t *opts) {
     CHECK_NULL(opts);
 
     const config_t *config = ctx->config;
-    output_ctx_t *out = ctx->out;
+    output_t *out = ctx->out;
 
     /* CLI flags override config */
     if (opts->verbose) {
@@ -462,7 +462,7 @@ static const args_opt_t key_opts[] = {
     ARGS_FLAG(
         "v verbose",
         cmd_key_options_t, verbose,
-        "Verbose output (status: show auto-encrypt patterns)"
+        "Verbose output"
     ),
     ARGS_POSITIONAL_RAW(
         cmd_key_options_t, positional_args, positional_count,
@@ -476,51 +476,18 @@ const args_command_t spec_key = {
     .summary     = "Manage encryption keys and passphrases",
     .usage       = "%s key [options] <set|clear|status>",
     .description =
-        "Manage the encryption passphrase that derives the per-file keys\n"
-        "used for at-rest encryption in profile branches. A single page\n"
-        "documents all three subcommands.\n"
-        "\n"
         "Subcommands:\n"
         "  set       Cache the passphrase for the current session.\n"
         "  clear     Clear the cached key from memory and disk.\n"
         "  status    Show encryption config and cache state.\n",
     .notes       =
-        "Key Management:\n"
-        "  The passphrase derives a master key via KDF. The derived key\n"
-        "  is held in memory and mirrored to disk for the configured\n"
-        "  session timeout (default 1 hour) so repeated commands do not\n"
-        "  re-prompt.\n"
-        "\n"
-        "Subcommand Details:\n"
-        "  %s key set\n"
-        "    Prompt for the passphrase and cache the derived key. The\n"
-        "    cache expires after session_timeout. Use before a batch of\n"
-        "    encrypt/decrypt-heavy commands.\n"
-        "\n"
-        "  %s key clear\n"
-        "    Zeroize and delete the cached key from memory and disk. The\n"
-        "    next encryption/decryption operation will prompt.\n"
-        "\n"
-        "  %s key status\n"
-        "    Report encryption.enabled, KDF opslimit, session_timeout,\n"
-        "    whether a key is cached, time-to-expiry, count of encrypted\n"
-        "    files in current profiles, and (with -v) auto-encrypt\n"
-        "    patterns from config.\n"
-        "\n"
         "Configuration:\n"
-        "  Set in the [encryption] section of config.toml:\n"
-        "    [encryption]\n"
-        "    enabled         = true\n"
-        "    session_timeout = 3600      # 1 hour\n"
-        "    opslimit        = 10000     # KDF CPU cost\n"
-        "\n"
-        "Security Notes:\n"
-        "  - The passphrase is never stored on disk.\n"
-        "  - The derived key is cached on disk at ~/.cache/dotta/session,\n"
-        "    machine-bound, and expires per session_timeout.\n"
-        "  - Keys are zeroized on timeout and on 'key clear'.\n"
-        "  - A forgotten passphrase cannot be recovered; encrypted files\n"
-        "    become unrecoverable.\n",
+        "  [encryption]\n"
+        "  enabled          = true\n"
+        "  session_timeout  = 3600      # 1 hour\n"
+        "  opslimit         = 10000     # KDF CPU cost\n"
+        "  memlimit         = 64        # Memory hardness cost"
+        "\n",
     .examples    =
         "  %s key set               # Cache passphrase for the session\n"
         "  %s key status            # Show cache state and config\n"

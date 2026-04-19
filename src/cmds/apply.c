@@ -1175,13 +1175,19 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         output_print(out, OUTPUT_VERBOSE, "\nSkipping orphan cleanup (file filter active)\n");
     }
 
-    /* Count pending profile reassignments within operation scope
+    /* Count pending profile reassignments and external-drift repairs within
+     * operation scope.
      *
      * Profile reassignment (old_profile set in state) is state bookkeeping,
      * not deployment: no bytes need to move to disk since content may be
      * identical. needs_deployment() correctly returns false for these, so
      * they never enter deploy_manifest. But the old_profile flag must still
      * be cleared to prevent the workspace from reporting stale divergence.
+     *
+     * DIVERGENCE_STALE is tagged inside analyze_file_divergence from the
+     * persistent anchor.blob_oid vs manifest.blob_oid comparison — a
+     * cross-invocation signal that survives status→apply sequences and
+     * reports correctly even when reconcile had nothing new to repair.
      *
      * Counted before the early-exit check to prevent the infinite dirty-status
      * loop: status reports DIRTY (profile_changed), but needs_deployment()
@@ -1194,19 +1200,27 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      *   3. Exclusion filter (--exclude): Respect explicit exclusions
      */
     size_t acknowledged_count = 0;
+    size_t stale_count = 0;
     size_t all_count = 0;
     const workspace_item_t *all_items = workspace_get_all_diverged(ws, &all_count);
 
     for (size_t i = 0; i < all_count; i++) {
-        if (!all_items[i].profile_changed) {
-            continue;
-        }
-
         /* Coherent Scope: same filters as deployment pipeline */
         if (!scope_accepts_entry(scope, all_items[i].profile, all_items[i].storage_path)) {
             continue;
         }
-        acknowledged_count++;
+        if (all_items[i].profile_changed) acknowledged_count++;
+        if (all_items[i].divergence & DIVERGENCE_STALE) stale_count++;
+    }
+
+    /* Drift signal: external Git changes repaired by workspace_load's
+     * reconcile, still visible in the persistent anchor/manifest.blob_oid
+     * comparison. Released files are covered by the orphan-prune summary below. */
+    if (stale_count > 0) {
+        output_info(
+            out, OUTPUT_NORMAL, "Synchronized %zu file%s from external Git changes",
+            stale_count, stale_count == 1 ? "" : "s"
+        );
     }
 
     /* Check if there's anything to do */

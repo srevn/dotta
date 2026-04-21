@@ -113,11 +113,12 @@ TARGET := $(BIN_DIR)/dotta
 .PHONY: all
 all: $(TARGET)
 
-# Create directories
-$(BUILD_DIR) $(BIN_DIR):
-	@mkdir -p $@
+# Build subdirectories
+BUILD_LAYER_DIRS := $(addprefix $(BUILD_DIR)/,base sys infra crypto core cmds utils)
+BUILD_SUBDIRS := $(BUILD_LAYER_DIRS) $(BUILD_DIR)/lib $(BUILD_DIR)/completions
 
-$(BUILD_DIR)/base $(BUILD_DIR)/sys $(BUILD_DIR)/infra $(BUILD_DIR)/crypto $(BUILD_DIR)/core $(BUILD_DIR)/cmds $(BUILD_DIR)/utils $(BUILD_DIR)/lib:
+# Create directories
+$(BUILD_DIR) $(BIN_DIR) $(BUILD_SUBDIRS):
 	@mkdir -p $@
 
 # Build configuration sentinel: invalidates every .o when CFLAGS changes.
@@ -135,7 +136,7 @@ $(BUILD_CONFIG): FORCE | $(BUILD_DIR)
 	 fi
 
 # Compile source files
-$(BUILD_DIR)/%.o: $(SRC_DIR)/%.c $(BUILD_CONFIG) | $(BUILD_DIR)/base $(BUILD_DIR)/sys $(BUILD_DIR)/infra $(BUILD_DIR)/crypto $(BUILD_DIR)/core $(BUILD_DIR)/cmds $(BUILD_DIR)/utils
+$(BUILD_DIR)/%.o: $(SRC_DIR)/%.c $(BUILD_CONFIG) | $(BUILD_LAYER_DIRS)
 	@echo "CC $<"
 	@$(CC) $(CFLAGS) $(INCLUDES) $(LIBGIT2_CFLAGS) $(SQLITE3_CFLAGS) $(VERSION_FLAGS) -c $< -o $@
 
@@ -187,10 +188,10 @@ static:
 	@$(MAKE) LIBGIT2_LIBS="$(LIBGIT2_STATIC_LIBS)" $(TARGET)
 
 # Tests
-TESTS_DIR     := tests
+TESTS_DIR := tests
 TESTS_BIN_DIR := $(TESTS_DIR)/bin
-TESTS_SRC     := $(wildcard $(TESTS_DIR)/*_test.c)
-TESTS_BIN     := $(patsubst $(TESTS_DIR)/%.c,$(TESTS_BIN_DIR)/%,$(TESTS_SRC))
+TESTS_SRC := $(wildcard $(TESTS_DIR)/*_test.c)
+TESTS_BIN := $(patsubst $(TESTS_DIR)/%.c,$(TESTS_BIN_DIR)/%,$(TESTS_SRC))
 
 $(TESTS_BIN_DIR):
 	@mkdir -p $@
@@ -251,21 +252,24 @@ uninstall:
 	@echo "Note: User configurations in ~/.config/dotta were not removed"
 	@echo "To remove user configs: rm -rf ~/.config/dotta"
 
-# Fish completion directories
-COMPLETIONS_DIR := $(ETC_DIR)/completions
-COMPLETIONS_ENTRY := $(COMPLETIONS_DIR)/dotta.fish
-COMPLETIONS_GEN := $(COMPLETIONS_DIR)/dotta-completions.fish
+# Fish completion paths
+COMPLETIONS_ENTRY := $(ETC_DIR)/completions/dotta.fish
+COMPLETIONS_GEN := $(BUILD_DIR)/completions/dotta-completions.fish
 
-# Regenerate the auto-generated fish schema from the current binary
+# Generate the fish schema from the current binary
+$(COMPLETIONS_GEN): $(TARGET) | $(BUILD_DIR)/completions
+	@echo "Generating shell completions..."
+	@echo ""
+	@$(TARGET) __complete spec fish > $@.tmp
+	@mv $@.tmp $@
+
+# Convenience alias for the generated schema
 .PHONY: completions
-completions: $(TARGET)
-	@echo "GEN $(COMPLETIONS_GEN)"
-	@$(TARGET) __complete spec fish > $(COMPLETIONS_GEN).tmp
-	@mv $(COMPLETIONS_GEN).tmp $(COMPLETIONS_GEN)
+completions: $(COMPLETIONS_GEN)
 
 # Install shell completions
 .PHONY: install-completions
-install-completions:
+install-completions: $(COMPLETIONS_GEN)
 	@echo "Installing shell completions..."
 	@if [ -d "$(FISHDIR)" ] || [ ! -e "$(FISHDIR)" ]; then \
 		install -d "$(FISHDIR)" && \
@@ -291,24 +295,19 @@ uninstall-completions:
 install-all: install
 	@$(MAKE) --no-print-directory install-completions
 
+# Shared find expression for C sources and headers
+FORMAT_FIND := src include \( -name "*.c" -o -name "*.h" \)
+
 # Format code (requires uncrustify)
-# Post-processing fixes uncrustify limitations:
-#   1. Orphaned ';' after multi-line closing paren: ")\n   ;" → ");"
-#   2. Address-of '&' split from operand: ", &\n   var" → ",\n   &var"
-#   3. Separated closing parens in if/while/for: ")\n   ) {" → ")) {"
 .PHONY: format
 format:
 	@echo "Formatting code..."
-	@find src include -name "*.c" -o -name "*.h" | xargs -I{} uncrustify -c $(UNCRUSTIFY_CFG) -l C --no-backup {}
-	@echo "Post-processing uncrustify output..."
-	@find src include \( -name "*.c" -o -name "*.h" \) -exec perl -0777 -pi -e 's/\)\n\s+;/);/g' {} +
-	@find src include \( -name "*.c" -o -name "*.h" \) -exec perl -0777 -pi -e 's/,\s*&\n(\s+)(\w)/,\n$$1\&$$2/g' {} +
-	@find src include \( -name "*.c" -o -name "*.h" \) -exec perl -0777 -pi -e 's/\)\n(\s+)\) \{/\)\) \{/g' {} +
+	@find $(FORMAT_FIND) | xargs -I{} uncrustify -c $(UNCRUSTIFY_CFG) -l C --no-backup {}
 
 # Check formatting without modifying files
 .PHONY: format-check
 format-check:
-	@find src include -name "*.c" -o -name "*.h" | xargs -I{} uncrustify -c $(UNCRUSTIFY_CFG) -l C --check {} 2>&1 | grep FAIL; \
+	@find $(FORMAT_FIND) | xargs -I{} uncrustify -c $(UNCRUSTIFY_CFG) -l C --check {} 2>&1 | grep FAIL; \
 	if [ $$? -eq 0 ]; then echo "Formatting issues found. Run 'make format' to fix."; exit 1; \
 	else echo "All files formatted correctly."; fi
 

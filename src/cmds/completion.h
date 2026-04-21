@@ -21,8 +21,8 @@
  *   dotta __complete commits --limit <n>   # Limit number of commits
  *   dotta __complete spec fish             # Emit the fish completion script for
  *                                          #   the entire root registry. Used by
- *                                          #   the Makefile to regenerate the
- *                                          #   dotta-completions.fish snapshot.
+ *                                          #   the Makefile to generate
+ *                                          #   dotta-completions.fish at install time.
  */
 
 #ifndef DOTTA_CMD_COMPLETION_H

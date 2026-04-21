@@ -350,7 +350,7 @@ error_t *cmd_completion(const dotta_ctx_t *ctx, const cmd_completion_options_t *
         case COMPLETE_SPEC_FISH:
             /* Build-time emission: projects the root registry into the
              * fish-completion dialect. Stable, repo-independent, invoked
-             * by `make completions` to refresh the committed snapshot.
+             * by `make completions` to generate the schema under build/.
              * Registry is borrowed from main.c via the typed accessor
              * so the cmds/ layer never names the registry symbol. */
             args_export_completion_fish(stdout, dotta_registry(), "dotta");

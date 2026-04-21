@@ -108,7 +108,7 @@ const dotta_spec_ext_t dotta_ext_read_silent = {
  *
  * Only consumer today is `cmds/completion.c`, which projects the
  * registry into the fish-completion dialect when the build emits
- * `etc/completions/dotta-completions.fish`. Keeping the storage
+ * `build/completions/dotta-completions.fish`. Keeping the storage
  * `static` and exposing it through this accessor lets the cmds/
  * layer read the array without compile-depending on the symbol.
  */

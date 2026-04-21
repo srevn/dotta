@@ -3241,14 +3241,11 @@ error_t *state_set_file_state(
  * Single-row UPDATE on enabled_profiles. Records the profile's current
  * branch HEAD as the last-synced commit.
  *
- * Called after operations that move a profile's branch HEAD:
- * - manifest_sync_diff (after pull/merge)
- * - manifest_add_files (after commit)
- * - manifest_update_files (after commit)
- * - manifest_remove_files (after commit)
- * - manifest_enable_profile (after populating entries)
- * - manifest_populate (after clone-time population)
- * - manifest_repair_stale (after repairing entries)
+ * Direct callers:
+ * - manifest_persist_profile_head (gitops_resolve_branch_head_oid + this
+ *   function; reached by every scope-transition or post-commit path that
+ *   needs to refresh a profile's stored HEAD)
+ * - manifest_sync_diff (binds the explicit new_oid passed by sync)
  *
  * Cache discipline: this mutation patches the row cache *in place* rather
  * than invalidating it. Only the commit_oid field of the matching row

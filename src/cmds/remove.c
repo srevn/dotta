@@ -1502,8 +1502,13 @@ static error_t *delete_profile_branch(
      * This ensures proper global context when determining file removal.
      */
 
-    /* Update manifest if profile is enabled (BEFORE deleting branch) */
-
+    /* Update manifest if profile is enabled (BEFORE deleting branch).
+     *
+     * apply_scope never reads the profile being removed (it builds from
+     * the post-disable enabled set), so branch existence is not strictly
+     * required — but we preserve the pre-delete ordering so the
+     * reconcile sees a consistent world and the post-deletion upgrade
+     * loop finds the INACTIVE rows this pass stages. */
     if (profile_was_enabled) {
         output_print(
             out, OUTPUT_VERBOSE, "Disabling profile in manifest before deletion...\n"
@@ -1520,68 +1525,25 @@ static error_t *delete_profile_branch(
             goto cleanup;
         }
 
-        /* Get enabled profiles */
-        string_array_t *enabled_profiles = NULL;
-        err = state_get_profiles(state, &enabled_profiles);
-        if (err) {
-            err = error_wrap(err, "Failed to get enabled profiles");
-            goto cleanup;
-        }
-
-        /* Build list of remaining profiles (exclude opts->profile) */
-        string_array_t *remaining = string_array_new(0);
-        if (!remaining) {
-            err = ERROR(ERR_MEMORY, "Failed to allocate remaining profiles array");
-            string_array_free(enabled_profiles);
-            goto cleanup;
-        }
-
-        for (size_t i = 0; i < enabled_profiles->count; i++) {
-            const char *enabled = enabled_profiles->items[i];
-            if (strcmp(enabled, opts->profile) != 0) {
-                err = string_array_push(remaining, enabled);
-                if (err) {
-                    err = error_wrap(err, "Failed to build remaining profiles list");
-                    string_array_free(enabled_profiles);
-                    string_array_free(remaining);
-                    goto cleanup;
-                }
-            }
-        }
-
-        /* Disable profile (handles fallback logic, marks for removal)
-         * CRITICAL: This MUST happen BEFORE git_branch_delete() because
-         * manifest_disable_profile() needs to read from Git branches to
-         * detect fallbacks */
-        err = manifest_disable_profile(
-            repo,
-            state,
-            opts->profile,
-            remaining,
-            NULL  /* No stats needed for remove command */
-        );
-
-        if (err) {
-            err = error_wrap(err, "Failed to disable profile in manifest");
-            string_array_free(enabled_profiles);
-            string_array_free(remaining);
-            goto cleanup;
-        }
-
-        /* Remove from enabled_profiles in state */
+        /* Ordering rule: mutate enabled_profiles first, then reconcile manifest.
+         * state_disable_profile drops the row from enabled_profiles; apply_scope
+         * then rebuilds virtual_manifest against the remaining set (orphans
+         * without a fallback flip to STATE_INACTIVE, which the post-deletion
+         * pass below upgrades to STATE_DELETED after gitops_delete_branch). */
         err = state_disable_profile(state, opts->profile);
         if (err) {
             err = error_wrap(err, "Failed to remove profile from state");
-            string_array_free(enabled_profiles);
-            string_array_free(remaining);
+            goto cleanup;
+        }
+
+        err = manifest_apply_scope(repo, state, NULL, NULL);
+        if (err) {
+            err = error_wrap(err, "Failed to reconcile manifest after disable");
             goto cleanup;
         }
 
         /* Commit transaction */
         err = state_commit(state);
-        string_array_free(enabled_profiles);
-        string_array_free(remaining);
-
         if (err) {
             err = error_wrap(err, "Failed to save manifest updates");
             goto cleanup;
@@ -1604,15 +1566,16 @@ static error_t *delete_profile_branch(
     /* Post-deletion: upgrade STATE_INACTIVE entries to STATE_DELETED
      * (or release immediately without --delete-files)
      *
-     * After branch deletion, STATE_INACTIVE entries from manifest_disable_profile()
-     * (or from a prior profile disable) must be upgraded to STATE_DELETED.
-     * Without this, the safety module would RELEASE these files (branch gone +
-     * STATE_INACTIVE = irrecoverable), when the user's intent is to delete them.
+     * After branch deletion, STATE_INACTIVE entries left by the earlier
+     * manifest_apply_scope() call (or from a prior profile disable) must be
+     * upgraded to STATE_DELETED. Without this, the safety module would RELEASE
+     * these files (branch gone + STATE_INACTIVE = irrecoverable), when the
+     * user's intent is to delete them.
      *
      * Without --delete-files: remove state entries entirely (release from management).
      *
-     * This is a SEPARATE transaction from the earlier manifest_disable_profile
-     * transaction — the branch must be deleted first.
+     * This is a SEPARATE transaction from the earlier scope reconciliation —
+     * the branch must be deleted first.
      */
     error_t *delete_err = state_begin(state);
     if (!delete_err) {

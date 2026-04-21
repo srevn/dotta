@@ -338,16 +338,19 @@ static error_t *interactive_save_profile_order(
         );
     }
 
-    /* Update manifest to reflect new precedence order
+    /* Reconcile manifest against the new precedence order.
      *
-     * This synchronizes the virtual_manifest table with the new profile order.
-     * Reassigned files will be updated (deployed_at preserved), while
-     * files whose assignment remains unchanged preserve their existing entry. */
-    err = manifest_reorder_profiles(repo, deploy_state, &profiles);
+     * state_set_profiles preserves commit_oid for profiles that remain
+     * enabled, so enabled_profiles is already fully authoritative — no
+     * persist_profile_head loop needed for reorder. apply_scope's orphan
+     * pass is a no-op here because the set membership is unchanged; it
+     * just re-UPSERTs entries whose precedence owner shifted (deployed_at
+     * preserved by SQL, old_profile auto-captured when profile changes). */
+    err = manifest_apply_scope(repo, deploy_state, NULL, NULL);
     if (err) {
         state_rollback(deploy_state);
         return error_wrap(
-            err, "Failed to update manifest with new precedence"
+            err, "Failed to reconcile manifest with new precedence"
         );
     }
 

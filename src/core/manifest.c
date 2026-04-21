@@ -35,15 +35,17 @@
  * stored commit_oid in enabled_profiles.
  *
  * Composes gitops_resolve_branch_head_oid + state_set_profile_commit_oid.
- * Used by every manifest operation that must refresh a profile's stored
- * HEAD after the branch has moved (add/remove/update) or after the profile
- * has entered scope (enable/rebuild/repair_stale/reorder).
+ * Callers pair this with state_enable_profile / state_set_profiles to
+ * complete the authoritative-scope contract before manifest_apply_scope:
+ * state_enable_profile writes the zero-OID sentinel; this function
+ * replaces it with the real branch HEAD. apply_scope then trusts the
+ * commit_oid column and does not walk refs on its own.
  *
  * Sites that bypass this helper:
  *   - manifest_detect_stale_profiles: read-only HEAD comparison.
  *   - manifest_sync_diff: caller passes the new HEAD explicitly as new_oid.
  */
-static error_t *manifest_persist_profile_head(
+error_t *manifest_persist_profile_head(
     git_repository *repo,
     state_t *state,
     const char *profile
@@ -198,638 +200,275 @@ static error_t *sync_entry_to_state(
 }
 
 /**
- * Sync entire profile to manifest (bulk population)
+ * Reconcile virtual_manifest to the current enabled-profile scope
  *
- * Implementation follows the precedence oracle pattern:
- *   1. Build manifest from all enabled profiles (precedence resolution)
- *   2. For each file owned by this profile (highest precedence):
- *      - Compute content hash
- *      - Extract metadata
- *      - Sync to state
+ * The enabled set is read from state; the caller is responsible for
+ * making enabled_profiles authoritative before the call (see header
+ * docstring for the ordering rule).
+ *
+ * Algorithm:
+ *   1. Snapshot current virtual_manifest (arena-backed, used by step 5).
+ *   2. Build fresh precedence manifest from state-authoritative scope.
+ *   3. Load merged metadata (missing metadata tolerated — sync_entry_to_state
+ *      falls back to Git-derived mode for old profiles without metadata.json).
+ *   4. UPSERT every entry in the new manifest. The SQL UPSERT preserves
+ *      the deployment anchor on UPDATE, auto-captures old_profile when
+ *      the profile column changes, and unconditionally writes
+ *      state=STATE_ACTIVE (which reactivates any STATE_INACTIVE row
+ *      whose path re-entered scope).
+ *   5. Orphan pass. For every pre-reconcile row:
+ *        - In new manifest: owner-change stats only (row already updated).
+ *        - Not in new manifest: STATE_ACTIVE → STATE_INACTIVE.
+ *          STATE_INACTIVE / STATE_DELETED / STATE_RELEASED preserved.
+ *   6. Rebuild tracked_directories (mark-ACTIVE-inactive then reactivate).
  */
-error_t *manifest_enable_profile(
+error_t *manifest_apply_scope(
     git_repository *repo,
     state_t *state,
-    const char *profile,
-    const string_array_t *enabled_profiles,
-    manifest_enable_stats_t *out_stats
+    const string_array_t *stats_filter,
+    manifest_scope_stats_t *out_stats
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(state);
-    CHECK_NULL(profile);
-    CHECK_NULL(enabled_profiles);
 
-    /* Initialize output stats (access_errors is incremented inline, must start at 0) */
-    if (out_stats) {
-        memset(out_stats, 0, sizeof(*out_stats));
+    /* Parallel-NULL contract: either both stats arguments are NULL
+     * (caller doesn't want stats) or both are non-NULL (caller owns a
+     * zero-fillable array of length stats_filter->count). Mixing is a
+     * caller bug; fail loudly rather than writing into unallocated
+     * memory or silently skipping requested stats. */
+    if ((stats_filter == NULL) != (out_stats == NULL)) {
+        return ERROR(
+            ERR_INVALID_ARG,
+            "manifest_apply_scope: stats_filter and out_stats must both be "
+            "NULL or both non-NULL"
+        );
     }
 
     error_t *err = NULL;
-    manifest_t *manifest = NULL;
+    string_array_t *enabled = NULL;
+    manifest_t *new_manifest = NULL;
     metadata_t *metadata = NULL;
+    state_file_entry_t *old_entries = NULL;
+    size_t old_count = 0;
+    hashmap_t *stats_map = NULL;
 
     arena_t *arena = arena_create(64 * 1024);
-    if (!arena) return ERROR(ERR_MEMORY, "Failed to create manifest arena");
+    if (!arena) return ERROR(ERR_MEMORY, "Failed to create apply_scope arena");
 
-    /* 1. Build FRESH manifest from Git (post-enable state)
+    /* Step 1: Read the authoritative scope from state.
      *
-     * Custom prefix resolution is handled internally by manifest_build.
-     * The caller (cmds/profile.c) already stored the custom prefix via
-     * state_enable_profile() before calling us, so the prefix is visible
-     * in state when the oracle loads it. */
-    err = manifest_build(repo, enabled_profiles, state, arena, &manifest);
+     * Precondition: the caller has already updated enabled_profiles
+     * to reflect the target set AND populated commit_oid for any
+     * newly-introduced profiles (via manifest_persist_profile_head).
+     * apply_scope does not walk branch HEADs — it trusts the table. */
+    err = state_get_profiles(state, &enabled);
     if (err) {
-        arena_destroy(arena);
-        return error_wrap(err, "Failed to build manifest for profile sync");
+        err = error_wrap(err, "Failed to read enabled profiles for scope reconcile");
+        goto cleanup;
     }
 
-    /* 3. Load merged metadata from all profiles */
-    err = metadata_load_from_profiles(repo, enabled_profiles, &metadata);
+    /* Step 2: Build fresh precedence manifest.
+     *
+     * manifest_build consults state_peek_profile_prefix only for profiles
+     * in the passed list — disabled profiles are never considered, so the
+     * ordering rule ("update state first, then reconcile") is enforced by
+     * the oracle's own read scope. */
+    err = manifest_build(repo, enabled, state, arena, &new_manifest);
     if (err) {
-        /* Metadata may not exist for old profiles - continue with NULL */
-        if (err->code != ERR_NOT_FOUND) {
-            goto cleanup;
-        }
+        err = error_wrap(err, "Failed to build manifest for scope reconcile");
+        goto cleanup;
+    }
+
+    /* Step 3: Load merged metadata. ERR_NOT_FOUND is tolerated — old
+     * profiles may lack metadata.json, and sync_entry_to_state reads
+     * the merged view NULL-gracefully (falls back to Git-derived mode). */
+    err = metadata_load_from_profiles(repo, enabled, &metadata);
+    if (err) {
+        if (err->code != ERR_NOT_FOUND) goto cleanup;
         error_free(err);
         err = NULL;
     }
 
-    /* 4. Sync entries owned by this profile (highest precedence)
+    /* Step 4: Snapshot the current virtual_manifest rows (all states).
      *
-     * The row is inserted with deployed_at = 0 (never confirmed). lstat drives
-     * the user-visible stats only — it is not a confirmation event. The
-     * anchor (blob_oid, stat, deployed_at) advances later on the paths that
-     * actually prove disk matches the profile blob: workspace slow-path
-     * CMP_EQUAL (seeds the stat witness) and apply's deploy/adopt path
-     * (mints the lifecycle timestamp). Treating lstat-sees-a-file as a
-     * deployment event would write an incoherent row (deployed_at > 0 with
-     * anchor.blob_oid == 0) and violates the anchor invariants in state.h.
-     *
-     * For UPDATE (existing entries): SQL UPSERT preserves the existing
-     * anchor columns regardless of the values passed here. */
+     * Captured BEFORE step 5's UPSERTs so the orphan pass sees pre-
+     * reconcile state — "was this path previously managed?" is a
+     * function of the snapshot, not of the in-flight UPDATE that step
+     * 5 may have just committed. Arena-allocated: no explicit free. */
+    err = state_get_all_files(state, arena, &old_entries, &old_count);
+    if (err) {
+        err = error_wrap(err, "Failed to snapshot current manifest");
+        goto cleanup;
+    }
 
-    /* Track counts for user feedback */
-    size_t total_files = 0;
-    size_t already_deployed = 0;
-    size_t needs_deployment = 0;
-
-    for (size_t i = 0; i < manifest->count; i++) {
-        file_entry_t *entry = &manifest->entries[i];
-
-        /* Only process files owned by this profile */
-        if (strcmp(entry->profile, profile) != 0) {
-            continue;
+    /* Stats attribution index. Maps profile name → (array index + 1).
+     * The +1 offset distinguishes "found at index 0" from "not found"
+     * in hashmap_get (which returns NULL when a key is absent). Keys
+     * are borrowed from stats_filter; the caller keeps it alive for
+     * the duration of this call. */
+    if (stats_filter) {
+        size_t cap = stats_filter->count > 0 ? stats_filter->count * 2 : 16;
+        stats_map = hashmap_borrow(cap);
+        if (!stats_map) {
+            err = ERROR(ERR_MEMORY, "Failed to create stats attribution map");
+            goto cleanup;
         }
+        for (size_t i = 0; i < stats_filter->count; i++) {
+            memset(&out_stats[i], 0, sizeof(out_stats[i]));
+            out_stats[i].profile = stats_filter->items[i];
+            err = hashmap_set(
+                stats_map, stats_filter->items[i],
+                (void *) (uintptr_t) (i + 1)
+            );
+            if (err) {
+                err = error_wrap(err, "Failed to populate stats attribution map");
+                goto cleanup;
+            }
+        }
+    }
 
-        total_files++;
+    /* Step 5: Sync every entry in the new manifest.
+     *
+     * UPSERT semantics (see state.c::sql_insert):
+     *   - New path: INSERT with state=ACTIVE, deployed_at=0, anchor unset.
+     *   - Existing path: UPDATE VWD-cache columns (storage_path, profile,
+     *     blob_oid, type, mode, owner, group, encrypted, state), preserve
+     *     the deployment anchor (deployed_blob_oid, deployed_at, stat_*).
+     *     The CASE on old_profile auto-captures the prior profile when
+     *     the profile column changes, and preserves it otherwise.
+     *   - state column overwritten with STATE_ACTIVE unconditionally,
+     *     which reactivates STATE_INACTIVE rows whose path re-entered
+     *     scope (typical on profile re-enable).
+     *
+     * Gain-side stats are attributed here: files_claimed counts every
+     * entry the filtered profile owns; lstat drives the user-visible
+     * "already deployed vs needs deployment" fan-out. lstat is NOT a
+     * confirmation event — the anchor remains unadvanced here. */
+    for (size_t i = 0; i < new_manifest->count; i++) {
+        file_entry_t *entry = &new_manifest->entries[i];
 
-        /* lstat populates user-visible stats; does NOT influence deployed_at. */
-        struct stat st;
+        if (stats_map) {
+            void *p = hashmap_get(stats_map, entry->profile);
+            if (p) {
+                size_t idx = (size_t) (uintptr_t) p - 1;
+                out_stats[idx].files_claimed++;
 
-        /* New entry - check if file exists on filesystem */
-        if (lstat(entry->filesystem_path, &st) == 0) {
-            /* File present on disk (match vs profile blob pending verification
-             * by status/apply via workspace divergence analysis). */
-            already_deployed++;
-        } else if (errno == ENOENT) {
-            /* File absent — apply will deploy from the profile blob. */
-            needs_deployment++;
-        } else {
-            /* Inaccessible (permission denied, I/O error, etc.): degrade
-             * gracefully rather than abort. The row is still managed; the
-             * failure surfaces to the user via access_errors, and runtime
-             * divergence analysis re-evaluates on the next status/apply. */
-            needs_deployment++;
-
-            /* Track access errors for user feedback */
-            if (out_stats) {
-                out_stats->access_errors++;
+                struct stat st;
+                if (lstat(entry->filesystem_path, &st) == 0) {
+                    /* File present on disk; match vs profile blob is
+                     * unverified — workspace divergence analysis
+                     * (status/diff/apply) decides. */
+                    out_stats[idx].files_on_disk++;
+                } else if (errno == ENOENT) {
+                    out_stats[idx].files_absent++;
+                } else {
+                    /* Inaccessible (permission denied, I/O error, …).
+                     * Degrade gracefully: the row is still managed,
+                     * and the user sees the access error count. Count
+                     * as absent so files_claimed stays the sum of the
+                     * on-disk and absent fan-outs. */
+                    out_stats[idx].files_absent++;
+                    out_stats[idx].access_errors++;
+                }
             }
         }
 
-        /* Sync entry */
         err = sync_entry_to_state(repo, state, entry, metadata);
-        if (err) goto cleanup;
+        if (err) {
+            err = error_wrap(
+                err, "Failed to sync '%s' during scope reconcile",
+                entry->storage_path
+            );
+            goto cleanup;
+        }
     }
 
-    /* Populate output stats if requested */
-    if (out_stats) {
-        out_stats->total_files = total_files;
-        out_stats->already_deployed = already_deployed;
-        out_stats->needs_deployment = needs_deployment;
-    }
-
-    /* 5. Record profile's current HEAD in enabled_profiles.commit_oid.
+    /* Step 6: Orphan pass over the pre-reconcile snapshot.
      *
-     * state_enable_profile inserts with zeroblob(20); this replaces the
-     * sentinel with the real HEAD. */
-    err = manifest_persist_profile_head(repo, state, profile);
-    if (err) goto cleanup;
+     * A row whose filesystem_path is NOT in the new manifest's index
+     * left scope entirely. Flip STATE_ACTIVE → STATE_INACTIVE; leave
+     * STATE_INACTIVE (no-op), STATE_DELETED (staged for removal via
+     * remove --delete-profile; downgrading would break the post-
+     * deletion upgrade path in remove.c), and STATE_RELEASED (external
+     * drift classification; downgrading would clobber it) untouched.
+     *
+     * A row still in the new manifest was already updated in step 5;
+     * we only harvest loss-side stats here (reassignment between
+     * precedence winners). */
+    for (size_t i = 0; i < old_count; i++) {
+        state_file_entry_t *old = &old_entries[i];
 
-    /* 6. Sync tracked directories */
-    err = manifest_sync_directories(repo, state, enabled_profiles);
+        void *idx_ptr = new_manifest->index
+            ? hashmap_get(new_manifest->index, old->filesystem_path)
+            : NULL;
+
+        if (idx_ptr) {
+            /* Still covered. If precedence shifted, attribute the loss
+             * to the prior owner (for user-facing "A → B" messaging). */
+            if (stats_map && old->profile) {
+                size_t idx = (size_t) (uintptr_t) idx_ptr - 1;
+                file_entry_t *new_entry = &new_manifest->entries[idx];
+                if (strcmp(old->profile, new_entry->profile) != 0) {
+                    void *p = hashmap_get(stats_map, old->profile);
+                    if (p) {
+                        size_t sidx = (size_t) (uintptr_t) p - 1;
+                        out_stats[sidx].files_reassigned++;
+                    }
+                }
+            }
+            continue;
+        }
+
+        /* Not covered — orphan. Only downgrade ACTIVE rows. */
+        if (old->state && strcmp(old->state, STATE_ACTIVE) == 0) {
+            error_t *flip_err = state_set_file_state(
+                state, old->filesystem_path, STATE_INACTIVE
+            );
+            if (flip_err) {
+                /* Non-fatal: orphan detection at workspace-load time
+                 * still catches it (STATE_ACTIVE + missing-from-Git
+                 * surfaces a warning, and cleanup proceeds). Mirrors
+                 * the policy in the primitives this one subsumes. */
+                fprintf(
+                    stderr, "warning: failed to mark '%s' inactive: %s\n",
+                    old->filesystem_path, error_message(flip_err)
+                );
+                error_free(flip_err);
+            }
+        }
+
+        if (stats_map && old->profile) {
+            void *p = hashmap_get(stats_map, old->profile);
+            if (p) {
+                size_t sidx = (size_t) (uintptr_t) p - 1;
+                out_stats[sidx].files_orphaned++;
+            }
+        }
+    }
+
+    /* Step 7: Rebuild tracked_directories from the new scope.
+     *
+     * manifest_sync_directories uses the mark-ACTIVE-as-INACTIVE then
+     * reactivate pattern (see state_mark_all_directories_inactive —
+     * narrowed in a prior commit to preserve STATE_DELETED/RELEASED).
+     * Directory fallback and orphan semantics fall out of the rebuild:
+     * directories still in any enabled profile's metadata are
+     * reactivated with the new owner; directories that left scope
+     * remain STATE_INACTIVE for apply-time cleanup. */
+    err = manifest_sync_directories(repo, state, enabled);
     if (err) {
+        err = error_wrap(err, "Failed to sync tracked directories");
         goto cleanup;
     }
 
 cleanup:
+    /* old_entries is arena-backed — destruction is bundled with arena_destroy. */
+    if (stats_map) hashmap_free(stats_map, NULL);
     if (metadata) metadata_free(metadata);
-    if (manifest) manifest_free(manifest);
+    if (new_manifest) manifest_free(new_manifest);
+    string_array_free(enabled);
     arena_destroy(arena);
 
-    return err;
-}
-
-/**
- * Build directory fallback index from remaining enabled profiles
- *
- * Loads metadata from each remaining profile and builds O(1) lookup hashmaps
- * for directory fallback resolution. This implements "last wins" precedence,
- * matching the file fallback pattern (manifest_build()) and workspace metadata
- * merge pattern.
- *
- * PRECEDENCE MODEL:
- * - Profiles iterated in precedence order (low→high): global < OS < host
- * - Later profiles override earlier ones ("last wins")
- * - Result: Highest precedence profile wins for each directory
- *
- * MEMORY MODEL:
- * - Returns borrowed pointers into loaded_metadata array
- * - Caller MUST keep loaded_metadata alive while using hashmaps
- * - Caller responsible for cleanup via provided pattern (see manifest_disable_profile)
- *
- * EDGE CASES HANDLED:
- * - Empty remaining_enabled: Returns empty hashmaps (not an error)
- * - No directories in any profile: Returns empty hashmaps
- * - Metadata file missing: Skips gracefully (continues to next profile)
- * - Memory allocation failure: Cleans up loaded metadata and returns error
- *
- * @param repo Git repository (must not be NULL)
- * @param remaining_enabled Profile names in precedence order (must not be NULL)
- * @param out_fallback_dirs Storage path → metadata_item_t* hashmap (caller must free)
- * @param out_fallback_profiles Storage path → profile name hashmap (caller must free)
- * @param out_loaded_metadata Array of loaded metadata for cleanup (caller must free all)
- * @param out_loaded_count Number of loaded metadata instances
- * @return Error or NULL on success
- */
-static error_t *build_directory_fallback_index(
-    git_repository *repo,
-    const string_array_t *remaining_enabled,
-    hashmap_t **out_fallback_dirs,
-    hashmap_t **out_fallback_profiles,
-    metadata_t ***out_loaded_metadata,
-    size_t *out_loaded_count
-) {
-    CHECK_NULL(repo);
-    CHECK_NULL(remaining_enabled);
-    CHECK_NULL(out_fallback_dirs);
-    CHECK_NULL(out_fallback_profiles);
-    CHECK_NULL(out_loaded_metadata);
-    CHECK_NULL(out_loaded_count);
-
-    error_t *err = NULL;
-    hashmap_t *fallback_dirs = NULL;
-    hashmap_t *fallback_dir_profiles = NULL;
-    metadata_t **loaded_metadata = NULL;
-    size_t loaded_metadata_count = 0;
-
-    /* Handle empty profile list (edge case: all profiles disabled) */
-    if (remaining_enabled->count == 0) {
-        *out_fallback_dirs = hashmap_create(1);  /* Empty hashmap */
-        *out_fallback_profiles = hashmap_create(1);
-        if (!*out_fallback_dirs || !*out_fallback_profiles) {
-            if (*out_fallback_dirs) hashmap_free(*out_fallback_dirs, NULL);
-            if (*out_fallback_profiles) hashmap_free(*out_fallback_profiles, NULL);
-            return ERROR(ERR_MEMORY, "Failed to create empty hashmaps");
-        }
-        *out_loaded_metadata = NULL;
-        *out_loaded_count = 0;
-        return NULL;
-    }
-
-    /* Initialize hashmaps */
-    fallback_dirs = hashmap_borrow(64);
-    fallback_dir_profiles = hashmap_borrow(64);
-
-    if (!fallback_dirs || !fallback_dir_profiles) {
-        if (fallback_dirs) hashmap_free(fallback_dirs, NULL);
-        if (fallback_dir_profiles) hashmap_free(fallback_dir_profiles, NULL);
-        return ERROR(ERR_MEMORY, "Failed to create fallback hashmaps");
-    }
-
-    /* Allocate array to track loaded metadata (for proper cleanup) */
-    loaded_metadata = malloc(remaining_enabled->count * sizeof(metadata_t *));
-    if (!loaded_metadata) {
-        hashmap_free(fallback_dirs, NULL);
-        hashmap_free(fallback_dir_profiles, NULL);
-        return ERROR(ERR_MEMORY, "Failed to allocate metadata array");
-    }
-
-    /* Load metadata from each profile and build index with "last wins" precedence */
-    for (size_t i = 0; i < remaining_enabled->count; i++) {
-        const char *profile = remaining_enabled->items[i];
-        metadata_t *metadata = NULL;
-
-        /* Load metadata (may not exist for old profiles - gracefully skip) */
-        err = metadata_load_from_branch(repo, profile, &metadata);
-        if (err) {
-            if (err->code == ERR_NOT_FOUND) {
-                /* No metadata file - old profile or no directories tracked */
-                error_free(err);
-                err = NULL;
-                continue;
-            }
-            /* Other error - fatal */
-            err = error_wrap(err, "Failed to load metadata for profile '%s'", profile);
-            goto cleanup;
-        }
-
-        /* Track loaded metadata for cleanup */
-        loaded_metadata[loaded_metadata_count++] = metadata;
-
-        /* Extract directories from metadata */
-        size_t meta_dir_count = 0;
-        const metadata_item_t **directories =
-            metadata_get_items_by_kind(metadata, METADATA_ITEM_DIRECTORY, &meta_dir_count);
-
-        /* Add each directory to fallback index (precedence: LAST profile wins)
-         *
-         * Unconditionally set/update - later profiles override (last wins).
-         * This implements the same precedence as:
-         *   - File fallback: manifest_build()
-         *   - Metadata merge: metadata_merge()
-         *
-         * Precedence order: global < OS < host (see profiles.h)
-         * Iteration order: same as precedence (low→high)
-         * Result: Later iterations override earlier ones → highest precedence wins
-         */
-        for (size_t j = 0; j < meta_dir_count; j++) {
-            const metadata_item_t *dir_item = directories[j];
-            const char *storage_path = dir_item->key;  /* Storage path (portable) */
-
-            /* Unconditionally set/update - later profiles override (last wins) */
-            hashmap_set(fallback_dirs, storage_path, (void *) dir_item);
-            hashmap_set(fallback_dir_profiles, storage_path, (void *) profile);
-        }
-
-        /* Free the pointer array (items themselves are owned by metadata) */
-        free(directories);
-    }
-
-    /* Success - transfer ownership to caller */
-    *out_fallback_dirs = fallback_dirs;
-    *out_fallback_profiles = fallback_dir_profiles;
-    *out_loaded_metadata = loaded_metadata;
-    *out_loaded_count = loaded_metadata_count;
-    return NULL;
-
-cleanup:
-    if (fallback_dirs) hashmap_free(fallback_dirs, NULL);
-    if (fallback_dir_profiles) hashmap_free(fallback_dir_profiles, NULL);
-    if (loaded_metadata) {
-        for (size_t i = 0; i < loaded_metadata_count; i++) {
-            metadata_free(loaded_metadata[i]);
-        }
-        free(loaded_metadata);
-    }
-    return err;
-}
-
-/**
- * Remove profile from manifest (bulk cleanup)
- *
- * Implementation handles fallback:
- *   1. Get all entries owned by disabled profile
- *   2. Build manifest from remaining profiles (fallback check)
- *   3. For each entry:
- *      - If found in fallback: update source (deployed_at preserved)
- *      - If not found: entry remains for orphan detection (apply removes)
- */
-error_t *manifest_disable_profile(
-    git_repository *repo,
-    state_t *state,
-    const char *profile,
-    const string_array_t *remaining_enabled,
-    manifest_disable_stats_t *out_stats
-) {
-    CHECK_NULL(repo);
-    CHECK_NULL(state);
-    CHECK_NULL(profile);
-    CHECK_NULL(remaining_enabled);
-
-    error_t *err = NULL;
-    size_t count = 0;
-    state_file_entry_t *entries = NULL;
-    manifest_t *fallback_manifest = NULL;
-    metadata_t *fallback_metadata = NULL;
-
-    arena_t *arena = arena_create(64 * 1024);
-    if (!arena) return ERROR(ERR_MEMORY, "Failed to create manifest arena");
-
-    /* Track stats for output */
-    size_t total_files = 0;
-    size_t fallback_count = 0;
-    size_t removed_count = 0;
-
-    /* 1. Get all entries from disabled profile */
-    err = state_get_entries_by_profile(state, profile, arena, &entries, &count);
-    if (err) {
-        arena_destroy(arena);
-        return error_wrap(err, "Failed to get entries for profile '%s'", profile);
-    }
-
-    if (count == 0) {
-        /* No entries, nothing to do */
-        arena_destroy(arena);
-        return NULL;
-    }
-
-    /* 2. Build manifest from remaining profiles (fallback check) */
-    if (remaining_enabled->count > 0) {
-        err = manifest_build(repo, remaining_enabled, state, arena, &fallback_manifest);
-        if (err) {
-            arena_destroy(arena);
-            return error_wrap(err, "Failed to build fallback manifest");
-        }
-    }
-
-    /* Load merged metadata from remaining profiles for fallback resolution
-     *
-     * When files fall back to lower-precedence profiles, we need their metadata
-     * (.dotta/metadata.json) to correctly set mode, owner, group, encrypted.
-     *
-     * This is the authoritative source for file metadata - NOT the Git tree.
-     * Git tree provides basic type and default permissions, but metadata.json
-     * contains the user's explicit intent (custom mode, ownership, encryption).
-     *
-     * Pattern: Same as manifest_sync_diff, manifest_add_files, manifest_update_files.
-     * All operations that handle fallbacks use this metadata-loading pattern.
-     */
-    if (remaining_enabled->count > 0) {
-        err = metadata_load_from_profiles(repo, remaining_enabled, &fallback_metadata);
-        if (err && err->code != ERR_NOT_FOUND) {
-            /* Fatal error - cannot proceed without metadata for correctness */
-            goto cleanup;
-        }
-        if (err) {
-            /* Non-fatal: Old profiles may not have metadata.json
-             * sync_entry_to_state handles NULL metadata gracefully (uses Git defaults) */
-            error_free(err);
-            err = NULL;
-        }
-    }
-
-    /* 3. Process each entry */
-    for (size_t i = 0; i < count; i++) {
-        state_file_entry_t *entry = &entries[i];
-        total_files++;
-
-        /* Check for fallback in remaining profiles using O(1) index lookup */
-        file_entry_t *fallback = NULL;
-        if (fallback_manifest && fallback_manifest->index) {
-            void *idx_ptr = hashmap_get(fallback_manifest->index, entry->filesystem_path);
-            if (idx_ptr) {
-                size_t idx = (size_t) (uintptr_t) idx_ptr - 1;
-                fallback = &fallback_manifest->entries[idx];
-            }
-        }
-
-        if (fallback) {
-            /* File exists in lower-precedence profile — update to fallback.
-             * deployed_at preserved by SQL UPSERT (lifecycle history unchanged),
-             * old_profile auto-captured by SQL (profile is changing). */
-            err = sync_entry_to_state(repo, state, fallback, fallback_metadata);
-            if (err) {
-                err = error_wrap(
-                    err, "Failed to sync entry to fallback for %s",
-                    entry->storage_path
-                );
-                goto cleanup;
-            }
-
-            /* Track profile reassignment (old_profile metadata) */
-            fallback_count++;
-        } else {
-            /* No fallback - mark as inactive (staged for removal)
-             *
-             * ARCHITECTURE: Separation of concerns for orphan cleanup.
-             *
-             * The entry is marked STATE_INACTIVE and remains in state for orphan detection:
-             *   1. Entry marked inactive with profile=<disabled_profile>
-             *   2. Workspace skips inactive entries during manifest building (no Git validation)
-             *   3. Workspace orphan detection loads inactive entries → marks as ORPHANED
-             *   4. Apply removes: file from filesystem + entry from state
-             *
-             * This design enables:
-             *   - Silent handling: No false warnings during workspace operations
-             *   - Safe re-enable: Profile can be re-enabled (marks active again)
-             *   - Orphan detection: Workspace analysis detects for cleanup
-             *   - User visibility: Status shows orphans before removal
-             *   - Explicit action: User runs apply to execute destructive cleanup
-             *
-             * The state field makes the lifecycle explicit:
-             *   STATE_ACTIVE → file should exist in Git (validate)
-             *   STATE_INACTIVE → file staged for removal (skip validation)
-             *
-             * This follows the Git staging model:
-             *   profile disable = git rm (staging)
-             *   apply = git commit (execution)
-             *
-             * Cleanup deferred to apply - DO NOT call state_remove_file() here.
-             */
-
-            /* Mark entry as inactive for silent workspace handling */
-            err = state_set_file_state(state, entry->filesystem_path, STATE_INACTIVE);
-            if (err) {
-                /* Non-fatal: log warning but continue. Even if marking fails,
-                 * orphan detection still works (Git validation warning will appear,
-                 * but orphan will be detected and can be cleaned up). */
-                fprintf(
-                    stderr, "warning: failed to mark '%s' as inactive: %s\n",
-                    entry->filesystem_path, error_message(err)
-                );
-                error_free(err);
-                err = NULL;  /* Clear error, continue operation */
-            }
-
-            removed_count++;  /* Stats: file marked for removal (user visibility) */
-        }
-    }
-
-    /* Populate output stats if requested */
-    if (out_stats) {
-        out_stats->total_files = total_files;
-        out_stats->files_with_fallback = fallback_count;
-        out_stats->files_removed = removed_count;
-    }
-
-    /* 4. Process directories from disabled profile (mirrors file handling above)
-     *
-     * CRITICAL ARCHITECTURE CHANGE: Use incremental fallback/orphan pattern instead
-     * of rebuild pattern to preserve orphan detection.
-     *
-     * Iterate directories from disabled profile, find fallback in remaining profiles,
-     * update to fallback OR leave for orphan detection. Deferred cleanup via apply.
-     */
-
-    /* 4a. Get directories from disabled profile */
-    state_directory_entry_t *dir_entries = NULL;
-    size_t dir_count = 0;
-    hashmap_t *fallback_dirs = NULL;          /* storage_path -> metadata_item_t* */
-    hashmap_t *fallback_dir_profiles = NULL;  /* storage_path -> profile */
-    metadata_t **loaded_metadata = NULL;      /* Array of loaded metadata (for cleanup) */
-    size_t loaded_metadata_count = 0;
-
-    err = state_get_directories_by_profile(state, profile, arena, &dir_entries, &dir_count);
-    if (err) {
-        goto directory_cleanup;
-    }
-
-    /* Early exit: no directories in this profile */
-    if (dir_count == 0) {
-        goto directory_cleanup;
-    }
-
-    /* 4b. Build fallback directory index from remaining enabled profiles
-     *
-     * Uses helper function that implements "last wins" precedence (matching file
-     * fallback pattern). See build_directory_fallback_index() for details.
-     */
-    err = build_directory_fallback_index(
-        repo, remaining_enabled, &fallback_dirs, &fallback_dir_profiles,
-        &loaded_metadata, &loaded_metadata_count
-    );
-    if (err) {
-        err = error_wrap(err, "Failed to build directory fallback index");
-        goto directory_cleanup;
-    }
-
-    /* 4c. Process each directory entry */
-    size_t dir_fallback_count = 0;
-    size_t dir_removed_count = 0;
-
-    for (size_t i = 0; i < dir_count; i++) {
-        state_directory_entry_t *entry = &dir_entries[i];
-
-        /* Check for fallback in remaining profiles using O(1) index lookup
-         * IMPORTANT: Hashmap is indexed by storage_path (portable), not filesystem_path */
-        const metadata_item_t *fallback = hashmap_get(fallback_dirs, entry->storage_path);
-        const char *fallback_profile = hashmap_get(fallback_dir_profiles, entry->storage_path);
-
-        if (fallback && fallback_profile) {
-            /* Directory exists in lower-precedence profile - update to fallback.
-             *
-             * entry->{profile,owner,group,storage_path} were allocated from the
-             * function-local arena by state_get_directories_by_profile(). We
-             * overwrite them with fresh arena_strdup() pointers — the old
-             * pointers leak into the arena and are reclaimed wholesale by
-             * arena_destroy() at function exit. state_update_directory() binds
-             * with SQLITE_TRANSIENT, so SQLite copies the strings immediately. */
-            entry->profile = arena_strdup(arena, fallback_profile);
-            if (!entry->profile) {
-                err = ERROR(ERR_MEMORY, "Failed to allocate fallback profile name");
-                goto directory_cleanup;
-            }
-
-            /* Update metadata from fallback */
-            entry->mode = fallback->mode;
-
-            /* owner and group may legitimately be NULL for non-root/ directories.
-             * Skip the strdup in that case to keep the NULL semantics intact —
-             * arena_strdup(NULL) returns NULL (same as OOM), so a NULL return
-             * can't be distinguished from failure without this explicit check. */
-            if (fallback->owner) {
-                entry->owner = arena_strdup(arena, fallback->owner);
-                if (!entry->owner) {
-                    err = ERROR(ERR_MEMORY, "Failed to allocate fallback owner");
-                    goto directory_cleanup;
-                }
-            } else {
-                entry->owner = NULL;
-            }
-
-            if (fallback->group) {
-                entry->group = arena_strdup(arena, fallback->group);
-                if (!entry->group) {
-                    err = ERROR(ERR_MEMORY, "Failed to allocate fallback group");
-                    goto directory_cleanup;
-                }
-            } else {
-                entry->group = NULL;
-            }
-
-            entry->storage_path = arena_strdup(arena, fallback->key);
-            if (!entry->storage_path) {
-                err = ERROR(ERR_MEMORY, "Failed to allocate fallback storage path");
-                goto directory_cleanup;
-            }
-
-            /* Update in state (preserves deployed_at) */
-            err = state_update_directory(state, entry);
-            if (err) {
-                err = error_wrap(
-                    err, "Failed to update directory to fallback for %s",
-                    entry->filesystem_path
-                );
-                goto directory_cleanup;
-            }
-
-            dir_fallback_count++;
-        } else {
-            /* No fallback - mark as inactive (staged for removal)
-             *
-             * ARCHITECTURE: Explicit state tracking for directory lifecycle.
-             *
-             * The entry is marked STATE_INACTIVE and remains in state:
-             *   1. Entry marked inactive with profile=<disabled_profile>
-             *   2. Workspace skips inactive entries during manifest building
-             *   3. Workspace orphan detection loads inactive entries → ORPHANED
-             *   4. Apply removes: directory from filesystem + entry from state
-             *
-             * The state field makes the lifecycle explicit:
-             *   STATE_ACTIVE → directory should exist (check divergence)
-             *   STATE_INACTIVE → directory staged for removal (skip validation)
-             */
-            err = state_set_directory_state(state, entry->filesystem_path, STATE_INACTIVE);
-            if (err) {
-                /* Non-fatal: log warning but continue. Even if marking fails,
-                 * orphan detection will still work (directory won't be in merged_metadata).
-                 * The explicit state just makes it cleaner. */
-                error_t *wrapped = error_wrap(
-                    err, "Failed to mark directory '%s' as inactive",
-                    entry->filesystem_path
-                );
-                fprintf(stderr, "Warning: %s\n", error_message(wrapped));
-                error_free(wrapped);  /* Frees wrapped + chained cause (err) */
-                err = NULL;
-            }
-            dir_removed_count++;  /* Stats: directory marked for removal (user visibility) */
-        }
-    }
-
-    /* Populate directory stats if requested */
-    if (out_stats) {
-        out_stats->directories_with_fallback = dir_fallback_count;
-        out_stats->directories_removed = dir_removed_count;
-    }
-
-directory_cleanup:
-    /* Free directory-specific resources */
-    if (fallback_dirs) hashmap_free(fallback_dirs, NULL);                  /* Values are borrowed */
-    if (fallback_dir_profiles) hashmap_free(fallback_dir_profiles, NULL);  /* Values are borrowed */
-
-    /* Free loaded metadata */
-    if (loaded_metadata) {
-        for (size_t i = 0; i < loaded_metadata_count; i++) {
-            metadata_free(loaded_metadata[i]);
-        }
-        free(loaded_metadata);
-    }
-
-cleanup:
-    if (fallback_metadata) metadata_free(fallback_metadata);
-    if (fallback_manifest) manifest_free(fallback_manifest);
-    arena_destroy(arena);
     return err;
 }
 
@@ -915,7 +554,6 @@ error_t *manifest_remove_files(
 
     /* 2. Load merged metadata from enabled profiles for fallback resolution
      *
-     * Pattern: Same as manifest_disable_profile, manifest_sync_diff.
      * Metadata is authoritative for mode, owner, group, encrypted fields.
      * sync_entry_to_state uses this to correctly populate fallback entries.
      */
@@ -1052,105 +690,6 @@ error_t *manifest_remove_files(
 cleanup:
     if (metadata) metadata_free(metadata);
     if (fresh_manifest) manifest_free(fresh_manifest);
-    arena_destroy(arena);
-
-    return err;
-}
-
-/**
- * Populate manifest from enabled profiles
- *
- * Builds the virtual_manifest table from a set of enabled profiles in a
- * single pass: walks each profile's tree once via the precedence oracle,
- * resolves overrides, then writes one row per file.
- *
- * Sole caller is cmd_clone, which invokes this immediately after
- * state_set_profiles against a freshly created (and therefore empty)
- * virtual_manifest. Not a general-purpose repair primitive — it does not
- * detect or remove orphans. For incremental drift repair use
- * manifest_reconcile; for profile-scoped sync use manifest_enable_profile
- * or manifest_disable_profile.
- *
- * Algorithm:
- *   1. Build manifest from enabled profiles (precedence oracle, single pass)
- *   2. Load merged metadata from all profiles
- *   3. Insert one row per manifest entry with deployed_at = 0 and anchor
- *      unset (populate is a VWD-cache writer, not a confirmation event)
- *   4. Replace the per-profile commit_oid sentinel with the real branch HEAD
- *   5. Sync tracked directories from metadata
- *
- * Performance: O(M) where M = total files across all enabled profiles
- */
-error_t *manifest_populate(
-    git_repository *repo,
-    state_t *state,
-    const string_array_t *enabled_profiles
-) {
-    CHECK_NULL(repo);
-    CHECK_NULL(state);
-    CHECK_NULL(enabled_profiles);
-
-    error_t *err = NULL;
-    manifest_t *manifest = NULL;
-    metadata_t *metadata = NULL;
-
-    arena_t *arena = arena_create(64 * 1024);
-    if (!arena) return ERROR(ERR_MEMORY, "Failed to create manifest arena");
-
-    /* No profiles → no files to populate. Sync directories for symmetry
-     * (no-op on the empty starting state this function requires). */
-    if (enabled_profiles->count == 0) {
-        err = manifest_sync_directories(repo, state, enabled_profiles);
-        goto cleanup;
-    }
-
-    /* 1. Build manifest from all enabled profiles (precedence oracle, single pass) */
-    err = manifest_build(repo, enabled_profiles, state, arena, &manifest);
-    if (err) {
-        err = error_wrap(err, "Failed to build manifest for populate");
-        goto cleanup;
-    }
-
-    /* 2. Load merged metadata from all profiles */
-    err = metadata_load_from_profiles(repo, enabled_profiles, &metadata);
-    if (err) {
-        /* Metadata may not exist for old profiles - continue with NULL */
-        if (err->code != ERR_NOT_FOUND) goto cleanup;
-        error_free(err);
-        err = NULL;
-    }
-
-    /* 3. Insert one row per manifest entry with deployed_at = 0 (never
-     * confirmed). The empty-starting-state precondition means every call
-     * hits the INSERT path; the SQL UPSERT clause would preserve the
-     * deployment anchor (deployed_at, deployed_blob_oid, stat_*) automatically
-     * if any pre-existing row were ever encountered.
-     *
-     * The anchor advances later on the paths that actually prove disk
-     * matches the profile blob: workspace slow-path CMP_EQUAL (seeds the
-     * stat witness) and apply's deploy/adopt path (mints the lifecycle
-     * timestamp). lstat-sees-a-file is not a confirmation event — pretending
-     * otherwise would violate state.h's anchor invariants (see the
-     * sync_entry_to_state docstring for details). */
-    for (size_t i = 0; i < manifest->count; i++) {
-        file_entry_t *entry = &manifest->entries[i];
-        err = sync_entry_to_state(repo, state, entry, metadata);
-        if (err) goto cleanup;
-    }
-
-    /* 4. Replace the zero sentinel state_set_profiles wrote with the real HEAD. */
-    for (size_t p = 0; p < enabled_profiles->count; p++) {
-        err = manifest_persist_profile_head(repo, state, enabled_profiles->items[p]);
-        if (err) goto cleanup;
-    }
-
-    /* 5. Sync tracked directories */
-    err = manifest_sync_directories(repo, state, enabled_profiles);
-    if (err) goto cleanup;
-
-cleanup:
-    if (metadata) metadata_free(metadata);
-    if (manifest) manifest_free(manifest);
     arena_destroy(arena);
 
     return err;
@@ -1509,161 +1048,6 @@ error_t *manifest_reconcile(
 }
 
 /**
- * Update manifest after profile precedence change
- *
- * Implementation strategy:
- *   1. Build new manifest with precedence oracle
- *   2. Compare with current state to detect reassignments
- *   3. Update only changed files (preserves deployed_at for unchanged)
- *   4. Handle orphaned files (entries remain for orphan detection, apply removes)
- */
-error_t *manifest_reorder_profiles(
-    git_repository *repo,
-    state_t *state,
-    const string_array_t *new_profile_order
-) {
-    CHECK_NULL(repo);
-    CHECK_NULL(state);
-    CHECK_NULL(new_profile_order);
-
-    error_t *err = NULL;
-    manifest_t *new_manifest = NULL;
-    state_file_entry_t *old_entries = NULL;
-    size_t old_count = 0;
-    hashmap_t *old_map = NULL;
-    metadata_t *metadata = NULL;
-
-    arena_t *arena = arena_create(64 * 1024);
-    if (!arena) return ERROR(ERR_MEMORY, "Failed to create manifest arena");
-
-    /* 1. Build new manifest with new precedence order (precedence oracle) */
-    err = manifest_build(repo, new_profile_order, state, arena, &new_manifest);
-    if (err) {
-        arena_destroy(arena);
-        return error_wrap(err, "Failed to build manifest for precedence update");
-    }
-
-    /* 2. Verify new manifest has index */
-    if (!new_manifest->index) {
-        err = ERROR(ERR_INTERNAL, "New manifest missing index");
-        goto cleanup;
-    }
-
-    /* 3. Get all current manifest entries and build hashmap for O(1) lookups */
-    err = state_get_all_files(state, arena, &old_entries, &old_count);
-    if (err) {
-        goto cleanup;
-    }
-
-    /* Build hashmap for O(1) old entry lookups */
-    old_map = hashmap_borrow(old_count > 0 ? old_count : 16);
-    if (!old_map) {
-        err = ERROR(ERR_MEMORY, "Failed to create old entries hashmap");
-        goto cleanup;
-    }
-
-    for (size_t i = 0; i < old_count; i++) {
-        err = hashmap_set(old_map, old_entries[i].filesystem_path, &old_entries[i]);
-        if (err) {
-            err = error_wrap(err, "Failed to populate old entries hashmap");
-            goto cleanup;
-        }
-    }
-
-    /* 4. Load metadata */
-    err = metadata_load_from_profiles(repo, new_profile_order, &metadata);
-    if (err && err->code != ERR_NOT_FOUND) {
-        goto cleanup;
-    }
-    if (err) {
-        error_free(err);
-        err = NULL;
-    }
-
-    /* 5. Process each file in new manifest */
-    for (size_t i = 0; i < new_manifest->count; i++) {
-        file_entry_t *new_entry = &new_manifest->entries[i];
-
-        /* Check if exists in old state using O(1) hashmap lookup */
-        state_file_entry_t *old_entry = hashmap_get(old_map, new_entry->filesystem_path);
-
-        if (!old_entry) {
-            /* New file (rare in reorder, but handle it) */
-
-            /* New file - deployed_at = 0 (never deployed) */
-            err = sync_entry_to_state(repo, state, new_entry, metadata);
-            if (err) {
-                goto cleanup;
-            }
-        } else {
-            /* Existing entry - check if owner changed */
-            bool owner_changed = strcmp(old_entry->profile, new_entry->profile) != 0;
-
-            if (owner_changed) {
-                /* Owner changed — sync with new owner. deployed_at preserved
-                 * by SQL UPSERT, old_profile auto-captured by SQL. */
-                err = sync_entry_to_state(repo, state, new_entry, metadata);
-                if (err) {
-                    goto cleanup;
-                }
-            }
-            /* else: owner unchanged, preserve existing entry */
-        }
-    }
-
-    /* 6. Check for files in old manifest but not in new (mark for removal) */
-    for (size_t i = 0; i < old_count; i++) {
-        state_file_entry_t *old_entry = &old_entries[i];
-
-        /* Check if still exists in new manifest using O(1) index lookup */
-        void *idx_ptr = hashmap_get(new_manifest->index, old_entry->filesystem_path);
-        file_entry_t *new_entry = NULL;
-        if (idx_ptr) {
-            size_t idx = (size_t) (uintptr_t) idx_ptr - 1;
-            new_entry = &new_manifest->entries[idx];
-        }
-
-        if (!new_entry) {
-            /* File no longer in any profile - entry becomes orphaned
-             *
-             * Entry remains in state for orphan detection. Profile reordering
-             * can cause a file to lose all coverage (all profiles reordered above
-             * it, or removed from all profiles).
-             *
-             * The orphan cleanup flow applies (see manifest_disable_profile()).
-             * Cleanup deferred to apply - DO NOT call state_remove_file() here.
-             */
-
-            /* Mark entry as inactive for silent workspace handling */
-            err = state_set_file_state(state, old_entry->filesystem_path, STATE_INACTIVE);
-            if (err) {
-                /* Non-fatal: log warning but continue */
-                fprintf(
-                    stderr, "warning: failed to mark '%s' as inactive: %s\n",
-                    old_entry->filesystem_path, error_message(err)
-                );
-                error_free(err);
-                err = NULL;  /* Clear error, continue operation */
-            }
-        }
-    }
-
-    /* 7. Sync tracked directories with new profile order */
-    err = manifest_sync_directories(repo, state, new_profile_order);
-    if (err) {
-        goto cleanup;
-    }
-
-cleanup:
-    if (old_map) hashmap_free(old_map, NULL);
-    if (metadata) metadata_free(metadata);
-    if (new_manifest) manifest_free(new_manifest);
-    arena_destroy(arena);
-
-    return err;
-}
-
-/**
  * Sync multiple files to manifest in bulk (optimized for update command)
  *
  * High-performance batch operation that builds a FRESH manifest from Git
@@ -1814,7 +1198,6 @@ error_t *manifest_update_files(
                  * This bulk operation may process multiple files simultaneously, but the
                  * architectural principle remains: deferred cleanup via apply.
                  *
-                 * See manifest_disable_profile() for detailed rationale.
                  * Cleanup deferred to apply - DO NOT call state_remove_file() here.
                  */
 
@@ -2430,7 +1813,6 @@ error_t *manifest_sync_diff(
                      * This maintains consistency with other manifest operations: sync
                      * updates scope (what's in Git), apply executes cleanup (removal).
                      *
-                     * The orphan cleanup flow applies (see manifest_disable_profile()).
                      * Cleanup deferred to apply - DO NOT call state_remove_file() here.
                      */
 

@@ -589,10 +589,13 @@ static error_t *create_commit(
  * Called when `dotta add -p <profile>` creates a NEW profile branch for the first
  * time. Combines profile enabling with manifest sync in a single atomic transaction.
  *
- * WHY manifest_add_files (not manifest_enable_profile):
- * - Files captured FROM filesystem (already deployed) → deployed_at = time(NULL)
- * - manifest_enable_profile uses lstat() check which may set deployed_at = 0 for missing files
- * - Matches VWD architecture specification
+ * WHY manifest_add_files (not manifest_apply_scope):
+ * - These files were just captured FROM disk; the deployment anchor
+ *   (deployed_blob_oid, stat_*, deployed_at) should be stamped from that
+ *   witness so the next status hits the fast path.
+ * - manifest_apply_scope is a pure VWD-cache writer; it never advances the
+ *   anchor, which is correct for scope reconciliation but wrong here — we
+ *   want fully deployed rows, not staged-for-deployment rows.
  *
  * Algorithm:
  *   1. Open write transaction (creates DB if missing)
@@ -1499,10 +1502,10 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
          * UX Decision: Creating a profile via 'add' should enable it automatically.
          * This matches user expectations: "I just added a file, it should be active."
          *
-         * Uses manifest_add_files (not manifest_enable_profile) because:
-         * - Files captured FROM filesystem (already deployed)
-         * - Should have deployed_at = time(NULL), not deployed_at = 0
-         * - Matches VWD architecture specification
+         * Uses manifest_add_files (not manifest_apply_scope) because the files
+         * were just captured from disk: we want the deployment anchor stamped
+         * from that witness, not left unset for a later status to fill in.
+         * apply_scope is the scope reconciler; add is the disk-capture path.
          */
         error_t *enable_err = auto_enable_and_sync_profile(
             repo, ctx->state, opts->profile, opts->custom_prefix, all_files,

@@ -261,7 +261,16 @@ static error_t *initialize_state(
         return error_wrap(err, "Failed to initialize state database");
     }
 
-    /* Set enabled profiles and populate manifest */
+    /* Set enabled profiles and reconcile manifest.
+     *
+     * state_set_profiles writes the zero-OID sentinel for every newly
+     * enabled profile. We replace each sentinel with the real branch HEAD
+     * before calling manifest_apply_scope so enabled_profiles is fully
+     * authoritative (name + position + custom_prefix + commit_oid).
+     * apply_scope then trusts the table and does not walk branch refs.
+     *
+     * Fresh clone → virtual_manifest is empty → apply_scope INSERTs one
+     * row per entry in the precedence-resolved manifest. */
     if (profiles->count > 0) {
         err = state_set_profiles(state, profiles);
         if (err) {
@@ -269,16 +278,21 @@ static error_t *initialize_state(
             return error_wrap(err, "Failed to set profiles in state");
         }
 
-        /* Populate manifest from enabled profiles
-         *
-         * This populates the virtual_manifest table by walking through all
-         * enabled profiles and adding their files with correct precedence.
-         * Without this, the manifest would be empty and 'dotta apply' would
-         * have nothing to deploy. */
-        err = manifest_populate(repo, state, profiles);
+        for (size_t i = 0; i < profiles->count; i++) {
+            err = manifest_persist_profile_head(repo, state, profiles->items[i]);
+            if (err) {
+                state_free(state);
+                return error_wrap(
+                    err, "Failed to record commit_oid for profile '%s'",
+                    profiles->items[i]
+                );
+            }
+        }
+
+        err = manifest_apply_scope(repo, state, NULL, NULL);
         if (err) {
             state_free(state);
-            return error_wrap(err, "Failed to populate manifest");
+            return error_wrap(err, "Failed to reconcile manifest scope");
         }
     }
 

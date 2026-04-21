@@ -1718,7 +1718,8 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
              * orphaned entries accumulate forever in virtual_manifest.
              *
              * The flow for orphaned files:
-             *   1. Profile disabled -> entry stays in state (manifest_disable_profile)
+             *   1. Profile disabled -> entry stays in state (manifest_apply_scope
+             *      flipped ACTIVE -> INACTIVE during scope reconciliation)
              *   2. Workspace detects orphan -> entry in state, profile not enabled
              *   3. cleanup_execute() -> file removed from filesystem (just happened)
              *   4. THIS CODE -> entry removed from state (completing the cycle)
@@ -1814,7 +1815,8 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
              * we need to remove their entries from state to prevent accumulation.
              *
              * The flow for orphaned directories:
-             *   1. Profile disabled -> entry stays in state (manifest_disable_profile)
+             *   1. Profile disabled -> entry stays in state (manifest_sync_directories
+             *      left the row STATE_INACTIVE during scope reconciliation)
              *   2. Workspace detects orphan -> entry in state, profile not enabled
              *   3. cleanup_execute() -> directory removed from filesystem (just happened)
              *   4. THIS CODE -> entry removed from state (completing the cycle)

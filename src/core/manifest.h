@@ -4,7 +4,7 @@
  * Owns the Virtual Working Directory (VWD) types and all manifest operations:
  *   - Type definitions: file_entry_t, manifest_t
  *   - Construction: manifest_build(), manifest_build_from_tree(), manifest_free()
- *   - Consistency layer: manifest_enable_profile(), manifest_sync_diff(), etc.
+ *   - Consistency layer: manifest_apply_scope(), manifest_sync_diff(), etc.
  *
  * The manifest module is the single authority for all manifest table modifications.
  * It implements the "Virtual Working Directory" concept - maintaining the manifest
@@ -110,29 +110,33 @@ typedef struct manifest {
 } manifest_t;
 
 /**
- * Statistics from profile enable operation
+ * Per-profile statistics from a scope transition
  *
- * Reflects what lstat observed at enable time; NOT a verification result.
- * Whether a file present on disk actually matches the profile blob is
- * decided later by workspace divergence analysis (status/diff/apply).
+ * Fields are populated conditionally based on the profile's role in the
+ * transition. The same profile can gain and lose files simultaneously
+ * (e.g., enable A while B was reordered above it), so gain-side and
+ * loss-side fields are independent.
+ *
+ *   Gain-side  — the profile claimed file(s) in the new manifest.
+ *   Loss-side  — the profile lost file(s) that were in the old manifest.
+ *
+ * Counters reflect what was observed at reconcile time; they do NOT
+ * verify disk matches the profile blob. Verification is workspace
+ * divergence analysis (status/diff/apply).
  */
 typedef struct {
-    size_t total_files;         /* Total files owned by profile (after precedence) */
-    size_t already_deployed;    /* Files present on filesystem at enable time (unverified) */
-    size_t needs_deployment;    /* Files absent or inaccessible (need deployment by apply) */
-    size_t access_errors;       /* Files with non-ENOENT lstat errors (counted in needs_deployment) */
-} manifest_enable_stats_t;
+    const char *profile;         /* Profile name (borrowed from stats_filter) */
 
-/**
- * Statistics from profile disable operation
- */
-typedef struct {
-    size_t total_files;                /* Total files owned by disabled profile */
-    size_t files_with_fallback;        /* Files updated to fallback profile */
-    size_t files_removed;              /* Files marked inactive (staged for removal) */
-    size_t directories_with_fallback;  /* Directories updated to fallback profile */
-    size_t directories_removed;        /* Directories marked as orphaned */
-} manifest_disable_stats_t;
+    /* Gain-side */
+    size_t files_claimed;        /* Files this profile wins precedence for */
+    size_t files_on_disk;        /* lstat observed a file at the deploy path */
+    size_t files_absent;         /* lstat returned ENOENT (includes access errors) */
+    size_t access_errors;        /* lstat failed non-ENOENT (subset of files_absent) */
+
+    /* Loss-side */
+    size_t files_reassigned;     /* Files reassigned to a different profile */
+    size_t files_orphaned;       /* Files that left scope entirely (→ STATE_INACTIVE) */
+} manifest_scope_stats_t;
 
 /**
  * Statistics from stale manifest repair
@@ -145,103 +149,115 @@ typedef struct {
 } manifest_repair_stats_t;
 
 /**
- * Enable profile in manifest
+ * Reconcile virtual_manifest to the current enabled-profile scope
  *
- * Called when a profile is enabled. Populates manifest from Git branch
- * with precedence resolution across all enabled profiles.
+ * Single authoritative primitive for every scope transition. The enabled
+ * profile set is read from state (via state_peek_profiles); the caller
+ * is responsible for making enabled_profiles authoritative *before*
+ * calling this function (see ordering rule below). Idempotent: applying
+ * the same scope twice is a no-op (UPSERT preserves every column that
+ * a repeat call would rewrite to the same value).
  *
- * Algorithm:
- *   1. Build manifest from all enabled profiles (precedence oracle)
- *   2. Load merged metadata from all profiles
- *   3. For each file owned by this profile (highest precedence):
- *      - Extract blob OID from Git tree entry (content identity)
- *      - Extract metadata
- *      - Insert/update manifest entry
- *
- * Custom prefix resolution is handled internally by the oracle.
- * The caller must store the custom prefix via state_enable_profile()
- * BEFORE calling this function, so it's visible in the state database.
+ * ORDERING RULE (all callers):
+ *   1. Update enabled_profiles to reflect the target scope:
+ *        enable    → state_enable_profile for each new profile,
+ *                    then manifest_persist_profile_head for each to
+ *                    fill the commit_oid column.
+ *        disable   → state_disable_profile for each removed profile.
+ *        reorder   → state_set_profiles(new_order) (preserves commit_oids).
+ *        clone     → state_set_profiles(initial_set),
+ *                    then manifest_persist_profile_head for each.
+ *   2. Call manifest_apply_scope().
+ *   3. No further state mutations required — apply_scope handles the
+ *      virtual_manifest table and tracked_directories.
  *
  * Preconditions:
- *   - profile MUST be in enabled_profiles
- *   - state MUST have active transaction (via state_open)
- *   - Git branch for profile MUST exist
- *   - Custom prefix (if any) MUST already be stored via state_enable_profile()
+ *   - state MUST have an active write transaction.
+ *   - enabled_profiles is fully authoritative for the target scope:
+ *       name, position (precedence), custom_prefix, commit_oid.
+ *   - Git branches are at the commits referenced by
+ *     enabled_profiles.commit_oid.
+ *   - stats_filter and out_stats are either both NULL or both non-NULL.
+ *   - When stats_filter is non-NULL, out_stats points to an array of
+ *     length stats_filter->count.
  *
  * Postconditions:
- *   - All files from profile added/updated in manifest
- *   - Higher precedence files override lower precedence
- *   - Existing entries updated if profile has higher precedence (anchor preserved)
- *   - New entries inserted with deployed_at = 0 and anchor unset; the
- *     deployment anchor advances later on paths that prove disk matches the
- *     profile blob (workspace slow-path CMP_EQUAL or apply deploy/adopt)
- *   - Transaction remains open (caller commits)
+ *   - virtual_manifest reflects (enabled_profiles × Git trees) with
+ *     correct precedence.
+ *   - Rows whose filesystem_path left scope:
+ *       STATE_ACTIVE  → STATE_INACTIVE (staged for removal by apply).
+ *       STATE_INACTIVE / STATE_DELETED / STATE_RELEASED: preserved
+ *       (downgrading them would break downstream intent signals).
+ *   - tracked_directories rebuilt via manifest_sync_directories.
+ *   - The deployment anchor (deployed_blob_oid, deployed_at, stat_*) is
+ *     preserved on every UPDATE — apply_scope is a pure VWD-cache
+ *     writer, not a confirmation event.
+ *   - Transaction remains open (caller commits via state_save).
+ *
+ * Stats attribution (when stats_filter is non-NULL):
+ *   A profile in stats_filter ∩ new_enabled receives gain-side fields
+ *   (files_claimed + lstat-derived files_on_disk / files_absent /
+ *   access_errors) as the new-manifest sync processes its entries.
+ *   A profile that owned rows no longer in scope receives loss-side
+ *   fields (files_reassigned / files_orphaned) during the orphan pass.
+ *   A profile can collect both simultaneously. Overlap semantics: if B
+ *   overrides A for path X, B gets files_claimed for X and A gets
+ *   files_reassigned for X. The sum is the true manifest size.
  *
  * Error Conditions:
- *   - ERR_NOT_FOUND: Profile branch doesn't exist
- *   - ERR_GIT: Git operation failed
+ *   - ERR_GIT: Git operation failed (tree walk, branch resolution)
  *   - ERR_CRYPTO: Encrypted file but key unavailable
- *   - ERR_NOMEM: Memory allocation failed
- *   - ERR_STATE: Database operation failed
+ *   - ERR_STATE_INVALID: Database operation failed
+ *   - ERR_MEMORY: Memory allocation failed
  *
- * Performance: O(N) where N = files in profile
+ * Performance: O(M + S + D)
+ *   M = files in the new manifest (one manifest_build, one metadata load)
+ *   S = rows in virtual_manifest (one state_get_all_files for orphan pass)
+ *   D = directories across enabled profiles (one sync_directories rebuild)
  *
- * @param repo Git repository
- * @param state State handle (with active transaction)
- * @param profile Profile being enabled
- * @param enabled_profiles All enabled profiles (including profile)
+ * @param repo Git repository (must not be NULL)
+ * @param state State handle with active transaction (must not be NULL)
+ * @param stats_filter Optional: profiles to attribute stats to (NULL = none)
+ * @param out_stats Parallel array (length stats_filter->count); zero-initialized
+ *                  and populated during the call (must be non-NULL iff
+ *                  stats_filter is non-NULL)
  * @return Error or NULL on success
  */
-error_t *manifest_enable_profile(
+error_t *manifest_apply_scope(
     git_repository *repo,
     state_t *state,
-    const char *profile,
-    const string_array_t *enabled_profiles,
-    manifest_enable_stats_t *out_stats
+    const string_array_t *stats_filter,
+    manifest_scope_stats_t *out_stats
 );
 
 /**
- * Disable profile in manifest
+ * Record a profile's current branch HEAD in enabled_profiles.commit_oid.
  *
- * Called when a profile is disabled. Handles fallback to lower-precedence
- * profiles for files that exist in multiple profiles.
- *
- * Algorithm:
- *   1. Get all manifest entries owned by disabled profile
- *   2. Build manifest from remaining profiles (fallback check)
- *   3. For each entry:
- *      - If fallback found: reassign to fallback profile
- *      - If no fallback: mark as STATE_INACTIVE (staged for removal by apply)
+ * Composes gitops_resolve_branch_head_oid + state_set_profile_commit_oid.
+ * Callers pair this with the state mutation that introduces the profile
+ * (state_enable_profile or state_set_profiles), which writes a zero-OID
+ * sentinel; this call replaces the sentinel with the real HEAD so
+ * enabled_profiles is fully authoritative before manifest_apply_scope.
  *
  * Preconditions:
- *   - profile MUST NOT be in remaining_enabled
- *   - state MUST have active transaction
+ *   - state has an active write transaction.
+ *   - profile is currently in enabled_profiles (just written by
+ *     state_enable_profile or state_set_profiles).
+ *   - The profile's Git branch exists and resolves to a commit.
  *
  * Postconditions:
- *   - Files unique to profile marked STATE_INACTIVE (apply will remove)
- *   - Files with fallback updated to fallback profile (source changed)
- *   - Entries with fallbacks keep same deployed_at timestamp
- *   - Transaction remains open (caller commits)
+ *   - enabled_profiles.commit_oid for profile equals the branch HEAD.
+ *   - Transaction remains open.
  *
- * Error Conditions:
- *   - ERR_STATE: Database query failed
- *   - ERR_GIT: Git operation failed
- *   - ERR_NOMEM: Memory allocation failed
- *
- * Performance: O(F + N) where F = files in fallback profiles, N = files in disabled profile
- *
- * @param repo Git repository
- * @param state State handle (with active transaction)
- * @param profile Profile being disabled
- * @param remaining_enabled Remaining enabled profiles (excluding profile)
+ * @param repo Git repository (must not be NULL)
+ * @param state State handle with active transaction (must not be NULL)
+ * @param profile Profile name (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *manifest_disable_profile(
+error_t *manifest_persist_profile_head(
     git_repository *repo,
     state_t *state,
-    const char *profile,
-    const string_array_t *remaining_enabled,
-    manifest_disable_stats_t *out_stats
+    const char *profile
 );
 
 /**
@@ -441,69 +457,6 @@ error_t *manifest_remove_files(
 );
 
 /**
- * Populate manifest from enabled profiles
- *
- * Builds the virtual_manifest table from a set of enabled profiles in a
- * single pass: walks each profile's tree once via the precedence oracle,
- * resolves overrides, then writes one row per file.
- *
- * Sole caller is cmd_clone, which invokes this immediately after
- * state_set_profiles against a freshly created (and therefore empty)
- * virtual_manifest. Not a general-purpose repair primitive — it does not
- * detect or remove orphans. For incremental drift repair use
- * manifest_reconcile; for profile-scoped sync use manifest_enable_profile
- * or manifest_disable_profile.
- *
- * Algorithm:
- *   1. Build manifest from enabled profiles (precedence oracle, O(M))
- *   2. Load merged metadata from all profiles
- *   3. Insert one row per manifest entry with deployed_at = 0 and anchor unset
- *   4. Replace the per-profile commit_oid sentinel with the real branch HEAD
- *   5. Sync tracked directories from metadata
- *
- * Key optimization: Builds manifest once and syncs all entries directly,
- * rather than calling manifest_enable_profile() N times (which would rebuild
- * the manifest N times). This reduces complexity from O(N × M) to O(M).
- *
- * Preconditions:
- *   - state MUST have active transaction (state_open or state_begin)
- *   - virtual_manifest is empty (caller's responsibility — if violated,
- *     existing rows are upserted with the deployment anchor preserved by
- *     SQL, but orphans are NOT removed and inactive rows are silently
- *     reactivated)
- *   - Empty profile list supported (no-op on files, syncs empty directory set)
- *
- * Postconditions:
- *   - virtual_manifest contains one row per file in the precedence-resolved
- *     manifest, with state='active', deployed_at = 0, and the deployment
- *     anchor unset. The anchor advances later on paths that prove disk
- *     matches the profile blob (workspace slow-path CMP_EQUAL or apply
- *     deploy/adopt) — populate is a pure VWD-cache writer, not a
- *     confirmation event.
- *   - Each enabled profile's commit_oid reflects its current branch HEAD
- *   - Empty profile list results in empty manifest
- *   - Transaction remains open (caller commits via state_save)
- *
- * Error Conditions:
- *   - ERR_GIT: Git operation failed (tree walk, branch resolution)
- *   - ERR_CRYPTO: Encrypted file but key unavailable
- *   - ERR_STATE_INVALID: Database operation failed
- *   - ERR_MEMORY: Memory allocation failed
- *
- * Performance: O(M) where M = total files across all enabled profiles
- *
- * @param repo Git repository
- * @param state State handle (with active transaction)
- * @param enabled_profiles Enabled profiles to build from
- * @return Error or NULL on success
- */
-error_t *manifest_populate(
-    git_repository *repo,
-    state_t *state,
-    const string_array_t *enabled_profiles
-);
-
-/**
  * Reconcile manifest with current Git state (drift repair)
  *
  * The single public entry point for drift-based VWD repair. Brings the
@@ -560,54 +513,6 @@ error_t *manifest_reconcile(
     git_repository *repo,
     state_t *state,
     manifest_repair_stats_t *out_stats
-);
-
-/**
- * Reorder profiles in manifest
- *
- * Called when profiles are reordered. Intelligently updates reassignment
- * and status only for files that change owner, preserving DEPLOYED
- * status for files whose profile assignment remains unchanged.
- *
- * Algorithm:
- *   1. Build manifest from new profile order (precedence oracle)
- *   2. Get all current manifest entries and build hashmap for O(1) lookups
- *   3. For each file in new manifest:
- *      - If not in old manifest: add with deployed_at = 0 (rare, file never deployed)
- *      - If owner changed: update profile assignment (deployed_at preserved)
- *      - If owner unchanged: skip (preserve existing entry)
- *   4. For files in old manifest but not new: remain for orphan detection (apply removes)
- *
- * Note: deployed_at is preserved by SQL UPSERT for files whose profile
- * assignment doesn't change, so reordering does not reset lifecycle state.
- *
- * Preconditions:
- *   - state MUST have active transaction (via state_open)
- *   - new_profile_order MUST be valid enabled profiles
- *
- * Postconditions:
- *   - Reassigned files updated (deployed_at preserved)
- *   - Files with unchanged assignment preserve existing entry
- *   - Orphaned files remain for orphan detection (apply removes)
- *   - Transaction remains open (caller commits)
- *
- * Error Conditions:
- *   - ERR_GIT: Git operation failed
- *   - ERR_CRYPTO: Encrypted file but key unavailable
- *   - ERR_STATE: Database operation failed
- *   - ERR_NOMEM: Memory allocation failed
- *
- * Performance: O(N + M) where N = files in old manifest, M = files in new manifest
- *
- * @param repo Git repository
- * @param state State handle (with active transaction)
- * @param new_profile_order New profile order (determines precedence)
- * @return Error or NULL on success
- */
-error_t *manifest_reorder_profiles(
-    git_repository *repo,
-    state_t *state,
-    const string_array_t *new_profile_order
 );
 
 /**

@@ -15,6 +15,7 @@
 #include "base/args.h"
 #include "base/array.h"
 #include "base/error.h"
+#include "base/hashmap.h"
 #include "base/output.h"
 #include "core/manifest.h"
 #include "core/profiles.h"
@@ -55,15 +56,18 @@ static error_t *count_profile_files(
 /**
  * Print manifest enable statistics
  *
- * Shows deployment analysis from manifest enable operation.
- * Verbose mode shows detailed breakdown, normal mode shows summary.
+ * Reports gain-side attribution for one enabled profile from a single
+ * apply_scope call: files_claimed (rows the profile won precedence for)
+ * partitioned by lstat observation into files_on_disk and files_absent.
+ * access_errors is a subset of files_absent: paths where lstat failed
+ * for a non-ENOENT reason.
  */
 static void print_manifest_enable_stats(
     const output_t *out,
     const char *profile,
-    const manifest_enable_stats_t *stats
+    const manifest_scope_stats_t *stats
 ) {
-    if (!stats || stats->total_files == 0) return;
+    if (!stats || stats->files_claimed == 0) return;
 
     if (output_is_verbose(out)) {
         /* Detailed breakdown */
@@ -74,22 +78,22 @@ static void print_manifest_enable_stats(
         );
         output_print(
             out, OUTPUT_VERBOSE, "  Total files: %zu\n",
-            stats->total_files
+            stats->files_claimed
         );
 
-        if (stats->already_deployed > 0) {
+        if (stats->files_on_disk > 0) {
             output_styled(
                 out, OUTPUT_VERBOSE,
                 "    - {green}%zu{reset} already deployed\n",
-                stats->already_deployed
+                stats->files_on_disk
             );
         }
 
-        if (stats->needs_deployment > 0) {
+        if (stats->files_absent > 0) {
             output_styled(
                 out, OUTPUT_VERBOSE,
                 "    - {yellow}%zu{reset} need deployment\n",
-                stats->needs_deployment
+                stats->files_absent
             );
         }
 
@@ -107,16 +111,16 @@ static void print_manifest_enable_stats(
         output_newline(out, OUTPUT_VERBOSE);
     } else {
         /* Compact summary */
-        if (stats->needs_deployment > 0) {
+        if (stats->files_absent > 0) {
             output_print(
                 out, OUTPUT_NORMAL, "  Staged %zu file%s for deployment\n",
-                stats->needs_deployment, stats->needs_deployment == 1 ? "" : "s"
+                stats->files_absent, stats->files_absent == 1 ? "" : "s"
             );
         }
-        if (stats->already_deployed > 0) {
+        if (stats->files_on_disk > 0) {
             output_print(
                 out, OUTPUT_NORMAL, "  Found %zu file%s already deployed\n",
-                stats->already_deployed, stats->already_deployed == 1 ? "" : "s"
+                stats->files_on_disk, stats->files_on_disk == 1 ? "" : "s"
             );
         }
 
@@ -135,14 +139,19 @@ static void print_manifest_enable_stats(
 /**
  * Print manifest disable statistics
  *
- * Shows impact analysis from manifest disable operation.
+ * Reports loss-side attribution for one disabled profile from a single
+ * apply_scope call: files_reassigned (picked up by a fallback profile)
+ * + files_orphaned (left scope entirely → STATE_INACTIVE).
  */
 static void print_manifest_disable_stats(
     const output_t *out,
     const char *profile,
-    const manifest_disable_stats_t *stats
+    const manifest_scope_stats_t *stats
 ) {
-    if (!stats || stats->total_files == 0) return;
+    if (!stats) return;
+
+    size_t total = stats->files_reassigned + stats->files_orphaned;
+    if (total == 0) return;
 
     if (output_is_verbose(out)) {
         /* Detailed breakdown */
@@ -151,40 +160,40 @@ static void print_manifest_disable_stats(
 
         output_print(
             out, OUTPUT_VERBOSE,
-            "  Total files affected: %zu\n", stats->total_files
+            "  Total files affected: %zu\n", total
         );
 
-        if (stats->files_with_fallback > 0) {
+        if (stats->files_reassigned > 0) {
             output_styled(
                 out, OUTPUT_VERBOSE,
                 "    - {green}%zu{reset} file%s with fallback (will revert)\n",
-                stats->files_with_fallback,
-                stats->files_with_fallback == 1 ? "" : "s"
+                stats->files_reassigned,
+                stats->files_reassigned == 1 ? "" : "s"
             );
         }
 
-        if (stats->files_removed > 0) {
+        if (stats->files_orphaned > 0) {
             output_styled(
                 out, OUTPUT_VERBOSE,
                 "    - {red}%zu{reset} file%s without fallback (will be removed)\n",
-                stats->files_removed,
-                stats->files_removed == 1 ? "" : "s"
+                stats->files_orphaned,
+                stats->files_orphaned == 1 ? "" : "s"
             );
         }
     } else {
         /* Compact summary */
-        if (stats->files_removed > 0) {
+        if (stats->files_orphaned > 0) {
             output_print(
                 out, OUTPUT_NORMAL, "  Staged %zu file%s for removal\n",
-                stats->files_removed, stats->files_removed == 1 ? "" : "s"
+                stats->files_orphaned, stats->files_orphaned == 1 ? "" : "s"
             );
         }
 
-        if (stats->files_with_fallback > 0) {
+        if (stats->files_reassigned > 0) {
             output_print(
                 out, OUTPUT_NORMAL, "  Reverted %zu file%s to lower precedence\n",
-                stats->files_with_fallback,
-                stats->files_with_fallback == 1 ? "" : "s"
+                stats->files_reassigned,
+                stats->files_reassigned == 1 ? "" : "s"
             );
         }
     }
@@ -648,7 +657,21 @@ cleanup:
 /**
  * Profile enable subcommand
  *
- * Adds profiles to the enabled set in state.
+ * Four-phase flow (see manifest_apply_scope's ORDERING RULE):
+ *   1. Gather & validate — resolve --all/args to a request set, then
+ *      filter out already-enabled, missing, and custom-without-prefix
+ *      profiles. Emits per-profile warnings; produces to_enable_validated.
+ *   2. Commit scope to state — state_enable_profile per target (writes
+ *      custom_prefix + zero-OID sentinel), then
+ *      manifest_persist_profile_head per target to fill in the real
+ *      branch HEAD. enabled_profiles is now authoritative.
+ *   3. Reconcile once — a single apply_scope call builds the VWD for
+ *      the post-enable set, with stats_filter pinned to the newly
+ *      enabled profiles so gain-side stats (files_claimed / on-disk /
+ *      absent) land in the right slot per profile. Old K·M cost
+ *      (rebuilding the manifest per profile) collapses to a single M.
+ *   4. Per-profile feedback — iterate the validated targets to preserve
+ *      per-profile output, then state_save.
  */
 static error_t *profile_enable(
     git_repository *repo,
@@ -663,23 +686,44 @@ static error_t *profile_enable(
 
     /* Resource tracking for cleanup */
     string_array_t *enabled = NULL;
-    string_array_t *to_enable = NULL;
     string_array_t *all_branches = NULL;
+    string_array_t *to_enable = NULL;
+    string_array_t *to_enable_validated = NULL;
+    hashmap_t *enabled_set = NULL;
+    manifest_scope_stats_t *stats = NULL;
     error_t *err = NULL;
 
-    /* Counters for summary (not cleaned up) */
+    /* Counters for summary (survive the cleanup free of arrays) */
     size_t enabled_count = 0;
     size_t already_enabled = 0;
     size_t not_found = 0;
 
-    /* Get current enabled profiles */
+    /* Phase 1: Gather & validate */
     err = state_get_profiles(state, &enabled);
     if (err) {
         err = error_wrap(err, "Failed to get enabled profiles");
         goto cleanup;
     }
 
-    /* Determine which profiles to enable */
+    /* O(1) already-enabled lookups; replaces the inner linear scan that
+     * made the previous flow O(K·E) on the membership check. */
+    size_t cap = enabled->count > 0 ? enabled->count * 2 : 16;
+    enabled_set = hashmap_borrow(cap);
+    if (!enabled_set) {
+        err = ERROR(ERR_MEMORY, "Failed to create enabled membership set");
+        goto cleanup;
+    }
+    for (size_t i = 0; i < enabled->count; i++) {
+        err = hashmap_set(enabled_set, enabled->items[i], (void *) (uintptr_t) 1);
+        if (err) {
+            err = error_wrap(err, "Failed to populate enabled membership set");
+            goto cleanup;
+        }
+    }
+
+    /* Resolve the request set (--all → list of local branches; args →
+     * verbatim). Both paths deposit into to_enable; Phase 1's filter
+     * loop decides which ones are actually actionable. */
     to_enable = string_array_new(0);
     if (!to_enable) {
         err = ERROR(ERR_MEMORY, "Failed to create array");
@@ -723,7 +767,8 @@ static error_t *profile_enable(
         }
     }
 
-    /* Validation: --prefix requires exactly ONE profile */
+    /* Fatal up-front: --prefix binds to a specific profile and cannot
+     * disambiguate among many. Caught here before any state mutation. */
     if (opts->custom_prefix && to_enable->count > 1) {
         output_error(out, "Cannot use --prefix with multiple profiles");
         output_hint(out, OUTPUT_NORMAL, "Enable each profile separately:");
@@ -738,24 +783,20 @@ static error_t *profile_enable(
         goto cleanup;
     }
 
-    /* Process each profile */
+    /* Filter: already-enabled, missing branch, custom-without-prefix,
+     * and invalid-prefix are all non-fatal per-profile skips. The
+     * surviving set lands in to_enable_validated. */
+    to_enable_validated = string_array_new(0);
+    if (!to_enable_validated) {
+        err = ERROR(ERR_MEMORY, "Failed to create validated list");
+        goto cleanup;
+    }
+
     for (size_t i = 0; i < to_enable->count; i++) {
         const char *profile = to_enable->items[i];
 
-        /* Check if already enabled */
-        bool is_enabled = false;
-        for (size_t j = 0; j < enabled->count; j++) {
-            if (strcmp(enabled->items[j], profile) == 0) {
-                is_enabled = true;
-                break;
-            }
-        }
-
-        if (is_enabled) {
-            output_info(
-                out, OUTPUT_VERBOSE, "  %s already enabled",
-                profile
-            );
+        if (hashmap_get(enabled_set, profile)) {
+            output_info(out, OUTPUT_VERBOSE, "  %s already enabled", profile);
             already_enabled++;
             continue;
         }
@@ -812,44 +853,66 @@ static error_t *profile_enable(
             }
         }
 
-        /* Enable profile in state with custom prefix */
+        err = string_array_push(to_enable_validated, profile);
+        if (err) {
+            err = error_wrap(err, "Failed to add profile to validated list");
+            goto cleanup;
+        }
+    }
+
+    enabled_count = to_enable_validated->count;
+
+    /* Phase 2: Commit scope to state */
+    for (size_t i = 0; i < to_enable_validated->count; i++) {
+        const char *profile = to_enable_validated->items[i];
+
         err = state_enable_profile(state, profile, opts->custom_prefix);
         if (err) {
-            err = error_wrap(err, "Failed to enable profile in state");
-            goto cleanup;
-        }
-
-        /* Add to enabled list (for manifest building) */
-        err = string_array_push(enabled, profile);
-        if (err) {
-            err = error_wrap(err, "Failed to add profile to enabled list");
-            goto cleanup;
-        }
-        enabled_count++;
-
-        /* Sync profile to manifest and capture stats */
-        manifest_enable_stats_t stats = { 0 };
-        err = manifest_enable_profile(
-            repo, state, profile, enabled, &stats
-        );
-        if (err) {
             err = error_wrap(
-                err, "Failed to sync profile '%s' to manifest",
-                profile
+                err, "Failed to enable profile '%s' in state", profile
             );
             goto cleanup;
         }
 
-        /* Show manifest analysis (verbose: detailed, normal: compact) */
-        output_styled(
-            out, OUTPUT_NORMAL, "  {green}✓{reset} Enabled %s\n",
-            profile
-        );
-        print_manifest_enable_stats(out, profile, &stats);
+        /* Replace the zero-OID sentinel state_enable_profile writes with
+         * the real branch HEAD so enabled_profiles is fully authoritative
+         * before apply_scope runs. */
+        err = manifest_persist_profile_head(repo, state, profile);
+        if (err) {
+            err = error_wrap(
+                err, "Failed to persist HEAD for profile '%s'", profile
+            );
+            goto cleanup;
+        }
     }
 
-    /* Save state (profiles already updated via state_enable_profile in loop) */
-    if (enabled_count > 0) {
+    /* Phase 3: Reconcile once */
+    if (to_enable_validated->count > 0) {
+        stats = calloc(to_enable_validated->count, sizeof(*stats));
+        if (!stats) {
+            err = ERROR(ERR_MEMORY, "Failed to allocate enable stats");
+            goto cleanup;
+        }
+
+        err = manifest_apply_scope(
+            repo, state, to_enable_validated, stats
+        );
+        if (err) {
+            err = error_wrap(err, "Failed to reconcile manifest after enable");
+            goto cleanup;
+        }
+
+        /* Phase 4: Per-profile feedback */
+        for (size_t i = 0; i < to_enable_validated->count; i++) {
+            output_styled(
+                out, OUTPUT_NORMAL, "  {green}✓{reset} Enabled %s\n",
+                to_enable_validated->items[i]
+            );
+            print_manifest_enable_stats(
+                out, to_enable_validated->items[i], &stats[i]
+            );
+        }
+
         err = state_save(repo, state);
         if (err) {
             err = error_wrap(err, "Failed to save state");
@@ -859,8 +922,11 @@ static error_t *profile_enable(
 
 cleanup:
     /* Cleanup all resources */
-    string_array_free(all_branches);
+    free(stats);
+    if (enabled_set) hashmap_free(enabled_set, NULL);
+    string_array_free(to_enable_validated);
     string_array_free(to_enable);
+    string_array_free(all_branches);
     string_array_free(enabled);
 
     /* If there's an error, return it now */
@@ -906,7 +972,17 @@ cleanup:
 /**
  * Profile disable subcommand
  *
- * Removes profiles from the enabled set.
+ * Four-phase flow (see manifest_apply_scope's ORDERING RULE):
+ *   1. Gather & validate — filter requested profiles to those actually
+ *      enabled; emit not-enabled diagnostics up front.
+ *   2. Commit scope to state — state_disable_profile per validated
+ *      target; enabled_profiles is now authoritative for the target set.
+ *   3. Reconcile once — a single apply_scope call rebuilds the VWD
+ *      against the post-disable enabled set and attributes loss-side
+ *      stats (files_reassigned / files_orphaned) to each disabled
+ *      profile via stats_filter.
+ *   4. Per-profile feedback — iterate the validated targets to preserve
+ *      the existing per-profile UX.
  */
 static error_t *profile_disable(
     git_repository *repo,
@@ -921,32 +997,48 @@ static error_t *profile_disable(
 
     /* Resource tracking for cleanup */
     string_array_t *enabled = NULL;
-    string_array_t *to_disable = NULL;
-    string_array_t *new_enabled = NULL;
+    string_array_t *to_disable_validated = NULL;
+    hashmap_t *enabled_set = NULL;
+    manifest_scope_stats_t *stats = NULL;
     error_t *err = NULL;
 
-    /* Counters for summary (not cleaned up) */
+    /* Counters for summary (survive the cleanup free of to_disable_validated) */
     size_t disabled_count = 0;
     size_t not_enabled = 0;
 
-    /* Get current enabled profiles */
+    /* Phase 1: Gather & validate */
     err = state_get_profiles(state, &enabled);
     if (err) {
         err = error_wrap(err, "Failed to get enabled profiles");
         goto cleanup;
     }
 
-    /* Determine which profiles to disable */
-    to_disable = string_array_new(0);
-    if (!to_disable) {
+    /* O(1) membership lookups; pre-loop replaces the inner linear scans
+     * that made the old flow quadratic when many profiles were passed. */
+    size_t cap = enabled->count > 0 ? enabled->count * 2 : 16;
+    enabled_set = hashmap_borrow(cap);
+    if (!enabled_set) {
+        err = ERROR(ERR_MEMORY, "Failed to create enabled membership set");
+        goto cleanup;
+    }
+    for (size_t i = 0; i < enabled->count; i++) {
+        err = hashmap_set(enabled_set, enabled->items[i], (void *) (uintptr_t) 1);
+        if (err) {
+            err = error_wrap(err, "Failed to populate enabled membership set");
+            goto cleanup;
+        }
+    }
+
+    to_disable_validated = string_array_new(0);
+    if (!to_disable_validated) {
         err = ERROR(ERR_MEMORY, "Failed to create array");
         goto cleanup;
     }
 
     if (opts->all_profiles) {
-        /* Disable all */
+        /* --all: every currently enabled profile is, by definition, valid. */
         for (size_t i = 0; i < enabled->count; i++) {
-            err = string_array_push(to_disable, enabled->items[i]);
+            err = string_array_push(to_disable_validated, enabled->items[i]);
             if (err) {
                 err = error_wrap(err, "Failed to add profile to disable list");
                 goto cleanup;
@@ -963,144 +1055,86 @@ static error_t *profile_disable(
         }
 
         for (size_t i = 0; i < opts->profile_count; i++) {
-            err = string_array_push(to_disable, opts->profiles[i]);
-            if (err) {
-                err = error_wrap(err, "Failed to add profile to disable list");
-                goto cleanup;
+            const char *profile = opts->profiles[i];
+            if (hashmap_get(enabled_set, profile)) {
+                err = string_array_push(to_disable_validated, profile);
+                if (err) {
+                    err = error_wrap(err, "Failed to add profile to disable list");
+                    goto cleanup;
+                }
+            } else {
+                output_info(
+                    out, OUTPUT_VERBOSE, "  %s was not enabled", profile
+                );
+                not_enabled++;
             }
         }
     }
 
-    /* Count profiles and build new_enabled for manifest operations */
-    new_enabled = string_array_new(0);
-    if (!new_enabled) {
-        err = ERROR(ERR_MEMORY, "Failed to create array");
-        goto cleanup;
-    }
+    disabled_count = to_disable_validated->count;
 
-    /* Build new_enabled list (for manifest_disable_profile) and count */
-    for (size_t i = 0; i < enabled->count; i++) {
-        const char *profile = enabled->items[i];
-
-        /* Check if this profile should be disabled */
-        bool should_disable = false;
-        for (size_t j = 0; j < to_disable->count; j++) {
-            if (strcmp(to_disable->items[j], profile) == 0) {
-                should_disable = true;
-                disabled_count++;
-                break;
-            }
-        }
-
-        /* Add to new_enabled if NOT being disabled (needed for manifest fallback) */
-        if (!should_disable) {
-            err = string_array_push(new_enabled, profile);
-            if (err) {
-                err = error_wrap(err, "Failed to build remaining profiles list");
-                goto cleanup;
-            }
-        }
-    }
-
-    /* Check for profiles that weren't enabled */
-    for (size_t i = 0; i < to_disable->count; i++) {
-        const char *profile = to_disable->items[i];
-
-        bool was_enabled = false;
-        for (size_t j = 0; j < enabled->count; j++) {
-            if (strcmp(enabled->items[j], profile) == 0) {
-                was_enabled = true;
-                break;
-            }
-        }
-
-        if (!was_enabled) {
-            output_info(out, OUTPUT_VERBOSE, "  %s was not enabled", profile);
-            not_enabled++;
-        }
-    }
-
-    /* Dry-run mode: show what would happen and exit */
+    /* Dry-run short-circuits before any state mutation. */
     if (opts->dry_run) {
-        if (disabled_count > 0) {
+        if (to_disable_validated->count > 0) {
             output_newline(out, OUTPUT_NORMAL);
-
             output_info(
-                out, OUTPUT_NORMAL, "Would disable %zu profile%s:", disabled_count,
-                disabled_count == 1 ? "" : "s"
+                out, OUTPUT_NORMAL, "Would disable %zu profile%s:",
+                to_disable_validated->count,
+                to_disable_validated->count == 1 ? "" : "s"
             );
-            for (size_t i = 0; i < to_disable->count; i++) {
-                const char *profile = to_disable->items[i];
-                /* Check if it was actually enabled */
-                bool was_enabled = false;
-                for (size_t j = 0; j < enabled->count; j++) {
-                    if (strcmp(enabled->items[j], profile) == 0) {
-                        was_enabled = true;
-                        break;
-                    }
-                }
-                if (was_enabled) {
-                    output_print(
-                        out, OUTPUT_NORMAL, "  - %s\n",
-                        profile
-                    );
-                }
+            for (size_t i = 0; i < to_disable_validated->count; i++) {
+                output_print(
+                    out, OUTPUT_NORMAL, "  - %s\n",
+                    to_disable_validated->items[i]
+                );
             }
             output_newline(out, OUTPUT_NORMAL);
-            output_info(out, OUTPUT_NORMAL, "Run 'dotta apply' to remove deployed files");
+            output_info(
+                out, OUTPUT_NORMAL, "Run 'dotta apply' to remove deployed files"
+            );
         }
         goto cleanup;
     }
 
-    /* Update state with disabled profiles */
-    if (disabled_count > 0) {
-        /* Process each disabled profile */
-        for (size_t i = 0; i < to_disable->count; i++) {
-            const char *profile = to_disable->items[i];
+    /* Phase 2: Commit scope to state */
+    for (size_t i = 0; i < to_disable_validated->count; i++) {
+        err = state_disable_profile(state, to_disable_validated->items[i]);
+        if (err) {
+            err = error_wrap(
+                err, "Failed to remove profile '%s' from state",
+                to_disable_validated->items[i]
+            );
+            goto cleanup;
+        }
+    }
 
-            /* Check if this profile was actually enabled */
-            bool was_enabled = false;
-            for (size_t j = 0; j < enabled->count; j++) {
-                if (strcmp(enabled->items[j], profile) == 0) {
-                    was_enabled = true;
-                    break;
-                }
-            }
-
-            if (was_enabled) {
-                /* Unsync from manifest (updates to fallback or marks for removal) */
-                manifest_disable_stats_t stats = { 0 };
-                err = manifest_disable_profile(
-                    repo, state, profile, new_enabled, &stats
-                );
-                if (err) {
-                    err = error_wrap(
-                        err, "Failed to unsync profile '%s' from manifest",
-                        profile
-                    );
-                    goto cleanup;
-                }
-
-                /* Show manifest analysis (verbose: detailed, normal: compact) */
-                output_styled(
-                    out, OUTPUT_NORMAL, "  {green}✓{reset} Disabled %s\n",
-                    profile
-                );
-                print_manifest_disable_stats(out, profile, &stats);
-
-                /* Remove from state */
-                err = state_disable_profile(state, profile);
-                if (err) {
-                    err = error_wrap(
-                        err, "Failed to remove profile '%s' from state",
-                        profile
-                    );
-                    goto cleanup;
-                }
-            }
+    /* Phase 3: Reconcile once */
+    if (to_disable_validated->count > 0) {
+        stats = calloc(to_disable_validated->count, sizeof(*stats));
+        if (!stats) {
+            err = ERROR(ERR_MEMORY, "Failed to allocate disable stats");
+            goto cleanup;
         }
 
-        /* Save state (profile disabling only - filesystem cleanup via 'apply') */
+        err = manifest_apply_scope(
+            repo, state, to_disable_validated, stats
+        );
+        if (err) {
+            err = error_wrap(err, "Failed to reconcile manifest after disable");
+            goto cleanup;
+        }
+
+        /* Phase 4: Per-profile feedback */
+        for (size_t i = 0; i < to_disable_validated->count; i++) {
+            output_styled(
+                out, OUTPUT_NORMAL, "  {green}✓{reset} Disabled %s\n",
+                to_disable_validated->items[i]
+            );
+            print_manifest_disable_stats(
+                out, to_disable_validated->items[i], &stats[i]
+            );
+        }
+
         err = state_save(repo, state);
         if (err) {
             err = error_wrap(err, "Failed to save state");
@@ -1109,9 +1143,9 @@ static error_t *profile_disable(
     }
 
 cleanup:
-    /* Cleanup all resources */
-    string_array_free(new_enabled);
-    string_array_free(to_disable);
+    free(stats);
+    if (enabled_set) hashmap_free(enabled_set, NULL);
+    string_array_free(to_disable_validated);
     string_array_free(enabled);
 
     /* If there's an error, return it now */
@@ -1325,10 +1359,14 @@ static error_t *profile_reorder(
         goto cleanup;
     }
 
-    /* Update manifest to reflect new precedence order */
-    err = manifest_reorder_profiles(repo, state, &new_order);
+    /* Reconcile manifest against the new precedence order.
+     *
+     * state_set_profiles preserves commit_oid for profiles that remain
+     * enabled, so enabled_profiles is already fully authoritative — no
+     * persist_profile_head loop needed for reorder. */
+    err = manifest_apply_scope(repo, state, NULL, NULL);
     if (err) {
-        err = error_wrap(err, "Failed to update manifest with new precedence");
+        err = error_wrap(err, "Failed to reconcile manifest with new precedence");
         goto cleanup;
     }
 

@@ -725,13 +725,11 @@ error_t *state_set_file_state(
  * Writes the profile's current branch HEAD to the per-profile commit_oid
  * column. Single-row UPDATE on enabled_profiles.
  *
- * Called after operations that move a profile's branch HEAD:
- * - manifest_sync_diff (after pull/merge)
- * - manifest_add_files (after commit)
- * - manifest_update_files (after commit)
- * - manifest_remove_files (after commit)
- * - manifest_enable_profile (after initial population)
- * - manifest_populate (after clone-time population)
+ * Direct callers:
+ * - manifest_persist_profile_head (gitops_resolve_branch_head_oid + this
+ *   function; reached by every scope-transition or post-commit path that
+ *   needs to refresh a profile's stored HEAD)
+ * - manifest_sync_diff (binds the explicit new_oid passed by sync)
  *
  * @param state State (must not be NULL, must have active transaction)
  * @param profile Profile name (must not be NULL)

@@ -988,10 +988,14 @@ error_t *state_set_directory_state(
 );
 
 /**
- * Mark all directories as inactive
+ * Mark all ACTIVE directories as inactive
  *
  * Bulk operation for manifest_sync_directories to prepare for rebuild.
  * Replaces the nuclear state_clear_directories() approach with mark-and-reactivate pattern.
+ *
+ * Only STATE_ACTIVE rows are downgraded to STATE_INACTIVE. STATE_DELETED and
+ * STATE_RELEASED are preserved (they represent downstream intent that must
+ * survive a reconciliation sweep).
  *
  * @param state State handle (must not be NULL, must have active transaction)
  * @return Error or NULL on success

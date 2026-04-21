@@ -179,7 +179,8 @@ typedef struct {
  *     enabled_profiles.commit_oid.
  *   - stats_filter and out_stats are either both NULL or both non-NULL.
  *   - When stats_filter is non-NULL, out_stats points to an array of
- *     length stats_filter->count.
+ *     length stats_filter->count, and stats_filter's entries are
+ *     pairwise unique (duplicates return ERR_INVALID_ARG — see below).
  *
  * Postconditions:
  *   - virtual_manifest reflects (enabled_profiles × Git trees) with
@@ -205,6 +206,8 @@ typedef struct {
  *   files_reassigned for X. The sum is the true manifest size.
  *
  * Error Conditions:
+ *   - ERR_INVALID_ARG: stats_filter contains a duplicate profile name,
+ *                      or stats_filter/out_stats violate the pairing rule
  *   - ERR_GIT: Git operation failed (tree walk, branch resolution)
  *   - ERR_CRYPTO: Encrypted file but key unavailable
  *   - ERR_STATE_INVALID: Database operation failed

@@ -690,6 +690,7 @@ static error_t *profile_enable(
     string_array_t *to_enable = NULL;
     string_array_t *to_enable_validated = NULL;
     hashmap_t *enabled_set = NULL;
+    hashmap_t *seen_set = NULL;
     manifest_scope_stats_t *stats = NULL;
     error_t *err = NULL;
 
@@ -706,11 +707,17 @@ static error_t *profile_enable(
     }
 
     /* O(1) already-enabled lookups; replaces the inner linear scan that
-     * made the previous flow O(K·E) on the membership check. */
+     * made the previous flow O(K·E) on the membership check.
+     *
+     * seen_set tracks profiles decided-about within this command pass, so
+     * duplicate args like `enable foo foo` are silently deduped instead of
+     * producing two rows in to_enable_validated (and, downstream, two
+     * "Enabled foo" lines with split stats attribution). */
     size_t cap = enabled->count > 0 ? enabled->count * 2 : 16;
     enabled_set = hashmap_borrow(cap);
-    if (!enabled_set) {
-        err = ERROR(ERR_MEMORY, "Failed to create enabled membership set");
+    seen_set = hashmap_borrow(cap);
+    if (!enabled_set || !seen_set) {
+        err = ERROR(ERR_MEMORY, "Failed to create membership sets");
         goto cleanup;
     }
     for (size_t i = 0; i < enabled->count; i++) {
@@ -783,6 +790,19 @@ static error_t *profile_enable(
         goto cleanup;
     }
 
+    /* Fatal up-front: validate the prefix value itself. Validating inside
+     * the per-profile loop used to categorize a bad prefix as not_found,
+     * which mislabels a CLI input problem as a missing profile. With the
+     * --prefix-requires-single-profile rule above, a single validation
+     * here covers every path that can reach Phase 2. */
+    if (opts->custom_prefix) {
+        err = path_validate_custom_prefix(opts->custom_prefix);
+        if (err) {
+            err = error_wrap(err, "Invalid --prefix value");
+            goto cleanup;
+        }
+    }
+
     /* Filter: already-enabled, missing branch, custom-without-prefix,
      * and invalid-prefix are all non-fatal per-profile skips. The
      * surviving set lands in to_enable_validated. */
@@ -794,6 +814,15 @@ static error_t *profile_enable(
 
     for (size_t i = 0; i < to_enable->count; i++) {
         const char *profile = to_enable->items[i];
+
+        /* Silently dedupe duplicate args — we've already decided about
+         * this profile earlier in this pass. */
+        if (hashmap_get(seen_set, profile)) continue;
+        err = hashmap_set(seen_set, profile, (void *) (uintptr_t) 1);
+        if (err) {
+            err = error_wrap(err, "Failed to mark profile '%s' as seen", profile);
+            goto cleanup;
+        }
 
         if (hashmap_get(enabled_set, profile)) {
             output_info(out, OUTPUT_VERBOSE, "  %s already enabled", profile);
@@ -824,7 +853,8 @@ static error_t *profile_enable(
             err = NULL;
         }
 
-        /* Validate custom prefix requirement */
+        /* Validate custom prefix requirement (the value itself was
+         * validated up-front alongside the --prefix multi-profile check). */
         if (has_custom && !opts->custom_prefix) {
             output_error(
                 out, "Profile '%s' contains custom/ files but --prefix not provided",
@@ -838,21 +868,6 @@ static error_t *profile_enable(
             continue;
         }
 
-        /* Validate custom prefix if provided */
-        if (opts->custom_prefix) {
-            err = path_validate_custom_prefix(opts->custom_prefix);
-            if (err) {
-                output_error(
-                    out, "Invalid custom prefix: %s",
-                    error_message(err)
-                );
-                error_free(err);
-                err = NULL;
-                not_found++;
-                continue;
-            }
-        }
-
         err = string_array_push(to_enable_validated, profile);
         if (err) {
             err = error_wrap(err, "Failed to add profile to validated list");
@@ -862,32 +877,36 @@ static error_t *profile_enable(
 
     enabled_count = to_enable_validated->count;
 
-    /* Phase 2: Commit scope to state */
-    for (size_t i = 0; i < to_enable_validated->count; i++) {
-        const char *profile = to_enable_validated->items[i];
-
-        err = state_enable_profile(state, profile, opts->custom_prefix);
-        if (err) {
-            err = error_wrap(
-                err, "Failed to enable profile '%s' in state", profile
-            );
-            goto cleanup;
-        }
-
-        /* Replace the zero-OID sentinel state_enable_profile writes with
-         * the real branch HEAD so enabled_profiles is fully authoritative
-         * before apply_scope runs. */
-        err = manifest_persist_profile_head(repo, state, profile);
-        if (err) {
-            err = error_wrap(
-                err, "Failed to persist HEAD for profile '%s'", profile
-            );
-            goto cleanup;
-        }
-    }
-
-    /* Phase 3: Reconcile once */
+    /* Phases 2–4 share the "we have work to do" precondition. Wrapping
+     * them together makes the "nothing validated → exit without touching
+     * state" path explicit; the transaction opened by state_open then
+     * rolls back via state_free on the no-op exit. */
     if (to_enable_validated->count > 0) {
+        /* Phase 2: Commit scope to state */
+        for (size_t i = 0; i < to_enable_validated->count; i++) {
+            const char *profile = to_enable_validated->items[i];
+
+            err = state_enable_profile(state, profile, opts->custom_prefix);
+            if (err) {
+                err = error_wrap(
+                    err, "Failed to enable profile '%s' in state", profile
+                );
+                goto cleanup;
+            }
+
+            /* Replace the zero-OID sentinel state_enable_profile writes
+             * with the real branch HEAD so enabled_profiles is fully
+             * authoritative before apply_scope runs. */
+            err = manifest_persist_profile_head(repo, state, profile);
+            if (err) {
+                err = error_wrap(
+                    err, "Failed to persist HEAD for profile '%s'", profile
+                );
+                goto cleanup;
+            }
+        }
+
+        /* Phase 3: Reconcile once */
         stats = calloc(to_enable_validated->count, sizeof(*stats));
         if (!stats) {
             err = ERROR(ERR_MEMORY, "Failed to allocate enable stats");
@@ -921,8 +940,11 @@ static error_t *profile_enable(
     }
 
 cleanup:
-    /* Cleanup all resources */
+    /* Cleanup all resources. Hashmaps freed before the string_arrays they
+     * borrow keys from (enabled, to_enable) to respect the borrow lifetime;
+     * seen_set borrows keys from to_enable, enabled_set from enabled. */
     free(stats);
+    if (seen_set) hashmap_free(seen_set, NULL);
     if (enabled_set) hashmap_free(enabled_set, NULL);
     string_array_free(to_enable_validated);
     string_array_free(to_enable);
@@ -999,6 +1021,7 @@ static error_t *profile_disable(
     string_array_t *enabled = NULL;
     string_array_t *to_disable_validated = NULL;
     hashmap_t *enabled_set = NULL;
+    hashmap_t *seen_set = NULL;
     manifest_scope_stats_t *stats = NULL;
     error_t *err = NULL;
 
@@ -1014,11 +1037,17 @@ static error_t *profile_disable(
     }
 
     /* O(1) membership lookups; pre-loop replaces the inner linear scans
-     * that made the old flow quadratic when many profiles were passed. */
+     * that made the old flow quadratic when many profiles were passed.
+     *
+     * seen_set tracks profiles decided-about within this command pass,
+     * so duplicate args (`disable foo foo`) are silently deduped and
+     * don't produce two rows in to_disable_validated. Only the explicit-
+     * args path consults it; --all iterates the unique enabled set. */
     size_t cap = enabled->count > 0 ? enabled->count * 2 : 16;
     enabled_set = hashmap_borrow(cap);
-    if (!enabled_set) {
-        err = ERROR(ERR_MEMORY, "Failed to create enabled membership set");
+    seen_set = hashmap_borrow(cap);
+    if (!enabled_set || !seen_set) {
+        err = ERROR(ERR_MEMORY, "Failed to create membership sets");
         goto cleanup;
     }
     for (size_t i = 0; i < enabled->count; i++) {
@@ -1056,6 +1085,16 @@ static error_t *profile_disable(
 
         for (size_t i = 0; i < opts->profile_count; i++) {
             const char *profile = opts->profiles[i];
+
+            /* Silently dedupe duplicate args — we've already decided
+             * about this profile earlier in this pass. */
+            if (hashmap_get(seen_set, profile)) continue;
+            err = hashmap_set(seen_set, profile, (void *) (uintptr_t) 1);
+            if (err) {
+                err = error_wrap(err, "Failed to mark profile '%s' as seen", profile);
+                goto cleanup;
+            }
+
             if (hashmap_get(enabled_set, profile)) {
                 err = string_array_push(to_disable_validated, profile);
                 if (err) {
@@ -1096,20 +1135,24 @@ static error_t *profile_disable(
         goto cleanup;
     }
 
-    /* Phase 2: Commit scope to state */
-    for (size_t i = 0; i < to_disable_validated->count; i++) {
-        err = state_disable_profile(state, to_disable_validated->items[i]);
-        if (err) {
-            err = error_wrap(
-                err, "Failed to remove profile '%s' from state",
-                to_disable_validated->items[i]
-            );
-            goto cleanup;
-        }
-    }
-
-    /* Phase 3: Reconcile once */
+    /* Phases 2–4 share the "we have work to do" precondition. Wrapping
+     * them together makes the "nothing validated → exit without touching
+     * state" path explicit; the transaction opened by state_open then
+     * rolls back via state_free on the no-op exit. */
     if (to_disable_validated->count > 0) {
+        /* Phase 2: Commit scope to state */
+        for (size_t i = 0; i < to_disable_validated->count; i++) {
+            err = state_disable_profile(state, to_disable_validated->items[i]);
+            if (err) {
+                err = error_wrap(
+                    err, "Failed to remove profile '%s' from state",
+                    to_disable_validated->items[i]
+                );
+                goto cleanup;
+            }
+        }
+
+        /* Phase 3: Reconcile once */
         stats = calloc(to_disable_validated->count, sizeof(*stats));
         if (!stats) {
             err = ERROR(ERR_MEMORY, "Failed to allocate disable stats");
@@ -1143,7 +1186,11 @@ static error_t *profile_disable(
     }
 
 cleanup:
+    /* Cleanup all resources. Hashmaps freed before the string_arrays whose
+     * items they borrow — seen_set borrows from opts->profiles (caller-
+     * owned, outlives us) and enabled_set from enabled (owned here). */
     free(stats);
+    if (seen_set) hashmap_free(seen_set, NULL);
     if (enabled_set) hashmap_free(enabled_set, NULL);
     string_array_free(to_disable_validated);
     string_array_free(enabled);

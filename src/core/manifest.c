@@ -314,12 +314,24 @@ error_t *manifest_apply_scope(
             goto cleanup;
         }
         for (size_t i = 0; i < stats_filter->count; i++) {
+            const char *name = stats_filter->items[i];
+
+            /* Duplicate profile names would silently collapse: hashmap_set
+             * overwrites, so the later occurrence's slot would receive all
+             * attribution and the earlier slot would stay zero-filled. Fail
+             * loudly instead — this is a caller-side contract violation. */
+            if (hashmap_has(stats_map, name)) {
+                err = ERROR(
+                    ERR_INVALID_ARG,
+                    "manifest_apply_scope: duplicate profile '%s' in stats_filter",
+                    name
+                );
+                goto cleanup;
+            }
+
             memset(&out_stats[i], 0, sizeof(out_stats[i]));
-            out_stats[i].profile = stats_filter->items[i];
-            err = hashmap_set(
-                stats_map, stats_filter->items[i],
-                (void *) (uintptr_t) (i + 1)
-            );
+            out_stats[i].profile = name;
+            err = hashmap_set(stats_map, name, (void *) (uintptr_t) (i + 1));
             if (err) {
                 err = error_wrap(err, "Failed to populate stats attribution map");
                 goto cleanup;

@@ -58,8 +58,8 @@ static error_t *count_profile_files(
  *
  * Reports gain-side attribution for one enabled profile from a single
  * apply_scope call: files_claimed (rows the profile won precedence for)
- * partitioned by lstat observation into files_on_disk and files_absent.
- * access_errors is a subset of files_absent: paths where lstat failed
+ * partitioned by lstat observation into files_present and files_missing.
+ * access_errors is a subset of files_missing: paths where lstat failed
  * for a non-ENOENT reason.
  */
 static void print_manifest_enable_stats(
@@ -81,19 +81,19 @@ static void print_manifest_enable_stats(
             stats->files_claimed
         );
 
-        if (stats->files_on_disk > 0) {
+        if (stats->files_present > 0) {
             output_styled(
                 out, OUTPUT_VERBOSE,
                 "    - {green}%zu{reset} already deployed\n",
-                stats->files_on_disk
+                stats->files_present
             );
         }
 
-        if (stats->files_absent > 0) {
+        if (stats->files_missing > 0) {
             output_styled(
                 out, OUTPUT_VERBOSE,
                 "    - {yellow}%zu{reset} need deployment\n",
-                stats->files_absent
+                stats->files_missing
             );
         }
 
@@ -111,16 +111,16 @@ static void print_manifest_enable_stats(
         output_newline(out, OUTPUT_VERBOSE);
     } else {
         /* Compact summary */
-        if (stats->files_absent > 0) {
+        if (stats->files_missing > 0) {
             output_print(
                 out, OUTPUT_NORMAL, "  Staged %zu file%s for deployment\n",
-                stats->files_absent, stats->files_absent == 1 ? "" : "s"
+                stats->files_missing, stats->files_missing == 1 ? "" : "s"
             );
         }
-        if (stats->files_on_disk > 0) {
+        if (stats->files_present > 0) {
             output_print(
                 out, OUTPUT_NORMAL, "  Found %zu file%s already deployed\n",
-                stats->files_on_disk, stats->files_on_disk == 1 ? "" : "s"
+                stats->files_present, stats->files_present == 1 ? "" : "s"
             );
         }
 
@@ -166,7 +166,7 @@ static void print_manifest_disable_stats(
         if (stats->files_reassigned > 0) {
             output_styled(
                 out, OUTPUT_VERBOSE,
-                "    - {green}%zu{reset} file%s with fallback (will revert)\n",
+                "    - {green}%zu{reset} file%s with fallback (will reassign)\n",
                 stats->files_reassigned,
                 stats->files_reassigned == 1 ? "" : "s"
             );
@@ -180,6 +180,8 @@ static void print_manifest_disable_stats(
                 stats->files_orphaned == 1 ? "" : "s"
             );
         }
+
+        output_newline(out, OUTPUT_VERBOSE);
     } else {
         /* Compact summary */
         if (stats->files_orphaned > 0) {
@@ -191,7 +193,7 @@ static void print_manifest_disable_stats(
 
         if (stats->files_reassigned > 0) {
             output_print(
-                out, OUTPUT_NORMAL, "  Reverted %zu file%s to lower precedence\n",
+                out, OUTPUT_NORMAL, "  Reassigned %zu file%s to lower precedence\n",
                 stats->files_reassigned,
                 stats->files_reassigned == 1 ? "" : "s"
             );
@@ -694,8 +696,7 @@ static error_t *profile_enable(
     manifest_scope_stats_t *stats = NULL;
     error_t *err = NULL;
 
-    /* Counters for summary (survive the cleanup free of arrays) */
-    size_t enabled_count = 0;
+    /* Phase 1 observations — tallied during the validation loop. */
     size_t already_enabled = 0;
     size_t not_found = 0;
 
@@ -803,9 +804,12 @@ static error_t *profile_enable(
         }
     }
 
-    /* Filter: already-enabled, missing branch, custom-without-prefix,
-     * and invalid-prefix are all non-fatal per-profile skips. The
-     * surviving set lands in to_enable_validated. */
+    /* Filter: already-enabled and missing-branch are non-fatal per-profile
+     * skips. Custom-without-prefix is fatal — the profile exists but the
+     * user's input is incomplete, which is categorically different from
+     * "not found". Treating it as a per-profile skip previously leaked
+     * into the not_found tally and produced contradictory diagnostics.
+     * The surviving set lands in to_enable_validated. */
     to_enable_validated = string_array_new(0);
     if (!to_enable_validated) {
         err = ERROR(ERR_MEMORY, "Failed to create validated list");
@@ -817,14 +821,14 @@ static error_t *profile_enable(
 
         /* Silently dedupe duplicate args — we've already decided about
          * this profile earlier in this pass. */
-        if (hashmap_get(seen_set, profile)) continue;
+        if (hashmap_has(seen_set, profile)) continue;
         err = hashmap_set(seen_set, profile, (void *) (uintptr_t) 1);
         if (err) {
             err = error_wrap(err, "Failed to mark profile '%s' as seen", profile);
             goto cleanup;
         }
 
-        if (hashmap_get(enabled_set, profile)) {
+        if (hashmap_has(enabled_set, profile)) {
             output_info(out, OUTPUT_VERBOSE, "  %s already enabled", profile);
             already_enabled++;
             continue;
@@ -853,8 +857,10 @@ static error_t *profile_enable(
             err = NULL;
         }
 
-        /* Validate custom prefix requirement (the value itself was
-         * validated up-front alongside the --prefix multi-profile check). */
+        /* Fatal: the profile exists, but its custom/ files require a
+         * mount point the user didn't provide. Mirrors the
+         * --prefix-with-multiple-profiles check above — both are
+         * CLI-input errors, not per-profile skips. */
         if (has_custom && !opts->custom_prefix) {
             output_error(
                 out, "Profile '%s' contains custom/ files but --prefix not provided",
@@ -864,8 +870,11 @@ static error_t *profile_enable(
                 out, OUTPUT_NORMAL, "dotta profile enable %s --prefix /path/to/target",
                 profile
             );
-            not_found++;
-            continue;
+            err = ERROR(
+                ERR_INVALID_ARG,
+                "Profile '%s' requires --prefix", profile
+            );
+            goto cleanup;
         }
 
         err = string_array_push(to_enable_validated, profile);
@@ -875,7 +884,52 @@ static error_t *profile_enable(
         }
     }
 
-    enabled_count = to_enable_validated->count;
+    /* Dry-run: preview what a live run would do, skip every state
+     * mutation. Dry-run owns its complete UX below — the live-path
+     * summary is unreachable on this branch (goto cleanup bypasses it). */
+    if (opts->dry_run) {
+        if (!output_is_verbose(out)) {
+            output_newline(out, OUTPUT_NORMAL);
+        }
+
+        if (to_enable_validated->count > 0) {
+            output_info(
+                out, OUTPUT_NORMAL, "Would enable %zu profile%s:",
+                to_enable_validated->count,
+                to_enable_validated->count == 1 ? "" : "s"
+            );
+            for (size_t i = 0; i < to_enable_validated->count; i++) {
+                output_print(
+                    out, OUTPUT_NORMAL, "  - %s\n",
+                    to_enable_validated->items[i]
+                );
+            }
+            output_newline(out, OUTPUT_NORMAL);
+            output_info(
+                out, OUTPUT_NORMAL, "Run 'dotta apply' to deploy files"
+            );
+        }
+        if (already_enabled > 0) {
+            output_info(
+                out, OUTPUT_NORMAL, "%zu profile%s already enabled",
+                already_enabled, already_enabled == 1 ? "" : "s"
+            );
+        }
+        if (not_found > 0) {
+            output_warning(
+                out, OUTPUT_NORMAL, "%zu profile%s not found",
+                not_found, not_found == 1 ? "" : "s"
+            );
+        }
+        /* Mirror the live-path terminal: if nothing would be enabled
+         * because every requested profile was missing, surface the same
+         * error a live run would produce. Idempotent cases (all already
+         * enabled) fall through to cleanup with err == NULL. */
+        if (to_enable_validated->count == 0 && not_found > 0) {
+            err = ERROR(ERR_NOT_FOUND, "No profiles were enabled");
+        }
+        goto cleanup;
+    }
 
     /* Phases 2–4 share the "we have work to do" precondition. Wrapping
      * them together makes the "nothing validated → exit without touching
@@ -939,39 +993,24 @@ static error_t *profile_enable(
         }
     }
 
-cleanup:
-    /* Cleanup all resources. Hashmaps freed before the string_arrays they
-     * borrow keys from (enabled, to_enable) to respect the borrow lifetime;
-     * seen_set borrows keys from to_enable, enabled_set from enabled. */
-    free(stats);
-    if (seen_set) hashmap_free(seen_set, NULL);
-    if (enabled_set) hashmap_free(enabled_set, NULL);
-    string_array_free(to_enable_validated);
-    string_array_free(to_enable);
-    string_array_free(all_branches);
-    string_array_free(enabled);
-
-    /* If there's an error, return it now */
-    if (err) return err;
-
-    /* Summary (only shown on success) */
+    /* Live summary — only runs on non-dry-run, non-error completion.
+     * Any Phase 2-4 failure sets err and jumps to cleanup, skipping
+     * the summary; dry-run owns its own messaging above. */
     if (!output_is_verbose(out)) {
         output_newline(out, OUTPUT_NORMAL);
     }
 
-    if (enabled_count > 0) {
+    if (to_enable_validated->count > 0) {
         output_success(
             out, OUTPUT_NORMAL, "Enabled %zu profile%s",
-            enabled_count, enabled_count == 1 ? "" : "s"
+            to_enable_validated->count,
+            to_enable_validated->count == 1 ? "" : "s"
         );
         output_info(
             out, OUTPUT_NORMAL, "Files staged for deployment in manifest"
         );
-        output_info(
-            out, OUTPUT_NORMAL, "Run 'dotta status' to review or 'dotta apply' to deploy"
-        );
     }
-    if (already_enabled > 0 && !opts->quiet) {
+    if (already_enabled > 0) {
         output_info(
             out, OUTPUT_NORMAL, "%zu profile%s already enabled",
             already_enabled, already_enabled == 1 ? "" : "s"
@@ -984,11 +1023,27 @@ cleanup:
         );
     }
 
-    if (enabled_count == 0 && not_found > 0) {
-        return ERROR(ERR_NOT_FOUND, "No profiles were enabled");
+    /* Terminal: error only if the user's inputs produced zero validated
+     * profiles AND at least one was genuinely missing. Pure idempotent
+     * cases (all already-enabled, or --all on an empty repo) fall
+     * through to cleanup with err == NULL. */
+    if (to_enable_validated->count == 0 && not_found > 0) {
+        err = ERROR(ERR_NOT_FOUND, "No profiles were enabled");
     }
 
-    return NULL;
+cleanup:
+    /* Cleanup all resources. Hashmaps freed before the string_arrays they
+     * borrow keys from (enabled, to_enable) to respect the borrow lifetime;
+     * seen_set borrows keys from to_enable, enabled_set from enabled. */
+    free(stats);
+    if (seen_set) hashmap_free(seen_set, NULL);
+    if (enabled_set) hashmap_free(enabled_set, NULL);
+    string_array_free(to_enable_validated);
+    string_array_free(to_enable);
+    string_array_free(all_branches);
+    string_array_free(enabled);
+
+    return err;
 }
 
 /**
@@ -1025,8 +1080,7 @@ static error_t *profile_disable(
     manifest_scope_stats_t *stats = NULL;
     error_t *err = NULL;
 
-    /* Counters for summary (survive the cleanup free of to_disable_validated) */
-    size_t disabled_count = 0;
+    /* Phase 1 observation — tallied during explicit-args validation. */
     size_t not_enabled = 0;
 
     /* Phase 1: Gather & validate */
@@ -1034,6 +1088,17 @@ static error_t *profile_disable(
     if (err) {
         err = error_wrap(err, "Failed to get enabled profiles");
         goto cleanup;
+    }
+
+    /* --all on an empty enabled set is idempotent: there is nothing to
+     * disable, which matches `disable <name>` where <name> is not
+     * enabled (also a no-op success). The historic ERR_NOT_FOUND here
+     * made the two paths inconsistent for the same user intent. */
+    if (opts->all_profiles && enabled->count == 0) {
+        if (!opts->quiet) {
+            output_info(out, OUTPUT_NORMAL, "No enabled profiles to disable");
+        }
+        goto cleanup;  /* err is NULL — idempotent success */
     }
 
     /* O(1) membership lookups; pre-loop replaces the inner linear scans
@@ -1088,14 +1153,14 @@ static error_t *profile_disable(
 
             /* Silently dedupe duplicate args — we've already decided
              * about this profile earlier in this pass. */
-            if (hashmap_get(seen_set, profile)) continue;
+            if (hashmap_has(seen_set, profile)) continue;
             err = hashmap_set(seen_set, profile, (void *) (uintptr_t) 1);
             if (err) {
                 err = error_wrap(err, "Failed to mark profile '%s' as seen", profile);
                 goto cleanup;
             }
 
-            if (hashmap_get(enabled_set, profile)) {
+            if (hashmap_has(enabled_set, profile)) {
                 err = string_array_push(to_disable_validated, profile);
                 if (err) {
                     err = error_wrap(err, "Failed to add profile to disable list");
@@ -1110,12 +1175,15 @@ static error_t *profile_disable(
         }
     }
 
-    disabled_count = to_disable_validated->count;
-
-    /* Dry-run short-circuits before any state mutation. */
+    /* Dry-run: preview what a live run would do, skip every state
+     * mutation. Dry-run owns its complete UX below — the live-path
+     * summary is unreachable on this branch (goto cleanup bypasses it). */
     if (opts->dry_run) {
-        if (to_disable_validated->count > 0) {
+        if (!output_is_verbose(out)) {
             output_newline(out, OUTPUT_NORMAL);
+        }
+
+        if (to_disable_validated->count > 0) {
             output_info(
                 out, OUTPUT_NORMAL, "Would disable %zu profile%s:",
                 to_disable_validated->count,
@@ -1130,6 +1198,12 @@ static error_t *profile_disable(
             output_newline(out, OUTPUT_NORMAL);
             output_info(
                 out, OUTPUT_NORMAL, "Run 'dotta apply' to remove deployed files"
+            );
+        }
+        if (not_enabled > 0) {
+            output_info(
+                out, OUTPUT_NORMAL, "%zu profile%s not enabled",
+                not_enabled, not_enabled == 1 ? "" : "s"
             );
         }
         goto cleanup;
@@ -1185,6 +1259,36 @@ static error_t *profile_disable(
         }
     }
 
+    /* Live summary — only runs on non-dry-run, non-error completion.
+     * All reachable states here are successes:
+     *   - count > 0: actual work performed.
+     *   - count == 0 && not_enabled > 0: idempotent (user asked to
+     *     disable profiles that weren't enabled).
+     *   - count == 0 && not_enabled == 0 is unreachable: the explicit-
+     *     args path requires opts->profile_count > 0 (caught earlier),
+     *     and the --all-on-empty case is caught by the early exit. */
+    if (!output_is_verbose(out)) {
+        output_newline(out, OUTPUT_NORMAL);
+    }
+
+    if (to_disable_validated->count > 0) {
+        output_success(
+            out, OUTPUT_NORMAL, "Disabled %zu profile%s",
+            to_disable_validated->count,
+            to_disable_validated->count == 1 ? "" : "s"
+        );
+        output_info(
+            out, OUTPUT_NORMAL, "Files updated in manifest (fallback or marked for removal)"
+        );
+    }
+
+    if (not_enabled > 0) {
+        output_info(
+            out, OUTPUT_NORMAL, "%zu profile%s not enabled",
+            not_enabled, not_enabled == 1 ? "" : "s"
+        );
+    }
+
 cleanup:
     /* Cleanup all resources. Hashmaps freed before the string_arrays whose
      * items they borrow — seen_set borrows from opts->profiles (caller-
@@ -1195,47 +1299,7 @@ cleanup:
     string_array_free(to_disable_validated);
     string_array_free(enabled);
 
-    /* If there's an error, return it now */
-    if (err) return err;
-
-    /* Summary (only shown on success) */
-    if (!output_is_verbose(out)) {
-        output_newline(out, OUTPUT_NORMAL);
-    }
-
-    if (disabled_count > 0) {
-        output_success(
-            out, OUTPUT_NORMAL, "Disabled %zu profile%s",
-            disabled_count, disabled_count == 1 ? "" : "s"
-        );
-        output_info(
-            out, OUTPUT_NORMAL, "Files updated in manifest (fallback or marked for removal)"
-        );
-        output_info(
-            out, OUTPUT_NORMAL, "Run 'dotta status' to review or 'dotta apply' to execute changes"
-        );
-    }
-
-    if (not_enabled > 0 && !opts->quiet) {
-        output_info(
-            out, OUTPUT_NORMAL, "%zu profile%s were not enabled",
-            not_enabled, not_enabled == 1 ? "" : "s"
-        );
-    }
-
-    /* Return success if profiles were already disabled (idempotent) */
-    if (disabled_count == 0 && not_enabled > 0) {
-        return NULL;
-    }
-
-    /* Only error if nothing was specified or found */
-    if (disabled_count == 0) {
-        return ERROR(
-            ERR_NOT_FOUND, "No specified profiles were enabled or found"
-        );
-    }
-
-    return NULL;
+    return err;
 }
 
 /**
@@ -1368,7 +1432,7 @@ static error_t *profile_reorder(
 
     if (!order_changed) {
         if (!opts->quiet) {
-            output_info(out, OUTPUT_NORMAL, "No change - profiles already in requested order");
+            output_info(out, OUTPUT_NORMAL, "Profiles already in requested order");
         }
         goto cleanup;  /* Success, but no-op */
     }
@@ -1635,7 +1699,7 @@ error_t *cmd_profile(const dotta_ctx_t *ctx, const cmd_profile_options_t *opts) 
     CHECK_NULL(opts);
 
     git_repository *repo = ctx->repo;
-    state_t *state = ctx->state;  /* NULL for fetch (repo_only); set for list/validate/enable/disable/reorder */
+    state_t *state = ctx->state;  /* NULL for fetch (repo_only) */
     output_t *out = ctx->out;
 
     /* Override verbosity from CLI */
@@ -1779,6 +1843,11 @@ static const args_opt_t profile_enable_opts[] = {
         "Custom prefix for profiles with custom/ files"
     ),
     ARGS_FLAG(
+        "n dry-run",
+        cmd_profile_options_t,dry_run,
+        "Show what would change without modifying state"
+    ),
+    ARGS_FLAG(
         "v verbose",
         cmd_profile_options_t,verbose,
         "Show detailed progress"
@@ -1797,7 +1866,7 @@ static const args_opt_t profile_enable_opts[] = {
 static const args_command_t spec_profile_enable = {
     .name          = "profile enable",
     .summary       = "Enable profiles for deployment",
-    .usage         = "%s profile enable [--all] [--prefix <path>] [-v|-q] [<name>...]",
+    .usage         = "%s profile enable [options] [<name>...]",
     .description   =
         "Enables one or more profiles so that 'dotta apply' deploys their files.\n"
         "\n"

@@ -680,8 +680,9 @@ static error_t *update_metadata_for_profile(
 
     if (captured_file_count > 0 || updated_dir_count > 0) {
         output_info(
-            out, OUTPUT_VERBOSE, "Updated metadata for %zu file(s) and %zu director%s",
-            captured_file_count, updated_dir_count, updated_dir_count == 1 ? "y" : "ies"
+            out, OUTPUT_VERBOSE, "Updated metadata for %zu file%s and %zu director%s",
+            captured_file_count, captured_file_count == 1 ? "" : "s",
+            updated_dir_count, updated_dir_count == 1 ? "y" : "ies"
         );
     }
 
@@ -1145,8 +1146,8 @@ static error_t *update_manifest_after_update(
     if (synced > 0 || removed > 0 || fallbacks > 0) {
         output_info(
             out, OUTPUT_VERBOSE,
-            "Manifest synced: %zu updated, %zu removed, %zu fallbacks",
-            synced, removed, fallbacks
+            "Manifest synced: %zu staged, %zu removed, %zu fallback%s",
+            synced, removed, fallbacks, fallbacks == 1 ? "" : "s"
         );
     }
 

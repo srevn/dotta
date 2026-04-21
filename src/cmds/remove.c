@@ -491,10 +491,8 @@ static void display_multi_profile_warnings(
 
     output_section(out, OUTPUT_NORMAL, "Multi-profile file warning");
     output_warning(
-        out, OUTPUT_NORMAL, "%zu file%s exist%s in multiple profiles:",
-        multi_profile_count,
-        multi_profile_count == 1 ? "" : "s",
-        multi_profile_count == 1 ? "s" : ""
+        out, OUTPUT_NORMAL, "Found %zu file%s in multiple profiles:",
+        multi_profile_count, multi_profile_count == 1 ? "" : "s"
     );
 
     /* Display each multi-profile file */

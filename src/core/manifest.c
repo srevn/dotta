@@ -370,16 +370,16 @@ error_t *manifest_apply_scope(
                     /* File present on disk; match vs profile blob is
                      * unverified — workspace divergence analysis
                      * (status/diff/apply) decides. */
-                    out_stats[idx].files_on_disk++;
+                    out_stats[idx].files_present++;
                 } else if (errno == ENOENT) {
-                    out_stats[idx].files_absent++;
+                    out_stats[idx].files_missing++;
                 } else {
                     /* Inaccessible (permission denied, I/O error, …).
                      * Degrade gracefully: the row is still managed,
                      * and the user sees the access error count. Count
                      * as absent so files_claimed stays the sum of the
                      * on-disk and absent fan-outs. */
-                    out_stats[idx].files_absent++;
+                    out_stats[idx].files_missing++;
                     out_stats[idx].access_errors++;
                 }
             }

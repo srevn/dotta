@@ -1296,8 +1296,8 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
             }
 
             if (cleared > 0) {
-                output_info(
-                    out, OUTPUT_NORMAL, "Acknowledged %zu profile reassignment%s",
+                output_styled(
+                    out, OUTPUT_NORMAL, "Acknowledged {cyan}%zu{reset} profile reassignment%s\n",
                     cleared, cleared == 1 ? "" : "s"
                 );
             }
@@ -1446,10 +1446,9 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
             }
 
             output_warning(
-                out, OUTPUT_NORMAL, "%zu orphaned file%s %s uncommitted changes.",
+                out, OUTPUT_NORMAL, "%zu orphaned file%s with uncommitted changes.",
                 blocking_violation_count,
-                blocking_violation_count == 1 ? "" : "s",
-                blocking_violation_count == 1 ? "has" : "have"
+                blocking_violation_count == 1 ? "" : "s"
             );
 
             output_print(
@@ -1587,7 +1586,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         if (output_is_verbose(out)) {
             /* Detailed breakdown */
             output_print(
-                out, OUTPUT_VERBOSE, "Skipped %zu file%s (--exclude patterns):\n",
+                out, OUTPUT_VERBOSE, "Skipped %zu file%s (--exclude):\n",
                 total_excluded, total_excluded == 1 ? "" : "s"
             );
             if (excluded_deploy_count > 0) {

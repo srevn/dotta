@@ -1731,6 +1731,12 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
             drift.updated, drift.updated == 1 ? "" : "s"
         );
     }
+    if (drift.refreshed > 0) {
+        output_info(
+            out, OUTPUT_NORMAL, "Refreshed tracking for %zu unchanged file%s",
+            drift.refreshed, drift.refreshed == 1 ? "" : "s"
+        );
+    }
     if (drift.released > 0) {
         output_info(
             out, OUTPUT_NORMAL, "Released %zu file%s from management (run 'dotta apply' to prune)",

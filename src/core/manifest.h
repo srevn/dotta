@@ -129,9 +129,9 @@ typedef struct {
 
     /* Gain-side */
     size_t files_claimed;        /* Files this profile wins precedence for */
-    size_t files_on_disk;        /* lstat observed a file at the deploy path */
-    size_t files_absent;         /* lstat returned ENOENT (includes access errors) */
-    size_t access_errors;        /* lstat failed non-ENOENT (subset of files_absent) */
+    size_t files_present;        /* lstat observed a file at the deploy path */
+    size_t files_missing;        /* lstat returned ENOENT (includes access errors) */
+    size_t access_errors;        /* lstat failed non-ENOENT (subset of files_missing) */
 
     /* Loss-side */
     size_t files_reassigned;     /* Files reassigned to a different profile */
@@ -197,7 +197,7 @@ typedef struct {
  *
  * Stats attribution (when stats_filter is non-NULL):
  *   A profile in stats_filter ∩ new_enabled receives gain-side fields
- *   (files_claimed + lstat-derived files_on_disk / files_absent /
+ *   (files_claimed + lstat-derived files_present / files_missing /
  *   access_errors) as the new-manifest sync processes its entries.
  *   A profile that owned rows no longer in scope receives loss-side
  *   fields (files_reassigned / files_orphaned) during the orphan pass.

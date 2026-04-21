@@ -379,6 +379,18 @@ error_t *gitops_resolve_commit_in_branch(
  * - GIT_FILEMODE_BLOB (0100644): Regular file
  * - GIT_FILEMODE_BLOB_EXECUTABLE (0100755): Executable file
  *
+ * Index handling:
+ * - When `branch_name` is NOT the currently-checked-out branch (the
+ *   common case — dotta keeps HEAD on dotta-worktree while mutating
+ *   profile branches), the repository's shared index is left alone
+ *   on purpose. Touching it would corrupt the checked-out branch's
+ *   staging area.
+ * - When `branch_name` IS the current branch, the shared index is
+ *   re-seeded from the new tree so a subsequent workdir sync (e.g.
+ *   `gitops_sync_worktree` with GIT_CHECKOUT_SAFE) can proceed
+ *   without seeing phantom modifications. The workdir itself is the
+ *   caller's responsibility — this function does not write to disk.
+ *
  * @param repo Repository (must not be NULL)
  * @param branch_name Branch name (must not be NULL)
  * @param file_path File path within branch (must not be NULL or empty)

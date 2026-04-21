@@ -1132,12 +1132,80 @@ error_t *gitops_update_file(
         commit_message,
         NULL
     );
+    if (err) {
+        git_tree_free(new_tree);
+        return err;
+    }
+
+    /* Commit succeeded: the ref advanced and the tree changed. Report it
+     * via was_modified *before* the sync attempt so the flag stays a
+     * faithful signal of "did the commit happen" even if a later step
+     * fails. Errors below carry recovery context so callers can still
+     * tell a commit failure from a post-commit sync failure. */
+    if (was_modified) *was_modified = true;
+
+    /*
+     * Sync INDEX and workdir when we advance the current branch.
+     *
+     * The commit we just created advanced the branch ref, but the
+     * repo's shared index (.git/index) still points at the previous
+     * tree and the workdir still holds the previous content. When the
+     * target is the currently-checked-out branch (typically only
+     * dotta-worktree here), the next time anything inspects working
+     * state — `git status`, a subsequent `git_checkout_head`, or the
+     * caller's own logic — it sees phantom "local modifications"
+     * pointing backwards at the file we just committed.
+     *
+     * `git_checkout_tree` with a single-path pathspec and FORCE is the
+     * canonical libgit2 primitive for "make INDEX and workdir match
+     * this tree entry, leaving other paths alone". Scoping to one path
+     * ensures we don't touch unrelated workdir files the user may
+     * have modified.
+     *
+     * Profile-branch writes (the vast majority of callers) skip this —
+     * their indexes and workdirs are never observed while HEAD stays
+     * on dotta-worktree, and mutating the shared index for another
+     * branch would corrupt the checked-out branch's staging area. See
+     * the long comment in gitops_commit_tree_updates_safe for the
+     * rationale behind that invariant.
+     */
+    bool on_current = false;
+    err = gitops_is_current_branch(repo, branch_name, &on_current);
+    if (err) {
+        git_tree_free(new_tree);
+        return error_wrap(
+            err,
+            "Commit to '%s' succeeded but could not determine HEAD state "
+            "to sync working directory",
+            branch_name
+        );
+    }
+
+    if (on_current) {
+        /* Skip leading slashes to match libgit2's repo-relative pathspec form */
+        const char *norm_path = file_path;
+        while (*norm_path == '/') norm_path++;
+
+        char *paths[] = { (char *) norm_path };
+        git_checkout_options opts;
+        git_checkout_options_init(&opts, GIT_CHECKOUT_OPTIONS_VERSION);
+        opts.checkout_strategy = GIT_CHECKOUT_FORCE;
+        opts.paths.strings = paths;
+        opts.paths.count = 1;
+
+        git_err = git_checkout_tree(repo, (const git_object *) new_tree, &opts);
+        if (git_err < 0) {
+            err = error_wrap(
+                error_from_git(git_err),
+                "Commit to '%s' succeeded but failed to sync working "
+                "directory for '%s'. Run 'dotta git checkout -- %s' "
+                "to reconcile",
+                branch_name, norm_path, norm_path
+            );
+        }
+    }
 
     git_tree_free(new_tree);
-
-    /* Set modification flag only on confirmed success */
-    if (!err && was_modified) *was_modified = true;
-
     return err;
 }
 

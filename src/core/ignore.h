@@ -1,13 +1,19 @@
 /**
  * ignore.h - Multi-layered ignore pattern system
  *
- * Implements a comprehensive ignore system with four layers of precedence:
- *   1. CLI --exclude flags (highest priority - operation-specific)
- *   2. Combined .dottaignore (baseline + profile-specific)
- *      - Baseline .dottaignore from dotta-worktree (applies to all profiles)
- *      - Profile .dottaignore extends baseline (can use ! to override)
- *      - Profile starts empty and inherits all baseline patterns
- *   3. Config ignore patterns (machine-specific rules from config.toml)
+ * Implements a comprehensive ignore system with four tiers of precedence:
+ *   1. CLI --exclude flags (highest priority - per-operation)
+ *   2. Combined .dottaignore ruleset, evaluated as one libgit2 ruleset:
+ *      - Baseline .dottaignore on dotta-worktree (machine-local, seeded
+ *        with compiled defaults by `dotta init` and `dotta clone`, then
+ *        editable via `dotta ignore`). If absent, compiled defaults are
+ *        applied as a fallback so safety patterns stay active.
+ *      - Profile .dottaignore on the profile branch (synced with the
+ *        profile, editable via `dotta ignore <profile>`).
+ *      Within the combined ruleset, later rules can negate earlier ones
+ *      via `!` — so profile patterns may override baseline patterns,
+ *      and baseline patterns may override the defaults fallback.
+ *   3. Config ignore patterns (user-level rules from config.toml)
  *   4. Source .gitignore (lowest priority - when adding from git repos)
  *
  * Uses libgit2's gitignore parser for full .gitignore spec support:
@@ -46,7 +52,8 @@ typedef enum {
     IGNORE_SOURCE_NONE = 0,              /* Not ignored */
     IGNORE_SOURCE_CLI,                   /* CLI --exclude patterns */
     IGNORE_SOURCE_PROFILE_DOTTAIGNORE,   /* Profile-specific .dottaignore */
-    IGNORE_SOURCE_BASELINE_DOTTAIGNORE,  /* Baseline .dottaignore */
+    IGNORE_SOURCE_BASELINE_DOTTAIGNORE,  /* Baseline .dottaignore on dotta-worktree */
+    IGNORE_SOURCE_BUILTIN,               /* Compiled defaults (baseline fallback) */
     IGNORE_SOURCE_CONFIG,                /* Config file patterns */
     IGNORE_SOURCE_SOURCE_GITIGNORE       /* Source .gitignore */
 } ignore_source_t;
@@ -112,7 +119,8 @@ void ignore_context_free(ignore_context_t *ctx);
  *
  * Applies all ignore rules in precedence order:
  *   1. CLI excludes
- *   2. Combined .dottaignore (baseline + profile with negation support)
+ *   2. Combined .dottaignore ruleset (baseline-or-builtin + profile,
+ *      evaluated as a single libgit2 ruleset with `!` negation)
  *   3. Config patterns
  *   4. Source .gitignore (if applicable and enabled)
  *
@@ -133,11 +141,32 @@ error_t *ignore_should_ignore(
  * Get default .dottaignore content
  *
  * Returns sensible default patterns for common unwanted files.
- * Used by `dotta init` to create initial .dottaignore.
+ * Used as the baseline seed on `dotta init` / `dotta clone`, as the
+ * fallback source when baseline is absent, and for `dotta ignore
+ * --list-defaults`.
  *
  * @return Default .dottaignore content (static string, do not free)
  */
 const char *ignore_default_dottaignore_content(void);
+
+/**
+ * Seed baseline .dottaignore on dotta-worktree
+ *
+ * Commits the compiled default patterns to `.dottaignore` on the
+ * `dotta-worktree` branch. Called by `dotta init` and `dotta clone` so
+ * every repo has a visible, editable starting point for machine-local
+ * ignore extensions.
+ *
+ * Idempotent: `gitops_update_file` detects a no-op when the blob
+ * already matches HEAD, so repeated invocations don't create empty
+ * commits. Because the target is the currently-checked-out branch,
+ * the same call also brings INDEX and workdir into line with HEAD
+ * for the seeded file — no follow-up sync needed.
+ *
+ * @param repo Repository (must not be NULL; must have dotta-worktree branch)
+ * @return Error or NULL on success
+ */
+error_t *ignore_seed_baseline(git_repository *repo);
 
 /**
  * Get profile .dottaignore template

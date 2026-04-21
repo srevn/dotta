@@ -507,30 +507,8 @@ static error_t *edit_baseline_dottaignore(
         return NULL;
     }
 
-    /*
-     * Sync working directory if dotta-worktree is the current branch.
-     * Use SAFE checkout to preserve any local modifications.
-     */
-    bool is_current = false;
-    error_t *branch_err = gitops_is_current_branch(repo, "dotta-worktree", &is_current);
-    if (!branch_err && is_current) {
-        error_t *sync_err = gitops_sync_worktree(repo, GIT_CHECKOUT_SAFE);
-        if (sync_err) {
-            /*
-             * Primary operation (pattern update) succeeded.
-             * Sync failed due to local modifications - warn but don't fail.
-             */
-            output_warning(
-                out, OUTPUT_NORMAL,
-                "Patterns saved to Git, but working directory sync failed.\n"
-                "  You may have local modifications to .dottaignore.\n"
-                "  To sync:  dotta git checkout .dottaignore\n"
-                "  To diff:  dotta git diff .dottaignore"
-            );
-            error_free(sync_err);
-        }
-    }
-    if (branch_err) error_free(branch_err);
+    /* INDEX and workdir are kept in sync by gitops_update_file for the
+     * current-branch case — no explicit worktree sync needed here. */
 
     output_success(
         out, OUTPUT_NORMAL, "Updated baseline .dottaignore in dotta-worktree branch"
@@ -894,32 +872,8 @@ static error_t *modify_baseline_dottaignore(
         return error_wrap(err, "Failed to update .dottaignore");
     }
 
-    /*
-     * Sync working directory if dotta-worktree is the current branch.
-     * Use SAFE checkout to preserve any local modifications.
-     */
-    bool is_current = false;
-    error_t *branch_err = gitops_is_current_branch(repo, "dotta-worktree", &is_current);
-    if (!branch_err && is_current) {
-        error_t *sync_err = gitops_sync_worktree(repo, GIT_CHECKOUT_SAFE);
-        if (sync_err) {
-            /*
-             * Primary operation (pattern update) succeeded.
-             * Sync failed due to local modifications - warn but don't fail.
-             */
-            output_warning(
-                out, OUTPUT_NORMAL,
-                "Patterns saved to Git, but working directory sync failed.\n"
-                "  You may have local modifications to .dottaignore.\n"
-                "  To sync:  dotta git checkout .dottaignore\n"
-                "  To diff:  dotta git diff .dottaignore"
-            );
-            error_free(sync_err);
-        }
-    }
-    if (branch_err) {
-        error_free(branch_err);
-    }
+    /* INDEX and workdir are kept in sync by gitops_update_file for the
+     * current-branch case — no explicit worktree sync needed here. */
 
     /* Report results */
     if (total_added > 0) {
@@ -1274,7 +1228,8 @@ static error_t *test_path_ignore(
             out, OUTPUT_NORMAL, "No enabled profiles found"
         );
         output_info(
-            out, OUTPUT_NORMAL, "Testing against baseline .dottaignore only"
+            out, OUTPUT_NORMAL,
+            "Testing against baseline .dottaignore and config patterns only"
         );
 
         /* Test with no profile */
@@ -1400,6 +1355,14 @@ error_t *cmd_ignore(const dotta_ctx_t *ctx, const cmd_ignore_options_t *opts) {
         output_set_verbosity(out, OUTPUT_VERBOSE);
     }
 
+    /* --list-defaults is terminal: print the compiled defaults and exit.
+     * Discoverability aid — lets users inspect the safety patterns
+     * without grepping source or cloning the repo. */
+    if (opts->list_defaults) {
+        output_print(out, OUTPUT_NORMAL, "%s", ignore_default_dottaignore_content());
+        return NULL;
+    }
+
     /* Validate mutual exclusivity */
     bool has_add = opts->add_count > 0;
     bool has_remove = opts->remove_count > 0;
@@ -1495,6 +1458,11 @@ static const args_opt_t ignore_opts[] = {
         "Report whether path is ignored"
     ),
     ARGS_FLAG(
+        "list-defaults",
+        cmd_ignore_options_t,list_defaults,
+        "Print compiled default patterns and exit"
+    ),
+    ARGS_FLAG(
         "v verbose",
         cmd_ignore_options_t,verbose,
         "Verbose output (test mode: show matches)"
@@ -1511,23 +1479,23 @@ const args_command_t spec_ignore = {
     .summary     = "Manage ignore patterns",
     .usage       = "%s ignore [options] [profile]",
     .description =
-        "View or edit .dottaignore files. Without a positional, operates\n"
-        "on the baseline; with one, on that profile's .dottaignore which\n"
-        "extends the baseline.\n",
+        "View or edit .dottaignore files. Without a positional,\n"
+        "operates on the machine-local baseline; with one, on that\n"
+        "profile's .dottaignore which extends the baseline.\n",
     .notes       =
         "Ignore Pattern Layers:\n"
-        "  1. CLI --exclude patterns (command-specific)\n"
-        "  2. Combined .dottaignore:\n"
-        "     - Baseline (dotta-worktree branch, applies to every profile)\n"
-        "     - Profile .dottaignore (extends baseline, can override with !)\n"
-        "  3. Config file patterns\n"
+        "  1. CLI --exclude patterns (per-operation)\n"
+        "  2. Combined .dottaignore ruleset:\n"
+        "     - Baseline .dottaignore (machine-local)\n"
+        "     - Profile .dottaignore (synced with the profile)\n"
+        "  3. Config file ignore patterns\n"
         "  4. Source .gitignore (lowest precedence)\n"
         "\n"
         "Pattern Syntax:\n"
-        "  *.log             # Match all .log files\n"
-        "  node_modules/     # Match directory\n"
-        "  !debug.log        # Negate a prior match\n"
-        "  .cache/           # Match .cache directories\n"
+        "  *.log                # Match all .log files\n"
+        "  node_modules/        # Match directory\n"
+        "  !debug.log           # Negate a prior match\n"
+        "  .cache/              # Match .cache directories\n"
         "\n"
         "Editor Selection:\n"
         "  $DOTTA_EDITOR, then $VISUAL, then $EDITOR, then vi\n",
@@ -1537,6 +1505,7 @@ const args_command_t spec_ignore = {
         "  %s ignore --add '*.tmp' --add '*.log'     # Append patterns\n"
         "  %s ignore global --remove '.DS_Store'     # Remove a pattern\n"
         "  %s ignore --add 'new' --remove 'old'      # Add + remove\n"
+        "  %s ignore --list-defaults                 # Show compiled defaults\n"
         "  %s ignore --test ~/.config/nvim/node_modules  # Enabled profiles\n"
         "  %s ignore global --test ~/.bashrc         # Single profile\n",
     .opts_size   = sizeof(cmd_ignore_options_t),

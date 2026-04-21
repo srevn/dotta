@@ -115,12 +115,12 @@ confirm_new_files = true
 #
 # Multi-layered ignore system with the following precedence:
 #   1. CLI --exclude flags (highest priority - operation-specific)
-#   2. .dottaignore file (repository-wide, version-controlled)
-#   3. Config ignore patterns (user-specific, below)
-#   4. Source .gitignore (when adding from git repos)
+#   2. Baseline .dottaignore file (repository-wide, machine-local, version-controlled)
+#   3. Profile .dottaignore file (per-profile overrides, can negate with `!`)
+#   4. Config ignore patterns (user-specific, below)
+#   5. Source .gitignore (when adding from git repos)
 #
-# Use the config patterns for machine-specific or personal ignore rules
-# that shouldn't be shared with the team (e.g., local IDE settings).
+# Run `dotta ignore --list-defaults` to see the compiled safety patterns.
 #
 # ============================================================================
 
@@ -152,11 +152,6 @@ patterns = [
     ".DS_Store",             # macOS (also in .dottaignore, but good for redundancy)
     "Thumbs.db",             # Windows
 ]
-
-# .dottaignore File Location
-# Path to the shared ignore file (usually in the dotta repository)
-# Default: .dottaignore (relative to repo_dir)
-file = ".dottaignore"
 
 # Respect Source .gitignore
 # When adding files from a git repository, check its .gitignore too

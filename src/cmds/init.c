@@ -137,40 +137,6 @@ static error_t *init_state(git_repository *repo) {
 }
 
 /**
- * Create default .dottaignore file in dotta-worktree branch
- */
-static error_t *init_dottaignore(git_repository *repo) {
-    CHECK_NULL(repo);
-
-    const char *content = ignore_default_dottaignore_content();
-
-    /* Commit .dottaignore directly to the branch (no index/workdir needed) */
-    error_t *err = gitops_update_file(
-        repo,
-        "dotta-worktree",
-        ".dottaignore",
-        content,
-        strlen(content),
-        "Initialize .dottaignore with default patterns",
-        GIT_FILEMODE_BLOB,
-        NULL
-    );
-    if (err) {
-        return error_wrap(err, "Failed to commit .dottaignore");
-    }
-
-    /* Sync working directory so the file appears on disk */
-    err = gitops_sync_worktree(repo, GIT_CHECKOUT_FORCE);
-    if (err) {
-        return error_wrap(
-            err, "Failed to sync .dottaignore to working directory"
-        );
-    }
-
-    return NULL;
-}
-
-/**
  * Initialize command implementation
  */
 error_t *cmd_init(const dotta_ctx_t *ctx, const cmd_init_options_t *opts) {
@@ -244,9 +210,10 @@ error_t *cmd_init(const dotta_ctx_t *ctx, const cmd_init_options_t *opts) {
         goto cleanup;
     }
 
-    /* Create default .dottaignore */
-    err = init_dottaignore(repo);
+    /* Seed baseline .dottaignore on dotta-worktree with default patterns */
+    err = ignore_seed_baseline(repo);
     if (err) {
+        err = error_wrap(err, "Failed to seed baseline .dottaignore");
         goto cleanup;
     }
 

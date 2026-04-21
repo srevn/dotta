@@ -20,6 +20,7 @@
 #include "base/array.h"
 #include "base/error.h"
 #include "base/output.h"
+#include "core/ignore.h"
 #include "core/manifest.h"
 #include "core/profiles.h"
 #include "core/state.h"
@@ -615,6 +616,22 @@ error_t *cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
     git_err = git_checkout_head(repo, &checkout_opts);
     if (git_err < 0) {
         final_err = error_from_git(git_err);
+        goto cleanup;
+    }
+
+    /* Seed baseline .dottaignore on dotta-worktree with default patterns.
+     *
+     * dotta-worktree is filtered from push/fetch (see upstream.c), so a
+     * cloned machine starts without one. Seeding here gives every repo
+     * the same visible, editable starting point that `dotta init`
+     * creates — and ensures the safety defaults are applied via the
+     * baseline path rather than only through the compiled fallback.
+     *
+     * Idempotent via gitops_update_file's no-op detection; no-op when
+     * the branch already has matching content (e.g. repeat invocations). */
+    err = ignore_seed_baseline(repo);
+    if (err) {
+        final_err = error_wrap(err, "Failed to seed baseline .dottaignore");
         goto cleanup;
     }
 

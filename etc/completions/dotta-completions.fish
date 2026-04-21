@@ -3,7 +3,7 @@
 
 complete -c dotta -f
 
-set -g __dotta_value_flags -p --profile --profiles --prefix -m --message -e --exclude --diverged --add --remove --test
+set -g __dotta_value_flags -p --profile --prefix -m --message -e --exclude --diverged --add --remove --test
 
 # Root options
 complete -c dotta -s h -l help -d "Show help"
@@ -35,7 +35,7 @@ complete -c dotta -n __dotta_needs_command -a interactive -d "Interactive profil
 complete -c dotta -n "__dotta_using_command init" -s q -l quiet -d "Suppress output"
 
 # clone
-complete -c dotta -n "__dotta_using_command clone" -s p -l profile -l profiles -r -d "Fetch specific profile(s) (repeatable)"
+complete -c dotta -n "__dotta_using_command clone" -s p -l profile -r -d "Fetch specific profile(s) (repeatable)"
 complete -c dotta -n "__dotta_using_command clone" -l all -d "Fetch every remote profile (hub/backup workflow)"
 complete -c dotta -n "__dotta_using_command clone" -l bootstrap -d "Run bootstrap scripts without prompting"
 complete -c dotta -n "__dotta_using_command clone" -l no-bootstrap -d "Skip bootstrap scripts entirely"
@@ -44,19 +44,19 @@ complete -c dotta -n "__dotta_using_command clone" -s v -l verbose -d "Verbose o
 
 # add
 complete -c dotta -n "__dotta_using_command add" -s p -l profile -r -d "Profile name (alternative to positional)"
-complete -c dotta -n "__dotta_using_command add" -l prefix -r -d "Storage root for custom/ paths (e.g. /mnt/jails/web)"
+complete -c dotta -n "__dotta_using_command add" -l prefix -r -d "Declare a relocatable storage root"
 complete -c dotta -n "__dotta_using_command add" -s m -l message -r -d "Commit message"
 complete -c dotta -n "__dotta_using_command add" -s e -l exclude -r -d "Skip matching files (glob, repeatable)"
 complete -c dotta -n "__dotta_using_command add" -s f -l force -d "Overwrite existing entries in the profile"
 complete -c dotta -n "__dotta_using_command add" -s v -l verbose -d "Verbose output"
 complete -c dotta -n "__dotta_using_command add" -l encrypt -d "Force encryption for the given files"
-complete -c dotta -n "__dotta_using_command add" -l no-encrypt -d "Bypass auto-encrypt patterns"
+complete -c dotta -n "__dotta_using_command add" -l no-encrypt -d "Bypass auto-encryption patterns"
 
 # remove
 complete -c dotta -n "__dotta_using_command remove" -s p -l profile -r -d "Profile name (alternative to positional)"
 complete -c dotta -n "__dotta_using_command remove" -s m -l message -r -d "Commit message"
 complete -c dotta -n "__dotta_using_command remove" -l delete-profile -d "Delete the entire profile branch"
-complete -c dotta -n "__dotta_using_command remove" -l delete-files -d "Stage deployed copies for removal on next apply"
+complete -c dotta -n "__dotta_using_command remove" -l delete-files -d "Stage deployed items for removal on next apply"
 complete -c dotta -n "__dotta_using_command remove" -s n -l dry-run -d "Preview without writing"
 complete -c dotta -n "__dotta_using_command remove" -s f -l force -d "Skip confirmation prompts"
 complete -c dotta -n "__dotta_using_command remove" -s i -l interactive -d "Prompt for each file"
@@ -136,6 +136,7 @@ complete -c dotta -n "__dotta_using_subcommand profile fetch" -l all -d "Fetch a
 complete -c dotta -n "__dotta_using_subcommand profile fetch" -s v -l verbose -d "Show detailed progress"
 complete -c dotta -n "__dotta_using_subcommand profile enable" -l all -d "Enable all local profiles"
 complete -c dotta -n "__dotta_using_subcommand profile enable" -l prefix -r -d "Custom prefix for profiles with custom/ files"
+complete -c dotta -n "__dotta_using_subcommand profile enable" -s n -l dry-run -d "Show what would change without modifying state"
 complete -c dotta -n "__dotta_using_subcommand profile enable" -s v -l verbose -d "Show detailed progress"
 complete -c dotta -n "__dotta_using_subcommand profile enable" -s q -l quiet -d "Suppress non-error output"
 complete -c dotta -n "__dotta_using_subcommand profile disable" -l all -d "Disable all currently enabled profiles"
@@ -154,6 +155,7 @@ complete -c dotta -n "__dotta_using_command ignore" -s p -l profile -r -d "Profi
 complete -c dotta -n "__dotta_using_command ignore" -l add -r -d "Append pattern to .dottaignore (repeatable)"
 complete -c dotta -n "__dotta_using_command ignore" -l remove -r -d "Delete pattern from .dottaignore (repeatable)"
 complete -c dotta -n "__dotta_using_command ignore" -l test -r -d "Report whether path is ignored"
+complete -c dotta -n "__dotta_using_command ignore" -l list-defaults -d "Print compiled default patterns and exit"
 complete -c dotta -n "__dotta_using_command ignore" -s v -l verbose -d "Verbose output (test mode: show matches)"
 
 # bootstrap
@@ -167,7 +169,7 @@ complete -c dotta -n "__dotta_using_command bootstrap" -s y -l yes -l no-confirm
 complete -c dotta -n "__dotta_using_command bootstrap" -l continue-on-error -d "Continue after a script failure"
 
 # key
-complete -c dotta -n "__dotta_using_command key" -s v -l verbose -d "Verbose output (status: show auto-encrypt patterns)"
+complete -c dotta -n "__dotta_using_command key" -s v -l verbose -d "Verbose output"
 
 # git
 complete -c dotta -n "__dotta_using_command git" -xa "(__fish_complete_subcommand --command git)"

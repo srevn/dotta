@@ -39,7 +39,6 @@ struct config {
     /* [ignore] */
     char **ignore_patterns;       /* Array of patterns from config */
     size_t ignore_pattern_count;
-    char *ignore_file;            /* Path to .dottaignore (default: $REPO/.dottaignore) */
     bool respect_gitignore;       /* Check .gitignore in source directories */
 
     /* [output] */

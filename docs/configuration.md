@@ -61,7 +61,6 @@ patterns = [                  # Personal ignore patterns (not shared)
     ".DS_Store",
     "*.local",
 ]
-file = ".dottaignore"         # Shared ignore file (relative to repo)
 respect_gitignore = true      # Honor source .gitignore when adding
 ```
 
@@ -135,7 +134,7 @@ Dotta uses a multi-layered ignore system (in precedence order):
 
 1. **CLI** -- `--exclude` flags (highest priority, per-operation)
 2. **Profile `.dottaignore`** -- per-profile overrides, can negate with `!`
-3. **Baseline `.dottaignore`** -- repository-wide, version-controlled
+3. **Baseline `.dottaignore`** -- repository-wide, machine-local, version-controlled
 4. **Config patterns** -- `[ignore] patterns` in config.toml (user-specific)
 5. **Source `.gitignore`** -- from the directory being added (lowest priority)
 
@@ -147,7 +146,11 @@ dotta ignore
 dotta ignore darwin
 
 # Add a pattern programmatically
-dotta ignore --add '*.tmp'
+dotta ignore --add '*.tmp'                # to baseline
+dotta ignore darwin --add '*.tmp'         # to the darwin profile
+
+# See the compiled safety defaults
+dotta ignore --list-defaults
 
 # Test if a path would be ignored
 dotta ignore --test ~/.config/nvim/node_modules

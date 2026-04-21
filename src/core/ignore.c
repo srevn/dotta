@@ -28,8 +28,15 @@
  *
  * Layered ignore system:
  *   1. CLI patterns (highest priority) — uses match module
- *   2. Combined .dottaignore (baseline + profile) — uses libgit2 for negation
- *   3. Config patterns (machine-specific rules) — uses match module
+ *   2. Combined .dottaignore ruleset — uses libgit2 for negation semantics
+ *      Sources inside the combined ruleset, concatenated in this order:
+ *        a. Baseline .dottaignore on dotta-worktree, if present.
+ *           Absent? Fall back to compiled defaults so safety patterns
+ *           still apply (relevant on cloned repos where baseline was
+ *           never seeded, or when the user has deleted the file).
+ *        b. Profile .dottaignore on the profile branch, if present.
+ *      Later rules override earlier via `!` negation.
+ *   3. Config patterns (user-level rules) — uses match module
  *   4. Source .gitignore (lowest priority) — uses libgit2 on source repo
  *
  * Note: Layers 1/3 and layer 2 use different matching engines. The match
@@ -52,7 +59,7 @@ struct ignore_context {
     char *profile_dottaignore_content;     /* Profile .dottaignore from profile branch */
 
     /* Combined .dottaignore cache */
-    char *combined_dottaignore_content;    /* Pre-combined baseline + profile */
+    char *combined_dottaignore_content;    /* Pre-combined (baseline OR builtin) + profile */
     bool rules_loaded;                     /* Whether rules added to libgit2 */
 
     /* Config patterns (user-level) */
@@ -687,38 +694,42 @@ error_t *ignore_context_create(
         }
     }
 
-    /* Combine baseline + profile .dottaignore for efficient checking.
-     * Order matters: profile second allows negation to override baseline. */
+    /* Build the combined .dottaignore ruleset.
+     *
+     * Pick the "global" source: if baseline was loaded from dotta-worktree,
+     * use it; otherwise fall back to compiled defaults so safety patterns
+     * stay active even on repos where baseline was never seeded or was
+     * later deleted.
+     *
+     * The fallback string is a static compiled constant, not owned by the
+     * context — we only strdup when we need to materialize `combined`.
+     *
+     * Ordering matters: `global` first, `profile` second, so profile `!`
+     * negations can override anything from the global source. */
     ctx->combined_dottaignore_content = NULL;
     ctx->rules_loaded = false;
 
-    if (ctx->baseline_dottaignore_content && ctx->profile_dottaignore_content) {
-        /* Both exist: combine with baseline first, profile second */
+    const char *global = ctx->baseline_dottaignore_content
+        ? ctx->baseline_dottaignore_content
+        : ignore_default_dottaignore_content();
+
+    if (ctx->profile_dottaignore_content) {
         ctx->combined_dottaignore_content = str_format(
             "%s\n%s",
-            ctx->baseline_dottaignore_content,
+            global,
             ctx->profile_dottaignore_content
         );
         if (!ctx->combined_dottaignore_content) {
             ignore_context_free(ctx);
             return ERROR(ERR_MEMORY, "Failed to combine .dottaignore content");
         }
-    } else if (ctx->profile_dottaignore_content) {
-        /* Only profile exists */
-        ctx->combined_dottaignore_content = strdup(ctx->profile_dottaignore_content);
-        if (!ctx->combined_dottaignore_content) {
-            ignore_context_free(ctx);
-            return ERROR(ERR_MEMORY, "Failed to copy .dottaignore content");
-        }
-    } else if (ctx->baseline_dottaignore_content) {
-        /* Only baseline exists */
-        ctx->combined_dottaignore_content = strdup(ctx->baseline_dottaignore_content);
+    } else {
+        ctx->combined_dottaignore_content = strdup(global);
         if (!ctx->combined_dottaignore_content) {
             ignore_context_free(ctx);
             return ERROR(ERR_MEMORY, "Failed to copy .dottaignore content");
         }
     }
-    /* else: Neither exists, combined_content remains NULL */
 
     /* Initialize source repository cache */
     ctx->cached_source_repo = NULL;
@@ -993,6 +1004,22 @@ const char *ignore_profile_dottaignore_template(void) {
     return PROFILE_DOTTAIGNORE;
 }
 
+error_t *ignore_seed_baseline(git_repository *repo) {
+    CHECK_NULL(repo);
+
+    const char *content = DEFAULT_DOTTAIGNORE;
+    return gitops_update_file(
+        repo,
+        "dotta-worktree",
+        ".dottaignore",
+        content,
+        strlen(content),
+        "Initialize .dottaignore with default patterns",
+        GIT_FILEMODE_BLOB,
+        NULL
+    );
+}
+
 /**
  * Test path with diagnostic information
  *
@@ -1038,7 +1065,7 @@ error_t *ignore_test_path(
         return NULL;
     }
 
-    /* Layer 2+3: Combined baseline + profile .dottaignore patterns */
+    /* Layer 2: Combined .dottaignore ruleset (baseline-or-builtin + profile) */
     if (ctx->combined_dottaignore_content) {
         /* Lazy load rules on first use */
         error_t *err = ensure_rules_loaded(ctx);
@@ -1053,26 +1080,33 @@ error_t *ignore_test_path(
                 error_free(err);
             } else if (matched) {
                 result->ignored = true;
-                /* Determine which .dottaignore layer caused the match */
-                if (ctx->baseline_dottaignore_content && ctx->profile_dottaignore_content) {
-                    /* Both exist: best-effort source attribution.
-                     *
-                     * The combined rules use libgit2 (supports negation),
-                     * but libgit2 doesn't expose which rule caused the
-                     * match. We approximate by checking if baseline alone
-                     * would match using the match module (no negation).
-                     *
-                     * Accurate for simple cases. May misattribute when
-                     * negation patterns interact between layers. */
-                    result->source = content_has_matching_pattern(
-                        ctx->baseline_dottaignore_content, rel_path, is_directory
-                        ) ? IGNORE_SOURCE_BASELINE_DOTTAIGNORE
-                          : IGNORE_SOURCE_PROFILE_DOTTAIGNORE;
+                /* Best-effort source attribution.
+                 *
+                 * The combined ruleset runs through libgit2 (full negation
+                 * support), but libgit2 doesn't expose which rule caused
+                 * the match. We approximate by asking the match module
+                 * (no negation) which source contains a positive pattern
+                 * for this path. The global source (baseline or builtin
+                 * fallback) wins attribution when it matches, because it
+                 * declared the rule first; profile inherits otherwise.
+                 *
+                 * Accurate for simple cases. May misattribute when
+                 * negation patterns interact between layers. */
+                const char *global_content = ctx->baseline_dottaignore_content
+                    ? ctx->baseline_dottaignore_content
+                    : ignore_default_dottaignore_content();
+                ignore_source_t global_src = ctx->baseline_dottaignore_content
+                    ? IGNORE_SOURCE_BASELINE_DOTTAIGNORE
+                    : IGNORE_SOURCE_BUILTIN;
 
+                if (content_has_matching_pattern(global_content, rel_path, is_directory)) {
+                    result->source = global_src;
                 } else if (ctx->profile_dottaignore_content) {
                     result->source = IGNORE_SOURCE_PROFILE_DOTTAIGNORE;
                 } else {
-                    result->source = IGNORE_SOURCE_BASELINE_DOTTAIGNORE;
+                    /* Profile absent and global didn't match positively —
+                     * attribute to global anyway (single source). */
+                    result->source = global_src;
                 }
                 return NULL;
             }
@@ -1126,6 +1160,8 @@ const char *ignore_source_to_string(ignore_source_t source) {
             return "profile .dottaignore";
         case IGNORE_SOURCE_BASELINE_DOTTAIGNORE:
             return "baseline .dottaignore";
+        case IGNORE_SOURCE_BUILTIN:
+            return "built-in defaults";
         case IGNORE_SOURCE_CONFIG:
             return "config file patterns";
         case IGNORE_SOURCE_SOURCE_GITIGNORE:

@@ -17,7 +17,6 @@
 #define DEFAULT_CONFIG_DIR "~/.config/dotta"
 #define DEFAULT_CONFIG_FILE "config.toml"
 #define DEFAULT_HOOKS_DIR "~/.config/dotta/hooks"
-#define DEFAULT_IGNORE_FILE ".dottaignore"
 
 /**
  * Helper: Extract string array from TOML array
@@ -148,7 +147,6 @@ config_t *config_create_default(void) {
     /* [ignore] defaults */
     config->ignore_patterns = NULL;
     config->ignore_pattern_count = 0;
-    config->ignore_file = strdup(DEFAULT_IGNORE_FILE); /* .dottaignore */
     config->respect_gitignore = true;                  /* Default: respect .gitignore */
 
     config->verbosity = strdup("normal");
@@ -198,7 +196,6 @@ void config_free(config_t *config) {
         }
         free(config->ignore_patterns);
     }
-    free(config->ignore_file);
 
     free(config->verbosity);
     free(config->color);
@@ -412,15 +409,9 @@ error_t *config_load(const char *config_path, config_t **out) {
     /* Extract [ignore] section */
     toml_datum_t ignore = toml_get(result.toptab, "ignore");
     if (ignore.type == TOML_TABLE) {
-        static const char *known[] = { "file", "patterns", "respect_gitignore" };
-        err = validate_known_keys(ignore, "ignore", known, 3);
+        static const char *known[] = { "patterns", "respect_gitignore" };
+        err = validate_known_keys(ignore, "ignore", known, 2);
         if (err) goto cleanup;
-
-        toml_datum_t file = toml_get(ignore, "file");
-        if (file.type == TOML_STRING) {
-            err = set_string(&config->ignore_file, file.u.s);
-            if (err) goto cleanup;
-        }
 
         toml_datum_t patterns = toml_get(ignore, "patterns");
         if (patterns.type == TOML_ARRAY) {

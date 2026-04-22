@@ -114,43 +114,52 @@ static inline stat_cache_t stat_cache_from_stat(const struct stat *st) {
 }
 
 /**
- * Deployment anchor — dotta's record of "disk was confirmed to equal this"
+ * Deployment anchor — three orthogonal signals about a managed path
  *
- * Three fields, one concept: the blob dotta last confirmed was present on
- * disk, when that confirmation happened, and the stat triple that proves
- * it is still there without re-hashing.
+ * Three signals, three write rules:
+ *   - blob_oid + stat : content-verified witness. Advanced only after
+ *     disk-matches-blob verification (slow-path CMP_EQUAL, apply deploy,
+ *     adoption, add, update). Zero blob_oid is rejected by
+ *     state_update_anchor; preserve-on-zero-sentinel on UPSERT.
+ *   - deployed_at     : active-ownership timestamp. Advances to now on
+ *     apply deploy, apply adoption, add, update. Preserve-on-zero
+ *     semantic in both SQL paths (UPSERT and sql_update_anchor).
+ *   - observed_at     : first-observation timestamp. Set to now when
+ *     lstat first confirms the path exists on disk in scope (enable-
+ *     time reconcile via sync_entry_to_state, apply deploy/adopt, add,
+ *     update, CMP_EQUAL flush). Monotonic once set: SQL CASE preserves
+ *     any existing non-zero value on every write, so the first non-zero
+ *     caller wins.
  *
  * Invariants:
  *   - blob_oid is non-zero iff dotta has at some point confirmed disk
- *     content matched that blob. Zero means "never confirmed" (e.g.,
- *     newly enabled profile whose files predate dotta).
+ *     content matched that blob. Zero means "never confirmed."
  *   - stat matching live stat is a fast-path witness that disk still
  *     equals blob_oid.
  *   - blob_oid ≠ virtual_manifest.blob_oid iff the Git-expected value
  *     has advanced past the last disk confirmation — i.e., stale.
+ *   - observed_at is zero iff dotta has never lstat-confirmed the path
+ *     on disk in scope (ghost file); any non-zero value is the earliest
+ *     observation time and never regresses.
  *
- * Witness vs. ownership split:
- *   - (blob_oid, stat) is witness data — cheap, observational, updated
- *     whenever dotta confirms disk matches (including from status/diff/sync
- *     via workspace_flush_anchor_updates). Witness writes pass
- *     deployed_at = 0 to preserve the ownership flag.
- *   - deployed_at > 0 is the ownership flag — dotta actively committed to
- *     managing this file's disk presence. Written by explicit user acts:
- *     apply (deploy or adoption), add, update. Workspace classification
- *     reads deployed_at > 0 to separate DELETED (was owned, now missing)
- *     from UNDEPLOYED (never owned); consumers are analyze_file_divergence
- *     and analyze_encryption_policy_mismatch.
+ * Classifier reads (workspace.c analyze_file_divergence and the
+ * encryption-policy classifier):
+ *   - missing + observed_at > 0  → WORKSPACE_STATE_DELETED
+ *   - missing + observed_at == 0 → WORKSPACE_STATE_UNDEPLOYED
  *
  * The anchor is written only by state_update_anchor() — the sole writer
- * of deployed_blob_oid, deployed_at, and stat_*. Manifest-layer writes
- * (reconcile/sync/rebuild via sync_entry_to_state) leave every anchor
- * column untouched: the UPSERT's preserve-on-zero sentinel on
- * deployed_blob_oid and unconditional preserve on deployed_at + stat_*.
+ * of deployed_blob_oid, deployed_at, observed_at, and stat_*. Manifest-
+ * layer writes (reconcile/sync/rebuild via sync_entry_to_state) go
+ * through the UPSERT: preserve-on-zero-sentinel on deployed_blob_oid,
+ * unconditional preserve on deployed_at + stat_*, preserve-if-set on
+ * observed_at (so an INSERT carrying a non-zero observed_at seeds the
+ * first observation and later UPDATEs cannot overwrite it with zero).
  */
 typedef struct {
-    git_oid blob_oid;         /* Blob whose on-disk presence dotta confirmed */
-    time_t deployed_at;       /* When confirmation happened (0 = never) */
-    stat_cache_t stat;        /* Fast-path witness for the confirmation */
+    git_oid blob_oid;         /* Content-confirmed blob (zero = never confirmed) */
+    time_t deployed_at;       /* Last active-ownership event (advances; 0 = never) */
+    time_t observed_at;       /* First lstat-observation in scope (monotonic once set; 0 = never) */
+    stat_cache_t stat;        /* Fast-path witness, bound to blob_oid */
 } deployment_anchor_t;
 
 #define DEPLOYMENT_ANCHOR_UNSET ((deployment_anchor_t){0})
@@ -176,6 +185,7 @@ static inline deployment_anchor_t capture_anchor_from_disk(
     deployment_anchor_t anchor = {
         .blob_oid    = *blob_oid,
         .deployed_at = deployed_at,
+        .observed_at = deployed_at,   /* capture-from-disk implies observation */
         .stat        = STAT_CACHE_UNSET,
     };
 
@@ -207,7 +217,9 @@ static inline deployment_anchor_t capture_anchor_from_disk(
  * SCOPE-BASED ARCHITECTURE:
  * - manifest existence = file should be managed
  * - state (lifecycle string) tracks active/inactive/deleted/released
- * - anchor.deployed_at is the lifecycle timestamp (0 = never confirmed)
+ * - anchor.observed_at gates the classifier (missing + observed_at > 0 → DELETED)
+ * - anchor.deployed_at drives the adoption-loop gate and the
+ *   state_get_profile_timestamp display ("(deployed X ago)")
  */
 typedef struct {
     /* Identity */
@@ -647,7 +659,8 @@ void state_free_entry(state_file_entry_t *entry);
  * Advance a manifest entry's deployment anchor
  *
  * The sole writer of the deployment columns (deployed_blob_oid, deployed_at,
- * stat_*). Call after confirming disk content matches anchor->blob_oid.
+ * observed_at, stat_*). Call after confirming disk content matches
+ * anchor->blob_oid.
  *
  * Semantics:
  *   - anchor->blob_oid must be non-zero. A zero blob_oid is only valid as
@@ -658,6 +671,9 @@ void state_free_entry(state_file_entry_t *entry);
  *     the anchor witness without claiming a new deployment event).
  *   - anchor->deployed_at != 0 → write the new value
  *     (apply post-deploy/adoption case — stamps the deployment event).
+ *   - anchor->observed_at is written only if the row's existing value is
+ *     zero (monotonic-once-set). A non-zero existing column wins; a zero
+ *     passed here also preserves (safe no-op).
  *   - anchor->stat is always written.
  *
  * Not-found is not an error: the entry may not exist if the profile is

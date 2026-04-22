@@ -22,6 +22,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "base/arena.h"
@@ -685,32 +686,43 @@ static error_t *analyze_file_divergence(
 
     /* PHASE 2: Reality-based classification
      *
-     * Use anchor.deployed_at to distinguish lifecycle states. The anchor is
-     * advanced only on confirmation events (apply deploy/adopt, add/update
-     * capture-from-disk, workspace slow-path witness seeding — see
-     * state.h's deployment_anchor_t invariants).
+     * Use anchor.observed_at to distinguish lifecycle states for missing
+     * files. observed_at is stamped the first time dotta lstat-confirms
+     * the path on disk in scope. Writers:
+     *   - sync_entry_to_state INSERT path (scope-entry observation).
+     *   - state_update_anchor (every witness/ownership advance — apply
+     *     deploy, adoption, add, update, CMP_EQUAL flush).
+     * All writes go through the SQL CASE that preserves the first
+     * non-zero value, so observed_at is monotonic once set.
      *
-     * anchor.deployed_at semantics:
-     * - 0  -> File has never been actively deployed or adopted by dotta
-     *         (mere scope membership from profile enable/populate does NOT
-     *         advance deployed_at — lstat is not a confirmation event)
-     * - >0 -> File was deployed, adopted, added, or sync-captured by dotta
+     * anchor.observed_at semantics:
+     * - 0  -> dotta has never lstat-confirmed this path on disk in scope
+     *         (ghost file: profile enabled but the file was never there).
+     * - >0 -> dotta has seen this file on disk in scope at least once
+     *         (was present at enable, during any status, or after a
+     *         content-verification event).
      *
      * Classification:
-     * 1. File missing + anchor.deployed_at = 0 -> UNDEPLOYED (needs initial deployment)
-     * 2. File missing + anchor.deployed_at > 0 -> DELETED (was managed, needs restoration)
-     * 3. File present -> DEPLOYED (may have divergence)
+     * 1. File missing + anchor.observed_at = 0 -> UNDEPLOYED (ghost, no-op)
+     * 2. File missing + anchor.observed_at > 0 -> DELETED (user removed it)
+     * 3. File present                          -> DEPLOYED (may diverge)
+     *
+     * The ownership signal (anchor.deployed_at) is still the authority for
+     * "(deployed X ago)" display and the adoption-loop gate; it just no
+     * longer controls classification.
      */
     if (!on_filesystem) {
         /* File in manifest but missing from filesystem */
 
-        /* Use anchor.deployed_at to distinguish never-managed vs deleted
+        /* Use anchor.observed_at to distinguish ghost files from deletions
          * (see classification table above for the full decision matrix). */
-        if (in_state && manifest_entry->anchor.deployed_at > 0) {
-            /* File was actively managed (anchor.deployed_at > 0), now deleted */
+        if (in_state && manifest_entry->anchor.observed_at > 0) {
+            /* Path has been lstat-observed on disk in scope; current
+             * absence means the user deleted a previously-seen file. */
             state = WORKSPACE_STATE_DELETED;
         } else {
-            /* File never deployed (anchor.deployed_at = 0) or not in state (manifest from Git) */
+            /* Path has never been observed (ghost file) or the manifest
+             * was built directly from Git with no state row (in_state = false). */
             state = WORKSPACE_STATE_UNDEPLOYED;
         }
 
@@ -2163,19 +2175,19 @@ static error_t *analyze_encryption_policy_mismatch(
             } else {
                 /* File has NO other divergence — encryption policy is the only issue.
                  *
-                 * Classify lifecycle state from presence + ownership anchor,
+                 * Classify lifecycle state from presence + observation anchor,
                  * mirroring analyze_file_divergence Phase 2. on_filesystem is
                  * checked first: a file on disk is DEPLOYED regardless of
-                 * whether dotta has claimed ownership yet (pre-apply, the
-                 * anchor may still be 0). A missing file is DELETED if ever
-                 * owned (deployed_at > 0), else UNDEPLOYED. */
+                 * whether dotta has stamped observation yet. A missing file
+                 * is DELETED if ever observed (observed_at > 0), else
+                 * UNDEPLOYED (ghost file that was never on disk in scope). */
                 struct stat enc_stat;
                 bool on_filesystem = (lstat(manifest_entry->filesystem_path, &enc_stat) == 0);
 
                 workspace_state_t item_state;
                 if (on_filesystem) {
                     item_state = WORKSPACE_STATE_DEPLOYED;
-                } else if (manifest_entry->anchor.deployed_at > 0) {
+                } else if (manifest_entry->anchor.observed_at > 0) {
                     item_state = WORKSPACE_STATE_DELETED;
                 } else {
                     item_state = WORKSPACE_STATE_UNDEPLOYED;
@@ -2962,8 +2974,9 @@ bool workspace_item_extract_display_info(
  * Single workspace-scope writer for anchor advances: persists via
  * state_update_anchor, then patches ws->manifest's entry so the two
  * views cannot drift. Mirrors state_update_anchor's preserve-on-zero
- * semantic on deployed_at — a zero timestamp preserves the in-memory
- * value just as the DB preserves its column.
+ * semantic on deployed_at (a zero timestamp preserves the in-memory
+ * value) and the monotonic-once-set semantic on observed_at (the first
+ * non-zero value wins).
  *
  * DB write runs first; on error we return without touching memory so a
  * failed write cannot leave the in-memory view ahead of reality.
@@ -3002,6 +3015,9 @@ error_t *workspace_advance_anchor(
     in_mem->stat = anchor->stat;
     if (anchor->deployed_at != 0) {
         in_mem->deployed_at = anchor->deployed_at;
+    }
+    if (in_mem->observed_at == 0 && anchor->observed_at != 0) {
+        in_mem->observed_at = anchor->observed_at;   /* monotonic once set */
     }
 
     return NULL;
@@ -3048,11 +3064,13 @@ error_t *workspace_flush_anchor_updates(workspace_t *ws) {
         }
     }
 
+    time_t now = time(NULL);
     for (size_t i = 0; i < ws->anchor_update_count; i++) {
         const anchor_update_t *update = &ws->anchor_updates[i];
         deployment_anchor_t anchor = {
             .blob_oid    = update->blob_oid,
-            .deployed_at = 0,   /* preserve — flush is a witness advance, not a deploy */
+            .deployed_at = 0,      /* preserve — flush is a witness advance, not a deploy */
+            .observed_at = now,    /* monotonic CASE in SQL preserves any prior observation stamp */
             .stat        = update->stat,
         };
         error_t *err = workspace_advance_anchor(

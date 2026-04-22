@@ -74,12 +74,17 @@ error_t *manifest_persist_profile_head(
  * Translates from in-memory manifest representation (file_entry_t) to
  * persistent state representation (state_file_entry_t in SQLite).
  *
- * SCOPE ("Pure VWD-cache writer"):
+ * SCOPE ("Pure VWD-cache writer, plus observation stamp on INSERT"):
  *   This function is authoritative for the VWD-cache columns (storage_path,
  *   profile, blob_oid, type, mode, owner, group, encrypted, state). It NEVER
- *   advances the deployment anchor (deployed_blob_oid, deployed_at, stat_*).
- *   Callers needing to advance the anchor must follow with
- *   state_update_anchor(), which is the sole legitimate anchor writer.
+ *   advances the deployment witness (deployed_blob_oid, deployed_at, stat_*).
+ *   Callers needing to advance the witness must follow with
+ *   state_update_anchor(), which is the sole legitimate witness writer.
+ *
+ *   It does stamp anchor.observed_at on INSERT when the target path exists
+ *   on disk (see step 5 of the body). The UPSERT's monotonic CASE preserves
+ *   any existing non-zero observed_at on UPDATE, so repeat calls are
+ *   idempotent on that column.
  *
  *   Reassignment tracking is automatic: the UPSERT's old_profile CASE
  *   captures the prior profile into old_profile when the profile column
@@ -90,12 +95,12 @@ error_t *manifest_persist_profile_head(
  * Callers must use entries from manifest_build (or equivalent) where
  * the blob_oid is pre-populated.
  *
- * The anchor columns (deployed_blob_oid, deployed_at, stat_*) are left
+ * The witness columns (deployed_blob_oid, deployed_at, stat_*) are left
  * untouched — the UPSERT preserves them on UPDATE, and on INSERT they
  * start at zero. Lifecycle stamping is state_update_anchor's job;
  * capture-from-disk callers (manifest_add_files, manifest_update_files)
  * pair this call with a state_update_anchor(..., now) that stamps
- * deployed_at on both INSERT and UPDATE paths.
+ * deployed_at and the stat witness on both INSERT and UPDATE paths.
  *
  * Note: commit_oid is stored per-profile in enabled_profiles, not per-file.
  * Callers are responsible for calling manifest_persist_profile_head() after
@@ -156,15 +161,35 @@ static error_t *sync_entry_to_state(
      *   2. Git mode (fallback) - authoritative for type, good default for permissions */
     mode_t mode = meta_item ? meta_item->mode : git_mode;
 
-    /* 5. Build state entry. blob_oid is an inline struct copy from the
+    /* 5. Probe the filesystem so we can stamp the observation signal on
+     * INSERT. observed_at answers "has dotta ever lstat-confirmed this
+     * path on disk in scope?" — the classifier uses it to distinguish
+     * a ghost file (never seen, classifies UNDEPLOYED) from a file the
+     * user has removed (seen, classifies DELETED). The UPSERT's CASE
+     * preserves existing non-zero observed_at on UPDATE, so this lstat
+     * only matters on INSERT; repeat reconciles are idempotent.
+     *
+     * Gate is strict: only a successful lstat counts as an observation.
+     * ENOENT and every other lstat failure leave observed_at = 0, which
+     * keeps ghost files out of DELETED classification. */
+    time_t observed_at = 0;
+    struct stat observe_st;
+    if (lstat(manifest_entry->filesystem_path, &observe_st) == 0) {
+        observed_at = time(NULL);
+    }
+
+    /* 6. Build state entry. blob_oid is an inline struct copy from the
      * pre-populated entry field. commit_oid lives in enabled_profiles
      * (per-profile, not per-file) and is refreshed via manifest_persist_profile_head().
      *
-     * The anchor is zero-initialized — sync_entry_to_state is a pure
-     * VWD-cache writer and does not advance the deployment anchor. The
-     * UPSERT preserves existing anchor columns on UPDATE, and INSERT
-     * lands a fresh zero-anchor row that a later state_update_anchor
-     * (capture-from-disk, apply post-deploy, apply adoption) will fill. */
+     * The witness half of the anchor (blob_oid, deployed_at, stat) is
+     * zero-initialized — sync_entry_to_state is a pure VWD-cache writer
+     * and does not advance the witness. The UPSERT preserves existing
+     * witness columns on UPDATE, and INSERT lands a fresh zero-anchor
+     * row that a later state_update_anchor (capture-from-disk, apply
+     * post-deploy, apply adoption) will fill. The observation half
+     * (observed_at) is stamped here on INSERT and preserved on UPDATE
+     * by the UPSERT's monotonic-once-set CASE. */
     state_file_entry_t state_entry = {
         .storage_path    = manifest_entry->storage_path,
         .filesystem_path = manifest_entry->filesystem_path,
@@ -178,10 +203,15 @@ static error_t *sync_entry_to_state(
         .encrypted       = (meta_item && meta_item->kind == METADATA_ITEM_FILE)
                          ? meta_item->file.encrypted : false,
         .state           = STATE_ACTIVE,
-        .anchor          = DEPLOYMENT_ANCHOR_UNSET,
+        .anchor          = {
+            .blob_oid    = { { 0 } },
+            .deployed_at = 0,
+            .observed_at = observed_at,
+            .stat        = STAT_CACHE_UNSET,
+        },
     };
 
-    /* 6. Write entry to state (UPSERT).
+    /* 7. Write entry to state (UPSERT).
      *
      * With old_profile bound to NULL, state_add_file's ON CONFLICT CASE
      * auto-captures the prior profile when the profile column changes

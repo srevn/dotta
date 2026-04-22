@@ -716,7 +716,7 @@ error_t *state_clear_old_profile(
  * Valid states:
  *   - STATE_ACTIVE   - Normal entry, file is in scope
  *   - STATE_INACTIVE - Staged for removal, reversible (profile disable)
- *   - STATE_DELETED  - Confirmed deletion via remove command
+ *   - STATE_DELETED  - Dotta-committed deletion (remove, update, sync), blob gone from tree
  *   - STATE_RELEASED    - File removed from Git externally, loss of authority
  *
  * Preconditions:

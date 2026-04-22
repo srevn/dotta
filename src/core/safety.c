@@ -387,8 +387,12 @@ static check_result_t map_divergence_to_violation(
  * Four-phase check implementing safety hierarchy:
  *
  * PHASE 1: Controlled Deletion (STATE_DELETED)
- * - Skip branch check entirely (user confirmed intent via remove command)
- * - Proceed to divergence routing
+ * - Skip branch and tree checks entirely — the lifecycle state already
+ *   encodes "dotta committed this deletion, the blob is gone from the
+ *   tree by design." Reached via remove, update, or sync whenever a
+ *   no-fallback committed deletion left the path on disk.
+ * - Proceed to divergence routing (divergence decides safe-remove vs.
+ *   MODIFIED violation)
  *
  * PHASE 2: Stale Entry (STATE_RELEASED)
  * - File already identified as removed from Git externally
@@ -399,10 +403,14 @@ static check_result_t map_divergence_to_violation(
  * - Branch exists: continue to Phase 4
  *
  * PHASE 4: File-in-Tree (defense in depth)
- * - Branch exists but file not in tree: RELEASED violation
+ * - Branch exists but file not in tree: RELEASED violation. Reached only
+ *   when a STATE_INACTIVE/ACTIVE row's tree was edited externally
+ *   between the scope change and apply — genuinely external loss. All
+ *   internal committed-deletion paths route through STATE_DELETED and
+ *   bypass this phase at PHASE 1.
  * - File in tree: proceed to divergence routing
  *
- * Key Invariant: Only STATE_DELETED (explicit confirmed intent) bypasses
+ * Key Invariant: Only STATE_DELETED (dotta-confirmed deletion) bypasses
  * safety checks. STATE_RELEASED auto-releases. All other states require both
  * branch existence AND file-in-tree verification for safe removal.
  *
@@ -460,8 +468,12 @@ static check_result_t check_branch_existence(
     if (is_controlled_deletion) {
         /* PHASE 1: CONTROLLED DELETION (STATE_DELETED)
          *
-         * Entry marked STATE_DELETED by deliberate user action (remove command).
-         * User intent is unambiguous - skip branch existence check entirely.
+         * Entry marked STATE_DELETED by a dotta-committed deletion
+         * (remove, update, sync). The blob is gone from the tree by
+         * design, so the PHASE 3/4 branch/tree lookups would only
+         * confirm that absence and misattribute it as external
+         * authority loss (RELEASED). Skip straight to divergence
+         * routing instead.
          *
          * Behavior:
          * - Clean files (DIVERGENCE_NONE): Safe to remove (no violation)
@@ -541,9 +553,15 @@ static check_result_t check_branch_existence(
 
     /* PHASE 4: FILE-IN-TREE CHECK (defense in depth)
      *
-     * Branch exists, but file may have been removed from it externally.
+     * Branch exists, but the file may have been removed from it externally.
      * Verify the specific file still exists in the profile's current tree.
      * This catches: git rm <file> && git commit (branch alive, file gone).
+     *
+     * Only reachable for STATE_INACTIVE/ACTIVE rows — internal committed
+     * deletions (remove/update/sync) route through STATE_DELETED and are
+     * short-circuited at PHASE 1. A PHASE 4 failure here therefore
+     * genuinely represents loss of authority, and the RELEASED outcome
+     * below is semantically correct.
      */
     const char *lookup_path = storage_path ? storage_path : orphan->storage_path;
 

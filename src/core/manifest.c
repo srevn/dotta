@@ -1234,25 +1234,53 @@ error_t *manifest_update_files(
 
                 (*out_fallbacks)++;
             } else {
-                /* No fallback - mark as inactive (staged for removal)
+                /* No fallback — decide the terminal row state from disk
+                 * reality:
                  *
-                 * Entry marked STATE_INACTIVE and remains in state for orphan detection.
-                 * This bulk operation may process multiple files simultaneously, but the
-                 * architectural principle remains: deferred cleanup via apply.
+                 *   absent  → purge (apply has no filesystem work to do)
+                 *   present → STATE_DELETED (apply removes via safety
+                 *             PHASE 1 bypass, sidestepping the PHASE 4
+                 *             tree check that would otherwise misroute
+                 *             this internal deletion through the
+                 *             external-loss RELEASED pathway).
                  *
-                 * Cleanup deferred to apply - DO NOT call state_remove_file() here.
-                 */
-
-                /* Mark entry as inactive for silent workspace handling */
-                err = state_set_file_state(state, item->filesystem_path, STATE_INACTIVE);
-                if (err) {
-                    /* Non-fatal: log warning but continue */
-                    fprintf(
-                        stderr, "warning: failed to mark '%s' as inactive: %s\n",
-                        item->filesystem_path, error_message(err)
+                 * WORKSPACE_STATE_DELETED classifies the path as absent at
+                 * workspace-load time, so the purge branch is the normal
+                 * outcome. The stat runs again inside the transaction to
+                 * catch the narrow race where the user recreates the file
+                 * between workspace load and commit — that path then
+                 * falls through to STATE_DELETED and apply re-evaluates
+                 * with divergence routing instead of silently dropping
+                 * the row.
+                 *
+                 * ERR_NOT_FOUND from state_remove_file means the row
+                 * already vanished (e.g. a concurrent reconcile released
+                 * it). The desired end state is reached — swallow.
+                 *
+                 * All other failures are non-fatal: the Git commit
+                 * already succeeded; the next status self-heals via
+                 * manifest_reconcile. */
+                struct stat st;
+                error_t *rm_err;
+                if (lstat(item->filesystem_path, &st) != 0 && errno == ENOENT) {
+                    rm_err = state_remove_file(state, item->filesystem_path);
+                    if (rm_err && error_code(rm_err) == ERR_NOT_FOUND) {
+                        error_free(rm_err);
+                        rm_err = NULL;
+                    }
+                } else {
+                    rm_err = state_set_file_state(
+                        state, item->filesystem_path, STATE_DELETED
                     );
-                    error_free(err);
-                    err = NULL;  /* Clear error, continue operation */
+                }
+                if (rm_err) {
+                    /* Non-fatal: Git commit already succeeded; the next
+                     * status will self-heal via manifest_reconcile. */
+                    fprintf(
+                        stderr, "warning: failed to finalize deletion of '%s': %s\n",
+                        item->filesystem_path, error_message(rm_err)
+                    );
+                    error_free(rm_err);
                 }
 
                 (*out_removed)++;
@@ -1846,24 +1874,42 @@ error_t *manifest_sync_diff(
 
                 /* Check if this profile owns this file */
                 if (strcmp(state_entry->profile, profile) == 0) {
-                    /* We own it and no fallback exists - mark as inactive
+                    /* We own the path and no enabled profile provides a
+                     * fallback. Decide the terminal row state from disk
+                     * reality:
                      *
-                     * File deleted from Git during sync (pull/rebase/merge), with no
-                     * fallback coverage. Entry marked STATE_INACTIVE for cleanup.
+                     *   absent  → purge (apply has nothing to clean up)
+                     *   present → STATE_DELETED (apply removes via safety
+                     *             PHASE 1 bypass, sidestepping the PHASE 4
+                     *             tree check that would otherwise misroute
+                     *             this internal deletion through the
+                     *             external-loss RELEASED pathway).
                      *
-                     * Entry marked inactive and remains in state for orphan detection.
-                     * This maintains consistency with other manifest operations: sync
-                     * updates scope (what's in Git), apply executes cleanup (removal).
+                     * ERR_NOT_FOUND from state_remove_file means the row
+                     * already vanished (e.g. a concurrent reconcile
+                     * released it). The desired end state is reached —
+                     * swallow.
                      *
-                     * Cleanup deferred to apply - DO NOT call state_remove_file() here.
-                     */
-
-                    /* Mark entry as inactive for silent workspace handling */
-                    err = state_set_file_state(state, filesystem_path, STATE_INACTIVE);
+                     * All other failures are non-fatal: the Git commit is
+                     * already applied to the local branch, and
+                     * manifest_reconcile will re-examine the row on the
+                     * next status. */
+                    struct stat st;
+                    if (lstat(filesystem_path, &st) != 0 && errno == ENOENT) {
+                        err = state_remove_file(state, filesystem_path);
+                        if (err && error_code(err) == ERR_NOT_FOUND) {
+                            error_free(err);
+                            err = NULL;
+                        }
+                    } else {
+                        err = state_set_file_state(
+                            state, filesystem_path, STATE_DELETED
+                        );
+                    }
                     if (err) {
                         /* Non-fatal: log warning but continue */
                         fprintf(
-                            stderr, "warning: failed to mark '%s' as inactive: %s\n",
+                            stderr, "warning: failed to finalize deletion of '%s': %s\n",
                             filesystem_path, error_message(err)
                         );
                         error_free(err);

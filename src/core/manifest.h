@@ -284,7 +284,13 @@ error_t *manifest_persist_profile_head(
  *   5. For each item (O(N)):
  *      - If DELETED: check fresh manifest for fallback
  *        → Fallback exists: update to fallback profile (deployed_at preserved)
- *        → No fallback: mark as STATE_INACTIVE (staged for removal)
+ *        → No fallback: decide the terminal row state from disk
+ *          reality. The common path — file absent on disk
+ *          (WORKSPACE_STATE_DELETED precondition held through the
+ *          transaction) — purges the row so apply has no spurious
+ *          orphan to clean up. If a racing recreation placed the path
+ *          back on disk, the row is marked STATE_DELETED instead so
+ *          apply's divergence routing can protect the user's edits.
  *      - Else (modified/new): lookup in fresh manifest
  *        → Found + precedence matches: sync to state (deployed_at = time(NULL))
  *        → Not found: file filtered/excluded (skip gracefully)
@@ -302,8 +308,11 @@ error_t *manifest_persist_profile_head(
  *     (blob_oid + fresh disk stat, lifecycle timestamp preserved). Anchor-write
  *     failures are non-fatal — the VWD cache is already committed and the next
  *     status falls through to the slow path, which self-heals the anchor.
- *   - Deleted files fallback (deployed_at preserved) or marked STATE_INACTIVE;
- *     anchor left untouched (no disk confirmation for deleted/fallback paths)
+ *   - Deleted files: fallback reassigns the row to the fallback profile
+ *     (deployed_at preserved); no-fallback purges the row if the path
+ *     is absent on disk, or marks it STATE_DELETED if a race has placed
+ *     it back. Anchor left untouched (no disk confirmation for deleted
+ *     / fallback paths).
  *   - Tracked directories synced from all enabled profiles
  *   - Transaction remains open (caller commits)
  *
@@ -315,7 +324,7 @@ error_t *manifest_persist_profile_head(
  * @param item_count Number of items
  * @param enabled_profiles All enabled profiles (must not be NULL)
  * @param out_synced Output: count of files synced (must not be NULL)
- * @param out_removed Output: count of files removed (must not be NULL)
+ * @param out_removed Output: count of no-fallback deletions purged from state (must not be NULL)
  * @param out_fallbacks Output: count of fallback resolutions (must not be NULL)
  * @return Error or NULL on success
  */
@@ -445,7 +454,7 @@ error_t *manifest_add_files(
  * @param removed_profile Profile files were removed from (must not be NULL)
  * @param removed_storage_paths Storage paths of removed files (must not be NULL)
  * @param enabled_profiles All enabled profiles (must not be NULL)
- * @param out_removed Output: files without fallback (marked inactive) (can be NULL)
+ * @param out_removed Output: files without fallback (marked STATE_DELETED) (can be NULL)
  * @param out_fallbacks Output: files updated to fallback (can be NULL)
  * @return Error or NULL on success
  */
@@ -543,7 +552,8 @@ error_t *manifest_reconcile(
  *
  *   Phase 3: Process Deltas (O(D))
  *     - For additions/modifications: sync (deployed_at preserved if exists, else 0 for new files)
- *     - For deletions: check for fallbacks, mark STATE_INACTIVE if none
+ *     - For deletions: check for fallbacks. No-fallback terminates on
+ *       disk reality: purge if the path is absent, else mark STATE_DELETED.
  *     - Handle precedence: only sync if profile won the file
  *
  * Deletion & Fallback Logic:
@@ -551,7 +561,11 @@ error_t *manifest_reconcile(
  *     1. Check new precedence manifest (built from post-sync state)
  *     2. If another profile (profile-B) now wins: update to profile-B (fallback)
  *     3. If no other profile has it: check current state
- *     4. If profile-A owns it in state: entry remains for orphan detection (apply removes)
+ *     4. If profile-A owns it in state: the terminal row state comes
+ *        from disk reality — purge when the path is absent (apply has
+ *        no filesystem work), STATE_DELETED when it is still present
+ *        (apply removes it via safety PHASE 1 bypass, sidestepping the
+ *        RELEASED pathway).
  *     5. Otherwise: skip (file wasn't ours to begin with)
  *
  * Preconditions:
@@ -563,7 +577,9 @@ error_t *manifest_reconcile(
  * Postconditions:
  *   - Added/modified files synced (deployed_at preserved if exists, else 0 for new files)
  *   - Deleted files with fallbacks updated to new owner (deployed_at preserved)
- *   - Deleted files without fallbacks marked STATE_INACTIVE (staged for removal)
+ *   - Deleted files without fallbacks terminate on disk reality: the row
+ *     is purged if the path is absent on disk, or marked STATE_DELETED
+ *     if still present (apply removes it via safety PHASE 1 bypass)
  *   - Files filtered by .dottaignore are skipped (expected behavior)
  *   - Files won by other profiles are skipped (they'll sync when their changes arrive)
  *   - Tracked directories synced from all enabled profiles

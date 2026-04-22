@@ -72,7 +72,7 @@ struct gitignore_ruleset {
 
 static inline bool is_ws(char c) {
     return c == ' ' || c == '\t' || c == '\n'
-        || c == '\f' || c == '\r' || c == '\v';
+           || c == '\f' || c == '\r' || c == '\v';
 }
 
 static inline bool is_wildcard(char c) {
@@ -376,11 +376,13 @@ error_t *gitignore_ruleset_append(
                 MAX_PATTERN_LENGTH
             );
 
-        gitignore_rule_t rule = {0};
+        gitignore_rule_t rule = { 0 };
         bool have = false;
-        RETURN_IF_ERROR(parse_one_rule(
+        RETURN_IF_ERROR(
+            parse_one_rule(
             set->arena, cursor, line_len, origin, &rule, &have
-        ));
+            )
+        );
 
         /* Drop a non-wildcard negation that no earlier rule could match
          * (gitignore's "parent directory cannot be re-included" rule).

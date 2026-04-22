@@ -206,6 +206,11 @@ error_t *path_resolve_input(
     char **out_storage_path
 );
 
+/* Forward declaration for the compiled glob ruleset; defined in
+ * base/gitignore.h. Kept opaque here so path.h does not pull in the
+ * whole ignore engine. */
+typedef struct gitignore_ruleset gitignore_ruleset_t;
+
 /**
  * Path filter for selective file operations
  *
@@ -215,12 +220,20 @@ error_t *path_resolve_input(
  *   3. Glob patterns: "*.vim", "home/ ** / *.conf" - pattern-based matching
  *
  * NULL filter semantics: matches all paths (no filtering).
+ *
+ * Glob storage: patterns are compiled once into `glob_ruleset` (the
+ * authoritative matcher) and also kept as raw strings in
+ * `glob_patterns[]` for diagnostic consumers (e.g. diff.c's
+ * unmatched-pattern warning). Both are arena-owned and freed together
+ * at path_filter_free.
  */
 typedef struct {
-    struct hashmap *exact_paths;  /* Exact paths for O(1) lookup (hashmap owns keys) */
-    char **glob_patterns;         /* Glob patterns for iteration (owned) */
-    size_t glob_count;            /* Number of glob patterns */
-    size_t count;                 /* Total entries (exact + globs) */
+    struct hashmap *exact_paths;         /* Exact paths for O(1) lookup (hashmap owns keys) */
+    arena_t *arena;                      /* Owns glob_ruleset + glob_patterns entries */
+    gitignore_ruleset_t *glob_ruleset;   /* Compiled globs; NULL when glob_count == 0 */
+    char **glob_patterns;                /* Arena-owned strings; retained for diagnostics */
+    size_t glob_count;                   /* Number of glob patterns */
+    size_t count;                        /* Total entries (exact + globs) */
 } path_filter_t;
 
 /**
@@ -274,7 +287,7 @@ error_t *path_filter_create(
 /**
  * Check if storage path matches filter
  *
- * Matching semantics (gitignore-style via match module):
+ * Matching semantics (gitignore-style via base/gitignore):
  * - Exact match: "home/.bashrc" matches "home/.bashrc"
  * - Directory prefix: "home/.config" matches "home/.config/fish/config.fish"
  * - Glob patterns: recursive globs match nested paths

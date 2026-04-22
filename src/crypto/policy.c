@@ -11,7 +11,7 @@
 #include <string.h>
 
 #include "base/error.h"
-#include "base/match.h"
+#include "base/gitignore.h"
 #include "base/string.h"
 #include "core/metadata.h"
 
@@ -62,8 +62,48 @@ static bool is_protected_meta_file(const char *storage_path) {
     return false;
 }
 
-error_t *encryption_policy_should_encrypt(
+error_t *encryption_policy_build_auto_rules(
     const config_t *config,
+    arena_t *arena,
+    gitignore_ruleset_t **out_rules
+) {
+    CHECK_NULL(arena);
+    CHECK_NULL(out_rules);
+
+    *out_rules = NULL;
+
+    /* Short-circuit: nothing to compile when encryption is off, no
+     * patterns are configured, or no config was provided. Callers treat
+     * *out_rules == NULL as the fast "no auto-encrypt" sentinel. */
+    if (!config || !config->encryption_enabled ||
+        !config->auto_encrypt_patterns ||
+        config->auto_encrypt_pattern_count == 0) {
+        return NULL;
+    }
+
+    gitignore_ruleset_t *rules = NULL;
+    error_t *err = gitignore_ruleset_create(arena, &rules);
+    if (err) {
+        return error_wrap(err, "Failed to allocate auto-encrypt ruleset");
+    }
+
+    /* Origin tag is unused for auto-encrypt — no per-rule attribution. */
+    err = gitignore_ruleset_append_patterns(
+        rules,
+        (const char *const *) config->auto_encrypt_patterns,
+        config->auto_encrypt_pattern_count,
+        0
+    );
+    if (err) {
+        return error_wrap(err, "Failed to compile auto-encrypt patterns");
+    }
+
+    *out_rules = rules;
+    return NULL;
+}
+
+error_t *encryption_policy_should_encrypt(
+    const gitignore_ruleset_t *auto_rules,
     const char *storage_path,
     bool explicit_encrypt,
     bool explicit_no_encrypt,
@@ -160,74 +200,25 @@ error_t *encryption_policy_should_encrypt(
         }
     }
 
-    /* Priority 4: Check auto-encrypt patterns
+    /* Priority 4: Check auto-encrypt patterns.
      *
-     * If config has auto_encrypt patterns enabled, check if this file
-     * matches any pattern (e.g., ".ssh/id_*", "*.key").
-     */
-    if (config && config->encryption_enabled) {
-        bool matches_pattern = false;
-        error_t *err = encryption_policy_matches_auto_patterns(
-            config,
-            storage_path,
-            &matches_pattern
-        );
-
-        if (err) {
-            /* Non-fatal: Pattern matching errors shouldn't block operations.
-             * Log warning and default to plaintext (safer than blocking).
-             * The caller can choose to log this if verbose mode is enabled.
-             *
-             * Note: Current implementation never returns errors (pattern
-             * matching is pure computation), but we keep error handling
-             * for future robustness.
-             */
-            error_free(err);
-            *out_should_encrypt = false;
-            return NULL;
-        }
-
-        *out_should_encrypt = matches_pattern;
-        return NULL;
-    }
-
-    /* Priority 5: Default to plaintext
-     *
-     * If none of the above conditions apply, default to plaintext.
-     * Encryption is opt-in, not opt-out (safer default).
-     */
-    *out_should_encrypt = false;
+     * Pattern matching is pure computation on the pre-compiled ruleset;
+     * it cannot fail. A NULL auto_rules is the sentinel meaning "no
+     * auto-encrypt applies" and is treated as a non-match. */
+    *out_should_encrypt =
+        encryption_policy_matches_auto_patterns(auto_rules, storage_path);
     return NULL;
 }
 
-error_t *encryption_policy_matches_auto_patterns(
-    const config_t *config,
-    const char *storage_path,
-    bool *out_matches
+bool encryption_policy_matches_auto_patterns(
+    const gitignore_ruleset_t *auto_rules,
+    const char *storage_path
 ) {
-    CHECK_NULL(storage_path);
-    CHECK_NULL(out_matches);
-
-    /* Default: no match */
-    *out_matches = false;
-
-    /* If config is NULL, no patterns to match */
-    if (!config) {
-        return NULL;
+    if (!auto_rules || !storage_path) {
+        return false;
     }
 
-    /* If encryption disabled, never auto-encrypt */
-    if (!config->encryption_enabled) {
-        return NULL;
-    }
-
-    /* If no patterns configured, never auto-encrypt */
-    if (!config->auto_encrypt_patterns ||
-        config->auto_encrypt_pattern_count == 0) {
-        return NULL;
-    }
-
-    /* Strip prefix for pattern matching
+    /* Strip storage prefix for pattern matching
      *
      * This allows patterns like ".ssh/id_*" to match "home/.ssh/id_rsa"
      * without requiring users to write "home/.ssh/id_*" in their config.
@@ -235,31 +226,16 @@ error_t *encryption_policy_matches_auto_patterns(
      * Prefixes: "home/" (5 chars), "root/" (5 chars), "custom/" (7 chars)
      */
     const char *path_for_matching = storage_path;
-
-    if (str_starts_with(storage_path, "home/")) {
-        path_for_matching = storage_path + 5;  /* Skip "home/" */
-    } else if (str_starts_with(storage_path, "root/")) {
-        path_for_matching = storage_path + 5;  /* Skip "root/" */
+    if (str_starts_with(storage_path, "home/") ||
+        str_starts_with(storage_path, "root/")) {
+        path_for_matching = storage_path + 5;
     } else if (str_starts_with(storage_path, "custom/")) {
-        path_for_matching = storage_path + 7;  /* Skip "custom/" */
+        path_for_matching = storage_path + 7;
     }
 
-    /* Check if path matches any auto-encrypt pattern
-     *
-     * Uses new match module with MATCH_DOUBLESTAR flag for full gitignore
-     * semantics including double-star recursive glob support.
-     *
-     * Examples:
-     *   Pattern: ".ssh/id_*" matches ".ssh/id_rsa"
-     *   Pattern: "*.key" matches "api.key" and "dir/api.key"
-     *   Pattern: "secrets" with recursive glob matches "proj/secrets/file.txt"
-     */
-    *out_matches = match_any(
-        config->auto_encrypt_patterns,
-        config->auto_encrypt_pattern_count,
-        path_for_matching,
-        MATCH_DOUBLESTAR  /* Enable ** support */
-    );
-
-    return NULL;
+    /* Encryption applies to files, not directories — is_dir is always
+     * false. Gitignore's last-match-wins with negation support is what
+     * the user actually wants: `*.key` + `!public.key` correctly excludes
+     * `public.key` from auto-encryption. */
+    return gitignore_is_ignored(auto_rules, path_for_matching, false);
 }

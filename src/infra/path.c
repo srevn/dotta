@@ -13,9 +13,10 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include "base/arena.h"
 #include "base/error.h"
+#include "base/gitignore.h"
 #include "base/hashmap.h"
-#include "base/match.h"
 #include "base/string.h"
 #include "sys/filesystem.h"
 
@@ -863,11 +864,13 @@ cleanup:
  * Create path filter from user input paths
  *
  * Handles three types of inputs:
- * 1. Glob patterns (*, ?, []) - stored in glob_patterns array for iteration
+ * 1. Glob patterns (*, ?, []) - compiled into gitignore_ruleset for matching,
+ *    raw strings retained in glob_patterns[] for diagnostic iteration
  * 2. Storage paths (home/..., root/..., custom/...) - stored in exact_paths hashmap
  * 3. Filesystem paths (/, ~, ./) - resolved to storage format, then stored in hashmap
  *
- * Performance: Separates exact paths (O(1) lookup) from globs (O(G) iteration).
+ * Performance: Separates exact paths (O(1) lookup) from globs (one
+ * gitignore_eval scan that respects rule ordering and negation).
  */
 error_t *path_filter_create(
     char *const *inputs,
@@ -896,7 +899,10 @@ error_t *path_filter_create(
         return ERROR(ERR_MEMORY, "Failed to allocate filter hashmap");
     }
 
-    /* First pass: count glob patterns for allocation */
+    /* First pass: count glob patterns so we can size the storage array
+     * exactly. No entries allocated yet for the zero-globs case — the
+     * arena stays NULL, keeping the common "exact paths only" path
+     * allocation-free beyond the hashmap. */
     size_t glob_count = 0;
     for (size_t i = 0; i < count; i++) {
         if (inputs[i] && strpbrk(inputs[i], "*?[")) {
@@ -904,22 +910,45 @@ error_t *path_filter_create(
         }
     }
 
-    /* Allocate glob patterns array if needed */
+    /* Stand up arena + ruleset + glob_patterns[] when at least one
+     * glob is present. All three share the filter's arena lifetime:
+     * dropping the filter drops all three with one arena_destroy. */
     if (glob_count > 0) {
-        filter->glob_patterns = calloc(glob_count, sizeof(char *));
-        if (!filter->glob_patterns) {
+        filter->arena = arena_create(0);
+        if (!filter->arena) {
             hashmap_free(filter->exact_paths, NULL);
             free(filter);
-            return ERROR(ERR_MEMORY, "Failed to allocate glob patterns");
+            return ERROR(ERR_MEMORY, "Failed to allocate filter arena");
+        }
+
+        error_t *rules_err = gitignore_ruleset_create(
+            filter->arena, &filter->glob_ruleset
+        );
+        if (rules_err) {
+            arena_destroy(filter->arena);
+            hashmap_free(filter->exact_paths, NULL);
+            free(filter);
+            return error_wrap(rules_err, "Failed to allocate glob ruleset");
+        }
+
+        filter->glob_patterns = arena_calloc(
+            filter->arena, glob_count, sizeof(*filter->glob_patterns)
+        );
+        if (!filter->glob_patterns) {
+            arena_destroy(filter->arena);
+            hashmap_free(filter->exact_paths, NULL);
+            free(filter);
+            return ERROR(ERR_MEMORY, "Failed to allocate glob pattern table");
         }
     }
 
-    /* Second pass: populate hashmap and glob array */
+    /* Second pass: populate hashmap and glob storage */
     error_t *err = NULL;
     for (size_t i = 0; i < count; i++) {
         const char *input = inputs[i];
 
-        /* Case 1: Glob pattern - validate and store in glob array */
+        /* Case 1: Glob pattern - validate, copy into arena, and
+         * append to the compiled ruleset. */
         if (input && strpbrk(input, "*?[")) {
             /*
              * Glob patterns are used directly for matching.
@@ -944,13 +973,19 @@ error_t *path_filter_create(
                 goto cleanup;
             }
 
-            filter->glob_patterns[filter->glob_count] = strdup(input);
-            if (!filter->glob_patterns[filter->glob_count]) {
+            char *arena_copy = arena_strdup(filter->arena, input);
+            if (!arena_copy) {
                 err = ERROR(ERR_MEMORY, "Failed to duplicate pattern");
                 goto cleanup;
             }
-            filter->glob_count++;
+            filter->glob_patterns[filter->glob_count++] = arena_copy;
             filter->count++;
+
+            err = gitignore_ruleset_append(filter->glob_ruleset, arena_copy, 0);
+            if (err) {
+                err = error_wrap(err, "Failed to compile glob pattern '%s'", input);
+                goto cleanup;
+            }
             continue;
         }
 
@@ -973,11 +1008,10 @@ error_t *path_filter_create(
     return NULL;
 
 cleanup:
-    /* Free already allocated glob patterns */
-    for (size_t j = 0; j < filter->glob_count; j++) {
-        free(filter->glob_patterns[j]);
-    }
-    free(filter->glob_patterns);
+    /* arena_destroy drops glob_ruleset and every arena-owned pattern
+     * copy in one shot; arena_destroy(NULL) is a no-op for the
+     * zero-globs failure path. */
+    arena_destroy(filter->arena);
     hashmap_free(filter->exact_paths, NULL);
     free(filter);
     return err;
@@ -1033,21 +1067,13 @@ bool path_filter_matches(
         }
     }
 
-    /* Slow path: O(G) glob pattern matching
+    /* Slow path: compiled gitignore ruleset.
      *
-     * Iterate through glob patterns using full match_pattern() semantics.
-     * This handles wildcards (*, ?, []), recursive globs (**), and
-     * basename-only patterns that match at any depth.
-     */
-    for (size_t i = 0; i < filter->glob_count; i++) {
-        if (match_pattern(
-            filter->glob_patterns[i], storage_path, MATCH_DOUBLESTAR
-            )) {
-            return true;
-        }
-    }
-
-    return false;
+     * One gitignore_eval scan honors rule ordering, negation, directory
+     * walk-up, and `**` recursive globs consistently with the rest of
+     * the ignore stack. Storage paths always reference files, so is_dir
+     * is false; directory-only globs still match via walk-up. */
+    return gitignore_is_ignored(filter->glob_ruleset, storage_path, false);
 }
 
 /**
@@ -1058,11 +1084,10 @@ void path_filter_free(path_filter_t *filter) {
         return;
     }
 
-    /* Free glob patterns (owned strings) */
-    for (size_t i = 0; i < filter->glob_count; i++) {
-        free(filter->glob_patterns[i]);
-    }
-    free(filter->glob_patterns);
+    /* arena_destroy drops glob_ruleset and every arena-owned pattern
+     * copy in one shot. Safe when filter->arena is NULL (zero-globs
+     * case): arena_destroy(NULL) is a no-op. */
+    arena_destroy(filter->arena);
 
     /* Free hashmap (keys owned by hashmap, values are just markers) */
     hashmap_free(filter->exact_paths, NULL);

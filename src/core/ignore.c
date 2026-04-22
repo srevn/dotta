@@ -28,10 +28,14 @@
 #include "base/string.h"
 #include "sys/gitops.h"
 
-/* Input validation limits */
+/* Input validation limits.
+ *
+ * Per-pattern length and cumulative rule count are enforced by the
+ * underlying gitignore engine (see base/gitignore.c); they are
+ * intentionally not duplicated here. Only the blob-size cap — an
+ * ignore-specific policy that guards against a runaway .dottaignore
+ * file pulled in from Git — lives in this module. */
 #define MAX_DOTTAIGNORE_SIZE (1024 * 1024)   /* 1MB per .dottaignore blob */
-#define MAX_PATTERN_LENGTH 4096              /* per individual CLI/config pattern */
-#define MAX_PATTERN_COUNT 10000              /* per CLI/config array */
 
 /* Initial arena block. Comfortably fits a typical baseline (~1KB)
  * plus a handful of extra rules; the arena grows on demand. */
@@ -165,69 +169,6 @@ static const char *PROFILE_DOTTAIGNORE =
     "#   - Use / at start to anchor to repo root\n"
     "\n"
     "# Add your profile-specific patterns below:\n";
-
-/* =====================================================================
- * Static helpers
- * ===================================================================== */
-
-/**
- * Join an array of patterns with '\n' into an arena buffer and append
- * the result to the ruleset with the given origin tag.
- *
- * Enforces MAX_PATTERN_COUNT and MAX_PATTERN_LENGTH before parsing.
- * Empty arrays are a no-op. The gitignore engine applies its own
- * per-line and total-rule caps as a second defense.
- */
-static error_t *append_pattern_array(
-    gitignore_ruleset_t *ruleset,
-    arena_t *arena,
-    char **patterns,
-    size_t count,
-    gitignore_origin_t origin,
-    const char *source_label
-) {
-    if (!patterns || count == 0) return NULL;
-
-    if (count > MAX_PATTERN_COUNT) {
-        return ERROR(
-            ERR_VALIDATION, "Too many %s patterns (max %d)",
-            source_label, MAX_PATTERN_COUNT
-        );
-    }
-
-    size_t total = 0;
-    for (size_t i = 0; i < count; i++) {
-        if (!patterns[i]) continue;
-        size_t len = strlen(patterns[i]);
-        if (len > MAX_PATTERN_LENGTH) {
-            return ERROR(
-                ERR_VALIDATION,
-                "%s pattern too long (max %d chars)",
-                source_label, MAX_PATTERN_LENGTH
-            );
-        }
-        total += len + 1;  /* +1 for '\n' separator (last one doubles as terminator slot) */
-    }
-
-    if (total == 0) return NULL;
-
-    char *joined = arena_alloc(arena, total + 1);
-    if (!joined) {
-        return ERROR(ERR_MEMORY, "Arena exhausted building %s pattern buffer", source_label);
-    }
-
-    size_t offset = 0;
-    for (size_t i = 0; i < count; i++) {
-        if (!patterns[i]) continue;
-        size_t len = strlen(patterns[i]);
-        memcpy(joined + offset, patterns[i], len);
-        offset += len;
-        joined[offset++] = '\n';
-    }
-    joined[offset] = '\0';
-
-    return gitignore_ruleset_append(ruleset, joined, origin);
-}
 
 /**
  * Check if path is ignored by source .gitignore (with caching).
@@ -363,10 +304,6 @@ static error_t *matches_source_gitignore(
     return NULL;
 }
 
-/* =====================================================================
- * Public API
- * ===================================================================== */
-
 error_t *ignore_load_raw_content(
     git_repository *repo,
     const char *branch_name,
@@ -416,7 +353,7 @@ error_t *ignore_load_raw_content(
         free(content);
         return ERROR(
             ERR_VALIDATION,
-            ".dottaignore on branch '%s' exceeds size cap (max %d bytes, actual %zu)",
+            ".dottaignore on branch '%s' exceeds capacity (max %d bytes, actual %zu)",
             branch_name, MAX_DOTTAIGNORE_SIZE, size
         );
     }
@@ -555,33 +492,29 @@ error_t *ignore_context_create(
 
     /* 3. Config patterns. */
     if (config && config->ignore_patterns && config->ignore_pattern_count > 0) {
-        err = append_pattern_array(
+        err = gitignore_ruleset_append_patterns(
             ctx->ruleset,
-            ctx->arena,
-            config->ignore_patterns,
+            (const char *const *) config->ignore_patterns,
             config->ignore_pattern_count,
-            (gitignore_origin_t) IGNORE_SOURCE_CONFIG,
-            "config ignore"
+            (gitignore_origin_t) IGNORE_SOURCE_CONFIG
         );
         if (err) {
             ignore_context_free(ctx);
-            return err;
+            return error_wrap(err, "Failed to compile config ignore patterns");
         }
     }
 
     /* 4. CLI excludes — appended last so they win last-match. */
     if (cli_excludes && cli_exclude_count > 0) {
-        err = append_pattern_array(
+        err = gitignore_ruleset_append_patterns(
             ctx->ruleset,
-            ctx->arena,
-            cli_excludes,
+            (const char *const *) cli_excludes,
             cli_exclude_count,
-            (gitignore_origin_t) IGNORE_SOURCE_CLI,
-            "CLI exclude"
+            (gitignore_origin_t) IGNORE_SOURCE_CLI
         );
         if (err) {
             ignore_context_free(ctx);
-            return err;
+            return error_wrap(err, "Failed to compile CLI exclude patterns");
         }
     }
 

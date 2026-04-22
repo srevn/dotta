@@ -1993,10 +1993,13 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
  * Error handling:
  * - Git read errors: Non-fatal, warns and skips file
  * - Metadata corruption: Non-fatal, warns and uses magic header
- * - Pattern match errors: Non-fatal, skips file
  *
  * This is a security-focused check: files matching sensitive patterns
  * (e.g., "*.key", ".ssh/id_*") should be encrypted.
+ *
+ * Auto-encrypt ruleset is compiled once at the start of the scan and
+ * borrowed across every manifest entry; matching itself is pure
+ * computation and cannot fail.
  */
 static error_t *analyze_encryption_policy_mismatch(
     workspace_t *ws,
@@ -2015,27 +2018,38 @@ static error_t *analyze_encryption_policy_mismatch(
         return NULL;
     }
 
+    /* Compile the auto-encrypt ruleset once for this scan. On its own
+     * arena so it doesn't pollute ws->arena (which has a different
+     * lifetime aligned with the workspace itself). */
+    arena_t *rules_arena = arena_create(0);
+    if (!rules_arena) {
+        return ERROR(ERR_MEMORY, "Failed to allocate auto-encrypt arena");
+    }
+
+    gitignore_ruleset_t *auto_rules = NULL;
+    error_t *err = encryption_policy_build_auto_rules(
+        config, rules_arena, &auto_rules
+    );
+    if (err) {
+        arena_destroy(rules_arena);
+        return error_wrap(err, "Failed to compile auto-encrypt patterns");
+    }
+
+    /* If the builder returned NULL the short-circuit above should have
+     * fired; treat unexpected NULL as "nothing to scan". */
+    if (!auto_rules) {
+        arena_destroy(rules_arena);
+        return NULL;
+    }
+
     /* Check each file in manifest */
     for (size_t i = 0; i < ws->manifest->count; i++) {
         const file_entry_t *manifest_entry = &ws->manifest->entries[i];
         const char *storage_path = manifest_entry->storage_path;
         const char *profile = manifest_entry->profile;
 
-        /* Check if file should be auto-encrypted */
-        bool should_auto_encrypt = false;
-        error_t *err = encryption_policy_matches_auto_patterns(
-            config,
-            storage_path,
-            &should_auto_encrypt
-        );
-        if (err) {
-            /* Non-fatal: pattern matching errors shouldn't block status */
-            error_free(err);
-            continue;
-        }
-
-        /* If file doesn't match patterns, no mismatch */
-        if (!should_auto_encrypt) {
+        /* Check if file should be auto-encrypted (pure computation) */
+        if (!encryption_policy_matches_auto_patterns(auto_rules, storage_path)) {
             continue;
         }
 
@@ -2089,8 +2103,11 @@ static error_t *analyze_encryption_policy_mismatch(
             );
         }
 
-        /* Policy mismatch: should be encrypted but isn't */
-        if (should_auto_encrypt && !is_encrypted) {
+        /* Policy mismatch: should be encrypted but isn't.
+         * At this point we know the pattern matched (continue above would
+         * have skipped otherwise), so the original `should_auto_encrypt &&`
+         * guard collapses to the plaintext check. */
+        if (!is_encrypted) {
             /* Check if file already has divergence (O(1) index lookup).
              * This prevents last-write-wins bug when multiple analysis functions
              * detect different divergence types for the same file. */
@@ -2144,12 +2161,14 @@ static error_t *analyze_encryption_policy_mismatch(
                 );
 
                 if (err) {
+                    arena_destroy(rules_arena);
                     return err;
                 }
             }
         }
     }
 
+    arena_destroy(rules_arena);
     return NULL;
 }
 

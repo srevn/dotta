@@ -130,13 +130,14 @@ static const char *normalize_pattern(
 /**
  * Add patterns to .dottaignore content
  *
- * Returns new content with patterns appended.
- * Skips patterns that already exist or are duplicates within the batch.
+ * Appends normalized patterns (whitespace-trimmed) to existing_content,
+ * skipping patterns that already exist or are duplicates within the batch.
+ * Deduplication is textual — each candidate is compared against lines
+ * already present in the accumulating buffer.
  *
- * Uses upper-bound allocation with a single pass. Deduplication against both
- * existing content and earlier batch entries is handled by checking
- * pattern_exists() against the accumulated result buffer, which grows as
- * patterns are appended.
+ * Contract: on success, *new_content is NULL iff *added_count == 0. The
+ * helper never hands back a buffer that is byte-identical to its input,
+ * so callers can treat NULL as "nothing changed" without further checks.
  */
 static error_t *add_patterns_to_content(
     const char *existing_content,
@@ -213,16 +214,28 @@ static error_t *add_patterns_to_content(
         (*added_count)++;
     }
 
-    *new_content = result;
+    /* Nothing was added: the seeded buffer is a byte-for-byte copy of
+     * existing_content. Drop it and signal "no change" via NULL so the
+     * caller can skip a free(). */
+    if (*added_count == 0) {
+        free(result);
+        return NULL;
+    }
 
+    *new_content = result;
     return NULL;
 }
 
 /**
  * Remove patterns from .dottaignore content
  *
- * Returns new content with patterns removed.
- * Warns if pattern not found.
+ * Filters existing_content line-by-line, dropping any non-comment line
+ * that textually matches a normalized entry in patterns. `*not_found_count`
+ * reports how many requested patterns were absent from the input and is
+ * always populated regardless of whether the buffer changed.
+ *
+ * Contract: on success, *new_content is NULL iff *removed_count == 0.
+ * Callers can treat NULL as "nothing changed" without a content compare.
  */
 static error_t *remove_patterns_from_content(
     const char *existing_content,
@@ -242,12 +255,9 @@ static error_t *remove_patterns_from_content(
     *not_found_count = 0;
 
     if (!existing_content || pattern_count == 0) {
-        if (existing_content) {
-            *new_content = strdup(existing_content);
-            if (!*new_content) {
-                return ERROR(ERR_MEMORY, "Failed to duplicate content");
-            }
-        }
+        /* Nothing to filter: no new buffer produced. All requested
+         * patterns are vacuously "not found" so the caller can report
+         * accurately. */
         *not_found_count = pattern_count;
         return NULL;
     }
@@ -349,37 +359,52 @@ static error_t *remove_patterns_from_content(
     }
 
     free(pattern_found);
-    *new_content = result;
 
+    /* No line matched — the seeded buffer would be identical to the input.
+     * Drop it and signal "no change" via NULL so the caller can skip a
+     * free(). *not_found_count is still set above, so the "patterns not
+     * found" diagnostic fires correctly. */
+    if (*removed_count == 0) {
+        free(result);
+        return NULL;
+    }
+
+    *new_content = result;
     return NULL;
 }
 
 /**
- * Edit baseline .dottaignore (from dotta-worktree branch)
+ * Edit content in an external editor via a temporary file.
+ *
+ * Seeds a fresh mkstemp file with `seed` (may be empty when
+ * `seed_size == 0`), launches the user's preferred editor via
+ * editor_launch_with_env (DOTTA_EDITOR / VISUAL / EDITOR, falling
+ * back to `vi`), then reads the post-edit contents into a
+ * heap-owned NUL-terminated buffer. The tempfile is unlinked on
+ * every exit path.
+ *
+ * @param seed        Seed content (must not be NULL; may be empty)
+ * @param seed_size   Bytes of seed to write (0 skips the write call)
+ * @param out_content Receives heap-allocated NUL-terminated result
+ *                    (caller frees; never NULL on success)
+ * @param out_size    Receives byte count of result (excludes NUL)
+ * @return Error or NULL on success
  */
-static error_t *edit_baseline_dottaignore(
-    git_repository *repo,
-    const config_t *config,
-    output_t *out
+static error_t *edit_content_via_editor(
+    const char *seed,
+    size_t seed_size,
+    char **out_content,
+    size_t *out_size
 ) {
-    CHECK_NULL(repo);
-    (void) config;  /* Reserved for future use */
+    CHECK_NULL(seed);
+    CHECK_NULL(out_content);
+    CHECK_NULL(out_size);
 
-    /* Check if dotta-worktree branch exists */
-    bool branch_exists = false;
-    error_t *err = gitops_branch_exists(repo, "dotta-worktree", &branch_exists);
-    if (err) return err;
+    *out_content = NULL;
+    *out_size = 0;
 
-    if (!branch_exists) {
-        return ERROR(
-            ERR_INTERNAL, "dotta-worktree branch does not exist. "
-            "Run 'dotta init' first."
-        );
-    }
-
-    /* Create temporary file */
     const char *tmpdir = getenv("TMPDIR");
-    if (!tmpdir) {
+    if (!tmpdir || !*tmpdir) {
         tmpdir = "/tmp";
     }
 
@@ -394,50 +419,24 @@ static error_t *edit_baseline_dottaignore(
         return ERROR(ERR_FS, "Failed to create temporary file");
     }
 
-    /* Seed tmpfile with existing baseline, or compiled defaults if absent */
-    char *existing_content = NULL;
-    size_t existing_size = 0;
-    err = ignore_load_raw_content(
-        repo, "dotta-worktree", &existing_content, &existing_size
-    );
-    if (err) {
-        close(fd);
-        unlink(tmpfile);
-        free(tmpfile);
-        return error_wrap(err, "Failed to load baseline .dottaignore");
+    if (seed_size > 0) {
+        ssize_t written = write(fd, seed, seed_size);
+        if (written < 0 || (size_t) written != seed_size) {
+            close(fd);
+            unlink(tmpfile);
+            free(tmpfile);
+            return ERROR(ERR_FS, "Failed to write to temporary file");
+        }
     }
-
-    const char *seed;
-    size_t seed_size;
-    if (existing_content) {
-        seed = existing_content;
-        seed_size = existing_size;
-    } else {
-        seed = ignore_default_dottaignore_content();
-        seed_size = strlen(seed);
-    }
-
-    ssize_t written = write(fd, seed, seed_size);
-    free(existing_content);
-
-    if (written < 0 || (size_t) written != seed_size) {
-        close(fd);
-        unlink(tmpfile);
-        free(tmpfile);
-        return ERROR(ERR_FS, "Failed to write to temporary file");
-    }
-
     close(fd);
 
-    /* Open in editor - priority: DOTTA_EDITOR, VISUAL, EDITOR, vi */
-    err = editor_launch_with_env(tmpfile, "vi");
+    error_t *err = editor_launch_with_env(tmpfile, "vi");
     if (err) {
         unlink(tmpfile);
         free(tmpfile);
-        return error_wrap(err, "Failed to edit baseline .dottaignore");
+        return err;
     }
 
-    /* Read back the content */
     FILE *f = fopen(tmpfile, "r");
     if (!f) {
         unlink(tmpfile);
@@ -445,8 +444,13 @@ static error_t *edit_baseline_dottaignore(
         return ERROR(ERR_FS, "Failed to read temporary file");
     }
 
-    /* Get file size */
-    fseek(f, 0, SEEK_END);
+    if (fseek(f, 0, SEEK_END) != 0) {
+        fclose(f);
+        unlink(tmpfile);
+        free(tmpfile);
+        return ERROR(ERR_FS, "Failed to seek temporary file");
+    }
+
     long fsize = ftell(f);
     if (fsize < 0) {
         fclose(f);
@@ -454,105 +458,66 @@ static error_t *edit_baseline_dottaignore(
         free(tmpfile);
         return ERROR(ERR_FS, "Failed to determine temporary file size");
     }
-    fseek(f, 0, SEEK_SET);
+    rewind(f);
 
-    char *new_content = malloc((size_t) fsize + 1);
-    if (!new_content) {
+    char *buf = malloc((size_t) fsize + 1);
+    if (!buf) {
         fclose(f);
         unlink(tmpfile);
         free(tmpfile);
         return ERROR(ERR_MEMORY, "Failed to allocate content buffer");
     }
 
-    size_t read_size = fread(new_content, 1, (size_t) fsize, f);
-    new_content[read_size] = '\0';
+    size_t read_size = fread(buf, 1, (size_t) fsize, f);
+    buf[read_size] = '\0';
     fclose(f);
     unlink(tmpfile);
     free(tmpfile);
 
-    /* Update .dottaignore in dotta-worktree branch */
-    bool was_modified = false;
-    err = gitops_update_file(
-        repo,
-        "dotta-worktree",
-        ".dottaignore",
-        new_content,
-        read_size,
-        "Update baseline .dottaignore",
-        GIT_FILEMODE_BLOB,
-        &was_modified
-    );
-
-    free(new_content);
-
-    if (err) {
-        return error_wrap(err, "Failed to update .dottaignore");
-    }
-
-    if (!was_modified) {
-        output_info(out, OUTPUT_NORMAL, "No changes to baseline .dottaignore");
-        return NULL;
-    }
-
-    /* INDEX and workdir are kept in sync by gitops_update_file for the
-     * current-branch case — no explicit worktree sync needed here. */
-
-    output_success(
-        out, OUTPUT_NORMAL, "Updated baseline .dottaignore in dotta-worktree branch"
-    );
-
+    *out_content = buf;
+    *out_size = read_size;
     return NULL;
 }
 
 /**
- * Edit profile-specific .dottaignore
+ * File-local scope for the two .dottaignore-editing surfaces: the
+ * baseline on dotta-worktree, and any named profile branch.
+ *
+ * Captures everything that differs between the two so edit_dottaignore
+ * and modify_dottaignore stay branch-agnostic. Constructed on the
+ * stack in cmd_ignore; label strings for the profile case are heap-
+ * owned with matching cmd_ignore lifetime.
  */
-static error_t *edit_profile_dottaignore(
+typedef struct {
+    const char *branch_name;    /* "dotta-worktree" or profile name */
+    const char *display_label;  /* "baseline" or "profile 'X'" */
+    const char *default_seed;   /* default content / profile template */
+} dottaignore_scope_t;
+
+/**
+ * Edit a .dottaignore via external editor.
+ *
+ * Called with scope->branch_name already verified to exist (cmd_ignore
+ * hoists that check). Loads existing content, delegates to the editor
+ * helper, commits the result back to the same branch.
+ */
+static error_t *edit_dottaignore(
     git_repository *repo,
-    const char *profile,
+    const dottaignore_scope_t *scope,
     output_t *out
 ) {
     CHECK_NULL(repo);
-    CHECK_NULL(profile);
+    CHECK_NULL(scope);
 
-    /* Check if profile branch exists */
-    bool branch_exists = false;
-    error_t *err = gitops_branch_exists(repo, profile, &branch_exists);
-    if (err) return err;
-
-    if (!branch_exists) {
-        return ERROR(
-            ERR_INVALID_ARG, "Profile '%s' does not exist",
-            profile
-        );
-    }
-
-    /* Create temporary file */
-    const char *tmpdir = getenv("TMPDIR");
-    if (!tmpdir) tmpdir = "/tmp";
-
-    char *tmpfile = str_format("%s/dotta-ignore-XXXXXX", tmpdir);
-    if (!tmpfile) {
-        return ERROR(ERR_MEMORY, "Failed to allocate temporary file path");
-    }
-
-    int fd = mkstemp(tmpfile);
-    if (fd < 0) {
-        free(tmpfile);
-        return ERROR(ERR_FS, "Failed to create temporary file");
-    }
-
-    /* Seed tmpfile with existing profile content, or template if absent */
     char *existing_content = NULL;
     size_t existing_size = 0;
-    err = ignore_load_raw_content(
-        repo, profile, &existing_content, &existing_size
+    error_t *err = ignore_load_raw_content(
+        repo, scope->branch_name, &existing_content, &existing_size
     );
     if (err) {
-        close(fd);
-        unlink(tmpfile);
-        free(tmpfile);
-        return error_wrap(err, "Failed to load profile .dottaignore");
+        return error_wrap(
+            err, "Failed to load %s .dottaignore", scope->display_label
+        );
     }
 
     const char *seed;
@@ -561,66 +526,24 @@ static error_t *edit_profile_dottaignore(
         seed = existing_content;
         seed_size = existing_size;
     } else {
-        seed = ignore_profile_dottaignore_template();
+        seed = scope->default_seed;
         seed_size = strlen(seed);
     }
 
-    ssize_t written = write(fd, seed, seed_size);
+    char *new_content = NULL;
+    size_t new_size = 0;
+    err = edit_content_via_editor(
+        seed, seed_size, &new_content, &new_size
+    );
     free(existing_content);
-
-    if (written < 0 || (size_t) written != seed_size) {
-        close(fd);
-        unlink(tmpfile);
-        free(tmpfile);
-        return ERROR(ERR_FS, "Failed to write to temporary file");
-    }
-
-    close(fd);
-
-    /* Open in editor - priority: DOTTA_EDITOR, VISUAL, EDITOR, vi */
-    err = editor_launch_with_env(tmpfile, "vi");
     if (err) {
-        unlink(tmpfile);
-        free(tmpfile);
-        return error_wrap(err, "Failed to edit profile .dottaignore");
+        return error_wrap(
+            err, "Failed to edit %s .dottaignore", scope->display_label
+        );
     }
 
-    /* Read back the content */
-    FILE *f = fopen(tmpfile, "r");
-    if (!f) {
-        unlink(tmpfile);
-        free(tmpfile);
-        return ERROR(ERR_FS, "Failed to read temporary file");
-    }
-
-    /* Get file size */
-    fseek(f, 0, SEEK_END);
-    long fsize = ftell(f);
-    if (fsize < 0) {
-        fclose(f);
-        unlink(tmpfile);
-        free(tmpfile);
-        return ERROR(ERR_FS, "Failed to determine temporary file size");
-    }
-    fseek(f, 0, SEEK_SET);
-
-    char *new_content = malloc((size_t) fsize + 1);
-    if (!new_content) {
-        fclose(f);
-        unlink(tmpfile);
-        free(tmpfile);
-        return ERROR(ERR_MEMORY, "Failed to allocate content buffer");
-    }
-
-    size_t read_size = fread(new_content, 1, (size_t) fsize, f);
-    new_content[read_size] = '\0';
-    fclose(f);
-    unlink(tmpfile);
-    free(tmpfile);
-
-    /* Update .dottaignore in profile branch */
     char *commit_msg = str_format(
-        "Update .dottaignore for profile '%s'", profile
+        "Update %s .dottaignore", scope->display_label
     );
     if (!commit_msg) {
         free(new_content);
@@ -630,43 +553,57 @@ static error_t *edit_profile_dottaignore(
     bool was_modified = false;
     err = gitops_update_file(
         repo,
-        profile,
+        scope->branch_name,
         ".dottaignore",
         new_content,
-        read_size,
+        new_size,
         commit_msg,
         GIT_FILEMODE_BLOB,
         &was_modified
     );
-
     free(commit_msg);
     free(new_content);
 
     if (err) {
-        return error_wrap(err, "Failed to update profile .dottaignore");
+        return error_wrap(
+            err, "Failed to update %s .dottaignore", scope->display_label
+        );
     }
 
     if (!was_modified) {
         output_info(
-            out, OUTPUT_NORMAL, "No changes to .dottaignore for profile '%s'",
-            profile
+            out, OUTPUT_NORMAL, "No changes to %s .dottaignore",
+            scope->display_label
         );
         return NULL;
     }
 
-    output_success(
-        out, OUTPUT_NORMAL, "Updated .dottaignore for profile '%s'",
-        profile
-    );
+    /* INDEX and workdir are kept in sync by gitops_update_file for the
+     * current-branch case — no explicit worktree sync needed here. */
 
+    output_success(
+        out, OUTPUT_NORMAL, "Updated %s .dottaignore", scope->display_label
+    );
     return NULL;
 }
 
 /**
- * Modify baseline .dottaignore by adding or removing patterns
+ * Add / remove patterns in a .dottaignore non-interactively.
+ *
+ * Called with scope->branch_name already verified to exist. Load
+ * existing content, apply add/remove transforms, commit the result
+ * if it actually changed.
+ *
+ * Ownership is linear: `owned` is the single buffer this function frees
+ * at every exit. Each transform either leaves `owned` untouched (helper
+ * returned NULL = no change) or hands back a fresh buffer we adopt after
+ * dropping the old one. The helper contracts guarantee a non-NULL return
+ * iff the content actually changed, which is what lets this function
+ * get by with one variable and no pointer-identity comparisons.
  */
-static error_t *modify_baseline_dottaignore(
+static error_t *modify_dottaignore(
     git_repository *repo,
+    const dottaignore_scope_t *scope,
     char **add_patterns,
     size_t add_count,
     char **remove_patterns,
@@ -674,376 +611,160 @@ static error_t *modify_baseline_dottaignore(
     output_t *out
 ) {
     CHECK_NULL(repo);
+    CHECK_NULL(scope);
 
-    /* Check if dotta-worktree branch exists */
-    bool branch_exists = false;
-    error_t *err = gitops_branch_exists(repo, "dotta-worktree", &branch_exists);
+    char *owned = NULL;
+    error_t *err = ignore_load_raw_content(
+        repo, scope->branch_name, &owned, NULL
+    );
     if (err) {
-        return err;
-    }
-
-    if (!branch_exists) {
-        return ERROR(
-            ERR_INTERNAL, "dotta-worktree branch does not exist. "
-            "Run 'dotta init' first."
+        return error_wrap(
+            err, "Failed to load %s .dottaignore", scope->display_label
         );
     }
 
-    /* Load existing .dottaignore content */
-    char *existing_content = NULL;
-    err = ignore_load_raw_content(
-        repo, "dotta-worktree", &existing_content, NULL
-    );
-    if (err) {
-        return error_wrap(err, "Failed to load baseline .dottaignore");
-    }
-
-    if (!existing_content && !add_patterns) {
-        /* No existing .dottaignore and no patterns to add */
-        output_info(out, OUTPUT_NORMAL, "No .dottaignore file exists in baseline");
+    /* Nothing to work with: no existing file and no adds to seed one.
+     * Wording uses "%s .dottaignore" so it composes naturally for both
+     * scopes: "No baseline .dottaignore exists" / "No profile 'foo'
+     * .dottaignore exists". */
+    if (!owned && add_count == 0) {
+        output_info(
+            out, OUTPUT_NORMAL, "No %s .dottaignore exists",
+            scope->display_label
+        );
         return NULL;
     }
 
-    /* If no existing content, use default for adds */
-    if (!existing_content && add_count > 0) {
-        existing_content = strdup(ignore_default_dottaignore_content());
-        if (!existing_content) {
+    /* Seed with default/template when file is absent and adds exist. */
+    if (!owned && add_count > 0) {
+        owned = strdup(scope->default_seed);
+        if (!owned) {
             return ERROR(ERR_MEMORY, "Failed to allocate default content");
         }
     }
 
-    char *new_content = existing_content;
     size_t total_added = 0;
     size_t total_removed = 0;
     size_t total_not_found = 0;
 
-    /* Process additions */
     if (add_count > 0) {
         size_t added = 0;
-        char *content_with_adds = NULL;
+        char *next = NULL;
         err = add_patterns_to_content(
-            new_content, add_patterns, add_count, &content_with_adds, &added
+            owned, add_patterns, add_count, &next, &added
         );
         if (err) {
-            free(existing_content);
+            free(owned);
             return error_wrap(err, "Failed to add patterns");
         }
-
-        if (content_with_adds) {
-            if (new_content != existing_content) {
-                free(new_content);
-            }
-            new_content = content_with_adds;
+        if (next) {
+            free(owned);
+            owned = next;
             total_added = added;
         }
     }
 
-    /* Process removals */
     if (remove_count > 0) {
         size_t removed = 0;
         size_t not_found = 0;
-        char *content_with_removals = NULL;
+        char *next = NULL;
         err = remove_patterns_from_content(
-            new_content, remove_patterns, remove_count, &content_with_removals,
-            &removed, &not_found
+            owned, remove_patterns, remove_count, &next, &removed, &not_found
         );
         if (err) {
-            if (new_content != existing_content) {
-                free(new_content);
-            }
-            free(existing_content);
+            free(owned);
             return error_wrap(err, "Failed to remove patterns");
         }
-
-        if (content_with_removals) {
-            if (new_content != existing_content) {
-                free(new_content);
-            }
-            new_content = content_with_removals;
+        /* not_found is populated whether or not the buffer changed — always
+         * capture so the "patterns not found" diagnostic fires even when
+         * nothing was removed. */
+        total_not_found = not_found;
+        if (next) {
+            free(owned);
+            owned = next;
             total_removed = removed;
-            total_not_found = not_found;
         }
     }
 
-    /* Check if any changes were made */
+    /* Nothing actually changed — report why and return early. */
     if (total_added == 0 && total_removed == 0) {
-        if (new_content != existing_content) {
-            free(new_content);
-        }
-        free(existing_content);
+        free(owned);
 
         if (add_count > 0 && remove_count > 0) {
-            output_info(out, OUTPUT_NORMAL, "No changes: all patterns already exist or not found");
+            output_info(
+                out, OUTPUT_NORMAL,
+                "No changes: all patterns already exist or not found"
+            );
         } else if (add_count > 0) {
-            output_info(out, OUTPUT_NORMAL, "No changes: all patterns already exist");
+            output_info(
+                out, OUTPUT_NORMAL, "No changes: all patterns already exist"
+            );
         } else {
-            output_info(out, OUTPUT_NORMAL, "No changes: patterns not found");
+            output_info(
+                out, OUTPUT_NORMAL, "No changes: patterns not found"
+            );
         }
         return NULL;
     }
 
-    /* Create commit message */
     char *commit_msg = NULL;
     if (total_added > 0 && total_removed > 0) {
         commit_msg = str_format(
-            "Update baseline .dottaignore (added %zu, removed %zu patterns)",
-            total_added, total_removed
+            "Update %s .dottaignore (added %zu, removed %zu patterns)",
+            scope->display_label, total_added, total_removed
         );
     } else if (total_added > 0) {
         commit_msg = str_format(
-            "Add %zu pattern%s to baseline .dottaignore",
-            total_added, total_added == 1 ? "" : "s"
+            "Add %zu pattern%s to %s .dottaignore",
+            total_added, total_added == 1 ? "" : "s", scope->display_label
         );
     } else {
         commit_msg = str_format(
-            "Remove %zu pattern%s from baseline .dottaignore",
-            total_removed, total_removed == 1 ? "" : "s"
+            "Remove %zu pattern%s from %s .dottaignore",
+            total_removed, total_removed == 1 ? "" : "s", scope->display_label
         );
     }
 
     if (!commit_msg) {
-        if (new_content != existing_content) {
-            free(new_content);
-        }
-        free(existing_content);
+        free(owned);
         return ERROR(ERR_MEMORY, "Failed to allocate commit message");
     }
 
-    /* Update .dottaignore in dotta-worktree branch */
     err = gitops_update_file(
         repo,
-        "dotta-worktree",
+        scope->branch_name,
         ".dottaignore",
-        new_content,
-        strlen(new_content),
+        owned,
+        strlen(owned),
         commit_msg,
         GIT_FILEMODE_BLOB,
-        NULL  /* Don't need modification flag */
+        NULL
     );
 
     free(commit_msg);
-    if (new_content != existing_content) {
-        free(new_content);
-    }
-    free(existing_content);
+    free(owned);
 
     if (err) {
-        return error_wrap(err, "Failed to update .dottaignore");
+        return error_wrap(
+            err, "Failed to update %s .dottaignore", scope->display_label
+        );
     }
 
     /* INDEX and workdir are kept in sync by gitops_update_file for the
      * current-branch case — no explicit worktree sync needed here. */
 
-    /* Report results */
     if (total_added > 0) {
         output_success(
             out, OUTPUT_NORMAL,
-            "Added %zu pattern%s to baseline .dottaignore",
-            total_added, total_added == 1 ? "" : "s"
+            "Added %zu pattern%s to %s .dottaignore",
+            total_added, total_added == 1 ? "" : "s", scope->display_label
         );
     }
     if (total_removed > 0) {
         output_success(
             out, OUTPUT_NORMAL,
-            "Removed %zu pattern%s from baseline .dottaignore",
-            total_removed, total_removed == 1 ? "" : "s"
-        );
-    }
-    if (total_not_found > 0) {
-        output_info(
-            out, OUTPUT_NORMAL,
-            "Warning: %zu pattern%s not found (already removed or never added)",
-            total_not_found, total_not_found == 1 ? "" : "s"
-        );
-    }
-
-    return NULL;
-}
-
-/**
- * Modify profile-specific .dottaignore by adding or removing patterns
- */
-static error_t *modify_profile_dottaignore(
-    git_repository *repo,
-    const char *profile,
-    char **add_patterns,
-    size_t add_count,
-    char **remove_patterns,
-    size_t remove_count,
-    output_t *out
-) {
-    CHECK_NULL(repo);
-    CHECK_NULL(profile);
-
-    /* Check if profile branch exists */
-    bool branch_exists = false;
-    error_t *err = gitops_branch_exists(repo, profile, &branch_exists);
-    if (err) {
-        return err;
-    }
-
-    if (!branch_exists) {
-        return ERROR(
-            ERR_INVALID_ARG, "Profile '%s' does not exist", profile
-        );
-    }
-
-    /* Load existing .dottaignore content from profile */
-    char *existing_content = NULL;
-    err = ignore_load_raw_content(repo, profile, &existing_content, NULL);
-    if (err) {
-        return error_wrap(err, "Failed to load profile .dottaignore");
-    }
-
-    if (!existing_content && !add_patterns) {
-        /* No existing .dottaignore and no patterns to add */
-        output_info(
-            out, OUTPUT_NORMAL, "No .dottaignore file exists in profile '%s'",
-            profile
-        );
-        return NULL;
-    }
-
-    /* If no existing content, use template for adds */
-    if (!existing_content && add_count > 0) {
-        existing_content = strdup(ignore_profile_dottaignore_template());
-        if (!existing_content) {
-            return ERROR(ERR_MEMORY, "Failed to allocate template content");
-        }
-    }
-
-    char *new_content = existing_content;
-    size_t total_added = 0;
-    size_t total_removed = 0;
-    size_t total_not_found = 0;
-
-    /* Process additions */
-    if (add_count > 0) {
-        size_t added = 0;
-        char *content_with_adds = NULL;
-        err = add_patterns_to_content(
-            new_content, add_patterns, add_count, &content_with_adds, &added
-        );
-        if (err) {
-            free(existing_content);
-            return error_wrap(err, "Failed to add patterns");
-        }
-
-        if (content_with_adds) {
-            if (new_content != existing_content) {
-                free(new_content);
-            }
-            new_content = content_with_adds;
-            total_added = added;
-        }
-    }
-
-    /* Process removals */
-    if (remove_count > 0) {
-        size_t removed = 0;
-        size_t not_found = 0;
-        char *content_with_removals = NULL;
-        err = remove_patterns_from_content(
-            new_content, remove_patterns, remove_count, &content_with_removals,
-            &removed, &not_found
-        );
-        if (err) {
-            if (new_content != existing_content) {
-                free(new_content);
-            }
-            free(existing_content);
-            return error_wrap(err, "Failed to remove patterns");
-        }
-
-        if (content_with_removals) {
-            if (new_content != existing_content) {
-                free(new_content);
-            }
-            new_content = content_with_removals;
-            total_removed = removed;
-            total_not_found = not_found;
-        }
-    }
-
-    /* Check if any changes were made */
-    if (total_added == 0 && total_removed == 0) {
-        if (new_content != existing_content) {
-            free(new_content);
-        }
-        free(existing_content);
-
-        if (add_count > 0 && remove_count > 0) {
-            output_info(out, OUTPUT_NORMAL, "No changes: all patterns already exist or not found");
-        } else if (add_count > 0) {
-            output_info(out, OUTPUT_NORMAL, "No changes: all patterns already exist");
-        } else {
-            output_info(out, OUTPUT_NORMAL, "No changes: patterns not found");
-        }
-        return NULL;
-    }
-
-    /* Create commit message */
-    char *commit_msg = NULL;
-    if (total_added > 0 && total_removed > 0) {
-        commit_msg = str_format(
-            "Update .dottaignore for profile '%s' (added %zu, removed %zu patterns)",
-            profile, total_added, total_removed
-        );
-    } else if (total_added > 0) {
-        commit_msg = str_format(
-            "Add %zu pattern%s to .dottaignore for profile '%s'",
-            total_added, total_added == 1 ? "" : "s", profile
-        );
-    } else {
-        commit_msg = str_format(
-            "Remove %zu pattern%s from .dottaignore for profile '%s'",
-            total_removed, total_removed == 1 ? "" : "s", profile
-        );
-    }
-
-    if (!commit_msg) {
-        if (new_content != existing_content) {
-            free(new_content);
-        }
-        free(existing_content);
-        return ERROR(ERR_MEMORY, "Failed to allocate commit message");
-    }
-
-    /* Update .dottaignore in profile branch */
-    err = gitops_update_file(
-        repo,
-        profile,
-        ".dottaignore",
-        new_content,
-        strlen(new_content),
-        commit_msg,
-        GIT_FILEMODE_BLOB,
-        NULL  /* Don't need modification flag */
-    );
-
-    free(commit_msg);
-    if (new_content != existing_content) {
-        free(new_content);
-    }
-    free(existing_content);
-
-    if (err) {
-        return error_wrap(err, "Failed to update profile .dottaignore");
-    }
-
-    /* Report results */
-    if (total_added > 0) {
-        output_success(
-            out, OUTPUT_NORMAL,
-            "Added %zu pattern%s to profile '%s' .dottaignore",
-            total_added, total_added == 1 ? "" : "s", profile
-        );
-    }
-    if (total_removed > 0) {
-        output_success(
-            out, OUTPUT_NORMAL,
-            "Removed %zu pattern%s from profile '%s' .dottaignore",
-            total_removed, total_removed == 1 ? "" : "s", profile
+            "Removed %zu pattern%s from %s .dottaignore",
+            total_removed, total_removed == 1 ? "" : "s", scope->display_label
         );
     }
     if (total_not_found > 0) {
@@ -1120,9 +841,7 @@ static error_t *test_path_ignore(
             repo, config, specific_profile, NULL, 0, &ctx
         );
         if (err) {
-            return error_wrap(
-                err, "Failed to create ignore context"
-            );
+            return error_wrap(err, "Failed to create ignore context");
         }
 
         /* Test the path */
@@ -1304,45 +1023,70 @@ error_t *cmd_ignore(const dotta_ctx_t *ctx, const cmd_ignore_options_t *opts) {
         return NULL;
     }
 
-    /* Validate mutual exclusivity */
     bool has_add = opts->add_count > 0;
     bool has_remove = opts->remove_count > 0;
     bool has_test = opts->test_path != NULL;
     bool has_modify = has_add || has_remove;
-    error_t *err = NULL;
 
     if (has_test && has_modify) {
         return ERROR(ERR_INVALID_ARG, "Cannot use --test with --add or --remove");
     }
 
-    /* Determine action */
+    /* --test is a read-only query that walks every enabled profile by
+     * itself; it doesn't use dottaignore_scope_t. Dispatch early. */
     if (has_test) {
-        /* Test mode */
-        err = test_path_ignore(
+        return test_path_ignore(
             repo, ctx->state, config, opts->test_path, opts->profile, out
         );
-    } else if (has_modify) {
-        /* Add/remove mode */
-        if (opts->profile) {
-            err = modify_profile_dottaignore(
-                repo, opts->profile, opts->add_patterns, opts->add_count,
-                opts->remove_patterns, opts->remove_count, out
-            );
-        } else {
-            err = modify_baseline_dottaignore(
-                repo, opts->add_patterns, opts->add_count, opts->remove_patterns,
-                opts->remove_count, out
-            );
+    }
+
+    /* Build the dottaignore_scope_t for edit / modify. Profile labels
+     * are heap-formatted here; lifetime matches this function frame. */
+    char *profile_label = NULL;
+    dottaignore_scope_t scope;
+    if (opts->profile) {
+        profile_label = str_format("profile '%s'", opts->profile);
+        if (!profile_label) {
+            return ERROR(ERR_MEMORY, "Failed to format scope label");
         }
+        scope = (dottaignore_scope_t){
+            .branch_name = opts->profile,
+            .display_label = profile_label,
+            .default_seed = ignore_profile_dottaignore_template(),
+        };
     } else {
-        /* Edit mode (default) */
-        if (opts->profile) {
-            err = edit_profile_dottaignore(repo, opts->profile, out);
+        scope = (dottaignore_scope_t){
+            .branch_name = "dotta-worktree",
+            .display_label = "baseline",
+            .default_seed = ignore_default_dottaignore_content(),
+        };
+    }
+
+    /* Verify the scope branch exists once, up front, so edit/modify
+     * start with a guaranteed-present branch. Error message mirrors
+     * the original per-function wording. */
+    bool branch_exists = false;
+    error_t *err = gitops_branch_exists(repo, scope.branch_name, &branch_exists);
+    if (!err && !branch_exists) {
+        err = opts->profile
+            ? ERROR(ERR_INVALID_ARG, "Profile '%s' does not exist", opts->profile)
+            : ERROR(ERR_INTERNAL, "dotta-worktree does not exist. Run 'dotta init'.");
+    }
+
+    if (!err) {
+        if (has_modify) {
+            err = modify_dottaignore(
+                repo, &scope,
+                opts->add_patterns, opts->add_count,
+                opts->remove_patterns, opts->remove_count,
+                out
+            );
         } else {
-            err = edit_baseline_dottaignore(repo, config, out);
+            err = edit_dottaignore(repo, &scope, out);
         }
     }
 
+    free(profile_label);
     return err;
 }
 

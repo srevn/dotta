@@ -16,6 +16,14 @@
  * 3. File previously encrypted (metadata) → ENCRYPT (maintain state)
  * 4. Auto-encrypt patterns → ENCRYPT (pattern match)
  * 5. Default → PLAINTEXT (safe default)
+ *
+ * Auto-encrypt ruleset lifecycle:
+ *   Patterns are compiled once per command via
+ *   encryption_policy_build_auto_rules; the resulting ruleset is then
+ *   threaded into every per-file decision. Callers own the arena backing
+ *   the ruleset and must keep it alive for the duration of all policy
+ *   queries. NULL rules are explicitly accepted (encryption disabled,
+ *   no patterns, or no config) and propagate as "no auto-encrypt".
  */
 
 #ifndef DOTTA_POLICY_H
@@ -25,8 +33,33 @@
 #include <types.h>
 
 /* Forward declarations */
-typedef struct config config_t;
 typedef struct metadata metadata_t;
+typedef struct gitignore_ruleset gitignore_ruleset_t;
+
+/**
+ * Compile auto-encrypt patterns from config into a gitignore ruleset.
+ *
+ * Returns success with *out_rules = NULL when any of:
+ *   - config is NULL
+ *   - config->encryption_enabled is false
+ *   - config->auto_encrypt_pattern_count is 0
+ *
+ * These are not errors — they simply mean "no auto-encrypt ruleset
+ * applies". Callers should treat NULL as a fast-path sentinel.
+ *
+ * The returned ruleset is arena-backed; the caller owns the arena and
+ * must ensure it outlives every policy call that receives auto_rules.
+ *
+ * @param config Configuration (can be NULL)
+ * @param arena Arena providing storage (must not be NULL; must outlive rules)
+ * @param out_rules Output ruleset (must not be NULL; set to NULL when no rules apply)
+ * @return Error or NULL on success
+ */
+error_t *encryption_policy_build_auto_rules(
+    const config_t *config,
+    arena_t *arena,
+    gitignore_ruleset_t **out_rules
+);
 
 /**
  * Determine if file should be encrypted based on policy
@@ -51,7 +84,7 @@ typedef struct metadata metadata_t;
  *    Example: `dotta update` on already-encrypted file
  *    Rationale: Preserve encryption state to avoid accidental decryption
  *
- * 4. If file matches auto_encrypt patterns → ENCRYPT (pattern match)
+ * 4. If file matches auto_rules → ENCRYPT (pattern match)
  *    Example: File matches config pattern like ".ssh/id_*"
  *
  * 5. Otherwise → PLAINTEXT (default)
@@ -59,11 +92,11 @@ typedef struct metadata metadata_t;
  *
  * Implementation notes:
  * - Metadata lookup errors (except ERR_NOT_FOUND) are propagated
- * - Auto-encrypt pattern matching errors are treated as non-fatal (default to plaintext)
  * - NULL metadata is valid (means file is new or metadata unavailable)
- * - NULL config is valid (disables auto-encrypt checking)
+ * - NULL auto_rules is valid (disables priority-4 check)
  *
- * @param config Configuration (for auto_encrypt patterns, can be NULL)
+ * @param auto_rules Compiled auto-encrypt ruleset (can be NULL; see
+ *                   encryption_policy_build_auto_rules)
  * @param storage_path File path in profile (e.g., "home/.bashrc", must not be NULL)
  * @param explicit_encrypt Explicit --encrypt flag from user
  * @param explicit_no_encrypt Explicit --no-encrypt flag from user
@@ -76,7 +109,7 @@ typedef struct metadata metadata_t;
  * - ERR_*: Propagated from metadata lookup (serious errors only)
  */
 error_t *encryption_policy_should_encrypt(
-    const config_t *config,
+    const gitignore_ruleset_t *auto_rules,
     const char *storage_path,
     bool explicit_encrypt,
     bool explicit_no_encrypt,
@@ -87,18 +120,19 @@ error_t *encryption_policy_should_encrypt(
 /**
  * Check if file path matches auto-encrypt patterns
  *
- * Tests storage path against auto_encrypt patterns from config.
- * Returns true if ANY pattern matches (logical OR).
+ * Tests storage path against the pre-compiled auto-encrypt ruleset.
+ * Returns true iff the last-match-wins verdict is "ignored" (i.e. the
+ * path matches a positive rule that no later negation un-matches).
  *
- * This is a helper function used by encryption_policy_should_encrypt()
- * and also exposed publicly for validation/diagnostic purposes (e.g.,
- * workspace divergence analysis).
+ * This helper is used by encryption_policy_should_encrypt() and also
+ * exposed publicly for validation/diagnostic purposes (e.g. workspace
+ * divergence analysis).
  *
  * Pattern matching:
- * - Uses gitignore-style glob matching with double-star support
- * - Patterns are matched against path with "home/" or "root/" prefix stripped
- * - Example: storage_path "home/.ssh/id_rsa" is matched against ".ssh/id_rsa"
- * - Supports recursive globs: double-star patterns match at any depth
+ * - Full gitignore semantics (including `!` negation, directory-only,
+ *   anchoring, `**` recursive globs) via base/gitignore.
+ * - Storage-path prefix (`home/`, `root/`, `custom/`) is stripped before
+ *   matching, so users can write `.ssh/id_*` instead of `home/.ssh/id_*`.
  *
  * Pattern examples:
  *   Pattern: ".ssh/id_*"
@@ -108,28 +142,21 @@ error_t *encryption_policy_should_encrypt(
  *   Pattern: "*.key"
  *   Matches: "home/api.key", "home/dir/secret.key" (basename match)
  *
- *   Pattern: "secrets" followed by recursive glob
- *   Matches: "home/secrets/api.key", "home/proj/secrets/data/file.txt"
+ *   Pattern: "secrets/"
+ *   Matches: "home/secrets/api.key" (directory walk-up)
  *
- * Behavior:
- * - If encryption disabled in config: returns false (no auto-encrypt)
- * - If no patterns configured: returns false (no auto-encrypt)
- * - If config is NULL: returns false (no configuration)
- * - Empty patterns never match
- * - Pattern matching uses new match module with full double-star support
+ * Never fails. Returns false when:
+ * - auto_rules is NULL (encryption disabled or no patterns)
+ * - storage_path is NULL
+ * - No rule matches, or the winning rule is a negation
  *
- * @param config Configuration (for auto_encrypt patterns, can be NULL)
- * @param storage_path File path in profile (e.g., "home/.bashrc", must not be NULL)
- * @param out_matches Output: true if path matches any pattern (must not be NULL)
- * @return Always returns NULL (no errors possible from pattern matching)
- *
- * Note: This function never fails. Pattern matching is purely computational
- * and does not perform I/O or allocations that could fail.
+ * @param auto_rules Compiled auto-encrypt ruleset (can be NULL)
+ * @param storage_path File path in profile (e.g., "home/.bashrc")
+ * @return true if path matches an auto-encrypt rule, false otherwise
  */
-error_t *encryption_policy_matches_auto_patterns(
-    const config_t *config,
-    const char *storage_path,
-    bool *out_matches
+bool encryption_policy_matches_auto_patterns(
+    const gitignore_ruleset_t *auto_rules,
+    const char *storage_path
 );
 
 #endif /* DOTTA_POLICY_H */

@@ -11,10 +11,11 @@
 #include <string.h>
 #include <time.h>
 
+#include "base/arena.h"
 #include "base/args.h"
 #include "base/error.h"
+#include "base/gitignore.h"
 #include "base/hashmap.h"
-#include "base/match.h"
 #include "base/output.h"
 #include "base/string.h"
 #include "base/timeutil.h"
@@ -877,26 +878,61 @@ static size_t validate_filter_paths(
         }
     }
 
-    /* Check glob patterns */
-    for (size_t g = 0; g < file_filter->glob_count; g++) {
-        bool found = false;
-        for (size_t i = 0; i < manifest->count; i++) {
-            if (match_pattern(
-                file_filter->glob_patterns[g],
-                manifest->entries[i].storage_path,
-                MATCH_DOUBLESTAR
-                )) {
-                found = true;
-                break;
+    /* Check glob patterns via per-pattern rulesets.
+     *
+     * Each glob becomes its own single-rule ruleset so a negation in
+     * one pattern cannot silently un-match another — a combined
+     * ruleset's last-match-wins would conflate the verdicts. Runs
+     * once per command; arena-OOM degrades to a stderr warning and
+     * skips the glob check (exact-path validation already ran). */
+    if (file_filter->glob_count > 0) {
+        arena_t *scratch = arena_create(0);
+        gitignore_ruleset_t **per_pattern = scratch ? arena_calloc(
+            scratch, file_filter->glob_count, sizeof(*per_pattern)
+            ) : NULL;
+
+        bool build_ok = (scratch && per_pattern);
+        for (size_t g = 0; build_ok && g < file_filter->glob_count; g++) {
+            error_t *err = gitignore_ruleset_create(scratch, &per_pattern[g]);
+            if (!err) {
+                err = gitignore_ruleset_append(
+                    per_pattern[g], file_filter->glob_patterns[g], 0
+                );
+            }
+            if (err) {
+                error_free(err);
+                build_ok = false;
             }
         }
-        if (!found) {
+
+        if (!build_ok) {
             output_warning(
-                out, OUTPUT_NORMAL, "No managed file matches pattern '%s'",
-                file_filter->glob_patterns[g]
+                out, OUTPUT_NORMAL, "Skipping filter-pattern validation"
             );
-            unmatched++;
+            arena_destroy(scratch);
+            return unmatched;
         }
+
+        for (size_t g = 0; g < file_filter->glob_count; g++) {
+            bool found = false;
+            for (size_t i = 0; i < manifest->count; i++) {
+                if (gitignore_is_ignored(
+                    per_pattern[g], manifest->entries[i].storage_path, false
+                    )) {
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) {
+                output_warning(
+                    out, OUTPUT_NORMAL, "No managed file matches pattern '%s'",
+                    file_filter->glob_patterns[g]
+                );
+                unmatched++;
+            }
+        }
+
+        arena_destroy(scratch);
     }
 
     return unmatched;

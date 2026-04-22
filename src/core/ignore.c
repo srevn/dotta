@@ -1,81 +1,71 @@
 /**
  * ignore.c - Multi-layered ignore pattern system implementation
+ *
+ * All user-authored ignore rules (baseline/builtin defaults, profile
+ * .dottaignore, config patterns, CLI excludes) compile into a single
+ * gitignore_ruleset_t at context creation. Rules are appended in
+ * precedence order (baseline first, CLI last); gitignore_eval's
+ * last-match-wins semantics give the right verdict for free, including
+ * cross-layer negation (e.g. baseline `*.log` + profile `!debug.log`).
+ *
+ * Source .gitignore (layer 5) is the one place libgit2 still does the
+ * matching: it lives on a *foreign* repository (the user's source tree),
+ * which libgit2 already knows how to walk with nested .gitignore
+ * inheritance and core.excludesfile support. The cache batches queries
+ * against the same source tree.
  */
 
 #include "core/ignore.h"
 
 #include <config.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
+#include "base/arena.h"
 #include "base/error.h"
-#include "base/match.h"
+#include "base/gitignore.h"
 #include "base/string.h"
 #include "sys/gitops.h"
 
-/* Maximum path length for git repository discovery */
-#ifndef GIT_PATH_MAX
-#define GIT_PATH_MAX 4096
-#endif
-
 /* Input validation limits */
-#define MAX_DOTTAIGNORE_SIZE (1024 * 1024)   /* 1MB - reasonable limit for ignore files */
-#define MAX_PATTERN_LENGTH 4096              /* Maximum length for a single pattern */
-#define MAX_PATTERN_COUNT 10000              /* Maximum number of patterns */
+#define MAX_DOTTAIGNORE_SIZE (1024 * 1024)   /* 1MB per .dottaignore blob */
+#define MAX_PATTERN_LENGTH 4096              /* per individual CLI/config pattern */
+#define MAX_PATTERN_COUNT 10000              /* per CLI/config array */
+
+/* Initial arena block. Comfortably fits a typical baseline (~1KB)
+ * plus a handful of extra rules; the arena grows on demand. */
+#define IGNORE_ARENA_INITIAL_CAPACITY (8 * 1024)
 
 /**
- * Ignore context structure
+ * Ignore context — arena + compiled ruleset + layer-5 cache.
  *
- * Layered ignore system:
- *   1. CLI patterns (highest priority) — uses match module
- *   2. Combined .dottaignore ruleset — uses libgit2 for negation semantics
- *      Sources inside the combined ruleset, concatenated in this order:
- *        a. Baseline .dottaignore on dotta-worktree, if present.
- *           Absent? Fall back to compiled defaults so safety patterns
- *           still apply (relevant on cloned repos where baseline was
- *           never seeded, or when the user has deleted the file).
- *        b. Profile .dottaignore on the profile branch, if present.
- *      Later rules override earlier via `!` negation.
- *   3. Config patterns (user-level rules) — uses match module
- *   4. Source .gitignore (lowest priority) — uses libgit2 on source repo
+ * Rules compile into a single gitignore_ruleset_t at creation. Matching
+ * is pure in-memory evaluation; no mutation of the dotta repository
+ * handle occurs. Multiple contexts against the same repo are safe and
+ * independent.
  *
- * Note: Layers 1/3 and layer 2 use different matching engines. The match
- * module implements gitignore-style matching but without negation support.
- * libgit2 provides full gitignore semantics including negation (!patterns).
- * Subtle behavioral differences between engines are possible for edge cases.
- *
- * CONSTRAINT: Only one ignore_context_t may be active per git_repository*
- * at a time. libgit2's internal ignore rules are global to the repository
- * handle — concurrent contexts would corrupt each other's rules.
+ * Layer 5 (source .gitignore) stays on libgit2 because it queries a
+ * different repository: the source tree the user is adding from. That
+ * repo's ignore machinery (nested .gitignore inheritance, attr stack,
+ * core.excludesfile) earns its keep there, and the query never touches
+ * the dotta repo handle.
  */
 struct ignore_context {
-    /* CLI patterns (highest priority) */
-    char **cli_patterns;
-    size_t cli_pattern_count;
-
-    /* Loaded ignore rules (libgit2) */
-    git_repository *repo;                  /* Borrowed reference */
-    char *baseline_dottaignore_content;    /* Baseline .dottaignore from dotta-worktree */
-    char *profile_dottaignore_content;     /* Profile .dottaignore from profile branch */
-
-    /* Combined .dottaignore cache */
-    char *combined_dottaignore_content;    /* Pre-combined (baseline OR builtin) + profile */
-    bool rules_loaded;                     /* Whether rules added to libgit2 */
-
-    /* Config patterns (user-level) */
-    char **config_patterns;
-    size_t config_pattern_count;
-
-    /* Source .gitignore caching */
-    git_repository *cached_source_repo;    /* Owned reference, freed in context_free */
-    char *cached_source_workdir;           /* Workdir of cached repo for invalidation */
-
-    /* Settings */
+    arena_t *arena;                     /* owns ruleset + pattern copies */
+    gitignore_ruleset_t *ruleset;       /* baseline/builtin + profile + config + CLI */
+    git_repository *cached_source_repo; /* owned; layer-5 cache */
+    char *cached_source_workdir;        /* owned; layer-5 cache */
     bool respect_gitignore;
+    bool layer5_warning_emitted;        /* suppress repeat stderr warnings */
 };
 
 /**
- * Baseline .dottaignore content with sensible defaults
+ * Default baseline .dottaignore content.
+ *
+ * Seeded into new repos by `dotta init` / `dotta clone`, and applied
+ * as origin=BUILTIN fallback whenever the baseline is absent so safety
+ * patterns stay active regardless of repo state.
  */
 static const char *DEFAULT_DOTTAIGNORE =
     "# Dotta Ignore Patterns\n"
@@ -144,10 +134,11 @@ static const char *DEFAULT_DOTTAIGNORE =
     ".temp/\n";
 
 /**
- * Minimal .dottaignore template for new profiles
+ * Minimal .dottaignore template for new profiles.
  *
- * Provides a clean starting point with clear documentation about the layering system.
- * Users can add profile-specific patterns or use negation (!) to override baseline.
+ * Provides a clean starting point with documentation about the layering
+ * system. Users can add profile-specific patterns or use negation (!)
+ * to override baseline rules.
  */
 static const char *PROFILE_DOTTAIGNORE =
     "# Dotta Ignore Patterns\n"
@@ -174,6 +165,207 @@ static const char *PROFILE_DOTTAIGNORE =
     "#   - Use / at start to anchor to repo root\n"
     "\n"
     "# Add your profile-specific patterns below:\n";
+
+/* =====================================================================
+ * Static helpers
+ * ===================================================================== */
+
+/**
+ * Join an array of patterns with '\n' into an arena buffer and append
+ * the result to the ruleset with the given origin tag.
+ *
+ * Enforces MAX_PATTERN_COUNT and MAX_PATTERN_LENGTH before parsing.
+ * Empty arrays are a no-op. The gitignore engine applies its own
+ * per-line and total-rule caps as a second defense.
+ */
+static error_t *append_pattern_array(
+    gitignore_ruleset_t *ruleset,
+    arena_t *arena,
+    char **patterns,
+    size_t count,
+    gitignore_origin_t origin,
+    const char *source_label
+) {
+    if (!patterns || count == 0) return NULL;
+
+    if (count > MAX_PATTERN_COUNT) {
+        return ERROR(
+            ERR_VALIDATION, "Too many %s patterns (max %d)",
+            source_label, MAX_PATTERN_COUNT
+        );
+    }
+
+    size_t total = 0;
+    for (size_t i = 0; i < count; i++) {
+        if (!patterns[i]) continue;
+        size_t len = strlen(patterns[i]);
+        if (len > MAX_PATTERN_LENGTH) {
+            return ERROR(
+                ERR_VALIDATION,
+                "%s pattern too long (max %d chars)",
+                source_label, MAX_PATTERN_LENGTH
+            );
+        }
+        total += len + 1;  /* +1 for '\n' separator (last one doubles as terminator slot) */
+    }
+
+    if (total == 0) return NULL;
+
+    char *joined = arena_alloc(arena, total + 1);
+    if (!joined) {
+        return ERROR(ERR_MEMORY, "Arena exhausted building %s pattern buffer", source_label);
+    }
+
+    size_t offset = 0;
+    for (size_t i = 0; i < count; i++) {
+        if (!patterns[i]) continue;
+        size_t len = strlen(patterns[i]);
+        memcpy(joined + offset, patterns[i], len);
+        offset += len;
+        joined[offset++] = '\n';
+    }
+    joined[offset] = '\0';
+
+    return gitignore_ruleset_append(ruleset, joined, origin);
+}
+
+/**
+ * Check if path is ignored by source .gitignore (with caching).
+ *
+ * Layer 5 alone still runs through libgit2: it queries a foreign repo
+ * (the user's source tree), which libgit2 walks with nested .gitignore
+ * inheritance. The cache reuses the last-discovered repo when the
+ * queried path falls under the same workdir.
+ */
+static error_t *matches_source_gitignore(
+    ignore_context_t *ctx,
+    const char *abs_path,
+    bool is_directory,
+    bool *matched
+) {
+    CHECK_NULL(ctx);
+    CHECK_NULL(abs_path);
+    CHECK_NULL(matched);
+
+    *matched = false;
+
+    /* Fast path: cached repo still covers this path */
+    if (ctx->cached_source_repo && ctx->cached_source_workdir) {
+        if (str_starts_with(abs_path, ctx->cached_source_workdir)) {
+            const char *rel_path = abs_path + strlen(ctx->cached_source_workdir);
+
+            while (*rel_path == '/') {
+                rel_path++;
+            }
+
+            if (*rel_path == '\0') {
+                return NULL;
+            }
+
+            /* Append '/' for directories so directory-only patterns can match */
+            char *dir_path = NULL;
+            const char *check_path = rel_path;
+            if (is_directory && rel_path[0] != '\0' &&
+                rel_path[strlen(rel_path) - 1] != '/') {
+                dir_path = str_format("%s/", rel_path);
+                if (dir_path) check_path = dir_path;
+            }
+
+            int ignored = 0;
+            int git_err = git_ignore_path_is_ignored(
+                &ignored, ctx->cached_source_repo, check_path
+            );
+            free(dir_path);
+            if (git_err < 0) {
+                return error_from_git(git_err);
+            }
+
+            *matched = (ignored == 1);
+            return NULL;
+        }
+
+        /* Path outside cached workdir — invalidate */
+        git_repository_free(ctx->cached_source_repo);
+        ctx->cached_source_repo = NULL;
+        free(ctx->cached_source_workdir);
+        ctx->cached_source_workdir = NULL;
+    }
+
+    /* Slow path: discover and open */
+    git_buf discovered_path = GIT_BUF_INIT;
+    int git_err = git_repository_discover(
+        &discovered_path, abs_path,
+        0,    /* don't cross filesystem boundaries */
+        NULL  /* no ceiling directories */
+    );
+    if (git_err < 0) {
+        /* Not in a git repository — fine, not an error */
+        if (git_err == GIT_ENOTFOUND) {
+            return NULL;
+        }
+        return error_from_git(git_err);
+    }
+
+    git_repository *source_repo = NULL;
+    git_err = git_repository_open(&source_repo, discovered_path.ptr);
+    git_buf_dispose(&discovered_path);
+    if (git_err < 0) {
+        return error_from_git(git_err);
+    }
+
+    const char *workdir = git_repository_workdir(source_repo);
+    if (!workdir) {
+        /* Bare repo — no workdir, can't have ignored files */
+        git_repository_free(source_repo);
+        return NULL;
+    }
+
+    const char *rel_path = abs_path;
+    if (str_starts_with(abs_path, workdir)) {
+        rel_path = abs_path + strlen(workdir);
+        while (*rel_path == '/') {
+            rel_path++;
+        }
+    }
+
+    if (*rel_path == '\0') {
+        git_repository_free(source_repo);
+        return NULL;
+    }
+
+    char *dir_path = NULL;
+    const char *check_path = rel_path;
+    if (is_directory && rel_path[0] != '\0' &&
+        rel_path[strlen(rel_path) - 1] != '/') {
+        dir_path = str_format("%s/", rel_path);
+        if (dir_path) check_path = dir_path;
+    }
+
+    int ignored = 0;
+    git_err = git_ignore_path_is_ignored(&ignored, source_repo, check_path);
+    free(dir_path);
+    if (git_err < 0) {
+        git_repository_free(source_repo);
+        return error_from_git(git_err);
+    }
+
+    *matched = (ignored == 1);
+
+    /* Cache for future queries */
+    ctx->cached_source_repo = source_repo;
+    ctx->cached_source_workdir = strdup(workdir);
+    if (!ctx->cached_source_workdir) {
+        /* Cache write failed — drop the repo, keep the result */
+        git_repository_free(source_repo);
+        ctx->cached_source_repo = NULL;
+    }
+
+    return NULL;
+}
+
+/* =====================================================================
+ * Public API
+ * ===================================================================== */
 
 error_t *ignore_load_raw_content(
     git_repository *repo,
@@ -241,293 +433,6 @@ error_t *ignore_load_raw_content(
     return NULL;
 }
 
-/**
- * Check if path matches any CLI patterns using gitignore-style matching
- *
- * Uses the centralized match module for consistent pattern semantics.
- *
- * Supported patterns:
- *   - Basename patterns: *.log matches at any depth
- *   - Anchored patterns: .ssh/id_* matches from root only
- *   - Recursive globs: double-star patterns match at all depths
- *   - Directory prefix: .cache matches .cache and everything under it
- */
-static bool matches_cli_patterns(
-    const char *path,
-    bool is_directory,
-    char **patterns,
-    size_t pattern_count
-) {
-    if (!path || !patterns || pattern_count == 0) {
-        return false;
-    }
-
-    match_flags_t flags = MATCH_DOUBLESTAR;
-    if (is_directory) {
-        flags |= MATCH_DIRECTORY;
-    }
-
-    return match_any(patterns, pattern_count, path, flags);
-}
-
-/**
- * Ensure .dottaignore rules are loaded into libgit2 (lazy initialization)
- *
- * Adds combined .dottaignore rules to repository on first call.
- * Subsequent calls are no-ops. Rules persist until context_free.
- */
-static error_t *ensure_rules_loaded(ignore_context_t *ctx) {
-    CHECK_NULL(ctx);
-
-    /* Already loaded */
-    if (ctx->rules_loaded) {
-        return NULL;
-    }
-
-    /* No content to load */
-    if (!ctx->combined_dottaignore_content || !ctx->repo) {
-        return NULL;
-    }
-
-    /* Clear any stale rules from previous contexts.
-     *
-     * libgit2's internal ignore rules are global to the repository handle —
-     * git_ignore_add_rule() mutates the repo, git_ignore_clear_internal_rules()
-     * clears ALL internal rules. Only one ignore_context_t may be active per
-     * git_repository* at a time. This defensive clear ensures clean state
-     * even if a previous context was not freed properly. */
-    git_ignore_clear_internal_rules(ctx->repo);
-
-    /* Add rules to repository (happens once per context) */
-    int git_err = git_ignore_add_rule(
-        ctx->repo,
-        ctx->combined_dottaignore_content
-    );
-    if (git_err < 0) {
-        /* Clean up any partially-added rules */
-        git_ignore_clear_internal_rules(ctx->repo);
-        return error_from_git(git_err);
-    }
-
-    ctx->rules_loaded = true;
-    return NULL;
-}
-
-/**
- * Check if path matches .dottaignore patterns using libgit2
- *
- * Assumes rules already loaded by ensure_rules_loaded().
- */
-static error_t *matches_dottaignore(
-    git_repository *repo,
-    const char *path,
-    bool is_directory,
-    bool *matched
-) {
-    CHECK_NULL(repo);
-    CHECK_NULL(path);
-    CHECK_NULL(matched);
-
-    *matched = false;
-
-    /* Build path for checking - append / for directories */
-    char *check_path = NULL;
-    if (is_directory) {
-        size_t len = strlen(path);
-        if (len > 0 && path[len - 1] != '/') {
-            check_path = str_format("%s/", path);
-        } else {
-            check_path = strdup(path);
-        }
-    } else {
-        check_path = strdup(path);
-    }
-
-    if (!check_path) {
-        return ERROR(ERR_MEMORY, "Failed to allocate path");
-    }
-
-    /* Check using pre-loaded rules */
-    int ignored = 0;
-    int git_err = git_ignore_path_is_ignored(&ignored, repo, check_path);
-
-    free(check_path);
-
-    if (git_err < 0) {
-        return error_from_git(git_err);
-    }
-
-    *matched = (ignored == 1);
-    return NULL;
-}
-
-/**
- * Check if path matches config patterns
- */
-static bool matches_config_patterns(
-    const char *path,
-    bool is_directory,
-    char **patterns,
-    size_t pattern_count
-) {
-    return matches_cli_patterns(path, is_directory, patterns, pattern_count);
-}
-
-/**
- * Check if path is ignored by source .gitignore (with caching)
- *
- * Caches source repository handle to avoid repeated discovery.
- * Fast path reuses cached repo when path is under same workdir.
- */
-static error_t *matches_source_gitignore(
-    ignore_context_t *ctx,
-    const char *abs_path,
-    bool is_directory,
-    bool *matched
-) {
-    CHECK_NULL(ctx);
-    CHECK_NULL(abs_path);
-    CHECK_NULL(matched);
-
-    *matched = false;
-
-    /* Fast path: Check if cached repo covers this path */
-    if (ctx->cached_source_repo && ctx->cached_source_workdir) {
-        if (str_starts_with(abs_path, ctx->cached_source_workdir)) {
-            /* Reuse cached repository */
-            const char *rel_path = abs_path + strlen(ctx->cached_source_workdir);
-
-            /* Skip leading slashes (workdir ends with /) */
-            while (*rel_path == '/') {
-                rel_path++;
-            }
-
-            if (*rel_path == '\0') {
-                return NULL;
-            }
-
-            /* Append / for directories so directory-only patterns can match */
-            char *dir_path = NULL;
-            const char *check_path = rel_path;
-            if (is_directory && rel_path[0] != '\0' &&
-                rel_path[strlen(rel_path) - 1] != '/') {
-                dir_path = str_format("%s/", rel_path);
-                if (dir_path) check_path = dir_path;
-            }
-
-            int ignored = 0;
-            int git_err = git_ignore_path_is_ignored(
-                &ignored,
-                ctx->cached_source_repo,
-                check_path
-            );
-            free(dir_path);
-            if (git_err < 0) {
-                return error_from_git(git_err);
-            }
-
-            *matched = (ignored == 1);
-            return NULL;
-        } else {
-            /* Path outside cached workdir - invalidate cache */
-            git_repository_free(ctx->cached_source_repo);
-            ctx->cached_source_repo = NULL;
-            free(ctx->cached_source_workdir);
-            ctx->cached_source_workdir = NULL;
-        }
-    }
-
-    /* Slow path: Discover and open new repository */
-    git_buf discovered_path = GIT_BUF_INIT;
-    int git_err = git_repository_discover(
-        &discovered_path,
-        abs_path,
-        0, /* Don't cross filesystem boundaries */
-        NULL /* No ceiling directories */
-    );
-
-    if (git_err < 0) {
-        /* Not in a git repository - that's fine, not an error */
-        if (git_err == GIT_ENOTFOUND) {
-            return NULL;
-        }
-        /* Other errors should be reported */
-        return error_from_git(git_err);
-    }
-
-    /* Open the source git repository */
-    git_repository *source_repo = NULL;
-    git_err = git_repository_open(&source_repo, discovered_path.ptr);
-    git_buf_dispose(&discovered_path);
-
-    if (git_err < 0) {
-        return error_from_git(git_err);
-    }
-
-    /* Get the repository workdir to make path relative */
-    const char *workdir = git_repository_workdir(source_repo);
-    if (!workdir) {
-        git_repository_free(source_repo);
-        /* Bare repo - no workdir, can't have ignored files */
-        return NULL;
-    }
-
-    /* Make path relative to workdir */
-    const char *rel_path = abs_path;
-    size_t workdir_len = strlen(workdir);
-
-    /* Remove workdir prefix if path starts with it */
-    if (str_starts_with(abs_path, workdir)) {
-        rel_path = abs_path + workdir_len;
-        /* Skip leading slashes */
-        while (*rel_path == '/') {
-            rel_path++;
-        }
-    }
-
-    if (*rel_path == '\0') {
-        /* Path is the workdir itself */
-        git_repository_free(source_repo);
-        return NULL;
-    }
-
-    /* Append / for directories so directory-only patterns can match */
-    char *dir_path = NULL;
-    const char *check_path = rel_path;
-    if (is_directory && rel_path[0] != '\0' &&
-        rel_path[strlen(rel_path) - 1] != '/') {
-        dir_path = str_format("%s/", rel_path);
-        if (dir_path) check_path = dir_path;
-    }
-
-    /* Check if path is ignored */
-    int ignored = 0;
-    git_err = git_ignore_path_is_ignored(
-        &ignored,
-        source_repo,
-        check_path
-    );
-    free(dir_path);
-    if (git_err < 0) {
-        git_repository_free(source_repo);
-        return error_from_git(git_err);
-    }
-
-    *matched = (ignored == 1);
-
-    /* Cache for future checks */
-    ctx->cached_source_repo = source_repo;
-    ctx->cached_source_workdir = strdup(workdir);
-    if (!ctx->cached_source_workdir) {
-        /* Can't cache without workdir - free repo and continue */
-        git_repository_free(source_repo);
-        ctx->cached_source_repo = NULL;
-        /* Result already computed - no error needed */
-    }
-
-    return NULL;
-}
-
 error_t *ignore_context_create(
     git_repository *repo,
     const config_t *config,
@@ -538,169 +443,148 @@ error_t *ignore_context_create(
 ) {
     CHECK_NULL(out);
 
-    ignore_context_t *ctx = calloc(1, sizeof(ignore_context_t));
+    *out = NULL;
+
+    ignore_context_t *ctx = calloc(1, sizeof(*ctx));
     if (!ctx) {
         return ERROR(ERR_MEMORY, "Failed to allocate ignore context");
     }
 
-    ctx->repo = repo;  /* Borrowed reference */
-
-    /* Copy CLI patterns */
-    if (cli_excludes && cli_exclude_count > 0) {
-        /* Validate pattern count to prevent overflow and DoS */
-        if (cli_exclude_count > MAX_PATTERN_COUNT) {
-            free(ctx);
-            return ERROR(
-                ERR_VALIDATION, "Too many CLI exclude patterns (max 10000)"
-            );
-        }
-
-        ctx->cli_patterns = malloc(cli_exclude_count * sizeof(char *));
-        if (!ctx->cli_patterns) {
-            free(ctx);
-            return ERROR(ERR_MEMORY, "Failed to allocate CLI patterns");
-        }
-
-        for (size_t i = 0; i < cli_exclude_count; i++) {
-            /* Validate pattern length to prevent excessive memory use and DoS */
-            if (strlen(cli_excludes[i]) > MAX_PATTERN_LENGTH) {
-                /* Clean up already allocated patterns */
-                for (size_t j = 0; j < i; j++) {
-                    free(ctx->cli_patterns[j]);
-                }
-                free(ctx->cli_patterns);
-                free(ctx);
-                return ERROR(
-                    ERR_VALIDATION, "CLI exclude pattern too long (max 4096 chars)"
-                );
-            }
-
-            ctx->cli_patterns[i] = strdup(cli_excludes[i]);
-            if (!ctx->cli_patterns[i]) {
-                /* Clean up already allocated patterns */
-                for (size_t j = 0; j < i; j++) {
-                    free(ctx->cli_patterns[j]);
-                }
-                free(ctx->cli_patterns);
-                free(ctx);
-                return ERROR(ERR_MEMORY, "Failed to copy CLI pattern");
-            }
-        }
-        ctx->cli_pattern_count = cli_exclude_count;
+    ctx->arena = arena_create(IGNORE_ARENA_INITIAL_CAPACITY);
+    if (!ctx->arena) {
+        free(ctx);
+        return ERROR(ERR_MEMORY, "Failed to allocate ignore arena");
     }
 
-    /* Load profile-specific .dottaignore (if profile specified) */
-    if (repo && profile && profile[0] != '\0') {
-        error_t *err = ignore_load_raw_content(
-            repo, profile, &ctx->profile_dottaignore_content, NULL
-        );
-        if (err) {
-            /* Non-fatal - continue without profile .dottaignore */
-            error_free(err);
-        }
+    error_t *err = gitignore_ruleset_create(ctx->arena, &ctx->ruleset);
+    if (err) {
+        ignore_context_free(ctx);
+        return err;
     }
 
-    /* Load baseline .dottaignore from repository */
+    /* Build the ruleset in precedence order (lowest first, highest last).
+     * gitignore_eval scans in reverse insertion order, so the tail wins
+     * on overlapping matches:
+     *   1. baseline / builtin fallback  (lowest precedence)
+     *   2. profile .dottaignore
+     *   3. config patterns
+     *   4. CLI --exclude flags          (highest precedence)
+     */
+
+    /* 1. Baseline .dottaignore, or compiled defaults as fallback.
+     *
+     * Load errors are fatal: a corrupted or unreadable .dottaignore
+     * must surface, not silently drop safety defaults. The BUILTIN
+     * fallback only fires when the load returned NULL content (branch
+     * missing, file missing, or empty blob — all non-errors). */
     if (repo) {
-        error_t *err = ignore_load_raw_content(
-            repo, "dotta-worktree", &ctx->baseline_dottaignore_content, NULL
+        char *baseline_content = NULL;
+        err = ignore_load_raw_content(
+            repo, "dotta-worktree", &baseline_content, NULL
         );
         if (err) {
-            /* Non-fatal - continue without baseline .dottaignore */
-            error_free(err);
-        }
-    }
-
-    /* Build the combined .dottaignore ruleset.
-     *
-     * Pick the "global" source: if baseline was loaded from dotta-worktree,
-     * use it; otherwise fall back to compiled defaults so safety patterns
-     * stay active even on repos where baseline was never seeded or was
-     * later deleted.
-     *
-     * The fallback string is a static compiled constant, not owned by the
-     * context — we only strdup when we need to materialize `combined`.
-     *
-     * Ordering matters: `global` first, `profile` second, so profile `!`
-     * negations can override anything from the global source. */
-    ctx->combined_dottaignore_content = NULL;
-    ctx->rules_loaded = false;
-
-    const char *global = ctx->baseline_dottaignore_content
-        ? ctx->baseline_dottaignore_content
-        : ignore_default_dottaignore_content();
-
-    if (ctx->profile_dottaignore_content) {
-        ctx->combined_dottaignore_content = str_format(
-            "%s\n%s",
-            global,
-            ctx->profile_dottaignore_content
-        );
-        if (!ctx->combined_dottaignore_content) {
             ignore_context_free(ctx);
-            return ERROR(ERR_MEMORY, "Failed to combine .dottaignore content");
+            return error_wrap(err, "Failed to load baseline .dottaignore");
+        }
+
+        if (baseline_content) {
+            err = gitignore_ruleset_append(
+                ctx->ruleset,
+                baseline_content,
+                (gitignore_origin_t) IGNORE_SOURCE_BASELINE_DOTTAIGNORE
+            );
+            free(baseline_content);
+            if (err) {
+                ignore_context_free(ctx);
+                return error_wrap(err, "Failed to parse baseline .dottaignore");
+            }
+        } else {
+            err = gitignore_ruleset_append(
+                ctx->ruleset,
+                DEFAULT_DOTTAIGNORE,
+                (gitignore_origin_t) IGNORE_SOURCE_BUILTIN
+            );
+            if (err) {
+                ignore_context_free(ctx);
+                return err;
+            }
         }
     } else {
-        ctx->combined_dottaignore_content = strdup(global);
-        if (!ctx->combined_dottaignore_content) {
+        /* No repo handle — apply builtin defaults so safety patterns
+         * still fire (e.g., callers testing patterns without an open repo). */
+        err = gitignore_ruleset_append(
+            ctx->ruleset,
+            DEFAULT_DOTTAIGNORE,
+            (gitignore_origin_t) IGNORE_SOURCE_BUILTIN
+        );
+        if (err) {
             ignore_context_free(ctx);
-            return ERROR(ERR_MEMORY, "Failed to copy .dottaignore content");
+            return err;
         }
     }
 
-    /* Initialize source repository cache */
-    ctx->cached_source_repo = NULL;
-    ctx->cached_source_workdir = NULL;
-
-    /* Copy config patterns */
-    if (config && config->ignore_patterns && config->ignore_pattern_count > 0) {
-        /* Validate pattern count to prevent overflow and DoS */
-        if (config->ignore_pattern_count > MAX_PATTERN_COUNT) {
+    /* 2. Profile .dottaignore (if specified and present). Fatal on
+     * load or parse error, same rationale as baseline. */
+    if (repo && profile && profile[0] != '\0') {
+        char *profile_content = NULL;
+        err = ignore_load_raw_content(
+            repo, profile, &profile_content, NULL
+        );
+        if (err) {
             ignore_context_free(ctx);
-            return ERROR(
-                ERR_VALIDATION, "Too many config ignore patterns (max 10000)"
+            return error_wrap(
+                err, "Failed to load .dottaignore for profile '%s'", profile
             );
         }
 
-        ctx->config_patterns = malloc(config->ignore_pattern_count * sizeof(char *));
-        if (!ctx->config_patterns) {
-            ignore_context_free(ctx);
-            return ERROR(ERR_MEMORY, "Failed to allocate config patterns");
-        }
-
-        for (size_t i = 0; i < config->ignore_pattern_count; i++) {
-            /* Validate pattern length to prevent excessive memory use and DoS */
-            if (strlen(config->ignore_patterns[i]) > MAX_PATTERN_LENGTH) {
-                /* Clean up - set to NULL to prevent double-free in ignore_context_free() */
-                for (size_t j = 0; j < i; j++) {
-                    free(ctx->config_patterns[j]);
-                }
-                free(ctx->config_patterns);
-                ctx->config_patterns = NULL;
-                ctx->config_pattern_count = 0;
+        if (profile_content) {
+            err = gitignore_ruleset_append(
+                ctx->ruleset,
+                profile_content,
+                (gitignore_origin_t) IGNORE_SOURCE_PROFILE_DOTTAIGNORE
+            );
+            free(profile_content);
+            if (err) {
                 ignore_context_free(ctx);
-                return ERROR(
-                    ERR_VALIDATION, "Config ignore pattern too long (max 4096 chars)"
+                return error_wrap(
+                    err, "Failed to parse .dottaignore for profile '%s'", profile
                 );
             }
-
-            ctx->config_patterns[i] = strdup(config->ignore_patterns[i]);
-            if (!ctx->config_patterns[i]) {
-                /* Clean up - set to NULL to prevent double-free in ignore_context_free() */
-                for (size_t j = 0; j < i; j++) {
-                    free(ctx->config_patterns[j]);
-                }
-                free(ctx->config_patterns);
-                ctx->config_patterns = NULL;
-                ctx->config_pattern_count = 0;
-                ignore_context_free(ctx);
-                return ERROR(ERR_MEMORY, "Failed to copy config pattern");
-            }
         }
-        ctx->config_pattern_count = config->ignore_pattern_count;
     }
 
-    /* Copy settings */
+    /* 3. Config patterns. */
+    if (config && config->ignore_patterns && config->ignore_pattern_count > 0) {
+        err = append_pattern_array(
+            ctx->ruleset,
+            ctx->arena,
+            config->ignore_patterns,
+            config->ignore_pattern_count,
+            (gitignore_origin_t) IGNORE_SOURCE_CONFIG,
+            "config ignore"
+        );
+        if (err) {
+            ignore_context_free(ctx);
+            return err;
+        }
+    }
+
+    /* 4. CLI excludes — appended last so they win last-match. */
+    if (cli_excludes && cli_exclude_count > 0) {
+        err = append_pattern_array(
+            ctx->ruleset,
+            ctx->arena,
+            cli_excludes,
+            cli_exclude_count,
+            (gitignore_origin_t) IGNORE_SOURCE_CLI,
+            "CLI exclude"
+        );
+        if (err) {
+            ignore_context_free(ctx);
+            return err;
+        }
+    }
+
     ctx->respect_gitignore = config ? config->respect_gitignore : true;
 
     *out = ctx;
@@ -708,37 +592,14 @@ error_t *ignore_context_create(
 }
 
 void ignore_context_free(ignore_context_t *ctx) {
-    if (!ctx) {
-        return;
-    }
+    if (!ctx) return;
 
-    /* Free CLI patterns */
-    if (ctx->cli_patterns) {
-        for (size_t i = 0; i < ctx->cli_pattern_count; i++) {
-            free(ctx->cli_patterns[i]);
-        }
-        free(ctx->cli_patterns);
-    }
+    /* Arena destroy frees the ruleset and every pattern copy in one go.
+     * arena_destroy(NULL) is a no-op — safe for partial-state contexts
+     * (e.g., allocation failure mid-create). */
+    arena_destroy(ctx->arena);
 
-    /* Clear libgit2 rules if loaded */
-    if (ctx->rules_loaded && ctx->repo) {
-        git_ignore_clear_internal_rules(ctx->repo);
-    }
-
-    /* Free .dottaignore content */
-    free(ctx->baseline_dottaignore_content);
-    free(ctx->profile_dottaignore_content);
-    free(ctx->combined_dottaignore_content);
-
-    /* Free config patterns */
-    if (ctx->config_patterns) {
-        for (size_t i = 0; i < ctx->config_pattern_count; i++) {
-            free(ctx->config_patterns[i]);
-        }
-        free(ctx->config_patterns);
-    }
-
-    /* Free cached source repository */
+    /* Layer-5 cache */
     if (ctx->cached_source_repo) {
         git_repository_free(ctx->cached_source_repo);
     }
@@ -747,170 +608,77 @@ void ignore_context_free(ignore_context_t *ctx) {
     free(ctx);
 }
 
+error_t *ignore_test_path(
+    ignore_context_t *ctx,
+    const char *path,
+    bool is_directory,
+    ignore_test_result_t *result
+) {
+    CHECK_NULL(ctx);
+    CHECK_NULL(path);
+    CHECK_NULL(result);
+
+    result->ignored = false;
+    result->source = IGNORE_SOURCE_NONE;
+
+    /* Layers 1-4: compiled ruleset. gitignore_eval scans reverse
+     * insertion order (CLI → config → profile → baseline); the first
+     * match decides. Match.origin exposes the source verbatim. */
+    gitignore_match_t match;
+    gitignore_eval(ctx->ruleset, path, is_directory, &match);
+    if (match.decided && match.ignored) {
+        result->ignored = true;
+        result->source = (ignore_source_t) match.origin;
+        return NULL;
+    }
+
+    /* Layer 5: source .gitignore (when enabled).
+     *
+     * Requires an absolute path to discover the containing git
+     * repository. A relative path cannot be resolved to a repo and
+     * is silently skipped — callers that want full layer-5 coverage
+     * must pass absolute paths. */
+    if (ctx->respect_gitignore && path[0] == '/') {
+        bool matched = false;
+        error_t *err = matches_source_gitignore(ctx, path, is_directory, &matched);
+        if (err) {
+            /* Layer-5 errors are non-fatal (foreign repo, not our
+             * problem to fix), but not silent: emit one warning per
+             * context so the user knows filtering is incomplete, then
+             * suppress repeats to avoid flooding a multi-path scan. */
+            if (!ctx->layer5_warning_emitted) {
+                fprintf(
+                    stderr,
+                    "dotta: warning: source .gitignore check failed for '%s': %s\n",
+                    path, error_message(err)
+                );
+                ctx->layer5_warning_emitted = true;
+            }
+            error_free(err);
+        } else if (matched) {
+            result->ignored = true;
+            result->source = IGNORE_SOURCE_SOURCE_GITIGNORE;
+            return NULL;
+        }
+    }
+
+    return NULL;
+}
+
 error_t *ignore_should_ignore(
     ignore_context_t *ctx,
     const char *path,
     bool is_directory,
     bool *ignored
 ) {
-    CHECK_NULL(ctx);
-    CHECK_NULL(path);
     CHECK_NULL(ignored);
 
-    *ignored = false;
+    ignore_test_result_t result;
+    error_t *err = ignore_test_path(ctx, path, is_directory, &result);
+    if (err) return err;
 
-    /* Store absolute path for source .gitignore checking */
-    const char *abs_path = path;
-
-    /* Make path relative for matching (remove leading / if present) */
-    const char *rel_path = path;
-    while (*rel_path == '/') {
-        rel_path++;
-    }
-
-    if (*rel_path == '\0') {
-        /* Empty path after normalization */
-        return NULL;
-    }
-
-    /* Layer 1: CLI patterns (highest priority) */
-    if (matches_cli_patterns(
-        rel_path,
-        is_directory,
-        ctx->cli_patterns,
-        ctx->cli_pattern_count
-        )) {
-        *ignored = true;
-        return NULL;
-    }
-
-    /* Layer 2+3: Combined baseline + profile .dottaignore patterns */
-    if (ctx->combined_dottaignore_content) {
-        /* Lazy load rules on first use */
-        error_t *err = ensure_rules_loaded(ctx);
-        if (err) {
-            /* Non-fatal - continue without .dottaignore checking */
-            error_free(err);
-        } else {
-            bool matched = false;
-            err = matches_dottaignore(
-                ctx->repo,
-                rel_path,
-                is_directory,
-                &matched
-            );
-            if (err) {
-                /* Non-fatal - continue without .dottaignore checking */
-                error_free(err);
-            } else if (matched) {
-                *ignored = true;
-                return NULL;
-            }
-        }
-    }
-
-    /* Layer 4: Config patterns (user-level rules) */
-    if (matches_config_patterns(
-        rel_path,
-        is_directory,
-        ctx->config_patterns,
-        ctx->config_pattern_count
-        )) {
-        *ignored = true;
-        return NULL;
-    }
-
-    /* Layer 5: Source .gitignore (lowest priority, when enabled) */
-    if (ctx->respect_gitignore && abs_path[0] == '/') {
-        bool matched = false;
-        error_t *err = matches_source_gitignore(
-            ctx, abs_path, is_directory, &matched
-        );
-        if (err) {
-            /* Non-fatal - continue without source .gitignore checking */
-            error_free(err);
-        } else if (matched) {
-            *ignored = true;
-            return NULL;
-        }
-    }
-
-    *ignored = false;
+    *ignored = result.ignored;
     return NULL;
-}
-
-/**
- * Check if any non-negation pattern in content matches the path
- *
- * Used by ignore_test_path() for diagnostic source attribution when both
- * baseline and profile .dottaignore exist. Uses the match module (not libgit2)
- * for a best-effort check - accurate for standard patterns, may not perfectly
- * replicate libgit2's behavior for complex negation chains within one file.
- */
-static bool content_has_matching_pattern(
-    const char *content,
-    const char *path,
-    bool is_directory
-) {
-    if (!content || !path) return false;
-
-    match_flags_t flags = MATCH_DOUBLESTAR;
-    if (is_directory) flags |= MATCH_DIRECTORY;
-
-    /* Strip trailing / from path - MATCH_DIRECTORY flag conveys directory info.
-     * Trailing / breaks basename extraction in match_pattern (returns empty). */
-    char clean_path[GIT_PATH_MAX];
-    size_t pathlen = strlen(path);
-    if (pathlen > 0 &&
-        pathlen < sizeof(clean_path) && path[pathlen - 1] == '/') {
-        memcpy(clean_path, path, pathlen - 1);
-        clean_path[pathlen - 1] = '\0';
-        path = clean_path;
-    }
-
-    const char *line = content;
-    while (*line) {
-        const char *eol = strchr(line, '\n');
-        if (!eol) eol = line + strlen(line);
-
-        /* Find trimmed region (no allocation) */
-        const char *start = line;
-        size_t len = (size_t) (eol - line);
-
-        /* Skip leading whitespace */
-        while (len > 0 && (*start == ' ' || *start == '\t')) {
-            start++;
-            len--;
-        }
-
-        /* Skip trailing whitespace */
-        while (len > 0) {
-            char c = start[len - 1];
-            if (c == ' ' || c == '\t' || c == '\r') {
-                len--;
-            } else {
-                break;
-            }
-        }
-
-        /* Skip comments, empty lines, and negation patterns */
-        if (len > 0 && *start != '#' && *start != '!') {
-            /* Copy to stack buffer for null-termination */
-            char pattern[MAX_PATTERN_LENGTH + 1];
-            if (len <= MAX_PATTERN_LENGTH) {
-                memcpy(pattern, start, len);
-                pattern[len] = '\0';
-
-                if (match_pattern(pattern, path, flags)) {
-                    return true;
-                }
-            }
-        }
-
-        line = (*eol == '\n') ? eol + 1 : eol;
-    }
-
-    return false;
 }
 
 const char *ignore_default_dottaignore_content(void) {
@@ -937,136 +705,6 @@ error_t *ignore_seed_baseline(git_repository *repo) {
     );
 }
 
-/**
- * Test path with diagnostic information
- *
- * Similar to ignore_should_ignore() but returns which layer matched.
- */
-error_t *ignore_test_path(
-    ignore_context_t *ctx,
-    const char *path,
-    bool is_directory,
-    ignore_test_result_t *result
-) {
-    CHECK_NULL(ctx);
-    CHECK_NULL(path);
-    CHECK_NULL(result);
-
-    /* Initialize result */
-    result->ignored = false;
-    result->source = IGNORE_SOURCE_NONE;
-
-    /* Store absolute path for source .gitignore checking */
-    const char *abs_path = path;
-
-    /* Make path relative for matching (remove leading / if present) */
-    const char *rel_path = path;
-    while (*rel_path == '/') {
-        rel_path++;
-    }
-
-    if (*rel_path == '\0') {
-        /* Empty path after normalization */
-        return NULL;
-    }
-
-    /* Layer 1: CLI patterns (highest priority) */
-    if (matches_cli_patterns(
-        rel_path,
-        is_directory,
-        ctx->cli_patterns,
-        ctx->cli_pattern_count
-        )) {
-        result->ignored = true;
-        result->source = IGNORE_SOURCE_CLI;
-        return NULL;
-    }
-
-    /* Layer 2: Combined .dottaignore ruleset (baseline-or-builtin + profile) */
-    if (ctx->combined_dottaignore_content) {
-        /* Lazy load rules on first use */
-        error_t *err = ensure_rules_loaded(ctx);
-        if (err) {
-            /* Non-fatal - continue without .dottaignore checking */
-            error_free(err);
-        } else {
-            bool matched = false;
-            err = matches_dottaignore(ctx->repo, rel_path, is_directory, &matched);
-            if (err) {
-                /* Non-fatal - continue without .dottaignore checking */
-                error_free(err);
-            } else if (matched) {
-                result->ignored = true;
-                /* Best-effort source attribution.
-                 *
-                 * The combined ruleset runs through libgit2 (full negation
-                 * support), but libgit2 doesn't expose which rule caused
-                 * the match. We approximate by asking the match module
-                 * (no negation) which source contains a positive pattern
-                 * for this path. The global source (baseline or builtin
-                 * fallback) wins attribution when it matches, because it
-                 * declared the rule first; profile inherits otherwise.
-                 *
-                 * Accurate for simple cases. May misattribute when
-                 * negation patterns interact between layers. */
-                const char *global_content = ctx->baseline_dottaignore_content
-                    ? ctx->baseline_dottaignore_content
-                    : ignore_default_dottaignore_content();
-                ignore_source_t global_src = ctx->baseline_dottaignore_content
-                    ? IGNORE_SOURCE_BASELINE_DOTTAIGNORE
-                    : IGNORE_SOURCE_BUILTIN;
-
-                if (content_has_matching_pattern(global_content, rel_path, is_directory)) {
-                    result->source = global_src;
-                } else if (ctx->profile_dottaignore_content) {
-                    result->source = IGNORE_SOURCE_PROFILE_DOTTAIGNORE;
-                } else {
-                    /* Profile absent and global didn't match positively —
-                     * attribute to global anyway (single source). */
-                    result->source = global_src;
-                }
-                return NULL;
-            }
-        }
-    }
-
-    /* Layer 4: Config patterns (user-level rules) */
-    if (matches_config_patterns(
-        rel_path,
-        is_directory,
-        ctx->config_patterns,
-        ctx->config_pattern_count
-        )) {
-        result->ignored = true;
-        result->source = IGNORE_SOURCE_CONFIG;
-        return NULL;
-    }
-
-    /* Layer 5: Source .gitignore (lowest priority, when enabled) */
-    if (ctx->respect_gitignore && abs_path[0] == '/') {
-        bool matched = false;
-        error_t *err = matches_source_gitignore(
-            ctx, abs_path, is_directory, &matched
-        );
-        if (err) {
-            /* Non-fatal - continue without source .gitignore checking */
-            error_free(err);
-        } else if (matched) {
-            result->ignored = true;
-            result->source = IGNORE_SOURCE_SOURCE_GITIGNORE;
-            return NULL;
-        }
-    }
-
-    /* Not ignored */
-    result->ignored = false;
-    result->source = IGNORE_SOURCE_NONE;
-    return NULL;
-}
-
-/**
- * Convert ignore source to human-readable string
- */
 const char *ignore_source_to_string(ignore_source_t source) {
     switch (source) {
         case IGNORE_SOURCE_NONE:

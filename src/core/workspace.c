@@ -1675,7 +1675,12 @@ static error_t *analyze_untracked_files(
             continue;
         }
 
-        /* Create profile-specific ignore context once for all directories */
+        /* Create profile-specific ignore context once for all directories.
+         *
+         * Fatal on failure: scanning a profile without its ignore rules
+         * risks reporting genuinely ignored files as untracked, which
+         * the user could then `dotta add` by accident. A corrupt
+         * .dottaignore must surface so the user can fix it. */
         ignore_context_t *ignore_ctx = NULL;
         err = ignore_context_create(
             ws->repo,
@@ -1685,16 +1690,10 @@ static error_t *analyze_untracked_files(
             0,
             &ignore_ctx
         );
-
         if (err) {
-            /* Non-fatal: continue without ignore filtering */
-            fprintf(
-                stderr, "warning: failed to load ignore patterns for profile '%s': %s\n",
-                profile, err->message
+            return error_wrap(
+                err, "Failed to load ignore patterns for profile '%s'", profile
             );
-            error_free(err);
-            err = NULL;
-            ignore_ctx = NULL;
         }
 
         /* Scan each tracked directory */

@@ -1051,19 +1051,18 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
 
     /* If we reach here, privileges are OK - proceed with operation */
 
-    /* Create ignore context */
+    /* Create ignore context.
+     *
+     * Fatal on failure: if we cannot build the ignore rules, proceeding
+     * would risk tracking files the user explicitly told us to ignore
+     * (via baseline, profile, config, or CLI). Surface the error. */
     err = ignore_context_create(
         repo, config, opts->profile, opts->exclude_patterns,
         opts->exclude_count, &ignore_ctx
     );
     if (err) {
-        /* Non-fatal: continue without ignore context */
-        output_warning(
-            out, OUTPUT_VERBOSE, "Failed to create ignore context: %s",
-            error_message(err)
-        );
-        error_free(err);
-        err = NULL;
+        err = error_wrap(err, "Failed to build ignore rules");
+        goto cleanup;
     }
 
     /* Build hook invocation */

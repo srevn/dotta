@@ -1,29 +1,35 @@
 /**
  * ignore.h - Multi-layered ignore pattern system
  *
- * Implements a comprehensive ignore system with four tiers of precedence:
- *   1. CLI --exclude flags (highest priority - per-operation)
- *   2. Combined .dottaignore ruleset, evaluated as one libgit2 ruleset:
- *      - Baseline .dottaignore on dotta-worktree (machine-local, seeded
- *        with compiled defaults by `dotta init` and `dotta clone`, then
- *        editable via `dotta ignore`). If absent, compiled defaults are
- *        applied as a fallback so safety patterns stay active.
- *      - Profile .dottaignore on the profile branch (synced with the
- *        profile, editable via `dotta ignore <profile>`).
- *      Within the combined ruleset, later rules can negate earlier ones
- *      via `!` — so profile patterns may override baseline patterns,
- *      and baseline patterns may override the defaults fallback.
- *   3. Config ignore patterns (user-level rules from config.toml)
- *   4. Source .gitignore (lowest priority - when adding from git repos)
+ * All user-authored rules (baseline, profile, config, CLI) compile into
+ * a single gitignore ruleset at context creation. Rules are appended in
+ * precedence order and evaluated with last-match-wins semantics, so
+ * `!`-negation works across layers — a profile can un-ignore a baseline
+ * pattern, config can un-ignore a profile pattern, and CLI (highest
+ * precedence) can un-ignore anything below.
  *
- * Uses libgit2's gitignore parser for full .gitignore spec support:
- *   - Glob patterns (*, ?, [abc])
+ * Precedence (lowest to highest):
+ *   1. Baseline .dottaignore on `dotta-worktree` (machine-local;
+ *      seeded by `dotta init`/`clone`, editable via `dotta ignore`).
+ *      If absent, compiled defaults are used instead (origin=BUILTIN).
+ *   2. Profile .dottaignore on the profile branch.
+ *   3. Config ignore patterns (user-level rules from config.toml).
+ *   4. CLI --exclude flags (per-operation, highest priority).
+ *
+ * A separate fifth layer — source .gitignore of a foreign repo the
+ * user is adding from — is queried via libgit2 when `respect_gitignore`
+ * is enabled and the path is absolute. This layer is independent of
+ * the dotta repo and uses libgit2's nested-.gitignore + attr-stack
+ * machinery directly.
+ *
+ * Full .gitignore grammar is supported:
+ *   - Glob patterns (*, ?, [abc]) and recursive globs (double-star)
  *   - Directory matching (trailing /)
- *   - Negation patterns (!) - profile can negate baseline patterns
+ *   - Negation patterns (!) — now honored in CLI and config too
  *   - Comment lines (#)
  *   - Anchored patterns (leading /)
  *
- * Example negation workflow:
+ * Example cross-layer negation:
  *   Baseline .dottaignore:  *.log       (ignore all log files)
  *   Profile .dottaignore:   !debug.log  (un-ignore debug.log)
  *   Result: debug.log is NOT ignored in this profile
@@ -37,11 +43,12 @@
 #include <types.h>
 
 /**
- * Ignore context - manages all ignore rules and precedence
+ * Ignore context — a compiled ruleset plus a layer-5 source-repo cache.
  *
- * Holds state for all layers of ignore patterns.
- * Baseline and profile .dottaignore are combined to allow negation.
- * Create once per operation, reuse for multiple path checks.
+ * Create once per operation (or per profile, when iterating), reuse for
+ * multiple path checks. The context does not mutate the dotta repository
+ * handle, so multiple contexts against the same repo are safe and
+ * independent.
  */
 typedef struct ignore_context ignore_context_t;
 
@@ -67,35 +74,31 @@ typedef struct {
 } ignore_test_result_t;
 
 /**
- * Create ignore context
+ * Create ignore context.
  *
- * Initializes the ignore system with all configured rules.
+ * Loads baseline and profile .dottaignore from the repository, then
+ * appends config patterns and CLI excludes, compiling all layers into
+ * a single ruleset. Returns an owned context the caller frees with
+ * `ignore_context_free`.
  *
- * Lifetime Requirements:
- *   - The repository pointer is borrowed (not owned). The caller MUST ensure
- *     the repository remains valid for the entire lifetime of the ignore context.
- *   - Freeing the repository before freeing the ignore context will result in
- *     use-after-free errors.
- *   - Only ONE ignore_context_t may be active per git_repository* at a time.
- *     The context mutates the repository's internal ignore rules (via libgit2).
- *     Creating a second context before freeing the first produces incorrect results.
- *   - The config and profile are copied internally and can be freed after
- *     this function returns.
- *   - CLI exclude patterns are copied internally and can be freed after this
- *     function returns.
+ * Lifetime:
+ *   - `repo` is read only during construction (baseline/profile tree
+ *     loads); it does not need to outlive the returned context.
+ *   - `config`, `profile`, and `cli_excludes` are copied internally.
+ *   - Multiple contexts against the same repo are safe and independent.
  *
- * Input Validation:
- *   - Maximum CLI patterns: 10,000 (returns ERR_VALIDATION if exceeded)
- *   - Maximum config patterns: 10,000 (returns ERR_VALIDATION if exceeded)
- *   - Maximum pattern length: 4,096 characters (returns ERR_VALIDATION if exceeded)
- *   - Maximum .dottaignore file size: 1MB (returns ERR_VALIDATION if exceeded)
+ * Input validation:
+ *   - Maximum CLI patterns: 10,000 (ERR_VALIDATION if exceeded).
+ *   - Maximum config patterns: 10,000 (ERR_VALIDATION if exceeded).
+ *   - Maximum pattern length: 4,096 chars (ERR_VALIDATION if exceeded).
+ *   - Maximum .dottaignore blob size: 1 MB (ERR_VALIDATION if exceeded).
  *
- * @param repo Repository (for accessing .dottaignore files) - BORROWED, must outlive context
- * @param config Configuration (for config patterns and settings, can be NULL)
- * @param profile Profile name (for profile-specific .dottaignore, can be NULL)
- * @param cli_excludes CLI --exclude patterns (can be NULL)
+ * @param repo Repository — borrowed only during this call, can be NULL
+ * @param config Configuration — can be NULL
+ * @param profile Profile name — can be NULL or empty
+ * @param cli_excludes CLI --exclude patterns — can be NULL
  * @param cli_exclude_count Number of CLI patterns
- * @param out Ignore context (must not be NULL)
+ * @param out Output context (must not be NULL)
  * @return Error or NULL on success
  */
 error_t *ignore_context_create(
@@ -115,17 +118,18 @@ error_t *ignore_context_create(
 void ignore_context_free(ignore_context_t *ctx);
 
 /**
- * Check if path should be ignored
+ * Check if path should be ignored.
  *
- * Applies all ignore rules in precedence order:
- *   1. CLI excludes
- *   2. Combined .dottaignore ruleset (baseline-or-builtin + profile,
- *      evaluated as a single libgit2 ruleset with `!` negation)
- *   3. Config patterns
- *   4. Source .gitignore (if applicable and enabled)
+ * Evaluates the compiled ruleset (baseline/builtin + profile + config
+ * + CLI) with last-match-wins semantics, then falls through to the
+ * foreign source .gitignore (layer 5) if enabled and `path` is
+ * absolute.
+ *
+ * Relative paths skip layer 5 silently — callers that want full
+ * layer-5 coverage must pass absolute paths.
  *
  * @param ctx Ignore context (must not be NULL)
- * @param path Path to check (relative or absolute)
+ * @param path Path to check (absolute recommended)
  * @param is_directory Whether path is a directory
  * @param ignored Output boolean (must not be NULL)
  * @return Error or NULL on success

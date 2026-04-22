@@ -175,151 +175,69 @@ static const char *PROFILE_DOTTAIGNORE =
     "\n"
     "# Add your profile-specific patterns below:\n";
 
-/**
- * Load baseline .dottaignore from dotta-worktree branch
- *
- * This provides baseline ignore rules that apply to all profiles.
- * Profile-specific .dottaignore files extend this baseline and can use
- * negation patterns (!) to override baseline rules.
- */
-static error_t *load_baseline_dottaignore(
+error_t *ignore_load_raw_content(
     git_repository *repo,
-    char **out_content
+    const char *branch_name,
+    char **out_content,
+    size_t *out_size
 ) {
     CHECK_NULL(repo);
+    CHECK_NULL(branch_name);
     CHECK_NULL(out_content);
+    CHECK_ARG(branch_name[0] != '\0', "Branch name cannot be empty");
 
     *out_content = NULL;
+    if (out_size) *out_size = 0;
 
-    /* Check if dotta-worktree branch exists */
+    /* Missing branch is not an error — callers treat NULL content as
+     * "no baseline/profile .dottaignore yet". */
     bool branch_exists = false;
-    error_t *err = gitops_branch_exists(repo, "dotta-worktree", &branch_exists);
-    if (err) {
-        return err;
-    }
-
-    if (!branch_exists) {
-        /* No dotta-worktree branch yet - not an error, just no .dottaignore */
-        return NULL;
-    }
-
-    /* Load tree from dotta-worktree */
-    git_tree *tree = NULL;
-    err = gitops_load_tree(repo, "refs/heads/dotta-worktree", &tree);
-    if (err) {
-        return error_wrap(err, "Failed to load dotta-worktree tree");
-    }
-
-    /* Look for .dottaignore entry */
-    const git_tree_entry *entry = git_tree_entry_byname(tree, ".dottaignore");
-    if (!entry) {
-        /* No .dottaignore file - not an error */
-        git_tree_free(tree);
-        return NULL;
-    }
-
-    /* Read blob content */
-    void *content = NULL;
-    size_t size = 0;
-    err = gitops_read_blob_content(repo, git_tree_entry_id(entry), &content, &size);
-    git_tree_free(tree);
+    error_t *err = gitops_branch_exists(repo, branch_name, &branch_exists);
     if (err) return err;
+    if (!branch_exists) return NULL;
 
-    /* Validate size to prevent excessive memory allocation */
-    if (size > MAX_DOTTAIGNORE_SIZE) {
-        free(content);
-        return ERROR(ERR_VALIDATION, "Baseline .dottaignore file too large (max 1MB)");
-    }
-
-    if (size > 0) {
-        *out_content = content;
-    } else {
-        free(content);
-    }
-
-    return NULL;
-}
-
-/**
- * Load profile-specific .dottaignore from a profile branch
- *
- * Profile .dottaignore extends the baseline .dottaignore.
- * Profiles start with an empty state and inherit all baseline patterns.
- * Use negation patterns (!) to un-ignore files matched by baseline patterns.
- *
- * Example:
- *   Baseline .dottaignore: *.log
- *   Profile .dottaignore:  !important.log
- *   Result: important.log is NOT ignored (negation overrides baseline)
- */
-static error_t *load_profile_dottaignore(
-    git_repository *repo,
-    const char *profile,
-    char **out_content
-) {
-    CHECK_NULL(repo);
-    CHECK_NULL(out_content);
-
-    *out_content = NULL;
-
-    /* If no profile specified, return without error */
-    if (!profile || profile[0] == '\0') {
-        return NULL;
-    }
-
-    /* Check if profile branch exists */
-    bool branch_exists = false;
-    error_t *err = gitops_branch_exists(repo, profile, &branch_exists);
-    if (err) {
-        return err;
-    }
-
-    if (!branch_exists) {
-        /* Profile doesn't exist yet - not an error */
-        return NULL;
-    }
-
-    /* Load tree from profile branch
-     * Branch existence was verified above, so tree load failure
-     * indicates a genuine error (I/O, corruption) not "branch missing" */
+    /* Existence just verified, so a tree load failure is a real error
+     * (I/O, corruption) rather than "branch missing". */
     git_tree *tree = NULL;
-    err = gitops_load_branch_tree(repo, profile, &tree, NULL);
+    err = gitops_load_branch_tree(repo, branch_name, &tree, NULL);
     if (err) {
         return error_wrap(
-            err, "Failed to load tree for profile '%s'",
-            profile
+            err, "Failed to load tree for branch '%s'", branch_name
         );
     }
 
-    /* Look for .dottaignore entry */
     const git_tree_entry *entry = git_tree_entry_byname(tree, ".dottaignore");
     if (!entry) {
-        /* No .dottaignore in this profile - not an error */
         git_tree_free(tree);
         return NULL;
     }
 
-    /* Read blob content */
     void *content = NULL;
     size_t size = 0;
-    err = gitops_read_blob_content(repo, git_tree_entry_id(entry), &content, &size);
+    err = gitops_read_blob_content(
+        repo, git_tree_entry_id(entry), &content, &size
+    );
     git_tree_free(tree);
     if (err) return err;
 
-    /* Validate size to prevent excessive memory allocation */
     if (size > MAX_DOTTAIGNORE_SIZE) {
         free(content);
         return ERROR(
-            ERR_VALIDATION, "Profile .dottaignore file too large (max 1MB)"
+            ERR_VALIDATION,
+            ".dottaignore on branch '%s' exceeds size cap (max %d bytes, actual %zu)",
+            branch_name, MAX_DOTTAIGNORE_SIZE, size
         );
     }
 
-    if (size > 0) {
-        *out_content = content;
-    } else {
+    /* Treat empty blobs as absent — nothing to parse, and it lets
+     * callers use "content == NULL" as the single "no source" check. */
+    if (size == 0) {
         free(content);
+        return NULL;
     }
 
+    *out_content = content;
+    if (out_size) *out_size = size;
     return NULL;
 }
 
@@ -672,9 +590,9 @@ error_t *ignore_context_create(
     }
 
     /* Load profile-specific .dottaignore (if profile specified) */
-    if (repo && profile) {
-        error_t *err = load_profile_dottaignore(
-            repo, profile, &ctx->profile_dottaignore_content
+    if (repo && profile && profile[0] != '\0') {
+        error_t *err = ignore_load_raw_content(
+            repo, profile, &ctx->profile_dottaignore_content, NULL
         );
         if (err) {
             /* Non-fatal - continue without profile .dottaignore */
@@ -684,9 +602,8 @@ error_t *ignore_context_create(
 
     /* Load baseline .dottaignore from repository */
     if (repo) {
-        error_t *err = load_baseline_dottaignore(
-            repo,
-            &ctx->baseline_dottaignore_content
+        error_t *err = ignore_load_raw_content(
+            repo, "dotta-worktree", &ctx->baseline_dottaignore_content, NULL
         );
         if (err) {
             /* Non-fatal - continue without baseline .dottaignore */

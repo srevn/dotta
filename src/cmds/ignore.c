@@ -394,52 +394,39 @@ static error_t *edit_baseline_dottaignore(
         return ERROR(ERR_FS, "Failed to create temporary file");
     }
 
-    /* Load existing .dottaignore content */
-    git_tree *tree = NULL;
-    err = gitops_load_tree(repo, "refs/heads/dotta-worktree", &tree);
+    /* Seed tmpfile with existing baseline, or compiled defaults if absent */
+    char *existing_content = NULL;
+    size_t existing_size = 0;
+    err = ignore_load_raw_content(
+        repo, "dotta-worktree", &existing_content, &existing_size
+    );
     if (err) {
         close(fd);
         unlink(tmpfile);
         free(tmpfile);
-        return error_wrap(err, "Failed to load dotta-worktree tree");
+        return error_wrap(err, "Failed to load baseline .dottaignore");
     }
 
-    const git_tree_entry *entry = git_tree_entry_byname(tree, ".dottaignore");
-    if (entry) {
-        /* Load existing content */
-        void *content = NULL;
-        size_t size = 0;
-        error_t *blob_err = gitops_read_blob_content(
-            repo, git_tree_entry_id(entry), &content, &size
-        );
-        if (!blob_err) {
-            ssize_t written = write(fd, content, size);
-            if (written < 0 || (size_t) written != size) {
-                free(content);
-                git_tree_free(tree);
-                close(fd);
-                unlink(tmpfile);
-                free(tmpfile);
-                return ERROR(ERR_FS, "Failed to write to temporary file");
-            }
-        }
-        free(content);
-        error_free(blob_err);
+    const char *seed;
+    size_t seed_size;
+    if (existing_content) {
+        seed = existing_content;
+        seed_size = existing_size;
     } else {
-        /* No existing .dottaignore, create with defaults */
-        const char *default_content = ignore_default_dottaignore_content();
-        size_t len = strlen(default_content);
-        ssize_t written = write(fd, default_content, len);
-        if (written < 0 || (size_t) written != len) {
-            git_tree_free(tree);
-            close(fd);
-            unlink(tmpfile);
-            free(tmpfile);
-            return ERROR(ERR_FS, "Failed to write default content");
-        }
+        seed = ignore_default_dottaignore_content();
+        seed_size = strlen(seed);
     }
 
-    git_tree_free(tree);
+    ssize_t written = write(fd, seed, seed_size);
+    free(existing_content);
+
+    if (written < 0 || (size_t) written != seed_size) {
+        close(fd);
+        unlink(tmpfile);
+        free(tmpfile);
+        return ERROR(ERR_FS, "Failed to write to temporary file");
+    }
+
     close(fd);
 
     /* Open in editor - priority: DOTTA_EDITOR, VISUAL, EDITOR, vi */
@@ -555,52 +542,39 @@ static error_t *edit_profile_dottaignore(
         return ERROR(ERR_FS, "Failed to create temporary file");
     }
 
-    /* Load existing .dottaignore content from profile */
-    git_tree *tree = NULL;
-    err = gitops_load_branch_tree(repo, profile, &tree, NULL);
+    /* Seed tmpfile with existing profile content, or template if absent */
+    char *existing_content = NULL;
+    size_t existing_size = 0;
+    err = ignore_load_raw_content(
+        repo, profile, &existing_content, &existing_size
+    );
     if (err) {
         close(fd);
         unlink(tmpfile);
         free(tmpfile);
-        return error_wrap(err, "Failed to load profile tree");
+        return error_wrap(err, "Failed to load profile .dottaignore");
     }
 
-    const git_tree_entry *entry = git_tree_entry_byname(tree, ".dottaignore");
-    if (entry) {
-        /* Load existing content */
-        void *content = NULL;
-        size_t size = 0;
-        error_t *blob_err = gitops_read_blob_content(
-            repo, git_tree_entry_id(entry), &content, &size
-        );
-        if (!blob_err) {
-            ssize_t written = write(fd, content, size);
-            if (written < 0 || (size_t) written != size) {
-                free(content);
-                git_tree_free(tree);
-                close(fd);
-                unlink(tmpfile);
-                free(tmpfile);
-                return ERROR(ERR_FS, "Failed to write to temporary file");
-            }
-        }
-        free(content);
-        error_free(blob_err);
+    const char *seed;
+    size_t seed_size;
+    if (existing_content) {
+        seed = existing_content;
+        seed_size = existing_size;
     } else {
-        /* No existing profile .dottaignore - use canonical template */
-        const char *template = ignore_profile_dottaignore_template();
-        size_t len = strlen(template);
-        ssize_t written = write(fd, template, len);
-        if (written < 0 || (size_t) written != len) {
-            git_tree_free(tree);
-            close(fd);
-            unlink(tmpfile);
-            free(tmpfile);
-            return ERROR(ERR_FS, "Failed to write template");
-        }
+        seed = ignore_profile_dottaignore_template();
+        seed_size = strlen(seed);
     }
 
-    git_tree_free(tree);
+    ssize_t written = write(fd, seed, seed_size);
+    free(existing_content);
+
+    if (written < 0 || (size_t) written != seed_size) {
+        close(fd);
+        unlink(tmpfile);
+        free(tmpfile);
+        return ERROR(ERR_FS, "Failed to write to temporary file");
+    }
+
     close(fd);
 
     /* Open in editor - priority: DOTTA_EDITOR, VISUAL, EDITOR, vi */
@@ -717,33 +691,18 @@ static error_t *modify_baseline_dottaignore(
 
     /* Load existing .dottaignore content */
     char *existing_content = NULL;
-    git_tree *tree = NULL;
-    err = gitops_load_tree(repo, "refs/heads/dotta-worktree", &tree);
+    err = ignore_load_raw_content(
+        repo, "dotta-worktree", &existing_content, NULL
+    );
     if (err) {
-        return error_wrap(err, "Failed to load dotta-worktree tree");
+        return error_wrap(err, "Failed to load baseline .dottaignore");
     }
 
-    const git_tree_entry *entry = git_tree_entry_byname(tree, ".dottaignore");
-    if (entry) {
-        void *content = NULL;
-        size_t size = 0;
-        error_t *blob_err = gitops_read_blob_content(
-            repo, git_tree_entry_id(entry), &content, &size
-        );
-        if (!blob_err && size > 0) {
-            existing_content = content;
-        } else {
-            free(content);
-        }
-        error_free(blob_err);
-    } else if (!add_patterns) {
+    if (!existing_content && !add_patterns) {
         /* No existing .dottaignore and no patterns to add */
-        git_tree_free(tree);
         output_info(out, OUTPUT_NORMAL, "No .dottaignore file exists in baseline");
         return NULL;
     }
-
-    git_tree_free(tree);
 
     /* If no existing content, use default for adds */
     if (!existing_content && add_count > 0) {
@@ -931,37 +890,19 @@ static error_t *modify_profile_dottaignore(
 
     /* Load existing .dottaignore content from profile */
     char *existing_content = NULL;
-    git_tree *tree = NULL;
-    err = gitops_load_branch_tree(repo, profile, &tree, NULL);
+    err = ignore_load_raw_content(repo, profile, &existing_content, NULL);
     if (err) {
-        return error_wrap(err, "Failed to load profile tree");
+        return error_wrap(err, "Failed to load profile .dottaignore");
     }
 
-    const git_tree_entry *entry = git_tree_entry_byname(tree, ".dottaignore");
-    if (entry) {
-        void *content = NULL;
-        size_t size = 0;
-        error_t *blob_err = gitops_read_blob_content(
-            repo, git_tree_entry_id(entry), &content, &size
-        );
-        if (!blob_err && size > 0) {
-            existing_content = content;
-        } else {
-            free(content);
-        }
-        error_free(blob_err);
-    } else if (!add_patterns) {
+    if (!existing_content && !add_patterns) {
         /* No existing .dottaignore and no patterns to add */
-        git_tree_free(tree);
-
         output_info(
             out, OUTPUT_NORMAL, "No .dottaignore file exists in profile '%s'",
             profile
         );
         return NULL;
     }
-
-    git_tree_free(tree);
 
     /* If no existing content, use template for adds */
     if (!existing_content && add_count > 0) {

@@ -180,6 +180,34 @@ error_t *ignore_seed_baseline(git_repository *repo);
 const char *ignore_profile_dottaignore_template(void);
 
 /**
+ * Load raw .dottaignore blob from a branch into an owned buffer.
+ *
+ * Returns (*out_content=NULL, *out_size=0) when any of:
+ *   - The branch does not exist
+ *   - The branch exists but contains no .dottaignore at the tree root
+ *   - The .dottaignore blob is empty (size == 0)
+ *
+ * None of these produce an error; they just mean "no content". Only I/O
+ * failures, malformed trees, OOM, or size-cap violations (>1MB) return
+ * an error.
+ *
+ * On success with non-NULL content, *out_content is a heap-allocated,
+ * NUL-terminated buffer of *out_size bytes. The caller owns and frees it.
+ *
+ * @param repo Repository (must not be NULL)
+ * @param branch_name Short branch name, e.g. "dotta-worktree" (must not be NULL or empty)
+ * @param out_content Output content (must not be NULL); set to NULL if absent
+ * @param out_size Output size in bytes (may be NULL if caller does not need it)
+ * @return Error or NULL on success
+ */
+error_t *ignore_load_raw_content(
+    git_repository *repo,
+    const char *branch_name,
+    char **out_content,
+    size_t *out_size
+);
+
+/**
  * Test if path should be ignored (with diagnostic info)
  *
  * Like ignore_should_ignore(), but returns which layer caused the ignore.

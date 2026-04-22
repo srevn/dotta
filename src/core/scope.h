@@ -229,8 +229,10 @@ bool scope_accepts_path(const scope_t *s, const char *storage_path);
  * (asymmetric with scope_accepts_* by design — reads naturally at call
  * sites: `if (scope_is_excluded(s, p)) { ... }`).
  *
- * Uses doublestar glob matching (MATCH_DOUBLESTAR). NULL storage_path or
- * no exclude patterns returns false.
+ * Uses gitignore semantics via base/gitignore: `!`-negation, directory
+ * walk-up (so `-e 'build/'` matches files under `build/`), anchoring,
+ * and `**` recursive globs. NULL storage_path or no exclude patterns
+ * returns false.
  */
 bool scope_is_excluded(const scope_t *s, const char *storage_path);
 

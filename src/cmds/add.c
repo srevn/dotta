@@ -30,6 +30,7 @@
 #include "infra/worktree.h"
 #include "sys/filesystem.h"
 #include "sys/gitops.h"
+#include "sys/source.h"
 #include "utils/commit.h"
 #include "utils/hooks.h"
 #include "utils/privilege.h"
@@ -52,37 +53,60 @@ static error_t *validate_options(const cmd_add_options_t *opts) {
 }
 
 /**
- * Check if path should be ignored using the ignore context
+ * Check if path should be ignored.
  *
- * Uses the multi-layered ignore system with full precedence logic.
+ * Consults two independent mechanisms in order:
+ *   1. `ignore_ctx` — the user's `.dottaignore` layers (baseline,
+ *      profile, config, CLI).
+ *   2. `source_filter` — the source tree's own `.gitignore`, if the
+ *      caller opted in by building a filter (typically gated on
+ *      `config.respect_gitignore`).
+ *
+ * Either input may be NULL to skip that mechanism. Errors from either
+ * check degrade to a verbose warning and a "not excluded" verdict so
+ * an unreadable `.dottaignore` or an odd source repo never blocks the
+ * user from adding a file they explicitly named.
  */
 static bool is_excluded(
     const char *path,
     bool is_directory,
     ignore_context_t *ignore_ctx,
+    source_filter_t *source_filter,
     output_t *out
 ) {
     if (!path) return false;
 
-    /* If we have an ignore context, use it */
     if (ignore_ctx) {
         bool ignored = false;
         error_t *err = ignore_should_ignore(
-            ignore_ctx,
-            path,
-            is_directory,
-            &ignored
+            ignore_ctx, path, is_directory, &ignored
         );
         if (err) {
-            /* On error, log and continue without ignoring */
             output_warning(
                 out, OUTPUT_VERBOSE, "Ignore check failed for %s: %s",
                 path, error_message(err)
             );
             error_free(err);
+        } else if (ignored) {
+            return true;
+        }
+    }
+
+    if (source_filter) {
+        bool excluded = false;
+        error_t *err = source_filter_is_excluded(
+            source_filter, path, is_directory, &excluded
+        );
+        if (err) {
+            output_warning(
+                out, OUTPUT_VERBOSE,
+                "Source .gitignore check failed for %s: %s",
+                path, error_message(err)
+            );
+            error_free(err);
             return false;
         }
-        return ignored;
+        return excluded;
     }
 
     return false;
@@ -99,6 +123,7 @@ static error_t *collect_files_from_dir(
     const char *dir_path,
     const cmd_add_options_t *opts,
     ignore_context_t *ignore_ctx,
+    source_filter_t *source_filter,
     output_t *out,
     string_array_t **out_files
 ) {
@@ -140,7 +165,7 @@ static error_t *collect_files_from_dir(
         bool is_dir = !is_symlink && fs_is_directory(full_path);
 
         /* Check exclude patterns */
-        if (is_excluded(full_path, is_dir, ignore_ctx, out)) {
+        if (is_excluded(full_path, is_dir, ignore_ctx, source_filter, out)) {
             output_info(out, OUTPUT_VERBOSE, "Excluded: %s", full_path);
             free(full_path);
             errno = 0;
@@ -152,7 +177,7 @@ static error_t *collect_files_from_dir(
             /* Recurse into subdirectory */
             string_array_t *subdir_files = NULL;
             error_t *err = collect_files_from_dir(
-                full_path, opts, ignore_ctx, out, &subdir_files
+                full_path, opts, ignore_ctx, source_filter, out, &subdir_files
             );
             free(full_path);
 
@@ -901,6 +926,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
 
     /* Initialize all resources to NULL for safe cleanup */
     ignore_context_t *ignore_ctx = NULL;
+    source_filter_t *source_filter = NULL;
     worktree_handle_t *wt = NULL;
     string_array_t *all_files = NULL;
     tracked_dir_t *tracked_dirs = NULL;
@@ -1069,6 +1095,20 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         goto cleanup;
     }
 
+    /* Source-tree .gitignore filter (opt-in via config).
+     *
+     * Built once per command and shared across the whole collection
+     * walk so the discovered source-repo handle is reused for every
+     * file under the same source tree. A non-fatal build failure leaves
+     * source_filter NULL, which is_excluded() treats as "layer skipped". */
+    if (config && config->respect_gitignore) {
+        err = source_filter_create(&source_filter);
+        if (err) {
+            err = error_wrap(err, "Failed to build source .gitignore filter");
+            goto cleanup;
+        }
+    }
+
     /* Build hook invocation */
     const hook_invocation_t hook_inv = {
         .cmd        = HOOK_CMD_ADD,
@@ -1189,7 +1229,9 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         if (!fs_is_symlink(absolute) && fs_is_directory(absolute)) {
             /* Recursively collect files from directory */
             string_array_t *dir_files = NULL;
-            err = collect_files_from_dir(absolute, opts, ignore_ctx, out, &dir_files);
+            err = collect_files_from_dir(
+                absolute, opts, ignore_ctx, source_filter, out, &dir_files
+            );
 
             if (err) {
                 free(absolute);
@@ -1266,7 +1308,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
             tracked_dir_count++;
         } else {
             /* Single file or symlink - check if excluded */
-            if (is_excluded(absolute, false, ignore_ctx, out)) {
+            if (is_excluded(absolute, false, ignore_ctx, source_filter, out)) {
                 output_info(out, OUTPUT_VERBOSE, "Excluded: %s", absolute);
                 free(absolute);
                 continue;
@@ -1709,6 +1751,7 @@ cleanup:
     if (metadata) metadata_free(metadata);
     if (all_files) string_array_free(all_files);
     if (wt) worktree_cleanup(&wt);
+    source_filter_free(source_filter);
     if (ignore_ctx) ignore_context_free(ignore_ctx);
     /* auto_rules is arena-borrowed — destroy the arena drops both. */
     arena_destroy(auto_rules_arena);

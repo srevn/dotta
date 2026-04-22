@@ -16,11 +16,11 @@
  *   3. Config ignore patterns (user-level rules from config.toml).
  *   4. CLI --exclude flags (per-operation, highest priority).
  *
- * A separate fifth layer — source .gitignore of a foreign repo the
- * user is adding from — is queried via libgit2 when `respect_gitignore`
- * is enabled and the path is absolute. This layer is independent of
- * the dotta repo and uses libgit2's nested-.gitignore + attr-stack
- * machinery directly.
+ * The source tree's own `.gitignore` (when the user is adding files
+ * from inside another git repo) is a separate mechanism: see
+ * `sys/source.h` for `source_filter_t`. Callers that want that
+ * behaviour construct a `source_filter_t` alongside the ignore
+ * context and consult both explicitly.
  *
  * Full .gitignore grammar is supported:
  *   - Glob patterns (*, ?, [abc]) and recursive globs (double-star)
@@ -43,7 +43,7 @@
 #include <types.h>
 
 /**
- * Ignore context — a compiled ruleset plus a layer-5 source-repo cache.
+ * Ignore context — a compiled `.dottaignore` ruleset.
  *
  * Create once per operation (or per profile, when iterating), reuse for
  * multiple path checks. The context does not mutate the dotta repository
@@ -61,8 +61,7 @@ typedef enum {
     IGNORE_SOURCE_PROFILE_DOTTAIGNORE,   /* Profile-specific .dottaignore */
     IGNORE_SOURCE_BASELINE_DOTTAIGNORE,  /* Baseline .dottaignore on dotta-worktree */
     IGNORE_SOURCE_BUILTIN,               /* Compiled defaults (baseline fallback) */
-    IGNORE_SOURCE_CONFIG,                /* Config file patterns */
-    IGNORE_SOURCE_SOURCE_GITIGNORE       /* Source .gitignore */
+    IGNORE_SOURCE_CONFIG                 /* Config file patterns */
 } ignore_source_t;
 
 /**
@@ -121,15 +120,12 @@ void ignore_context_free(ignore_context_t *ctx);
  * Check if path should be ignored.
  *
  * Evaluates the compiled ruleset (baseline/builtin + profile + config
- * + CLI) with last-match-wins semantics, then falls through to the
- * foreign source .gitignore (layer 5) if enabled and `path` is
- * absolute.
- *
- * Relative paths skip layer 5 silently — callers that want full
- * layer-5 coverage must pass absolute paths.
+ * + CLI) with last-match-wins semantics. Callers that also want to
+ * consult the source tree's own `.gitignore` pair this with
+ * `source_filter_is_excluded` from `sys/source.h`.
  *
  * @param ctx Ignore context (must not be NULL)
- * @param path Path to check (absolute recommended)
+ * @param path Path to check (relative or absolute)
  * @param is_directory Whether path is a directory
  * @param ignored Output boolean (must not be NULL)
  * @return Error or NULL on success
@@ -214,8 +210,11 @@ error_t *ignore_load_raw_content(
 /**
  * Test if path should be ignored (with diagnostic info)
  *
- * Like ignore_should_ignore(), but returns which layer caused the ignore.
- * Useful for debugging and the 'dotta ignore --test' command.
+ * Like ignore_should_ignore(), but returns which layer caused the
+ * ignore. Useful for debugging and the `dotta ignore --test` command.
+ * Covers only the four `.dottaignore` layers; the source tree's own
+ * `.gitignore` is reported separately by the caller via
+ * `sys/source.h`.
  *
  * @param ctx Ignore context (must not be NULL)
  * @param path Path to check (relative or absolute)

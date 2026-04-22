@@ -4,6 +4,7 @@
 
 #include "cmds/ignore.h"
 
+#include <config.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -20,6 +21,7 @@
 #include "sys/editor.h"
 #include "sys/filesystem.h"
 #include "sys/gitops.h"
+#include "sys/source.h"
 
 /**
  * Check if a pattern already exists in content (zero-allocation)
@@ -779,6 +781,38 @@ static error_t *modify_dottaignore(
 }
 
 /**
+ * Probe the source-tree .gitignore after the .dottaignore layers have
+ * returned "not ignored". Requires an absolute path; a relative test
+ * target (typical when the user types a non-existent relative path)
+ * silently short-circuits to "no source verdict".
+ *
+ * Errors from the underlying libgit2 query are surfaced at NORMAL
+ * verbosity so a --test invocation that can't probe layer 5 makes the
+ * limitation visible, then return a "not excluded" verdict so the
+ * rest of the output remains coherent.
+ */
+static bool source_gitignore_matches(
+    source_filter_t *filter,
+    const char *abs_path,
+    bool is_directory,
+    output_t *out
+) {
+    if (!filter || !abs_path || abs_path[0] != '/') return false;
+
+    bool excluded = false;
+    error_t *err = source_filter_is_excluded(filter, abs_path, is_directory, &excluded);
+    if (err) {
+        output_warning(
+            out, OUTPUT_NORMAL,
+            "Source .gitignore check failed: %s", error_message(err)
+        );
+        error_free(err);
+        return false;
+    }
+    return excluded;
+}
+
+/**
  * Test if path is ignored across profiles
  */
 static error_t *test_path_ignore(
@@ -807,11 +841,10 @@ static error_t *test_path_ignore(
         is_directory = (len > 0 && test_path[len - 1] == '/');
     }
 
-    /* Resolve relative paths to absolute for comprehensive layer testing.
-     * The source .gitignore layer requires absolute paths to discover the
-     * enclosing git repository. Without resolution, that layer is silently
-     * skipped for relative paths. Non-existent paths are left as-is since
-     * there is no filesystem location to resolve. */
+    /* Resolve relative paths to absolute so the source-tree check below
+     * can discover the enclosing git repository. Non-existent paths are
+     * left as-is — there is no filesystem location to resolve — and the
+     * source check short-circuits on their relative form. */
     char resolved_buf[4096];
     const char *effective_path = test_path;
 
@@ -825,35 +858,46 @@ static error_t *test_path_ignore(
         output_info(out, OUTPUT_VERBOSE, "Path does not exist: %s", test_path);
     }
 
+    /* Source .gitignore filter (opt-in via config). Built once for the
+     * whole test invocation so the discovered repo handle is reused
+     * across the per-profile loop below. */
+    source_filter_t *source_filter = NULL;
+    if (config && config->respect_gitignore) {
+        error_t *sf_err = source_filter_create(&source_filter);
+        if (sf_err) {
+            return error_wrap(sf_err, "Failed to build source .gitignore filter");
+        }
+    }
+
+    string_array_t *profiles = NULL;
+    error_t *err = NULL;
+
     /* If specific profile requested, test only that one */
     if (specific_profile) {
-        /* Verify profile exists */
         if (!profile_exists(repo, specific_profile)) {
-            return ERROR(
-                ERR_NOT_FOUND, "Profile '%s' does not exist",
-                specific_profile
+            err = ERROR(
+                ERR_NOT_FOUND, "Profile '%s' does not exist", specific_profile
             );
+            goto cleanup;
         }
 
-        /* Create ignore context for this profile */
         ignore_context_t *ctx = NULL;
-        error_t *err = ignore_context_create(
+        err = ignore_context_create(
             repo, config, specific_profile, NULL, 0, &ctx
         );
         if (err) {
-            return error_wrap(err, "Failed to create ignore context");
+            err = error_wrap(err, "Failed to create ignore context");
+            goto cleanup;
         }
 
-        /* Test the path */
         ignore_test_result_t result;
         err = ignore_test_path(ctx, effective_path, is_directory, &result);
         ignore_context_free(ctx);
-
         if (err) {
-            return error_wrap(err, "Failed to test path");
+            err = error_wrap(err, "Failed to test path");
+            goto cleanup;
         }
 
-        /* Print result */
         if (result.ignored) {
             output_styled(
                 out, OUTPUT_NORMAL, "{red}✗{reset} IGNORED by profile '%s'\n",
@@ -863,6 +907,16 @@ static error_t *test_path_ignore(
                 out, OUTPUT_NORMAL, "  Reason: %s",
                 ignore_source_to_string(result.source)
             );
+        } else if (source_gitignore_matches(
+            source_filter, effective_path, is_directory, out
+        )) {
+            output_styled(
+                out, OUTPUT_NORMAL, "{red}✗{reset} IGNORED by profile '%s'\n",
+                specific_profile
+            );
+            output_info(
+                out, OUTPUT_NORMAL, "  Reason: source .gitignore"
+            );
         } else {
             output_success(
                 out, OUTPUT_NORMAL, "Not ignored by profile '%s'",
@@ -870,18 +924,19 @@ static error_t *test_path_ignore(
             );
         }
 
-        return NULL;
+        goto cleanup;
     }
 
     /* Test against all enabled profiles */
-    string_array_t *profiles = NULL;
-    error_t *err = profile_resolve_enabled(repo, state, &profiles);
+    err = profile_resolve_enabled(repo, state, &profiles);
 
     if (err) {
         if (error_code(err) != ERR_NOT_FOUND) {
-            return error_wrap(err, "Failed to load profiles");
+            err = error_wrap(err, "Failed to load profiles");
+            goto cleanup;
         }
         error_free(err);
+        err = NULL;
 
         /* No enabled profiles - test against baseline .dottaignore only */
         output_info(
@@ -892,36 +947,39 @@ static error_t *test_path_ignore(
             "Testing against baseline .dottaignore and config patterns only"
         );
 
-        /* Test with no profile */
         ignore_context_t *ctx = NULL;
         err = ignore_context_create(repo, config, NULL, NULL, 0, &ctx);
         if (err) {
-            return error_wrap(err, "Failed to create ignore context");
+            err = error_wrap(err, "Failed to create ignore context");
+            goto cleanup;
         }
 
         ignore_test_result_t result;
         err = ignore_test_path(ctx, effective_path, is_directory, &result);
         ignore_context_free(ctx);
-
         if (err) {
-            return error_wrap(err, "Failed to test path");
+            err = error_wrap(err, "Failed to test path");
+            goto cleanup;
         }
 
         if (result.ignored) {
-            output_styled(
-                out, OUTPUT_NORMAL, "{red}✗{reset} IGNORED\n"
-            );
+            output_styled(out, OUTPUT_NORMAL, "{red}✗{reset} IGNORED\n");
             output_info(
                 out, OUTPUT_NORMAL, "  Reason: %s",
                 ignore_source_to_string(result.source)
             );
-        } else {
-            output_success(
-                out, OUTPUT_NORMAL, "Not ignored"
+        } else if (source_gitignore_matches(
+            source_filter, effective_path, is_directory, out
+        )) {
+            output_styled(out, OUTPUT_NORMAL, "{red}✗{reset} IGNORED\n");
+            output_info(
+                out, OUTPUT_NORMAL, "  Reason: source .gitignore"
             );
+        } else {
+            output_success(out, OUTPUT_NORMAL, "Not ignored");
         }
 
-        return NULL;
+        goto cleanup;
     }
 
     /* Test against each enabled profile */
@@ -933,52 +991,53 @@ static error_t *test_path_ignore(
     for (size_t i = 0; i < profiles->count; i++) {
         const char *profile = profiles->items[i];
 
-        /* Create ignore context for this profile */
         ignore_context_t *ctx = NULL;
         err = ignore_context_create(repo, config, profile, NULL, 0, &ctx);
         if (err) {
-            string_array_free(profiles);
-            return error_wrap(
+            err = error_wrap(
                 err, "Failed to create ignore context for profile '%s'",
                 profile
             );
+            goto cleanup;
         }
 
-        /* Test the path */
         ignore_test_result_t result;
         err = ignore_test_path(ctx, effective_path, is_directory, &result);
         ignore_context_free(ctx);
-
         if (err) {
-            string_array_free(profiles);
-            return error_wrap(
-                err, "Failed to test path against profile '%s'",
-                profile
+            err = error_wrap(
+                err, "Failed to test path against profile '%s'", profile
             );
+            goto cleanup;
         }
 
-        /* Print result */
-        if (result.ignored) {
+        bool ignored_here = result.ignored;
+        bool by_source = false;
+        if (!ignored_here) {
+            by_source = source_gitignore_matches(
+                source_filter, effective_path, is_directory, out
+            );
+            ignored_here = by_source;
+        }
+
+        if (ignored_here) {
             output_styled(
                 out, OUTPUT_NORMAL, "{red}✗{reset} Profile '%s': IGNORED\n",
                 profile
             );
             if (output_is_verbose(out)) {
-                output_info(
-                    out, OUTPUT_NORMAL, "    Reason: %s",
-                    ignore_source_to_string(result.source)
-                );
+                const char *reason = by_source
+                    ? "source .gitignore"
+                    : ignore_source_to_string(result.source);
+                output_info(out, OUTPUT_NORMAL, "    Reason: %s", reason);
             }
             any_ignored = true;
         } else {
             output_success(
-                out, OUTPUT_NORMAL, "Profile '%s': NOT IGNORED",
-                profile
+                out, OUTPUT_NORMAL, "Profile '%s': NOT IGNORED", profile
             );
         }
     }
-
-    string_array_free(profiles);
 
     /* Summary */
     output_newline(out, OUTPUT_NORMAL);
@@ -994,7 +1053,10 @@ static error_t *test_path_ignore(
         );
     }
 
-    return NULL;
+cleanup:
+    string_array_free(profiles);
+    source_filter_free(source_filter);
+    return err;
 }
 
 /**

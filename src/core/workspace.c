@@ -39,6 +39,7 @@
 #include "infra/content.h"
 #include "sys/filesystem.h"
 #include "sys/gitops.h"
+#include "sys/source.h"
 #include "utils/privilege.h"
 
 /**
@@ -1476,6 +1477,7 @@ static error_t *scan_directory_for_untracked(
     const char *storage_prefix,
     const char *profile,
     ignore_context_t *ignore_ctx,
+    source_filter_t *source_filter,
     workspace_t *ws,
     int depth
 ) {
@@ -1521,15 +1523,21 @@ static error_t *scan_directory_for_untracked(
 
         /* Check if ignored */
         bool is_dir = S_ISDIR(st.st_mode);
+        bool ignored = false;
         if (ignore_ctx) {
-            bool ignored = false;
             error_t *err = ignore_should_ignore(ignore_ctx, full_path, is_dir, &ignored);
-            if (!err && ignored) {
-                free(full_path);
-                errno = 0;
-                continue;
-            }
-            error_free(err);  /* Ignore errors in ignore checking */
+            error_free(err);  /* Non-fatal: ignore checking errors fall through */
+        }
+        if (!ignored && source_filter) {
+            error_t *err = source_filter_is_excluded(
+                source_filter, full_path, is_dir, &ignored
+            );
+            error_free(err);  /* Non-fatal: layer-5 errors fall through */
+        }
+        if (ignored) {
+            free(full_path);
+            errno = 0;
+            continue;
         }
 
         if (is_dir) {
@@ -1546,6 +1554,7 @@ static error_t *scan_directory_for_untracked(
                 sub_storage_prefix,
                 profile,
                 ignore_ctx,
+                source_filter,
                 ws,
                 depth + 1
             );
@@ -1650,6 +1659,24 @@ static error_t *analyze_untracked_files(
         return NULL;  /* No profiles to analyze */
     }
 
+    /* Source-tree .gitignore filter — built once for the whole scan so
+     * the discovered source-repo handle is reused across every profile
+     * and directory. Driven by config; policy decision lives here, not
+     * in the ignore module. Non-fatal on build failure: we continue
+     * without layer-5 filtering rather than blocking status. */
+    source_filter_t *source_filter = NULL;
+    if (config && config->respect_gitignore) {
+        error_t *sf_err = source_filter_create(&source_filter);
+        if (sf_err) {
+            fprintf(
+                stderr,
+                "warning: failed to build source .gitignore filter: %s\n",
+                sf_err->message
+            );
+            error_free(sf_err);
+        }
+    }
+
     /* Scan tracked directories from each enabled profile's state database */
     for (size_t p = 0; p < ws->profiles->count; p++) {
         const char *profile = ws->profiles->items[p];
@@ -1747,6 +1774,7 @@ static error_t *analyze_untracked_files(
                 dir_entry->storage_path,   /* Portable storage path */
                 profile,
                 ignore_ctx,
+                source_filter,
                 ws,
                 0                          /* Initial depth */
             );
@@ -1766,6 +1794,7 @@ static error_t *analyze_untracked_files(
         ignore_context_free(ignore_ctx);
     }
 
+    source_filter_free(source_filter);
     return NULL;
 }
 

@@ -8,24 +8,20 @@
  * last-match-wins semantics give the right verdict for free, including
  * cross-layer negation (e.g. baseline `*.log` + profile `!debug.log`).
  *
- * Source .gitignore (layer 5) is the one place libgit2 still does the
- * matching: it lives on a *foreign* repository (the user's source tree),
- * which libgit2 already knows how to walk with nested .gitignore
- * inheritance and core.excludesfile support. The cache batches queries
- * against the same source tree.
+ * Source-tree `.gitignore` — the rules of a foreign git repo the user
+ * is adding files from — is a separate mechanism in `sys/source.h`.
+ * Callers compose the two explicitly.
  */
 
 #include "core/ignore.h"
 
 #include <config.h>
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "base/arena.h"
 #include "base/error.h"
 #include "base/gitignore.h"
-#include "base/string.h"
 #include "sys/gitops.h"
 
 /* Input validation limits.
@@ -42,26 +38,16 @@
 #define IGNORE_ARENA_INITIAL_CAPACITY (8 * 1024)
 
 /**
- * Ignore context — arena + compiled ruleset + layer-5 cache.
+ * Ignore context — arena-backed compiled ruleset.
  *
  * Rules compile into a single gitignore_ruleset_t at creation. Matching
  * is pure in-memory evaluation; no mutation of the dotta repository
  * handle occurs. Multiple contexts against the same repo are safe and
  * independent.
- *
- * Layer 5 (source .gitignore) stays on libgit2 because it queries a
- * different repository: the source tree the user is adding from. That
- * repo's ignore machinery (nested .gitignore inheritance, attr stack,
- * core.excludesfile) earns its keep there, and the query never touches
- * the dotta repo handle.
  */
 struct ignore_context {
     arena_t *arena;                     /* owns ruleset + pattern copies */
     gitignore_ruleset_t *ruleset;       /* baseline/builtin + profile + config + CLI */
-    git_repository *cached_source_repo; /* owned; layer-5 cache */
-    char *cached_source_workdir;        /* owned; layer-5 cache */
-    bool respect_gitignore;
-    bool layer5_warning_emitted;        /* suppress repeat stderr warnings */
 };
 
 /**
@@ -169,140 +155,6 @@ static const char *PROFILE_DOTTAIGNORE =
     "#   - Use / at start to anchor to repo root\n"
     "\n"
     "# Add your profile-specific patterns below:\n";
-
-/**
- * Check if path is ignored by source .gitignore (with caching).
- *
- * Layer 5 alone still runs through libgit2: it queries a foreign repo
- * (the user's source tree), which libgit2 walks with nested .gitignore
- * inheritance. The cache reuses the last-discovered repo when the
- * queried path falls under the same workdir.
- */
-static error_t *matches_source_gitignore(
-    ignore_context_t *ctx,
-    const char *abs_path,
-    bool is_directory,
-    bool *matched
-) {
-    CHECK_NULL(ctx);
-    CHECK_NULL(abs_path);
-    CHECK_NULL(matched);
-
-    *matched = false;
-
-    /* Fast path: cached repo still covers this path */
-    if (ctx->cached_source_repo && ctx->cached_source_workdir) {
-        if (str_starts_with(abs_path, ctx->cached_source_workdir)) {
-            const char *rel_path = abs_path + strlen(ctx->cached_source_workdir);
-
-            while (*rel_path == '/') {
-                rel_path++;
-            }
-
-            if (*rel_path == '\0') {
-                return NULL;
-            }
-
-            /* Append '/' for directories so directory-only patterns can match */
-            char *dir_path = NULL;
-            const char *check_path = rel_path;
-            if (is_directory && rel_path[0] != '\0' &&
-                rel_path[strlen(rel_path) - 1] != '/') {
-                dir_path = str_format("%s/", rel_path);
-                if (dir_path) check_path = dir_path;
-            }
-
-            int ignored = 0;
-            int git_err = git_ignore_path_is_ignored(
-                &ignored, ctx->cached_source_repo, check_path
-            );
-            free(dir_path);
-            if (git_err < 0) {
-                return error_from_git(git_err);
-            }
-
-            *matched = (ignored == 1);
-            return NULL;
-        }
-
-        /* Path outside cached workdir — invalidate */
-        git_repository_free(ctx->cached_source_repo);
-        ctx->cached_source_repo = NULL;
-        free(ctx->cached_source_workdir);
-        ctx->cached_source_workdir = NULL;
-    }
-
-    /* Slow path: discover and open */
-    git_buf discovered_path = GIT_BUF_INIT;
-    int git_err = git_repository_discover(
-        &discovered_path, abs_path,
-        0,    /* don't cross filesystem boundaries */
-        NULL  /* no ceiling directories */
-    );
-    if (git_err < 0) {
-        /* Not in a git repository — fine, not an error */
-        if (git_err == GIT_ENOTFOUND) {
-            return NULL;
-        }
-        return error_from_git(git_err);
-    }
-
-    git_repository *source_repo = NULL;
-    git_err = git_repository_open(&source_repo, discovered_path.ptr);
-    git_buf_dispose(&discovered_path);
-    if (git_err < 0) {
-        return error_from_git(git_err);
-    }
-
-    const char *workdir = git_repository_workdir(source_repo);
-    if (!workdir) {
-        /* Bare repo — no workdir, can't have ignored files */
-        git_repository_free(source_repo);
-        return NULL;
-    }
-
-    const char *rel_path = abs_path;
-    if (str_starts_with(abs_path, workdir)) {
-        rel_path = abs_path + strlen(workdir);
-        while (*rel_path == '/') {
-            rel_path++;
-        }
-    }
-
-    if (*rel_path == '\0') {
-        git_repository_free(source_repo);
-        return NULL;
-    }
-
-    char *dir_path = NULL;
-    const char *check_path = rel_path;
-    if (is_directory && rel_path[0] != '\0' &&
-        rel_path[strlen(rel_path) - 1] != '/') {
-        dir_path = str_format("%s/", rel_path);
-        if (dir_path) check_path = dir_path;
-    }
-
-    int ignored = 0;
-    git_err = git_ignore_path_is_ignored(&ignored, source_repo, check_path);
-    free(dir_path);
-    if (git_err < 0) {
-        git_repository_free(source_repo);
-        return error_from_git(git_err);
-    }
-
-    *matched = (ignored == 1);
-
-    /* Cache for future queries */
-    ctx->cached_source_repo = source_repo;
-    ctx->cached_source_workdir = strdup(workdir);
-    if (!ctx->cached_source_workdir) {
-        /* Cache write failed — drop the repo, keep the result */
-        git_repository_free(source_repo);
-        ctx->cached_source_repo = NULL;
-    }
-
-    return NULL;
-}
 
 error_t *ignore_load_raw_content(
     git_repository *repo,
@@ -518,8 +370,6 @@ error_t *ignore_context_create(
         }
     }
 
-    ctx->respect_gitignore = config ? config->respect_gitignore : true;
-
     *out = ctx;
     return NULL;
 }
@@ -531,12 +381,6 @@ void ignore_context_free(ignore_context_t *ctx) {
      * arena_destroy(NULL) is a no-op — safe for partial-state contexts
      * (e.g., allocation failure mid-create). */
     arena_destroy(ctx->arena);
-
-    /* Layer-5 cache */
-    if (ctx->cached_source_repo) {
-        git_repository_free(ctx->cached_source_repo);
-    }
-    free(ctx->cached_source_workdir);
 
     free(ctx);
 }
@@ -554,45 +398,14 @@ error_t *ignore_test_path(
     result->ignored = false;
     result->source = IGNORE_SOURCE_NONE;
 
-    /* Layers 1-4: compiled ruleset. gitignore_eval scans reverse
+    /* Evaluate the compiled ruleset. gitignore_eval scans in reverse
      * insertion order (CLI → config → profile → baseline); the first
-     * match decides. Match.origin exposes the source verbatim. */
+     * match decides. match.origin exposes the winning source verbatim. */
     gitignore_match_t match;
     gitignore_eval(ctx->ruleset, path, is_directory, &match);
     if (match.decided && match.ignored) {
         result->ignored = true;
         result->source = (ignore_source_t) match.origin;
-        return NULL;
-    }
-
-    /* Layer 5: source .gitignore (when enabled).
-     *
-     * Requires an absolute path to discover the containing git
-     * repository. A relative path cannot be resolved to a repo and
-     * is silently skipped — callers that want full layer-5 coverage
-     * must pass absolute paths. */
-    if (ctx->respect_gitignore && path[0] == '/') {
-        bool matched = false;
-        error_t *err = matches_source_gitignore(ctx, path, is_directory, &matched);
-        if (err) {
-            /* Layer-5 errors are non-fatal (foreign repo, not our
-             * problem to fix), but not silent: emit one warning per
-             * context so the user knows filtering is incomplete, then
-             * suppress repeats to avoid flooding a multi-path scan. */
-            if (!ctx->layer5_warning_emitted) {
-                fprintf(
-                    stderr,
-                    "dotta: warning: source .gitignore check failed for '%s': %s\n",
-                    path, error_message(err)
-                );
-                ctx->layer5_warning_emitted = true;
-            }
-            error_free(err);
-        } else if (matched) {
-            result->ignored = true;
-            result->source = IGNORE_SOURCE_SOURCE_GITIGNORE;
-            return NULL;
-        }
     }
 
     return NULL;
@@ -652,8 +465,6 @@ const char *ignore_source_to_string(ignore_source_t source) {
             return "built-in defaults";
         case IGNORE_SOURCE_CONFIG:
             return "config file patterns";
-        case IGNORE_SOURCE_SOURCE_GITIGNORE:
-            return "source .gitignore";
         default:
             return "unknown";
     }

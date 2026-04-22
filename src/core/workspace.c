@@ -27,6 +27,7 @@
 #include "base/arena.h"
 #include "base/array.h"
 #include "base/error.h"
+#include "base/gitignore.h"
 #include "base/hashmap.h"
 #include "base/string.h"
 #include "core/ignore.h"
@@ -1476,7 +1477,7 @@ static error_t *scan_directory_for_untracked(
     const char *dir_path,
     const char *storage_prefix,
     const char *profile,
-    ignore_context_t *ignore_ctx,
+    const gitignore_ruleset_t *rules,
     source_filter_t *source_filter,
     workspace_t *ws,
     int depth
@@ -1523,11 +1524,7 @@ static error_t *scan_directory_for_untracked(
 
         /* Check if ignored */
         bool is_dir = S_ISDIR(st.st_mode);
-        bool ignored = false;
-        if (ignore_ctx) {
-            error_t *err = ignore_should_ignore(ignore_ctx, full_path, is_dir, &ignored);
-            error_free(err);  /* Non-fatal: ignore checking errors fall through */
-        }
+        bool ignored = rules && gitignore_is_ignored(rules, full_path, is_dir);
         if (!ignored && source_filter) {
             error_t *err = source_filter_is_excluded(
                 source_filter, full_path, is_dir, &ignored
@@ -1553,7 +1550,7 @@ static error_t *scan_directory_for_untracked(
                 full_path,
                 sub_storage_prefix,
                 profile,
-                ignore_ctx,
+                rules,
                 source_filter,
                 ws,
                 depth + 1
@@ -1677,6 +1674,22 @@ static error_t *analyze_untracked_files(
         }
     }
 
+    /* Layered-rules builder — one per scan. Baseline and config are
+     * loaded here; each profile's `.dottaignore` is parsed once on
+     * first use and cached, so the profile loop below amortises the
+     * cost across the whole status (the previous shape rebuilt an
+     * entire context per profile, re-loading the baseline each time). */
+    ignore_rules_t *ignore_rules = NULL;
+    {
+        error_t *init_err = ignore_rules_create(
+            ws->repo, config, NULL, 0, &ignore_rules
+        );
+        if (init_err) {
+            source_filter_free(source_filter);
+            return error_wrap(init_err, "Failed to build ignore rules");
+        }
+    }
+
     /* Scan tracked directories from each enabled profile's state database */
     for (size_t p = 0; p < ws->profiles->count; p++) {
         const char *profile = ws->profiles->items[p];
@@ -1702,22 +1715,17 @@ static error_t *analyze_untracked_files(
             continue;
         }
 
-        /* Create profile-specific ignore context once for all directories.
+        /* Resolve the profile-specific ruleset (memoised in the builder).
          *
          * Fatal on failure: scanning a profile without its ignore rules
          * risks reporting genuinely ignored files as untracked, which
          * the user could then `dotta add` by accident. A corrupt
          * .dottaignore must surface so the user can fix it. */
-        ignore_context_t *ignore_ctx = NULL;
-        err = ignore_context_create(
-            ws->repo,
-            config,
-            profile,
-            NULL,
-            0,
-            &ignore_ctx
-        );
+        const gitignore_ruleset_t *profile_rules = NULL;
+        err = ignore_rules_for_profile(ignore_rules, profile, &profile_rules);
         if (err) {
+            ignore_rules_free(ignore_rules);
+            source_filter_free(source_filter);
             return error_wrap(
                 err, "Failed to load ignore patterns for profile '%s'", profile
             );
@@ -1773,7 +1781,7 @@ static error_t *analyze_untracked_files(
                 filesystem_path,           /* Already resolved filesystem path */
                 dir_entry->storage_path,   /* Portable storage path */
                 profile,
-                ignore_ctx,
+                profile_rules,
                 source_filter,
                 ws,
                 0                          /* Initial depth */
@@ -1789,11 +1797,9 @@ static error_t *analyze_untracked_files(
                 err = NULL;
             }
         }
-
-        /* Free ignore context after scanning all directories in this profile */
-        ignore_context_free(ignore_ctx);
     }
 
+    ignore_rules_free(ignore_rules);
     source_filter_free(source_filter);
     return NULL;
 }

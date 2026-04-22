@@ -14,6 +14,7 @@
 #include "base/args.h"
 #include "base/array.h"
 #include "base/error.h"
+#include "base/gitignore.h"
 #include "base/output.h"
 #include "base/string.h"
 #include "core/ignore.h"
@@ -513,7 +514,7 @@ static error_t *edit_dottaignore(
 
     char *existing_content = NULL;
     size_t existing_size = 0;
-    error_t *err = ignore_load_raw_content(
+    error_t *err = ignore_blob_read(
         repo, scope->branch_name, &existing_content, &existing_size
     );
     if (err) {
@@ -537,11 +538,30 @@ static error_t *edit_dottaignore(
     err = edit_content_via_editor(
         seed, seed_size, &new_content, &new_size
     );
-    free(existing_content);
     if (err) {
+        free(existing_content);
         return error_wrap(
             err, "Failed to edit %s .dottaignore", scope->display_label
         );
+    }
+
+    /* No-op detection: compare against the pre-edit blob. When the
+     * blob was absent before the edit, any non-empty edit counts as a
+     * change (the editor only produced content because the default
+     * seed was non-empty; a user who wiped the buffer to empty still
+     * writes an empty blob intentionally). */
+    bool unchanged = existing_content
+        && new_size == existing_size
+        && (new_size == 0 || memcmp(new_content, existing_content, new_size) == 0);
+    free(existing_content);
+
+    if (unchanged) {
+        free(new_content);
+        output_info(
+            out, OUTPUT_NORMAL, "No changes to %s .dottaignore",
+            scope->display_label
+        );
+        return NULL;
     }
 
     char *commit_msg = str_format(
@@ -552,16 +572,8 @@ static error_t *edit_dottaignore(
         return ERROR(ERR_MEMORY, "Failed to allocate commit message");
     }
 
-    bool was_modified = false;
-    err = gitops_update_file(
-        repo,
-        scope->branch_name,
-        ".dottaignore",
-        new_content,
-        new_size,
-        commit_msg,
-        GIT_FILEMODE_BLOB,
-        &was_modified
+    err = ignore_blob_write(
+        repo, scope->branch_name, new_content, new_size, commit_msg
     );
     free(commit_msg);
     free(new_content);
@@ -572,15 +584,7 @@ static error_t *edit_dottaignore(
         );
     }
 
-    if (!was_modified) {
-        output_info(
-            out, OUTPUT_NORMAL, "No changes to %s .dottaignore",
-            scope->display_label
-        );
-        return NULL;
-    }
-
-    /* INDEX and workdir are kept in sync by gitops_update_file for the
+    /* INDEX and workdir are kept in sync by ignore_blob_write for the
      * current-branch case — no explicit worktree sync needed here. */
 
     output_success(
@@ -616,7 +620,7 @@ static error_t *modify_dottaignore(
     CHECK_NULL(scope);
 
     char *owned = NULL;
-    error_t *err = ignore_load_raw_content(
+    error_t *err = ignore_blob_read(
         repo, scope->branch_name, &owned, NULL
     );
     if (err) {
@@ -732,15 +736,9 @@ static error_t *modify_dottaignore(
         return ERROR(ERR_MEMORY, "Failed to allocate commit message");
     }
 
-    err = gitops_update_file(
-        repo,
-        scope->branch_name,
-        ".dottaignore",
-        owned,
-        strlen(owned),
-        commit_msg,
-        GIT_FILEMODE_BLOB,
-        NULL
+    err = ignore_blob_write(
+        repo, scope->branch_name,
+        owned, strlen(owned), commit_msg
     );
 
     free(commit_msg);
@@ -752,7 +750,7 @@ static error_t *modify_dottaignore(
         );
     }
 
-    /* INDEX and workdir are kept in sync by gitops_update_file for the
+    /* INDEX and workdir are kept in sync by ignore_blob_write for the
      * current-branch case — no explicit worktree sync needed here. */
 
     if (total_added > 0) {
@@ -869,8 +867,21 @@ static error_t *test_path_ignore(
         }
     }
 
+    /* Layered-rules builder — loads baseline + config once, memoises
+     * each profile's ruleset on first request. */
+    ignore_rules_t *ignore_rules = NULL;
+    error_t *err = ignore_rules_create(
+        repo, config,
+        /* CLI excludes are add/update specific; --test has none. */
+        NULL, 0,
+        &ignore_rules
+    );
+    if (err) {
+        source_filter_free(source_filter);
+        return error_wrap(err, "Failed to build ignore rules");
+    }
+
     string_array_t *profiles = NULL;
-    error_t *err = NULL;
 
     /* If specific profile requested, test only that one */
     if (specific_profile) {
@@ -881,35 +892,31 @@ static error_t *test_path_ignore(
             goto cleanup;
         }
 
-        ignore_context_t *ctx = NULL;
-        err = ignore_context_create(
-            repo, config, specific_profile, NULL, 0, &ctx
-        );
+        const gitignore_ruleset_t *rules = NULL;
+        err = ignore_rules_for_profile(ignore_rules, specific_profile, &rules);
         if (err) {
-            err = error_wrap(err, "Failed to create ignore context");
+            err = error_wrap(
+                err, "Failed to load ignore rules for profile '%s'",
+                specific_profile
+            );
             goto cleanup;
         }
 
-        ignore_test_result_t result;
-        err = ignore_test_path(ctx, effective_path, is_directory, &result);
-        ignore_context_free(ctx);
-        if (err) {
-            err = error_wrap(err, "Failed to test path");
-            goto cleanup;
-        }
+        gitignore_match_t match;
+        gitignore_eval(rules, effective_path, is_directory, &match);
 
-        if (result.ignored) {
+        if (match.decided && match.ignored) {
             output_styled(
                 out, OUTPUT_NORMAL, "{red}✗{reset} IGNORED by profile '%s'\n",
                 specific_profile
             );
             output_info(
                 out, OUTPUT_NORMAL, "  Reason: %s",
-                ignore_source_to_string(result.source)
+                ignore_origin_describe((ignore_origin_t) match.origin)
             );
         } else if (source_gitignore_matches(
             source_filter, effective_path, is_directory, out
-        )) {
+            )) {
             output_styled(
                 out, OUTPUT_NORMAL, "{red}✗{reset} IGNORED by profile '%s'\n",
                 specific_profile
@@ -938,7 +945,9 @@ static error_t *test_path_ignore(
         error_free(err);
         err = NULL;
 
-        /* No enabled profiles - test against baseline .dottaignore only */
+        /* No enabled profiles - test against baseline + config only.
+         * `ignore_rules_for_profile(..., NULL, ...)` returns the
+         * ruleset with no per-profile layer. */
         output_info(
             out, OUTPUT_NORMAL, "No enabled profiles found"
         );
@@ -947,30 +956,25 @@ static error_t *test_path_ignore(
             "Testing against baseline .dottaignore and config patterns only"
         );
 
-        ignore_context_t *ctx = NULL;
-        err = ignore_context_create(repo, config, NULL, NULL, 0, &ctx);
+        const gitignore_ruleset_t *rules = NULL;
+        err = ignore_rules_for_profile(ignore_rules, NULL, &rules);
         if (err) {
-            err = error_wrap(err, "Failed to create ignore context");
+            err = error_wrap(err, "Failed to build ignore rules");
             goto cleanup;
         }
 
-        ignore_test_result_t result;
-        err = ignore_test_path(ctx, effective_path, is_directory, &result);
-        ignore_context_free(ctx);
-        if (err) {
-            err = error_wrap(err, "Failed to test path");
-            goto cleanup;
-        }
+        gitignore_match_t match;
+        gitignore_eval(rules, effective_path, is_directory, &match);
 
-        if (result.ignored) {
+        if (match.decided && match.ignored) {
             output_styled(out, OUTPUT_NORMAL, "{red}✗{reset} IGNORED\n");
             output_info(
                 out, OUTPUT_NORMAL, "  Reason: %s",
-                ignore_source_to_string(result.source)
+                ignore_origin_describe((ignore_origin_t) match.origin)
             );
         } else if (source_gitignore_matches(
             source_filter, effective_path, is_directory, out
-        )) {
+            )) {
             output_styled(out, OUTPUT_NORMAL, "{red}✗{reset} IGNORED\n");
             output_info(
                 out, OUTPUT_NORMAL, "  Reason: source .gitignore"
@@ -991,27 +995,19 @@ static error_t *test_path_ignore(
     for (size_t i = 0; i < profiles->count; i++) {
         const char *profile = profiles->items[i];
 
-        ignore_context_t *ctx = NULL;
-        err = ignore_context_create(repo, config, profile, NULL, 0, &ctx);
+        const gitignore_ruleset_t *rules = NULL;
+        err = ignore_rules_for_profile(ignore_rules, profile, &rules);
         if (err) {
             err = error_wrap(
-                err, "Failed to create ignore context for profile '%s'",
-                profile
+                err, "Failed to load ignore rules for profile '%s'", profile
             );
             goto cleanup;
         }
 
-        ignore_test_result_t result;
-        err = ignore_test_path(ctx, effective_path, is_directory, &result);
-        ignore_context_free(ctx);
-        if (err) {
-            err = error_wrap(
-                err, "Failed to test path against profile '%s'", profile
-            );
-            goto cleanup;
-        }
+        gitignore_match_t match;
+        gitignore_eval(rules, effective_path, is_directory, &match);
 
-        bool ignored_here = result.ignored;
+        bool ignored_here = match.decided && match.ignored;
         bool by_source = false;
         if (!ignored_here) {
             by_source = source_gitignore_matches(
@@ -1028,7 +1024,7 @@ static error_t *test_path_ignore(
             if (output_is_verbose(out)) {
                 const char *reason = by_source
                     ? "source .gitignore"
-                    : ignore_source_to_string(result.source);
+                    : ignore_origin_describe((ignore_origin_t) match.origin);
                 output_info(out, OUTPUT_NORMAL, "    Reason: %s", reason);
             }
             any_ignored = true;
@@ -1056,6 +1052,7 @@ static error_t *test_path_ignore(
 cleanup:
     string_array_free(profiles);
     source_filter_free(source_filter);
+    ignore_rules_free(ignore_rules);
     return err;
 }
 
@@ -1081,7 +1078,7 @@ error_t *cmd_ignore(const dotta_ctx_t *ctx, const cmd_ignore_options_t *opts) {
      * Discoverability aid — lets users inspect the safety patterns
      * without grepping source or cloning the repo. */
     if (opts->list_defaults) {
-        output_print(out, OUTPUT_NORMAL, "%s", ignore_default_dottaignore_content());
+        output_print(out, OUTPUT_NORMAL, "%s", ignore_baseline_defaults());
         return NULL;
     }
 
@@ -1114,13 +1111,13 @@ error_t *cmd_ignore(const dotta_ctx_t *ctx, const cmd_ignore_options_t *opts) {
         scope = (dottaignore_scope_t){
             .branch_name = opts->profile,
             .display_label = profile_label,
-            .default_seed = ignore_profile_dottaignore_template(),
+            .default_seed = ignore_profile_template(),
         };
     } else {
         scope = (dottaignore_scope_t){
             .branch_name = "dotta-worktree",
             .display_label = "baseline",
-            .default_seed = ignore_default_dottaignore_content(),
+            .default_seed = ignore_baseline_defaults(),
         };
     }
 

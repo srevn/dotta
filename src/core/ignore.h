@@ -1,31 +1,39 @@
 /**
- * ignore.h - Multi-layered ignore pattern system
+ * ignore.h - Layered `.dottaignore` ruleset builder and persistence.
  *
- * All user-authored rules (baseline, profile, config, CLI) compile into
- * a single gitignore ruleset at context creation. Rules are appended in
- * precedence order and evaluated with last-match-wins semantics, so
- * `!`-negation works across layers — a profile can un-ignore a baseline
- * pattern, config can un-ignore a profile pattern, and CLI (highest
- * precedence) can un-ignore anything below.
+ * Dotta composes four user-authored layers into a single gitignore
+ * ruleset per operation:
  *
- * Precedence (lowest to highest):
- *   1. Baseline .dottaignore on `dotta-worktree` (machine-local;
- *      seeded by `dotta init`/`clone`, editable via `dotta ignore`).
- *      If absent, compiled defaults are used instead (origin=BUILTIN).
- *   2. Profile .dottaignore on the profile branch.
+ *   1. Baseline `.dottaignore` on `dotta-worktree` (machine-local;
+ *      seeded by `dotta init` / `dotta clone`, editable via
+ *      `dotta ignore`). Falls back to compiled defaults when absent.
+ *   2. Profile `.dottaignore` on the profile branch.
  *   3. Config ignore patterns (user-level rules from config.toml).
- *   4. CLI --exclude flags (per-operation, highest priority).
+ *   4. CLI `--exclude` flags (per-operation, highest priority).
  *
- * The source tree's own `.gitignore` (when the user is adding files
- * from inside another git repo) is a separate mechanism: see
- * `sys/source.h` for `source_filter_t`. Callers that want that
- * behaviour construct a `source_filter_t` alongside the ignore
- * context and consult both explicitly.
+ * Rules from later layers override earlier ones via last-match-wins
+ * semantics, so cross-layer negation works: a profile can un-ignore a
+ * baseline pattern, CLI can un-ignore anything below, etc.
+ *
+ * The source tree's own `.gitignore` (when the user runs `dotta add`
+ * against files that live inside a different git repository) is a
+ * separate mechanism in `sys/source.h`. Callers that want that
+ * behaviour build a `source_filter_t` alongside and consult it
+ * explicitly.
+ *
+ * Runtime shape
+ * -------------
+ * A consumer builds one `ignore_rules_t` per command via
+ * `ignore_rules_create`. Profile-specific rulesets are produced on
+ * demand by `ignore_rules_for_profile`, which returns a borrowed
+ * `const gitignore_ruleset_t *` the caller passes directly to
+ * `gitignore_is_ignored()` or `gitignore_eval()`. Per-profile
+ * rulesets are memoised for the builder's lifetime.
  *
  * Full .gitignore grammar is supported:
- *   - Glob patterns (*, ?, [abc]) and recursive globs (double-star)
+ *   - Glob patterns (*, ?, [abc]) and `**` recursive globs
  *   - Directory matching (trailing /)
- *   - Negation patterns (!) — now honored in CLI and config too
+ *   - Negation patterns (!)
  *   - Comment lines (#)
  *   - Anchored patterns (leading /)
  *
@@ -42,199 +50,229 @@
 #include <stdbool.h>
 #include <types.h>
 
-/**
- * Ignore context — a compiled `.dottaignore` ruleset.
- *
- * Create once per operation (or per profile, when iterating), reuse for
- * multiple path checks. The context does not mutate the dotta repository
- * handle, so multiple contexts against the same repo are safe and
- * independent.
- */
-typedef struct ignore_context ignore_context_t;
+/* Forward declarations — the full headers pull in plenty of machinery
+ * we do not want every consumer of core/ignore.h to transitively
+ * include. Both types already typedef identically elsewhere */
+typedef struct gitignore_ruleset gitignore_ruleset_t;
+typedef struct worktree_handle worktree_handle_t;
 
 /**
- * Ignore source layer (for diagnostic purposes)
+ * Layered-ruleset builder — command-scoped.
+ *
+ * Loads the common layers (baseline / builtin, config, CLI) once on
+ * construction and builds per-profile rulesets lazily. Each ruleset
+ * returned by `ignore_rules_for_profile` is a self-contained evaluator
+ * usable with any `base/gitignore` primitive.
+ *
+ * Lifetime: command-scoped. Per-profile rulesets are memoised for the
+ * life of the builder; pointers returned by `ignore_rules_for_profile`
+ * stay valid until `ignore_rules_free`.
+ *
+ * Thread safety: not thread-safe.
+ */
+typedef struct ignore_rules ignore_rules_t;
+
+/**
+ * Origin of the rule that decided a match.
+ *
+ * Declared in ascending precedence so a larger numeric value means
+ * "this layer overrides lower ones." Values round-trip through
+ * `gitignore_origin_t` (8-bit) when the builder tags rules during
+ * append; a `_Static_assert` in ignore.c guards against truncation if
+ * this enum ever grows past UINT8_MAX.
  */
 typedef enum {
-    IGNORE_SOURCE_NONE = 0,              /* Not ignored */
-    IGNORE_SOURCE_CLI,                   /* CLI --exclude patterns */
-    IGNORE_SOURCE_PROFILE_DOTTAIGNORE,   /* Profile-specific .dottaignore */
-    IGNORE_SOURCE_BASELINE_DOTTAIGNORE,  /* Baseline .dottaignore on dotta-worktree */
-    IGNORE_SOURCE_BUILTIN,               /* Compiled defaults (baseline fallback) */
-    IGNORE_SOURCE_CONFIG                 /* Config file patterns */
-} ignore_source_t;
+    IGNORE_ORIGIN_NONE = 0,   /* No rule matched */
+    IGNORE_ORIGIN_BUILTIN,    /* Compiled defaults (fallback when baseline absent) */
+    IGNORE_ORIGIN_BASELINE,   /* Baseline .dottaignore on dotta-worktree */
+    IGNORE_ORIGIN_PROFILE,    /* Profile .dottaignore on its branch */
+    IGNORE_ORIGIN_CONFIG,     /* Config file patterns */
+    IGNORE_ORIGIN_CLI,        /* --exclude flags (highest priority) */
+    IGNORE_ORIGIN_COUNT_      /* Sentinel; not a value */
+} ignore_origin_t;
 
 /**
- * Test result with diagnostic information
- */
-typedef struct {
-    bool ignored;               /* Whether path is ignored */
-    ignore_source_t source;     /* Which layer caused the ignore */
-} ignore_test_result_t;
-
-/**
- * Create ignore context.
+ * Create the layered-ruleset builder.
  *
- * Loads baseline and profile .dottaignore from the repository, then
- * appends config patterns and CLI excludes, compiling all layers into
- * a single ruleset. Returns an owned context the caller frees with
- * `ignore_context_free`.
+ * Loads the baseline `.dottaignore` from `dotta-worktree` (falling
+ * back to compiled defaults when absent) and captures the config and
+ * CLI pattern arrays for per-profile composition. Does not touch the
+ * profile branch until `ignore_rules_for_profile` is called.
  *
- * Lifetime:
- *   - `repo` is read only during construction (baseline/profile tree
- *     loads); it does not need to outlive the returned context.
- *   - `config`, `profile`, and `cli_excludes` are copied internally.
- *   - Multiple contexts against the same repo are safe and independent.
+ * Lifetime / ownership:
+ *   - `repo` is borrowed; the builder must not outlive the repo handle.
+ *   - `config->ignore_patterns` and `cli_excludes` are borrowed; the
+ *     backing arrays and their string entries must outlive the
+ *     builder. In practice both are command-scoped.
  *
- * Input validation:
- *   - Maximum CLI patterns: 10,000 (ERR_VALIDATION if exceeded).
- *   - Maximum config patterns: 10,000 (ERR_VALIDATION if exceeded).
- *   - Maximum pattern length: 4,096 chars (ERR_VALIDATION if exceeded).
- *   - Maximum .dottaignore blob size: 1 MB (ERR_VALIDATION if exceeded).
+ * Input validation (enforced by the underlying gitignore engine):
+ *   - Per-pattern length: 4096 bytes.
+ *   - Per-ruleset rule count: 10,000.
+ *   - `.dottaignore` blob size: 1 MB.
  *
- * @param repo Repository — borrowed only during this call, can be NULL
- * @param config Configuration — can be NULL
- * @param profile Profile name — can be NULL or empty
- * @param cli_excludes CLI --exclude patterns — can be NULL
- * @param cli_exclude_count Number of CLI patterns
- * @param out Output context (must not be NULL)
+ * @param repo         Repository (must not be NULL)
+ * @param config       Configuration (may be NULL)
+ * @param cli_excludes CLI --exclude patterns (may be NULL when count == 0)
+ * @param cli_count    Number of CLI patterns
+ * @param out          Output handle (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *ignore_context_create(
+error_t *ignore_rules_create(
     git_repository *repo,
     const config_t *config,
+    char *const *cli_excludes,
+    size_t cli_count,
+    ignore_rules_t **out
+);
+
+/**
+ * Free the builder and every memoised ruleset it holds.
+ *
+ * @param rules Builder (may be NULL)
+ */
+void ignore_rules_free(ignore_rules_t *rules);
+
+/**
+ * Resolve the ruleset to use for `profile`.
+ *
+ * The returned pointer is borrowed from the builder's arena and
+ * stays valid until `ignore_rules_free`. Repeated calls with the
+ * same profile name return the same pointer — the ruleset is built
+ * on first use and cached.
+ *
+ * `profile` may be NULL or empty to request the baseline-only
+ * ruleset (baseline/builtin + config + CLI, no per-profile layer).
+ *
+ * A non-existent profile branch is not an error: the profile layer
+ * simply contributes no rules. Callers that need "profile exists"
+ * semantics check with `profile_exists` first.
+ *
+ * @param rules   Builder (must not be NULL)
+ * @param profile Profile name (may be NULL or "")
+ * @param out     Output ruleset pointer (must not be NULL)
+ * @return Error or NULL on success
+ */
+error_t *ignore_rules_for_profile(
+    ignore_rules_t *rules,
     const char *profile,
-    char **cli_excludes,
-    size_t cli_exclude_count,
-    ignore_context_t **out
+    const gitignore_ruleset_t **out
 );
 
 /**
- * Free ignore context
+ * Describe an origin tag for diagnostic display.
  *
- * @param ctx Context to free (can be NULL)
+ * Accepts the origin returned by `gitignore_eval` (as stored in the
+ * match result) after the caller's cast to `ignore_origin_t`.
+ *
+ * @param origin Origin tag
+ * @return Human-readable static string (never NULL, never to be freed)
  */
-void ignore_context_free(ignore_context_t *ctx);
+const char *ignore_origin_describe(ignore_origin_t origin);
 
 /**
- * Check if path should be ignored.
+ * Read a `.dottaignore` blob from a branch into a heap buffer.
  *
- * Evaluates the compiled ruleset (baseline/builtin + profile + config
- * + CLI) with last-match-wins semantics. Callers that also want to
- * consult the source tree's own `.gitignore` pair this with
- * `source_filter_is_excluded` from `sys/source.h`.
- *
- * @param ctx Ignore context (must not be NULL)
- * @param path Path to check (relative or absolute)
- * @param is_directory Whether path is a directory
- * @param ignored Output boolean (must not be NULL)
- * @return Error or NULL on success
- */
-error_t *ignore_should_ignore(
-    ignore_context_t *ctx,
-    const char *path,
-    bool is_directory,
-    bool *ignored
-);
-
-/**
- * Get default .dottaignore content
- *
- * Returns sensible default patterns for common unwanted files.
- * Used as the baseline seed on `dotta init` / `dotta clone`, as the
- * fallback source when baseline is absent, and for `dotta ignore
- * --list-defaults`.
- *
- * @return Default .dottaignore content (static string, do not free)
- */
-const char *ignore_default_dottaignore_content(void);
-
-/**
- * Seed baseline .dottaignore on dotta-worktree
- *
- * Commits the compiled default patterns to `.dottaignore` on the
- * `dotta-worktree` branch. Called by `dotta init` and `dotta clone` so
- * every repo has a visible, editable starting point for machine-local
- * ignore extensions.
- *
- * Idempotent: `gitops_update_file` detects a no-op when the blob
- * already matches HEAD, so repeated invocations don't create empty
- * commits. Because the target is the currently-checked-out branch,
- * the same call also brings INDEX and workdir into line with HEAD
- * for the seeded file — no follow-up sync needed.
- *
- * @param repo Repository (must not be NULL; must have dotta-worktree branch)
- * @return Error or NULL on success
- */
-error_t *ignore_seed_baseline(git_repository *repo);
-
-/**
- * Get profile .dottaignore template
- *
- * Returns a minimal template for new profile .dottaignore files.
- * Includes clear documentation about the layering system and baseline inheritance.
- * Used when creating new profiles to provide a clean starting point.
- *
- * @return Profile .dottaignore template (static string, do not free)
- */
-const char *ignore_profile_dottaignore_template(void);
-
-/**
- * Load raw .dottaignore blob from a branch into an owned buffer.
- *
- * Returns (*out_content=NULL, *out_size=0) when any of:
+ * Returns (*out_content = NULL, *out_size = 0) without error when any
+ * of the following hold:
  *   - The branch does not exist
- *   - The branch exists but contains no .dottaignore at the tree root
- *   - The .dottaignore blob is empty (size == 0)
+ *   - The branch has no `.dottaignore` at its tree root
+ *   - The blob is empty
  *
- * None of these produce an error; they just mean "no content". Only I/O
- * failures, malformed trees, OOM, or size-cap violations (>1MB) return
- * an error.
+ * Only I/O failures, malformed trees, OOM, or the 1 MB size cap
+ * produce an error.
  *
- * On success with non-NULL content, *out_content is a heap-allocated,
- * NUL-terminated buffer of *out_size bytes. The caller owns and frees it.
+ * On success with non-NULL content, `*out_content` is a heap-allocated
+ * NUL-terminated buffer of `*out_size` bytes. The caller owns it.
  *
- * @param repo Repository (must not be NULL)
- * @param branch_name Short branch name, e.g. "dotta-worktree" (must not be NULL or empty)
- * @param out_content Output content (must not be NULL); set to NULL if absent
- * @param out_size Output size in bytes (may be NULL if caller does not need it)
+ * @param repo        Repository (must not be NULL)
+ * @param branch      Short branch name (must not be NULL or empty)
+ * @param out_content Output content (must not be NULL); NULL when absent
+ * @param out_size    Output size in bytes (may be NULL)
  * @return Error or NULL on success
  */
-error_t *ignore_load_raw_content(
+error_t *ignore_blob_read(
     git_repository *repo,
-    const char *branch_name,
+    const char *branch,
     char **out_content,
     size_t *out_size
 );
 
 /**
- * Test if path should be ignored (with diagnostic info)
+ * Write `content` as the `.dottaignore` blob on `branch`, creating a
+ * commit with `commit_msg`.
  *
- * Like ignore_should_ignore(), but returns which layer caused the
- * ignore. Useful for debugging and the `dotta ignore --test` command.
- * Covers only the four `.dottaignore` layers; the source tree's own
- * `.gitignore` is reported separately by the caller via
- * `sys/source.h`.
+ * Idempotent: no-ops (no commit) when the blob already matches HEAD.
+ * Rejects writes above the 1 MB cap up front — symmetric with
+ * `ignore_blob_read`, so an editor buffer that somehow grew past the
+ * cap fails cleanly instead of committing a blob that later refuses
+ * to load.
  *
- * @param ctx Ignore context (must not be NULL)
- * @param path Path to check (relative or absolute)
- * @param is_directory Whether path is a directory
- * @param result Output result (must not be NULL)
+ * When `branch` is the currently-checked-out branch,
+ * `gitops_update_file` keeps the INDEX and workdir in sync — no
+ * follow-up sync needed.
+ *
+ * @param repo       Repository (must not be NULL)
+ * @param branch     Short branch name (must not be NULL or empty)
+ * @param content    Blob content (must not be NULL; may be empty)
+ * @param size       Size in bytes (must be <= 1 MB)
+ * @param commit_msg Commit message (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *ignore_test_path(
-    ignore_context_t *ctx,
-    const char *path,
-    bool is_directory,
-    ignore_test_result_t *result
+error_t *ignore_blob_write(
+    git_repository *repo,
+    const char *branch,
+    const char *content,
+    size_t size,
+    const char *commit_msg
 );
 
 /**
- * Convert ignore source to human-readable string
+ * Seed the baseline `.dottaignore` on `dotta-worktree`.
  *
- * @param source Ignore source
- * @return Human-readable string (static, do not free)
+ * Writes the compiled default patterns. Called by `dotta init` and
+ * `dotta clone` so every repo has a visible, editable starting point
+ * for machine-local ignore extensions. Idempotent via
+ * `ignore_blob_write`'s no-op detection.
+ *
+ * @param repo Repository (must not be NULL; must have dotta-worktree)
+ * @return Error or NULL on success
  */
-const char *ignore_source_to_string(ignore_source_t source);
+error_t *ignore_seed_baseline(git_repository *repo);
+
+/**
+ * Seed a new profile's `.dottaignore` by writing the template into
+ * the worktree and staging it for the next commit.
+ *
+ * Called by `dotta add` when creating a new profile branch. The
+ * caller's normal commit flow picks up the staged file — this
+ * primitive does not itself create a commit.
+ *
+ * @param wt Worktree handle (must not be NULL; must be checked out
+ *           on the new profile's branch)
+ * @return Error or NULL on success
+ */
+error_t *ignore_seed_profile(worktree_handle_t *wt);
+
+/**
+ * Default baseline `.dottaignore` content.
+ *
+ * Used as the init/clone seed and as the implicit fallback when the
+ * baseline blob is missing or empty.
+ *
+ * @return Static NUL-terminated string (never to be freed)
+ */
+const char *ignore_baseline_defaults(void);
+
+/**
+ * Profile `.dottaignore` template.
+ *
+ * Minimal starter content documenting the layering model and
+ * baseline inheritance. Used by `dotta add` when initialising a new
+ * profile branch and by `dotta ignore` when seeding an editor
+ * session for an empty profile.
+ *
+ * @return Static NUL-terminated string (never to be freed)
+ */
+const char *ignore_profile_template(void);
 
 #endif /* DOTTA_IGNORE_H */

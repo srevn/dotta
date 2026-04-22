@@ -1,60 +1,72 @@
 /**
- * ignore.c - Multi-layered ignore pattern system implementation
+ * ignore.c - Layered `.dottaignore` ruleset builder and persistence.
  *
- * All user-authored ignore rules (baseline/builtin defaults, profile
- * .dottaignore, config patterns, CLI excludes) compile into a single
- * gitignore_ruleset_t at context creation. Rules are appended in
- * precedence order (baseline first, CLI last); gitignore_eval's
- * last-match-wins semantics give the right verdict for free, including
- * cross-layer negation (e.g. baseline `*.log` + profile `!debug.log`).
+ * The builder pre-loads the three "common" layers (baseline or
+ * builtin, config patterns, CLI excludes) into an arena at creation
+ * time, and lazily assembles a fresh per-profile ruleset on first
+ * call to `ignore_rules_for_profile`. Subsequent calls with the same
+ * profile name return the cached pointer — memoisation lives in the
+ * builder, not in any caller bookkeeping.
  *
- * Source-tree `.gitignore` — the rules of a foreign git repo the user
- * is adding files from — is a separate mechanism in `sys/source.h`.
- * Callers compose the two explicitly.
+ * Why re-append common layers instead of sharing one base ruleset:
+ * `base/gitignore` rulesets are append-only values in an arena.
+ * Composing a base + profile cheaply across multiple profiles would
+ * need a clone primitive in the engine. Re-appending from the saved
+ * sources (static `DEFAULT_DOTTAIGNORE` string, Git-loaded baseline
+ * content, caller-borrowed config and CLI arrays) parses each input
+ * once per profile for a few-hundred-byte cost; trivial next to the
+ * SQLite + Git work the surrounding commands do. Option kept on the
+ * shelf: if someone ever profiles this as hot, add a `clone_into`
+ * to the engine and short-circuit.
+ *
+ * Source-tree `.gitignore` (a foreign repo the user is adding files
+ * from) is a separate mechanism — see `sys/source.h`. Consumers
+ * compose the two explicitly.
  */
 
 #include "core/ignore.h"
 
 #include <config.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "base/arena.h"
+#include "base/buffer.h"
 #include "base/error.h"
 #include "base/gitignore.h"
+#include "base/string.h"
+#include "infra/worktree.h"
+#include "sys/filesystem.h"
 #include "sys/gitops.h"
 
-/* Input validation limits.
- *
- * Per-pattern length and cumulative rule count are enforced by the
- * underlying gitignore engine (see base/gitignore.c); they are
- * intentionally not duplicated here. Only the blob-size cap — an
- * ignore-specific policy that guards against a runaway .dottaignore
- * file pulled in from Git — lives in this module. */
-#define MAX_DOTTAIGNORE_SIZE (1024 * 1024)   /* 1MB per .dottaignore blob */
+/* Origin tags round-trip through the engine's uint8_t tag during
+ * append. If someone ever adds a layer that pushes the enum past 255,
+ * this catches it at compile time instead of letting `(gitignore_origin_t)`
+ * silently truncate. */
+_Static_assert(
+    IGNORE_ORIGIN_COUNT_ <= UINT8_MAX,
+    "ignore_origin_t must round-trip through gitignore_origin_t (uint8_t)"
+);
 
-/* Initial arena block. Comfortably fits a typical baseline (~1KB)
- * plus a handful of extra rules; the arena grows on demand. */
+/* Size cap on `.dottaignore` blobs — an ignore-specific policy
+ * guarding against a runaway file pulled in from Git. The underlying
+ * gitignore engine already caps per-pattern length and rule count. */
+#define MAX_DOTTAIGNORE_SIZE (1024 * 1024)   /* 1 MB */
+
+/* Arena starting capacity. Comfortably fits a typical baseline (~1 KB)
+ * plus a few per-profile rulesets; grows on demand. */
 #define IGNORE_ARENA_INITIAL_CAPACITY (8 * 1024)
 
-/**
- * Ignore context — arena-backed compiled ruleset.
- *
- * Rules compile into a single gitignore_ruleset_t at creation. Matching
- * is pure in-memory evaluation; no mutation of the dotta repository
- * handle occurs. Multiple contexts against the same repo are safe and
- * independent.
- */
-struct ignore_context {
-    arena_t *arena;                     /* owns ruleset + pattern copies */
-    gitignore_ruleset_t *ruleset;       /* baseline/builtin + profile + config + CLI */
-};
+/* Initial profile-cache capacity. Profile counts are almost always
+ * single-digit so the cache rarely grows. */
+#define INITIAL_PROFILE_CAPACITY 4
 
 /**
- * Default baseline .dottaignore content.
+ * Default baseline `.dottaignore` content.
  *
- * Seeded into new repos by `dotta init` / `dotta clone`, and applied
- * as origin=BUILTIN fallback whenever the baseline is absent so safety
+ * Seeded into new repos by `dotta init` / `dotta clone`, and used as
+ * the BUILTIN fallback whenever the baseline blob is absent so safety
  * patterns stay active regardless of repo state.
  */
 static const char *DEFAULT_DOTTAIGNORE =
@@ -124,11 +136,7 @@ static const char *DEFAULT_DOTTAIGNORE =
     ".temp/\n";
 
 /**
- * Minimal .dottaignore template for new profiles.
- *
- * Provides a clean starting point with documentation about the layering
- * system. Users can add profile-specific patterns or use negation (!)
- * to override baseline rules.
+ * Minimal `.dottaignore` template for new profiles.
  */
 static const char *PROFILE_DOTTAIGNORE =
     "# Dotta Ignore Patterns\n"
@@ -156,35 +164,176 @@ static const char *PROFILE_DOTTAIGNORE =
     "\n"
     "# Add your profile-specific patterns below:\n";
 
-error_t *ignore_load_raw_content(
+/**
+ * One entry in the profile-ruleset memoisation table.
+ *
+ * `name` is the canonicalised key (empty string "" stands for the
+ * baseline-only ruleset — NULL and "" collapse to the same entry).
+ */
+typedef struct {
+    const char *name;
+    gitignore_ruleset_t *ruleset;
+} profile_entry_t;
+
+struct ignore_rules {
+    arena_t *arena;                 /* owns baseline copy, cache array, all rulesets */
+    git_repository *repo;           /* borrowed; used only by lazy profile loads */
+
+    /* Common layers. `baseline_content` is either an arena-owned copy
+     * of the Git blob (origin=BASELINE) or a pointer to the static
+     * DEFAULT_DOTTAIGNORE string (origin=BUILTIN). Either is valid for
+     * the builder's lifetime. */
+    const char *baseline_content;
+    ignore_origin_t baseline_origin;
+
+    /* Borrowed pattern arrays. Callers guarantee they outlive the
+     * builder (command-scoped config and CLI). */
+    char *const *config_patterns;
+    size_t config_count;
+    char *const *cli_patterns;
+    size_t cli_count;
+
+    /* Memoised per-profile rulesets. Linear scan — profile counts are
+     * small (typical <= 5, hard cap at the scope of an enabled set). */
+    profile_entry_t *profiles;
+    size_t profile_count;
+    size_t profile_capacity;
+};
+
+/**
+ * Grow the profile cache array if we're at capacity.
+ *
+ * Arena allocators have no in-place realloc, so growth allocates a
+ * larger block and copies. The old block is reclaimed on
+ * arena_destroy. Mirrors the pattern in base/gitignore.c.
+ */
+static error_t *profile_cache_ensure_capacity(ignore_rules_t *r) {
+    if (r->profile_count < r->profile_capacity) return NULL;
+
+    size_t new_cap = r->profile_capacity
+        ? r->profile_capacity * 2
+        : INITIAL_PROFILE_CAPACITY;
+
+    profile_entry_t *resized = arena_alloc(
+        r->arena, new_cap * sizeof(*resized)
+    );
+    if (!resized) {
+        return ERROR(ERR_MEMORY, "ignore: profile cache allocation failed");
+    }
+    if (r->profile_count > 0) {
+        memcpy(resized, r->profiles, r->profile_count * sizeof(*resized));
+    }
+    r->profiles = resized;
+    r->profile_capacity = new_cap;
+    return NULL;
+}
+
+/**
+ * Build a fresh ruleset for `profile` in the builder's arena.
+ *
+ * Appends the four layers in precedence order (baseline/builtin,
+ * profile, config, CLI). `gitignore_eval` scans in reverse insertion
+ * order, so CLI wins last-match and the ordering here establishes
+ * the documented precedence for free.
+ *
+ * `profile` is the canonicalised key ("" means baseline-only).
+ */
+static error_t *build_profile_ruleset(
+    ignore_rules_t *r,
+    const char *profile,
+    gitignore_ruleset_t **out
+) {
+    gitignore_ruleset_t *rs = NULL;
+    RETURN_IF_ERROR(gitignore_ruleset_create(r->arena, &rs));
+
+    /* 1. Baseline / builtin fallback (lowest precedence). */
+    RETURN_IF_ERROR(
+        gitignore_ruleset_append(
+        rs,
+        r->baseline_content,
+        (gitignore_origin_t) r->baseline_origin
+        )
+    );
+
+    /* 2. Profile-specific `.dottaignore` (if the profile was named and
+     *    has a blob on its branch). A missing branch / missing file /
+     *    empty blob is normal and silently contributes no rules. */
+    if (profile[0] != '\0') {
+        char *content = NULL;
+        error_t *err = ignore_blob_read(r->repo, profile, &content, NULL);
+        if (err) {
+            return error_wrap(
+                err, "Failed to load .dottaignore for profile '%s'", profile
+            );
+        }
+        if (content) {
+            err = gitignore_ruleset_append(
+                rs, content, (gitignore_origin_t) IGNORE_ORIGIN_PROFILE
+            );
+            free(content);
+            if (err) {
+                return error_wrap(
+                    err, "Failed to parse .dottaignore for profile '%s'",
+                    profile
+                );
+            }
+        }
+    }
+
+    /* 3. Config patterns. */
+    if (r->config_count > 0) {
+        RETURN_IF_ERROR(
+            gitignore_ruleset_append_patterns(
+            rs,
+            (const char *const *) r->config_patterns,
+            r->config_count,
+            (gitignore_origin_t) IGNORE_ORIGIN_CONFIG
+            )
+        );
+    }
+
+    /* 4. CLI excludes — highest precedence, appended last. */
+    if (r->cli_count > 0) {
+        RETURN_IF_ERROR(
+            gitignore_ruleset_append_patterns(
+            rs,
+            (const char *const *) r->cli_patterns,
+            r->cli_count,
+            (gitignore_origin_t) IGNORE_ORIGIN_CLI
+            )
+        );
+    }
+
+    *out = rs;
+    return NULL;
+}
+
+error_t *ignore_blob_read(
     git_repository *repo,
-    const char *branch_name,
+    const char *branch,
     char **out_content,
     size_t *out_size
 ) {
     CHECK_NULL(repo);
-    CHECK_NULL(branch_name);
+    CHECK_NULL(branch);
     CHECK_NULL(out_content);
-    CHECK_ARG(branch_name[0] != '\0', "Branch name cannot be empty");
+    CHECK_ARG(branch[0] != '\0', "Branch name cannot be empty");
 
     *out_content = NULL;
     if (out_size) *out_size = 0;
 
     /* Missing branch is not an error — callers treat NULL content as
      * "no baseline/profile .dottaignore yet". */
-    bool branch_exists = false;
-    error_t *err = gitops_branch_exists(repo, branch_name, &branch_exists);
-    if (err) return err;
-    if (!branch_exists) return NULL;
+    bool exists = false;
+    RETURN_IF_ERROR(gitops_branch_exists(repo, branch, &exists));
+    if (!exists) return NULL;
 
     /* Existence just verified, so a tree load failure is a real error
      * (I/O, corruption) rather than "branch missing". */
     git_tree *tree = NULL;
-    err = gitops_load_branch_tree(repo, branch_name, &tree, NULL);
+    error_t *err = gitops_load_branch_tree(repo, branch, &tree, NULL);
     if (err) {
-        return error_wrap(
-            err, "Failed to load tree for branch '%s'", branch_name
-        );
+        return error_wrap(err, "Failed to load tree for branch '%s'", branch);
     }
 
     const git_tree_entry *entry = git_tree_entry_byname(tree, ".dottaignore");
@@ -205,8 +354,9 @@ error_t *ignore_load_raw_content(
         free(content);
         return ERROR(
             ERR_VALIDATION,
-            ".dottaignore on branch '%s' exceeds capacity (max %d bytes, actual %zu)",
-            branch_name, MAX_DOTTAIGNORE_SIZE, size
+            ".dottaignore on branch '%s' exceeds capacity "
+            "(max %d bytes, actual %zu)",
+            branch, MAX_DOTTAIGNORE_SIZE, size
         );
     }
 
@@ -222,250 +372,214 @@ error_t *ignore_load_raw_content(
     return NULL;
 }
 
-error_t *ignore_context_create(
+error_t *ignore_blob_write(
+    git_repository *repo,
+    const char *branch,
+    const char *content,
+    size_t size,
+    const char *commit_msg
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(branch);
+    CHECK_NULL(content);
+    CHECK_NULL(commit_msg);
+    CHECK_ARG(branch[0] != '\0', "Branch name cannot be empty");
+
+    if (size > MAX_DOTTAIGNORE_SIZE) {
+        return ERROR(
+            ERR_VALIDATION,
+            ".dottaignore content exceeds capacity "
+            "(max %d bytes, actual %zu)",
+            MAX_DOTTAIGNORE_SIZE, size
+        );
+    }
+
+    return gitops_update_file(
+        repo, branch, ".dottaignore", content, size,
+        commit_msg, GIT_FILEMODE_BLOB, NULL
+    );
+}
+
+error_t *ignore_rules_create(
     git_repository *repo,
     const config_t *config,
-    const char *profile,
-    char **cli_excludes,
-    size_t cli_exclude_count,
-    ignore_context_t **out
+    char *const *cli_excludes,
+    size_t cli_count,
+    ignore_rules_t **out
 ) {
+    CHECK_NULL(repo);
     CHECK_NULL(out);
 
     *out = NULL;
 
-    ignore_context_t *ctx = calloc(1, sizeof(*ctx));
-    if (!ctx) {
-        return ERROR(ERR_MEMORY, "Failed to allocate ignore context");
+    ignore_rules_t *r = calloc(1, sizeof(*r));
+    if (!r) {
+        return ERROR(ERR_MEMORY, "Failed to allocate ignore rules builder");
     }
 
-    ctx->arena = arena_create(IGNORE_ARENA_INITIAL_CAPACITY);
-    if (!ctx->arena) {
-        free(ctx);
+    r->arena = arena_create(IGNORE_ARENA_INITIAL_CAPACITY);
+    if (!r->arena) {
+        free(r);
         return ERROR(ERR_MEMORY, "Failed to allocate ignore arena");
     }
 
-    error_t *err = gitignore_ruleset_create(ctx->arena, &ctx->ruleset);
-    if (err) {
-        ignore_context_free(ctx);
-        return err;
-    }
+    r->repo = repo;
 
-    /* Build the ruleset in precedence order (lowest first, highest last).
-     * gitignore_eval scans in reverse insertion order, so the tail wins
-     * on overlapping matches:
-     *   1. baseline / builtin fallback  (lowest precedence)
-     *   2. profile .dottaignore
-     *   3. config patterns
-     *   4. CLI --exclude flags          (highest precedence)
-     */
-
-    /* 1. Baseline .dottaignore, or compiled defaults as fallback.
+    /* Load baseline; fall back to compiled defaults when absent.
      *
-     * Load errors are fatal: a corrupted or unreadable .dottaignore
-     * must surface, not silently drop safety defaults. The BUILTIN
-     * fallback only fires when the load returned NULL content (branch
-     * missing, file missing, or empty blob — all non-errors). */
-    if (repo) {
-        char *baseline_content = NULL;
-        err = ignore_load_raw_content(
-            repo, "dotta-worktree", &baseline_content, NULL
-        );
-        if (err) {
-            ignore_context_free(ctx);
-            return error_wrap(err, "Failed to load baseline .dottaignore");
-        }
+     * Load errors are fatal: a corrupted or unreadable baseline must
+     * surface, not silently drop safety defaults. The BUILTIN fallback
+     * only fires when the load returned NULL content (branch missing,
+     * file missing, or empty blob — all non-errors). */
+    char *baseline = NULL;
+    error_t *err = ignore_blob_read(repo, "dotta-worktree", &baseline, NULL);
+    if (err) {
+        ignore_rules_free(r);
+        return error_wrap(err, "Failed to load baseline .dottaignore");
+    }
 
-        if (baseline_content) {
-            err = gitignore_ruleset_append(
-                ctx->ruleset,
-                baseline_content,
-                (gitignore_origin_t) IGNORE_SOURCE_BASELINE_DOTTAIGNORE
-            );
-            free(baseline_content);
-            if (err) {
-                ignore_context_free(ctx);
-                return error_wrap(err, "Failed to parse baseline .dottaignore");
-            }
-        } else {
-            err = gitignore_ruleset_append(
-                ctx->ruleset,
-                DEFAULT_DOTTAIGNORE,
-                (gitignore_origin_t) IGNORE_SOURCE_BUILTIN
-            );
-            if (err) {
-                ignore_context_free(ctx);
-                return err;
-            }
+    if (baseline) {
+        /* Arena-copy so the Git heap buffer can be freed immediately
+         * and the content outlives the function frame. */
+        r->baseline_content = arena_strdup(r->arena, baseline);
+        free(baseline);
+        if (!r->baseline_content) {
+            ignore_rules_free(r);
+            return ERROR(ERR_MEMORY, "Failed to copy baseline content");
         }
+        r->baseline_origin = IGNORE_ORIGIN_BASELINE;
     } else {
-        /* No repo handle — apply builtin defaults so safety patterns
-         * still fire (e.g., callers testing patterns without an open repo). */
-        err = gitignore_ruleset_append(
-            ctx->ruleset,
-            DEFAULT_DOTTAIGNORE,
-            (gitignore_origin_t) IGNORE_SOURCE_BUILTIN
-        );
-        if (err) {
-            ignore_context_free(ctx);
-            return err;
-        }
+        /* Static string — no copy needed; always valid. */
+        r->baseline_content = DEFAULT_DOTTAIGNORE;
+        r->baseline_origin = IGNORE_ORIGIN_BUILTIN;
     }
 
-    /* 2. Profile .dottaignore (if specified and present). Fatal on
-     * load or parse error, same rationale as baseline. */
-    if (repo && profile && profile[0] != '\0') {
-        char *profile_content = NULL;
-        err = ignore_load_raw_content(
-            repo, profile, &profile_content, NULL
-        );
-        if (err) {
-            ignore_context_free(ctx);
-            return error_wrap(
-                err, "Failed to load .dottaignore for profile '%s'", profile
-            );
-        }
-
-        if (profile_content) {
-            err = gitignore_ruleset_append(
-                ctx->ruleset,
-                profile_content,
-                (gitignore_origin_t) IGNORE_SOURCE_PROFILE_DOTTAIGNORE
-            );
-            free(profile_content);
-            if (err) {
-                ignore_context_free(ctx);
-                return error_wrap(
-                    err, "Failed to parse .dottaignore for profile '%s'", profile
-                );
-            }
-        }
+    /* Borrow config/CLI arrays. The caller guarantees command-scoped
+     * lifetime, which is longer than the builder's. */
+    if (config && config->ignore_patterns &&
+        config->ignore_pattern_count > 0) {
+        r->config_patterns = config->ignore_patterns;
+        r->config_count = config->ignore_pattern_count;
+    }
+    if (cli_excludes && cli_count > 0) {
+        r->cli_patterns = cli_excludes;
+        r->cli_count = cli_count;
     }
 
-    /* 3. Config patterns. */
-    if (config && config->ignore_patterns && config->ignore_pattern_count > 0) {
-        err = gitignore_ruleset_append_patterns(
-            ctx->ruleset,
-            (const char *const *) config->ignore_patterns,
-            config->ignore_pattern_count,
-            (gitignore_origin_t) IGNORE_SOURCE_CONFIG
-        );
-        if (err) {
-            ignore_context_free(ctx);
-            return error_wrap(err, "Failed to compile config ignore patterns");
-        }
-    }
-
-    /* 4. CLI excludes — appended last so they win last-match. */
-    if (cli_excludes && cli_exclude_count > 0) {
-        err = gitignore_ruleset_append_patterns(
-            ctx->ruleset,
-            (const char *const *) cli_excludes,
-            cli_exclude_count,
-            (gitignore_origin_t) IGNORE_SOURCE_CLI
-        );
-        if (err) {
-            ignore_context_free(ctx);
-            return error_wrap(err, "Failed to compile CLI exclude patterns");
-        }
-    }
-
-    *out = ctx;
+    *out = r;
     return NULL;
 }
 
-void ignore_context_free(ignore_context_t *ctx) {
-    if (!ctx) return;
+void ignore_rules_free(ignore_rules_t *r) {
+    if (!r) return;
 
-    /* Arena destroy frees the ruleset and every pattern copy in one go.
-     * arena_destroy(NULL) is a no-op — safe for partial-state contexts
-     * (e.g., allocation failure mid-create). */
-    arena_destroy(ctx->arena);
-
-    free(ctx);
+    /* Arena destroy drops every ruleset, every arena-owned string, and
+     * the profile cache array in one shot. arena_destroy(NULL) is a
+     * no-op, so partial-state builders from allocation failure mid-
+     * create are safe. */
+    arena_destroy(r->arena);
+    free(r);
 }
 
-error_t *ignore_test_path(
-    ignore_context_t *ctx,
-    const char *path,
-    bool is_directory,
-    ignore_test_result_t *result
+error_t *ignore_rules_for_profile(
+    ignore_rules_t *r,
+    const char *profile,
+    const gitignore_ruleset_t **out
 ) {
-    CHECK_NULL(ctx);
-    CHECK_NULL(path);
-    CHECK_NULL(result);
+    CHECK_NULL(r);
+    CHECK_NULL(out);
 
-    result->ignored = false;
-    result->source = IGNORE_SOURCE_NONE;
+    *out = NULL;
 
-    /* Evaluate the compiled ruleset. gitignore_eval scans in reverse
-     * insertion order (CLI → config → profile → baseline); the first
-     * match decides. match.origin exposes the winning source verbatim. */
-    gitignore_match_t match;
-    gitignore_eval(ctx->ruleset, path, is_directory, &match);
-    if (match.decided && match.ignored) {
-        result->ignored = true;
-        result->source = (ignore_source_t) match.origin;
+    /* Canonicalise NULL/empty to "" so both cases share a cache slot. */
+    const char *key = (profile && profile[0]) ? profile : "";
+
+    /* Memoisation lookup. */
+    for (size_t i = 0; i < r->profile_count; i++) {
+        if (strcmp(r->profiles[i].name, key) == 0) {
+            *out = r->profiles[i].ruleset;
+            return NULL;
+        }
     }
 
+    /* Build fresh and cache. */
+    gitignore_ruleset_t *rs = NULL;
+    RETURN_IF_ERROR(build_profile_ruleset(r, key, &rs));
+
+    RETURN_IF_ERROR(profile_cache_ensure_capacity(r));
+
+    const char *name_copy = arena_strdup(r->arena, key);
+    if (!name_copy) {
+        return ERROR(ERR_MEMORY, "Failed to copy profile name");
+    }
+    r->profiles[r->profile_count].name = name_copy;
+    r->profiles[r->profile_count].ruleset = rs;
+    r->profile_count++;
+
+    *out = rs;
     return NULL;
 }
 
-error_t *ignore_should_ignore(
-    ignore_context_t *ctx,
-    const char *path,
-    bool is_directory,
-    bool *ignored
-) {
-    CHECK_NULL(ignored);
-
-    ignore_test_result_t result;
-    error_t *err = ignore_test_path(ctx, path, is_directory, &result);
-    if (err) return err;
-
-    *ignored = result.ignored;
-    return NULL;
+const char *ignore_origin_describe(ignore_origin_t origin) {
+    switch (origin) {
+        case IGNORE_ORIGIN_NONE:     return "not ignored";
+        case IGNORE_ORIGIN_BUILTIN:  return "built-in defaults";
+        case IGNORE_ORIGIN_BASELINE: return "baseline .dottaignore";
+        case IGNORE_ORIGIN_PROFILE:  return "profile .dottaignore";
+        case IGNORE_ORIGIN_CONFIG:   return "config file patterns";
+        case IGNORE_ORIGIN_CLI:      return "CLI --exclude patterns";
+        case IGNORE_ORIGIN_COUNT_:   break;  /* fall through to unknown */
+    }
+    return "unknown";
 }
 
-const char *ignore_default_dottaignore_content(void) {
+const char *ignore_baseline_defaults(void) {
     return DEFAULT_DOTTAIGNORE;
 }
 
-const char *ignore_profile_dottaignore_template(void) {
+const char *ignore_profile_template(void) {
     return PROFILE_DOTTAIGNORE;
 }
 
 error_t *ignore_seed_baseline(git_repository *repo) {
     CHECK_NULL(repo);
 
-    const char *content = DEFAULT_DOTTAIGNORE;
-    return gitops_update_file(
-        repo,
-        "dotta-worktree",
-        ".dottaignore",
-        content,
-        strlen(content),
-        "Initialize .dottaignore with default patterns",
-        GIT_FILEMODE_BLOB,
-        NULL
+    return ignore_blob_write(
+        repo, "dotta-worktree",
+        DEFAULT_DOTTAIGNORE,
+        strlen(DEFAULT_DOTTAIGNORE),
+        "Initialize .dottaignore with default patterns"
     );
 }
 
-const char *ignore_source_to_string(ignore_source_t source) {
-    switch (source) {
-        case IGNORE_SOURCE_NONE:
-            return "not ignored";
-        case IGNORE_SOURCE_CLI:
-            return "CLI --exclude patterns";
-        case IGNORE_SOURCE_PROFILE_DOTTAIGNORE:
-            return "profile .dottaignore";
-        case IGNORE_SOURCE_BASELINE_DOTTAIGNORE:
-            return "baseline .dottaignore";
-        case IGNORE_SOURCE_BUILTIN:
-            return "built-in defaults";
-        case IGNORE_SOURCE_CONFIG:
-            return "config file patterns";
-        default:
-            return "unknown";
+error_t *ignore_seed_profile(worktree_handle_t *wt) {
+    CHECK_NULL(wt);
+
+    const char *wt_path = worktree_get_path(wt);
+    if (!wt_path) {
+        return ERROR(ERR_INTERNAL, "Worktree path is NULL");
     }
+
+    char *path = str_format("%s/.dottaignore", wt_path);
+    if (!path) {
+        return ERROR(ERR_MEMORY, "Failed to allocate .dottaignore path");
+    }
+
+    buffer_t content = BUFFER_INIT;
+    error_t *err = buffer_append_string(&content, PROFILE_DOTTAIGNORE);
+    if (err) {
+        buffer_free(&content);
+        free(path);
+        return error_wrap(err, "Failed to populate .dottaignore buffer");
+    }
+
+    err = fs_write_file(path, &content);
+    buffer_free(&content);
+    free(path);
+    if (err) return error_wrap(err, "Failed to write .dottaignore");
+
+    err = worktree_stage_file(wt, ".dottaignore");
+    if (err) return error_wrap(err, "Failed to stage .dottaignore");
+
+    return NULL;
 }

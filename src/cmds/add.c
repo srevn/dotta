@@ -15,8 +15,8 @@
 #include "base/arena.h"
 #include "base/args.h"
 #include "base/array.h"
-#include "base/buffer.h"
 #include "base/error.h"
+#include "base/gitignore.h"
 #include "base/output.h"
 #include "base/string.h"
 #include "core/ignore.h"
@@ -56,40 +56,29 @@ static error_t *validate_options(const cmd_add_options_t *opts) {
  * Check if path should be ignored.
  *
  * Consults two independent mechanisms in order:
- *   1. `ignore_ctx` — the user's `.dottaignore` layers (baseline,
- *      profile, config, CLI).
+ *   1. `rules` — the user's `.dottaignore` layers (baseline, profile,
+ *      config, CLI) compiled into a single gitignore ruleset.
  *   2. `source_filter` — the source tree's own `.gitignore`, if the
  *      caller opted in by building a filter (typically gated on
  *      `config.respect_gitignore`).
  *
- * Either input may be NULL to skip that mechanism. Errors from either
- * check degrade to a verbose warning and a "not excluded" verdict so
- * an unreadable `.dottaignore` or an odd source repo never blocks the
- * user from adding a file they explicitly named.
+ * Either input may be NULL to skip that mechanism. Source-filter
+ * errors degrade to a verbose warning and a "not excluded" verdict
+ * so an odd source repo never blocks the user from adding a file
+ * they explicitly named. The gitignore evaluator never fails — its
+ * verdict is applied directly.
  */
 static bool is_excluded(
     const char *path,
     bool is_directory,
-    ignore_context_t *ignore_ctx,
+    const gitignore_ruleset_t *rules,
     source_filter_t *source_filter,
     output_t *out
 ) {
     if (!path) return false;
 
-    if (ignore_ctx) {
-        bool ignored = false;
-        error_t *err = ignore_should_ignore(
-            ignore_ctx, path, is_directory, &ignored
-        );
-        if (err) {
-            output_warning(
-                out, OUTPUT_VERBOSE, "Ignore check failed for %s: %s",
-                path, error_message(err)
-            );
-            error_free(err);
-        } else if (ignored) {
-            return true;
-        }
+    if (rules && gitignore_is_ignored(rules, path, is_directory)) {
+        return true;
     }
 
     if (source_filter) {
@@ -122,7 +111,7 @@ static bool is_excluded(
 static error_t *collect_files_from_dir(
     const char *dir_path,
     const cmd_add_options_t *opts,
-    ignore_context_t *ignore_ctx,
+    const gitignore_ruleset_t *rules,
     source_filter_t *source_filter,
     output_t *out,
     string_array_t **out_files
@@ -165,7 +154,7 @@ static error_t *collect_files_from_dir(
         bool is_dir = !is_symlink && fs_is_directory(full_path);
 
         /* Check exclude patterns */
-        if (is_excluded(full_path, is_dir, ignore_ctx, source_filter, out)) {
+        if (is_excluded(full_path, is_dir, rules, source_filter, out)) {
             output_info(out, OUTPUT_VERBOSE, "Excluded: %s", full_path);
             free(full_path);
             errno = 0;
@@ -177,7 +166,7 @@ static error_t *collect_files_from_dir(
             /* Recurse into subdirectory */
             string_array_t *subdir_files = NULL;
             error_t *err = collect_files_from_dir(
-                full_path, opts, ignore_ctx, source_filter, out, &subdir_files
+                full_path, opts, rules, source_filter, out, &subdir_files
             );
             free(full_path);
 
@@ -453,72 +442,6 @@ static error_t *add_file_to_worktree(
             );
         }
     }
-
-    return NULL;
-}
-
-/**
- * Initialize profile .dottaignore in a new profile
- *
- * Creates a minimal .dottaignore file with clear documentation about
- * the layering system. This gives users a clean starting point and
- * documents baseline inheritance.
- */
-static error_t *init_profile_dottaignore(
-    worktree_handle_t *wt,
-    const cmd_add_options_t *opts,
-    output_t *out
-) {
-    CHECK_NULL(wt);
-    CHECK_NULL(opts);
-
-    const char *wt_path = worktree_get_path(wt);
-    if (!wt_path) {
-        return ERROR(ERR_INTERNAL, "Worktree path is NULL");
-    }
-
-    /* Build path to .dottaignore */
-    char *dottaignore_path = str_format("%s/.dottaignore", wt_path);
-    if (!dottaignore_path) {
-        return ERROR(ERR_MEMORY, "Failed to allocate .dottaignore path");
-    }
-
-    /* Get profile template content */
-    const char *template_content = ignore_profile_dottaignore_template();
-
-    /* Create buffer with template content */
-    buffer_t content = BUFFER_INIT;
-
-    error_t *err = buffer_append(
-        &content, template_content, strlen(template_content)
-    );
-    if (err) {
-        buffer_free(&content);
-        free(dottaignore_path);
-        return error_wrap(err, "Failed to populate buffer");
-    }
-
-    /* Write to file */
-    err = fs_write_file(dottaignore_path, &content);
-    buffer_free(&content);
-    if (err) {
-        free(dottaignore_path);
-        return error_wrap(err, "Failed to write .dottaignore");
-    }
-
-    /* Stage the file */
-    err = worktree_stage_file(wt, ".dottaignore");
-    if (err) {
-        free(dottaignore_path);
-        return error_wrap(err, "Failed to stage .dottaignore");
-    }
-
-    output_info(
-        out, OUTPUT_VERBOSE, "Created .dottaignore for profile '%s'",
-        opts->profile
-    );
-
-    free(dottaignore_path);
 
     return NULL;
 }
@@ -925,7 +848,8 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     if (err) return err;
 
     /* Initialize all resources to NULL for safe cleanup */
-    ignore_context_t *ignore_ctx = NULL;
+    ignore_rules_t *ignore_rules = NULL;
+    const gitignore_ruleset_t *profile_rules = NULL;
     source_filter_t *source_filter = NULL;
     worktree_handle_t *wt = NULL;
     string_array_t *all_files = NULL;
@@ -1081,14 +1005,21 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
 
     /* If we reach here, privileges are OK - proceed with operation */
 
-    /* Create ignore context.
+    /* Build ignore rules once per command.
      *
      * Fatal on failure: if we cannot build the ignore rules, proceeding
      * would risk tracking files the user explicitly told us to ignore
-     * (via baseline, profile, config, or CLI). Surface the error. */
-    err = ignore_context_create(
-        repo, config, opts->profile, opts->exclude_patterns,
-        opts->exclude_count, &ignore_ctx
+     * (via baseline, profile, config, or CLI). Surface the error.
+     *
+     * The profile-specific ruleset (which layers the profile's own
+     * `.dottaignore` on top of the common layers) is resolved below,
+     * after the branch exists — for a brand-new profile the builder
+     * would otherwise try to load a non-existent branch (a non-error,
+     * but no point walking that code path). */
+    err = ignore_rules_create(
+        repo, config,
+        opts->exclude_patterns, opts->exclude_count,
+        &ignore_rules
     );
     if (err) {
         err = error_wrap(err, "Failed to build ignore rules");
@@ -1151,7 +1082,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
 
     /* Initialize .dottaignore for new profiles */
     if (!profile_exists) {
-        err = init_profile_dottaignore(wt, opts, out);
+        err = ignore_seed_profile(wt);
         if (err) {
             err = error_wrap(
                 err, "Failed to initialize .dottaignore for profile '%s'",
@@ -1159,6 +1090,22 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
             );
             goto cleanup;
         }
+        output_info(
+            out, OUTPUT_VERBOSE, "Created .dottaignore for profile '%s'",
+            opts->profile
+        );
+    }
+
+    /* Resolve the profile-specific ruleset. Safe for both paths:
+     * existing profile → loads the profile's `.dottaignore`; new
+     * profile → branch doesn't exist yet, builder treats that as
+     * "no profile layer" and the common layers still apply. */
+    err = ignore_rules_for_profile(ignore_rules, opts->profile, &profile_rules);
+    if (err) {
+        err = error_wrap(
+            err, "Failed to load ignore rules for profile '%s'", opts->profile
+        );
+        goto cleanup;
     }
 
     /* Collect all files to add (expanding directories) */
@@ -1230,7 +1177,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
             /* Recursively collect files from directory */
             string_array_t *dir_files = NULL;
             err = collect_files_from_dir(
-                absolute, opts, ignore_ctx, source_filter, out, &dir_files
+                absolute, opts, profile_rules, source_filter, out, &dir_files
             );
 
             if (err) {
@@ -1308,7 +1255,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
             tracked_dir_count++;
         } else {
             /* Single file or symlink - check if excluded */
-            if (is_excluded(absolute, false, ignore_ctx, source_filter, out)) {
+            if (is_excluded(absolute, false, profile_rules, source_filter, out)) {
                 output_info(out, OUTPUT_VERBOSE, "Excluded: %s", absolute);
                 free(absolute);
                 continue;
@@ -1752,7 +1699,7 @@ cleanup:
     if (all_files) string_array_free(all_files);
     if (wt) worktree_cleanup(&wt);
     source_filter_free(source_filter);
-    if (ignore_ctx) ignore_context_free(ignore_ctx);
+    ignore_rules_free(ignore_rules);
     /* auto_rules is arena-borrowed — destroy the arena drops both. */
     arena_destroy(auto_rules_arena);
     if (preflight_allocated_paths) {

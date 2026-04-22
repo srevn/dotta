@@ -28,8 +28,8 @@
  * gitignore ruleset. Allocated lazily (NULL when no -e patterns), which
  * keeps the zero-excludes case allocation-free. Matching goes through
  * base/gitignore for full `!`-negation, directory walk-up, and anchoring
- * semantics — the same engine that powers .dottaignore and CLI --exclude
- * in ignore_context_t.
+ * semantics — the same engine that powers the layered `.dottaignore`
+ * ruleset in core/ignore.
  */
 struct scope {
     string_array_t *enabled;               /* Persistent enabled set; non-NULL, may be empty */

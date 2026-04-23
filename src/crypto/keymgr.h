@@ -176,7 +176,7 @@ bool keymgr_probe_key(keymgr *keymgr);
  * @param out_expires_at Optional output for absolute expiration timestamp
  * @return Seconds until expiration (0 if not cached, -1 if no timeout)
  */
-int64_t keymgrime_until_expiry(
+int64_t keymgr_time_until_expiry(
     const keymgr *keymgr,
     time_t *out_expires_at
 );

@@ -454,15 +454,20 @@ int main(int argc, char **argv) {
     }
 
     /* Load configuration once for entire process.
-     * Non-fatal: if config file is missing or invalid, use defaults. */
+     *
+     * config_load handles the missing-config-file case internally
+     * (returns defaults with no error). Any error returned here is a
+     * real failure — parse error, unknown key, invalid value, or a
+     * malformed auto-encrypt pattern — and must surface, not fall back
+     * silently to defaults that hide the user's mistake. */
     config_t *config = NULL;
     error_t *cfg_err = config_load(NULL, &config);
     if (cfg_err) {
+        fprintf(
+            stderr, "Failed to load configuration: %s\n",
+            error_message(cfg_err)
+        );
         error_free(cfg_err);
-        config = config_create_default();
-    }
-    if (!config) {
-        fprintf(stderr, "Failed to create configuration\n");
         git_libgit2_shutdown();
         return 1;
     }

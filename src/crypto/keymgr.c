@@ -752,7 +752,7 @@ bool keymgr_probe_key(keymgr *keymgr) {
     return true;
 }
 
-int64_t keymgrime_until_expiry(
+int64_t keymgr_time_until_expiry(
     const keymgr *keymgr,
     time_t *out_expires_at
 ) {

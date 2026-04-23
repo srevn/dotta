@@ -139,6 +139,22 @@ error_t *path_validate_storage(const char *storage_path);
 error_t *path_expand_home(const char *path, char **out);
 
 /**
+ * Return pointer into storage_path past the storage prefix.
+ *
+ * Strips leading "home/", "root/", or "custom/" for callers that need
+ * the user-facing tail (e.g. pattern matching against config patterns
+ * like ".ssh/id_*", which are written without the storage prefix).
+ *
+ * Returns storage_path unchanged when no prefix matches or when input
+ * is NULL. Never NULL for non-NULL input. Zero allocation; the returned
+ * pointer aliases storage_path and shares its lifetime.
+ *
+ * @param storage_path Storage path (can be NULL)
+ * @return Pointer past the prefix, or storage_path unchanged
+ */
+const char *path_strip_storage_prefix(const char *storage_path);
+
+/**
  * Get $HOME directory
  *
  * @param out HOME directory path (must not be NULL, caller must free)

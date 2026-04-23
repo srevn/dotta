@@ -172,6 +172,22 @@ error_t *path_expand_home(const char *path, char **out) {
     return err;
 }
 
+const char *path_strip_storage_prefix(const char *storage_path) {
+    if (!storage_path) {
+        return NULL;
+    }
+
+    /* "home/" and "root/" are both 5 chars; "custom/" is 7. */
+    if (str_starts_with(storage_path, "home/") ||
+        str_starts_with(storage_path, "root/")) {
+        return storage_path + 5;
+    }
+    if (str_starts_with(storage_path, "custom/")) {
+        return storage_path + 7;
+    }
+    return storage_path;
+}
+
 /**
  * Return the relative part of `absolute` after stripping `prefix`, with
  * path-component boundary verification (next character must be '/' or '\0').

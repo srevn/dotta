@@ -53,6 +53,7 @@
 #define ENCRYPTION_MAGIC "DOTTA"
 #define ENCRYPTION_MAGIC_BYTES 5        /* "DOTTA" magic string length */
 #define ENCRYPTION_VERSION 3            /* Version 3: SIV with length-prefixed domain separation */
+#define ENCRYPTION_TAG_BYTES 6          /* Magic (5) + version (1): bytes checked by encryption_is_encrypted */
 #define ENCRYPTION_HEADER_SIZE 8        /* Magic (5) + version (1) + reserved (2) */
 #define ENCRYPTION_SIV_SIZE 32          /* SIV/MAC tag (32 bytes) */
 #define ENCRYPTION_OVERHEAD 40          /* Header (8) + SIV (32) */
@@ -215,14 +216,17 @@ error_t *encryption_decrypt(
 );
 
 /**
- * Check if data is encrypted
+ * Check if data is an encrypted dotta blob this build can decrypt
  *
- * Checks for dotta encryption magic header ("DOTTA").
- * Does not validate version or nonce.
+ * Verifies both the "DOTTA" magic and the version byte match the current
+ * build. Blobs with a different version byte are reported as NOT encrypted,
+ * so callers never try to decrypt something they cannot parse; any version
+ * mismatch for a blob that does claim to be a dotta file surfaces later
+ * from encryption_decrypt with an explicit "unsupported version" error.
  *
  * @param data File content (must not be NULL)
  * @param data_len Content length
- * @return true if data has valid dotta encryption magic header
+ * @return true if data begins with a recognised dotta magic + version
  */
 bool encryption_is_encrypted(
     const unsigned char *data,

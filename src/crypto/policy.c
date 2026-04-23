@@ -2,7 +2,9 @@
  * policy.c - Centralized encryption policy decision logic
  *
  * Implements the single source of truth for encryption decisions.
- * Consolidates logic previously scattered across add.c, update.c, etc.
+ * The compiled auto-encrypt ruleset lives on the config handle
+ * (see include/config.h); policy calls read it directly and never
+ * own or free it.
  */
 
 #include "crypto/policy.h"
@@ -12,8 +14,8 @@
 
 #include "base/error.h"
 #include "base/gitignore.h"
-#include "base/string.h"
 #include "core/metadata.h"
+#include "infra/path.h"
 
 /**
  * System files that must NEVER be encrypted
@@ -62,48 +64,12 @@ static bool is_protected_meta_file(const char *storage_path) {
     return false;
 }
 
-error_t *encryption_policy_build_auto_rules(
-    const config_t *config,
-    arena_t *arena,
-    gitignore_ruleset_t **out_rules
-) {
-    CHECK_NULL(arena);
-    CHECK_NULL(out_rules);
-
-    *out_rules = NULL;
-
-    /* Short-circuit: nothing to compile when encryption is off, no
-     * patterns are configured, or no config was provided. Callers treat
-     * *out_rules == NULL as the fast "no auto-encrypt" sentinel. */
-    if (!config || !config->encryption_enabled ||
-        !config->auto_encrypt_patterns ||
-        config->auto_encrypt_pattern_count == 0) {
-        return NULL;
-    }
-
-    gitignore_ruleset_t *rules = NULL;
-    error_t *err = gitignore_ruleset_create(arena, &rules);
-    if (err) {
-        return error_wrap(err, "Failed to allocate auto-encrypt ruleset");
-    }
-
-    /* Origin tag is unused for auto-encrypt — no per-rule attribution. */
-    err = gitignore_ruleset_append_patterns(
-        rules,
-        (const char *const *) config->auto_encrypt_patterns,
-        config->auto_encrypt_pattern_count,
-        0
-    );
-    if (err) {
-        return error_wrap(err, "Failed to compile auto-encrypt patterns");
-    }
-
-    *out_rules = rules;
-    return NULL;
+bool encryption_policy_is_active(const config_t *config) {
+    return config && config->auto_encrypt.rules != NULL;
 }
 
 error_t *encryption_policy_should_encrypt(
-    const gitignore_ruleset_t *auto_rules,
+    const config_t *config,
     const char *storage_path,
     bool explicit_encrypt,
     bool explicit_no_encrypt,
@@ -203,39 +169,30 @@ error_t *encryption_policy_should_encrypt(
     /* Priority 4: Check auto-encrypt patterns.
      *
      * Pattern matching is pure computation on the pre-compiled ruleset;
-     * it cannot fail. A NULL auto_rules is the sentinel meaning "no
-     * auto-encrypt applies" and is treated as a non-match. */
+     * it cannot fail. An inactive policy (no config, disabled, or no
+     * patterns) is treated as a non-match. */
     *out_should_encrypt =
-        encryption_policy_matches_auto_patterns(auto_rules, storage_path);
+        encryption_policy_matches_auto_patterns(config, storage_path);
     return NULL;
 }
 
 bool encryption_policy_matches_auto_patterns(
-    const gitignore_ruleset_t *auto_rules,
+    const config_t *config,
     const char *storage_path
 ) {
-    if (!auto_rules || !storage_path) {
+    if (!config || !config->auto_encrypt.rules || !storage_path) {
         return false;
     }
 
-    /* Strip storage prefix for pattern matching
-     *
-     * This allows patterns like ".ssh/id_*" to match "home/.ssh/id_rsa"
-     * without requiring users to write "home/.ssh/id_*" in their config.
-     *
-     * Prefixes: "home/" (5 chars), "root/" (5 chars), "custom/" (7 chars)
-     */
-    const char *path_for_matching = storage_path;
-    if (str_starts_with(storage_path, "home/") ||
-        str_starts_with(storage_path, "root/")) {
-        path_for_matching = storage_path + 5;
-    } else if (str_starts_with(storage_path, "custom/")) {
-        path_for_matching = storage_path + 7;
-    }
+    /* Strip storage prefix so patterns like ".ssh/id_*" match
+     * "home/.ssh/id_rsa" without forcing users to write "home/" in config. */
+    const char *path_for_matching = path_strip_storage_prefix(storage_path);
 
     /* Encryption applies to files, not directories — is_dir is always
      * false. Gitignore's last-match-wins with negation support is what
      * the user actually wants: `*.key` + `!public.key` correctly excludes
      * `public.key` from auto-encryption. */
-    return gitignore_is_ignored(auto_rules, path_for_matching, false);
+    return gitignore_is_ignored(
+        config->auto_encrypt.rules, path_for_matching, false
+    );
 }

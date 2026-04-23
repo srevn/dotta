@@ -73,7 +73,7 @@ static error_t *cmd_key_set(
 
     /* Notify if key is already cached (check both memory and disk) */
     if (keymgr_probe_key(keymgr)) {
-        int64_t seconds_remaining = keymgrime_until_expiry(keymgr, NULL);
+        int64_t seconds_remaining = keymgr_time_until_expiry(keymgr, NULL);
         if (seconds_remaining == -1) {
             output_info(
                 out, OUTPUT_NORMAL, "A passphrase is already cached (no expiration)"
@@ -299,7 +299,7 @@ static error_t *cmd_key_status(
         /* Show time until expiry */
         time_t expires_at = 0;
         int64_t seconds_remaining =
-            keymgrime_until_expiry(keymgr, &expires_at);
+            keymgr_time_until_expiry(keymgr, &expires_at);
 
         if (seconds_remaining == -1) {
             output_print(

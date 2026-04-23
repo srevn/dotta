@@ -334,6 +334,21 @@ bool metadata_get_file_encrypted(
 );
 
 /**
+ * True iff metadata contains at least one FILE entry marked encrypted.
+ *
+ * Set-level counterpart to metadata_get_file_encrypted. Used at command
+ * dispatch to decide whether a keymgr must be fetched — a profile that
+ * already contains any encrypted file may need decryption even when no
+ * auto-encrypt pattern is currently configured.
+ *
+ * NULL-safe (returns false). O(N) over entries.
+ *
+ * @param metadata Metadata collection (can be NULL)
+ * @return true if any item is a file with encrypted=true
+ */
+bool metadata_has_encrypted_files(const metadata_t *metadata);
+
+/**
  * Get all items (unfiltered)
  *
  * Returns direct pointer to internal items array (borrowed reference).

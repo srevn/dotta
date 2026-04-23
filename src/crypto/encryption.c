@@ -20,6 +20,25 @@ static const unsigned char MAGIC_HEADER[8] = {
     0x00, 0x00         /* Reserved (padding to 8 bytes) */
 };
 
+/* Defensive upper bound on storage_path bytes (excluding NUL).
+ *
+ * Storage paths are profile-relative ("home/.bashrc", "root/etc/foo"), so
+ * in practice they stay well under 1 KiB. The cap exists so the crypto
+ * module defends itself at its own boundary rather than trusting upstream
+ * validation, and so the same limit holds on every platform (PATH_MAX
+ * varies — 1024 on macOS, 4096 on Linux). Trips only on pathological
+ * input; normal callers never approach it. */
+#define ENCRYPTION_STORAGE_PATH_MAX 4096
+
+/* Maximum file size for encryption / decryption (100 MiB).
+ *
+ * Dotfiles are small configuration files; a 100 MiB cap prevents the
+ * crypto layer from allocating huge keystream / ciphertext buffers on
+ * behalf of runaway input. Enforced at both entry points so every
+ * caller — regardless of how the bytes reached us — hits the same
+ * limit with the same diagnostic. */
+#define ENCRYPTION_MAX_CONTENT_SIZE ((size_t) 100 * 1024 * 1024)
+
 /**
  * Store a uint64_t in little-endian byte order (portable)
  */
@@ -506,6 +525,30 @@ error_t *encryption_encrypt(
 
     *out_ciphertext = (buffer_t){ 0 };
 
+    /* Defensive: reject pathological storage paths at the boundary.
+     * strnlen keeps the scan bounded even if the caller hands us a
+     * non-NUL-terminated buffer. */
+    if (strnlen(storage_path, ENCRYPTION_STORAGE_PATH_MAX + 1)
+        > ENCRYPTION_STORAGE_PATH_MAX) {
+        return ERROR(
+            ERR_INVALID_ARG, "Storage path too long (maximum %d bytes)",
+            ENCRYPTION_STORAGE_PATH_MAX
+        );
+    }
+
+    /* Policy cap: dotta manages small configuration files. A single cap
+     * on the crypto entry point enforces the rule for every caller. */
+    if (plaintext_len > ENCRYPTION_MAX_CONTENT_SIZE) {
+        return ERROR(
+            ERR_INVALID_ARG,
+            "Content too large: %zu bytes (max %zu bytes).\n\n"
+            "Rationale: dotfiles should be small configuration files.\n"
+            "If you need to manage files larger than 100MB, consider whether\n"
+            "they belong in a dotfile manager or should use a different tool.",
+            plaintext_len, (size_t) ENCRYPTION_MAX_CONTENT_SIZE
+        );
+    }
+
     /* Calculate output size with overflow detection */
     if (plaintext_len > SIZE_MAX - ENCRYPTION_OVERHEAD) {
         return ERROR(
@@ -635,6 +678,33 @@ error_t *encryption_decrypt(
 
     *out_plaintext = (buffer_t){ 0 };
 
+    /* Defensive: reject pathological storage paths at the boundary.
+     * strnlen keeps the scan bounded even if the caller hands us a
+     * non-NUL-terminated buffer. */
+    if (strnlen(storage_path, ENCRYPTION_STORAGE_PATH_MAX + 1)
+        > ENCRYPTION_STORAGE_PATH_MAX) {
+        return ERROR(
+            ERR_INVALID_ARG, "Storage path too long (maximum %d bytes)",
+            ENCRYPTION_STORAGE_PATH_MAX
+        );
+    }
+
+    /* Policy cap: mirror the encrypt-side limit. ciphertext_len includes
+     * header + SIV, so the inner plaintext is ciphertext_len - OVERHEAD
+     * bytes — cap the total with the overhead baked in. */
+    if (ciphertext_len
+        > ENCRYPTION_MAX_CONTENT_SIZE + (size_t) ENCRYPTION_OVERHEAD) {
+        return ERROR(
+            ERR_INVALID_ARG,
+            "Ciphertext too large: %zu bytes (max %zu bytes).\n\n"
+            "Rationale: dotfiles should be small configuration files.\n"
+            "If you need to manage files larger than 100MB, consider whether\n"
+            "they belong in a dotfile manager or should use a different tool.",
+            ciphertext_len,
+            (size_t) ENCRYPTION_MAX_CONTENT_SIZE + (size_t) ENCRYPTION_OVERHEAD
+        );
+    }
+
     /* Step 1: Validate minimum size */
     if (ciphertext_len < ENCRYPTION_OVERHEAD) {
         return ERROR(
@@ -759,11 +829,14 @@ cleanup:
 }
 
 bool encryption_is_encrypted(const unsigned char *data, size_t data_len) {
-    /* Check if data is large enough to contain magic bytes */
-    if (!data || data_len < ENCRYPTION_MAGIC_BYTES) {
+    /* Require magic + version so we only identify blobs we can actually
+     * decrypt. A file whose first bytes happen to be "DOTTA" but encode
+     * a different version byte is treated as plaintext here; the decrypt
+     * path still surfaces a precise "unsupported version" error if a
+     * caller does reach it (e.g. via explicit --no-encrypt override). */
+    if (!data || data_len < ENCRYPTION_TAG_BYTES) {
         return false;
     }
 
-    /* Compare only the magic bytes (first 5 bytes of MAGIC_HEADER) */
-    return memcmp(data, MAGIC_HEADER, ENCRYPTION_MAGIC_BYTES) == 0;
+    return memcmp(data, MAGIC_HEADER, ENCRYPTION_TAG_BYTES) == 0;
 }

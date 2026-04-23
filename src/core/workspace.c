@@ -2033,9 +2033,9 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
  * uses magic header truth for policy enforcement. This ensures policy
  * violations are always detected even with corrupted metadata.
  *
- * Only checks if:
- * - Encryption is globally enabled
- * - Auto-encrypt patterns are configured
+ * Only fires when encryption is active — i.e. the config has a compiled
+ * auto-encrypt ruleset (see encryption_policy_is_active). Nothing to
+ * check without one.
  *
  * Error handling:
  * - Git read errors: Non-fatal, warns and skips file
@@ -2044,9 +2044,8 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
  * This is a security-focused check: files matching sensitive patterns
  * (e.g., "*.key", ".ssh/id_*") should be encrypted.
  *
- * Auto-encrypt ruleset is compiled once at the start of the scan and
- * borrowed across every manifest entry; matching itself is pure
- * computation and cannot fail.
+ * The compiled auto-encrypt ruleset lives on the config handle; matching
+ * is pure computation and cannot fail.
  */
 static error_t *analyze_encryption_policy_mismatch(
     workspace_t *ws,
@@ -2055,39 +2054,12 @@ static error_t *analyze_encryption_policy_mismatch(
     CHECK_NULL(ws);
     CHECK_NULL(ws->manifest);
 
-    /* Skip if encryption disabled globally */
-    if (!config || !config->encryption_enabled) {
+    /* Fast-path: no auto-encrypt ruleset means nothing to validate. */
+    if (!encryption_policy_is_active(config)) {
         return NULL;
     }
 
-    /* Skip if no auto-encrypt patterns configured */
-    if (!config->auto_encrypt_patterns || config->auto_encrypt_pattern_count == 0) {
-        return NULL;
-    }
-
-    /* Compile the auto-encrypt ruleset once for this scan. On its own
-     * arena so it doesn't pollute ws->arena (which has a different
-     * lifetime aligned with the workspace itself). */
-    arena_t *rules_arena = arena_create(0);
-    if (!rules_arena) {
-        return ERROR(ERR_MEMORY, "Failed to allocate auto-encrypt arena");
-    }
-
-    gitignore_ruleset_t *auto_rules = NULL;
-    error_t *err = encryption_policy_build_auto_rules(
-        config, rules_arena, &auto_rules
-    );
-    if (err) {
-        arena_destroy(rules_arena);
-        return error_wrap(err, "Failed to compile auto-encrypt patterns");
-    }
-
-    /* If the builder returned NULL the short-circuit above should have
-     * fired; treat unexpected NULL as "nothing to scan". */
-    if (!auto_rules) {
-        arena_destroy(rules_arena);
-        return NULL;
-    }
+    error_t *err = NULL;
 
     /* Check each file in manifest */
     for (size_t i = 0; i < ws->manifest->count; i++) {
@@ -2096,7 +2068,7 @@ static error_t *analyze_encryption_policy_mismatch(
         const char *profile = manifest_entry->profile;
 
         /* Check if file should be auto-encrypted (pure computation) */
-        if (!encryption_policy_matches_auto_patterns(auto_rules, storage_path)) {
+        if (!encryption_policy_matches_auto_patterns(config, storage_path)) {
             continue;
         }
 
@@ -2208,14 +2180,12 @@ static error_t *analyze_encryption_policy_mismatch(
                 );
 
                 if (err) {
-                    arena_destroy(rules_arena);
                     return err;
                 }
             }
         }
     }
 
-    arena_destroy(rules_arena);
     return NULL;
 }
 

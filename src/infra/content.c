@@ -21,19 +21,6 @@
 #include "sys/gitops.h"
 
 /**
- * Maximum file size for encryption (100MB)
- *
- * This limit prevents:
- * - Memory exhaustion from huge files
- * - Disk exhaustion in worktrees
- * - DoS via resource consumption
- *
- * Rationale: Dotfiles should be small configuration files.
- * If you need to encrypt 100MB+ files, reconsider your approach.
- */
-#define MAX_ENCRYPTED_FILE_SIZE (100 * 1024 * 1024)
-
-/**
  * Content cache structure
  */
 struct content_cache {
@@ -352,18 +339,6 @@ error_t *content_store_to_blob(
     const unsigned char *data = (const unsigned char *) plaintext->data;
     size_t size = plaintext->size;
 
-    /* Validate file size (security: prevent DoS via huge files) */
-    if (size > MAX_ENCRYPTED_FILE_SIZE) {
-        return ERROR(
-            ERR_INVALID_ARG,
-            "Content too large: %zu bytes (max %d bytes).\n\n"
-            "Rationale: Dotfiles should be small configuration files.\n"
-            "If you need to manage files larger than 100MB, consider whether\n"
-            "they belong in a dotfile manager or should use a different tool.",
-            size, MAX_ENCRYPTED_FILE_SIZE
-        );
-    }
-
     buffer_t ciphertext = BUFFER_INIT;
 
     /* Handle encryption if requested */
@@ -461,29 +436,23 @@ error_t *content_store_file_to_worktree(
         );
     }
 
-    /* Step 2: Validate file size before reading (prevent memory exhaustion) */
-    if ((size_t) st.st_size > MAX_ENCRYPTED_FILE_SIZE) {
-        return ERROR(
-            ERR_INVALID_ARG,
-            "File '%s' is too large: %zu bytes (max %d bytes).\n\n"
-            "Rationale: Dotfiles should be small configuration files.\n"
-            "If you need to manage files larger than 100MB, consider whether\n"
-            "they belong in a dotfile manager or should use a different tool.",
-            filesystem_path, (size_t) st.st_size, MAX_ENCRYPTED_FILE_SIZE
-        );
-    }
-
-    /* Step 3: Read file from filesystem */
+    /* Step 2: Read file from filesystem
+     *
+     * The 100 MiB content cap lives in crypto/encryption.c as the single
+     * enforcement point; the encrypt path rejects oversize input after
+     * this read. For the plaintext path we rely on fs_read_file's own
+     * bounds and libgit2's blob handling rather than duplicating the
+     * policy here. */
     buffer_t content = BUFFER_INIT;
     error_t *err = fs_read_file(filesystem_path, &content);
     if (err) {
         return error_wrap(err, "Failed to read file '%s'", filesystem_path);
     }
 
-    /* Step 4: Get source file's mode (preserve permissions in worktree -> git) */
+    /* Step 3: Get source file's mode (preserve permissions in worktree -> git) */
     mode_t mode = st.st_mode;  /* Reuse mode from stat() above */
 
-    /* Step 5: Encrypt if requested */
+    /* Step 4: Encrypt if requested */
     buffer_t *data_to_write = &content;  /* Default: write plaintext */
     buffer_t ciphertext = BUFFER_INIT;
 
@@ -531,7 +500,7 @@ error_t *content_store_file_to_worktree(
         data_to_write = &ciphertext;
     }
 
-    /* Step 6: Write to worktree with original mode
+    /* Step 5: Write to worktree with original mode
      * CRITICAL: Use source file's mode so git commits with correct permissions.
      * This ensures git mode matches metadata mode, preventing spurious MODE diffs. */
     err = fs_write_file_raw(

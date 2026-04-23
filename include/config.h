@@ -11,6 +11,26 @@
 
 #include <types.h>
 
+/* Forward declaration — kept opaque so consumers of struct config do
+ * not transitively pull in the gitignore engine. The full type lives
+ * in base/gitignore.h; only utils/config.c and crypto/policy.c touch
+ * the rules directly. */
+typedef struct gitignore_ruleset gitignore_ruleset_t;
+
+/**
+ * Compiled auto-encrypt ruleset.
+ *
+ * Materialized once at config_load from config->auto_encrypt_patterns
+ * and destroyed by config_free. Arena owns the ruleset storage;
+ * destroying the arena drops both. Both fields are NULL when encryption
+ * is disabled or no patterns are configured — consumers treat a NULL
+ * rules pointer as the fast "no auto-encrypt applies" sentinel.
+ */
+typedef struct config_auto_encrypt_rules {
+    arena_t *arena;
+    const gitignore_ruleset_t *rules;  /* NULL when inactive */
+} config_auto_encrypt_rules_t;
+
 /**
  * Configuration structure
  */
@@ -57,6 +77,7 @@ struct config {
     bool encryption_enabled;      /* Enable encryption feature (default: false) */
     char **auto_encrypt_patterns; /* Auto-encrypt patterns (gitignore-style) */
     size_t auto_encrypt_pattern_count;
+    config_auto_encrypt_rules_t auto_encrypt; /* Compiled form of auto_encrypt_patterns */
     uint64_t encryption_opslimit; /* CPU cost for password hashing (default: 10000) */
     size_t encryption_memlimit;   /* Memory cost for balloon hashing in MB (default: 64, 0 = disabled) */
     int32_t session_timeout;      /* Key cache timeout in seconds (default: 3600, 0 = always prompt, -1 = never expire) */

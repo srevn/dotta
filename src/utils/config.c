@@ -8,7 +8,9 @@
 #include <string.h>
 #include <tomlc17.h>
 
+#include "base/arena.h"
 #include "base/error.h"
+#include "base/gitignore.h"
 #include "infra/path.h"
 #include "sys/filesystem.h"
 
@@ -76,6 +78,52 @@ static error_t *set_string(char **field, const char *value) {
     }
     free(*field);
     *field = copy;
+    return NULL;
+}
+
+/**
+ * Helper: Compile config->auto_encrypt_patterns into a gitignore ruleset.
+ *
+ * Populates config->auto_encrypt.{arena,rules}. Leaves both NULL when
+ * encryption is disabled or no patterns are configured — consumers
+ * treat NULL rules as the "no auto-encrypt applies" sentinel.
+ *
+ * Eager compile at load time: any per-pattern length or per-ruleset
+ * rule-count violation surfaces once, at startup, via the existing
+ * config_load error path — no per-command deferred failures.
+ */
+static error_t *config_compile_auto_encrypt(config_t *config) {
+    if (!config->encryption_enabled || !config->auto_encrypt_patterns ||
+        config->auto_encrypt_pattern_count == 0) {
+        return NULL;
+    }
+
+    arena_t *arena = arena_create(0);
+    if (!arena) {
+        return ERROR(ERR_MEMORY, "Failed to allocate auto-encrypt arena");
+    }
+
+    gitignore_ruleset_t *rules = NULL;
+    error_t *err = gitignore_ruleset_create(arena, &rules);
+    if (err) {
+        arena_destroy(arena);
+        return error_wrap(err, "Failed to allocate auto-encrypt ruleset");
+    }
+
+    /* Origin tag is unused — auto-encrypt has no per-rule attribution. */
+    err = gitignore_ruleset_append_patterns(
+        rules,
+        (const char *const *) config->auto_encrypt_patterns,
+        config->auto_encrypt_pattern_count,
+        0
+    );
+    if (err) {
+        arena_destroy(arena);
+        return error_wrap(err, "Invalid auto-encrypt patterns");
+    }
+
+    config->auto_encrypt.arena = arena;
+    config->auto_encrypt.rules = rules;
     return NULL;
 }
 
@@ -212,6 +260,10 @@ void config_free(config_t *config) {
         }
         free(config->auto_encrypt_patterns);
     }
+
+    /* Drop the compiled auto-encrypt ruleset. arena_destroy is NULL-safe
+     * and owns the ruleset storage — no separate rules free needed. */
+    arena_destroy(config->auto_encrypt.arena);
 
     free(config);
 }
@@ -587,6 +639,15 @@ error_t *config_load(const char *config_path, config_t **out) {
 
     /* Validate */
     err = config_validate(config);
+    if (err) {
+        config_free(config);
+        return err;
+    }
+
+    /* Materialize derived state (compiled auto-encrypt ruleset) after
+     * validation. Pattern-compile errors are real config errors — same
+     * failure class as invalid verbosity or out-of-range opslimit. */
+    err = config_compile_auto_encrypt(config);
     if (err) {
         config_free(config);
         return err;

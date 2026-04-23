@@ -38,6 +38,7 @@
 /**
  * Copy file from filesystem to worktree (with optional encryption)
  *
+ * @param config Configuration (for encryption policy; can be NULL)
  * @param out_was_encrypted Optional output - set to true if file was encrypted (can be NULL)
  * @param out_stat Optional output - filled with stat data from source file (can be NULL)
  */
@@ -47,7 +48,7 @@ static error_t *copy_file_to_worktree(
     const char *storage_path,
     const char *profile,
     keymgr *keymgr,
-    const gitignore_ruleset_t *auto_rules,
+    const config_t *config,
     const metadata_t *metadata,
     bool *out_was_encrypted,
     struct stat *out_stat
@@ -132,7 +133,7 @@ static error_t *copy_file_to_worktree(
          */
         bool should_encrypt = false;
         err = encryption_policy_should_encrypt(
-            auto_rules,
+            config,
             storage_path,
             false,           /* No explicit --encrypt flag in update.c */
             false,           /* No explicit --no-encrypt flag in update.c */
@@ -702,7 +703,6 @@ static error_t *update_metadata_for_profile(
  * @param opts Update options (must not be NULL)
  * @param out Output context (must not be NULL)
  * @param config Configuration (can be NULL)
- * @param auto_rules Pre-compiled auto-encrypt ruleset (can be NULL)
  * @param out_processed Output: number of items committed (must not be NULL)
  * @return Error or NULL on success
  */
@@ -714,7 +714,6 @@ static error_t *update_profile(
     const cmd_update_options_t *opts,
     output_t *out,
     const config_t *config,
-    const gitignore_ruleset_t *auto_rules,
     size_t *out_processed
 ) {
     CHECK_NULL(wt);
@@ -764,25 +763,19 @@ static error_t *update_profile(
     }
     owns_metadata = true;
 
-    /* Get keymgr if encryption may be needed */
-    bool needs_encryption = false;
+    /* Get keymgr if encryption may be needed.
+     *
+     * Fetch a key if this profile has any encrypted files today (priority 3
+     * will fire during policy evaluation) OR auto-encrypt patterns are
+     * configured (priority 4 may fire on any file). Both dimensions also
+     * require the encryption feature to be enabled — no patterns are
+     * compiled and no metadata-encrypted files can land without it. */
+    bool needs_encryption = config && config->encryption_enabled && (
+        encryption_policy_is_active(config) ||
+        metadata_has_encrypted_files(existing_metadata)
+    );
 
-    if (existing_metadata && config && config->encryption_enabled) {
-        for (size_t i = 0; i < existing_metadata->count; i++) {
-            const metadata_item_t *meta_item = &existing_metadata->items[i];
-            if (meta_item->kind == METADATA_ITEM_FILE && meta_item->file.encrypted) {
-                needs_encryption = true;
-                break;
-            }
-        }
-    }
-
-    if (!needs_encryption && config && config->encryption_enabled &&
-        config->auto_encrypt_patterns && config->auto_encrypt_pattern_count > 0) {
-        needs_encryption = true;
-    }
-
-    if (needs_encryption && config && config->encryption_enabled) {
+    if (needs_encryption) {
         keymgr = keymgr_get_global(config);
         if (!keymgr) {
             if (owns_metadata && existing_metadata) metadata_free(existing_metadata);
@@ -867,7 +860,7 @@ static error_t *update_profile(
                     item->storage_path,
                     profile,
                     keymgr,
-                    auto_rules,
+                    config,
                     existing_metadata,
                     &copy_results[i].encrypted,
                     &copy_results[i].stat
@@ -1188,7 +1181,6 @@ cleanup:
  * @param opts Update options (must not be NULL)
  * @param out Output context (must not be NULL)
  * @param config Configuration (can be NULL)
- * @param auto_rules Pre-compiled auto-encrypt ruleset (can be NULL)
  * @param total_updated Output: total items updated across all profiles (must not be NULL)
  * @param out_by_profile Output: hashmap of items grouped by profile (must not be NULL, freed by caller)
  * @return Error or NULL on success
@@ -1200,7 +1192,6 @@ static error_t *update_execute_for_all_profiles(
     const cmd_update_options_t *opts,
     output_t *out,
     const config_t *config,
-    const gitignore_ruleset_t *auto_rules,
     size_t *total_updated,
     hashmap_t **out_by_profile
 ) {
@@ -1271,7 +1262,7 @@ static error_t *update_execute_for_all_profiles(
         size_t processed = 0;
         err = update_profile(
             wt, profile, (const workspace_item_t **) array->items, array->count,
-            opts, out, config, auto_rules, &processed
+            opts, out, config, &processed
         );
 
         if (err) {
@@ -1771,8 +1762,6 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
     const workspace_item_t **update_items = NULL;
     size_t update_count = 0;
     size_t total_updated = 0;
-    arena_t *auto_rules_arena = NULL;        /* owns auto_rules for the whole command */
-    gitignore_ruleset_t *auto_rules = NULL;  /* NULL when no auto-encrypt applies */
 
     /* CLI flags override config */
     if (opts->verbose) {
@@ -1821,26 +1810,6 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
     /* Execute pre-update hook */
     err = hook_fire_pre(config, out, ctx->repo_path, &hook_inv);
     if (err) goto cleanup;
-
-    /* Compile auto-encrypt ruleset once per command.
-     *
-     * Arena lifetime is the entire command — every per-file policy
-     * call (via copy_file_to_worktree) borrows this ruleset. When
-     * encryption is disabled or no patterns are configured,
-     * build_auto_rules leaves auto_rules NULL, which every policy
-     * consumer treats as "no auto-encrypt applies". */
-    auto_rules_arena = arena_create(0);  /* default initial capacity */
-    if (!auto_rules_arena) {
-        err = ERROR(ERR_MEMORY, "Failed to allocate auto-encrypt arena");
-        goto cleanup;
-    }
-    err = encryption_policy_build_auto_rules(
-        config, auto_rules_arena, &auto_rules
-    );
-    if (err) {
-        err = error_wrap(err, "Failed to compile auto-encrypt patterns");
-        goto cleanup;
-    }
 
     /* Load workspace for update analysis
      *
@@ -2033,7 +2002,7 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
     /* Execute profile updates. Filtered to operation scope */
     hashmap_t *by_profile = NULL;
     err = update_execute_for_all_profiles(
-        repo, update_items, update_count, opts, out, config, auto_rules,
+        repo, update_items, update_count, opts, out, config,
         &total_updated, &by_profile
     );
 
@@ -2123,8 +2092,6 @@ cleanup:
     if (ws) workspace_free(ws);
     if (profiles_str) free(profiles_str);
     if (scope) scope_free(scope);
-    /* auto_rules is arena-borrowed — destroying the arena drops both. */
-    arena_destroy(auto_rules_arena);
 
     return err;
 }

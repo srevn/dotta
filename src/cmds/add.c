@@ -12,7 +12,6 @@
 #include <string.h>
 #include <sys/stat.h>
 
-#include "base/arena.h"
 #include "base/args.h"
 #include "base/array.h"
 #include "base/error.h"
@@ -229,8 +228,7 @@ static error_t *collect_files_from_dir(
  * @param storage_path Pre-computed storage path (e.g., "home/.bashrc")
  * @param opts Command options
  * @param keymgr Key manager (for encryption, can be NULL if encryption disabled)
- * @param auto_rules Pre-compiled auto-encrypt ruleset (can be NULL if
- *                   encryption disabled or no patterns configured)
+ * @param config Configuration (for encryption policy; can be NULL)
  * @param metadata Metadata collection (captured entry will be added here)
  * @param out Output context
  * @return Error or NULL on success
@@ -241,7 +239,7 @@ static error_t *add_file_to_worktree(
     const char *storage_path,
     const cmd_add_options_t *opts,
     keymgr *keymgr,
-    const gitignore_ruleset_t *auto_rules,
+    const config_t *config,
     metadata_t *metadata,
     output_t *out
 ) {
@@ -342,7 +340,7 @@ static error_t *add_file_to_worktree(
         /* Regular file - determine encryption policy using centralized logic */
         bool should_encrypt = false;
         err = encryption_policy_should_encrypt(
-            auto_rules,
+            config,
             storage_path,
             opts->encrypt_mode == ADD_ENCRYPT_FORCE_ON,
             opts->encrypt_mode == ADD_ENCRYPT_FORCE_OFF,
@@ -860,8 +858,6 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     bool profile_was_new = false;
     metadata_t *metadata = NULL;
     keymgr *keymgr = NULL;
-    arena_t *auto_rules_arena = NULL;        /* owns auto_rules for the whole command */
-    gitignore_ruleset_t *auto_rules = NULL;  /* NULL when no auto-encrypt applies */
 
     /* Pre-flight privilege check arrays */
     char **preflight_storage_paths = NULL;
@@ -1311,18 +1307,27 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         }
     }
 
-    /* Get keymgr if encryption may be needed
+    /* Get keymgr if encryption may be needed.
      *
-     * Keymanager handles profile key caching internally, so files will reuse
-     * the same derived key without redundant derivations (O(1) after first derivation).
+     * Keymanager handles profile key caching internally, so files will
+     * reuse the same derived key without redundant derivations.
      *
-     * Get keymgr if EITHER:
+     * Fetch keymgr if ANY of:
      *   1. Explicit encryption requested (--encrypt flag)
      *   2. Auto-encrypt patterns configured (files may match patterns)
-     */
+     *   3. Re-adding over an existing file whose metadata says encrypted
+     *      (policy priority 3 fires only with --force, because a non-force
+     *      add errors out earlier on "file already exists").
+     *
+     * is_active implies encryption_enabled; so only path 1 can reach the
+     * !encryption_enabled branch. Path 3 overshoots per command — we key
+     * on "any encrypted file in this profile's metadata" rather than
+     * checking each candidate path — because the cost (one profile-key
+     * derivation that goes unused) is trivial versus a keymgr-NULL crash
+     * in content_store_file_to_worktree if we undershoot. */
     bool needs_encryption = opts->encrypt_mode == ADD_ENCRYPT_FORCE_ON ||
-        (config->encryption_enabled && config->auto_encrypt_patterns &&
-        config->auto_encrypt_pattern_count > 0);
+        encryption_policy_is_active(config) ||
+        (opts->force && metadata_has_encrypted_files(metadata));
 
     if (needs_encryption) {
         if (!config->encryption_enabled) {
@@ -1338,25 +1343,6 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
             err = ERROR(ERR_INTERNAL, "Failed to get encryption key manager");
             goto cleanup;
         }
-    }
-
-    /* Compile auto-encrypt ruleset once per command.
-     *
-     * Arena lifetime is the entire command — every per-file policy call
-     * borrows this ruleset. When encryption is disabled or no patterns
-     * are configured, build_auto_rules leaves auto_rules NULL, which
-     * every policy consumer treats as "no auto-encrypt applies". */
-    auto_rules_arena = arena_create(0);  /* default initial capacity */
-    if (!auto_rules_arena) {
-        err = ERROR(ERR_MEMORY, "Failed to allocate auto-encrypt arena");
-        goto cleanup;
-    }
-    err = encryption_policy_build_auto_rules(
-        config, auto_rules_arena, &auto_rules
-    );
-    if (err) {
-        err = error_wrap(err, "Failed to compile auto-encrypt patterns");
-        goto cleanup;
     }
 
     /* Single-pass: add files and capture metadata inline */
@@ -1383,7 +1369,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
          * ARCHITECTURE: add_file_to_worktree handles both operations atomically,
          * sharing stat() data between content and metadata layers to eliminate TOCTOU */
         err = add_file_to_worktree(
-            wt, file_path, storage_path, opts, keymgr, auto_rules, metadata, out
+            wt, file_path, storage_path, opts, keymgr, config, metadata, out
         );
         if (err) {
             free(storage_path);
@@ -1700,8 +1686,6 @@ cleanup:
     if (wt) worktree_cleanup(&wt);
     source_filter_free(source_filter);
     ignore_rules_free(ignore_rules);
-    /* auto_rules is arena-borrowed — destroy the arena drops both. */
-    arena_destroy(auto_rules_arena);
     if (preflight_allocated_paths) {
         for (size_t i = 0; i < preflight_storage_count; i++) {
             free(preflight_allocated_paths[i]);

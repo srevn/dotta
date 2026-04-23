@@ -83,7 +83,13 @@ ETC_DIR := etc
 PREFIX ?= /usr/local
 BINDIR := $(PREFIX)/bin
 DATADIR := $(PREFIX)/share/dotta
-FISHDIR ?= $(PREFIX)/share/fish/vendor_completions.d
+
+# Fish completion directory
+ifeq ($(BUILD_OS),linux)
+    FISHDIR ?= /usr/share/fish/vendor_completions.d
+else
+    FISHDIR ?= $(PREFIX)/share/fish/vendor_completions.d
+endif
 
 # Source files by layer
 BASE_SRC := $(wildcard $(SRC_DIR)/base/*.c)

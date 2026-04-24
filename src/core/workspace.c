@@ -1741,7 +1741,16 @@ static error_t *analyze_untracked_files(
             );
         }
 
-        /* Scan each tracked directory */
+        /* Scan each tracked directory.
+         *
+         * Tree-root suppression: entries arrive parent-first thanks to
+         * state_get_directories_by_profile's ORDER BY filesystem_path. If
+         * the last scanned entry is a directory-prefix ancestor of the
+         * current one, this subtree is already covered by the ancestor's
+         * recursive scan — ws->diverged_index dedupes the RESULT either
+         * way, but the IO was still being paid per-level. Resets per
+         * profile (different ignore rules). */
+        const char *last_scanned = NULL;
         for (size_t i = 0; i < dir_count; i++) {
             const state_directory_entry_t *dir_entry = &directories[i];
 
@@ -1786,6 +1795,18 @@ static error_t *analyze_untracked_files(
                 continue;
             }
 
+            /* Nested-scan suppression: if the previously-scanned directory is
+             * a strict directory-prefix ancestor, this subtree was already
+             * walked. Boundary-aware ('/' terminator) to avoid false matches
+             * like /foo/bar vs /foo/barn. Order guarantees ancestor-first. */
+            if (last_scanned) {
+                size_t plen = strlen(last_scanned);
+                if (strncmp(last_scanned, filesystem_path, plen) == 0 &&
+                    filesystem_path[plen] == '/') {
+                    continue;
+                }
+            }
+
             /* Scan this directory for untracked files */
             err = scan_directory_for_untracked(
                 filesystem_path,           /* Already resolved filesystem path */
@@ -1806,6 +1827,10 @@ static error_t *analyze_untracked_files(
                 error_free(err);
                 err = NULL;
             }
+
+            /* Record this scan root regardless of outcome — a failed scan
+             * still visited the subtree, so deeper entries are redundant. */
+            last_scanned = filesystem_path;
         }
     }
 

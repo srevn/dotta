@@ -1879,7 +1879,12 @@ error_t *state_directory_entry_create_from_metadata(
     entry->mode = meta_item->mode;
     entry->owner = DUP_OPT(meta_item->owner);
     entry->group = DUP_OPT(meta_item->group);
-    entry->deployed_at = 0;
+
+    /* deployed_at intentionally left zero-initialized by calloc. The
+     * INSERT in state_add_directory omits the column (schema DEFAULT
+     * strftime('%s','now') fires for new rows); the UPDATE in
+     * state_update_directory also omits it (preserving the existing
+     * value on refresh). The field on this struct is never persisted. */
 
     /* Check allocation success */
     if (!entry->filesystem_path || !entry->storage_path || !entry->profile ||

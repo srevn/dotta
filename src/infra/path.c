@@ -311,8 +311,14 @@ static error_t *path_classify(
     }
 
     if (*candidate_relative == '\0') {
+        /* Path equals the winning classification root exactly. No storage-
+         * path encoding exists for the root itself; callers that walk a
+         * directory tree handle this as a "skip this entry, its descendants
+         * are captured separately" signal (see add.c's metadata-capture
+         * loop). Callers that expected a file receive this as an error. */
         return ERROR(
-            ERR_INVALID_ARG, "Cannot use the %s directory as a file path",
+            ERR_INVALID_ARG,
+            "Path equals the %s classification root; no storage-path representation",
             candidate->display
         );
     }

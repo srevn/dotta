@@ -530,33 +530,25 @@ static error_t *prune_orphaned_directories(
              * fs_exists follows symlinks (returns true if target exists), but
              * rmdir operates on the path itself and fails on symlinks.
              * Treat as non-removable to avoid confusing error messages.
-             */
+             *
+             * Mark state only; the skipped_dirs push is deferred to the
+             * finalization pass below (a symlink can't transition out of
+             * NOT_EMPTY, but the same pattern serves both branches). */
             if (fs_is_symlink(dir_path)) {
-                if (states[i] != DIR_STATE_NOT_EMPTY) {
-                    error_t *push_err = string_array_push(result->skipped_dirs, dir_path);
-                    if (push_err) {
-                        free(states);
-                        return error_wrap(push_err, "Failed to track skipped symlink directory");
-                    }
-                    states[i] = DIR_STATE_NOT_EMPTY;
-                }
+                states[i] = DIR_STATE_NOT_EMPTY;
                 continue;
             }
 
-            /* INLINE SAFETY CHECK: Is directory empty? */
+            /* INLINE SAFETY CHECK: Is directory empty?
+             *
+             * Mark state only. The NOT_EMPTY verdict can transition back to
+             * UNKNOWN (and then to REMOVED) after a child gets removed on a
+             * later iteration — reset_parent_directory_state_orphans handles
+             * that. Pushing to skipped_dirs now would produce contradictory
+             * "[skipped] a, [removed] a" output; the finalization pass below
+             * commits only entries whose FINAL state is NOT_EMPTY. */
             if (!fs_is_directory_empty(dir_path)) {
-                /* Safety violation: contains untracked files */
-                if (states[i] != DIR_STATE_NOT_EMPTY) {
-                    /* First time seeing this violation - track it */
-                    error_t *push_err = string_array_push(result->skipped_dirs, dir_path);
-                    if (push_err) {
-                        /* Free resources and return fatal error */
-                        free(states);
-                        return error_wrap(push_err, "Failed to track skipped directory");
-                    }
-
-                    states[i] = DIR_STATE_NOT_EMPTY;
-                }
+                states[i] = DIR_STATE_NOT_EMPTY;
                 continue;  /* Won't re-check until child removed */
             }
 
@@ -602,7 +594,23 @@ static error_t *prune_orphaned_directories(
         }
     }
 
-    /* Cleanup */
+    /* Finalize skipped_dirs: only entries whose FINAL state is NOT_EMPTY
+     * belong in the skipped list. An entry transiently marked NOT_EMPTY on
+     * an early pass may get reset to UNKNOWN once a child is removed, then
+     * transition to REMOVED on a later pass — pushing eagerly would pair
+     * "[skipped] a" with "[removed] a" in the user-facing output. */
+    for (size_t i = 0; i < dir_count; i++) {
+        if (states[i] == DIR_STATE_NOT_EMPTY) {
+            error_t *push_err = string_array_push(
+                result->skipped_dirs, orphans[i]->filesystem_path
+            );
+            if (push_err) {
+                free(states);
+                return error_wrap(push_err, "Failed to finalize skipped directory");
+            }
+        }
+    }
+
     free(states);
     return NULL;
 }

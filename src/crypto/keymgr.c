@@ -15,7 +15,6 @@
 
 #include "base/buffer.h"
 #include "base/error.h"
-#include "base/hashmap.h"
 #include "crypto/encryption.h"
 #include "crypto/passphrase.h"
 #include "crypto/session.h"
@@ -34,9 +33,6 @@ struct keymgr {
     bool has_key;             /* Is master key cached? */
     time_t cached_at;         /* When was key cached (monotonic time, 0 if not cached) */
     bool mlocked;             /* Is memory locked with mlock()? */
-
-    /* Profile key cache (profile → uint8_t[32]) */
-    hashmap_t *profile_keys;  /* Owned - each value is malloc'd ENCRYPTION_PROFILE_KEY_SIZE */
 };
 
 /**
@@ -84,7 +80,6 @@ error_t *keymgr_create(
     keymgr->has_key = false;
     keymgr->cached_at = 0;
     keymgr->mlocked = false;
-    keymgr->profile_keys = NULL;  /* Created lazily on first profile key request */
     hydro_memzero(keymgr->master_key, sizeof(keymgr->master_key));
 
     /* Attempt to lock memory to prevent swapping to disk
@@ -105,17 +100,6 @@ error_t *keymgr_create(
     return NULL;
 }
 
-/**
- * Secure destructor trampoline for profile keys.
- *
- * `hashmap_free`/`hashmap_clear` take a `void(*)(void*)` callback, so
- * `buffer_secure_free` (which takes `(void*, size_t)`) needs a fixed
- * length bound at compile time. This one-liner supplies the length.
- */
-static void secure_free_profile_key(void *key_ptr) {
-    buffer_secure_free(key_ptr, ENCRYPTION_PROFILE_KEY_SIZE);
-}
-
 void keymgr_free(keymgr *keymgr) {
     if (!keymgr) {
         return;
@@ -125,12 +109,6 @@ void keymgr_free(keymgr *keymgr) {
     hydro_memzero(keymgr->master_key, sizeof(keymgr->master_key));
     keymgr->has_key = false;
     keymgr->cached_at = 0;
-
-    /* Securely clear and free profile key cache */
-    if (keymgr->profile_keys) {
-        hashmap_free(keymgr->profile_keys, secure_free_profile_key);
-        keymgr->profile_keys = NULL;
-    }
 
     /* Unlock memory if it was locked */
     if (keymgr->mlocked) {
@@ -256,13 +234,6 @@ void keymgr_clear(keymgr *keymgr) {
     keymgr->has_key = false;
     keymgr->cached_at = 0;
 
-    /* Clear profile key cache (keys derived from master key, must be cleared too) */
-    if (keymgr->profile_keys) {
-        hashmap_clear(keymgr->profile_keys, secure_free_profile_key);
-        /* Note: hashmap_clear clears entries but keeps the map structure.
-         * This is intentional - we keep the map for future use. */
-    }
-
     /* Clear file cache */
     session_clear();
 }
@@ -279,20 +250,6 @@ error_t *keymgr_set_passphrase(
         return ERROR(
             ERR_INVALID_ARG, "Passphrase cannot be empty"
         );
-    }
-
-    /* Clear profile keys cache before deriving new master key
-     *
-     * CRITICAL: When the master key changes (e.g., session timeout + new passphrase),
-     * all cached profile keys become invalid since they were derived from the OLD
-     * master key. Failing to clear them causes decryption failures with confusing
-     * "Authentication failed" errors.
-     *
-     * This is safe even if the same passphrase is entered - profile keys will simply
-     * be re-derived on next use (negligible cost compared to master key derivation).
-     */
-    if (keymgr->profile_keys) {
-        hashmap_clear(keymgr->profile_keys, secure_free_profile_key);
     }
 
     /* Derive master key from passphrase */
@@ -331,9 +288,16 @@ error_t *keymgr_set_passphrase(
     return NULL;
 }
 
-error_t *keymgr_get_key(
+/**
+ * Resolve the master key (memory cache → disk session → prompt).
+ *
+ * Order: in-memory cache, on-disk session file, then interactive prompt
+ * (or DOTTA_ENCRYPTION_PASSPHRASE fallback). Caller owns the output
+ * buffer and is responsible for zeroing it after use.
+ */
+static error_t *keymgr_get_key(
     keymgr *keymgr,
-    uint8_t out_master_key[32]
+    uint8_t out_master_key[ENCRYPTION_MASTER_KEY_SIZE]
 ) {
     CHECK_NULL(keymgr);
     CHECK_NULL(out_master_key);
@@ -422,9 +386,16 @@ error_t *keymgr_get_key(
 }
 
 /**
- * Get derived profile key (with caching)
+ * Derive a profile key from the cached master key.
+ *
+ * The master key is fetched via keymgr_get_key (in-memory cache, then
+ * disk session, then prompt); the derivation itself is a keyed-BLAKE2
+ * hash in the microsecond range. The local master-key copy is zeroed
+ * before return, so the only remaining key material is the caller's
+ * stack buffer — which keymgr_encrypt / keymgr_decrypt zero after their
+ * single use.
  */
-error_t *keymgr_get_profile_key(
+static error_t *keymgr_get_profile_key(
     keymgr *keymgr,
     const char *profile,
     uint8_t out_profile_key[ENCRYPTION_PROFILE_KEY_SIZE]
@@ -433,27 +404,6 @@ error_t *keymgr_get_profile_key(
     CHECK_NULL(profile);
     CHECK_NULL(out_profile_key);
 
-    /* Check cache first, but only if master key is still valid.
-     *
-     * If the master key has expired (session timeout), cached profile keys
-     * must not be served — doing so would bypass re-authentication.
-     * Clear the cache and fall through to trigger a passphrase prompt. */
-    if (keymgr->profile_keys) {
-        if (!is_key_valid(keymgr)) {
-            /* Master key expired — invalidate all derived profile keys */
-            hashmap_clear(keymgr->profile_keys, secure_free_profile_key);
-        } else {
-            uint8_t *cached_key = hashmap_get(keymgr->profile_keys, profile);
-            if (cached_key) {
-                /* Cache hit - copy and return */
-                memcpy(out_profile_key, cached_key, ENCRYPTION_PROFILE_KEY_SIZE);
-                return NULL;
-            }
-        }
-    }
-
-    /* Cache miss - need to derive profile key */
-
     /* Get master key (may prompt for passphrase) */
     uint8_t master_key[ENCRYPTION_MASTER_KEY_SIZE];
     error_t *err = keymgr_get_key(keymgr, master_key);
@@ -461,63 +411,15 @@ error_t *keymgr_get_profile_key(
         return error_wrap(err, "Failed to get master key");
     }
 
-    /* Allocate memory for profile key (will be owned by cache) */
-    uint8_t *profile_key = malloc(ENCRYPTION_PROFILE_KEY_SIZE);
-    if (!profile_key) {
-        hydro_memzero(master_key, sizeof(master_key));
-        return ERROR(ERR_MEMORY, "Failed to allocate profile key");
-    }
-
-    /* Lock memory to prevent swapping to disk (best-effort, non-fatal if fails) */
-    if (mlock(profile_key, ENCRYPTION_PROFILE_KEY_SIZE) != 0) {
-        /* mlock failure is non-fatal - common reasons: insufficient privileges,
-         * RLIMIT_MEMLOCK exceeded. Key still protected by file permissions. */
-    }
-
     /* Derive profile key from master key */
-    err = encryption_derive_profile_key(master_key, profile, profile_key);
+    err = encryption_derive_profile_key(master_key, profile, out_profile_key);
 
     /* Clear master key immediately */
     hydro_memzero(master_key, sizeof(master_key));
 
     if (err) {
-        buffer_secure_free(profile_key, ENCRYPTION_PROFILE_KEY_SIZE);
         return error_wrap(err, "Failed to derive profile key for '%s'", profile);
     }
-
-    /* Create cache hashmap if it doesn't exist yet (lazy initialization) */
-    if (!keymgr->profile_keys) {
-        keymgr->profile_keys = hashmap_create(8);  /* Initial capacity: 8 profiles */
-        if (!keymgr->profile_keys) {
-            /* Non-fatal: continue without caching */
-            fprintf(stderr, "Warning: Failed to create profile key cache\n");
-            fprintf(stderr, "         Performance may be degraded for batch operations\n");
-
-            /* Copy key to output and return (no caching) */
-            memcpy(out_profile_key, profile_key, ENCRYPTION_PROFILE_KEY_SIZE);
-            buffer_secure_free(profile_key, ENCRYPTION_PROFILE_KEY_SIZE);
-            return NULL;
-        }
-    }
-
-    /* Store in cache */
-    err = hashmap_set(keymgr->profile_keys, profile, profile_key);
-    if (err) {
-        /* Non-fatal: continue without caching */
-        fprintf(
-            stderr, "Warning: Failed to cache profile key for '%s': %s\n",
-            profile, error_message(err)
-        );
-        error_free(err);
-
-        /* Copy key to output and return (no caching) */
-        memcpy(out_profile_key, profile_key, ENCRYPTION_PROFILE_KEY_SIZE);
-        buffer_secure_free(profile_key, ENCRYPTION_PROFILE_KEY_SIZE);
-        return NULL;
-    }
-
-    /* Successfully cached - copy to output */
-    memcpy(out_profile_key, profile_key, ENCRYPTION_PROFILE_KEY_SIZE);
 
     return NULL;
 }
@@ -535,9 +437,7 @@ error_t *keymgr_encrypt(
     CHECK_NULL(storage_path);
     CHECK_NULL(out_ciphertext);
 
-    /* Fetch (or derive) profile key. The caller of this function never
-     * sees the raw bytes — they live only in this local buffer and are
-     * zeroed below before we return. */
+    /* Derive profile key into a local buffer — never escapes this frame. */
     uint8_t profile_key[ENCRYPTION_PROFILE_KEY_SIZE];
     error_t *err = keymgr_get_profile_key(keymgr, profile, profile_key);
     if (err) {
@@ -548,9 +448,9 @@ error_t *keymgr_encrypt(
         plaintext, plaintext_len, profile_key, storage_path, out_ciphertext
     );
 
-    /* Clear the local key buffer on both success and failure. Missing
-     * this zeroization on the error path would leave 32 bytes of key
-     * material in stack memory until the frame is overwritten. */
+    /* Clear on both success and failure. Missing this zeroization on the
+     * error path would leave 32 bytes of key material on the stack until
+     * the frame is overwritten. */
     hydro_memzero(profile_key, sizeof(profile_key));
 
     return err;

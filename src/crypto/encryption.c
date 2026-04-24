@@ -72,20 +72,21 @@ static uint64_t load_le64(const uint8_t in[8]) {
  *
  * Derives two independent subkeys from the profile key using KDF:
  *   mac_key = KDF(profile_key, subkey_id=1, context="dottasiv")
- *   ctr_key = KDF(profile_key, subkey_id=2, context="dottasiv")
+ *   prf_key = KDF(profile_key, subkey_id=2, context="dottasiv")
  *
- * This ensures cryptographic independence between the MAC and stream cipher keys,
- * a critical security requirement for SIV constructions.
+ * Cryptographic independence between the MAC key (used to compute the SIV
+ * over the plaintext) and the PRF key (used to derive the keystream seed
+ * from the SIV) is a critical security requirement for SIV constructions.
  *
  * @param profile_key Profile encryption key (32 bytes)
  * @param out_mac_key Output buffer for MAC key (32 bytes)
- * @param out_ctr_key Output buffer for CTR key (32 bytes)
+ * @param out_prf_key Output buffer for PRF key (32 bytes)
  * @return Error or NULL on success
  */
 static error_t *derive_siv_subkeys(
     const uint8_t profile_key[ENCRYPTION_PROFILE_KEY_SIZE],
     uint8_t out_mac_key[32],
-    uint8_t out_ctr_key[32]
+    uint8_t out_prf_key[32]
 ) {
     /* Derive MAC key (subkey_id=1) */
     if (hydro_kdf_derive_from_key(
@@ -95,77 +96,58 @@ static error_t *derive_siv_subkeys(
         return ERROR(ERR_CRYPTO, "Failed to derive MAC key");
     }
 
-    /* Derive CTR key (subkey_id=2) */
+    /* Derive PRF key (subkey_id=2) */
     if (hydro_kdf_derive_from_key(
-        out_ctr_key, 32, 2,
+        out_prf_key, 32, 2,
         ENCRYPTION_CTX_SIV_KDF, profile_key
         ) != 0) {
         hydro_memzero(out_mac_key, 32);
-        return ERROR(ERR_CRYPTO, "Failed to derive CTR key");
+        return ERROR(ERR_CRYPTO, "Failed to derive PRF key");
     }
 
     return NULL;
 }
 
 /**
- * Derive deterministic stream seed from path (internal helper)
+ * Compute synthetic IV over associated data and plaintext (internal helper)
  *
- * Derives a deterministic seed for the stream cipher from the CTR key and storage path:
- *   stream_seed = HMAC(ctr_key, storage_path, context="dottactr")
+ * The synthetic IV doubles as both the MAC tag and the nonce that drives
+ * the keystream. It is computed as:
  *
- * This binds the keystream to the specific file path, ensuring different files
- * (even with identical content) use different keystreams.
+ *   siv = HMAC(mac_key,
+ *              len(storage_path) as LE64 || storage_path || plaintext,
+ *              context="dottamac")
  *
- * @param ctr_key CTR subkey (32 bytes)
- * @param storage_path File path in profile (e.g., "home/.bashrc")
- * @param out_seed Output buffer for stream seed (32 bytes)
- * @return Error or NULL on success
- */
-static error_t *derive_stream_seed(
-    const uint8_t ctr_key[32],
-    const char *storage_path,
-    uint8_t out_seed[32]
-) {
-    if (hydro_hash_hash(
-        out_seed, 32, (const uint8_t *) storage_path, strlen(storage_path),
-        ENCRYPTION_CTX_SIV_CTR, ctr_key
-        ) != 0) {
-        return ERROR(ERR_CRYPTO, "Failed to derive stream seed");
-    }
-
-    return NULL;
-}
-
-/**
- * Compute SIV/MAC over associated data and ciphertext (internal helper)
+ * The path length prefix provides domain separation between path and
+ * plaintext so an adversary cannot shift the boundary to forge a valid SIV
+ * for a different (path, plaintext) pair. No length prefix is needed for
+ * the plaintext: the path's length prefix already separates the two fields
+ * unambiguously, and BLAKE2 is not vulnerable to length-extension.
  *
- * Computes the SIV (Synthetic IV) as a MAC over:
- *   siv = HMAC(mac_key, len(storage_path) || storage_path || ciphertext, context="dottamac")
- *
- * The path length prefix (8-byte LE) provides domain separation, preventing
- * an adversary from shifting the boundary between path and ciphertext to forge
- * a valid MAC for a different (path, ciphertext) pair.
+ * Because the SIV is a function of the plaintext, two different plaintexts
+ * at the same (mac_key, path) produce different SIVs — and therefore
+ * different keystreams — giving nonce-misuse resistance.
  *
  * @param mac_key MAC subkey (32 bytes)
  * @param storage_path File path in profile (authenticated associated data)
- * @param ciphertext Encrypted data
- * @param ciphertext_len Ciphertext length
- * @param out_siv Output buffer for SIV/MAC (32 bytes)
+ * @param plaintext Plaintext to authenticate
+ * @param plaintext_len Plaintext length
+ * @param out_siv Output buffer for SIV (ENCRYPTION_SIV_SIZE bytes)
  * @return Error or NULL on success
  */
 static error_t *compute_siv(
     const uint8_t mac_key[32],
     const char *storage_path,
-    const unsigned char *ciphertext,
-    size_t ciphertext_len,
-    uint8_t out_siv[32]
+    const unsigned char *plaintext,
+    size_t plaintext_len,
+    uint8_t out_siv[ENCRYPTION_SIV_SIZE]
 ) {
     hydro_hash_state mac_state;
 
     /* Initialize MAC with mac_key */
     if (hydro_hash_init(&mac_state, ENCRYPTION_CTX_SIV_MAC, mac_key) != 0) {
         return ERROR(
-            ERR_CRYPTO, "Failed to initialize MAC computation"
+            ERR_CRYPTO, "Failed to initialize SIV computation"
         );
     }
 
@@ -183,18 +165,49 @@ static error_t *compute_siv(
         &mac_state, (const uint8_t *) storage_path, path_len
     );
 
-    /* Authenticate ciphertext (guard against NULL from malloc(0)) */
-    if (ciphertext_len > 0) {
-        hydro_hash_update(
-            &mac_state, ciphertext, ciphertext_len
-        );
+    /* Authenticate plaintext (guard against NULL when plaintext_len == 0) */
+    if (plaintext_len > 0) {
+        hydro_hash_update(&mac_state, plaintext, plaintext_len);
     }
 
     /* Finalize to get SIV */
-    hydro_hash_final(&mac_state, out_siv, 32);
+    hydro_hash_final(&mac_state, out_siv, ENCRYPTION_SIV_SIZE);
 
     /* Clear MAC state */
     hydro_memzero(&mac_state, sizeof(mac_state));
+
+    return NULL;
+}
+
+/**
+ * Derive keystream seed from SIV (internal helper)
+ *
+ * Produces the seed that feeds the deterministic PRNG used for the XOR
+ * keystream:
+ *   keystream_seed = HMAC(prf_key, siv, context="dottactr")
+ *
+ * Binding the seed to a secret (prf_key) is essential: the SIV is written
+ * to the output and is therefore public. If the PRNG were seeded directly
+ * from the SIV, anyone who saw the ciphertext could reproduce the keystream
+ * and recover the plaintext. Passing the SIV through a keyed hash puts the
+ * keystream back behind the profile key.
+ *
+ * @param prf_key PRF subkey (32 bytes)
+ * @param siv Synthetic IV (ENCRYPTION_SIV_SIZE bytes)
+ * @param out_seed Output buffer for keystream seed (32 bytes)
+ * @return Error or NULL on success
+ */
+static error_t *derive_keystream_seed(
+    const uint8_t prf_key[32],
+    const uint8_t siv[ENCRYPTION_SIV_SIZE],
+    uint8_t out_seed[32]
+) {
+    if (hydro_hash_hash(
+        out_seed, 32, siv, ENCRYPTION_SIV_SIZE,
+        ENCRYPTION_CTX_SIV_CTR, prf_key
+        ) != 0) {
+        return ERROR(ERR_CRYPTO, "Failed to derive keystream seed");
+    }
 
     return NULL;
 }
@@ -516,11 +529,8 @@ error_t *encryption_encrypt(
 
     error_t *err = NULL;
     uint8_t mac_key[32] = { 0 };
-    uint8_t ctr_key[32] = { 0 };
-    uint8_t stream_seed[32] = { 0 };
-    uint8_t siv[ENCRYPTION_SIV_SIZE] = { 0 };
-    uint8_t *keystream = NULL;
-    unsigned char *ciphertext = NULL;
+    uint8_t prf_key[32] = { 0 };
+    uint8_t keystream_seed[32] = { 0 };
     buffer_t output = BUFFER_INIT;
 
     *out_ciphertext = (buffer_t){ 0 };
@@ -559,70 +569,58 @@ error_t *encryption_encrypt(
     size_t total_len =
         ENCRYPTION_HEADER_SIZE + ENCRYPTION_SIV_SIZE + plaintext_len;
 
-    /* Step 1: Derive MAC and CTR subkeys from profile key */
-    err = derive_siv_subkeys(profile_key, mac_key, ctr_key);
+    /* Step 1: Derive MAC and PRF subkeys from profile key */
+    err = derive_siv_subkeys(profile_key, mac_key, prf_key);
     if (err) {
         goto cleanup;
     }
 
-    /* Step 2: Derive deterministic stream seed from CTR key and path */
-    err = derive_stream_seed(ctr_key, storage_path, stream_seed);
+    /* Step 2: Allocate the output buffer at its final size and write directly.
+     *
+     * buffer_grow reserves total_len + 1 bytes (for the NUL terminator). We
+     * own [0, total_len) and restore the invariant NUL at [total_len]. This
+     * layout lets us compute the SIV and keystream straight into the output,
+     * so peak memory is total_len bytes instead of the 3 * N of separate
+     * keystream + ciphertext + output buffers. */
+    err = buffer_grow(&output, total_len);
     if (err) {
         goto cleanup;
     }
+    output.size = total_len;
+    output.data[output.size] = '\0';
 
-    /* Step 3: Generate deterministic keystream */
-    if (plaintext_len > 0) {
-        keystream = malloc(plaintext_len);
-        if (!keystream) {
-            err = ERROR(ERR_MEMORY, "Failed to allocate keystream buffer");
-            goto cleanup;
-        }
-        hydro_random_buf_deterministic(
-            keystream, plaintext_len, stream_seed
-        );
-    }
+    /* Step 3: Write the fixed header */
+    memcpy(output.data, MAGIC_HEADER, ENCRYPTION_HEADER_SIZE);
 
-    /* Step 4: Encrypt plaintext by XORing with keystream */
-    if (plaintext_len > 0) {
-        ciphertext = malloc(plaintext_len);
-        if (!ciphertext) {
-            err = ERROR(ERR_MEMORY, "Failed to allocate ciphertext buffer");
-            goto cleanup;
-        }
-        for (size_t i = 0; i < plaintext_len; i++) {
-            ciphertext[i] = plaintext[i] ^ keystream[i];
-        }
-    }
+    unsigned char *siv_slot =
+        (unsigned char *) output.data + ENCRYPTION_HEADER_SIZE;
+    unsigned char *ct_slot = siv_slot + ENCRYPTION_SIV_SIZE;
 
-    /* Step 5: Compute SIV/MAC over storage_path || ciphertext */
+    /* Step 4: Compute the synthetic IV over (path, plaintext) directly into
+     * its output slot. Because the SIV depends on the plaintext, different
+     * plaintexts at the same path yield different SIVs — and therefore
+     * different keystreams — giving nonce-misuse resistance. This is the
+     * defining step of SIV. */
     err = compute_siv(
-        mac_key, storage_path, ciphertext, plaintext_len, siv
+        mac_key, storage_path, plaintext, plaintext_len, siv_slot
     );
     if (err) {
         goto cleanup;
     }
 
-    /* Step 6: Assemble output: [Magic Header][SIV][Ciphertext] */
-    err = buffer_grow(&output, total_len);
+    /* Step 5: Derive the keystream seed from the SIV (keyed by prf_key so
+     * the keystream is not reconstructable from the public SIV alone). */
+    err = derive_keystream_seed(prf_key, siv_slot, keystream_seed);
     if (err) {
         goto cleanup;
     }
 
-    err = buffer_append(&output, MAGIC_HEADER, sizeof(MAGIC_HEADER));
-    if (err) {
-        goto cleanup;
-    }
-
-    err = buffer_append(&output, siv, sizeof(siv));
-    if (err) {
-        goto cleanup;
-    }
-
+    /* Step 6: Write the keystream into the ciphertext slot, then XOR the
+     * plaintext in place. One pass, one buffer. */
     if (plaintext_len > 0) {
-        err = buffer_append(&output, ciphertext, plaintext_len);
-        if (err) {
-            goto cleanup;
+        hydro_random_buf_deterministic(ct_slot, plaintext_len, keystream_seed);
+        for (size_t i = 0; i < plaintext_len; i++) {
+            ct_slot[i] ^= plaintext[i];
         }
     }
 
@@ -633,20 +631,13 @@ error_t *encryption_encrypt(
 cleanup:
     /* Securely clear sensitive data */
     hydro_memzero(mac_key, sizeof(mac_key));
-    hydro_memzero(ctr_key, sizeof(ctr_key));
-    hydro_memzero(stream_seed, sizeof(stream_seed));
-    hydro_memzero(siv, sizeof(siv));
+    hydro_memzero(prf_key, sizeof(prf_key));
+    hydro_memzero(keystream_seed, sizeof(keystream_seed));
 
-    if (keystream) {
-        hydro_memzero(keystream, plaintext_len);
-        free(keystream);
-    }
-
-    if (ciphertext) {
-        hydro_memzero(ciphertext, plaintext_len);
-        free(ciphertext);
-    }
-
+    /* On error, zero any bytes already written (including a freshly-written
+     * keystream, which could otherwise disclose this plaintext's keystream
+     * to an attacker who recovered the partial output). On success this is
+     * a no-op — ownership was transferred to the caller above. */
     if (output.data) {
         hydro_memzero(output.data, output.size);
         buffer_free(&output);
@@ -669,11 +660,11 @@ error_t *encryption_decrypt(
 
     error_t *err = NULL;
     uint8_t mac_key[32] = { 0 };
-    uint8_t ctr_key[32] = { 0 };
-    uint8_t stream_seed[32] = { 0 };
-    uint8_t siv_computed[ENCRYPTION_SIV_SIZE] = { 0 };
-    uint8_t *keystream = NULL;
+    uint8_t prf_key[32] = { 0 };
+    uint8_t keystream_seed[32] = { 0 };
+    uint8_t siv_recomputed[ENCRYPTION_SIV_SIZE] = { 0 };
     unsigned char *plaintext_data = NULL;
+    size_t plaintext_len = 0;
     buffer_t output = BUFFER_INIT;
 
     *out_plaintext = (buffer_t){ 0 };
@@ -713,7 +704,7 @@ error_t *encryption_decrypt(
         );
     }
 
-    /* Step 2: Verify magic header and version
+    /* Step 2: Verify magic header and version.
      *
      * Check magic bytes and version separately to give precise diagnostics.
      * A version mismatch should report the actual version found, not just
@@ -724,7 +715,6 @@ error_t *encryption_decrypt(
         );
     }
 
-    /* Check version */
     if (ciphertext[5] != ENCRYPTION_VERSION) {
         return ERROR(
             ERR_CRYPTO, "Unsupported encryption version: %d (expected %d)",
@@ -735,27 +725,57 @@ error_t *encryption_decrypt(
     /* Step 3: Extract SIV and ciphertext body */
     const unsigned char *siv_received =
         ciphertext + ENCRYPTION_HEADER_SIZE;
-    const unsigned char *ciphertext_body =
+    const unsigned char *ct_body =
         ciphertext + ENCRYPTION_HEADER_SIZE + ENCRYPTION_SIV_SIZE;
-    size_t plaintext_len =
-        ciphertext_len - ENCRYPTION_OVERHEAD;
+    plaintext_len = ciphertext_len - ENCRYPTION_OVERHEAD;
 
-    /* Step 4: Derive MAC and CTR subkeys from profile key */
-    err = derive_siv_subkeys(profile_key, mac_key, ctr_key);
+    /* Step 4: Derive MAC and PRF subkeys from profile key */
+    err = derive_siv_subkeys(profile_key, mac_key, prf_key);
     if (err) {
         goto cleanup;
     }
 
-    /* Step 5: Re-compute SIV over storage_path || ciphertext */
+    /* Step 5: Derive the keystream seed from the received SIV.
+     *
+     * In SIV, the IV authenticates the plaintext — it cannot be checked
+     * without first recovering the plaintext. We therefore decrypt first,
+     * compute siv' over the candidate plaintext, and compare against the
+     * received SIV. The candidate is held in memory only until that
+     * comparison; on mismatch it is wiped by the cleanup path and never
+     * returned to the caller. */
+    err = derive_keystream_seed(prf_key, siv_received, keystream_seed);
+    if (err) {
+        goto cleanup;
+    }
+
+    /* Step 6: Generate the keystream directly into the candidate plaintext
+     * buffer, then XOR the ciphertext body into it. */
+    if (plaintext_len > 0) {
+        plaintext_data = malloc(plaintext_len);
+        if (!plaintext_data) {
+            err = ERROR(ERR_MEMORY, "Failed to allocate plaintext buffer");
+            goto cleanup;
+        }
+        hydro_random_buf_deterministic(
+            plaintext_data, plaintext_len, keystream_seed
+        );
+        for (size_t i = 0; i < plaintext_len; i++) {
+            plaintext_data[i] ^= ct_body[i];
+        }
+    }
+
+    /* Step 7: Re-compute the SIV over (path, candidate_plaintext). If the
+     * ciphertext is authentic, this matches the received SIV exactly. */
     err = compute_siv(
-        mac_key, storage_path, ciphertext_body, plaintext_len, siv_computed
+        mac_key, storage_path, plaintext_data, plaintext_len, siv_recomputed
     );
     if (err) {
         goto cleanup;
     }
 
-    /* Step 6: Verify SIV using constant-time comparison */
-    if (!hydro_equal(siv_computed, siv_received, ENCRYPTION_SIV_SIZE)) {
+    /* Step 8: Constant-time compare. On mismatch, the cleanup path wipes
+     * the candidate plaintext before returning. */
+    if (!hydro_equal(siv_recomputed, siv_received, ENCRYPTION_SIV_SIZE)) {
         err = ERROR(
             ERR_CRYPTO, "Authentication failed "
             "- wrong passphrase, corrupted file, or incorrect path"
@@ -763,57 +783,23 @@ error_t *encryption_decrypt(
         goto cleanup;
     }
 
-    /* Step 7: Derive deterministic stream seed from CTR key and path */
-    err = derive_stream_seed(ctr_key, storage_path, stream_seed);
-    if (err) {
-        goto cleanup;
-    }
-
-    /* Step 8: Generate deterministic keystream */
+    /* Step 9: Transfer plaintext to the output buffer */
     if (plaintext_len > 0) {
-        keystream = malloc(plaintext_len);
-        if (!keystream) {
-            err = ERROR(ERR_MEMORY, "Failed to allocate keystream buffer");
+        err = buffer_append(&output, plaintext_data, plaintext_len);
+        if (err) {
             goto cleanup;
         }
-        hydro_random_buf_deterministic(
-            keystream, plaintext_len, stream_seed
-        );
     }
 
-    /* Step 9: Decrypt ciphertext by XORing with keystream */
-    if (plaintext_len > 0) {
-        plaintext_data = malloc(plaintext_len);
-        if (!plaintext_data) {
-            err = ERROR(ERR_MEMORY, "Failed to allocate plaintext buffer");
-            goto cleanup;
-        }
-        for (size_t i = 0; i < plaintext_len; i++) {
-            plaintext_data[i] = ciphertext_body[i] ^ keystream[i];
-        }
-    }
-
-    /* Step 10: Create output buffer */
-    err = buffer_append(&output, plaintext_data, plaintext_len);
-    if (err) {
-        goto cleanup;
-    }
-
-    /* Transfer to caller */
     *out_plaintext = output;
     output = (buffer_t){ 0 };
 
 cleanup:
     /* Securely clear sensitive data */
     hydro_memzero(mac_key, sizeof(mac_key));
-    hydro_memzero(ctr_key, sizeof(ctr_key));
-    hydro_memzero(stream_seed, sizeof(stream_seed));
-    hydro_memzero(siv_computed, sizeof(siv_computed));
-
-    if (keystream) {
-        hydro_memzero(keystream, plaintext_len);
-        free(keystream);
-    }
+    hydro_memzero(prf_key, sizeof(prf_key));
+    hydro_memzero(keystream_seed, sizeof(keystream_seed));
+    hydro_memzero(siv_recomputed, sizeof(siv_recomputed));
 
     if (plaintext_data) {
         hydro_memzero(plaintext_data, plaintext_len);

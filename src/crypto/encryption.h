@@ -2,8 +2,9 @@
  * encryption.h - Cryptographic primitives for file encryption
  *
  * Provides deterministic authenticated encryption for sensitive dotfiles using
- * a SIV (Synthetic IV) construction built on libhydrogen primitives.
- * Files are encrypted at rest in Git and decrypted during deployment.
+ * a SIV (Synthetic IV) construction built on libhydrogen primitives, in the
+ * spirit of RFC 5297. Files are encrypted at rest in Git and decrypted during
+ * deployment.
  *
  * Key hierarchy:
  *   User Passphrase
@@ -11,35 +12,48 @@
  *     → balloon_harden (memory-hard, when memlimit > 0)
  *     → Master Key (32 bytes)
  *       → Profile Key (via hydro_hash_hash with profile name)
- *         → Per-file MAC Key + CTR Key (via hydro_kdf_derive_from_key)
+ *         → Per-file MAC Key + PRF Key (via hydro_kdf_derive_from_key)
  *
- * SIV Construction (Version 3):
- *   This implements deterministic AEAD using the SIV (Synthetic IV) pattern:
+ * SIV Construction (Version 4):
+ *   Deterministic AEAD where the synthetic IV is computed from the plaintext
+ *   itself — the defining property of SIV. The IV doubles as the
+ *   authentication tag:
  *
- *   1. Derive subkeys:
+ *   1. Derive subkeys from the profile key:
  *      mac_key = KDF(profile_key, subkey_id=1, context="dottasiv")
- *      ctr_key = KDF(profile_key, subkey_id=2, context="dottasiv")
+ *      prf_key = KDF(profile_key, subkey_id=2, context="dottasiv")
  *
- *   2. Derive deterministic stream seed:
- *      stream_seed = HMAC(ctr_key, storage_path, context="dottactr")
+ *   2. Compute synthetic IV over path and plaintext:
+ *      siv = HMAC(mac_key,
+ *                 len(storage_path) as LE64 || storage_path || plaintext,
+ *                 context="dottamac")
+ *      (path length prefix provides domain separation; BLAKE2 is not
+ *       length-extension vulnerable, so no trailing length is required)
  *
- *   3. Encrypt using deterministic stream cipher:
- *      keystream = DeterministicPRNG(stream_seed, length=plaintext_len)
+ *   3. Derive a secret keystream seed from the (public) SIV:
+ *      keystream_seed = HMAC(prf_key, siv, context="dottactr")
+ *      (prf_key keeps the keystream behind the profile key — if the seed
+ *       were computed directly from the public SIV, anyone with the
+ *       ciphertext could reproduce the keystream and recover the plaintext)
+ *
+ *   4. Encrypt using deterministic stream cipher:
+ *      keystream = DeterministicPRNG(keystream_seed, length=plaintext_len)
  *      ciphertext = plaintext XOR keystream
  *
- *   4. Compute SIV (MAC over associated data + ciphertext):
- *      siv = HMAC(mac_key, len(storage_path) || storage_path || ciphertext, context="dottamac")
- *      (length prefix provides domain separation between path and ciphertext)
- *
- *   File format: [Magic 8B][SIV 32B][Ciphertext N B]
+ *   File format: [Magic 5B][Version 1B][Reserved 2B][SIV 32B][Ciphertext N B]
  *
  * Security properties:
- * - Deterministic: Same (path, content, key) → same ciphertext (Git-friendly)
- * - Authenticated: Tamper detection via SIV verification
- * - Path-bound: Files tied to specific storage paths (AAD)
- * - Nonce-misuse resistant: No nonce management required
- * - Key isolation: Independent MAC and CTR keys via KDF
- * - Secure memory clearing after use
+ * - Deterministic: Same (path, plaintext, key) → same ciphertext (Git-friendly)
+ * - Authenticated: SIV is a MAC over (path, plaintext); any tampering of SIV
+ *   or ciphertext produces an SIV mismatch after trial decryption.
+ * - Path-bound: Ciphertext decrypted under a different path fails SIV
+ *   verification.
+ * - Nonce-misuse resistant: Different plaintexts at the same path yield
+ *   different synthetic IVs (and therefore different keystreams), avoiding
+ *   the many-time-pad leak that would occur if the keystream were a pure
+ *   function of the path.
+ * - Key isolation: Independent MAC and PRF keys via KDF.
+ * - Secure memory clearing after use.
  */
 
 #ifndef DOTTA_ENCRYPTION_H
@@ -52,7 +66,7 @@
 /* Magic header for encrypted files */
 #define ENCRYPTION_MAGIC "DOTTA"
 #define ENCRYPTION_MAGIC_BYTES 5        /* "DOTTA" magic string length */
-#define ENCRYPTION_VERSION 3            /* Version 3: SIV with length-prefixed domain separation */
+#define ENCRYPTION_VERSION 4            /* Version 4: SIV with IV bound to plaintext (fixes v3 keystream reuse) */
 #define ENCRYPTION_TAG_BYTES 6          /* Magic (5) + version (1): bytes checked by encryption_is_encrypted */
 #define ENCRYPTION_HEADER_SIZE 8        /* Magic (5) + version (1) + reserved (2) */
 #define ENCRYPTION_SIV_SIZE 32          /* SIV/MAC tag (32 bytes) */
@@ -61,9 +75,9 @@
 /* Context strings (MUST be exactly 8 bytes) */
 #define ENCRYPTION_CTX_PWHASH    "dotta/v1"
 #define ENCRYPTION_CTX_KDF       "profile "  /* Note: 8 chars with trailing space */
-#define ENCRYPTION_CTX_SIV_KDF   "dottasiv"  /* For deriving MAC/CTR subkeys */
-#define ENCRYPTION_CTX_SIV_MAC   "dottamac"  /* For computing SIV/MAC */
-#define ENCRYPTION_CTX_SIV_CTR   "dottactr"  /* For deriving stream seed */
+#define ENCRYPTION_CTX_SIV_KDF   "dottasiv"  /* For deriving MAC/PRF subkeys */
+#define ENCRYPTION_CTX_SIV_MAC   "dottamac"  /* For computing SIV over (path, plaintext) */
+#define ENCRYPTION_CTX_SIV_CTR   "dottactr"  /* For deriving keystream seed from SIV */
 
 /* Key sizes (from libhydrogen) */
 #define ENCRYPTION_MASTER_KEY_SIZE 32   /* hydro_pwhash output */
@@ -146,24 +160,27 @@ error_t *encryption_derive_profile_key(
 /**
  * Encrypt file content using SIV construction
  *
- * Encrypts plaintext using deterministic AEAD (SIV pattern). The encryption is
- * deterministic: same (storage_path, plaintext, profile_key) always produces
- * the same ciphertext, enabling Git deduplication and idempotency.
+ * Encrypts plaintext using deterministic AEAD where the synthetic IV is
+ * computed from the plaintext itself. Same (storage_path, plaintext,
+ * profile_key) always produces the same ciphertext, enabling Git
+ * deduplication and idempotency; different plaintexts at the same path
+ * produce different IVs (and therefore different keystreams), giving
+ * nonce-misuse resistance.
  *
  * Construction:
- *   1. Derive mac_key and ctr_key from profile_key via KDF
- *   2. Derive stream seed from ctr_key and storage_path
- *   3. Generate deterministic keystream and XOR with plaintext
- *   4. Compute SIV/MAC over storage_path || ciphertext
+ *   1. Derive mac_key and prf_key from profile_key via KDF
+ *   2. Compute siv = MAC(mac_key, len(path) || path || plaintext)
+ *   3. Derive keystream_seed = MAC(prf_key, siv)
+ *   4. ciphertext = plaintext XOR DeterministicPRNG(keystream_seed, N)
  *
  * Output format:
- *   [Magic: "DOTTA\x03\x00\x00" (8 bytes)]
- *   [SIV: MAC tag (32 bytes)]
+ *   [Magic: "DOTTA\x04\x00\x00" (8 bytes)]
+ *   [SIV: synthetic IV / MAC tag (32 bytes)]
  *   [Ciphertext: encrypted data (plaintext_len bytes)]
  *
- * The storage_path is used as authenticated associated data (AAD), binding
- * the ciphertext to its intended location. A file encrypted for one path
- * cannot be successfully decrypted for a different path.
+ * The storage_path is authenticated associated data, binding the ciphertext
+ * to its intended location. A file encrypted for one path cannot be
+ * successfully decrypted under another.
  *
  * @param plaintext Input data (must not be NULL)
  * @param plaintext_len Input length in bytes
@@ -183,17 +200,21 @@ error_t *encryption_encrypt(
 /**
  * Decrypt file content using SIV construction
  *
- * Verifies dotta header, validates SIV/MAC, and decrypts ciphertext.
+ * Verifies dotta header, decrypts the ciphertext using the stored SIV as the
+ * nonce, then re-computes the SIV over the candidate plaintext and verifies
+ * that it matches the stored SIV.
  *
  * Process:
- *   1. Parse header and extract SIV
- *   2. Derive mac_key and ctr_key from profile_key
- *   3. Re-compute SIV over storage_path || ciphertext
- *   4. Verify SIV matches (constant-time comparison)
- *   5. If valid, derive keystream and decrypt
+ *   1. Parse header and extract SIV + ciphertext body
+ *   2. Derive mac_key and prf_key from profile_key
+ *   3. Derive keystream_seed from (prf_key, stored SIV)
+ *   4. Decrypt: candidate_plaintext = ciphertext XOR keystream
+ *   5. Re-compute siv' = MAC(mac_key, len(path) || path || candidate_plaintext)
+ *   6. Constant-time compare siv' against the stored SIV; on mismatch the
+ *      candidate is wiped and never returned.
  *
  * The storage_path must match the path used during encryption. This is
- * authenticated via the SIV - any mismatch will cause verification to fail.
+ * authenticated via the SIV — any mismatch will cause verification to fail.
  *
  * Returns ERR_CRYPTO if:
  * - Authentication fails (SIV mismatch - wrong key, tampered data, or wrong path)

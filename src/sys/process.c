@@ -196,6 +196,31 @@ error_t *process_run(const process_spec_t *spec, process_result_t *result) {
         );
     }
 
+    /* stdin_content / stdin_content_len are load-bearing only for
+     * BUFFER; any stray setting under INHERIT/DEVNULL means the caller
+     * expected a stdin payload that will not be delivered. Reject
+     * rather than silently ignore. */
+    if (spec->stdin_policy == PROCESS_STDIN_BUFFER) {
+        if (spec->stdin_content_len > 0 && !spec->stdin_content) {
+            return ERROR(
+                ERR_INVALID_ARG,
+                "stdin_content_len > 0 but stdin_content is NULL"
+            );
+        }
+        if (spec->stdin_content_len > PROCESS_STDIN_BUFFER_MAX) {
+            return ERROR(
+                ERR_INVALID_ARG,
+                "stdin_content_len %zu exceeds PROCESS_STDIN_BUFFER_MAX (%d)",
+                spec->stdin_content_len, PROCESS_STDIN_BUFFER_MAX
+            );
+        }
+    } else if (spec->stdin_content != NULL || spec->stdin_content_len > 0) {
+        return ERROR(
+            ERR_INVALID_ARG,
+            "stdin_content set but stdin_policy is not PROCESS_STDIN_BUFFER"
+        );
+    }
+
     /* Zero result so every path through cleanup leaves callers with
      * a well-defined struct. */
     *result = (process_result_t) { 0 };
@@ -203,6 +228,7 @@ error_t *process_run(const process_spec_t *spec, process_result_t *result) {
     /* All resources initialized to safe sentinels. */
     int pipefd[2] = { -1, -1 };
     int errfd[2] = { -1, -1 };
+    int stdin_pipe[2] = { -1, -1 };
     pid_t pid = -1;
     pid_t kill_target = -1;
     char *capture = NULL;
@@ -232,6 +258,19 @@ error_t *process_run(const process_spec_t *spec, process_result_t *result) {
         goto cleanup;
     }
     set_pipe_cloexec(errfd);
+
+    /* Stdin payload pipe (parent writes spec->stdin_content; child
+     * reads from its stdin). Only created for BUFFER policy. */
+    if (spec->stdin_policy == PROCESS_STDIN_BUFFER) {
+        if (pipe(stdin_pipe) != 0) {
+            err = ERROR(
+                ERR_FS, "Failed to create stdin pipe: %s",
+                strerror(errno)
+            );
+            goto cleanup;
+        }
+        set_pipe_cloexec(stdin_pipe);
+    }
 
     /* Pre-allocate capture buffer if requested. Failure here is
      * surfaced as ERR_MEMORY rather than silently degrading. */
@@ -293,6 +332,22 @@ error_t *process_run(const process_spec_t *spec, process_result_t *result) {
             /* If open failed, child inherits whatever stdin parent had.
              * No clean way to report from the child here; the worst case
              * is the script blocks on a terminal read and we time out. */
+        } else if (spec->stdin_policy == PROCESS_STDIN_BUFFER) {
+            /* Parent holds the write end; close it so the child cannot
+             * see its own stdin source as writable. */
+            close(stdin_pipe[1]);
+            if (stdin_pipe[0] != STDIN_FILENO) {
+                if (dup2(stdin_pipe[0], STDIN_FILENO) < 0) {
+                    int e = errno;
+                    (void) write_full(errfd[1], &e, sizeof(e));
+                    _exit(126);
+                }
+                close(stdin_pipe[0]);
+            }
+            /* If stdin_pipe[0] == STDIN_FILENO already (parent's stdin was
+             * closed pre-fork), it is in the right slot — leave it open.
+             * The explicit closes above make stdin_pipe[0]/[1] invisible
+             * to the close-fds loop below. */
         }
 
         if (dup2(pipefd[1], STDOUT_FILENO) < 0
@@ -361,6 +416,25 @@ error_t *process_run(const process_spec_t *spec, process_result_t *result) {
     pipefd[1] = -1;
     close(errfd[1]);
     errfd[1] = -1;
+
+    /* Deliver the stdin payload before entering the capture loop. The
+     * spec-entry cap on stdin_content_len keeps the payload within any
+     * POSIX-conformant pipe buffer, so the write returns immediately
+     * even if the child has not yet reached its consuming read. EPIPE
+     * (child exec failed or exited before reading) is benign — the
+     * exec-errno drain and wait-status decode below surface the real
+     * cause. */
+    if (spec->stdin_policy == PROCESS_STDIN_BUFFER) {
+        close(stdin_pipe[0]);
+        stdin_pipe[0] = -1;
+        if (spec->stdin_content_len > 0) {
+            (void) write_full(
+                stdin_pipe[1], spec->stdin_content, spec->stdin_content_len
+            );
+        }
+        close(stdin_pipe[1]);
+        stdin_pipe[1] = -1;
+    }
 
     /* Non-blocking output pipe so the select+read loop never blocks
      * past the timeout. */
@@ -572,6 +646,8 @@ cleanup:
     if (pipefd[1] >= 0) close(pipefd[1]);
     if (errfd[0] >= 0) close(errfd[0]);
     if (errfd[1] >= 0) close(errfd[1]);
+    if (stdin_pipe[0] >= 0) close(stdin_pipe[0]);
+    if (stdin_pipe[1] >= 0) close(stdin_pipe[1]);
 
     /* Reap any stray child. We get here with pid > 0 only if a
      * mid-execution failure prevented the normal wait paths from

@@ -60,11 +60,36 @@
  * DEVNULL — child's STDIN_FILENO is redirected to /dev/null. Use for
  *           non-interactive children that must never block on a
  *           terminal read.
+ * BUFFER  — child's STDIN_FILENO reads from a pipe the primitive
+ *           fills with spec->stdin_content (stdin_content_len bytes)
+ *           and closes. Use for subprocesses that consume a small
+ *           fixed payload on stdin (e.g., `git credential fill`
+ *           reading a protocol request). Payload is capped at
+ *           PROCESS_STDIN_BUFFER_MAX so the single synchronous write
+ *           performed before the capture loop never blocks on a
+ *           pipe-buffer shortage.
  */
 typedef enum {
     PROCESS_STDIN_INHERIT,
     PROCESS_STDIN_DEVNULL,
+    PROCESS_STDIN_BUFFER,
 } process_stdin_t;
+
+/**
+ * Upper bound on stdin_content_len for PROCESS_STDIN_BUFFER.
+ *
+ * The primitive writes the entire payload synchronously before the
+ * stdout capture loop starts. For that write to be non-blocking even
+ * when the child has not yet reached its consuming read, the payload
+ * must fit in the pipe buffer. POSIX guarantees PIPE_BUF-sized writes
+ * are atomic, and the minimum PIPE_BUF (_POSIX_PIPE_BUF) is 512 bytes;
+ * Linux's default pipe capacity is 65536 and macOS's is 16384, with
+ * PIPE_BUF itself at 4096 / 512 respectively. Picking 4096 is a
+ * comfortable ceiling across realistic targets — larger payloads need
+ * a future extension that interleaves stdin writes with the stdout
+ * select loop.
+ */
+#define PROCESS_STDIN_BUFFER_MAX 4096
 
 /**
  * Process-group policy for the spawned child.
@@ -105,11 +130,21 @@ typedef enum {
  *   set, the child tries work_dir first; on chdir failure, falls
  *   back to work_dir_fallback. If both fail, child exits with
  *   exec_failed=true and exec_errno=<chdir errno>.
+ * - stdin_content / stdin_content_len: both zero (NULL / 0) unless
+ *   stdin_policy == PROCESS_STDIN_BUFFER. When BUFFER, stdin_content
+ *   must be non-NULL if stdin_content_len > 0, and stdin_content_len
+ *   must not exceed PROCESS_STDIN_BUFFER_MAX. The primitive writes
+ *   the full buffer once before entering the capture loop; if the
+ *   child exits before consuming it (EPIPE on the write), that is
+ *   not a primitive-level error — exec_failed / exit_code carry the
+ *   real cause.
  */
 typedef struct {
     char *const *argv;              /* argv[0] = absolute path; NULL-terminated */
     char *const *envp;              /* environment, NULL-terminated */
     process_stdin_t stdin_policy;
+    const char *stdin_content;      /* non-NULL iff stdin_policy == BUFFER */
+    size_t stdin_content_len;       /* bytes in stdin_content (≤ MAX) */
     bool capture;                   /* true = collect stdout+stderr into result */
     int stream_fd;                  /* -1 = no streaming; else write each chunk */
     const char *work_dir;           /* NULL = inherit parent's CWD */

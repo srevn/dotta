@@ -11,10 +11,18 @@
 #include <string.h>
 #include <unistd.h>
 
+#include "base/buffer.h"
+#include "base/error.h"
 #include "base/string.h"
+#include "sys/process.h"
 
 /* Maximum length for username and password received from the helper. */
 #define CRED_MAX_LEN 256
+
+/* Credential helper subprocess timeout. Accommodates TouchID/Keychain
+ * prompts and LDAP-backed corporate helpers on first use; a hung helper
+ * is killed after this window so dotta does not wedge indefinitely. */
+#define CRED_HELPER_TIMEOUT_SECONDS 30
 
 /**
  * Validate a credential field for git credential protocol compliance.
@@ -142,58 +150,120 @@ static char *extract_protocol(const char *url) {
 }
 
 /**
- * Write a credential request to the helper subprocess stdin.
+ * Build a git credential protocol request into `out`.
  *
- * Implements the git credential protocol:
- *   protocol=https\n
+ *   protocol=<protocol>\n
  *   host=<hostname>\n
  *   [username=<username>\n]
  *   [password=<password>\n]
  *   \n  (blank line terminates request)
  *
- * SECURITY: No user data passes through shell command construction.
- * All credential fields are written directly to the subprocess stdin
- * pipe, not the shell command line.
+ * `username` and `password` are optional — omitted when NULL or empty.
+ * The fill path passes `username_from_url` (or NULL) and no password;
+ * the approve/reject path passes both.
+ *
+ * Pre-sizes the buffer so no mid-fill realloc occurs. Buffers used to
+ * carry passwords are scrubbed and freed by the caller; pre-sizing
+ * means the scrub covers the complete lifetime of the password bytes
+ * — no freed-and-reused intermediate heap pages escape zeroization.
  */
-static int write_credential_request(
-    FILE *fp,
+static error_t *build_credential_request(
+    buffer_t *out,
     const char *protocol,
     const char *hostname,
     const char *username,
     const char *password
 ) {
-    if (!fp || !hostname || !protocol) {
-        return -1;
-    }
+    /* Upper bound: fixed keywords/newlines/terminator + field lengths. */
+    size_t upper = 64
+        + strlen(protocol)
+        + strlen(hostname)
+        + (username ? strlen(username) : 0)
+        + (password ? strlen(password) : 0);
 
-    /* Check for write errors */
-    if (fprintf(fp, "protocol=%s\n", protocol) < 0) return -1;
-    if (fprintf(fp, "host=%s\n", hostname) < 0) return -1;
+    error_t *err = buffer_grow(out, upper);
+    if (err) return err;
 
-    /* Write optional fields only if present and non-empty */
+    if ((err = buffer_appendf(out, "protocol=%s\n", protocol))) return err;
+    if ((err = buffer_appendf(out, "host=%s\n", hostname))) return err;
     if (username && *username) {
-        if (fprintf(fp, "username=%s\n", username) < 0) return -1;
+        if ((err = buffer_appendf(out, "username=%s\n", username))) return err;
     }
     if (password && *password) {
-        if (fprintf(fp, "password=%s\n", password) < 0) return -1;
+        if ((err = buffer_appendf(out, "password=%s\n", password))) return err;
     }
+    return buffer_append(out, "\n", 1);
+}
 
-    /* Blank line signals end of request (protocol requirement) */
-    if (fprintf(fp, "\n") < 0) return -1;
+/**
+ * Run `git credential <subcommand>` with `request` piped to stdin.
+ *
+ * Shared by fill / approve / reject. Shell-free: the child is spawned
+ * via `sys/process` using execve — no popen, no heredoc, no
+ * interpolation of user data into any command string.
+ *
+ * `capture` controls whether the helper's response is captured into
+ * `*result`. Approve/reject pass false (fire-and-forget, output
+ * ignored); fill passes true.
+ */
+static error_t *run_credential_helper(
+    const char *subcommand,
+    const char *request,
+    size_t request_len,
+    bool capture,
+    process_result_t *result
+) {
+    /* `env` locates `git` on PATH; process_run does no PATH lookup of
+     * its own (argv[0] must be an absolute path). */
+    char *const argv[] = {
+        "/usr/bin/env",
+        "git",
+        "credential",
+        (char *) subcommand,
+        NULL
+    };
+    /* Helper inherits the user's environment — git needs $HOME for
+     * ~/.gitconfig, $PATH to dispatch to `git-credential-<name>`
+     * binaries, and possibly $DISPLAY / $SSH_AUTH_SOCK / $XDG_* for
+     * GUI-backed helpers. Curating a narrower list risks missing a
+     * var some helper silently depends on. */
+    extern char **environ;
+    process_spec_t spec = {
+        .argv              = argv,
+        .envp              = environ,
+        .stdin_policy      = PROCESS_STDIN_BUFFER,
+        .stdin_content     = request,
+        .stdin_content_len = request_len,
+        .capture           = capture,
+        .stream_fd         = -1,
+        .timeout_seconds   = CRED_HELPER_TIMEOUT_SECONDS,
+        .pgrp_policy       = PROCESS_PGRP_SHARED,
+    };
+    return process_run(&spec, result);
+}
 
-    /* Ensure data is flushed */
-    if (fflush(fp) != 0) return -1;
-
-    return 0;
+/**
+ * Scrub and free the request buffer.
+ *
+ * Request buffers may hold a password (approve/reject). The pre-size
+ * in build_credential_request prevents realloc, so scrubbing the
+ * capacity before buffer_free wipes every byte that ever held
+ * credential data.
+ */
+static void credential_request_secure_free(buffer_t *req) {
+    if (req->data) {
+        hydro_memzero(req->data, req->capacity);
+    }
+    buffer_free(req);
 }
 
 /**
  * Run the git credential helper subcommand (approve/reject) for a single
  * credential tuple. Shared body for credentials_helper_{approve,reject}.
  *
- * SECURITY: No user data is interpolated into the shell command — the
- * subcommand is a static string literal from the caller. Credential
- * fields flow through the subprocess stdin pipe via write_credential_request.
+ * SECURITY: No user data is interpolated into any shell command — there
+ * is no shell. argv is a fixed-literal vector; credential fields flow
+ * through the subprocess stdin pipe assembled in build_credential_request.
  */
 static void credentials_helper_commit(
     const char *subcommand,
@@ -212,23 +282,25 @@ static void credentials_helper_commit(
         is_valid_hostname(hostname) &&
         is_valid_credential_field(username) &&
         is_valid_credential_field(password)) {
-        /* Command is a compile-time literal + a hardcoded subcommand —
-         * no injection surface. Buffer size is generous for the short
-         * subcommands we pass ("approve" or "reject"). */
-        char cmd[64];
-        int n = snprintf(
-            cmd, sizeof(cmd),
-            "git credential %s 2>/dev/null", subcommand
+        buffer_t req = BUFFER_INIT;
+        error_t *err = build_credential_request(
+            &req, protocol, hostname, username, password
         );
-        if (n > 0 && (size_t) n < sizeof(cmd)) {
-            FILE *fp = popen(cmd, "w");
-            if (fp) {
-                write_credential_request(
-                    fp, protocol, hostname, username, password
-                );
-                pclose(fp);
-            }
+        if (!err) {
+            process_result_t result = { 0 };
+            error_t *run_err = run_credential_helper(
+                subcommand, req.data, req.size, false, &result
+            );
+            if (run_err) error_free(run_err);
+            process_result_dispose(&result);
+            /* Approve / reject are best-effort: the caller's state
+             * machine has already classified this session, and the
+             * user observes any downstream failure at the next auth
+             * attempt. Silent failure here is intentional. */
+        } else {
+            error_free(err);
         }
+        credential_request_secure_free(&req);
     }
 
     free(hostname);
@@ -268,14 +340,14 @@ static const char *get_home_dir(void) {
 /**
  * Query the git credential helper for credentials.
  *
- * SECURITY NOTE: Uses heredoc (unlike approve/reject which use pipe
- * writes) because we need bidirectional communication — write request,
- * read response. This is SAFE because:
- *   1. Only hostname, protocol, and username_from_url are in the shell
- *      command (not the resulting credentials).
- *   2. Hostname is strictly validated (alphanumeric + .-_ only).
- *   3. username_from_url is validated for CR/LF (heredoc-breaking chars).
- *   4. Credentials are READ from helper output (not written to shell).
+ * Spawns `git credential fill` via sys/process — no shell, no heredoc.
+ * The request is written over a pipe built by PROCESS_STDIN_BUFFER; the
+ * response is captured into process_result_t.output and parsed in place.
+ *
+ * Hostname / protocol / username_from_url are validated for protocol-
+ * breaking characters before use; a helper that emits a password
+ * containing a newline cannot inject additional request lines into its
+ * own next invocation, because the request is assembled fresh each time.
  *
  * @param protocol          Validated protocol (e.g., "https")
  * @param hostname          Validated hostname (NOT full URL)
@@ -295,12 +367,6 @@ static int get_credentials_from_helper(
     char *password,
     size_t max_len
 ) {
-    /* SECURITY: Validate inputs before embedding in heredoc command.
-     * hostname, protocol, and username_from_url are the only user-derived
-     * inputs in the shell command. The single-quoted heredoc (<<'EOF')
-     * prevents shell expansion, but newlines in any field could break
-     * the heredoc structure. All credential fields come from the
-     * helper's OUTPUT (we read them). */
     if (!is_valid_hostname(hostname) || !protocol ||
         !is_valid_credential_field(protocol)) {
         return -1;
@@ -309,82 +375,78 @@ static int get_credentials_from_helper(
     bool forward_user = username_from_url && *username_from_url &&
         is_valid_credential_field(username_from_url);
 
-    /* Build credential helper command using safe heredoc */
-    char cmd[1024];
-    int n;
-    if (forward_user) {
-        n = snprintf(
-            cmd, sizeof(cmd),
-            "git credential fill 2>/dev/null <<'EOF'\n"
-            "protocol=%s\n"
-            "host=%s\n"
-            "username=%s\n"
-            "EOF\n",
-            protocol,
-            hostname,
-            username_from_url
-        );
-    } else {
-        n = snprintf(
-            cmd, sizeof(cmd),
-            "git credential fill 2>/dev/null <<'EOF'\n"
-            "protocol=%s\n"
-            "host=%s\n"
-            "EOF\n",
-            protocol,
-            hostname
-        );
-    }
-    if (n < 0 || (size_t) n >= sizeof(cmd)) {
-        /* Refuse to run a truncated heredoc — would send a malformed
-         * request and possibly leak a partial username. */
+    /* Build the fill request. No password in fill requests; the
+     * username-from-URL is optional and disambiguates multi-account
+     * configs (helper picks the matching entry instead of the default
+     * for this host). */
+    buffer_t req = BUFFER_INIT;
+    error_t *err = build_credential_request(
+        &req, protocol, hostname,
+        forward_user ? username_from_url : NULL,
+        NULL
+    );
+    if (err) {
+        error_free(err);
+        credential_request_secure_free(&req);
         return -1;
     }
 
-    /* Execute command and read output */
-    FILE *fp = popen(cmd, "r");
-    if (!fp) {
-        return -1;
-    }
+    process_result_t result = { 0 };
+    err = run_credential_helper("fill", req.data, req.size, true, &result);
 
-    char line[512];
+    /* Request bytes (protocol, host, optionally username-from-URL) are
+     * low-sensitivity, but scrub on the same path as approve/reject so
+     * the discipline is uniform and future changes do not silently
+     * leak a newly added field. */
+    credential_request_secure_free(&req);
+
+    int rc = -1;
     username[0] = '\0';
     password[0] = '\0';
 
-    while (fgets(line, sizeof(line), fp)) {
-        /* Remove newline */
-        line[strcspn(line, "\n")] = 0;
-
-        /* Parse key=value */
-        char *eq = strchr(line, '=');
-        if (!eq) {
-            continue;
+    if (!err && !result.exec_failed && !result.timed_out &&
+        result.exit_code == 0 && result.output) {
+        /* Parse key=value\n lines from stdout. Helper stderr is merged
+         * into the same capture stream; lines that don't match the
+         * key=value shape are skipped (benign). The parse is
+         * destructive — it rewrites the output buffer — which is fine
+         * because the buffer is scrubbed and freed immediately below. */
+        char *p = result.output;
+        while (p && *p) {
+            char *line_end = strchr(p, '\n');
+            if (!line_end) break;
+            *line_end = '\0';
+            char *eq = strchr(p, '=');
+            if (eq) {
+                *eq = '\0';
+                const char *key = p;
+                const char *value = eq + 1;
+                if (strcmp(key, "username") == 0) {
+                    strncpy(username, value, max_len - 1);
+                    username[max_len - 1] = '\0';
+                } else if (strcmp(key, "password") == 0) {
+                    strncpy(password, value, max_len - 1);
+                    password[max_len - 1] = '\0';
+                }
+            }
+            p = line_end + 1;
         }
-
-        *eq = '\0';
-        const char *key = line;
-        const char *value = eq + 1;
-
-        if (strcmp(key, "username") == 0) {
-            strncpy(username, value, max_len - 1);
-            username[max_len - 1] = '\0';
-        } else if (strcmp(key, "password") == 0) {
-            strncpy(password, value, max_len - 1);
-            password[max_len - 1] = '\0';
+        if (username[0] != '\0' || password[0] != '\0') {
+            rc = 0;
         }
     }
 
-    /* Wipe the line buffer — may contain credential bytes. */
-    hydro_memzero(line, sizeof(line));
+    if (err) error_free(err);
 
-    int status = pclose(fp);
-
-    /* Check if we got credentials */
-    if (status == 0 && (username[0] != '\0' || password[0] != '\0')) {
-        return 0;
+    /* Output buffer held the helper response, password included.
+     * process_result_dispose free()s it unscrubbed; zero the bytes
+     * first so they do not linger on the freelist. */
+    if (result.output) {
+        hydro_memzero(result.output, result.output_len);
     }
+    process_result_dispose(&result);
 
-    return -1;
+    return rc;
 }
 
 

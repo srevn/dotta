@@ -100,33 +100,49 @@ static bool is_excluded(
 }
 
 /**
- * Recursively collect files from directory
+ * Recursively collect a directory tree into the caller's accumulators.
  *
- * Walks directory tree and collects all file paths, respecting ignore patterns.
- * All files including hidden files (dotfiles) are included by default.
- * Use ignore patterns to exclude specific files.
+ * Appends one entry to `directories` on every successful entry (the walker
+ * is the sole source of truth for directory tracking), and one entry to
+ * `files` for every non-excluded non-directory child. Dedups against
+ * already-collected entries so overlapping CLI args (~/.config and
+ * ~/.config/fish) don't double-record — within a single walk, tree
+ * recursion visits each directory exactly once, so only cross-walk
+ * duplicates are possible.
+ *
+ * Symlinks are never recursed into: symlink-to-dir is treated as an
+ * atomic entry by the outer loop and never reaches this function.
+ *
+ * All pushed strings are owned by the arrays (string_array_push copies).
+ * On error, partial results remain in the caller's arrays; the caller's
+ * cleanup path frees them.
  */
-static error_t *collect_files_from_dir(
+static error_t *collect_tree(
     const char *dir_path,
-    const cmd_add_options_t *opts,
     const gitignore_ruleset_t *rules,
     source_filter_t *source_filter,
     output_t *out,
-    string_array_t **out_files
+    string_array_t *files,
+    string_array_t *directories
 ) {
     CHECK_NULL(dir_path);
-    CHECK_NULL(opts);
-    CHECK_NULL(out_files);
+    CHECK_NULL(files);
+    CHECK_NULL(directories);
 
     DIR *dir = opendir(dir_path);
     if (!dir) {
         return ERROR(ERR_FS, "Failed to open directory: %s", dir_path);
     }
 
-    string_array_t *files = string_array_new(0);
-    if (!files) {
-        closedir(dir);
-        return ERROR(ERR_MEMORY, "Failed to allocate file list");
+    /* Record this directory. Classification-root skip happens later in
+     * the metadata-capture phase; at collection time every walked
+     * directory is a tracking candidate. */
+    if (!string_array_contains(directories, dir_path)) {
+        error_t *push_err = string_array_push(directories, dir_path);
+        if (push_err) {
+            closedir(dir);
+            return push_err;
+        }
     }
 
     struct dirent *entry;
@@ -142,7 +158,6 @@ static error_t *collect_files_from_dir(
         /* Build full path */
         char *full_path = str_format("%s/%s", dir_path, entry->d_name);
         if (!full_path) {
-            string_array_free(files);
             closedir(dir);
             return ERROR(ERR_MEMORY, "Failed to allocate path");
         }
@@ -159,41 +174,19 @@ static error_t *collect_files_from_dir(
             continue;
         }
 
-        /* Handle directories vs files */
+        error_t *err = NULL;
         if (is_dir) {
-            /* Recurse into subdirectory */
-            string_array_t *subdir_files = NULL;
-            error_t *err = collect_files_from_dir(
-                full_path, opts, rules, source_filter, out, &subdir_files
+            /* Recurse: child pushes itself on entry. */
+            err = collect_tree(
+                full_path, rules, source_filter, out, files, directories
             );
-            free(full_path);
-
-            if (err) {
-                string_array_free(files);
-                closedir(dir);
-                return err;
-            }
-
-            /* Merge subdirectory files */
-            for (size_t i = 0; i < subdir_files->count; i++) {
-                err = string_array_push(files, subdir_files->items[i]);
-                if (err) {
-                    string_array_free(subdir_files);
-                    string_array_free(files);
-                    closedir(dir);
-                    return err;
-                }
-            }
-            string_array_free(subdir_files);
-        } else {
-            /* Add file to list */
-            error_t *push_err = string_array_push(files, full_path);
-            free(full_path);
-            if (push_err) {
-                string_array_free(files);
-                closedir(dir);
-                return push_err;
-            }
+        } else if (!string_array_contains(files, full_path)) {
+            err = string_array_push(files, full_path);
+        }
+        free(full_path);
+        if (err) {
+            closedir(dir);
+            return err;
         }
         errno = 0;
     }
@@ -203,7 +196,6 @@ static error_t *collect_files_from_dir(
     if (errno != 0) {
         int saved_errno = errno;
         closedir(dir);
-        string_array_free(files);
         return ERROR(
             ERR_FS, "Error reading directory '%s': %s",
             dir_path, strerror(saved_errno)
@@ -211,8 +203,6 @@ static error_t *collect_files_from_dir(
     }
 
     closedir(dir);
-    *out_files = files;
-
     return NULL;
 }
 
@@ -442,14 +432,6 @@ static error_t *add_file_to_worktree(
 
     return NULL;
 }
-
-/**
- * Directory tracking entry for passing to metadata
- */
-typedef struct {
-    char *filesystem_path;
-    char *storage_path;
-} tracked_dir_t;
 
 /**
  * Create commit in worktree
@@ -850,9 +832,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     source_filter_t *source_filter = NULL;
     worktree_handle_t *wt = NULL;
     string_array_t *all_files = NULL;
-    tracked_dir_t *tracked_dirs = NULL;
-    size_t tracked_dir_count = 0;
-    size_t tracked_dir_capacity = 0;
+    string_array_t *all_directories = NULL;
     size_t added_count = 0;
     bool profile_was_new = false;
     metadata_t *metadata = NULL;
@@ -941,13 +921,22 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         err = path_to_storage(absolute, opts->custom_prefix, &storage_path, &prefix);
         free(absolute);
         if (err) {
-            /* Directory inputs that equal the custom prefix can't be converted
-             * to a storage path (the prefix root has no storage representation).
-             * The main processing loop will expand the directory into files.
+            /* A directory input equal to a classification root ($HOME, "/",
+             * or --prefix) has no storage representation; path_to_storage
+             * returns ERR_INVALID_ARG. The main loop's walker will still
+             * expand its descendants — the metadata path handles that fine.
              *
-             * If the custom prefix needs elevation, add a representative entry
-             * so the privilege check fires for expanded custom/ files. Without
-             * this, directory inputs bypass the pre-flight entirely. */
+             * What DOES need handling here: the pre-flight's only question
+             * is "will this op touch a path that needs elevation?" If the
+             * custom prefix needs elevation, the expanded descendants will
+             * land under custom/, so we stub ONE representative "custom/"
+             * entry as a proxy. Without this, a directory-typed input would
+             * bypass the privilege check entirely.
+             *
+             * Known pre-existing gap: `dotta add /` as non-root with no
+             * --prefix takes this branch for the root/ classification root;
+             * the sentinel only fires for custom/, so root/ elevation is
+             * missed in that edge case. Very unusual input, not addressed. */
             if (!fs_is_symlink(file_path) && fs_is_directory(file_path)) {
                 error_free(err);
                 err = NULL;
@@ -1102,10 +1091,12 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         goto cleanup;
     }
 
-    /* Collect all files to add (expanding directories) */
+    /* Collect all files to add (expanding directories).
+     * The walker appends to both arrays; the caller owns both. */
     all_files = string_array_new(0);
-    if (!all_files) {
-        err = ERROR(ERR_MEMORY, "Failed to allocate file list");
+    all_directories = string_array_new(0);
+    if (!all_files || !all_directories) {
+        err = ERROR(ERR_MEMORY, "Failed to allocate collection arrays");
         goto cleanup;
     }
 
@@ -1168,85 +1159,39 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
 
         /* Handle symlinks, directories, and files */
         if (!fs_is_symlink(absolute) && fs_is_directory(absolute)) {
-            /* Recursively collect files from directory */
-            string_array_t *dir_files = NULL;
-            err = collect_files_from_dir(
-                absolute, opts, profile_rules, source_filter, out, &dir_files
-            );
+            /* Remember counts so we can describe what the walk produced. */
+            size_t files_before = all_files->count;
+            size_t dirs_before = all_directories->count;
 
+            err = collect_tree(
+                absolute, profile_rules, source_filter, out,
+                all_files, all_directories
+            );
             if (err) {
                 free(absolute);
-                err = error_wrap(err, "Failed to collect files from '%s'", file);
+                err = error_wrap(err, "Failed to collect from '%s'", file);
                 goto cleanup;
             }
 
-            /* If all files were excluded, skip this directory entirely */
-            if (dir_files->count == 0) {
-                string_array_free(dir_files);
+            /* Diagnostic: the walker always pushes the CLI-arg directory
+             * itself, so all_directories grows by at least one. The file
+             * count reflects whether anything trackable was inside. */
+            if (all_files->count == files_before &&
+                all_directories->count == dirs_before + 1) {
                 output_info(
-                    out, OUTPUT_VERBOSE, "Skipped directory (all files excluded): %s",
+                    out, OUTPUT_VERBOSE,
+                    "Directory has no trackable contents (tracking dir only): %s",
                     absolute
                 );
-                free(absolute);
-                continue;
-            }
-
-            /* Merge directory files into all_files (dedup against explicit file args) */
-            for (size_t j = 0; j < dir_files->count; j++) {
-                const char *dir_file = dir_files->items[j];
-                if (string_array_contains(all_files, dir_file)) {
-                    continue;
-                }
-                err = string_array_push(all_files, dir_file);
-                if (err) {
-                    string_array_free(dir_files);
-                    free(absolute);
-                    goto cleanup;
-                }
-            }
-            string_array_free(dir_files);
-
-            output_info(out, OUTPUT_VERBOSE, "Added directory: %s", absolute);
-
-            /* Track this directory for metadata capture */
-            char *storage_prefix = NULL;
-            path_prefix_t prefix;
-            err = path_to_storage(absolute, opts->custom_prefix, &storage_prefix, &prefix);
-            if (err) {
-                /* Non-fatal: directory that equals the custom prefix root has no
-                 * storage path representation. Individual files are still added. */
-                error_free(err);
-                free(absolute);
-                err = NULL;
-                continue;
-            }
-
-            /* Add to tracked directories list */
-            if (tracked_dir_count >= tracked_dir_capacity) {
-                size_t new_capacity = tracked_dir_capacity == 0 ? 8 : tracked_dir_capacity * 2;
-                tracked_dir_t *new_dirs = realloc(
-                    tracked_dirs,
-                    new_capacity * sizeof(tracked_dir_t)
+            } else if (all_files->count == files_before) {
+                output_info(
+                    out, OUTPUT_VERBOSE,
+                    "All files excluded (tracking directory tree only): %s",
+                    absolute
                 );
-                if (!new_dirs) {
-                    free(storage_prefix);
-                    free(absolute);
-                    err = ERROR(ERR_MEMORY, "Failed to allocate tracked directories");
-                    goto cleanup;
-                }
-                tracked_dirs = new_dirs;
-                tracked_dir_capacity = new_capacity;
+            } else {
+                output_info(out, OUTPUT_VERBOSE, "Added directory: %s", absolute);
             }
-
-            tracked_dirs[tracked_dir_count].filesystem_path = strdup(absolute);
-            if (!tracked_dirs[tracked_dir_count].filesystem_path) {
-                free(storage_prefix);
-                free(absolute);
-                err = ERROR(ERR_MEMORY, "Failed to duplicate directory path");
-                goto cleanup;
-            }
-            tracked_dirs[tracked_dir_count].storage_path = storage_prefix;
-            tracked_dir_count++;
         } else {
             /* Single file or symlink - check if excluded */
             if (is_excluded(absolute, false, profile_rules, source_filter, out)) {
@@ -1268,8 +1213,11 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         free(absolute);
     }
 
-    /* Check if we have anything to add (files or directories) */
-    if (all_files->count == 0 && tracked_dir_count == 0) {
+    /* Check if we have anything to add (files or directories).
+     * all_directories may contain classification-root entries that Phase 3
+     * skips, but it also captures descendants — so a non-empty array is
+     * sufficient evidence that the walk produced something worth committing. */
+    if (all_files->count == 0 && all_directories->count == 0) {
         if (opts->exclude_count > 0) {
             err = ERROR(
                 ERR_INVALID_ARG,
@@ -1341,35 +1289,64 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         added_count++;
     }
 
-    /* Handle tracked directories metadata */
+    /* Capture directory metadata for every walked directory.
+     *
+     * Iterates `all_directories` (filesystem paths produced by the walker)
+     * and converts each to a storage path here. The walker records every
+     * directory it walks into — including the CLI-arg top-level — so this
+     * loop captures the full tree, not just the CLI-named entry points.
+     *
+     * Classification roots ($HOME, "/", --prefix) have no storage-path
+     * representation: path_to_storage returns ERR_INVALID_ARG and we skip
+     * them by design. Their descendants are captured normally.
+     */
     size_t dir_tracked_count = 0;
-    for (size_t i = 0; i < tracked_dir_count; i++) {
-        const tracked_dir_t *dir = &tracked_dirs[i];
+    for (size_t i = 0; i < all_directories->count; i++) {
+        const char *filesystem_path = all_directories->items[i];
 
-        /* Stat directory first to capture metadata */
+        char *storage_path = NULL;
+        path_prefix_t prefix;
+        err = path_to_storage(filesystem_path, opts->custom_prefix, &storage_path, &prefix);
+        if (err) {
+            /* Classification root (filesystem_path equals $HOME, "/", or --prefix):
+             * no storage encoding exists. Skip the root itself; its descendants
+             * appear as separate entries and are captured normally. The error
+             * message in path.c:path_classify makes this semantic explicit. */
+            if (err->code == ERR_INVALID_ARG) {
+                error_free(err);
+                err = NULL;
+                continue;
+            }
+            err = error_wrap(
+                err, "Failed to convert directory path '%s'", filesystem_path
+            );
+            goto cleanup;
+        }
+
+        /* Stat directory to capture mode (and ownership if root/custom). */
         struct stat dir_stat;
-        if (stat(dir->filesystem_path, &dir_stat) != 0) {
-            /* Non-fatal: log warning and continue */
+        if (stat(filesystem_path, &dir_stat) != 0) {
             output_warning(
                 out, OUTPUT_VERBOSE, "Failed to stat directory '%s': %s",
-                dir->filesystem_path, strerror(errno)
+                filesystem_path, strerror(errno)
             );
+            free(storage_path);
             continue;
         }
 
         /* Capture directory metadata using stat data */
         metadata_item_t *dir_item = NULL;
-        err = metadata_capture_from_directory(dir->storage_path, &dir_stat, &dir_item);
-
+        err = metadata_capture_from_directory(storage_path, &dir_stat, &dir_item);
         if (err) {
             /* Non-fatal: log warning and continue */
             output_warning(
                 out, OUTPUT_VERBOSE,
                 "Failed to capture metadata for directory '%s': %s",
-                dir->filesystem_path, error_message(err)
+                filesystem_path, error_message(err)
             );
             error_free(err);
             err = NULL;
+            free(storage_path);
             continue;
         }
 
@@ -1378,7 +1355,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
             output_info(
                 out, OUTPUT_VERBOSE,
                 "Captured directory metadata: %s (mode: %04o, owner: %s:%s)",
-                dir->filesystem_path, dir_item->mode,
+                filesystem_path, dir_item->mode,
                 dir_item->owner ? dir_item->owner : "?",
                 dir_item->group ? dir_item->group : "?"
             );
@@ -1386,20 +1363,19 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
             output_info(
                 out, OUTPUT_VERBOSE,
                 "Captured directory metadata: %s (mode: %04o)",
-                dir->filesystem_path, dir_item->mode
+                filesystem_path, dir_item->mode
             );
         }
 
         /* Add directory to metadata */
         err = metadata_add_item(metadata, dir_item);
-
         metadata_item_free(dir_item);
 
         if (err) {
             /* Non-fatal: log warning and continue */
             output_warning(
                 out, OUTPUT_VERBOSE, "Failed to track directory '%s': %s",
-                dir->filesystem_path, error_message(err)
+                filesystem_path, error_message(err)
             );
             error_free(err);
             err = NULL;
@@ -1407,9 +1383,10 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
             dir_tracked_count++;
             output_info(
                 out, OUTPUT_VERBOSE, "Tracked directory: %s -> %s",
-                dir->filesystem_path, dir->storage_path
+                filesystem_path, storage_path
             );
         }
+        free(storage_path);
     }
 
     /* Save metadata to worktree */
@@ -1631,17 +1608,9 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     }
 
 cleanup:
-    /* Free tracked directories */
-    if (tracked_dirs) {
-        for (size_t i = 0; i < tracked_dir_count; i++) {
-            free(tracked_dirs[i].filesystem_path);
-            free(tracked_dirs[i].storage_path);
-        }
-        free(tracked_dirs);
-    }
-
     /* Free resources in reverse order of allocation */
     if (metadata) metadata_free(metadata);
+    if (all_directories) string_array_free(all_directories);
     if (all_files) string_array_free(all_files);
     if (wt) worktree_cleanup(&wt);
     source_filter_free(source_filter);

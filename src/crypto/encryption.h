@@ -66,8 +66,8 @@
 /* Magic header for encrypted files */
 #define ENCRYPTION_MAGIC "DOTTA"
 #define ENCRYPTION_MAGIC_BYTES 5        /* "DOTTA" magic string length */
-#define ENCRYPTION_VERSION 4            /* Version 4: SIV with IV bound to plaintext (fixes v3 keystream reuse) */
-#define ENCRYPTION_TAG_BYTES 6          /* Magic (5) + version (1): bytes checked by encryption_is_encrypted */
+#define ENCRYPTION_VERSION 4            /* Version 4: SIV with IV bound to plaintext */
+#define ENCRYPTION_DETECT_BYTES 6       /* Magic (5) + version (1): prefix length checking */
 #define ENCRYPTION_HEADER_SIZE 8        /* Magic (5) + version (1) + reserved (2) */
 #define ENCRYPTION_SIV_SIZE 32          /* SIV/MAC tag (32 bytes) */
 #define ENCRYPTION_OVERHEAD 40          /* Header (8) + SIV (32) */

@@ -820,9 +820,9 @@ bool encryption_is_encrypted(const unsigned char *data, size_t data_len) {
      * a different version byte is treated as plaintext here; the decrypt
      * path still surfaces a precise "unsupported version" error if a
      * caller does reach it (e.g. via explicit --no-encrypt override). */
-    if (!data || data_len < ENCRYPTION_TAG_BYTES) {
+    if (!data || data_len < ENCRYPTION_DETECT_BYTES) {
         return false;
     }
 
-    return memcmp(data, MAGIC_HEADER, ENCRYPTION_TAG_BYTES) == 0;
+    return memcmp(data, MAGIC_HEADER, ENCRYPTION_DETECT_BYTES) == 0;
 }

@@ -56,6 +56,30 @@ struct session_cache_file {
 } __attribute__((packed));
 
 /**
+ * Serialize a uint64_t as little-endian bytes.
+ *
+ * Used to canonicalize the two timestamp fields before they feed into
+ * the session-cache MAC. Matches the convention already used by
+ * `crypto/encryption.c::store_le64`; keeping an independent static copy
+ * avoids widening the crypto module's public surface for one call site.
+ * The MAC is never compared across machines (the cache is machine-bound
+ * via `machine_salt` + `get_machine_identity`), but feeding canonical
+ * bytes makes the computation reproducible regardless of host byte
+ * order instead of relying on "same binary, same architecture" as an
+ * implicit invariant.
+ */
+static void store_le64(uint8_t out[8], uint64_t val) {
+    out[0] = (uint8_t) (val);
+    out[1] = (uint8_t) (val >> 8);
+    out[2] = (uint8_t) (val >> 16);
+    out[3] = (uint8_t) (val >> 24);
+    out[4] = (uint8_t) (val >> 32);
+    out[5] = (uint8_t) (val >> 40);
+    out[6] = (uint8_t) (val >> 48);
+    out[7] = (uint8_t) (val >> 56);
+}
+
+/**
  * Key manager structure
  */
 struct keymgr {
@@ -242,25 +266,27 @@ static error_t *session_cache_save(
     }
 
     /* Compute MAC over: created_at || expires_at || machine_salt || encrypted_key
-     * Use cache_key as the MAC key for authentication */
+     * Use cache_key as the MAC key for authentication.
+     *
+     * The two timestamp fields are canonicalized to little-endian before
+     * hashing so the MAC input is independent of host byte order. The
+     * on-disk layout still stores them as native uint64_t — the cache
+     * is machine-bound, so the layout never crosses endian boundaries —
+     * but the MAC input itself is now reproducible from the field values
+     * alone, matching the convention already used in encryption.c. */
     hydro_hash_state mac_state;
     if (hydro_hash_init(&mac_state, "dottamac", cache_key) != 0) {
         err = ERROR(ERR_CRYPTO, "Failed to initialize MAC computation");
         goto cleanup;
     }
 
-    hydro_hash_update(
-        &mac_state, (uint8_t *) &cache.created_at, 8
-    );
-    hydro_hash_update(
-        &mac_state, (uint8_t *) &cache.expires_at, 8
-    );
-    hydro_hash_update(
-        &mac_state, cache.machine_salt, 16
-    );
-    hydro_hash_update(
-        &mac_state, cache.encrypted_key, 32
-    );
+    uint8_t ts_le[8];
+    store_le64(ts_le, cache.created_at);
+    hydro_hash_update(&mac_state, ts_le, sizeof(ts_le));
+    store_le64(ts_le, cache.expires_at);
+    hydro_hash_update(&mac_state, ts_le, sizeof(ts_le));
+    hydro_hash_update(&mac_state, cache.machine_salt, 16);
+    hydro_hash_update(&mac_state, cache.encrypted_key, 32);
 
     hydro_hash_final(&mac_state, cache.mac, 32);
     hydro_memzero(&mac_state, sizeof(mac_state));
@@ -490,7 +516,13 @@ static error_t *session_cache_load(
     hydro_hash_final(&hash_state, cache_key, 32);
     hydro_memzero(&hash_state, sizeof(hash_state));
 
-    /* Verify MAC using cache_key */
+    /* Verify MAC using cache_key.
+     *
+     * Canonicalize the timestamp fields the same way session_cache_save
+     * does — feeding raw field memory would match the save path on the
+     * same machine today, but makes the MAC input host-byte-order
+     * dependent. Using store_le64 here keeps the two paths in sync
+     * regardless of host. */
     hydro_hash_state mac_state;
     if (hydro_hash_init(&mac_state, "dottamac", cache_key) != 0) {
         err = ERROR(
@@ -499,18 +531,13 @@ static error_t *session_cache_load(
         goto cleanup;
     }
 
-    hydro_hash_update(
-        &mac_state, (uint8_t *) &cache.created_at, 8
-    );
-    hydro_hash_update(
-        &mac_state, (uint8_t *) &cache.expires_at, 8
-    );
-    hydro_hash_update(
-        &mac_state, cache.machine_salt, 16
-    );
-    hydro_hash_update(
-        &mac_state, cache.encrypted_key, 32
-    );
+    uint8_t ts_le[8];
+    store_le64(ts_le, cache.created_at);
+    hydro_hash_update(&mac_state, ts_le, sizeof(ts_le));
+    store_le64(ts_le, cache.expires_at);
+    hydro_hash_update(&mac_state, ts_le, sizeof(ts_le));
+    hydro_hash_update(&mac_state, cache.machine_salt, 16);
+    hydro_hash_update(&mac_state, cache.encrypted_key, 32);
 
     hydro_hash_final(&mac_state, computed_mac, 32);
     hydro_memzero(&mac_state, sizeof(mac_state));

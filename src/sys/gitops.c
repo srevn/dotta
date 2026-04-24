@@ -285,7 +285,7 @@ error_t *gitops_list_branches(
     return NULL;
 }
 
-error_t *gitops_list_remote_branches(
+error_t *gitops_list_remote_tracking(
     git_repository *repo,
     const char *remote_name,
     string_array_t **out
@@ -1703,6 +1703,89 @@ error_t *gitops_delete_remote_branch(
     if (err < 0) {
         return error_from_git(err);
     }
+    return NULL;
+}
+
+error_t *gitops_list_remote_branches(
+    git_repository *repo,
+    const char *remote_name,
+    transfer_context_t *xfer,
+    string_array_t **out_branches
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(remote_name);
+    CHECK_NULL(out_branches);
+
+    git_remote *remote = NULL;
+    string_array_t *branches = string_array_new(0);
+    if (!branches) {
+        return ERROR(ERR_MEMORY, "Failed to allocate branch list");
+    }
+
+    int git_err = git_remote_lookup(&remote, repo, remote_name);
+    if (git_err < 0) {
+        string_array_free(branches);
+        return error_from_git(git_err);
+    }
+
+    /* git_remote_connect + git_remote_ls transfer no byte payload, so the
+     * progress callback never fires; GIT_DIRECTION_FETCH keeps the
+     * credential path aligned with fetch semantics. */
+    git_remote_callbacks callbacks;
+    git_remote_init_callbacks(&callbacks, GIT_REMOTE_CALLBACKS_VERSION);
+    transfer_configure_callbacks(&callbacks, xfer, GIT_DIRECTION_FETCH);
+
+    transfer_op_begin(xfer);
+    git_err = git_remote_connect(
+        remote, GIT_DIRECTION_FETCH, &callbacks, NULL, NULL
+    );
+    transfer_op_end(xfer, git_err);
+    if (git_err < 0) {
+        git_remote_free(remote);
+        string_array_free(branches);
+        return error_from_git(git_err);
+    }
+
+    const git_remote_head **refs = NULL;
+    size_t refs_len = 0;
+    git_err = git_remote_ls(&refs, &refs_len, remote);
+    if (git_err < 0) {
+        git_remote_disconnect(remote);
+        git_remote_free(remote);
+        string_array_free(branches);
+        return error_from_git(git_err);
+    }
+
+    static const char heads_prefix[] = "refs/heads/";
+    const size_t prefix_len = sizeof(heads_prefix) - 1;
+
+    for (size_t i = 0; i < refs_len; i++) {
+        const char *refname = refs[i]->name;
+
+        if (!str_starts_with(refname, heads_prefix)) {
+            continue;
+        }
+
+        const char *branch_name = refname + prefix_len;
+
+        if (*branch_name == '\0' ||
+            strcmp(branch_name, "dotta-worktree") == 0) {
+            continue;
+        }
+
+        error_t *push_err = string_array_push(branches, branch_name);
+        if (push_err) {
+            git_remote_disconnect(remote);
+            git_remote_free(remote);
+            string_array_free(branches);
+            return push_err;
+        }
+    }
+
+    git_remote_disconnect(remote);
+    git_remote_free(remote);
+
+    *out_branches = branches;
     return NULL;
 }
 

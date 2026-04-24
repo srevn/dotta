@@ -12,8 +12,6 @@
 #include <stdbool.h>
 #include <types.h>
 
-#include "sys/transfer.h"
-
 /**
  * Sync state for a profile relative to remote
  */
@@ -80,8 +78,8 @@ const char *upstream_state_symbol(upstream_state_t state);
  * and you want to see what's available to create local branches from.
  *
  * **Limitation**: If a remote was just added without fetching, this returns
- * empty because no remote tracking refs exist yet. Use upstream_query_remote_branches()
- * instead to query the actual server.
+ * empty because no remote tracking refs exist yet. Use
+ * gitops_list_remote_branches() instead to query the actual server.
  *
  * **Use cases:**
  * - After git clone, to show unfetched profiles
@@ -95,39 +93,6 @@ const char *upstream_state_symbol(upstream_state_t state);
 error_t *upstream_discover_branches(
     git_repository *repo,
     const char *remote_name,
-    string_array_t **out_branches
-);
-
-/**
- * Query remote server for available branches
- *
- * **NETWORK OPERATION** - Connects to the remote server to query ALL branches
- * that exist on the server, regardless of local state.
- *
- * This is the authoritative source for what's on the remote, unlike
- * upstream_discover_branches() which only looks at cached local metadata.
- *
- * **Use cases:**
- * - Listing remote profiles without fetching (profile list --remote)
- * - Fetching all profiles (profile fetch --all)
- * - Validating branch existence before operations
- * - When remote was just added and no tracking refs exist yet
- *
- * **Requirements:**
- * - Network connectivity
- * - Credentials if repository requires authentication
- *
- * @param repo Repository (must not be NULL)
- * @param remote_name Remote name (e.g., "origin")
- * @param xfer Transfer context for credentials and op lifecycle
- *             (may be NULL; operation proceeds unauthenticated)
- * @param out_branches String array of branch names on remote (caller must free)
- * @return Error or NULL on success
- */
-error_t *upstream_query_remote_branches(
-    git_repository *repo,
-    const char *remote_name,
-    transfer_context_t *xfer,
     string_array_t **out_branches
 );
 

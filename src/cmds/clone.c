@@ -195,7 +195,7 @@ static error_t *fetch_all_profiles(
 
     /* List all remote tracking branches */
     string_array_t *all_branches = NULL;
-    error_t *err = gitops_list_remote_branches(
+    error_t *err = gitops_list_remote_tracking(
         repo, remote_name, &all_branches
     );
     if (err) {
@@ -458,7 +458,7 @@ error_t *cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
 
         /* List all remote tracking branches (available after clone) */
         string_array_t *remote_branches = NULL;
-        err = gitops_list_remote_branches(repo, "origin", &remote_branches);
+        err = gitops_list_remote_tracking(repo, "origin", &remote_branches);
         if (err) {
             output_warning(
                 out, OUTPUT_NORMAL, "Failed to list remote branches: %s",

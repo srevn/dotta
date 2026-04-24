@@ -118,7 +118,7 @@ error_t *gitops_list_branches(git_repository *repo, string_array_t **out);
  * @param out String array of branch names (must not be NULL, caller must free)
  * @return Error or NULL on success
  */
-error_t *gitops_list_remote_branches(
+error_t *gitops_list_remote_tracking(
     git_repository *repo,
     const char *remote_name,
     string_array_t **out
@@ -582,6 +582,32 @@ error_t *gitops_delete_remote_branch(
     const char *remote_name,
     const char *branch_name,
     transfer_context_t *xfer
+);
+
+/**
+ * List branches advertised by the remote server (network op).
+ *
+ * Connects to the remote and reads the advertised refs via git_remote_ls.
+ * Unlike gitops_list_remote_tracking (which reads cached refs under
+ * refs/remotes/<remote>/), this is authoritative — it sees branches
+ * added to the server since the last fetch — but requires network
+ * and credentials.
+ *
+ * Filters results to refs under refs/heads/, excluding dotta-worktree
+ * and empty names.
+ *
+ * @param repo Repository (must not be NULL)
+ * @param remote_name Remote name (must not be NULL)
+ * @param xfer Transfer context for credentials and op lifecycle
+ *             (must not be NULL)
+ * @param out_branches Branch names on remote (must not be NULL, caller frees)
+ * @return Error or NULL on success
+ */
+error_t *gitops_list_remote_branches(
+    git_repository *repo,
+    const char *remote_name,
+    transfer_context_t *xfer,
+    string_array_t **out_branches
 );
 
 /**

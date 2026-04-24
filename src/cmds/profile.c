@@ -359,7 +359,7 @@ static error_t *profile_list(
                  * This contacts the remote server to get the current list of profiles,
                  * ensuring we see newly added profiles that haven't been fetched yet.
                  */
-                remote_err = upstream_query_remote_branches(
+                remote_err = gitops_list_remote_branches(
                     repo, remote_name, xfer, &remote_branches
                 );
                 if (remote_err) {
@@ -458,7 +458,7 @@ static error_t *profile_fetch(
 
     if (opts->fetch_all) {
         /* Query remote server for all available branches */
-        err = upstream_query_remote_branches(
+        err = gitops_list_remote_branches(
             repo, remote_name, xfer, &remote_branches
         );
         if (err) {
@@ -521,7 +521,7 @@ static error_t *profile_fetch(
 
         /* Pre-flight validation: query remote for available branches */
         string_array_t *available_remote = NULL;
-        err = upstream_query_remote_branches(
+        err = gitops_list_remote_branches(
             repo, remote_name, xfer, &available_remote
         );
         if (err) {

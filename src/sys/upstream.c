@@ -11,9 +11,7 @@
 
 #include "base/array.h"
 #include "base/error.h"
-#include "base/string.h"
 #include "sys/gitops.h"
-#include "sys/transfer.h"
 
 /**
  * Analyze upstream state for a single profile
@@ -252,7 +250,7 @@ error_t *upstream_discover_branches(
 
     /* Get all remote tracking branches */
     string_array_t *remote_branches = NULL;
-    error_t *err = gitops_list_remote_branches(repo, remote_name, &remote_branches);
+    error_t *err = gitops_list_remote_tracking(repo, remote_name, &remote_branches);
     if (err) {
         return err;
     }
@@ -289,105 +287,6 @@ error_t *upstream_discover_branches(
     string_array_free(local_branches);
 
     *out_branches = new_branches;
-    return NULL;
-}
-
-/**
- * Query remote server for available branches
- */
-error_t *upstream_query_remote_branches(
-    git_repository *repo,
-    const char *remote_name,
-    transfer_context_t *xfer,
-    string_array_t **out_branches
-) {
-    CHECK_NULL(repo);
-    CHECK_NULL(remote_name);
-    CHECK_NULL(out_branches);
-
-    /* Resource tracking */
-    git_remote *remote = NULL;
-    string_array_t *branches = NULL;
-    error_t *err = NULL;
-
-    /* Create branch array */
-    branches = string_array_new(0);
-    if (!branches) {
-        return ERROR(ERR_MEMORY, "Failed to create branch array");
-    }
-
-    /* Lookup remote */
-    int git_err = git_remote_lookup(&remote, repo, remote_name);
-    if (git_err < 0) {
-        string_array_free(branches);
-        return error_from_git(git_err);
-    }
-
-    /* Wire transfer callbacks. git_remote_connect + git_remote_ls transfer
-     * no bytes, so the attached progress callback never fires; using
-     * GIT_DIRECTION_FETCH keeps the credential path aligned with fetch. */
-    git_remote_callbacks callbacks;
-    git_remote_init_callbacks(&callbacks, GIT_REMOTE_CALLBACKS_VERSION);
-    transfer_configure_callbacks(&callbacks, xfer, GIT_DIRECTION_FETCH);
-
-    transfer_op_begin(xfer);
-    git_err = git_remote_connect(
-        remote, GIT_DIRECTION_FETCH, &callbacks, NULL, NULL
-    );
-    transfer_op_end(xfer, git_err);
-    if (git_err < 0) {
-        git_remote_free(remote);
-        string_array_free(branches);
-        return error_from_git(git_err);
-    }
-
-    /* Get list of refs from remote */
-    const git_remote_head **refs = NULL;
-    size_t refs_len = 0;
-    git_err = git_remote_ls(&refs, &refs_len, remote);
-    if (git_err < 0) {
-        git_remote_disconnect(remote);
-        git_remote_free(remote);
-        string_array_free(branches);
-        return error_from_git(git_err);
-    }
-
-    /* Extract branch names from refs/heads/ prefix */
-    const char *heads_prefix = "refs/heads/";
-    size_t prefix_len = strlen(heads_prefix);
-
-    for (size_t i = 0; i < refs_len; i++) {
-        const char *refname = refs[i]->name;
-
-        /* Only process branch refs */
-        if (!str_starts_with(refname, heads_prefix)) {
-            continue;
-        }
-
-        /* Extract branch name */
-        const char *branch_name = refname + prefix_len;
-
-        /* Skip dotta-worktree and any empty names */
-        if (strcmp(branch_name, "dotta-worktree") == 0 ||
-            strlen(branch_name) == 0) {
-            continue;
-        }
-
-        /* Add to list */
-        err = string_array_push(branches, branch_name);
-        if (err) {
-            git_remote_disconnect(remote);
-            git_remote_free(remote);
-            string_array_free(branches);
-            return err;
-        }
-    }
-
-    /* Cleanup */
-    git_remote_disconnect(remote);
-    git_remote_free(remote);
-
-    *out_branches = branches;
     return NULL;
 }
 

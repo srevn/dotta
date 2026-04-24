@@ -1030,7 +1030,11 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
         metadata_free(current_meta);
         metadata_free(target_meta);
 
-        keymgr = keymgr_get_global(config);
+        err = keymgr_create(config, &keymgr);
+        if (err) {
+            err = error_wrap(err, "Failed to create key manager");
+            goto cleanup;
+        }
 
         err = show_diff_preview(
             repo, resolved_path, profile, current_encrypted, target_encrypted,
@@ -1256,6 +1260,7 @@ cleanup:
     if (target_commit) git_commit_free(target_commit);
     if (profile) free(profile);
     if (resolved_path) free(resolved_path);
+    keymgr_free(keymgr);
 
     /* Don't return error if user aborted */
     if (user_aborted) return NULL;

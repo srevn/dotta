@@ -65,10 +65,10 @@ static error_t *cmd_key_set(
         );
     }
 
-    /* Get global keymgr */
-    keymgr *keymgr = keymgr_get_global(config);
-    if (!keymgr) {
-        return ERROR(ERR_INTERNAL, "Failed to initialize key manager");
+    keymgr *keymgr = NULL;
+    error_t *err = keymgr_create(config, &keymgr);
+    if (err) {
+        return error_wrap(err, "Failed to create key manager");
     }
 
     /* Notify if key is already cached (check both memory and disk) */
@@ -91,11 +91,12 @@ static error_t *cmd_key_set(
     /* Prompt for passphrase */
     char *passphrase = NULL;
     size_t passphrase_len = 0;
-    error_t *err = keymgr_prompt_passphrase(
+    err = keymgr_prompt_passphrase(
         "Enter encryption passphrase: ", &passphrase, &passphrase_len
     );
     if (err) {
-        return error_wrap(err, "Failed to read passphrase");
+        err = error_wrap(err, "Failed to read passphrase");
+        goto cleanup;
     }
 
     /* Set passphrase in keymgr (derives and caches master key) */
@@ -111,7 +112,8 @@ static error_t *cmd_key_set(
     }
 
     if (err) {
-        return error_wrap(err, "Failed to set passphrase");
+        err = error_wrap(err, "Failed to set passphrase");
+        goto cleanup;
     }
 
     /* Display success message */
@@ -136,7 +138,9 @@ static error_t *cmd_key_set(
         "in all profiles until the cache expires or is explicitly cleared.\n"
     );
 
-    return NULL;
+cleanup:
+    keymgr_free(keymgr);
+    return err;
 }
 
 /**
@@ -156,13 +160,16 @@ static error_t *cmd_key_clear(
         );
     }
 
-    /* Get global keymgr */
-    keymgr *keymgr = keymgr_get_global(config);
-    if (!keymgr) {
-        return ERROR(ERR_INTERNAL, "Failed to initialize key manager");
+    keymgr *keymgr = NULL;
+    error_t *err = keymgr_create(config, &keymgr);
+    if (err) {
+        return error_wrap(err, "Failed to create key manager");
     }
 
-    /* Check if key is cached in memory */
+    /* Check if key is cached in memory (always false for a freshly-created
+     * keymgr; retained so the user-facing message matches pre-singleton
+     * behaviour once Commit B hands key a ctx-owned keymgr that may carry
+     * a cached key from earlier dispatch steps). */
     bool had_key = keymgr_has_key(keymgr);
 
     /* Always clear both memory and file cache (even if no in-memory key) */
@@ -186,6 +193,7 @@ static error_t *cmd_key_clear(
         "operation that requires encryption or decryption.\n"
     );
 
+    keymgr_free(keymgr);
     return NULL;
 }
 
@@ -281,9 +289,10 @@ static error_t *cmd_key_status(
     /* Display key cache status */
     output_section(out, OUTPUT_NORMAL, "Key Cache Status");
 
-    keymgr *keymgr = keymgr_get_global(config);
-    if (!keymgr) {
-        return ERROR(ERR_INTERNAL, "Failed to initialize key manager");
+    keymgr *keymgr = NULL;
+    error_t *create_err = keymgr_create(config, &keymgr);
+    if (create_err) {
+        return error_wrap(create_err, "Failed to create key manager");
     }
 
     bool key_cached = keymgr_probe_key(keymgr);
@@ -365,6 +374,7 @@ static error_t *cmd_key_status(
         }
     }
 
+    keymgr_free(keymgr);
     return NULL;
 }
 

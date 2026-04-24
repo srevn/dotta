@@ -654,14 +654,21 @@ static error_t *compare_manifest_to_filesystem(
     error_t *err = NULL;
     content_cache_t *cache = NULL;
     file_diff_t *diff = NULL;
+    keymgr *keymgr = NULL;
 
-    /* Create content cache for efficient blob access.
-     * Pass config to ensure keymgr uses user's derivation parameters
-     * (opslimit, memlimit) if this is the first call to create the singleton. */
-    keymgr *keymgr = keymgr_get_global(config);
+    /* Create a command-scoped keymgr for this historical diff path.
+     * The workspace-backed diff path (compare_workspace_to_filesystem)
+     * borrows workspace's keymgr + cache instead; the two paths will
+     * unify once keymgr and content_cache move onto the dispatch ctx. */
+    err = keymgr_create(config, &keymgr);
+    if (err) {
+        return error_wrap(err, "Failed to create key manager");
+    }
+
     cache = content_cache_create(repo, keymgr);
     if (!cache) {
-        return ERROR(ERR_MEMORY, "Failed to create content cache");
+        err = ERROR(ERR_MEMORY, "Failed to create content cache");
+        goto cleanup;
     }
 
     /* Iterate through all files in the historical manifest */
@@ -821,6 +828,7 @@ static error_t *compare_manifest_to_filesystem(
 cleanup:
     compare_free_diff(diff);
     content_cache_free(cache);
+    keymgr_free(keymgr);
 
     return err;
 }

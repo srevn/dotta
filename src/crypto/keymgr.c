@@ -15,11 +15,12 @@
 #include <termios.h>
 #include <unistd.h>
 
+#include <config.h>
+
 #include "base/error.h"
 #include "base/hashmap.h"
 #include "crypto/encryption.h"
 #include "sys/filesystem.h"
-#include "utils/config.h"
 
 /**
  * Session Cache File Format
@@ -1356,79 +1357,4 @@ error_t *keymgr_decrypt(
     hydro_memzero(profile_key, sizeof(profile_key));
 
     return err;
-}
-
-/* Global Keymanager Singleton
- *
- * Provides a process-wide keymgr instance to avoid repeatedly prompting
- * for passphrase across multiple commands in the same execution.
- *
- * Thread safety: Not thread-safe (dotta is single-threaded)
- * Lifecycle: Created on first access, cleaned up at program exit
- */
-
-static keymgr *global_keymgr = NULL;
-
-/**
- * Get or create global keymgr
- *
- * Creates the global keymgr on first access. Returns the same instance
- * on subsequent calls. If config is NULL, uses default config values.
- *
- * @param config Configuration (can be NULL for defaults)
- * @return Global keymgr instance or NULL on error
- */
-keymgr *keymgr_get_global(const config_t *config) {
-    if (global_keymgr) {
-        return global_keymgr;
-    }
-
-    /* Create new keymgr */
-    const config_t *cfg = config;
-    config_t *default_config = NULL;
-
-    if (!cfg) {
-        default_config = config_create_default();
-        if (!default_config) {
-            return NULL;
-        }
-        cfg = default_config;
-    }
-
-    error_t *err = keymgr_create(cfg, &global_keymgr);
-
-    config_free(default_config);
-
-    if (err) {
-        fprintf(
-            stderr, "Failed to create global keymgr: %s\n",
-            error_message(err)
-        );
-        error_free(err);
-        return NULL;
-    }
-
-    return global_keymgr;
-}
-
-/**
- * Cleanup global keymgr
- *
- * Securely clears and frees the global keymgr instance.
- * Safe to call multiple times or if global keymgr doesn't exist.
- *
- * NOTE: This does NOT clear the file cache - the cache persists across
- * invocations until it expires (per session_timeout) or is explicitly
- * cleared via `dotta key clear`. This is intentional for UX.
- *
- * Should be called at program exit (e.g., via atexit() or explicit cleanup).
- */
-void keymgr_cleanup_global(void) {
-    if (global_keymgr) {
-        keymgr_free(global_keymgr);
-        global_keymgr = NULL;
-    }
-
-    /* Note: We intentionally do NOT clear the file cache here.
-     * The cache should persist across invocations until timeout/expiry. */
 }

@@ -24,8 +24,8 @@
  *   * Passphrase buffers during input/derivation
  * - Graceful degradation if mlock fails (logs warning)
  * - In-memory cache uses monotonic time (prevents lifetime manipulation)
- * - Cleared on timeout, explicit clear, or process exit
- * - Signal handlers recommended for cleanup on SIGINT/SIGTERM
+ * - Cleared on timeout, explicit clear, or handle free; kernel reclaims
+ *   locked pages on process death regardless
  */
 
 #ifndef DOTTA_KEYMGR_H
@@ -282,29 +282,5 @@ error_t *keymgr_prompt_passphrase(
     char **out_passphrase,
     size_t *out_len
 );
-
-/**
- * Get or create global keymgr
- *
- * Returns a process-wide keymgr instance, creating it on first access.
- * This avoids repeatedly prompting for passphrase across multiple operations.
- *
- * The global keymgr uses the provided config (or defaults if NULL).
- * Once created, it persists until keymgr_cleanup_global() is called.
- *
- * @param config Configuration (can be NULL for defaults)
- * @return Global keymgr instance or NULL on error
- */
-keymgr *keymgr_get_global(const config_t *config);
-
-/**
- * Cleanup global keymgr
- *
- * Securely clears and frees the global keymgr instance.
- * Should be called at program exit.
- *
- * Safe to call multiple times.
- */
-void keymgr_cleanup_global(void);
 
 #endif /* DOTTA_KEYMGR_H */

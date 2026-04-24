@@ -213,15 +213,17 @@ static error_t *show_file(
     git_commit *commit = NULL;
     git_oid commit_oid;
     metadata_t *metadata = NULL;
+    keymgr *keymgr = NULL;
 
-    /*
-     * Get global keymgr for decryption (if needed)
+    /* Create keymgr for transparent decryption.
      *
-     * This does NOT prompt for password yet. Password prompt only happens
-     * if file is encrypted and key is not cached, when content layer calls
-     * keymgr_get_key().
-     */
-    keymgr *keymgr = keymgr_get_global(config);
+     * This does NOT prompt for passphrase yet — the prompt only fires
+     * inside the content layer if the blob is actually encrypted and
+     * neither the in-memory nor disk session cache has the key. */
+    err = keymgr_create(config, &keymgr);
+    if (err) {
+        return error_wrap(err, "Failed to create key manager");
+    }
 
     /* Load metadata for encryption state validation */
     err = metadata_load_from_branch(repo, profile, &metadata);
@@ -335,6 +337,7 @@ cleanup:
     if (entry) git_tree_entry_free(entry);
     if (tree) git_tree_free(tree);
     if (commit) git_commit_free(commit);
+    keymgr_free(keymgr);
 
     return err;
 }

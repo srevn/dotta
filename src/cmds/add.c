@@ -1334,9 +1334,9 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     );
 
     if (needs_encryption) {
-        keymgr = keymgr_get_global(config);
-        if (!keymgr) {
-            err = ERROR(ERR_INTERNAL, "Failed to get encryption key manager");
+        err = keymgr_create(config, &keymgr);
+        if (err) {
+            err = error_wrap(err, "Failed to create key manager");
             goto cleanup;
         }
     }
@@ -1689,6 +1689,7 @@ cleanup:
         free(preflight_allocated_paths);
     }
     if (preflight_storage_paths) free(preflight_storage_paths);
+    keymgr_free(keymgr);
 
     return err;
 }

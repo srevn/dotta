@@ -85,9 +85,15 @@ struct workspace {
     state_file_entry_t *cached_state_files;  /* Owned, freed in workspace_free (NULL if empty) */
     size_t cached_state_count;               /* Number of entries in cached_state_files */
 
-    /* Encryption and caching infrastructure */
-    keymgr *keymgr;                  /* Borrowed from global */
-    content_cache_t *content_cache;  /* Owned - caches decrypted content */
+    /* Encryption and caching infrastructure.
+     *
+     * Both are owned; freed in workspace_free in reverse creation order
+     * (content_cache first — it holds a borrowed pointer to keymgr but
+     * does not dereference it during destruction). keymgr is NULL when
+     * `workspace_load` ran without a config; content_cache handles a
+     * NULL keymgr by treating every blob as plaintext. */
+    keymgr *keymgr;                  /* Owned — may be NULL */
+    content_cache_t *content_cache;  /* Owned — caches decrypted content */
 
     /* Cached directory state (shared between analyze_orphaned_directories
      * and analyze_directory_metadata_divergence to avoid redundant table scans) */
@@ -2422,9 +2428,27 @@ error_t *workspace_load(
         return err;
     }
 
-    /* Initialize encryption infrastructure */
-    /* Note: keymgr can be NULL if encryption is not configured - this is valid */
-    ws->keymgr = keymgr_get_global(config);
+    /* Initialize encryption infrastructure.
+     *
+     * Ownership: ws->keymgr and ws->content_cache both live for the
+     * workspace's lifetime; workspace_free releases them in reverse
+     * creation order. Callers that need to reuse the cache across a
+     * workspace rebuild (e.g. update.c's mid-command commit flow)
+     * accept a fresh cache on the new workspace — the disk session
+     * cache keeps the passphrase prompt out of the second keymgr.
+     *
+     * NULL config is a valid workspace_load argument per the docstring
+     * ("config: can be NULL"); the cache tolerates a NULL keymgr by
+     * treating every blob as plaintext and surfacing ERR_CRYPTO if a
+     * decrypt is attempted. No call site relies on this path today,
+     * but preserving it keeps the documented contract honest. */
+    if (config) {
+        err = keymgr_create(config, &ws->keymgr);
+        if (err) {
+            workspace_free(ws);
+            return error_wrap(err, "Failed to create key manager");
+        }
+    }
 
     ws->content_cache = content_cache_create(ws->repo, ws->keymgr);
     if (!ws->content_cache) {
@@ -3089,9 +3113,12 @@ void workspace_free(workspace_t *ws) {
     hashmap_free(ws->profile_index, NULL);
     hashmap_free(ws->diverged_index, NULL);
 
-    /* Free encryption infrastructure */
+    /* Free encryption infrastructure in reverse creation order.
+     * content_cache holds a borrowed keymgr pointer but does not
+     * dereference it during teardown, so the order is safe either way —
+     * matching creation order keeps the code's intent readable. */
     content_cache_free(ws->content_cache);
-    /* Don't free keymgr - it's global */
+    keymgr_free(ws->keymgr);
 
     /* Free manifest (arena_backed mode: frees git_tree_entry objects,
      * entries array, hashmap, and struct — all heap-allocated) */

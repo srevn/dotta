@@ -774,10 +774,10 @@ static error_t *update_profile(
     );
 
     if (needs_encryption) {
-        keymgr = keymgr_get_global(config);
-        if (!keymgr) {
-            if (owns_metadata && existing_metadata) metadata_free(existing_metadata);
-            return ERROR(ERR_INTERNAL, "Failed to get encryption key manager");
+        err = keymgr_create(config, &keymgr);
+        if (err) {
+            err = error_wrap(err, "Failed to create key manager");
+            goto cleanup;
         }
     }
 
@@ -961,6 +961,7 @@ cleanup:
     if (index) git_index_free(index);
     if (owns_metadata && existing_metadata) metadata_free(existing_metadata);
     if (copy_results) free(copy_results);
+    keymgr_free(keymgr);
 
     return err;
 }

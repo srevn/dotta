@@ -38,7 +38,6 @@
 #include "cmds/update.h"
 #include "core/state.h"
 #include "crypto/encryption.h"
-#include "crypto/keymgr.h"
 #include "utils/config.h"
 #include "utils/privilege.h"
 #include "utils/repo.h"
@@ -354,41 +353,31 @@ static int run_spec(
 volatile sig_atomic_t active_child_pgid = 0;
 
 /**
- * Signal handler for cleanup on SIGINT/SIGTERM
+ * Signal handler for SIGINT/SIGTERM
  *
- * Ensures that the global keymgr is properly cleaned up (master key
- * zeroed in memory) when the user interrupts the program with Ctrl+C
- * or when the process receives a termination signal.
+ * Forwards the signal to any active child process group (so a hook
+ * dies atomically with dotta) and re-raises with the default disposition
+ * so the kernel can terminate the process.
  *
- * Cleanup Architecture:
- * - Child propagation: If a PROCESS_PGRP_NEW child (e.g. a hook) is
- *   alive, forward the signal to its process group BEFORE local
- *   cleanup so the child dies atomically with dotta. SHARED children
- *   get no forwarding — the kernel routes their copy via the
- *   foreground process group directly.
- * - Keymanager: Cleaned here (security-critical, global state)
- * - Worktrees: Self-healing on next invocation
- * - Temp files: Minor impact, OS cleans eventually
- * - Transactions: Auto-rollback by SQLite (WAL mode)
+ * No resource cleanup runs here by design. Signal handlers must stay
+ * AS-safe per POSIX SUSv4 §2.4.3 — which rules out malloc/free (needed
+ * by libgit2 teardown) and hydro_memzero/munlock (needed by keymgr
+ * teardown). The kernel reclaims mlocked pages on process death and
+ * zeroes them before reallocation, so master keys held in the now-freed
+ * keymgr cannot surface in another process's memory. Worktrees are
+ * orphan-cleaned by worktree.c on the next invocation, and SQLite WAL
+ * mode auto-rolls-back any in-flight transaction.
  *
- * Rationale: Signal handlers are heavily restricted (async-signal-safety).
- * We cannot safely clean worktrees here (requires malloc/free via libgit2).
- * Instead, worktree.c implements transparent orphan cleanup on next run,
- * which is more robust and handles all failure modes (Ctrl-C, crashes, kill -9).
- *
- * AS-safety: kill(2), signal(), and raise() are AS-safe per POSIX
- * SUSv4 §2.4.3; reading volatile sig_atomic_t is atomic by definition.
+ * AS-safe primitives used: kill(2), signal(2), raise(3) per SUSv4
+ * §2.4.3. Reading volatile sig_atomic_t is atomic by definition.
  */
 static void signal_cleanup_handler(int signum) {
-    /* Forward first, so the child group starts dying even if local
-     * cleanup takes non-trivial time. */
+    /* Forward first, so the child group starts dying even if the
+     * default disposition takes non-trivial time to kick in. */
     sig_atomic_t cpgid = active_child_pgid;
     if (cpgid > 0) {
         (void) kill(-(pid_t) cpgid, signum);
     }
-
-    /* Clean up global keymgr (securely zero master key) */
-    keymgr_cleanup_global();
 
     /* Re-raise signal with default handler to ensure proper exit */
     signal(signum, SIG_DFL);
@@ -414,9 +403,10 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    /* Register cleanup handlers for graceful shutdown
-     * This ensures encryption keys are cleared from memory on exit */
-    atexit(keymgr_cleanup_global);
+    /* Install signal handlers so child process groups (spawned hooks)
+     * get forwarded terminal signals atomically with dotta. Keymgr
+     * teardown is command-scoped and happens via keymgr_free on the
+     * dispatch return path, not here — see signal_cleanup_handler. */
     signal(SIGINT, signal_cleanup_handler);   /* Ctrl+C */
     signal(SIGTERM, signal_cleanup_handler);  /* kill command */
 

@@ -26,6 +26,7 @@
 #include "infra/worktree.h"
 #include "sys/filesystem.h"
 #include "sys/gitops.h"
+#include "sys/transfer.h"
 #include "sys/upstream.h"
 #include "utils/commit.h"
 #include "utils/hooks.h"
@@ -1688,8 +1689,31 @@ static error_t *delete_profile_branch(
             remote_name
         );
 
-        /* We don't have a credential context here, but gitops_delete_remote_branch will handle NULL */
-        err = gitops_delete_remote_branch(repo, remote_name, opts->profile, NULL);
+        /* Resolve remote URL for credential handling. A NULL url is legal
+         * (unauthenticated paths still work); if the lookup fails we let
+         * the push attempt with whatever SSH/default auth is available. */
+        char *del_url = NULL;
+        error_t *del_url_err = gitops_get_remote_url(repo, remote_name, &del_url);
+        error_free(del_url_err);
+
+        transfer_context_t *del_xfer = NULL;
+        transfer_options_t del_opts = { .output = out, .url = del_url };
+        error_t *del_xfer_err = transfer_context_create(&del_opts, &del_xfer);
+        free(del_url);
+
+        if (del_xfer_err) {
+            output_warning(
+                out, OUTPUT_NORMAL, "Failed to create transfer context: %s",
+                error_message(del_xfer_err)
+            );
+            error_free(del_xfer_err);
+            err = NULL;
+        } else {
+            err = gitops_delete_remote_branch(
+                repo, remote_name, opts->profile, del_xfer
+            );
+            transfer_context_free(del_xfer);
+        }
         if (err) {
             /* Non-fatal: warn but don't fail the whole operation
              * The local branch is already deleted, so this is just about syncing

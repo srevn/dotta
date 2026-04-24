@@ -1,81 +1,84 @@
 /**
- * credentials.h - Git credential handling
+ * credentials.h - Git credential dispatch and helper IPC
+ *
+ * Stateless module: dispatches to SSH agent / SSH key files / HTTPS
+ * credential helper to obtain a git_credential, and commits or revokes
+ * credentials against the helper.
+ *
+ * Session identity (URL, cached credentials, approval state) lives on
+ * transfer_context_t. This module holds no state between calls.
  */
 
 #ifndef DOTTA_CREDENTIALS_H
 #define DOTTA_CREDENTIALS_H
 
 #include <git2.h>
-#include <stdbool.h>
 
 /**
- * Credential context for tracking credentials across operations.
+ * Dispatch credential acquisition for a libgit2 network op.
  *
- * Lives for the duration of a transfer session (owned by transfer_context_t).
- * Stores helper-sourced credentials so they can be committed (approve) or
- * revoked (reject) exactly once at session teardown. Anti-loop retry
- * tracking lives on transfer_context_t, not here — it is per-op, while
- * these credentials are per-session.
- */
-typedef struct {
-    char *url;
-    char *username;
-    char *password;
-    bool credentials_provided;
-} credential_context_t;
-
-/**
- * Create credential context
- */
-credential_context_t *credential_context_create(const char *url);
-
-/**
- * Free credential context
- */
-void credential_context_free(credential_context_t *ctx);
-
-/**
- * Approve credentials (save them via git credential helper)
- */
-void credential_context_approve(credential_context_t *ctx);
-
-/**
- * Reject credentials (remove them via git credential helper)
- */
-void credential_context_reject(credential_context_t *ctx);
-
-/**
- * Default credential callback for git operations
+ * Attempt order:
+ *   - SSH agent (for SSH URLs, if GIT_CREDENTIAL_SSH_KEY allowed)
+ *   - SSH private key from ~/.ssh/id_* (SSH URLs)
+ *   - Cache-once reuse (if cached_username/cached_password non-NULL/non-empty)
+ *   - git credential helper fill (HTTPS URLs, if USERPASS_PLAINTEXT allowed)
+ *   - Anonymous (empty userpass) for public HTTPS repos
+ *   - git_credential_default (libgit2 fallback)
  *
- * This callback is used for clone, fetch, push, and pull operations.
- * It attempts authentication in the following order:
+ * Cache-once semantics (HTTPS helper path):
+ *   - If the caller provides cached credentials, dispatch wraps them and
+ *     returns without invoking the helper — avoids re-prompts and pins
+ *     the session identity to the first successful fill.
+ *   - On a fresh helper fill (no cache), dispatch writes strdup'd copies
+ *     of the obtained credentials into `*out_username` / `*out_password`
+ *     when those out-params are non-NULL. The caller owns and must free
+ *     these with buffer_secure_free.
+ *   - On SSH, cached reuse, anonymous, or default paths, the out-params
+ *     are left untouched (NULL on first call).
  *
- * For SSH URLs:
- *   1. SSH agent (git@github.com or ssh:// URLs)
- *   2. SSH keys from standard locations (~/.ssh/id_ed25519, ~/.ssh/id_rsa, etc.)
- *
- * For HTTPS URLs:
- *   1. Git credential helper (invokes `git credential fill`)
- *   2. Anonymous access (empty credentials for public repositories)
- *   3. libgit2 default credentials (fallback)
- *
- * The callback integrates with git's credential helper system, so it works
- * with configured credential helpers like osxkeychain, wincred, or custom helpers.
- *
- * @param out Output credential object
- * @param url Remote URL being accessed
- * @param username_from_url Username from URL (may be NULL)
- * @param allowed_types Allowed credential types (bitfield)
- * @param payload User payload (unused)
- * @return 0 on success, GIT_PASSTHROUGH to let libgit2 try without credentials,
- *         or negative error code on failure
+ * @param out               libgit2 credential output (required)
+ * @param url               Remote URL (required for credential resolution;
+ *                          NULL returns GIT_PASSTHROUGH)
+ * @param username_from_url Username encoded in URL (may be NULL)
+ * @param allowed_types     libgit2 credential-type bitfield
+ * @param cached_username   Cached username to reuse (may be NULL)
+ * @param cached_password   Cached password to reuse (may be NULL)
+ * @param out_username      On fresh helper fill, receives strdup'd copy
+ *                          (may be NULL to opt out of caching)
+ * @param out_password      On fresh helper fill, receives strdup'd copy
+ *                          (may be NULL to opt out of caching)
+ * @return 0 on success, GIT_PASSTHROUGH for unauthenticated fallback,
+ *         negative git error on failure
  */
-int credentials_callback(
+int credentials_dispatch(
     git_credential **out,
     const char *url,
     const char *username_from_url,
     unsigned int allowed_types,
-    void *payload
+    const char *cached_username,
+    const char *cached_password,
+    char **out_username,
+    char **out_password
+);
+
+/**
+ * Commit credentials to the helper via `git credential approve`.
+ *
+ * No-op if any argument is NULL or empty, or if hostname/protocol
+ * extraction or validation fails. Safe to call with any input —
+ * malformed inputs silently skip the helper invocation.
+ */
+void credentials_helper_approve(
+    const char *url, const char *username, const char *password
+);
+
+/**
+ * Revoke credentials via `git credential reject`.
+ *
+ * Same safety rules as credentials_helper_approve.
+ */
+void credentials_helper_reject(
+    const char *url, const char *username, const char *password
 );
 
 #endif /* DOTTA_CREDENTIALS_H */

@@ -1,15 +1,17 @@
 /**
  * transfer.h - Unified transfer context for network operations
  *
- * Provides a unified context for Git network operations (clone, fetch, push)
- * that encapsulates both credential handling and progress reporting.
+ * Provides an opaque context for Git network operations (clone, fetch,
+ * push, delete) that encapsulates credential session identity and
+ * progress reporting.
  *
  * Design principles:
- * - Single context per operation (matches libgit2 design)
- * - Encapsulates credentials (callers don't manage them directly)
- * - Type-safe (no void* payloads)
- * - Delegates to existing credential and output systems
- * - Extensible for future enhancements (sideband, pack progress)
+ * - Single context per command-level network session (one remote, N ops)
+ * - Opaque: struct body is private to transfer.c
+ * - Encapsulates credential session state and identity
+ * - Type-safe payload for libgit2 callbacks
+ * - Commits exactly one approve/reject decision to the credential helper
+ *   at session teardown (based on classified op outcomes)
  */
 
 #ifndef DOTTA_TRANSFER_H
@@ -17,9 +19,12 @@
 
 #include <git2.h>
 #include <stdbool.h>
+#include <types.h>
 
 #include "base/output.h"
-#include "sys/credentials.h"
+
+/* Opaque transfer context. Struct body lives in transfer.c. */
+typedef struct transfer_context_s transfer_context_t;
 
 /**
  * Outcome of the most recent op within a transfer session.
@@ -35,63 +40,39 @@ typedef enum {
 } transfer_outcome_t;
 
 /**
- * Transfer context for network operations
+ * Configuration for transfer_context_create.
  *
- * Unified context that manages credential session state and progress
- * reporting for Git network operations (clone, fetch, push). A single
- * context spans multiple ops against one remote (e.g., a sync that
- * fetches then pushes several profiles); the credential session caches
- * creds across ops and commits an approve/reject decision to the
- * credential helper exactly once, at transfer_context_free().
+ * Designated-initializer friendly; unset fields default to zero/NULL/false.
  */
-typedef struct transfer_context_s {
-    credential_context_t *cred; /* Credential context (owned) */
-    output_t *output;           /* Output context (borrowed) */
-
-    /* Progress tracking state */
-    bool progress_active;          /* Whether progress is currently being displayed */
-    bool ephemeral;                /* Clear progress on completion instead of showing "done" */
-    const char *operation;         /* Current operation ("Receiving", "Sending", etc.) */
-
-    /* Transfer statistics */
-    size_t total_objects;          /* Total objects to transfer */
-    size_t indexed_objects;        /* Objects indexed so far */
-    size_t received_objects;       /* Objects received so far */
-    size_t received_bytes;         /* Bytes received so far */
-
-    /* Credential session state (internal — use the transfer_* API below).
-     * credential_state is stored as int so the enum stays file-local to
-     * transfer.c and callers cannot depend on its values. */
-    int credential_state;          /* credential_state_t in transfer.c */
-    transfer_outcome_t last_outcome; /* Outcome of the most recent op. */
-    int attempts;                  /* Per-op anti-loop counter. */
-} transfer_context_t;
+typedef struct {
+    output_t *output;              /* Required. Borrowed for the session. */
+    const char *url;               /* Remote URL. NULL is legal (SSH agent /
+                                    * unauthenticated paths still work;
+                                    * helper approve/reject become no-ops). */
+    bool ephemeral_progress;       /* If true, clear the progress line on
+                                    * completion instead of emitting "done". */
+} transfer_options_t;
 
 /**
- * Create transfer context
+ * Create a transfer context.
  *
- * Creates a transfer context for a network operation. The context owns
- * the credential context and will free it on destruction. The output
- * context is borrowed and must remain valid for the lifetime of the
- * transfer context.
- *
- * @param output Output context for progress reporting (may be NULL for silent)
- * @param url Remote URL for credential handling (may be NULL)
- * @return Transfer context or NULL on allocation failure
+ * @param opts Configuration (must not be NULL; opts->output required)
+ * @param out  Receives the new context on success (caller frees via
+ *             transfer_context_free)
+ * @return Error or NULL on success. On failure, *out is unchanged.
  */
-transfer_context_t *transfer_context_create(output_t *output, const char *url);
+error_t *transfer_context_create(
+    const transfer_options_t *opts,
+    transfer_context_t **out
+);
 
 /**
- * Free transfer context
+ * Free a transfer context.
  *
- * Frees the transfer context and its owned credential context.
  * Before freeing, commits the session's credential decision to the
  * helper exactly once: approve on VALIDATED, reject on REJECTED,
  * neither on NOT_ACQUIRED (SSH/anonymous) or unresolved ACQUIRED.
- *
- * Safe to call with NULL.
- *
- * @param ctx Transfer context (may be NULL)
+ * NULL-safe.
  */
 void transfer_context_free(transfer_context_t *ctx);
 
@@ -102,7 +83,7 @@ void transfer_context_free(transfer_context_t *ctx);
  * transfer_op_end() around each libgit2 network call (git_clone,
  * git_remote_fetch, git_remote_push, git_remote_connect).
  *
- * Safe to call with NULL.
+ * NULL-safe.
  */
 void transfer_op_begin(transfer_context_t *xfer);
 
@@ -119,7 +100,7 @@ void transfer_op_begin(transfer_context_t *xfer);
  *   VALIDATED     + anything     → VALIDATED      (terminal-absorbing)
  *   REJECTED      + anything     → REJECTED       (terminal-absorbing)
  *
- * Safe to call with NULL.
+ * NULL-safe.
  *
  * @param xfer    Transfer context (may be NULL)
  * @param git_err libgit2 return code (0, GIT_EAUTH, or other negative)
@@ -132,13 +113,12 @@ void transfer_op_end(transfer_context_t *xfer, int git_err);
  * Callers should inspect this immediately after the op completes,
  * before the next transfer_op_begin() overwrites it.
  *
- * @param xfer Transfer context (may be NULL)
- * @return transfer_outcome_t (NONE for NULL input)
+ * NULL-safe (returns TRANSFER_OUTCOME_NONE).
  */
 transfer_outcome_t transfer_last_outcome(const transfer_context_t *xfer);
 
 /**
- * Wire transfer_context_t into a libgit2 remote_callbacks struct.
+ * Wire transfer context into a libgit2 remote_callbacks struct.
  *
  * Installs the credential callback (always) and the progress callback
  * matching `direction`. NULL xfer is safe: payload becomes NULL and
@@ -160,17 +140,30 @@ void transfer_configure_callbacks(
 );
 
 /**
- * Credential callback for libgit2
+ * Mark the progress line as no longer active.
  *
- * This callback is used for clone, fetch, and push operations.
- * Delegates to the credential system (credentials_callback).
+ * Callers that take manual ownership of the current output line (clearing
+ * it or emitting their own content) invoke this to suppress the safety-net
+ * newline that transfer_context_free would otherwise emit at teardown.
  *
- * @param out Output credential object
- * @param url Remote URL being accessed
- * @param username_from_url Username from URL (may be NULL)
- * @param allowed_types Allowed credential types (bitfield)
- * @param payload Transfer context (transfer_context_t*)
- * @return 0 on success, negative error code on failure
+ * NULL-safe.
+ */
+void transfer_clear_progress(transfer_context_t *xfer);
+
+/**
+ * Return true iff any objects were received by a fetch op on this session.
+ *
+ * Used to distinguish "up-to-date, nothing to fetch" from "fetched
+ * something" when resolving the trailing progress line.
+ *
+ * NULL-safe (returns false).
+ */
+bool transfer_received_any(const transfer_context_t *xfer);
+
+/**
+ * libgit2 credential callback (payload = transfer_context_t *).
+ *
+ * Installed by transfer_configure_callbacks. Not intended for direct use.
  */
 int transfer_credentials_callback(
     git_credential **out,
@@ -181,14 +174,9 @@ int transfer_credentials_callback(
 );
 
 /**
- * Transfer progress callback for fetch operations
+ * libgit2 fetch progress callback (payload = transfer_context_t *).
  *
- * Called by libgit2 during fetch to report download progress.
- * Uses output_progress() to display progress to the user.
- *
- * @param stats Transfer statistics
- * @param payload Transfer context (transfer_context_t*)
- * @return 0 to continue, negative to abort
+ * Installed by transfer_configure_callbacks. Not intended for direct use.
  */
 int transfer_progress_callback(
     const git_indexer_progress *stats,
@@ -196,16 +184,9 @@ int transfer_progress_callback(
 );
 
 /**
- * Push transfer progress callback for push operations
+ * libgit2 push progress callback (payload = transfer_context_t *).
  *
- * Called by libgit2 during push to report upload progress.
- * Uses output_progress() to display progress to the user.
- *
- * @param current Number of objects transferred
- * @param total Total number of objects
- * @param bytes Bytes transferred
- * @param payload Transfer context (transfer_context_t*)
- * @return 0 to continue, negative to abort
+ * Installed by transfer_configure_callbacks. Not intended for direct use.
  */
 int transfer_push_progress_callback(
     unsigned int current,

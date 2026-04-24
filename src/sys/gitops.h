@@ -487,7 +487,7 @@ typedef struct transfer_context_s transfer_context_t;
  * @param out Repository handle (must not be NULL)
  * @param url Remote URL (must not be NULL)
  * @param local_path Local path for clone (must not be NULL)
- * @param xfer Transfer context for credentials and progress (may be NULL)
+ * @param xfer Transfer context for credentials and progress (must not be NULL)
  * @return Error or NULL on success
  */
 error_t *gitops_clone(
@@ -503,7 +503,7 @@ error_t *gitops_clone(
  * @param repo Repository (must not be NULL)
  * @param remote_name Remote name (e.g., "origin") (must not be NULL)
  * @param branch_name Branch name (must not be NULL)
- * @param xfer Transfer context for credentials and progress (may be NULL)
+ * @param xfer Transfer context for credentials and progress (must not be NULL)
  * @return Error or NULL on success
  */
 error_t *gitops_fetch_branch(
@@ -522,7 +522,7 @@ error_t *gitops_fetch_branch(
  * @param repo Repository (must not be NULL)
  * @param remote_name Remote name (e.g., "origin") (must not be NULL)
  * @param branches Branch names to fetch (must not be NULL, count > 0)
- * @param xfer Transfer context for credentials and progress (may be NULL)
+ * @param xfer Transfer context for credentials and progress (must not be NULL)
  * @return Error or NULL on success
  */
 error_t *gitops_fetch_branches(
@@ -538,7 +538,7 @@ error_t *gitops_fetch_branches(
  * @param repo Repository (must not be NULL)
  * @param remote_name Remote name (must not be NULL)
  * @param branch_name Branch name (must not be NULL)
- * @param xfer Transfer context for credentials and progress (may be NULL)
+ * @param xfer Transfer context for credentials and progress (must not be NULL)
  * @return Error or NULL on success
  */
 error_t *gitops_push_branch(
@@ -558,7 +558,7 @@ error_t *gitops_push_branch(
  * @param repo Repository (must not be NULL)
  * @param remote_name Remote name (must not be NULL)
  * @param branch_name Branch name (must not be NULL)
- * @param xfer Transfer context for credentials and progress (may be NULL)
+ * @param xfer Transfer context for credentials and progress (must not be NULL)
  * @return Error or NULL on success
  */
 error_t *gitops_force_push_branch(
@@ -574,7 +574,7 @@ error_t *gitops_force_push_branch(
  * @param repo Repository (must not be NULL)
  * @param remote_name Remote name (must not be NULL)
  * @param branch_name Branch name (must not be NULL)
- * @param xfer Transfer context for credentials and progress (may be NULL)
+ * @param xfer Transfer context for credentials and progress (must not be NULL)
  * @return Error or NULL on success
  */
 error_t *gitops_delete_remote_branch(

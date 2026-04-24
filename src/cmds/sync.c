@@ -300,10 +300,6 @@ static error_t *sync_fetch_phase(
     );
     fflush(out->stream);
 
-    if (xfer) {
-        xfer->ephemeral = true;
-    }
-
     /* Build array of fetchable branch names.
      *
      * Only include profiles that have a remote tracking ref — these are known
@@ -360,9 +356,7 @@ static error_t *sync_fetch_phase(
      *   - Callback completed: already cleared, harmless no-op
      *   - Mid-progress error: clears partial progress
      *   - Up-to-date: clears "Fetching..." text */
-    if (xfer && xfer->progress_active) {
-        xfer->progress_active = false;
-    }
+    transfer_clear_progress(xfer);
     if (ephemeral) {
         output_clear_line(out);
     } else {
@@ -1531,14 +1525,18 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
     error_t *url_err = gitops_get_remote_url(repo, remote_name, &remote_url);
     error_free(url_err);
 
-    /* Create transfer context for progress reporting */
-    xfer = transfer_context_create(out, remote_url);
+    /* Create transfer context for progress reporting. Ephemeral progress
+     * is enabled so the fetch progress line is cleared on completion,
+     * leaving a clean framing around sync's subsequent status output. */
+    transfer_options_t xfer_opts = {
+        .output = out,
+        .url = remote_url,
+        .ephemeral_progress = true,
+    };
+    err = transfer_context_create(&xfer_opts, &xfer);
     free(remote_url);
     remote_url = NULL;
-    if (!xfer) {
-        err = ERROR(ERR_MEMORY, "Failed to create transfer context");
-        goto cleanup;
-    }
+    if (err) goto cleanup;
 
     /* Determine auto_pull setting: CLI --no-pull overrides config */
     bool auto_pull = opts->no_pull ? false : config->auto_pull;

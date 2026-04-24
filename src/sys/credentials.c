@@ -1,50 +1,27 @@
 /**
- * credentials.c - Git credential handling implementation
+ * credentials.c - Git credential dispatch and helper IPC implementation
  */
 
 #include "sys/credentials.h"
 
+#include <hydrogen.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
-#include "base/buffer.h"
 #include "base/string.h"
 
-/* Maximum length for username and password */
+/* Maximum length for username and password received from the helper. */
 #define CRED_MAX_LEN 256
 
 /**
- * Secure zeroing that cannot be optimized away by the compiler.
- * The volatile qualifier prevents dead-store elimination, ensuring
- * sensitive data (passwords, credentials) is actually cleared from memory.
- */
-static void secure_zero(void *ptr, size_t len) {
-    volatile unsigned char *p = ptr;
-    while (len--) {
-        *p++ = 0;
-    }
-}
-
-/* Forward declarations */
-static char *extract_hostname(const char *url);
-static char *extract_protocol(const char *url);
-static bool is_valid_hostname(const char *hostname);
-
-/**
- * Validate credential field for git credential protocol compliance
+ * Validate a credential field for git credential protocol compliance.
  *
  * The git credential protocol is line-based (key=value\n format).
  * Field values MUST NOT contain newlines or carriage returns, as they
- * would break the protocol parser.
- *
- * This validation provides defense-in-depth against protocol injection,
- * though the primary protection is direct pipe I/O (no shell interpolation).
- *
- * @param field Field value (must not be NULL - caller responsibility)
- * @return true if field is protocol-compliant, false otherwise
+ * would break the protocol parser and could leak later fields.
  */
 static bool is_valid_credential_field(const char *field) {
     /* Defensive check - caller should ensure non-NULL */
@@ -64,10 +41,10 @@ static bool is_valid_credential_field(const char *field) {
 }
 
 /**
- * Validate host string (hostname or hostname:port)
+ * Validate a host string (hostname or hostname:port).
  *
- * Hostnames: alphanumeric, dots, hyphens, underscores
- * Port (optional): colon followed by digits only
+ * Hostnames: alphanumeric, dots, hyphens, underscores.
+ * Port (optional): colon followed by digits only.
  */
 static bool is_valid_hostname(const char *hostname) {
     if (!hostname || !*hostname) {
@@ -93,9 +70,80 @@ static bool is_valid_hostname(const char *hostname) {
 }
 
 /**
- * Write credential request to git credential helper
+ * Extract host (hostname[:port]) from URL.
  *
- * Uses direct pipe I/O without shell interpolation to prevent command injection.
+ * Handles standard URLs (https://host:port/path) and
+ * SCP-style URLs (user@host:path) where ':' is a path separator.
+ */
+static char *extract_hostname(const char *url) {
+    bool has_protocol = false;
+    const char *start = strstr(url, "://");
+    if (start) {
+        has_protocol = true;
+        start += 3;
+    } else {
+        start = url;
+    }
+
+    const char *authority_end = start;
+    if (has_protocol) {
+        while (*authority_end && *authority_end != '/') {
+            authority_end++;
+        }
+    } else {
+        /* SCP-style: ':' is a path separator, not port */
+        while (*authority_end &&
+               *authority_end != '/' &&
+               *authority_end != ':') {
+            authority_end++;
+        }
+    }
+
+    /* Skip userinfo@ prefix within authority */
+    for (const char *p = start; p < authority_end; p++) {
+        if (*p == '@') {
+            start = p + 1;
+            break;
+        }
+    }
+
+    size_t len = authority_end - start;
+    char *host = malloc(len + 1);
+    if (host) {
+        memcpy(host, start, len);
+        host[len] = '\0';
+    }
+
+    return host;
+}
+
+/**
+ * Extract protocol from URL.
+ */
+static char *extract_protocol(const char *url) {
+    const char *sep = strstr(url, "://");
+    if (sep) {
+        size_t len = sep - url;
+        char *proto = malloc(len + 1);
+        if (proto) {
+            memcpy(proto, url, len);
+            proto[len] = '\0';
+            return proto;
+        }
+    }
+
+    /* SCP-style user@host:path implies SSH */
+    if (strchr(url, '@') && strchr(url, ':') && !strstr(url, "://")) {
+        return strdup("ssh");
+    }
+
+    /* Default */
+    return strdup("https");
+}
+
+/**
+ * Write a credential request to the helper subprocess stdin.
+ *
  * Implements the git credential protocol:
  *   protocol=https\n
  *   host=<hostname>\n
@@ -104,13 +152,8 @@ static bool is_valid_hostname(const char *hostname) {
  *   \n  (blank line terminates request)
  *
  * SECURITY: No user data passes through shell command construction.
- * All credential fields are written directly to the subprocess stdin pipe.
- *
- * @param fp Pipe to credential helper subprocess (from popen)
- * @param hostname Validated hostname (required, must not be NULL)
- * @param username Username (optional, may be NULL or empty)
- * @param password Password (optional, may be NULL or empty)
- * @return 0 on success, -1 on error
+ * All credential fields are written directly to the subprocess stdin
+ * pipe, not the shell command line.
  */
 static int write_credential_request(
     FILE *fp,
@@ -145,143 +188,74 @@ static int write_credential_request(
 }
 
 /**
- * Create credential context
+ * Run the git credential helper subcommand (approve/reject) for a single
+ * credential tuple. Shared body for credentials_helper_{approve,reject}.
+ *
+ * SECURITY: No user data is interpolated into the shell command — the
+ * subcommand is a static string literal from the caller. Credential
+ * fields flow through the subprocess stdin pipe via write_credential_request.
  */
-credential_context_t *credential_context_create(const char *url) {
-    credential_context_t *ctx = calloc(1, sizeof(credential_context_t));
-    if (!ctx) {
-        return NULL;
+static void credentials_helper_commit(
+    const char *subcommand,
+    const char *url,
+    const char *username,
+    const char *password
+) {
+    if (!url || !username || !password || !*username || !*password) {
+        return;
     }
-    if (url) {
-        ctx->url = strdup(url);
-        if (!ctx->url) {
-            free(ctx);
-            return NULL;
+
+    char *hostname = extract_hostname(url);
+    char *protocol = extract_protocol(url);
+
+    if (hostname && protocol &&
+        is_valid_hostname(hostname) &&
+        is_valid_credential_field(username) &&
+        is_valid_credential_field(password)) {
+        /* Command is a compile-time literal + a hardcoded subcommand —
+         * no injection surface. Buffer size is generous for the short
+         * subcommands we pass ("approve" or "reject"). */
+        char cmd[64];
+        int n = snprintf(
+            cmd, sizeof(cmd),
+            "git credential %s 2>/dev/null", subcommand
+        );
+        if (n > 0 && (size_t) n < sizeof(cmd)) {
+            FILE *fp = popen(cmd, "w");
+            if (fp) {
+                write_credential_request(
+                    fp, protocol, hostname, username, password
+                );
+                pclose(fp);
+            }
         }
     }
-    return ctx;
-}
-
-/**
- * Free credential context
- */
-void credential_context_free(credential_context_t *ctx) {
-    if (!ctx) {
-        return;
-    }
-    free(ctx->url);
-    if (ctx->username) buffer_secure_free(ctx->username, strlen(ctx->username) + 1);
-    if (ctx->password) buffer_secure_free(ctx->password, strlen(ctx->password) + 1);
-    free(ctx);
-}
-
-/**
- * Approve credentials (save via git credential helper)
- *
- * SECURITY NOTE: This function previously used heredoc with user data,
- * creating command injection and process visibility vulnerabilities.
- * Now uses direct pipe I/O to eliminate shell involvement.
- */
-void credential_context_approve(credential_context_t *ctx) {
-    /* Validate context and required fields */
-    if (!ctx || !ctx->credentials_provided || !ctx->url ||
-        !ctx->username || !ctx->password) {
-        return;
-    }
-
-    /* Extract hostname from URL */
-    char *hostname = extract_hostname(ctx->url);
-    char *protocol = extract_protocol(ctx->url);
-
-    if (!hostname || !protocol) {
-        free(hostname);
-        free(protocol);
-        return;
-    }
-
-    /* Validation */
-    if (!is_valid_hostname(hostname) ||
-        !is_valid_credential_field(ctx->username) ||
-        !is_valid_credential_field(ctx->password)) {
-        free(hostname);
-        free(protocol);
-        return;
-    }
-
-    /* Execute git credential approve with direct pipe I/O
-     * SECURITY: No user data in command string (only command name)
-     * Credentials written to pipe, never exposed to shell */
-    FILE *fp = popen("git credential approve 2>/dev/null", "w");
-    if (fp) {
-        write_credential_request(
-            fp, protocol, hostname, ctx->username, ctx->password
-        );
-        pclose(fp);
-    }
 
     free(hostname);
     free(protocol);
 }
 
-/**
- * Reject credentials (remove via git credential helper)
- *
- * SECURITY NOTE: Uses same secure pattern as approve() - direct pipe I/O
- * with no shell interpolation of user data.
- */
-void credential_context_reject(credential_context_t *ctx) {
-    /* Validate context and required fields */
-    if (!ctx || !ctx->credentials_provided || !ctx->url ||
-        !ctx->username || !ctx->password) {
-        return;
-    }
+void credentials_helper_approve(
+    const char *url, const char *username, const char *password
+) {
+    credentials_helper_commit("approve", url, username, password);
+}
 
-    /* Extract hostname from URL */
-    char *hostname = extract_hostname(ctx->url);
-    char *protocol = extract_protocol(ctx->url);
-
-    /* Validate hostname to prevent command injection */
-    if (!hostname || !protocol) {
-        free(hostname);
-        free(protocol);
-        return;
-    }
-
-    /* Validate credentials for protocol compliance */
-    if (!is_valid_hostname(hostname) ||
-        !is_valid_credential_field(ctx->username) ||
-        !is_valid_credential_field(ctx->password)) {
-        free(hostname);
-        free(protocol);
-        return;
-    }
-
-    /* Execute git credential reject with direct pipe I/O */
-    FILE *fp = popen("git credential reject 2>/dev/null", "w");
-    if (fp) {
-        write_credential_request(
-            fp,
-            protocol,
-            hostname,
-            ctx->username,
-            ctx->password
-        );
-        pclose(fp);
-    }
-
-    free(hostname);
-    free(protocol);
+void credentials_helper_reject(
+    const char *url, const char *username, const char *password
+) {
+    credentials_helper_commit("reject", url, username, password);
 }
 
 /**
- * Check if a file exists and is readable
+ * Check if a file exists and is readable.
  */
 static bool file_exists(const char *path) {
     return access(path, R_OK) == 0;
 }
 
 /**
- * Get home directory
+ * Get the user's home directory.
  */
 static const char *get_home_dir(void) {
     const char *home = getenv("HOME");
@@ -292,26 +266,25 @@ static const char *get_home_dir(void) {
 }
 
 /**
- * Try to get credentials from git credential helper
+ * Query the git credential helper for credentials.
  *
- * SECURITY NOTE: This function uses heredoc (unlike approve/reject) because
- * it needs bidirectional communication (write request, read response).
- * This is SAFE because:
- *  1. Only hostname, protocol, and username_from_url are in the shell
- *     command (not the resulting credentials)
- *  2. Hostname is strictly validated (alphanumeric + .-_ only)
- *  3. username_from_url is validated for CR/LF (heredoc-breaking chars)
- *  4. Credentials are READ from helper output (not written to shell)
+ * SECURITY NOTE: Uses heredoc (unlike approve/reject which use pipe
+ * writes) because we need bidirectional communication — write request,
+ * read response. This is SAFE because:
+ *   1. Only hostname, protocol, and username_from_url are in the shell
+ *      command (not the resulting credentials).
+ *   2. Hostname is strictly validated (alphanumeric + .-_ only).
+ *   3. username_from_url is validated for CR/LF (heredoc-breaking chars).
+ *   4. Credentials are READ from helper output (not written to shell).
  *
- * @param protocol Validated protocol (e.g., "https")
- * @param hostname Validated hostname (NOT full URL - caller extracts it)
- * @param username_from_url Username encoded in the URL (e.g., the "alice"
- *     in https://alice@host/repo); NULL or empty if absent. Forwarded to
- *     the helper so multi-account configs disambiguate per URL instead
- *     of collapsing on the hostname's default identity.
- * @param username Output buffer for username
- * @param password Output buffer for password
- * @param max_len Size of output buffers
+ * @param protocol          Validated protocol (e.g., "https")
+ * @param hostname          Validated hostname (NOT full URL)
+ * @param username_from_url Username encoded in URL (may be NULL/empty);
+ *                          forwarded to the helper so multi-account
+ *                          configs disambiguate per URL.
+ * @param username          Output buffer for username
+ * @param password          Output buffer for password
+ * @param max_len           Size of output buffers
  * @return 0 on success, -1 on failure
  */
 static int get_credentials_from_helper(
@@ -362,9 +335,9 @@ static int get_credentials_from_helper(
             hostname
         );
     }
-    if (n < 0 || (size_t)n >= sizeof(cmd)) {
+    if (n < 0 || (size_t) n >= sizeof(cmd)) {
         /* Refuse to run a truncated heredoc — would send a malformed
-         * request to the helper and possibly leak a partial username. */
+         * request and possibly leak a partial username. */
         return -1;
     }
 
@@ -401,8 +374,8 @@ static int get_credentials_from_helper(
         }
     }
 
-    /* Zero the line buffer - may contain credential data */
-    secure_zero(line, sizeof(line));
+    /* Wipe the line buffer — may contain credential bytes. */
+    hydro_memzero(line, sizeof(line));
 
     int status = pclose(fp);
 
@@ -414,85 +387,9 @@ static int get_credentials_from_helper(
     return -1;
 }
 
-/**
- * Extract host (hostname[:port]) from URL
- *
- * Handles standard URLs (https://host:port/path) and
- * SCP-style URLs (user@host:path) where ':' is a path separator.
- *
- * Returns the host field suitable for the git credential protocol,
- * including port when present in standard URLs.
- */
-static char *extract_hostname(const char *url) {
-    /* Determine URL style and skip protocol */
-    bool has_protocol = false;
-    const char *start = strstr(url, "://");
-    if (start) {
-        has_protocol = true;
-        start += 3;
-    } else {
-        start = url;
-    }
-
-    /* Find end of authority section */
-    const char *authority_end = start;
-    if (has_protocol) {
-        /* Standard URL: authority ends at '/' or end of string */
-        while (*authority_end && *authority_end != '/') {
-            authority_end++;
-        }
-    } else {
-        /* SCP-style (user@host:path): ':' is a path separator, not port */
-        while (*authority_end && *authority_end != '/' && *authority_end != ':') {
-            authority_end++;
-        }
-    }
-
-    /* Skip userinfo@ prefix if present within authority */
-    for (const char *p = start; p < authority_end; p++) {
-        if (*p == '@') {
-            start = p + 1;
-            break;
-        }
-    }
-
-    /* Extract host (includes port for standard URLs) */
-    size_t len = authority_end - start;
-    char *host = malloc(len + 1);
-    if (host) {
-        memcpy(host, start, len);
-        host[len] = '\0';
-    }
-
-    return host;
-}
 
 /**
- * Extract protocol from URL
- */
-static char *extract_protocol(const char *url) {
-    const char *sep = strstr(url, "://");
-    if (sep) {
-        size_t len = sep - url;
-        char *proto = malloc(len + 1);
-        if (proto) {
-            memcpy(proto, url, len);
-            proto[len] = '\0';
-            return proto;
-        }
-    }
-
-    /* Handle SSH SCP-like syntax (user@host:path) */
-    if (strchr(url, '@') && strchr(url, ':') && !strstr(url, "://")) {
-        return strdup("ssh");
-    }
-
-    /* Fallback default */
-    return strdup("https");
-}
-
-/**
- * Try to find SSH private key in standard locations
+ * Find an SSH private key in standard locations.
  */
 static char *find_ssh_key(void) {
     const char *home = get_home_dir();
@@ -529,162 +426,151 @@ static char *find_ssh_key(void) {
 }
 
 /**
- * Default credential callback
+ * Try SSH-based credential acquisition (agent + key files).
+ *
+ * @return 0 on success (cred installed), -1 if no SSH path succeeded
  */
-int credentials_callback(
+static int try_ssh_credentials(
     git_credential **out,
     const char *url,
-    const char *username_from_url,
-    unsigned int allowed_types,
-    void *payload
+    const char *username_from_url
 ) {
-    credential_context_t *ctx = (credential_context_t *) payload;
-    int err = -1;
-
-    if (!url) {
-        return GIT_PASSTHROUGH;
-    }
-
-    /* Anti-loop is owned by the transfer layer (transfer_credentials_callback),
-     * which resets per op via transfer_op_begin(). This function is
-     * stateless with respect to retry counts. */
-
-    /* Determine username */
     const char *username = username_from_url;
     if (!username) {
-        /* For SSH, default to "git" */
+        /* Default SSH username for common URL shapes */
         if (str_starts_with(url, "git@") || strstr(url, "ssh://") != NULL) {
             username = "git";
         }
     }
 
-    /* Try SSH agent first (most common for SSH) */
-    if (allowed_types & GIT_CREDENTIAL_SSH_KEY) {
-        if (username) {
-            err = git_credential_ssh_key_from_agent(out, username);
-            if (err == 0) {
-                return 0;
-            }
-        }
-
-        /* Try finding SSH key in default locations */
-        char *ssh_key_path = find_ssh_key();
-        if (ssh_key_path) {
-            /* Build path to public key */
-            size_t pub_key_len = strlen(ssh_key_path) + 5;
-            char *pub_key_path = malloc(pub_key_len);
-            if (pub_key_path) {
-                snprintf(pub_key_path, pub_key_len, "%s.pub", ssh_key_path);
-
-                /* Try to use the key (with empty passphrase) */
-                err = git_credential_ssh_key_new(
-                    out,
-                    username ? username : "git",
-                    pub_key_path,
-                    ssh_key_path,
-                    NULL  /* No passphrase */
-                );
-
-                free(pub_key_path);
-            }
-            free(ssh_key_path);
-
-            if (err == 0) {
-                return 0;
-            }
+    if (username) {
+        if (git_credential_ssh_key_from_agent(out, username) == 0) {
+            return 0;
         }
     }
 
-    /* For HTTPS with username/password - try git credential helper */
-    if (allowed_types & GIT_CREDENTIAL_USERPASS_PLAINTEXT) {
-        /* Cache-once: within a session, reuse creds from the first
-         * successful helper fill. Skipping the re-query both avoids
-         * redundant helper invocations (fewer Touch ID prompts) and
-         * pins the session to a single identity — a mid-session
-         * helper update must not silently swap the creds we are
-         * about to commit at teardown. */
-        if (ctx && ctx->credentials_provided &&
-            ctx->username && ctx->password) {
+    char *ssh_key_path = find_ssh_key();
+    if (!ssh_key_path) {
+        return -1;
+    }
+
+    size_t pub_key_len = strlen(ssh_key_path) + 5;
+    char *pub_key_path = malloc(pub_key_len);
+    int err = -1;
+    if (pub_key_path) {
+        snprintf(pub_key_path, pub_key_len, "%s.pub", ssh_key_path);
+        err = git_credential_ssh_key_new(
+            out,
+            username ? username : "git",
+            pub_key_path,
+            ssh_key_path,
+            NULL  /* empty passphrase */
+        );
+        free(pub_key_path);
+    }
+    free(ssh_key_path);
+
+    return (err == 0) ? 0 : -1;
+}
+
+/**
+ * Try HTTPS userpass credential acquisition (cache → helper → anonymous).
+ *
+ * @param out_username  On fresh helper fill, receives strdup'd copy
+ *                      (may be NULL to opt out)
+ * @param out_password  On fresh helper fill, receives strdup'd copy
+ *                      (may be NULL to opt out)
+ * @return 0 on success (cred installed), -1 otherwise
+ */
+static int try_userpass_credentials(
+    git_credential **out,
+    const char *url,
+    const char *username_from_url,
+    const char *cached_username,
+    const char *cached_password,
+    char **out_username,
+    char **out_password
+) {
+    /* Cache-once: wrap cached creds without re-querying the helper. */
+    if (cached_username && *cached_username &&
+        cached_password && *cached_password) {
+        if (git_credential_userpass_plaintext_new(
+                out, cached_username, cached_password) == 0) {
+            return 0;
+        }
+    }
+
+    char *hostname = extract_hostname(url);
+    char *protocol = extract_protocol(url);
+    int result = -1;
+
+    if (hostname && protocol) {
+        char cred_username[CRED_MAX_LEN];
+        char cred_password[CRED_MAX_LEN];
+
+        if (get_credentials_from_helper(
+                protocol, hostname, username_from_url,
+                cred_username, cred_password, CRED_MAX_LEN) == 0) {
             if (git_credential_userpass_plaintext_new(
-                    out, ctx->username, ctx->password) == 0) {
-                return 0;
+                    out, cred_username, cred_password) == 0) {
+                /* Hand fresh creds back to the caller for session caching.
+                 * Heap copies because the caller's lifetime outlives this
+                 * function's stack. */
+                if (out_username) {
+                    *out_username = strdup(cred_username);
+                }
+                if (out_password) {
+                    *out_password = strdup(cred_password);
+                }
+                result = 0;
+            }
+        } else {
+            /* Anonymous access for public repos (no cache side-effect). */
+            if (git_credential_userpass_plaintext_new(out, "", "") == 0) {
+                result = 0;
             }
         }
 
-        /* Extract hostname from URL */
-        char *hostname = extract_hostname(url);
-        char *protocol = extract_protocol(url);
+        /* Wipe stack buffers that may still hold credential bytes. */
+        hydro_memzero(cred_username, sizeof(cred_username));
+        hydro_memzero(cred_password, sizeof(cred_password));
+    }
 
-        if (hostname && protocol) {
-            char cred_username[CRED_MAX_LEN];
-            char cred_password[CRED_MAX_LEN];
-            bool got_credentials = false;
+    free(hostname);
+    free(protocol);
+    return result;
+}
 
-            /* Try to get credentials from git credential helper */
-            if (get_credentials_from_helper(
-                protocol,
-                hostname,
-                username_from_url,
-                cred_username,
-                cred_password,
-                CRED_MAX_LEN
-                ) == 0
-            ) {
-                err = git_credential_userpass_plaintext_new(
-                    out,
-                    cred_username,
-                    cred_password
-                );
-                if (err == 0) {
-                    /* Cache on first fill. Free any prior values first
-                     * — belt-and-suspenders: the cache guard above
-                     * prevents re-entry today, but a future code
-                     * path change must not leak secrets through
-                     * strdup over a non-NULL pointer. */
-                    if (ctx) {
-                        if (ctx->username) {
-                            buffer_secure_free(
-                                ctx->username, strlen(ctx->username) + 1
-                            );
-                            ctx->username = NULL;
-                        }
-                        if (ctx->password) {
-                            buffer_secure_free(
-                                ctx->password, strlen(ctx->password) + 1
-                            );
-                            ctx->password = NULL;
-                        }
-                        ctx->username = strdup(cred_username);
-                        ctx->password = strdup(cred_password);
-                        ctx->credentials_provided = (ctx->username && ctx->password);
-                    }
-                    got_credentials = true;
-                }
-            } else {
-                /* Try anonymous access for public repos */
-                err = git_credential_userpass_plaintext_new(out, "", "");
-                if (err == 0) {
-                    got_credentials = true;
-                }
-            }
+int credentials_dispatch(
+    git_credential **out,
+    const char *url,
+    const char *username_from_url,
+    unsigned int allowed_types,
+    const char *cached_username,
+    const char *cached_password,
+    char **out_username,
+    char **out_password
+) {
+    if (!url) {
+        return GIT_PASSTHROUGH;
+    }
 
-            /* Zero stack buffers that may contain credential data */
-            secure_zero(cred_username, sizeof(cred_username));
-            secure_zero(cred_password, sizeof(cred_password));
+    if ((allowed_types & GIT_CREDENTIAL_SSH_KEY) &&
+        try_ssh_credentials(out, url, username_from_url) == 0) {
+        return 0;
+    }
 
-            if (got_credentials) {
-                free(hostname);
-                free(protocol);
-                return 0;
-            }
-        }
-        free(hostname);
-        free(protocol);
+    if ((allowed_types & GIT_CREDENTIAL_USERPASS_PLAINTEXT) &&
+        try_userpass_credentials(
+            out, url, username_from_url,
+            cached_username, cached_password,
+            out_username, out_password
+        ) == 0) {
+        return 0;
     }
 
     /* Try default credentials (uses git credential helpers) */
-    err = git_credential_default_new(out);
-    if (err == 0) {
+    if (git_credential_default_new(out) == 0) {
         return 0;
     }
 

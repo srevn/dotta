@@ -388,11 +388,12 @@ error_t *cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
     output_info(out, OUTPUT_NORMAL, "  Path: %s", local_path);
 
     /* Create transfer context for progress reporting and credentials */
-    xfer = transfer_context_create(out, opts->url);
-    if (!xfer) {
-        final_err = ERROR(ERR_MEMORY, "Failed to create transfer context");
-        goto cleanup;
-    }
+    transfer_options_t xfer_opts = {
+        .output = out,
+        .url = opts->url,
+    };
+    final_err = transfer_context_create(&xfer_opts, &xfer);
+    if (final_err) goto cleanup;
 
     /* Clone repository with progress reporting */
     err = gitops_clone(&repo, opts->url, local_path, xfer);

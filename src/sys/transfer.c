@@ -10,6 +10,8 @@
 
 #include <git2/errors.h>
 
+#include "base/buffer.h"
+#include "base/error.h"
 #include "base/output.h"
 #include "sys/credentials.h"
 
@@ -28,6 +30,40 @@ typedef enum {
     CRED_STATE_VALIDATED,         /* At least one op succeeded. Terminal. */
     CRED_STATE_REJECTED           /* Auth failed with no prior success. Terminal. */
 } credential_state_t;
+
+/**
+ * Transfer context.
+ *
+ * Owns the full lifecycle of a network session against one remote:
+ *   - Progress reporting (line state, ephemeral flag, received counters)
+ *   - Credential identity (URL, cached username/password)
+ *   - Credential state machine (acquisition → validation / rejection)
+ *
+ * Per-op counters (attempts, last_outcome) are reset by transfer_op_begin
+ * and classified by transfer_op_end. The cached credentials are filled
+ * at most once per session by the first successful helper fill
+ * (cache-once identity pinning).
+ */
+struct transfer_context_s {
+    output_t *output;               /* Borrowed. */
+
+    /* Progress state */
+    bool progress_active;           /* Line is mid-display. */
+    bool ephemeral;                 /* Clear on completion. */
+    size_t fetched_objects;         /* Objects reported by the most recent fetch */
+
+    /* Credential session identity */
+    char *url;                      /* Owned. Captured at create; drives
+                                     * helper approve/reject at teardown. */
+    char *username;                 /* Owned, heap, wiped on free. */
+    char *password;                 /* Owned, heap, wiped on free. */
+    bool  credentials_provided;     /* True iff helper filled creds. */
+
+    /* Session state machine */
+    credential_state_t credential_state;
+    transfer_outcome_t last_outcome;
+    int attempts;                   /* Per-op anti-loop counter. */
+};
 
 /**
  * Map a libgit2 return code to a transfer outcome class.
@@ -61,7 +97,21 @@ static void transfer_mark_cred_acquired(transfer_context_t *xfer) {
 }
 
 /**
- * Finalize the current progress line
+ * Securely replace a heap-allocated secret with a new heap-allocated value.
+ *
+ * Wipes and frees the old buffer (if any), then installs the new pointer.
+ * `*slot` is a field slot (e.g., `&ctx->username`). Ownership of `incoming`
+ * transfers to the slot; the caller must NOT free it after this call.
+ */
+static void secure_replace(char **slot, char *incoming) {
+    if (*slot) {
+        buffer_secure_free(*slot, strlen(*slot) + 1);
+    }
+    *slot = incoming;
+}
+
+/**
+ * Finalize the current progress line.
  *
  * In ephemeral mode on a TTY, clears the entire line (progress vanishes).
  * In persistent mode, appends the given completion text (e.g., ", done.\n").
@@ -79,35 +129,33 @@ static void finalize_progress(transfer_context_t *ctx, const char *completion) {
     ctx->progress_active = false;
 }
 
-/**
- * Create transfer context
- */
-transfer_context_t *transfer_context_create(output_t *output, const char *url) {
-    transfer_context_t *ctx = calloc(1, sizeof(transfer_context_t));
+error_t *transfer_context_create(
+    const transfer_options_t *opts,
+    transfer_context_t **out
+) {
+    CHECK_NULL(opts);
+    CHECK_NULL(out);
+    CHECK_NULL(opts->output);
+
+    transfer_context_t *ctx = calloc(1, sizeof(*ctx));
     if (!ctx) {
-        return NULL;
+        return ERROR(ERR_MEMORY, "Failed to allocate transfer context");
     }
 
-    /* Create credential context (owned by transfer context) */
-    ctx->cred = credential_context_create(url);
-    if (!ctx->cred && url) {
-        /* If URL was provided but credential creation failed, treat as error */
-        free(ctx);
-        return NULL;
+    if (opts->url) {
+        ctx->url = strdup(opts->url);
+        if (!ctx->url) {
+            free(ctx);
+            return ERROR(ERR_MEMORY, "Failed to copy transfer URL");
+        }
     }
 
-    /* Borrow output context (not owned) */
-    ctx->output = output;
+    ctx->output = opts->output;
+    ctx->ephemeral = opts->ephemeral_progress;
+    /* All other fields zero-initialized by calloc. */
 
-    /* Initialize progress state */
-    ctx->progress_active = false;
-    ctx->operation = NULL;
-    ctx->total_objects = 0;
-    ctx->indexed_objects = 0;
-    ctx->received_objects = 0;
-    ctx->received_bytes = 0;
-
-    return ctx;
+    *out = ctx;
+    return NULL;
 }
 
 /**
@@ -118,28 +166,28 @@ void transfer_context_free(transfer_context_t *ctx) {
         return;
     }
 
-    /* Commit the session's credential decision exactly once. Guarded on
-     * terminal state: intermediate states (NOT_ACQUIRED, unresolved
-     * ACQUIRED) produce no helper traffic. credential_context_approve /
-     * reject additionally guard on credentials_provided, so SSH paths
-     * are silent even if state somehow advanced. */
-    if (ctx->cred) {
-        if (ctx->credential_state == CRED_STATE_VALIDATED) {
-            credential_context_approve(ctx->cred);
-        } else if (ctx->credential_state == CRED_STATE_REJECTED) {
-            credential_context_reject(ctx->cred);
-        }
+    /* Commit the session's credential decision exactly once. Helper calls
+     * are guarded against empty inputs, so NOT_ACQUIRED / unresolved
+     * ACQUIRED states produce no helper traffic (SSH paths never populate
+     * username/password). */
+    if (ctx->credential_state == CRED_STATE_VALIDATED) {
+        credentials_helper_approve(ctx->url, ctx->username, ctx->password);
+    } else if (ctx->credential_state == CRED_STATE_REJECTED) {
+        credentials_helper_reject(ctx->url, ctx->username, ctx->password);
     }
-
-    /* Free owned credential context */
-    credential_context_free(ctx->cred);
 
     /* Clear progress if still active (safety net for interrupted transfers) */
     if (ctx->progress_active && ctx->output) {
         finalize_progress(ctx, "\n");
     }
 
-    /* Free the context itself */
+    if (ctx->username) {
+        buffer_secure_free(ctx->username, strlen(ctx->username) + 1);
+    }
+    if (ctx->password) {
+        buffer_secure_free(ctx->password, strlen(ctx->password) + 1);
+    }
+    free(ctx->url);
     free(ctx);
 }
 
@@ -208,10 +256,19 @@ void transfer_configure_callbacks(
     }
 }
 
+void transfer_clear_progress(transfer_context_t *xfer) {
+    if (!xfer) return;
+    xfer->progress_active = false;
+}
+
+bool transfer_received_any(const transfer_context_t *xfer) {
+    return xfer && xfer->fetched_objects > 0;
+}
+
 /**
- * Credential callback for libgit2
+ * libgit2 credential callback.
  *
- * Runs two session-level gates before delegating to credentials_callback:
+ * Runs two session-level gates before delegating to credentials_dispatch:
  *
  *   1. Fast-fail on REJECTED — once the server has rejected helper creds
  *      in this session, subsequent ops skip sending the same creds. Saves
@@ -222,9 +279,9 @@ void transfer_configure_callbacks(
  *      rejects creds within a single negotiation. transfer_op_begin
  *      resets the per-op counter, so across-op retries are allowed.
  *
- * On successful fill via the helper, advance the session state to
- * ACQUIRED so transfer_op_end() can then transition to VALIDATED or
- * REJECTED based on the op's outcome.
+ * On a fresh helper fill, cache-once the credentials into the session
+ * and advance the state to ACQUIRED so transfer_op_end() can then
+ * transition to VALIDATED or REJECTED based on the op's outcome.
  */
 int transfer_credentials_callback(
     git_credential **out,
@@ -243,16 +300,37 @@ int transfer_credentials_callback(
         return GIT_EAUTH;
     }
 
-    int rc = credentials_callback(
-        out,
-        url,
-        username_from_url,
-        allowed_types,
-        ctx ? ctx->cred : NULL
+    char *obtained_user = NULL;
+    char *obtained_pass = NULL;
+
+    int rc = credentials_dispatch(
+        out, url, username_from_url, allowed_types,
+        ctx ? ctx->username : NULL,
+        ctx ? ctx->password : NULL,
+        &obtained_user,
+        &obtained_pass
     );
 
-    if (rc == 0 && ctx && ctx->cred && ctx->cred->credentials_provided) {
-        transfer_mark_cred_acquired(ctx);
+    if (rc == 0 && ctx && (obtained_user || obtained_pass)) {
+        /* Fresh helper fill — cache-once into the session. secure_replace
+         * wipes any stale value first (defensive: the REJECTED fast-fail
+         * above makes re-entry impossible today, but a future code-path
+         * change must not silently leak secrets through an overwrite). */
+        secure_replace(&ctx->username, obtained_user);
+        secure_replace(&ctx->password, obtained_pass);
+        ctx->credentials_provided = (ctx->username && ctx->password);
+        if (ctx->credentials_provided) {
+            transfer_mark_cred_acquired(ctx);
+        }
+    } else {
+        /* No cache side-effect (SSH, cache-hit, anonymous, default, or
+         * failure). Free anything dispatch may have handed back. */
+        if (obtained_user) {
+            buffer_secure_free(obtained_user, strlen(obtained_user) + 1);
+        }
+        if (obtained_pass) {
+            buffer_secure_free(obtained_pass, strlen(obtained_pass) + 1);
+        }
     }
 
     return rc;
@@ -276,14 +354,12 @@ int transfer_progress_callback(
         return 0;
     }
 
-    /* Inline progress uses \r — only works on TTY */
+    /* Inline progress uses \r — only works on TTY. */
     if (!output_is_tty(ctx->output)) return 0;
 
-    /* Update statistics */
-    ctx->total_objects = stats->total_objects;
-    ctx->indexed_objects = stats->indexed_objects;
-    ctx->received_objects = stats->received_objects;
-    ctx->received_bytes = stats->received_bytes;
+    /* Record received count so transfer_received_any() can classify the
+     * session as "up-to-date" vs "fetched something". */
+    ctx->fetched_objects = stats->received_objects;
 
     unsigned int total = stats->total_objects;
     unsigned int received = stats->received_objects;
@@ -347,19 +423,16 @@ int transfer_push_progress_callback(
     /* Inline progress uses \r — only works on TTY */
     if (!output_is_tty(ctx->output)) return 0;
 
-    /* Update statistics */
-    ctx->total_objects = total;
-    ctx->received_objects = current;
-    ctx->received_bytes = bytes;
+    char bytes_str[32];
+    output_format_size(bytes, bytes_str, sizeof(bytes_str));
 
-    /* Calculate progress percentage */
     if (total > 0) {
         int percent = (current * 100) / total;
 
-        /* Display: "Sending objects: XX% (current/total)" */
+        /* Display: "Sending objects: XX% (current/total), X.X MiB" */
         fprintf(
-            ctx->output->stream, "\rSending objects: %3d%% (%u/%u)",
-            percent, current, total
+            ctx->output->stream, "\rSending objects: %3d%% (%u/%u), %s",
+            percent, current, total, bytes_str
         );
         fflush(ctx->output->stream);
         ctx->progress_active = true;
@@ -369,8 +442,11 @@ int transfer_push_progress_callback(
             finalize_progress(ctx, ", done.\n");
         }
     } else {
-        /* No total known - just show current */
-        fprintf(ctx->output->stream, "\rSending objects: %u", current);
+        /* Total unknown — show count and bytes */
+        fprintf(
+            ctx->output->stream, "\rSending objects: %u, %s",
+            current, bytes_str
+        );
         fflush(ctx->output->stream);
         ctx->progress_active = true;
     }

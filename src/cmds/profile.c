@@ -342,9 +342,17 @@ static error_t *profile_list(
             error_free(url_err);
 
             /* Create transfer context for credentials */
-            xfer = transfer_context_create(out, remote_url);
-            if (!xfer) {
-                output_warning(out, OUTPUT_NORMAL, "Failed to create transfer context");
+            transfer_options_t xfer_opts = {
+                .output = out,
+                .url = remote_url,
+            };
+            error_t *xfer_err = transfer_context_create(&xfer_opts, &xfer);
+            if (xfer_err) {
+                output_warning(
+                    out, OUTPUT_NORMAL, "Failed to create transfer context: %s",
+                    error_message(xfer_err)
+                );
+                error_free(xfer_err);
             } else {
                 /*
                  * Query remote server for available branches (network operation)
@@ -437,9 +445,12 @@ static error_t *profile_fetch(
     error_free(url_err);
 
     /* Create transfer context for progress reporting and credentials */
-    xfer = transfer_context_create(out, remote_url);
-    if (!xfer) {
-        err = ERROR(ERR_MEMORY, "Failed to create transfer context");
+    transfer_options_t xfer_opts = {
+        .output = out,
+        .url = remote_url,
+    };
+    err = transfer_context_create(&xfer_opts, &xfer);
+    if (err) {
         goto cleanup;
     }
 

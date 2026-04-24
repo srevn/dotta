@@ -541,16 +541,25 @@ static error_t *display_remote_status(
             );
             fflush(out->stream);
 
-            /* Create transfer context for progress reporting */
+            /* Create transfer context for progress reporting. Ephemeral
+             * progress is enabled so the fetch progress line is cleared
+             * on completion, leaving clean framing around the status
+             * output that follows. */
             char *remote_url = NULL;
             error_t *url_err = gitops_get_remote_url(repo, remote_name, &remote_url);
             error_free(url_err);
-            xfer = transfer_context_create(out, remote_url);
+            transfer_options_t xfer_opts = {
+                .output = out,
+                .url = remote_url,
+                .ephemeral_progress = true,
+            };
+            error_t *xfer_err = transfer_context_create(&xfer_opts, &xfer);
             free(remote_url);
-
-            if (xfer) {
-                xfer->ephemeral = true;
+            if (xfer_err) {
+                /* Non-fatal: proceed without credentials/progress. */
+                error_free(xfer_err);
             }
+
             ephemeral = output_is_tty(out);  /* ANSI clear only works on TTY */
         }
 
@@ -566,14 +575,12 @@ static error_t *display_remote_status(
                  *   - Callback completed: already cleared, harmless no-op
                  *   - Mid-progress error: clears partial progress
                  *   - Up-to-date: clears "Fetching..." text */
-                if (xfer && xfer->progress_active) {
-                    xfer->progress_active = false;
-                }
+                transfer_clear_progress(xfer);
                 output_clear_line(out);
             } else if (fetch_err) {
                 /* Non-TTY: finish the line before warning */
                 output_newline(out, OUTPUT_VERBOSE);
-            } else if (!xfer || xfer->total_objects == 0) {
+            } else if (!transfer_received_any(xfer)) {
                 /* Non-TTY, up-to-date: resolve inline */
                 output_print(out, OUTPUT_VERBOSE, " done.\n");
             }

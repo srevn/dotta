@@ -74,7 +74,44 @@ struct transfer_context_s {
     credential_state_t credential_state;
     transfer_outcome_t last_outcome;
     int attempts;                   /* Per-op anti-loop counter. */
+
+    /* Transport classification (cached from `url` at create time).
+     * True for file:// or plain filesystem paths. libgit2's local push
+     * transport leaves the `bytes` parameter of push_transfer_progress
+     * uninitialized (no wire bytes to count), so byte accounting must
+     * be suppressed for these sessions. */
+    bool local_transport;
 };
+
+/**
+ * Classify a remote URL as local (file:// or plain filesystem path) or
+ * remote (http(s)://, ssh://, git://, user@host:path).
+ *
+ * libgit2's local transport synthesizes push progress from packfile
+ * creation and does not populate the `bytes` parameter reliably. We use
+ * this classification to suppress byte accounting for local sessions so
+ * the summary line does not report nonsense (observed: 131038.9 GiB for
+ * an 8-object push against a file:// remote).
+ */
+static bool url_is_local(const char *url) {
+    if (!url || !*url) return false;
+
+    /* Explicit local scheme. */
+    if (strncmp(url, "file://", 7) == 0) return true;
+
+    /* Any other `scheme://` is a remote network transport. */
+    if (strstr(url, "://")) return false;
+
+    /* SCP-style `user@host:path` → SSH. Detect by `@` preceding the
+     * first `:`. Plain filesystem paths can contain `@` but not in
+     * this position. */
+    const char *at = strchr(url, '@');
+    const char *colon = strchr(url, ':');
+    if (at && colon && at < colon) return false;
+
+    /* No scheme, no SCP-style marker → filesystem path. */
+    return true;
+}
 
 /**
  * Map a libgit2 return code to a transfer outcome class.
@@ -163,6 +200,7 @@ error_t *transfer_context_create(
 
     ctx->output = opts->output;
     ctx->ephemeral = opts->ephemeral_progress;
+    ctx->local_transport = url_is_local(ctx->url);
     /* All other fields zero-initialized by calloc. */
 
     *out = ctx;
@@ -295,23 +333,41 @@ void transfer_summarize(
     char bytes_str[32];
 
     if (s->objects_received > 0) {
-        output_format_size(s->bytes_received, bytes_str, sizeof(bytes_str));
-        output_info(
-            out, level, "Fetched %zu object%s (%s)",
-            s->objects_received,
-            s->objects_received == 1 ? "" : "s",
-            bytes_str
-        );
+        if (s->bytes_received > 0) {
+            output_format_size(s->bytes_received, bytes_str, sizeof(bytes_str));
+            output_info(
+                out, level, "Fetched %zu object%s (%s)",
+                s->objects_received,
+                s->objects_received == 1 ? "" : "s",
+                bytes_str
+            );
+        } else {
+            output_info(
+                out, level, "Fetched %zu object%s",
+                s->objects_received,
+                s->objects_received == 1 ? "" : "s"
+            );
+        }
     }
 
     if (s->objects_sent > 0) {
-        output_format_size(s->bytes_sent, bytes_str, sizeof(bytes_str));
-        output_info(
-            out, level, "Pushed %zu object%s (%s)",
-            s->objects_sent,
-            s->objects_sent == 1 ? "" : "s",
-            bytes_str
-        );
+        /* Local transports leave bytes_sent at zero (see push callback).
+         * Suppress the "(SIZE)" suffix rather than reporting a bogus value. */
+        if (s->bytes_sent > 0) {
+            output_format_size(s->bytes_sent, bytes_str, sizeof(bytes_str));
+            output_info(
+                out, level, "Pushed %zu object%s (%s)",
+                s->objects_sent,
+                s->objects_sent == 1 ? "" : "s",
+                bytes_str
+            );
+        } else {
+            output_info(
+                out, level, "Pushed %zu object%s",
+                s->objects_sent,
+                s->objects_sent == 1 ? "" : "s"
+            );
+        }
     }
 }
 
@@ -490,9 +546,12 @@ int transfer_push_progress_callback(
 
     transfer_context_t *ctx = (transfer_context_t *) payload;
 
-    /* Record latest values for the stats fold at op_end (TTY-independent). */
+    /* Record latest values for the stats fold at op_end (TTY-independent).
+     * For local transports libgit2 does not populate `bytes` meaningfully
+     * (no wire to count) — treat it as absent rather than fold garbage
+     * into the session total. */
     ctx->op.last_count = current;
-    ctx->op.last_bytes = bytes;
+    ctx->op.last_bytes = ctx->local_transport ? 0 : bytes;
 
     /* Skip progress if no output context or below NORMAL verbosity */
     if (!ctx->output || ctx->output->verbosity < OUTPUT_NORMAL) {
@@ -502,17 +561,23 @@ int transfer_push_progress_callback(
     /* Inline progress uses \r — only works on TTY */
     if (!output_is_tty(ctx->output)) return 0;
 
-    char bytes_str[32];
-    output_format_size(bytes, bytes_str, sizeof(bytes_str));
-
     if (total > 0) {
         int percent = (current * 100) / total;
 
-        /* Display: "Sending objects: XX% (current/total), X.X MiB" */
-        fprintf(
-            ctx->output->stream, "\rSending objects: %3d%% (%u/%u), %s",
-            percent, current, total, bytes_str
-        );
+        if (ctx->local_transport) {
+            /* Local push has no wire-byte count; show objects only. */
+            fprintf(
+                ctx->output->stream, "\rSending objects: %3d%% (%u/%u)",
+                percent, current, total
+            );
+        } else {
+            char bytes_str[32];
+            output_format_size(bytes, bytes_str, sizeof(bytes_str));
+            fprintf(
+                ctx->output->stream, "\rSending objects: %3d%% (%u/%u), %s",
+                percent, current, total, bytes_str
+            );
+        }
         fflush(ctx->output->stream);
         ctx->progress_active = true;
 
@@ -521,11 +586,17 @@ int transfer_push_progress_callback(
             finalize_progress(ctx, ", done.\n");
         }
     } else {
-        /* Total unknown — show count and bytes */
-        fprintf(
-            ctx->output->stream, "\rSending objects: %u, %s",
-            current, bytes_str
-        );
+        /* Total unknown — show count (and bytes when meaningful). */
+        if (ctx->local_transport) {
+            fprintf(ctx->output->stream, "\rSending objects: %u", current);
+        } else {
+            char bytes_str[32];
+            output_format_size(bytes, bytes_str, sizeof(bytes_str));
+            fprintf(
+                ctx->output->stream, "\rSending objects: %u, %s",
+                current, bytes_str
+            );
+        }
         fflush(ctx->output->stream);
         ctx->progress_active = true;
     }

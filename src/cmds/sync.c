@@ -508,11 +508,11 @@ static bool sync_manifest(
 
     if (err) {
         output_warning(
-            out, OUTPUT_NORMAL, "     Manifest sync failed: %s",
+            out, OUTPUT_NORMAL, "    Manifest sync failed: %s",
             error_message(err)
         );
         output_hint(
-            out, OUTPUT_NORMAL, "     Run 'dotta status' or 'dotta apply' to resync manifest"
+            out, OUTPUT_NORMAL, "    Run 'dotta status' or 'dotta apply' to resync manifest"
         );
         error_free(err);
         return false;
@@ -549,18 +549,18 @@ static void sync_manifest_and_report(
 
     if (ok && (synced > 0 || removed > 0 || fallbacks > 0)) {
         output_info(
-            out, OUTPUT_NORMAL, "     Manifest: %zu staged, %zu removed, %zu fallback%s",
+            out, OUTPUT_NORMAL, "    Manifest: %zu staged, %zu removed, %zu fallback%s",
             synced, removed, fallbacks, fallbacks == 1 ? "" : "s"
         );
     }
 
     if (skipped > 0) {
         output_warning(
-            out, OUTPUT_NORMAL, "     %zu custom file%s skipped (no prefix configured for '%s')",
+            out, OUTPUT_NORMAL, "    %zu custom file%s skipped (no prefix configured for '%s')",
             skipped, skipped == 1 ? "" : "s", profile
         );
         output_hint(
-            out, OUTPUT_NORMAL, "     Run: dotta profile enable --prefix <path> %s",
+            out, OUTPUT_NORMAL, "    Run: dotta profile enable --prefix <path> %s",
             profile
         );
     }
@@ -580,7 +580,7 @@ static error_t *attempt_rollback(
 ) {
     error_t *err = resolve_rollback(ctx);
     if (err) {
-        output_error(out, "     ✗ Critical: Rollback failed: %s", error_message(err));
+        output_error(out, "    Critical: Rollback failed: %s", error_message(err));
         output_newline(out, OUTPUT_NORMAL);
         return error_wrap(
             err, "Failed to rollback branch '%s' after %s.\n"
@@ -590,7 +590,7 @@ static error_t *attempt_rollback(
         );
     }
 
-    output_info(out, OUTPUT_NORMAL, "     ↺ Rolled back to original state");
+    output_info(out, OUTPUT_NORMAL, "    ↺ Rolled back to original state");
 
     return NULL;
 }
@@ -618,11 +618,11 @@ static void handle_remote_ahead(
 
         if (no_pull) {
             output_hint(
-                out, OUTPUT_NORMAL, "     Pull skipped (--no-pull)"
+                out, OUTPUT_NORMAL, "    Pull skipped (--no-pull)"
             );
         } else {
             output_hint(
-                out, OUTPUT_NORMAL, "     Enable 'auto_pull' for automatic pull during sync"
+                out, OUTPUT_NORMAL, "    Enable 'auto_pull' for automatic pull during sync"
             );
         }
         return;
@@ -641,7 +641,7 @@ static void handle_remote_ahead(
     );
     if (err) {
         output_error(
-            out, "  ✗ %s: pull failed - %s",
+            out, "  %s: pull failed - %s",
             result->profile, error_message(err)
         );
         mark_result_failed(result, results, err);
@@ -689,11 +689,11 @@ static void handle_remote_ahead(
     }
     if (skipped > 0) {
         output_warning(
-            out, OUTPUT_NORMAL, "     %zu custom file%s skipped (no prefix configured for '%s')",
+            out, OUTPUT_NORMAL, "    %zu custom file%s skipped (no prefix configured for '%s')",
             skipped, skipped == 1 ? "" : "s", result->profile
         );
         output_hint(
-            out, OUTPUT_NORMAL, "     Run: dotta profile enable --prefix <path> %s",
+            out, OUTPUT_NORMAL, "    Run: dotta profile enable --prefix <path> %s",
             result->profile
         );
     }
@@ -729,7 +729,7 @@ static error_t *resolve_and_push_divergence(
         ? "rebased commits" : "merge commit";
 
     output_info(
-        out, OUTPUT_NORMAL, "     Resolving with %s strategy...",
+        out, OUTPUT_NORMAL, "    Resolving with %s strategy...",
         strategy_name
     );
 
@@ -740,7 +740,7 @@ static error_t *resolve_and_push_divergence(
     );
     if (err) {
         output_error(
-            out, "     ✗ Failed to initialize divergence context: %s",
+            out, "    Failed to initialize divergence context: %s",
             error_message(err)
         );
         mark_result_failed(result, results, err);
@@ -752,7 +752,7 @@ static error_t *resolve_and_push_divergence(
     err = resolve_execute(&ctx, &new_oid);
     if (err) {
         output_error(
-            out, "     ✗ %s failed: %s",
+            out, "    %s failed: %s",
             cap_name, error_message(err)
         );
         mark_result_failed(result, results, err);
@@ -764,7 +764,7 @@ static error_t *resolve_and_push_divergence(
     err = resolve_verify(&ctx, &ahead, NULL);
     if (err) {
         output_error(
-            out, "     ✗ %s verification failed: %s",
+            out, "    %s verification failed: %s",
             cap_name, error_message(err)
         );
         mark_result_failed(result, results, err);
@@ -777,24 +777,24 @@ static error_t *resolve_and_push_divergence(
     }
 
     output_success(
-        out, OUTPUT_NORMAL, "     Successfully %s (%zu commit%s to push)",
+        out, OUTPUT_NORMAL, "    Successfully %s (%zu commit%s to push)",
         past_desc, ahead, ahead == 1 ? "" : "s"
     );
 
     if (no_push) {
-        output_info(out, OUTPUT_NORMAL, "     Push skipped (--no-push)");
+        output_info(out, OUTPUT_NORMAL, "    Push skipped (--no-push)");
     } else {
         /* Push resolved commits */
         err = gitops_push_branch(repo, remote_name, result->profile, xfer);
         if (err) {
             output_error(
-                out, "     ✗ Push after %s failed: %s",
+                out, "    Push after %s failed: %s",
                 strategy_name, error_message(err)
             );
             mark_result_failed(result, results, err);
 
             output_info(
-                out, OUTPUT_NORMAL, "     ↺ Rolling back %s (push failed)...",
+                out, OUTPUT_NORMAL, "    ↺ Rolling back %s (push failed)...",
                 strategy_name
             );
             return attempt_rollback(
@@ -803,7 +803,7 @@ static error_t *resolve_and_push_divergence(
         }
 
         output_success(
-            out, OUTPUT_NORMAL, "     Pushed %s",
+            out, OUTPUT_NORMAL, "    Pushed %s",
             push_desc
         );
         result->pushed = true;
@@ -837,10 +837,10 @@ static error_t *handle_diverged_ours(
     transfer_context_t *xfer,
     bool no_push
 ) {
-    output_info(out, OUTPUT_NORMAL, "     Resolving with 'ours' strategy (force push)...");
+    output_info(out, OUTPUT_NORMAL, "    Resolving with 'ours' strategy (force push)...");
 
     if (no_push) {
-        output_info(out, OUTPUT_NORMAL, "     Force push skipped (--no-push)");
+        output_info(out, OUTPUT_NORMAL, "    Force push skipped (--no-push)");
         return NULL;
     }
 
@@ -854,7 +854,7 @@ static error_t *handle_diverged_ours(
             result->profile
         );
         if (!output_confirm_or_default(out, prompt, false, false)) {
-            output_info(out, OUTPUT_NORMAL, "     Operation cancelled by user");
+            output_info(out, OUTPUT_NORMAL, "    Operation cancelled by user");
             return NULL;
         }
     }
@@ -862,13 +862,13 @@ static error_t *handle_diverged_ours(
     /* Force push local to remote (local branch stays unchanged) */
     error_t *err = gitops_force_push_branch(repo, remote_name, result->profile, xfer);
     if (err) {
-        output_error(out, "     ✗ Force push failed: %s", error_message(err));
+        output_error(out, "    Force push failed: %s", error_message(err));
         mark_result_failed(result, results, err);
         return NULL;
     }
 
     output_success(
-        out, OUTPUT_NORMAL, "     Force pushed to remote (remote commits discarded)"
+        out, OUTPUT_NORMAL, "    Force pushed to remote (remote commits discarded)"
     );
     result->pushed = true;
     results->pushed_count++;
@@ -890,7 +890,7 @@ static error_t *handle_diverged_theirs(
     const string_array_t *enabled_profiles
 ) {
     output_info(
-        out, OUTPUT_NORMAL, "     Resolving with 'theirs' strategy (reset to remote)..."
+        out, OUTPUT_NORMAL, "    Resolving with 'theirs' strategy (reset to remote)..."
     );
 
     /* Get user confirmation for destructive operation */
@@ -903,7 +903,7 @@ static error_t *handle_diverged_theirs(
         );
         if (!output_confirm_or_default(out, prompt, false, false)) {
             output_info(
-                out, OUTPUT_NORMAL, "     Operation cancelled by user"
+                out, OUTPUT_NORMAL, "    Operation cancelled by user"
             );
             return NULL;
         }
@@ -916,7 +916,7 @@ static error_t *handle_diverged_theirs(
     );
     if (err) {
         output_error(
-            out, "     ✗ Failed to initialize divergence context: %s",
+            out, "    Failed to initialize divergence context: %s",
             error_message(err)
         );
         mark_result_failed(result, results, err);
@@ -928,7 +928,7 @@ static error_t *handle_diverged_theirs(
     err = resolve_execute(&ctx, &new_oid);
     if (err) {
         output_error(
-            out, "     ✗ Reset failed: %s",
+            out, "    Reset failed: %s",
             error_message(err)
         );
         mark_result_failed(result, results, err);
@@ -942,13 +942,13 @@ static error_t *handle_diverged_theirs(
      */
     err = resolve_verify(&ctx, NULL, NULL);
     if (err) {
-        output_error(out, "     ✗ Reset verification failed: %s", error_message(err));
-        output_warning(out, OUTPUT_NORMAL, "     Local branch was reset but verification failed");
+        output_error(out, "    Reset verification failed: %s", error_message(err));
+        output_warning(out, OUTPUT_NORMAL, "    Local branch was reset but verification failed");
         mark_result_failed(result, results, err);
         return NULL;
     }
 
-    output_success(out, OUTPUT_NORMAL, "     Reset to remote (local commits discarded)");
+    output_success(out, OUTPUT_NORMAL, "    Reset to remote (local commits discarded)");
     results->pulled_count++;
 
     /* Sync manifest with changes from reset */
@@ -979,7 +979,7 @@ static error_t *handle_diverged(
     bool no_push
 ) {
     output_warning(
-        out, OUTPUT_NORMAL, "  ⚠ {red}%s{reset}: diverged (%zu local, %zu remote commits)",
+        out, OUTPUT_NORMAL, "  {red}%s{reset}: diverged (%zu local, %zu remote commits)",
         result->profile, result->ahead, result->behind
     );
 
@@ -987,11 +987,11 @@ static error_t *handle_diverged(
         case DIVERGE_WARN: {
             output_hint(
                 out, OUTPUT_NORMAL,
-                "     Use --diverged=<strategy> or set diverged_strategy in config"
+                "    Use --diverged=<strategy> or set diverged_strategy in config"
             );
             output_hintline(
                 out, OUTPUT_NORMAL,
-                "     Strategies: rebase, merge, ours (keep local), theirs (keep remote)"
+                "    Strategies: rebase, merge, ours (keep local), theirs (keep remote)"
             );
             break;
         }
@@ -1123,7 +1123,7 @@ static error_t *sync_push_phase(
                 error_t *err = gitops_push_branch(repo, remote_name, result->profile, xfer);
                 if (err) {
                     output_error(
-                        out, "  ✗ %s: push failed - %s",
+                        out, "  %s: push failed - %s",
                         result->profile, error_message(err)
                     );
                     mark_result_failed(result, results, err);
@@ -1157,7 +1157,7 @@ static error_t *sync_push_phase(
                 error_t *err = gitops_push_branch(repo, remote_name, result->profile, xfer);
                 if (err) {
                     output_error(
-                        out, "  ✗ %s: failed to create remote branch - %s",
+                        out, "  %s: failed to create remote branch - %s",
                         result->profile, error_message(err)
                     );
                     mark_result_failed(result, results, err);
@@ -1182,7 +1182,7 @@ static error_t *sync_push_phase(
                     );
                     output_warning(
                         out, OUTPUT_NORMAL,
-                        "     Local is behind — force push will overwrite newer remote commits"
+                        "    Local is behind — force push will overwrite newer remote commits"
                     );
 
                     error_t *err = handle_diverged_ours(
@@ -1220,7 +1220,7 @@ static error_t *sync_push_phase(
                         diverged_strategy == DIVERGE_MERGE ? "merge" : "theirs";
 
                     output_hint(
-                        out, OUTPUT_NORMAL, "     '%s' resolution skipped (--no-pull prevents "
+                        out, OUTPUT_NORMAL, "    '%s' resolution skipped (--no-pull prevents "
                         "incorporating remote changes)", name
                     );
                     break;
@@ -1529,8 +1529,8 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
      * is enabled so the fetch progress line is cleared on completion,
      * leaving a clean framing around sync's subsequent status output. */
     transfer_options_t xfer_opts = {
-        .output = out,
-        .url = remote_url,
+        .output             = out,
+        .url                = remote_url,
         .ephemeral_progress = true,
     };
     err = transfer_context_create(&xfer_opts, &xfer);
@@ -1574,7 +1574,7 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
         for (size_t i = 0; i < results->count; i++) {
             profile_sync_result_t *r = &results->profiles[i];
             if (r->failed) {
-                output_error(out, "  ✗ %s: %s", r->profile, r->error_message);
+                output_error(out, "  %s: %s", r->profile, r->error_message);
                 continue;
             }
             switch (r->state) {
@@ -1698,7 +1698,7 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
     bool sync_ephemeral = !output_is_verbose(out) && all_quiet;
 
     if (sync_ephemeral) {
-        output_print(out, OUTPUT_NORMAL, "Syncing...");
+        output_print(out, OUTPUT_NORMAL, "Syncing with remote...");
         fflush(out->stream);
     }
 

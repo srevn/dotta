@@ -444,6 +444,7 @@ static void display_workspace_status(
 
                     /* Show detailed guidance only for diverged orphans */
                     if (has_diverged_orphans) {
+                        output_newline(out, OUTPUT_NORMAL);
                         output_hint(
                             out, OUTPUT_NORMAL,
                             "Diverged orphans blocking safe removal."
@@ -459,6 +460,10 @@ static void display_workspace_status(
                         output_hintline(
                             out, OUTPUT_NORMAL, "  [orphaned] [mode]       "
                             "- Permissions changed, skipped by 'dotta apply'"
+                        );
+                        output_hintline(
+                            out, OUTPUT_NORMAL, "  [orphaned] [unverified] "
+                            "- Missing key, skipped by 'dotta apply'"
                         );
                     }
                 }
@@ -537,8 +542,8 @@ static error_t *display_remote_status(
         error_free(url_err);
 
         transfer_options_t xfer_opts = {
-            .output = out,
-            .url = remote_url,
+            .output             = out,
+            .url                = remote_url,
             .ephemeral_progress = true,
         };
         transfer_context_t *xfer = NULL;

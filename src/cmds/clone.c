@@ -390,7 +390,7 @@ error_t *cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
     /* Create transfer context for progress reporting and credentials */
     transfer_options_t xfer_opts = {
         .output = out,
-        .url = opts->url,
+        .url    = opts->url,
     };
     final_err = transfer_context_create(&xfer_opts, &xfer);
     if (final_err) goto cleanup;

@@ -101,8 +101,8 @@ static char *extract_hostname(const char *url) {
     } else {
         /* SCP-style: ':' is a path separator, not port */
         while (*authority_end &&
-               *authority_end != '/' &&
-               *authority_end != ':') {
+            *authority_end != '/' &&
+            *authority_end != ':') {
             authority_end++;
         }
     }
@@ -449,7 +449,6 @@ static int get_credentials_from_helper(
     return rc;
 }
 
-
 /**
  * Find an SSH private key in standard locations.
  */
@@ -557,7 +556,8 @@ static int try_userpass_credentials(
     if (cached_username && *cached_username &&
         cached_password && *cached_password) {
         if (git_credential_userpass_plaintext_new(
-                out, cached_username, cached_password) == 0) {
+            out, cached_username, cached_password
+            ) == 0) {
             return 0;
         }
     }
@@ -571,10 +571,12 @@ static int try_userpass_credentials(
         char cred_password[CRED_MAX_LEN];
 
         if (get_credentials_from_helper(
-                protocol, hostname, username_from_url,
-                cred_username, cred_password, CRED_MAX_LEN) == 0) {
+            protocol, hostname, username_from_url,
+            cred_username, cred_password, CRED_MAX_LEN
+            ) == 0) {
             if (git_credential_userpass_plaintext_new(
-                    out, cred_username, cred_password) == 0) {
+                out, cred_username, cred_password
+                ) == 0) {
                 /* Hand fresh creds back to the caller for session caching.
                  * Heap copies because the caller's lifetime outlives this
                  * function's stack. */
@@ -624,9 +626,9 @@ int credentials_dispatch(
 
     if ((allowed_types & GIT_CREDENTIAL_USERPASS_PLAINTEXT) &&
         try_userpass_credentials(
-            out, url, username_from_url,
-            cached_username, cached_password,
-            out_username, out_password
+        out, url, username_from_url,
+        cached_username, cached_password,
+        out_username, out_password
         ) == 0) {
         return 0;
     }

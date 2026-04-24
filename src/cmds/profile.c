@@ -344,7 +344,7 @@ static error_t *profile_list(
             /* Create transfer context for credentials */
             transfer_options_t xfer_opts = {
                 .output = out,
-                .url = remote_url,
+                .url    = remote_url,
             };
             error_t *xfer_err = transfer_context_create(&xfer_opts, &xfer);
             if (xfer_err) {
@@ -446,8 +446,8 @@ static error_t *profile_fetch(
 
     /* Create transfer context for progress reporting and credentials */
     transfer_options_t xfer_opts = {
-        .output = out,
-        .url = remote_url,
+        .output             = out,
+        .url                = remote_url,
         .ephemeral_progress = true,
     };
     err = transfer_context_create(&xfer_opts, &xfer);

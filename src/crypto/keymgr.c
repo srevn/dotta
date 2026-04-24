@@ -1268,6 +1268,69 @@ error_t *keymgr_get_profile_key(
     return NULL;
 }
 
+error_t *keymgr_encrypt(
+    keymgr *keymgr,
+    const char *profile,
+    const char *storage_path,
+    const unsigned char *plaintext,
+    size_t plaintext_len,
+    buffer_t *out_ciphertext
+) {
+    CHECK_NULL(keymgr);
+    CHECK_NULL(profile);
+    CHECK_NULL(storage_path);
+    CHECK_NULL(out_ciphertext);
+
+    /* Fetch (or derive) profile key. The caller of this function never
+     * sees the raw bytes — they live only in this local buffer and are
+     * zeroed below before we return. */
+    uint8_t profile_key[ENCRYPTION_PROFILE_KEY_SIZE];
+    error_t *err = keymgr_get_profile_key(keymgr, profile, profile_key);
+    if (err) {
+        return error_wrap(err, "Failed to get profile key for '%s'", profile);
+    }
+
+    err = encryption_encrypt(
+        plaintext, plaintext_len, profile_key, storage_path, out_ciphertext
+    );
+
+    /* Clear the local key buffer on both success and failure. Missing
+     * this zeroization on the error path would leave 32 bytes of key
+     * material in stack memory until the frame is overwritten. */
+    hydro_memzero(profile_key, sizeof(profile_key));
+
+    return err;
+}
+
+error_t *keymgr_decrypt(
+    keymgr *keymgr,
+    const char *profile,
+    const char *storage_path,
+    const unsigned char *ciphertext,
+    size_t ciphertext_len,
+    buffer_t *out_plaintext
+) {
+    CHECK_NULL(keymgr);
+    CHECK_NULL(profile);
+    CHECK_NULL(storage_path);
+    CHECK_NULL(ciphertext);
+    CHECK_NULL(out_plaintext);
+
+    uint8_t profile_key[ENCRYPTION_PROFILE_KEY_SIZE];
+    error_t *err = keymgr_get_profile_key(keymgr, profile, profile_key);
+    if (err) {
+        return error_wrap(err, "Failed to get profile key for '%s'", profile);
+    }
+
+    err = encryption_decrypt(
+        ciphertext, ciphertext_len, profile_key, storage_path, out_plaintext
+    );
+
+    hydro_memzero(profile_key, sizeof(profile_key));
+
+    return err;
+}
+
 /* Global Keymanager Singleton
  *
  * Provides a process-wide keymgr instance to avoid repeatedly prompting

@@ -113,6 +113,75 @@ error_t *keymgr_get_profile_key(
 );
 
 /**
+ * Encrypt plaintext under a profile-derived key
+ *
+ * Convenience wrapper combining `keymgr_get_profile_key`,
+ * `encryption_encrypt`, and the mandatory `hydro_memzero` of the derived
+ * key buffer into one call. Callers never materialize raw key bytes.
+ *
+ * The profile key is fetched from the keymgr's per-profile cache when
+ * warm (no passphrase prompt, no KDF work), so this is cheap in a batch.
+ * A cold call may prompt for the passphrase via `keymgr_get_key`.
+ *
+ * Error wrapping policy:
+ *   - Profile-key fetch errors are wrapped with a uniform message that
+ *     names the profile (the caller already knows the path; it rarely
+ *     needs both).
+ *   - `encryption_encrypt` errors are returned unwrapped so the caller
+ *     can attach file-level context (path, operation) without
+ *     duplicating a generic wrap that loses fidelity.
+ *
+ * @param keymgr       Key manager (must not be NULL)
+ * @param profile      Profile name for key derivation (must not be NULL)
+ * @param storage_path File path in profile (must not be NULL; AAD bound
+ *                     into the ciphertext by `encryption_encrypt`)
+ * @param plaintext    Plaintext bytes (must not be NULL unless len == 0)
+ * @param plaintext_len Plaintext length in bytes
+ * @param out_ciphertext Output buffer (caller owns; free with buffer_free)
+ * @return Error or NULL on success
+ */
+error_t *keymgr_encrypt(
+    keymgr *keymgr,
+    const char *profile,
+    const char *storage_path,
+    const unsigned char *plaintext,
+    size_t plaintext_len,
+    buffer_t *out_ciphertext
+);
+
+/**
+ * Decrypt ciphertext under a profile-derived key
+ *
+ * Convenience wrapper combining `keymgr_get_profile_key`,
+ * `encryption_decrypt`, and the mandatory `hydro_memzero` of the derived
+ * key buffer into one call. Callers never materialize raw key bytes.
+ *
+ * Error wrapping policy matches `keymgr_encrypt` — profile-key failures
+ * are wrapped; `encryption_decrypt` errors pass through unwrapped so
+ * callers can render file-level diagnostics (e.g. "wrong passphrase,
+ * try: dotta key clear") without stacking duplicate wraps.
+ *
+ * @param keymgr       Key manager (must not be NULL)
+ * @param profile      Profile name for key derivation (must not be NULL)
+ * @param storage_path File path in profile (must not be NULL; must match
+ *                     the path used at encryption time — AAD mismatch
+ *                     fails SIV verification)
+ * @param ciphertext   Dotta-encrypted bytes including header (must not
+ *                     be NULL)
+ * @param ciphertext_len Ciphertext length in bytes (>= ENCRYPTION_OVERHEAD)
+ * @param out_plaintext Output buffer (caller owns; free with buffer_free)
+ * @return Error or NULL on success (ERR_CRYPTO on authentication failure)
+ */
+error_t *keymgr_decrypt(
+    keymgr *keymgr,
+    const char *profile,
+    const char *storage_path,
+    const unsigned char *ciphertext,
+    size_t ciphertext_len,
+    buffer_t *out_plaintext
+);
+
+/**
  * Explicitly set passphrase
  *
  * Derives key from passphrase and caches it. Used by `dotta key set`.

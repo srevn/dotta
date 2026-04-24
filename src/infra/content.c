@@ -140,21 +140,11 @@ static error_t *get_plaintext_from_blob(
             );
         }
 
-        /* Get profile key */
-        uint8_t profile_key[ENCRYPTION_PROFILE_KEY_SIZE];
-        error_t *err = keymgr_get_profile_key(keymgr, profile, profile_key);
-        if (err) {
-            return error_wrap(err, "Failed to get profile key for '%s'", profile);
-        }
-
-        /* Decrypt */
-        err = encryption_decrypt(
-            blob_data, blob_size, profile_key, storage_path, out_content
+        /* Decrypt via keymgr (fetches profile key, decrypts, zeroes the
+         * key buffer; raw key material never leaves the crypto layer). */
+        error_t *err = keymgr_decrypt(
+            keymgr, profile, storage_path, blob_data, blob_size, out_content
         );
-
-        /* Clear profile key immediately (security) */
-        hydro_memzero(profile_key, sizeof(profile_key));
-
         if (err) {
             return error_wrap(
                 err,
@@ -349,23 +339,9 @@ error_t *content_store_to_blob(
             );
         }
 
-        /* Get profile key (cached in keymgr for performance) */
-        uint8_t profile_key[ENCRYPTION_PROFILE_KEY_SIZE];
-        error_t *err = keymgr_get_profile_key(keymgr, profile, profile_key);
-        if (err) {
-            return error_wrap(
-                err, "Failed to get profile key for '%s'", profile
-            );
-        }
-
-        /* Encrypt */
-        err = encryption_encrypt(
-            data, size, profile_key, storage_path, &ciphertext
+        error_t *err = keymgr_encrypt(
+            keymgr, profile, storage_path, data, size, &ciphertext
         );
-
-        /* Clear profile key immediately (defense in depth) */
-        hydro_memzero(profile_key, sizeof(profile_key));
-
         if (err) {
             return error_wrap(err, "Failed to encrypt '%s'", storage_path);
         }
@@ -465,35 +441,14 @@ error_t *content_store_file_to_worktree(
             );
         }
 
-        /* Get profile key (cached in keymgr) */
-        uint8_t profile_key[ENCRYPTION_PROFILE_KEY_SIZE];
-        err = keymgr_get_profile_key(keymgr, profile, profile_key);
-        if (err) {
-            if (content.data) hydro_memzero(content.data, content.size);
-            buffer_free(&content);
-            return error_wrap(
-                err, "Failed to get profile key for '%s'", profile
-            );
-        }
-
-        /* Encrypt */
-        err = encryption_encrypt(
-            (const unsigned char *) content.data,
-            content.size,
-            profile_key,
-            storage_path,
-            &ciphertext
+        err = keymgr_encrypt(
+            keymgr, profile, storage_path,
+            (const unsigned char *) content.data, content.size, &ciphertext
         );
-
-        /* Clear profile key immediately */
-        hydro_memzero(profile_key, sizeof(profile_key));
-
         if (err) {
             if (content.data) hydro_memzero(content.data, content.size);
             buffer_free(&content);
-            return error_wrap(
-                err, "Failed to encrypt '%s'", storage_path
-            );
+            return error_wrap(err, "Failed to encrypt '%s'", storage_path);
         }
 
         /* Use encrypted data for writing */

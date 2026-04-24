@@ -1307,37 +1307,33 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         }
     }
 
-    /* Get keymgr if encryption may be needed.
+    /* Surface "--encrypt on disabled config" with a friendly CLI error
+     * before falling into policy_needs_keymgr. The helper collapses
+     * this case to "no keymgr needed" and content_store_file_to_worktree
+     * would otherwise fail much later with a less helpful message. */
+    bool explicit_encrypt = opts->encrypt_mode == ADD_ENCRYPT_FORCE_ON;
+    if (explicit_encrypt && !config->encryption_enabled) {
+        err = ERROR(
+            ERR_INVALID_ARG,
+            "Encryption requested (--encrypt) but encryption is not enabled in config.\n"
+            "Add to config.toml:\n\n  [encryption]\n  enabled = true"
+        );
+        goto cleanup;
+    }
+
+    /* Fetch keymgr if any file in this batch might need encryption.
      *
-     * Keymanager handles profile key caching internally, so files will
-     * reuse the same derived key without redundant derivations.
-     *
-     * Fetch keymgr if ANY of:
-     *   1. Explicit encryption requested (--encrypt flag)
-     *   2. Auto-encrypt patterns configured (files may match patterns)
-     *   3. Re-adding over an existing file whose metadata says encrypted
-     *      (policy priority 3 fires only with --force, because a non-force
-     *      add errors out earlier on "file already exists").
-     *
-     * is_active implies encryption_enabled; so only path 1 can reach the
-     * !encryption_enabled branch. Path 3 overshoots per command — we key
-     * on "any encrypted file in this profile's metadata" rather than
-     * checking each candidate path — because the cost (one profile-key
-     * derivation that goes unused) is trivial versus a keymgr-NULL crash
-     * in content_store_file_to_worktree if we undershoot. */
-    bool needs_encryption = opts->encrypt_mode == ADD_ENCRYPT_FORCE_ON ||
-        encryption_policy_is_active(config) ||
-        (opts->force && metadata_has_encrypted_files(metadata));
+     * The metadata check is gated on `--force` because a non-force add
+     * errors out earlier when the file already exists. Passing metadata
+     * only during force matches the previous semantics exactly — the
+     * helper skips the check when metadata is NULL. Deliberate overshoot
+     * at the profile level: one unused key derivation is cheap versus a
+     * keymgr-NULL crash deeper in content_store_file_to_worktree. */
+    bool needs_encryption = encryption_policy_needs_keymgr(
+        config, explicit_encrypt, opts->force ? metadata : NULL
+    );
 
     if (needs_encryption) {
-        if (!config->encryption_enabled) {
-            err = ERROR(
-                ERR_INVALID_ARG,
-                "Encryption requested (--encrypt) but encryption is not enabled in config.\n"
-                "Add to config.toml:\n\n  [encryption]\n  enabled = true"
-            );
-            goto cleanup;
-        }
         keymgr = keymgr_get_global(config);
         if (!keymgr) {
             err = ERROR(ERR_INTERNAL, "Failed to get encryption key manager");

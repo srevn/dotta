@@ -50,6 +50,46 @@ typedef struct metadata metadata_t;
 bool encryption_policy_is_active(const config_t *config);
 
 /**
+ * Report whether a command should acquire a keymgr for this batch.
+ *
+ * Answers the upfront question "is there any path through this
+ * operation that will need to encrypt or decrypt?". Each caller's
+ * per-file decision is still made by `encryption_policy_should_encrypt`;
+ * this helper just avoids the keymgr round-trip when no file can
+ * possibly need one.
+ *
+ * Consolidates the disjunction that add.c and update.c previously
+ * duplicated verbatim. Returns true iff encryption is enabled AND one
+ * or more of:
+ *   - `explicit_encrypt` — caller's `--encrypt` (or equivalent) flag
+ *   - auto-encrypt policy is active for this config
+ *   - `metadata` is non-NULL and contains encrypted files
+ *
+ * The `metadata` parameter lets each caller decide whether to consult
+ * existing encrypted state: update.c always passes its loaded metadata;
+ * add.c passes it only during `--force` re-adds. Passing NULL skips the
+ * metadata check entirely.
+ *
+ * Callers that want to reject "encryption requested on a disabled
+ * config" with a friendly CLI error should still do so explicitly
+ * before invoking this helper — the bool return can't carry that
+ * message.
+ *
+ * NULL-safe for both pointer arguments (returns false for NULL config
+ * or config with `encryption_enabled == false`).
+ *
+ * @param config Configuration (NULL → false)
+ * @param explicit_encrypt User-supplied encryption flag (`--encrypt`)
+ * @param metadata Metadata to consult for prior encrypted state (NULL → skip)
+ * @return true if the caller must fetch a keymgr before proceeding
+ */
+bool encryption_policy_needs_keymgr(
+    const config_t *config,
+    bool explicit_encrypt,
+    const metadata_t *metadata
+);
+
+/**
  * Determine if file should be encrypted based on policy
  *
  * This is the SINGLE SOURCE OF TRUTH for encryption decisions across all

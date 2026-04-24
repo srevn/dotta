@@ -763,16 +763,14 @@ static error_t *update_profile(
     }
     owns_metadata = true;
 
-    /* Get keymgr if encryption may be needed.
+    /* Fetch keymgr if this profile may need encryption on update.
      *
-     * Fetch a key if this profile has any encrypted files today (priority 3
-     * will fire during policy evaluation) OR auto-encrypt patterns are
-     * configured (priority 4 may fire on any file). Both dimensions also
-     * require the encryption feature to be enabled — no patterns are
-     * compiled and no metadata-encrypted files can land without it. */
-    bool needs_encryption = config && config->encryption_enabled && (
-        encryption_policy_is_active(config) ||
-        metadata_has_encrypted_files(existing_metadata)
+     * Update has no explicit `--encrypt` flag — the key is needed only
+     * for preserving existing state (priority 3) or matching auto-encrypt
+     * patterns (priority 4). The helper handles the enabled gate and
+     * the disjunction internally. */
+    bool needs_encryption = encryption_policy_needs_keymgr(
+        config, /*explicit_encrypt=*/ false, existing_metadata
     );
 
     if (needs_encryption) {

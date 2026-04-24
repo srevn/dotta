@@ -102,6 +102,43 @@ __attribute__((format(printf, 2, 3)));
 void buffer_clear(buffer_t *buf);
 
 /**
+ * Securely free a secret-bearing heap allocation
+ *
+ * Runs the mandatory cleanup sequence for buffers that hold passphrases,
+ * encryption keys, or other sensitive bytes:
+ *
+ *   1. hydro_memzero(ptr, len)   — wipe while still mlock'd, resistant
+ *                                  to dead-store elimination
+ *   2. munlock(ptr, len)         — release any best-effort mlock
+ *                                  (safe to call on never-locked
+ *                                  memory; the error is ignored)
+ *   3. free(ptr)                 — release the allocation
+ *
+ * Zeroing before munlock ensures the clearing is committed to physical
+ * memory before the page becomes swap-eligible; inverting the order
+ * widens the (small) window where the kernel could page out pre-zero
+ * bytes. Callers MUST NOT inline this sequence themselves — the single
+ * form prevents mis-ordering and mis-sized zeroization from spreading
+ * through hand-copied three-liners.
+ *
+ * Does not take a `buffer_t*`: secret allocations in this codebase are
+ * right-sized `char*` passphrases and `uint8_t*` key buffers; pairing
+ * pointer and length keeps the interface concern-free of buffer_t
+ * internals.
+ *
+ * Preconditions:
+ *   - `ptr` was obtained from a malloc-family allocator (or is NULL)
+ *   - `len` is the exact allocated byte count that was also the mlock
+ *     extent. A length mismatch either leaks tail bytes (short zero)
+ *     or munlocks pages outside this allocation.
+ *
+ * NULL-safe: `ptr == NULL` is a no-op.
+ * Zero-length: `len == 0` is legal; zero and munlock become no-ops,
+ * `free` still runs.
+ */
+void buffer_secure_free(void *ptr, size_t len);
+
+/**
  * Transfer ownership of buffer data to caller
  *
  * Returns the internal data pointer (already null-terminated) and resets

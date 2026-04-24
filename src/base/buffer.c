@@ -6,10 +6,12 @@
 
 #include "base/buffer.h"
 
+#include <hydrogen.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/mman.h>
 
 #include "base/error.h"
 
@@ -221,4 +223,25 @@ char *buffer_detach(buffer_t *buf) {
     *buf = (buffer_t){ 0 };
 
     return data;
+}
+
+void buffer_secure_free(void *ptr, size_t len) {
+    if (!ptr) {
+        return;
+    }
+
+    /* Zero before unlock: the wipe must land in physical memory before
+     * the page becomes swap-eligible. hydro_memzero resists dead-store
+     * elimination (free-immediately-after would otherwise let the
+     * optimizer delete the zeroization). */
+    hydro_memzero(ptr, len);
+
+    /* Unlock is best-effort. Calling munlock on memory that was never
+     * mlock'd (mlock may have failed at allocation time for want of
+     * RLIMIT_MEMLOCK) returns an error we explicitly ignore — there is
+     * no recovery and no remaining user-visible behavior at this point
+     * in the cleanup. */
+    (void) munlock(ptr, len);
+
+    free(ptr);
 }

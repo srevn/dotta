@@ -16,6 +16,7 @@
 #include <termios.h>
 #include <unistd.h>
 
+#include "base/buffer.h"
 #include "base/encoding.h"
 #include "base/error.h"
 #include "base/hashmap.h"
@@ -649,20 +650,14 @@ error_t *keymgr_create(
 }
 
 /**
- * Secure destructor for profile keys
+ * Secure destructor trampoline for profile keys.
  *
- * Unlocks, zeros, and frees memory to prevent key leakage.
- * Used as callback for hashmap_free() and hashmap_clear().
- *
- * @param key_ptr Pointer to malloc'd profile key (uint8_t[32])
+ * `hashmap_free`/`hashmap_clear` take a `void(*)(void*)` callback, so
+ * `buffer_secure_free` (which takes `(void*, size_t)`) needs a fixed
+ * length bound at compile time. This one-liner supplies the length.
  */
 static void secure_free_profile_key(void *key_ptr) {
-    if (key_ptr) {
-        /* Best-effort memory unlock (harmless if not locked) */
-        munlock(key_ptr, ENCRYPTION_PROFILE_KEY_SIZE);
-        hydro_memzero(key_ptr, ENCRYPTION_PROFILE_KEY_SIZE);
-        free(key_ptr);
-    }
+    buffer_secure_free(key_ptr, ENCRYPTION_PROFILE_KEY_SIZE);
 }
 
 void keymgr_free(keymgr *keymgr) {
@@ -965,9 +960,7 @@ error_t *keymgr_prompt_passphrase(
 
     /* Check read result */
     if (result == NULL) {
-        munlock(passphrase, MAX_PASSPHRASE_LENGTH + 1);
-        hydro_memzero(passphrase, MAX_PASSPHRASE_LENGTH + 1);
-        free(passphrase);
+        buffer_secure_free(passphrase, MAX_PASSPHRASE_LENGTH + 1);
         return ERROR(ERR_FS, "Failed to read passphrase");
     }
 
@@ -979,9 +972,7 @@ error_t *keymgr_prompt_passphrase(
      * chars WITHOUT a newline, the input was truncated. */
     bool has_newline = (len > 0 && passphrase[len - 1] == '\n');
     if (len == MAX_PASSPHRASE_LENGTH && !has_newline) {
-        munlock(passphrase, MAX_PASSPHRASE_LENGTH + 1);
-        hydro_memzero(passphrase, MAX_PASSPHRASE_LENGTH + 1);
-        free(passphrase);
+        buffer_secure_free(passphrase, MAX_PASSPHRASE_LENGTH + 1);
         return ERROR(
             ERR_INVALID_ARG, "Passphrase too long (maximum %d characters)",
             MAX_PASSPHRASE_LENGTH - 1
@@ -996,9 +987,7 @@ error_t *keymgr_prompt_passphrase(
 
     /* Check for empty passphrase */
     if (len == 0) {
-        munlock(passphrase, MAX_PASSPHRASE_LENGTH + 1);
-        hydro_memzero(passphrase, MAX_PASSPHRASE_LENGTH + 1);
-        free(passphrase);
+        buffer_secure_free(passphrase, MAX_PASSPHRASE_LENGTH + 1);
         return ERROR(ERR_INVALID_ARG, "Passphrase cannot be empty");
     }
 
@@ -1010,9 +999,7 @@ error_t *keymgr_prompt_passphrase(
      * By returning a tight copy, len+1 is always the correct size. */
     char *tight = malloc(len + 1);
     if (!tight) {
-        munlock(passphrase, MAX_PASSPHRASE_LENGTH + 1);
-        hydro_memzero(passphrase, MAX_PASSPHRASE_LENGTH + 1);
-        free(passphrase);
+        buffer_secure_free(passphrase, MAX_PASSPHRASE_LENGTH + 1);
         return ERROR(ERR_MEMORY, "Failed to allocate passphrase buffer");
     }
 
@@ -1023,9 +1010,7 @@ error_t *keymgr_prompt_passphrase(
     memcpy(tight, passphrase, len + 1);
 
     /* Zero and free the oversized read buffer */
-    munlock(passphrase, MAX_PASSPHRASE_LENGTH + 1);
-    hydro_memzero(passphrase, MAX_PASSPHRASE_LENGTH + 1);
-    free(passphrase);
+    buffer_secure_free(passphrase, MAX_PASSPHRASE_LENGTH + 1);
 
     *out_passphrase = tight;
     *out_len = len;
@@ -1151,9 +1136,7 @@ error_t *keymgr_get_key(
     /* Securely zero and free passphrase.
      * Both keymgr_prompt_passphrase and get_passphrase_from_env
      * return a buffer of exactly passphrase_len+1 bytes with mlock. */
-    munlock(passphrase, passphrase_len + 1);
-    hydro_memzero(passphrase, passphrase_len + 1);
-    free(passphrase);
+    buffer_secure_free(passphrase, passphrase_len + 1);
 
     if (err) {
         return error_wrap(err, "Failed to derive encryption key");
@@ -1225,9 +1208,7 @@ error_t *keymgr_get_profile_key(
     hydro_memzero(master_key, sizeof(master_key));
 
     if (err) {
-        munlock(profile_key, ENCRYPTION_PROFILE_KEY_SIZE);
-        hydro_memzero(profile_key, ENCRYPTION_PROFILE_KEY_SIZE);
-        free(profile_key);
+        buffer_secure_free(profile_key, ENCRYPTION_PROFILE_KEY_SIZE);
         return error_wrap(err, "Failed to derive profile key for '%s'", profile);
     }
 
@@ -1241,9 +1222,7 @@ error_t *keymgr_get_profile_key(
 
             /* Copy key to output and return (no caching) */
             memcpy(out_profile_key, profile_key, ENCRYPTION_PROFILE_KEY_SIZE);
-            munlock(profile_key, ENCRYPTION_PROFILE_KEY_SIZE);
-            hydro_memzero(profile_key, ENCRYPTION_PROFILE_KEY_SIZE);
-            free(profile_key);
+            buffer_secure_free(profile_key, ENCRYPTION_PROFILE_KEY_SIZE);
             return NULL;
         }
     }
@@ -1260,9 +1239,7 @@ error_t *keymgr_get_profile_key(
 
         /* Copy key to output and return (no caching) */
         memcpy(out_profile_key, profile_key, ENCRYPTION_PROFILE_KEY_SIZE);
-        munlock(profile_key, ENCRYPTION_PROFILE_KEY_SIZE);
-        hydro_memzero(profile_key, ENCRYPTION_PROFILE_KEY_SIZE);
-        free(profile_key);
+        buffer_secure_free(profile_key, ENCRYPTION_PROFILE_KEY_SIZE);
         return NULL;
     }
 

@@ -229,7 +229,6 @@ static error_t *balloon_harden(
 ) {
     error_t *err = NULL;
     uint8_t *buf = NULL;
-    bool buf_mlocked = false;
 
     const size_t n_blocks =
         memlimit / ENCRYPTION_BALLOON_BLOCK_SIZE;
@@ -245,8 +244,10 @@ static error_t *balloon_harden(
         );
     }
 
-    /* Best-effort mlock to prevent swapping sensitive key material to disk */
-    buf_mlocked = (mlock(buf, buf_size) == 0);
+    /* Best-effort mlock to prevent swapping sensitive key material to
+     * disk. Failure is non-fatal; buffer_secure_free below will munlock
+     * unconditionally (harmless if mlock never succeeded). */
+    (void) mlock(buf, buf_size);
 
     /* PHASE 1: EXPANSION
      *
@@ -360,13 +361,7 @@ static error_t *balloon_harden(
     }
 
 cleanup:
-    if (buf) {
-        hydro_memzero(buf, buf_size);
-        if (buf_mlocked) {
-            munlock(buf, buf_size);
-        }
-        free(buf);
-    }
+    buffer_secure_free(buf, buf_size);
     if (err) {
         hydro_memzero(out_master_key, ENCRYPTION_MASTER_KEY_SIZE);
     }

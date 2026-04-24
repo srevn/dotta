@@ -40,6 +40,29 @@ typedef enum {
 } transfer_outcome_t;
 
 /**
+ * Cumulative transfer metrics for a session.
+ *
+ * Aggregated across every op that actually transferred data. Fetches
+ * of zero objects (up-to-date) and connect-only ops (remote_ls) are
+ * not counted — the intent is "what moved", not "how many syscalls".
+ *
+ * Fed by the libgit2 progress callbacks TTY-independently, so metrics
+ * are accurate on pipes and logs, not just interactive terminals.
+ * Access via transfer_stats().
+ */
+typedef struct {
+    /* Fetch direction */
+    size_t fetch_ops;           /* Fetch ops that received data. */
+    size_t objects_received;    /* Cumulative objects received. */
+    size_t bytes_received;      /* Cumulative bytes received. */
+
+    /* Push direction */
+    size_t push_ops;            /* Push ops that sent data. */
+    size_t objects_sent;        /* Cumulative objects sent. */
+    size_t bytes_sent;          /* Cumulative bytes sent. */
+} transfer_stats_t;
+
+/**
  * Configuration for transfer_context_create.
  *
  * Designated-initializer friendly; unset fields default to zero/NULL/false.
@@ -79,13 +102,19 @@ void transfer_context_free(transfer_context_t *ctx);
 /**
  * Begin an op on this transfer session.
  *
- * Resets per-op counters (anti-loop attempts, last_outcome). Pair with
- * transfer_op_end() around each libgit2 network call (git_clone,
- * git_remote_fetch, git_remote_push, git_remote_connect).
+ * Resets per-op scratch (anti-loop attempts, last_outcome, stats
+ * scratch). Records the direction so transfer_op_end() knows which
+ * side of transfer_stats_t to fold into on success.
+ *
+ * Pair with transfer_op_end() around each libgit2 network call
+ * (git_clone, git_remote_fetch, git_remote_push, git_remote_connect).
  *
  * NULL-safe.
+ *
+ * @param xfer      Transfer context (may be NULL)
+ * @param direction GIT_DIRECTION_FETCH or GIT_DIRECTION_PUSH
  */
-void transfer_op_begin(transfer_context_t *xfer);
+void transfer_op_begin(transfer_context_t *xfer, git_direction direction);
 
 /**
  * End an op on this transfer session.
@@ -118,6 +147,35 @@ void transfer_op_end(transfer_context_t *xfer, int git_err);
 transfer_outcome_t transfer_last_outcome(const transfer_context_t *xfer);
 
 /**
+ * Return the cumulative transfer stats for this session.
+ *
+ * Read-only view. Updated by transfer_op_end when an op completes
+ * successfully with data transferred.
+ *
+ * NULL-safe (returns NULL).
+ */
+const transfer_stats_t *transfer_stats(const transfer_context_t *xfer);
+
+/**
+ * Emit a one-line summary of the session's transfer activity.
+ *
+ * Writes "Fetched N objects (SIZE)" and/or "Pushed N objects (SIZE)"
+ * to `out` at the given verbosity level. Silent when:
+ *   - `xfer` or `out` is NULL,
+ *   - the session's last op failed (the error message already carries
+ *     the narrative; a summary would be misleading),
+ *   - no direction saw any data (nothing interesting to report).
+ *
+ * Intended to be called by commands near their existing end-of-run
+ * summary so users see what moved on the wire.
+ */
+void transfer_summarize(
+    const transfer_context_t *xfer,
+    output_t *out,
+    output_verbosity_t level
+);
+
+/**
  * Wire transfer context into a libgit2 remote_callbacks struct.
  *
  * Installs the credential callback (always) and the progress callback
@@ -140,25 +198,16 @@ void transfer_configure_callbacks(
 );
 
 /**
- * Mark the progress line as no longer active.
+ * Release ownership of the progress line back to the caller.
  *
  * Callers that take manual ownership of the current output line (clearing
  * it or emitting their own content) invoke this to suppress the safety-net
  * newline that transfer_context_free would otherwise emit at teardown.
+ * Only marks the line as inactive — does not itself write or clear.
  *
  * NULL-safe.
  */
-void transfer_clear_progress(transfer_context_t *xfer);
-
-/**
- * Return true iff any objects were received by a fetch op on this session.
- *
- * Used to distinguish "up-to-date, nothing to fetch" from "fetched
- * something" when resolving the trailing progress line.
- *
- * NULL-safe (returns false).
- */
-bool transfer_received_any(const transfer_context_t *xfer);
+void transfer_progress_resolved(transfer_context_t *xfer);
 
 /**
  * libgit2 credential callback (payload = transfer_context_t *).

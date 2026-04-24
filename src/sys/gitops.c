@@ -1392,6 +1392,7 @@ error_t *gitops_clone(
     CHECK_NULL(out);
     CHECK_NULL(url);
     CHECK_NULL(local_path);
+    CHECK_NULL(xfer);
 
     git_clone_options opts;
     git_clone_options_init(&opts, GIT_CLONE_OPTIONS_VERSION);
@@ -1400,7 +1401,7 @@ error_t *gitops_clone(
         &opts.fetch_opts.callbacks, xfer, GIT_DIRECTION_FETCH
     );
 
-    transfer_op_begin(xfer);
+    transfer_op_begin(xfer, GIT_DIRECTION_FETCH);
     int err = git_clone(out, url, local_path, &opts);
     transfer_op_end(xfer, err);
 
@@ -1419,6 +1420,7 @@ error_t *gitops_fetch_branch(
     CHECK_NULL(repo);
     CHECK_NULL(remote_name);
     CHECK_NULL(branch_name);
+    CHECK_NULL(xfer);
     CHECK_ARG(remote_name[0] != '\0', "Remote name cannot be empty");
     CHECK_ARG(branch_name[0] != '\0', "Branch name cannot be empty");
 
@@ -1450,7 +1452,7 @@ error_t *gitops_fetch_branch(
     char *refspecs[] = { refspec };
     git_strarray refs = { refspecs, 1 };
 
-    transfer_op_begin(xfer);
+    transfer_op_begin(xfer, GIT_DIRECTION_FETCH);
     err = git_remote_fetch(remote, &refs, &fetch_opts, NULL);
     transfer_op_end(xfer, err);
     git_remote_free(remote);
@@ -1470,6 +1472,7 @@ error_t *gitops_fetch_branches(
     CHECK_NULL(repo);
     CHECK_NULL(remote_name);
     CHECK_NULL(branches);
+    CHECK_NULL(xfer);
     CHECK_ARG(remote_name[0] != '\0', "Remote name cannot be empty");
     CHECK_ARG(branches->count > 0, "branches must not be empty");
 
@@ -1533,7 +1536,7 @@ error_t *gitops_fetch_branches(
     /* Build git_strarray from our refspecs */
     git_strarray refs = { refspecs, branches->count };
 
-    transfer_op_begin(xfer);
+    transfer_op_begin(xfer, GIT_DIRECTION_FETCH);
     err = git_remote_fetch(remote, &refs, &fetch_opts, NULL);
     transfer_op_end(xfer, err);
 
@@ -1564,6 +1567,7 @@ error_t *gitops_push_branch(
     CHECK_NULL(repo);
     CHECK_NULL(remote_name);
     CHECK_NULL(branch_name);
+    CHECK_NULL(xfer);
     CHECK_ARG(remote_name[0] != '\0', "Remote name cannot be empty");
     CHECK_ARG(branch_name[0] != '\0', "Branch name cannot be empty");
 
@@ -1594,7 +1598,7 @@ error_t *gitops_push_branch(
     char *refspecs[] = { refspec };
     git_strarray refs = { refspecs, 1 };
 
-    transfer_op_begin(xfer);
+    transfer_op_begin(xfer, GIT_DIRECTION_PUSH);
     err = git_remote_push(remote, &refs, &push_opts);
     transfer_op_end(xfer, err);
     git_remote_free(remote);
@@ -1614,6 +1618,7 @@ error_t *gitops_force_push_branch(
     CHECK_NULL(repo);
     CHECK_NULL(remote_name);
     CHECK_NULL(branch_name);
+    CHECK_NULL(xfer);
     CHECK_ARG(remote_name[0] != '\0', "Remote name cannot be empty");
     CHECK_ARG(branch_name[0] != '\0', "Branch name cannot be empty");
 
@@ -1645,7 +1650,7 @@ error_t *gitops_force_push_branch(
     char *refspecs[] = { refspec };
     git_strarray refs = { refspecs, 1 };
 
-    transfer_op_begin(xfer);
+    transfer_op_begin(xfer, GIT_DIRECTION_PUSH);
     err = git_remote_push(remote, &refs, &push_opts);
     transfer_op_end(xfer, err);
     git_remote_free(remote);
@@ -1665,6 +1670,7 @@ error_t *gitops_delete_remote_branch(
     CHECK_NULL(repo);
     CHECK_NULL(remote_name);
     CHECK_NULL(branch_name);
+    CHECK_NULL(xfer);
     CHECK_ARG(remote_name[0] != '\0', "Remote name cannot be empty");
     CHECK_ARG(branch_name[0] != '\0', "Branch name cannot be empty");
 
@@ -1695,7 +1701,7 @@ error_t *gitops_delete_remote_branch(
     char *refspecs[] = { refspec };
     git_strarray refs = { refspecs, 1 };
 
-    transfer_op_begin(xfer);
+    transfer_op_begin(xfer, GIT_DIRECTION_PUSH);
     err = git_remote_push(remote, &refs, &push_opts);
     transfer_op_end(xfer, err);
     git_remote_free(remote);
@@ -1714,6 +1720,7 @@ error_t *gitops_list_remote_branches(
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(remote_name);
+    CHECK_NULL(xfer);
     CHECK_NULL(out_branches);
 
     git_remote *remote = NULL;
@@ -1735,7 +1742,7 @@ error_t *gitops_list_remote_branches(
     git_remote_init_callbacks(&callbacks, GIT_REMOTE_CALLBACKS_VERSION);
     transfer_configure_callbacks(&callbacks, xfer, GIT_DIRECTION_FETCH);
 
-    transfer_op_begin(xfer);
+    transfer_op_begin(xfer, GIT_DIRECTION_FETCH);
     git_err = git_remote_connect(
         remote, GIT_DIRECTION_FETCH, &callbacks, NULL, NULL
     );

@@ -356,7 +356,7 @@ static error_t *sync_fetch_phase(
      *   - Callback completed: already cleared, harmless no-op
      *   - Mid-progress error: clears partial progress
      *   - Up-to-date: clears "Fetching..." text */
-    transfer_clear_progress(xfer);
+    transfer_progress_resolved(xfer);
     if (ephemeral) {
         output_clear_line(out);
     } else {
@@ -1789,6 +1789,9 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
             results->auth_failed_count, results->auth_failed_count == 1 ? "" : "s"
         );
     }
+
+    /* Session-level wire stats (silent if nothing moved) */
+    transfer_summarize(xfer, out, OUTPUT_NORMAL);
 
     /* Provide guidance on next steps if remote content was pulled/resolved */
     if (results->pulled_count > 0) {

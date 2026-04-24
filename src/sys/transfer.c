@@ -35,29 +35,40 @@ typedef enum {
  * Transfer context.
  *
  * Owns the full lifecycle of a network session against one remote:
- *   - Progress reporting (line state, ephemeral flag, received counters)
+ *   - Progress reporting (line state, ephemeral flag)
+ *   - Session stats (cumulative objects/bytes across all ops)
  *   - Credential identity (URL, cached username/password)
  *   - Credential state machine (acquisition → validation / rejection)
  *
- * Per-op counters (attempts, last_outcome) are reset by transfer_op_begin
- * and classified by transfer_op_end. The cached credentials are filled
- * at most once per session by the first successful helper fill
- * (cache-once identity pinning).
+ * Per-op counters (attempts, last_outcome, op scratch) are reset by
+ * transfer_op_begin and classified/folded by transfer_op_end. The cached
+ * credentials are filled at most once per session by the first successful
+ * helper fill (cache-once identity pinning).
  */
 struct transfer_context_s {
     output_t *output;               /* Borrowed. */
 
-    /* Progress state */
+    /* Progress UI state */
     bool progress_active;           /* Line is mid-display. */
     bool ephemeral;                 /* Clear on completion. */
-    size_t fetched_objects;         /* Objects reported by the most recent fetch */
+
+    /* Cumulative session stats (TTY-independent) */
+    transfer_stats_t stats;
+
+    /* Per-op scratch. Written by the progress callbacks on each update;
+     * folded into `stats` by transfer_op_end on success. Reset by
+     * transfer_op_begin. */
+    struct {
+        git_direction direction;    /* Op direction (fetch/push). */
+        size_t last_count;          /* Last received_objects or current. */
+        size_t last_bytes;          /* Last received_bytes or bytes. */
+    } op;
 
     /* Credential session identity */
     char *url;                      /* Owned. Captured at create; drives
                                      * helper approve/reject at teardown. */
     char *username;                 /* Owned, heap, wiped on free. */
     char *password;                 /* Owned, heap, wiped on free. */
-    bool  credentials_provided;     /* True iff helper filled creds. */
 
     /* Session state machine */
     credential_state_t credential_state;
@@ -192,21 +203,40 @@ void transfer_context_free(transfer_context_t *ctx) {
 }
 
 /**
- * Begin an op — reset per-op counters.
+ * Begin an op — reset per-op scratch and record direction.
  */
-void transfer_op_begin(transfer_context_t *xfer) {
+void transfer_op_begin(transfer_context_t *xfer, git_direction direction) {
     if (!xfer) return;
     xfer->attempts = 0;
     xfer->last_outcome = TRANSFER_OUTCOME_NONE;
+    xfer->op.direction = direction;
+    xfer->op.last_count = 0;
+    xfer->op.last_bytes = 0;
 }
 
 /**
- * End an op — classify outcome and advance the credential state machine.
+ * End an op — fold stats, classify outcome, advance state machine.
  */
 void transfer_op_end(transfer_context_t *xfer, int git_err) {
     if (!xfer) return;
 
     xfer->last_outcome = classify_outcome(git_err);
+
+    /* Fold per-op values into cumulative stats. Only count ops that
+     * actually transferred data — connect+ls (list_remote_branches) and
+     * up-to-date fetches would otherwise pollute the summary. */
+    if (git_err == 0 &&
+        (xfer->op.last_count > 0 || xfer->op.last_bytes > 0)) {
+        if (xfer->op.direction == GIT_DIRECTION_PUSH) {
+            xfer->stats.push_ops++;
+            xfer->stats.objects_sent += xfer->op.last_count;
+            xfer->stats.bytes_sent += xfer->op.last_bytes;
+        } else {
+            xfer->stats.fetch_ops++;
+            xfer->stats.objects_received += xfer->op.last_count;
+            xfer->stats.bytes_received += xfer->op.last_bytes;
+        }
+    }
 
     if (xfer->credential_state != CRED_STATE_ACQUIRED) {
         /* NOT_ACQUIRED (no helper fill) and terminal states (VALIDATED,
@@ -237,6 +267,55 @@ transfer_outcome_t transfer_last_outcome(const transfer_context_t *xfer) {
 }
 
 /**
+ * Return read-only view of cumulative session stats.
+ */
+const transfer_stats_t *transfer_stats(const transfer_context_t *xfer) {
+    return xfer ? &xfer->stats : NULL;
+}
+
+/**
+ * Emit a one-line summary of the session's transfer activity.
+ *
+ * Silent on failed sessions (errors already carry the narrative) and on
+ * sessions with no data transferred (nothing to report).
+ */
+void transfer_summarize(
+    const transfer_context_t *xfer,
+    output_t *out,
+    output_verbosity_t level
+) {
+    if (!xfer || !out) return;
+
+    if (xfer->last_outcome == TRANSFER_OUTCOME_AUTH_FAILED ||
+        xfer->last_outcome == TRANSFER_OUTCOME_OTHER_FAILURE) {
+        return;
+    }
+
+    const transfer_stats_t *s = &xfer->stats;
+    char bytes_str[32];
+
+    if (s->objects_received > 0) {
+        output_format_size(s->bytes_received, bytes_str, sizeof(bytes_str));
+        output_info(
+            out, level, "Fetched %zu object%s (%s)",
+            s->objects_received,
+            s->objects_received == 1 ? "" : "s",
+            bytes_str
+        );
+    }
+
+    if (s->objects_sent > 0) {
+        output_format_size(s->bytes_sent, bytes_str, sizeof(bytes_str));
+        output_info(
+            out, level, "Pushed %zu object%s (%s)",
+            s->objects_sent,
+            s->objects_sent == 1 ? "" : "s",
+            bytes_str
+        );
+    }
+}
+
+/**
  * Wire transfer_context_t into a remote_callbacks struct.
  */
 void transfer_configure_callbacks(
@@ -256,13 +335,9 @@ void transfer_configure_callbacks(
     }
 }
 
-void transfer_clear_progress(transfer_context_t *xfer) {
+void transfer_progress_resolved(transfer_context_t *xfer) {
     if (!xfer) return;
     xfer->progress_active = false;
-}
-
-bool transfer_received_any(const transfer_context_t *xfer) {
-    return xfer && xfer->fetched_objects > 0;
 }
 
 /**
@@ -318,8 +393,7 @@ int transfer_credentials_callback(
          * change must not silently leak secrets through an overwrite). */
         secure_replace(&ctx->username, obtained_user);
         secure_replace(&ctx->password, obtained_pass);
-        ctx->credentials_provided = (ctx->username && ctx->password);
-        if (ctx->credentials_provided) {
+        if (ctx->username && ctx->password) {
             transfer_mark_cred_acquired(ctx);
         }
     } else {
@@ -349,6 +423,11 @@ int transfer_progress_callback(
 
     transfer_context_t *ctx = (transfer_context_t *) payload;
 
+    /* Record latest values for the stats fold at op_end. TTY-independent:
+     * running in a pipe or over a log must still produce correct totals. */
+    ctx->op.last_count = stats->received_objects;
+    ctx->op.last_bytes = stats->received_bytes;
+
     /* Skip progress if no output context or below NORMAL verbosity */
     if (!ctx->output || ctx->output->verbosity < OUTPUT_NORMAL) {
         return 0;
@@ -356,10 +435,6 @@ int transfer_progress_callback(
 
     /* Inline progress uses \r — only works on TTY. */
     if (!output_is_tty(ctx->output)) return 0;
-
-    /* Record received count so transfer_received_any() can classify the
-     * session as "up-to-date" vs "fetched something". */
-    ctx->fetched_objects = stats->received_objects;
 
     unsigned int total = stats->total_objects;
     unsigned int received = stats->received_objects;
@@ -414,6 +489,10 @@ int transfer_push_progress_callback(
     }
 
     transfer_context_t *ctx = (transfer_context_t *) payload;
+
+    /* Record latest values for the stats fold at op_end (TTY-independent). */
+    ctx->op.last_count = current;
+    ctx->op.last_bytes = bytes;
 
     /* Skip progress if no output context or below NORMAL verbosity */
     if (!ctx->output || ctx->output->verbosity < OUTPUT_NORMAL) {

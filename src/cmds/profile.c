@@ -448,6 +448,7 @@ static error_t *profile_fetch(
     transfer_options_t xfer_opts = {
         .output = out,
         .url = remote_url,
+        .ephemeral_progress = true,
     };
     err = transfer_context_create(&xfer_opts, &xfer);
     if (err) {
@@ -624,6 +625,10 @@ static error_t *profile_fetch(
     }
 
 cleanup:
+    /* Session-level wire stats (silent on failed sessions or no data).
+     * Emit before freeing xfer so stats are still live. */
+    transfer_summarize(xfer, out, OUTPUT_NORMAL);
+
     /* Cleanup all resources */
     string_array_free(remote_branches);
     transfer_context_free(xfer);

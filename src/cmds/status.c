@@ -528,75 +528,76 @@ static error_t *display_remote_status(
 
     /* Fetch if requested */
     if (!no_fetch) {
+        /* xfer is required by gitops network ops (credential state machine
+         * + approve/reject are needed even without verbose progress).
+         * Status's fetch is a background refresh: progress is always
+         * ephemeral so it never persists between status sections. */
+        char *remote_url = NULL;
+        error_t *url_err = gitops_get_remote_url(repo, remote_name, &remote_url);
+        error_free(url_err);
+
+        transfer_options_t xfer_opts = {
+            .output = out,
+            .url = remote_url,
+            .ephemeral_progress = true,
+        };
         transfer_context_t *xfer = NULL;
-        bool ephemeral = false;
+        error_t *xfer_err = transfer_context_create(&xfer_opts, &xfer);
+        free(remote_url);
 
-        if (verbose) {
-            /* Ephemeral fetch message (no newline — resolved after fetch).
-             * On TTY: progress overwrites via \r, then line is cleared entirely.
-             * On pipe: falls back to inline text resolution. */
-            output_print(
-                out, OUTPUT_VERBOSE, "Fetching from '%s'...",
-                remote_name
-            );
-            fflush(out->stream);
-
-            /* Create transfer context for progress reporting. Ephemeral
-             * progress is enabled so the fetch progress line is cleared
-             * on completion, leaving clean framing around the status
-             * output that follows. */
-            char *remote_url = NULL;
-            error_t *url_err = gitops_get_remote_url(repo, remote_name, &remote_url);
-            error_free(url_err);
-            transfer_options_t xfer_opts = {
-                .output = out,
-                .url = remote_url,
-                .ephemeral_progress = true,
-            };
-            error_t *xfer_err = transfer_context_create(&xfer_opts, &xfer);
-            free(remote_url);
-            if (xfer_err) {
-                /* Non-fatal: proceed without credentials/progress. */
-                error_free(xfer_err);
-            }
-
-            ephemeral = output_is_tty(out);  /* ANSI clear only works on TTY */
-        }
-
-        /* Perform batched fetch - single network operation for all branches */
-        error_t *fetch_err = gitops_fetch_branches(
-            repo, remote_name, check, xfer
-        );
-
-        /* Resolve the ephemeral fetch/progress line */
-        if (verbose) {
-            if (ephemeral) {
-                /* Clear any remaining text on the line. Handles all cases:
-                 *   - Callback completed: already cleared, harmless no-op
-                 *   - Mid-progress error: clears partial progress
-                 *   - Up-to-date: clears "Fetching..." text */
-                transfer_clear_progress(xfer);
-                output_clear_line(out);
-            } else if (fetch_err) {
-                /* Non-TTY: finish the line before warning */
-                output_newline(out, OUTPUT_VERBOSE);
-            } else if (!transfer_received_any(xfer)) {
-                /* Non-TTY, up-to-date: resolve inline */
-                output_print(out, OUTPUT_VERBOSE, " done.\n");
-            }
-            /* Non-TTY with objects: callback wrote ", done.\n" */
-        }
-
-        if (fetch_err) {
-            /* Non-fatal: just warn and continue with status display */
+        if (xfer_err) {
+            /* Non-fatal: skip the fetch and fall through to cached status
+             * display. Matches the "skip section on failure" pattern used
+             * earlier for remote detection. */
             output_warning(
-                out, OUTPUT_VERBOSE, "Failed to fetch branches: %s",
-                error_message(fetch_err)
+                out, OUTPUT_NORMAL, "Skipping remote fetch: %s",
+                error_message(xfer_err)
             );
-            error_free(fetch_err);
-        }
+            error_free(xfer_err);
+        } else {
+            if (verbose) {
+                /* Ephemeral fetch message (no newline — resolved after fetch).
+                 * On TTY: progress overwrites via \r, then line is cleared.
+                 * On pipe: falls back to inline " done.\n" resolution. */
+                output_print(
+                    out, OUTPUT_VERBOSE, "Fetching from '%s'...", remote_name
+                );
+                fflush(out->stream);
+            }
 
-        transfer_context_free(xfer);
+            /* Perform batched fetch — single network op for all branches */
+            error_t *fetch_err = gitops_fetch_branches(
+                repo, remote_name, check, xfer
+            );
+
+            /* Resolve the "Fetching from ..." preamble line (verbose only) */
+            if (verbose) {
+                if (output_is_tty(out)) {
+                    /* TTY: clear any remaining text. Handles all cases
+                     * uniformly (callback-finalized, mid-progress error,
+                     * up-to-date). */
+                    transfer_progress_resolved(xfer);
+                    output_clear_line(out);
+                } else if (fetch_err) {
+                    /* Non-TTY + error: finish the line before the warning */
+                    output_newline(out, OUTPUT_VERBOSE);
+                } else {
+                    /* Non-TTY + success: inline resolution */
+                    output_print(out, OUTPUT_VERBOSE, " done.\n");
+                }
+            }
+
+            if (fetch_err) {
+                /* Non-fatal: warn and continue with status display */
+                output_warning(
+                    out, OUTPUT_VERBOSE, "Failed to fetch branches: %s",
+                    error_message(fetch_err)
+                );
+                error_free(fetch_err);
+            }
+
+            transfer_context_free(xfer);
+        }
     }
 
     /* Display remote sync status section */

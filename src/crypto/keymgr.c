@@ -11,13 +11,13 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
-#include <termios.h>
 #include <unistd.h>
 
 #include "base/buffer.h"
 #include "base/error.h"
 #include "base/hashmap.h"
 #include "crypto/encryption.h"
+#include "crypto/passphrase.h"
 #include "crypto/session.h"
 
 /**
@@ -170,14 +170,6 @@ static bool is_key_valid(const keymgr *keymgr) {
     time_t elapsed = now - keymgr->cached_at;
 
     return elapsed < keymgr->session_timeout;
-}
-
-bool keymgr_has_key(const keymgr *keymgr) {
-    if (!keymgr) {
-        return false;
-    }
-
-    return is_key_valid(keymgr);
 }
 
 bool keymgr_probe_key(keymgr *keymgr) {
@@ -339,181 +331,6 @@ error_t *keymgr_set_passphrase(
     return NULL;
 }
 
-/* Maximum passphrase length - reasonable limit to prevent DoS */
-#define MAX_PASSPHRASE_LENGTH 4096
-
-error_t *keymgr_prompt_passphrase(
-    const char *prompt,
-    char **out_passphrase,
-    size_t *out_len
-) {
-    CHECK_NULL(prompt);
-    CHECK_NULL(out_passphrase);
-    CHECK_NULL(out_len);
-
-    /* Check if stdin is a TTY */
-    bool is_tty = isatty(STDIN_FILENO);
-
-    struct termios old_term, new_term;
-    bool echo_disabled = false;
-
-    /* Disable echo if TTY */
-    if (is_tty) {
-        if (tcgetattr(STDIN_FILENO, &old_term) != 0) {
-            return ERROR(
-                ERR_FS, "Failed to get terminal attributes"
-            );
-        }
-
-        new_term = old_term;
-        new_term.c_lflag &= ~ECHO;  /* Disable echo */
-
-        if (tcsetattr(STDIN_FILENO, TCSANOW, &new_term) != 0) {
-            return ERROR(
-                ERR_FS, "Failed to disable echo"
-            );
-        }
-
-        echo_disabled = true;
-    }
-
-    /* Display prompt */
-    fprintf(stderr, "%s", prompt);
-    fflush(stderr);
-
-    /* Allocate fixed-size buffer to prevent unbounded memory allocation
-     * This protects against DoS attacks where large data is piped to stdin */
-    char *passphrase = malloc(MAX_PASSPHRASE_LENGTH + 1);
-    if (!passphrase) {
-        if (echo_disabled) {
-            tcsetattr(STDIN_FILENO, TCSANOW, &old_term);
-        }
-        return ERROR(
-            ERR_MEMORY, "Failed to allocate passphrase buffer"
-        );
-    }
-
-    /* Lock memory to prevent passphrase from being swapped to disk */
-    if (mlock(passphrase, MAX_PASSPHRASE_LENGTH + 1) != 0) {
-        /* Best-effort: mlock failure is non-fatal but reduces security.
-         * Common on systems with tight RLIMIT_MEMLOCK or without privileges. */
-    }
-
-    /* Read with size limit and EINTR retry
-     * Signals (e.g., SIGWINCH on terminal resize) can interrupt fgets(),
-     * so we retry on EINTR to avoid forcing the user to re-enter */
-    char *result = NULL;
-    do {
-        errno = 0;
-        result = fgets(passphrase, MAX_PASSPHRASE_LENGTH + 1, stdin);
-    } while (result == NULL && errno == EINTR);
-
-    /* Restore echo immediately */
-    if (echo_disabled) {
-        tcsetattr(STDIN_FILENO, TCSANOW, &old_term);
-        fprintf(stderr, "\n");  /* Echo newline that was hidden */
-    }
-
-    /* Check read result */
-    if (result == NULL) {
-        buffer_secure_free(passphrase, MAX_PASSPHRASE_LENGTH + 1);
-        return ERROR(ERR_FS, "Failed to read passphrase");
-    }
-
-    /* Calculate length */
-    size_t len = strlen(passphrase);
-
-    /* Check if input was truncated BEFORE trimming newline
-     * fgets reads up to MAX_PASSPHRASE_LENGTH chars. If we got that many
-     * chars WITHOUT a newline, the input was truncated. */
-    bool has_newline = (len > 0 && passphrase[len - 1] == '\n');
-    if (len == MAX_PASSPHRASE_LENGTH && !has_newline) {
-        buffer_secure_free(passphrase, MAX_PASSPHRASE_LENGTH + 1);
-        return ERROR(
-            ERR_INVALID_ARG, "Passphrase too long (maximum %d characters)",
-            MAX_PASSPHRASE_LENGTH - 1
-        );
-    }
-
-    /* Trim trailing newline */
-    if (has_newline) {
-        passphrase[len - 1] = '\0';
-        len--;
-    }
-
-    /* Check for empty passphrase */
-    if (len == 0) {
-        buffer_secure_free(passphrase, MAX_PASSPHRASE_LENGTH + 1);
-        return ERROR(ERR_INVALID_ARG, "Passphrase cannot be empty");
-    }
-
-    /* Create a right-sized copy so callers can munlock/memzero with len+1.
-     *
-     * The read buffer is MAX_PASSPHRASE_LENGTH+1 bytes but the actual passphrase
-     * is typically much shorter. Returning the oversized buffer means callers
-     * can't know the true allocation size for proper munlock/memzero cleanup.
-     * By returning a tight copy, len+1 is always the correct size. */
-    char *tight = malloc(len + 1);
-    if (!tight) {
-        buffer_secure_free(passphrase, MAX_PASSPHRASE_LENGTH + 1);
-        return ERROR(ERR_MEMORY, "Failed to allocate passphrase buffer");
-    }
-
-    if (mlock(tight, len + 1) != 0) {
-        /* Best-effort: non-fatal */
-    }
-
-    memcpy(tight, passphrase, len + 1);
-
-    /* Zero and free the oversized read buffer */
-    buffer_secure_free(passphrase, MAX_PASSPHRASE_LENGTH + 1);
-
-    *out_passphrase = tight;
-    *out_len = len;
-    return NULL;
-}
-
-/**
- * Get passphrase from environment variable
- *
- * Reads from DOTTA_ENCRYPTION_PASSPHRASE if set.
- *
- * @param out_passphrase Passphrase (caller must free and zero)
- * @param out_len Passphrase length
- * @return Error or NULL on success (returns ERR_NOT_FOUND if not set)
- */
-static error_t *get_passphrase_from_env(
-    char **out_passphrase,
-    size_t *out_len
-) {
-    CHECK_NULL(out_passphrase);
-    CHECK_NULL(out_len);
-
-    const char *env_passphrase = getenv("DOTTA_ENCRYPTION_PASSPHRASE");
-
-    if (!env_passphrase || env_passphrase[0] == '\0') {
-        return ERROR(ERR_NOT_FOUND, "DOTTA_ENCRYPTION_PASSPHRASE not set");
-    }
-
-    /* Duplicate passphrase */
-    size_t len = strlen(env_passphrase);
-    char *passphrase = malloc(len + 1);
-    if (!passphrase) {
-        return ERROR(ERR_MEMORY, "Failed to allocate passphrase buffer");
-    }
-
-    /* Lock memory to prevent swapping (best-effort) */
-    if (mlock(passphrase, len + 1) != 0) {
-        /* Non-fatal - passphrase still protected by process isolation */
-    }
-
-    memcpy(passphrase, env_passphrase, len + 1);
-
-    *out_passphrase = passphrase;
-    *out_len = len;
-    return NULL;
-}
-
 error_t *keymgr_get_key(
     keymgr *keymgr,
     uint8_t out_master_key[32]
@@ -560,14 +377,14 @@ error_t *keymgr_get_key(
     error_t *err = NULL;
 
     /* Try environment variable first */
-    err = get_passphrase_from_env(&passphrase, &passphrase_len);
+    err = passphrase_from_env(&passphrase, &passphrase_len);
 
     if (err && err->code == ERR_NOT_FOUND) {
         /* Env var not set - prompt interactively */
         error_free(err);
         err = NULL;
 
-        err = keymgr_prompt_passphrase(
+        err = passphrase_prompt(
             "Enter encryption passphrase: ",
             &passphrase,
             &passphrase_len
@@ -589,9 +406,9 @@ error_t *keymgr_get_key(
     /* Derive master key */
     err = keymgr_set_passphrase(keymgr, passphrase, passphrase_len);
 
-    /* Securely zero and free passphrase.
-     * Both keymgr_prompt_passphrase and get_passphrase_from_env
-     * return a buffer of exactly passphrase_len+1 bytes with mlock. */
+    /* Securely zero and free passphrase. Both passphrase_prompt and
+     * passphrase_from_env return a buffer of exactly
+     * passphrase_len + 1 bytes (NUL-terminated, mlock'd). */
     buffer_secure_free(passphrase, passphrase_len + 1);
 
     if (err) {

@@ -211,17 +211,6 @@ error_t *keymgr_set_passphrase(
 void keymgr_clear(keymgr *keymgr);
 
 /**
- * Check if key is cached in memory and not expired
- *
- * Only checks in-memory state. Does not probe the disk cache.
- * Use keymgr_probe_key() for a full availability check.
- *
- * @param keymgr Key manager (must not be NULL)
- * @return true if key is available in memory (cached and not expired)
- */
-bool keymgr_has_key(const keymgr *keymgr);
-
-/**
  * Probe for key availability without prompting
  *
  * Checks both in-memory cache and disk session cache. If a valid
@@ -229,7 +218,6 @@ bool keymgr_has_key(const keymgr *keymgr);
  * passphrase or check environment variables.
  *
  * This is the non-interactive counterpart to keymgr_get_key():
- *   - keymgr_has_key():   memory only (const, no side effects)
  *   - keymgr_probe_key(): memory + disk (may load from disk)
  *   - keymgr_get_key():   memory + disk + prompt (full resolution)
  *
@@ -259,28 +247,5 @@ int64_t keymgr_time_until_expiry(
  * @param keymgr Key manager (can be NULL)
  */
 void keymgr_free(keymgr *keymgr);
-
-/**
- * Prompt for passphrase (with echo disabled)
- *
- * Reads passphrase from stdin with terminal echo disabled.
- * Supports interactive TTY and non-TTY input (for scripts).
- *
- * Implementation details:
- * - Uses tcgetattr/tcsetattr to disable echo (POSIX)
- * - Restores echo on completion or error
- * - Handles Ctrl+C gracefully (restores echo)
- * - Trims trailing newline
- *
- * @param prompt Prompt message to display (must not be NULL)
- * @param out_passphrase Passphrase buffer (caller must free and zero)
- * @param out_len Passphrase length (excluding null terminator)
- * @return Error or NULL on success
- */
-error_t *keymgr_prompt_passphrase(
-    const char *prompt,
-    char **out_passphrase,
-    size_t *out_len
-);
 
 #endif /* DOTTA_KEYMGR_H */

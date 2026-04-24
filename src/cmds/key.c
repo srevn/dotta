@@ -15,6 +15,7 @@
 #include "base/output.h"
 #include "core/state.h"
 #include "crypto/keymgr.h"
+#include "crypto/passphrase.h"
 
 /**
  * Count encrypted files in current profiles
@@ -96,7 +97,7 @@ static error_t *cmd_key_set(
     /* Prompt for passphrase */
     char *passphrase = NULL;
     size_t passphrase_len = 0;
-    err = keymgr_prompt_passphrase(
+    err = passphrase_prompt(
         "Enter encryption passphrase: ", &passphrase, &passphrase_len
     );
     if (err) {
@@ -107,8 +108,8 @@ static error_t *cmd_key_set(
     /* Set passphrase in keymgr (derives and caches master key) */
     err = keymgr_set_passphrase(keymgr, passphrase, passphrase_len);
 
-    /* Securely clear passphrase from memory. keymgr_prompt_passphrase
-     * returns a buffer of exactly passphrase_len+1 bytes with mlock. */
+    /* Securely clear passphrase from memory. passphrase_prompt
+     * returns a buffer of exactly passphrase_len + 1 bytes with mlock. */
     buffer_secure_free(passphrase, passphrase_len + 1);
 
     if (err) {
@@ -169,12 +170,11 @@ static error_t *cmd_key_clear(
      * command declaring crypto_mode = KEY. See runtime.h ctx invariants. */
     CHECK_NULL(keymgr);
 
-    /* Probe loads the disk session cache into memory if one exists. This
-     * is the right primitive (vs. keymgr_has_key) because the ctx->keymgr
-     * is freshly-created for this command and never picked up anything
-     * from an "earlier dispatch step" — each dotta invocation is one
-     * process, one dispatch. A `true` here means the on-disk cache was
-     * present, which is what users mean by "had a key". */
+    /* Probe consults both in-memory and on-disk caches, loading the
+     * latter into memory if present. ctx->keymgr is freshly-created
+     * for this command (one process, one dispatch), so an in-memory
+     * hit is impossible — `true` here means the on-disk cache
+     * existed, which is what users mean by "had a key". */
     bool had_key = keymgr_probe_key(keymgr);
 
     /* Always clear both memory and file cache (even if no in-memory key) */

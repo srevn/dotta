@@ -18,7 +18,6 @@
 #include "core/scope.h"
 #include "core/state.h"
 #include "core/workspace.h"
-#include "sys/credentials.h"
 #include "sys/gitops.h"
 #include "sys/resolve.h"
 #include "sys/transfer.h"
@@ -127,68 +126,6 @@ static bool parse_divergence_strategy(
     }
 
     return false;
-}
-
-/**
- * Perform force push (for OURS strategy)
- */
-static error_t *force_push_branch(
-    git_repository *repo,
-    const char *remote_name,
-    const char *branch_name,
-    transfer_context_t *xfer
-) {
-    CHECK_NULL(repo);
-    CHECK_NULL(remote_name);
-    CHECK_NULL(branch_name);
-    CHECK_NULL(xfer);
-
-    /* Force push local to remote */
-    git_remote *remote = NULL;
-    int git_err = git_remote_lookup(&remote, repo, remote_name);
-    if (git_err < 0) {
-        return error_from_git(git_err);
-    }
-
-    /* Set up transfer callbacks */
-    git_push_options push_opts;
-    git_push_options_init(&push_opts, GIT_PUSH_OPTIONS_VERSION);
-    push_opts.callbacks.credentials = transfer_credentials_callback;
-    push_opts.callbacks.push_transfer_progress = transfer_push_progress_callback;
-    push_opts.callbacks.payload = xfer;
-
-    /* Force push refspec ('+' prefix forces the push) */
-    char refspec[DOTTA_REFSPEC_MAX];
-    error_t *err_build = gitops_build_refname(
-        refspec, sizeof(refspec), "+refs/heads/%s:refs/heads/%s",
-        branch_name, branch_name
-    );
-    if (err_build) {
-        git_remote_free(remote);
-        return error_wrap(
-            err_build, "Invalid branch name '%s'",
-            branch_name
-        );
-    }
-
-    char *refspecs[] = { refspec };
-    git_strarray refs = { refspecs, 1 };
-
-    git_err = git_remote_push(remote, &refs, &push_opts);
-    git_remote_free(remote);
-
-    if (git_err < 0) {
-        if (xfer->cred) {
-            credential_context_reject(xfer->cred);
-        }
-        return error_from_git(git_err);
-    }
-
-    if (xfer->cred) {
-        credential_context_approve(xfer->cred);
-    }
-
-    return NULL;
 }
 
 /**
@@ -433,10 +370,11 @@ static error_t *sync_fetch_phase(
     }
 
     if (err) {
-        /* Check if this is an authentication error */
+        /* Classify authoritatively from the transfer outcome rather than
+         * matching libgit2's English error strings. Read immediately:
+         * the next transfer_op_begin would overwrite last_outcome. */
         const char *err_msg = error_message(err);
-        if (strstr(err_msg, "authentication") || strstr(err_msg, "credentials") ||
-            strstr(err_msg, "permission denied") || strstr(err_msg, "unauthorized")) {
+        if (transfer_last_outcome(xfer) == TRANSFER_OUTCOME_AUTH_FAILED) {
             results->auth_failed_count++;
             output_error(out, "Authentication failed: %s", err_msg);
         } else {
@@ -928,7 +866,7 @@ static error_t *handle_diverged_ours(
     }
 
     /* Force push local to remote (local branch stays unchanged) */
-    error_t *err = force_push_branch(repo, remote_name, result->profile, xfer);
+    error_t *err = gitops_force_push_branch(repo, remote_name, result->profile, xfer);
     if (err) {
         output_error(out, "     ✗ Force push failed: %s", error_message(err));
         mark_result_failed(result, results, err);

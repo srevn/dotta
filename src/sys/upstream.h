@@ -12,6 +12,8 @@
 #include <stdbool.h>
 #include <types.h>
 
+#include "sys/transfer.h"
+
 /**
  * Sync state for a profile relative to remote
  */
@@ -117,14 +119,15 @@ error_t *upstream_discover_branches(
  *
  * @param repo Repository (must not be NULL)
  * @param remote_name Remote name (e.g., "origin")
- * @param cred_ctx Credential context for authentication (may be NULL)
+ * @param xfer Transfer context for credentials and op lifecycle
+ *             (may be NULL; operation proceeds unauthenticated)
  * @param out_branches String array of branch names on remote (caller must free)
  * @return Error or NULL on success
  */
 error_t *upstream_query_remote_branches(
     git_repository *repo,
     const char *remote_name,
-    void *cred_ctx,
+    transfer_context_t *xfer,
     string_array_t **out_branches
 );
 

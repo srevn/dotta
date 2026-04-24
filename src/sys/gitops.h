@@ -549,6 +549,26 @@ error_t *gitops_push_branch(
 );
 
 /**
+ * Force-push branch to remote (overwrites remote history).
+ *
+ * Identical to gitops_push_branch except the refspec is prefixed with
+ * '+', which instructs the server to accept a non-fast-forward update.
+ * Used by sync's 'ours' divergence strategy.
+ *
+ * @param repo Repository (must not be NULL)
+ * @param remote_name Remote name (must not be NULL)
+ * @param branch_name Branch name (must not be NULL)
+ * @param xfer Transfer context for credentials and progress (may be NULL)
+ * @return Error or NULL on success
+ */
+error_t *gitops_force_push_branch(
+    git_repository *repo,
+    const char *remote_name,
+    const char *branch_name,
+    transfer_context_t *xfer
+);
+
+/**
  * Delete a branch from remote repository
  *
  * @param repo Repository (must not be NULL)

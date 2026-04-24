@@ -8,8 +8,57 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <git2/errors.h>
+
 #include "base/output.h"
 #include "sys/credentials.h"
+
+/**
+ * Credential session states (file-local).
+ *
+ * Terminal states (VALIDATED, REJECTED) are absorbing: once reached,
+ * further ops cannot change the decision that will be committed at
+ * transfer_context_free(). NOT_ACQUIRED means no helper fill happened
+ * (SSH agent, SSH key, anonymous, default) — nothing to approve or
+ * reject.
+ */
+typedef enum {
+    CRED_STATE_NOT_ACQUIRED = 0,  /* Initial; SSH/anonymous stay here. */
+    CRED_STATE_ACQUIRED,          /* Helper filled creds; outcome pending. */
+    CRED_STATE_VALIDATED,         /* At least one op succeeded. Terminal. */
+    CRED_STATE_REJECTED           /* Auth failed with no prior success. Terminal. */
+} credential_state_t;
+
+/**
+ * Map a libgit2 return code to a transfer outcome class.
+ *
+ * GIT_EAUTH is libgit2's canonical auth-failure signal — returned when
+ * our credential callback bails with GIT_EAUTH, or when libgit2 exhausts
+ * its own retry budget against server rejections. We treat it as
+ * definitive.
+ *
+ * Rarely, auth failures may surface as generic errors (certain TLS/SSH
+ * paths, HTTP 401 before the credential callback runs). Those classify
+ * as OTHER_FAILURE here; the resulting wording is suboptimal but not
+ * incorrect. If smoke tests surface a misclassified case, widen the
+ * match (e.g., inspect giterr_last()->klass).
+ */
+static transfer_outcome_t classify_outcome(int git_err) {
+    if (git_err == 0) return TRANSFER_OUTCOME_OK;
+    if (git_err == GIT_EAUTH) return TRANSFER_OUTCOME_AUTH_FAILED;
+    return TRANSFER_OUTCOME_OTHER_FAILURE;
+}
+
+/**
+ * Advance credential_state on first helper fill. Idempotent: subsequent
+ * calls (cached-cred replays, terminal states) do not regress the state.
+ */
+static void transfer_mark_cred_acquired(transfer_context_t *xfer) {
+    if (!xfer) return;
+    if (xfer->credential_state == CRED_STATE_NOT_ACQUIRED) {
+        xfer->credential_state = CRED_STATE_ACQUIRED;
+    }
+}
 
 /**
  * Finalize the current progress line
@@ -69,6 +118,19 @@ void transfer_context_free(transfer_context_t *ctx) {
         return;
     }
 
+    /* Commit the session's credential decision exactly once. Guarded on
+     * terminal state: intermediate states (NOT_ACQUIRED, unresolved
+     * ACQUIRED) produce no helper traffic. credential_context_approve /
+     * reject additionally guard on credentials_provided, so SSH paths
+     * are silent even if state somehow advanced. */
+    if (ctx->cred) {
+        if (ctx->credential_state == CRED_STATE_VALIDATED) {
+            credential_context_approve(ctx->cred);
+        } else if (ctx->credential_state == CRED_STATE_REJECTED) {
+            credential_context_reject(ctx->cred);
+        }
+    }
+
     /* Free owned credential context */
     credential_context_free(ctx->cred);
 
@@ -82,7 +144,87 @@ void transfer_context_free(transfer_context_t *ctx) {
 }
 
 /**
+ * Begin an op — reset per-op counters.
+ */
+void transfer_op_begin(transfer_context_t *xfer) {
+    if (!xfer) return;
+    xfer->attempts = 0;
+    xfer->last_outcome = TRANSFER_OUTCOME_NONE;
+}
+
+/**
+ * End an op — classify outcome and advance the credential state machine.
+ */
+void transfer_op_end(transfer_context_t *xfer, int git_err) {
+    if (!xfer) return;
+
+    xfer->last_outcome = classify_outcome(git_err);
+
+    if (xfer->credential_state != CRED_STATE_ACQUIRED) {
+        /* NOT_ACQUIRED (no helper fill) and terminal states (VALIDATED,
+         * REJECTED) absorb any outcome without transitioning. */
+        return;
+    }
+
+    switch (xfer->last_outcome) {
+        case TRANSFER_OUTCOME_OK:
+            xfer->credential_state = CRED_STATE_VALIDATED;
+            break;
+        case TRANSFER_OUTCOME_AUTH_FAILED:
+            xfer->credential_state = CRED_STATE_REJECTED;
+            break;
+        case TRANSFER_OUTCOME_OTHER_FAILURE:
+        case TRANSFER_OUTCOME_NONE:
+            /* Non-auth failure: session identity is still pending;
+             * a subsequent op may validate or invalidate it. */
+            break;
+    }
+}
+
+/**
+ * Return the outcome of the most recent op.
+ */
+transfer_outcome_t transfer_last_outcome(const transfer_context_t *xfer) {
+    return xfer ? xfer->last_outcome : TRANSFER_OUTCOME_NONE;
+}
+
+/**
+ * Wire transfer_context_t into a remote_callbacks struct.
+ */
+void transfer_configure_callbacks(
+    git_remote_callbacks *cb,
+    transfer_context_t *xfer,
+    git_direction direction
+) {
+    if (!cb) return;
+
+    cb->credentials = transfer_credentials_callback;
+    cb->payload = xfer;
+
+    if (direction == GIT_DIRECTION_PUSH) {
+        cb->push_transfer_progress = transfer_push_progress_callback;
+    } else {
+        cb->transfer_progress = transfer_progress_callback;
+    }
+}
+
+/**
  * Credential callback for libgit2
+ *
+ * Runs two session-level gates before delegating to credentials_callback:
+ *
+ *   1. Fast-fail on REJECTED — once the server has rejected helper creds
+ *      in this session, subsequent ops skip sending the same creds. Saves
+ *      a wasted round-trip per op in a multi-profile sync after an auth
+ *      failure.
+ *
+ *   2. Anti-loop — libgit2 re-invokes this callback when the server
+ *      rejects creds within a single negotiation. transfer_op_begin
+ *      resets the per-op counter, so across-op retries are allowed.
+ *
+ * On successful fill via the helper, advance the session state to
+ * ACQUIRED so transfer_op_end() can then transition to VALIDATED or
+ * REJECTED based on the op's outcome.
  */
 int transfer_credentials_callback(
     git_credential **out,
@@ -91,17 +233,29 @@ int transfer_credentials_callback(
     unsigned int allowed_types,
     void *payload
 ) {
-    /* Payload is transfer_context_t* */
     transfer_context_t *ctx = (transfer_context_t *) payload;
 
-    /* Delegate to the credential system */
-    return credentials_callback(
+    if (ctx && ctx->credential_state == CRED_STATE_REJECTED) {
+        return GIT_EAUTH;
+    }
+
+    if (ctx && ctx->attempts++ > 0) {
+        return GIT_EAUTH;
+    }
+
+    int rc = credentials_callback(
         out,
         url,
         username_from_url,
         allowed_types,
         ctx ? ctx->cred : NULL
     );
+
+    if (rc == 0 && ctx && ctx->cred && ctx->cred->credentials_provided) {
+        transfer_mark_cred_acquired(ctx);
+    }
+
+    return rc;
 }
 
 /**

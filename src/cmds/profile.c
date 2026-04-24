@@ -352,7 +352,7 @@ static error_t *profile_list(
                  * ensuring we see newly added profiles that haven't been fetched yet.
                  */
                 remote_err = upstream_query_remote_branches(
-                    repo, remote_name, xfer->cred, &remote_branches
+                    repo, remote_name, xfer, &remote_branches
                 );
                 if (remote_err) {
                     output_warning(
@@ -448,7 +448,7 @@ static error_t *profile_fetch(
     if (opts->fetch_all) {
         /* Query remote server for all available branches */
         err = upstream_query_remote_branches(
-            repo, remote_name, xfer ? xfer->cred : NULL, &remote_branches
+            repo, remote_name, xfer, &remote_branches
         );
         if (err) {
             err = error_wrap(err, "Failed to query remote branches");
@@ -511,7 +511,7 @@ static error_t *profile_fetch(
         /* Pre-flight validation: query remote for available branches */
         string_array_t *available_remote = NULL;
         err = upstream_query_remote_branches(
-            repo, remote_name, xfer ? xfer->cred : NULL, &available_remote
+            repo, remote_name, xfer, &available_remote
         );
         if (err) {
             err = error_wrap(err, "Failed to query remote branches");

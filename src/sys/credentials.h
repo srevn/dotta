@@ -9,14 +9,19 @@
 #include <stdbool.h>
 
 /**
- * Credential context for tracking credentials across operations
+ * Credential context for tracking credentials across operations.
+ *
+ * Lives for the duration of a transfer session (owned by transfer_context_t).
+ * Stores helper-sourced credentials so they can be committed (approve) or
+ * revoked (reject) exactly once at session teardown. Anti-loop retry
+ * tracking lives on transfer_context_t, not here — it is per-op, while
+ * these credentials are per-session.
  */
 typedef struct {
     char *url;
     char *username;
     char *password;
     bool credentials_provided;
-    int attempts;              /* Retry counter to prevent infinite callback loop */
 } credential_context_t;
 
 /**

@@ -15,7 +15,6 @@
 #include "base/array.h"
 #include "base/error.h"
 #include "base/string.h"
-#include "sys/credentials.h"
 #include "sys/transfer.h"
 
 /**
@@ -1397,31 +1396,17 @@ error_t *gitops_clone(
     git_clone_options opts;
     git_clone_options_init(&opts, GIT_CLONE_OPTIONS_VERSION);
 
-    /* Set up transfer callbacks if context provided */
-    if (xfer) {
-        opts.fetch_opts.callbacks.credentials = transfer_credentials_callback;
-        opts.fetch_opts.callbacks.transfer_progress = transfer_progress_callback;
-        opts.fetch_opts.callbacks.payload = xfer;
-    } else {
-        /* No transfer context - use basic credential callback */
-        opts.fetch_opts.callbacks.credentials = credentials_callback;
-    }
+    transfer_configure_callbacks(
+        &opts.fetch_opts.callbacks, xfer, GIT_DIRECTION_FETCH
+    );
 
-    /* Clone with credential and progress support */
+    transfer_op_begin(xfer);
     int err = git_clone(out, url, local_path, &opts);
+    transfer_op_end(xfer, err);
+
     if (err < 0) {
-        /* Reject credentials on failure if context provided */
-        if (xfer && xfer->cred) {
-            credential_context_reject(xfer->cred);
-        }
         return error_from_git(err);
     }
-
-    /* Approve credentials on success if context provided */
-    if (xfer && xfer->cred) {
-        credential_context_approve(xfer->cred);
-    }
-
     return NULL;
 }
 
@@ -1443,17 +1428,11 @@ error_t *gitops_fetch_branch(
         return error_from_git(err);
     }
 
-    /* Set up transfer callbacks if context provided */
     git_fetch_options fetch_opts;
     git_fetch_options_init(&fetch_opts, GIT_FETCH_OPTIONS_VERSION);
-    if (xfer) {
-        fetch_opts.callbacks.credentials = transfer_credentials_callback;
-        fetch_opts.callbacks.transfer_progress = transfer_progress_callback;
-        fetch_opts.callbacks.payload = xfer;
-    } else {
-        /* No transfer context - use basic credential callback */
-        fetch_opts.callbacks.credentials = credentials_callback;
-    }
+    transfer_configure_callbacks(
+        &fetch_opts.callbacks, xfer, GIT_DIRECTION_FETCH
+    );
 
     char refspec[DOTTA_REFSPEC_MAX];
     error_t *err_build = gitops_build_refname(
@@ -1471,22 +1450,14 @@ error_t *gitops_fetch_branch(
     char *refspecs[] = { refspec };
     git_strarray refs = { refspecs, 1 };
 
+    transfer_op_begin(xfer);
     err = git_remote_fetch(remote, &refs, &fetch_opts, NULL);
+    transfer_op_end(xfer, err);
     git_remote_free(remote);
 
     if (err < 0) {
-        /* Authentication failed - reject credentials if they were provided */
-        if (xfer && xfer->cred) {
-            credential_context_reject(xfer->cred);
-        }
         return error_from_git(err);
     }
-
-    /* Success - approve credentials if they were provided */
-    if (xfer && xfer->cred) {
-        credential_context_approve(xfer->cred);
-    }
-
     return NULL;
 }
 
@@ -1553,36 +1524,22 @@ error_t *gitops_fetch_branches(
         }
     }
 
-    /* Set up transfer callbacks if context provided */
     git_fetch_options fetch_opts;
     git_fetch_options_init(&fetch_opts, GIT_FETCH_OPTIONS_VERSION);
-    if (xfer) {
-        fetch_opts.callbacks.credentials = transfer_credentials_callback;
-        fetch_opts.callbacks.transfer_progress = transfer_progress_callback;
-        fetch_opts.callbacks.payload = xfer;
-    } else {
-        /* No transfer context - use basic credential callback */
-        fetch_opts.callbacks.credentials = credentials_callback;
-    }
+    transfer_configure_callbacks(
+        &fetch_opts.callbacks, xfer, GIT_DIRECTION_FETCH
+    );
 
     /* Build git_strarray from our refspecs */
     git_strarray refs = { refspecs, branches->count };
 
-    /* Perform the batched fetch */
+    transfer_op_begin(xfer);
     err = git_remote_fetch(remote, &refs, &fetch_opts, NULL);
+    transfer_op_end(xfer, err);
 
     if (err < 0) {
-        /* Authentication failed - reject credentials if they were provided */
-        if (xfer && xfer->cred) {
-            credential_context_reject(xfer->cred);
-        }
         err_result = error_from_git(err);
         goto cleanup;
-    }
-
-    /* Success - approve credentials if they were provided */
-    if (xfer && xfer->cred) {
-        credential_context_approve(xfer->cred);
     }
 
 cleanup:
@@ -1616,17 +1573,11 @@ error_t *gitops_push_branch(
         return error_from_git(err);
     }
 
-    /* Set up transfer callbacks if context provided */
     git_push_options push_opts;
     git_push_options_init(&push_opts, GIT_PUSH_OPTIONS_VERSION);
-    if (xfer) {
-        push_opts.callbacks.credentials = transfer_credentials_callback;
-        push_opts.callbacks.push_transfer_progress = transfer_push_progress_callback;
-        push_opts.callbacks.payload = xfer;
-    } else {
-        /* No transfer context - use basic credential callback */
-        push_opts.callbacks.credentials = credentials_callback;
-    }
+    transfer_configure_callbacks(
+        &push_opts.callbacks, xfer, GIT_DIRECTION_PUSH
+    );
 
     char refspec[DOTTA_REFSPEC_MAX];
     error_t *err_build = gitops_build_refname(
@@ -1643,22 +1594,65 @@ error_t *gitops_push_branch(
     char *refspecs[] = { refspec };
     git_strarray refs = { refspecs, 1 };
 
+    transfer_op_begin(xfer);
     err = git_remote_push(remote, &refs, &push_opts);
+    transfer_op_end(xfer, err);
     git_remote_free(remote);
 
     if (err < 0) {
-        /* Authentication failed - reject credentials if they were provided */
-        if (xfer && xfer->cred) {
-            credential_context_reject(xfer->cred);
-        }
+        return error_from_git(err);
+    }
+    return NULL;
+}
+
+error_t *gitops_force_push_branch(
+    git_repository *repo,
+    const char *remote_name,
+    const char *branch_name,
+    transfer_context_t *xfer
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(remote_name);
+    CHECK_NULL(branch_name);
+    CHECK_ARG(remote_name[0] != '\0', "Remote name cannot be empty");
+    CHECK_ARG(branch_name[0] != '\0', "Branch name cannot be empty");
+
+    git_remote *remote = NULL;
+    int err = git_remote_lookup(&remote, repo, remote_name);
+    if (err < 0) {
         return error_from_git(err);
     }
 
-    /* Success - approve credentials if they were provided */
-    if (xfer && xfer->cred) {
-        credential_context_approve(xfer->cred);
+    git_push_options push_opts;
+    git_push_options_init(&push_opts, GIT_PUSH_OPTIONS_VERSION);
+    transfer_configure_callbacks(
+        &push_opts.callbacks, xfer, GIT_DIRECTION_PUSH
+    );
+
+    /* Force push refspec ('+' prefix accepts non-fast-forward update) */
+    char refspec[DOTTA_REFSPEC_MAX];
+    error_t *err_build = gitops_build_refname(
+        refspec, sizeof(refspec), "+refs/heads/%s:refs/heads/%s",
+        branch_name, branch_name
+    );
+    if (err_build) {
+        git_remote_free(remote);
+        return error_wrap(
+            err_build, "Invalid branch name '%s'", branch_name
+        );
     }
 
+    char *refspecs[] = { refspec };
+    git_strarray refs = { refspecs, 1 };
+
+    transfer_op_begin(xfer);
+    err = git_remote_push(remote, &refs, &push_opts);
+    transfer_op_end(xfer, err);
+    git_remote_free(remote);
+
+    if (err < 0) {
+        return error_from_git(err);
+    }
     return NULL;
 }
 
@@ -1680,17 +1674,11 @@ error_t *gitops_delete_remote_branch(
         return error_from_git(err);
     }
 
-    /* Set up transfer callbacks if context provided */
     git_push_options push_opts;
     git_push_options_init(&push_opts, GIT_PUSH_OPTIONS_VERSION);
-    if (xfer) {
-        push_opts.callbacks.credentials = transfer_credentials_callback;
-        push_opts.callbacks.push_transfer_progress = transfer_push_progress_callback;
-        push_opts.callbacks.payload = xfer;
-    } else {
-        /* No transfer context - use basic credential callback */
-        push_opts.callbacks.credentials = credentials_callback;
-    }
+    transfer_configure_callbacks(
+        &push_opts.callbacks, xfer, GIT_DIRECTION_PUSH
+    );
 
     /* Delete remote branch using empty refspec: :refs/heads/branch */
     char refspec[DOTTA_REFSPEC_MAX];
@@ -1707,22 +1695,14 @@ error_t *gitops_delete_remote_branch(
     char *refspecs[] = { refspec };
     git_strarray refs = { refspecs, 1 };
 
+    transfer_op_begin(xfer);
     err = git_remote_push(remote, &refs, &push_opts);
+    transfer_op_end(xfer, err);
     git_remote_free(remote);
 
     if (err < 0) {
-        /* Authentication failed - reject credentials if they were provided */
-        if (xfer && xfer->cred) {
-            credential_context_reject(xfer->cred);
-        }
         return error_from_git(err);
     }
-
-    /* Success - approve credentials if they were provided */
-    if (xfer && xfer->cred) {
-        credential_context_approve(xfer->cred);
-    }
-
     return NULL;
 }
 

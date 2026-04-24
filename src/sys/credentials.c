@@ -10,6 +10,7 @@
 #include <string.h>
 #include <unistd.h>
 
+#include "base/buffer.h"
 #include "base/string.h"
 
 /* Maximum length for username and password */
@@ -169,14 +170,8 @@ void credential_context_free(credential_context_t *ctx) {
         return;
     }
     free(ctx->url);
-    if (ctx->username) {
-        secure_zero(ctx->username, strlen(ctx->username));
-        free(ctx->username);
-    }
-    if (ctx->password) {
-        secure_zero(ctx->password, strlen(ctx->password));
-        free(ctx->password);
-    }
+    if (ctx->username) buffer_secure_free(ctx->username, strlen(ctx->username) + 1);
+    if (ctx->password) buffer_secure_free(ctx->password, strlen(ctx->password) + 1);
     free(ctx);
 }
 
@@ -302,11 +297,18 @@ static const char *get_home_dir(void) {
  * SECURITY NOTE: This function uses heredoc (unlike approve/reject) because
  * it needs bidirectional communication (write request, read response).
  * This is SAFE because:
- *  1. Only hostname is in the shell command (not credentials)
+ *  1. Only hostname, protocol, and username_from_url are in the shell
+ *     command (not the resulting credentials)
  *  2. Hostname is strictly validated (alphanumeric + .-_ only)
- *  3. Credentials are READ from helper output (not written to shell)
+ *  3. username_from_url is validated for CR/LF (heredoc-breaking chars)
+ *  4. Credentials are READ from helper output (not written to shell)
  *
+ * @param protocol Validated protocol (e.g., "https")
  * @param hostname Validated hostname (NOT full URL - caller extracts it)
+ * @param username_from_url Username encoded in the URL (e.g., the "alice"
+ *     in https://alice@host/repo); NULL or empty if absent. Forwarded to
+ *     the helper so multi-account configs disambiguate per URL instead
+ *     of collapsing on the hostname's default identity.
  * @param username Output buffer for username
  * @param password Output buffer for password
  * @param max_len Size of output buffers
@@ -315,31 +317,56 @@ static const char *get_home_dir(void) {
 static int get_credentials_from_helper(
     const char *protocol,
     const char *hostname,
+    const char *username_from_url,
     char *username,
     char *password,
     size_t max_len
 ) {
     /* SECURITY: Validate inputs before embedding in heredoc command.
-     * Hostname and protocol are the only user-derived inputs in the shell
-     * command. The single-quoted heredoc (<<'EOF') prevents shell expansion,
-     * but newlines in either field could break the heredoc structure.
-     * All credential fields come from the helper's OUTPUT (we read them). */
+     * hostname, protocol, and username_from_url are the only user-derived
+     * inputs in the shell command. The single-quoted heredoc (<<'EOF')
+     * prevents shell expansion, but newlines in any field could break
+     * the heredoc structure. All credential fields come from the
+     * helper's OUTPUT (we read them). */
     if (!is_valid_hostname(hostname) || !protocol ||
         !is_valid_credential_field(protocol)) {
         return -1;
     }
 
+    bool forward_user = username_from_url && *username_from_url &&
+        is_valid_credential_field(username_from_url);
+
     /* Build credential helper command using safe heredoc */
     char cmd[1024];
-    snprintf(
-        cmd, sizeof(cmd),
-        "git credential fill 2>/dev/null <<'EOF'\n"
-        "protocol=%s\n"
-        "host=%s\n"
-        "EOF\n",
-        protocol,
-        hostname
-    );
+    int n;
+    if (forward_user) {
+        n = snprintf(
+            cmd, sizeof(cmd),
+            "git credential fill 2>/dev/null <<'EOF'\n"
+            "protocol=%s\n"
+            "host=%s\n"
+            "username=%s\n"
+            "EOF\n",
+            protocol,
+            hostname,
+            username_from_url
+        );
+    } else {
+        n = snprintf(
+            cmd, sizeof(cmd),
+            "git credential fill 2>/dev/null <<'EOF'\n"
+            "protocol=%s\n"
+            "host=%s\n"
+            "EOF\n",
+            protocol,
+            hostname
+        );
+    }
+    if (n < 0 || (size_t)n >= sizeof(cmd)) {
+        /* Refuse to run a truncated heredoc — would send a malformed
+         * request to the helper and possibly leak a partial username. */
+        return -1;
+    }
 
     /* Execute command and read output */
     FILE *fp = popen(cmd, "r");
@@ -518,15 +545,9 @@ int credentials_callback(
         return GIT_PASSTHROUGH;
     }
 
-    /* Prevent infinite retry loop.
-     * libgit2 calls this callback repeatedly when the server rejects
-     * credentials. Without tracking, we'd return the same credentials
-     * each time, looping forever. */
-    if (ctx) {
-        if (ctx->attempts++ > 0) {
-            return GIT_EAUTH;
-        }
-    }
+    /* Anti-loop is owned by the transfer layer (transfer_credentials_callback),
+     * which resets per op via transfer_op_begin(). This function is
+     * stateless with respect to retry counts. */
 
     /* Determine username */
     const char *username = username_from_url;
@@ -576,6 +597,20 @@ int credentials_callback(
 
     /* For HTTPS with username/password - try git credential helper */
     if (allowed_types & GIT_CREDENTIAL_USERPASS_PLAINTEXT) {
+        /* Cache-once: within a session, reuse creds from the first
+         * successful helper fill. Skipping the re-query both avoids
+         * redundant helper invocations (fewer Touch ID prompts) and
+         * pins the session to a single identity — a mid-session
+         * helper update must not silently swap the creds we are
+         * about to commit at teardown. */
+        if (ctx && ctx->credentials_provided &&
+            ctx->username && ctx->password) {
+            if (git_credential_userpass_plaintext_new(
+                    out, ctx->username, ctx->password) == 0) {
+                return 0;
+            }
+        }
+
         /* Extract hostname from URL */
         char *hostname = extract_hostname(url);
         char *protocol = extract_protocol(url);
@@ -589,6 +624,7 @@ int credentials_callback(
             if (get_credentials_from_helper(
                 protocol,
                 hostname,
+                username_from_url,
                 cred_username,
                 cred_password,
                 CRED_MAX_LEN
@@ -600,8 +636,24 @@ int credentials_callback(
                     cred_password
                 );
                 if (err == 0) {
-                    /* Store credentials in context for later approve/reject */
+                    /* Cache on first fill. Free any prior values first
+                     * — belt-and-suspenders: the cache guard above
+                     * prevents re-entry today, but a future code
+                     * path change must not leak secrets through
+                     * strdup over a non-NULL pointer. */
                     if (ctx) {
+                        if (ctx->username) {
+                            buffer_secure_free(
+                                ctx->username, strlen(ctx->username) + 1
+                            );
+                            ctx->username = NULL;
+                        }
+                        if (ctx->password) {
+                            buffer_secure_free(
+                                ctx->password, strlen(ctx->password) + 1
+                            );
+                            ctx->password = NULL;
+                        }
                         ctx->username = strdup(cred_username);
                         ctx->password = strdup(cred_password);
                         ctx->credentials_provided = (ctx->username && ctx->password);

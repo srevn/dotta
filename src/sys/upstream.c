@@ -12,8 +12,8 @@
 #include "base/array.h"
 #include "base/error.h"
 #include "base/string.h"
-#include "sys/credentials.h"
 #include "sys/gitops.h"
+#include "sys/transfer.h"
 
 /**
  * Analyze upstream state for a single profile
@@ -298,7 +298,7 @@ error_t *upstream_discover_branches(
 error_t *upstream_query_remote_branches(
     git_repository *repo,
     const char *remote_name,
-    void *cred_ctx,
+    transfer_context_t *xfer,
     string_array_t **out_branches
 ) {
     CHECK_NULL(repo);
@@ -323,30 +323,22 @@ error_t *upstream_query_remote_branches(
         return error_from_git(git_err);
     }
 
-    /* Setup callbacks for authentication */
+    /* Wire transfer callbacks. git_remote_connect + git_remote_ls transfer
+     * no bytes, so the attached progress callback never fires; using
+     * GIT_DIRECTION_FETCH keeps the credential path aligned with fetch. */
     git_remote_callbacks callbacks;
     git_remote_init_callbacks(&callbacks, GIT_REMOTE_CALLBACKS_VERSION);
-    if (cred_ctx) {
-        callbacks.credentials = credentials_callback;
-        callbacks.payload = cred_ctx;
-    }
+    transfer_configure_callbacks(&callbacks, xfer, GIT_DIRECTION_FETCH);
 
-    /* Connect to remote (network operation) */
+    transfer_op_begin(xfer);
     git_err = git_remote_connect(
         remote, GIT_DIRECTION_FETCH, &callbacks, NULL, NULL
     );
+    transfer_op_end(xfer, git_err);
     if (git_err < 0) {
-        if (cred_ctx) {
-            credential_context_reject(cred_ctx);
-        }
         git_remote_free(remote);
         string_array_free(branches);
         return error_from_git(git_err);
-    }
-
-    /* Approve credentials on successful connection */
-    if (cred_ctx) {
-        credential_context_approve(cred_ctx);
     }
 
     /* Get list of refs from remote */

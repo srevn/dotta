@@ -856,7 +856,6 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     size_t added_count = 0;
     bool profile_was_new = false;
     metadata_t *metadata = NULL;
-    keymgr *keymgr = NULL;
 
     /* Pre-flight privilege check arrays */
     char **preflight_storage_paths = NULL;
@@ -1306,32 +1305,6 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         }
     }
 
-    /* Surface "--encrypt on disabled config" with a friendly CLI error
-     * before falling into policy_needs_keymgr. The helper collapses
-     * this case to "no keymgr needed" and content_store_file_to_worktree
-     * would otherwise fail much later with a less helpful message. */
-    bool explicit_encrypt = opts->encrypt_mode == ADD_ENCRYPT_FORCE_ON;
-    if (explicit_encrypt && !config->encryption_enabled) {
-        err = ERROR(
-            ERR_INVALID_ARG,
-            "Encryption requested (--encrypt) but encryption is not enabled in config.\n"
-            "Add to config.toml:\n\n  [encryption]\n  enabled = true"
-        );
-        goto cleanup;
-    }
-
-    /* Borrow the dispatcher-owned keymgr when any file in this batch
-     * might need encryption. The policy helper consolidates the
-     * "should this batch consult a key?" check — it returns false when
-     * encryption is disabled, so a NULL ctx->keymgr on disabled configs
-     * never reaches the content layer. When force-adding, the helper
-     * also flags re-encryption of already-encrypted files (hence passing
-     * metadata on --force). */
-    bool needs_encryption = encryption_policy_needs_keymgr(
-        config, explicit_encrypt, opts->force ? metadata : NULL
-    );
-    if (needs_encryption) keymgr = ctx->keymgr;
-
     /* Single-pass: add files and capture metadata inline */
     for (size_t i = 0; i < all_files->count; i++) {
         const char *file_path = all_files->items[i];
@@ -1356,7 +1329,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
          * ARCHITECTURE: add_file_to_worktree handles both operations atomically,
          * sharing stat() data between content and metadata layers to eliminate TOCTOU */
         err = add_file_to_worktree(
-            wt, file_path, storage_path, opts, keymgr, config, metadata, out
+            wt, file_path, storage_path, opts, ctx->keymgr, config, metadata, out
         );
         if (err) {
             free(storage_path);

@@ -40,54 +40,12 @@ typedef struct metadata metadata_t;
  * encryption is enabled AND at least one pattern was configured AND
  * the patterns compiled successfully at config_load.
  *
- * Used by command dispatchers that want to know "is it worth fetching
- * a keymgr for pattern matches?" without reaching into the compiled
- * form. Also used by workspace analysis to short-circuit scans when
- * nothing would match.
+ * Used by workspace analysis to short-circuit the auto-encrypt
+ * divergence scan when no pattern could possibly match.
  *
  * NULL-safe (returns false).
  */
 bool encryption_policy_is_active(const config_t *config);
-
-/**
- * Report whether this batch should consult the keymgr at all.
- *
- * Answers the per-batch question "is there any path through this
- * operation that will need to encrypt or decrypt?". Each caller's
- * per-file decision is still made by `encryption_policy_should_encrypt`;
- * this helper just lets callers short-circuit the keymgr lookup when
- * no file in the batch can possibly need one.
- *
- * Consolidates the disjunction that add.c and update.c previously
- * duplicated verbatim. Returns true iff encryption is enabled AND one
- * or more of:
- *   - `explicit_encrypt` — caller's `--encrypt` (or equivalent) flag
- *   - auto-encrypt policy is active for this config
- *   - `metadata` is non-NULL and contains encrypted files
- *
- * The `metadata` parameter lets each caller decide whether to consult
- * existing encrypted state: update.c always passes its loaded metadata;
- * add.c passes it only during `--force` re-adds. Passing NULL skips the
- * metadata check entirely.
- *
- * Callers that want to reject "encryption requested on a disabled
- * config" with a friendly CLI error should still do so explicitly
- * before invoking this helper — the bool return can't carry that
- * message.
- *
- * NULL-safe for both pointer arguments (returns false for NULL config
- * or config with `encryption_enabled == false`).
- *
- * @param config Configuration (NULL → false)
- * @param explicit_encrypt User-supplied encryption flag (`--encrypt`)
- * @param metadata Metadata to consult for prior encrypted state (NULL → skip)
- * @return true if the caller must use ctx->keymgr in this batch
- */
-bool encryption_policy_needs_keymgr(
-    const config_t *config,
-    bool explicit_encrypt,
-    const metadata_t *metadata
-);
 
 /**
  * Determine if file should be encrypted based on policy
@@ -122,6 +80,14 @@ bool encryption_policy_needs_keymgr(
  * - Metadata lookup errors (except ERR_NOT_FOUND) are propagated
  * - NULL metadata is valid (means file is new or metadata unavailable)
  * - NULL config (or config without compiled rules) disables priority-4
+ * - Priorities 1 and 3 are NOT gated on `config->encryption_enabled`.
+ *   This is intentional: if the user explicitly asked to encrypt or a
+ *   file's prior state says "encrypted", the policy says so, and the
+ *   content layer is the single enforcement point. When encryption is
+ *   disabled, `content_store_*` surfaces ERR_CRYPTO with a friendly
+ *   "enable encryption" message. We never silently coerce a request
+ *   to plaintext, because doing so on a previously-encrypted file
+ *   would leak its content.
  *
  * @param config Configuration (can be NULL; disables priority-4)
  * @param storage_path File path in profile (e.g., "home/.bashrc", must not be NULL)

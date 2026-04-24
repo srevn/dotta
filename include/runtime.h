@@ -123,10 +123,12 @@ typedef enum dotta_state_mode {
  * -----------------------------
  * When `config->encryption_enabled == false`, `ctx->keymgr` stays NULL
  * regardless of mode. Under KEY_CACHE the cache is still created (with
- * NULL keymgr) so callers deal with one shape; the content layer
- * surfaces ERR_CRYPTO if asked to decrypt without a keymgr. Under KEY,
- * both handles stay NULL — callers that need the key gate their use on
- * `encryption_policy_needs_keymgr` or equivalent.
+ * NULL keymgr) so callers deal with one shape. Under KEY, both handles
+ * stay NULL. Handlers forward `ctx->keymgr` to the content layer
+ * unconditionally — it surfaces ERR_CRYPTO with a user-facing message
+ * naming the file if a per-file operation asks to encrypt or decrypt
+ * without a key, so commands never need to gate on "do I have a key?"
+ * before calling through.
  */
 typedef enum dotta_crypto_mode {
     DOTTA_CRYPTO_NONE,        /* Neither handle acquired */
@@ -172,10 +174,10 @@ typedef struct dotta_spec_ext {
  *     is torn down before the keymgr.
  *   - `keymgr != NULL` implies `config->encryption_enabled`. A spec
  *     declaring KEY or KEY_CACHE on a disabled config receives NULL
- *     keymgr; handlers that legitimately need a key gate their use on
- *     `encryption_policy_needs_keymgr` or equivalent, and paths that
- *     forward NULL into the content layer receive ERR_CRYPTO on any
- *     decrypt attempt.
+ *     keymgr; handlers forward the NULL straight into the content
+ *     layer, which returns ERR_CRYPTO with a user-facing message if
+ *     any per-file operation actually asks to encrypt or decrypt. No
+ *     caller-side gate is required.
  *
  * Members not welcome on this struct
  * ----------------------------------

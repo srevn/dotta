@@ -725,21 +725,6 @@ bool metadata_get_file_encrypted(
     return encrypted;
 }
 
-bool metadata_has_encrypted_files(const metadata_t *metadata) {
-    if (!metadata) {
-        return false;
-    }
-
-    for (size_t i = 0; i < metadata->count; i++) {
-        const metadata_item_t *item = &metadata->items[i];
-        if (item->kind == METADATA_ITEM_FILE && item->file.encrypted) {
-            return true;
-        }
-    }
-
-    return false;
-}
-
 /**
  * Get all items (unfiltered)
  *

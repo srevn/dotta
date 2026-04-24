@@ -335,7 +335,12 @@ error_t *content_store_to_blob(
     if (should_encrypt) {
         if (!keymgr) {
             return ERROR(
-                ERR_CRYPTO, "Encryption requested but no keymgr provided"
+                ERR_CRYPTO,
+                "Cannot encrypt '%s': encryption key is not available.\n\n"
+                "To enable encryption, edit config.toml:\n\n"
+                "  [encryption]\n"
+                "  enabled = true\n\n"
+                "Then set a passphrase: dotta key set", storage_path
             );
         }
 
@@ -437,7 +442,12 @@ error_t *content_store_file_to_worktree(
             if (content.data) hydro_memzero(content.data, content.size);
             buffer_free(&content);
             return ERROR(
-                ERR_CRYPTO, "Encryption requested but no keymgr provided"
+                ERR_CRYPTO,
+                "Cannot encrypt '%s': encryption key is not available.\n\n"
+                "To enable encryption, edit config.toml:\n\n"
+                "  [encryption]\n"
+                "  enabled = true\n\n"
+                "Then set a passphrase: dotta key set", storage_path
             );
         }
 

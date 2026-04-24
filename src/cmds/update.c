@@ -742,7 +742,6 @@ static error_t *update_profile(
     error_t *err = NULL;
     metadata_t *existing_metadata = NULL;
     bool owns_metadata = false;
-    keymgr *keymgr = NULL;
     file_copy_result_t *copy_results = NULL;
 
     /* Load metadata from Git branch */
@@ -762,19 +761,6 @@ static error_t *update_profile(
         }
     }
     owns_metadata = true;
-
-    /* Borrow the dispatcher-owned keymgr if this profile may need encryption.
-     *
-     * Update has no explicit `--encrypt` flag — the key is needed only
-     * for preserving existing state (priority 3) or matching auto-encrypt
-     * patterns (priority 4). The helper handles the enabled gate and
-     * the disjunction internally. ctx_keymgr is NULL when encryption is
-     * disabled; the helper returns false in that case, so we never
-     * forward a NULL pointer into the content layer. */
-    bool needs_encryption = encryption_policy_needs_keymgr(
-        config, /*explicit_encrypt=*/ false, existing_metadata
-    );
-    if (needs_encryption) keymgr = ctx_keymgr;
 
     /* Allocate per-item result tracking (indexed by item position, not file-only position).
      * This prevents index misalignment between update_profile and update_metadata_for_profile
@@ -852,7 +838,7 @@ static error_t *update_profile(
                     item->filesystem_path,
                     item->storage_path,
                     profile,
-                    keymgr,
+                    ctx_keymgr,
                     config,
                     existing_metadata,
                     &copy_results[i].encrypted,

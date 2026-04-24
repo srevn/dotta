@@ -68,35 +68,6 @@ bool encryption_policy_is_active(const config_t *config) {
     return config && config->auto_encrypt.rules != NULL;
 }
 
-bool encryption_policy_needs_keymgr(
-    const config_t *config,
-    bool explicit_encrypt,
-    const metadata_t *metadata
-) {
-    /* Short-circuit on disabled encryption. The remaining triggers all
-     * imply the feature is on: compiled auto-encrypt rules exist only
-     * when enabled at config_load, and encrypted files cannot have
-     * entered metadata while the feature was off. This guard is the
-     * single authority — callers no longer repeat it. */
-    if (!config || !config->encryption_enabled) {
-        return false;
-    }
-
-    if (explicit_encrypt) {
-        return true;
-    }
-
-    if (encryption_policy_is_active(config)) {
-        return true;
-    }
-
-    if (metadata && metadata_has_encrypted_files(metadata)) {
-        return true;
-    }
-
-    return false;
-}
-
 error_t *encryption_policy_should_encrypt(
     const config_t *config,
     const char *storage_path,

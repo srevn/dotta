@@ -1420,7 +1420,9 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
             .analyze_directories = false,  /* Directory metadata is apply's concern */
             .analyze_encryption  = false   /* Encryption is apply's concern */
         };
-        err = workspace_load(repo, state, scope, config, &ws_opts, &ws);
+        err = workspace_load(
+            repo, state, scope, config, ctx->content_cache, &ws_opts, &ws
+        );
         if (err) {
             err = error_wrap(err, "Failed to load workspace");
             goto cleanup;
@@ -1964,6 +1966,6 @@ const args_command_t spec_sync = {
         "  %s status --remote # Inspect remote state before syncing\n",
     .opts_size   = sizeof(cmd_sync_options_t),
     .opts        = sync_opts,
-    .payload     = &dotta_ext_read,
+    .payload     = &dotta_ext_read_crypto,
     .dispatch    = sync_dispatch,
 };

@@ -24,7 +24,6 @@
 #include "core/scope.h"
 #include "core/state.h"
 #include "core/workspace.h"
-#include "crypto/keymgr.h"
 #include "infra/compare.h"
 #include "infra/content.h"
 #include "infra/path.h"
@@ -627,6 +626,7 @@ static int print_diff_line_cb(
  * @param profile Profile name (must not be NULL)
  * @param file_filter File filter for CLI (can be NULL for no filter)
  * @param opts Command options (must not be NULL)
+ * @param cache Shared content cache (borrowed from ctx, must not be NULL)
  * @param out Output context (must not be NULL)
  * @param diff_count Output: number of diffs shown (must not be NULL)
  * @return Error or NULL on success
@@ -638,7 +638,7 @@ static error_t *compare_manifest_to_filesystem(
     const char *profile,
     const path_filter_t *file_filter,
     const cmd_diff_options_t *opts,
-    const config_t *config,
+    content_cache_t *cache,
     output_t *out,
     size_t *diff_count
 ) {
@@ -647,29 +647,13 @@ static error_t *compare_manifest_to_filesystem(
     CHECK_NULL(metadata);
     CHECK_NULL(profile);
     CHECK_NULL(opts);
+    CHECK_NULL(cache);
     CHECK_NULL(out);
     CHECK_NULL(diff_count);
 
     *diff_count = 0;
     error_t *err = NULL;
-    content_cache_t *cache = NULL;
     file_diff_t *diff = NULL;
-    keymgr *keymgr = NULL;
-
-    /* Create a command-scoped keymgr for this historical diff path.
-     * The workspace-backed diff path (compare_workspace_to_filesystem)
-     * borrows workspace's keymgr + cache instead; the two paths will
-     * unify once keymgr and content_cache move onto the dispatch ctx. */
-    err = keymgr_create(config, &keymgr);
-    if (err) {
-        return error_wrap(err, "Failed to create key manager");
-    }
-
-    cache = content_cache_create(repo, keymgr);
-    if (!cache) {
-        err = ERROR(ERR_MEMORY, "Failed to create content cache");
-        goto cleanup;
-    }
 
     /* Iterate through all files in the historical manifest */
     for (size_t i = 0; i < manifest->count; i++) {
@@ -827,9 +811,6 @@ static error_t *compare_manifest_to_filesystem(
 
 cleanup:
     compare_free_diff(diff);
-    content_cache_free(cache);
-    keymgr_free(keymgr);
-
     return err;
 }
 
@@ -963,7 +944,7 @@ static size_t validate_filter_paths(
  * @param commit_ref Commit reference to compare (must not be NULL)
  * @param scope Operation scope (must not be NULL)
  * @param opts Command options (must not be NULL)
- * @param config Configuration (can be NULL)
+ * @param cache Shared content cache (borrowed from ctx, must not be NULL)
  * @param out Output context (must not be NULL)
  * @return Error or NULL on success
  */
@@ -973,7 +954,7 @@ static error_t *diff_commit_to_workspace(
     const char *commit_ref,
     const scope_t *scope,
     const cmd_diff_options_t *opts,
-    const config_t *config,
+    content_cache_t *cache,
     output_t *out
 ) {
     CHECK_NULL(repo);
@@ -1053,8 +1034,7 @@ static error_t *diff_commit_to_workspace(
     /* Step 6: Compare historical manifest against current filesystem */
     size_t diff_count = 0;
     err = compare_manifest_to_filesystem(
-        repo, manifest, metadata, profile, file_filter, opts,
-        config, out, &diff_count
+        repo, manifest, metadata, profile, file_filter, opts, cache, out, &diff_count
     );
     if (err) {
         goto cleanup;
@@ -1343,17 +1323,18 @@ static error_t *diff_workspace(
     state_t *state,
     const scope_t *scope,
     const config_t *config,
+    content_cache_t *cache,
     const cmd_diff_options_t *opts,
     output_t *out
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(scope);
+    CHECK_NULL(cache);
     CHECK_NULL(opts);
     CHECK_NULL(out);
 
     error_t *err = NULL;
     workspace_t *ws = NULL;
-    content_cache_t *cache = NULL;  /* Borrowed from workspace, do not free */
 
     /* Step 1: Load workspace with full file analysis */
     workspace_load_t ws_opts = {
@@ -1364,7 +1345,7 @@ static error_t *diff_workspace(
         .analyze_encryption  = false  /* Not needed for diff */
     };
 
-    err = workspace_load(repo, state, scope, config, &ws_opts, &ws);
+    err = workspace_load(repo, state, scope, config, cache, &ws_opts, &ws);
     if (err) {
         return error_wrap(err, "Failed to load workspace");
     }
@@ -1398,20 +1379,7 @@ static error_t *diff_workspace(
         }
     }
 
-    /* Step 5: Borrow content cache from workspace
-     *
-     * Reuses the workspace's cache which was populated during file analysis.
-     * For encrypted files, this avoids redundant blob reads and decryption.
-     * The cache is borrowed (workspace owns it), so we don't free it manually.
-     */
-    cache = workspace_get_content_cache(ws);
-    if (!cache) {
-        /* Workspace always creates cache during load, but handle gracefully */
-        err = ERROR(ERR_INTERNAL, "Workspace missing content cache");
-        goto cleanup;
-    }
-
-    /* Step 6: Filter and present diffs based on direction */
+    /* Step 5: Filter and present diffs based on direction */
     size_t total_diff_count = 0;
 
     if (opts->direction == DIFF_BOTH) {
@@ -1470,7 +1438,6 @@ static error_t *diff_workspace(
 
 cleanup:
     workspace_free(ws);
-
     return err;
 }
 
@@ -1513,7 +1480,9 @@ error_t *cmd_diff(const dotta_ctx_t *ctx, const cmd_diff_options_t *opts) {
         goto cleanup;
     }
 
-    /* Route to diff implementation based on mode */
+    /* Route to diff implementation based on mode. All historical and
+     * workspace paths share ctx->content_cache so that unchanged OIDs
+     * get cache hits regardless of which path decodes them first. */
     switch (opts->mode) {
         case DIFF_COMMIT_TO_COMMIT:
             /* Diff two commits — historical mode, path filter only */
@@ -1525,14 +1494,14 @@ error_t *cmd_diff(const dotta_ctx_t *ctx, const cmd_diff_options_t *opts) {
         case DIFF_COMMIT_TO_WORKSPACE:
             /* Commit-to-workspace — historical mode, path filter only */
             err = diff_commit_to_workspace(
-                repo, state, opts->commit1, scope, opts, config, out
+                repo, state, opts->commit1, scope, opts, ctx->content_cache, out
             );
             goto cleanup;
 
         case DIFF_WORKSPACE:
             /* Workspace diff — full scope (profile + path dimensions) */
             err = diff_workspace(
-                repo, state, scope, config, opts, out
+                repo, state, scope, config, ctx->content_cache, opts, out
             );
             goto cleanup;
     }
@@ -1693,6 +1662,6 @@ const args_command_t spec_diff = {
     .opts        = diff_opts,
     .classify    = diff_classify,
     .post_parse  = diff_post_parse,
-    .payload     = &dotta_ext_read,
+    .payload     = &dotta_ext_read_crypto,
     .dispatch    = diff_dispatch,
 };

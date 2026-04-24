@@ -877,7 +877,9 @@ error_t *cmd_status(const dotta_ctx_t *ctx, const cmd_status_options_t *opts) {
             .analyze_directories = true,
             .analyze_encryption  = true
         };
-        err = workspace_load(repo, state, scope, config, &ws_opts, &ws);
+        err = workspace_load(
+            repo, state, scope, config, ctx->content_cache, &ws_opts, &ws
+        );
         if (err) {
             err = error_wrap(err, "Failed to load workspace");
             goto cleanup;
@@ -1095,6 +1097,6 @@ const args_command_t spec_status = {
     .opts_size   = sizeof(cmd_status_options_t),
     .opts        = status_opts,
     .post_parse  = status_post_parse,
-    .payload     = &dotta_ext_read,
+    .payload     = &dotta_ext_read_crypto,
     .dispatch    = status_dispatch,
 };

@@ -38,6 +38,8 @@
 #include "cmds/update.h"
 #include "core/state.h"
 #include "crypto/encryption.h"
+#include "crypto/keymgr.h"
+#include "infra/content.h"
 #include "utils/config.h"
 #include "utils/privilege.h"
 #include "utils/repo.h"
@@ -100,6 +102,26 @@ const dotta_spec_ext_t dotta_ext_write = {
 const dotta_spec_ext_t dotta_ext_read_silent = {
     .repo_mode  = DOTTA_REPO_OPTIONAL_SILENT,
     .state_mode = DOTTA_STATE_READ,
+};
+const dotta_spec_ext_t dotta_ext_read_key = {
+    .repo_mode   = DOTTA_REPO_REQUIRED,
+    .state_mode  = DOTTA_STATE_READ,
+    .crypto_mode = DOTTA_CRYPTO_KEY,
+};
+const dotta_spec_ext_t dotta_ext_write_key = {
+    .repo_mode   = DOTTA_REPO_REQUIRED,
+    .state_mode  = DOTTA_STATE_WRITE,
+    .crypto_mode = DOTTA_CRYPTO_KEY,
+};
+const dotta_spec_ext_t dotta_ext_read_crypto = {
+    .repo_mode   = DOTTA_REPO_REQUIRED,
+    .state_mode  = DOTTA_STATE_READ,
+    .crypto_mode = DOTTA_CRYPTO_KEY_CACHE,
+};
+const dotta_spec_ext_t dotta_ext_write_crypto = {
+    .repo_mode   = DOTTA_REPO_REQUIRED,
+    .state_mode  = DOTTA_STATE_WRITE,
+    .crypto_mode = DOTTA_CRYPTO_KEY_CACHE,
 };
 
 /**
@@ -221,6 +243,60 @@ static int open_state_for_mode(
 }
 
 /**
+ * Acquire crypto handles according to the command's declared mode.
+ *
+ * Returns 0 on success, 1 on unrecoverable error (error is printed).
+ * On success, `*keymgr_out` and `*cache_out` are set per mode:
+ *
+ *   DOTTA_CRYPTO_NONE       → both NULL
+ *   DOTTA_CRYPTO_KEY        → keymgr set iff encryption enabled;   cache NULL
+ *   DOTTA_CRYPTO_KEY_CACHE  → cache always set; keymgr set iff encryption enabled
+ *
+ * Parallel in shape to `open_repo_for_mode` and `open_state_for_mode`.
+ * No crypto is acquired when `repo == NULL` (content_cache needs a repo
+ * to read blobs from, and a standalone keymgr has no use site downstream).
+ *
+ * Under KEY_CACHE with encryption disabled, the cache is still created
+ * with a NULL keymgr; it handles plaintext blobs uniformly and surfaces
+ * ERR_CRYPTO on any decrypt attempt — per the runtime.h invariant on
+ * `ctx->content_cache`.
+ */
+static int open_crypto_for_mode(
+    dotta_crypto_mode_t mode,
+    git_repository *repo,
+    const config_t *config,
+    keymgr **keymgr_out,
+    content_cache_t **cache_out
+) {
+    *keymgr_out = NULL;
+    *cache_out = NULL;
+
+    if (mode == DOTTA_CRYPTO_NONE || repo == NULL) return 0;
+
+    if (config->encryption_enabled) {
+        error_t *err = keymgr_create(config, keymgr_out);
+        if (err != NULL) {
+            error_print(err, stderr);
+            error_free(err);
+            return 1;
+        }
+    }
+
+    if (mode == DOTTA_CRYPTO_KEY) return 0;
+
+    /* KEY_CACHE: cache always created, possibly with NULL keymgr. */
+    *cache_out = content_cache_create(repo, *keymgr_out);
+    if (*cache_out == NULL) {
+        keymgr_free(*keymgr_out);
+        *keymgr_out = NULL;
+        fprintf(stderr, "Failed to create content cache\n");
+        return 1;
+    }
+
+    return 0;
+}
+
+/**
  * Parse, dispatch, and cleanup for one spec-engine command.
  *
  * Owns a command-scoped arena (destroyed before return). Follows the
@@ -285,15 +361,18 @@ static int run_spec(
     }
 
     /* Each command's spec stashes its dispatch preconditions in `payload`
-     * via a `dotta_spec_ext_t` constant. NULL falls back to NONE/NONE
-     * so a spec that omits payload simply gets no repo and no state. */
+     * via a `dotta_spec_ext_t` constant. NULL falls back to NONE/NONE/NONE
+     * so a spec that omits payload simply gets no handles. */
     const dotta_spec_ext_t *ext = resolved->payload;
     dotta_repo_mode_t repo_mode = ext != NULL ? ext->repo_mode : DOTTA_REPO_NONE;
     dotta_state_mode_t state_mode = ext != NULL ? ext->state_mode : DOTTA_STATE_NONE;
+    dotta_crypto_mode_t crypto_mode = ext != NULL ? ext->crypto_mode : DOTTA_CRYPTO_NONE;
 
     git_repository *repo = NULL;
     char *repo_path = NULL;
     state_t *state = NULL;
+    keymgr *keymgr = NULL;
+    content_cache_t *cache = NULL;
 
     if (open_repo_for_mode(repo_mode, config, &repo, &repo_path) != 0) {
         arena_destroy(arena);
@@ -305,24 +384,37 @@ static int run_spec(
         arena_destroy(arena);
         return 1;
     }
+    if (open_crypto_for_mode(crypto_mode, repo, config, &keymgr, &cache) != 0) {
+        state_free(state);
+        if (repo != NULL) git_repository_free(repo);
+        free(repo_path);
+        arena_destroy(arena);
+        return 1;
+    }
 
     int exit_override = 0;
     dotta_ctx_t ctx = {
-        .repo      = repo,
-        .repo_path = repo_path,
-        .state     = state,
-        .config    = config,
-        .out       = out,
-        .arena     = arena,
-        .argc      = argc,
-        .argv      = argv,
-        .exit_code = &exit_override,
+        .repo          = repo,
+        .repo_path     = repo_path,
+        .state         = state,
+        .keymgr        = keymgr,
+        .content_cache = cache,
+        .config        = config,
+        .out           = out,
+        .arena         = arena,
+        .argc          = argc,
+        .argv          = argv,
+        .exit_code     = &exit_override,
     };
 
     error_t *err = resolved->dispatch(&ctx, opts);
 
-    /* LIFO teardown. `state_free` auto-rolls-back any uncommitted transaction
-     * per state.h's contract, so error paths don't need explicit rollback. */
+    /* LIFO teardown. content_cache first (holds a borrowed keymgr pointer
+     * but does not dereference it at teardown), then keymgr, then state
+     * (state_free auto-rolls-back any uncommitted transaction per state.h's
+     * contract). All *_free primitives are NULL-safe. */
+    content_cache_free(cache);
+    keymgr_free(keymgr);
     state_free(state);
     if (repo != NULL) git_repository_free(repo);
     free(repo_path);

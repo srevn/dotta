@@ -21,7 +21,6 @@
 #include "base/timeutil.h"
 #include "core/metadata.h"
 #include "core/profiles.h"
-#include "crypto/keymgr.h"
 #include "infra/content.h"
 #include "infra/path.h"
 #include "sys/gitops.h"
@@ -204,7 +203,7 @@ static error_t *show_file(
     const char *file_path,
     const char *commit_ref,
     bool raw,
-    const config_t *config,
+    keymgr *keymgr,
     output_t *out
 ) {
     error_t *err = NULL;
@@ -213,17 +212,6 @@ static error_t *show_file(
     git_commit *commit = NULL;
     git_oid commit_oid;
     metadata_t *metadata = NULL;
-    keymgr *keymgr = NULL;
-
-    /* Create keymgr for transparent decryption.
-     *
-     * This does NOT prompt for passphrase yet — the prompt only fires
-     * inside the content layer if the blob is actually encrypted and
-     * neither the in-memory nor disk session cache has the key. */
-    err = keymgr_create(config, &keymgr);
-    if (err) {
-        return error_wrap(err, "Failed to create key manager");
-    }
 
     /* Load metadata for encryption state validation */
     err = metadata_load_from_branch(repo, profile, &metadata);
@@ -337,7 +325,6 @@ cleanup:
     if (entry) git_tree_entry_free(entry);
     if (tree) git_tree_free(tree);
     if (commit) git_commit_free(commit);
-    keymgr_free(keymgr);
 
     return err;
 }
@@ -570,7 +557,6 @@ error_t *cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
 
     git_repository *repo = ctx->repo;
     const state_t *state = ctx->state;  /* Borrowed from dispatcher; do not free */
-    const config_t *config = ctx->config;
     output_t *out = ctx->out;
 
     error_t *err = NULL;
@@ -681,7 +667,8 @@ error_t *cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
         }
 
         err = show_file(
-            repo, opts->profile, search_path, opts->commit, opts->raw, config, out
+            repo, opts->profile, search_path, opts->commit, opts->raw,
+            ctx->keymgr, out
         );
         goto cleanup;
     }
@@ -725,7 +712,7 @@ error_t *cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
         );
     }
     err = show_file(
-        repo, found_profile, search_path, NULL, opts->raw, config, out
+        repo, found_profile, search_path, NULL, opts->raw, ctx->keymgr, out
     );
 
 cleanup:
@@ -888,6 +875,6 @@ const args_command_t spec_show = {
     .opts_size   = sizeof(cmd_show_options_t),
     .opts        = show_opts,
     .post_parse  = show_post_parse,
-    .payload     = &dotta_ext_read,
+    .payload     = &dotta_ext_read_key,
     .dispatch    = show_dispatch,
 };

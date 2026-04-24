@@ -51,9 +51,10 @@ static error_t *count_encrypted_files(
 /**
  * Execute key set action
  *
- * Prompts user for passphrase and caches it in the global keymgr.
+ * Prompts user for passphrase and caches it in the dispatcher-owned keymgr.
  */
 static error_t *cmd_key_set(
+    keymgr *keymgr,
     const config_t *config,
     output_t *out
 ) {
@@ -65,26 +66,31 @@ static error_t *cmd_key_set(
         );
     }
 
-    keymgr *keymgr = NULL;
-    error_t *err = keymgr_create(config, &keymgr);
-    if (err) {
-        return error_wrap(err, "Failed to create key manager");
-    }
+    /* Invariant: encryption_enabled implies ctx->keymgr != NULL for a
+     * command declaring crypto_mode = KEY. See runtime.h ctx invariants. */
+    CHECK_NULL(keymgr);
+
+    error_t *err = NULL;
 
     /* Notify if key is already cached (check both memory and disk) */
     if (keymgr_probe_key(keymgr)) {
         int64_t seconds_remaining = keymgr_time_until_expiry(keymgr, NULL);
         if (seconds_remaining == -1) {
             output_info(
-                out, OUTPUT_NORMAL, "A passphrase is already cached (no expiration)"
+                out, OUTPUT_NORMAL,
+                "A passphrase is already cached (no expiration)"
             );
         } else if (seconds_remaining > 0) {
             output_info(
-                out, OUTPUT_NORMAL, "A passphrase is already cached (expires in %ld seconds)",
+                out, OUTPUT_NORMAL,
+                "A passphrase is already cached (expires in %ld seconds)",
                 (long) seconds_remaining
             );
         }
-        output_info(out, OUTPUT_NORMAL, "Enter a new passphrase to replace it.");
+        output_info(
+            out, OUTPUT_NORMAL,
+            "Enter a new passphrase to replace it."
+        );
         output_newline(out, OUTPUT_NORMAL);
     }
 
@@ -119,16 +125,19 @@ static error_t *cmd_key_set(
     /* Display success message */
     if (config->session_timeout == 0) {
         output_success(
-            out, OUTPUT_NORMAL, "Passphrase set (will be prompted on each use)"
+            out, OUTPUT_NORMAL,
+            "Passphrase set (will be prompted on each use)"
         );
     } else if (config->session_timeout > 0) {
         output_success(
-            out, OUTPUT_NORMAL, "Passphrase cached for %d seconds",
+            out, OUTPUT_NORMAL,
+            "Passphrase cached for %d seconds",
             config->session_timeout
         );
     } else {
         output_success(
-            out, OUTPUT_NORMAL, "Passphrase cached (no expiration)"
+            out, OUTPUT_NORMAL,
+            "Passphrase cached (no expiration)"
         );
     }
 
@@ -139,16 +148,18 @@ static error_t *cmd_key_set(
     );
 
 cleanup:
-    keymgr_free(keymgr);
+    /* keymgr borrowed from ctx — never freed here. */
     return err;
 }
 
 /**
  * Execute key clear action
  *
- * Clears the cached passphrase from the global keymgr.
+ * Clears the cached passphrase from the dispatcher-owned keymgr and
+ * its on-disk session cache.
  */
 static error_t *cmd_key_clear(
+    keymgr *keymgr,
     const config_t *config,
     output_t *out
 ) {
@@ -160,17 +171,17 @@ static error_t *cmd_key_clear(
         );
     }
 
-    keymgr *keymgr = NULL;
-    error_t *err = keymgr_create(config, &keymgr);
-    if (err) {
-        return error_wrap(err, "Failed to create key manager");
-    }
+    /* Invariant: encryption_enabled implies ctx->keymgr != NULL for a
+     * command declaring crypto_mode = KEY. See runtime.h ctx invariants. */
+    CHECK_NULL(keymgr);
 
-    /* Check if key is cached in memory (always false for a freshly-created
-     * keymgr; retained so the user-facing message matches pre-singleton
-     * behaviour once Commit B hands key a ctx-owned keymgr that may carry
-     * a cached key from earlier dispatch steps). */
-    bool had_key = keymgr_has_key(keymgr);
+    /* Probe loads the disk session cache into memory if one exists. This
+     * is the right primitive (vs. keymgr_has_key) because the ctx->keymgr
+     * is freshly-created for this command and never picked up anything
+     * from an "earlier dispatch step" — each dotta invocation is one
+     * process, one dispatch. A `true` here means the on-disk cache was
+     * present, which is what users mean by "had a key". */
+    bool had_key = keymgr_probe_key(keymgr);
 
     /* Always clear both memory and file cache (even if no in-memory key) */
     keymgr_clear(keymgr);
@@ -178,11 +189,13 @@ static error_t *cmd_key_clear(
     /* Display result */
     if (had_key) {
         output_success(
-            out, OUTPUT_NORMAL, "Encryption key cleared from memory and disk cache"
+            out, OUTPUT_NORMAL,
+            "Encryption key cleared from memory and disk cache"
         );
     } else {
         output_success(
-            out, OUTPUT_NORMAL, "Disk cache cleared (no key was cached in memory)"
+            out, OUTPUT_NORMAL,
+            "Disk cache cleared (no key was cached)"
         );
     }
 
@@ -193,7 +206,6 @@ static error_t *cmd_key_clear(
         "operation that requires encryption or decryption.\n"
     );
 
-    keymgr_free(keymgr);
     return NULL;
 }
 
@@ -203,6 +215,7 @@ static error_t *cmd_key_clear(
  * Displays encryption configuration and key cache status.
  */
 static error_t *cmd_key_status(
+    keymgr *keymgr,
     state_t *state,
     const config_t *config,
     output_t *out
@@ -289,11 +302,9 @@ static error_t *cmd_key_status(
     /* Display key cache status */
     output_section(out, OUTPUT_NORMAL, "Key Cache Status");
 
-    keymgr *keymgr = NULL;
-    error_t *create_err = keymgr_create(config, &keymgr);
-    if (create_err) {
-        return error_wrap(create_err, "Failed to create key manager");
-    }
+    /* Encryption-enabled path guarantees ctx->keymgr is populated by
+     * the dispatcher under crypto_mode = KEY. */
+    CHECK_NULL(keymgr);
 
     bool key_cached = keymgr_probe_key(keymgr);
     output_print(
@@ -374,7 +385,6 @@ static error_t *cmd_key_status(
         }
     }
 
-    keymgr_free(keymgr);
     return NULL;
 }
 
@@ -395,19 +405,21 @@ error_t *cmd_key(const dotta_ctx_t *ctx, const cmd_key_options_t *opts) {
         output_set_verbosity(out, OUTPUT_VERBOSE);
     }
 
-    /* Dispatch to appropriate action */
+    /* Dispatch to appropriate action. Each handler takes the borrowed
+     * ctx->keymgr (NULL when encryption is disabled — each handler
+     * short-circuits on that via its own config->encryption_enabled check). */
     error_t *err = NULL;
     switch (opts->action) {
         case KEY_ACTION_SET:
-            err = cmd_key_set(config, out);
+            err = cmd_key_set(ctx->keymgr, config, out);
             break;
 
         case KEY_ACTION_CLEAR:
-            err = cmd_key_clear(config, out);
+            err = cmd_key_clear(ctx->keymgr, config, out);
             break;
 
         case KEY_ACTION_STATUS:
-            err = cmd_key_status(ctx->state, config, out);
+            err = cmd_key_status(ctx->keymgr, ctx->state, config, out);
             break;
 
         default:
@@ -510,6 +522,6 @@ const args_command_t spec_key = {
     .opts_size   = sizeof(cmd_key_options_t),
     .opts        = key_opts,
     .post_parse  = key_post_parse,
-    .payload     = &dotta_ext_read,
+    .payload     = &dotta_ext_read_key,
     .dispatch    = key_dispatch,
 };

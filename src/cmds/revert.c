@@ -22,7 +22,6 @@
 #include "core/metadata.h"
 #include "core/profiles.h"
 #include "core/state.h"
-#include "crypto/keymgr.h"
 #include "infra/content.h"
 #include "infra/path.h"
 #include "sys/gitops.h"
@@ -844,7 +843,7 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
     git_tree *target_tree = NULL;
     git_tree_entry *current_entry = NULL;
     git_tree_entry *target_entry = NULL;
-    keymgr *keymgr = NULL;
+    keymgr *keymgr = ctx->keymgr; /* Borrowed from dispatcher; NULL if encryption disabled */
     state_t *state = ctx->state;  /* Borrowed from dispatcher; do not free */
     bool user_aborted = false;
 
@@ -1029,12 +1028,6 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
 
         metadata_free(current_meta);
         metadata_free(target_meta);
-
-        err = keymgr_create(config, &keymgr);
-        if (err) {
-            err = error_wrap(err, "Failed to create key manager");
-            goto cleanup;
-        }
 
         err = show_diff_preview(
             repo, resolved_path, profile, current_encrypted, target_encrypted,
@@ -1260,7 +1253,6 @@ cleanup:
     if (target_commit) git_commit_free(target_commit);
     if (profile) free(profile);
     if (resolved_path) free(resolved_path);
-    keymgr_free(keymgr);
 
     /* Don't return error if user aborted */
     if (user_aborted) return NULL;
@@ -1421,6 +1413,6 @@ const args_command_t spec_revert = {
     .opts_size   = sizeof(cmd_revert_options_t),
     .opts        = revert_opts,
     .post_parse  = revert_post_parse,
-    .payload     = &dotta_ext_read,
+    .payload     = &dotta_ext_read_key,
     .dispatch    = revert_dispatch,
 };

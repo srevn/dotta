@@ -135,6 +135,9 @@ typedef struct {
  * @param scope Operation scope (must not be NULL; workspace reads
  *              scope_enabled(scope) as its profile set)
  * @param config Configuration (for ignore patterns, can be NULL)
+ * @param content_cache Shared blob-content cache (must not be NULL;
+ *              borrowed — lifetime must extend past workspace_free.
+ *              Obtain from `ctx->content_cache` under crypto_mode == KEY_CACHE)
  * @param options Analysis options (must not be NULL)
  * @param out Workspace (must not be NULL, caller must free with workspace_free)
  * @return Error or NULL on success
@@ -144,6 +147,7 @@ error_t *workspace_load(
     state_t *state,
     const scope_t *scope,
     const struct config *config,
+    content_cache_t *content_cache,
     const workspace_load_t *options,
     workspace_t **out
 );
@@ -294,21 +298,6 @@ error_t *check_item_metadata_divergence(
  * @return Manifest (borrowed reference, never NULL for valid workspace)
  */
 const manifest_t *workspace_get_manifest(const workspace_t *ws);
-
-/**
- * Get content cache from workspace
- *
- * Returns the content cache used by the workspace for transparent
- * encryption/decryption. The cache is pre-populated during workspace
- * analysis and can be reused by commands to avoid redundant decryption.
- *
- * Typical usage: Pass to diff/show commands to reuse decrypted content
- * without redundant blob reads and decryption operations.
- *
- * @param ws Workspace (must not be NULL)
- * @return Content cache (borrowed reference, do not free, can be NULL)
- */
-content_cache_t *workspace_get_content_cache(const workspace_t *ws);
 
 /**
  * Extract display tags and metadata from workspace item

@@ -9,20 +9,21 @@
  * it exposes.
  *
  * Contents:
- *   - `dotta_repo_mode_t`  — repo-open contract honored by the dispatcher;
- *   - `dotta_state_mode_t` — state-open contract honored by the dispatcher;
- *   - `dotta_spec_ext_t`   — payload referenced by `args_command_t::payload`,
- *                            letting each command declare its dispatch
- *                            preconditions in a typed way without the
- *                            base/args engine learning the enums;
- *   - `dotta_ctx_t`        — bundle handed to each command's dispatch
- *                            handler (repo, state, config, output, arena, ...);
- *   - `dotta_ext_*`        — one per (repo_mode, state_mode) combination
- *                            actually used; commands point `payload` at
- *                            the constant matching their need;
- *   - `dotta_registry()`   — typed accessor for the root registry,
- *                            consumed by `cmds/completion.c` when exporting
- *                            the fish completion script.
+ *   - `dotta_repo_mode_t`   — repo-open contract honored by the dispatcher;
+ *   - `dotta_state_mode_t`  — state-open contract honored by the dispatcher;
+ *   - `dotta_crypto_mode_t` — crypto-resources contract (keymgr +/- content_cache);
+ *   - `dotta_spec_ext_t`    — payload referenced by `args_command_t::payload`,
+ *                             letting each command declare its dispatch
+ *                             preconditions in a typed way without the
+ *                             base/args engine learning the enums;
+ *   - `dotta_ctx_t`         — bundle handed to each command's dispatch
+ *                             handler (repo, state, keymgr, cache, config, ...);
+ *   - `dotta_ext_*`         — one per (repo_mode, state_mode, crypto_mode)
+ *                             combination actually used; commands point
+ *                             `payload` at the constant matching their need;
+ *   - `dotta_registry()`    — typed accessor for the root registry,
+ *                             consumed by `cmds/completion.c` when exporting
+ *                             the fish completion script.
  */
 
 #ifndef DOTTA_RUNTIME_H
@@ -43,6 +44,11 @@ struct git_repository;
  * same type, so this coexists with core/state.h's identical typedef in
  * any TU that includes both. Mirrors the struct-tag forward decl above. */
 typedef struct state state_t;
+
+/* Crypto handles. Full APIs in `crypto/keymgr.h` and `infra/content.h`;
+ * TUs that call their functions include those headers. */
+typedef struct keymgr keymgr;
+typedef struct content_cache content_cache_t;
 
 /* Spec-engine command descriptor. Forward-declared (rather than pulling
  * `base/args.h`) so that every TU that transitively includes
@@ -96,6 +102,39 @@ typedef enum dotta_state_mode {
 } dotta_state_mode_t;
 
 /**
+ * Crypto-resources contract honored by the dispatcher.
+ *
+ * Each command declares its crypto needs on the same `dotta_spec_ext_t`
+ * payload as repo/state modes. Main.c reads the mode in `run_spec`
+ * *after* opening state and acquires the handles accordingly. Both
+ * handles are borrowed by the handler; the dispatcher tears them down
+ * LIFO (cache, then keymgr) before state teardown.
+ *
+ * Mode split rationale
+ * --------------------
+ *   - KEY is enough for commands that read or write a single blob via
+ *     the non-caching content API (`add` writes; `show`, `revert` read
+ *     single blobs). 4 of 9 crypto-aware commands want only this.
+ *   - KEY_CACHE is required by commands that iterate workspace divergence
+ *     or a historical manifest, where the same blob OID can be fetched
+ *     multiple times (`apply`, `diff`, `status`, `sync`, `update`).
+ *
+ * Disabled-encryption semantics
+ * -----------------------------
+ * When `config->encryption_enabled == false`, `ctx->keymgr` stays NULL
+ * regardless of mode. Under KEY_CACHE the cache is still created (with
+ * NULL keymgr) so callers deal with one shape; the content layer
+ * surfaces ERR_CRYPTO if asked to decrypt without a keymgr. Under KEY,
+ * both handles stay NULL — callers that need the key gate their use on
+ * `encryption_policy_needs_keymgr` or equivalent.
+ */
+typedef enum dotta_crypto_mode {
+    DOTTA_CRYPTO_NONE,        /* Neither handle acquired */
+    DOTTA_CRYPTO_KEY,         /* ctx->keymgr only (NULL if encryption disabled) */
+    DOTTA_CRYPTO_KEY_CACHE    /* Both; cache always acquired, keymgr may be NULL */
+} dotta_crypto_mode_t;
+
+/**
  * Per-command extension payload referenced by `args_command_t::payload`.
  *
  * Carries the declarative dispatch preconditions each command has.
@@ -106,6 +145,7 @@ typedef enum dotta_state_mode {
 typedef struct dotta_spec_ext {
     dotta_repo_mode_t repo_mode;
     dotta_state_mode_t state_mode;
+    dotta_crypto_mode_t crypto_mode;
 } dotta_spec_ext_t;
 
 /**
@@ -114,15 +154,6 @@ typedef struct dotta_spec_ext {
  * Bundling is deliberate: future additions (signal cancellation,
  * verbosity override, etc.) land as struct members, not dispatch-signature
  * churn across every command.
- *
- * Field lifetimes
- * ---------------
- *   `repo`/`repo_path`/`state`/`arena`  — command-scoped (acquired in
- *                                         run_spec, released on return).
- *   `config`/`out`                      — process-scoped (created in main).
- *   `argc`/`argv`                       — process-scoped (kernel-supplied).
- *   `exit_code`                         — points to a stack int in run_spec;
- *                                         command-scoped lifetime.
  *
  * Invariants
  * ----------
@@ -135,6 +166,34 @@ typedef struct dotta_spec_ext {
  *     spec declaring STATE_READ or STATE_WRITE on a repo_mode that
  *     produced a handle receives a borrowed state; dispatch closes it
  *     on return. Commands never free `ctx->state`.
+ *   - `content_cache != NULL`  iff  `crypto_mode == KEY_CACHE AND
+ *     repo != NULL`. The cache carries a borrowed pointer to
+ *     `ctx->keymgr` (which may be NULL if encryption is disabled) and
+ *     is torn down before the keymgr.
+ *   - `keymgr != NULL` implies `config->encryption_enabled`. A spec
+ *     declaring KEY or KEY_CACHE on a disabled config receives NULL
+ *     keymgr; handlers that legitimately need a key gate their use on
+ *     `encryption_policy_needs_keymgr` or equivalent, and paths that
+ *     forward NULL into the content layer receive ERR_CRYPTO on any
+ *     decrypt attempt.
+ *
+ * Members not welcome on this struct
+ * ----------------------------------
+ * The following patterns have been rejected by the design and must not
+ * be added without first re-evaluating the whole ownership model:
+ *
+ *   1. No invalidation API on ctx for any field. Command-scoped
+ *      resources do not need invalidation; a need to "clear" a
+ *      resource mid-command is an API operation on the borrowed handle
+ *      (e.g. `keymgr_clear(ctx->keymgr)` inside `dotta key clear`),
+ *      not a ctx-layer concern.
+ *   2. No lazy accessors (`dotta_ctx_get_X(ctx)` that construct on
+ *      first call). Fields are populated eagerly by dispatch before
+ *      the handler runs, so handlers see a fixed shape.
+ *   3. No "reach inside workspace to borrow its resource" pattern.
+ *      Resources that multiple dispatch steps share live on ctx; there
+ *      is never a `workspace_get_X` / `state_get_X` accessor that
+ *      exposes ctx-scope resources via a lower layer.
  *
  * Exit-code override
  * ------------------
@@ -159,6 +218,8 @@ typedef struct dotta_ctx {
     struct git_repository *repo;        /* NULL unless repo_mode opens */
     const char *repo_path;              /* Set by REQUIRED and PATH_ONLY modes */
     state_t *state;                     /* NULL unless state_mode acquires; borrowed */
+    keymgr *keymgr;                     /* NULL unless crypto_mode acquires + encryption enabled */
+    content_cache_t *content_cache;     /* NULL unless crypto_mode == KEY_CACHE */
     const config_t *config;
     output_t *out;
     arena_t *arena;                     /* Command-scoped; parser-owned */
@@ -168,17 +229,17 @@ typedef struct dotta_ctx {
 } dotta_ctx_t;
 
 /* Per-combination payloads. Each command's spec sets `.payload =
- * &dotta_ext_X` for its needed (repo_mode, state_mode) pair; main.c
- * reads it back in run_spec. The constants are defined in main.c beside
- * the dispatcher that consumes them — referenced from every command
- * file but defined exactly once. Only the combinations actually used
- * in the registry are declared; new pairings earn new constants. */
-extern const dotta_spec_ext_t dotta_ext_none;         /* NONE,            NONE  */
-extern const dotta_spec_ext_t dotta_ext_path_only;    /* PATH_ONLY,       NONE  */
-extern const dotta_spec_ext_t dotta_ext_repo_only;    /* REQUIRED,        NONE  */
-extern const dotta_spec_ext_t dotta_ext_read;         /* REQUIRED,        READ  */
-extern const dotta_spec_ext_t dotta_ext_write;        /* REQUIRED,        WRITE */
-extern const dotta_spec_ext_t dotta_ext_read_silent;  /* OPTIONAL_SILENT, READ  */
+ * &dotta_ext_X` for its needed (repo_mode, state_mode, crypto_mode) */
+extern const dotta_spec_ext_t dotta_ext_none;          /* NONE,            NONE,  NONE      */
+extern const dotta_spec_ext_t dotta_ext_path_only;     /* PATH_ONLY,       NONE,  NONE      */
+extern const dotta_spec_ext_t dotta_ext_repo_only;     /* REQUIRED,        NONE,  NONE      */
+extern const dotta_spec_ext_t dotta_ext_read;          /* REQUIRED,        READ,  NONE      */
+extern const dotta_spec_ext_t dotta_ext_write;         /* REQUIRED,        WRITE, NONE      */
+extern const dotta_spec_ext_t dotta_ext_read_silent;   /* OPTIONAL_SILENT, READ,  NONE      */
+extern const dotta_spec_ext_t dotta_ext_read_key;      /* REQUIRED,        READ,  KEY       */
+extern const dotta_spec_ext_t dotta_ext_write_key;     /* REQUIRED,        WRITE, KEY       */
+extern const dotta_spec_ext_t dotta_ext_read_crypto;   /* REQUIRED,        READ,  KEY_CACHE */
+extern const dotta_spec_ext_t dotta_ext_write_crypto;  /* REQUIRED,        WRITE, KEY_CACHE */
 
 /**
  * Accessor for the root command registry.

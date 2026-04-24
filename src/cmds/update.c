@@ -26,7 +26,6 @@
 #include "core/scope.h"
 #include "core/state.h"
 #include "core/workspace.h"
-#include "crypto/keymgr.h"
 #include "crypto/policy.h"
 #include "infra/content.h"
 #include "infra/worktree.h"
@@ -714,6 +713,7 @@ static error_t *update_profile(
     const cmd_update_options_t *opts,
     output_t *out,
     const config_t *config,
+    keymgr *ctx_keymgr,
     size_t *out_processed
 ) {
     CHECK_NULL(wt);
@@ -763,23 +763,18 @@ static error_t *update_profile(
     }
     owns_metadata = true;
 
-    /* Fetch keymgr if this profile may need encryption on update.
+    /* Borrow the dispatcher-owned keymgr if this profile may need encryption.
      *
      * Update has no explicit `--encrypt` flag — the key is needed only
      * for preserving existing state (priority 3) or matching auto-encrypt
      * patterns (priority 4). The helper handles the enabled gate and
-     * the disjunction internally. */
+     * the disjunction internally. ctx_keymgr is NULL when encryption is
+     * disabled; the helper returns false in that case, so we never
+     * forward a NULL pointer into the content layer. */
     bool needs_encryption = encryption_policy_needs_keymgr(
         config, /*explicit_encrypt=*/ false, existing_metadata
     );
-
-    if (needs_encryption) {
-        err = keymgr_create(config, &keymgr);
-        if (err) {
-            err = error_wrap(err, "Failed to create key manager");
-            goto cleanup;
-        }
-    }
+    if (needs_encryption) keymgr = ctx_keymgr;
 
     /* Allocate per-item result tracking (indexed by item position, not file-only position).
      * This prevents index misalignment between update_profile and update_metadata_for_profile
@@ -961,7 +956,6 @@ cleanup:
     if (index) git_index_free(index);
     if (owns_metadata && existing_metadata) metadata_free(existing_metadata);
     if (copy_results) free(copy_results);
-    keymgr_free(keymgr);
 
     return err;
 }
@@ -1191,6 +1185,7 @@ static error_t *update_execute_for_all_profiles(
     const cmd_update_options_t *opts,
     output_t *out,
     const config_t *config,
+    keymgr *ctx_keymgr,
     size_t *total_updated,
     hashmap_t **out_by_profile
 ) {
@@ -1261,7 +1256,7 @@ static error_t *update_execute_for_all_profiles(
         size_t processed = 0;
         err = update_profile(
             wt, profile, (const workspace_item_t **) array->items, array->count,
-            opts, out, config, &processed
+            opts, out, config, ctx_keymgr, &processed
         );
 
         if (err) {
@@ -1836,7 +1831,9 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
         .analyze_directories = true,                    /* Directory metadata change detection */
         .analyze_encryption  = true                     /* Encryption policy validation */
     };
-    err = workspace_load(repo, state, scope, config, &ws_opts, &ws);
+    err = workspace_load(
+        repo, state, scope, config, ctx->content_cache, &ws_opts, &ws
+    );
     if (err) {
         err = error_wrap(err, "Failed to analyze workspace");
         goto cleanup;
@@ -1998,10 +1995,11 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
             break;
     }
 
-    /* Execute profile updates. Filtered to operation scope */
+    /* Execute profile updates. Filtered to operation scope. ctx->keymgr
+     * is borrowed by update_profile inside per-profile iteration. */
     hashmap_t *by_profile = NULL;
     err = update_execute_for_all_profiles(
-        repo, update_items, update_count, opts, out, config,
+        repo, update_items, update_count, opts, out, config, ctx->keymgr,
         &total_updated, &by_profile
     );
 
@@ -2243,6 +2241,6 @@ const args_command_t spec_update = {
     .opts_size   = sizeof(cmd_update_options_t),
     .opts        = update_opts,
     .post_parse  = update_post_parse,
-    .payload     = &dotta_ext_read,
+    .payload     = &dotta_ext_read_crypto,
     .dispatch    = update_dispatch,
 };

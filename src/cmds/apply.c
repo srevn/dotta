@@ -849,7 +849,9 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         .analyze_directories = true,             /* Directory metadata convergence */
         .analyze_encryption  = false             /* Not needed for deployment */
     };
-    err = workspace_load(repo, state, scope, config, &ws_opts, &ws);
+    err = workspace_load(
+        repo, state, scope, config, ctx->content_cache, &ws_opts, &ws
+    );
     if (err) {
         err = error_wrap(err, "Failed to load workspace");
         goto cleanup;
@@ -1343,22 +1345,15 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         }
     }
 
-    /* Reuse workspace's content cache for batch operations
+    /* Reuse the dispatcher-owned content cache for batch operations.
      *
-     * Architecture: Workspace creates and owns the content cache during workspace_load().
-     * The cache is already populated with decrypted content from divergence analysis:
-     * - Encrypted deployed files: decrypted for content comparison
-     * - Encrypted orphaned files: decrypted for orphan divergence check
-     *
-     * By reusing the workspace cache, subsequent operations get cache hits:
+     * The cache was populated with decrypted content during workspace
+     * divergence analysis (workspace_load borrowed it from the same
+     * ctx->content_cache). Subsequent operations get cache hits:
      * - Safety check for orphan removal: cache hit (already decrypted)
-     * - Deploy file content: cache hit (already decrypted)
+     * - Deploy file content:             cache hit (already decrypted)
      */
-    cache = workspace_get_content_cache(ws);
-    if (!cache) {
-        err = ERROR(ERR_INTERNAL, "Workspace content cache unavailable");
-        goto cleanup;
-    }
+    cache = ctx->content_cache;
 
     /* Run pre-flight checks (using workspace divergence analysis)
      *
@@ -2124,6 +2119,6 @@ const args_command_t spec_apply = {
     .opts_size   = sizeof(cmd_apply_options_t),
     .opts        = apply_opts,
     .classify    = apply_classify,
-    .payload     = &dotta_ext_write,
+    .payload     = &dotta_ext_write_crypto,
     .dispatch    = apply_dispatch,
 };

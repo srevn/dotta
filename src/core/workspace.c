@@ -35,7 +35,6 @@
 #include "core/manifest.h"
 #include "core/scope.h"
 #include "crypto/encryption.h"
-#include "crypto/keymgr.h"
 #include "crypto/policy.h"
 #include "infra/compare.h"
 #include "infra/content.h"
@@ -85,15 +84,8 @@ struct workspace {
     state_file_entry_t *cached_state_files;  /* Owned, freed in workspace_free (NULL if empty) */
     size_t cached_state_count;               /* Number of entries in cached_state_files */
 
-    /* Encryption and caching infrastructure.
-     *
-     * Both are owned; freed in workspace_free in reverse creation order
-     * (content_cache first — it holds a borrowed pointer to keymgr but
-     * does not dereference it during destruction). keymgr is NULL when
-     * `workspace_load` ran without a config; content_cache handles a
-     * NULL keymgr by treating every blob as plaintext. */
-    keymgr *keymgr;                  /* Owned — may be NULL */
-    content_cache_t *content_cache;  /* Owned — caches decrypted content */
+    /* Content cache for encrypted blob reads during divergence analysis */
+    content_cache_t *content_cache;  /* Borrowed — NOT freed in workspace_free */
 
     /* Cached directory state (shared between analyze_orphaned_directories
      * and analyze_directory_metadata_divergence to avoid redundant table scans) */
@@ -107,12 +99,12 @@ struct workspace {
     hashmap_t *diverged_index;       /* Maps filesystem_path -> array index+1 (as void*) */
 
     /* Anchor updates (accumulated during divergence analysis) */
-    anchor_update_t *anchor_updates;   /* Pending slow-path updates (owned) */
-    size_t anchor_update_count;        /* Number of pending updates */
-    size_t anchor_update_capacity;     /* Allocated capacity of updates array */
+    anchor_update_t *anchor_updates; /* Pending slow-path updates (owned) */
+    size_t anchor_update_count;      /* Number of pending updates */
+    size_t anchor_update_capacity;   /* Allocated capacity of updates array */
 
     /* Status cache */
-    workspace_status_t status;         /* Cached cleanliness assessment */
+    workspace_status_t status;       /* Cached cleanliness assessment */
 };
 
 /**
@@ -2375,12 +2367,14 @@ error_t *workspace_load(
     state_t *state,
     const scope_t *scope,
     const config_t *config,
+    content_cache_t *content_cache,
     const workspace_load_t *options,
     workspace_t **out
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(state);
     CHECK_NULL(scope);
+    CHECK_NULL(content_cache);
     CHECK_NULL(options);
     CHECK_NULL(out);
 
@@ -2428,36 +2422,11 @@ error_t *workspace_load(
         return err;
     }
 
-    /* Initialize encryption infrastructure.
-     *
-     * Ownership: ws->keymgr and ws->content_cache both live for the
-     * workspace's lifetime; workspace_free releases them in reverse
-     * creation order. Callers that need to reuse the cache across a
-     * workspace rebuild (e.g. update.c's mid-command commit flow)
-     * accept a fresh cache on the new workspace — the disk session
-     * cache keeps the passphrase prompt out of the second keymgr.
-     *
-     * NULL config is a valid workspace_load argument per the docstring
-     * ("config: can be NULL"); the cache tolerates a NULL keymgr by
-     * treating every blob as plaintext and surfacing ERR_CRYPTO if a
-     * decrypt is attempted. No call site relies on this path today,
-     * but preserving it keeps the documented contract honest. */
-    if (config) {
-        err = keymgr_create(config, &ws->keymgr);
-        if (err) {
-            workspace_free(ws);
-            return error_wrap(err, "Failed to create key manager");
-        }
-    }
-
-    ws->content_cache = content_cache_create(ws->repo, ws->keymgr);
-    if (!ws->content_cache) {
-        workspace_free(ws);
-        return ERROR(ERR_MEMORY, "Failed to create content cache");
-    }
-
-    /* Borrow caller's state. Caller retains ownership and must free it. */
+    /* Borrow caller-owned resources. Lifetime guarantees: state comes from
+     * ctx->state (command-scoped); content_cache comes from ctx->content_cache
+     * (command-scoped, wraps ctx->keymgr). Both must outlive workspace_free */
     ws->state = state;
+    ws->content_cache = content_cache;
 
     /* Build manifest from state (Virtual Working Directory architecture)
      * This replaces the old manifest_build() which walked Git trees.
@@ -2698,23 +2667,6 @@ const manifest_t *workspace_get_manifest(const workspace_t *ws) {
         return NULL;
     }
     return ws->manifest;
-}
-
-/**
- * Get content cache from workspace
- *
- * Returns the content cache used by the workspace for transparent
- * encryption/decryption. The cache is pre-populated during workspace
- * analysis and can be reused by commands to avoid redundant decryption.
- *
- * @param ws Workspace (must not be NULL)
- * @return Content cache (borrowed reference, do not free, can be NULL)
- */
-content_cache_t *workspace_get_content_cache(const workspace_t *ws) {
-    if (!ws) {
-        return NULL;
-    }
-    return ws->content_cache;
 }
 
 /**
@@ -3112,13 +3064,6 @@ void workspace_free(workspace_t *ws) {
     /* Free indices (values are borrowed, so pass NULL for value free function) */
     hashmap_free(ws->profile_index, NULL);
     hashmap_free(ws->diverged_index, NULL);
-
-    /* Free encryption infrastructure in reverse creation order.
-     * content_cache holds a borrowed keymgr pointer but does not
-     * dereference it during teardown, so the order is safe either way —
-     * matching creation order keeps the code's intent readable. */
-    content_cache_free(ws->content_cache);
-    keymgr_free(ws->keymgr);
 
     /* Free manifest (arena_backed mode: frees git_tree_entry objects,
      * entries array, hashmap, and struct — all heap-allocated) */

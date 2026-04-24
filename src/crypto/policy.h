@@ -50,13 +50,13 @@ typedef struct metadata metadata_t;
 bool encryption_policy_is_active(const config_t *config);
 
 /**
- * Report whether a command should acquire a keymgr for this batch.
+ * Report whether this batch should consult the keymgr at all.
  *
- * Answers the upfront question "is there any path through this
+ * Answers the per-batch question "is there any path through this
  * operation that will need to encrypt or decrypt?". Each caller's
  * per-file decision is still made by `encryption_policy_should_encrypt`;
- * this helper just avoids the keymgr round-trip when no file can
- * possibly need one.
+ * this helper just lets callers short-circuit the keymgr lookup when
+ * no file in the batch can possibly need one.
  *
  * Consolidates the disjunction that add.c and update.c previously
  * duplicated verbatim. Returns true iff encryption is enabled AND one
@@ -81,7 +81,7 @@ bool encryption_policy_is_active(const config_t *config);
  * @param config Configuration (NULL → false)
  * @param explicit_encrypt User-supplied encryption flag (`--encrypt`)
  * @param metadata Metadata to consult for prior encrypted state (NULL → skip)
- * @return true if the caller must fetch a keymgr before proceeding
+ * @return true if the caller must use ctx->keymgr in this batch
  */
 bool encryption_policy_needs_keymgr(
     const config_t *config,

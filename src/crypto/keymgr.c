@@ -4,6 +4,7 @@
 
 #include "crypto/keymgr.h"
 
+#include <config.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <hydrogen.h>
@@ -15,8 +16,7 @@
 #include <termios.h>
 #include <unistd.h>
 
-#include <config.h>
-
+#include "base/encoding.h"
 #include "base/error.h"
 #include "base/hashmap.h"
 #include "crypto/encryption.h"
@@ -55,30 +55,6 @@ struct session_cache_file {
     uint8_t encrypted_key[32];  /* Obfuscated master key */
     uint8_t mac[32];            /* HMAC for integrity */
 } __attribute__((packed));
-
-/**
- * Serialize a uint64_t as little-endian bytes.
- *
- * Used to canonicalize the two timestamp fields before they feed into
- * the session-cache MAC. Matches the convention already used by
- * `crypto/encryption.c::store_le64`; keeping an independent static copy
- * avoids widening the crypto module's public surface for one call site.
- * The MAC is never compared across machines (the cache is machine-bound
- * via `machine_salt` + `get_machine_identity`), but feeding canonical
- * bytes makes the computation reproducible regardless of host byte
- * order instead of relying on "same binary, same architecture" as an
- * implicit invariant.
- */
-static void store_le64(uint8_t out[8], uint64_t val) {
-    out[0] = (uint8_t) (val);
-    out[1] = (uint8_t) (val >> 8);
-    out[2] = (uint8_t) (val >> 16);
-    out[3] = (uint8_t) (val >> 24);
-    out[4] = (uint8_t) (val >> 32);
-    out[5] = (uint8_t) (val >> 40);
-    out[6] = (uint8_t) (val >> 48);
-    out[7] = (uint8_t) (val >> 56);
-}
 
 /**
  * Key manager structure

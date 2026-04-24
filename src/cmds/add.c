@@ -22,7 +22,6 @@
 #include "core/manifest.h"
 #include "core/metadata.h"
 #include "core/state.h"
-#include "crypto/keymgr.h"
 #include "crypto/policy.h"
 #include "infra/content.h"
 #include "infra/path.h"
@@ -1321,25 +1320,17 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         goto cleanup;
     }
 
-    /* Fetch keymgr if any file in this batch might need encryption.
-     *
-     * The metadata check is gated on `--force` because a non-force add
-     * errors out earlier when the file already exists. Passing metadata
-     * only during force matches the previous semantics exactly — the
-     * helper skips the check when metadata is NULL. Deliberate overshoot
-     * at the profile level: one unused key derivation is cheap versus a
-     * keymgr-NULL crash deeper in content_store_file_to_worktree. */
+    /* Borrow the dispatcher-owned keymgr when any file in this batch
+     * might need encryption. The policy helper consolidates the
+     * "should this batch consult a key?" check — it returns false when
+     * encryption is disabled, so a NULL ctx->keymgr on disabled configs
+     * never reaches the content layer. When force-adding, the helper
+     * also flags re-encryption of already-encrypted files (hence passing
+     * metadata on --force). */
     bool needs_encryption = encryption_policy_needs_keymgr(
         config, explicit_encrypt, opts->force ? metadata : NULL
     );
-
-    if (needs_encryption) {
-        err = keymgr_create(config, &keymgr);
-        if (err) {
-            err = error_wrap(err, "Failed to create key manager");
-            goto cleanup;
-        }
-    }
+    if (needs_encryption) keymgr = ctx->keymgr;
 
     /* Single-pass: add files and capture metadata inline */
     for (size_t i = 0; i < all_files->count; i++) {
@@ -1689,7 +1680,6 @@ cleanup:
         free(preflight_allocated_paths);
     }
     if (preflight_storage_paths) free(preflight_storage_paths);
-    keymgr_free(keymgr);
 
     return err;
 }
@@ -1828,6 +1818,6 @@ const args_command_t spec_add = {
     .opts_size   = sizeof(cmd_add_options_t),
     .opts        = add_opts,
     .post_parse  = add_post_parse,
-    .payload     = &dotta_ext_write,
+    .payload     = &dotta_ext_write_key,
     .dispatch    = add_dispatch,
 };

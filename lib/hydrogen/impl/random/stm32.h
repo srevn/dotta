@@ -32,7 +32,9 @@ hydro_random_init(void)
     SET_BIT(RNG->CR, RNG_CR_RNGEN);
 #    elif defined(STM32L4)
     RngHandle.Instance = RNG;
-    HAL_RNG_Init(&RngHandle);
+    if (HAL_RNG_Init(&RngHandle) != HAL_OK) {
+        return -1;
+    }
 #    endif
 
     hydro_hash_init(&st, ctx, NULL);
@@ -40,13 +42,18 @@ hydro_random_init(void)
     while (ebits < 256) {
         uint32_t r = 0;
 #    if defined(STM32F4)
+        uint32_t timeout = 0x100000U;
+
         while (!(READ_BIT(RNG->SR, RNG_SR_DRDY))) {
+            if (timeout-- == 0U) {
+                return -1;
+            }
         }
 
         r = RNG->DR;
 #    elif defined(STM32L4)
         if (HAL_RNG_GenerateRandomNumber(&RngHandle, &r) != HAL_OK) {
-            continue;
+            return -1;
         }
 #    endif
         hydro_hash_update(&st, (const uint32_t *) &r, sizeof r);

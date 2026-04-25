@@ -138,6 +138,7 @@ static int ucs_to_utf8(uint32_t code, char buf[4]);
 // stack overflow during recursive descent of the parser.
 #define BRACKET_LEVEL_MAX 30
 #define BRACE_LEVEL_MAX 30
+#define TABLE_MAX (1 << 16)
 
 static inline size_t align8(size_t x) { return (((x) + 7) & ~7); }
 
@@ -145,17 +146,17 @@ enum toktyp_t {
   TOK_DOT = 1,
   TOK_EQUAL,
   TOK_COMMA,
-  TOK_LBRACK,
-  TOK_LLBRACK,
-  TOK_RBRACK,
-  TOK_RRBRACK,
-  TOK_LBRACE,
-  TOK_RBRACE,
+  TOK_LBRACK,  // [
+  TOK_LLBRACK, // [[
+  TOK_RBRACK,  // ]
+  TOK_RRBRACK, // ]]
+  TOK_LBRACE,  // {
+  TOK_RBRACE,  // }
   TOK_LIT,
-  TOK_STRING,
-  TOK_MLSTRING,
-  TOK_LITSTRING,
-  TOK_MLLITSTRING,
+  TOK_STRING,      // "string"
+  TOK_MLSTRING,    // """multi-line-string"""
+  TOK_LITSTRING,   // 'lit-string'
+  TOK_MLLITSTRING, // '''multi-line-lit-string'''
   TOK_TIME,
   TOK_DATE,
   TOK_DATETIME,
@@ -267,6 +268,10 @@ static toml_datum_t *tab_emplace(toml_datum_t *tab, span_t key,
 
   // Expand pkey[], plen[] and value[].
   int N = tab->u.tab.size;
+  if (N >= TABLE_MAX) {
+    *reason = "table too large";
+    return NULL;
+  }
   {
     char **pkey = REALLOC(tab->u.tab.key, sizeof(*pkey) * align8(N + 1));
     int *plen = REALLOC(tab->u.tab.len, sizeof(*plen) * align8(N + 1));
@@ -2054,14 +2059,14 @@ static bool is_valid_timezone(int minute) {
 // Read an int (without signs) from the string p.
 static int read_int(const char *p, int *ret) {
   const char *pp = p;
-  int val = 0;
+  int64_t val = 0;
   for (; isdigit(*p); p++) {
-    val = val * 10u + (*p - '0');
-    if (val < 0) {
+    val = val * 10 + (*p - '0');
+    if (val > INT_MAX) {
       return 0; // overflowed
     }
   }
-  *ret = val;
+  *ret = (int)val;
   return p - pp;
 }
 

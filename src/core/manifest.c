@@ -2104,7 +2104,8 @@ error_t *manifest_sync_directories(
             }
 
             if (get_err && get_err->code == ERR_NOT_FOUND) {
-                /* New directory - add with STATE_ACTIVE */
+                /* New directory. state_add_directory defaults state to STATE_ACTIVE
+                 * when entry->state is NULL/empty, so we don't need to set it. */
                 error_free(get_err);
                 state_dir->state = arena_strdup(arena, STATE_ACTIVE);
                 if (!state_dir->state) {

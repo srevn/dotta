@@ -76,6 +76,23 @@
 #define METADATA_VERSION 4
 
 /**
+ * Default mode for tracked directories without an explicit override.
+ *
+ * Mirrors the umask default any newly-mkdir'd directory gets on Linux/
+ * macOS/BSD (0755 = rwxr-xr-x) — the same mode file deploy's
+ * fs_create_dir(parents=true) produces when materialising an ancestor
+ * that no metadata.json entry claims.
+ *
+ * Used by metadata_prune_directories as the residue discriminator: a
+ * kind=directory entry with this mode and no ownership carries no
+ * preservation intent over what the filesystem already does by default,
+ * so when it has no anchoring descendants either, the entry is walker
+ * residue from a path the user no longer tracks and can be dropped
+ * without information loss.
+ */
+#define DIR_MODE_DEFAULT 0755
+
+/**
  * Metadata item kind discriminator
  */
 typedef enum {
@@ -290,6 +307,52 @@ error_t *metadata_get_item(
 error_t *metadata_remove_item(
     metadata_t *metadata,
     const char *key
+);
+
+/**
+ * Prune redundant directory entries
+ *
+ * Removes kind=directory items that carry no actionable information
+ * beyond what an unwritten entry would. An entry is "redundant" when
+ * ALL of these hold:
+ *
+ *   - No FILE or SYMLINK item has it as a path prefix (no anchoring
+ *     descendants in this metadata collection).
+ *   - mode == DIR_MODE_DEFAULT (no mode override to preserve over the
+ *     filesystem's umask default).
+ *   - owner == NULL AND group == NULL (no ownership override to preserve).
+ *
+ * Such an entry has no role in any downstream pipeline: file deploy
+ * already mkdirs ancestors at the same default mode, manifest_sync_
+ * directories would only register it as a default-mode scan anchor for
+ * an emptied subtree, and divergence detection has nothing to compare
+ * against. Typically it's walker residue from a path the user no
+ * longer tracks (e.g., `dotta add ~/dir/` followed by `dotta remove`
+ * of every file underneath). Without this prune, manifest_sync_
+ * directories would re-activate the entry indefinitely.
+ *
+ * Custom-attribute entries (mode != default, or non-NULL owner/group)
+ * are preserved even when unanchored: they may represent legitimate
+ * "track this empty directory with these attributes" intent. Today
+ * the schema cannot distinguish that from leftover residue, so we err
+ * on the side of preservation for entries that carry distinguishing
+ * information.
+ *
+ * The descendant scan considers FILE AND SYMLINK items: any storage-
+ * path leaf anchors its ancestors and blocks the prune.
+ *
+ * Caller pattern: invoke after a per-item edit pass and before
+ * metadata_save_to_worktree, so the prune lands in the same commit as
+ * the triggering removals. *out_pruned_count == 0 indicates nothing
+ * was pruned (caller may use this to skip a no-op rewrite).
+ *
+ * @param metadata Metadata collection (must not be NULL; mutated in place)
+ * @param out_pruned_count Output: number of entries pruned (must not be NULL)
+ * @return Error or NULL on success
+ */
+error_t *metadata_prune_directories(
+    metadata_t *metadata,
+    size_t *out_pruned_count
 );
 
 /**

@@ -652,6 +652,108 @@ error_t *metadata_remove_item(
 }
 
 /**
+ * Prune redundant directory entries
+ *
+ * Two-pass collect-then-prune: metadata_remove_item shifts the items
+ * array, which would invalidate borrowed pointers from
+ * metadata_get_items_by_kind. string_array_push duplicates each key, so
+ * the prune pass operates on independent strings.
+ */
+error_t *metadata_prune_directories(
+    metadata_t *metadata,
+    size_t *out_pruned_count
+) {
+    CHECK_NULL(metadata);
+    CHECK_NULL(out_pruned_count);
+
+    *out_pruned_count = 0;
+
+    size_t dir_count = 0;
+    const metadata_item_t **directories = metadata_get_items_by_kind(
+        metadata, METADATA_ITEM_DIRECTORY, &dir_count
+    );
+    if (!directories || dir_count == 0) {
+        free(directories);
+        return NULL;
+    }
+
+    size_t file_count = 0;
+    const metadata_item_t **files = metadata_get_items_by_kind(
+        metadata, METADATA_ITEM_FILE, &file_count
+    );
+
+    size_t symlink_count = 0;
+    const metadata_item_t **symlinks = metadata_get_items_by_kind(
+        metadata, METADATA_ITEM_SYMLINK, &symlink_count
+    );
+
+    error_t *err = NULL;
+    string_array_t *prune_keys = string_array_new(0);
+    if (!prune_keys) {
+        err = ERROR(ERR_MEMORY, "Failed to allocate prune set");
+        goto cleanup;
+    }
+
+    for (size_t d = 0; d < dir_count; d++) {
+        const metadata_item_t *dir = directories[d];
+
+        /* Preserve any entry that carries distinguishing information:
+         * custom mode, or any owner/group overlay. Today this is the
+         * only signal that separates legitimate empty-dir intent from
+         * walker-captured residue. */
+        if (dir->mode != DIR_MODE_DEFAULT) continue;
+        if (dir->owner != NULL || dir->group != NULL) continue;
+
+        const char *dir_key = dir->key;
+        size_t dir_key_len = strlen(dir_key);
+        bool anchored = false;
+
+        for (size_t f = 0; f < file_count && !anchored; f++) {
+            const char *fk = files[f]->key;
+            if (str_starts_with(fk, dir_key) && fk[dir_key_len] == '/') {
+                anchored = true;
+            }
+        }
+
+        for (size_t s = 0; s < symlink_count && !anchored; s++) {
+            const char *sk = symlinks[s]->key;
+            if (str_starts_with(sk, dir_key) && sk[dir_key_len] == '/') {
+                anchored = true;
+            }
+        }
+
+        if (!anchored) {
+            err = string_array_push(prune_keys, dir_key);
+            if (err) {
+                err = error_wrap(err, "Failed to record redundant directory");
+                goto cleanup;
+            }
+        }
+    }
+
+    for (size_t i = 0; i < prune_keys->count; i++) {
+        err = metadata_remove_item(metadata, prune_keys->items[i]);
+        if (err) {
+            err = error_wrap(
+                err, "Failed to prune redundant directory '%s'",
+                prune_keys->items[i]
+            );
+            goto cleanup;
+        }
+    }
+
+    *out_pruned_count = prune_keys->count;
+
+cleanup:
+    string_array_free(prune_keys);
+    free(symlinks);
+    free(files);
+    free(directories);
+
+    return err;
+}
+
+/**
  * Check if metadata item exists
  *
  * Works for both files and directories.

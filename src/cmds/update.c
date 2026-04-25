@@ -589,6 +589,32 @@ static error_t *update_metadata_for_profile(
             case WORKSPACE_ITEM_DIRECTORY: {
                 /* Handle directory metadata */
 
+                /* Handle deleted directories (symmetric with the file
+                 * branch above). Without this, the stat() below would fail
+                 * with ENOENT and the metadata entry would survive,
+                 * letting manifest_sync_directories' overlay pass
+                 * re-activate a directory the user just deleted. */
+                if (item->state == WORKSPACE_STATE_DELETED) {
+                    if (metadata_has_item(metadata, item->storage_path)) {
+                        err = metadata_remove_item(metadata, item->storage_path);
+                        if (err && err->code != ERR_NOT_FOUND) {
+                            metadata_free(metadata);
+                            return error_wrap(
+                                err, "Failed to remove directory metadata entry"
+                            );
+                        }
+                        if (err) {
+                            error_free(err);
+                            err = NULL;
+                        }
+                        output_info(
+                            out, OUTPUT_VERBOSE, "  Removed directory metadata: %s",
+                            item->filesystem_path
+                        );
+                    }
+                    continue;
+                }
+
                 /* Stat directory to capture current metadata */
                 struct stat dir_stat;
                 if (stat(item->filesystem_path, &dir_stat) != 0) {
@@ -662,6 +688,29 @@ static error_t *update_metadata_for_profile(
             metadata_free(metadata);
             return err;
         }
+    }
+
+    /* Prune redundant directory entries.
+     *
+     * Catches the implicit-orphaning case (Path A handles explicit
+     * WORKSPACE_STATE_DELETED): file removals can leave a parent
+     * directory's metadata entry with no anchoring descendants. Only
+     * entries that carry no actionable information are pruned —
+     * custom-attribute entries survive as potential empty-dir intent.
+     * Without this, manifest_sync_directories' overlay pass would
+     * re-activate the orphaned entry indefinitely. */
+    size_t pruned_dirs = 0;
+    err = metadata_prune_directories(metadata, &pruned_dirs);
+    if (err) {
+        metadata_free(metadata);
+        return error_wrap(err, "Failed to prune redundant directories");
+    }
+
+    if (pruned_dirs > 0) {
+        output_info(
+            out, OUTPUT_VERBOSE, "  Pruned %zu redundant directory entr%s",
+            pruned_dirs, pruned_dirs == 1 ? "y" : "ies"
+        );
     }
 
     /* Save metadata to worktree (single save for both files and directories) */

@@ -49,104 +49,190 @@ static bool is_valid_credential_field(const char *field) {
 }
 
 /**
- * Validate a host string (hostname or hostname:port).
+ * Validate a host string.
  *
- * Hostnames: alphanumeric, dots, hyphens, underscores.
- * Port (optional): colon followed by digits only.
+ * Accepts two forms:
+ *   - Bracketed IPv6: "[<address>]" optionally followed by ":<port>".
+ *     Inner address is hex digits, ':' separators, and '.' (for the
+ *     IPv4-mapped form ::ffff:1.2.3.4).
+ *   - Plain hostname[:port]: alphanumerics plus '.', '-', '_', then
+ *     an optional ":<port>" of digits only.
+ *
+ * Brackets are preserved on IPv6 hosts so the value can travel
+ * directly into a `host=` line — internal address colons are not
+ * mistaken for a port separator by the helper.
  */
-static bool is_valid_hostname(const char *hostname) {
-    if (!hostname || !*hostname) {
+static bool is_valid_host(const char *host) {
+    if (!host || !*host) {
         return false;
     }
 
-    bool in_port = false;
-    for (const char *p = hostname; *p; p++) {
-        if (in_port) {
-            if (!(*p >= '0' && *p <= '9')) {
-                return false;
-            }
-        } else if (*p == ':') {
-            in_port = true;
-        } else if (!((*p >= 'a' && *p <= 'z') ||
-            (*p >= 'A' && *p <= 'Z') ||
-            (*p >= '0' && *p <= '9') ||
-            *p == '.' || *p == '-' || *p == '_')) {
+    /* Bracketed IPv6 form */
+    if (host[0] == '[') {
+        const char *close = strchr(host, ']');
+        if (!close || close == host + 1) {
             return false;
         }
+
+        /* Inside brackets: hex digits, ':' separators, '.' (for IPv4-
+         * mapped addresses like ::ffff:1.2.3.4). */
+        for (const char *p = host + 1; p < close; p++) {
+            char c = *p;
+            bool is_hex = (c >= '0' && c <= '9') ||
+                (c >= 'a' && c <= 'f') ||
+                (c >= 'A' && c <= 'F');
+            if (!(is_hex || c == ':' || c == '.')) {
+                return false;
+            }
+        }
+
+        /* After ']': end of string, or ":<digits>". */
+        const char *after = close + 1;
+        if (*after == '\0') {
+            return true;
+        }
+        if (*after != ':' || !*(after + 1)) {
+            return false;
+        }
+        for (const char *p = after + 1; *p; p++) {
+            if (*p < '0' || *p > '9') {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /* Plain hostname[:port] */
+    bool in_port = false;
+    bool port_has_digit = false;
+    for (const char *p = host; *p; p++) {
+        char c = *p;
+        if (in_port) {
+            if (c < '0' || c > '9') {
+                return false;
+            }
+            port_has_digit = true;
+        } else if (c == ':') {
+            in_port = true;
+        } else if (!((c >= 'a' && c <= 'z') ||
+            (c >= 'A' && c <= 'Z') ||
+            (c >= '0' && c <= '9') ||
+            c == '.' || c == '-' || c == '_')) {
+            return false;
+        }
+    }
+    if (in_port && !port_has_digit) {
+        return false;
     }
     return true;
 }
 
-/**
- * Extract host (hostname[:port]) from URL.
- *
- * Handles standard URLs (https://host:port/path) and
- * SCP-style URLs (user@host:path) where ':' is a path separator.
- */
-static char *extract_hostname(const char *url) {
-    bool has_protocol = false;
-    const char *start = strstr(url, "://");
-    if (start) {
-        has_protocol = true;
-        start += 3;
-    } else {
-        start = url;
+error_t *credential_url_parse(const char *url, credential_url_t *out) {
+    CHECK_NULL(out);
+    if (!url || !*url) {
+        return ERROR(ERR_INVALID_ARG, "URL is empty");
     }
 
-    const char *authority_end = start;
-    if (has_protocol) {
-        while (*authority_end && *authority_end != '/') {
-            authority_end++;
+    out->protocol = NULL;
+    out->host = NULL;
+
+    /* Resolve protocol and the start of the authority component. */
+    const char *scheme_sep = strstr(url, "://");
+    bool is_scp = false;
+    char *protocol = NULL;
+    const char *authority_start;
+
+    if (scheme_sep) {
+        size_t plen = (size_t)(scheme_sep - url);
+        if (plen == 0) {
+            return ERROR(ERR_INVALID_ARG, "URL has empty scheme: %s", url);
         }
+        protocol = malloc(plen + 1);
+        if (!protocol) {
+            return ERROR(ERR_MEMORY, "Failed to allocate URL protocol");
+        }
+        memcpy(protocol, url, plen);
+        protocol[plen] = '\0';
+        authority_start = scheme_sep + 3;
     } else {
-        /* SCP-style: ':' is a path separator, not port */
-        while (*authority_end &&
-            *authority_end != '/' &&
-            *authority_end != ':') {
-            authority_end++;
+        /* No "://" — only SCP-style user@host:path is accepted. A bare
+         * hostname is not a valid git remote URL; reject explicitly so
+         * the caller can fall through to its no-credentials path. */
+        const char *at = strchr(url, '@');
+        const char *colon = strchr(url, ':');
+        if (!(at && colon && at < colon)) {
+            return ERROR(
+                ERR_INVALID_ARG, "URL has no scheme or SCP-style form: %s", url
+            );
         }
+        protocol = strdup("ssh");
+        if (!protocol) {
+            return ERROR(ERR_MEMORY, "Failed to allocate URL protocol");
+        }
+        is_scp = true;
+        authority_start = url;
     }
 
-    /* Skip userinfo@ prefix within authority */
-    for (const char *p = start; p < authority_end; p++) {
-        if (*p == '@') {
-            start = p + 1;
+    /* Walk to the authority terminator. For standard URLs that's '/'.
+     * For SCP it's the first unbracketed ':' (path separator). Bracketed
+     * regions (IPv6 literals) are skipped wholesale so internal colons
+     * are not confused for a port or path separator. */
+    const char *authority_end = authority_start;
+    while (*authority_end) {
+        char c = *authority_end;
+        if (c == '/') break;
+        if (c == ':' && is_scp) break;
+        if (c == '[') {
+            const char *q = authority_end + 1;
+            while (*q && *q != ']') q++;
+            if (*q == ']') {
+                authority_end = q + 1;
+                continue;
+            }
+            /* Unmatched bracket — let host validation reject it. */
             break;
         }
+        authority_end++;
     }
 
-    size_t len = authority_end - start;
-    char *host = malloc(len + 1);
-    if (host) {
-        memcpy(host, start, len);
-        host[len] = '\0';
-    }
-
-    return host;
-}
-
-/**
- * Extract protocol from URL.
- */
-static char *extract_protocol(const char *url) {
-    const char *sep = strstr(url, "://");
-    if (sep) {
-        size_t len = sep - url;
-        char *proto = malloc(len + 1);
-        if (proto) {
-            memcpy(proto, url, len);
-            proto[len] = '\0';
-            return proto;
+    /* Skip userinfo: take the LAST '@' before the authority terminator
+     * so a password containing an unencoded '@' (uncommon but legal
+     * pre-encoding) does not split the host away. */
+    const char *host_start = authority_start;
+    for (const char *p = authority_start; p < authority_end; p++) {
+        if (*p == '@') {
+            host_start = p + 1;
         }
     }
 
-    /* SCP-style user@host:path implies SSH */
-    if (strchr(url, '@') && strchr(url, ':') && !strstr(url, "://")) {
-        return strdup("ssh");
+    size_t host_len = (size_t)(authority_end - host_start);
+    char *host = malloc(host_len + 1);
+    if (!host) {
+        free(protocol);
+        return ERROR(ERR_MEMORY, "Failed to allocate URL host");
+    }
+    memcpy(host, host_start, host_len);
+    host[host_len] = '\0';
+
+    if (!is_valid_credential_field(protocol) || !is_valid_host(host)) {
+        free(host);
+        free(protocol);
+        return ERROR(ERR_INVALID_ARG, "URL is malformed: %s", url);
     }
 
-    /* Default */
-    return strdup("https");
+    out->protocol = protocol;
+    out->host = host;
+    return NULL;
+}
+
+void credential_url_dispose(credential_url_t *u) {
+    if (!u) {
+        return;
+    }
+    free(u->protocol);
+    free(u->host);
+    u->protocol = NULL;
+    u->host = NULL;
 }
 
 /**
@@ -274,37 +360,39 @@ static void credentials_helper_commit(
     if (!url || !username || !password || !*username || !*password) {
         return;
     }
-
-    char *hostname = extract_hostname(url);
-    char *protocol = extract_protocol(url);
-
-    if (hostname && protocol &&
-        is_valid_hostname(hostname) &&
-        is_valid_credential_field(username) &&
-        is_valid_credential_field(password)) {
-        buffer_t req = BUFFER_INIT;
-        error_t *err = build_credential_request(
-            &req, protocol, hostname, username, password
-        );
-        if (!err) {
-            process_result_t result = { 0 };
-            error_t *run_err = run_credential_helper(
-                subcommand, req.data, req.size, false, &result
-            );
-            if (run_err) error_free(run_err);
-            process_result_dispose(&result);
-            /* Approve / reject are best-effort: the caller's state
-             * machine has already classified this session, and the
-             * user observes any downstream failure at the next auth
-             * attempt. Silent failure here is intentional. */
-        } else {
-            error_free(err);
-        }
-        credential_request_secure_free(&req);
+    if (!is_valid_credential_field(username) ||
+        !is_valid_credential_field(password)) {
+        return;
     }
 
-    free(hostname);
-    free(protocol);
+    credential_url_t u = {0};
+    error_t *parse_err = credential_url_parse(url, &u);
+    if (parse_err) {
+        error_free(parse_err);
+        return;
+    }
+
+    buffer_t req = BUFFER_INIT;
+    error_t *err = build_credential_request(
+        &req, u.protocol, u.host, username, password
+    );
+    if (!err) {
+        process_result_t result = { 0 };
+        error_t *run_err = run_credential_helper(
+            subcommand, req.data, req.size, false, &result
+        );
+        if (run_err) error_free(run_err);
+        process_result_dispose(&result);
+        /* Approve / reject are best-effort: the caller's state
+         * machine has already classified this session, and the
+         * user observes any downstream failure at the next auth
+         * attempt. Silent failure here is intentional. */
+    } else {
+        error_free(err);
+    }
+    credential_request_secure_free(&req);
+
+    credential_url_dispose(&u);
 }
 
 void credentials_helper_approve(
@@ -327,30 +415,19 @@ static bool file_exists(const char *path) {
 }
 
 /**
- * Get the user's home directory.
- */
-static const char *get_home_dir(void) {
-    const char *home = getenv("HOME");
-    if (!home) {
-        home = getenv("USERPROFILE"); /* Windows fallback */
-    }
-    return home;
-}
-
-/**
  * Query the git credential helper for credentials.
  *
  * Spawns `git credential fill` via sys/process — no shell, no heredoc.
  * The request is written over a pipe built by PROCESS_STDIN_BUFFER; the
  * response is captured into process_result_t.output and parsed in place.
  *
- * Hostname / protocol / username_from_url are validated for protocol-
- * breaking characters before use; a helper that emits a password
- * containing a newline cannot inject additional request lines into its
- * own next invocation, because the request is assembled fresh each time.
+ * Protocol and host travel as a parsed credential_url_t — already
+ * validated at parse time, so this function does not re-walk the URL.
+ * A helper that emits a password containing a newline cannot inject
+ * additional request lines into its own next invocation, because the
+ * request is assembled fresh each time.
  *
- * @param protocol          Validated protocol (e.g., "https")
- * @param hostname          Validated hostname (NOT full URL)
+ * @param u                 Parsed remote URL (protocol + host)
  * @param username_from_url Username encoded in URL (may be NULL/empty);
  *                          forwarded to the helper so multi-account
  *                          configs disambiguate per URL.
@@ -360,18 +437,12 @@ static const char *get_home_dir(void) {
  * @return 0 on success, -1 on failure
  */
 static int get_credentials_from_helper(
-    const char *protocol,
-    const char *hostname,
+    const credential_url_t *u,
     const char *username_from_url,
     char *username,
     char *password,
     size_t max_len
 ) {
-    if (!is_valid_hostname(hostname) || !protocol ||
-        !is_valid_credential_field(protocol)) {
-        return -1;
-    }
-
     bool forward_user = username_from_url && *username_from_url &&
         is_valid_credential_field(username_from_url);
 
@@ -381,7 +452,7 @@ static int get_credentials_from_helper(
      * for this host). */
     buffer_t req = BUFFER_INIT;
     error_t *err = build_credential_request(
-        &req, protocol, hostname,
+        &req, u->protocol, u->host,
         forward_user ? username_from_url : NULL,
         NULL
     );
@@ -453,7 +524,7 @@ static int get_credentials_from_helper(
  * Find an SSH private key in standard locations.
  */
 static char *find_ssh_key(void) {
-    const char *home = get_home_dir();
+    const char *home = getenv("HOME");
     if (!home) {
         return NULL;
     }
@@ -562,16 +633,16 @@ static int try_userpass_credentials(
         }
     }
 
-    char *hostname = extract_hostname(url);
-    char *protocol = extract_protocol(url);
+    credential_url_t u = {0};
+    error_t *parse_err = credential_url_parse(url, &u);
     int result = -1;
 
-    if (hostname && protocol) {
+    if (!parse_err) {
         char cred_username[CRED_MAX_LEN];
         char cred_password[CRED_MAX_LEN];
 
         if (get_credentials_from_helper(
-            protocol, hostname, username_from_url,
+            &u, username_from_url,
             cred_username, cred_password, CRED_MAX_LEN
             ) == 0) {
             if (git_credential_userpass_plaintext_new(
@@ -598,10 +669,11 @@ static int try_userpass_credentials(
         /* Wipe stack buffers that may still hold credential bytes. */
         hydro_memzero(cred_username, sizeof(cred_username));
         hydro_memzero(cred_password, sizeof(cred_password));
+    } else {
+        error_free(parse_err);
     }
 
-    free(hostname);
-    free(protocol);
+    credential_url_dispose(&u);
     return result;
 }
 

@@ -13,6 +13,56 @@
 #define DOTTA_CREDENTIALS_H
 
 #include <git2.h>
+#include <types.h>
+
+/**
+ * Parsed remote URL (protocol + host).
+ *
+ * Replaces ad-hoc duplicated walks of the URL. Both fields are
+ * validated at parse time:
+ *   - protocol is free of \r/\n (required for the line-based git
+ *     credential protocol)
+ *   - host matches one of the accepted host grammars (plain
+ *     hostname[:port] or bracketed IPv6 [addr][:port]) and is
+ *     therefore also free of \r/\n by construction.
+ *
+ * Brackets on IPv6 hosts are preserved so callers can forward the
+ * value verbatim into a `host=` line — disambiguating address bytes
+ * from a trailing port without further parsing downstream.
+ */
+typedef struct {
+    char *protocol;   /* e.g. "https", "ssh" */
+    char *host;       /* hostname[:port] or "[ipv6][:port]" */
+} credential_url_t;
+
+/**
+ * Parse a remote URL into protocol + host components.
+ *
+ * Accepts:
+ *   - <scheme>://[user[:pass]@]host[:port][/path]
+ *   - <scheme>://[user[:pass]@][ipv6-addr][:port][/path]
+ *   - user@host:path  (SCP-style → protocol "ssh")
+ *
+ * Strips userinfo and path; only protocol and host[:port] survive.
+ * A URL whose protocol or host fails validation produces an error;
+ * downstream consumers therefore do not need to re-validate parsed
+ * components.
+ *
+ * @param url Remote URL (must be non-NULL and non-empty)
+ * @param out Output struct (zero-initialize before calling; populated
+ *            on success). Caller disposes via credential_url_dispose.
+ * @return Error or NULL on success. On failure, *out is left
+ *         zero-initialized.
+ */
+error_t *credential_url_parse(const char *url, credential_url_t *out);
+
+/**
+ * Release resources owned by a parsed URL.
+ *
+ * Idempotent; safe to call on a zero-initialized struct or twice in a
+ * row. Resets the struct to its zero-initialized form.
+ */
+void credential_url_dispose(credential_url_t *u);
 
 /**
  * Dispatch credential acquisition for a libgit2 network op.

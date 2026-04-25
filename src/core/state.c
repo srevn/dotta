@@ -1659,6 +1659,63 @@ error_t *state_count_files_by_profile(
     return err;
 }
 
+error_t *state_get_distinct_file_profiles(
+    const state_t *state,
+    string_array_t **out
+) {
+    CHECK_NULL(state);
+    CHECK_NULL(out);
+
+    *out = NULL;
+
+    string_array_t *profiles = string_array_new(0);
+    if (!profiles) {
+        return ERROR(ERR_MEMORY, "Failed to allocate distinct-profiles array");
+    }
+
+    /* Empty state (no DB file) — no profiles, success with empty array. */
+    if (!state->db) {
+        *out = profiles;
+        return NULL;
+    }
+
+    const char *sql =
+        "SELECT DISTINCT profile FROM virtual_manifest;";
+
+    sqlite3_stmt *stmt = NULL;
+    int rc = sqlite3_prepare_v2(state->db, sql, -1, &stmt, NULL);
+    if (rc != SQLITE_OK) {
+        string_array_free(profiles);
+        return sqlite_error(state->db, "Failed to prepare distinct-profiles query");
+    }
+
+    error_t *err = NULL;
+    while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+        const char *name = (const char *) sqlite3_column_text(stmt, 0);
+        if (!name) continue;  /* defensive: profile is NOT NULL in schema */
+
+        err = string_array_push(profiles, name);
+        if (err) {
+            err = error_wrap(err, "Failed to record distinct profile");
+            break;
+        }
+    }
+
+    if (!err && rc != SQLITE_DONE) {
+        err = sqlite_error(state->db, "Failed to enumerate distinct profiles");
+    }
+
+    sqlite3_finalize(stmt);
+
+    if (err) {
+        string_array_free(profiles);
+        return err;
+    }
+
+    *out = profiles;
+    return NULL;
+}
+
 /**
  * Count active encrypted manifest entries
  *

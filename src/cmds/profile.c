@@ -1636,20 +1636,32 @@ static error_t *profile_validate(
         }
     }
 
-    /* Check 2: State file entries reference valid profiles */
-    size_t state_file_count = 0;
-    state_file_entry_t *state_files = NULL;
-    err = state_get_all_files(state, arena, &state_files, &state_file_count);
+    /* Check 2: State file entries reference valid profiles
+     *
+     * Dedupe by profile before probing Git: F per-row probes (where F is the
+     * total manifest entry count) collapses to P probes (where P is the
+     * distinct-profile count, typically <10). For each missing profile we
+     * then ask SQL once for its row count rather than incrementing during
+     * the row scan. */
+    string_array_t *file_profiles = NULL;
+    err = state_get_distinct_file_profiles(state, &file_profiles);
     if (err) goto cleanup;
 
-    for (size_t i = 0; i < state_file_count; i++) {
-        const char *profile = state_files[i].profile;
-        if (!profile_exists(repo, profile)) {
-            orphaned_files++;
-            has_issues = true;
-            has_orphaned_files = true;
+    for (size_t i = 0; i < file_profiles->count; i++) {
+        const char *profile = file_profiles->items[i];
+        if (profile_exists(repo, profile)) continue;
+
+        size_t n = 0;
+        err = state_count_files_by_profile(state, profile, &n);
+        if (err) {
+            string_array_free(file_profiles);
+            goto cleanup;
         }
+        orphaned_files += n;
+        has_issues = true;
+        has_orphaned_files = true;
     }
+    string_array_free(file_profiles);
 
     if (orphaned_files > 0) {
         output_warning(

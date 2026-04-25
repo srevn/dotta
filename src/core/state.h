@@ -499,6 +499,31 @@ error_t *state_count_files_by_profile(
 );
 
 /**
+ * Return the set of distinct profile names referenced in virtual_manifest
+ *
+ * Pure SQL aggregate (SELECT DISTINCT profile FROM virtual_manifest),
+ * backed by idx_manifest_profile. Used by profile_validate's orphan
+ * check to deduplicate profile names before probing Git for branch
+ * existence — turning F per-row probes (where F = manifest entry count)
+ * into P probes (where P = distinct profile count, typically <10).
+ *
+ * The output is heap-allocated; caller frees with string_array_free.
+ * Order is unspecified.
+ *
+ * On empty state (no DB), returns an empty array (count == 0) with no
+ * error.
+ *
+ * @param state State (must not be NULL)
+ * @param out Output: distinct profile names (must not be NULL,
+ *            caller frees with string_array_free)
+ * @return Error or NULL on success
+ */
+error_t *state_get_distinct_file_profiles(
+    const state_t *state,
+    string_array_t **out
+);
+
+/**
  * Count active encrypted manifest entries
  *
  * Pure SQL aggregate (SELECT COUNT(*) WHERE encrypted = 1 AND state =

@@ -472,6 +472,7 @@ error_t *manifest_add_files(
  * @param removed_profile Profile files were removed from (must not be NULL)
  * @param removed_storage_paths Storage paths of removed files (must not be NULL)
  * @param enabled_profiles All enabled profiles (must not be NULL)
+ * @param out_marked Output: filesystem paths just marked STATE_DELETED (can be NULL)
  * @param out_removed Output: files without fallback (marked STATE_DELETED) (can be NULL)
  * @param out_fallbacks Output: files updated to fallback (can be NULL)
  * @return Error or NULL on success
@@ -483,6 +484,7 @@ error_t *manifest_remove_files(
     const char *removed_profile,
     const string_array_t *removed_storage_paths,
     const string_array_t *enabled_profiles,
+    string_array_t *out_marked,
     size_t *out_removed,
     size_t *out_fallbacks
 );

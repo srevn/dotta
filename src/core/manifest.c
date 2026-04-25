@@ -525,6 +525,7 @@ error_t *manifest_remove_files(
     const char *removed_profile,
     const string_array_t *removed_storage_paths,
     const string_array_t *enabled_profiles,
+    string_array_t *out_marked,
     size_t *out_removed,
     size_t *out_fallbacks
 ) {
@@ -646,6 +647,17 @@ error_t *manifest_remove_files(
                 );
                 error_free(err);
                 err = NULL;  /* Clear error, continue operation */
+            } else if (out_marked) {
+                /* Record the precise path so callers releasing management
+                 * immediately can scope state_remove_file to paths just
+                 * touched, not every STATE_DELETED row for the profile. */
+                error_t *push_err = string_array_push(out_marked, filesystem_path);
+                if (push_err) {
+                    /* Non-fatal: row is marked, just absent from the
+                     * caller's release list. The caller skips it; the
+                     * row stays STATE_DELETED for apply to clean up. */
+                    error_free(push_err);
+                }
             }
 
             removed_count++;

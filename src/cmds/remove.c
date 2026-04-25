@@ -1076,16 +1076,23 @@ static error_t *remove_files_from_profile(
                 error_free(manifest_err);
                 state_rollback(state);
             } else {
-                /* Update manifest with fallback logic */
+                /* Without --delete-files we release management immediately;
+                 * collect the precise paths manifest_remove_files marks so
+                 * the post-call cleanup acts only on this invocation's set,
+                 * not every STATE_DELETED row for the profile (which would
+                 * include rows from prior `remove --delete-files` calls
+                 * still awaiting apply). */
+                string_array_t *marked_paths = NULL;
+                if (!opts->delete_files) {
+                    marked_paths = string_array_new(0);
+                    /* Allocation failure is non-fatal: manifest_remove_files
+                     * still marks rows; we just skip the immediate release
+                     * pass below and leave them for apply. */
+                }
+
                 manifest_err = manifest_remove_files(
-                    repo,
-                    state,
-                    arena,
-                    opts->profile,
-                    removed_paths,
-                    enabled_profiles,
-                    &manifest_removed_count,
-                    &manifest_fallback_count
+                    repo, state, arena, opts->profile, removed_paths, enabled_profiles,
+                    marked_paths, &manifest_removed_count, &manifest_fallback_count
                 );
 
                 if (manifest_err) {
@@ -1102,25 +1109,15 @@ static error_t *remove_files_from_profile(
                 } else {
                     /* manifest_remove_files() marks entries STATE_DELETED.
                      * With --delete-files: leave them for apply to clean up.
-                     * Default: release immediately (no apply needed). */
-                    if (!opts->delete_files && manifest_removed_count > 0) {
-                        state_file_entry_t *delete_entries = NULL;
-                        size_t delete_count = 0;
-                        error_t *delete_err = state_get_entries_by_profile(
-                            state, opts->profile, arena, &delete_entries, &delete_count
-                        );
-                        if (!delete_err) {
-                            for (size_t di = 0; di < delete_count; di++) {
-                                if (delete_entries[di].state &&
-                                    strcmp(delete_entries[di].state, STATE_DELETED) == 0) {
-                                    error_t *rm_err = state_remove_file(
-                                        state, delete_entries[di].filesystem_path
-                                    );
-                                    if (rm_err) error_free(rm_err);
-                                }
-                            }
-                        } else {
-                            error_free(delete_err);
+                     * Default: release exactly the paths just marked. */
+                    if (marked_paths) {
+                        for (size_t i = 0; i < marked_paths->count; i++) {
+                            error_t *rm_err = state_remove_file(
+                                state, marked_paths->items[i]
+                            );
+                            /* ERR_NOT_FOUND is benign — the row may have
+                             * been collected already; nothing else to do. */
+                            if (rm_err) error_free(rm_err);
                         }
                     }
 
@@ -1155,6 +1152,7 @@ static error_t *remove_files_from_profile(
                     }
                 }
 
+                string_array_free(marked_paths);
                 string_array_free(enabled_profiles);
             }
         }

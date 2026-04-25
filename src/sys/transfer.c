@@ -40,7 +40,7 @@ typedef enum {
  *   - Credential identity (URL, cached username/password)
  *   - Credential state machine (acquisition → validation / rejection)
  *
- * Per-op counters (attempts, last_outcome, op scratch) are reset by
+ * Per-op counters (op_attempts, last_outcome, op scratch) are reset by
  * transfer_op_begin and classified/folded by transfer_op_end. The cached
  * credentials are filled at most once per session by the first successful
  * helper fill (cache-once identity pinning).
@@ -73,7 +73,7 @@ struct transfer_context_s {
     /* Session state machine */
     credential_state_t credential_state;
     transfer_outcome_t last_outcome;
-    int attempts;                   /* Per-op anti-loop counter. */
+    int op_attempts;                /* Per-op anti-loop counter. */
 
     /* Transport classification (cached from `url` at create time).
      * True for file:// or plain filesystem paths. libgit2's local push
@@ -208,6 +208,59 @@ error_t *transfer_context_create(
 }
 
 /**
+ * Commit the session's credential decision to the helper.
+ *
+ * Approve on VALIDATED (a successful op confirmed the cred), reject
+ * on REJECTED (an auth-failed op invalidated it). Other states never
+ * acquired creds in the first place — nothing to commit.
+ *
+ * Helper IPC errors (exec failure, timeout) are surfaced as warnings
+ * so users have a breadcrumb when the helper subprocess misbehaves;
+ * "helper has nothing to say about approve/reject" (a non-zero exit
+ * from a read-only helper) is intentionally not surfaced.
+ */
+static void transfer_commit_credential_decision(transfer_context_t *ctx) {
+    if (ctx->credential_state != CRED_STATE_VALIDATED &&
+        ctx->credential_state != CRED_STATE_REJECTED) {
+        return;
+    }
+    if (!ctx->url || !ctx->username || !ctx->password) {
+        return;
+    }
+
+    credential_url_t u = { 0 };
+    error_t *parse_err = credential_url_parse(ctx->url, &u);
+    if (parse_err) {
+        /* URL came from gitops_get_remote_url, so a parse failure here
+         * is an internal correctness issue rather than user-actionable.
+         * Surface verbose-only. */
+        output_print(
+            ctx->output, OUTPUT_VERBOSE,
+            "credential helper: skipping commit — %s\n",
+            error_message(parse_err)
+        );
+        error_free(parse_err);
+        return;
+    }
+
+    error_t *commit_err =
+        (ctx->credential_state == CRED_STATE_VALIDATED)
+        ? credential_helper_approve(&u, ctx->username, ctx->password)
+        : credential_helper_reject(&u, ctx->username, ctx->password);
+
+    if (commit_err) {
+        output_warning(
+            ctx->output, OUTPUT_NORMAL,
+            "credential helper: %s",
+            error_message(commit_err)
+        );
+        error_free(commit_err);
+    }
+
+    credential_url_dispose(&u);
+}
+
+/**
  * Free transfer context
  */
 void transfer_context_free(transfer_context_t *ctx) {
@@ -215,15 +268,7 @@ void transfer_context_free(transfer_context_t *ctx) {
         return;
     }
 
-    /* Commit the session's credential decision exactly once. Helper calls
-     * are guarded against empty inputs, so NOT_ACQUIRED / unresolved
-     * ACQUIRED states produce no helper traffic (SSH paths never populate
-     * username/password). */
-    if (ctx->credential_state == CRED_STATE_VALIDATED) {
-        credentials_helper_approve(ctx->url, ctx->username, ctx->password);
-    } else if (ctx->credential_state == CRED_STATE_REJECTED) {
-        credentials_helper_reject(ctx->url, ctx->username, ctx->password);
-    }
+    transfer_commit_credential_decision(ctx);
 
     /* Clear progress if still active (safety net for interrupted transfers) */
     if (ctx->progress_active && ctx->output) {
@@ -245,7 +290,7 @@ void transfer_context_free(transfer_context_t *ctx) {
  */
 void transfer_op_begin(transfer_context_t *xfer, git_direction direction) {
     if (!xfer) return;
-    xfer->attempts = 0;
+    xfer->op_attempts = 0;
     xfer->last_outcome = TRANSFER_OUTCOME_NONE;
     xfer->op.direction = direction;
     xfer->op.last_count = 0;
@@ -397,22 +442,39 @@ void transfer_progress_resolved(transfer_context_t *xfer) {
 }
 
 /**
+ * Drop credentials handed back by credential_helper_fill that we
+ * couldn't install (libgit2 cred construction failed under memory
+ * pressure). Both inputs are heap-owned and must be wiped before free.
+ */
+static void discard_obtained_credentials(char *user, char *pass) {
+    if (user) buffer_secure_free(user, strlen(user) + 1);
+    if (pass) buffer_secure_free(pass, strlen(pass) + 1);
+}
+
+/**
  * libgit2 credential callback.
  *
- * Runs two session-level gates before delegating to credentials_dispatch:
+ * Composes the credential primitives directly so all session policy
+ * — REJECTED fast-fail, anti-loop, cache-once, fill-then-cache,
+ * anonymous fallback — lives next to the state it touches.
  *
- *   1. Fast-fail on REJECTED — once the server has rejected helper creds
- *      in this session, subsequent ops skip sending the same creds. Saves
- *      a wasted round-trip per op in a multi-profile sync after an auth
- *      failure.
+ *   1. Fast-fail on REJECTED — once the server has rejected helper
+ *      creds in this session, subsequent ops skip sending the same
+ *      creds. Saves a wasted round-trip per op in a multi-profile
+ *      sync after an auth failure.
  *
  *   2. Anti-loop — libgit2 re-invokes this callback when the server
  *      rejects creds within a single negotiation. transfer_op_begin
  *      resets the per-op counter, so across-op retries are allowed.
  *
- * On a fresh helper fill, cache-once the credentials into the session
- * and advance the state to ACQUIRED so transfer_op_end() can then
- * transition to VALIDATED or REJECTED based on the op's outcome.
+ *   3. SSH path takes precedence when allowed; SSH never populates
+ *      the cred cache, so the session stays in NOT_ACQUIRED.
+ *
+ *   4. HTTPS userpass path: replay the cache-once cred if pinned;
+ *      otherwise parse the URL, fill the helper, install the cred,
+ *      and cache it for subsequent ops in the same session. Helper
+ *      / parse failures fall through to anonymous (public-repo path)
+ *      and finally libgit2's default.
  */
 int transfer_credentials_callback(
     git_credential **out,
@@ -423,47 +485,84 @@ int transfer_credentials_callback(
 ) {
     transfer_context_t *ctx = (transfer_context_t *) payload;
 
-    if (ctx && ctx->credential_state == CRED_STATE_REJECTED) {
-        return GIT_EAUTH;
+    if (ctx->credential_state == CRED_STATE_REJECTED) return GIT_EAUTH;
+    if (ctx->op_attempts++ > 0) return GIT_EAUTH;
+    if (!url) return GIT_PASSTHROUGH;
+
+    /* SSH path — agent then on-disk key. */
+    if (allowed_types & GIT_CREDENTIAL_SSH_KEY) {
+        if (credential_try_ssh(out, url, username_from_url) == 0) {
+            return 0;
+        }
     }
 
-    if (ctx && ctx->attempts++ > 0) {
-        return GIT_EAUTH;
-    }
-
-    char *obtained_user = NULL;
-    char *obtained_pass = NULL;
-
-    int rc = credentials_dispatch(
-        out, url, username_from_url, allowed_types,
-        ctx ? ctx->username : NULL,
-        ctx ? ctx->password : NULL,
-        &obtained_user,
-        &obtained_pass
-    );
-
-    if (rc == 0 && ctx && (obtained_user || obtained_pass)) {
-        /* Fresh helper fill — cache-once into the session. secure_replace
-         * wipes any stale value first (defensive: the REJECTED fast-fail
-         * above makes re-entry impossible today, but a future code-path
-         * change must not silently leak secrets through an overwrite). */
-        secure_replace(&ctx->username, obtained_user);
-        secure_replace(&ctx->password, obtained_pass);
+    /* HTTPS userpass path. */
+    if (allowed_types & GIT_CREDENTIAL_USERPASS_PLAINTEXT) {
+        /* Cache-once replay. If construction fails (memory pressure
+         * is the only realistic cause), fall through to the libgit2
+         * default rather than re-prompting the helper — the user
+         * already authed once, surprising them with a fresh prompt
+         * mid-session is worse than a passthrough. */
         if (ctx->username && ctx->password) {
-            transfer_mark_cred_acquired(ctx);
+            if (credential_make_userpass(out, ctx->username, ctx->password) == 0) {
+                return 0;
+            }
+            return credential_make_default(out) == 0 ? 0 : GIT_PASSTHROUGH;
         }
-    } else {
-        /* No cache side-effect (SSH, cache-hit, anonymous, default, or
-         * failure). Free anything dispatch may have handed back. */
-        if (obtained_user) {
-            buffer_secure_free(obtained_user, strlen(obtained_user) + 1);
+
+        /* Fresh fill from the helper. */
+        credential_url_t u = { 0 };
+        error_t *parse_err = credential_url_parse(url, &u);
+        char *fresh_user = NULL;
+        char *fresh_pass = NULL;
+
+        if (parse_err) {
+            output_print(
+                ctx->output, OUTPUT_VERBOSE,
+                "credential URL parse: %s\n", error_message(parse_err)
+            );
+            error_free(parse_err);
+        } else {
+            error_t *fill_err = credential_helper_fill(
+                &u, username_from_url, &fresh_user, &fresh_pass
+            );
+            credential_url_dispose(&u);
+
+            if (fill_err) {
+                /* Exec failure / timeout / malformed response — surface
+                 * to the user so they can diagnose helper issues. */
+                output_warning(
+                    ctx->output, OUTPUT_NORMAL,
+                    "credential helper: %s", error_message(fill_err)
+                );
+                error_free(fill_err);
+            }
         }
-        if (obtained_pass) {
-            buffer_secure_free(obtained_pass, strlen(obtained_pass) + 1);
+
+        if (fresh_user && fresh_pass) {
+            if (credential_make_userpass(out, fresh_user, fresh_pass) == 0) {
+                /* Cache-once: ownership of fresh_user/fresh_pass moves
+                 * into the session. secure_replace wipes any stale
+                 * value before installing the new one (defensive — the
+                 * REJECTED fast-fail above makes re-entry impossible
+                 * today, but a future code-path change must not
+                 * silently leak secrets through an overwrite). */
+                secure_replace(&ctx->username, fresh_user);
+                secure_replace(&ctx->password, fresh_pass);
+                transfer_mark_cred_acquired(ctx);
+                return 0;
+            }
+            discard_obtained_credentials(fresh_user, fresh_pass);
+        }
+
+        /* Anonymous fallback for public repos (no cache side-effect). */
+        if (credential_make_anonymous(out) == 0) {
+            return 0;
         }
     }
 
-    return rc;
+    /* Last resort — libgit2's platform-integrated default. */
+    return credential_make_default(out) == 0 ? 0 : GIT_PASSTHROUGH;
 }
 
 /**

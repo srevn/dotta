@@ -179,16 +179,17 @@ void transfer_summarize(
  * Wire transfer context into a libgit2 remote_callbacks struct.
  *
  * Installs the credential callback (always) and the progress callback
- * matching `direction`. NULL xfer is safe: payload becomes NULL and
- * the credential callback falls through to SSH/anonymous paths without
- * session tracking.
+ * matching `direction`. The transfer context is required — every
+ * gitops_* network primitive enforces this with CHECK_NULL, so a NULL
+ * payload here would be a dotta-internal contract violation, not a
+ * user-recoverable case.
  *
  * Ops with no byte transfer (e.g., git_remote_connect + git_remote_ls)
  * may pass GIT_DIRECTION_FETCH; the installed progress callback simply
  * never fires.
  *
  * @param cb        Callbacks struct (caller must have initialized it)
- * @param xfer      Transfer context (may be NULL)
+ * @param xfer      Transfer context (must not be NULL)
  * @param direction GIT_DIRECTION_FETCH or GIT_DIRECTION_PUSH
  */
 void transfer_configure_callbacks(

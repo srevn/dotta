@@ -16,9 +16,6 @@
 #include "base/string.h"
 #include "sys/process.h"
 
-/* Maximum length for username and password received from the helper. */
-#define CRED_MAX_LEN 256
-
 /* Credential helper subprocess timeout. Accommodates TouchID/Keychain
  * prompts and LDAP-backed corporate helpers on first use; a hung helper
  * is killed after this window so dotta does not wedge indefinitely. */
@@ -143,7 +140,7 @@ error_t *credential_url_parse(const char *url, credential_url_t *out) {
     const char *authority_start;
 
     if (scheme_sep) {
-        size_t plen = (size_t)(scheme_sep - url);
+        size_t plen = (size_t) (scheme_sep - url);
         if (plen == 0) {
             return ERROR(ERR_INVALID_ARG, "URL has empty scheme: %s", url);
         }
@@ -205,7 +202,7 @@ error_t *credential_url_parse(const char *url, credential_url_t *out) {
         }
     }
 
-    size_t host_len = (size_t)(authority_end - host_start);
+    size_t host_len = (size_t) (authority_end - host_start);
     char *host = malloc(host_len + 1);
     if (!host) {
         free(protocol);
@@ -344,105 +341,127 @@ static void credential_request_secure_free(buffer_t *req) {
 }
 
 /**
- * Run the git credential helper subcommand (approve/reject) for a single
- * credential tuple. Shared body for credentials_helper_{approve,reject}.
+ * Inspect a process_result_t for primitive-level helper failures
+ * (exec failed / timed out) and synthesize an error_t describing the
+ * cause. Returns NULL when the process completed normally — even when
+ * the exit code is non-zero, since many helpers signal "no creds for
+ * this URL" or "subcommand not implemented" via non-zero exit, which
+ * the caller treats as a non-fatal outcome.
  *
- * SECURITY: No user data is interpolated into any shell command — there
- * is no shell. argv is a fixed-literal vector; credential fields flow
- * through the subprocess stdin pipe assembled in build_credential_request.
+ * `subcommand` is woven into the message so the caller doesn't need
+ * to repeat the context.
  */
-static void credentials_helper_commit(
+static error_t *helper_outcome_error(
+    const char *subcommand, const process_result_t *result
+) {
+    if (result->exec_failed) {
+        return ERROR(
+            ERR_INTERNAL,
+            "git credential %s failed to execute (errno=%d)",
+            subcommand, result->exec_errno
+        );
+    }
+    if (result->timed_out) {
+        return ERROR(
+            ERR_INTERNAL,
+            "git credential %s timed out after %d seconds",
+            subcommand, CRED_HELPER_TIMEOUT_SECONDS
+        );
+    }
+    return NULL;
+}
+
+/**
+ * Run the git credential helper subcommand (approve/reject) for a
+ * single credential tuple. Shared body for
+ * credential_helper_{approve,reject}.
+ *
+ * SECURITY: No user data is interpolated into any shell command —
+ * there is no shell. argv is a fixed-literal vector; credential fields
+ * flow through the subprocess stdin pipe assembled in
+ * build_credential_request.
+ *
+ * A non-zero exit from the helper is NOT propagated as an error — many
+ * helpers are read-only and don't implement approve/reject. Only exec
+ * failure or timeout produce an error_t; the caller decides whether
+ * to surface it.
+ */
+static error_t *credential_helper_commit(
     const char *subcommand,
-    const char *url,
+    const credential_url_t *u,
     const char *username,
     const char *password
 ) {
-    if (!url || !username || !password || !*username || !*password) {
-        return;
+    if (!username || !password || !*username || !*password) {
+        return NULL;
     }
     if (!is_valid_credential_field(username) ||
         !is_valid_credential_field(password)) {
-        return;
-    }
-
-    credential_url_t u = {0};
-    error_t *parse_err = credential_url_parse(url, &u);
-    if (parse_err) {
-        error_free(parse_err);
-        return;
+        return ERROR(
+            ERR_INVALID_ARG,
+            "credential field contains protocol-breaking characters"
+        );
     }
 
     buffer_t req = BUFFER_INIT;
     error_t *err = build_credential_request(
-        &req, u.protocol, u.host, username, password
+        &req, u->protocol, u->host, username, password
     );
-    if (!err) {
-        process_result_t result = { 0 };
-        error_t *run_err = run_credential_helper(
-            subcommand, req.data, req.size, false, &result
-        );
-        if (run_err) error_free(run_err);
-        process_result_dispose(&result);
-        /* Approve / reject are best-effort: the caller's state
-         * machine has already classified this session, and the
-         * user observes any downstream failure at the next auth
-         * attempt. Silent failure here is intentional. */
-    } else {
-        error_free(err);
+    if (err) {
+        credential_request_secure_free(&req);
+        return err;
     }
+
+    process_result_t result = { 0 };
+    err = run_credential_helper(
+        subcommand, req.data, req.size, false, &result
+    );
     credential_request_secure_free(&req);
 
-    credential_url_dispose(&u);
+    if (!err) {
+        err = helper_outcome_error(subcommand, &result);
+    }
+    process_result_dispose(&result);
+    return err;
 }
 
-void credentials_helper_approve(
-    const char *url, const char *username, const char *password
+error_t *credential_helper_approve(
+    const credential_url_t *u, const char *user, const char *pass
 ) {
-    credentials_helper_commit("approve", url, username, password);
+    CHECK_NULL(u);
+    return credential_helper_commit("approve", u, user, pass);
 }
 
-void credentials_helper_reject(
-    const char *url, const char *username, const char *password
+error_t *credential_helper_reject(
+    const credential_url_t *u, const char *user, const char *pass
 ) {
-    credentials_helper_commit("reject", url, username, password);
+    CHECK_NULL(u);
+    return credential_helper_commit("reject", u, user, pass);
 }
 
 /**
- * Check if a file exists and is readable.
+ * Scrub the helper-response capture buffer (which held the password)
+ * before process_result_dispose releases it back to the allocator.
  */
-static bool file_exists(const char *path) {
-    return access(path, R_OK) == 0;
+static void scrub_helper_output(process_result_t *result) {
+    if (result->output) {
+        hydro_memzero(result->output, result->output_len);
+    }
 }
 
-/**
- * Query the git credential helper for credentials.
- *
- * Spawns `git credential fill` via sys/process — no shell, no heredoc.
- * The request is written over a pipe built by PROCESS_STDIN_BUFFER; the
- * response is captured into process_result_t.output and parsed in place.
- *
- * Protocol and host travel as a parsed credential_url_t — already
- * validated at parse time, so this function does not re-walk the URL.
- * A helper that emits a password containing a newline cannot inject
- * additional request lines into its own next invocation, because the
- * request is assembled fresh each time.
- *
- * @param u                 Parsed remote URL (protocol + host)
- * @param username_from_url Username encoded in URL (may be NULL/empty);
- *                          forwarded to the helper so multi-account
- *                          configs disambiguate per URL.
- * @param username          Output buffer for username
- * @param password          Output buffer for password
- * @param max_len           Size of output buffers
- * @return 0 on success, -1 on failure
- */
-static int get_credentials_from_helper(
+error_t *credential_helper_fill(
     const credential_url_t *u,
     const char *username_from_url,
-    char *username,
-    char *password,
-    size_t max_len
+    char **out_user,
+    char **out_pass
 ) {
+    CHECK_NULL(u);
+    CHECK_NULL(out_user);
+    CHECK_NULL(out_pass);
+
+    *out_user = NULL;
+    *out_pass = NULL;
+
     bool forward_user = username_from_url && *username_from_url &&
         is_valid_credential_field(username_from_url);
 
@@ -457,9 +476,8 @@ static int get_credentials_from_helper(
         NULL
     );
     if (err) {
-        error_free(err);
         credential_request_secure_free(&req);
-        return -1;
+        return err;
     }
 
     process_result_t result = { 0 };
@@ -471,53 +489,112 @@ static int get_credentials_from_helper(
      * leak a newly added field. */
     credential_request_secure_free(&req);
 
-    int rc = -1;
-    username[0] = '\0';
-    password[0] = '\0';
+    if (err) {
+        scrub_helper_output(&result);
+        process_result_dispose(&result);
+        return err;
+    }
 
-    if (!err && !result.exec_failed && !result.timed_out &&
-        result.exit_code == 0 && result.output) {
-        /* Parse key=value\n lines from stdout. Helper stderr is merged
-         * into the same capture stream; lines that don't match the
-         * key=value shape are skipped (benign). The parse is
-         * destructive — it rewrites the output buffer — which is fine
-         * because the buffer is scrubbed and freed immediately below. */
-        char *p = result.output;
-        while (p && *p) {
-            char *line_end = strchr(p, '\n');
-            if (!line_end) break;
-            *line_end = '\0';
-            char *eq = strchr(p, '=');
-            if (eq) {
-                *eq = '\0';
-                const char *key = p;
-                const char *value = eq + 1;
-                if (strcmp(key, "username") == 0) {
-                    strncpy(username, value, max_len - 1);
-                    username[max_len - 1] = '\0';
-                } else if (strcmp(key, "password") == 0) {
-                    strncpy(password, value, max_len - 1);
-                    password[max_len - 1] = '\0';
+    err = helper_outcome_error("fill", &result);
+    if (err) {
+        scrub_helper_output(&result);
+        process_result_dispose(&result);
+        return err;
+    }
+
+    /* A non-zero exit means "helper has nothing for this URL" — common
+     * (helper not configured, public repo). Not an error; the caller
+     * falls through to its anonymous / default path. */
+    if (result.exit_code != 0 || !result.output) {
+        scrub_helper_output(&result);
+        process_result_dispose(&result);
+        return NULL;
+    }
+
+    /* Parse key=value\n lines from stdout. Helper stderr is merged
+     * into the same capture stream; lines that don't match the
+     * key=value shape are skipped (benign). The parse is destructive —
+     * it rewrites the output buffer — which is fine because the
+     * buffer is scrubbed and freed immediately below.
+     *
+     * strdup'ing each value gives a right-sized heap allocation
+     * (no fixed-buffer truncation) that the caller scrubs and
+     * frees with buffer_secure_free. */
+    char *user_buf = NULL;
+    char *pass_buf = NULL;
+    error_t *parse_err = NULL;
+
+    for (char *p = result.output; p && *p && !parse_err;) {
+        char *line_end = strchr(p, '\n');
+        if (!line_end) break;
+        *line_end = '\0';
+
+        char *eq = strchr(p, '=');
+        if (eq) {
+            *eq = '\0';
+            const char *key = p;
+            const char *value = eq + 1;
+            if (strcmp(key, "username") == 0 && !user_buf) {
+                user_buf = strdup(value);
+                if (!user_buf) {
+                    parse_err = ERROR(
+                        ERR_MEMORY, "Failed to copy helper username"
+                    );
+                }
+            } else if (strcmp(key, "password") == 0 && !pass_buf) {
+                pass_buf = strdup(value);
+                if (!pass_buf) {
+                    parse_err = ERROR(
+                        ERR_MEMORY, "Failed to copy helper password"
+                    );
                 }
             }
-            p = line_end + 1;
         }
-        if (username[0] != '\0' || password[0] != '\0') {
-            rc = 0;
-        }
+        p = line_end + 1;
     }
 
-    if (err) error_free(err);
-
-    /* Output buffer held the helper response, password included.
-     * process_result_dispose free()s it unscrubbed; zero the bytes
-     * first so they do not linger on the freelist. */
-    if (result.output) {
-        hydro_memzero(result.output, result.output_len);
-    }
+    scrub_helper_output(&result);
     process_result_dispose(&result);
 
-    return rc;
+    if (parse_err) {
+        if (user_buf) buffer_secure_free(user_buf, strlen(user_buf) + 1);
+        if (pass_buf) buffer_secure_free(pass_buf, strlen(pass_buf) + 1);
+        return parse_err;
+    }
+
+    /* Atomic both-or-neither: a partial response is treated as "no
+     * creds" so the caller falls through cleanly. The git credential
+     * protocol contracts both fields on a successful fill. */
+    if (!user_buf || !pass_buf) {
+        if (user_buf) buffer_secure_free(user_buf, strlen(user_buf) + 1);
+        if (pass_buf) buffer_secure_free(pass_buf, strlen(pass_buf) + 1);
+        return NULL;
+    }
+
+    /* Defensive: a misbehaving helper can't inject additional protocol
+     * lines (we rebuild the request from scratch each call), but it
+     * could poison fields we forward elsewhere. Reject malformed values
+     * outright. */
+    if (!is_valid_credential_field(user_buf) ||
+        !is_valid_credential_field(pass_buf)) {
+        buffer_secure_free(user_buf, strlen(user_buf) + 1);
+        buffer_secure_free(pass_buf, strlen(pass_buf) + 1);
+        return ERROR(
+            ERR_INTERNAL,
+            "git credential helper returned malformed fields"
+        );
+    }
+
+    *out_user = user_buf;
+    *out_pass = pass_buf;
+    return NULL;
+}
+
+/**
+ * Check if a file exists and is readable.
+ */
+static bool file_exists(const char *path) {
+    return access(path, R_OK) == 0;
 }
 
 /**
@@ -557,19 +634,19 @@ static char *find_ssh_key(void) {
     return NULL;
 }
 
-/**
- * Try SSH-based credential acquisition (agent + key files).
- *
- * @return 0 on success (cred installed), -1 if no SSH path succeeded
- */
-static int try_ssh_credentials(
+int credential_try_ssh(
     git_credential **out,
     const char *url,
     const char *username_from_url
 ) {
     const char *username = username_from_url;
-    if (!username) {
-        /* Default SSH username for common URL shapes */
+    if (!username && url) {
+        /* Default SSH username for the common URL shapes that don't
+         * already encode one. libgit2 itself extracts userinfo for
+         * standard ssh://user@host paths and SCP-style user@host:path,
+         * so the only case we still need to cover is the bare `git@`
+         * convention with no userinfo and the `ssh://host/path` form
+         * — both default to "git" in practice. */
         if (str_starts_with(url, "git@") || strstr(url, "ssh://") != NULL) {
             username = "git";
         }
@@ -596,7 +673,9 @@ static int try_ssh_credentials(
             username ? username : "git",
             pub_key_path,
             ssh_key_path,
-            NULL  /* empty passphrase */
+            NULL  /* empty passphrase — encrypted keys without an agent
+                   * are not supported; users hit ssh-add or fall back
+                   * to the helper path. */
         );
         free(pub_key_path);
     }
@@ -605,111 +684,16 @@ static int try_ssh_credentials(
     return (err == 0) ? 0 : -1;
 }
 
-/**
- * Try HTTPS userpass credential acquisition (cache → helper → anonymous).
- *
- * @param out_username  On fresh helper fill, receives strdup'd copy
- *                      (may be NULL to opt out)
- * @param out_password  On fresh helper fill, receives strdup'd copy
- *                      (may be NULL to opt out)
- * @return 0 on success (cred installed), -1 otherwise
- */
-static int try_userpass_credentials(
-    git_credential **out,
-    const char *url,
-    const char *username_from_url,
-    const char *cached_username,
-    const char *cached_password,
-    char **out_username,
-    char **out_password
+int credential_make_userpass(
+    git_credential **out, const char *user, const char *pass
 ) {
-    /* Cache-once: wrap cached creds without re-querying the helper. */
-    if (cached_username && *cached_username &&
-        cached_password && *cached_password) {
-        if (git_credential_userpass_plaintext_new(
-            out, cached_username, cached_password
-            ) == 0) {
-            return 0;
-        }
-    }
-
-    credential_url_t u = {0};
-    error_t *parse_err = credential_url_parse(url, &u);
-    int result = -1;
-
-    if (!parse_err) {
-        char cred_username[CRED_MAX_LEN];
-        char cred_password[CRED_MAX_LEN];
-
-        if (get_credentials_from_helper(
-            &u, username_from_url,
-            cred_username, cred_password, CRED_MAX_LEN
-            ) == 0) {
-            if (git_credential_userpass_plaintext_new(
-                out, cred_username, cred_password
-                ) == 0) {
-                /* Hand fresh creds back to the caller for session caching.
-                 * Heap copies because the caller's lifetime outlives this
-                 * function's stack. */
-                if (out_username) {
-                    *out_username = strdup(cred_username);
-                }
-                if (out_password) {
-                    *out_password = strdup(cred_password);
-                }
-                result = 0;
-            }
-        } else {
-            /* Anonymous access for public repos (no cache side-effect). */
-            if (git_credential_userpass_plaintext_new(out, "", "") == 0) {
-                result = 0;
-            }
-        }
-
-        /* Wipe stack buffers that may still hold credential bytes. */
-        hydro_memzero(cred_username, sizeof(cred_username));
-        hydro_memzero(cred_password, sizeof(cred_password));
-    } else {
-        error_free(parse_err);
-    }
-
-    credential_url_dispose(&u);
-    return result;
+    return git_credential_userpass_plaintext_new(out, user, pass);
 }
 
-int credentials_dispatch(
-    git_credential **out,
-    const char *url,
-    const char *username_from_url,
-    unsigned int allowed_types,
-    const char *cached_username,
-    const char *cached_password,
-    char **out_username,
-    char **out_password
-) {
-    if (!url) {
-        return GIT_PASSTHROUGH;
-    }
+int credential_make_anonymous(git_credential **out) {
+    return git_credential_userpass_plaintext_new(out, "", "");
+}
 
-    if ((allowed_types & GIT_CREDENTIAL_SSH_KEY) &&
-        try_ssh_credentials(out, url, username_from_url) == 0) {
-        return 0;
-    }
-
-    if ((allowed_types & GIT_CREDENTIAL_USERPASS_PLAINTEXT) &&
-        try_userpass_credentials(
-        out, url, username_from_url,
-        cached_username, cached_password,
-        out_username, out_password
-        ) == 0) {
-        return 0;
-    }
-
-    /* Try default credentials (uses git credential helpers) */
-    if (git_credential_default_new(out) == 0) {
-        return 0;
-    }
-
-    /* Pass through to let libgit2 try without credentials (for public repos) */
-    return GIT_PASSTHROUGH;
+int credential_make_default(git_credential **out) {
+    return git_credential_default_new(out);
 }

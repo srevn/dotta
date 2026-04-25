@@ -9,7 +9,10 @@
  *   - Precedence Oracle: Uses manifest_build() for correctness
  *   - Transaction Management: Caller manages transactions, we operate within them
  *   - Blob OID Extraction: Reads pre-populated blob_oid from file_entry_t for O(1) content identity
- *   - Metadata Integration: Uses metadata_load_from_profiles() for merged view
+ *   - Metadata Integration: manifest_build attributes per-profile metadata
+ *     onto each file_entry_t during the tree walk (single profile per entry,
+ *     no cross-profile merge — storage_path collisions across profiles with
+ *     distinct custom_prefix values are kept apart).
  */
 
 #include "core/manifest.h"
@@ -82,7 +85,7 @@ error_t *manifest_persist_profile_head(
  *   state_update_anchor(), which is the sole legitimate witness writer.
  *
  *   It does stamp anchor.observed_at on INSERT when the target path exists
- *   on disk (see step 5 of the body). The UPSERT's monotonic CASE preserves
+ *   on disk (see step 1 of the body). The UPSERT's monotonic CASE preserves
  *   any existing non-zero observed_at on UPDATE, so repeat calls are
  *   idempotent on that column.
  *
@@ -92,8 +95,13 @@ error_t *manifest_persist_profile_head(
  *   separate concern, handled by state_clear_old_profile() once the
  *   user has been shown the reassignment.
  *
- * Callers must use entries from manifest_build (or equivalent) where
- * the blob_oid is pre-populated.
+ * Single-source-of-truth contract: the entry IS the source. mode, owner,
+ * group, and encrypted are read directly from manifest_entry — manifest_build
+ * has already attributed each entry to its source profile and applied that
+ * profile's metadata.json claim during the tree walk. No metadata side-
+ * channel is consulted here, which is what keeps storage_path collisions
+ * across profiles with distinct custom_prefix values from cross-contaminating
+ * the row (each entry's metadata-owned fields belong to exactly one profile).
  *
  * The witness columns (deployed_blob_oid, deployed_at, stat_*) are left
  * untouched — the UPSERT preserves them on UPDATE, and on INSERT they
@@ -109,59 +117,21 @@ error_t *manifest_persist_profile_head(
  * @param repo Git repository
  * @param state State handle (with active transaction)
  * @param manifest_entry Entry from in-memory manifest (borrowed); MUST have
- *                       blob_oid and profile set (guaranteed for entries
- *                       from manifest_build)
- * @param metadata Merged metadata from all profiles
+ *                       blob_oid, profile, and metadata-owned fields
+ *                       populated (guaranteed for entries from manifest_build)
  * @return Error or NULL on success
  */
 static error_t *sync_entry_to_state(
     git_repository *repo,
     state_t *state,
-    const file_entry_t *manifest_entry,
-    const metadata_t *metadata
+    const file_entry_t *manifest_entry
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(state);
     CHECK_NULL(manifest_entry);
     CHECK_NULL(manifest_entry->profile);
 
-    error_t *err = NULL;
-    const metadata_item_t *meta_item = NULL;
-
-    /* 1. Read blob_oid from pre-populated entry field (set during tree walk). */
-    const git_oid *blob_oid_obj = &manifest_entry->blob_oid;
-
-    /* 2. Get metadata item (may not exist for old profiles) */
-    if (metadata) {
-        err = metadata_get_item(
-            metadata, manifest_entry->storage_path, &meta_item
-        );
-        /* Allow NOT_FOUND (old profiles without metadata) */
-        if (err && err->code != ERR_NOT_FOUND) {
-            return err;
-        }
-        if (err) {
-            error_free(err);
-            err = NULL;
-        }
-    }
-
-    /* 3. Read file type and mode from pre-populated entry fields.
-     *
-     * These were derived from git_tree_entry_filemode() during the tree walk
-     * callback and stored as scalar fields on file_entry_t. */
-    state_file_type_t file_type = manifest_entry->type;
-    mode_t git_mode = manifest_entry->mode;
-
-    /* 4. Determine mode with metadata precedence (no allocation needed!)
-     *
-     * Precedence Rules:
-     *   1. Metadata mode (if present) - explicit user intent, may differ from Git
-     *      Example: User wants 0600 (private) instead of Git's 0644
-     *   2. Git mode (fallback) - authoritative for type, good default for permissions */
-    mode_t mode = meta_item ? meta_item->mode : git_mode;
-
-    /* 5. Probe the filesystem so we can stamp the observation signal on
+    /* 1. Probe the filesystem so we can stamp the observation signal on
      * INSERT. observed_at answers "has dotta ever lstat-confirmed this
      * path on disk in scope?" — the classifier uses it to distinguish
      * a ghost file (never seen, classifies UNDEPLOYED) from a file the
@@ -178,7 +148,7 @@ static error_t *sync_entry_to_state(
         observed_at = time(NULL);
     }
 
-    /* 6. Build state entry. blob_oid is an inline struct copy from the
+    /* 2. Build state entry. blob_oid is an inline struct copy from the
      * pre-populated entry field. commit_oid lives in enabled_profiles
      * (per-profile, not per-file) and is refreshed via manifest_persist_profile_head().
      *
@@ -195,13 +165,12 @@ static error_t *sync_entry_to_state(
         .filesystem_path = manifest_entry->filesystem_path,
         .profile         = (char *) manifest_entry->profile,
         .old_profile     = NULL,
-        .type            = file_type,
-        .blob_oid        = *blob_oid_obj,
-        .mode            = mode,
-        .owner           = meta_item ? meta_item->owner : NULL,
-        .group           = meta_item ? meta_item->group : NULL,
-        .encrypted       = (meta_item && meta_item->kind == METADATA_ITEM_FILE)
-                         ? meta_item->file.encrypted : false,
+        .type            = manifest_entry->type,
+        .blob_oid        = manifest_entry->blob_oid,
+        .mode            = manifest_entry->mode,
+        .owner           = manifest_entry->owner,
+        .group           = manifest_entry->group,
+        .encrypted       = manifest_entry->encrypted,
         .state           = STATE_ACTIVE,
         .anchor          = {
             .blob_oid    = { { 0 } },
@@ -211,14 +180,14 @@ static error_t *sync_entry_to_state(
         },
     };
 
-    /* 7. Write entry to state (UPSERT).
+    /* 3. Write entry to state (UPSERT).
      *
      * With old_profile bound to NULL, state_add_file's ON CONFLICT CASE
      * auto-captures the prior profile when the profile column changes
      * and preserves existing values otherwise — reassignment tracking
      * happens in a single atomic operation without a read-before-write.
      */
-    err = state_add_file(state, &state_entry);
+    error_t *err = state_add_file(state, &state_entry);
     if (err) {
         err = error_wrap(
             err, "Failed to sync manifest entry for %s",
@@ -237,20 +206,21 @@ static error_t *sync_entry_to_state(
  * docstring for the ordering rule).
  *
  * Algorithm:
- *   1. Snapshot current virtual_manifest (arena-backed, used by step 5).
- *   2. Build fresh precedence manifest from state-authoritative scope.
- *   3. Load merged metadata (missing metadata tolerated — sync_entry_to_state
- *      falls back to Git-derived mode for old profiles without metadata.json).
- *   4. UPSERT every entry in the new manifest. The SQL UPSERT preserves
+ *   1. Build fresh precedence manifest from state-authoritative scope.
+ *      manifest_build attributes per-profile metadata to each entry during
+ *      the tree walk; sync_entry_to_state then writes the entry's already-
+ *      attributed mode/owner/group/encrypted directly to the row.
+ *   2. Snapshot current virtual_manifest (arena-backed, used by step 3).
+ *   3. UPSERT every entry in the new manifest. The SQL UPSERT preserves
  *      the deployment anchor on UPDATE, auto-captures old_profile when
  *      the profile column changes, and unconditionally writes
  *      state=STATE_ACTIVE (which reactivates any STATE_INACTIVE row
  *      whose path re-entered scope).
- *   5. Orphan pass. For every pre-reconcile row:
+ *   4. Orphan pass. For every pre-reconcile row:
  *        - In new manifest: owner-change stats only (row already updated).
  *        - Not in new manifest: STATE_ACTIVE → STATE_INACTIVE.
  *          STATE_INACTIVE / STATE_DELETED / STATE_RELEASED preserved.
- *   6. Rebuild tracked_directories (mark-ACTIVE-inactive then reactivate).
+ *   5. Rebuild tracked_directories (mark-ACTIVE-inactive then reactivate).
  */
 error_t *manifest_apply_scope(
     git_repository *repo,
@@ -277,7 +247,6 @@ error_t *manifest_apply_scope(
     error_t *err = NULL;
     string_array_t *enabled = NULL;
     manifest_t *new_manifest = NULL;
-    metadata_t *metadata = NULL;
     state_file_entry_t *old_entries = NULL;
     size_t old_count = 0;
     hashmap_t *stats_map = NULL;
@@ -309,22 +278,12 @@ error_t *manifest_apply_scope(
         goto cleanup;
     }
 
-    /* Step 3: Load merged metadata. ERR_NOT_FOUND is tolerated — old
-     * profiles may lack metadata.json, and sync_entry_to_state reads
-     * the merged view NULL-gracefully (falls back to Git-derived mode). */
-    err = metadata_load_from_profiles(repo, enabled, &metadata);
-    if (err) {
-        if (err->code != ERR_NOT_FOUND) goto cleanup;
-        error_free(err);
-        err = NULL;
-    }
-
-    /* Step 4: Snapshot the current virtual_manifest rows (all states).
+    /* Step 3: Snapshot the current virtual_manifest rows (all states).
      *
-     * Captured BEFORE step 5's UPSERTs so the orphan pass sees pre-
+     * Captured BEFORE step 4's UPSERTs so the orphan pass sees pre-
      * reconcile state — "was this path previously managed?" is a
      * function of the snapshot, not of the in-flight UPDATE that step
-     * 5 may have just committed. Arena-allocated: no explicit free. */
+     * 4 may have just committed. Arena-allocated: no explicit free. */
     err = state_get_all_files(state, arena, &old_entries, &old_count);
     if (err) {
         err = error_wrap(err, "Failed to snapshot current manifest");
@@ -369,7 +328,7 @@ error_t *manifest_apply_scope(
         }
     }
 
-    /* Step 5: Sync every entry in the new manifest.
+    /* Step 4: Sync every entry in the new manifest.
      *
      * UPSERT semantics (see state.c::sql_insert):
      *   - New path: INSERT with state=ACTIVE, deployed_at=0, anchor unset.
@@ -415,7 +374,7 @@ error_t *manifest_apply_scope(
             }
         }
 
-        err = sync_entry_to_state(repo, state, entry, metadata);
+        err = sync_entry_to_state(repo, state, entry);
         if (err) {
             err = error_wrap(
                 err, "Failed to sync '%s' during scope reconcile",
@@ -425,7 +384,7 @@ error_t *manifest_apply_scope(
         }
     }
 
-    /* Step 6: Orphan pass over the pre-reconcile snapshot.
+    /* Step 5: Orphan pass over the pre-reconcile snapshot.
      *
      * A row whose filesystem_path is NOT in the new manifest's index
      * left scope entirely. Flip STATE_ACTIVE → STATE_INACTIVE; leave
@@ -434,7 +393,7 @@ error_t *manifest_apply_scope(
      * deletion upgrade path in remove.c), and STATE_RELEASED (external
      * drift classification; downgrading would clobber it) untouched.
      *
-     * A row still in the new manifest was already updated in step 5;
+     * A row still in the new manifest was already updated in step 4;
      * we only harvest loss-side stats here (reassignment between
      * precedence winners). */
     for (size_t i = 0; i < old_count; i++) {
@@ -488,7 +447,7 @@ error_t *manifest_apply_scope(
         }
     }
 
-    /* Step 7: Rebuild tracked_directories from the new scope.
+    /* Step 6: Rebuild tracked_directories from the new scope.
      *
      * manifest_sync_directories uses the mark-ACTIVE-as-INACTIVE then
      * reactivate pattern (see state_mark_all_directories_inactive —
@@ -506,7 +465,6 @@ error_t *manifest_apply_scope(
 cleanup:
     /* old_entries is arena-backed — destruction is bundled with arena_destroy. */
     if (stats_map) hashmap_free(stats_map, NULL);
-    if (metadata) metadata_free(metadata);
     if (new_manifest) manifest_free(new_manifest);
     string_array_free(enabled);
     arena_destroy(arena);
@@ -578,14 +536,17 @@ error_t *manifest_remove_files(
 
     error_t *err = NULL;
     manifest_t *fresh_manifest = NULL;
-    metadata_t *metadata = NULL;
     size_t removed_count = 0;
     size_t fallback_count = 0;
 
     arena_t *arena = arena_create(64 * 1024);
     if (!arena) return ERROR(ERR_MEMORY, "Failed to create manifest arena");
 
-    /* 1. Build fresh manifest from current Git state (post-removal) */
+    /* 1. Build fresh manifest from current Git state (post-removal).
+     *
+     * manifest_build attributes per-profile metadata to each entry during
+     * the tree walk, so any fallback selected from this manifest already
+     * carries the correct mode/owner/group/encrypted for its source profile. */
     err = manifest_build(repo, enabled_profiles, state, arena, &fresh_manifest);
     if (err) {
         arena_destroy(arena);
@@ -594,24 +555,7 @@ error_t *manifest_remove_files(
         );
     }
 
-    /* 2. Load merged metadata from enabled profiles for fallback resolution
-     *
-     * Metadata is authoritative for mode, owner, group, encrypted fields.
-     * sync_entry_to_state uses this to correctly populate fallback entries.
-     */
-    err = metadata_load_from_profiles(repo, enabled_profiles, &metadata);
-    if (err && err->code != ERR_NOT_FOUND) {
-        err = error_wrap(err, "Failed to load metadata");
-        goto cleanup;
-    }
-    if (err) {
-        /* Non-fatal: Old profiles may not have metadata.json
-         * sync_entry_to_state handles NULL metadata gracefully (uses Git defaults) */
-        error_free(err);
-        err = NULL;
-    }
-
-    /* 3/4. Process each removed file. */
+    /* 2. Process each removed file. */
     const char *removed_custom_prefix = state_peek_profile_prefix(state, removed_profile);
 
     for (size_t i = 0; i < removed_storage_paths->count; i++) {
@@ -665,7 +609,7 @@ error_t *manifest_remove_files(
             /* Fallback found — sync complete entry from fallback profile.
              * deployed_at preserved by SQL UPSERT, old_profile auto-captured
              * by SQL when the owning profile changes. */
-            err = sync_entry_to_state(repo, state, fallback, metadata);
+            err = sync_entry_to_state(repo, state, fallback);
             if (err) {
                 err = error_wrap(
                     err, "Failed to sync fallback for %s", filesystem_path
@@ -723,14 +667,13 @@ error_t *manifest_remove_files(
     err = manifest_persist_profile_head(repo, state, removed_profile);
     if (err) goto cleanup;
 
-    /* 5. Sync tracked directories */
+    /* 3. Sync tracked directories */
     err = manifest_sync_directories(repo, state, enabled_profiles);
     if (err) {
         goto cleanup;
     }
 
 cleanup:
-    if (metadata) metadata_free(metadata);
     if (fresh_manifest) manifest_free(fresh_manifest);
     arena_destroy(arena);
 
@@ -841,7 +784,6 @@ static error_t *manifest_repair_stale(
     hashmap_t *profile_scope = NULL;
     hashmap_t *stale_profiles = NULL;
     manifest_t *fresh_manifest = NULL;
-    metadata_t *metadata = NULL;
 
     arena_t *arena = arena_create(64 * 1024);
     if (!arena) return ERROR(ERR_MEMORY, "Failed to create manifest arena");
@@ -881,22 +823,14 @@ static error_t *manifest_repair_stale(
     }
 
     /* Phase 2: Build fresh manifest from current Git state.
-     * This gives us the ground truth for what files should exist. */
+     * Provides the ground truth for what files should exist. The build
+     * attributes per-profile metadata onto each entry, so the repair pass
+     * below propagates the correct metadata for whichever profile won
+     * precedence after Git moved underneath us. */
     err = manifest_build(repo, enabled_profiles, state, arena, &fresh_manifest);
     if (err) {
         err = error_wrap(err, "Failed to build fresh manifest for stale repair");
         goto cleanup;
-    }
-
-    /* Load merged metadata from all enabled profiles */
-    err = metadata_load_from_profiles(repo, enabled_profiles, &metadata);
-    if (err) {
-        if (err->code != ERR_NOT_FOUND) {
-            goto cleanup;
-        }
-        /* Old profiles without metadata — proceed with NULL */
-        error_free(err);
-        err = NULL;
     }
 
     /* Phase 3: Process ACTIVE state entries from stale profiles.
@@ -951,7 +885,7 @@ static error_t *manifest_repair_stale(
              * by SQL when the owning profile shifts during repair. */
             bool profile_shifted = strcmp(fresh_entry->profile, entry->profile) != 0;
 
-            err = sync_entry_to_state(repo, state, fresh_entry, metadata);
+            err = sync_entry_to_state(repo, state, fresh_entry);
             if (err) {
                 err = error_wrap(
                     err, "Failed to repair stale entry '%s'",
@@ -1002,7 +936,7 @@ static error_t *manifest_repair_stale(
         if (err) goto cleanup;
     }
 
-    /* Phase 5: Sync tracked directories to reflect current Git state.
+    /* Phase 4: Sync tracked directories to reflect current Git state.
      *
      * External Git changes may have added/removed directories in metadata.
      * Re-syncing ensures the tracked_directories table is consistent. */
@@ -1015,7 +949,6 @@ static error_t *manifest_repair_stale(
 cleanup:
     if (stale_profiles) hashmap_free(stale_profiles, NULL);
     if (profile_scope) hashmap_free(profile_scope, NULL);
-    if (metadata) metadata_free(metadata);
     if (fresh_manifest) manifest_free(fresh_manifest);
     arena_destroy(arena);
 
@@ -1170,12 +1103,15 @@ error_t *manifest_update_files(
 
     error_t *err = NULL;
     manifest_t *fresh_manifest = NULL;
-    metadata_t *metadata = NULL;
 
     arena_t *arena = arena_create(64 * 1024);
     if (!arena) return ERROR(ERR_MEMORY, "Failed to create manifest arena");
 
-    /* 1. Build FRESH manifest from Git (post-commit state) */
+    /* 1. Build FRESH manifest from Git (post-commit state).
+     *
+     * manifest_build attributes per-profile metadata onto each entry, so the
+     * sync loop below feeds sync_entry_to_state entries that already carry
+     * the correct mode/owner/group/encrypted for their source profile. */
     err = manifest_build(repo, enabled_profiles, state, arena, &fresh_manifest);
     if (err) {
         arena_destroy(arena);
@@ -1188,20 +1124,7 @@ error_t *manifest_update_files(
         goto cleanup;
     }
 
-    /* 3. Load fresh merged metadata from Git (post-commit state) */
-    err = metadata_load_from_profiles(repo, enabled_profiles, &metadata);
-    if (err && err->code != ERR_NOT_FOUND) {
-        err = error_wrap(err, "Failed to load metadata for manifest sync");
-        goto cleanup;
-    }
-    if (err) {
-        /* Non-fatal: Old profiles may not have metadata.json
-         * sync_entry_to_state handles NULL metadata gracefully (uses Git defaults) */
-        error_free(err);
-        err = NULL;
-    }
-
-    /* 4. Process each item */
+    /* 3. Process each item */
     for (size_t i = 0; i < item_count; i++) {
         const workspace_item_t *item = items[i];
 
@@ -1223,7 +1146,7 @@ error_t *manifest_update_files(
                 /* Fallback found — update manifest to the fallback profile.
                  * deployed_at preserved by SQL UPSERT, old_profile auto-captured
                  * by SQL when the owning profile changes. */
-                err = sync_entry_to_state(repo, state, fallback, metadata);
+                err = sync_entry_to_state(repo, state, fallback);
                 if (err) {
                     err = error_wrap(
                         err, "Failed to sync fallback for '%s'",
@@ -1311,7 +1234,7 @@ error_t *manifest_update_files(
              * Lifecycle stamping is the paired state_update_anchor's job below —
              * the UPSERT preserves deployed_at on UPDATE regardless of what we
              * pass here, so a non-zero value would be silently ineffective. */
-            err = sync_entry_to_state(repo, state, entry, metadata);
+            err = sync_entry_to_state(repo, state, entry);
             if (err) {
                 err = error_wrap(
                     err, "Failed to sync '%s' to manifest", item->filesystem_path
@@ -1347,7 +1270,7 @@ error_t *manifest_update_files(
         }
     }
 
-    /* 5. After updating files, synchronize commit_oid for ALL files from affected profiles.
+    /* 4. After updating files, synchronize commit_oid for ALL files from affected profiles.
      * Each profile that had files updated has a new HEAD commit.
      * Build set of unique profile names from items and sync each. */
     string_array_t *updated_profiles = string_array_new(0);
@@ -1377,7 +1300,7 @@ error_t *manifest_update_files(
         }
     }
 
-    /* 6. Set stored commit_oid for each profile whose HEAD moved */
+    /* 5. Set stored commit_oid for each profile whose HEAD moved */
     for (size_t i = 0; i < updated_profiles->count; i++) {
         err = manifest_persist_profile_head(repo, state, updated_profiles->items[i]);
         if (err) {
@@ -1388,14 +1311,13 @@ error_t *manifest_update_files(
 
     string_array_free(updated_profiles);
 
-    /* 7. Sync tracked directories */
+    /* 6. Sync tracked directories */
     err = manifest_sync_directories(repo, state, enabled_profiles);
     if (err) {
         goto cleanup;
     }
 
 cleanup:
-    if (metadata) metadata_free(metadata);
     if (fresh_manifest) manifest_free(fresh_manifest);
     arena_destroy(arena);
 
@@ -1485,12 +1407,16 @@ error_t *manifest_add_files(
 
     error_t *err = NULL;
     manifest_t *fresh_manifest = NULL;
-    metadata_t *metadata = NULL;
 
     arena_t *arena = arena_create(64 * 1024);
     if (!arena) return ERROR(ERR_MEMORY, "Failed to create manifest arena");
 
-    /* 1. Build FRESH manifest from Git (post-commit state) */
+    /* 1. Build FRESH manifest from Git (post-commit state).
+     *
+     * manifest_build attributes per-profile metadata to each entry, so
+     * sync_entry_to_state below writes the correct mode/owner/group/encrypted
+     * for the profile that won precedence (the only attribution that
+     * matters for the row being inserted). */
     err = manifest_build(repo, enabled_profiles, state, arena, &fresh_manifest);
     if (err) {
         arena_destroy(arena);
@@ -1503,20 +1429,7 @@ error_t *manifest_add_files(
         goto cleanup;
     }
 
-    /* 3. Load fresh merged metadata from Git (post-commit state) */
-    err = metadata_load_from_profiles(repo, enabled_profiles, &metadata);
-    if (err && err->code != ERR_NOT_FOUND) {
-        err = error_wrap(err, "Failed to load metadata for manifest sync");
-        goto cleanup;
-    }
-    if (err) {
-        /* Non-fatal: Old profiles may not have metadata.json
-         * sync_entry_to_state handles NULL metadata gracefully (uses Git defaults) */
-        error_free(err);
-        err = NULL;
-    }
-
-    /* 4. Process each file */
+    /* 3. Process each file */
     for (size_t i = 0; i < filesystem_paths->count; i++) {
         const char *filesystem_path = filesystem_paths->items[i];
 
@@ -1555,7 +1468,7 @@ error_t *manifest_add_files(
          * Lifecycle stamping is the paired state_update_anchor's job below —
          * the UPSERT preserves deployed_at on UPDATE regardless of what we
          * pass here, so a non-zero value would be silently ineffective. */
-        err = sync_entry_to_state(repo, state, entry, metadata);
+        err = sync_entry_to_state(repo, state, entry);
 
         if (err) {
             err = error_wrap(
@@ -1596,14 +1509,13 @@ error_t *manifest_add_files(
     err = manifest_persist_profile_head(repo, state, profile);
     if (err) goto cleanup;
 
-    /* 5. Sync tracked directories */
+    /* 4. Sync tracked directories */
     err = manifest_sync_directories(repo, state, enabled_profiles);
     if (err) {
         goto cleanup;
     }
 
 cleanup:
-    if (metadata) metadata_free(metadata);
     if (fresh_manifest) manifest_free(fresh_manifest);
     arena_destroy(arena);
 
@@ -1625,10 +1537,9 @@ cleanup:
  * Algorithm:
  *   Phase 1: Build Context
  *     - Load all enabled profiles
- *     - Build fresh manifest from current Git state (post-sync)
+ *     - Build fresh manifest from current Git state (post-sync); manifest_build
+ *       attributes per-profile metadata to each entry during the tree walk
  *     - Create hashmap index for O(1) file lookups
- *     - Build profile→oid map
- *     - Load merged metadata from Git
  *
  *   Phase 2: Compute Diff
  *     - Lookup old and new trees
@@ -1682,7 +1593,6 @@ error_t *manifest_sync_diff(
 
     /* Resources to clean up */
     manifest_t *fresh_manifest = NULL;
-    metadata_t *metadata = NULL;
     git_tree *old_tree = NULL;
     git_tree *new_tree = NULL;
     git_diff *diff = NULL;
@@ -1693,7 +1603,13 @@ error_t *manifest_sync_diff(
     size_t synced = 0, removed = 0, fallbacks = 0, skipped = 0;
 
     /* PHASE 1: BUILD CONTEXT (O(M)) */
-    /* 1.1. Build fresh manifest from Git (post-sync state) */
+    /* 1.1. Build fresh manifest from Git (post-sync state).
+     *
+     * manifest_build attributes per-profile metadata to each entry, so the
+     * delta loop below feeds sync_entry_to_state entries that already carry
+     * the correct mode/owner/group/encrypted for their source profile —
+     * fallbacks pick up the right metadata for the *fallback* profile, not
+     * the deleting one. */
     err = manifest_build(repo, enabled_profiles, state, arena, &fresh_manifest);
     if (err) {
         err = error_wrap(err, "Failed to build fresh manifest");
@@ -1704,19 +1620,6 @@ error_t *manifest_sync_diff(
     if (!fresh_manifest->index) {
         err = ERROR(ERR_INTERNAL, "Fresh manifest missing index");
         goto cleanup;
-    }
-
-    /* 1.3. Load merged metadata from Git (post-sync state) */
-    err = metadata_load_from_profiles(repo, enabled_profiles, &metadata);
-    if (err && err->code != ERR_NOT_FOUND) {
-        err = error_wrap(err, "Failed to load metadata");
-        goto cleanup;
-    }
-    if (err) {
-        /* Non-fatal: Old profiles may not have metadata.json
-         * sync_entry_to_state handles NULL metadata gracefully (uses Git defaults) */
-        error_free(err);
-        err = NULL;
     }
 
     /* PHASE 2: COMPUTE DIFF (O(D)) */
@@ -1809,11 +1712,10 @@ error_t *manifest_sync_diff(
             /* Sync entry to state. deployed_at is preserved by SQL UPSERT on
              * UPDATE; 0 is used for INSERT (new file, never deployed). old_profile
              * auto-captured by SQL when the owning profile changes. */
-            err = sync_entry_to_state(repo, state, entry, metadata);
+            err = sync_entry_to_state(repo, state, entry);
             if (err) {
                 err = error_wrap(
-                    err, "Failed to sync '%s' to manifest",
-                    filesystem_path
+                    err, "Failed to sync '%s' to manifest", filesystem_path
                 );
                 free(filesystem_path);
                 goto cleanup;
@@ -1840,11 +1742,10 @@ error_t *manifest_sync_diff(
                 /* Fallback found — update manifest to the new profile owner.
                  * deployed_at preserved by SQL UPSERT, old_profile auto-captured
                  * by SQL when the owning profile changes. */
-                err = sync_entry_to_state(repo, state, entry, metadata);
+                err = sync_entry_to_state(repo, state, entry);
                 if (err) {
                     err = error_wrap(
-                        err, "Failed to sync fallback for '%s'",
-                        filesystem_path
+                        err, "Failed to sync fallback for '%s'", filesystem_path
                     );
                     free(filesystem_path);
                     goto cleanup;
@@ -1954,7 +1855,6 @@ cleanup:
     if (diff) git_diff_free(diff);
     if (new_tree) git_tree_free(new_tree);
     if (old_tree) git_tree_free(old_tree);
-    if (metadata) metadata_free(metadata);
     if (fresh_manifest) manifest_free(fresh_manifest);
     arena_destroy(arena);
 
@@ -2182,17 +2082,115 @@ cleanup:
  * - manifest: borrowed, caller retains ownership
  * - path_map: borrowed, caller retains ownership
  * - custom_prefix: borrowed, can be NULL (used for path_from_storage only)
+ * - metadata: borrowed (per-profile, reloaded for each profile in the outer
+ *             build loop), can be NULL (profile lacks metadata.json)
  * - error: owned by callback, caller must free on error
  */
 struct manifest_build_ctx {
-    manifest_t *manifest;       /* Target manifest (modified by callback) */
-    size_t capacity;            /* Current entries capacity (updated on growth) */
-    hashmap_t *path_map;        /* For O(1) dedup/override detection */
-    const char *profile;        /* Profile name for entries and error messages */
-    const char *custom_prefix;  /* For path_from_storage (can be NULL) */
-    arena_t *arena;             /* Arena for string allocations (NULL = heap) */
-    error_t *error;             /* Error propagation (set on failure) */
+    manifest_t *manifest;          /* Target manifest (modified by callback) */
+    size_t capacity;               /* Current entries capacity (updated on growth) */
+    hashmap_t *path_map;           /* For O(1) dedup/override detection */
+    const char *profile;           /* Profile name for entries and error messages */
+    const char *custom_prefix;     /* For path_from_storage (can be NULL) */
+    const metadata_t *metadata;    /* Per-profile metadata (NULL if absent) */
+    arena_t *arena;                /* Arena for string allocations (NULL = heap) */
+    error_t *error;                /* Error propagation (set on failure) */
 };
+
+/**
+ * Apply per-profile metadata to a Git-built file_entry_t slot.
+ *
+ * Selectively overrides the metadata-owned fields (mode, owner, group,
+ * encrypted) on an entry whose Git-derived defaults have already been set.
+ * Each call attributes a single profile's claim to the entry; precedence
+ * across profiles is resolved by the manifest walker's override pass and
+ * paired re-application of this helper.
+ *
+ * Per-kind semantics when an item exists for the entry's storage_path:
+ *   FILE      → override mode; set encrypted; copy owner/group
+ *   SYMLINK   → leave mode at 0 (links carry no settable mode); copy owner/group
+ *   DIRECTORY → no-op (the tree walker filters to blobs; a directory metadata
+ *               key cannot legitimately match a blob's storage_path)
+ *
+ * NULL metadata, missing item, and ERR_NOT_FOUND all leave the entry's
+ * Git-derived defaults intact. Other lookup failures propagate.
+ *
+ * Override-path callers MUST clear any existing heap-allocated owner/group
+ * (when arena=NULL) before calling, since this helper unconditionally
+ * overwrites those pointers with fresh allocations on a successful lookup.
+ *
+ * @param entry    Target slot (mutable)
+ * @param metadata Per-profile metadata (NULL → no-op)
+ * @param arena    Allocation arena for string copies (NULL → heap)
+ * @return Error or NULL on success
+ */
+static error_t *apply_metadata_to_entry(
+    file_entry_t *entry,
+    const metadata_t *metadata,
+    arena_t *arena
+) {
+    if (!metadata) return NULL;
+
+    const metadata_item_t *item = NULL;
+    error_t *err = metadata_get_item(metadata, entry->storage_path, &item);
+    if (err) {
+        if (err->code == ERR_NOT_FOUND) {
+            error_free(err);
+            return NULL;
+        }
+        return err;
+    }
+
+    /* owner/group apply to all kinds; copy first so the mode/encrypted
+     * overrides below can short-circuit after the allocations have already
+     * succeeded. arena_strdup and strdup both return NULL only on real
+     * failure (NULL input bypasses the if-guards). */
+    char *owner_dup = NULL;
+    if (item->owner) {
+        owner_dup = arena ? arena_strdup(arena, item->owner)
+                          : strdup(item->owner);
+        if (!owner_dup) {
+            return ERROR(
+                ERR_MEMORY, "Failed to duplicate owner for '%s'",
+                entry->storage_path
+            );
+        }
+    }
+
+    char *group_dup = NULL;
+    if (item->group) {
+        group_dup = arena ? arena_strdup(arena, item->group)
+                          : strdup(item->group);
+        if (!group_dup) {
+            if (!arena) free(owner_dup);
+            return ERROR(
+                ERR_MEMORY, "Failed to duplicate group for '%s'",
+                entry->storage_path
+            );
+        }
+    }
+
+    /* Allocations succeeded — commit the overrides. */
+    entry->owner = owner_dup;
+    entry->group = group_dup;
+
+    switch (item->kind) {
+        case METADATA_ITEM_FILE:
+            entry->mode = item->mode;
+            entry->encrypted = item->file.encrypted;
+            break;
+        case METADATA_ITEM_SYMLINK:
+            /* mode stays 0 (Git default for links); encrypted stays false. */
+            break;
+        case METADATA_ITEM_DIRECTORY:
+            /* Defensive: walker filters to blobs, so this branch is
+             * unreachable in practice. Take no action rather than corrupt
+             * a file entry with directory mode bits. */
+            break;
+    }
+
+    return NULL;
+}
 
 /**
  * Tree walk callback that builds manifest entries directly
@@ -2211,6 +2209,7 @@ struct manifest_build_ctx {
  * - Profile precedence override (higher precedence wins)
  * - Array growth on demand
  * - File identity extraction from Git tree entry
+ * - Per-profile metadata application (mode override, owner, group, encrypted)
  *
  * @param root Directory path within tree (empty string for root level)
  * @param entry Git tree entry (borrowed — valid for callback duration only)
@@ -2322,14 +2321,24 @@ static int manifest_build_callback(
             return -1;
         }
 
-        /* Free old resources — strings abandoned when arena-backed */
+        file_entry_t *override = &ctx->manifest->entries[existing_idx];
+
+        /* Free old resources and clear metadata-owned fields before the new
+         * profile's metadata is applied. The lower-precedence profile may
+         * have left non-NULL owner/group/encrypted on the slot; carrying
+         * those through would leak its attribution into the higher-
+         * precedence entry. Strings are abandoned when arena-backed. */
         if (!ctx->arena) {
-            free(ctx->manifest->entries[existing_idx].storage_path);
-            free(ctx->manifest->entries[existing_idx].filesystem_path);
+            free(override->storage_path);
+            free(override->filesystem_path);
+            free(override->owner);
+            free(override->group);
         }
+        override->owner = NULL;
+        override->group = NULL;
+        override->encrypted = false;
 
         /* Update with new values from higher-precedence profile */
-        file_entry_t *override = &ctx->manifest->entries[existing_idx];
         override->storage_path = dup_storage_path;
         override->filesystem_path = filesystem_path;
         override->profile = ctx->profile;
@@ -2352,8 +2361,22 @@ static int manifest_build_callback(
                 break;
         }
 
-        /* Other VWD fields remain NULL/0 (not populated for Git-based manifests).
-         * The existing entry already has these initialized from initial creation. */
+        /* Apply the new profile's metadata claim to the slot, if any. The
+         * Git-derived defaults set above are the floor; metadata may override
+         * mode and encrypted, and contribute owner/group. */
+        error_t *meta_err = apply_metadata_to_entry(
+            override, ctx->metadata, ctx->arena
+        );
+        if (meta_err) {
+            /* The slot is already in a consistent post-override shape
+             * (owner/group NULL, encrypted false, Git-derived mode). The
+             * caller's outer error path will free the manifest as a whole. */
+            ctx->error = error_wrap(
+                meta_err, "Failed to apply metadata to '%s'",
+                override->storage_path
+            );
+            return -1;
+        }
     } else {
         /* Add new entry - grow array if needed */
         if (ctx->manifest->count >= ctx->capacity) {
@@ -2391,9 +2414,11 @@ static int manifest_build_callback(
          *
          * realloc() does NOT zero new memory. Zero the whole slot first so
          * every VWD cache field starts clean; then overwrite the fields this
-         * Git-built path actually sets. Deployment context fields (deployed_at,
-         * stat_cache, encrypted, owner, group) remain zero — they are only
-         * populated for state-built entries. */
+         * Git-built path actually sets. Deployment context fields
+         * (deployed_at, stat_cache) remain zero — they are populated only
+         * for state-built entries. Metadata-owned fields (mode override,
+         * owner, group, encrypted) start zero and are filled by the
+         * apply_metadata_to_entry call below when the profile claims them. */
         file_entry_t *new_entry = &ctx->manifest->entries[ctx->manifest->count];
         memset(new_entry, 0, sizeof(*new_entry));
         new_entry->storage_path = dup_storage_path;
@@ -2418,19 +2443,48 @@ static int manifest_build_callback(
                 break;
         }
 
-        /* Store index in hashmap (offset by 1 to distinguish from NULL) */
-        err = hashmap_set(
-            ctx->path_map, filesystem_path, (void *) (uintptr_t) (ctx->manifest->count + 1)
+        /* Apply this profile's metadata claim (if any) to the slot.
+         *
+         * Done before the hashmap insertion so any failure rolls back without
+         * leaving a stale path → index mapping pointing at a half-built entry.
+         */
+        error_t *meta_err = apply_metadata_to_entry(
+            new_entry, ctx->metadata, ctx->arena
         );
-        if (err) {
-            /* Entry already added to manifest, but hashmap failed.
-             * Clean up the entry (strings abandoned when arena-backed). */
+        if (meta_err) {
             if (!ctx->arena) {
                 free(new_entry->storage_path);
                 free(new_entry->filesystem_path);
             }
             new_entry->storage_path = NULL;
             new_entry->filesystem_path = NULL;
+            ctx->error = error_wrap(
+                meta_err, "Failed to apply metadata to '%s'",
+                storage_path
+            );
+            return -1;
+        }
+
+        /* Store index in hashmap (offset by 1 to distinguish from NULL) */
+        err = hashmap_set(
+            ctx->path_map, filesystem_path, (void *) (uintptr_t) (ctx->manifest->count + 1)
+        );
+        if (err) {
+            /* Entry already added to manifest, but hashmap failed.
+             * Clean up the entry (strings abandoned when arena-backed).
+             * Metadata-owned strings (owner/group) may also be set; free
+             * them on the heap path to avoid leaking attribution from a
+             * lookup that did succeed before the index update failed. */
+            if (!ctx->arena) {
+                free(new_entry->storage_path);
+                free(new_entry->filesystem_path);
+                free(new_entry->owner);
+                free(new_entry->group);
+            }
+            new_entry->storage_path = NULL;
+            new_entry->filesystem_path = NULL;
+            new_entry->owner = NULL;
+            new_entry->group = NULL;
             ctx->error = error_wrap(err, "Failed to update hashmap");
             return -1;
         }
@@ -2502,21 +2556,43 @@ error_t *manifest_build(
         err = gitops_load_branch_tree(repo, profile, &tree, NULL);
         if (err) {
             err = error_wrap(
-                err, "Failed to load tree for profile '%s'",
-                profile
+                err, "Failed to load tree for profile '%s'", profile
             );
             goto cleanup;
+        }
+
+        /* Load this profile's metadata.json (if present). Per-profile
+         * lookup is the correctness boundary for VWD attribution: each
+         * profile claims its own files via its own metadata, never via a
+         * cross-profile merge. ERR_NOT_FOUND is normal — old or freshly
+         * created profiles may not have a metadata.json yet, and the
+         * callback degrades gracefully (Git-derived defaults stand). */
+        metadata_t *profile_metadata = NULL;
+        err = metadata_load_from_branch(repo, profile, &profile_metadata);
+        if (err) {
+            if (err->code != ERR_NOT_FOUND) {
+                git_tree_free(tree);
+                err = error_wrap(
+                    err, "Failed to load metadata for profile '%s'", profile
+                );
+                goto cleanup;
+            }
+            error_free(err);
+            err = NULL;
+            profile_metadata = NULL;
         }
 
         /* Build manifest entries via single-pass tree traversal
          *
          * The callback extracts identity fields (blob_oid, type, mode) from
          * borrowed tree entries, converts paths, handles precedence override,
-         * and populates file_entry_t directly—all in O(N) time.
+         * applies per-profile metadata to mode/owner/group/encrypted, and
+         * populates file_entry_t directly—all in O(N) time.
          *
          * profile borrows from caller's profiles array — must outlive manifest.
          * custom_prefix is a borrowed pointer into the state row cache (stable
-         * for the lifetime of this call — no enabled_profiles mutation here). */
+         * for the lifetime of this call — no enabled_profiles mutation here).
+         * metadata borrows from profile_metadata, scoped to this iteration. */
         struct manifest_build_ctx ctx = {
             .manifest      = manifest,
             .capacity      = capacity,
@@ -2525,12 +2601,14 @@ error_t *manifest_build(
             .custom_prefix = state
                 ? state_peek_profile_prefix(state, profile)
                 : NULL,
+            .metadata      = profile_metadata,
             .arena         = arena,
             .error         = NULL
         };
 
         err = gitops_tree_walk(tree, manifest_build_callback, &ctx);
         git_tree_free(tree);
+        metadata_free(profile_metadata);
 
         if (err || ctx.error) {
             err = ctx.error ? ctx.error : err;
@@ -2568,6 +2646,7 @@ cleanup:
  * @param tree Git tree to build manifest from (must not be NULL)
  * @param profile Profile name for entries (must not be NULL)
  * @param custom_prefix Custom prefix for custom/ paths (NULL for graceful degradation)
+ * @param metadata Optional per-tree metadata applied to entries (can be NULL)
  * @param out Manifest (must not be NULL, caller must free with manifest_free)
  * @return Error or NULL on success
  */
@@ -2575,6 +2654,7 @@ error_t *manifest_build_from_tree(
     git_tree *tree,
     const char *profile,
     const char *custom_prefix,
+    const metadata_t *metadata,
     manifest_t **out
 ) {
     CHECK_NULL(tree);
@@ -2620,16 +2700,19 @@ error_t *manifest_build_from_tree(
     /* Build manifest entries via single-pass tree traversal
      *
      * The callback extracts identity fields (blob_oid, type, mode) from
-     * borrowed tree entries, converts paths, and populates file_entry_t
-     * directly—all in O(N) time.
+     * borrowed tree entries, converts paths, applies any supplied metadata
+     * to mode/owner/group/encrypted, and populates file_entry_t directly—
+     * all in O(N) time.
      *
-     * custom_prefix borrows from function parameter — outlives tree walk. */
+     * custom_prefix and metadata borrow from function parameters — both
+     * outlive the tree walk. */
     struct manifest_build_ctx ctx = {
         .manifest      = manifest,
         .capacity      = capacity,
         .path_map      = path_map,
         .profile       = manifest->owned_profile,
         .custom_prefix = custom_prefix,
+        .metadata      = metadata,
         .arena         = NULL,
         .error         = NULL
     };

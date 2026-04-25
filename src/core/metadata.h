@@ -511,29 +511,6 @@ error_t *metadata_capture_from_directory(
 );
 
 /**
- * Merge metadata from multiple sources
- *
- * Merges metadata collections according to precedence order.
- * Later sources override earlier ones for conflicting items (same key).
- * This implements profile layering (e.g., darwin overrides global).
- *
- * Example:
- *   sources[0] = global metadata
- *   sources[1] = darwin metadata
- *   Result: darwin items override global items
- *
- * @param sources Array of metadata collections (must not be NULL)
- * @param count Number of sources
- * @param out Merged metadata (must not be NULL, caller must free)
- * @return Error or NULL on success
- */
-error_t *metadata_merge(
-    const metadata_t **sources,
-    size_t count,
-    metadata_t **out
-);
-
-/**
  * Load metadata from profile branch
  *
  * Reads .dotta/metadata.json from the specified branch.
@@ -612,29 +589,6 @@ error_t *metadata_from_json(
  */
 error_t *metadata_load_from_file(
     const char *file_path,
-    metadata_t **out
-);
-
-/**
- * Load and merge metadata from multiple profiles
- *
- * Convenience function that loads .dotta/metadata.json from each profile
- * branch and merges them according to array order (later profiles override
- * earlier ones).
- *
- * Gracefully handles missing profiles and missing metadata files:
- * - Profile branch doesn't exist: skipped (non-fatal)
- * - Metadata file doesn't exist in profile: skipped (non-fatal)
- * - Returns empty metadata if no profiles have metadata files
- *
- * @param repo Repository (must not be NULL)
- * @param profiles Array of profile names to load (must not be NULL)
- * @param out Merged metadata (must not be NULL, caller must free with metadata_free)
- * @return Error or NULL on success (empty metadata if no profiles have metadata)
- */
-error_t *metadata_load_from_profiles(
-    git_repository *repo,
-    const string_array_t *profiles,
     metadata_t **out
 );
 

@@ -21,8 +21,8 @@
  *   Commands → manifest layer → state API → SQLite
  *
  * The manifest layer orchestrates existing components:
- *   - manifest_build() for precedence resolution
- *   - metadata_load_from_profiles() for metadata merging
+ *   - manifest_build() for precedence resolution and per-profile metadata
+ *     attribution (each entry carries its source profile's metadata claim)
  *   - blob_oid extraction from tree entries for content identity
  *   - state_*() API for persistence
  */
@@ -33,6 +33,7 @@
 #include <git2.h>
 #include <types.h>
 
+#include "core/metadata.h"
 #include "core/state.h"
 #include "core/workspace.h"
 
@@ -707,9 +708,17 @@ error_t *manifest_build(
  * Creates a manifest from a specific Git tree, useful for historical diffs.
  * This is a simplified version of manifest_build() for a single tree.
  *
+ * Metadata, when supplied, is applied to entries in lockstep with the tree
+ * walk — mode, owner, group, and encrypted are filled from the tree's own
+ * metadata.json. Pass NULL to skip metadata application (entries keep
+ * Git-derived defaults). Callers that have already loaded the tree's
+ * metadata for their own purposes should pass it here to keep the
+ * file_entry_t shape uniform across all manifest_build* paths.
+ *
  * @param tree Git tree to build manifest from (must not be NULL)
  * @param profile Profile name for entries (must not be NULL)
  * @param custom_prefix Custom prefix for custom/ paths (NULL for graceful degradation)
+ * @param metadata Optional per-tree metadata to apply to entries (can be NULL)
  * @param out Manifest (must not be NULL, caller must free with manifest_free)
  * @return Error or NULL on success
  */
@@ -717,6 +726,7 @@ error_t *manifest_build_from_tree(
     git_tree *tree,
     const char *profile,
     const char *custom_prefix,
+    const metadata_t *metadata,
     manifest_t **out
 );
 

@@ -1025,7 +1025,7 @@ static error_t *diff_commit_to_workspace(
      * for the duration of this call (no enabled_profiles mutation). */
     const char *custom_prefix = state_peek_profile_prefix(state, profile);
 
-    err = manifest_build_from_tree(tree, profile, custom_prefix, &manifest);
+    err = manifest_build_from_tree(tree, profile, custom_prefix, metadata, &manifest);
     if (err) {
         err = error_wrap(err, "Failed to build manifest from commit");
         goto cleanup;

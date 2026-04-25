@@ -459,13 +459,12 @@ error_t *state_get_file_by_storage(
 /**
  * Get all file entries
  *
- * When arena is NULL, returns heap-allocated array that caller must free
- * with state_free_all_files(). When arena is non-NULL, all allocations
- * (entries array + string fields) use the arena — caller must NOT call
- * state_free_all_files() (arena_destroy handles everything).
+ * Allocates the entries array and every string field from the caller's
+ * arena. Lifetime is tied to the arena: caller controls cleanup by
+ * destroying the arena.
  *
  * @param state State (must not be NULL)
- * @param arena Arena for allocations (NULL = heap with state_free_all_files)
+ * @param arena Arena for allocations (must not be NULL)
  * @param out Output array (must not be NULL)
  * @param count Output count (must not be NULL)
  * @return Error or NULL on success
@@ -476,14 +475,6 @@ error_t *state_get_all_files(
     state_file_entry_t **out,
     size_t *count
 );
-
-/**
- * Free array returned by state_get_all_files()
- *
- * @param entries Array to free (can be NULL)
- * @param count Number of entries in array
- */
-void state_free_all_files(state_file_entry_t *entries, size_t count);
 
 /**
  * Enable profile with optional custom prefix
@@ -828,15 +819,15 @@ const git_oid *state_peek_profile_commit_oid(
 /**
  * Get entries by profile
  *
- * Returns all manifest entries from the specified profile.
- * Used by profile disable to determine impact of disabling a profile.
+ * Returns all manifest entries from the specified profile. Allocations
+ * (entries array + string fields) use the caller's arena; lifetime ends
+ * when the arena is destroyed.
  *
- * When arena is NULL, returns heap-allocated array (free with state_free_all_files).
- * When arena is non-NULL, all allocations use the arena.
+ * Used by profile disable to determine impact of disabling a profile.
  *
  * @param state State (must not be NULL)
  * @param profile Profile name to filter by (must not be NULL)
- * @param arena Arena for allocations (NULL = heap with state_free_all_files)
+ * @param arena Arena for allocations (must not be NULL)
  * @param out Output array (must not be NULL)
  * @param count Output count (must not be NULL)
  * @return Error or NULL on success (empty array if no matches)
@@ -854,11 +845,13 @@ error_t *state_get_entries_by_profile(
  *
  * Converts portable metadata (storage_path) to state entry (both paths).
  * Derives filesystem_path from metadata's storage_path using path_from_storage().
+ * The entry and its string fields are allocated from the caller's arena.
  *
  * @param meta_item Metadata item (must not be NULL, must be DIRECTORY kind)
  * @param profile Source profile name (must not be NULL)
  * @param custom_prefix Custom prefix for this profile (NULL for home/root)
- * @param out State directory entry (must not be NULL, caller must free)
+ * @param arena Arena for allocations (must not be NULL)
+ * @param out State directory entry (must not be NULL, lifetime tied to arena)
  * @return Error or NULL on success
  */
 error_t *state_directory_entry_create_from_metadata(
@@ -884,13 +877,12 @@ error_t *state_add_directory(
 /**
  * Get all tracked directories
  *
- * When arena is NULL, returns heap-allocated array that caller must free
- * with state_free_all_directories(). When arena is non-NULL, all allocations
- * (entries array + string fields) use the arena — caller must NOT call
- * state_free_all_directories() (arena_destroy handles everything).
+ * Allocates the entries array and every string field from the caller's
+ * arena. Lifetime is tied to the arena: caller controls cleanup by
+ * destroying the arena.
  *
  * @param state State (must not be NULL)
- * @param arena Arena for allocations (NULL = heap with state_free_all_directories)
+ * @param arena Arena for allocations (must not be NULL)
  * @param out Output array (must not be NULL)
  * @param count Output count (must not be NULL)
  * @return Error or NULL on success
@@ -905,16 +897,15 @@ error_t *state_get_all_directories(
 /**
  * Get directories by profile
  *
- * Returns all directory entries from the specified profile.
- * Used by profile disable to determine impact on directories.
+ * Returns all directory entries from the specified profile. Allocations
+ * use the caller's arena; lifetime ends when the arena is destroyed.
  *
- * When arena is NULL, returns heap-allocated array (free with state_free_all_directories).
- * When arena is non-NULL, all allocations use the arena.
+ * Used by profile disable to determine impact on directories.
  *
  * @param state State (must not be NULL)
  * @param profile Profile name to filter by (must not be NULL)
- * @param arena Arena for allocations (NULL = heap with state_free_all_directories)
- * @param out Output array (must not be NULL, caller must free)
+ * @param arena Arena for allocations (must not be NULL)
+ * @param out Output array (must not be NULL, lifetime tied to arena)
  * @param count Output count (must not be NULL)
  * @return Error or NULL on success (empty array if no matches)
  */
@@ -1022,16 +1013,5 @@ error_t *state_mark_all_directories_inactive(state_t *state);
  * @param entry Entry to free (can be NULL)
  */
 void state_free_directory_entry(state_directory_entry_t *entry);
-
-/**
- * Free array of directory entries
- *
- * @param entries Array to free (can be NULL)
- * @param count Number of entries in array
- */
-void state_free_all_directories(
-    state_directory_entry_t *entries,
-    size_t count
-);
 
 #endif /* DOTTA_STATE_H */

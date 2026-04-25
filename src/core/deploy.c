@@ -10,6 +10,7 @@
 #include <string.h>
 #include <unistd.h>
 
+#include "base/arena.h"
 #include "base/array.h"
 #include "base/error.h"
 #include "base/hashmap.h"
@@ -620,43 +621,47 @@ static error_t *calculate_required_directories(
     CHECK_NULL(out);
 
     *out = NULL;
+
+    arena_t *arena = arena_create(0);
+    if (!arena) {
+        return ERROR(ERR_MEMORY, "Failed to allocate tracked-directory scan arena");
+    }
+
     error_t *err = NULL;
+    hashmap_t *tracked = NULL;
+    hashmap_t *required = NULL;
+    char *parent = NULL;
 
     /* Get all tracked directories for O(1) membership check */
     state_directory_entry_t *directories = NULL;
     size_t dir_count = 0;
-    err = state_get_all_directories(state, NULL, &directories, &dir_count);
-    if (err) {
-        return err;
-    }
+    err = state_get_all_directories(state, arena, &directories, &dir_count);
+    if (err) goto cleanup;
 
     if (dir_count == 0) {
-        state_free_all_directories(directories, dir_count);
-        return NULL;  /* No tracked directories - nothing to filter */
+        goto cleanup;  /* No tracked directories - nothing to filter */
     }
 
     /* Build lookup hashmap of tracked directory paths */
-    hashmap_t *tracked = hashmap_create(dir_count);
+    tracked = hashmap_create(dir_count);
     if (!tracked) {
-        state_free_all_directories(directories, dir_count);
-        return ERROR(ERR_MEMORY, "Failed to create tracked directory hashmap");
+        err = ERROR(ERR_MEMORY, "Failed to create tracked directory hashmap");
+        goto cleanup;
     }
 
     for (size_t i = 0; i < dir_count; i++) {
         err = hashmap_set(tracked, directories[i].filesystem_path, (void *) 1);
         if (err) {
-            hashmap_free(tracked, NULL);
-            state_free_all_directories(directories, dir_count);
-            return error_wrap(err, "Failed to populate tracked directory set");
+            err = error_wrap(err, "Failed to populate tracked directory set");
+            goto cleanup;
         }
     }
-    state_free_all_directories(directories, dir_count);
 
     /* Build set of required directories from manifest file ancestors */
-    hashmap_t *required = hashmap_create(0);
+    required = hashmap_create(0);
     if (!required) {
-        hashmap_free(tracked, NULL);
-        return ERROR(ERR_MEMORY, "Failed to create required directory hashmap");
+        err = ERROR(ERR_MEMORY, "Failed to create required directory hashmap");
+        goto cleanup;
     }
 
     for (size_t i = 0; i < manifest->count; i++) {
@@ -664,11 +669,10 @@ static error_t *calculate_required_directories(
 
         /* Walk up directory tree, adding tracked ancestors */
         size_t len = strlen(filepath);
-        char *parent = malloc(len + 1);
+        parent = malloc(len + 1);
         if (!parent) {
-            hashmap_free(required, NULL);
-            hashmap_free(tracked, NULL);
-            return ERROR(ERR_MEMORY, "Failed to allocate path buffer");
+            err = ERROR(ERR_MEMORY, "Failed to allocate path buffer");
+            goto cleanup;
         }
         memcpy(parent, filepath, len + 1);
 
@@ -683,19 +687,24 @@ static error_t *calculate_required_directories(
             if (hashmap_has(tracked, parent)) {
                 err = hashmap_set(required, parent, (void *) 1);
                 if (err) {
-                    free(parent);
-                    hashmap_free(required, NULL);
-                    hashmap_free(tracked, NULL);
-                    return error_wrap(err, "Failed to add required directory");
+                    err = error_wrap(err, "Failed to add required directory");
+                    goto cleanup;
                 }
             }
         }
         free(parent);
+        parent = NULL;
     }
 
-    hashmap_free(tracked, NULL);
     *out = required;
-    return NULL;
+    required = NULL;  /* Ownership transferred to caller */
+
+cleanup:
+    free(parent);
+    if (tracked) hashmap_free(tracked, NULL);
+    if (required) hashmap_free(required, NULL);
+    arena_destroy(arena);
+    return err;
 }
 
 /**
@@ -739,17 +748,22 @@ static error_t *deploy_tracked_directories(
         return NULL;
     }
 
+    arena_t *arena = arena_create(0);
+    if (!arena) {
+        return ERROR(ERR_MEMORY, "Failed to allocate tracked-directories arena");
+    }
+
     /* Get all tracked directories from state database */
     state_directory_entry_t *directories = NULL;
     size_t dir_count = 0;
-    error_t *err = state_get_all_directories(state, NULL, &directories, &dir_count);
+    error_t *err = state_get_all_directories(state, arena, &directories, &dir_count);
     if (err) {
-        return error_wrap(err, "Failed to load tracked directories from state");
+        err = error_wrap(err, "Failed to load tracked directories from state");
+        goto cleanup;
     }
 
     if (dir_count == 0) {
-        state_free_all_directories(directories, dir_count);
-        return NULL;  /* No tracked directories */
+        goto cleanup;  /* No tracked directories */
     }
 
     /* Verbose output: differentiate scoped vs full sync mode.
@@ -936,11 +950,11 @@ static error_t *deploy_tracked_directories(
 
             error_t *clear_err = fs_clear_path(filesystem_path);
             if (clear_err) {
-                state_free_all_directories(directories, dir_count);
-                return error_wrap(
+                err = error_wrap(
                     clear_err, "Failed to clear type conflict at '%s'",
                     filesystem_path
                 );
+                goto cleanup;
             }
 
             /* Path cleared - update tracking flag for verbose output */
@@ -1012,11 +1026,11 @@ static error_t *deploy_tracked_directories(
             opts->verbose
         );
         if (err) {
-            state_free_all_directories(directories, dir_count);
-            return error_wrap(
+            err = error_wrap(
                 err, "Failed to resolve ownership for directory: %s",
                 dir_entry->storage_path
             );
+            goto cleanup;
         }
 
         /* Create directory with ATOMIC ownership and permissions
@@ -1031,11 +1045,11 @@ static error_t *deploy_tracked_directories(
         );
 
         if (err) {
-            state_free_all_directories(directories, dir_count);
-            return error_wrap(
+            err = error_wrap(
                 err, "Failed to create tracked directory: %s",
                 filesystem_path
             );
+            goto cleanup;
         }
 
         /* Verbose output - distinguish creation from metadata fix */
@@ -1071,10 +1085,9 @@ static error_t *deploy_tracked_directories(
         }
     }
 
-    /* Free state directory entries */
-    state_free_all_directories(directories, dir_count);
-
-    return NULL;
+cleanup:
+    arena_destroy(arena);
+    return err;
 }
 
 /**

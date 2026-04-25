@@ -63,9 +63,10 @@
  *   of construction path (Git tree walk or state DB)
  *
  * Memory ownership:
- * - All string fields are owned and must be freed in manifest_free()
+ * - All string fields are arena-borrowed; the arena outlives the manifest
+ *   and releases them at arena_destroy(). manifest_free() does not touch them.
  * - profile is borrowed (from caller's profiles array, workspace profile_index,
- *   state arena, or manifest's owned_profile for tree-based manifests)
+ *   state arena, or the arena that backs a tree-based manifest's strings)
  */
 typedef struct file_entry {
     /* Paths */
@@ -96,18 +97,17 @@ typedef struct file_entry {
  * The index is populated by manifest_build() and can be NULL for
  * manifests built by other means (e.g., workspace_build_manifest_from_state).
  *
- * For tree-based manifests (manifest_build_from_tree), the manifest
- * owns the profile name string that entries borrow.
- * This is NULL for manifests from manifest_build() (which borrow
- * from the caller's profiles array) and workspace_build_manifest_from_state()
- * (which borrow from the workspace's profile_index).
+ * Per-entry string fields (storage_path, filesystem_path, owner, group, plus
+ * the borrowed profile pointer) live in a caller-owned arena. The arena is
+ * supplied by the construction path: manifest_build() takes it as a parameter,
+ * manifest_build_from_tree() takes it as a parameter, and
+ * workspace_build_manifest_from_state() draws from ws->arena. The arena must
+ * outlive the manifest; manifest_free() leaves the strings to it.
  */
 typedef struct manifest {
     file_entry_t *entries;
     size_t count;
     hashmap_t *index;              /* Maps filesystem_path -> index in entries array (offset by 1), can be NULL */
-    char *owned_profile;           /* Owned profile name for tree-based manifests (NULL otherwise) */
-    bool arena_backed;             /* If true, entry string fields are arena-owned (skip free) */
 } manifest_t;
 
 /**
@@ -684,13 +684,16 @@ error_t *manifest_sync_directories(
  * Profiles without a custom prefix deploy to home/root normally.
  * Custom/ files are skipped for profiles without a prefix entry.
  *
- * Memory: manifest entries borrow profile from the caller's profiles
- * array. The profiles array must outlive the returned manifest.
+ * Memory: per-entry strings (storage_path, filesystem_path, owner, group)
+ * are allocated from the caller's arena. The arena must outlive the
+ * manifest, since manifest_free() abandons those strings to the arena.
+ * Entries also borrow `profile` from the caller's profiles array, which
+ * must outlive the manifest.
  *
  * @param repo Repository (must not be NULL)
  * @param profiles Profile names in precedence order (must not be NULL)
  * @param state State handle for custom prefix resolution (NULL = no custom prefixes)
- * @param arena Arena for string allocations (NULL = heap)
+ * @param arena Arena for string allocations (must not be NULL)
  * @param out Manifest (must not be NULL, caller must free with manifest_free)
  * @return Error or NULL on success
  */
@@ -715,10 +718,15 @@ error_t *manifest_build(
  * metadata for their own purposes should pass it here to keep the
  * file_entry_t shape uniform across all manifest_build* paths.
  *
+ * Memory: per-entry strings (storage_path, filesystem_path, owner, group)
+ * are allocated from the caller's arena. The arena must outlive the
+ * manifest, since manifest_free() abandons those strings to the arena.
+ *
  * @param tree Git tree to build manifest from (must not be NULL)
  * @param profile Profile name for entries (must not be NULL)
  * @param custom_prefix Custom prefix for custom/ paths (NULL for graceful degradation)
  * @param metadata Optional per-tree metadata to apply to entries (can be NULL)
+ * @param arena Arena for per-entry string allocations (must not be NULL)
  * @param out Manifest (must not be NULL, caller must free with manifest_free)
  * @return Error or NULL on success
  */
@@ -727,6 +735,7 @@ error_t *manifest_build_from_tree(
     const char *profile,
     const char *custom_prefix,
     const metadata_t *metadata,
+    arena_t *arena,
     manifest_t **out
 );
 

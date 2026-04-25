@@ -972,6 +972,7 @@ static error_t *diff_commit_to_workspace(
     char *profile = NULL;
     git_tree *tree = NULL;
     manifest_t *manifest = NULL;
+    arena_t *manifest_arena = NULL;
     metadata_t *metadata = NULL;
 
     /* Step 1: Resolve commit to find which profile contains it */
@@ -1022,10 +1023,23 @@ static error_t *diff_commit_to_workspace(
 
     /* Step 5: Build manifest from historical tree.
      * Borrow the profile's custom_prefix from the state row cache — stable
-     * for the duration of this call (no enabled_profiles mutation). */
+     * for the duration of this call (no enabled_profiles mutation).
+     *
+     * The arena backs per-entry strings (storage_path, filesystem_path, owner,
+     * group); it must outlive both manifest_build_from_tree and the subsequent
+     * compare_manifest_to_filesystem call. Default 4 KB block is sufficient for
+     * a single-profile historical manifest. */
     const char *custom_prefix = state_peek_profile_prefix(state, profile);
 
-    err = manifest_build_from_tree(tree, profile, custom_prefix, metadata, &manifest);
+    manifest_arena = arena_create(0);
+    if (!manifest_arena) {
+        err = ERROR(ERR_MEMORY, "Failed to create manifest arena");
+        goto cleanup;
+    }
+
+    err = manifest_build_from_tree(
+        tree, profile, custom_prefix, metadata, manifest_arena, &manifest
+    );
     if (err) {
         err = error_wrap(err, "Failed to build manifest from commit");
         goto cleanup;
@@ -1058,6 +1072,7 @@ static error_t *diff_commit_to_workspace(
 cleanup:
     metadata_free(metadata);
     manifest_free(manifest);
+    arena_destroy(manifest_arena);
     git_tree_free(tree);
     git_commit_free(commit);
     free(profile);

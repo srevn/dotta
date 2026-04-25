@@ -401,7 +401,6 @@ static int run_spec(
         .content_cache = cache,
         .config        = config,
         .out           = out,
-        .arena         = arena,
         .argc          = argc,
         .argv          = argv,
         .exit_code     = &exit_override,

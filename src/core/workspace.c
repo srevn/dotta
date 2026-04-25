@@ -81,7 +81,7 @@ struct workspace {
 
     /* Cached state query (shared between workspace_build_manifest_from_state
      * and analyze_orphaned_files to avoid redundant full-table scan) */
-    state_file_entry_t *cached_state_files;  /* Owned, freed in workspace_free (NULL if empty) */
+    state_file_entry_t *cached_state_files;  /* Arena-allocated (NULL if empty) */
     size_t cached_state_count;               /* Number of entries in cached_state_files */
 
     /* Content cache for encrypted blob reads during divergence analysis */
@@ -2250,7 +2250,7 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
     /* Read all entries from manifest table (arena-allocated).
      *
      * Cached on workspace for reuse by analyze_orphaned_files().
-     * Arena handles cleanup — no state_free_all_files() needed. */
+     * Arena handles cleanup. */
     err = state_get_all_files(ws->state, ws->arena, &state_entries, &state_count);
     if (err) {
         return error_wrap(err, "Failed to read manifest from state");
@@ -2369,7 +2369,6 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
 
     /* Set final count (may be less than state_count due to filtering) */
     ws->manifest->count = manifest_idx;
-    ws->manifest->arena_backed = true;
 
     return NULL;
 
@@ -3090,8 +3089,8 @@ void workspace_free(workspace_t *ws) {
     hashmap_free(ws->profile_index, NULL);
     hashmap_free(ws->diverged_index, NULL);
 
-    /* Free manifest (arena_backed mode: frees git_tree_entry objects,
-     * entries array, hashmap, and struct — all heap-allocated) */
+    /* Free manifest spine (entries array, index hashmap, struct).
+     * Per-entry strings live in ws->arena and are released below. */
     manifest_free(ws->manifest);
 
     /* Free arena AFTER manifest_free — arena owns all string fields

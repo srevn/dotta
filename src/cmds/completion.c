@@ -12,6 +12,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "base/arena.h"
 #include "base/args.h"
 #include "base/array.h"
 #include "base/error.h"
@@ -136,22 +137,26 @@ static void complete_files(
 ) {
     if (!state) return;
 
+    arena_t *arena = arena_create(0);
+    if (!arena) return;
+
     state_file_entry_t *entries = NULL;
     size_t count = 0;
     error_t *err = NULL;
 
     if (profile) {
         err = state_get_entries_by_profile(
-            state, profile, NULL, &entries, &count
+            state, profile, arena, &entries, &count
         );
     } else {
         err = state_get_all_files(
-            state, NULL, &entries, &count
+            state, arena, &entries, &count
         );
     }
 
     if (err) {
         error_free(err);
+        arena_destroy(arena);
         return;
     }
 
@@ -172,7 +177,7 @@ static void complete_files(
         }
     }
 
-    state_free_all_files(entries, count);
+    arena_destroy(arena);
 }
 
 /**

@@ -9,6 +9,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "base/arena.h"
 #include "base/args.h"
 #include "base/buffer.h"
 #include "base/error.h"
@@ -32,10 +33,16 @@ static error_t *count_encrypted_files(
 
     *out_count = 0;
 
+    arena_t *arena = arena_create(0);
+    if (!arena) return ERROR(ERR_MEMORY, "Failed to allocate manifest scan arena");
+
     state_file_entry_t *entries = NULL;
     size_t count = 0;
-    error_t *err = state_get_all_files(state, NULL, &entries, &count);
-    if (err) return error_wrap(err, "Failed to get manifest entries");
+    error_t *err = state_get_all_files(state, arena, &entries, &count);
+    if (err) {
+        arena_destroy(arena);
+        return error_wrap(err, "Failed to get manifest entries");
+    }
 
     for (size_t i = 0; i < count; i++) {
         if (entries[i].encrypted &&
@@ -44,7 +51,7 @@ static error_t *count_encrypted_files(
         }
     }
 
-    state_free_all_files(entries, count);
+    arena_destroy(arena);
     return NULL;
 }
 

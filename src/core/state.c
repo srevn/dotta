@@ -1618,14 +1618,15 @@ error_t *state_get_file_by_storage(
 /**
  * Get all file entries
  *
- * Returns allocated array that caller MUST free.
- * Original API returned borrowed reference.
+ * Returns allocated array via the caller's arena. Lifetime is tied to the
+ * arena: caller controls cleanup by destroying the arena.
  *
  * This change is necessary because SQLite implementation doesn't keep
  * all files in memory.
  *
  * @param state State (must not be NULL)
- * @param out Output array (must not be NULL, caller must free with state_free_all_files)
+ * @param arena Arena for allocations (must not be NULL)
+ * @param out Output array (must not be NULL, lifetime tied to arena)
  * @param count Output count (must not be NULL)
  * @return Error or NULL on success
  */
@@ -1636,6 +1637,7 @@ error_t *state_get_all_files(
     size_t *count
 ) {
     CHECK_NULL(state);
+    CHECK_NULL(arena);
     CHECK_NULL(out);
     CHECK_NULL(count);
 
@@ -1668,15 +1670,14 @@ error_t *state_get_all_files(
     }
 
     /* Allocate array */
-    state_file_entry_t *entries = arena
-        ? arena_calloc(arena, file_count, sizeof(state_file_entry_t))
-        : calloc(file_count, sizeof(state_file_entry_t));
+    state_file_entry_t *entries =
+        arena_calloc(arena, file_count, sizeof(state_file_entry_t));
     if (!entries) {
         return ERROR(ERR_MEMORY, "Failed to allocate file array");
     }
 
-    /* Helper macros: route allocations through arena or heap */
-    #define DUP(s)      (arena ? arena_strdup(arena, (s)) : strdup((s)))
+    /* Helper macros: route allocations through arena */
+    #define DUP(s)      arena_strdup(arena, (s))
     #define DUP_OPT(s)  ((s) ? DUP(s) : NULL)
 
     /* Query all files (17 columns: 4 identity + 7 VWD cache + 6 anchor) */
@@ -1689,7 +1690,6 @@ error_t *state_get_all_files(
     sqlite3_stmt *stmt = NULL;
     rc = sqlite3_prepare_v2(state->db, sql_files, -1, &stmt, NULL);
     if (rc != SQLITE_OK) {
-        if (!arena) free(entries);
         return sqlite_error(state->db, "Failed to prepare select query");
     }
 
@@ -1734,11 +1734,10 @@ error_t *state_get_all_files(
         /* Validate non-nullable string columns (OIDs already validated above) */
         if (!fs_path || !storage_path || !profile || !type_str) {
             sqlite3_finalize(stmt);
-            if (!arena) state_free_all_files(entries, i);
             return ERROR(ERR_STATE_INVALID, "NULL value in required column at row %zu", i);
         }
 
-        /* Copy strings (arena or heap) */
+        /* Copy strings into arena */
         entries[i].filesystem_path = DUP(fs_path);
         entries[i].storage_path = DUP(storage_path);
         entries[i].profile = DUP(profile);
@@ -1764,7 +1763,6 @@ error_t *state_get_all_files(
         if (!entries[i].filesystem_path || !entries[i].storage_path ||
             !entries[i].profile || !entries[i].state) {
             sqlite3_finalize(stmt);
-            if (!arena) state_free_all_files(entries, i + 1);
             return ERROR(ERR_MEMORY, "Failed to copy entry strings");
         }
 
@@ -1774,7 +1772,6 @@ error_t *state_get_all_files(
     sqlite3_finalize(stmt);
 
     if (rc != SQLITE_DONE) {
-        if (!arena) state_free_all_files(entries, i);
         return sqlite_error(state->db, "Failed to query files");
     }
 
@@ -1788,29 +1785,6 @@ error_t *state_get_all_files(
 }
 
 /**
- * Free array returned by state_get_all_files()
- *
- * @param entries Array to free (can be NULL)
- * @param count Number of entries in array
- */
-void state_free_all_files(state_file_entry_t *entries, size_t count) {
-    if (!entries) return;
-
-    /* blob_oid is an inline binary field — no allocation to free. */
-    for (size_t i = 0; i < count; i++) {
-        free(entries[i].filesystem_path);
-        free(entries[i].storage_path);
-        free(entries[i].profile);
-        free(entries[i].old_profile);
-        free(entries[i].owner);
-        free(entries[i].group);
-        free(entries[i].state);
-    }
-
-    free(entries);
-}
-
-/**
  * Create state directory entry from metadata item
  *
  * Converts portable metadata (storage_path) to state entry (both paths).
@@ -1819,7 +1793,8 @@ void state_free_all_files(state_file_entry_t *entries, size_t count) {
  * @param meta_item Metadata item (must not be NULL, must be DIRECTORY kind)
  * @param profile Source profile name (must not be NULL)
  * @param custom_prefix Custom prefix for this profile (NULL for home/root)
- * @param out State directory entry (must not be NULL, caller must free)
+ * @param arena Arena for allocations (must not be NULL)
+ * @param out State directory entry (must not be NULL, lifetime tied to arena)
  * @return Error or NULL on success
  */
 error_t *state_directory_entry_create_from_metadata(
@@ -1831,6 +1806,7 @@ error_t *state_directory_entry_create_from_metadata(
 ) {
     CHECK_NULL(meta_item);
     CHECK_NULL(profile);
+    CHECK_NULL(arena);
     CHECK_NULL(out);
 
     /* Validate that this is a directory item */
@@ -1845,34 +1821,29 @@ error_t *state_directory_entry_create_from_metadata(
         );
     }
 
-    /* Helper macros: route allocations through arena or heap */
-    #define DUP(s)      (arena ? arena_strdup(arena, (s)) : strdup((s)))
+    /* Helper macros: route allocations through arena */
+    #define DUP(s)      arena_strdup(arena, (s))
     #define DUP_OPT(s)  ((s) ? DUP(s) : NULL)
 
-    state_directory_entry_t *entry = arena
-        ? arena_calloc(arena, 1, sizeof(state_directory_entry_t))
-        : calloc(1, sizeof(state_directory_entry_t));
+    state_directory_entry_t *entry =
+        arena_calloc(arena, 1, sizeof(state_directory_entry_t));
     if (!entry) {
         return ERROR(ERR_MEMORY, "Failed to allocate state directory entry");
     }
 
     /* Derive filesystem path from storage path with appropriate prefix.
-     * path_from_storage always returns a heap-allocated string. */
+     * path_from_storage always returns a heap-allocated string; copy it
+     * into the arena and release the heap original. */
     char *heap_path = NULL;
     error_t *err = path_from_storage(meta_item->key, custom_prefix, &heap_path);
     if (err) {
-        if (!arena) free(entry);
         return error_wrap(
             err, "Failed to derive filesystem path from storage path: %s",
             meta_item->key
         );
     }
-    if (arena) {
-        entry->filesystem_path = arena_strdup(arena, heap_path);
-        free(heap_path);
-    } else {
-        entry->filesystem_path = heap_path;
-    }
+    entry->filesystem_path = arena_strdup(arena, heap_path);
+    free(heap_path);
 
     entry->storage_path = DUP(meta_item->key);
     entry->profile = DUP(profile);
@@ -1889,7 +1860,6 @@ error_t *state_directory_entry_create_from_metadata(
     /* Check allocation success */
     if (!entry->filesystem_path || !entry->storage_path || !entry->profile ||
         (meta_item->owner && !entry->owner) || (meta_item->group && !entry->group)) {
-        if (!arena) state_free_directory_entry(entry);
         return ERROR(ERR_MEMORY, "Failed to copy directory entry fields");
     }
 
@@ -1980,13 +1950,12 @@ error_t *state_add_directory(state_t *state, const state_directory_entry_t *entr
 /**
  * Get all tracked directories
  *
- * When arena is NULL, returns heap-allocated array that caller must free
- * with state_free_all_directories(). When arena is non-NULL, all allocations
- * (entries array + string fields) use the arena — caller must NOT call
- * state_free_all_directories() (arena_destroy handles everything).
+ * Allocates the entries array and every string field from the caller's
+ * arena. Lifetime is tied to the arena: caller controls cleanup by
+ * destroying the arena.
  *
  * @param state State (must not be NULL)
- * @param arena Arena for allocations (NULL = heap with state_free_all_directories)
+ * @param arena Arena for allocations (must not be NULL)
  * @param out Output array (must not be NULL)
  * @param count Output count (must not be NULL)
  * @return Error or NULL on success
@@ -1998,6 +1967,7 @@ error_t *state_get_all_directories(
     size_t *count
 ) {
     CHECK_NULL(state);
+    CHECK_NULL(arena);
     CHECK_NULL(out);
     CHECK_NULL(count);
 
@@ -2007,7 +1977,7 @@ error_t *state_get_all_directories(
     /* Empty state (no DB file) — return empty results */
     if (!state->db) return NULL;
 
-    /* Count directories first (avoid realloc, required for arena mode) */
+    /* Count directories first (avoid realloc, required for arena allocation) */
     const char *sql_count = "SELECT COUNT(*) FROM tracked_directories;";
     sqlite3_stmt *stmt_count = NULL;
 
@@ -2030,15 +2000,14 @@ error_t *state_get_all_directories(
     }
 
     /* Allocate array */
-    state_directory_entry_t *entries = arena
-        ? arena_calloc(arena, dir_count, sizeof(state_directory_entry_t))
-        : calloc(dir_count, sizeof(state_directory_entry_t));
+    state_directory_entry_t *entries =
+        arena_calloc(arena, dir_count, sizeof(state_directory_entry_t));
     if (!entries) {
         return ERROR(ERR_MEMORY, "Failed to allocate directories array");
     }
 
-    /* Helper macros: route allocations through arena or heap */
-    #define DUP(s)      (arena ? arena_strdup(arena, (s)) : strdup((s)))
+    /* Helper macros: route allocations through arena */
+    #define DUP(s)      arena_strdup(arena, (s))
     #define DUP_OPT(s)  ((s) ? DUP(s) : NULL)
 
     /* Prepare statement if needed (const cast is safe for read-only ops) */
@@ -2052,7 +2021,6 @@ error_t *state_get_all_directories(
             mutable_state->db, sql_dirs, -1, &mutable_state->stmt_get_all_directories, NULL
         );
         if (rc != SQLITE_OK) {
-            if (!arena) free(entries);
             return sqlite_error(
                 mutable_state->db, "Failed to prepare get all directories statement"
             );
@@ -2081,11 +2049,10 @@ error_t *state_get_all_directories(
         /* Validate non-nullable columns */
         if (!fs_path || !storage || !profile) {
             sqlite3_reset(stmt);
-            if (!arena) state_free_all_directories(entries, i);
             return ERROR(ERR_STATE_INVALID, "NULL value in required column at row %zu", i);
         }
 
-        /* Copy strings (arena or heap) */
+        /* Copy strings into arena */
         entries[i].filesystem_path = DUP(fs_path);
         entries[i].storage_path = DUP(storage);
         entries[i].profile = DUP(profile);
@@ -2099,7 +2066,6 @@ error_t *state_get_all_directories(
         if (!entries[i].filesystem_path || !entries[i].storage_path ||
             !entries[i].profile || !entries[i].state) {
             sqlite3_reset(stmt);
-            if (!arena) state_free_all_directories(entries, i + 1);
             return ERROR(ERR_MEMORY, "Failed to copy directory entry strings");
         }
 
@@ -2109,7 +2075,6 @@ error_t *state_get_all_directories(
     sqlite3_reset(stmt);
 
     if (rc != SQLITE_DONE && rc != SQLITE_ROW) {
-        if (!arena) state_free_all_directories(entries, i);
         return sqlite_error(mutable_state->db, "Failed to query directories");
     }
 
@@ -2125,16 +2090,15 @@ error_t *state_get_all_directories(
 /**
  * Get directories by profile
  *
- * Returns all directory entries from the specified profile.
- * Used by profile disable to determine impact on directories.
+ * Returns all directory entries from the specified profile. Allocations
+ * use the caller's arena; lifetime ends when the arena is destroyed.
  *
- * When arena is NULL, returns heap-allocated array (free with state_free_all_directories).
- * When arena is non-NULL, all allocations use the arena.
+ * Used by profile disable to determine impact on directories.
  *
  * @param state State (must not be NULL)
  * @param profile Profile name to filter by (must not be NULL)
- * @param arena Arena for allocations (NULL = heap with state_free_all_directories)
- * @param out Output array (must not be NULL)
+ * @param arena Arena for allocations (must not be NULL)
+ * @param out Output array (must not be NULL, lifetime tied to arena)
  * @param count Output count (must not be NULL)
  * @return Error or NULL on success (empty array if no matches)
  */
@@ -2147,6 +2111,7 @@ error_t *state_get_directories_by_profile(
 ) {
     CHECK_NULL(state);
     CHECK_NULL(profile);
+    CHECK_NULL(arena);
     CHECK_NULL(out);
     CHECK_NULL(count);
 
@@ -2156,7 +2121,7 @@ error_t *state_get_directories_by_profile(
     /* Empty state (no DB file) — return empty results */
     if (!state->db) return NULL;
 
-    /* Count directories first (avoid realloc, required for arena mode) */
+    /* Count directories first (avoid realloc, required for arena allocation) */
     const char *sql_count = "SELECT COUNT(*) FROM tracked_directories WHERE profile = ?;";
     sqlite3_stmt *stmt_count = NULL;
 
@@ -2181,15 +2146,14 @@ error_t *state_get_directories_by_profile(
     }
 
     /* Allocate array */
-    state_directory_entry_t *entries = arena
-        ? arena_calloc(arena, dir_count, sizeof(state_directory_entry_t))
-        : calloc(dir_count, sizeof(state_directory_entry_t));
+    state_directory_entry_t *entries =
+        arena_calloc(arena, dir_count, sizeof(state_directory_entry_t));
     if (!entries) {
         return ERROR(ERR_MEMORY, "Failed to allocate directories array");
     }
 
-    /* Helper macros: route allocations through arena or heap */
-    #define DUP(s)      (arena ? arena_strdup(arena, (s)) : strdup((s)))
+    /* Helper macros: route allocations through arena */
+    #define DUP(s)      arena_strdup(arena, (s))
     #define DUP_OPT(s)  ((s) ? DUP(s) : NULL)
 
     /* Prepare statement if needed (const cast is safe for read-only ops) */
@@ -2203,7 +2167,6 @@ error_t *state_get_directories_by_profile(
             mutable_state->db, sql, -1, &mutable_state->stmt_get_directories_by_profile, NULL
         );
         if (rc != SQLITE_OK) {
-            if (!arena) free(entries);
             return sqlite_error(
                 mutable_state->db, "Failed to prepare get directories by profile statement"
             );
@@ -2234,11 +2197,10 @@ error_t *state_get_directories_by_profile(
         /* Validate non-nullable columns */
         if (!fs_path || !storage || !profile_str) {
             sqlite3_reset(stmt);
-            if (!arena) state_free_all_directories(entries, i);
             return ERROR(ERR_STATE_INVALID, "NULL value in required column at row %zu", i);
         }
 
-        /* Copy strings (arena or heap) */
+        /* Copy strings into arena */
         entries[i].filesystem_path = DUP(fs_path);
         entries[i].storage_path = DUP(storage);
         entries[i].profile = DUP(profile_str);
@@ -2252,7 +2214,6 @@ error_t *state_get_directories_by_profile(
         if (!entries[i].filesystem_path || !entries[i].storage_path ||
             !entries[i].profile || !entries[i].state) {
             sqlite3_reset(stmt);
-            if (!arena) state_free_all_directories(entries, i + 1);
             return ERROR(ERR_MEMORY, "Failed to copy directory entry strings");
         }
 
@@ -2262,7 +2223,6 @@ error_t *state_get_directories_by_profile(
     sqlite3_reset(stmt);
 
     if (rc != SQLITE_DONE && rc != SQLITE_ROW) {
-        if (!arena) state_free_all_directories(entries, i);
         return sqlite_error(mutable_state->db, "Failed to query directories");
     }
 
@@ -2677,26 +2637,6 @@ void state_free_directory_entry(state_directory_entry_t *entry) {
     free(entry->group);
     free(entry->state);
     free(entry);
-}
-
-/**
- * Free array of directory entries
- */
-void state_free_all_directories(state_directory_entry_t *entries, size_t count) {
-    if (!entries) {
-        return;
-    }
-
-    for (size_t i = 0; i < count; i++) {
-        free(entries[i].filesystem_path);
-        free(entries[i].storage_path);
-        free(entries[i].profile);
-        free(entries[i].owner);
-        free(entries[i].group);
-        free(entries[i].state);
-    }
-
-    free(entries);
 }
 
 /**
@@ -3363,12 +3303,15 @@ error_t *state_set_profile_commit_oid(
 /**
  * Get entries by profile
  *
- * Returns all manifest entries from the specified profile.
+ * Returns all manifest entries from the specified profile. Allocations
+ * use the caller's arena; lifetime ends when the arena is destroyed.
+ *
  * Used by profile disable to determine impact of disabling a profile.
  *
  * @param state State (must not be NULL)
  * @param profile Profile name to filter by (must not be NULL)
- * @param out Output array (must not be NULL, caller must free with state_free_all_files)
+ * @param arena Arena for allocations (must not be NULL)
+ * @param out Output array (must not be NULL, lifetime tied to arena)
  * @param count Output count (must not be NULL)
  * @return Error or NULL on success (empty array if no matches)
  */
@@ -3381,6 +3324,7 @@ error_t *state_get_entries_by_profile(
 ) {
     CHECK_NULL(state);
     CHECK_NULL(profile);
+    CHECK_NULL(arena);
     CHECK_NULL(out);
     CHECK_NULL(count);
 
@@ -3421,15 +3365,14 @@ error_t *state_get_entries_by_profile(
     }
 
     /* Allocate array */
-    state_file_entry_t *entries = arena
-        ? arena_calloc(arena, entry_count, sizeof(state_file_entry_t))
-        : calloc(entry_count, sizeof(state_file_entry_t));
+    state_file_entry_t *entries =
+        arena_calloc(arena, entry_count, sizeof(state_file_entry_t));
     if (!entries) {
         return ERROR(ERR_MEMORY, "Failed to allocate entries array");
     }
 
-    /* Helper macros: route allocations through arena or heap */
-    #define DUP(s)      (arena ? arena_strdup(arena, (s)) : strdup((s)))
+    /* Helper macros: route allocations through arena */
+    #define DUP(s)      arena_strdup(arena, (s))
     #define DUP_OPT(s)  ((s) ? DUP(s) : NULL)
 
     /* Reset and bind profile */
@@ -3475,7 +3418,6 @@ error_t *state_get_entries_by_profile(
 
         if (!fs_path || !storage_path || !profile || !type_str) {
             sqlite3_reset(stmt);
-            if (!arena) state_free_all_files(entries, i);
             return ERROR(ERR_STATE_INVALID, "NULL value in required column at row %zu", i);
         }
 
@@ -3501,7 +3443,6 @@ error_t *state_get_entries_by_profile(
         if (!entries[i].filesystem_path || !entries[i].storage_path ||
             !entries[i].profile || !entries[i].state) {
             sqlite3_reset(stmt);
-            if (!arena) state_free_all_files(entries, i + 1);
             return ERROR(ERR_MEMORY, "Failed to copy entry strings");
         }
 
@@ -3511,7 +3452,6 @@ error_t *state_get_entries_by_profile(
     sqlite3_reset(stmt);
 
     if (rc != SQLITE_DONE) {
-        if (!arena) state_free_all_files(entries, i);
         return sqlite_error(state->db, "Failed to fetch entries");
     }
 

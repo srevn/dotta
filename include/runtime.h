@@ -196,6 +196,14 @@ typedef struct dotta_spec_ext {
  *      Resources that multiple dispatch steps share live on ctx; there
  *      is never a `workspace_get_X` / `state_get_X` accessor that
  *      exposes ctx-scope resources via a lower layer.
+ *   4. No raw scratch arena on ctx. The parser's arena lives on
+ *      `run_spec`'s frame and is not handed to handlers. A handler that
+ *      needs an arena creates one with the lifetime of its operation
+ *      (e.g. `arena_t *a = arena_create(0)` at function entry,
+ *      `arena_destroy(a)` at exit). The parser's arena lifetime is
+ *      "command dispatch"; handler scratch lifetime is "this operation,"
+ *      which is *nested* inside dispatch but not the same. Bundling them
+ *      would force a future invalidator (Rule 5).
  *
  * Exit-code override
  * ------------------
@@ -224,7 +232,6 @@ typedef struct dotta_ctx {
     content_cache_t *content_cache;     /* NULL unless crypto_mode == KEY_CACHE */
     const config_t *config;
     output_t *out;
-    arena_t *arena;                     /* Command-scoped; parser-owned */
     int argc;                           /* Original process argc */
     char **argv;                        /* Original process argv */
     int *exit_code;                     /* Non-NULL; *exit_code overrides exit when err==NULL */

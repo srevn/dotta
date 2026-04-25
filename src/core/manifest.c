@@ -2084,6 +2084,7 @@ cleanup:
  * - custom_prefix: borrowed, can be NULL (used for path_from_storage only)
  * - metadata: borrowed (per-profile, reloaded for each profile in the outer
  *             build loop), can be NULL (profile lacks metadata.json)
+ * - arena: borrowed, must not be NULL; per-entry strings are abandoned to it
  * - error: owned by callback, caller must free on error
  */
 struct manifest_build_ctx {
@@ -2093,7 +2094,7 @@ struct manifest_build_ctx {
     const char *profile;           /* Profile name for entries and error messages */
     const char *custom_prefix;     /* For path_from_storage (can be NULL) */
     const metadata_t *metadata;    /* Per-profile metadata (NULL if absent) */
-    arena_t *arena;                /* Arena for string allocations (NULL = heap) */
+    arena_t *arena;                /* Arena for string allocations (must not be NULL) */
     error_t *error;                /* Error propagation (set on failure) */
 };
 
@@ -2115,13 +2116,12 @@ struct manifest_build_ctx {
  * NULL metadata, missing item, and ERR_NOT_FOUND all leave the entry's
  * Git-derived defaults intact. Other lookup failures propagate.
  *
- * Override-path callers MUST clear any existing heap-allocated owner/group
- * (when arena=NULL) before calling, since this helper unconditionally
- * overwrites those pointers with fresh allocations on a successful lookup.
+ * Override-path callers may freely overwrite owner/group: prior values are
+ * arena-borrowed and abandoned to the arena, no per-pointer free required.
  *
  * @param entry    Target slot (mutable)
  * @param metadata Per-profile metadata (NULL → no-op)
- * @param arena    Allocation arena for string copies (NULL → heap)
+ * @param arena    Allocation arena for string copies (must not be NULL)
  * @return Error or NULL on success
  */
 static error_t *apply_metadata_to_entry(
@@ -2143,12 +2143,11 @@ static error_t *apply_metadata_to_entry(
 
     /* owner/group apply to all kinds; copy first so the mode/encrypted
      * overrides below can short-circuit after the allocations have already
-     * succeeded. arena_strdup and strdup both return NULL only on real
-     * failure (NULL input bypasses the if-guards). */
+     * succeeded. arena_strdup returns NULL only on real failure (NULL
+     * item->owner/group bypasses the if-guards and leaves the dup NULL). */
     char *owner_dup = NULL;
     if (item->owner) {
-        owner_dup = arena ? arena_strdup(arena, item->owner)
-                          : strdup(item->owner);
+        owner_dup = arena_strdup(arena, item->owner);
         if (!owner_dup) {
             return ERROR(
                 ERR_MEMORY, "Failed to duplicate owner for '%s'",
@@ -2159,10 +2158,8 @@ static error_t *apply_metadata_to_entry(
 
     char *group_dup = NULL;
     if (item->group) {
-        group_dup = arena ? arena_strdup(arena, item->group)
-                          : strdup(item->group);
+        group_dup = arena_strdup(arena, item->group);
         if (!group_dup) {
-            if (!arena) free(owner_dup);
             return ERROR(
                 ERR_MEMORY, "Failed to duplicate group for '%s'",
                 entry->storage_path
@@ -2287,15 +2284,11 @@ static int manifest_build_callback(
             );
             return -1;
         }
-        if (ctx->arena) {
-            filesystem_path = arena_strdup(ctx->arena, heap_path);
-            free(heap_path);
-            if (!filesystem_path) {
-                ctx->error = ERROR(ERR_MEMORY, "Failed to arena-copy filesystem path");
-                return -1;
-            }
-        } else {
-            filesystem_path = heap_path;
+        filesystem_path = arena_strdup(ctx->arena, heap_path);
+        free(heap_path);
+        if (!filesystem_path) {
+            ctx->error = ERROR(ERR_MEMORY, "Failed to arena-copy filesystem path");
+            return -1;
         }
     }
 
@@ -2313,27 +2306,21 @@ static int manifest_build_callback(
         size_t existing_idx = (size_t) (uintptr_t) idx_ptr - 1;
 
         /* Duplicate storage path */
-        char *dup_storage_path = ctx->arena ? arena_strdup(ctx->arena, storage_path)
-                                            : strdup(storage_path);
+        char *dup_storage_path = arena_strdup(ctx->arena, storage_path);
         if (!dup_storage_path) {
-            if (!ctx->arena) free(filesystem_path);
             ctx->error = ERROR(ERR_MEMORY, "Failed to duplicate storage path");
             return -1;
         }
 
         file_entry_t *override = &ctx->manifest->entries[existing_idx];
 
-        /* Free old resources and clear metadata-owned fields before the new
-         * profile's metadata is applied. The lower-precedence profile may
-         * have left non-NULL owner/group/encrypted on the slot; carrying
-         * those through would leak its attribution into the higher-
-         * precedence entry. Strings are abandoned when arena-backed. */
-        if (!ctx->arena) {
-            free(override->storage_path);
-            free(override->filesystem_path);
-            free(override->owner);
-            free(override->group);
-        }
+        /* Clear metadata-owned fields before the new profile's metadata is
+         * applied. The lower-precedence profile may have left non-NULL
+         * owner/group/encrypted on the slot; carrying those through would
+         * leak its attribution into the higher-precedence entry. The old
+         * string pointers (storage_path, filesystem_path, owner, group)
+         * are arena-borrowed and abandoned to the caller's arena when
+         * overwritten below. */
         override->owner = NULL;
         override->group = NULL;
         override->encrypted = false;
@@ -2381,7 +2368,6 @@ static int manifest_build_callback(
         /* Add new entry - grow array if needed */
         if (ctx->manifest->count >= ctx->capacity) {
             if (ctx->capacity > SIZE_MAX / 2) {
-                if (!ctx->arena) free(filesystem_path);
                 ctx->error = ERROR(ERR_INTERNAL, "Manifest capacity overflow");
                 return -1;
             }
@@ -2392,7 +2378,6 @@ static int manifest_build_callback(
                 new_capacity * sizeof(file_entry_t)
             );
             if (!new_entries) {
-                if (!ctx->arena) free(filesystem_path);
                 ctx->error = ERROR(ERR_MEMORY, "Failed to grow manifest");
                 return -1;
             }
@@ -2401,11 +2386,8 @@ static int manifest_build_callback(
         }
 
         /* Duplicate storage path */
-        char *dup_storage_path = ctx->arena
-            ? arena_strdup(ctx->arena, storage_path)
-            : strdup(storage_path);
+        char *dup_storage_path = arena_strdup(ctx->arena, storage_path);
         if (!dup_storage_path) {
-            if (!ctx->arena) free(filesystem_path);
             ctx->error = ERROR(ERR_MEMORY, "Failed to duplicate storage path");
             return -1;
         }
@@ -2452,10 +2434,9 @@ static int manifest_build_callback(
             new_entry, ctx->metadata, ctx->arena
         );
         if (meta_err) {
-            if (!ctx->arena) {
-                free(new_entry->storage_path);
-                free(new_entry->filesystem_path);
-            }
+            /* Strings are arena-borrowed; abandon them to the caller's
+             * arena and zero the fields so the unused slot doesn't carry
+             * stale attribution into a future overlay. */
             new_entry->storage_path = NULL;
             new_entry->filesystem_path = NULL;
             ctx->error = error_wrap(
@@ -2471,16 +2452,10 @@ static int manifest_build_callback(
         );
         if (err) {
             /* Entry already added to manifest, but hashmap failed.
-             * Clean up the entry (strings abandoned when arena-backed).
-             * Metadata-owned strings (owner/group) may also be set; free
-             * them on the heap path to avoid leaking attribution from a
-             * lookup that did succeed before the index update failed. */
-            if (!ctx->arena) {
-                free(new_entry->storage_path);
-                free(new_entry->filesystem_path);
-                free(new_entry->owner);
-                free(new_entry->group);
-            }
+             * Strings (including any owner/group that apply_metadata
+             * succeeded on before this point) are arena-borrowed; abandon
+             * them to the caller's arena and zero the fields so the
+             * unused slot doesn't carry stale attribution. */
             new_entry->storage_path = NULL;
             new_entry->filesystem_path = NULL;
             new_entry->owner = NULL;
@@ -2537,11 +2512,10 @@ error_t *manifest_build(
      * Create hash map for O(1) duplicate detection
      * Maps: filesystem_path -> index in entries array
      *
-     * Borrow keys when arena-backed (arena outlives hashmap).
-     * In non-arena mode, manifest_free() frees entry strings before
-     * the hashmap, so keys must be owned copies.
+     * Borrow keys: filesystem_path strings live in the caller's arena,
+     * which outlives the hashmap.
      */
-    path_map = arena ? hashmap_borrow(128) : hashmap_create(128);
+    path_map = hashmap_borrow(128);
     if (!path_map) {
         err = ERROR(ERR_MEMORY, "Failed to create hashmap");
         goto cleanup;
@@ -2625,7 +2599,6 @@ error_t *manifest_build(
 
     /* Success - transfer index ownership to manifest */
     manifest->index = path_map;
-    manifest->arena_backed = (arena != NULL);
     *out = manifest;
 
     return NULL;
@@ -2647,6 +2620,7 @@ cleanup:
  * @param profile Profile name for entries (must not be NULL)
  * @param custom_prefix Custom prefix for custom/ paths (NULL for graceful degradation)
  * @param metadata Optional per-tree metadata applied to entries (can be NULL)
+ * @param arena Arena for per-entry string allocations (must not be NULL)
  * @param out Manifest (must not be NULL, caller must free with manifest_free)
  * @return Error or NULL on success
  */
@@ -2655,10 +2629,12 @@ error_t *manifest_build_from_tree(
     const char *profile,
     const char *custom_prefix,
     const metadata_t *metadata,
+    arena_t *arena,
     manifest_t **out
 ) {
     CHECK_NULL(tree);
     CHECK_NULL(profile);
+    CHECK_NULL(arena);
     CHECK_NULL(out);
 
     error_t *err = NULL;
@@ -2681,18 +2657,20 @@ error_t *manifest_build_from_tree(
     }
     manifest->count = 0;
 
-    /* Create hash map for O(1) duplicate detection */
-    path_map = hashmap_create(128);
+    /* Create hash map for O(1) duplicate detection.
+     * Borrow keys: filesystem_path strings live in the caller's arena, which
+     * outlives the manifest, so duplicating keys onto the heap would be waste. */
+    path_map = hashmap_borrow(128);
     if (!path_map) {
         err = ERROR(ERR_MEMORY, "Failed to create hashmap");
         goto cleanup;
     }
 
-    /* Own copy of profile name for entry borrowing.
-     * Entries set profile to this pointer —
-     * manifest lifetime guarantees it remains valid until manifest_free(). */
-    manifest->owned_profile = strdup(profile);
-    if (!manifest->owned_profile) {
+    /* Arena-allocate the profile name. Entries borrow this pointer; the
+     * caller's arena outlives the manifest (it backs every per-entry string
+     * the callback writes), so the borrow stays valid until arena_destroy. */
+    const char *owned_profile = arena_strdup(arena, profile);
+    if (!owned_profile) {
         err = ERROR(ERR_MEMORY, "Failed to duplicate profile name");
         goto cleanup;
     }
@@ -2710,10 +2688,10 @@ error_t *manifest_build_from_tree(
         .manifest      = manifest,
         .capacity      = capacity,
         .path_map      = path_map,
-        .profile       = manifest->owned_profile,
+        .profile       = owned_profile,
         .custom_prefix = custom_prefix,
         .metadata      = metadata,
-        .arena         = NULL,
+        .arena         = arena,
         .error         = NULL
     };
 
@@ -2747,28 +2725,15 @@ void manifest_free(manifest_t *manifest) {
         return;
     }
 
-    for (size_t i = 0; i < manifest->count; i++) {
-        /* Skip string field frees when arena-backed.
-         * blob_oid is an inline binary field — no free. */
-        if (!manifest->arena_backed) {
-            free(manifest->entries[i].storage_path);
-            free(manifest->entries[i].filesystem_path);
-            free(manifest->entries[i].old_profile);
-            free(manifest->entries[i].owner);
-            free(manifest->entries[i].group);
-        }
-    }
-
-    /* entries array, index, owned strings, and manifest struct are always heap */
+    /* Per-entry string fields live in a caller-owned arena; the manifest
+     * abandons them to that arena. Only the heap-owned spine is freed here:
+     * entries array, index hashmap, and the manifest struct itself. */
     free(manifest->entries);
 
     /* Free index if present */
     if (manifest->index) {
         hashmap_free(manifest->index, NULL);
     }
-
-    /* Free owned profile name (used by tree-based manifests, NULL otherwise) */
-    free(manifest->owned_profile);
 
     free(manifest);
 }

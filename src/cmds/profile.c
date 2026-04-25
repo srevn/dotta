@@ -12,6 +12,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "base/arena.h"
 #include "base/args.h"
 #include "base/array.h"
 #include "base/error.h"
@@ -1629,10 +1630,17 @@ static error_t *profile_validate(
     }
 
     /* Check 2: State file entries reference valid profiles */
+    arena_t *files_arena = arena_create(0);
+    if (!files_arena) {
+        err = ERROR(ERR_MEMORY, "Failed to allocate state-files scan arena");
+        goto cleanup;
+    }
+
     size_t state_file_count = 0;
     state_file_entry_t *state_files = NULL;
-    err = state_get_all_files(state, NULL, &state_files, &state_file_count);
+    err = state_get_all_files(state, files_arena, &state_files, &state_file_count);
     if (err) {
+        arena_destroy(files_arena);
         goto cleanup;
     }
 
@@ -1645,7 +1653,7 @@ static error_t *profile_validate(
         }
     }
 
-    state_free_all_files(state_files, state_file_count);
+    arena_destroy(files_arena);
 
     if (orphaned_files > 0) {
         output_warning(

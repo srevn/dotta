@@ -12,6 +12,7 @@
 #include <string.h>
 #include <unistd.h>
 
+#include "base/arena.h"
 #include "base/args.h"
 #include "base/array.h"
 #include "base/error.h"
@@ -1101,26 +1102,30 @@ static error_t *remove_files_from_profile(
                      * With --delete-files: leave them for apply to clean up.
                      * Default: release immediately (no apply needed). */
                     if (!opts->delete_files && manifest_removed_count > 0) {
-                        state_file_entry_t *delete_entries = NULL;
-                        size_t delete_count = 0;
-                        error_t *delete_err = state_get_entries_by_profile(
-                            state, opts->profile, NULL, &delete_entries, &delete_count
-                        );
-                        if (!delete_err) {
-                            for (size_t di = 0; di < delete_count; di++) {
-                                if (delete_entries[di].state &&
-                                    strcmp(delete_entries[di].state, STATE_DELETED) == 0) {
-                                    error_t *rm_err = state_remove_file(
-                                        state, delete_entries[di].filesystem_path
-                                    );
-                                    if (rm_err) {
-                                        error_free(rm_err);
+                        arena_t *delete_arena = arena_create(0);
+                        if (delete_arena) {
+                            state_file_entry_t *delete_entries = NULL;
+                            size_t delete_count = 0;
+                            error_t *delete_err = state_get_entries_by_profile(
+                                state, opts->profile, delete_arena,
+                                &delete_entries, &delete_count
+                            );
+                            if (!delete_err) {
+                                for (size_t di = 0; di < delete_count; di++) {
+                                    if (delete_entries[di].state &&
+                                        strcmp(delete_entries[di].state, STATE_DELETED) == 0) {
+                                        error_t *rm_err = state_remove_file(
+                                            state, delete_entries[di].filesystem_path
+                                        );
+                                        if (rm_err) {
+                                            error_free(rm_err);
+                                        }
                                     }
                                 }
+                            } else {
+                                error_free(delete_err);
                             }
-                            state_free_all_files(delete_entries, delete_count);
-                        } else {
-                            error_free(delete_err);
+                            arena_destroy(delete_arena);
                         }
                     }
 
@@ -1347,21 +1352,24 @@ static error_t *delete_profile_branch(
     size_t deployed_count = 0;
 
     /* Count deployed files for informational display */
-    size_t state_file_count = 0;
-    state_file_entry_t *state_files = NULL;
-    error_t *state_err = state_get_all_files(
-        state, NULL, &state_files, &state_file_count
-    );
-    if (!state_err && state_files) {
-        for (size_t i = 0; i < state_file_count; i++) {
-            if (strcmp(state_files[i].profile, opts->profile) == 0) {
-                deployed_count++;
+    arena_t *count_arena = arena_create(0);
+    if (count_arena) {
+        size_t state_file_count = 0;
+        state_file_entry_t *state_files = NULL;
+        error_t *state_err = state_get_all_files(
+            state, count_arena, &state_files, &state_file_count
+        );
+        if (!state_err && state_files) {
+            for (size_t i = 0; i < state_file_count; i++) {
+                if (strcmp(state_files[i].profile, opts->profile) == 0) {
+                    deployed_count++;
+                }
             }
         }
-        state_free_all_files(state_files, state_file_count);
-    }
-    if (state_err) {
-        error_free(state_err);
+        if (state_err) {
+            error_free(state_err);
+        }
+        arena_destroy(count_arena);
     }
 
     /* Save custom prefix for hook filesystem path conversion. The peek
@@ -1524,74 +1532,82 @@ static error_t *delete_profile_branch(
     if (!delete_err) {
         size_t released_count = 0;
 
-        /* Handle file entries */
-        state_file_entry_t *file_entries = NULL;
-        size_t entry_count = 0;
-        delete_err = state_get_entries_by_profile(
-            state, opts->profile, NULL, &file_entries, &entry_count
-        );
-        if (!delete_err) {
-            for (size_t i = 0; i < entry_count; i++) {
-                if (!file_entries[i].state ||
-                    (strcmp(file_entries[i].state, STATE_INACTIVE) != 0 &&
-                    strcmp(file_entries[i].state, STATE_DELETED) != 0)){
-                    continue;
-                }
-                error_t *file_err = NULL;
+        /* One arena spans both queries — file_entries and dir_entries are
+         * borrowed for the duration of this cleanup block, then released
+         * together when the arena is destroyed below. Failure is treated as
+         * "skip the best-effort cleanup" (the commit below still runs). */
+        arena_t *cleanup_arena = arena_create(0);
 
-                if (opts->delete_files) {
-                    file_err = state_set_file_state(
-                        state, file_entries[i].filesystem_path, STATE_DELETED
-                    );
-                } else {
-                    file_err = state_remove_file(
-                        state, file_entries[i].filesystem_path
-                    );
+        /* Handle file entries */
+        if (cleanup_arena) {
+            state_file_entry_t *file_entries = NULL;
+            size_t entry_count = 0;
+            error_t *file_query_err = state_get_entries_by_profile(
+                state, opts->profile, cleanup_arena, &file_entries, &entry_count
+            );
+            if (!file_query_err) {
+                for (size_t i = 0; i < entry_count; i++) {
+                    if (!file_entries[i].state ||
+                        (strcmp(file_entries[i].state, STATE_INACTIVE) != 0 &&
+                        strcmp(file_entries[i].state, STATE_DELETED) != 0)){
+                        continue;
+                    }
+                    error_t *file_err = NULL;
+
+                    if (opts->delete_files) {
+                        file_err = state_set_file_state(
+                            state, file_entries[i].filesystem_path, STATE_DELETED
+                        );
+                    } else {
+                        file_err = state_remove_file(
+                            state, file_entries[i].filesystem_path
+                        );
+                    }
+                    if (file_err) {
+                        error_free(file_err);
+                    } else {
+                        released_count++;
+                    }
                 }
-                if (file_err) {
-                    error_free(file_err);
-                } else {
-                    released_count++;
-                }
+            } else {
+                error_free(file_query_err);
             }
-            state_free_all_files(file_entries, entry_count);
-        } else {
-            error_free(delete_err);
-            delete_err = NULL;
         }
 
         /* Handle directory entries */
-        state_directory_entry_t *dir_entries = NULL;
-        size_t dir_count = 0;
-        delete_err = state_get_directories_by_profile(
-            state, opts->profile, NULL, &dir_entries, &dir_count
-        );
-        if (!delete_err) {
-            for (size_t i = 0; i < dir_count; i++) {
-                if (!dir_entries[i].state ||
-                    (strcmp(dir_entries[i].state, STATE_INACTIVE) != 0 &&
-                    strcmp(dir_entries[i].state, STATE_DELETED) != 0)){
-                    continue;
+        if (cleanup_arena) {
+            state_directory_entry_t *dir_entries = NULL;
+            size_t dir_count = 0;
+            error_t *dir_query_err = state_get_directories_by_profile(
+                state, opts->profile, cleanup_arena, &dir_entries, &dir_count
+            );
+            if (!dir_query_err) {
+                for (size_t i = 0; i < dir_count; i++) {
+                    if (!dir_entries[i].state ||
+                        (strcmp(dir_entries[i].state, STATE_INACTIVE) != 0 &&
+                        strcmp(dir_entries[i].state, STATE_DELETED) != 0)){
+                        continue;
+                    }
+                    error_t *dir_err = NULL;
+                    if (opts->delete_files) {
+                        dir_err = state_set_directory_state(
+                            state, dir_entries[i].filesystem_path, STATE_DELETED
+                        );
+                    } else {
+                        dir_err = state_remove_directory(
+                            state, dir_entries[i].filesystem_path
+                        );
+                    }
+                    if (dir_err) {
+                        error_free(dir_err);
+                    }
                 }
-                error_t *dir_err = NULL;
-                if (opts->delete_files) {
-                    dir_err = state_set_directory_state(
-                        state, dir_entries[i].filesystem_path, STATE_DELETED
-                    );
-                } else {
-                    dir_err = state_remove_directory(
-                        state, dir_entries[i].filesystem_path
-                    );
-                }
-                if (dir_err) {
-                    error_free(dir_err);
-                }
+            } else {
+                error_free(dir_query_err);
             }
-            state_free_all_directories(dir_entries, dir_count);
-        } else {
-            error_free(delete_err);
-            delete_err = NULL;
         }
+
+        arena_destroy(cleanup_arena);
 
         /* Commit transaction */
         delete_err = state_commit(state);

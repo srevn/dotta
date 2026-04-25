@@ -16,6 +16,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <hydrogen.h>
 #include <signal.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -156,21 +157,75 @@ static long process_remaining(
 }
 
 /**
+ * Compute the next capacity in the doubling schedule.
+ *
+ * Returns 0 on overflow, otherwise the smallest power-of-two-step
+ * capacity that fits `needed`. Shared by both grow strategies so the
+ * size policy stays in one place.
+ */
+static size_t capture_next_capacity(size_t current, size_t needed) {
+    while (current < needed) {
+        if (current > SIZE_MAX / 2) {
+            return 0;
+        }
+        current *= 2;
+    }
+    return current;
+}
+
+/**
  * Grow the capture buffer to fit `needed` bytes. Returns NULL on
  * allocation failure or arithmetic overflow; otherwise returns the
  * (possibly reallocated) buffer and updates *capacity_inout.
  */
 static char *capture_grow(char *buf, size_t needed, size_t *capacity_inout) {
-    size_t cap = *capacity_inout;
-    while (cap < needed) {
-        if (cap > SIZE_MAX / 2) {
-            return NULL;
-        }
-        cap *= 2;
+    size_t cap = capture_next_capacity(*capacity_inout, needed);
+    if (cap == 0) {
+        return NULL;
     }
     char *grown = realloc(buf, cap);
     if (!grown) {
         return NULL;
+    }
+    *capacity_inout = cap;
+    return grown;
+}
+
+/**
+ * Secure variant of capture_grow.
+ *
+ * Used when the capture buffer holds secrets (passwords from a
+ * credential helper response). realloc may relocate, leaving the
+ * old bytes on the freelist unscrubbed; this helper performs an
+ * explicit malloc → memcpy → memzero → free so every byte that
+ * ever held a secret is wiped before the page returns to the
+ * allocator.
+ *
+ * `cur_len` is the number of valid bytes in `buf` (the live data
+ * to preserve). The full prior capacity is zeroed so dead-store
+ * elimination cannot drop the wipe and the entire allocation
+ * (not just the live prefix) is clean before free.
+ *
+ * Cost is one extra memcpy + memzero per grow event. The doubling
+ * schedule keeps grow events O(log n), and for the realistic case
+ * (helper response slightly over PROCESS_CAPTURE_INITIAL) only one
+ * grow fires per call.
+ */
+static char *capture_grow_secure(
+    char *buf, size_t cur_len, size_t needed, size_t *capacity_inout
+) {
+    size_t cap = capture_next_capacity(*capacity_inout, needed);
+    if (cap == 0) {
+        return NULL;
+    }
+    char *grown = malloc(cap);
+    if (!grown) {
+        return NULL;
+    }
+    if (buf) {
+        memcpy(grown, buf, cur_len);
+        hydro_memzero(buf, *capacity_inout);
+        free(buf);
     }
     *capacity_inout = cap;
     return grown;
@@ -505,7 +560,9 @@ error_t *process_run(const process_spec_t *spec, process_result_t *result) {
                 goto cleanup;
             }
             if (need > cap_capacity) {
-                char *grown = capture_grow(capture, need, &cap_capacity);
+                char *grown = spec->secure_capture
+                    ? capture_grow_secure(capture, cap_len, need, &cap_capacity)
+                    : capture_grow(capture, need, &cap_capacity);
                 if (!grown) {
                     err = ERROR(
                         ERR_MEMORY,
@@ -627,10 +684,13 @@ error_t *process_run(const process_spec_t *spec, process_result_t *result) {
         result->signal_num = 0;
     }
 
-    /* Transfer capture ownership into the result. */
+    /* Transfer capture ownership into the result. The secure flag
+     * mirrors the spec so process_result_dispose can scrub before
+     * free without re-deriving intent. */
     if (spec->capture) {
         result->output = capture;
         result->output_len = cap_len;
+        result->secure = spec->secure_capture;
         capture = NULL;
     }
 
@@ -660,7 +720,12 @@ cleanup:
         );
     }
 
-    /* Free capture buffer only if ownership was not transferred. */
+    /* Free capture buffer only if ownership was not transferred.
+     * Secure captures get a wipe first so partial-read bytes do
+     * not linger after a mid-capture failure. */
+    if (capture && spec->secure_capture) {
+        hydro_memzero(capture, cap_capacity);
+    }
     free(capture);
 
     return err;
@@ -669,6 +734,9 @@ cleanup:
 void process_result_dispose(process_result_t *result) {
     if (!result) {
         return;
+    }
+    if (result->secure && result->output) {
+        hydro_memzero(result->output, result->output_len);
     }
     free(result->output);
     *result = (process_result_t) { 0 };

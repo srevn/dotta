@@ -146,6 +146,7 @@ typedef struct {
     const char *stdin_content;      /* non-NULL iff stdin_policy == BUFFER */
     size_t stdin_content_len;       /* bytes in stdin_content (≤ MAX) */
     bool capture;                   /* true = collect stdout+stderr into result */
+    bool secure_capture;            /* scrub the capture buffer before any allocator hand-back */
     int stream_fd;                  /* -1 = no streaming; else write each chunk */
     const char *work_dir;           /* NULL = inherit parent's CWD */
     const char *work_dir_fallback;  /* NULL = no fallback */
@@ -187,6 +188,11 @@ typedef struct {
  *                 otherwise dispose frees it.
  * - output_len  : number of bytes in output, excluding the
  *                 terminating NUL. Zero when output is NULL.
+ * - secure      : mirrors spec.secure_capture. When true,
+ *                 process_result_dispose scrubs the capture buffer
+ *                 before free. Ownership-transfer (output = NULL
+ *                 before dispose) bypasses this scrub — the caller
+ *                 then owns scrubbing.
  */
 typedef struct {
     int exit_code;
@@ -196,6 +202,7 @@ typedef struct {
     int exec_errno;
     char *output;
     size_t output_len;
+    bool secure;
 } process_result_t;
 
 /**
@@ -227,6 +234,11 @@ error_t *process_run(const process_spec_t *spec, process_result_t *result);
  * no-op. To take ownership of the capture buffer before disposing,
  * read result->output (and result->output_len), then set
  * result->output = NULL before calling.
+ *
+ * When result->secure is true (mirrored from spec.secure_capture),
+ * the capture buffer is wiped before free so secrets do not linger
+ * on the freelist. Ownership-transfer (output = NULL before dispose)
+ * bypasses the scrub — the caller owns it from that point on.
  */
 void process_result_dispose(process_result_t *result);
 

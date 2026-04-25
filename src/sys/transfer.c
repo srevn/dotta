@@ -92,6 +92,17 @@ struct transfer_context_s {
  * this classification to suppress byte accounting for local sessions so
  * the summary line does not report nonsense (observed: 131038.9 GiB for
  * an 8-object push against a file:// remote).
+ *
+ * Why this is not credential_url_parse:
+ *   The credential parser deliberately rejects URLs that have no
+ *   credential identity — file:// (empty host) and bare filesystem
+ *   paths both fail the "valid host" rule. Those are exactly the
+ *   shapes this function must classify as local. The two predicates
+ *   partition URL space — credential_url_parse for "is this an
+ *   authenticated transport?", url_is_local for "did libgit2 pick its
+ *   local transport?" — and pulling them through one function would
+ *   cost an allocate-and-free on every session create just to reuse
+ *   a 4-line shape check. The duplication is the right trade.
  */
 static bool url_is_local(const char *url) {
     if (!url || !*url) return false;

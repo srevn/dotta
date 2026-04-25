@@ -126,12 +126,17 @@ static bool is_valid_host(const char *host) {
 
 error_t *credential_url_parse(const char *url, credential_url_t *out) {
     CHECK_NULL(out);
+
+    /* Reset before any return so callers that forgot to zero-initialize
+     * still see well-defined fields on the failure paths. The header
+     * documents the zero-init contract; this guarantees it instead of
+     * just expecting it. */
+    out->protocol = NULL;
+    out->host = NULL;
+
     if (!url || !*url) {
         return ERROR(ERR_INVALID_ARG, "URL is empty");
     }
-
-    out->protocol = NULL;
-    out->host = NULL;
 
     /* Resolve protocol and the start of the authority component. */
     const char *scheme_sep = strstr(url, "://");
@@ -318,6 +323,7 @@ static error_t *run_credential_helper(
         .stdin_content     = request,
         .stdin_content_len = request_len,
         .capture           = capture,
+        .secure_capture    = capture,
         .stream_fd         = -1,
         .timeout_seconds   = CRED_HELPER_TIMEOUT_SECONDS,
         .pgrp_policy       = PROCESS_PGRP_SHARED,
@@ -439,16 +445,6 @@ error_t *credential_helper_reject(
     return credential_helper_commit("reject", u, user, pass);
 }
 
-/**
- * Scrub the helper-response capture buffer (which held the password)
- * before process_result_dispose releases it back to the allocator.
- */
-static void scrub_helper_output(process_result_t *result) {
-    if (result->output) {
-        hydro_memzero(result->output, result->output_len);
-    }
-}
-
 error_t *credential_helper_fill(
     const credential_url_t *u,
     const char *username_from_url,
@@ -489,15 +485,16 @@ error_t *credential_helper_fill(
      * leak a newly added field. */
     credential_request_secure_free(&req);
 
+    /* All process_result_dispose paths below scrub the capture buffer
+     * automatically because run_credential_helper opted into
+     * secure_capture — no separate per-exit scrub call needed. */
     if (err) {
-        scrub_helper_output(&result);
         process_result_dispose(&result);
         return err;
     }
 
     err = helper_outcome_error("fill", &result);
     if (err) {
-        scrub_helper_output(&result);
         process_result_dispose(&result);
         return err;
     }
@@ -506,7 +503,6 @@ error_t *credential_helper_fill(
      * (helper not configured, public repo). Not an error; the caller
      * falls through to its anonymous / default path. */
     if (result.exit_code != 0 || !result.output) {
-        scrub_helper_output(&result);
         process_result_dispose(&result);
         return NULL;
     }
@@ -515,7 +511,7 @@ error_t *credential_helper_fill(
      * into the same capture stream; lines that don't match the
      * key=value shape are skipped (benign). The parse is destructive —
      * it rewrites the output buffer — which is fine because the
-     * buffer is scrubbed and freed immediately below.
+     * buffer is scrubbed and freed by process_result_dispose below.
      *
      * strdup'ing each value gives a right-sized heap allocation
      * (no fixed-buffer truncation) that the caller scrubs and
@@ -553,7 +549,6 @@ error_t *credential_helper_fill(
         p = line_end + 1;
     }
 
-    scrub_helper_output(&result);
     process_result_dispose(&result);
 
     if (parse_err) {

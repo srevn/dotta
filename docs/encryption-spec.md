@@ -50,10 +50,10 @@ Master Key (32 bytes)
     ↓ [hydro_hash_hash with profile name as input]
 Profile Key (32 bytes, one per profile)
     ↓ [hydro_kdf_derive_from_key]
-    ├─→ MAC Key (32 bytes, subkey_id=1)
-    └─→ CTR Key (32 bytes, subkey_id=2)
-         ↓ [hydro_hash_hash with storage path]
-         Stream Seed (32 bytes, path-specific)
+    ├─→ MAC Key (32 bytes, subkey_id=1)   — used to compute the SIV over (path, plaintext)
+    └─→ PRF Key (32 bytes, subkey_id=2)   — used to derive the keystream seed from the SIV
+         ↓ [hydro_hash_hash with the SIV as input]
+         Keystream Seed (32 bytes, plaintext-dependent)
 ```
 
 ### Key Derivation Details
@@ -94,21 +94,25 @@ hydro_hash_hash(
 )
 ```
 
-**MAC/CTR Subkey Derivation:**
+**MAC/PRF Subkey Derivation:**
 ```c
 hydro_kdf_derive_from_key(mac_key, 32, 1, "dottasiv", profile_key)
-hydro_kdf_derive_from_key(ctr_key, 32, 2, "dottasiv", profile_key)
+hydro_kdf_derive_from_key(prf_key, 32, 2, "dottasiv", profile_key)
 ```
 
-**Stream Seed Derivation:**
+**Keystream Seed Derivation:**
 ```c
 hydro_hash_hash(
-    stream_seed,          // Output: 32 bytes
-    storage_path,         // Input: path in profile
+    keystream_seed,       // Output: 32 bytes
+    siv,                  // Input: the 32-byte synthetic IV (a function of plaintext)
     "dottactr",           // Context: 8 bytes
-    ctr_key               // Key: CTR subkey
+    prf_key               // Key: PRF subkey
 )
 ```
+
+The keystream seed is derived from the *secret* PRF key applied to the (public)
+SIV. If the seed were a function of the SIV alone, anyone with the ciphertext
+could reproduce the keystream and recover the plaintext.
 
 ## Balloon Hashing (Memory-Hard Layer)
 
@@ -188,31 +192,46 @@ Dotta implements a custom **SIV (Synthetic IV)** construction for deterministic 
 
 1. **Derive subkeys** from profile key:
    - `mac_key = KDF(profile_key, subkey_id=1, context="dottasiv")`
-   - `ctr_key = KDF(profile_key, subkey_id=2, context="dottasiv")`
+   - `prf_key = KDF(profile_key, subkey_id=2, context="dottasiv")`
 
-2. **Derive deterministic stream seed** from path:
-   - `stream_seed = HMAC(ctr_key, storage_path, context="dottactr")`
-
-3. **Generate keystream** deterministically:
-   - `keystream = DeterministicPRNG(stream_seed, length=plaintext_len)`
-
-4. **Encrypt plaintext** via XOR:
-   - `ciphertext = plaintext ⊕ keystream`
-
-5. **Compute SIV** (MAC over length-prefixed AAD + ciphertext):
-   - `siv = HMAC(mac_key, len(storage_path) || storage_path || ciphertext, context="dottamac")`
+2. **Compute the synthetic IV** over (path, plaintext) — the defining
+   property of SIV. The IV doubles as the authentication tag:
+   - `siv = HMAC(mac_key, len(storage_path) || storage_path || plaintext, context="dottamac")`
    - Path length is encoded as 8-byte little-endian for domain separation
+     between path and plaintext bytes; BLAKE2 is not length-extension
+     vulnerable, so no trailing length is required.
+
+3. **Derive the keystream seed** from the SIV under the PRF key (the SIV
+   itself is public; passing it through a keyed hash keeps the keystream
+   behind the profile key):
+   - `keystream_seed = HMAC(prf_key, siv, context="dottactr")`
+
+4. **Generate keystream** deterministically:
+   - `keystream = DeterministicPRNG(keystream_seed, length=plaintext_len)`
+
+5. **Encrypt plaintext** via XOR:
+   - `ciphertext = plaintext ⊕ keystream`
 
 6. **Assemble output**:
    - `[Magic Header 8B][SIV 32B][Ciphertext N B]`
 
+Because the SIV depends on the plaintext, two different plaintexts at the
+same `(profile_key, path)` yield different SIVs — and therefore different
+keystreams — giving nonce-misuse resistance.
+
 **Decryption:**
 
-1. Parse header and extract SIV
-2. Derive `mac_key` and `ctr_key` (same as encryption)
-3. Re-compute SIV over `len(storage_path) || storage_path || ciphertext`
-4. Verify SIV matches (constant-time comparison)
-5. If valid: derive `stream_seed`, generate keystream, decrypt
+1. Parse header and extract the stored `siv` and the ciphertext body.
+2. Derive `mac_key` and `prf_key` (same as encryption).
+3. Derive `keystream_seed = HMAC(prf_key, stored_siv, context="dottactr")`.
+4. Generate the keystream and recover a candidate plaintext:
+   - `candidate_plaintext = ciphertext ⊕ keystream`
+5. Re-compute the SIV over the candidate plaintext:
+   - `siv' = HMAC(mac_key, len(storage_path) || storage_path || candidate_plaintext, context="dottamac")`
+6. Constant-time compare `siv'` against the stored `siv`.
+   - On mismatch: securely zero the candidate plaintext and return
+     `ERR_CRYPTO`. The candidate is never returned to the caller.
+   - On match: return the candidate plaintext.
 
 ### Security Properties
 
@@ -220,7 +239,7 @@ Dotta implements a custom **SIV (Synthetic IV)** construction for deterministic 
 - **Authenticated:** SIV provides integrity verification (32-byte MAC)
 - **Path-bound:** Storage path is cryptographically bound via AAD
 - **Nonce-misuse resistant:** No nonce management required
-- **Key isolation:** Independent MAC and CTR keys prevent cryptographic cross-contamination
+- **Key isolation:** Independent MAC and PRF keys prevent cryptographic cross-contamination
 
 ### Why SIV?
 
@@ -244,14 +263,16 @@ SIV constructions trade randomness for determinism while maintaining strong secu
 
 Magic Header (8 bytes):
   [0-4]   "DOTTA" (magic string)
-  [5]     0x03 (version byte)
+  [5]     0x04 (version byte)
   [6-7]   0x00 0x00 (reserved/padding)
 
 SIV (32 bytes):
-  MAC tag authenticating len(storage_path) || storage_path || ciphertext
+  MAC tag authenticating len(storage_path) || storage_path || plaintext.
+  The SIV is a function of the plaintext (the defining SIV property)
+  and also doubles as the keystream-seed input via prf_key.
 
 Ciphertext (N bytes):
-  plaintext ⊕ keystream
+  plaintext ⊕ keystream, where keystream = PRNG(HMAC(prf_key, siv))
 ```
 
 **Total overhead:** 40 bytes per file
@@ -271,12 +292,12 @@ Ciphertext (N bytes):
    - Load plaintext from filesystem
 
 4. Encryption (crypto/encryption.c):
-   - Get profile key from keymanager (may prompt for passphrase)
-   - Derive MAC/CTR subkeys from profile key
-   - Derive stream seed from path
+   - Get profile key from keymgr (may prompt for passphrase)
+   - Derive MAC/PRF subkeys from profile key
+   - Compute SIV over (path, plaintext) — the synthetic IV
+   - Derive keystream seed from the SIV under prf_key
    - Generate keystream
    - Encrypt: ciphertext = plaintext ⊕ keystream
-   - Compute SIV
    - Assemble: [Magic][SIV][Ciphertext]
 
 5. Store in Git:
@@ -302,12 +323,15 @@ Ciphertext (N bytes):
    - Check magic header
 
    IF ENCRYPTED:
-     - Get profile key from keymanager (may prompt once)
-     - Derive MAC/CTR subkeys
-     - Recompute SIV and verify (constant-time)
-     - Derive stream seed from path
+     - Get profile key from keymgr (may prompt once)
+     - Derive MAC/PRF subkeys
+     - Derive keystream seed from the stored SIV under prf_key
      - Generate keystream
-     - Decrypt: plaintext = ciphertext ⊕ keystream
+     - Decrypt candidate: candidate_plaintext = ciphertext ⊕ keystream
+     - Re-compute SIV over (path, candidate_plaintext)
+     - Constant-time compare against the stored SIV
+     - On mismatch: securely zero the candidate and fail
+     - On match: return the candidate plaintext
 
    ELSE:
      - Use blob content directly
@@ -333,29 +357,43 @@ auto_encrypt = [
 ]
 ```
 
-**Pattern Matching (crypto/pattern.c):**
-- Uses gitignore-style glob syntax
-- Patterns without `/` match basename at any depth
-- Patterns with `/` match full path from root
-- Example: `*.key` matches `api.key` and `dir/api.key`
-- Example: `.ssh/id_*` matches only `.ssh/id_rsa` (anchored)
+**Pattern Matching (crypto/policy.c, evaluated via base/gitignore.c):**
+- Auto-encrypt patterns are compiled once into a `gitignore_ruleset_t` at
+  `config_load` and stored on the config handle (`config->auto_encrypt.rules`).
+- Per-file matching runs in `encryption_policy_matches_auto_patterns`, which
+  strips the storage prefix (`home/`, `root/`, `custom/`) before evaluating
+  patterns so users can write `.ssh/id_*` instead of `home/.ssh/id_*`.
+- Full gitignore semantics: last-match-wins with `!` negation support
+  (`*.key` + `!public.key` correctly excludes `public.key`).
+- Patterns without `/` match basename at any depth.
+- Patterns with `/` match full path from root (anchored).
+- Example: `*.key` matches `home/api.key` and `home/dir/secret.key`.
+- Example: `.ssh/id_*` matches `home/.ssh/id_rsa` (anchored to profile root).
 
 ## Key Management
 
 ### Session-Based Caching
 
-**Design (crypto/keymanager.c):**
+**Design (crypto/keymgr.c):**
 
 ```c
-struct keymanager {
-    uint8_t master_key[32];    // Cached master key
-    bool has_key;              // Cache valid?
-    time_t cached_at;          // Cache timestamp
-    int32_t session_timeout;   // Timeout in seconds
-    hashmap_t *profile_keys;   // Profile key cache
-    bool mlocked;              // Memory locked with mlock()?
+struct keymgr {
+    /* Configuration */
+    uint64_t opslimit;        // CPU cost for password hashing
+    size_t memlimit;          // Memory cost for balloon hashing (0 = disabled)
+    int32_t session_timeout;  // Timeout in seconds (0 = always prompt, -1 = never expire)
+
+    /* Cached master key */
+    uint8_t master_key[ENCRYPTION_MASTER_KEY_SIZE];
+    bool has_key;             // Is master key cached?
+    time_t cached_at;         // When was key cached (monotonic time)
+    bool mlocked;             // Is memory locked with mlock()?
 };
 ```
+
+In-memory cache expiry uses `CLOCK_MONOTONIC` (immune to wall-clock
+manipulation). The persistent disk cache below uses Unix wall-clock
+timestamps because `CLOCK_MONOTONIC` resets across reboots.
 
 **Cache Lifecycle:**
 
@@ -545,31 +583,31 @@ dotta apply       # Uses cached key
 
 **Problem:** Deriving profile keys is fast (~microseconds) but becomes bottleneck during batch operations (e.g., `status` with 1000 files).
 
-**Solution (crypto/keymanager.c:466):**
+**Solution (crypto/keymgr.c, `keymgr_get_profile_key`):**
 ```c
-error_t *keymanager_get_profile_key(
-    keymanager_t *mgr,
-    const char *profile_name,
-    uint8_t out_profile_key[32]
+error_t *keymgr_get_profile_key(
+    keymgr *km,
+    const char *profile,
+    uint8_t out_profile_key[ENCRYPTION_PROFILE_KEY_SIZE]
 ) {
-    // 1. Check cache, but only if master key is still valid
-    if (mgr->profile_keys) {
-        if (!is_key_valid(mgr)) {
-            // Master key expired — invalidate all derived profile keys
-            hashmap_clear(mgr->profile_keys, secure_free_profile_key);
+    // 1. Check cache, but only if master key is still valid.
+    //    If the master key has expired (session timeout), cached profile keys
+    //    must not be served — that would bypass re-authentication. Clear and
+    //    fall through to a fresh derivation, which prompts as needed.
+    if (km->profile_keys) {
+        if (!is_key_valid(km)) {
+            hashmap_clear(km->profile_keys, secure_free_profile_key);
         } else {
-            uint8_t *cached_key = hashmap_get(mgr->profile_keys, profile_name);
+            uint8_t *cached_key = hashmap_get(km->profile_keys, profile);
             if (cached_key) {
-                memcpy(out_profile_key, cached_key, 32);
+                memcpy(out_profile_key, cached_key, ENCRYPTION_PROFILE_KEY_SIZE);
                 return NULL;  // Cache hit
             }
         }
     }
 
-    // 2. Cache miss or expired: get master key (may prompt), derive and cache
-    // ...derive profile_key from master_key...
-    hashmap_set(mgr->profile_keys, profile_name, profile_key);
-
+    // 2. Cache miss or expired: get master key (may prompt), derive and cache.
+    //    ... keymgr_get_key + encryption_derive_profile_key + hashmap_set ...
     return NULL;
 }
 ```
@@ -586,15 +624,18 @@ error_t *keymanager_get_profile_key(
 
 **Solution (infra/content.c):**
 ```c
-content_cache_t *cache = content_cache_create(repo, keymanager);
+content_cache_t *cache = content_cache_create(repo, keymgr);
 
 for (each_file) {
     const buffer_t *content;  // Borrowed reference
-    content_cache_get_from_tree_entry(cache, entry, path, profile, meta, &content);
+    content_cache_get_from_blob_oid(
+        cache, &blob_oid, storage_path, profile,
+        expected_encrypted, &content
+    );
     // ... use content (cache owns buffer, don't free) ...
 }
 
-content_cache_free(cache);  // Frees all cached buffers
+content_cache_free(cache);  // Frees all cached buffers (zeros plaintext first)
 ```
 
 **Benefits:**
@@ -716,9 +757,9 @@ libhydrogen requires 8-byte context strings for domain separation:
 | `ENCRYPTION_CTX_BALLOON_MIX` | `"dottamix"` | Balloon mixing: block combination |
 | `ENCRYPTION_CTX_BALLOON_FINAL` | `"dottafin"` | Balloon finalization: master key extraction |
 | `ENCRYPTION_CTX_KDF` | `"profile "` | Profile key derivation |
-| `ENCRYPTION_CTX_SIV_KDF` | `"dottasiv"` | MAC/CTR subkey derivation |
-| `ENCRYPTION_CTX_SIV_MAC` | `"dottamac"` | SIV computation |
-| `ENCRYPTION_CTX_SIV_CTR` | `"dottactr"` | Stream seed derivation |
+| `ENCRYPTION_CTX_SIV_KDF` | `"dottasiv"` | MAC/PRF subkey derivation |
+| `ENCRYPTION_CTX_SIV_MAC` | `"dottamac"` | SIV computation over (path, plaintext) |
+| `ENCRYPTION_CTX_SIV_CTR` | `"dottactr"` | Keystream seed derivation from the SIV under prf_key |
 | (Session cache) | `"dottacch"` | Cache key derivation |
 | (Session cache) | `"dottamac"` | Cache MAC computation (reuses SIV MAC context) |
 

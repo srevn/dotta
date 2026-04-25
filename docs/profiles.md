@@ -102,7 +102,7 @@ When cloning, dotta auto-detects profiles that match the current system:
 - OS base and sub-profiles (e.g., `darwin`, `darwin/*`)
 - Host base and sub-profiles (e.g., `hosts/<hostname>`, `hosts/<hostname>/*`)
 
-These are automatically fetched and enabled. Override this with `--all` (fetch everything) or `--profiles` (fetch specific ones).
+These are automatically fetched and enabled. Override this with `--all` (fetch everything) or `--profile` (fetch specific ones).
 
 ## Interactive Mode
 

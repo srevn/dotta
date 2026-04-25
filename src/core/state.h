@@ -768,6 +768,74 @@ error_t *state_set_file_state(
 );
 
 /**
+ * Bulk DELETE: virtual_manifest entries by (profile, state-set)
+ *
+ * Single SQL statement: DELETE FROM virtual_manifest
+ *                       WHERE profile = ? AND state IN (?, ?, ...)
+ *
+ * Replaces fetch-all-by-profile + per-row filter + per-row state_remove_file.
+ * Atomic: a failure aborts the operation (no partial-cleanup foot-gun); a
+ * success purges every matching row in one round-trip to SQLite.
+ *
+ * Edge cases:
+ *   - state->db == NULL (no DB file)         → no-op success, *out_purged = 0
+ *   - state_count == 0                       → ERR_INVALID_ARG (caller bug;
+ *                                              empty IN-set is meaningless)
+ *   - states[i] not in CHECK vocabulary      → matches zero rows (harmless)
+ *   - profile name unknown                   → zero rows affected (success)
+ *
+ * @param state State (must not be NULL, must have active transaction)
+ * @param profile Profile name to filter on (must not be NULL)
+ * @param states Array of lifecycle state values to match (must not be NULL)
+ * @param state_count Number of entries in states (must be > 0)
+ * @param out_purged Output: rows deleted (optional, may be NULL)
+ * @return Error or NULL on success
+ */
+error_t *state_purge_files_by_profile(
+    state_t *state,
+    const char *profile,
+    const char *const *states,
+    size_t state_count,
+    size_t *out_purged
+);
+
+/**
+ * Bulk UPDATE: virtual_manifest entries' state by (profile, from-state-set)
+ *
+ * Single SQL statement: UPDATE virtual_manifest SET state = ?
+ *                       WHERE profile = ? AND state IN (?, ?, ...)
+ *
+ * Replaces fetch-all-by-profile + per-row filter + per-row state_set_file_state.
+ * Atomic: a failure aborts the operation; a success transitions every matching
+ * row in one round-trip.
+ *
+ * new_state is validated against the table's CHECK vocabulary
+ * (active, inactive, deleted, released). from_states values are not validated
+ * — invalid values just match zero rows (harmless).
+ *
+ * Edge cases:
+ *   - state->db == NULL                      → no-op success, *out_changed = 0
+ *   - from_state_count == 0                  → ERR_INVALID_ARG
+ *   - new_state not in CHECK vocabulary      → ERR_INVALID_ARG
+ *
+ * @param state State (must not be NULL, must have active transaction)
+ * @param profile Profile name to filter on (must not be NULL)
+ * @param from_states Array of source state values to match (must not be NULL)
+ * @param from_state_count Number of entries in from_states (must be > 0)
+ * @param new_state Target state value (must not be NULL, must be valid)
+ * @param out_changed Output: rows updated (optional, may be NULL)
+ * @return Error or NULL on success
+ */
+error_t *state_transition_files_by_profile(
+    state_t *state,
+    const char *profile,
+    const char *const *from_states,
+    size_t from_state_count,
+    const char *new_state,
+    size_t *out_changed
+);
+
+/**
  * Set commit_oid for a profile in enabled_profiles
  *
  * Writes the profile's current branch HEAD to the per-profile commit_oid
@@ -992,14 +1060,6 @@ error_t *state_update_directory(
 error_t *state_remove_directory(state_t *state, const char *filesystem_path);
 
 /**
- * Clear all tracked directories
- *
- * @param state State (must not be NULL)
- * @return Error or NULL on success
- */
-error_t *state_clear_directories(state_t *state);
-
-/**
  * Get directory entry from state
  *
  * Retrieves single directory entry by filesystem path.
@@ -1037,7 +1097,6 @@ error_t *state_set_directory_state(
  * Mark all ACTIVE directories as inactive
  *
  * Bulk operation for manifest_sync_directories to prepare for rebuild.
- * Replaces the nuclear state_clear_directories() approach with mark-and-reactivate pattern.
  *
  * Only STATE_ACTIVE rows are downgraded to STATE_INACTIVE. STATE_DELETED and
  * STATE_RELEASED are preserved (they represent downstream intent that must
@@ -1047,6 +1106,58 @@ error_t *state_set_directory_state(
  * @return Error or NULL on success
  */
 error_t *state_mark_all_directories_inactive(state_t *state);
+
+/**
+ * Bulk DELETE: tracked_directories entries by (profile, state-set)
+ *
+ * Single SQL statement: DELETE FROM tracked_directories
+ *                       WHERE profile = ? AND state IN (?, ?, ...)
+ *
+ * Mirror of state_purge_files_by_profile for the tracked_directories table.
+ * See that function's docstring for atomicity / edge-case semantics.
+ *
+ * @param state State (must not be NULL, must have active transaction)
+ * @param profile Profile name to filter on (must not be NULL)
+ * @param states Array of lifecycle state values to match (must not be NULL)
+ * @param state_count Number of entries in states (must be > 0)
+ * @param out_purged Output: rows deleted (optional, may be NULL)
+ * @return Error or NULL on success
+ */
+error_t *state_purge_directories_by_profile(
+    state_t *state,
+    const char *profile,
+    const char *const *states,
+    size_t state_count,
+    size_t *out_purged
+);
+
+/**
+ * Bulk UPDATE: tracked_directories entries' state by (profile, from-state-set)
+ *
+ * Single SQL statement: UPDATE tracked_directories SET state = ?
+ *                       WHERE profile = ? AND state IN (?, ?, ...)
+ *
+ * Mirror of state_transition_files_by_profile for the tracked_directories
+ * table. The new_state vocabulary is the directory CHECK constraint:
+ * (active, inactive, deleted) — STATE_RELEASED is NOT permitted on
+ * directory rows. See state_transition_files_by_profile for shared semantics.
+ *
+ * @param state State (must not be NULL, must have active transaction)
+ * @param profile Profile name to filter on (must not be NULL)
+ * @param from_states Array of source state values to match (must not be NULL)
+ * @param from_state_count Number of entries in from_states (must be > 0)
+ * @param new_state Target state value (must not be NULL, must be valid)
+ * @param out_changed Output: rows updated (optional, may be NULL)
+ * @return Error or NULL on success
+ */
+error_t *state_transition_directories_by_profile(
+    state_t *state,
+    const char *profile,
+    const char *const *from_states,
+    size_t from_state_count,
+    const char *new_state,
+    size_t *out_changed
+);
 
 /**
  * Free single directory entry

@@ -1516,79 +1516,39 @@ static error_t *delete_profile_branch(
      */
     error_t *delete_err = state_begin(state);
     if (!delete_err) {
-        size_t released_count = 0;
+        /* Sweep set: every row left for this profile after manifest_apply_scope
+         * is either INACTIVE (just-orphaned by reconcile) or DELETED (carried
+         * over from a prior dotta remove). Fallback-having entries already
+         * moved to other profiles in step 1, so by-profile scope is precise. */
+        static const char *const sweep_states[] = { STATE_INACTIVE, STATE_DELETED };
+        const size_t sweep_count = sizeof(sweep_states) / sizeof(sweep_states[0]);
+        size_t files_changed = 0, dirs_changed = 0;
 
-        /* The borrowed command arena backs both queries — file_entries and
-         * dir_entries live until command end. Per-query failure stays
-         * best-effort; the commit below still runs. */
-
-        /* Handle file entries */
-        state_file_entry_t *file_entries = NULL;
-        size_t entry_count = 0;
-        error_t *file_query_err = state_get_entries_by_profile(
-            state, opts->profile, arena, &file_entries, &entry_count
-        );
-        if (!file_query_err) {
-            for (size_t i = 0; i < entry_count; i++) {
-                if (!file_entries[i].state ||
-                    (strcmp(file_entries[i].state, STATE_INACTIVE) != 0 &&
-                    strcmp(file_entries[i].state, STATE_DELETED) != 0)){
-                    continue;
-                }
-                error_t *file_err = NULL;
-
-                if (opts->delete_files) {
-                    file_err = state_set_file_state(
-                        state, file_entries[i].filesystem_path, STATE_DELETED
-                    );
-                } else {
-                    file_err = state_remove_file(
-                        state, file_entries[i].filesystem_path
-                    );
-                }
-                if (file_err) {
-                    error_free(file_err);
-                } else {
-                    released_count++;
-                }
+        if (opts->delete_files) {
+            delete_err = state_transition_files_by_profile(
+                state, opts->profile, sweep_states, sweep_count,
+                STATE_DELETED, &files_changed
+            );
+            if (!delete_err) {
+                delete_err = state_transition_directories_by_profile(
+                    state, opts->profile, sweep_states, sweep_count,
+                    STATE_DELETED, &dirs_changed
+                );
             }
         } else {
-            error_free(file_query_err);
-        }
-
-        /* Handle directory entries */
-        state_directory_entry_t *dir_entries = NULL;
-        size_t dir_count = 0;
-        error_t *dir_query_err = state_get_directories_by_profile(
-            state, opts->profile, arena, &dir_entries, &dir_count
-        );
-        if (!dir_query_err) {
-            for (size_t i = 0; i < dir_count; i++) {
-                if (!dir_entries[i].state ||
-                    (strcmp(dir_entries[i].state, STATE_INACTIVE) != 0 &&
-                    strcmp(dir_entries[i].state, STATE_DELETED) != 0)){
-                    continue;
-                }
-                error_t *dir_err = NULL;
-                if (opts->delete_files) {
-                    dir_err = state_set_directory_state(
-                        state, dir_entries[i].filesystem_path, STATE_DELETED
-                    );
-                } else {
-                    dir_err = state_remove_directory(
-                        state, dir_entries[i].filesystem_path
-                    );
-                }
-                if (dir_err) {
-                    error_free(dir_err);
-                }
+            delete_err = state_purge_files_by_profile(
+                state, opts->profile, sweep_states, sweep_count, &files_changed
+            );
+            if (!delete_err) {
+                delete_err = state_purge_directories_by_profile(
+                    state, opts->profile, sweep_states, sweep_count, &dirs_changed
+                );
             }
-        } else {
-            error_free(dir_query_err);
         }
 
         /* Commit transaction */
-        delete_err = state_commit(state);
+        if (!delete_err) delete_err = state_commit(state);
+
         if (delete_err) {
             output_warning(
                 out, OUTPUT_NORMAL, "Failed to update state after branch deletion: %s",
@@ -1596,16 +1556,16 @@ static error_t *delete_profile_branch(
             );
             error_free(delete_err);
             state_rollback(state);
-        } else if (released_count > 0) {
+        } else if (files_changed > 0) {
             if (opts->delete_files) {
                 output_info(
                     out, OUTPUT_VERBOSE, "%zu file%s staged for removal",
-                    released_count, released_count == 1 ? "" : "s"
+                    files_changed, files_changed == 1 ? "" : "s"
                 );
             } else {
                 output_info(
                     out, OUTPUT_VERBOSE, "%zu file%s released from management",
-                    released_count, released_count == 1 ? "" : "s"
+                    files_changed, files_changed == 1 ? "" : "s"
                 );
             }
         }

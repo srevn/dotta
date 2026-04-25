@@ -2458,32 +2458,6 @@ error_t *state_remove_directory(state_t *state, const char *filesystem_path) {
 }
 
 /**
- * Clear all directory entries
- *
- * Efficiently truncates tracked_directories table.
- *
- * @param state State (must not be NULL)
- * @return Error or NULL on success
- */
-error_t *state_clear_directories(state_t *state) {
-    CHECK_NULL(state);
-    CHECK_NULL(state->db);
-
-    char *errmsg = NULL;
-    int rc = sqlite3_exec(state->db, "DELETE FROM tracked_directories;", NULL, NULL, &errmsg);
-    if (rc != SQLITE_OK) {
-        error_t *err = ERROR(
-            ERR_STATE_INVALID, "Failed to clear tracked directories: %s",
-            errmsg ? errmsg : sqlite3_errstr(rc)
-        );
-        sqlite3_free(errmsg);
-        return err;
-    }
-
-    return NULL;
-}
-
-/**
  * Get directory entry from state
  *
  * Retrieves single directory entry by filesystem path.
@@ -2660,7 +2634,6 @@ error_t *state_set_directory_state(
  * Mark all ACTIVE directories as inactive
  *
  * Bulk operation for manifest_sync_directories to prepare for rebuild.
- * Replaces the nuclear state_clear_directories() approach with mark-and-reactivate pattern.
  *
  * Only STATE_ACTIVE rows are downgraded to STATE_INACTIVE. STATE_DELETED and
  * STATE_RELEASED are preserved — they represent downstream intent (controlled
@@ -2704,6 +2677,212 @@ error_t *state_mark_all_directories_inactive(state_t *state) {
     }
 
     return NULL;
+}
+
+/* Build a "?,?,...,?" placeholder list for SQL IN clauses.
+ *
+ * Writes the placeholder string into buf (null-terminated) and returns its
+ * length. Returns -1 on overflow or on n == 0. Each placeholder consumes
+ * 2 bytes (',?') except the first (1 byte '?'). For state-set IN clauses the
+ * bound is small (at most 4 lifecycle values), so a 64-byte buffer is ample */
+static int build_in_placeholders(char *buf, size_t bufsz, size_t n) {
+    if (n == 0 || bufsz == 0) return -1;
+    size_t pos = 0;
+    for (size_t i = 0; i < n; i++) {
+        size_t need = (i == 0) ? 1 : 2;
+        if (pos + need + 1 > bufsz) return -1;
+        if (i > 0) buf[pos++] = ',';
+        buf[pos++] = '?';
+    }
+    buf[pos] = '\0';
+    return (int) pos;
+}
+
+/* Bulk DELETE on a per-profile state-set, shared by file and directory
+ * primitives. Uses an index-backed query (idx_manifest_profile or
+ * idx_tracked_directories_profile). The table parameter is a code-controlled
+ * constant — never user input — so SQL injection is not a concern.
+ *
+ * Returns rows-affected via *out_purged when provided. Empty DB and unknown
+ * profile both yield zero rows-affected with no error. Empty state-set is
+ * a caller bug (ERR_INVALID_ARG). */
+static error_t *bulk_purge_by_profile(
+    state_t *state,
+    const char *table,
+    const char *profile,
+    const char *const *states,
+    size_t state_count,
+    size_t *out_purged
+) {
+    CHECK_NULL(state);
+    CHECK_NULL(profile);
+    CHECK_NULL(states);
+
+    if (out_purged) *out_purged = 0;
+
+    /* Empty state (no DB file) — nothing to delete, success. */
+    if (!state->db) return NULL;
+
+    if (state_count == 0) {
+        return ERROR(
+            ERR_INVALID_ARG,
+            "bulk purge requires at least one state value"
+        );
+    }
+
+    char placeholders[64];
+    if (build_in_placeholders(placeholders, sizeof(placeholders), state_count) < 0) {
+        return ERROR(
+            ERR_INTERNAL,
+            "Too many state values for bulk purge (got %zu)", state_count
+        );
+    }
+
+    char sql[256];
+    int n = snprintf(
+        sql, sizeof(sql),
+        "DELETE FROM %s WHERE profile = ? AND state IN (%s);",
+        table, placeholders
+    );
+    if (n < 0 || (size_t) n >= sizeof(sql)) {
+        return ERROR(ERR_INTERNAL, "SQL buffer overflow building bulk purge");
+    }
+
+    sqlite3_stmt *stmt = NULL;
+    int rc = sqlite3_prepare_v2(state->db, sql, -1, &stmt, NULL);
+    if (rc != SQLITE_OK) {
+        return sqlite_error(state->db, "Failed to prepare bulk purge");
+    }
+
+    sqlite3_bind_text(stmt, 1, profile, -1, SQLITE_TRANSIENT);
+    for (size_t i = 0; i < state_count; i++) {
+        sqlite3_bind_text(stmt, (int) (i + 2), states[i], -1, SQLITE_TRANSIENT);
+    }
+
+    rc = sqlite3_step(stmt);
+    int changes = sqlite3_changes(state->db);
+    sqlite3_finalize(stmt);
+
+    if (rc != SQLITE_DONE) {
+        return sqlite_error(state->db, "Failed to execute bulk purge");
+    }
+
+    if (out_purged) *out_purged = (size_t) changes;
+
+    return NULL;
+}
+
+/* Bulk UPDATE on a per-profile state-set, shared by file and directory
+ * primitives. The new_state value is bound as ?1; callers are responsible
+ * for validating it against the appropriate table's CHECK vocabulary
+ * before invoking this helper (vocabularies differ between
+ * virtual_manifest and tracked_directories). */
+static error_t *bulk_transition_by_profile(
+    state_t *state,
+    const char *table,
+    const char *profile,
+    const char *const *from_states,
+    size_t from_state_count,
+    const char *new_state,
+    size_t *out_changed
+) {
+    CHECK_NULL(state);
+    CHECK_NULL(profile);
+    CHECK_NULL(from_states);
+    CHECK_NULL(new_state);
+
+    if (out_changed) *out_changed = 0;
+
+    if (!state->db) return NULL;
+
+    if (from_state_count == 0) {
+        return ERROR(
+            ERR_INVALID_ARG,
+            "bulk transition requires at least one source state value"
+        );
+    }
+
+    char placeholders[64];
+    if (build_in_placeholders(placeholders, sizeof(placeholders), from_state_count) < 0) {
+        return ERROR(
+            ERR_INTERNAL,
+            "Too many state values for bulk transition (got %zu)", from_state_count
+        );
+    }
+
+    char sql[256];
+    int n = snprintf(
+        sql, sizeof(sql),
+        "UPDATE %s SET state = ? WHERE profile = ? AND state IN (%s);",
+        table, placeholders
+    );
+    if (n < 0 || (size_t) n >= sizeof(sql)) {
+        return ERROR(ERR_INTERNAL, "SQL buffer overflow building bulk transition");
+    }
+
+    sqlite3_stmt *stmt = NULL;
+    int rc = sqlite3_prepare_v2(state->db, sql, -1, &stmt, NULL);
+    if (rc != SQLITE_OK) {
+        return sqlite_error(state->db, "Failed to prepare bulk transition");
+    }
+
+    sqlite3_bind_text(stmt, 1, new_state, -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 2, profile, -1, SQLITE_TRANSIENT);
+    for (size_t i = 0; i < from_state_count; i++) {
+        sqlite3_bind_text(stmt, (int) (i + 3), from_states[i], -1, SQLITE_TRANSIENT);
+    }
+
+    rc = sqlite3_step(stmt);
+    int changes = sqlite3_changes(state->db);
+    sqlite3_finalize(stmt);
+
+    if (rc != SQLITE_DONE) {
+        return sqlite_error(state->db, "Failed to execute bulk transition");
+    }
+
+    if (out_changed) *out_changed = (size_t) changes;
+
+    return NULL;
+}
+
+error_t *state_purge_directories_by_profile(
+    state_t *state,
+    const char *profile,
+    const char *const *states,
+    size_t state_count,
+    size_t *out_purged
+) {
+    return bulk_purge_by_profile(
+        state, "tracked_directories", profile, states, state_count, out_purged
+    );
+}
+
+error_t *state_transition_directories_by_profile(
+    state_t *state,
+    const char *profile,
+    const char *const *from_states,
+    size_t from_state_count,
+    const char *new_state,
+    size_t *out_changed
+) {
+    /* Directory CHECK vocabulary excludes 'released' — see schema at
+     * tracked_directories.state. Mirror state_set_directory_state's
+     * validation message so caller-facing errors stay consistent. */
+    if (!new_state ||
+        (strcmp(new_state, STATE_ACTIVE) != 0 &&
+        strcmp(new_state, STATE_INACTIVE) != 0 &&
+        strcmp(new_state, STATE_DELETED) != 0)) {
+        return ERROR(
+            ERR_INVALID_ARG,
+            "Invalid state '%s' (must be 'active', 'inactive' or 'deleted')",
+            new_state ? new_state : "(null)"
+        );
+    }
+
+    return bulk_transition_by_profile(
+        state, "tracked_directories", profile,
+        from_states, from_state_count, new_state, out_changed
+    );
 }
 
 /**
@@ -3304,6 +3483,47 @@ error_t *state_set_file_state(
     }
 
     return NULL;
+}
+
+error_t *state_purge_files_by_profile(
+    state_t *state,
+    const char *profile,
+    const char *const *states,
+    size_t state_count,
+    size_t *out_purged
+) {
+    return bulk_purge_by_profile(
+        state, "virtual_manifest", profile, states, state_count, out_purged
+    );
+}
+
+error_t *state_transition_files_by_profile(
+    state_t *state,
+    const char *profile,
+    const char *const *from_states,
+    size_t from_state_count,
+    const char *new_state,
+    size_t *out_changed
+) {
+    /* virtual_manifest CHECK vocabulary includes 'released'. Mirror
+     * state_set_file_state's validation message so caller-facing errors
+     * stay consistent. */
+    if (!new_state ||
+        (strcmp(new_state, STATE_ACTIVE) != 0 &&
+        strcmp(new_state, STATE_INACTIVE) != 0 &&
+        strcmp(new_state, STATE_DELETED) != 0 &&
+        strcmp(new_state, STATE_RELEASED) != 0)) {
+        return ERROR(
+            ERR_INVALID_ARG,
+            "Invalid state '%s' (must be 'active', 'inactive', 'deleted', or 'released')",
+            new_state ? new_state : "(null)"
+        );
+    }
+
+    return bulk_transition_by_profile(
+        state, "virtual_manifest", profile,
+        from_states, from_state_count, new_state, out_changed
+    );
 }
 
 /**

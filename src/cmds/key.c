@@ -9,7 +9,6 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "base/arena.h"
 #include "base/args.h"
 #include "base/buffer.h"
 #include "base/error.h"
@@ -17,43 +16,6 @@
 #include "core/state.h"
 #include "crypto/keymgr.h"
 #include "crypto/passphrase.h"
-
-/**
- * Count encrypted files in current profiles
- *
- * Queries the VWD manifest directly — the encrypted flag is already
- * cached per entry, so no Git tree walks or metadata parsing needed.
- */
-static error_t *count_encrypted_files(
-    state_t *state,
-    size_t *out_count
-) {
-    CHECK_NULL(state);
-    CHECK_NULL(out_count);
-
-    *out_count = 0;
-
-    arena_t *arena = arena_create(0);
-    if (!arena) return ERROR(ERR_MEMORY, "Failed to allocate manifest scan arena");
-
-    state_file_entry_t *entries = NULL;
-    size_t count = 0;
-    error_t *err = state_get_all_files(state, arena, &entries, &count);
-    if (err) {
-        arena_destroy(arena);
-        return error_wrap(err, "Failed to get manifest entries");
-    }
-
-    for (size_t i = 0; i < count; i++) {
-        if (entries[i].encrypted &&
-            entries[i].state && strcmp(entries[i].state, STATE_ACTIVE) == 0) {
-            (*out_count)++;
-        }
-    }
-
-    arena_destroy(arena);
-    return NULL;
-}
 
 /**
  * Execute key set action
@@ -362,7 +324,7 @@ static error_t *cmd_key_status(
     output_section(out, OUTPUT_NORMAL, "Encrypted Files");
 
     size_t encrypted_count = 0;
-    error_t *err = count_encrypted_files(state, &encrypted_count);
+    error_t *err = state_count_encrypted_files(state, &encrypted_count);
     if (err) {
         /* Non-fatal error - concise at normal, detail at verbose */
         output_print(

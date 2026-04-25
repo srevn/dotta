@@ -1351,25 +1351,14 @@ static error_t *delete_profile_branch(
     bool profile_was_enabled = state_has_profile(state, opts->profile);
     size_t deployed_count = 0;
 
-    /* Count deployed files for informational display */
-    arena_t *count_arena = arena_create(0);
-    if (count_arena) {
-        size_t state_file_count = 0;
-        state_file_entry_t *state_files = NULL;
-        error_t *state_err = state_get_all_files(
-            state, count_arena, &state_files, &state_file_count
-        );
-        if (!state_err && state_files) {
-            for (size_t i = 0; i < state_file_count; i++) {
-                if (strcmp(state_files[i].profile, opts->profile) == 0) {
-                    deployed_count++;
-                }
-            }
-        }
-        if (state_err) {
-            error_free(state_err);
-        }
-        arena_destroy(count_arena);
+    /* Count deployed files for informational display. Failure is non-fatal:
+     * the count is purely cosmetic, so swallow any error and display 0. */
+    error_t *count_err = state_count_files_by_profile(
+        state, opts->profile, &deployed_count
+    );
+    if (count_err) {
+        error_free(count_err);
+        deployed_count = 0;
     }
 
     /* Save custom prefix for hook filesystem path conversion. The peek

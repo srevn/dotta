@@ -477,6 +477,47 @@ error_t *state_get_all_files(
 );
 
 /**
+ * Count manifest entries belonging to a profile
+ *
+ * Pure SQL aggregate (SELECT COUNT(*) WHERE profile = ?), backed by the
+ * idx_manifest_profile index. Avoids materializing rows just to count
+ * them. All lifecycle states are counted (active, inactive, deleted,
+ * released) — callers that want only one state must filter at a higher
+ * layer.
+ *
+ * On empty state (no DB), returns *out_count = 0 with no error.
+ *
+ * @param state State (must not be NULL)
+ * @param profile Profile name (must not be NULL)
+ * @param out_count Output count (must not be NULL)
+ * @return Error or NULL on success
+ */
+error_t *state_count_files_by_profile(
+    const state_t *state,
+    const char *profile,
+    size_t *out_count
+);
+
+/**
+ * Count active encrypted manifest entries
+ *
+ * Pure SQL aggregate (SELECT COUNT(*) WHERE encrypted = 1 AND state =
+ * 'active'). Used by the key command to summarize how many files the
+ * cached passphrase will decrypt. Inactive/deleted/released rows are
+ * excluded — they are not part of the live working set.
+ *
+ * On empty state (no DB), returns *out_count = 0 with no error.
+ *
+ * @param state State (must not be NULL)
+ * @param out_count Output count (must not be NULL)
+ * @return Error or NULL on success
+ */
+error_t *state_count_encrypted_files(
+    const state_t *state,
+    size_t *out_count
+);
+
+/**
  * Enable profile with optional custom prefix
  *
  * If profile already enabled, updates its custom_prefix (UPSERT behavior).

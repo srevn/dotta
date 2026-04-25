@@ -1616,6 +1616,90 @@ error_t *state_get_file_by_storage(
 }
 
 /**
+ * Count manifest entries belonging to a profile
+ *
+ * Pure SQL aggregate; index-backed by idx_manifest_profile. Counts every
+ * lifecycle state — callers needing a sub-state count must run their own
+ * query.
+ */
+error_t *state_count_files_by_profile(
+    const state_t *state,
+    const char *profile,
+    size_t *out_count
+) {
+    CHECK_NULL(state);
+    CHECK_NULL(profile);
+    CHECK_NULL(out_count);
+
+    *out_count = 0;
+
+    /* Empty state (no DB file) — zero rows by definition. */
+    if (!state->db) return NULL;
+
+    const char *sql =
+        "SELECT COUNT(*) FROM virtual_manifest WHERE profile = ?;";
+
+    sqlite3_stmt *stmt = NULL;
+    int rc = sqlite3_prepare_v2(state->db, sql, -1, &stmt, NULL);
+    if (rc != SQLITE_OK) {
+        return sqlite_error(state->db, "Failed to prepare profile-count query");
+    }
+
+    sqlite3_bind_text(stmt, 1, profile, -1, SQLITE_STATIC);
+
+    error_t *err = NULL;
+    rc = sqlite3_step(stmt);
+    if (rc == SQLITE_ROW) {
+        *out_count = (size_t) sqlite3_column_int64(stmt, 0);
+    } else {
+        err = sqlite_error(state->db, "Failed to count files for profile");
+    }
+
+    sqlite3_finalize(stmt);
+    return err;
+}
+
+/**
+ * Count active encrypted manifest entries
+ *
+ * The state literal 'active' is inlined to match the schema's CHECK
+ * constraint vocabulary and the equivalent literal at the
+ * state_get_file_by_storage query.
+ */
+error_t *state_count_encrypted_files(
+    const state_t *state,
+    size_t *out_count
+) {
+    CHECK_NULL(state);
+    CHECK_NULL(out_count);
+
+    *out_count = 0;
+
+    if (!state->db) return NULL;
+
+    const char *sql =
+        "SELECT COUNT(*) FROM virtual_manifest "
+        "WHERE encrypted = 1 AND state = 'active';";
+
+    sqlite3_stmt *stmt = NULL;
+    int rc = sqlite3_prepare_v2(state->db, sql, -1, &stmt, NULL);
+    if (rc != SQLITE_OK) {
+        return sqlite_error(state->db, "Failed to prepare encrypted-count query");
+    }
+
+    error_t *err = NULL;
+    rc = sqlite3_step(stmt);
+    if (rc == SQLITE_ROW) {
+        *out_count = (size_t) sqlite3_column_int64(stmt, 0);
+    } else {
+        err = sqlite_error(state->db, "Failed to count encrypted files");
+    }
+
+    sqlite3_finalize(stmt);
+    return err;
+}
+
+/**
  * Get all file entries
  *
  * Returns allocated array via the caller's arena. Lifetime is tied to the

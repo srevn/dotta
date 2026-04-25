@@ -225,11 +225,13 @@ static error_t *sync_entry_to_state(
 error_t *manifest_apply_scope(
     git_repository *repo,
     state_t *state,
+    arena_t *arena,
     const string_array_t *stats_filter,
     manifest_scope_stats_t *out_stats
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(state);
+    CHECK_NULL(arena);
 
     /* Parallel-NULL contract: either both stats arguments are NULL
      * (caller doesn't want stats) or both are non-NULL (caller owns a
@@ -250,9 +252,6 @@ error_t *manifest_apply_scope(
     state_file_entry_t *old_entries = NULL;
     size_t old_count = 0;
     hashmap_t *stats_map = NULL;
-
-    arena_t *arena = arena_create(64 * 1024);
-    if (!arena) return ERROR(ERR_MEMORY, "Failed to create apply_scope arena");
 
     /* Step 1: Read the authoritative scope from state.
      *
@@ -456,18 +455,18 @@ error_t *manifest_apply_scope(
      * directories still in any enabled profile's metadata are
      * reactivated with the new owner; directories that left scope
      * remain STATE_INACTIVE for apply-time cleanup. */
-    err = manifest_sync_directories(repo, state, enabled);
+    err = manifest_sync_directories(repo, state, arena, enabled);
     if (err) {
         err = error_wrap(err, "Failed to sync tracked directories");
         goto cleanup;
     }
 
 cleanup:
-    /* old_entries is arena-backed — destruction is bundled with arena_destroy. */
+    /* old_entries and new_manifest strings are arena-backed; the caller's
+     * arena (typically ctx->arena) reclaims them at command end. */
     if (stats_map) hashmap_free(stats_map, NULL);
     if (new_manifest) manifest_free(new_manifest);
     string_array_free(enabled);
-    arena_destroy(arena);
 
     return err;
 }
@@ -522,6 +521,7 @@ cleanup:
 error_t *manifest_remove_files(
     git_repository *repo,
     state_t *state,
+    arena_t *arena,
     const char *removed_profile,
     const string_array_t *removed_storage_paths,
     const string_array_t *enabled_profiles,
@@ -530,6 +530,7 @@ error_t *manifest_remove_files(
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(state);
+    CHECK_NULL(arena);
     CHECK_NULL(removed_profile);
     CHECK_NULL(removed_storage_paths);
     CHECK_NULL(enabled_profiles);
@@ -539,9 +540,6 @@ error_t *manifest_remove_files(
     size_t removed_count = 0;
     size_t fallback_count = 0;
 
-    arena_t *arena = arena_create(64 * 1024);
-    if (!arena) return ERROR(ERR_MEMORY, "Failed to create manifest arena");
-
     /* 1. Build fresh manifest from current Git state (post-removal).
      *
      * manifest_build attributes per-profile metadata to each entry during
@@ -549,7 +547,6 @@ error_t *manifest_remove_files(
      * carries the correct mode/owner/group/encrypted for its source profile. */
     err = manifest_build(repo, enabled_profiles, state, arena, &fresh_manifest);
     if (err) {
-        arena_destroy(arena);
         return error_wrap(
             err, "Failed to build manifest for fallback detection"
         );
@@ -668,14 +665,15 @@ error_t *manifest_remove_files(
     if (err) goto cleanup;
 
     /* 3. Sync tracked directories */
-    err = manifest_sync_directories(repo, state, enabled_profiles);
+    err = manifest_sync_directories(repo, state, arena, enabled_profiles);
     if (err) {
         goto cleanup;
     }
 
 cleanup:
+    /* fresh_manifest's strings are arena-backed; the caller's arena
+     * (typically ctx->arena) reclaims them at command end. */
     if (fresh_manifest) manifest_free(fresh_manifest);
-    arena_destroy(arena);
 
     return err;
 }
@@ -768,11 +766,13 @@ static error_t *manifest_detect_stale_profiles(
 static error_t *manifest_repair_stale(
     git_repository *repo,
     state_t *state,
+    arena_t *arena,
     const string_array_t *enabled_profiles,
     manifest_repair_stats_t *out_stats
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(state);
+    CHECK_NULL(arena);
     CHECK_NULL(enabled_profiles);
     CHECK_NULL(out_stats);
 
@@ -784,9 +784,6 @@ static error_t *manifest_repair_stale(
     hashmap_t *profile_scope = NULL;
     hashmap_t *stale_profiles = NULL;
     manifest_t *fresh_manifest = NULL;
-
-    arena_t *arena = arena_create(64 * 1024);
-    if (!arena) return ERROR(ERR_MEMORY, "Failed to create manifest arena");
 
     /* Phase 1: Detect stale profiles via per-profile commit_oid comparison.
      *
@@ -940,17 +937,18 @@ static error_t *manifest_repair_stale(
      *
      * External Git changes may have added/removed directories in metadata.
      * Re-syncing ensures the tracked_directories table is consistent. */
-    err = manifest_sync_directories(repo, state, enabled_profiles);
+    err = manifest_sync_directories(repo, state, arena, enabled_profiles);
     if (err) {
         err = error_wrap(err, "Failed to sync directories after stale repair");
         goto cleanup;
     }
 
 cleanup:
+    /* fresh_manifest and all_entries strings are arena-backed; the caller's
+     * arena (typically ctx->arena) reclaims them at command end. */
     if (stale_profiles) hashmap_free(stale_profiles, NULL);
     if (profile_scope) hashmap_free(profile_scope, NULL);
     if (fresh_manifest) manifest_free(fresh_manifest);
-    arena_destroy(arena);
 
     return err;
 }
@@ -966,10 +964,12 @@ cleanup:
 error_t *manifest_reconcile(
     git_repository *repo,
     state_t *state,
+    arena_t *arena,
     manifest_repair_stats_t *out_stats
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(state);
+    CHECK_NULL(arena);
 
     string_array_t *profiles = NULL;
     error_t *err = state_get_profiles(state, &profiles);
@@ -1005,7 +1005,7 @@ error_t *manifest_reconcile(
     manifest_repair_stats_t local_stats;
     manifest_repair_stats_t *stats_target = out_stats ? out_stats : &local_stats;
 
-    err = manifest_repair_stale(repo, state, profiles, stats_target);
+    err = manifest_repair_stale(repo, state, arena, profiles, stats_target);
 
     if (needs_tx) {
         if (err) {
@@ -1075,6 +1075,7 @@ error_t *manifest_reconcile(
 error_t *manifest_update_files(
     git_repository *repo,
     state_t *state,
+    arena_t *arena,
     const workspace_item_t **items,
     size_t item_count,
     const string_array_t *enabled_profiles,
@@ -1084,6 +1085,7 @@ error_t *manifest_update_files(
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(state);
+    CHECK_NULL(arena);
     CHECK_NULL(items);
     CHECK_NULL(enabled_profiles);
     CHECK_NULL(out_synced);
@@ -1098,14 +1100,11 @@ error_t *manifest_update_files(
     if (item_count == 0) {
         /* No file items to process, but still sync directories.
          * Handles cases where only directory metadata changed. */
-        return manifest_sync_directories(repo, state, enabled_profiles);
+        return manifest_sync_directories(repo, state, arena, enabled_profiles);
     }
 
     error_t *err = NULL;
     manifest_t *fresh_manifest = NULL;
-
-    arena_t *arena = arena_create(64 * 1024);
-    if (!arena) return ERROR(ERR_MEMORY, "Failed to create manifest arena");
 
     /* 1. Build FRESH manifest from Git (post-commit state).
      *
@@ -1114,7 +1113,6 @@ error_t *manifest_update_files(
      * the correct mode/owner/group/encrypted for their source profile. */
     err = manifest_build(repo, enabled_profiles, state, arena, &fresh_manifest);
     if (err) {
-        arena_destroy(arena);
         return error_wrap(err, "Failed to build fresh manifest for bulk sync");
     }
 
@@ -1312,14 +1310,15 @@ error_t *manifest_update_files(
     string_array_free(updated_profiles);
 
     /* 6. Sync tracked directories */
-    err = manifest_sync_directories(repo, state, enabled_profiles);
+    err = manifest_sync_directories(repo, state, arena, enabled_profiles);
     if (err) {
         goto cleanup;
     }
 
 cleanup:
+    /* fresh_manifest's strings are arena-backed; the caller's arena
+     * (typically ctx->arena) reclaims them at command end. */
     if (fresh_manifest) manifest_free(fresh_manifest);
-    arena_destroy(arena);
 
     return err;
 }
@@ -1383,6 +1382,7 @@ cleanup:
 error_t *manifest_add_files(
     git_repository *repo,
     state_t *state,
+    arena_t *arena,
     const char *profile,
     const string_array_t *filesystem_paths,
     const string_array_t *enabled_profiles,
@@ -1390,6 +1390,7 @@ error_t *manifest_add_files(
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(state);
+    CHECK_NULL(arena);
     CHECK_NULL(profile);
     CHECK_NULL(filesystem_paths);
     CHECK_NULL(enabled_profiles);
@@ -1402,14 +1403,11 @@ error_t *manifest_add_files(
         /* No files to add, but still sync directories.
          * Handles directory-only adds where filesystem_paths
          * is empty but metadata.json has tracked directories. */
-        return manifest_sync_directories(repo, state, enabled_profiles);
+        return manifest_sync_directories(repo, state, arena, enabled_profiles);
     }
 
     error_t *err = NULL;
     manifest_t *fresh_manifest = NULL;
-
-    arena_t *arena = arena_create(64 * 1024);
-    if (!arena) return ERROR(ERR_MEMORY, "Failed to create manifest arena");
 
     /* 1. Build FRESH manifest from Git (post-commit state).
      *
@@ -1419,7 +1417,6 @@ error_t *manifest_add_files(
      * matters for the row being inserted). */
     err = manifest_build(repo, enabled_profiles, state, arena, &fresh_manifest);
     if (err) {
-        arena_destroy(arena);
         return error_wrap(err, "Failed to build fresh manifest for bulk sync");
     }
 
@@ -1510,14 +1507,15 @@ error_t *manifest_add_files(
     if (err) goto cleanup;
 
     /* 4. Sync tracked directories */
-    err = manifest_sync_directories(repo, state, enabled_profiles);
+    err = manifest_sync_directories(repo, state, arena, enabled_profiles);
     if (err) {
         goto cleanup;
     }
 
 cleanup:
+    /* fresh_manifest's strings are arena-backed; the caller's arena
+     * (typically ctx->arena) reclaims them at command end. */
     if (fresh_manifest) manifest_free(fresh_manifest);
-    arena_destroy(arena);
 
     return err;
 }
@@ -1573,6 +1571,7 @@ cleanup:
 error_t *manifest_sync_diff(
     git_repository *repo,
     state_t *state,
+    arena_t *arena,
     const char *profile,
     const git_oid *old_oid,
     const git_oid *new_oid,
@@ -1584,6 +1583,7 @@ error_t *manifest_sync_diff(
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(state);
+    CHECK_NULL(arena);
     CHECK_NULL(profile);
     CHECK_NULL(old_oid);
     CHECK_NULL(new_oid);
@@ -1596,9 +1596,6 @@ error_t *manifest_sync_diff(
     git_tree *old_tree = NULL;
     git_tree *new_tree = NULL;
     git_diff *diff = NULL;
-
-    arena_t *arena = arena_create(64 * 1024);
-    if (!arena) return ERROR(ERR_MEMORY, "Failed to create manifest arena");
 
     size_t synced = 0, removed = 0, fallbacks = 0, skipped = 0;
 
@@ -1845,18 +1842,19 @@ error_t *manifest_sync_diff(
     }
 
     /* 4. Sync tracked directories */
-    err = manifest_sync_directories(repo, state, enabled_profiles);
+    err = manifest_sync_directories(repo, state, arena, enabled_profiles);
     if (err) {
         goto cleanup;
     }
 
 cleanup:
-    /* Free resources in reverse order of acquisition */
+    /* Free resources in reverse order of acquisition. fresh_manifest's
+     * strings are arena-backed; the caller's arena (typically ctx->arena)
+     * reclaims them at command end. */
     if (diff) git_diff_free(diff);
     if (new_tree) git_tree_free(new_tree);
     if (old_tree) git_tree_free(old_tree);
     if (fresh_manifest) manifest_free(fresh_manifest);
-    arena_destroy(arena);
 
     return err;
 }
@@ -1900,20 +1898,17 @@ cleanup:
 error_t *manifest_sync_directories(
     git_repository *repo,
     state_t *state,
+    arena_t *arena,
     const string_array_t *enabled_profiles
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(state);
+    CHECK_NULL(arena);
     CHECK_NULL(enabled_profiles);
 
     error_t *err = NULL;
     metadata_t *metadata = NULL;
     const metadata_item_t **directories = NULL;
-
-    arena_t *arena = arena_create(8 * 1024);
-    if (!arena) {
-        return ERROR(ERR_MEMORY, "Failed to create directory sync arena");
-    }
 
     /* 1. Mark all directories as inactive (soft delete for orphan detection)
      *
@@ -1922,7 +1917,6 @@ error_t *manifest_sync_directories(
      */
     err = state_mark_all_directories_inactive(state);
     if (err) {
-        arena_destroy(arena);
         return error_wrap(err, "Failed to mark directories inactive");
     }
 
@@ -2056,10 +2050,11 @@ error_t *manifest_sync_directories(
 cleanup:
     /* Per-iteration resources are NULL on normal exit (freed in loop above).
      * Non-NULL only if outer loop exited before per-iteration cleanup (e.g.,
-     * metadata_load_from_branch error before inner loop). */
+     * metadata_load_from_branch error before inner loop). state_directory
+     * entries built into the borrowed arena live until the caller destroys
+     * it (typically command end). */
     if (directories) free(directories);
     if (metadata) metadata_free(metadata);
-    arena_destroy(arena);
 
     /* After rebuild, any directories still in STATE_INACTIVE are orphaned
      * (belonged to disabled profiles with no fallback).

@@ -10,7 +10,6 @@
 #include <string.h>
 #include <unistd.h>
 
-#include "base/arena.h"
 #include "base/array.h"
 #include "base/error.h"
 #include "base/hashmap.h"
@@ -614,18 +613,15 @@ cleanup:
 static error_t *calculate_required_directories(
     const manifest_t *manifest,
     const state_t *state,
+    arena_t *arena,
     hashmap_t **out
 ) {
     CHECK_NULL(manifest);
     CHECK_NULL(state);
+    CHECK_NULL(arena);
     CHECK_NULL(out);
 
     *out = NULL;
-
-    arena_t *arena = arena_create(0);
-    if (!arena) {
-        return ERROR(ERR_MEMORY, "Failed to allocate tracked-directory scan arena");
-    }
 
     error_t *err = NULL;
     hashmap_t *tracked = NULL;
@@ -703,7 +699,6 @@ cleanup:
     free(parent);
     if (tracked) hashmap_free(tracked, NULL);
     if (required) hashmap_free(required, NULL);
-    arena_destroy(arena);
     return err;
 }
 
@@ -737,20 +732,17 @@ cleanup:
 static error_t *deploy_tracked_directories(
     const workspace_t *ws,
     const state_t *state,
+    arena_t *arena,
     const deploy_options_t *opts,
     const hashmap_t *required_dirs
 ) {
     CHECK_NULL(ws);
+    CHECK_NULL(arena);
     CHECK_NULL(opts);
 
     /* Gracefully handle NULL state (no database = no tracked directories) */
     if (!state) {
         return NULL;
-    }
-
-    arena_t *arena = arena_create(0);
-    if (!arena) {
-        return ERROR(ERR_MEMORY, "Failed to allocate tracked-directories arena");
     }
 
     /* Get all tracked directories from state database */
@@ -1086,7 +1078,8 @@ static error_t *deploy_tracked_directories(
     }
 
 cleanup:
-    arena_destroy(arena);
+    /* directories array lives in the borrowed arena; the caller's arena
+     * (typically ctx->arena) reclaims it at command end. */
     return err;
 }
 
@@ -1098,6 +1091,7 @@ error_t *deploy_execute(
     const workspace_t *ws,
     const manifest_t *manifest,
     const state_t *state,
+    arena_t *arena,
     const deploy_options_t *opts,
     content_cache_t *cache,
     deploy_result_t **out
@@ -1105,6 +1099,7 @@ error_t *deploy_execute(
     CHECK_NULL(repo);
     CHECK_NULL(ws);
     CHECK_NULL(manifest);
+    CHECK_NULL(arena);
     CHECK_NULL(opts);
     CHECK_NULL(cache);
     CHECK_NULL(out);
@@ -1146,7 +1141,7 @@ error_t *deploy_execute(
     bool scope_narrows = opts->scope &&
         (scope_has_paths(opts->scope) || scope_has_filter(opts->scope));
     if (scope_narrows && manifest->count > 0 && state) {
-        err = calculate_required_directories(manifest, state, &required_dirs);
+        err = calculate_required_directories(manifest, state, arena, &required_dirs);
         if (err) {
             deploy_result_free(result);
             return error_wrap(err, "Failed to calculate required directories");
@@ -1154,7 +1149,7 @@ error_t *deploy_execute(
     }
 
     /* Deploy tracked directories from state database first */
-    err = deploy_tracked_directories(ws, state, opts, required_dirs);
+    err = deploy_tracked_directories(ws, state, arena, opts, required_dirs);
     if (required_dirs) {
         hashmap_free(required_dirs, NULL);
     }

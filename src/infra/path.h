@@ -240,14 +240,14 @@ typedef struct gitignore_ruleset gitignore_ruleset_t;
  * Glob storage: patterns are compiled once into `glob_ruleset` (the
  * authoritative matcher) and also kept as raw strings in
  * `glob_patterns[]` for diagnostic consumers (e.g. diff.c's
- * unmatched-pattern warning). Both are arena-owned and freed together
- * at path_filter_free.
+ * unmatched-pattern warning). Both are borrowed from the arena passed
+ * to `path_filter_create` (typically `ctx->arena`); the arena must
+ * outlive the filter.
  */
 typedef struct {
     struct hashmap *exact_paths;         /* Exact paths for O(1) lookup (hashmap owns keys) */
-    arena_t *arena;                      /* Owns glob_ruleset + glob_patterns entries */
-    gitignore_ruleset_t *glob_ruleset;   /* Compiled globs; NULL when glob_count == 0 */
-    char **glob_patterns;                /* Arena-owned strings; retained for diagnostics */
+    gitignore_ruleset_t *glob_ruleset;   /* Compiled globs; NULL when glob_count == 0; arena-borrowed */
+    char **glob_patterns;                /* Arena-borrowed strings; retained for diagnostics */
     size_t glob_count;                   /* Number of glob patterns */
     size_t count;                        /* Total entries (exact + globs) */
 } path_filter_t;
@@ -289,6 +289,8 @@ typedef struct {
  * @param count Number of inputs
  * @param prefixes Borrowed custom-prefix strings (NULL if prefix_count == 0)
  * @param prefix_count Number of entries in prefixes
+ * @param arena Borrowed allocator backing glob_ruleset and glob_patterns
+ *              entries; must outlive the filter (must not be NULL)
  * @param out Path filter (must not be NULL, receives NULL if no filter)
  * @return Error or NULL on success
  */
@@ -297,6 +299,7 @@ error_t *path_filter_create(
     size_t count,
     const char *const *prefixes,
     size_t prefix_count,
+    arena_t *arena,
     path_filter_t **out
 );
 

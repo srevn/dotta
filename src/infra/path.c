@@ -899,8 +899,10 @@ error_t *path_filter_create(
     size_t count,
     const char *const *prefixes,
     size_t prefix_count,
+    arena_t *arena,
     path_filter_t **out
 ) {
+    CHECK_NULL(arena);
     CHECK_NULL(out);
 
     /* No inputs = no filter (matches all) */
@@ -922,8 +924,8 @@ error_t *path_filter_create(
     }
 
     /* First pass: count glob patterns so we can size the storage array
-     * exactly. No entries allocated yet for the zero-globs case — the
-     * arena stays NULL, keeping the common "exact paths only" path
+     * exactly. The borrowed arena is only touched when at least one
+     * glob is present, keeping the "exact paths only" common path
      * allocation-free beyond the hashmap. */
     size_t glob_count = 0;
     for (size_t i = 0; i < count; i++) {
@@ -932,32 +934,23 @@ error_t *path_filter_create(
         }
     }
 
-    /* Stand up arena + ruleset + glob_patterns[] when at least one
-     * glob is present. All three share the filter's arena lifetime:
-     * dropping the filter drops all three with one arena_destroy. */
+    /* Stand up the compiled ruleset + glob_patterns[] when at least one
+     * glob is present. Both live in the borrowed arena; the caller's
+     * arena lifetime governs them. */
     if (glob_count > 0) {
-        filter->arena = arena_create(0);
-        if (!filter->arena) {
-            hashmap_free(filter->exact_paths, NULL);
-            free(filter);
-            return ERROR(ERR_MEMORY, "Failed to allocate filter arena");
-        }
-
         error_t *rules_err = gitignore_ruleset_create(
-            filter->arena, &filter->glob_ruleset
+            arena, &filter->glob_ruleset
         );
         if (rules_err) {
-            arena_destroy(filter->arena);
             hashmap_free(filter->exact_paths, NULL);
             free(filter);
             return error_wrap(rules_err, "Failed to allocate glob ruleset");
         }
 
         filter->glob_patterns = arena_calloc(
-            filter->arena, glob_count, sizeof(*filter->glob_patterns)
+            arena, glob_count, sizeof(*filter->glob_patterns)
         );
         if (!filter->glob_patterns) {
-            arena_destroy(filter->arena);
             hashmap_free(filter->exact_paths, NULL);
             free(filter);
             return ERROR(ERR_MEMORY, "Failed to allocate glob pattern table");
@@ -995,7 +988,7 @@ error_t *path_filter_create(
                 goto cleanup;
             }
 
-            char *arena_copy = arena_strdup(filter->arena, input);
+            char *arena_copy = arena_strdup(arena, input);
             if (!arena_copy) {
                 err = ERROR(ERR_MEMORY, "Failed to duplicate pattern");
                 goto cleanup;
@@ -1030,10 +1023,8 @@ error_t *path_filter_create(
     return NULL;
 
 cleanup:
-    /* arena_destroy drops glob_ruleset and every arena-owned pattern
-     * copy in one shot; arena_destroy(NULL) is a no-op for the
-     * zero-globs failure path. */
-    arena_destroy(filter->arena);
+    /* glob_ruleset and glob_patterns are arena-borrowed — released
+     * with the caller's arena, not here. */
     hashmap_free(filter->exact_paths, NULL);
     free(filter);
     return err;
@@ -1106,10 +1097,8 @@ void path_filter_free(path_filter_t *filter) {
         return;
     }
 
-    /* arena_destroy drops glob_ruleset and every arena-owned pattern
-     * copy in one shot. Safe when filter->arena is NULL (zero-globs
-     * case): arena_destroy(NULL) is a no-op. */
-    arena_destroy(filter->arena);
+    /* glob_ruleset and glob_patterns are arena-borrowed — released
+     * with the caller's arena, not here. */
 
     /* Free hashmap (keys owned by hashmap, values are just markers) */
     hashmap_free(filter->exact_paths, NULL);

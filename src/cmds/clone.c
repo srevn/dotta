@@ -248,10 +248,12 @@ static error_t *fetch_all_profiles(
  */
 static error_t *initialize_state(
     git_repository *repo,
+    arena_t *arena,
     const string_array_t *profiles,
     output_t *out
 ) {
     CHECK_NULL(repo);
+    CHECK_NULL(arena);
     CHECK_NULL(profiles);
     CHECK_NULL(out);
 
@@ -290,7 +292,7 @@ static error_t *initialize_state(
             }
         }
 
-        err = manifest_apply_scope(repo, state, NULL, NULL);
+        err = manifest_apply_scope(repo, state, arena, NULL, NULL);
         if (err) {
             state_free(state);
             return error_wrap(err, "Failed to reconcile manifest scope");
@@ -563,7 +565,7 @@ error_t *cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
             }
         }
 
-        err = initialize_state(repo, profiles, out);
+        err = initialize_state(repo, ctx->arena, profiles, out);
         if (err) {
             output_error(out, "Failed to initialize state: %s", error_message(err));
             error_free(err);
@@ -574,7 +576,7 @@ error_t *cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
         /* No profiles fetched - initialize empty state */
         output_warning(out, OUTPUT_NORMAL, "No profiles were fetched");
         string_array_t empty = { 0 };
-        err = initialize_state(repo, &empty, out);
+        err = initialize_state(repo, ctx->arena, &empty, out);
         if (err) {
             output_error(out, "Failed to initialize state: %s", error_message(err));
             error_free(err);

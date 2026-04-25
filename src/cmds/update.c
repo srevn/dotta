@@ -1096,6 +1096,7 @@ static error_t *flatten_items_to_array(
 static error_t *update_manifest_after_update(
     git_repository *repo,
     state_t *state,
+    arena_t *arena,
     const scope_t *scope,
     const hashmap_t *items_by_profile,
     const cmd_update_options_t *opts,
@@ -1104,6 +1105,7 @@ static error_t *update_manifest_after_update(
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(state);
+    CHECK_NULL(arena);
     CHECK_NULL(scope);
     CHECK_NULL(items_by_profile);
     CHECK_NULL(opts);
@@ -1146,6 +1148,7 @@ static error_t *update_manifest_after_update(
     err = manifest_update_files(
         repo,
         state,
+        arena,
         all_items,
         item_count,
         enabled_profiles,
@@ -1811,7 +1814,7 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
         .exclude_patterns = opts->exclude_patterns,
         .exclude_count    = opts->exclude_count,
     };
-    err = scope_build(repo, state, &scope_inputs, config, &scope);
+    err = scope_build(repo, state, &scope_inputs, config, ctx->arena, &scope);
     if (err) goto cleanup;
 
     if (scope_enabled(scope)->count == 0) {
@@ -1867,7 +1870,7 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
         .analyze_encryption  = true                     /* Encryption policy validation */
     };
     err = workspace_load(
-        repo, state, scope, config, ctx->content_cache, &ws_opts, &ws
+        repo, state, scope, config, ctx->content_cache, &ws_opts, ctx->arena, &ws
     );
     if (err) {
         err = error_wrap(err, "Failed to analyze workspace");
@@ -2059,7 +2062,7 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
      */
     bool manifest_updated = false;
     error_t *manifest_err = update_manifest_after_update(
-        repo, state, scope, by_profile, opts, out, &manifest_updated
+        repo, state, ctx->arena, scope, by_profile, opts, out, &manifest_updated
     );
 
     /* Free by_profile hashmap after manifest sync */

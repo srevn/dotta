@@ -807,7 +807,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         .exclude_patterns = opts->exclude_patterns,
         .exclude_count    = opts->exclude_count,
     };
-    err = scope_build(repo, state, &scope_inputs, config, &scope);
+    err = scope_build(repo, state, &scope_inputs, config, ctx->arena, &scope);
     if (err) goto cleanup;
 
     output_print(
@@ -850,7 +850,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         .analyze_encryption  = false             /* Not needed for deployment */
     };
     err = workspace_load(
-        repo, state, scope, config, ctx->content_cache, &ws_opts, &ws
+        repo, state, scope, config, ctx->content_cache, &ws_opts, ctx->arena, &ws
     );
     if (err) {
         err = error_wrap(err, "Failed to load workspace");
@@ -1539,7 +1539,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         }
 
         err = deploy_execute(
-            repo, ws, deploy_manifest, state, &deploy_opts, cache, &deploy_res
+            repo, ws, deploy_manifest, state, ctx->arena, &deploy_opts, cache, &deploy_res
         );
         if (err) {
             if (deploy_res) {

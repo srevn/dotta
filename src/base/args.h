@@ -519,6 +519,10 @@ void args_render_errors(
  * (profiles ∪ files) for polymorphic positionals and filters by prefix.
  *
  * @param out      Output stream (fully buffered writes are fine).
+ * @param arena    Borrowed scratch arena for token storage and dedup set.
+ *                 All allocations live until the caller destroys the
+ *                 arena; callers typically pass their command-scoped
+ *                 arena. Must not be NULL.
  * @param commands NULL-terminated registry of top-level commands.
  * @param prog     Program name used for `complete -c <prog>` lines and
  *                 `__<prog>_*` helper-function references. Must match
@@ -527,6 +531,7 @@ void args_render_errors(
  */
 void args_export_completion_fish(
     FILE *out,
+    arena_t *arena,
     const args_command_t *const *commands,
     const char *prog
 );

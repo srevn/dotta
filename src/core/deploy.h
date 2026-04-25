@@ -142,6 +142,9 @@ error_t *deploy_workspace_preflight(
  * @param ws Workspace with pre-computed divergence analysis (must not be NULL)
  * @param manifest Manifest to deploy (must not be NULL)
  * @param state State database for tracked directories (can be NULL)
+ * @param arena Scratch arena for the tracked-directories snapshot and
+ *              required-ancestor scan. Allocations live until the caller
+ *              destroys the arena (typically command end). Must not be NULL.
  * @param opts Deployment options (must not be NULL)
  * @param cache Content cache for batch operations (must not be NULL)
  * @param out Deployment results (must not be NULL, caller must free)
@@ -152,6 +155,7 @@ error_t *deploy_execute(
     const workspace_t *ws,
     const manifest_t *manifest,
     const state_t *state,
+    arena_t *arena,
     const deploy_options_t *opts,
     content_cache_t *cache,
     deploy_result_t **out

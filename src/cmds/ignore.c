@@ -819,11 +819,13 @@ static error_t *test_path_ignore(
     const config_t *config,
     const char *test_path,
     const char *specific_profile,
+    arena_t *arena,
     output_t *out
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(state);
     CHECK_NULL(test_path);
+    CHECK_NULL(arena);
     CHECK_NULL(out);
 
     /* Check if path exists and determine if it's a directory */
@@ -871,10 +873,7 @@ static error_t *test_path_ignore(
      * each profile's ruleset on first request. */
     ignore_rules_t *ignore_rules = NULL;
     error_t *err = ignore_rules_create(
-        repo, config,
-        /* CLI excludes are add/update specific; --test has none. */
-        NULL, 0,
-        &ignore_rules
+        repo, config, NULL, 0, arena, &ignore_rules
     );
     if (err) {
         source_filter_free(source_filter);
@@ -1095,7 +1094,8 @@ error_t *cmd_ignore(const dotta_ctx_t *ctx, const cmd_ignore_options_t *opts) {
      * itself; it doesn't use dottaignore_scope_t. Dispatch early. */
     if (has_test) {
         return test_path_ignore(
-            repo, ctx->state, config, opts->test_path, opts->profile, out
+            repo, ctx->state, config, opts->test_path,
+            opts->profile, ctx->arena, out
         );
     }
 
@@ -1135,10 +1135,8 @@ error_t *cmd_ignore(const dotta_ctx_t *ctx, const cmd_ignore_options_t *opts) {
     if (!err) {
         if (has_modify) {
             err = modify_dottaignore(
-                repo, &scope,
-                opts->add_patterns, opts->add_count,
-                opts->remove_patterns, opts->remove_count,
-                out
+                repo, &scope, opts->add_patterns, opts->add_count,
+                opts->remove_patterns, opts->remove_count, out
             );
         } else {
             err = edit_dottaignore(repo, &scope, out);

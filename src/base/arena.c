@@ -17,7 +17,7 @@
 /* --- Internal types ------------------------------------------------ */
 
 typedef struct arena_block {
-    struct arena_block *next;       /* previous block in chain */
+    struct arena_block *next;       /* Older block (chain prepends; head=current) */
     size_t capacity;                /* usable bytes in data[] */
     size_t used;                    /* bytes consumed so far  */
     char data[];                    /* flexible array member   */
@@ -74,8 +74,12 @@ arena_t *arena_create(size_t initial_capacity) {
 }
 
 void *arena_alloc(arena_t *arena, size_t size) {
-    if (!arena || size == 0)
-        return NULL;
+    if (!arena) return NULL;
+
+    /* Zero-byte request: return a non-NULL sentinel so callers can
+     * distinguish from OOM. The pointer aliases the current block's
+     * data and must not be dereferenced. */
+    if (size == 0) return arena->current->data;
 
     size_t aligned = align_up(size);
     if (aligned < size) return NULL;        /* alignment overflow */

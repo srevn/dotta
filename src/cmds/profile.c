@@ -12,7 +12,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "base/arena.h"
 #include "base/args.h"
 #include "base/array.h"
 #include "base/error.h"
@@ -695,11 +694,13 @@ cleanup:
 static error_t *profile_enable(
     git_repository *repo,
     state_t *state,
+    arena_t *arena,
     const cmd_profile_options_t *opts,
     output_t *out
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(state);
+    CHECK_NULL(arena);
     CHECK_NULL(opts);
     CHECK_NULL(out);
 
@@ -985,7 +986,7 @@ static error_t *profile_enable(
         }
 
         err = manifest_apply_scope(
-            repo, state, to_enable_validated, stats
+            repo, state, arena, to_enable_validated, stats
         );
         if (err) {
             err = error_wrap(err, "Failed to reconcile manifest after enable");
@@ -1081,11 +1082,13 @@ cleanup:
 static error_t *profile_disable(
     git_repository *repo,
     state_t *state,
+    arena_t *arena,
     const cmd_profile_options_t *opts,
     output_t *out
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(state);
+    CHECK_NULL(arena);
     CHECK_NULL(opts);
     CHECK_NULL(out);
 
@@ -1251,7 +1254,7 @@ static error_t *profile_disable(
         }
 
         err = manifest_apply_scope(
-            repo, state, to_disable_validated, stats
+            repo, state, arena, to_disable_validated, stats
         );
         if (err) {
             err = error_wrap(err, "Failed to reconcile manifest after disable");
@@ -1327,11 +1330,13 @@ cleanup:
 static error_t *profile_reorder(
     git_repository *repo,
     state_t *state,
+    arena_t *arena,
     const cmd_profile_options_t *opts,
     output_t *out
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(state);
+    CHECK_NULL(arena);
     CHECK_NULL(opts);
     CHECK_NULL(out);
 
@@ -1492,7 +1497,7 @@ static error_t *profile_reorder(
      * state_set_profiles preserves commit_oid for profiles that remain
      * enabled, so enabled_profiles is already fully authoritative — no
      * persist_profile_head loop needed for reorder. */
-    err = manifest_apply_scope(repo, state, NULL, NULL);
+    err = manifest_apply_scope(repo, state, arena, NULL, NULL);
     if (err) {
         err = error_wrap(err, "Failed to reconcile manifest with new precedence");
         goto cleanup;
@@ -1535,11 +1540,13 @@ cleanup:
 static error_t *profile_validate(
     git_repository *repo,
     state_t *state,
+    arena_t *arena,
     const cmd_profile_options_t *opts,
     output_t *out
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(state);
+    CHECK_NULL(arena);
     CHECK_NULL(opts);
     CHECK_NULL(out);
 
@@ -1630,19 +1637,10 @@ static error_t *profile_validate(
     }
 
     /* Check 2: State file entries reference valid profiles */
-    arena_t *files_arena = arena_create(0);
-    if (!files_arena) {
-        err = ERROR(ERR_MEMORY, "Failed to allocate state-files scan arena");
-        goto cleanup;
-    }
-
     size_t state_file_count = 0;
     state_file_entry_t *state_files = NULL;
-    err = state_get_all_files(state, files_arena, &state_files, &state_file_count);
-    if (err) {
-        arena_destroy(files_arena);
-        goto cleanup;
-    }
+    err = state_get_all_files(state, arena, &state_files, &state_file_count);
+    if (err) goto cleanup;
 
     for (size_t i = 0; i < state_file_count; i++) {
         const char *profile = state_files[i].profile;
@@ -1652,8 +1650,6 @@ static error_t *profile_validate(
             has_orphaned_files = true;
         }
     }
-
-    arena_destroy(files_arena);
 
     if (orphaned_files > 0) {
         output_warning(
@@ -1746,19 +1742,19 @@ error_t *cmd_profile(const dotta_ctx_t *ctx, const cmd_profile_options_t *opts) 
             break;
 
         case PROFILE_ENABLE:
-            result = profile_enable(repo, state, opts, out);
+            result = profile_enable(repo, state, ctx->arena, opts, out);
             break;
 
         case PROFILE_DISABLE:
-            result = profile_disable(repo, state, opts, out);
+            result = profile_disable(repo, state, ctx->arena, opts, out);
             break;
 
         case PROFILE_REORDER:
-            result = profile_reorder(repo, state, opts, out);
+            result = profile_reorder(repo, state, ctx->arena, opts, out);
             break;
 
         case PROFILE_VALIDATE:
-            result = profile_validate(repo, state, opts, out);
+            result = profile_validate(repo, state, ctx->arena, opts, out);
             break;
 
         default:

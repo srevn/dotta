@@ -12,7 +12,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "base/arena.h"
 #include "base/args.h"
 #include "base/array.h"
 #include "base/error.h"
@@ -127,18 +126,17 @@ static void complete_remotes(git_repository *repo) {
  * Output managed files from state database
  *
  * @param state Borrowed state handle; NULL when running outside a repo
+ * @param arena Borrowed scratch arena (caller's command arena)
  * @param profile Optional profile filter (NULL for all files)
  * @param storage_paths If true, output storage_path; if false, filesystem_path
  */
 static void complete_files(
     state_t *state,
+    arena_t *arena,
     const char *profile,
     bool storage_paths
 ) {
     if (!state) return;
-
-    arena_t *arena = arena_create(0);
-    if (!arena) return;
 
     state_file_entry_t *entries = NULL;
     size_t count = 0;
@@ -156,7 +154,6 @@ static void complete_files(
 
     if (err) {
         error_free(err);
-        arena_destroy(arena);
         return;
     }
 
@@ -170,14 +167,9 @@ static void complete_files(
         const char *path = storage_paths ? entries[i].storage_path
                                          : entries[i].filesystem_path;
         if (path) {
-            printf(
-                "%s\t%s\n",
-                path, entries[i].profile
-            );
+            printf("%s\t%s\n", path, entries[i].profile);
         }
     }
-
-    arena_destroy(arena);
 }
 
 /**
@@ -335,7 +327,7 @@ error_t *cmd_completion(const dotta_ctx_t *ctx, const cmd_completion_options_t *
             if (!repo) {
                 return NULL;
             }
-            complete_files(state, opts->profile, opts->storage_paths);
+            complete_files(state, ctx->arena, opts->profile, opts->storage_paths);
             break;
 
         case COMPLETE_COMMITS:
@@ -358,7 +350,7 @@ error_t *cmd_completion(const dotta_ctx_t *ctx, const cmd_completion_options_t *
              * by `make completions` to generate the schema under build/.
              * Registry is borrowed from main.c via the typed accessor
              * so the cmds/ layer never names the registry symbol. */
-            args_export_completion_fish(stdout, dotta_registry(), "dotta");
+            args_export_completion_fish(stdout, ctx->arena, dotta_registry(), "dotta");
             break;
 
         default:

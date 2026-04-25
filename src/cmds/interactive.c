@@ -298,9 +298,10 @@ static void interactive_move_profile_down(interactive_state_t *state) {
 static error_t *interactive_save_profile_order(
     git_repository *repo,
     state_t *deploy_state,
+    arena_t *arena,
     interactive_state_t *state
 ) {
-    if (!state || !repo || !deploy_state) {
+    if (!state || !repo || !deploy_state || !arena) {
         return error_create(ERR_INVALID_ARG, "invalid arguments");
     }
 
@@ -346,7 +347,7 @@ static error_t *interactive_save_profile_order(
      * pass is a no-op here because the set membership is unchanged; it
      * just re-UPSERTs entries whose precedence owner shifted (deployed_at
      * preserved by SQL, old_profile auto-captured when profile changes). */
-    err = manifest_apply_scope(repo, deploy_state, NULL, NULL);
+    err = manifest_apply_scope(repo, deploy_state, arena, NULL, NULL);
     if (err) {
         state_rollback(deploy_state);
         return error_wrap(
@@ -469,11 +470,12 @@ interactive_result_t interactive_handle_key(
     interactive_state_t *state,
     git_repository *repo,
     state_t *deploy_state,
+    arena_t *arena,
     int key,
     terminal_t **term_ptr,
     error_t **out_err
 ) {
-    if (!state || !repo || !deploy_state || !term_ptr || !out_err) {
+    if (!state || !repo || !deploy_state || !arena || !term_ptr || !out_err) {
         return INTERACTIVE_EXIT_ERROR;
     }
 
@@ -540,7 +542,9 @@ interactive_result_t interactive_handle_key(
                 return INTERACTIVE_CONTINUE;
             }
 
-            error_t *err = interactive_save_profile_order(repo, deploy_state, state);
+            error_t *err = interactive_save_profile_order(
+                repo, deploy_state, arena, state
+            );
             if (err) {
                 /* Exit and return error to caller */
                 *out_err = err;
@@ -565,10 +569,12 @@ interactive_result_t interactive_handle_key(
 
 /* Main Entry Point */
 
-error_t *interactive_run(git_repository *repo, state_t *deploy_state) {
-    if (!repo || !deploy_state) {
+error_t *interactive_run(
+    git_repository *repo, state_t *deploy_state, arena_t *arena
+) {
+    if (!repo || !deploy_state || !arena) {
         return error_create(
-            ERR_INVALID_ARG, "repo and deploy_state cannot be NULL"
+            ERR_INVALID_ARG, "repo, deploy_state, and arena cannot be NULL"
         );
     }
 
@@ -661,7 +667,9 @@ error_t *interactive_run(git_repository *repo, state_t *deploy_state) {
         int key = terminal_read_key();
 
         /* Handle key */
-        result = interactive_handle_key(state, repo, deploy_state, key, &term, &loop_err);
+        result = interactive_handle_key(
+            state, repo, deploy_state, arena, key, &term, &loop_err
+        );
 
         /* Re-render: move cursor up, then redraw */
         if (result == INTERACTIVE_CONTINUE) {
@@ -707,7 +715,7 @@ static error_t *interactive_dispatch(const void *ctx_v, void *opts_v) {
     const dotta_ctx_t *ctx = ctx_v;
     CHECK_NULL(ctx->state);
     (void) opts_v;
-    return interactive_run(ctx->repo, ctx->state);
+    return interactive_run(ctx->repo, ctx->state, ctx->arena);
 }
 
 const args_command_t spec_interactive = {

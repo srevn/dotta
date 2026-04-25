@@ -311,7 +311,11 @@ static int run_spec(
 ) {
     const char *prog = argv[0];
 
-    arena_t *arena = arena_create(8 * 1024);
+    /* Command-scoped arena. Sized for the median command — parsing
+     * needs ~few KB, but workspace/scope/manifest paths fit ~140 KB
+     * worst case in one or two blocks at this initial size.
+     * Borrowed by handlers via ctx->arena; destroyed below. */
+    arena_t *arena = arena_create(32 * 1024);
     if (arena == NULL) {
         fprintf(stderr, "Failed to allocate memory\n");
         return 1;
@@ -399,6 +403,7 @@ static int run_spec(
         .state         = state,
         .keymgr        = keymgr,
         .content_cache = cache,
+        .arena         = arena,
         .config        = config,
         .out           = out,
         .argc          = argc,

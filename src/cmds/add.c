@@ -551,6 +551,7 @@ static error_t *create_commit(
 static error_t *auto_enable_and_sync_profile(
     git_repository *repo,
     state_t *state,
+    arena_t *arena,
     const char *profile,
     const char *custom_prefix,
     const string_array_t *added_files,
@@ -559,6 +560,7 @@ static error_t *auto_enable_and_sync_profile(
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(state);
+    CHECK_NULL(arena);
     CHECK_NULL(profile);
     CHECK_NULL(added_files);
     CHECK_NULL(out_updated);
@@ -628,6 +630,7 @@ static error_t *auto_enable_and_sync_profile(
     err = manifest_add_files(
         repo,
         state,
+        arena,
         profile,
         added_files,
         enabled_profiles,
@@ -709,6 +712,7 @@ cleanup:
 static error_t *update_manifest_after_add(
     git_repository *repo,
     state_t *state,
+    arena_t *arena,
     const char *profile,
     const char *custom_prefix,
     const string_array_t *added_files,
@@ -717,6 +721,7 @@ static error_t *update_manifest_after_add(
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(state);
+    CHECK_NULL(arena);
     CHECK_NULL(profile);
     CHECK_NULL(added_files);
     CHECK_NULL(out_updated);
@@ -778,6 +783,7 @@ static error_t *update_manifest_after_add(
     err = manifest_add_files(
         repo,
         state,
+        arena,
         profile,
         added_files,
         enabled_profiles,
@@ -1002,7 +1008,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     err = ignore_rules_create(
         repo, config,
         opts->exclude_patterns, opts->exclude_count,
-        &ignore_rules
+        ctx->arena, &ignore_rules
     );
     if (err) {
         err = error_wrap(err, "Failed to build ignore rules");
@@ -1442,8 +1448,8 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
          * apply_scope is the scope reconciler; add is the disk-capture path.
          */
         error_t *enable_err = auto_enable_and_sync_profile(
-            repo, ctx->state, opts->profile, opts->custom_prefix, all_files,
-            &manifest_updated, &manifest_synced_count
+            repo, ctx->state, ctx->arena, opts->profile, opts->custom_prefix,
+            all_files, &manifest_updated, &manifest_synced_count
         );
 
         if (enable_err) {
@@ -1467,8 +1473,8 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
          * If not enabled, skips manifest update (user must explicitly enable).
          */
         error_t *manifest_err = update_manifest_after_add(
-            repo, ctx->state, opts->profile, opts->custom_prefix, all_files,
-            &manifest_updated, &manifest_synced_count
+            repo, ctx->state, ctx->arena, opts->profile, opts->custom_prefix,
+            all_files, &manifest_updated, &manifest_synced_count
         );
 
         if (manifest_err) {

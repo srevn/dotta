@@ -125,12 +125,16 @@ typedef struct scope_inputs {
  *      else enabled) — narrowing the filter narrows prefix harvest for
  *      path resolution.
  *   4. If in->file_count > 0, build the path filter using those prefixes.
- *   5. If in->exclude_count > 0, deep-copy the exclude patterns.
+ *   5. If in->exclude_count > 0, compile patterns into a borrowed-arena
+ *      gitignore ruleset.
  *
  * @param repo   Repository (must not be NULL)
  * @param state  State handle (must not be NULL, borrowed for the call)
  * @param in     Inputs (must not be NULL)
  * @param config Configuration (must not be NULL, read for strict_mode)
+ * @param arena  Borrowed allocator backing the compiled exclude ruleset
+ *               and the path filter's glob storage; must outlive the
+ *               returned scope (must not be NULL)
  * @param out    Scope (must not be NULL, caller frees with scope_free)
  * @return Error or NULL on success
  */
@@ -139,6 +143,7 @@ error_t *scope_build(
     const state_t *state,
     const scope_inputs_t *in,
     const config_t *config,
+    arena_t *arena,
     scope_t **out
 );
 

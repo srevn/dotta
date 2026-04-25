@@ -1181,6 +1181,7 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
     error_t *manifest_err = manifest_sync_diff(
         repo,
         state,
+        ctx->arena,
         profile,
         &current_oid,       /* Before revert (captured at step 3) */
         &new_head_oid,      /* After revert */

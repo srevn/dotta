@@ -54,10 +54,6 @@ _Static_assert(
  * gitignore engine already caps per-pattern length and rule count. */
 #define MAX_DOTTAIGNORE_SIZE (1024 * 1024)   /* 1 MB */
 
-/* Arena starting capacity. Comfortably fits a typical baseline (~1 KB)
- * plus a few per-profile rulesets; grows on demand. */
-#define IGNORE_ARENA_INITIAL_CAPACITY (8 * 1024)
-
 /* Initial profile-cache capacity. Profile counts are almost always
  * single-digit so the cache rarely grows. */
 #define INITIAL_PROFILE_CAPACITY 4
@@ -176,7 +172,7 @@ typedef struct {
 } profile_entry_t;
 
 struct ignore_rules {
-    arena_t *arena;                 /* owns baseline copy, cache array, all rulesets */
+    arena_t *arena;                 /* borrowed; backs baseline copy, cache array, all rulesets */
     git_repository *repo;           /* borrowed; used only by lazy profile loads */
 
     /* Common layers. `baseline_content` is either an arena-owned copy
@@ -405,9 +401,11 @@ error_t *ignore_rules_create(
     const config_t *config,
     char *const *cli_excludes,
     size_t cli_count,
+    arena_t *arena,
     ignore_rules_t **out
 ) {
     CHECK_NULL(repo);
+    CHECK_NULL(arena);
     CHECK_NULL(out);
 
     *out = NULL;
@@ -417,12 +415,7 @@ error_t *ignore_rules_create(
         return ERROR(ERR_MEMORY, "Failed to allocate ignore rules builder");
     }
 
-    r->arena = arena_create(IGNORE_ARENA_INITIAL_CAPACITY);
-    if (!r->arena) {
-        free(r);
-        return ERROR(ERR_MEMORY, "Failed to allocate ignore arena");
-    }
-
+    r->arena = arena;
     r->repo = repo;
 
     /* Load baseline; fall back to compiled defaults when absent.
@@ -473,11 +466,9 @@ error_t *ignore_rules_create(
 void ignore_rules_free(ignore_rules_t *r) {
     if (!r) return;
 
-    /* Arena destroy drops every ruleset, every arena-owned string, and
-     * the profile cache array in one shot. arena_destroy(NULL) is a
-     * no-op, so partial-state builders from allocation failure mid-
-     * create are safe. */
-    arena_destroy(r->arena);
+    /* Arena is borrowed — owned by the caller (typically ctx->arena).
+     * Per-profile rulesets, baseline copies, and the profile cache
+     * remain valid in that arena until the caller destroys it. */
     free(r);
 }
 

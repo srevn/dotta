@@ -8,7 +8,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "base/arena.h"
 #include "base/array.h"
 #include "base/error.h"
 #include "base/gitignore.h"
@@ -19,23 +18,21 @@
 /**
  * Internal scope representation.
  *
- * All fields except `active` are owned by scope_t and freed in
+ * `enabled`, `filter`, and `paths` are owned by scope_t and freed in
  * scope_free. `active` is a borrowed pointer into either `enabled` or
  * `filter` — set once during build, dangles after scope_free returns
  * (which is fine: no one is meant to dereference it post-free).
  *
- * Exclude-pattern storage uses a dedicated arena holding a pre-compiled
- * gitignore ruleset. Allocated lazily (NULL when no -e patterns), which
- * keeps the zero-excludes case allocation-free. Matching goes through
- * base/gitignore for full `!`-negation, directory walk-up, and anchoring
- * semantics — the same engine that powers the layered `.dottaignore`
- * ruleset in core/ignore.
+ * `excludes_ruleset` is borrowed from the caller's arena (typically
+ * `ctx->arena`). NULL when no -e patterns were given. Matching goes
+ * through base/gitignore for full `!`-negation, directory walk-up, and
+ * anchoring semantics — the same engine that powers the layered
+ * `.dottaignore` ruleset in core/ignore.
  */
 struct scope {
     string_array_t *enabled;               /* Persistent enabled set; non-NULL, may be empty */
     string_array_t *filter;                /* CLI filter; NULL when no -p */
-    arena_t *excludes_arena;               /* Owns excludes_ruleset; NULL when no excludes */
-    gitignore_ruleset_t *excludes_ruleset; /* Compiled -e patterns; NULL when no excludes */
+    gitignore_ruleset_t *excludes_ruleset; /* Compiled -e patterns; arena-borrowed; NULL when no excludes */
     path_filter_t *paths;                  /* CLI path filter; NULL when no positional args */
     const string_array_t *active;          /* Borrowed: filter if set, else enabled */
 };
@@ -72,7 +69,7 @@ static error_t *resolve_enabled_lenient(
 }
 
 /**
- * Compile exclude patterns into an arena-backed gitignore ruleset.
+ * Compile exclude patterns into a gitignore ruleset in the caller's arena.
  *
  * Pre-compiling the ruleset (rather than storing raw strings) lets
  * scope_is_excluded reduce to a single gitignore_is_ignored call per
@@ -81,30 +78,22 @@ static error_t *resolve_enabled_lenient(
  * .dottaignore so the `-e` CLI flag is consistent with all other
  * exclusion surfaces.
  *
- * The returned arena is owned by scope_t; both arena and ruleset are
- * freed together at scope_free. Leaves *out_arena and *out_rules NULL
- * when the input array is empty — the zero-excludes case pays no
- * allocation cost.
+ * The ruleset is borrowed from `arena`; the caller's arena lifetime
+ * governs it. Leaves *out_rules NULL when the input array is empty —
+ * the zero-excludes case touches the arena only when patterns exist.
  */
 static error_t *compile_excludes(
     char *const *patterns,
     size_t count,
-    arena_t **out_arena,
+    arena_t *arena,
     gitignore_ruleset_t **out_rules
 ) {
-    *out_arena = NULL;
     *out_rules = NULL;
     if (count == 0) return NULL;
-
-    arena_t *arena = arena_create(0);
-    if (!arena) {
-        return ERROR(ERR_MEMORY, "Failed to allocate excludes arena");
-    }
 
     gitignore_ruleset_t *rules = NULL;
     error_t *err = gitignore_ruleset_create(arena, &rules);
     if (err) {
-        arena_destroy(arena);
         return error_wrap(err, "Failed to allocate excludes ruleset");
     }
 
@@ -112,11 +101,9 @@ static error_t *compile_excludes(
         rules, (const char *const *) patterns, count, 0
     );
     if (err) {
-        arena_destroy(arena);
         return error_wrap(err, "Failed to compile CLI exclude patterns");
     }
 
-    *out_arena = arena;
     *out_rules = rules;
     return NULL;
 }
@@ -126,12 +113,14 @@ error_t *scope_build(
     const state_t *state,
     const scope_inputs_t *in,
     const config_t *config,
+    arena_t *arena,
     scope_t **out
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(state);
     CHECK_NULL(in);
     CHECK_NULL(config);
+    CHECK_NULL(arena);
     CHECK_NULL(out);
 
     *out = NULL;
@@ -179,7 +168,7 @@ error_t *scope_build(
 
         err = path_filter_create(
             in->files, in->file_count, (const char *const *) prefixes->items,
-            prefixes->count, &s->paths
+            prefixes->count, arena, &s->paths
         );
         string_array_free(prefixes);
         if (err) {
@@ -188,10 +177,9 @@ error_t *scope_build(
         }
     }
 
-    /* 5. Compile excludes into an arena-backed gitignore ruleset. */
+    /* 5. Compile excludes into a ruleset borrowed from the caller's arena. */
     err = compile_excludes(
-        in->exclude_patterns, in->exclude_count,
-        &s->excludes_arena, &s->excludes_ruleset
+        in->exclude_patterns, in->exclude_count, arena, &s->excludes_ruleset
     );
     if (err) goto fail;
 
@@ -207,10 +195,7 @@ void scope_free(scope_t *s) {
     if (!s) return;
     string_array_free(s->enabled);
     string_array_free(s->filter);
-    /* excludes_ruleset is arena-borrowed — destroying the arena drops
-     * both. arena_destroy(NULL) is a no-op, so the zero-excludes case
-     * handles itself. */
-    arena_destroy(s->excludes_arena);
+    /* excludes_ruleset is arena-borrowed — released with the caller's arena. */
     path_filter_free(s->paths);
     /* s->active is a borrow; do not free. */
     free(s);

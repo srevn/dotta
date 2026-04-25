@@ -823,12 +823,14 @@ cleanup:
  *
  * @param file_filter File filter to validate (NULL = no validation, returns 0)
  * @param manifest Manifest to check against (must not be NULL if filter is non-NULL)
+ * @param arena Borrowed scratch arena for per-pattern rulesets
  * @param out Output context for warnings
  * @return Number of filter entries that matched no manifest entry (0 = all matched)
  */
 static size_t validate_filter_paths(
     const path_filter_t *file_filter,
     const manifest_t *manifest,
+    arena_t *arena,
     output_t *out
 ) {
     if (!file_filter || !manifest) return 0;
@@ -871,18 +873,18 @@ static size_t validate_filter_paths(
      *
      * Each glob becomes its own single-rule ruleset so a negation in
      * one pattern cannot silently un-match another — a combined
-     * ruleset's last-match-wins would conflate the verdicts. Runs
-     * once per command; arena-OOM degrades to a stderr warning and
-     * skips the glob check (exact-path validation already ran). */
+     * ruleset's last-match-wins would conflate the verdicts. Allocations
+     * back into the borrowed command arena; block-OOM degrades to a
+     * stderr warning and skips the glob check (exact-path validation
+     * already ran). */
     if (file_filter->glob_count > 0) {
-        arena_t *scratch = arena_create(0);
-        gitignore_ruleset_t **per_pattern = scratch ? arena_calloc(
-            scratch, file_filter->glob_count, sizeof(*per_pattern)
-            ) : NULL;
+        gitignore_ruleset_t **per_pattern = arena_calloc(
+            arena, file_filter->glob_count, sizeof(*per_pattern)
+        );
 
-        bool build_ok = (scratch && per_pattern);
+        bool build_ok = (per_pattern != NULL);
         for (size_t g = 0; build_ok && g < file_filter->glob_count; g++) {
-            error_t *err = gitignore_ruleset_create(scratch, &per_pattern[g]);
+            error_t *err = gitignore_ruleset_create(arena, &per_pattern[g]);
             if (!err) {
                 err = gitignore_ruleset_append(
                     per_pattern[g], file_filter->glob_patterns[g], 0
@@ -898,7 +900,6 @@ static size_t validate_filter_paths(
             output_warning(
                 out, OUTPUT_NORMAL, "Skipping filter-pattern validation"
             );
-            arena_destroy(scratch);
             return unmatched;
         }
 
@@ -920,8 +921,6 @@ static size_t validate_filter_paths(
                 unmatched++;
             }
         }
-
-        arena_destroy(scratch);
     }
 
     return unmatched;
@@ -943,6 +942,7 @@ static size_t validate_filter_paths(
  * @param state State handle (must not be NULL)
  * @param commit_ref Commit reference to compare (must not be NULL)
  * @param scope Operation scope (must not be NULL)
+ * @param arena Borrowed command arena (backs the historical manifest)
  * @param opts Command options (must not be NULL)
  * @param cache Shared content cache (borrowed from ctx, must not be NULL)
  * @param out Output context (must not be NULL)
@@ -953,6 +953,7 @@ static error_t *diff_commit_to_workspace(
     const state_t *state,
     const char *commit_ref,
     const scope_t *scope,
+    arena_t *arena,
     const cmd_diff_options_t *opts,
     content_cache_t *cache,
     output_t *out
@@ -960,6 +961,7 @@ static error_t *diff_commit_to_workspace(
     CHECK_NULL(repo);
     CHECK_NULL(commit_ref);
     CHECK_NULL(scope);
+    CHECK_NULL(arena);
     CHECK_NULL(opts);
     CHECK_NULL(out);
 
@@ -972,7 +974,6 @@ static error_t *diff_commit_to_workspace(
     char *profile = NULL;
     git_tree *tree = NULL;
     manifest_t *manifest = NULL;
-    arena_t *manifest_arena = NULL;
     metadata_t *metadata = NULL;
 
     /* Step 1: Resolve commit to find which profile contains it */
@@ -1025,20 +1026,14 @@ static error_t *diff_commit_to_workspace(
      * Borrow the profile's custom_prefix from the state row cache — stable
      * for the duration of this call (no enabled_profiles mutation).
      *
-     * The arena backs per-entry strings (storage_path, filesystem_path, owner,
-     * group); it must outlive both manifest_build_from_tree and the subsequent
-     * compare_manifest_to_filesystem call. Default 4 KB block is sufficient for
-     * a single-profile historical manifest. */
+     * Per-entry strings (storage_path, filesystem_path, owner, group) are
+     * allocated into the borrowed command arena; they outlive both
+     * manifest_build_from_tree and the subsequent compare_manifest_to_filesystem
+     * call, then live until command end. */
     const char *custom_prefix = state_peek_profile_prefix(state, profile);
 
-    manifest_arena = arena_create(0);
-    if (!manifest_arena) {
-        err = ERROR(ERR_MEMORY, "Failed to create manifest arena");
-        goto cleanup;
-    }
-
     err = manifest_build_from_tree(
-        tree, profile, custom_prefix, metadata, manifest_arena, &manifest
+        tree, profile, custom_prefix, metadata, arena, &manifest
     );
     if (err) {
         err = error_wrap(err, "Failed to build manifest from commit");
@@ -1055,7 +1050,7 @@ static error_t *diff_commit_to_workspace(
     }
 
     if (diff_count == 0 && !opts->name_only) {
-        size_t unmatched = validate_filter_paths(file_filter, manifest, out);
+        size_t unmatched = validate_filter_paths(file_filter, manifest, arena, out);
 
         if (unmatched > 0) {
             output_hint(
@@ -1072,7 +1067,6 @@ static error_t *diff_commit_to_workspace(
 cleanup:
     metadata_free(metadata);
     manifest_free(manifest);
-    arena_destroy(manifest_arena);
     git_tree_free(tree);
     git_commit_free(commit);
     free(profile);
@@ -1340,12 +1334,14 @@ static error_t *diff_workspace(
     const config_t *config,
     content_cache_t *cache,
     const cmd_diff_options_t *opts,
+    arena_t *arena,
     output_t *out
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(scope);
     CHECK_NULL(cache);
     CHECK_NULL(opts);
+    CHECK_NULL(arena);
     CHECK_NULL(out);
 
     error_t *err = NULL;
@@ -1360,7 +1356,9 @@ static error_t *diff_workspace(
         .analyze_encryption  = false  /* Not needed for diff */
     };
 
-    err = workspace_load(repo, state, scope, config, cache, &ws_opts, &ws);
+    err = workspace_load(
+        repo, state, scope, config, cache, &ws_opts, arena, &ws
+    );
     if (err) {
         return error_wrap(err, "Failed to load workspace");
     }
@@ -1384,7 +1382,7 @@ static error_t *diff_workspace(
     /* Step 4: Validate file filter paths against manifest */
     const path_filter_t *file_filter = scope_paths(scope);
     if (file_filter) {
-        size_t unmatched = validate_filter_paths(file_filter, manifest, out);
+        size_t unmatched = validate_filter_paths(file_filter, manifest, arena, out);
         if (unmatched > 0) {
             output_hint(out, OUTPUT_NORMAL, "Use 'dotta list <profile>' to see managed files");
             if (unmatched == file_filter->count) {
@@ -1486,7 +1484,7 @@ error_t *cmd_diff(const dotta_ctx_t *ctx, const cmd_diff_options_t *opts) {
         .files         = opts->files,
         .file_count    = opts->file_count,
     };
-    err = scope_build(repo, state, &scope_inputs, config, &scope);
+    err = scope_build(repo, state, &scope_inputs, config, ctx->arena, &scope);
     if (err) goto cleanup;
 
     if (scope_enabled(scope)->count == 0) {
@@ -1509,14 +1507,16 @@ error_t *cmd_diff(const dotta_ctx_t *ctx, const cmd_diff_options_t *opts) {
         case DIFF_COMMIT_TO_WORKSPACE:
             /* Commit-to-workspace — historical mode, path filter only */
             err = diff_commit_to_workspace(
-                repo, state, opts->commit1, scope, opts, ctx->content_cache, out
+                repo, state, opts->commit1, scope, ctx->arena, opts,
+                ctx->content_cache, out
             );
             goto cleanup;
 
         case DIFF_WORKSPACE:
             /* Workspace diff — full scope (profile + path dimensions) */
             err = diff_workspace(
-                repo, state, scope, config, ctx->content_cache, opts, out
+                repo, state, scope, config, ctx->content_cache, opts,
+                ctx->arena, out
             );
             goto cleanup;
     }

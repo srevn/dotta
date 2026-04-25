@@ -1574,6 +1574,7 @@ static void emit_command(
 
 void args_export_completion_fish(
     FILE *out,
+    arena_t *arena,
     const args_command_t *const *commands,
     const char *prog
 ) {
@@ -1586,12 +1587,10 @@ void args_export_completion_fish(
      * expansions for commands that accept profile names, not paths. */
     fprintf(out, "complete -c %s -f\n\n", prog);
 
-    /* Token storage and the dedup set both live in a local scratch
-     * arena so no stdlib heap is touched. Arena is destroyed at the
-     * bottom of this function, which invalidates every pointer in
-     * `vset.tokens` — safe because the tokens are emitted via fprintf
-     * BEFORE the destroy call. */
-    arena_t *scratch = arena_create(4 * 1024);
+    /* Token storage and the dedup set live in the borrowed arena.
+     * `vset.tokens` points into arena memory; tokens are emitted via
+     * fprintf below, then the pointers go out of scope when this
+     * function returns — the arena outlives this call. */
     value_flag_set_t vset = { 0 };
 
     /* Collect value-taking flag tokens across every non-hidden command
@@ -1600,16 +1599,14 @@ void args_export_completion_fish(
     for (size_t i = 0; commands[i] != NULL; i++) {
         const args_command_t *c = commands[i];
         if (c->hidden) continue;
-        if (scratch != NULL) collect_value_flags(c->opts, &vset, scratch);
+        collect_value_flags(c->opts, &vset, arena);
 
         /* Also scan subcommands' opts. */
         if (c->subcommands != NULL) {
             for (const args_subcommand_t *s = c->subcommands;
                 s->name != NULL; s++) {
                 if (s->hidden || s->command == NULL) continue;
-                if (scratch != NULL) {
-                    collect_value_flags(s->command->opts, &vset, scratch);
-                }
+                collect_value_flags(s->command->opts, &vset, arena);
             }
         }
     }
@@ -1621,8 +1618,6 @@ void args_export_completion_fish(
         fprintf(out, " %s", vset.tokens[i]);
     }
     fputs("\n\n", out);
-
-    if (scratch != NULL) arena_destroy(scratch);
 
     /* Top-level flags. `-h` / `-v` are universal conventions so they
      * stay hardcoded here; command-declared root aliases are projected

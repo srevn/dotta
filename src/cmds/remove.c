@@ -12,7 +12,6 @@
 #include <string.h>
 #include <unistd.h>
 
-#include "base/arena.h"
 #include "base/args.h"
 #include "base/array.h"
 #include "base/error.h"
@@ -813,6 +812,7 @@ static error_t *cleanup_metadata(
 static error_t *remove_files_from_profile(
     git_repository *repo,
     state_t *state,
+    arena_t *arena,
     const config_t *config,
     output_t *out,
     const char *repo_path,
@@ -820,6 +820,7 @@ static error_t *remove_files_from_profile(
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(state);
+    CHECK_NULL(arena);
     CHECK_NULL(opts);
 
     /* Initialize all resources to NULL for safe cleanup */
@@ -1079,6 +1080,7 @@ static error_t *remove_files_from_profile(
                 manifest_err = manifest_remove_files(
                     repo,
                     state,
+                    arena,
                     opts->profile,
                     removed_paths,
                     enabled_profiles,
@@ -1102,30 +1104,23 @@ static error_t *remove_files_from_profile(
                      * With --delete-files: leave them for apply to clean up.
                      * Default: release immediately (no apply needed). */
                     if (!opts->delete_files && manifest_removed_count > 0) {
-                        arena_t *delete_arena = arena_create(0);
-                        if (delete_arena) {
-                            state_file_entry_t *delete_entries = NULL;
-                            size_t delete_count = 0;
-                            error_t *delete_err = state_get_entries_by_profile(
-                                state, opts->profile, delete_arena,
-                                &delete_entries, &delete_count
-                            );
-                            if (!delete_err) {
-                                for (size_t di = 0; di < delete_count; di++) {
-                                    if (delete_entries[di].state &&
-                                        strcmp(delete_entries[di].state, STATE_DELETED) == 0) {
-                                        error_t *rm_err = state_remove_file(
-                                            state, delete_entries[di].filesystem_path
-                                        );
-                                        if (rm_err) {
-                                            error_free(rm_err);
-                                        }
-                                    }
+                        state_file_entry_t *delete_entries = NULL;
+                        size_t delete_count = 0;
+                        error_t *delete_err = state_get_entries_by_profile(
+                            state, opts->profile, arena, &delete_entries, &delete_count
+                        );
+                        if (!delete_err) {
+                            for (size_t di = 0; di < delete_count; di++) {
+                                if (delete_entries[di].state &&
+                                    strcmp(delete_entries[di].state, STATE_DELETED) == 0) {
+                                    error_t *rm_err = state_remove_file(
+                                        state, delete_entries[di].filesystem_path
+                                    );
+                                    if (rm_err) error_free(rm_err);
                                 }
-                            } else {
-                                error_free(delete_err);
                             }
-                            arena_destroy(delete_arena);
+                        } else {
+                            error_free(delete_err);
                         }
                     }
 
@@ -1211,6 +1206,7 @@ cleanup:
 static error_t *delete_profile_branch(
     git_repository *repo,
     state_t *state,
+    arena_t *arena,
     const config_t *config,
     output_t *out,
     const char *repo_path,
@@ -1218,6 +1214,7 @@ static error_t *delete_profile_branch(
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(state);
+    CHECK_NULL(arena);
     CHECK_NULL(opts);
 
     /* Initialize all resources to NULL for safe cleanup */
@@ -1476,7 +1473,7 @@ static error_t *delete_profile_branch(
             goto cleanup;
         }
 
-        err = manifest_apply_scope(repo, state, NULL, NULL);
+        err = manifest_apply_scope(repo, state, arena, NULL, NULL);
         if (err) {
             err = error_wrap(err, "Failed to reconcile manifest after disable");
             goto cleanup;
@@ -1521,82 +1518,74 @@ static error_t *delete_profile_branch(
     if (!delete_err) {
         size_t released_count = 0;
 
-        /* One arena spans both queries — file_entries and dir_entries are
-         * borrowed for the duration of this cleanup block, then released
-         * together when the arena is destroyed below. Failure is treated as
-         * "skip the best-effort cleanup" (the commit below still runs). */
-        arena_t *cleanup_arena = arena_create(0);
+        /* The borrowed command arena backs both queries — file_entries and
+         * dir_entries live until command end. Per-query failure stays
+         * best-effort; the commit below still runs. */
 
         /* Handle file entries */
-        if (cleanup_arena) {
-            state_file_entry_t *file_entries = NULL;
-            size_t entry_count = 0;
-            error_t *file_query_err = state_get_entries_by_profile(
-                state, opts->profile, cleanup_arena, &file_entries, &entry_count
-            );
-            if (!file_query_err) {
-                for (size_t i = 0; i < entry_count; i++) {
-                    if (!file_entries[i].state ||
-                        (strcmp(file_entries[i].state, STATE_INACTIVE) != 0 &&
-                        strcmp(file_entries[i].state, STATE_DELETED) != 0)){
-                        continue;
-                    }
-                    error_t *file_err = NULL;
-
-                    if (opts->delete_files) {
-                        file_err = state_set_file_state(
-                            state, file_entries[i].filesystem_path, STATE_DELETED
-                        );
-                    } else {
-                        file_err = state_remove_file(
-                            state, file_entries[i].filesystem_path
-                        );
-                    }
-                    if (file_err) {
-                        error_free(file_err);
-                    } else {
-                        released_count++;
-                    }
+        state_file_entry_t *file_entries = NULL;
+        size_t entry_count = 0;
+        error_t *file_query_err = state_get_entries_by_profile(
+            state, opts->profile, arena, &file_entries, &entry_count
+        );
+        if (!file_query_err) {
+            for (size_t i = 0; i < entry_count; i++) {
+                if (!file_entries[i].state ||
+                    (strcmp(file_entries[i].state, STATE_INACTIVE) != 0 &&
+                    strcmp(file_entries[i].state, STATE_DELETED) != 0)){
+                    continue;
                 }
-            } else {
-                error_free(file_query_err);
+                error_t *file_err = NULL;
+
+                if (opts->delete_files) {
+                    file_err = state_set_file_state(
+                        state, file_entries[i].filesystem_path, STATE_DELETED
+                    );
+                } else {
+                    file_err = state_remove_file(
+                        state, file_entries[i].filesystem_path
+                    );
+                }
+                if (file_err) {
+                    error_free(file_err);
+                } else {
+                    released_count++;
+                }
             }
+        } else {
+            error_free(file_query_err);
         }
 
         /* Handle directory entries */
-        if (cleanup_arena) {
-            state_directory_entry_t *dir_entries = NULL;
-            size_t dir_count = 0;
-            error_t *dir_query_err = state_get_directories_by_profile(
-                state, opts->profile, cleanup_arena, &dir_entries, &dir_count
-            );
-            if (!dir_query_err) {
-                for (size_t i = 0; i < dir_count; i++) {
-                    if (!dir_entries[i].state ||
-                        (strcmp(dir_entries[i].state, STATE_INACTIVE) != 0 &&
-                        strcmp(dir_entries[i].state, STATE_DELETED) != 0)){
-                        continue;
-                    }
-                    error_t *dir_err = NULL;
-                    if (opts->delete_files) {
-                        dir_err = state_set_directory_state(
-                            state, dir_entries[i].filesystem_path, STATE_DELETED
-                        );
-                    } else {
-                        dir_err = state_remove_directory(
-                            state, dir_entries[i].filesystem_path
-                        );
-                    }
-                    if (dir_err) {
-                        error_free(dir_err);
-                    }
+        state_directory_entry_t *dir_entries = NULL;
+        size_t dir_count = 0;
+        error_t *dir_query_err = state_get_directories_by_profile(
+            state, opts->profile, arena, &dir_entries, &dir_count
+        );
+        if (!dir_query_err) {
+            for (size_t i = 0; i < dir_count; i++) {
+                if (!dir_entries[i].state ||
+                    (strcmp(dir_entries[i].state, STATE_INACTIVE) != 0 &&
+                    strcmp(dir_entries[i].state, STATE_DELETED) != 0)){
+                    continue;
                 }
-            } else {
-                error_free(dir_query_err);
+                error_t *dir_err = NULL;
+                if (opts->delete_files) {
+                    dir_err = state_set_directory_state(
+                        state, dir_entries[i].filesystem_path, STATE_DELETED
+                    );
+                } else {
+                    dir_err = state_remove_directory(
+                        state, dir_entries[i].filesystem_path
+                    );
+                }
+                if (dir_err) {
+                    error_free(dir_err);
+                }
             }
+        } else {
+            error_free(dir_query_err);
         }
-
-        arena_destroy(cleanup_arena);
 
         /* Commit transaction */
         delete_err = state_commit(state);
@@ -1756,10 +1745,14 @@ error_t *cmd_remove(const dotta_ctx_t *ctx, const cmd_remove_options_t *opts) {
 
     /* Branch: Delete profile or remove files */
     if (opts->delete_profile) {
-        return delete_profile_branch(repo, state, config, out, ctx->repo_path, opts);
+        return delete_profile_branch(
+            repo, state, ctx->arena, config, out, ctx->repo_path, opts
+        );
     }
 
-    return remove_files_from_profile(repo, state, config, out, ctx->repo_path, opts);
+    return remove_files_from_profile(
+        repo, state, ctx->arena, config, out, ctx->repo_path, opts
+    );
 }
 
 /* ══════════════════════════════════════════════════════════════════

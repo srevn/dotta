@@ -874,7 +874,7 @@ error_t *cmd_status(const dotta_ctx_t *ctx, const cmd_status_options_t *opts) {
         .profiles      = opts->profiles,
         .profile_count = opts->profile_count,
     };
-    err = scope_build(repo, state, &scope_inputs, config, &scope);
+    err = scope_build(repo, state, &scope_inputs, config, ctx->arena, &scope);
     if (err) goto cleanup;
 
     /* Load workspace for divergence analysis (only needed for local status)
@@ -891,7 +891,8 @@ error_t *cmd_status(const dotta_ctx_t *ctx, const cmd_status_options_t *opts) {
             .analyze_encryption  = true
         };
         err = workspace_load(
-            repo, state, scope, config, ctx->content_cache, &ws_opts, &ws
+            repo, state, scope, config, ctx->content_cache, &ws_opts,
+            ctx->arena, &ws
         );
         if (err) {
             err = error_wrap(err, "Failed to load workspace");

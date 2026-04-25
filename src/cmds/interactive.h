@@ -77,9 +77,11 @@ typedef enum {
  *
  * @param repo Repository (must not be NULL)
  * @param state Borrowed state handle from the dispatcher (must not be NULL)
+ * @param arena Borrowed command arena for the manifest_apply_scope call
+ *              triggered by the save keybinding (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *interactive_run(git_repository *repo, state_t *state);
+error_t *interactive_run(git_repository *repo, state_t *state, arena_t *arena);
 
 /**
  * Create interactive state
@@ -168,6 +170,8 @@ int interactive_get_required_lines(const interactive_state_t *state);
  * @param state UI state (must not be NULL)
  * @param repo Repository (must not be NULL)
  * @param deploy_state Borrowed state handle for scoped saves (must not be NULL)
+ * @param arena Borrowed command arena for the save-triggered manifest_apply_scope
+ *              (must not be NULL)
  * @param key Key code
  * @param term_ptr Terminal pointer (for restoring during commands, must not be NULL)
  * @param out_err Error output (must not be NULL, set on INTERACTIVE_EXIT_ERROR)
@@ -177,6 +181,7 @@ interactive_result_t interactive_handle_key(
     interactive_state_t *state,
     git_repository *repo,
     state_t *deploy_state,
+    arena_t *arena,
     int key,
     terminal_t **term_ptr,
     error_t **out_err

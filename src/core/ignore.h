@@ -101,6 +101,10 @@ typedef enum {
  *
  * Lifetime / ownership:
  *   - `repo` is borrowed; the builder must not outlive the repo handle.
+ *   - `arena` is borrowed; the builder allocates the baseline copy,
+ *     profile cache, and per-profile rulesets into it. The caller's
+ *     arena must outlive `ignore_rules_free`. In practice both arena
+ *     and builder are command-scoped (`ctx->arena`).
  *   - `config->ignore_patterns` and `cli_excludes` are borrowed; the
  *     backing arrays and their string entries must outlive the
  *     builder. In practice both are command-scoped.
@@ -114,6 +118,7 @@ typedef enum {
  * @param config       Configuration (may be NULL)
  * @param cli_excludes CLI --exclude patterns (may be NULL when count == 0)
  * @param cli_count    Number of CLI patterns
+ * @param arena        Borrowed allocator for builder-owned data (must not be NULL)
  * @param out          Output handle (must not be NULL)
  * @return Error or NULL on success
  */
@@ -122,6 +127,7 @@ error_t *ignore_rules_create(
     const config_t *config,
     char *const *cli_excludes,
     size_t cli_count,
+    arena_t *arena,
     ignore_rules_t **out
 );
 

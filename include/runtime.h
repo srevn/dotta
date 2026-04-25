@@ -178,6 +178,29 @@ typedef struct dotta_spec_ext {
  *     layer, which returns ERR_CRYPTO with a user-facing message if
  *     any per-file operation actually asks to encrypt or decrypt. No
  *     caller-side gate is required.
+ *   - `arena != NULL` always. The command arena is created before
+ *     dispatch and destroyed after the handler returns; `run_spec`
+ *     is the sole owner. Handlers and every layer beneath borrow the
+ *     pointer — never call `arena_destroy(ctx->arena)`.
+ *
+ * Arena lifetimes
+ * ---------------
+ * The codebase has exactly two arena lifetimes:
+ *
+ *   - Process-scope. `config->auto_encrypt.arena` holds the compiled
+ *     auto-encrypt ruleset, allocated once at config_load and read-only
+ *     thereafter. Lives the whole process; outlives every dispatch.
+ *
+ *   - Command-scope. `ctx->arena` is the dispatch-wide bump allocator,
+ *     created and destroyed by `run_spec`. Handlers allocate into it
+ *     directly or thread it as an `arena_t *` parameter; the parser
+ *     uses the same arena since its outputs are read by the handler.
+ *
+ * Adding a third arena requires evidence of a genuinely sub-command
+ * lifetime in code — an interactive REPL with per-iteration scope, for
+ * example. Hypothesised need is not enough; a primitive exists when a
+ * real consumer exists. Single-threaded by design (no pthread, no async
+ * I/O loop), so concurrent allocation is not a concern.
  *
  * Members not welcome on this struct
  * ----------------------------------
@@ -196,14 +219,6 @@ typedef struct dotta_spec_ext {
  *      Resources that multiple dispatch steps share live on ctx; there
  *      is never a `workspace_get_X` / `state_get_X` accessor that
  *      exposes ctx-scope resources via a lower layer.
- *   4. No raw scratch arena on ctx. The parser's arena lives on
- *      `run_spec`'s frame and is not handed to handlers. A handler that
- *      needs an arena creates one with the lifetime of its operation
- *      (e.g. `arena_t *a = arena_create(0)` at function entry,
- *      `arena_destroy(a)` at exit). The parser's arena lifetime is
- *      "command dispatch"; handler scratch lifetime is "this operation,"
- *      which is *nested* inside dispatch but not the same. Bundling them
- *      would force a future invalidator (Rule 5).
  *
  * Exit-code override
  * ------------------
@@ -230,6 +245,7 @@ typedef struct dotta_ctx {
     state_t *state;                     /* NULL unless state_mode acquires; borrowed */
     keymgr *keymgr;                     /* NULL unless crypto_mode acquires + encryption enabled */
     content_cache_t *content_cache;     /* NULL unless crypto_mode == KEY_CACHE */
+    arena_t *arena;                     /* Borrowed; command-scoped, owned by run_spec */
     const config_t *config;
     output_t *out;
     int argc;                           /* Original process argc */

@@ -71,7 +71,7 @@ typedef struct {
  */
 struct workspace {
     git_repository *repo;            /* Borrowed reference */
-    arena_t *arena;                  /* Bump allocator for workspace-lifetime strings */
+    arena_t *arena;                  /* Borrowed; backs every workspace-lifetime string */
 
     /* State data */
     manifest_t *manifest;            /* Profile state (owned) */
@@ -1692,7 +1692,7 @@ static error_t *analyze_untracked_files(
     ignore_rules_t *ignore_rules = NULL;
     {
         error_t *init_err = ignore_rules_create(
-            ws->repo, config, NULL, 0, &ignore_rules
+            ws->repo, config, NULL, 0, ws->arena, &ignore_rules
         );
         if (init_err) {
             source_filter_free(source_filter);
@@ -2234,18 +2234,12 @@ static error_t *analyze_encryption_policy_mismatch(
 static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
     CHECK_NULL(ws);
     CHECK_NULL(ws->state);
+    CHECK_NULL(ws->arena);
     CHECK_NULL(ws->profile_index);
 
     error_t *err = NULL;
     state_file_entry_t *state_entries = NULL;
     size_t state_count = 0;
-
-    /* Create workspace arena for all workspace-lifetime string allocations.
-     * 128 KB fits ~200 files comfortably in a single block. */
-    ws->arena = arena_create(128 * 1024);
-    if (!ws->arena) {
-        return ERROR(ERR_MEMORY, "Failed to create workspace arena");
-    }
 
     /* Read all entries from manifest table (arena-allocated).
      *
@@ -2393,6 +2387,7 @@ error_t *workspace_load(
     const config_t *config,
     content_cache_t *content_cache,
     const workspace_load_t *options,
+    arena_t *arena,
     workspace_t **out
 ) {
     CHECK_NULL(repo);
@@ -2400,6 +2395,7 @@ error_t *workspace_load(
     CHECK_NULL(scope);
     CHECK_NULL(content_cache);
     CHECK_NULL(options);
+    CHECK_NULL(arena);
     CHECK_NULL(out);
 
     /* Workspace scope is the persistent VWD enabled set — never the CLI
@@ -2436,7 +2432,7 @@ error_t *workspace_load(
      * Transaction scoping is internal to manifest_reconcile: uses the
      * caller's transaction when locked, opens a scoped BEGIN IMMEDIATE
      * otherwise. Common case (no drift) is O(P) and zero writes. */
-    err = manifest_reconcile(repo, state, NULL);
+    err = manifest_reconcile(repo, state, arena, NULL);
     if (err) {
         return error_wrap(err, "Failed to reconcile manifest with Git");
     }
@@ -2448,9 +2444,11 @@ error_t *workspace_load(
 
     /* Borrow caller-owned resources. Lifetime guarantees: state comes from
      * ctx->state (command-scoped); content_cache comes from ctx->content_cache
-     * (command-scoped, wraps ctx->keymgr). Both must outlive workspace_free */
+     * (command-scoped, wraps ctx->keymgr); arena is ctx->arena (command-scoped).
+     * All three must outlive workspace_free. */
     ws->state = state;
     ws->content_cache = content_cache;
+    ws->arena = arena;
 
     /* Build manifest from state (Virtual Working Directory architecture)
      * This replaces the old manifest_build() which walked Git trees.
@@ -3079,7 +3077,7 @@ void workspace_free(workspace_t *ws) {
         return;
     }
 
-    /* Free diverged array (string fields are arena-backed, not freed individually) */
+    /* Free diverged array (string fields are arena-borrowed, not freed individually) */
     free(ws->diverged);
 
     /* Free anchor updates (paths are borrowed, anchor is plain data) */
@@ -3090,13 +3088,13 @@ void workspace_free(workspace_t *ws) {
     hashmap_free(ws->diverged_index, NULL);
 
     /* Free manifest spine (entries array, index hashmap, struct).
-     * Per-entry strings live in ws->arena and are released below. */
+     * Per-entry strings are arena-borrowed; the caller's arena
+     * (ctx->arena) releases them when destroyed. */
     manifest_free(ws->manifest);
 
-    /* Free arena AFTER manifest_free — arena owns all string fields
-     * in manifest entries, state entries, and diverged items.
-     * Also frees cached_state_files array (arena_calloc'd). */
-    arena_destroy(ws->arena);
+    /* ws->arena is borrowed — never destroyed here. Arena-allocated
+     * data (manifest entries, cached state rows, diverged item strings)
+     * remains valid until the caller destroys the arena. */
 
     free(ws);
 }

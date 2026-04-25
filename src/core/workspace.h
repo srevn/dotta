@@ -139,6 +139,10 @@ typedef struct {
  *              borrowed — lifetime must extend past workspace_free.
  *              Obtain from `ctx->content_cache` under crypto_mode == KEY_CACHE)
  * @param options Analysis options (must not be NULL)
+ * @param arena Borrowed allocator backing every workspace-lifetime
+ *              string (manifest entries, diverged items, cached state
+ *              rows). Must outlive workspace_free; in practice
+ *              `ctx->arena` (must not be NULL).
  * @param out Workspace (must not be NULL, caller must free with workspace_free)
  * @return Error or NULL on success
  */
@@ -149,6 +153,7 @@ error_t *workspace_load(
     const struct config *config,
     content_cache_t *content_cache,
     const workspace_load_t *options,
+    arena_t *arena,
     workspace_t **out
 );
 

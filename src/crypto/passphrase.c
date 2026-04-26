@@ -68,7 +68,7 @@
  * overwrite saved_term_for_handler mid-window. Dotta is
  * single-threaded and never prompts twice concurrently, so this
  * is a latent invariant rather than an active constraint.
- * ====================================================================== */
+ */
 
 static struct termios saved_term_for_handler;
 static volatile sig_atomic_t saved_term_active = 0;

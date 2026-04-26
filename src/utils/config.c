@@ -221,9 +221,8 @@ config_t *config_create_default(void) {
     config->encryption_enabled = false;        /* Default: disabled (opt-in) */
     config->auto_encrypt_patterns = NULL;
     config->auto_encrypt_pattern_count = 0;
-    config->encryption_opslimit = 10000;       /* Moderate security */
-    config->encryption_memlimit = 64;          /* 64 MB balloon hashing */
-    config->session_timeout = 3600;            /* 1 hour */
+    config->encryption_memlimit = (size_t) 8 * 1024 * 1024; /* 8 MiB; ~600 ms on commodity HW */
+    config->session_timeout = 3600;                         /* 1 hour */
 
     return config;
 }
@@ -558,9 +557,9 @@ error_t *config_load(const char *config_path, config_t **out) {
     toml_datum_t encryption = toml_get(result.toptab, "encryption");
     if (encryption.type == TOML_TABLE) {
         static const char *known[] = {
-            "enabled", "auto_encrypt", "opslimit", "memlimit", "session_timeout"
+            "enabled", "auto_encrypt", "memlimit", "session_timeout"
         };
-        err = validate_known_keys(encryption, "encryption", known, 5);
+        err = validate_known_keys(encryption, "encryption", known, 4);
         if (err) goto cleanup;
 
         toml_datum_t enabled = toml_get(encryption, "enabled");
@@ -593,30 +592,29 @@ error_t *config_load(const char *config_path, config_t **out) {
             }
         }
 
-        toml_datum_t opslimit = toml_get(encryption, "opslimit");
-        if (opslimit.type == TOML_INT64) {
-            if (opslimit.u.int64 < 1) {
-                err = ERROR(
-                    ERR_INVALID_ARG,
-                    "Invalid opslimit: %lld (must be >= 1)",
-                    (long long) opslimit.u.int64
-                );
-                goto cleanup;
-            }
-            config->encryption_opslimit = (uint64_t) opslimit.u.int64;
-        }
-
+        /* memlimit is given in MB (user-friendly), stored in bytes (crypto-friendly).
+         * Conversion happens here so the boundary between the parsed-form and
+         * the consumed-form is explicit and overflow-checked once. */
         toml_datum_t memlimit = toml_get(encryption, "memlimit");
         if (memlimit.type == TOML_INT64) {
-            if (memlimit.u.int64 < 0) {
+            if (memlimit.u.int64 < 1) {
                 err = ERROR(
                     ERR_INVALID_ARG,
-                    "Invalid memlimit: %lld (must be >= 0)",
+                    "Invalid memlimit: %lld MB (must be >= 1)",
                     (long long) memlimit.u.int64
                 );
                 goto cleanup;
             }
-            config->encryption_memlimit = (size_t) memlimit.u.int64;
+            uint64_t mb = (uint64_t) memlimit.u.int64;
+            if (mb > SIZE_MAX / (1024 * 1024)) {
+                err = ERROR(
+                    ERR_INVALID_ARG,
+                    "Invalid memlimit: %llu MB (overflows size_t when converted to bytes)",
+                    (unsigned long long) mb
+                );
+                goto cleanup;
+            }
+            config->encryption_memlimit = (size_t) (mb * 1024 * 1024);
         }
 
         toml_datum_t session_timeout = toml_get(encryption, "session_timeout");
@@ -646,7 +644,7 @@ error_t *config_load(const char *config_path, config_t **out) {
 
     /* Materialize derived state (compiled auto-encrypt ruleset) after
      * validation. Pattern-compile errors are real config errors — same
-     * failure class as invalid verbosity or out-of-range opslimit. */
+     * failure class as invalid verbosity or non-power-of-two memlimit. */
     err = config_compile_auto_encrypt(config);
     if (err) {
         config_free(config);
@@ -735,13 +733,6 @@ error_t *config_validate(const config_t *config) {
         );
     }
 
-    /* Validate encryption_opslimit */
-    if (config->encryption_opslimit == 0) {
-        return ERROR(
-            ERR_INVALID_ARG, "Invalid opslimit: 0 (must be >= 1)"
-        );
-    }
-
     /* Validate session_timeout */
     if (config->session_timeout < -1) {
         return ERROR(
@@ -752,14 +743,24 @@ error_t *config_validate(const config_t *config) {
         );
     }
 
-    /* Validate encryption_memlimit (in MB, converted to bytes downstream).
-     * Any non-zero size_t value >= 1 meets the 1 MB minimum, so we only
-     * need to guard against overflow when converting to bytes. */
-    if (config->encryption_memlimit > SIZE_MAX / (1024 * 1024)) {
+    /* Validate encryption_memlimit (in bytes after parse-time conversion).
+     *
+     * Constraints come from crypto/balloon: power-of-two so the modular
+     * index reduction is bias-free, and >= 1 MiB so derivation cost is
+     * meaningfully memory-hard. Validating here surfaces config errors at
+     * load time instead of from a deep crypto frame. */
+    if (config->encryption_memlimit < (size_t) 1024 * 1024) {
         return ERROR(
             ERR_INVALID_ARG,
-            "Invalid encryption memlimit: %zu MB (value too large)",
+            "Invalid memlimit: %zu bytes (must be >= 1 MB)",
             config->encryption_memlimit
+        );
+    }
+    if ((config->encryption_memlimit & (config->encryption_memlimit - 1)) != 0) {
+        return ERROR(
+            ERR_INVALID_ARG,
+            "Invalid memlimit: %zu MB (must be a power of two: 1, 2, 4, 8, 16, 32, 64, ...)",
+            config->encryption_memlimit / (1024 * 1024)
         );
     }
 

@@ -24,7 +24,7 @@
 #include "core/metadata.h"
 #include "core/profiles.h"
 #include "core/state.h"
-#include "crypto/encryption.h"
+#include "crypto/cipher.h"
 #include "infra/path.h"
 #include "sys/gitops.h"
 #include "sys/stats.h"
@@ -84,7 +84,7 @@ static bool is_file_encrypted(
 
     const unsigned char *data = (const unsigned char *) git_blob_rawcontent(blob);
     size_t size = git_blob_rawsize(blob);
-    bool encrypted = encryption_is_encrypted(data, size);
+    bool encrypted = cipher_is_encrypted(data, size);
 
     git_blob_free(blob);
 
@@ -506,8 +506,8 @@ static error_t *list_files(
                 );
                 if (!stats_err) {
                     /* For encrypted files, show content size (subtract fixed overhead) */
-                    size_t display_size = encrypted && size > ENCRYPTION_OVERHEAD
-                                        ? size - ENCRYPTION_OVERHEAD : size;
+                    size_t display_size = encrypted && size > CIPHER_OVERHEAD
+                                        ? size - CIPHER_OVERHEAD : size;
 
                     char size_str[32];
                     output_format_size(display_size, size_str, sizeof(size_str));

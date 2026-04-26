@@ -5,6 +5,7 @@
  */
 
 #include <git2.h>
+#include <hydrogen.h>
 #include <runtime.h>
 #include <signal.h>
 #include <stdio.h>
@@ -37,7 +38,6 @@
 #include "cmds/sync.h"
 #include "cmds/update.h"
 #include "core/state.h"
-#include "crypto/encryption.h"
 #include "crypto/keymgr.h"
 #include "infra/content.h"
 #include "utils/config.h"
@@ -488,13 +488,8 @@ int main(int argc, char **argv) {
     }
 
     /* Initialize libhydrogen */
-    error_t *init_err = encryption_init();
-    if (init_err) {
-        fprintf(
-            stderr, "Failed to initialize encryption: %s\n",
-            error_message(init_err)
-        );
-        error_free(init_err);
+    if (hydro_init() != 0) {
+        fprintf(stderr, "Failed to initialize libhydrogen\n");
         git_libgit2_shutdown();
         return 1;
     }

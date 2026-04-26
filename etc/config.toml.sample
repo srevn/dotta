@@ -420,39 +420,27 @@ auto_encrypt = [
     ".config/gh/hosts.yml", # GitHub CLI credentials
 ]
 
-# Password Hashing Cost (opslimit)
-# Controls the computational cost of deriving encryption keys from your passphrase.
-# Higher values = more secure against brute force, but slower unlock times.
-#
-# Recommended values:
-#   -  10000 = ~1 second   (moderate security, good for frequent use)
-#   -  50000 = ~5 seconds  (high security, reasonable for important data)
-#   - 100000 = ~10 seconds (very high security, for maximum protection)
-#
-# Note: This value must be identical across all machines (affects key derivation).
-#
-# Default: 10000
-opslimit = 10000
-
-# Memory Hardness Cost (memlimit) — in megabytes
+# Memory Hardness Cost (memlimit) — in megabytes (must be a power of two)
 # Controls the memory required for key derivation via balloon hashing.
-# This adds memory hardness on top of the CPU hardness provided by opslimit,
-# making brute-force attacks expensive on GPUs/ASICs.
+# Memory hardness is the only attacker-bounding work in the derivation:
+# the attacker's parallelism is bounded by RAM, not CPU cores, so this
+# is the parameter that meaningfully resists brute-force on GPUs/ASICs.
 #
-# Each key derivation will temporarily allocate this much memory.
+# Each key derivation temporarily allocates this much memory and reads
+# it many times. On commodity hardware:
 #
-# Recommended values (in MB):
-#   -   0 = Disabled (CPU hardness only, NOT recommended for production)
-#   -   1 = 1 MB   (minimal, for constrained environments)
-#   -  16 = 16 MB  (moderate, good for low-memory systems)
-#   -  64 = 64 MB  (recommended default, good balance)
-#   - 256 = 256 MB (high security, for systems with ample RAM)
+#   -   1 MB   ≈  30 ms   (minimum; CI/test only)
+#   -   8 MB   ≈ 600 ms   (recommended default; runs once per session)
+#   -  16 MB   ≈ 1.2 s    (extra margin if your hardware can take it)
+#   -  32 MB   ≈ 2.5 s    (uncomfortable interactively)
+#
+# Must be a power of two so the algorithm's modular index reduction is
+# bias-free. Non-power-of-two values fail validation.
 #
 # Note: This value must be identical across all machines (affects key derivation).
-# Minimum: 1 MB when enabled. Set to 0 to disable entirely.
 #
-# Default: 64
-memlimit = 64
+# Default: 8
+memlimit = 8
 
 # Session Timeout
 # How long (in seconds) to cache the encryption key

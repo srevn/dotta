@@ -34,7 +34,7 @@
 #include "core/ignore.h"
 #include "core/manifest.h"
 #include "core/scope.h"
-#include "crypto/encryption.h"
+#include "crypto/cipher.h"
 #include "crypto/policy.h"
 #include "infra/compare.h"
 #include "infra/content.h"
@@ -2119,7 +2119,7 @@ static error_t *analyze_encryption_policy_mismatch(
             continue;
         }
 
-        is_encrypted = encryption_is_encrypted(blob_view.data, blob_view.size);
+        is_encrypted = cipher_is_encrypted(blob_view.data, blob_view.size);
 
         /* Close view immediately — only needed for magic header check above.
          * Prevents leak if future code adds early returns in metadata block. */

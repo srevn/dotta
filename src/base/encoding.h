@@ -13,8 +13,9 @@
  * across the hundreds-of-ms scale of the operations that use them
  * (balloon-hash block expansion, session-cache MAC computation).
  *
- * Single source of truth — previously duplicated in
- * `crypto/encryption.c` and `crypto/keymgr.c`.
+ * Single source of truth, used by `crypto/balloon.c` (block-index seeds
+ * and parameter binding), `crypto/cipher.c` (path-length prefix in SIV
+ * input), and `crypto/session.c` (cache-MAC canonicalization).
  */
 
 #ifndef DOTTA_ENCODING_H

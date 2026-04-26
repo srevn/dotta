@@ -191,14 +191,11 @@ static error_t *cmd_key_status(
             out, OUTPUT_NORMAL, "  Status: {green}enabled{reset}\n"
         );
 
-        /* Show configuration parameters */
-        output_print(
-            out, OUTPUT_VERBOSE, "  KDF opslimit: %lu\n",
-            (unsigned long) config->encryption_opslimit
-        );
+        /* Show derivation memory budget. config->encryption_memlimit is
+         * stored in bytes; render in MB for human consumption. */
         output_print(
             out, OUTPUT_VERBOSE, "  KDF memlimit: %zu MB\n",
-            config->encryption_memlimit
+            config->encryption_memlimit / (1024 * 1024)
         );
 
         /* Show session timeout */
@@ -470,8 +467,7 @@ const args_command_t spec_key = {
         "  [encryption]\n"
         "  enabled          = true\n"
         "  session_timeout  = 3600      # 1 hour\n"
-        "  opslimit         = 10000     # KDF CPU cost\n"
-        "  memlimit         = 64        # Memory hardness cost"
+        "  memlimit         = 8         # Memory hardness in MB"
         "\n",
     .examples    =
         "  %s key set               # Cache passphrase for the session\n"

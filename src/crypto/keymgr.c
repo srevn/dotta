@@ -15,45 +15,50 @@
 
 #include "base/buffer.h"
 #include "base/error.h"
-#include "crypto/encryption.h"
+#include "crypto/balloon.h"
+#include "crypto/cipher.h"
+#include "crypto/kdf.h"
 #include "crypto/passphrase.h"
 #include "crypto/session.h"
 
 /**
  * Key manager structure
+ *
+ * Holds derivation parameters (a balloon_params_t snapshot taken from
+ * config at create time) plus the cached master key and its lifecycle
+ * metadata. The struct is mlock'd best-effort so the master key cannot
+ * be paged out of this process; the much larger balloon buffer used
+ * during derivation is mlock'd separately by balloon_derive itself.
  */
 struct keymgr {
-    /* Configuration */
-    uint64_t opslimit;        /* CPU cost for password hashing */
-    size_t memlimit;          /* Memory cost for balloon hashing (0 = disabled) */
-    int32_t session_timeout;  /* Timeout in seconds (0 = always prompt, -1 = never expire) */
+    /* Configuration snapshot. */
+    balloon_params_t params;
+    int32_t session_timeout;  /* seconds; 0 = always prompt, -1 = never expire */
 
-    /* Cached master key */
-    uint8_t master_key[ENCRYPTION_MASTER_KEY_SIZE];
-    bool has_key;             /* Is master key cached? */
-    time_t cached_at;         /* When was key cached (monotonic time, 0 if not cached) */
-    bool mlocked;             /* Is memory locked with mlock()? */
+    /* Cached master key. */
+    uint8_t master_key[KDF_KEY_SIZE];
+    bool has_key;
+    time_t cached_at;         /* monotonic time, 0 if not cached */
+    bool mlocked;
 };
 
 /**
- * Get monotonic timestamp in seconds
+ * Get monotonic timestamp in seconds.
  *
- * Returns seconds since an arbitrary epoch (typically system boot time).
+ * Returns seconds since an arbitrary epoch (typically system boot).
  * Unlike time(NULL), this is not affected by system clock changes, NTP
- * adjustments, or timezone modifications.
+ * adjustments, or timezone modifications. Used for in-memory cache
+ * expiry so the user can't bend cache lifetime by skewing the clock.
  *
- * This is used for in-memory cache expiry calculations to prevent cache
- * lifetime manipulation via clock changes. The file-based cache still uses
- * wall-clock time (as monotonic time resets on reboot).
- *
- * @return Monotonic timestamp in seconds, or wall-clock time if unavailable
+ * The file-based cache still uses wall-clock time (monotonic time
+ * resets on reboot, which would make the on-disk cache unreadable
+ * after a reboot — which is not what users expect).
  */
 static time_t get_monotonic_time(void) {
     struct timespec ts;
     if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) {
-        /* Fallback to wall-clock time if CLOCK_MONOTONIC unavailable
-         * This should never happen on modern POSIX systems, but provides
-         * graceful degradation if it does. */
+        /* Should never happen on modern POSIX. Falls back to wall-clock so
+         * a malfunctioning monotonic clock degrades gracefully. */
         return time(NULL);
     }
     return ts.tv_sec;
@@ -71,29 +76,31 @@ error_t *keymgr_create(
         return ERROR(ERR_MEMORY, "Failed to allocate key manager");
     }
 
-    /* Copy configuration (memlimit: convert MB from config to bytes for crypto) */
-    keymgr->opslimit = config->encryption_opslimit;
-    keymgr->memlimit = config->encryption_memlimit * 1024 * 1024;
+    /* calloc zeroed the struct, so master_key, has_key, cached_at, and
+     * mlocked are already in their initial state — only the configuration
+     * snapshot needs explicit assignment. */
+    keymgr->params = (balloon_params_t){
+        .memlimit_bytes = config->encryption_memlimit,
+        .rounds = BALLOON_DEFAULT_ROUNDS,
+        .delta = BALLOON_DEFAULT_DELTA,
+    };
     keymgr->session_timeout = config->session_timeout;
 
-    /* Initialize key state */
-    keymgr->has_key = false;
-    keymgr->cached_at = 0;
-    keymgr->mlocked = false;
-    hydro_memzero(keymgr->master_key, sizeof(keymgr->master_key));
-
-    /* Attempt to lock memory to prevent swapping to disk
-     * This is a best-effort operation - if it fails, we log a warning
-     * but continue operation (security enhancement, not requirement) */
+    /* Best-effort mlock the keymgr struct so the cached master key cannot
+     * be paged out of this process. Failure is non-fatal — the much larger
+     * balloon buffer in derivation has its own warning, so this one fires
+     * separately for the same RLIMIT_MEMLOCK reason. */
     if (mlock(keymgr, sizeof(*keymgr)) == 0) {
         keymgr->mlocked = true;
     } else {
-        /* mlock failed - log warning but don't fail initialization
-         * Common reasons: insufficient permissions, RLIMIT_MEMLOCK exceeded */
-        fprintf(stderr, "Warning: Failed to lock keymgr memory: %s\n", strerror(errno));
-        fprintf(stderr, "         Master key may be swapped to disk.\n");
-        fprintf(stderr, "         Consider running with elevated privileges\n");
-        fprintf(stderr, "         or increasing RLIMIT_MEMLOCK for enhanced security.\n");
+        fprintf(
+            stderr,
+            "Warning: Failed to lock keymgr memory: %s\n"
+            "         Master key may be paged to disk.\n"
+            "         Raise RLIMIT_MEMLOCK (ulimit -l) or run with\n"
+            "         elevated privileges to enable this protection.\n",
+            strerror(errno)
+        );
     }
 
     *out = keymgr;
@@ -105,12 +112,11 @@ void keymgr_free(keymgr *keymgr) {
         return;
     }
 
-    /* Securely zero master key before freeing */
+    /* Securely zero master key before freeing. */
     hydro_memzero(keymgr->master_key, sizeof(keymgr->master_key));
     keymgr->has_key = false;
     keymgr->cached_at = 0;
 
-    /* Unlock memory if it was locked */
     if (keymgr->mlocked) {
         munlock(keymgr, sizeof(*keymgr));
         keymgr->mlocked = false;
@@ -120,33 +126,25 @@ void keymgr_free(keymgr *keymgr) {
 }
 
 /**
- * Check if cached key is expired
+ * Check if cached key is expired.
  *
- * Uses monotonic clock to prevent cache lifetime manipulation via
+ * Uses monotonic clock so cache lifetime can't be manipulated via
  * system clock changes.
- *
- * @param keymgr Key manager (must not be NULL)
- * @return true if key is cached and not expired
  */
 static bool is_key_valid(const keymgr *keymgr) {
     if (!keymgr->has_key) {
         return false;
     }
-
-    /* If timeout is 0, always prompt (no caching) */
     if (keymgr->session_timeout == 0) {
+        /* Always-prompt mode: in-memory cache is treated as already expired. */
         return false;
     }
-
-    /* If timeout is negative, key never expires */
     if (keymgr->session_timeout < 0) {
+        /* Never-expire mode. */
         return true;
     }
-
-    /* Check if expired (positive timeout) using monotonic clock */
     time_t now = get_monotonic_time();
     time_t elapsed = now - keymgr->cached_at;
-
     return elapsed < keymgr->session_timeout;
 }
 
@@ -155,12 +153,12 @@ bool keymgr_probe_key(keymgr *keymgr) {
         return false;
     }
 
-    /* Check in-memory cache first */
+    /* In-memory cache. */
     if (is_key_valid(keymgr)) {
         return true;
     }
 
-    /* Try disk session cache (skip if always-prompt mode) */
+    /* Disk session cache (skip in always-prompt mode). */
     if (keymgr->session_timeout == 0) {
         return false;
     }
@@ -171,7 +169,6 @@ bool keymgr_probe_key(keymgr *keymgr) {
         return false;
     }
 
-    /* Disk cache loaded successfully - promote to in-memory */
     keymgr->has_key = true;
     keymgr->cached_at = get_monotonic_time();
     return true;
@@ -188,7 +185,6 @@ int64_t keymgr_time_until_expiry(
         return 0;
     }
 
-    /* Negative timeout = never expires */
     if (keymgr->session_timeout < 0) {
         if (out_expires_at) {
             *out_expires_at = 0;
@@ -196,31 +192,27 @@ int64_t keymgr_time_until_expiry(
         return -1;
     }
 
-    /* Timeout of 0 = always prompt (key never valid, always expired) */
     if (keymgr->session_timeout == 0) {
         if (out_expires_at) {
-            *out_expires_at = time(NULL);  /* Already expired */
+            *out_expires_at = time(NULL);  /* Already expired. */
         }
         return 0;
     }
 
-    /* Positive timeout = calculate remaining time using monotonic clock
-     * This prevents cache lifetime manipulation via clock changes */
+    /* Positive timeout — use monotonic delta. */
     time_t now_monotonic = get_monotonic_time();
     time_t elapsed = now_monotonic - keymgr->cached_at;
     int64_t remaining = (int64_t) (keymgr->session_timeout - elapsed);
-
     if (remaining < 0) {
         remaining = 0;
     }
 
     if (out_expires_at) {
-        /* For display purposes, compute wall-clock expiry as current_time + remaining.
-         * This is more accurate than using the original cached_at (which is monotonic)
-         * and handles clock drift gracefully. */
+        /* Render expiry in wall-clock terms for display. Computing
+         * `time(NULL) + remaining` is more accurate than mixing
+         * monotonic cached_at into a wall-clock display field. */
         *out_expires_at = time(NULL) + remaining;
     }
-
     return remaining;
 }
 
@@ -228,13 +220,9 @@ void keymgr_clear(keymgr *keymgr) {
     if (!keymgr) {
         return;
     }
-
-    /* Securely zero master key */
     hydro_memzero(keymgr->master_key, sizeof(keymgr->master_key));
     keymgr->has_key = false;
     keymgr->cached_at = 0;
-
-    /* Clear file cache */
     session_clear();
 }
 
@@ -245,38 +233,26 @@ error_t *keymgr_set_passphrase(
 ) {
     CHECK_NULL(keymgr);
     CHECK_NULL(passphrase);
-
     if (passphrase_len == 0) {
-        return ERROR(
-            ERR_INVALID_ARG, "Passphrase cannot be empty"
-        );
+        return ERROR(ERR_INVALID_ARG, "Passphrase cannot be empty");
     }
 
-    /* Derive master key from passphrase */
-    error_t *err = encryption_derive_master_key(
-        passphrase,
-        passphrase_len,
-        keymgr->opslimit,
-        keymgr->memlimit,
-        keymgr->master_key
+    error_t *err = kdf_master_key(
+        passphrase, passphrase_len, keymgr->params, keymgr->master_key
     );
-
     if (err) {
-        /* Clear key on error */
         hydro_memzero(keymgr->master_key, sizeof(keymgr->master_key));
         keymgr->has_key = false;
         return error_wrap(err, "Failed to derive encryption key");
     }
 
-    /* Mark key as cached (using monotonic time for expiry checks) */
     keymgr->has_key = true;
     keymgr->cached_at = get_monotonic_time();
 
-    /* Save to file cache (non-fatal if fails) */
+    /* Save to file cache (non-fatal if it fails — in-memory still works). */
     if (keymgr->session_timeout != 0) {
         error_t *save_err = session_save(keymgr->master_key, keymgr->session_timeout);
         if (save_err) {
-            /* Log warning but don't fail - in-memory cache still works */
             fprintf(
                 stderr, "Warning: Failed to save session cache: %s\n",
                 error_message(save_err)
@@ -297,36 +273,31 @@ error_t *keymgr_set_passphrase(
  */
 static error_t *keymgr_get_key(
     keymgr *keymgr,
-    uint8_t out_master_key[ENCRYPTION_MASTER_KEY_SIZE]
+    uint8_t out_master_key[KDF_KEY_SIZE]
 ) {
     CHECK_NULL(keymgr);
     CHECK_NULL(out_master_key);
 
-    /* Step 1: Check in-memory cache */
+    /* Step 1: Check in-memory cache. */
     if (is_key_valid(keymgr)) {
-        memcpy(out_master_key, keymgr->master_key, ENCRYPTION_MASTER_KEY_SIZE);
+        memcpy(out_master_key, keymgr->master_key, KDF_KEY_SIZE);
         return NULL;
     }
 
-    /* Step 2: Try file cache (skip if session_timeout == 0) */
+    /* Step 2: Try file cache (skip if session_timeout == 0). */
     if (keymgr->session_timeout != 0) {
         error_t *err = session_load(keymgr->master_key);
         if (!err) {
-            /* Cache hit! Update in-memory state with current monotonic time.
-             * File cache has its own wall-clock expiry check - once loaded,
-             * we switch to monotonic time for in-memory expiry. */
             keymgr->has_key = true;
             keymgr->cached_at = get_monotonic_time();
-            memcpy(out_master_key, keymgr->master_key, ENCRYPTION_MASTER_KEY_SIZE);
+            memcpy(out_master_key, keymgr->master_key, KDF_KEY_SIZE);
             return NULL;
         }
-
-        /* Cache miss/expired/corrupted - non-fatal, continue to prompt */
         if (err->code == ERR_NOT_FOUND || err->code == ERR_CRYPTO) {
-            /* Expected failures (cache doesn't exist, expired, or corrupted) */
+            /* Expected: cache absent / expired / corrupted. */
             error_free(err);
         } else {
-            /* Unexpected error (file I/O) - warn but don't fail */
+            /* Unexpected I/O error — warn but continue to prompt. */
             fprintf(
                 stderr, "Warning: Failed to load session cache: %s\n",
                 error_message(err)
@@ -335,26 +306,17 @@ static error_t *keymgr_get_key(
         }
     }
 
-    /* Step 3: Prompt for passphrase */
+    /* Step 3: Prompt for passphrase (env var first, then interactive). */
     char *passphrase = NULL;
     size_t passphrase_len = 0;
-    error_t *err = NULL;
-
-    /* Try environment variable first */
-    err = passphrase_from_env(&passphrase, &passphrase_len);
+    error_t *err = passphrase_from_env(&passphrase, &passphrase_len);
 
     if (err && err->code == ERR_NOT_FOUND) {
-        /* Env var not set - prompt interactively */
         error_free(err);
-        err = NULL;
-
         err = passphrase_prompt(
-            "Enter encryption passphrase: ",
-            &passphrase,
-            &passphrase_len
+            "Enter encryption passphrase: ", &passphrase, &passphrase_len
         );
     } else if (err == NULL) {
-        /* Warn user that env var is being used (security risk) */
         fprintf(
             stderr,
             "Warning: Using passphrase from DOTTA_ENCRYPTION_PASSPHRASE environment variable\n"
@@ -367,21 +329,17 @@ static error_t *keymgr_get_key(
         return error_wrap(err, "Failed to get passphrase");
     }
 
-    /* Derive master key */
     err = keymgr_set_passphrase(keymgr, passphrase, passphrase_len);
 
-    /* Securely zero and free passphrase. Both passphrase_prompt and
-     * passphrase_from_env return a buffer of exactly
-     * passphrase_len + 1 bytes (NUL-terminated, mlock'd). */
+    /* Both passphrase_prompt and passphrase_from_env return a buffer of
+     * exactly passphrase_len + 1 bytes (NUL-terminated, mlock'd). */
     buffer_secure_free(passphrase, passphrase_len + 1);
 
     if (err) {
         return error_wrap(err, "Failed to derive encryption key");
     }
 
-    /* Copy to output */
-    memcpy(out_master_key, keymgr->master_key, ENCRYPTION_MASTER_KEY_SIZE);
-
+    memcpy(out_master_key, keymgr->master_key, KDF_KEY_SIZE);
     return NULL;
 }
 
@@ -398,30 +356,50 @@ static error_t *keymgr_get_key(
 static error_t *keymgr_get_profile_key(
     keymgr *keymgr,
     const char *profile,
-    uint8_t out_profile_key[ENCRYPTION_PROFILE_KEY_SIZE]
+    uint8_t out_profile_key[KDF_KEY_SIZE]
 ) {
     CHECK_NULL(keymgr);
     CHECK_NULL(profile);
     CHECK_NULL(out_profile_key);
 
-    /* Get master key (may prompt for passphrase) */
-    uint8_t master_key[ENCRYPTION_MASTER_KEY_SIZE];
+    uint8_t master_key[KDF_KEY_SIZE];
     error_t *err = keymgr_get_key(keymgr, master_key);
     if (err) {
         return error_wrap(err, "Failed to get master key");
     }
 
-    /* Derive profile key from master key */
-    err = encryption_derive_profile_key(master_key, profile, out_profile_key);
-
-    /* Clear master key immediately */
+    err = kdf_profile_key(master_key, profile, out_profile_key);
     hydro_memzero(master_key, sizeof(master_key));
 
     if (err) {
         return error_wrap(err, "Failed to derive profile key for '%s'", profile);
     }
-
     return NULL;
+}
+
+/**
+ * Resolve (mac_key, prf_key) for a profile in one place.
+ *
+ * Pulls the master key, derives the profile key, derives the SIV
+ * subkeys, then zeroes the intermediate profile key. Both `keymgr_encrypt`
+ * and `keymgr_decrypt` go through this so the zeroization sequence is
+ * defined once and they only need to wipe the (mac_key, prf_key) pair on
+ * exit themselves.
+ */
+static error_t *keymgr_get_siv_subkeys(
+    keymgr *keymgr,
+    const char *profile,
+    uint8_t out_mac_key[KDF_KEY_SIZE],
+    uint8_t out_prf_key[KDF_KEY_SIZE]
+) {
+    uint8_t profile_key[KDF_KEY_SIZE];
+    error_t *err = keymgr_get_profile_key(keymgr, profile, profile_key);
+    if (err) {
+        return err;
+    }
+    err = kdf_siv_subkeys(profile_key, out_mac_key, out_prf_key);
+    hydro_memzero(profile_key, sizeof(profile_key));
+    return err;
 }
 
 error_t *keymgr_encrypt(
@@ -437,22 +415,23 @@ error_t *keymgr_encrypt(
     CHECK_NULL(storage_path);
     CHECK_NULL(out_ciphertext);
 
-    /* Derive profile key into a local buffer — never escapes this frame. */
-    uint8_t profile_key[ENCRYPTION_PROFILE_KEY_SIZE];
-    error_t *err = keymgr_get_profile_key(keymgr, profile, profile_key);
+    uint8_t mac_key[KDF_KEY_SIZE];
+    uint8_t prf_key[KDF_KEY_SIZE];
+
+    error_t *err = keymgr_get_siv_subkeys(keymgr, profile, mac_key, prf_key);
     if (err) {
-        return error_wrap(err, "Failed to get profile key for '%s'", profile);
+        return error_wrap(err, "Failed to derive SIV subkeys for '%s'", profile);
     }
 
-    err = encryption_encrypt(
-        plaintext, plaintext_len, profile_key, storage_path, out_ciphertext
+    err = cipher_encrypt(
+        plaintext, plaintext_len, mac_key, prf_key, storage_path, out_ciphertext
     );
 
-    /* Clear on both success and failure. Missing this zeroization on the
-     * error path would leave 32 bytes of key material on the stack until
-     * the frame is overwritten. */
-    hydro_memzero(profile_key, sizeof(profile_key));
-
+    /* Wipe on success and failure: missing the failure-path zeroization
+     * would leave 64 bytes of subkey material on the stack until the
+     * frame is overwritten. */
+    hydro_memzero(mac_key, sizeof(mac_key));
+    hydro_memzero(prf_key, sizeof(prf_key));
     return err;
 }
 
@@ -470,17 +449,19 @@ error_t *keymgr_decrypt(
     CHECK_NULL(ciphertext);
     CHECK_NULL(out_plaintext);
 
-    uint8_t profile_key[ENCRYPTION_PROFILE_KEY_SIZE];
-    error_t *err = keymgr_get_profile_key(keymgr, profile, profile_key);
+    uint8_t mac_key[KDF_KEY_SIZE];
+    uint8_t prf_key[KDF_KEY_SIZE];
+
+    error_t *err = keymgr_get_siv_subkeys(keymgr, profile, mac_key, prf_key);
     if (err) {
-        return error_wrap(err, "Failed to get profile key for '%s'", profile);
+        return error_wrap(err, "Failed to derive SIV subkeys for '%s'", profile);
     }
 
-    err = encryption_decrypt(
-        ciphertext, ciphertext_len, profile_key, storage_path, out_plaintext
+    err = cipher_decrypt(
+        ciphertext, ciphertext_len, mac_key, prf_key, storage_path, out_plaintext
     );
 
-    hydro_memzero(profile_key, sizeof(profile_key));
-
+    hydro_memzero(mac_key, sizeof(mac_key));
+    hydro_memzero(prf_key, sizeof(prf_key));
     return err;
 }

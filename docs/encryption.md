@@ -98,26 +98,22 @@ dotta show home/.ssh/id_rsa  # Decrypted on display too
 
 ## Work Factor
 
-Two parameters control the cost of passphrase-to-key derivation:
+A single parameter controls the cost of passphrase-to-key derivation:
 
 ```toml
 [encryption]
-opslimit = 10000   # CPU cost: ~100ms (recommended)
-memlimit = 64      # Memory cost in MB: 64 MB (recommended)
+memlimit = 8       # Memory cost in MB (must be a power of two)
 ```
 
-**`opslimit`** -- CPU hardness via Gimli permutation iterations:
-- `1000` -- ~10ms (faster, weaker)
-- `10000` -- ~100ms (recommended)
-- `100000` -- ~1s (stronger, slower)
+**`memlimit`** -- Memory hardness via balloon hashing (in MB, power of two):
+- `1` -- ~30 ms (CI/test only)
+- `8` -- ~600 ms (recommended default)
+- `16` -- ~1.2 s (extra margin)
+- `32` -- ~2.5 s (uncomfortable interactively)
 
-**`memlimit`** -- Memory hardness via balloon hashing (in MB):
-- `0` -- Disabled (CPU hardness only, not recommended)
-- `1` -- 1 MB (minimal, for constrained environments)
-- `64` -- 64 MB (recommended default)
-- `256` -- 256 MB (high security)
+Memory hardness bounds attacker parallelism by RAM rather than CPU cores, which is what scales against GPU/ASIC brute-force. Higher values raise per-guess cost linearly with memory budget.
 
-**Important:** Both `opslimit` and `memlimit` must be identical across all machines. Different values produce different keys from the same passphrase, causing decryption failures.
+**Important:** `memlimit` must be identical across all machines that share the same encrypted profiles. Different values produce different keys from the same passphrase, causing decryption failures. Non-power-of-two values fail validation.
 
 ## Security Properties
 

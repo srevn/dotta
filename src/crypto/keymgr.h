@@ -55,7 +55,7 @@ typedef struct keymgr keymgr;
  * Does not prompt for passphrase immediately - passphrase is
  * requested on first key access (lazy initialization).
  *
- * @param config Configuration (for opslimit and session_timeout)
+ * @param config Configuration (for derivation memlimit and session_timeout)
  * @param out Key manager (caller must free with keymgr_free)
  * @return Error or NULL on success
  */
@@ -70,21 +70,21 @@ error_t *keymgr_create(
  * Acquires the profile key internally, calls the encryption primitive,
  * and zeroes the derived key buffer before returning — callers never
  * see raw key bytes. On a cold keymgr this may prompt for the passphrase
- * and run password hashing; once warm, each call only costs a cheap
- * keyed-BLAKE2 derivation plus the encryption itself.
+ * and run the memory-hard derivation; once warm, each call only costs a
+ * cheap keyed-BLAKE2 derivation plus the encryption itself.
  *
  * Error wrapping policy:
- *   - Profile-key fetch errors are wrapped with a uniform message that
+ *   - Subkey-derivation errors are wrapped with a uniform message that
  *     names the profile (the caller already knows the path; it rarely
  *     needs both).
- *   - `encryption_encrypt` errors are returned unwrapped so the caller
- *     can attach file-level context (path, operation) without
- *     duplicating a generic wrap that loses fidelity.
+ *   - `cipher_encrypt` errors are returned unwrapped so the caller can
+ *     attach file-level context (path, operation) without duplicating a
+ *     generic wrap that loses fidelity.
  *
  * @param keymgr       Key manager (must not be NULL)
  * @param profile      Profile name for key derivation (must not be NULL)
  * @param storage_path File path in profile (must not be NULL; AAD bound
- *                     into the ciphertext by `encryption_encrypt`)
+ *                     into the ciphertext by `cipher_encrypt`)
  * @param plaintext    Plaintext bytes (must not be NULL unless len == 0)
  * @param plaintext_len Plaintext length in bytes
  * @param out_ciphertext Output buffer (caller owns; free with buffer_free)
@@ -106,8 +106,8 @@ error_t *keymgr_encrypt(
  * and zeroes the derived key buffer before returning — callers never
  * see raw key bytes.
  *
- * Error wrapping policy matches `keymgr_encrypt` — profile-key failures
- * are wrapped; `encryption_decrypt` errors pass through unwrapped so
+ * Error wrapping policy matches `keymgr_encrypt` — subkey-derivation
+ * failures are wrapped; `cipher_decrypt` errors pass through unwrapped so
  * callers can render file-level diagnostics (e.g. "wrong passphrase,
  * try: dotta key clear") without stacking duplicate wraps.
  *
@@ -118,7 +118,7 @@ error_t *keymgr_encrypt(
  *                     fails SIV verification)
  * @param ciphertext   Dotta-encrypted bytes including header (must not
  *                     be NULL)
- * @param ciphertext_len Ciphertext length in bytes (>= ENCRYPTION_OVERHEAD)
+ * @param ciphertext_len Ciphertext length in bytes (>= CIPHER_OVERHEAD)
  * @param out_plaintext Output buffer (caller owns; free with buffer_free)
  * @return Error or NULL on success (ERR_CRYPTO on authentication failure)
  */

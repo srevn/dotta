@@ -15,7 +15,7 @@
 #include "base/buffer.h"
 #include "base/error.h"
 #include "base/hashmap.h"
-#include "crypto/encryption.h"
+#include "crypto/cipher.h"
 #include "crypto/keymgr.h"
 #include "sys/filesystem.h"
 #include "sys/gitops.h"
@@ -101,7 +101,7 @@ static error_t *get_plaintext_from_blob(
     *out_content = (buffer_t){ 0 };
 
     /* Step 1: Check magic header for encryption (source of truth) */
-    bool is_encrypted = encryption_is_encrypted(blob_data, blob_size);
+    bool is_encrypted = cipher_is_encrypted(blob_data, blob_size);
 
     /* Step 2: Validate encryption state matches expectation (defense in depth)
      *
@@ -419,7 +419,7 @@ error_t *content_store_file_to_worktree(
 
     /* Step 2: Read file from filesystem
      *
-     * The 100 MiB content cap lives in crypto/encryption.c as the single
+     * The 100 MiB content cap lives in crypto/cipher.c as the single
      * enforcement point; the encrypt path rejects oversize input after
      * this read. For the plaintext path we rely on fs_read_file's own
      * bounds and libgit2's blob handling rather than duplicating the

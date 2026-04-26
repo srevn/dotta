@@ -2,495 +2,308 @@
 
 ## Overview
 
-Dotta encrypts sensitive dotfiles transparently so they can be stored in a Git
-repository without exposing their contents. Files are encrypted at rest in
-Git and decrypted only when deployed to the filesystem.
+Dotta encrypts sensitive dotfiles transparently so they can be stored in a Git repository without exposing their contents. Files are encrypted at rest in Git and decrypted only when deployed to the filesystem.
 
 **Design goals:**
-- **Deterministic encryption** — same plaintext under the same key produces
-  the same ciphertext (Git deduplicates, history is meaningful).
-- **Path-bound authentication** — ciphertext is cryptographically tied to its
-  storage path; a file moved to a different path cannot be decrypted.
-- **Nonce-misuse resistant** — different plaintexts at the same path produce
-  different synthetic IVs (and therefore different keystreams) without any
-  per-encryption nonce or randomness.
-- **Single passphrase UX** — one passphrase covers every profile and every
-  encrypted file; profile- and file-level keys are derived deterministically.
-- **Session-based caching** — the master key is cached in process memory and
-  on disk for a configurable timeout, so users do not retype their passphrase
-  on every command.
 
-## Cryptographic foundation
-
-### libhydrogen
-
-Dotta uses [libhydrogen](https://github.com/jedisct1/libhydrogen), a minimal
-cryptographic library built on the Gimli permutation:
-
-- Small auditable codebase (~3000 LOC).
-- Hard-to-misuse high-level API, suitable for this project's scale.
-- Portable C99, ISC license.
-- No dynamic allocation in libhydrogen itself.
-
-The Curve25519 surface of libhydrogen is unused; only the symmetric primitives
-matter here.
-
-### Primitive usage
-
-| Operation             | libhydrogen function             | Algorithm                                |
-|-----------------------|----------------------------------|------------------------------------------|
-| Keyed hashing (HMAC)  | `hydro_hash_hash`, `hydro_hash_*`| KMAC-style construction over Gimli       |
-| Subkey derivation     | `hydro_kdf_derive_from_key`      | KMAC-like KDF over Gimli                 |
-| Deterministic PRNG    | `hydro_random_buf_deterministic` | Gimli-based DRBG (32-byte seed)          |
-| Memory clearing       | `hydro_memzero`                  | Compiler-fence-protected secure zero     |
-| Constant-time compare | `hydro_equal`                    | Timing-safe equality check               |
-
-`hydro_hash_*` accepts an 8-byte domain-separation context plus an optional
-32-byte key, and supports both 32-byte digest output (used for keys, MACs,
-and the SIV) and long-output / XOF mode up to 65 535 bytes (used by
-balloon hashing to squeeze full 1024-byte blocks directly from the keyed
-sponge). `hydro_random_buf_deterministic` absorbs a 32-byte seed in two
-16-byte halves before squeezing output; dotta uses it only as a stream
-keystream generator (cipher, session cache), never to fill data an
-attacker would benefit from compressing.
-
-> **Note on libhydrogen's `hydro_pwhash_deterministic`.** Dotta does **not**
-> use this function. It iterates the Gimli permutation `opslimit` times over
-> a 48-byte state, which is CPU-hard but not memory-hard: the permutation
-> needs no working memory, so an attacker with `n` cores runs `n` guesses in
-> parallel for the same time the defender pays for one. The `memlimit`
-> parameter is mixed into the seed (parameter binding) but does not drive
-> any memory-hard work — the only loop is over `opslimit`. Memory hardness
-> is the only thing that bounds the attacker's parallelism in this threat
-> model, so dotta builds it directly via balloon hashing (below) rather than
-> spending wall-clock time on a CPU-hard pre-stage that contributes nothing
-> against a parallel attacker.
+- **Deterministic AEAD** — identical `(passphrase, profile, path, plaintext)` produces byte-identical ciphertext. Git deduplicates, history is meaningful.
+- **Path-bound authentication** — ciphertext is cryptographically tied to its storage path; a file moved to a different path cannot be decrypted.
+- **Nonce-misuse resistant** — Synthetic-IV (SIV) construction; no random nonces to manage.
+- **Single passphrase UX** — one passphrase covers every profile. Per-profile subkeys are derived deterministically.
+- **Session caching** — master key cached in memory and on disk for a configurable timeout.
 
 ## Threat model
 
-**Mitigated** by the constructions in this document:
-- **Passive repository compromise.** An attacker who exfiltrates a Git
-  repository (clone of remote, stolen disk image, leaked backup) cannot
-  recover the plaintext of encrypted files without the passphrase. Brute
-  force is bounded by balloon-hashing's memory hardness — see the section
-  below for what that means in practice.
-- **Tampering of encrypted files.** Modifying any byte of the SIV or the
-  ciphertext causes the SIV-recompute step to fail. The candidate plaintext
-  is wiped and never returned.
-- **Path confusion.** A ciphertext encrypted for `home/.ssh/id_rsa` cannot
-  be decrypted as if it were `home/.bashrc` — the path is part of the
-  authenticated input to the SIV.
-- **Per-profile cross-contamination.** Different profile names derive
-  different per-profile keys; compromise of the keys for one profile does
-  not let an attacker forge or read another profile's files.
+### Mitigated
 
-**Not mitigated:**
-- **Local interactive compromise.** A process running as the dotta user
-  (or root) can read the master key from process memory while it is cached,
-  and from `~/.cache/dotta/session` in obfuscated form (see *Session cache*
-  below — the on-disk cache is XOR-obfuscated, not encrypted).
-- **Weak passphrases.** Memory hardness raises the per-guess cost but does
-  not save a 6-character dictionary word.
-- **Keyloggers and shoulder-surfing** during passphrase entry.
-- **Offline disk forensics on the live host.** The session cache is
-  designed to resist casual inspection and cross-machine copy, not a
-  forensic adversary on the host that wrote it.
+- **Passive repository compromise.** An attacker who exfiltrates the Git repository (clone, stolen disk image, leaked backup) cannot recover plaintext without the passphrase. Brute force is bounded by Argon2id memory hardness × passphrase entropy.
+- **Active tampering of encrypted blobs.** Modifying any byte of the magic, version, Argon2 params, SIV, or ciphertext fails SIV verification. The candidate plaintext is wiped before any return; the error is a uniform "authentication failed" diagnostic.
+- **Path confusion.** A blob encrypted for `home/.ssh/id_rsa` cannot decrypt as `home/.bashrc`. The storage path is bound into the SIV byte-for-byte.
+- **Cross-profile contamination.** Per-profile subkeys are derived deterministically from `(master_key, profile_name)` under domain-separated tags; compromise of one profile's `(mac_key, prf_key)` pair leaks nothing about another's without the master key.
+- **Version-confusion attacks on the file format.** The 9-byte cipher-blob header is bound into the SIV. A forged "v7-on-v6" blob fails MAC, not parse; every error path is uniform.
+- **Argon2-params tampering.** Params live in the authenticated header. A config edit cannot silently invalidate old files — decrypt re-runs Argon2 with whatever params each blob carries — and a bit-flipped header field fails MAC.
+
+### Not mitigated
+
+- **Local interactive compromise.** A process running as the dotta user (or root) can read the master key from process memory while cached, and from `~/.cache/dotta/session` in obfuscated form (see *Session cache*).
+- **Weak passphrases.** Argon2id raises the per-guess wall but does not save a 6-character dictionary word.
+- **Keyloggers, shoulder-surfing, evil-maid attacks** during passphrase entry.
+- **Forensic disk imaging on a live host.** The session cache resists casual inspection and cross-machine copy, not a forensic adversary on the host that wrote it.
+- **Plaintext-length leakage.** Stream cipher; ciphertext length = plaintext length + 41-byte header. Padding to a fixed boundary would defeat Git deduplication and is not adopted. File sizes are visible in Git regardless.
+- **Storage path leakage.** Paths are recorded in plaintext in `.dotta/metadata.json` and as Git tree entries. Encryption hides content, not structure.
+- **Plaintext-equality leakage across commits.** Encryption is deterministic; identical inputs produce identical ciphertext. An attacker observing multiple commits learns *whether* a file at a given path changed, not *what* changed. Intrinsic to deterministic SIV; the cost of Git friendliness.
+
+### Leakage matrix
+
+| What leaks                            | Brute-force cost                                    | Notes                                                                                    |
+|---------------------------------------|-----------------------------------------------------|------------------------------------------------------------------------------------------|
+| Repo only                             | Passphrase entropy × Argon2id memory cost           | Salt is hardcoded; attacker has it from source. Memory-hardness is the only wall.        |
+| Plaintext sizes (any leaked repo)     | N/A — leaked unconditionally                        | Stream cipher; out-of-scope by design.                                                   |
+| `~/.cache/dotta/session` + repo       | Master key recoverable without passphrase           | Cache is machine-bound obfuscation, not crypto. Possession of both reduces decryption to a hostname/username lookup. |
+
+For the "stolen laptop" / cloud-sync exposures the response is `dotta key clear` before lending or retiring the machine, plus exclusion of `~/.cache/dotta` from any backup that already contains the encrypted repo.
+
+## Cryptographic foundation
+
+### Monocypher
+
+Dotta uses [Monocypher](https://monocypher.org/), a small auditable C library implementing standard primitives:
+
+| Operation             | Monocypher function                          | Standard                              |
+|-----------------------|----------------------------------------------|---------------------------------------|
+| Memory-hard KDF       | `crypto_argon2`                              | Argon2id, RFC 9106                    |
+| Keyed hash / MAC      | `crypto_blake2b_keyed*`                      | BLAKE2b, RFC 7693                     |
+| Stream cipher         | `crypto_chacha20_x`                          | XChaCha20 (RFC 8439 + 24-byte nonce)  |
+| Constant-time compare | `crypto_verify32`                            | —                                     |
+| Memory clearing       | `crypto_wipe`                                | Doubly-volatile loop                  |
+
+Inside `src/crypto/` the canonical wipe primitive is `crypto_wipe`. Other layers use `secure_wipe` from `base/secure.h` (functionally identical; removes the vendor dependency from non-crypto layers).
+
+### `crypto/mac` chokepoint
+
+Every keyed-BLAKE2b call in the codebase routes through `src/crypto/mac.c`, which provides:
+
+1. **Domain separation.** Each call is tagged with an 8-byte ASCII string absorbed into the keyed BLAKE2b state at init. Adding a new tag requires editing one file with a compile-time uniqueness check.
+2. **Canonical LE64 length-prefixed framing.** `crypto_mac_absorb` unconditionally prepends `LE64(len)` to every absorbed input. Distinct sequences produce distinct absorbed byte streams even when the bytes coincide; concatenation-collision attacks are foreclosed at the framing layer.
+3. **Audit chokepoint.** A CI grep enforces no direct `crypto_blake2b_keyed*` calls outside `mac.c`.
+
+The 8-byte tag is absorbed *unframed* (fixed-length by construction); all subsequent absorptions ARE LE64-prefixed.
+
+| Tag (`crypto_domain_t`)        | 8-byte value | Purpose                                                  |
+|--------------------------------|--------------|----------------------------------------------------------|
+| `CRYPTO_DOMAIN_SIV_MAC`        | `dot-mac\0`  | kdf: master + profile → mac_key                          |
+| `CRYPTO_DOMAIN_SIV_PRF`        | `dot-prf\0`  | kdf: master + profile → prf_key                          |
+| `CRYPTO_DOMAIN_CIPHER_SIV`     | `dot-siv\0`  | cipher: SIV over (header, path, plaintext)               |
+| `CRYPTO_DOMAIN_CIPHER_KEY`     | `dot-key\0`  | cipher: keystream-seed from SIV under prf_key            |
+| `CRYPTO_DOMAIN_SESSION_MAC`    | `dot-ses\0`  | session: cache MAC over the 76-byte prefix               |
 
 ## Key hierarchy
 
 ```
-User Passphrase
-    ↓ [crypto/balloon — memory-hard, params-bound]
-Master Key (32 bytes)
-    ↓ [crypto/kdf — keyed BLAKE2 with profile name]
-Profile Key (32 bytes, one per profile)
-    ↓ [crypto/kdf — hydro_kdf_derive_from_key, subkey_id 1 and 2]
-    ├─→ MAC Key (32 bytes) — keys the SIV computation over (path, plaintext)
-    └─→ PRF Key (32 bytes) — keys the keystream-seed derivation from the SIV
-         ↓ [crypto/cipher — keyed BLAKE2 over the SIV]
-         Keystream Seed (32 bytes, plaintext-dependent via the SIV)
+        User passphrase (1..1024 bytes)
+                    │
+                    ▼  Argon2id (RFC 9106)
+                       memory_mib, passes from blob header / current config
+                       lanes = 1 (Monocypher is single-threaded)
+                       salt = 16-byte hardcoded constant in kdf.c
+        ┌────────────────────────────────────────────┐
+        │              Master key (32 B)             │
+        │      Cached by keymgr (memory + disk)      │
+        └────────────────────────────────────────────┘
+                    │
+        ┌───────────┴───────────┐
+        ▼                       ▼
+  crypto_mac_oneshot        crypto_mac_oneshot
+  (master, SIV_MAC,         (master, SIV_PRF,
+   profile_name)             profile_name)
+        │                       │
+        ▼                       ▼
+   mac_key (32 B)           prf_key (32 B)
+        │                       │
+        └───────────┬───────────┘
+                    ▼  Consumed by cipher_encrypt / cipher_decrypt
+                       for one operation, then wiped before return.
 ```
 
-The hierarchy is implemented across three crypto modules:
+**Three derivation steps** (down from a prior 4-level design that included a `profile_key` intermediate; the indirection bought no security and one extra BLAKE2b call per file). The cipher module never sees the master key or the profile name — only the `(mac_key, prf_key)` pair.
 
-- **`crypto/balloon`** owns the memory-hard derivation. It is the only
-  module that touches the balloon buffer. Its public surface is one
-  function (`balloon_derive`), one parameter struct, and a few constants.
-  All context strings, block size, mix structure, and `mlock` handling
-  are file-static.
-- **`crypto/kdf`** owns the rest of the derivation chain — passphrase →
-  master, master → profile, profile → SIV subkeys. It calls `balloon_derive`
-  internally; callers do not see balloon parameters except by passing them
-  through `kdf_master_key`.
-- **`crypto/cipher`** owns SIV encryption/decryption and the on-disk file
-  format. It receives the (mac_key, prf_key) pair directly and never sees
-  the master key or profile key.
+| Step                                       | Module       | Primitive                         | Cost (warm) |
+|--------------------------------------------|--------------|-----------------------------------|-------------|
+| passphrase → master                        | `kdf.c`      | `crypto_argon2`                   | 0 (cached)  |
+| master + profile → mac_key                 | `kdf.c`      | `crypto_mac_oneshot`              | µs          |
+| master + profile → prf_key                 | `kdf.c`      | `crypto_mac_oneshot`              | µs          |
+| (mac_key, header, path, plaintext) → SIV   | `cipher.c`   | `crypto_mac_*` (incremental)      | bandwidth   |
+| (prf_key, SIV) → keystream seed            | `cipher.c`   | `crypto_mac_oneshot`              | µs          |
+| (seed, SIV[0..24], plaintext) → ciphertext | `cipher.c`   | `crypto_chacha20_x`               | bandwidth   |
 
-`crypto/keymgr` is the only module that holds the master key in memory; it
-calls `kdf_*` to derive profile and SIV subkeys for each cipher invocation,
-then zeroes them on the way out.
+### Argon2id parameters
 
-### Master key derivation (single phase, memory-hard)
+| Preset      | memory_mib | passes | Wall-clock target | memory × passes |
+|-------------|------------|--------|-------------------|-----------------|
+| `fast`      |    64 MiB  |    3   | ~250–400 ms       | 192 MiB·passes  |
+| `balanced`  |   256 MiB  |    3   | ~1.0 s            | 768 MiB·passes  |
+| `paranoid`  |  1024 MiB  |    4   | ~4–6 s            |   4 GiB·passes  |
 
-```c
-balloon_params_t params = {
-    .memlimit_bytes = config->encryption_memlimit, // 8 MiB default; power of two
-    .rounds = BALLOON_DEFAULT_ROUNDS,              // 3
-    .delta  = BALLOON_DEFAULT_DELTA,               // 3
-};
-kdf_master_key(passphrase, passphrase_len, params, master_key);
-// ↳ thin wrapper over balloon_derive
-```
+`lanes = 1` is forced by Monocypher's single-threaded implementation. With `lanes = 1`, `memory × passes` is the right memory-hardness metric; RFC 9106's recommendations assume `lanes = 4`. Re-bench on real hardware.
 
-There is no separate CPU-hard pre-stage. The entire derivation is the
-balloon — see *Balloon hashing* below for the algorithm and rationale.
+**Bounds** (validated at config-load AND at the crypto boundary):
 
-### Profile key derivation
+- `argon2_memory_mib` ∈ [8, 4096]. The 8 MiB minimum is dotta's chosen security floor. The 4 GiB ceiling is a **DoS bound**: `cipher_decrypt` reads `memory_mib` from the blob header and would otherwise allocate attacker-controlled tens of GiB before SIV verification fires. 4 GiB is 4× the `paranoid` preset and well above any defensible setting.
+- `argon2_passes` ∈ [1, 20]. Same DoS rationale.
 
-```c
-hydro_hash_hash(
-    profile_key, KDF_KEY_SIZE,         // out, 32 bytes
-    profile, strlen(profile),          // in, the profile name
-    "profile ",                        // 8-byte context (trailing space)
-    master_key                         // 32-byte key
-);
-```
+`cipher_peek_params` revalidates the header-recorded params via `kdf_validate_params` BEFORE any allocation, so a tampered or attacker- planted blob is rejected at the parse step.
 
-A keyed BLAKE2 over the profile name. Different profile names yield
-independent profile keys; the same name always yields the same key under
-a given master.
+### Salt
 
-### MAC and PRF subkey derivation
+The Argon2id salt is a 16-byte constant compiled into `kdf.c`. A salt's job is to prevent attackers from amortising cracking work across multiple targets. Dotta is single-user / single-target; with one target there is nothing to amortise, so per-install random salt and constant salt produce identical per-guess attacker cost.
 
-```c
-hydro_kdf_derive_from_key(mac_key, KDF_KEY_SIZE, /*subkey_id=*/1, "dottasiv", profile_key);
-hydro_kdf_derive_from_key(prf_key, KDF_KEY_SIZE, /*subkey_id=*/2, "dottasiv", profile_key);
-```
+The constant satisfies the API; it contributes no security claims to the threat model. Changing the bytes invalidates every encrypted blob in every user's repo — treat it as a format-defining value alongside `CIPHER_VERSION`.
 
-Two independent subkeys are required by the SIV construction:
-- `mac_key` keys the SIV (which authenticates path + plaintext).
-- `prf_key` keys the derivation of the keystream seed from the public SIV.
+`extras.key` (pepper) and `extras.ad` (binding to host/install-id) are not used (`crypto_argon2_no_extras`):
 
-Cryptographic independence between the two is essential — otherwise the
-keystream would be derivable from the SIV alone, and the SIV is public.
+- **Pepper** narrows to a scenario (repo exfiltrated, pepper not exfiltrated) that rarely applies for a single-user manager and adds a second loss-of-data failure mode.
+- **`ad`** would break "back up your repo + passphrase = recover anywhere".
 
-### Keystream seed derivation
+## SIV construction (cipher format v6)
 
-```c
-hydro_hash_hash(
-    keystream_seed, 32,                // out
-    siv, CIPHER_SIV_SIZE,              // in (the 32-byte SIV)
-    "dottactr",                        // 8-byte context
-    prf_key                            // 32-byte key
-);
-```
-
-The seed is a keyed hash of the (public) SIV under the (secret) `prf_key`.
-If the seed were a function of the SIV alone, anyone holding the ciphertext
-could reproduce the keystream and recover the plaintext.
-
-## Balloon hashing — single-phase memory-hard derivation
-
-### Why balloon, why one phase
-
-Memory hardness is the only attacker-bounding work in this derivation.
-A passphrase guess on a 16-MiB balloon needs 16 MiB of working memory; a
-6 GiB attacker GPU can therefore run at most ~384 guesses in parallel —
-**bounded by RAM, not cores**. CPU-hard pre-stages do not help: their
-parallelism is bounded by cores, of which any modern attacker has many,
-each paying the same cost the defender does.
-
-Dotta therefore implements a single-phase balloon (Boneh, Corrigan-Gibbs,
-Schechter, 2016) directly over libhydrogen's keyed BLAKE2-via-Gimli sponge
-in long-output mode (1024-byte block fills squeezed from the same primitive
-that produces 32-byte digests). The whole interactive time budget goes into
-memory-hard work.
-
-### Algorithm
-
-The implementation lives in `src/crypto/balloon.c`. The header `balloon.h`
-exposes only `balloon_derive`, the parameter struct, and a handful of
-constants; everything else (block size, context strings, stage helpers,
-`mlock` handling) is file-static.
-
-#### Stage 0 — absorb passphrase + params into a 32-byte state
-
-```
-state = H(LE64(passphrase_len) || passphrase || LE64(memlimit) || LE64(rounds) || LE64(delta),
-          ctx="dottabl0", key=NULL)
-```
-
-A single keyed-BLAKE2 hash. The passphrase is length-prefixed so a shorter
-passphrase that happens to be a prefix of another cannot collide with it.
-The parameters are domain-mixed in so the same passphrase under different
-(memlimit, rounds, delta) yields unrelated keys.
-
-#### Stage 1 — sequential expansion with full-block dependencies
-
-```
-buf[0] = H(LE64(0),
-           ctx="dottabl1", key=state, out_len=BLOCK_SIZE)
-for i = 1 .. n_blocks - 1:
-    buf[i] = H(LE64(i) || buf[i-1],   # full previous block, 1024 bytes
-               ctx="dottabl1", key=state, out_len=BLOCK_SIZE)
-```
-
-The block content **is** the keyed-BLAKE2 long-output (BLAKE2 is sponge-
-based, and `hydro_hash_final` accepts output sizes up to 65 535 bytes;
-squeezing 1024 bytes costs the same number of Gimli permutations as
-filling the same buffer with the deterministic PRNG would). There is no
-32-byte intermediate seed sitting between the hash and the block, so a
-storage-tradeoff attacker has no compressed per-block label they could
-stash to obtain a free memory savings on top of the standard balloon TS
-tradeoff.
-
-Each block depends on the **full** previous block (1024 bytes), not a
-32-byte prefix. A parallel attacker cannot fill blocks out of order, and a
-storage-tradeoff attacker who keeps `k` bytes per block must recompute
-back through the dependency chain to a stashed neighbour, which is the
-standard balloon-hashing TS bound.
-
-#### Stage 2 — `rounds` mixing passes with full-block dependencies
-
-For each round `r ∈ [0, rounds)` and each block index `i ∈ [0, n_blocks)`,
-let `prev_idx = (i - 1) mod n_blocks`.
-
-**Index seed (data-dependent):**
-
-```
-idx_seed = H(LE64(r) || LE64(i) || buf[i],   # full current block, 1024 bytes
-             ctx="dottabli", key=state, out_len=8 * delta)
-```
-
-A single keyed hash absorbs `(r, i, full_current_block)` and produces
-`8 * delta` output bytes. Reading the **full current block** here keeps
-index derivation honest: the index is a function of the actual block
-contents, not a stashable prefix.
-
-**Mix step (data-dependent, full-block):**
-
-```
-for d = 0 .. delta - 1:
-    idx[d] = LE64(idx_seed[8*d : 8*(d+1)]) mod n_blocks    # bias-free; n_blocks is power of two
-
-buf[i] = H(LE64(r) || LE64(i) ||
-           buf[prev_idx] ||                                # full prev block
-           buf[i] ||                                       # full current block
-           buf[idx[0]] || buf[idx[1]] || ... || buf[idx[delta-1]],
-           ctx="dottablm", key=state, out_len=BLOCK_SIZE)
-securely_zero(idx_seed)
-```
-
-The hash absorbs every input completely before squeezing any output
-byte, so writing the squeezed output back into `buf[i]` (the same memory
-that was just absorbed as `current_block`) is safe — there is no
-absorb/squeeze aliasing.
-
-As in expansion, the new block content **is** the keyed-BLAKE2 long-output;
-no 32-byte intermediate seed exists between the hash and the block. Every
-block referenced in the mix is read in full (`BLOCK_SIZE` bytes), not as a
-32-byte prefix. The mix is keyed by `state` (the absorbed passphrase +
-params), binding every step back to the input.
-
-`n_blocks = memlimit_bytes / BLOCK_SIZE` is a power of two (because
-`memlimit_bytes` is validated as a power of two and `BLOCK_SIZE = 1024`),
-so `(uint64 % n_blocks)` is bias-free without rejection sampling.
-
-#### Stage 3 — finalize
-
-```
-master_key = H(buf[n_blocks - 1],    # full last block, 1024 bytes
-               ctx="dottablf", key=state, out_len=32)
-```
-
-The output is a keyed hash of the full final block under the absorbed-state
-key. The buffer is wiped and freed before return.
-
-### Parameters and bounds
-
-| Parameter        | Default           | Bounds       | Notes                                              |
-|------------------|-------------------|--------------|----------------------------------------------------|
-| `memlimit_bytes` | 8 MiB             | 1 MiB .. ∞   | Must be a power of two; multiple of `BLOCK_SIZE`.  |
-| `rounds`         | 3                 | 1 .. 16      | Mixing passes over the buffer.                     |
-| `delta`          | 3                 | 2 .. 8       | Random-block references absorbed per mix step.     |
-
-Validation runs both at config-parse time (`utils/config.c`) and at the
-crypto boundary (`balloon.c::validate_params`). Invalid parameters fail
-with a clear error before any allocation.
-
-`delta`'s lower bound is 2 because the index extraction asks
-`hydro_hash_final` for `8 * delta` bytes and libhydrogen rejects output
-shorter than `hydro_hash_BYTES_MIN = 16`. `delta`'s upper bound keeps the
-on-stack `idx_seed` array fixed-size (`8 * BALLOON_DELTA_MAX = 64` bytes).
-`rounds`'s upper bound prevents a misconfigured caller from locking the
-process up with a runaway value.
-
-### Block size choice
-
-`BLOCK_SIZE = 1024`. Block size is a tuning parameter, not a security
-parameter — total memory hardness is bounded by `memlimit_bytes`, not by
-block size. 1024 is large enough to amortize the per-mix hash setup
-(init + finalize cost is constant; absorbing 1024 bytes through `gimli_RATE = 16`
-takes 64 permutations, dwarfing the framing) and small enough that the
-buffer holds many blocks at any defensible memory budget.
-
-### Memory hygiene
-
-- The balloon buffer is best-effort `mlock`'d. On failure, `balloon_derive`
-  emits a single warning to stderr pointing at `RLIMIT_MEMLOCK` (`ulimit -l`)
-  and continues; the buffer is wiped before free regardless. The default
-  macOS `RLIMIT_MEMLOCK` is 64 KiB, so unprivileged processes will see
-  this warning unless the limit is raised.
-- The buffer is zeroed via `buffer_secure_free` on every exit path
-  (success, validation error, hash error).
-- The 32-byte `state` is zeroed at function exit.
-- Per-iteration secrets (mix hash state, index seed) are zeroed at the
-  end of each iteration as defense in depth — this bounds the window in
-  which transient key material sits on the stack on both normal-
-  completion and early-return paths inside the mix loops.
-- The output `out_key` is zeroed on any error before return so a partial
-  derivation cannot leak.
-
-### Performance notes
-
-The implementation is dominated by Stage 2 (mix), which runs
-`rounds × n_blocks` keyed long-output hashes; each absorbs `delta + 2`
-full predecessor blocks (prev, current, and `delta` random blocks) plus
-the index hash that absorbs the current block. Squeezing the new block
-out of the sponge costs the same number of Gimli permutations as
-absorbing one block. For the default
-`memlimit = 8 MiB, rounds = 3, delta = 3`, that is ~98 K full-block
-absorptions and ~24 K block-sized squeezes per derivation — measured at
-~600 ms on commodity 2026-era hardware. Derivation runs at most once
-per session (the master key is cached across commands; see *Session
-cache*).
-
-The defender pays this once per cache miss. The attacker pays it for
-every passphrase guess, multiplied by guesses-per-second per parallel
-guesser, which is itself bounded by `attacker_RAM / memlimit_bytes`.
-
-## SIV construction (cipher)
-
-Implemented in `crypto/cipher` as a Synthetic IV (SIV) deterministic AEAD
-in the spirit of RFC 5297. The synthetic IV is a function of the path and
-plaintext, and doubles as the authentication tag.
+Implemented in `src/crypto/cipher.c`. SIV deterministic AEAD in the spirit of RFC 5297, built from BLAKE2b (MAC) and XChaCha20 (keystream).
 
 ### Encryption
 
-Inputs: `(plaintext, mac_key, prf_key, storage_path)`.
+Inputs: `(plaintext, mac_key, prf_key, storage_path, memory_mib, passes)`.
 
-1. **Compute the synthetic IV** over (path, plaintext):
+1. **Build the 9-byte authenticated header:**
    ```
-   siv = H(LE64(path_len) || storage_path || plaintext,
-           ctx="dottamac", key=mac_key, out_len=32)
-   ```
-   The 8-byte path length prefix domain-separates the path from the
-   plaintext so an adversary cannot shift the boundary to forge a valid
-   SIV for a different (path, plaintext) pair. BLAKE2 is not vulnerable
-   to length extension, so no trailing length is required.
-2. **Derive the keystream seed** from the (public) SIV under `prf_key`:
-   ```
-   keystream_seed = H(siv, ctx="dottactr", key=prf_key, out_len=32)
-   ```
-3. **Encrypt** by XOR with a deterministic keystream:
-   ```
-   keystream  = PRNG(keystream_seed, plaintext_len)
-   ciphertext = plaintext ⊕ keystream
-   ```
-4. **Assemble** the output:
-   ```
-   [Magic 8B][SIV 32B][Ciphertext N B]
+   bytes [0..5)  = "DOTTA"
+   byte   [5]    = CIPHER_VERSION (0x06)
+   bytes [6..8)  = LE16(argon2_memory_mib)
+   byte   [8]    = argon2_passes
    ```
 
-Because the SIV depends on the plaintext, two distinct plaintexts at the
-same `(profile_key, path)` yield distinct SIVs and distinct keystreams.
-That gives nonce-misuse resistance without any nonce management: there is
-no per-encryption randomness to track.
+2. **Compute the synthetic IV** (32 bytes) over `(header, path, plaintext)`:
+   ```
+   crypto_mac_init(ctx, mac_key, CRYPTO_DOMAIN_CIPHER_SIV);
+   crypto_mac_absorb(ctx, header, 9);                      /* LE64-prefixed */
+   crypto_mac_absorb(ctx, storage_path, path_len);         /* LE64-prefixed */
+   crypto_mac_absorb(ctx, plaintext, plaintext_len);       /* LE64-prefixed */
+   crypto_mac_final(ctx, siv);
+   ```
+
+3. **Derive the keystream seed** from the (public) SIV under `prf_key`:
+   ```
+   seed = crypto_mac_oneshot(prf_key, CRYPTO_DOMAIN_CIPHER_KEY, siv, 32);
+   ```
+   Keying the seed with `prf_key` keeps the keystream behind a secret. The SIV alone is public.
+
+4. **Encrypt** with XChaCha20:
+   ```
+   crypto_chacha20_x(ciphertext, plaintext, plaintext_len,
+                     /*key=*/seed, /*nonce=*/siv[0..24], /*ctr=*/0);
+   ```
+   Monocypher reads exactly 24 bytes from the nonce pointer; the trailing 8 bytes of the 32-byte SIV serve only as the MAC tag.
+
+5. **Assemble** `[ header(9) | SIV(32) | ciphertext(N) ]`.
 
 ### Decryption
 
-Inputs: `(ciphertext, mac_key, prf_key, storage_path)`.
+1. Validate length, magic, version, and header-recorded Argon2 params via `kdf_validate_params`. Defense-in-depth — `keymgr_decrypt` already routed the call by `cipher_peek_params`.
+2. Derive `seed` from `(prf_key, stored_siv)` under `CIPHER_KEY` exactly as in encryption step 3.
+3. Decrypt: `candidate = ciphertext_body XOR XChaCha20(seed, siv[0..24], 0)`.
+4. Recompute SIV over `(header || storage_path || candidate)` under `mac_key`.
+5. Constant-time compare via `crypto_verify32`. On match, transfer the candidate to the caller. On mismatch, wipe the candidate and return `ERR_CRYPTO("authentication failed")`. The candidate is never surfaced.
 
-1. Parse the header. Magic must equal `"DOTTA"`; version byte must equal
-   `CIPHER_VERSION = 4`. Mismatches return `ERR_CRYPTO`.
-2. Extract the stored `siv` and the ciphertext body.
-3. Derive `keystream_seed` from `(prf_key, siv)` exactly as in step 2 of
-   encryption.
-4. Compute the candidate plaintext:
-   ```
-   candidate = ciphertext ⊕ PRNG(keystream_seed, body_len)
-   ```
-5. Recompute `siv'` over `(LE64(path_len), storage_path, candidate)` under
-   `mac_key`.
-6. Constant-time compare `siv' == siv`. On match, return the candidate.
-   On mismatch, wipe the candidate via the cleanup path and return
-   `ERR_CRYPTO`. **The candidate is never returned on mismatch.**
+In SIV, the IV authenticates the plaintext; verification cannot happen before recovery. The candidate is held just long enough to verify; cleanup zeroes the buffer on every error path.
 
-In SIV, the IV authenticates the plaintext — it cannot be checked without
-first recovering the plaintext. The candidate is held in memory only long
-enough to verify; the cleanup path zeroes the output buffer on every
-error path before freeing.
+### Determinism rationale
 
-### Why SIV (not AES-GCM / ChaCha20-Poly1305)
+Standard AEAD modes (AES-GCM, ChaCha20-Poly1305) require a unique nonce per encryption and produce different ciphertext on every call. Dotta needs deterministic ciphertext for:
 
-Standard AEAD modes require a unique nonce per encryption. Dotta wants
-deterministic ciphertexts because:
+- **Git deduplication.** Identical plaintexts share Git storage.
+- **Idempotency.** Re-running `dotta add` on an unchanged file produces no diff.
+- **Diffability.** Only files whose plaintexts actually changed appear in Git diffs of the encrypted tree.
 
-- **Git deduplication.** Identical plaintexts under the same key share Git
-  storage.
-- **Idempotency.** Re-running `dotta add` on an unchanged file produces no
-  Git diff.
-- **Diff-ability.** Only files whose plaintexts actually changed appear in
-  Git diffs of the encrypted tree.
+SIV gives the same security as a nonce-based AEAD when nonces are unique and stays robust ("nonce-misuse resistant") under repeated plaintexts at the same path. Different plaintexts at the same `(mac_key, path, header)` yield different SIVs and different keystreams; the many-time-pad leakage that a random-nonce stream cipher would suffer is structurally impossible.
 
-A nonce-based AEAD with a random nonce per encryption breaks all three.
-SIV gives the same security as a nonce-based AEAD when nonces are unique,
-and stays robust ("nonce-misuse resistant") in the face of repeated
-plaintexts at the same path.
+### Why not ChaCha20-Poly1305
+
+- Poly1305's 128-bit tag gives a 64-bit collision boundary, marginal for long-term Git storage.
+- Poly1305-based AEAD is **not key-committing**: two distinct keys can decrypt the same ciphertext to different plaintexts without failing the tag (the "invisible salamander" attack), especially relevant for password-derived keys. ETM-SIV with BLAKE2b's collision resistance gives key commitment for free.
 
 ### Cipher input bounds
 
-`crypto/cipher` enforces two limits at its entry points to avoid the
-crypto layer allocating huge buffers on behalf of pathological input:
+- **Storage path:** at most 4096 bytes (excluding NUL). `strnlen` keeps the scan bounded even on non-NUL-terminated input.
+- **Plaintext / ciphertext body:** at most `CIPHER_MAX_CONTENT = 100 MiB`. Dotfiles are small; the cap defends the crypto layer from runaway input.
 
-- **Storage path:** at most `CIPHER_STORAGE_PATH_MAX = 4096` bytes
-  (excluding NUL). `strnlen` keeps the scan bounded even on
-  non-NUL-terminated input.
-- **Plaintext / inner ciphertext:** at most
-  `CIPHER_MAX_CONTENT_SIZE = 100 MiB`. Dotfiles are small; this cap
-  defends the crypto layer from runaway input regardless of how the
-  bytes reached us.
+## File formats
 
-## File format
+### Encrypted blob (`CIPHER_VERSION = 0x06`)
 
 ```
-┌──────────────────────┬──────┬────────────────────┐
-│ Magic Header         │ SIV  │ Ciphertext         │
-├──────────────────────┼──────┼────────────────────┤
-│ 8 bytes              │ 32 B │ N bytes            │
-└──────────────────────┴──────┴────────────────────┘
+┌─────────┬────────────────────────────────────────┬─────────┬──────────────────┐
+│ offset  │ field                                  │ size    │ encoding         │
+├─────────┼────────────────────────────────────────┼─────────┼──────────────────┤
+│      0  │ magic                                  │   5 B   │ ASCII "DOTTA"    │
+│      5  │ version                                │   1 B   │ 0x06             │
+│      6  │ argon2_memory_mib                      │   2 B   │ LE16, 8..4096    │
+│      8  │ argon2_passes                          │   1 B   │ uint8, 1..20     │
+│      9  │ SIV / MAC tag                          │  32 B   │ BLAKE2b keyed    │
+│     41  │ ciphertext                             │   N B   │ XChaCha20 ⊕ pt   │
+└─────────┴────────────────────────────────────────┴─────────┴──────────────────┘
 
-Magic Header (8 bytes):
-  [0..4]  "DOTTA" (magic string)
-  [5]     0x04 (CIPHER_VERSION)
-  [6..7]  0x00 0x00 (reserved)
-
-SIV (32 bytes):
-  MAC tag over LE64(path_len) || storage_path || plaintext, keyed by mac_key.
-  Public; doubles as the input to keystream-seed derivation under prf_key.
-
-Ciphertext (N bytes):
-  plaintext ⊕ keystream, where keystream = PRNG(H(siv, key=prf_key)).
+Total: 41 + N bytes.  Lanes = 1 (not stored).
 ```
 
-`CIPHER_OVERHEAD = 40` bytes per file.
+The full 9-byte header is bound into the SIV computation as the first absorbed input. Tampering any byte (magic, version, or params) fails MAC, not parse — the version-confusion / params-rollback attack class is closed.
 
-`cipher_is_encrypted` recognises a blob as a dotta-encrypted file iff its
-first 6 bytes match magic + the build's version byte. A blob whose first
-bytes are `"DOTTA"` followed by a different version is reported as **not**
-encrypted, so callers never try to decrypt something they cannot parse;
-any explicit decrypt call surfaces a precise "unsupported version" error
-instead.
+### Encryption detection
+
+`cipher_is_encrypted` tests the 6-byte detection window (magic + current build's version). A blob whose first 5 bytes are `"DOTTA"` but whose version byte is not `CIPHER_VERSION` reports as **not encrypted** — coincidental plaintext starting with `"DOTTA"` is not misrouted into the decrypt path.
+
+The deploy decision in `infra/content.c` is a 4-case truth table joining `metadata.encrypted` (declared at add-time) with the magic-byte sniff:
+
+| metadata.encrypted | sniff                | Action                                                          |
+|--------------------|----------------------|-----------------------------------------------------------------|
+| true               | true                 | Decrypt via `keymgr_decrypt`.                                   |
+| false              | false                | Plaintext deploy.                                               |
+| true               | false                | `ERR_CRYPTO`: "metadata says encrypted but blob magic missing." |
+| false              | true                 | `ERR_CRYPTO`: "metadata says plaintext but blob has magic."     |
+
+A v7 blob encountered by a v6 build sniffs as not-encrypted; row 3 of the truth table fires before any decrypt attempt.
+
+### Session cache (`SESSION_CACHE_VERSION = 0x02`)
+
+```
+┌─────────┬────────────────────────────────────────┬─────────┬──────────────────┐
+│ offset  │ field                                  │ size    │ encoding         │
+├─────────┼────────────────────────────────────────┼─────────┼──────────────────┤
+│      0  │ magic                                  │   8 B   │ ASCII "DOTTASES" │
+│      8  │ version                                │   1 B   │ 0x02             │
+│      9  │ argon2_memory_mib                      │   2 B   │ LE16             │
+│     11  │ argon2_passes                          │   1 B   │ uint8            │
+│     12  │ created_at                             │   8 B   │ LE64 Unix sec    │
+│     20  │ expires_at                             │   8 B   │ LE64 Unix sec    │
+│     28  │ machine_salt                           │  16 B   │ entropy_fill     │
+│     44  │ obfuscated_key                         │  32 B   │ master ⊕ stream  │
+│     76  │ mac                                    │  32 B   │ keyed BLAKE2b    │
+└─────────┴────────────────────────────────────────┴─────────┴──────────────────┘
+
+Total: 108 bytes.  All multi-byte fields are little-endian on disk.
+```
+
+`expires_at = 0` means "never expire" (configured `session_timeout = -1`).
+
+#### Cache-key derivation
+
+```
+cache_key = BLAKE2b(LE64(host_len) || hostname
+                 || LE64(user_len) || username
+                 || machine_salt[16],
+                    out_size = 32)             /* unkeyed BLAKE2b */
+```
+
+Variable-length inputs are LE64-prefixed; the fixed-width 16-byte salt is absorbed verbatim. Hostname comes from `gethostname(2)`; username from `getpwuid(getuid())` (kernel-anchored, unlike `getlogin(3)` or `getenv("USER")`).
+
+This is the one keyed-BLAKE2b carve-out in the codebase: `cache_key` is the *output* of derivation, not a key into a keyed primitive, so the "no `crypto_blake2b_keyed*` outside `mac.c`" rule does not apply here. The keyed primitive is reserved for the MAC step that follows.
+
+#### Obfuscation keystream
+
+```
+zero_nonce[24]    = { 0 }
+obfuscated_key[i] = master_key[i] XOR XChaCha20(cache_key, zero_nonce, ctr=0)[i]
+```
+
+The `(cache_key, zero_nonce)` pair is unique per cache file because `cache_key` incorporates the per-file `machine_salt`.
+
+This is **obfuscation, not encryption**: an attacker with read access to the cache file plus the host's hostname and username (recoverable trivially from `/etc/hostname` and `/etc/passwd`) can re-derive `cache_key`, regenerate the keystream, and recover `master_key`. Naming the field `obfuscated_key` keeps the threat model and the construction in agreement — this layer provides **integrity** (the MAC over the 76-byte prefix) and **resistance to casual cross-machine copy** (machine-binding fails on a different host); it does **not** provide local-file confidentiality.
+
+#### MAC
+
+```
+mac = crypto_mac_oneshot(cache_key, CRYPTO_DOMAIN_SESSION_MAC,
+                         /*data=*/&cache[0..76], /*data_len=*/76);
+```
+
+Verification is constant-time via `crypto_verify32`. Domain-separated under `CRYPTO_DOMAIN_SESSION_MAC` so a forged cache cannot pass as a SIV-style MAC under another module's key.
 
 ## Encryption workflow
 
@@ -499,28 +312,28 @@ instead.
 ```
 1. User: dotta add -p myprofile ~/.ssh/id_rsa --encrypt
 
-2. Policy decision (crypto/policy.c):
-     - Protected meta-files (.bootstrap, .dottaignore, .dotta/metadata.json)
-       are always plaintext (rejected with a clear error if --encrypt is
-       requested explicitly).
-     - Otherwise: --encrypt > --no-encrypt > previous state in metadata
-       > auto-encrypt patterns.
+2. Policy decision (core/policy.c):
+   - Protected meta-files (.bootstrap, .dottaignore, .dotta/metadata.json)
+     are always plaintext (rejected with a clear error if --encrypt is
+     requested explicitly).
+   - Otherwise priority: --encrypt > --no-encrypt > previous metadata state
+                         > auto-encrypt patterns > default plaintext.
 
 3. Read plaintext from filesystem.
 
-4. Encrypt (crypto/cipher via crypto/keymgr):
-     - keymgr resolves the master key (memory cache → disk session → prompt).
-     - kdf_profile_key:    master_key   + profile  → profile_key
-     - kdf_siv_subkeys:    profile_key  → mac_key, prf_key
-     - cipher_encrypt:     SIV over (path, plaintext) → keystream → ciphertext
-     - profile_key, mac_key, prf_key zeroed on the way out.
+4. Encrypt (crypto/keymgr → crypto/cipher):
+   - keymgr resolves master_key for current-config (memory_mib, passes).
+   - kdf_siv_subkeys: master_key + profile → mac_key, prf_key.
+   - cipher_encrypt: builds header, computes SIV, derives keystream seed,
+                     XChaCha20 → ciphertext.
+   - mac_key, prf_key wiped on every exit path.
 
 5. Store in Git:
-     - Create blob from ciphertext, update tree in profile branch.
+   - Create blob from ciphertext, update tree in profile branch.
 
 6. Metadata (core/metadata.c):
-     - Record encrypted=true, mode=0600 in .dotta/metadata.json.
-     - Commit metadata.json to profile branch.
+   - Record encrypted=true and mode in .dotta/metadata.json.
+   - Commit metadata.json to profile branch.
 ```
 
 ### `dotta apply`
@@ -531,409 +344,327 @@ instead.
 2. Load workspace (manifest + per-profile metadata).
 
 3. For each managed file (infra/content.c):
-     - Read blob from Git tree.
-     - Detect dotta magic + version with cipher_is_encrypted.
+   - Read blob from Git tree.
+   - Detect dotta magic + version with cipher_is_encrypted; cross-check
+     against metadata.encrypted via the 4-case truth table.
 
    IF ENCRYPTED:
-     - keymgr resolves master_key (cache or prompt, once per command).
-     - kdf_profile_key + kdf_siv_subkeys → mac_key, prf_key.
-     - cipher_decrypt: candidate = ciphertext ⊕ keystream;
-                       recompute SIV; constant-time compare; return on match,
-                       wipe on mismatch.
-     - keys zeroed on the way out.
+     - cipher_peek_params reads (memory_mib, passes) from blob header.
+     - keymgr resolves master_key for the BLOB's params (not current config).
+     - kdf_siv_subkeys → mac_key, prf_key.
+     - cipher_decrypt: derives seed, XChaCha20, recomputes SIV,
+                       constant-time compare; returns plaintext on match,
+                       wipes candidate on mismatch.
+     - keys wiped on every exit path.
 
    ELSE:
      - Use blob content directly.
 
 4. Deploy:
-     - Copy plaintext to target path.
-     - Restore mode (and ownership for root/ files) from metadata.
-     - Update deployment state.
+   - Copy plaintext to target path.
+   - Restore mode (and ownership for root/ files) from metadata.
+   - Update deployment state.
 ```
 
 ## Auto-encryption policy
 
-Files can be auto-encrypted by glob pattern.
+Implemented in `src/core/policy.c`. (Moved from `src/crypto/` in the v6 rewrite — the module evaluates a boolean from `config_t` and `metadata_t` and never calls a cryptographic primitive, so it does not belong in the crypto layer.)
 
-**Configuration (`config.toml`):**
+### Configuration
 
 ```toml
 [encryption]
 enabled = true
 auto_encrypt = [
-    ".ssh/id_*",        # SSH private keys
-    "*.key",            # Generic key files
-    ".gnupg/secring*",  # GPG secret keyrings
+    ".ssh/id_*",
+    "*.key",
+    ".gnupg/*",
 ]
 ```
 
-**Pattern matching (`crypto/policy.c`, evaluated via `base/gitignore.c`):**
+Patterns compile once into a `gitignore_ruleset_t` at `config_load` and live on the config handle (`config->auto_encrypt.rules`). Per-file matching runs in `encryption_policy_matches_auto_patterns`, which strips the storage prefix (`home/`, `root/`, `custom/`) before evaluation so users can write `.ssh/id_*` rather than `home/.ssh/id_*`.
 
-- Patterns compile once into a `gitignore_ruleset_t` at `config_load` and
-  are stored on the config handle (`config->auto_encrypt.rules`).
-- Per-file matching runs in `encryption_policy_matches_auto_patterns`,
-  which strips the storage prefix (`home/`, `root/`, `custom/`) before
-  evaluation so users write `.ssh/id_*` rather than `home/.ssh/id_*`.
-- Full gitignore semantics, including `!` negation
-  (`*.key` + `!public.key` correctly excludes `public.key`).
-- Patterns without `/` match basename at any depth; patterns with `/` are
-  anchored to the storage root.
+Full gitignore semantics including `!` negation, directory-only patterns, anchoring, and `**` recursive globs (via `base/gitignore`).
 
-**Decision priority (`encryption_policy_should_encrypt`):**
+### Decision priority
 
-1. **Protected meta-files** (`.bootstrap`, `.dottaignore`,
-   `.dotta/metadata.json`) — always plaintext. Explicit `--encrypt` on
-   these files is rejected with a clear error.
+`encryption_policy_should_encrypt`:
+
+1. **Protected meta-files** (`.bootstrap`, `.dottaignore`, `.dotta/metadata.json`) — always plaintext. Explicit `--encrypt` on these files is rejected with a clear error.
 2. **Explicit `--encrypt`** on the command line.
 3. **Explicit `--no-encrypt`** on the command line.
-4. **Previous state in metadata.json.** A file previously encrypted stays
-   encrypted on subsequent `update` (so workflows like
-   *add → modify → update* don't accidentally drop encryption).
-5. **Auto-encrypt patterns** as the final fallback.
+4. **Previous state in metadata.** A file previously encrypted stays encrypted on subsequent `update` so workflows like *add → modify → update* don't accidentally drop encryption.
+5. **Auto-encrypt patterns**.
+6. **Default plaintext.**
 
-The default is "no encryption" if no rule matches.
+Priorities 1 and 4 are **not** gated on `config.encryption_enabled`. If the user explicitly requested encryption or a file's prior state says "encrypted", the policy says so; the content layer surfaces a friendly "enable encryption" error rather than silently coercing a previously- encrypted file to plaintext (which would leak its content).
 
 ## Key management
 
-### `crypto/keymgr` lifecycle
+### Two-tier cache
 
 ```c
 struct keymgr {
-    balloon_params_t params;        // snapshot from config at create time
-    int32_t          session_timeout; // seconds; 0 = always prompt, -1 = never expire
-    uint8_t          master_key[KDF_KEY_SIZE];
-    bool             has_key;
-    time_t           cached_at;     // monotonic time, 0 if not cached
-    bool             mlocked;
+    /* Configuration snapshot — set at create time, never mutated. */
+    uint16_t current_memory_mib;
+    uint8_t  current_passes;
+    int32_t  session_timeout;     /* seconds; 0 = always prompt, -1 = never expire */
+
+    /* In-memory cache slot (single slot; routes by params). */
+    bool     has_key;
+    uint16_t cached_memory_mib;
+    uint8_t  cached_passes;
+    uint8_t  master_key[KDF_KEY_SIZE];
+    time_t   cached_at;           /* CLOCK_MONOTONIC seconds */
+
+    bool     mlocked;
 };
 ```
 
-The keymgr struct is best-effort `mlock`'d so the cached master key cannot
-be paged to disk. The (much larger) balloon buffer is `mlock`'d separately
-inside `balloon_derive` for the duration of one derivation call.
+The struct is best-effort `mlock`'d at create time so the cached master key cannot be paged. The much larger Argon2 work area is `mlock`'d separately inside `kdf_master_key` for the duration of one derivation.
 
-In-memory cache expiry is computed against `CLOCK_MONOTONIC`, which is
-immune to wall-clock manipulation. The on-disk session cache uses
-wall-clock timestamps because monotonic time resets on reboot, which would
-make the on-disk cache un-loadable across a reboot.
+In-memory cache expiry uses `CLOCK_MONOTONIC` so a wall-clock skew cannot extend the session. The on-disk session uses wall-clock seconds (a monotonic clock resets on reboot, which would defeat the persistence).
 
-Profile keys are **not** cached. They are derived on demand (one keyed
-hash, microseconds), used for one cipher call, then zeroed on the stack.
-Caching profile keys was tried and removed (see commit `0dff2a5b`); the
-performance gain did not justify the additional in-memory key surface.
+### Single-slot rationale
 
-### Cache lifecycle
+Argon2 params live in the blob header, so `cipher_decrypt` runs Argon2 under whatever params the blob carries. The on-disk session cache only ever holds **one** entry — the master key under the **current-config** params — so a fresh process always re-prompts for old-params blobs regardless of any in-memory multi-slot scheme.
 
-1. **First key request.** Try the in-memory cache. On miss, try the
-   on-disk session cache (skipped when `session_timeout == 0`). On miss,
-   read the passphrase (env var or interactive prompt), derive the master
-   key via `kdf_master_key` (the expensive step), cache it in memory,
-   write the on-disk cache.
-2. **Subsequent requests in the same process.** Memory cache hit, O(1).
-3. **Subsequent requests across processes.** On-disk cache hit, validated
-   against the machine identity and timestamps before accepting; promoted
-   to memory cache.
-4. **Expiration.** Default `session_timeout = 3600` seconds. `-1` means
-   never expire (cache until manual clear). `0` disables caching entirely
-   (always prompt; on-disk cache also disabled).
-5. **Cleanup.** `dotta key clear` zeroes the in-memory key and unlinks
-   the on-disk file. `keymgr_free` zeroes and `munlock`s on process exit.
+A multi-slot in-memory cache would optimise *only* the within-process case where one command touches blobs at multiple param settings. The narrow benefit doesn't justify slot-management machinery; single-slot keeps the invariants tractable. Cross-params transitions cost one re-prompt per transition — the operational remediation is to re-encrypt old files under one consistent params set.
 
-### Passphrase sources (priority order)
+### Param routing
 
-1. **In-memory cache** (this process, not expired).
-2. **On-disk session cache** (`session_timeout != 0`, MAC-valid, not expired).
-3. **`DOTTA_ENCRYPTION_PASSPHRASE`** environment variable (with a stderr
-   warning that env vars leak in process listings and inherited environs).
-4. **Interactive prompt** on stdin with echo disabled via `tcsetattr`.
+| Function                  | Params source                                 |
+|---------------------------|-----------------------------------------------|
+| `keymgr_encrypt`          | Current-config snapshot (latest strength)     |
+| `keymgr_decrypt`          | Blob-header params via `cipher_peek_params`   |
+| `keymgr_set_passphrase`   | Current-config snapshot                       |
+| `keymgr_probe_key`        | Current-config snapshot                       |
 
-### On-disk session cache (`~/.cache/dotta/session`)
+### Master-key resolution chain
 
-**Purpose.** Persist the master key across command invocations so users
-don't retype their passphrase every time.
+`keymgr_resolve(target_memory_mib, target_passes, out)`:
 
-**File format (108 bytes total, packed):**
+1. **In-memory slot match** for the target params + not expired → return.
+2. **Slot mismatch** (any has_key) → evict (single-slot eviction).
+3. **Always-prompt mode** (`session_timeout == 0`) → skip disk.
+4. **`session_load`:**
+   - Match → install slot, return.
+   - Mismatch params → discard the loaded key, **leave the file in place**
+     (it is the canonical current-config slot).
+   - `ERR_NOT_FOUND` / `ERR_CRYPTO` → fall through; `session_load` already
+     unlinked anything unrecoverable.
+   - `ERR_FS` → warn, fall through.
+5. **`passphrase_from_env`** with stderr advisory (env var leaks via `ps(1)` and child-process inheritance).
+6. **`passphrase_prompt`** otherwise.
+7. Derive under target params, install in slot, wipe passphrase.
+8. **Save to disk** only if `target_(mib, passes) == current_(mib, passes)` AND `session_timeout != 0`. Old-params masters never persist.
+
+### Passphrase rotation
+
+There is no automated rotation command. `keymgr_set_passphrase` derives the master under current-config params and replaces the cached slot, but every file encrypted under the old passphrase becomes unrecoverable on next decrypt. The CLI command `cmd_key_set` is responsible for surfacing the rotation warning before invoking the function.
+
+The user-facing procedure (`docs/encryption.md`):
 
 ```
-┌────────────┬─────────┬──────────┬──────────────┬──────────────┬──────────────┬───────────────┬──────────┐
-│ Magic      │ Version │ Reserved │ Created at   │ Expires at   │ Machine salt │ Encrypted key │ MAC      │
-├────────────┼─────────┼──────────┼──────────────┼──────────────┼──────────────┼───────────────┼──────────┤
-│ "DOTTASES" │ 0x01    │ 0x00 × 3 │ uint64       │ uint64       │ 16 bytes     │ 32 bytes      │ 32 bytes │
-│ 8 bytes    │ 1 byte  │ 3 bytes  │ 8 bytes      │ 8 bytes      │              │               │          │
-└────────────┴─────────┴──────────┴──────────────┴──────────────┴──────────────┴───────────────┴──────────┘
+dotta key clear
+dotta apply              # decrypt + redeploy under the OLD passphrase
+dotta key set            # NEW passphrase
+dotta remove <file> && dotta add <file>   # per encrypted file
 ```
 
-Timestamps are stored in native byte order (the cache is machine-bound
-and never migrates between hosts). The MAC computation canonicalizes
-both timestamps to little-endian so it is reproducible from the field
-values alone and does not silently depend on host byte order.
+A premature `dotta key set <new>` followed by `dotta apply` leaves old-passphrase blobs unrecoverable.
 
-**Cryptographic design:**
+### Session cache lifecycle
 
-```
-machine_id  = hostname || '\0' || username || '\0'   # two NUL-terminated fields
-cache_key   = H(machine_id || machine_salt, ctx="dottacch", key=NULL, out_len=32)
-keystream   = PRNG(cache_key, 32)
-encrypted_k = master_key ⊕ keystream                       # XOR obfuscation
-mac         = H(LE(created_at) || LE(expires_at) || machine_salt || encrypted_k,
-                ctx="dottamac", key=cache_key, out_len=32) # tamper-evident
-```
+1. **First key request.** Memory miss → disk miss (when timeout != 0) → passphrase (env or prompt) → Argon2id derivation → cache in memory → write to disk.
+2. **Subsequent requests in the same process.** Memory hit (O(1) until expiry).
+3. **Subsequent requests across processes.** Disk hit; promoted to memory.
+4. **Expiration.** Default `session_timeout = 3600` seconds. `-1` = never expire. `0` = never cache (always prompt; disk cache disabled).
+5. **Cleanup.** `dotta key clear` zeroes the in-memory slot and unlinks the on-disk file. `keymgr_free` zeroes and `munlock`s on process exit.
 
-> **Threat-model caveat — read this.** The on-disk cache is **obfuscated
-> with a host-bound XOR keystream and authenticated with a MAC**, but it
-> is **not encrypted by anything the attacker doesn't already have**. An
-> attacker who reads the cache file, knows the hostname, and knows the
-> username can reconstruct `machine_id`, recompute `cache_key`, regenerate
-> the keystream, and recover the master key — without ever cracking the
-> passphrase.
->
-> This is a deliberate UX trade-off: an actually-passphrase-encrypted
-> cache would require typing the passphrase to load it, defeating the
-> cache's reason to exist. It means **balloon hardness is not the only
-> wall** an attacker has to climb; on a host the attacker controls, the
-> cache is a shorter wall. Threat scenarios where this matters: backup
-> theft, malware running as the user, access to a stale disk image,
-> shared filesystems with bad permissions.
+### Session-cache load validation
 
-**Cache load validation.** `session_load`:
-- Read the file. Verify mode is exactly `0600` (delete and refuse
-  otherwise).
-- Validate magic and version.
-- Check `expires_at` against wall-clock `time()`.
-- Recompute `cache_key` from the current host's `machine_id` plus the
-  stored `machine_salt`, recompute the MAC, constant-time compare.
-- On any failure, delete the file and report cache miss.
-- On success, XOR-decode the master key and return it.
+`session_load` validates in this order:
 
-**File permissions.** The cache directory `~/.cache/dotta/` is created
-with mode `0700`; the cache file with mode `0600`. Both are checked on
-every load.
+1. `open(O_NOFOLLOW)` followed by `fstat` against the opened fd (closes the TOCTOU window).
+2. Regular file, mode exactly `0600`, owned by current uid.
+3. File size exactly 108 bytes.
+4. Magic + version.
+5. `derive_cache_key` over the (still-unauthenticated) salt.
+6. MAC verify (constant-time `crypto_verify32`) — runs **before** expiry so the trusted bytes drive the comparison.
+7. Expiry against wall-clock.
+8. Recorded params within `KDF_ARGON2_*_MIN/MAX`.
+9. Deobfuscate `master_key` directly into the caller's output buffer.
 
-**What this protects against:**
-- Casual inspection (cache content is not plaintext).
-- Cross-machine copying (machine binding fails the MAC).
-- Stale credentials (auto-expiry).
-- Tampering (MAC detects modification).
+On any failure caused by the file itself (corruption, mismatch, expiry, wrong perms) the file is unlinked. On transient I/O failure the file is left in place.
 
-**What it does not protect against:**
-- Local root, malicious code running as the user, memory dumps, or
-  forensic disk imaging on the host that wrote the cache.
+`session_clear` overwrites the file with zeros, fsyncs, then unlinks. Best-effort: copy-on-write filesystems (btrfs, zfs, APFS) may retain the freed inode contents.
 
-### Memory protection
+## Memory protection
 
-- Master key in `keymgr` struct: best-effort `mlock`'d, `hydro_memzero`'d
-  on `keymgr_free`, on `keymgr_clear`, and on signal-handled exit.
-- Balloon buffer: best-effort `mlock`'d, `hydro_memzero`'d before free
-  on every exit path of `balloon_derive`.
-- Passphrase buffers: allocated by `crypto/passphrase` with
-  `buffer_secure_free` semantics (mlock on alloc, zero on free).
-- Subkeys (`profile_key`, `mac_key`, `prf_key`, `keystream_seed`): live
-  on the stack for one cipher call; zeroed before the function returns
-  on both success and failure paths.
+- **Master key** (in `keymgr` struct): best-effort `mlock`'d, `crypto_wipe`'d on `keymgr_free`, `keymgr_clear`, and signal-handled exit.
+- **Argon2 work area** (`memory_mib * 1024 * 1024` bytes): best-effort `mlock`'d for the duration of one derivation; `crypto_wipe`'d before free on every exit path. Defense-in-depth alongside Monocypher's internal zeroization.
+- **Passphrase buffers** (allocated by `sys/passphrase`): right-sized and `mlock`'d; released via `buffer_secure_free(p, len + 1)` (the `+1` covers the NUL terminator that is also `mlock`'d).
+- **Subkeys** (`mac_key`, `prf_key`, keystream seed, candidate plaintext): live on the stack for one cipher call; `crypto_wipe`'d before return on both success and failure paths.
 
-`mlock` failures are non-fatal but warn loudly to stderr — the warning
-text points the user at `RLIMIT_MEMLOCK` (`ulimit -l`). The default macOS
-limit (64 KiB) is too small to lock the balloon buffer, so unprivileged
-users will see the warning unless they raise the limit.
-
-### Environment variable risk
-
-```bash
-# Insecure — passphrase visible in process listings and child environs.
-DOTTA_ENCRYPTION_PASSPHRASE="secret" dotta apply
-
-# Better — interactive prompt, cached for the session.
-dotta key set
-dotta apply
-```
-
-`keymgr` warns to stderr on every command that uses
-`DOTTA_ENCRYPTION_PASSPHRASE`.
+`mlock` failures are non-fatal — `kdf_master_key` and `keymgr_create` each emit a one-time-per-process advisory pointing at `RLIMIT_MEMLOCK` (`ulimit -l`). The default macOS limit (64 KiB) is too small to lock any non-trivial Argon2 work area.
 
 ## Performance
 
-### Master key derivation (cold start)
+### Master-key derivation (cold session)
 
-| `memlimit` | Approx. wall-clock on commodity hardware |
-|------------|------------------------------------------|
-|  1 MiB     | ~30 ms (CI / test only — minimum allowed) |
-|  8 MiB     | ~600 ms (default)                         |
-| 16 MiB     | ~1.2 s                                    |
-| 32 MiB     | ~2.5 s (uncomfortable interactively)      |
+Re-bench on real hardware before tuning. Approximate values on commodity 2024-era hardware:
 
-These numbers come from the user-visible config sample
-(`etc/config.toml.sample`). Re-bench on your hardware before tuning.
+| Preset      | memory_mib | passes | Wall-clock     |
+|-------------|------------|--------|----------------|
+| `fast`      |    64      |   3    | ~250–400 ms    |
+| `balanced`  |   256      |   3    | ~1.0 s         |
+| `paranoid`  |  1024      |   4    | ~4–6 s         |
 
-Note: pushing memory hardness much harder than the on-disk cache's
-strength does not help in the realistic threat model (see *Session cache*
-threat-model caveat above). 8 MiB is the chosen default because it
-saturates the cache's strength while staying interactive.
+The defender pays this once per cold cache. The attacker pays it for every passphrase guess, multiplied by `attacker_RAM / memory_mib` parallel guesses.
 
-### Per-file overhead (warm session)
+### Per-file overhead (warm cache)
 
-Once the master key is cached, every file encrypt or decrypt costs:
+Once master_key is cached:
 
-- 1 keyed BLAKE2 (`kdf_profile_key`), microseconds.
-- 2 KDF subkey derivations (`kdf_siv_subkeys`), microseconds.
-- 1 SIV computation (one BLAKE2 over `LE(path_len) + path + plaintext`),
-  bounded by file size; megabytes per second on commodity hardware.
-- 1 keystream-seed derivation (one BLAKE2), microseconds.
-- 1 PRNG fill of `plaintext_len` bytes plus an in-place XOR, both
-  bandwidth-bound.
+- 2 keyed BLAKE2b for SIV subkeys (`kdf_siv_subkeys`), µs.
+- 1 keyed BLAKE2b absorption pass over `(header, path, plaintext)` for the SIV — bandwidth-bound.
+- 1 keyed BLAKE2b for the keystream seed, µs.
+- 1 XChaCha20 over `plaintext_len` bytes, bandwidth-bound.
 
-For typical dotfiles (well under 100 KiB), per-file overhead is in the
-millisecond range — dominated by file I/O, not crypto.
+For typical dotfiles (well under 100 KiB), per-file overhead is in the millisecond range — dominated by file I/O, not crypto.
 
 ### Content cache
 
-`infra/content.c` adds a content-cache that deduplicates decryption when
-the same blob OID is read multiple times within a single command:
+`infra/content.c` deduplicates decryption when the same blob OID is read multiple times within a single command. Hashmap keyed by blob OID; the cache lives for one command and zeroes plaintext buffers before free.
 
-```c
-content_cache_t *cache = content_cache_create(repo, keymgr);
-for (each file) {
-    const buffer_t *content;            // borrowed reference
-    content_cache_get_from_blob_oid(cache, &blob_oid, storage_path,
-                                    profile, expected_encrypted, &content);
-    // use content; cache owns the buffer.
-}
-content_cache_free(cache);              // zeroes plaintext before free
-```
-
-Hashmap keyed by blob OID. Cache lives for one command; freed buffers
-are zeroed first.
-
-## Configuration
-
-### `[encryption]` section
+## Configuration reference
 
 ```toml
 [encryption]
-enabled = true                  # opt-in; default false
-memlimit = 8                    # MiB; power of two, >= 1; default 8
-session_timeout = 3600          # seconds; -1 = never, 0 = always prompt
+
+# Enable encryption support. Default: false (opt-in).
+enabled = false
+
+# Strength preset. Default: "balanced".
+strength = "balanced"
+
+# Raw Argon2id overrides (advanced; both must be set together — setting one
+# is a config error). When set, `strength` is ignored. Bounds:
+#   argon2_memory_mib in [8, 4096]
+#   argon2_passes     in [1, 20]
+# argon2_memory_mib = 256
+# argon2_passes     = 3
+
+# Master-key cache lifetime (seconds).
+#   0    : always prompt (also disables on-disk session cache)
+#   -1   : never expire
+#   N>0  : seconds before expiry
+# Default: 3600.
+session_timeout = 3600
+
+# Auto-encrypt patterns (gitignore-style).
 auto_encrypt = [
     ".ssh/id_*",
+    ".ssh/*.pem",
+    ".gnupg/*",
     "*.key",
-    ".gnupg/secring*",
+    ".aws/credentials",
+    ".netrc",
+    ".npmrc",
+    ".pypirc",
+    ".config/gh/hosts.yml",
 ]
 ```
 
-The `memlimit` field is parsed in mebibytes for user friendliness and
-converted to bytes at config-load. The validator enforces:
+### Validation
 
-- `memlimit_bytes >= 1 MiB`,
-- `memlimit_bytes` is a power of two (so the modular index reduction is
-  bias-free).
+Run at config-load AND at the crypto boundary:
 
-`rounds` and `delta` are not exposed in `config.toml` — the defaults (3
-and 3) match the Boneh paper's parameters and align with the algorithm's
-provable memory-hardness bound. They are still validated at the crypto
-boundary (`balloon.c::validate_params`) for defense in depth.
+| Field                                    | Rule                                                       | Error                |
+|------------------------------------------|------------------------------------------------------------|----------------------|
+| `strength`                               | `"fast"`, `"balanced"`, or `"paranoid"`                    | `ERR_INVALID_CONFIG` |
+| `argon2_memory_mib`                      | 8..4096 if set                                             | `ERR_INVALID_CONFIG` |
+| `argon2_passes`                          | 1..20 if set                                               | `ERR_INVALID_CONFIG` |
+| `argon2_memory_mib` and `argon2_passes`  | Both set together or neither                               | `ERR_INVALID_CONFIG` |
+| Raw overrides + `strength`               | Raw overrides win; `strength` ignored (warning to stderr)  | warning              |
+| `session_timeout`                        | -1, 0, or 1..INT32_MAX                                     | `ERR_INVALID_CONFIG` |
+| `auto_encrypt[i]`                        | Valid gitignore pattern                                    | `ERR_INVALID_CONFIG` |
 
-`session_timeout` accepts:
-- `-1` — never expire (until manual clear via `dotta key clear`).
-- `0` — never cache (always prompt; on-disk cache disabled).
-- positive integer — seconds before expiry.
+Crypto-boundary checks (`kdf_master_key`, `cipher_peek_params`, `cipher_encrypt`):
 
-### Tuning notes
+- `memory_mib ∈ [8, 4096]` else `ERR_CRYPTO`
+- `passes ∈ [1, 20]` else `ERR_CRYPTO`
 
-- **Choose `memlimit` against your hardware**, not against an absolute
-  byte count. The defender pays the derivation cost on a cold session;
-  the attacker pays it per guess. Aim for ~500 ms – 1 s of wall-clock on
-  the slowest machine you intend to use. Memory hardness scales
-  proportionally to `memlimit_bytes`.
-- **`memlimit` must match across machines** that share the same
-  encrypted profiles. Different `memlimit` produces a different master
-  key for the same passphrase (params are domain-mixed into the absorbed
-  state), so files encrypted on one machine will fail SIV verification
-  on another with a different `memlimit`.
+### Hardcoded constants
+
+| Constant                  | Value                          | Rationale                                                   |
+|---------------------------|--------------------------------|-------------------------------------------------------------|
+| Algorithm                 | Argon2id                       | RFC 9106; only memory-hard primitive in Monocypher          |
+| Argon2id salt             | 16-byte constant in `kdf.c`    | Single user, no cross-target benefit                        |
+| Argon2 lanes              | 1                              | Forced by Monocypher's single-threaded implementation       |
+| Cipher MAC tag size       | 32 bytes (BLAKE2b output)      | Long-term Git storage; 256-bit collision boundary           |
+| Cipher nonce size         | 24 bytes (XChaCha20 nonce)     | First 24 bytes of the 32-byte SIV                           |
+| Key sizes                 | 32 bytes                       | BLAKE2b output; ChaCha20 key                                |
+| Argon2 `extras.key`       | Not used                       | Pepper (rejected; see *Salt* §)                             |
+| Argon2 `extras.ad`        | Not used                       | Hostname / install-id binding breaks cross-machine recovery |
 
 ## Security analysis
 
-### Cryptographic assumptions
+### Cryptographic primitives
 
-- **Gimli permutation security.** Peer-reviewed; NIST lightweight crypto
-  finalist; underlying primitive of every libhydrogen operation here.
-- **KMAC-style construction soundness.** libhydrogen's keyed hash and
-  KDF use a KMAC-like framing over Gimli (similar in spirit to NIST
-  SP 800-185).
-- **Balloon hashing memory-hardness** (Boneh, Corrigan-Gibbs, Schechter,
-  2016). The implementation follows the paper's primary data-dependent
-  scheme with `delta = 3` and full-block dependencies in expansion and
-  mixing.
+- **Argon2id** — RFC 9106, memory-hard password-based KDF.
+- **BLAKE2b** — RFC 7693, used keyed for MAC and unkeyed for cache_key derivation.
+- **XChaCha20** — RFC 8439 ChaCha20 with the Bernstein 24-byte-nonce extension; used by libsodium and Monocypher.
+- **SIV pattern** — RFC 5297 in spirit; concrete construction is bespoke ETM-SIV with BLAKE2b.
 
-### Known limitations
+### Key invariants
 
-1. **Deterministic encryption leaks change patterns.** Identical files
-   under the same key produce identical ciphertext; Git history reveals
-   *when* an encrypted file changed, not what changed to. This is the
-   intentional trade for Git friendliness.
-2. **Storage path is part of the AAD.** Renaming an encrypted file
-   requires re-encrypting it under the new path. The path itself is
-   recorded in plaintext in `.dotta/metadata.json` (visible to anyone
-   with the repo).
-3. **Profile names are public.** They appear as Git branch names and in
-   metadata. Per-profile keys provide cryptographic isolation between
-   profiles, but the existence of profiles is not hidden.
-4. **Session cache is obfuscation, not encryption.** Re-stated here from
-   the threat-model section: an attacker with the cache file plus the
-   hostname and username can recover the master key without cracking
-   the passphrase. `dotta key clear` is the response when this matters
-   (e.g., before lending or returning a machine).
+- **Determinism.** Identical `(passphrase, profile, path, plaintext, params)` produces byte-identical ciphertext. No randomness in the encryption path.
+- **Cipher isolation.** `cipher.c` never sees the master key or the profile name; it operates only on `(mac_key, prf_key)`.
+- **Framing.** Every variable-length input to keyed BLAKE2b is LE64-prefixed by `crypto_mac_absorb`. Domain tags are unique (compile-time check).
+- **Header binding.** The 9-byte cipher header is bound into the SIV scope. Any tamper fails MAC, not parse.
+- **Constant-time compare.** Tag bytes compared via `crypto_verify32`, never `memcmp`.
+- **Output zeroization.** Every error path wipes partial outputs via `crypto_wipe` before return.
+- **DoS bounds.** Header-recorded Argon2 params validated against `KDF_ARGON2_*_MAX` BEFORE allocation.
+- **Path canonicalization.** `cipher.c` does NO path normalization; the producer's canonical bytes are bound verbatim. Cross-platform Unicode drift falls on the caller (see *Limitations*).
 
 ### Defense in depth
 
-- Magic + version mismatch produces a precise error, not a silent
-  "wrong-passphrase".
-- SIV verification is constant-time (`hydro_equal`).
-- Decrypt's candidate plaintext is wiped on mismatch and never returned.
-- `mlock` failure warns rather than failing silently.
-- Balloon parameters are validated at both the config and crypto layers.
-- Cipher input bounds are enforced at the crypto entry points regardless
-  of upstream caller.
+- Argon2 work area wiped twice on every exit path (Monocypher's internal zero plus an explicit `crypto_wipe`).
+- Header validation runs at every boundary that sees the bytes (`cipher_peek_params`, `cipher_encrypt`, `cipher_decrypt`).
+- Session cache load: MAC verify before expiry check (trusted bytes drive the comparison).
+- Magic + version mismatch routes through the metadata-vs-sniff truth table before any decrypt attempt.
+
+### Limitations
+
+1. **Deterministic encryption leaks change patterns.** Identical files under the same key produce identical ciphertext; Git history reveals **whether** an encrypted file changed at a given path. Intrinsic to deterministic SIV.
+2. **Storage path is part of the SIV input.** Renaming an encrypted file requires re-encrypting under the new path. The path itself appears in plaintext in `.dotta/metadata.json`.
+3. **Profile names are public.** They appear as Git branch names. Per-profile keys provide cryptographic isolation; profile *existence* is not hidden.
+4. **Session cache is obfuscation, not encryption.** Re-stated from the threat model: an attacker with the cache file plus hostname and username can recover the master key without cracking the passphrase. `dotta key clear` is the response when this matters.
+5. **Non-ASCII paths are not portable across normalization-divergent machines.** Unicode NFC vs. NFD path bytes produce distinct SIVs. NFC normalization is deferred until needed; remediation is `dotta remove` + `dotta add` on the target machine.
 
 ## Implementation map
 
-| Concern                    | Module                | Public surface                                                        |
-|----------------------------|-----------------------|-----------------------------------------------------------------------|
-| Memory-hard derivation     | `src/crypto/balloon`  | `balloon_derive`, `balloon_params_t`, BALLOON_* defaults              |
-| Keyed-BLAKE2 / KDF chain   | `src/crypto/kdf`      | `kdf_master_key`, `kdf_profile_key`, `kdf_siv_subkeys`                |
-| SIV encrypt/decrypt + format| `src/crypto/cipher`  | `cipher_encrypt`, `cipher_decrypt`, `cipher_is_encrypted`             |
-| Master-key cache, lifecycle| `src/crypto/keymgr`   | `keymgr_create`, `keymgr_encrypt`, `keymgr_decrypt`, …                |
-| On-disk session cache      | `src/crypto/session`  | `session_load`, `session_save`, `session_clear`                       |
-| Passphrase prompt + env    | `src/crypto/passphrase` | `passphrase_prompt`, `passphrase_from_env`                          |
-| Auto-encrypt policy        | `src/crypto/policy`   | `encryption_policy_should_encrypt`, …                                 |
-| Content cache              | `src/infra/content`   | `content_cache_*`                                                     |
+| Concern                       | Module                | Public surface                                                 |
+|-------------------------------|-----------------------|----------------------------------------------------------------|
+| Memory-hard derivation        | `src/crypto/kdf`      | `kdf_master_key`, `kdf_siv_subkeys`, `kdf_validate_params`     |
+| Keyed-BLAKE2b chokepoint      | `src/crypto/mac`      | `crypto_mac_init/absorb/final/oneshot`, `crypto_domain_t`      |
+| SIV encrypt/decrypt + format  | `src/crypto/cipher`   | `cipher_encrypt`, `cipher_decrypt`, `cipher_is_encrypted`, `cipher_peek_params` |
+| Master-key lifecycle          | `src/crypto/keymgr`   | `keymgr_create/encrypt/decrypt/set_passphrase/clear/probe_key/time_until_expiry/free` |
+| On-disk session cache         | `src/crypto/session`  | `session_save`, `session_load`, `session_clear`                |
+| Passphrase prompt + env       | `src/sys/passphrase`  | `passphrase_prompt`, `passphrase_from_env`                     |
+| Cryptographic random bytes    | `src/sys/entropy`     | `entropy_fill`                                                 |
+| Encryption policy             | `src/core/policy`     | `encryption_policy_should_encrypt`, `encryption_policy_matches_auto_patterns`, `encryption_policy_is_active` |
+| Content cache (decrypt cache) | `src/infra/content`   | `content_cache_*`                                              |
 
-### Context strings
-
-| Context     | Module           | Purpose                                                  |
-|-------------|------------------|----------------------------------------------------------|
-| `dottabl0`  | crypto/balloon   | Stage 0 absorb (passphrase + params → state)             |
-| `dottabl1`  | crypto/balloon   | Stage 1 expansion (full-block squeeze per index)         |
-| `dottabli`  | crypto/balloon   | Stage 2 index-seed derivation                            |
-| `dottablm`  | crypto/balloon   | Stage 2 mix (full-block squeeze per (round, index))      |
-| `dottablf`  | crypto/balloon   | Stage 3 finalization                                     |
-| `profile `  | crypto/kdf       | `master_key, profile_name → profile_key`                 |
-| `dottasiv`  | crypto/kdf       | `profile_key → mac_key, prf_key`                         |
-| `dottamac`  | crypto/cipher    | SIV computation over `(path, plaintext)`                 |
-| `dottactr`  | crypto/cipher    | Keystream-seed derivation from the SIV under `prf_key`   |
-| `dottacch`  | crypto/session   | Cache key derivation from machine identity               |
-| `dottamac`  | crypto/session   | Cache MAC (key material disjoint from the SIV's `dottamac`) |
-
-The `"dottamac"` context is intentionally shared between the SIV MAC and
-the session-cache MAC — both are keyed BLAKE2s, but the *keys* come from
-disjoint key material (profile-derived `mac_key` vs. machine-derived
-`cache_key`), so cross-protocol confusion is not possible.
+`policy` and `passphrase` moved out of `src/crypto/` in this rewrite. Neither calls a cryptographic primitive — `policy` resolves a boolean from `config_t` and `metadata_t`; `passphrase` is TTY UX with `mlock`-backed buffer ownership — so they did not belong in the crypto layer.
 
 ## References
 
-- [libhydrogen documentation](https://github.com/jedisct1/libhydrogen/wiki)
-- Balloon Hashing — Boneh, Corrigan-Gibbs, Schechter (2016).
-  [eprint.iacr.org/2016/027](https://eprint.iacr.org/2016/027)
-- SIV — RFC 5297. [tools.ietf.org/html/rfc5297](https://tools.ietf.org/html/rfc5297)
-- KMAC — NIST SP 800-185. [csrc.nist.gov/publications/detail/sp/800-185/final](https://csrc.nist.gov/publications/detail/sp/800-185/final)
-- Gimli permutation. [gimli.cr.yp.to](https://gimli.cr.yp.to/)
-- Source: `src/crypto/{balloon,kdf,cipher,keymgr,session,passphrase,policy}.{c,h}`,
-  `src/infra/content.{c,h}`.
+- Argon2 — RFC 9106. <https://datatracker.ietf.org/doc/html/rfc9106>
+- BLAKE2 — RFC 7693. <https://datatracker.ietf.org/doc/html/rfc7693>
+- ChaCha20 / XChaCha20 — RFC 8439. <https://datatracker.ietf.org/doc/html/rfc8439>
+- SIV — RFC 5297. <https://datatracker.ietf.org/doc/html/rfc5297>
+- Monocypher — <https://monocypher.org/>
+- Source: `src/crypto/{kdf,mac,cipher,keymgr,session}.{c,h}`, `src/sys/{passphrase,entropy}.{c,h}`, `src/core/policy.{c,h}`, `src/infra/content.{c,h}`.

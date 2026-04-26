@@ -82,7 +82,7 @@ static bool is_file_encrypted(
         return false;  /* Can't load blob - assume not encrypted */
     }
 
-    const unsigned char *data = (const unsigned char *) git_blob_rawcontent(blob);
+    const uint8_t *data = (const uint8_t *) git_blob_rawcontent(blob);
     size_t size = git_blob_rawsize(blob);
     bool encrypted = cipher_is_encrypted(data, size);
 

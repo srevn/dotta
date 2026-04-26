@@ -16,7 +16,6 @@
 
 #include <errno.h>
 #include <fcntl.h>
-#include <hydrogen.h>
 #include <signal.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -27,6 +26,7 @@
 #include <unistd.h>
 
 #include "base/error.h"
+#include "base/secure.h"
 
 /* Defined in main.c. See sys/process.h "Threading and signal model"
  * for the host-program contract. Updated only by process_run() —
@@ -224,7 +224,7 @@ static char *capture_grow_secure(
     }
     if (buf) {
         memcpy(grown, buf, cur_len);
-        hydro_memzero(buf, *capacity_inout);
+        secure_wipe(buf, *capacity_inout);
         free(buf);
     }
     *capacity_inout = cap;
@@ -724,7 +724,7 @@ cleanup:
      * Secure captures get a wipe first so partial-read bytes do
      * not linger after a mid-capture failure. */
     if (capture && spec->secure_capture) {
-        hydro_memzero(capture, cap_capacity);
+        secure_wipe(capture, cap_capacity);
     }
     free(capture);
 
@@ -736,7 +736,7 @@ void process_result_dispose(process_result_t *result) {
         return;
     }
     if (result->secure && result->output) {
-        hydro_memzero(result->output, result->output_len);
+        secure_wipe(result->output, result->output_len);
     }
     free(result->output);
     *result = (process_result_t) { 0 };

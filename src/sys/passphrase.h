@@ -17,7 +17,7 @@
  *     buffer_secure_free(passphrase, passphrase_len + 1);
  *
  * The +1 covers the NUL terminator that is guaranteed to be present
- * and also mlock'd. Callers MUST NOT inline munlock / hydro_memzero /
+ * and also mlock'd. Callers MUST NOT inline munlock / secure_wipe /
  * free — buffer_secure_free is the single correct sequence.
  *
  * Terminal safety (passphrase_prompt only):

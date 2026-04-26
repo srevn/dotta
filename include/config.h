@@ -13,7 +13,7 @@
 
 /* Forward declaration — kept opaque so consumers of struct config do
  * not transitively pull in the gitignore engine. The full type lives
- * in base/gitignore.h; only utils/config.c and crypto/policy.c touch
+ * in base/gitignore.h; only utils/config.c and core/policy.c touch
  * the rules directly. */
 typedef struct gitignore_ruleset gitignore_ruleset_t;
 
@@ -74,12 +74,28 @@ struct config {
     char *diverged_strategy;      /* Strategy for diverged branches: warn, rebase, merge, ours, theirs */
 
     /* [encryption] */
-    bool encryption_enabled;      /* Enable encryption feature (default: false) */
-    char **auto_encrypt_patterns; /* Auto-encrypt patterns (gitignore-style) */
+    bool encryption_enabled;                  /* Enable encryption feature (default: false) */
+    char **auto_encrypt_patterns;             /* Auto-encrypt patterns (gitignore-style) */
     size_t auto_encrypt_pattern_count;
     config_auto_encrypt_rules_t auto_encrypt; /* Compiled form of auto_encrypt_patterns */
-    size_t encryption_memlimit;   /* Balloon hashing memory budget in BYTES; power of two, >= 1 MiB */
-    int32_t session_timeout;      /* Key cache timeout in seconds (default: 3600, 0 = always prompt, -1 = never expire) */
+
+    /* Argon2id derivation parameters resolved at config_load.
+     *
+     * Either set the user-friendly `strength` preset (fast/balanced/paranoid)
+     * or override the raw `argon2_memory_mib` / `argon2_passes` pair; the
+     * parser materialises the resolved values into the two fields below.
+     * Defaults to the "balanced" preset (256 MiB, 3 passes ≈ 1 s on
+     * commodity hardware).
+     *
+     * Bounds are enforced via crypto/kdf.h's KDF_ARGON2_*_MIN/MAX both
+     * at config-load and at the crypto boundary inside kdf_master_key
+     * (defense in depth — a tampered cipher-blob header is rejected
+     * by cipher_peek_params before the keymgr ever invokes the KDF).
+     */
+    uint16_t encryption_argon2_memory_mib;    /* 8..4096 MiB */
+    uint8_t encryption_argon2_passes;         /* 1..20 */
+
+    int32_t session_timeout;                  /* Key cache timeout in seconds (default: 3600, 0 = always prompt, -1 = never expire) */
 };
 
 #endif /* DOTTA_CONFIG_DEF_H */

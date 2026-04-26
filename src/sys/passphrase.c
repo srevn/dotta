@@ -2,10 +2,9 @@
  * passphrase.c — Secure passphrase acquisition implementation
  */
 
-#include "crypto/passphrase.h"
+#include "sys/passphrase.h"
 
 #include <errno.h>
-#include <hydrogen.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -16,6 +15,7 @@
 
 #include "base/buffer.h"
 #include "base/error.h"
+#include "base/secure.h"
 
 /* Maximum passphrase length — a defensive cap against runaway stdin
  * redirects. Well beyond any human-typed passphrase; trips only on
@@ -34,35 +34,13 @@
  *   SIGHUP  (controlling terminal hangup)
  *   SIGQUIT (ctrl-\)
  *
- * The handler runs in an async-signal-safe context — only sig_atomic_t
+ * Handler runs in an async-signal-safe context — sig_atomic_t
  * loads/stores and the narrow POSIX-defined async-safe syscalls
  * (tcsetattr, signal, raise) are permitted. We park the saved
  * terminal attributes at file scope so the handler can read them
  * without a stack frame lookup; access is gated by a sig_atomic_t
  * flag that is set before the handler is installed and cleared
  * before it is uninstalled.
- *
- * Ordering invariants (violation leaves the terminal or signal
- * table in an inconsistent state):
- *
- *   Setup:     save termios → set flag = 1 → install handlers →
- *              disable echo
- *
- *     A signal between "set flag" and "install handlers"
- *     terminates by default — echo has not yet been disabled, so
- *     the terminal is already in a good state.
- *
- *     A signal between "install handlers" and "disable echo"
- *     enters the handler, restores to saved_term_for_handler
- *     (which is the current state — a no-op), re-raises with
- *     default disposition, terminates normally.
- *
- *   Teardown:  restore echo → clear flag → uninstall handlers
- *
- *     A signal between "clear flag" and "uninstall handlers"
- *     enters the handler, sees flag == 0, does not call tcsetattr
- *     (echo is already restored), re-raises with default
- *     disposition. Terminal and exit status both correct.
  *
  * Non-reentrant. A second caller in the same process would
  * overwrite saved_term_for_handler mid-window. Dotta is
@@ -77,10 +55,7 @@ static volatile sig_atomic_t saved_term_active = 0;
  * terminate-the-process, which is exactly the scenario where
  * restoration matters. */
 static const int HANDLED_SIGNALS[] = {
-    SIGINT,
-    SIGTERM,
-    SIGHUP,
-    SIGQUIT,
+    SIGINT, SIGTERM, SIGHUP, SIGQUIT,
 };
 #define HANDLED_SIGNALS_COUNT \
     (sizeof(HANDLED_SIGNALS) / sizeof(HANDLED_SIGNALS[0]))
@@ -264,11 +239,16 @@ error_t *passphrase_prompt(
         return ERROR(ERR_MEMORY, "Failed to allocate passphrase buffer");
     }
 
-    /* Best-effort mlock. Non-fatal on failure (the process may
-     * lack RLIMIT_MEMLOCK headroom); the bytes still live in the
-     * caller's memory and are wiped before free. */
+    /* Best-effort mlock. Non-fatal on failure (the process may lack
+     * RLIMIT_MEMLOCK headroom); the bytes still live in the caller's
+     * memory and are wiped before free. The advisory is gated by a
+     * process-wide flag in `secure_mlock_warn` and shared with
+     * kdf and keymgr so the user sees one warning per process. */
     if (mlock(passphrase, MAX_PASSPHRASE_LENGTH + 1) != 0) {
-        /* no-op */
+        secure_mlock_warn(
+            errno, "%d-byte passphrase read buffer",
+            MAX_PASSPHRASE_LENGTH + 1
+        );
     }
 
     /* EINTR retry: non-terminating signals interrupt fgets
@@ -335,7 +315,9 @@ error_t *passphrase_prompt(
     }
 
     if (mlock(tight, len + 1) != 0) {
-        /* Best-effort; non-fatal. */
+        secure_mlock_warn(
+            errno, "%zu-byte passphrase buffer", len + 1
+        );
     }
 
     memcpy(tight, passphrase, len + 1);
@@ -353,6 +335,17 @@ error_t *passphrase_prompt(
  * Get passphrase from environment variable
  *
  * Reads from DOTTA_ENCRYPTION_PASSPHRASE if set.
+ *
+ * After copying the passphrase into a heap buffer, the env var is
+ * unset via `unsetenv` so subprocesses spawned by dotta do not
+ * inherit it. The original `getenv` string is libc-owned and cannot
+ * be wiped — `unsetenv` is the closest available approximation to
+ * scrubbing it (the libc may relink the environ entry, but recent
+ * glibc/macOS leave only a small residue and the visible env loses
+ * the variable). This is defense-in-depth against the env-var
+ * inheritance vector flagged by the keymgr advisory; the underlying
+ * "env-var passphrases are insecure" trade-off is the user's choice
+ * to accept.
  *
  * @param out_passphrase Passphrase (caller must free and zero)
  * @param out_len Passphrase length
@@ -376,12 +369,23 @@ error_t *passphrase_from_env(
         return ERROR(ERR_MEMORY, "Failed to allocate passphrase buffer");
     }
 
-    /* Lock memory to prevent swapping */
+    /* Lock memory to prevent swapping. Best-effort; non-fatal on
+     * failure. Process isolation still applies. */
     if (mlock(passphrase, len + 1) != 0) {
-        /* Best-effort; non-fatal. Process isolation still applies. */
+        secure_mlock_warn(
+            errno, "%zu-byte env-var passphrase buffer", len + 1
+        );
     }
 
     memcpy(passphrase, env_passphrase, len + 1);
+
+    /* Drop the env-var so child processes don't inherit it. The
+     * `getenv` pointer is invalidated by `unsetenv` per POSIX, so we
+     * MUST have completed `memcpy` above before this call. Failure
+     * is non-fatal — the copy in `passphrase` is what we hand back to
+     * the caller; the env-var residue is a defense-in-depth concern
+     * (the user already accepted the env-var trade-off). */
+    (void) unsetenv("DOTTA_ENCRYPTION_PASSPHRASE");
 
     *out_passphrase = passphrase;
     *out_len = len;

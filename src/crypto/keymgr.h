@@ -1,39 +1,67 @@
 /**
- * keymgr.h - Encryption key management and session caching
+ * keymgr.h — Master-key lifecycle and per-operation subkey acquisition
  *
- * Manages the encryption master key lifecycle with session-based caching.
- * Prompts for passphrase when needed and caches the derived master key
- * both in memory and on disk for a configurable timeout period.
+ * The single chokepoint between dotta's command/content layers and
+ * the cipher / kdf / session primitives. Two responsibilities:
  *
- * Design principles:
- * - Single passphrase for all profiles (UX-friendly)
- * - Session-based caching (balance security vs UX)
- * - Persistent disk cache across command invocations (~/.cache/dotta/session)
- * - Configurable timeout (default: 1 hour)
- * - Secure memory clearing (hydro_memzero)
- * - Memory locking to prevent swap (mlock on POSIX systems)
- * - Monotonic clock for cache expiry (immune to clock manipulation)
- * - Environment variable fallback for automation
+ *   1. Per-operation subkey acquisition — given a profile name and
+ *      target Argon2id params, derives the (mac_key, prf_key) pair
+ *      and hands them to `cipher_encrypt` / `cipher_decrypt`. The
+ *      master key never escapes this module.
+ *   2. Master-key cache lifecycle — hides the "is the user still
+ *      authenticated" question behind a single resolve step.
  *
- * Security considerations:
- * - Master key stored in process memory and on disk (vulnerable to dumps/theft)
- * - Disk cache obfuscated (XOR with host-bound keystream) and
- *   tamper-evident (keyed MAC) — not cryptographically encrypted; a
- *   reader with file access plus hostname/username can recover the key.
- *   See crypto/session.h for the full threat model.
- * - mlock() protection prevents swapping to disk (best-effort):
- *   * Master key in keymgr struct
- *   * Passphrase buffers during input/derivation
- * - Graceful degradation if mlock fails (logs warning)
- * - In-memory cache uses monotonic time (prevents lifetime manipulation)
- * - Cleared on timeout, explicit clear, or handle free; kernel reclaims
- *   locked pages on process death regardless
+ * Two-tier cache:
+ *   - In-memory slot. Single (master_key, memory_mib, passes,
+ *     cached_at) record inside the keymgr struct. Tracks whatever
+ *     (mib, passes) was last requested; evicts on any cross-parameter
+ *     request.
+ *   - On-disk session cache (~/.cache/dotta/session, owned by
+ *     crypto/session). The canonical current-config slot. Only
+ *     updated when the request's params equal the snapshot taken at
+ *     keymgr_create; a non-current request reads the file (to learn
+ *     its params) but never promotes or overwrites it.
+ *
+ * Param routing:
+ *   - `keymgr_encrypt` uses the current-config params (snapshot at
+ *     create time) so fresh blobs always carry the latest strength.
+ *   - `keymgr_decrypt` uses the params from the blob header so old
+ *     blobs decrypt under the params they were sealed with regardless
+ *     of later config edits.
+ *   - `keymgr_set_passphrase` and `keymgr_probe_key` use current-
+ *     config (no blob context to draw a different target from).
+ *
+ * Security:
+ *   - The master lives in process memory and on disk. The disk cache
+ *     is obfuscated and machine-bound, NOT encrypted at rest — see
+ *     crypto/session.h for the full threat model.
+ *   - mlock on the keymgr struct is best-effort; under tight
+ *     RLIMIT_MEMLOCK the constructor logs a one-time advisory and
+ *     continues. The kernel reclaims the page on process death.
+ *   - In-memory expiry uses CLOCK_MONOTONIC so cache lifetime cannot
+ *     be extended by skewing the system clock. The on-disk cache uses
+ *     wall-clock so it can survive reboots.
+ *   - Every key buffer (master, mac_key, prf_key, intermediates) is
+ *     scrubbed via `crypto_wipe` on every exit path. Callers never
+ *     see raw key bytes.
+ *   - Cross-parameter eviction is intentional. Workflows that
+ *     interleave blobs at different params re-prompt on each
+ *     transition; the remediation is operational (re-encrypt under
+ *     one consistent params set), not algorithmic.
+ *   - Always-prompt mode (`session_timeout == 0`) bypasses both cache
+ *     tiers entirely: derivations succeed but the master is never
+ *     installed in the slot or persisted, so no master-key bytes
+ *     outlive a single operation. The `is_slot_valid_for` predicate
+ *     would already treat the slot as cold under timeout==0, but the
+ *     stronger invariant — bytes never land there — is enforced at
+ *     every install site.
  */
 
 #ifndef DOTTA_KEYMGR_H
 #define DOTTA_KEYMGR_H
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <time.h>
 #include <types.h>
@@ -42,21 +70,29 @@
 typedef struct config config_t;
 
 /**
- * Key manager (opaque)
+ * Key manager (opaque).
  *
- * Maintains cached master key and session state.
+ * Holds the config snapshot (Argon2 params, session timeout) plus
+ * the in-memory cache slot. Best-effort mlock'd at create time.
+ * Treat as opaque; access via the functions below.
  */
 typedef struct keymgr keymgr;
 
 /**
- * Create key manager
+ * Create a key manager.
  *
- * Initializes session-based key management with configuration.
- * Does not prompt for passphrase immediately - passphrase is
- * requested on first key access (lazy initialization).
+ * Snapshots the current-config Argon2 params and session timeout
+ * into the struct. Later config edits in the same process do not
+ * affect this snapshot, so a single command produces blobs under
+ * one consistent (memory_mib, passes) even if the file changes
+ * mid-run.
  *
- * @param config Configuration (for derivation memlimit and session_timeout)
- * @param out Key manager (caller must free with keymgr_free)
+ * No derivation, prompt, or I/O at create time. The first call to
+ * encrypt / decrypt / set_passphrase / probe_key triggers the lazy
+ * resolution chain.
+ *
+ * @param config Configuration (non-NULL; encryption fields read)
+ * @param out    Key manager (caller frees with keymgr_free)
  * @return Error or NULL on success
  */
 error_t *keymgr_create(
@@ -65,123 +101,150 @@ error_t *keymgr_create(
 );
 
 /**
- * Encrypt plaintext under a profile-derived key
+ * Encrypt plaintext under a profile-derived key.
  *
- * Acquires the profile key internally, calls the encryption primitive,
- * and zeroes the derived key buffer before returning — callers never
- * see raw key bytes. On a cold keymgr this may prompt for the passphrase
- * and run the memory-hard derivation; once warm, each call only costs a
- * cheap keyed-BLAKE2 derivation plus the encryption itself.
+ * Acquires the master key under the current-config (memory_mib,
+ * passes) snapshot, derives the SIV subkey pair, calls
+ * `cipher_encrypt`, and wipes every intermediate buffer on every
+ * exit path.
  *
- * Error wrapping policy:
- *   - Subkey-derivation errors are wrapped with a uniform message that
- *     names the profile (the caller already knows the path; it rarely
- *     needs both).
- *   - `cipher_encrypt` errors are returned unwrapped so the caller can
- *     attach file-level context (path, operation) without duplicating a
- *     generic wrap that loses fidelity.
+ * Cold cache: prompts and runs memory-hard Argon2id. Warm cache:
+ * two BLAKE2b derivations plus SIV+keystream bandwidth.
  *
- * @param keymgr       Key manager (must not be NULL)
- * @param profile      Profile name for key derivation (must not be NULL)
- * @param storage_path File path in profile (must not be NULL; AAD bound
- *                     into the ciphertext by `cipher_encrypt`)
- * @param plaintext    Plaintext bytes (must not be NULL unless len == 0)
- * @param plaintext_len Plaintext length in bytes
- * @param out_ciphertext Output buffer (caller owns; free with buffer_free)
+ * Error wrapping: subkey-derivation errors are wrapped with a
+ * profile-naming message; `cipher_encrypt` errors pass through
+ * unwrapped so the caller can attach file-level context.
+ *
+ * @param keymgr         Key manager (non-NULL)
+ * @param profile        Profile name (non-NULL, non-empty)
+ * @param storage_path   File path (non-NULL; bound into SIV)
+ * @param plaintext      Plaintext bytes (non-NULL when len > 0)
+ * @param plaintext_len  Plaintext length (≤ CIPHER_MAX_CONTENT)
+ * @param out_ciphertext Output buffer (caller frees with buffer_free)
  * @return Error or NULL on success
  */
 error_t *keymgr_encrypt(
     keymgr *keymgr,
     const char *profile,
     const char *storage_path,
-    const unsigned char *plaintext,
+    const uint8_t *plaintext,
     size_t plaintext_len,
     buffer_t *out_ciphertext
 );
 
 /**
- * Decrypt ciphertext under a profile-derived key
+ * Decrypt ciphertext under a profile-derived key.
  *
- * Acquires the profile key internally, calls the decryption primitive,
- * and zeroes the derived key buffer before returning — callers never
- * see raw key bytes.
+ * Reads (memory_mib, passes) from the blob header via
+ * `cipher_peek_params`, then acquires the master key under those
+ * blob-recorded params. Decryption thus survives config edits.
  *
- * Error wrapping policy matches `keymgr_encrypt` — subkey-derivation
- * failures are wrapped; `cipher_decrypt` errors pass through unwrapped so
+ * If the cached slot holds different params it is evicted and
+ * re-derived under the blob's params. The on-disk session cache
+ * (canonical current-config slot) is consulted but never overwritten
+ * by an old-params derivation.
+ *
+ * Error wrapping mirrors `keymgr_encrypt`: subkey-derivation errors
+ * are wrapped; `cipher_decrypt` errors pass through unwrapped so
  * callers can render file-level diagnostics (e.g. "wrong passphrase,
- * try: dotta key clear") without stacking duplicate wraps.
+ * try: dotta key clear") without stacking wraps.
  *
- * @param keymgr       Key manager (must not be NULL)
- * @param profile      Profile name for key derivation (must not be NULL)
- * @param storage_path File path in profile (must not be NULL; must match
- *                     the path used at encryption time — AAD mismatch
- *                     fails SIV verification)
- * @param ciphertext   Dotta-encrypted bytes including header (must not
- *                     be NULL)
- * @param ciphertext_len Ciphertext length in bytes (>= CIPHER_OVERHEAD)
- * @param out_plaintext Output buffer (caller owns; free with buffer_free)
- * @return Error or NULL on success (ERR_CRYPTO on authentication failure)
+ * @param keymgr         Key manager (non-NULL)
+ * @param profile        Profile name (non-NULL, non-empty)
+ * @param storage_path   File path (non-NULL; must match the path used
+ *                       at encryption — mismatch fails SIV verify)
+ * @param ciphertext     Dotta-encrypted bytes including header (non-NULL)
+ * @param ciphertext_len Ciphertext length (≥ CIPHER_OVERHEAD)
+ * @param out_plaintext  Output buffer (caller frees with buffer_free)
+ * @return Error or NULL on success (ERR_CRYPTO on auth/parse failure)
  */
 error_t *keymgr_decrypt(
     keymgr *keymgr,
     const char *profile,
     const char *storage_path,
-    const unsigned char *ciphertext,
+    const uint8_t *ciphertext,
     size_t ciphertext_len,
     buffer_t *out_plaintext
 );
 
 /**
- * Explicitly set passphrase
+ * Explicitly set the passphrase (`dotta key set`).
  *
- * Derives key from passphrase and caches it. Used by `dotta key set`.
- * Does not prompt - passphrase must be provided by caller.
+ * Derives the master key under the current-config params. Behavior
+ * branches on `session_timeout`:
+ *   - `session_timeout != 0`: install the master in the in-memory slot
+ *     (replacing any prior contents) AND write to the on-disk session
+ *     cache.
+ *   - `session_timeout == 0` (always-prompt): derive — which validates
+ *     the passphrase — but neither install nor persist; the master is
+ *     scrubbed before return. Subsequent operations re-prompt as
+ *     expected under the always-prompt contract.
  *
- * @param keymgr Key manager (must not be NULL)
- * @param passphrase Passphrase (must not be NULL, will be copied and zeroed)
- * @param passphrase_len Passphrase length
+ * Rotation UX: if a master derived from a different passphrase was
+ * cached, this call silently invalidates every blob encrypted under
+ * the prior passphrase. `cmd_key_set` is responsible for surfacing
+ * the rotation warning before invoking this function.
+ *
+ * The passphrase buffer is read-only; the caller owns its lifetime
+ * and must scrub it after the call returns (`buffer_secure_free` is
+ * canonical for `passphrase_prompt` buffers).
+ *
+ * @param keymgr         Key manager (non-NULL)
+ * @param passphrase     Passphrase bytes (non-NULL, len > 0)
+ * @param passphrase_len Passphrase length (excluding NUL)
  * @return Error or NULL on success
  */
 error_t *keymgr_set_passphrase(
     keymgr *keymgr,
-    const char *passphrase,
+    const uint8_t *passphrase,
     size_t passphrase_len
 );
 
 /**
- * Clear cached key
+ * Clear the cached master key.
  *
- * Securely zeros cached master key. Used by `dotta key clear` or
- * signal handlers (SIGINT/SIGTERM).
+ * Securely zeros the in-memory slot (master_key, params, timestamp)
+ * and unlinks the on-disk session cache. Used by `dotta key clear` and
+ * at process shutdown via the cleanup chain. Safe to call multiple
+ * times and on a never-warmed keymgr.
  *
- * Safe to call multiple times.
- *
- * @param keymgr Key manager (must not be NULL)
+ * @param keymgr Key manager (NULL-safe)
  */
 void keymgr_clear(keymgr *keymgr);
 
 /**
- * Probe for key availability without prompting
+ * Probe whether the current-config master key is available without
+ * prompting.
  *
- * Checks both in-memory cache and disk session cache. If a valid
- * disk cache exists, loads it into memory. Does NOT prompt for
- * passphrase or check environment variables.
+ * Checks the in-memory slot first; on miss, consults the on-disk
+ * session cache. A disk cache recording non-current params is left
+ * in place but treated as a miss — this function answers "is the
+ * current-config key cached?".
  *
- * This is the non-interactive path: memory + disk (may load from disk),
- * never prompts. The operation-level functions keymgr_encrypt and
- * keymgr_decrypt do the full resolution (memory + disk + prompt).
+ * Side effect: a successful disk-cache match installs the key into
+ * the in-memory slot so the subsequent operation reuses it.
  *
- * @param keymgr Key manager (must not be NULL)
- * @return true if key is available (either from memory or disk cache)
+ * Never prompts and never reads `DOTTA_ENCRYPTION_PASSPHRASE`. For
+ * the full resolution chain use `keymgr_encrypt` / `keymgr_decrypt`.
+ *
+ * @param keymgr Key manager (NULL-safe; returns false)
+ * @return true iff the current-config key is cached
  */
 bool keymgr_probe_key(keymgr *keymgr);
 
 /**
- * Get time until cache expiration
+ * Get time until the cached slot expires.
  *
- * @param keymgr Key manager (must not be NULL)
- * @param out_expires_at Optional output for absolute expiration timestamp
- * @return Seconds until expiration (0 if not cached, -1 if no timeout)
+ * Reports against whatever (master_key, params) pair currently
+ * occupies the in-memory slot — a per-process freshness estimate,
+ * not a per-params query. For "is the current-config key warm?"
+ * use `keymgr_probe_key` first, then this for the time component.
+ *
+ * @param keymgr         Key manager (NULL-safe; returns 0)
+ * @param out_expires_at Optional output for the wall-clock expiry
+ *                       time; 0 when cache is cold or never expires
+ * @return Seconds until expiration; 0 if not cached or expired;
+ *         -1 if the slot never expires
  */
 int64_t keymgr_time_until_expiry(
     const keymgr *keymgr,
@@ -189,12 +252,12 @@ int64_t keymgr_time_until_expiry(
 );
 
 /**
- * Free key manager
+ * Free the key manager.
  *
- * Securely zeros cached key before freeing memory.
- * Safe to call with NULL.
+ * Securely zeros the cached key, releases the mlock pin (if held), and
+ * frees the struct. NULL-safe.
  *
- * @param keymgr Key manager (can be NULL)
+ * @param keymgr Key manager (NULL-safe)
  */
 void keymgr_free(keymgr *keymgr);
 

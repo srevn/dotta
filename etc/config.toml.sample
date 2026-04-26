@@ -420,27 +420,46 @@ auto_encrypt = [
     ".config/gh/hosts.yml", # GitHub CLI credentials
 ]
 
-# Memory Hardness Cost (memlimit) — in megabytes (must be a power of two)
-# Controls the memory required for key derivation via balloon hashing.
+# Argon2id strength preset
+# Controls the memory and pass count of the password-based key derivation.
 # Memory hardness is the only attacker-bounding work in the derivation:
-# the attacker's parallelism is bounded by RAM, not CPU cores, so this
-# is the parameter that meaningfully resists brute-force on GPUs/ASICs.
+# the attacker's parallelism is bounded by RAM bandwidth, not CPU cores,
+# so this is the parameter that meaningfully resists brute-force on
+# GPUs / ASICs.
 #
-# Each key derivation temporarily allocates this much memory and reads
-# it many times. On commodity hardware:
+# Each key derivation temporarily allocates `argon2_memory_mib` MiB of
+# RAM and reads it `argon2_passes` times. On commodity hardware
+# (2024-era laptop):
 #
-#   -   1 MB   ≈  30 ms   (minimum; CI/test only)
-#   -   8 MB   ≈ 600 ms   (recommended default; runs once per session)
-#   -  16 MB   ≈ 1.2 s    (extra margin if your hardware can take it)
-#   -  32 MB   ≈ 2.5 s    (uncomfortable interactively)
+#   - "fast"       64 MiB,  3 passes   ≈ 250–400 ms   (CI / test)
+#   - "balanced"  256 MiB,  3 passes   ≈ 1.0 s        (recommended)
+#   - "paranoid" 1024 MiB,  4 passes   ≈ 4–6 s        (slow but firm)
 #
-# Must be a power of two so the algorithm's modular index reduction is
-# bias-free. Non-power-of-two values fail validation.
+# The chosen params are recorded inside every encrypted blob's header so
+# `dotta apply` can decrypt files sealed under an older preset even
+# after you change this setting. Workflows that interleave files at
+# different presets re-prompt for the passphrase on each transition;
+# the in-memory cache holds one (key, params) pair at a time. To
+# converge on a single preset, re-encrypt old files via
+# `dotta remove` + `dotta add` after the change.
 #
-# Note: This value must be identical across all machines (affects key derivation).
+# Default: "balanced"
+strength = "balanced"
+
+# Raw Argon2id parameter overrides (advanced).
+# When set, both `argon2_memory_mib` and `argon2_passes` MUST be set
+# together — setting only one is a config error. When both are set,
+# `strength` is ignored.
 #
-# Default: 8
-memlimit = 8
+# Bounds:
+#   argon2_memory_mib in [8, 4096] MiB
+#   argon2_passes     in [1, 20]
+#
+# Defaults come from the chosen `strength` preset; the lines below are
+# illustrative and intentionally commented out.
+#
+# argon2_memory_mib = 256
+# argon2_passes     = 3
 
 # Session Timeout
 # How long (in seconds) to cache the encryption key

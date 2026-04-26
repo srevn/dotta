@@ -8,13 +8,13 @@
 
 #include <errno.h>
 #include <git2.h>
-#include <hydrogen.h>
 #include <string.h>
 #include <sys/stat.h>
 
 #include "base/buffer.h"
 #include "base/error.h"
 #include "base/hashmap.h"
+#include "base/secure.h"
 #include "crypto/cipher.h"
 #include "crypto/keymgr.h"
 #include "sys/filesystem.h"
@@ -52,7 +52,7 @@ static void buffer_destroy_secure(void *ptr) {
 
     /* Zero sensitive plaintext data before freeing (defense in depth) */
     if (buf->data && buf->size > 0) {
-        hydro_memzero(buf->data, buf->size);
+        secure_wipe(buf->data, buf->size);
     }
 
     buffer_destroy(buf);
@@ -86,7 +86,7 @@ static void buffer_destroy_secure(void *ptr) {
  * @return Error or NULL on success
  */
 static error_t *get_plaintext_from_blob(
-    const unsigned char *blob_data,
+    const uint8_t *blob_data,
     size_t blob_size,
     const char *storage_path,
     const char *profile,
@@ -326,7 +326,7 @@ error_t *content_store_to_blob(
     CHECK_NULL(profile);
     CHECK_NULL(out_oid);
 
-    const unsigned char *data = (const unsigned char *) plaintext->data;
+    const uint8_t *data = (const uint8_t *) plaintext->data;
     size_t size = plaintext->size;
 
     buffer_t ciphertext = BUFFER_INIT;
@@ -352,7 +352,7 @@ error_t *content_store_to_blob(
         }
 
         /* Use encrypted data */
-        data = (const unsigned char *) ciphertext.data;
+        data = (const uint8_t *) ciphertext.data;
         size = ciphertext.size;
     }
 
@@ -439,7 +439,7 @@ error_t *content_store_file_to_worktree(
 
     if (should_encrypt) {
         if (!keymgr) {
-            if (content.data) hydro_memzero(content.data, content.size);
+            if (content.data) secure_wipe(content.data, content.size);
             buffer_free(&content);
             return ERROR(
                 ERR_CRYPTO,
@@ -453,10 +453,10 @@ error_t *content_store_file_to_worktree(
 
         err = keymgr_encrypt(
             keymgr, profile, storage_path,
-            (const unsigned char *) content.data, content.size, &ciphertext
+            (const uint8_t *) content.data, content.size, &ciphertext
         );
         if (err) {
-            if (content.data) hydro_memzero(content.data, content.size);
+            if (content.data) secure_wipe(content.data, content.size);
             buffer_free(&content);
             return error_wrap(err, "Failed to encrypt '%s'", storage_path);
         }
@@ -478,7 +478,7 @@ error_t *content_store_file_to_worktree(
     );
 
     /* Cleanup (secure: plaintext may contain sensitive data) */
-    if (content.data) hydro_memzero(content.data, content.size);
+    if (content.data) secure_wipe(content.data, content.size);
     buffer_free(&content);
     buffer_free(&ciphertext);
 

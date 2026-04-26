@@ -7,7 +7,7 @@
  * own or free it.
  */
 
-#include "crypto/policy.h"
+#include "core/policy.h"
 
 #include <config.h>
 #include <string.h>

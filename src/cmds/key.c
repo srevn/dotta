@@ -15,7 +15,7 @@
 #include "base/output.h"
 #include "core/state.h"
 #include "crypto/keymgr.h"
-#include "crypto/passphrase.h"
+#include "sys/passphrase.h"
 
 /**
  * Execute key set action
@@ -41,7 +41,12 @@ static error_t *cmd_key_set(
 
     error_t *err = NULL;
 
-    /* Notify if key is already cached (check both memory and disk) */
+    /* Notify if key is already cached (check both memory and disk).
+     * Rotation UX: when a key is already cached, the new passphrase
+     * silently invalidates every blob encrypted under the old one.
+     * Surfacing the warning here (per sketch §5.4) keeps the
+     * keymgr_set_passphrase contract narrow — the function does the
+     * derivation; the CLI owns the human-facing warning. */
     if (keymgr_probe_key(keymgr)) {
         int64_t seconds_remaining = keymgr_time_until_expiry(keymgr, NULL);
         if (seconds_remaining == -1) {
@@ -56,6 +61,14 @@ static error_t *cmd_key_set(
                 (long) seconds_remaining
             );
         }
+        output_warning(
+            out, OUTPUT_NORMAL,
+            "Setting a new passphrase will invalidate every file already "
+            "encrypted under the current one — those files will fail "
+            "authentication on next decrypt. To replace the cached "
+            "passphrase without rotation, run `dotta key clear` first, "
+            "then `dotta key set` again with the same passphrase."
+        );
         output_info(
             out, OUTPUT_NORMAL,
             "Enter a new passphrase to replace it."
@@ -74,8 +87,14 @@ static error_t *cmd_key_set(
         goto cleanup;
     }
 
-    /* Set passphrase in keymgr (derives and caches master key) */
-    err = keymgr_set_passphrase(keymgr, passphrase, passphrase_len);
+    /* Set passphrase in keymgr (derives and caches master key). The
+     * cast bridges the passphrase API (`char *` for TTY ergonomics)
+     * with the crypto API (`uint8_t *` for byte-array discipline);
+     * both types alias `unsigned char` on every platform with
+     * <stdint.h>. */
+    err = keymgr_set_passphrase(
+        keymgr, (const uint8_t *) passphrase, passphrase_len
+    );
 
     /* Securely clear passphrase from memory. passphrase_prompt
      * returns a buffer of exactly passphrase_len + 1 bytes with mlock. */
@@ -191,11 +210,15 @@ static error_t *cmd_key_status(
             out, OUTPUT_NORMAL, "  Status: {green}enabled{reset}\n"
         );
 
-        /* Show derivation memory budget. config->encryption_memlimit is
-         * stored in bytes; render in MB for human consumption. */
+        /* Show Argon2id derivation parameters. The pair is what the
+         * config schema exposes (either as a `strength` preset or as
+         * raw `argon2_memory_mib` / `argon2_passes`); printing the
+         * resolved values keeps the status output independent of which
+         * input form the user wrote. */
         output_print(
-            out, OUTPUT_VERBOSE, "  KDF memlimit: %zu MB\n",
-            config->encryption_memlimit / (1024 * 1024)
+            out, OUTPUT_VERBOSE, "  Argon2id: %u MiB, %u passes\n",
+            (unsigned) config->encryption_argon2_memory_mib,
+            (unsigned) config->encryption_argon2_passes
         );
 
         /* Show session timeout */
@@ -467,8 +490,7 @@ const args_command_t spec_key = {
         "  [encryption]\n"
         "  enabled          = true\n"
         "  session_timeout  = 3600      # 1 hour\n"
-        "  memlimit         = 8         # Memory hardness in MB"
-        "\n",
+        "  strength         = \"balanced\" # \"fast\", \"balanced\", or \"paranoid\"\n",
     .examples    =
         "  %s key set               # Cache passphrase for the session\n"
         "  %s key status            # Show cache state and config\n"

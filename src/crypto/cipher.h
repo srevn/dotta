@@ -1,50 +1,63 @@
 /**
  * cipher.h - Deterministic authenticated encryption (SIV)
  *
- * Provides deterministic AEAD for sensitive dotfiles using a Synthetic IV
- * construction (in the spirit of RFC 5297) built on libhydrogen primitives.
- * Files are encrypted at rest in Git and decrypted during deployment.
+ * Deterministic AEAD for sensitive dotfiles. Identical
+ * (mac_key, prf_key, header, storage_path, plaintext) yields
+ * byte-identical ciphertext, preserving Git deduplication.
  *
- * SIV Construction (Version 4):
- *   The synthetic IV is computed from the plaintext itself — the defining
- *   property of SIV — and doubles as the authentication tag.
+ * SIV pipeline:
+ *   1. siv  = MAC(mac_key, CIPHER_SIV, header(9), storage_path, plaintext)
+ *   2. seed = MAC(prf_key, CIPHER_KEY, siv)
+ *   3. ciphertext = XChaCha20(key=seed, nonce=siv[0..24], ctr=0, plaintext)
  *
- *   1. Compute synthetic IV over path and plaintext:
- *      siv = HMAC(mac_key,
- *                 len(storage_path) as LE64 || storage_path || plaintext,
- *                 context="dottamac")
- *      (path length prefix provides domain separation; BLAKE2 is not
- *       length-extension vulnerable, so no trailing length is required)
+ * The 32-byte SIV doubles as MAC tag and as the source of XChaCha20's
+ * 24-byte nonce; `crypto_mac_absorb` LE64-prefixes each variable input
+ * so distinct tuples produce distinct absorbed streams.
  *
- *   2. Derive a secret keystream seed from the (public) SIV:
- *      keystream_seed = HMAC(prf_key, siv, context="dottactr")
- *      (prf_key keeps the keystream behind the profile key — if the seed
- *       were computed directly from the public SIV, anyone with the
- *       ciphertext could reproduce the keystream and recover the plaintext)
+ * On-disk blob layout:
  *
- *   3. Encrypt using deterministic stream cipher:
- *      keystream = DeterministicPRNG(keystream_seed, length=plaintext_len)
- *      ciphertext = plaintext XOR keystream
+ *     ┌────────┬────────────────────────────────────┬────────┐
+ *     │ offset │ field                              │ size   │
+ *     ├────────┼────────────────────────────────────┼────────┤
+ *     │   0    │ magic "DOTTA"                      │  5 B   │
+ *     │   5    │ version = 0x06                     │  1 B   │
+ *     │   6    │ argon2_memory_mib (LE16)           │  2 B   │
+ *     │   8    │ argon2_passes                      │  1 B   │
+ *     │   9    │ SIV / MAC tag                      │ 32 B   │
+ *     │  41    │ ciphertext (XChaCha20 keystream)   │  N B   │
+ *     └────────┴────────────────────────────────────┴────────┘
  *
- *   File format: [Magic 5B][Version 1B][Reserved 2B][SIV 32B][Ciphertext N B]
+ * The 9-byte header is the FIRST input absorbed into the SIV.
+ * Tampering any of magic, version, or Argon2 params fails MAC
+ * verification, not parse validation, keeping error paths uniform.
  *
  * Security properties:
- *   - Deterministic: same (path, plaintext, keys) → same ciphertext
- *     (Git-friendly).
- *   - Authenticated: SIV is a MAC over (path, plaintext); any tampering
- *     of SIV or ciphertext produces an SIV mismatch after trial decryption.
- *   - Path-bound: ciphertext decrypted under a different path fails SIV
- *     verification.
- *   - Nonce-misuse resistant: different plaintexts at the same path yield
- *     different SIVs (and therefore different keystreams), avoiding the
- *     many-time-pad leak that would occur if the keystream were a pure
- *     function of the path.
- *   - Key isolation: independent MAC and PRF keys via crypto/kdf.
+ *   - Determinism. Same inputs → same ciphertext (Git-friendly).
+ *   - Authentication. 32-byte keyed-BLAKE2b tag over
+ *     (header || path || plaintext); constant-time verify on decrypt.
+ *   - Path binding. `storage_path` bytes are absorbed verbatim; no
+ *     normalization. A blob encrypted under one path cannot decrypt
+ *     under another.
+ *   - Params binding. Argon2 (memory_mib, passes) live in the bound
+ *     header, so config edits cannot invalidate old blobs and a
+ *     tampered params field fails MAC.
+ *   - Nonce-misuse resistance. Distinct plaintexts under the same
+ *     (mac_key, path, header) yield distinct SIVs and keystreams.
+ *   - Key isolation. Operates only on the per-operation
+ *     (mac_key, prf_key) pair; never sees master key or profile name.
  *
- * Subkey provenance: the (mac_key, prf_key) pair is derived by crypto/kdf
- * from a profile key. This module never sees the master key or the profile
- * key; it operates only on the per-SIV subkey pair, which is the exact
- * scope cipher needs.
+ * Format-version policy: `CIPHER_VERSION` bumps on any incompatible
+ * change. A bump invalidates every blob keyed under the prior version
+ * — no migration path (alpha policy in CLAUDE.md).
+ *
+ * Caller contract: `cipher_encrypt` / `cipher_decrypt` accept a raw
+ * `(mac_key, prf_key)` pair so this module stays free of master-key
+ * and profile-name knowledge. The canonical caller is `crypto/keymgr`,
+ * which derives the pair via `kdf_siv_subkeys` and wipes both buffers
+ * after the single per-operation use. Any other call site needs
+ * explicit justification — `kdf_siv_subkeys` is what makes the two
+ * subkeys cryptographically independent, and per-operation derive +
+ * wipe is what bounds subkey lifetime on the stack.
  */
 
 #ifndef DOTTA_CRYPTO_CIPHER_H
@@ -56,87 +69,171 @@
 #include <types.h>
 
 #include "crypto/kdf.h"
+#include "crypto/mac.h"
 
-/* File format constants */
+/** Magic prefix on every encrypted blob (5 ASCII bytes). */
 #define CIPHER_MAGIC          "DOTTA"
-#define CIPHER_MAGIC_BYTES    5             /* "DOTTA" magic string length */
-#define CIPHER_VERSION        5             /* SIV with IV bound to plaintext */
-#define CIPHER_DETECT_BYTES   6             /* Magic (5) + version (1) */
-#define CIPHER_HEADER_SIZE    8             /* Magic (5) + version (1) + reserved (2) */
-#define CIPHER_SIV_SIZE       32            /* SIV / MAC tag */
-#define CIPHER_OVERHEAD       40            /* Header (8) + SIV (32) */
+#define CIPHER_MAGIC_SIZE     5
+
+/** Cipher format version. See file-level "Format-version policy". */
+#define CIPHER_VERSION        0x06
 
 /**
- * Encrypt a plaintext buffer under (mac_key, prf_key) bound to storage_path.
+ * Detection-prefix length (magic + version).
  *
- * Output layout:
- *   [Magic: "DOTTA\x04\x00\x00" (8 bytes)]
- *   [SIV: synthetic IV / MAC tag (32 bytes)]
- *   [Ciphertext: encrypted data (plaintext_len bytes)]
+ * `cipher_is_encrypted` matches the first 6 bytes against
+ * `"DOTTA" || CIPHER_VERSION`; a different version byte reports as
+ * not-encrypted so the metadata cross-check in infra/content.c can
+ * route the mismatch before any decrypt attempt.
+ */
+#define CIPHER_DETECT_BYTES   6
+
+/**
+ * Authenticated header size (magic + version + Argon2 params).
  *
- * @param plaintext     Input data (must not be NULL)
- * @param plaintext_len Input length in bytes
- * @param mac_key       SIV MAC key (32 bytes)
- * @param prf_key       SIV PRF key (32 bytes)
- * @param storage_path  File path in profile (authenticated; must not be NULL)
- * @param out_ciphertext Output buffer (caller frees with buffer_free)
+ *   bytes [0..5)  = "DOTTA"
+ *   byte   [5]    = CIPHER_VERSION
+ *   bytes [6..8)  = LE16 argon2_memory_mib
+ *   byte   [8]    = argon2_passes
+ *
+ * Bound into the SIV as the first absorbed input — tampering fails
+ * MAC, not parse, closing version-confusion / params-rollback attacks.
+ */
+#define CIPHER_HEADER_SIZE    9
+
+/** SIV / MAC tag size. Must equal `CRYPTO_MAC_SIZE`. */
+#define CIPHER_SIV_SIZE       32
+
+/** Total fixed overhead per ciphertext (header + SIV). */
+#define CIPHER_OVERHEAD       (CIPHER_HEADER_SIZE + CIPHER_SIV_SIZE)
+
+/**
+ * Defensive plaintext / ciphertext-body cap (100 MiB).
+ *
+ * Policy bound, not a primitive limit: dotfiles are small. Prevents
+ * runaway input from forcing huge keystream / ciphertext allocations.
+ */
+#define CIPHER_MAX_CONTENT    ((size_t) 100 * 1024 * 1024)
+
+_Static_assert(
+    CIPHER_SIV_SIZE == CRYPTO_MAC_SIZE,
+    "SIV is a BLAKE2b-keyed tag"
+);
+_Static_assert(
+    CIPHER_HEADER_SIZE == 9,
+    "header layout drift: must be magic(5) + version(1) + mib(2) + passes(1)"
+);
+_Static_assert(
+    CIPHER_OVERHEAD == CIPHER_HEADER_SIZE + CIPHER_SIV_SIZE,
+    "OVERHEAD must equal HEADER + SIV"
+);
+
+/**
+ * Test whether a byte buffer is a dotta-encrypted blob this build
+ * can decrypt.
+ *
+ * Sniffs the 6-byte detection window (magic + version). A blob with
+ * a non-current version byte reports false; the metadata cross-check
+ * in infra/content.c routes that case before any decrypt attempt.
+ *
+ * @param data     File content (may be NULL when len == 0)
+ * @param data_len Content length
+ * @return true iff data begins with magic + current-build version
+ */
+bool cipher_is_encrypted(const uint8_t *data, size_t data_len);
+
+/**
+ * Read the Argon2 params from a cipher-blob header without
+ * touching the SIV or attempting decryption.
+ *
+ * Used by `keymgr_decrypt` to derive the master key under the params
+ * the producer used. Applies `kdf_validate_params` so an out-of-range
+ * header rejects before any Argon2 work area is allocated — closes
+ * the DoS surface where an attacker-planted blob would otherwise
+ * force tens-of-GiB allocations.
+ *
+ * Failure modes (all ERR_CRYPTO): too short, magic mismatch,
+ * unsupported version, params out of [KDF_ARGON2_*_MIN..MAX].
+ *
+ * @param data            Blob bytes (must include at least HEADER_SIZE)
+ * @param data_len        Blob length
+ * @param out_memory_mib  Set to header's argon2_memory_mib on success
+ * @param out_passes      Set to header's argon2_passes on success
+ * @return Error or NULL on success
+ */
+error_t *cipher_peek_params(
+    const uint8_t *data,
+    size_t data_len,
+    uint16_t *out_memory_mib,
+    uint8_t *out_passes
+);
+
+/**
+ * Encrypt a plaintext buffer under (mac_key, prf_key) bound to
+ * `storage_path`, recording the Argon2 params in the header.
+ *
+ * Output ownership: on success `*out_ciphertext` becomes the caller's
+ * (release with `buffer_free`); on any error the in-progress buffer
+ * is wiped and freed before return.
+ *
+ * Subkey wiping: `mac_key` / `prf_key` are NOT wiped here. The
+ * caller (typically `keymgr_encrypt`) owns the per-operation lifetime.
+ *
+ * @param plaintext         Input bytes (non-NULL)
+ * @param plaintext_len     Input length (≤ CIPHER_MAX_CONTENT)
+ * @param mac_key           SIV MAC subkey (32 bytes)
+ * @param prf_key           SIV PRF subkey (32 bytes)
+ * @param storage_path      Profile-relative path bound into SIV
+ *                          (non-NULL, NUL-terminated)
+ * @param argon2_memory_mib Memory parameter (validated against
+ *                          KDF_ARGON2_*_MIN/MAX)
+ * @param argon2_passes     Pass parameter (validated)
+ * @param out_ciphertext    Output buffer (caller frees with buffer_free)
  * @return Error or NULL on success
  */
 error_t *cipher_encrypt(
-    const unsigned char *plaintext,
+    const uint8_t *plaintext,
     size_t plaintext_len,
     const uint8_t mac_key[KDF_KEY_SIZE],
     const uint8_t prf_key[KDF_KEY_SIZE],
     const char *storage_path,
+    uint16_t argon2_memory_mib,
+    uint8_t argon2_passes,
     buffer_t *out_ciphertext
 );
 
 /**
- * Decrypt a dotta-encrypted blob bound to storage_path.
+ * Decrypt a dotta-encrypted blob bound to `storage_path`.
  *
- * Process:
- *   1. Parse header and extract SIV + ciphertext body.
- *   2. Derive keystream_seed from (prf_key, stored SIV).
- *   3. Decrypt: candidate_plaintext = ciphertext XOR keystream.
- *   4. Re-compute siv' = MAC(mac_key, len(path) || path || candidate_plaintext).
- *   5. Constant-time compare siv' against the stored SIV; on mismatch the
- *      candidate is wiped and never returned.
+ * Validates the header, derives the keystream seed from
+ * (prf_key, stored SIV), produces a candidate plaintext, recomputes
+ * the SIV over (header || path || candidate), and constant-time
+ * compares against the stored SIV. On mismatch the candidate is
+ * wiped before return and never surfaces.
  *
- * Returns ERR_CRYPTO if:
- *   - Authentication fails (SIV mismatch — wrong key, tampered data, or wrong path)
- *   - Invalid header format
- *   - Unsupported version
+ * Output ownership: on success `*out_plaintext` becomes the caller's
+ * (release with `buffer_free`); on any error the candidate is wiped
+ * and freed before return.
  *
- * @param ciphertext     Encrypted input (must include 8-byte header + 32-byte SIV)
- * @param ciphertext_len Input length (>= CIPHER_OVERHEAD)
- * @param mac_key        SIV MAC key (32 bytes)
- * @param prf_key        SIV PRF key (32 bytes)
- * @param storage_path   Same path used at encryption time; AAD mismatch fails SIV
+ * SIV mismatch surfaces as a single generic "authentication failed"
+ * regardless of which bound input was tampered. Parse-level errors
+ * carry specific messages but no key-derivable information.
+ *
+ * @param ciphertext     Encrypted input (≥ CIPHER_OVERHEAD bytes)
+ * @param ciphertext_len Input length
+ * @param mac_key        SIV MAC subkey (32 bytes)
+ * @param prf_key        SIV PRF subkey (32 bytes)
+ * @param storage_path   Profile-relative path used at encryption
  * @param out_plaintext  Output buffer (caller frees with buffer_free)
- * @return Error or NULL on success (ERR_CRYPTO on auth failure)
+ * @return Error or NULL on success (ERR_CRYPTO on auth/parse failure)
  */
 error_t *cipher_decrypt(
-    const unsigned char *ciphertext,
+    const uint8_t *ciphertext,
     size_t ciphertext_len,
     const uint8_t mac_key[KDF_KEY_SIZE],
     const uint8_t prf_key[KDF_KEY_SIZE],
     const char *storage_path,
     buffer_t *out_plaintext
 );
-
-/**
- * Test whether a byte buffer is a dotta-encrypted blob this build can decrypt.
- *
- * Verifies both the "DOTTA" magic and the version byte match the current
- * build. Blobs with a different version byte are reported as NOT encrypted,
- * so callers never try to decrypt something they cannot parse; any version
- * mismatch for a blob that does claim to be a dotta file surfaces later
- * from cipher_decrypt with an explicit "unsupported version" error.
- *
- * @param data     File content (may be NULL when len == 0)
- * @param data_len Content length
- * @return true if data begins with a recognised dotta magic + version
- */
-bool cipher_is_encrypted(const unsigned char *data, size_t data_len);
 
 #endif /* DOTTA_CRYPTO_CIPHER_H */

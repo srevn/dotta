@@ -5,7 +5,6 @@
  */
 
 #include <git2.h>
-#include <hydrogen.h>
 #include <runtime.h>
 #include <signal.h>
 #include <stdio.h>
@@ -457,7 +456,7 @@ volatile sig_atomic_t active_child_pgid = 0;
  *
  * No resource cleanup runs here by design. Signal handlers must stay
  * AS-safe per POSIX SUSv4 §2.4.3 — which rules out malloc/free (needed
- * by libgit2 teardown) and hydro_memzero/munlock (needed by keymgr
+ * by libgit2 teardown) and crypto_wipe/munlock (needed by keymgr
  * teardown). The kernel reclaims mlocked pages on process death and
  * zeroes them before reallocation, so master keys held in the now-freed
  * keymgr cannot surface in another process's memory. Worktrees are
@@ -484,13 +483,6 @@ int main(int argc, char **argv) {
     /* Initialize libgit2 */
     if (git_libgit2_init() < 0) {
         fprintf(stderr, "Failed to initialize libgit2\n");
-        return 1;
-    }
-
-    /* Initialize libhydrogen */
-    if (hydro_init() != 0) {
-        fprintf(stderr, "Failed to initialize libhydrogen\n");
-        git_libgit2_shutdown();
         return 1;
     }
 

@@ -107,7 +107,7 @@ void buffer_clear(buffer_t *buf);
  * Runs the mandatory cleanup sequence for buffers that hold passphrases,
  * encryption keys, or other sensitive bytes:
  *
- *   1. hydro_memzero(ptr, len)   — wipe while still mlock'd, resistant
+ *   1. secure_wipe(ptr, len)     — wipe while still mlock'd, resistant
  *                                  to dead-store elimination
  *   2. munlock(ptr, len)         — release any best-effort mlock
  *                                  (safe to call on never-locked

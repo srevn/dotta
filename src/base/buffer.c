@@ -6,7 +6,6 @@
 
 #include "base/buffer.h"
 
-#include <hydrogen.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -14,6 +13,7 @@
 #include <sys/mman.h>
 
 #include "base/error.h"
+#include "base/secure.h"
 
 #define MIN_CAPACITY 64
 
@@ -231,10 +231,10 @@ void buffer_secure_free(void *ptr, size_t len) {
     }
 
     /* Zero before unlock: the wipe must land in physical memory before
-     * the page becomes swap-eligible. hydro_memzero resists dead-store
+     * the page becomes swap-eligible. secure_wipe resists dead-store
      * elimination (free-immediately-after would otherwise let the
      * optimizer delete the zeroization). */
-    hydro_memzero(ptr, len);
+    secure_wipe(ptr, len);
 
     /* Unlock is best-effort. Calling munlock on memory that was never
      * mlock'd (mlock may have failed at allocation time for want of

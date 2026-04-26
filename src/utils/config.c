@@ -4,6 +4,7 @@
 
 #include "utils/config.h"
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <tomlc17.h>
@@ -11,6 +12,7 @@
 #include "base/arena.h"
 #include "base/error.h"
 #include "base/gitignore.h"
+#include "crypto/kdf.h"
 #include "infra/path.h"
 #include "sys/filesystem.h"
 
@@ -19,6 +21,38 @@
 #define DEFAULT_CONFIG_DIR "~/.config/dotta"
 #define DEFAULT_CONFIG_FILE "config.toml"
 #define DEFAULT_HOOKS_DIR "~/.config/dotta/hooks"
+
+/**
+ * Argon2id strength presets.
+ *
+ * The user-friendly knob is `strength = "fast" | "balanced" | "paranoid"`;
+ * `argon2_memory_mib` and `argon2_passes` exist as raw overrides for
+ * users who want exact control. Wall-clock timings below are
+ * indicative only — they were measured on a 2024-era laptop and
+ * scale with single-thread memory bandwidth and L3 cache size.
+ *
+ * Adding a preset: append a row here. The lookup is linear; the
+ * three-row count is the design ceiling, not a vector limit.
+ */
+typedef struct {
+    const char *name;
+    uint16_t memory_mib;
+    uint8_t passes;
+} encryption_strength_preset_t;
+
+static const encryption_strength_preset_t ENCRYPTION_STRENGTH_PRESETS[] = {
+    { "fast",     64,   3 },  /* ~250–400 ms; CI/test */
+    { "balanced", 256,  3 },  /* ~1.0 s; recommended */
+    { "paranoid", 1024, 4 },  /* ~4–6 s; slow but firm */
+};
+static const size_t ENCRYPTION_STRENGTH_PRESETS_COUNT =
+    sizeof(ENCRYPTION_STRENGTH_PRESETS) / sizeof(ENCRYPTION_STRENGTH_PRESETS[0]);
+
+/**
+ * Default preset name used when [encryption] omits both `strength` and
+ * the raw mib/passes overrides. Must match a row in the table above.
+ */
+#define DEFAULT_ENCRYPTION_STRENGTH "balanced"
 
 /**
  * Helper: Extract string array from TOML array
@@ -217,12 +251,15 @@ config_t *config_create_default(void) {
     config->auto_pull = true;                   /* Default: auto-pull when remote ahead */
     config->diverged_strategy = strdup("warn"); /* Default: warn on divergence */
 
-    /* [encryption] defaults */
-    config->encryption_enabled = false;        /* Default: disabled (opt-in) */
+    /* [encryption] defaults — match the "balanced" preset (~1.0 s
+     * derivation on commodity HW). The parser overwrites these if the
+     * user sets `strength`, `argon2_memory_mib`, or `argon2_passes`. */
+    config->encryption_enabled = false;            /* Default: disabled (opt-in) */
     config->auto_encrypt_patterns = NULL;
     config->auto_encrypt_pattern_count = 0;
-    config->encryption_memlimit = (size_t) 8 * 1024 * 1024; /* 8 MiB; ~600 ms on commodity HW */
-    config->session_timeout = 3600;                         /* 1 hour */
+    config->encryption_argon2_memory_mib = 256;    /* "balanced" preset */
+    config->encryption_argon2_passes = 3;          /* "balanced" preset */
+    config->session_timeout = 3600;                /* 1 hour */
 
     return config;
 }
@@ -557,9 +594,10 @@ error_t *config_load(const char *config_path, config_t **out) {
     toml_datum_t encryption = toml_get(result.toptab, "encryption");
     if (encryption.type == TOML_TABLE) {
         static const char *known[] = {
-            "enabled", "auto_encrypt", "memlimit", "session_timeout"
+            "enabled",           "auto_encrypt",  "strength",
+            "argon2_memory_mib", "argon2_passes", "session_timeout"
         };
-        err = validate_known_keys(encryption, "encryption", known, 4);
+        err = validate_known_keys(encryption, "encryption", known, 6);
         if (err) goto cleanup;
 
         toml_datum_t enabled = toml_get(encryption, "enabled");
@@ -592,30 +630,90 @@ error_t *config_load(const char *config_path, config_t **out) {
             }
         }
 
-        /* memlimit is given in MB (user-friendly), stored in bytes (crypto-friendly).
-         * Conversion happens here so the boundary between the parsed-form and
-         * the consumed-form is explicit and overflow-checked once. */
-        toml_datum_t memlimit = toml_get(encryption, "memlimit");
-        if (memlimit.type == TOML_INT64) {
-            if (memlimit.u.int64 < 1) {
-                err = ERROR(
-                    ERR_INVALID_ARG,
-                    "Invalid memlimit: %lld MB (must be >= 1)",
-                    (long long) memlimit.u.int64
-                );
-                goto cleanup;
-            }
-            uint64_t mb = (uint64_t) memlimit.u.int64;
-            if (mb > SIZE_MAX / (1024 * 1024)) {
-                err = ERROR(
-                    ERR_INVALID_ARG,
-                    "Invalid memlimit: %llu MB (overflows size_t when converted to bytes)",
-                    (unsigned long long) mb
-                );
-                goto cleanup;
-            }
-            config->encryption_memlimit = (size_t) (mb * 1024 * 1024);
+        /* Argon2id derivation parameters — sketch §9.3 resolution:
+         *   - Both `argon2_memory_mib` and `argon2_passes` set → use them.
+         *     Warn-once if `strength` is also set (raw wins).
+         *   - Exactly one of the raw pair set → ERR_INVALID_ARG.
+         *   - Only `strength` set → look up preset.
+         *   - Nothing set → defaults from config_create_default stand. */
+        toml_datum_t strength = toml_get(encryption, "strength");
+        toml_datum_t mib = toml_get(encryption, "argon2_memory_mib");
+        toml_datum_t passes = toml_get(encryption, "argon2_passes");
+
+        const bool strength_set = (strength.type == TOML_STRING);
+        const bool mib_set = (mib.type == TOML_INT64);
+        const bool passes_set = (passes.type == TOML_INT64);
+
+        if (mib_set != passes_set) {
+            err = ERROR(
+                ERR_INVALID_ARG,
+                "[encryption] argon2_memory_mib and argon2_passes must be set "
+                "together (set both, or neither and use `strength` instead)"
+            );
+            goto cleanup;
         }
+
+        if (mib_set) {
+            /* Bounds-check using KDF_ARGON2_*_MIN/MAX (defense-in-depth
+             * against the same constants kdf_validate_params re-checks at
+             * the crypto boundary; see crypto/kdf.h's bounds rationale). */
+            if (mib.u.int64 < KDF_ARGON2_MEMORY_MIB_MIN
+                || mib.u.int64 > KDF_ARGON2_MEMORY_MIB_MAX) {
+                err = ERROR(
+                    ERR_INVALID_ARG,
+                    "Invalid argon2_memory_mib: %lld (must be %u..%u)",
+                    (long long) mib.u.int64,
+                    (unsigned) KDF_ARGON2_MEMORY_MIB_MIN,
+                    (unsigned) KDF_ARGON2_MEMORY_MIB_MAX
+                );
+                goto cleanup;
+            }
+            if (passes.u.int64 < KDF_ARGON2_PASSES_MIN
+                || passes.u.int64 > KDF_ARGON2_PASSES_MAX) {
+                err = ERROR(
+                    ERR_INVALID_ARG,
+                    "Invalid argon2_passes: %lld (must be %u..%u)",
+                    (long long) passes.u.int64,
+                    (unsigned) KDF_ARGON2_PASSES_MIN,
+                    (unsigned) KDF_ARGON2_PASSES_MAX
+                );
+                goto cleanup;
+            }
+            config->encryption_argon2_memory_mib = (uint16_t) mib.u.int64;
+            config->encryption_argon2_passes = (uint8_t) passes.u.int64;
+
+            if (strength_set) {
+                fprintf(
+                    stderr,
+                    "Warning: [encryption] strength = \"%s\" is ignored because "
+                    "argon2_memory_mib and argon2_passes are set explicitly.\n",
+                    strength.u.s
+                );
+            }
+        } else if (strength_set) {
+            const encryption_strength_preset_t *preset = NULL;
+            for (size_t i = 0; i < ENCRYPTION_STRENGTH_PRESETS_COUNT; i++) {
+                if (strcmp(
+                    strength.u.s,
+                    ENCRYPTION_STRENGTH_PRESETS[i].name
+                    ) == 0) {
+                    preset = &ENCRYPTION_STRENGTH_PRESETS[i];
+                    break;
+                }
+            }
+            if (!preset) {
+                err = ERROR(
+                    ERR_INVALID_ARG,
+                    "Invalid [encryption] strength: \"%s\" "
+                    "(valid: \"fast\", \"balanced\", \"paranoid\")",
+                    strength.u.s
+                );
+                goto cleanup;
+            }
+            config->encryption_argon2_memory_mib = preset->memory_mib;
+            config->encryption_argon2_passes = preset->passes;
+        }
+        /* else: keep the balanced defaults set by config_create_default. */
 
         toml_datum_t session_timeout = toml_get(encryption, "session_timeout");
         if (session_timeout.type == TOML_INT64) {
@@ -644,7 +742,7 @@ error_t *config_load(const char *config_path, config_t **out) {
 
     /* Materialize derived state (compiled auto-encrypt ruleset) after
      * validation. Pattern-compile errors are real config errors — same
-     * failure class as invalid verbosity or non-power-of-two memlimit. */
+     * failure class as invalid verbosity or out-of-range argon2 params. */
     err = config_compile_auto_encrypt(config);
     if (err) {
         config_free(config);
@@ -743,25 +841,30 @@ error_t *config_validate(const config_t *config) {
         );
     }
 
-    /* Validate encryption_memlimit (in bytes after parse-time conversion).
-     *
-     * Constraints come from crypto/balloon: power-of-two so the modular
-     * index reduction is bias-free, and >= 1 MiB so derivation cost is
-     * meaningfully memory-hard. Validating here surfaces config errors at
-     * load time instead of from a deep crypto frame. */
-    if (config->encryption_memlimit < (size_t) 1024 * 1024) {
-        return ERROR(
-            ERR_INVALID_ARG,
-            "Invalid memlimit: %zu bytes (must be >= 1 MB)",
-            config->encryption_memlimit
+    /* Defense-in-depth Argon2 params bounds check. Same constants the
+     * parse step already applied; this guards against a future code path
+     * that mutates config_t after load (today there is none). The check
+     * runs unconditionally — even with encryption disabled — because the
+     * defaults set by config_create_default are within bounds and a
+     * caller that flips `encryption_enabled = true` mid-session would
+     * otherwise be deriving keys with whatever stale values the struct
+     * carries. */
+    error_t *kdf_err = kdf_validate_params(
+        config->encryption_argon2_memory_mib,
+        config->encryption_argon2_passes
+    );
+    if (kdf_err) {
+        /* Re-wrap as INVALID_ARG so config-layer errors stay uniform —
+         * kdf_validate_params returns ERR_CRYPTO for the parse-tampered
+         * blob-header use case, which is wrong-class for a config error. */
+        char *msg = strdup(error_message(kdf_err));
+        error_free(kdf_err);
+        error_t *wrapped = ERROR(
+            ERR_INVALID_ARG, "Invalid [encryption] argon2 params: %s",
+            msg ? msg : "(allocation failed)"
         );
-    }
-    if ((config->encryption_memlimit & (config->encryption_memlimit - 1)) != 0) {
-        return ERROR(
-            ERR_INVALID_ARG,
-            "Invalid memlimit: %zu MB (must be a power of two: 1, 2, 4, 8, 16, 32, 64, ...)",
-            config->encryption_memlimit / (1024 * 1024)
-        );
+        free(msg);
+        return wrapped;
     }
 
     return NULL;

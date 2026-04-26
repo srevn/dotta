@@ -4,7 +4,6 @@
 
 #include "sys/credentials.h"
 
-#include <hydrogen.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -13,6 +12,7 @@
 
 #include "base/buffer.h"
 #include "base/error.h"
+#include "base/secure.h"
 #include "base/string.h"
 #include "sys/process.h"
 
@@ -341,7 +341,7 @@ static error_t *run_credential_helper(
  */
 static void credential_request_secure_free(buffer_t *req) {
     if (req->data) {
-        hydro_memzero(req->data, req->capacity);
+        secure_wipe(req->data, req->capacity);
     }
     buffer_free(req);
 }

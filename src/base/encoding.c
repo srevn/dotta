@@ -5,6 +5,27 @@
 #include "base/encoding.h"
 
 /**
+ * Store a uint16_t in little-endian byte order (portable)
+ */
+void store_le16(uint8_t out[2], uint16_t val) {
+    out[0] = (uint8_t) (val);
+    out[1] = (uint8_t) (val >> 8);
+}
+
+/**
+ * Load a uint16_t from little-endian byte order (portable)
+ *
+ * The byte casts widen each operand to `unsigned` (via integer
+ * promotion) before the OR; the explicit final cast back to
+ * `uint16_t` makes the narrowing return-type conversion visible to
+ * the reader and quiet under any narrowing-warning flag.
+ */
+uint16_t load_le16(const uint8_t in[2]) {
+    return (uint16_t) ((uint16_t) in[0]
+           | ((uint16_t) in[1] << 8));
+}
+
+/**
  * Store a uint64_t in little-endian byte order (portable)
  */
 void store_le64(uint8_t out[8], uint64_t val) {

@@ -38,9 +38,9 @@ BUILD_TYPE ?= release
 # Vendor libraries
 LIB_DIR := lib
 CJSON_SRC := $(LIB_DIR)/cjson/cJSON.c
-TOML_SRC := $(LIB_DIR)/toml/tomlc17.c
-HYDROGEN_SRC := $(LIB_DIR)/hydrogen/hydrogen.c
-LIB_INCLUDES := -I$(LIB_DIR)/cjson -I$(LIB_DIR)/toml -I$(LIB_DIR)/hydrogen
+TOML_SRC := $(LIB_DIR)/tomlc17/tomlc17.c
+MONOCYPHER_SRC := $(LIB_DIR)/monocypher/monocypher.c
+LIB_INCLUDES := -I$(LIB_DIR)/cjson -I$(LIB_DIR)/tomlc17 -I$(LIB_DIR)/monocypher
 
 # Include paths
 INCLUDES := -Iinclude -Isrc $(LIB_INCLUDES)
@@ -104,11 +104,12 @@ UTILS_SRC := $(wildcard $(SRC_DIR)/utils/*.c)
 # Library objects
 CJSON_OBJ := $(BUILD_DIR)/lib/cJSON.o
 TOML_OBJ := $(BUILD_DIR)/lib/tomlc17.o
-HYDROGEN_OBJ := $(BUILD_DIR)/lib/hydrogen.o
+MONOCYPHER_OBJ := $(BUILD_DIR)/lib/monocypher.o
 
 # All source files (excluding main.c for library)
 LIB_SRC := $(BASE_SRC) $(SYS_SRC) $(INFRA_SRC) $(CRYPTO_SRC) $(CORE_SRC) $(CMDS_SRC) $(UTILS_SRC)
-LIB_OBJ := $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(LIB_SRC)) $(CJSON_OBJ) $(TOML_OBJ) $(HYDROGEN_OBJ)
+LIB_OBJ := $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(LIB_SRC)) \
+           $(CJSON_OBJ) $(TOML_OBJ) $(MONOCYPHER_OBJ)
 
 # Main executable
 MAIN_SRC := $(SRC_DIR)/main.c
@@ -155,7 +156,7 @@ $(BUILD_DIR)/lib/tomlc17.o: $(TOML_SRC) $(BUILD_CONFIG) | $(BUILD_DIR)/lib
 	@echo "CC $<"
 	@$(CC) $(CFLAGS) $(LIB_INCLUDES) -c $< -o $@
 
-$(BUILD_DIR)/lib/hydrogen.o: $(HYDROGEN_SRC) $(BUILD_CONFIG) | $(BUILD_DIR)/lib
+$(BUILD_DIR)/lib/monocypher.o: $(MONOCYPHER_SRC) $(BUILD_CONFIG) | $(BUILD_DIR)/lib
 	@echo "CC $<"
 	@$(CC) $(CFLAGS) $(LIB_INCLUDES) -c $< -o $@
 

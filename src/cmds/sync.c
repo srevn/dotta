@@ -508,12 +508,14 @@ static bool sync_manifest(
     );
 
     if (err) {
-        output_warning(
-            out, OUTPUT_NORMAL, "    Manifest sync failed: %s",
+        output_styled(
+            out, OUTPUT_NORMAL,
+            "    {yellow}⚠{reset} Manifest sync failed: %s\n",
             error_message(err)
         );
         output_hint(
-            out, OUTPUT_NORMAL, "    Run 'dotta status' or 'dotta apply' to resync manifest"
+            out, OUTPUT_NORMAL,
+            "    Run 'dotta status' or 'dotta apply' to resync manifest"
         );
         error_free(err);
         return false;
@@ -557,12 +559,14 @@ static void sync_manifest_and_report(
     }
 
     if (skipped > 0) {
-        output_warning(
-            out, OUTPUT_NORMAL, "    %zu custom file%s skipped (no prefix configured for '%s')",
+        output_styled(
+            out, OUTPUT_NORMAL,
+            "    {yellow}⚠{reset} %zu custom file%s skipped (no prefix configured for '%s')\n",
             skipped, skipped == 1 ? "" : "s", profile
         );
         output_hint(
-            out, OUTPUT_NORMAL, "    Run: dotta profile enable --prefix <path> %s",
+            out, OUTPUT_NORMAL,
+            "    Run: dotta profile enable --prefix <path> %s",
             profile
         );
     }
@@ -582,7 +586,11 @@ static error_t *attempt_rollback(
 ) {
     error_t *err = resolve_rollback(ctx);
     if (err) {
-        output_error(out, "    Critical: Rollback failed: %s", error_message(err));
+        output_styled(
+            out, OUTPUT_NORMAL,
+            "    {red}✗{reset} Critical: Rollback failed: %s\n",
+            error_message(err)
+        );
         output_newline(out, OUTPUT_NORMAL);
         return error_wrap(
             err, "Failed to rollback branch '%s' after %s.\n"
@@ -678,25 +686,29 @@ static void handle_remote_ahead(
     );
 
     if (!manifest_ok) {
-        output_success(
-            out, OUTPUT_NORMAL, "  {green}%s{reset}: pulled %zu commit%s (manifest sync failed)",
+        output_styled(
+            out, OUTPUT_NORMAL,
+            "  {green}✓{reset} {green}%s{reset}: pulled %zu commit%s (manifest sync failed)\n",
             result->profile, result->behind, result->behind == 1 ? "" : "s"
         );
     } else {
-        output_success(
+        output_styled(
             out, OUTPUT_NORMAL,
-            "  {green}%s{reset}: pulled %zu commit%s (%zu staged, %zu removed, %zu fallback%s)",
+            "  {green}✓{reset} {green}%s{reset}: pulled %zu commit%s "
+            "(%zu staged, %zu removed, %zu fallback%s)\n",
             result->profile, result->behind, result->behind == 1 ? "" : "s",
             synced, removed, fallbacks, fallbacks == 1 ? "" : "s"
         );
     }
     if (skipped > 0) {
-        output_warning(
-            out, OUTPUT_NORMAL, "    %zu custom file%s skipped (no prefix configured for '%s')",
+        output_styled(
+            out, OUTPUT_NORMAL,
+            "    {yellow}⚠{reset} %zu custom file%s skipped (no prefix configured for '%s')\n",
             skipped, skipped == 1 ? "" : "s", result->profile
         );
         output_hint(
-            out, OUTPUT_NORMAL, "    Run: dotta profile enable --prefix <path> %s",
+            out, OUTPUT_NORMAL,
+            "    Run: dotta profile enable --prefix <path> %s",
             result->profile
         );
     }
@@ -743,8 +755,9 @@ static error_t *resolve_and_push_divergence(
         &ctx, repo, remote_name, result->profile, strategy
     );
     if (err) {
-        output_error(
-            out, "    Failed to initialize divergence context: %s",
+        output_styled(
+            out, OUTPUT_NORMAL,
+            "    {red}✗{reset} Failed to initialize divergence context: %s\n",
             error_message(err)
         );
         mark_result_failed(result, results, err);
@@ -755,8 +768,9 @@ static error_t *resolve_and_push_divergence(
     git_oid new_oid;
     err = resolve_execute(&ctx, &new_oid);
     if (err) {
-        output_error(
-            out, "    %s failed: %s",
+        output_styled(
+            out, OUTPUT_NORMAL,
+            "    {red}✗{reset} %s failed: %s\n",
             cap_name, error_message(err)
         );
         mark_result_failed(result, results, err);
@@ -767,8 +781,9 @@ static error_t *resolve_and_push_divergence(
     size_t ahead = 0;
     err = resolve_verify(&ctx, &ahead, NULL);
     if (err) {
-        output_error(
-            out, "    %s verification failed: %s",
+        output_styled(
+            out, OUTPUT_NORMAL,
+            "    {red}✗{reset} %s verification failed: %s\n",
             cap_name, error_message(err)
         );
         mark_result_failed(result, results, err);
@@ -780,8 +795,9 @@ static error_t *resolve_and_push_divergence(
         return attempt_rollback(&ctx, result->profile, reason, out);
     }
 
-    output_success(
-        out, OUTPUT_NORMAL, "    Successfully %s (%zu commit%s to push)",
+    output_styled(
+        out, OUTPUT_NORMAL,
+        "    {green}✓{reset} Successfully %s (%zu commit%s to push)\n",
         past_desc, ahead, ahead == 1 ? "" : "s"
     );
 
@@ -791,14 +807,16 @@ static error_t *resolve_and_push_divergence(
         /* Push resolved commits */
         err = gitops_push_branch(repo, remote_name, result->profile, xfer);
         if (err) {
-            output_error(
-                out, "    Push after %s failed: %s",
+            output_styled(
+                out, OUTPUT_NORMAL,
+                "    {red}✗{reset} Push after %s failed: %s\n",
                 strategy_name, error_message(err)
             );
             mark_result_failed(result, results, err);
 
             output_info(
-                out, OUTPUT_NORMAL, "    ↺ Rolling back %s (push failed)...",
+                out, OUTPUT_NORMAL,
+                "    ↺ Rolling back %s (push failed)...",
                 strategy_name
             );
             return attempt_rollback(
@@ -806,8 +824,9 @@ static error_t *resolve_and_push_divergence(
             );
         }
 
-        output_success(
-            out, OUTPUT_NORMAL, "    Pushed %s",
+        output_styled(
+            out, OUTPUT_NORMAL,
+            "    {green}✓{reset} Pushed %s\n",
             push_desc
         );
         result->pushed = true;
@@ -866,13 +885,18 @@ static error_t *handle_diverged_ours(
     /* Force push local to remote (local branch stays unchanged) */
     error_t *err = gitops_force_push_branch(repo, remote_name, result->profile, xfer);
     if (err) {
-        output_error(out, "    Force push failed: %s", error_message(err));
+        output_styled(
+            out, OUTPUT_NORMAL,
+            "    {red}✗{reset} Force push failed: %s\n",
+            error_message(err)
+        );
         mark_result_failed(result, results, err);
         return NULL;
     }
 
-    output_success(
-        out, OUTPUT_NORMAL, "    Force pushed to remote (remote commits discarded)"
+    output_styled(
+        out, OUTPUT_NORMAL,
+        "    {green}✓{reset} Force pushed to remote (remote commits discarded)\n"
     );
     result->pushed = true;
     results->pushed_count++;
@@ -895,7 +919,8 @@ static error_t *handle_diverged_theirs(
     const string_array_t *enabled_profiles
 ) {
     output_info(
-        out, OUTPUT_NORMAL, "    Resolving with 'theirs' strategy (reset to remote)..."
+        out, OUTPUT_NORMAL,
+        "    Resolving with 'theirs' strategy (reset to remote)..."
     );
 
     /* Get user confirmation for destructive operation */
@@ -920,8 +945,9 @@ static error_t *handle_diverged_theirs(
         &ctx, repo, remote_name, result->profile, RESOLVE_STRATEGY_THEIRS
     );
     if (err) {
-        output_error(
-            out, "    Failed to initialize divergence context: %s",
+        output_styled(
+            out, OUTPUT_NORMAL,
+            "    {red}✗{reset} Failed to initialize divergence context: %s\n",
             error_message(err)
         );
         mark_result_failed(result, results, err);
@@ -932,8 +958,9 @@ static error_t *handle_diverged_theirs(
     git_oid new_oid;
     err = resolve_execute(&ctx, &new_oid);
     if (err) {
-        output_error(
-            out, "    Reset failed: %s",
+        output_styled(
+            out, OUTPUT_NORMAL,
+            "    {red}✗{reset} Reset failed: %s\n",
             error_message(err)
         );
         mark_result_failed(result, results, err);
@@ -947,13 +974,23 @@ static error_t *handle_diverged_theirs(
      */
     err = resolve_verify(&ctx, NULL, NULL);
     if (err) {
-        output_error(out, "    Reset verification failed: %s", error_message(err));
-        output_warning(out, OUTPUT_NORMAL, "    Local branch was reset but verification failed");
+        output_styled(
+            out, OUTPUT_NORMAL,
+            "    {red}✗{reset} Reset verification failed: %s\n",
+            error_message(err)
+        );
+        output_styled(
+            out, OUTPUT_NORMAL,
+            "    {yellow}⚠{reset} Local branch was reset but verification failed\n"
+        );
         mark_result_failed(result, results, err);
         return NULL;
     }
 
-    output_success(out, OUTPUT_NORMAL, "    Reset to remote (local commits discarded)");
+    output_styled(
+        out, OUTPUT_NORMAL,
+        "    {green}✓{reset} Reset to remote (local commits discarded)\n"
+    );
     results->pulled_count++;
 
     /* Sync manifest with changes from reset */
@@ -984,8 +1021,9 @@ static error_t *handle_diverged(
     const string_array_t *enabled_profiles,
     bool no_push
 ) {
-    output_warning(
-        out, OUTPUT_NORMAL, "  {red}%s{reset}: diverged (%zu local, %zu remote commits)",
+    output_styled(
+        out, OUTPUT_NORMAL,
+        "  {yellow}⚠{reset} {red}%s{reset}: diverged (%zu local, %zu remote commits)\n",
         result->profile, result->ahead, result->behind
     );
 
@@ -1083,7 +1121,11 @@ static error_t *sync_push_phase(
 
         /* Skip failed analysis */
         if (result->failed) {
-            output_error(out, "  %s: %s", result->profile, result->error_message);
+            output_styled(
+                out, OUTPUT_NORMAL,
+                "  {red}✗{reset} {red}%s{reset}: %s\n",
+                result->profile, result->error_message
+            );
             continue;
         }
 
@@ -1091,7 +1133,8 @@ static error_t *sync_push_phase(
         switch (result->state) {
             case UPSTREAM_UP_TO_DATE: {
                 output_info(
-                    out, OUTPUT_VERBOSE, "  = {green}%s{reset}: up-to-date",
+                    out, OUTPUT_VERBOSE,
+                    "  = {green}%s{reset}: up-to-date",
                     result->profile
                 );
                 break;
@@ -1102,7 +1145,8 @@ static error_t *sync_push_phase(
                  * Blocked by --no-pull since resetting to remote incorporates remote state */
                 if (diverged_strategy == DIVERGE_THEIRS && !no_pull) {
                     output_info(
-                        out, OUTPUT_NORMAL, "  ↑ {yellow}%s{reset}: %zu commit%s ahead of remote",
+                        out, OUTPUT_NORMAL,
+                        "  ↑ {yellow}%s{reset}: %zu commit%s ahead of remote",
                         result->profile, result->ahead, result->ahead == 1 ? "" : "s"
                     );
                     error_t *err = handle_diverged_theirs(
@@ -1130,8 +1174,9 @@ static error_t *sync_push_phase(
 
                 error_t *err = gitops_push_branch(repo, remote_name, result->profile, xfer);
                 if (err) {
-                    output_error(
-                        out, "  %s: push failed - %s",
+                    output_styled(
+                        out, OUTPUT_NORMAL,
+                        "  {red}✗{reset} {red}%s{reset}: push failed - %s\n",
                         result->profile, error_message(err)
                     );
                     mark_result_failed(result, results, err);
@@ -1139,8 +1184,9 @@ static error_t *sync_push_phase(
                     result->pushed = true;
                     results->pushed_count++;
 
-                    output_success(
-                        out, OUTPUT_NORMAL, "  {green}%s{reset}: pushed %zu commit%s",
+                    output_styled(
+                        out, OUTPUT_NORMAL,
+                        "  {green}✓{reset} {green}%s{reset}: pushed %zu commit%s\n",
                         result->profile, result->ahead, result->ahead == 1 ? "" : "s"
                     );
                 }
@@ -1150,7 +1196,8 @@ static error_t *sync_push_phase(
             case UPSTREAM_NO_REMOTE: {
                 if (no_push) {
                     output_info(
-                        out, OUTPUT_NORMAL, "  • %s: local only (push skipped: --no-push)",
+                        out, OUTPUT_NORMAL,
+                        "  • %s: local only (push skipped: --no-push)",
                         result->profile
                     );
                     break;
@@ -1158,22 +1205,25 @@ static error_t *sync_push_phase(
 
                 /* Remote branch doesn't exist - create it */
                 output_info(
-                    out, OUTPUT_VERBOSE, "  Creating remote branch %s...",
+                    out, OUTPUT_VERBOSE,
+                    "  Creating remote branch %s...",
                     result->profile
                 );
 
                 error_t *err = gitops_push_branch(repo, remote_name, result->profile, xfer);
                 if (err) {
-                    output_error(
-                        out, "  %s: failed to create remote branch - %s",
+                    output_styled(
+                        out, OUTPUT_NORMAL,
+                        "  {red}✗{reset} {red}%s{reset}: failed to create remote branch - %s\n",
                         result->profile, error_message(err)
                     );
                     mark_result_failed(result, results, err);
                 } else {
                     result->pushed = true;
                     results->pushed_count++;
-                    output_success(
-                        out, OUTPUT_NORMAL, "  {green}%s{reset}: created remote branch",
+                    output_styled(
+                        out, OUTPUT_NORMAL,
+                        "  {green}✓{reset} {green}%s{reset}: created remote branch\n",
                         result->profile
                     );
                 }
@@ -1185,12 +1235,14 @@ static error_t *sync_push_phase(
                 if (diverged_strategy == DIVERGE_OURS) {
 
                     output_info(
-                        out, OUTPUT_NORMAL, "  ↓ {yellow}%s{reset}: %zu remote commit%s ahead",
+                        out, OUTPUT_NORMAL,
+                        "  ↓ {yellow}%s{reset}: %zu remote commit%s ahead",
                         result->profile, result->behind, result->behind == 1 ? "" : "s"
                     );
-                    output_warning(
+                    output_styled(
                         out, OUTPUT_NORMAL,
-                        "    Local is behind — force push will overwrite newer remote commits"
+                        "    {yellow}⚠{reset} Local is behind — "
+                        "force push will overwrite newer remote commits\n"
                     );
 
                     error_t *err = handle_diverged_ours(
@@ -1219,16 +1271,18 @@ static error_t *sync_push_phase(
                 if (no_pull && diverged_strategy != DIVERGE_WARN &&
                     diverged_strategy != DIVERGE_OURS) {
 
-                    output_warning(
+                    output_styled(
                         out, OUTPUT_NORMAL,
-                        "  ⚠ {red}%s{reset}: diverged (%zu local, %zu remote commits)",
+                        "  {yellow}⚠{reset} {red}%s{reset}: diverged "
+                        "(%zu local, %zu remote commits)\n",
                         result->profile, result->ahead, result->behind
                     );
                     const char *name = diverged_strategy == DIVERGE_REBASE ? "rebase" :
                         diverged_strategy == DIVERGE_MERGE ? "merge" : "theirs";
 
                     output_hint(
-                        out, OUTPUT_NORMAL, "    '%s' resolution skipped (--no-pull prevents "
+                        out, OUTPUT_NORMAL,
+                        "    '%s' resolution skipped (--no-pull prevents "
                         "incorporating remote changes)", name
                     );
                     break;
@@ -1244,7 +1298,11 @@ static error_t *sync_push_phase(
             }
 
             case UPSTREAM_UNKNOWN: {
-                output_warning(out, OUTPUT_NORMAL, "  ? %s: state unknown", result->profile);
+                output_styled(
+                    out, OUTPUT_NORMAL,
+                    "  {yellow}?{reset} %s: state unknown\n",
+                    result->profile
+                );
                 break;
             }
         }
@@ -1583,7 +1641,10 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
         for (size_t i = 0; i < results->count; i++) {
             profile_sync_result_t *r = &results->profiles[i];
             if (r->failed) {
-                output_error(out, "  %s: %s", r->profile, r->error_message);
+                output_styled(
+                    out, OUTPUT_NORMAL, "  {red}✗{reset} %s: %s\n",
+                    r->profile, r->error_message
+                );
                 continue;
             }
             switch (r->state) {
@@ -1606,8 +1667,9 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
                     );
                     break;
                 case UPSTREAM_DIVERGED:
-                    output_warning(
-                        out, OUTPUT_NORMAL, "  ↕ %s: diverged (%zu local, %zu remote)",
+                    output_styled(
+                        out, OUTPUT_NORMAL,
+                        "  {yellow}↕{reset} %s: diverged (%zu local, %zu remote)\n",
                         r->profile, r->ahead, r->behind
                     );
                     break;
@@ -1618,8 +1680,9 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
                     );
                     break;
                 case UPSTREAM_UNKNOWN:
-                    output_warning(
-                        out, OUTPUT_NORMAL, "  ? %s: unknown state",
+                    output_styled(
+                        out, OUTPUT_NORMAL,
+                        "  {yellow}?{reset} %s: unknown state\n",
                         r->profile
                     );
                     break;
@@ -1745,56 +1808,56 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
 
     if (results->pushed_count > 0) {
         output_success(
-            out, OUTPUT_NORMAL, "  {cyan}%zu{reset} profile%s pushed",
+            out, OUTPUT_NORMAL, "{cyan}%zu{reset} profile%s pushed",
             results->pushed_count, results->pushed_count == 1 ? "" : "s"
         );
     }
 
     if (results->pulled_count > 0) {
         output_success(
-            out, OUTPUT_NORMAL, "  {cyan}%zu{reset} profile%s updated from remote",
+            out, OUTPUT_NORMAL, "{cyan}%zu{reset} profile%s updated from remote",
             results->pulled_count, results->pulled_count == 1 ? "" : "s"
         );
     }
 
     if (results->up_to_date_count > 0) {
         output_info(
-            out, OUTPUT_NORMAL, "  {cyan}%zu{reset} profile%s already up-to-date",
+            out, OUTPUT_NORMAL, "{cyan}%zu{reset} profile%s already up-to-date",
             results->up_to_date_count, results->up_to_date_count == 1 ? "" : "s"
         );
     }
 
     if (results->need_pull_count > 0) {
         output_warning(
-            out, OUTPUT_NORMAL, "  {cyan}%zu{reset} profile%s need pull",
+            out, OUTPUT_NORMAL, "{cyan}%zu{reset} profile%s need pull",
             results->need_pull_count, results->need_pull_count == 1 ? "" : "s"
         );
     }
 
     if (results->diverged_count > 0) {
         output_warning(
-            out, OUTPUT_NORMAL, "  {cyan}%zu{reset} profile%s diverged",
+            out, OUTPUT_NORMAL, "{cyan}%zu{reset} profile%s diverged",
             results->diverged_count, results->diverged_count == 1 ? "" : "s"
         );
     }
 
     if (results->failed_count > 0) {
         output_error(
-            out, "  {cyan}%zu{reset} profile%s failed",
+            out, "{cyan}%zu{reset} profile%s failed",
             results->failed_count, results->failed_count == 1 ? "" : "s"
         );
     }
 
     if (results->fetch_failed_count > 0) {
         output_warning(
-            out, OUTPUT_NORMAL, "  {cyan}%zu{reset} fetch operation%s failed",
+            out, OUTPUT_NORMAL, "{cyan}%zu{reset} fetch operation%s failed",
             results->fetch_failed_count, results->fetch_failed_count == 1 ? "" : "s"
         );
     }
 
     if (results->auth_failed_count > 0) {
         output_error(
-            out, "  {cyan}%zu{reset} authentication failure%s",
+            out, "{cyan}%zu{reset} authentication failure%s",
             results->auth_failed_count, results->auth_failed_count == 1 ? "" : "s"
         );
     }

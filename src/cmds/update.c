@@ -1321,8 +1321,8 @@ static error_t *update_execute_for_all_profiles(
         *total_updated += processed;
 
         if (!output_is_verbose(out) && processed > 0) {
-            output_success(
-                out, OUTPUT_NORMAL, "  Updated %zu item%s",
+            output_styled(
+                out, OUTPUT_NORMAL, "  {green}✓{reset} Updated %zu item%s\n",
                 processed, processed == 1 ? "" : "s"
             );
         }
@@ -2113,7 +2113,6 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
     );
 
     /* Manifest status feedback */
-    output_newline(out, OUTPUT_NORMAL);
     if (manifest_updated) {
         output_info(
             out, OUTPUT_NORMAL,

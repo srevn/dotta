@@ -209,6 +209,9 @@ static void display_workspace_status(
         }
     }
 
+    /* Tracks whether the Issues section contained orphans with divergence */
+    bool has_diverged_orphans = false;
+
     /* Show sectioned output for dirty/invalid workspace */
     if (ws_status != WORKSPACE_CLEAN) {
         /* When filter active and filtered profile is clean, skip detailed sections */
@@ -410,13 +413,11 @@ static void display_workspace_status(
                 );
 
                 if (list) {
-                    /* Check if any orphans have divergence
-                     * Clean orphans (DIVERGENCE_NONE) are straightforward - they'll be removed.
-                     * Only show guidance hints for diverged orphans (modified, mode, unverified)
-                     * since those are the confusing cases where apply won't remove the file.
+                    /* Render orphans and track whether any are diverged.
+                     * Clean orphans (DIVERGENCE_NONE) are straightforward; they'll
+                     * be removed. Diverged orphans (modified, mode, unverified) are
+                     * confusing cases where apply won't remove the file.
                      */
-                    bool has_diverged_orphans = false;
-
                     for (size_t i = 0; i < orphaned_count; i++) {
                         const char *tags[WORKSPACE_ITEM_MAX_DISPLAY_TAGS];
                         size_t tag_count;
@@ -441,31 +442,6 @@ static void display_workspace_status(
 
                     output_list_render(list);
                     output_list_free(list);
-
-                    /* Show detailed guidance only for diverged orphans */
-                    if (has_diverged_orphans) {
-                        output_newline(out, OUTPUT_NORMAL);
-                        output_hint(
-                            out, OUTPUT_NORMAL,
-                            "Diverged orphans blocking safe removal."
-                        );
-                        output_hintline(
-                            out, OUTPUT_NORMAL, "  [orphaned]              "
-                            "- Clean, will be removed by 'dotta apply'"
-                        );
-                        output_hintline(
-                            out, OUTPUT_NORMAL, "  [orphaned] [modified]   "
-                            "- Has uncommitted changes, skipped by 'dotta apply'"
-                        );
-                        output_hintline(
-                            out, OUTPUT_NORMAL, "  [orphaned] [mode]       "
-                            "- Permissions changed, skipped by 'dotta apply'"
-                        );
-                        output_hintline(
-                            out, OUTPUT_NORMAL, "  [orphaned] [unverified] "
-                            "- Missing key, skipped by 'dotta apply'"
-                        );
-                    }
                 }
             }
 
@@ -478,6 +454,32 @@ static void display_workspace_status(
             output_styled(
                 out, OUTPUT_NORMAL, "  {dim}(%zu item%s hidden){reset}\n",
                 hidden_count, hidden_count == 1 ? "" : "s"
+            );
+        }
+
+        /* Section-level hint: show detailed guidance only for
+         * diverged orphans. Placed outside the Issues section */
+        if (has_diverged_orphans) {
+            output_newline(out, OUTPUT_NORMAL);
+            output_hint(
+                out, OUTPUT_NORMAL,
+                "Diverged orphans blocking safe removal."
+            );
+            output_hintline(
+                out, OUTPUT_NORMAL, "  [orphaned]              "
+                "- Clean, will be removed by 'dotta apply'"
+            );
+            output_hintline(
+                out, OUTPUT_NORMAL, "  [orphaned] [modified]   "
+                "- Has uncommitted changes, skipped by 'dotta apply'"
+            );
+            output_hintline(
+                out, OUTPUT_NORMAL, "  [orphaned] [mode]       "
+                "- Permissions changed, skipped by 'dotta apply'"
+            );
+            output_hintline(
+                out, OUTPUT_NORMAL, "  [orphaned] [unverified] "
+                "- Missing key, skipped by 'dotta apply'"
             );
         }
     }

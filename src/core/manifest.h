@@ -83,7 +83,10 @@ typedef struct file_entry {
     mode_t mode;                     /* Permission mode (e.g., 0644), 0 if no metadata tracked */
     char *owner;                     /* Owner username (root/ files only, can be NULL) */
     char *group;                     /* Group name (root/ files only, can be NULL) */
-    bool encrypted;                  /* Encryption flag */
+    bool encrypted;                  /* Metadata-projected cache; byte-truth via the
+                                      * Phase 2 write-time invariant in
+                                      * content_store_file_to_worktree. See
+                                      * docs/encryption-spec.md → "Cache hierarchy". */
 
     /* Deployment anchor (dotta-authored, advances only via state_update_anchor) */
     deployment_anchor_t anchor;

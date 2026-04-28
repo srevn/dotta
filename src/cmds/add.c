@@ -408,9 +408,7 @@ static error_t *add_file_to_worktree(
 
         /* Stamp metadata.encrypted from byte truth, NOT from policy.
          * This is the write-time invariant: bytes-on-disk and the
-         * metadata cache are bound at the same boundary, by construction.
-         * Per Rule 6 in CLAUDE.md, downstream readers (state DB column,
-         * manifest_entry->encrypted) trust this cache without re-sniffing. */
+         * metadata cache are bound at the same boundary, by construction. */
         if (item && item->kind == METADATA_ITEM_FILE) {
             item->file.encrypted = (written_kind != CONTENT_PLAINTEXT);
         }

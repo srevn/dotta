@@ -536,6 +536,13 @@ static error_t *analyze_file_divergence(
              * - Encrypted: blob_oid is ciphertext hash; must load, decrypt, compare
              *
              * Both paths receive initial_stat to avoid redundant lstat syscalls.
+             *
+             * Asymmetry with the Phase 3 anchor-staleness site below: that site routes
+             * through content_compare_blob_to_disk (byte-classify internally) because
+             * anchor.blob_oid can differ from manifest_entry->blob_oid and there is
+             * no anchor-side cache to trust. Here we route on manifest_entry->encrypted
+             * directly — the cache IS byte-truth for *this* blob via the Phase 2
+             * write-time invariant in content_store_file_to_worktree.
              */
             if (!manifest_entry->encrypted) {
                 err = compare_oid_to_disk(
@@ -553,7 +560,6 @@ static error_t *analyze_file_divergence(
                     blob_oid_ptr,
                     storage_path,
                     profile,
-                    manifest_entry->encrypted,
                     &expected_content
                 );
 
@@ -768,41 +774,33 @@ static error_t *analyze_file_divergence(
         struct stat verify_stat;
         error_t *verify_err = NULL;
 
-        /* Unified verification: load the anchor blob through the same path
-         * for both encrypted and non-encrypted files (content_cache handles
-         * decryption transparently), then byte-compare against disk.
-         * compare_oid_to_disk is the shorter route for non-encrypted blobs
-         * (avoids the content_cache buffer allocation) - fast branch. */
-        if (!manifest_entry->encrypted) {
-            verify_err = compare_oid_to_disk(
-                &manifest_entry->anchor.blob_oid,
-                fs_path,
-                expected_mode,
-                &initial_stat,
-                &verify_result,
-                &verify_stat
-            );
-        } else {
-            const buffer_t *anchor_content = NULL;
-            verify_err = content_cache_get_from_blob_oid(
-                ws->content_cache,
-                &manifest_entry->anchor.blob_oid,
-                storage_path,
-                profile,
-                manifest_entry->encrypted,
-                &anchor_content
-            );
-            if (!verify_err && anchor_content) {
-                verify_err = compare_buffer_to_disk(
-                    anchor_content,
-                    fs_path,
-                    expected_mode,
-                    &initial_stat,
-                    &verify_result,
-                    &verify_stat
-                );
-            }
-        }
+        /* Route the anchor comparison by the anchor blob's own bytes.
+         *
+         * The latent bug class this avoids: routing on manifest_entry->encrypted
+         * silently miscategorised the staleness check across encryption-policy
+         * transitions. Both directions failed:
+         *   - encrypted anchor / plaintext current → compare_oid_to_disk
+         *     hashed plaintext disk against an encrypted-blob OID, never
+         *     equal, STALE never set.
+         *   - plaintext anchor / encrypted current → content_cache called
+         *     with expected_encrypted=true on a plaintext blob, the old
+         *     cross-check raised ERR_STATE_INVALID, swallowed below.
+         *
+         * content_compare_blob_to_disk classifies by bytes, so the routing
+         * decision lives with the blob whose comparison we are doing. A
+         * routing-on-stale-flag bug is structurally impossible. */
+        verify_err = content_compare_blob_to_disk(
+            ws->repo,
+            &manifest_entry->anchor.blob_oid,
+            fs_path,
+            expected_mode,
+            &initial_stat,
+            storage_path,
+            profile,
+            ws->content_cache,
+            &verify_result,
+            &verify_stat
+        );
 
         if (!verify_err && verify_result == CMP_EQUAL) {
             /* File matches old deployed content — stale repair is safe */
@@ -902,83 +900,39 @@ static divergence_type_t compute_orphan_divergence(
     compare_result_t cmp_result;
     error_t *err = NULL;
 
-    /* Step 3: Content and type comparison with strategy selection
+    /* Step 3: Content and type comparison.
      *
-     * Non-encrypted: Hash filesystem file and compare OID directly.
-     * Encrypted: blob_oid is ciphertext hash; must load, decrypt, compare.
-     *
-     * Both paths receive in_stat to avoid redundant lstat syscalls.
-     */
-    if (!state_entry->encrypted) {
-        /* Fast path: OID hash verification */
-        err = compare_oid_to_disk(
-            blob_oid_ptr,
-            fs_path,
-            expected_mode,
-            in_stat,
-            &cmp_result,
-            &fresh_stat
-        );
+     * content_compare_blob_to_disk classifies the blob by magic header and routes;
+     * plaintext takes the fast OID-hash-of-disk path, encrypted decrypts via the
+     * cache and byte-compares. The routing decision lives with the blob, so the
+     * orphan walker cannot route a different blob's state via state_entry->encrypted
+     * by accident. in_stat is forwarded to avoid redundant lstat. */
+    err = content_compare_blob_to_disk(
+        ws->repo,
+        blob_oid_ptr,
+        fs_path,
+        expected_mode,
+        in_stat,
+        storage_path,
+        profile,
+        ws->content_cache,
+        &cmp_result,
+        &fresh_stat
+    );
 
-        if (err) {
-            /* Hash verification failed (I/O error, permissions, etc.)
-             * Return UNVERIFIED to prevent false "clean" indication. */
-            error_free(err);
-            return DIVERGENCE_UNVERIFIED;
-        }
-    } else {
-        /* SLOW PATH: Content comparison for encrypted files
+    if (err) {
+        /* Cannot classify, load, decrypt, or compare. Possible causes:
+         * - Encrypted file but no passphrase available (missing key)
+         * - Decryption failed (wrong passphrase, corrupted ciphertext)
+         * - Blob uses an unsupported cipher version (skew)
+         * - I/O error reading blob from git
+         * - Blob missing from repository (corruption)
          *
-         * Content cache provides:
-         * - Automatic decryption (uses state_entry->encrypted flag)
-         * - Caching (repeated checks for same blob don't re-decrypt)
-         * - Error handling (missing key, corrupt data, etc.)
-         *
-         * VWD Pattern: Use state_entry->encrypted directly.
-         * This flag was set atomically with blob_oid when entry was synced.
-         */
-        const buffer_t *expected_content = NULL;
-        err = content_cache_get_from_blob_oid(
-            ws->content_cache,
-            blob_oid_ptr,
-            storage_path,
-            profile,
-            state_entry->encrypted, /* VWD pattern: use cached flag */
-            &expected_content
-        );
-
-        if (err) {
-            /* Cannot load/decrypt content
-             *
-             * Possible causes:
-             * - Encrypted file but no passphrase available (missing key)
-             * - Decryption failed (wrong passphrase, corrupted ciphertext)
-             * - I/O error reading blob from git
-             * - Blob missing from repository (corruption)
-             *
-             * Conservative approach: Return UNVERIFIED to prevent false "clean" indication.
-             * User will see [orphaned, unverified] and can investigate.
-             */
-            error_free(err);
-            return DIVERGENCE_UNVERIFIED;
-        }
-
-        /* Content and type comparison using caller's stat */
-        err = compare_buffer_to_disk(
-            expected_content,
-            fs_path,
-            expected_mode,
-            in_stat,
-            &cmp_result,
-            &fresh_stat
-        );
-        /* Note: Don't free expected_content - cache owns it! */
-
-        if (err) {
-            /* Comparison failed (I/O error, permissions, etc.) */
-            error_free(err);
-            return DIVERGENCE_UNVERIFIED;
-        }
+         * Conservative approach: return UNVERIFIED so the user sees
+         * [orphaned, unverified] and can investigate, rather than a
+         * false [orphaned, clean] or noisy [orphaned, modified]. */
+        error_free(err);
+        return DIVERGENCE_UNVERIFIED;
     }
 
     /* Step 4: Interpret comparison result
@@ -2073,9 +2027,7 @@ static error_t *analyze_encryption_policy_mismatch(
     CHECK_NULL(ws->manifest);
 
     /* Fast-path: no auto-encrypt ruleset means nothing to validate. */
-    if (!encryption_policy_is_active(config)) {
-        return NULL;
-    }
+    if (!encryption_policy_is_active(config)) return NULL;
 
     error_t *err = NULL;
 
@@ -2085,81 +2037,70 @@ static error_t *analyze_encryption_policy_mismatch(
         const char *storage_path = manifest_entry->storage_path;
         const char *profile = manifest_entry->profile;
 
-        /* Project the cached bool to a content_kind_t for the policy
-         * predicate. The 3-valued enum's UNSUPPORTED_VERSION case is
-         * unreachable here — manifest_entry->encrypted is a bool and
-         * collapses ENCRYPTED + UNSUPPORTED_VERSION onto true. That
-         * collapse is exhaustive for encryption_policy_violation: any
-         * non-PLAINTEXT kind carries encryption intent and is treated
-         * as not-a-violation. The version-skew distinction surfaces
-         * via the content read path, not here. */
-        content_kind_t kind = manifest_entry->encrypted
-                            ? CONTENT_ENCRYPTED
-                            : CONTENT_PLAINTEXT;
+        /* Project the cached bool to a content_kind_t for the policy predicate.
+         * The 3-valued enum's UNSUPPORTED_VERSION case is unreachable here -
+         * manifest_entry->encrypted is a bool and collapses ENCRYPTED +
+         * UNSUPPORTED_VERSION onto true. That collapse is exhaustive for
+         * encryption_policy_violation: any non-PLAINTEXT kind carries encryption
+         * intent and is treated as not-a-violation. The version-skew distinction
+         * surfaces ia the content read path, not here. */
+        content_kind_t kind = manifest_entry->encrypted ? CONTENT_ENCRYPTED
+                                                        : CONTENT_PLAINTEXT;
 
         if (!encryption_policy_violation(config, storage_path, kind)) {
             continue;
         }
 
-        /* Policy mismatch: file is plaintext and matches an auto-encrypt
-         * pattern. Flag DIVERGENCE_ENCRYPTION on the existing item if
-         * already diverged, or create a new item. */
-        {
-            /* Check if file already has divergence (O(1) index lookup).
-             * This prevents last-write-wins bug when multiple analysis functions
-             * detect different divergence types for the same file. */
-            void *idx_ptr = hashmap_get(ws->diverged_index, manifest_entry->filesystem_path);
-            workspace_item_t *existing = NULL;
-            if (idx_ptr) {
-                size_t idx = (size_t) (uintptr_t) idx_ptr - 1;  /* Convert index+1 back to index */
-                existing = &ws->diverged[idx];
+        /* Merge the violation into the existing divergence index — the file may already have
+         * CONTENT/MODE/etc. divergence, in which case we OR the ENCRYPTION flag in alongside.
+         * The O(1) index lookup prevents last-write-wins between analysis passes. */
+        void *idx_ptr = hashmap_get(ws->diverged_index, manifest_entry->filesystem_path);
+        workspace_item_t *existing = NULL;
+        if (idx_ptr) {
+            size_t idx = (size_t) (uintptr_t) idx_ptr - 1;  /* Convert index+1 back to index */
+            existing = &ws->diverged[idx];
+        }
+
+        if (existing) {
+            /* File already diverged - accumulate encryption flag
+             *
+             * Example: File is DEPLOYED with CONTENT divergence AND violates encryption
+             * policy. We accumulate: divergence |= DIVERGENCE_ENCRYPTION.
+             * Result: User sees both flags: "modified [encryption]" in status. */
+            existing->divergence |= DIVERGENCE_ENCRYPTION;
+        } else {
+            /* No existing divergence row for this file — encryption policy is the only issue.
+             * Classify lifecycle state from presence + observation anchor, mirroring
+             * analyze_file_divergence Phase 2: a file on disk is DEPLOYED, a missing file is
+             * DELETED if ever observed (observed_at > 0), else UNDEPLOYED (ghost). */
+            struct stat enc_stat;
+            bool on_filesystem = (lstat(manifest_entry->filesystem_path, &enc_stat) == 0);
+
+            workspace_state_t item_state;
+            if (on_filesystem) {
+                item_state = WORKSPACE_STATE_DEPLOYED;
+            } else if (manifest_entry->anchor.observed_at > 0) {
+                item_state = WORKSPACE_STATE_DELETED;
+            } else {
+                item_state = WORKSPACE_STATE_UNDEPLOYED;
             }
 
-            if (existing) {
-                /* File already diverged - accumulate encryption flag
-                 *
-                 * Example: File is DEPLOYED with CONTENT divergence AND violates encryption
-                 * policy. We accumulate: divergence |= DIVERGENCE_ENCRYPTION.
-                 * Result: User sees both flags: "modified [encryption]" in status. */
-                existing->divergence |= DIVERGENCE_ENCRYPTION;
-            } else {
-                /* File has NO other divergence — encryption policy is the only issue.
-                 *
-                 * Classify lifecycle state from presence + observation anchor,
-                 * mirroring analyze_file_divergence Phase 2. on_filesystem is
-                 * checked first: a file on disk is DEPLOYED regardless of
-                 * whether dotta has stamped observation yet. A missing file
-                 * is DELETED if ever observed (observed_at > 0), else
-                 * UNDEPLOYED (ghost file that was never on disk in scope). */
-                struct stat enc_stat;
-                bool on_filesystem = (lstat(manifest_entry->filesystem_path, &enc_stat) == 0);
+            err = workspace_add_diverged(
+                ws,
+                manifest_entry->filesystem_path,
+                storage_path,
+                profile,
+                NULL,
+                item_state,
+                DIVERGENCE_ENCRYPTION, /* Divergence: encryption policy violated */
+                WORKSPACE_ITEM_FILE,
+                on_filesystem,
+                true,                  /* profile_enabled */
+                false                  /* No profile change */
+            );
 
-                workspace_state_t item_state;
-                if (on_filesystem) {
-                    item_state = WORKSPACE_STATE_DEPLOYED;
-                } else if (manifest_entry->anchor.observed_at > 0) {
-                    item_state = WORKSPACE_STATE_DELETED;
-                } else {
-                    item_state = WORKSPACE_STATE_UNDEPLOYED;
-                }
-
-                err = workspace_add_diverged(
-                    ws,
-                    manifest_entry->filesystem_path,
-                    storage_path,
-                    profile,
-                    NULL,
-                    item_state,
-                    DIVERGENCE_ENCRYPTION, /* Divergence: encryption policy violated */
-                    WORKSPACE_ITEM_FILE,
-                    on_filesystem,
-                    true,                  /* profile_enabled */
-                    false                  /* No profile change */
-                );
-
-                if (err) {
-                    return err;
-                }
+            if (err) {
+                return err;
             }
         }
     }

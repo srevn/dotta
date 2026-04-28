@@ -60,23 +60,27 @@ static void buffer_destroy_secure(void *ptr) {
     buffer_destroy(buf);
 }
 
+/**
+ * Classify raw bytes by inspecting the cipher detection window.
+ *
+ * Pure computation; no I/O. Boundary handling:
+ *
+ * - Short blob (size < CIPHER_DETECT_BYTES) → PLAINTEXT.
+ *   Real cipher blobs are at least CIPHER_OVERHEAD (41) bytes; even a
+ *   bare 5-byte "DOTTA" prefix lacks both the version byte and the
+ *   SIV, so plaintext is the only safe interpretation.
+ * - Magic prefix mismatch → PLAINTEXT.
+ * - Magic match + current version → ENCRYPTED.
+ * - Magic match + non-current version → UNSUPPORTED_VERSION.
+ *
+ * Indexing the version byte by `CIPHER_MAGIC_SIZE` keeps cipher's
+ * internal field offsets (CIPHER_OFFSET_VERSION) opaque to this
+ * layer; the static_assert in cipher.c guards their equivalence.
+ */
 content_kind_t content_classify_bytes(
     const uint8_t *data,
     size_t size
 ) {
-    /* Boundary handling:
-     *   - NULL or short → PLAINTEXT. Real cipher blobs are at least
-     *     CIPHER_OVERHEAD bytes; even a bare "DOTTA" prefix lacks both
-     *     the version byte and the SIV, so plaintext is the only safe
-     *     interpretation.
-     *   - Magic prefix mismatch → PLAINTEXT.
-     *   - Magic match + current version → ENCRYPTED.
-     *   - Magic match + non-current version → UNSUPPORTED_VERSION.
-     *
-     * Indexing the version byte by CIPHER_MAGIC_SIZE keeps cipher's
-     * internal field offsets opaque to this layer; cipher.c's
-     * static_assert guards their equivalence with CIPHER_OFFSET_VERSION.
-     */
     if (!data || size < CIPHER_DETECT_BYTES) {
         return CONTENT_PLAINTEXT;
     }
@@ -155,6 +159,7 @@ error_t *content_classify_path(
     close(fd);
 
     *out_kind = content_classify_bytes(header, got);
+
     return NULL;
 }
 
@@ -168,34 +173,30 @@ size_t content_estimated_plaintext_size(
     if (kind != CONTENT_ENCRYPTED) {
         return blob_size;
     }
-    return blob_size > CIPHER_OVERHEAD
-                     ? blob_size - CIPHER_OVERHEAD
-                     : blob_size;
+    return blob_size > CIPHER_OVERHEAD ? blob_size - CIPHER_OVERHEAD
+                                       : blob_size;
 }
 
 /**
  * Get plaintext from blob (internal workhorse)
  *
- * This function handles the core logic of transparently decrypting
- * raw blob bytes if needed. Works on a zero-copy view, so callers
- * must keep the backing blob alive for the duration of the call.
+ * Classifies the blob by magic header (the single source of truth for
+ * encryption state) and routes accordingly:
+ *   - PLAINTEXT           → copy bytes
+ *   - ENCRYPTED           → decrypt via keymgr
+ *   - UNSUPPORTED_VERSION → ERR_CRYPTO with version-skew diagnostic
  *
- * Architecture:
- * - VWD operations: expected_encrypted comes from entry->encrypted (state cache)
- * - Historical operations: expected_encrypted extracted from metadata by caller
- * - Defense-in-depth: Validates magic header matches expected state
+ * Works on a zero-copy view, so callers must keep the backing blob alive
+ * for the duration of the call.
  *
- * Process:
- * 1. Check magic header for encryption (source of truth)
- * 2. Validate encryption matches expectation (defense in depth)
- * 3. Decrypt if needed
- * 4. Return plaintext buffer
+ * No external claim is consulted: the bytes carry the answer. This is
+ * the choke point that makes the "metadata says encrypted but bytes say
+ * plaintext" drift class structurally impossible.
  *
  * @param blob_data Raw blob bytes (must not be NULL unless blob_size == 0)
  * @param blob_size Raw blob size in bytes
- * @param storage_path File path in profile
- * @param profile Profile name
- * @param expected_encrypted Expected encryption state (from VWD cache or metadata)
+ * @param storage_path File path in profile (used as AAD when encrypted)
+ * @param profile Profile name (used for key derivation when encrypted)
  * @param keymgr Key manager (can be NULL for plaintext files)
  * @param out_content Output buffer (caller owns)
  * @return Error or NULL on success
@@ -205,7 +206,6 @@ static error_t *get_plaintext_from_blob(
     size_t blob_size,
     const char *storage_path,
     const char *profile,
-    bool expected_encrypted,
     keymgr *keymgr,
     buffer_t *out_content
 ) {
@@ -215,78 +215,73 @@ static error_t *get_plaintext_from_blob(
 
     *out_content = (buffer_t){ 0 };
 
-    /* Step 1: Classify by magic header (the single source of truth).
-     * Collapse the 3-valued kind to the bool the existing cross-check
-     * speaks: an UNSUPPORTED_VERSION blob carries encryption intent
-     * and routes the same as ENCRYPTED through the mismatch logic
-     * below, surfacing as ERR_STATE_INVALID when metadata disagrees. */
-    bool is_encrypted = (content_classify_bytes(blob_data, blob_size)
-                         == CONTENT_ENCRYPTED);
+    /* Bytes are authoritative. content_classify_bytes is total: every blob
+     * lands in exactly one of three states regardless of any external claim. */
+    content_kind_t kind = content_classify_bytes(blob_data, blob_size);
 
-    /* Step 2: Validate encryption state matches expectation (defense in depth)
-     *
-     * This cross-check detects:
-     * - Manifest operations: State database out of sync with Git (corruption)
-     * - Historical operations: Metadata corruption or manual tampering
-     * - All operations: Magic header vs expected state mismatch
-     *
-     * The magic header is the source of truth, but we validate against the
-     * expected state to catch inconsistencies early.
-     */
-    if (is_encrypted != expected_encrypted) {
-        return ERROR(
-            ERR_STATE_INVALID,
-            "Encryption state mismatch for '%s':\n"
-            "  Magic header indicates: %s\n"
-            "  Expected state indicates: %s\n\n"
-            "This means state corruption or manual git manipulation.\n"
-            "To fix, run: dotta update -p %s '%s'",
-            storage_path, is_encrypted ? "encrypted" : "plaintext",
-            expected_encrypted ? "encrypted" : "plaintext",
-            profile, storage_path
-        );
-    }
+    switch (kind) {
+        case CONTENT_PLAINTEXT: {
+            if (blob_size > 0) {
+                error_t *err = buffer_append(out_content, blob_data, blob_size);
+                if (err) {
+                    return error_wrap(err, "Failed to copy blob content");
+                }
+            }
+            return NULL;
+        }
 
-    /* Step 3: Handle encrypted files */
-    if (is_encrypted) {
-        /* Check we have keymgr */
-        if (!keymgr) {
+        case CONTENT_ENCRYPTED: {
+            if (!keymgr) {
+                return ERROR(
+                    ERR_CRYPTO,
+                    "File '%s' is encrypted but no key manager provided.\n\n"
+                    "To decrypt this file, ensure encryption is configured:\n"
+                    "  1. Set passphrase: dotta key set\n"
+                    "  2. Configure encryption in config.toml", storage_path
+                );
+            }
+
+            /* Decrypt via keymgr (fetches profile key, decrypts, zeroes the
+             * key buffer; raw key material never leaves the crypto layer). */
+            error_t *err = keymgr_decrypt(
+                keymgr, profile, storage_path, blob_data, blob_size, out_content
+            );
+            if (err) {
+                return error_wrap(
+                    err,
+                    "Failed to decrypt '%s'.\n\nPossible causes:\n"
+                    "  - Wrong passphrase (try: dotta key clear)\n"
+                    "  - File corrupted in repository\n"
+                    "  - File encrypted with different passphrase", storage_path
+                );
+            }
+            return NULL;
+        }
+
+        case CONTENT_UNSUPPORTED_VERSION: {
+            /* content_classify_bytes only returns this branch when blob_size
+             * is large enough to carry the version byte at offset
+             * CIPHER_MAGIC_SIZE, so reading it here is safe. Surface the byte
+             * for diagnostics. */
+            unsigned blob_version = blob_data[CIPHER_MAGIC_SIZE];
             return ERROR(
                 ERR_CRYPTO,
-                "File '%s' is encrypted but no key manager provided.\n\n"
-                "To decrypt this file, ensure encryption is configured:\n"
-                "  1. Set passphrase: dotta key set\n"
-                "  2. Configure encryption in config.toml", storage_path
+                "Cannot read '%s': blob uses cipher version 0x%02X which "
+                "this dotta build does not support (expects 0x%02X).\n\n"
+                "Possible causes:\n"
+                "  - The repository was written with a different dotta build\n"
+                "  - The file is corrupted or has been tampered with\n\n"
+                "Update dotta or restore from a compatible version.",
+                storage_path, blob_version, (unsigned) CIPHER_VERSION
             );
-        }
-
-        /* Decrypt via keymgr (fetches profile key, decrypts, zeroes the
-         * key buffer; raw key material never leaves the crypto layer). */
-        error_t *err = keymgr_decrypt(
-            keymgr, profile, storage_path, blob_data, blob_size, out_content
-        );
-        if (err) {
-            return error_wrap(
-                err,
-                "Failed to decrypt '%s'.\n\nPossible causes:\n"
-                "  - Wrong passphrase (try: dotta key clear)\n"
-                "  - File corrupted in repository\n"
-                "  - File encrypted with different passphrase", storage_path
-            );
-        }
-
-        return NULL;
-    }
-
-    /* Step 4: Handle plaintext files */
-    if (blob_size > 0) {
-        error_t *err = buffer_append(out_content, blob_data, blob_size);
-        if (err) {
-            return error_wrap(err, "Failed to copy blob content");
         }
     }
 
-    return NULL;
+    /* Unreachable: content_classify_bytes returns one of three values. */
+    return ERROR(
+        ERR_INTERNAL,
+        "Unknown content kind %d for '%s'", (int) kind, storage_path
+    );
 }
 
 error_t *content_get_from_blob_oid(
@@ -294,7 +289,6 @@ error_t *content_get_from_blob_oid(
     const git_oid *blob_oid,
     const char *storage_path,
     const char *profile,
-    bool expected_encrypted,
     keymgr *keymgr,
     buffer_t *out_content
 ) {
@@ -313,11 +307,11 @@ error_t *content_get_from_blob_oid(
 
     /* Get plaintext content (view bytes valid until close) */
     err = get_plaintext_from_blob(
-        view.data, view.size, storage_path, profile,
-        expected_encrypted, keymgr, out_content
+        view.data, view.size, storage_path, profile, keymgr, out_content
     );
 
     gitops_blob_view_close(&view);
+
     return err;
 }
 
@@ -353,7 +347,6 @@ error_t *content_cache_get_from_blob_oid(
     const git_oid *blob_oid,
     const char *storage_path,
     const char *profile,
-    bool expected_encrypted,
     const buffer_t **out_content
 ) {
     CHECK_NULL(cache);
@@ -392,8 +385,7 @@ error_t *content_cache_get_from_blob_oid(
 
     /* Get plaintext content (view bytes valid until close) */
     err = get_plaintext_from_blob(
-        view.data, view.size, storage_path, profile,
-        expected_encrypted, cache->keymgr, content
+        view.data, view.size, storage_path, profile, cache->keymgr, content
     );
 
     gitops_blob_view_close(&view);
@@ -413,7 +405,62 @@ error_t *content_cache_get_from_blob_oid(
     }
 
     *out_content = content;
+
     return NULL;
+}
+
+error_t *content_compare_blob_to_disk(
+    git_repository *repo,
+    const git_oid *blob_oid,
+    const char *fs_path,
+    git_filemode_t expected_mode,
+    const struct stat *initial_stat,
+    const char *storage_path,
+    const char *profile,
+    content_cache_t *cache,
+    compare_result_t *out_result,
+    struct stat *out_stat
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(blob_oid);
+    CHECK_NULL(fs_path);
+    CHECK_NULL(storage_path);
+    CHECK_NULL(profile);
+    CHECK_NULL(cache);
+    CHECK_NULL(out_result);
+
+    /* Bytes are authoritative: classify the blob, route by the answer.
+     * No proxy field can disagree with this — there is no proxy. The
+     * routing-on-stale-flag bug class is structurally impossible here. */
+    content_kind_t kind;
+    error_t *err = content_classify(repo, blob_oid, &kind);
+    if (err) {
+        return err;  /* Already wrapped by content_classify */
+    }
+
+    if (kind == CONTENT_PLAINTEXT) {
+        /* Fast path: stream-hash disk file, compare to OID. The stored
+         * Git blob is never inflated for the comparison itself. */
+        return compare_oid_to_disk(
+            blob_oid, fs_path, expected_mode, initial_stat, out_result, out_stat
+        );
+    }
+
+    /* Encrypted or unsupported-version blob: load via cache. The cache
+     * call routes through get_plaintext_from_blob, which surfaces
+     * ERR_CRYPTO with a version-skew diagnostic for UNSUPPORTED_VERSION
+     * — callers receive the actionable error directly. */
+    const buffer_t *content = NULL;
+    err = content_cache_get_from_blob_oid(
+        cache, blob_oid, storage_path, profile, &content
+    );
+    if (err) {
+        return err;
+    }
+
+    return compare_buffer_to_disk(
+        content, fs_path, expected_mode, initial_stat, out_result, out_stat
+    );
 }
 
 void content_cache_free(content_cache_t *cache) {

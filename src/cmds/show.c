@@ -75,12 +75,18 @@ static error_t *print_blob_content(
     CHECK_NULL(metadata);
     CHECK_NULL(out);
 
-    /* Get plaintext content (handles encryption transparently) */
+    /* Get plaintext content (handles encryption transparently — the content
+     * layer classifies by bytes, no caller-supplied flag needed).
+     *
+     * The metadata-derived `encrypted` bool below is read for display only
+     * (the "(encrypted)" annotation): it is byte-truth via the write-time
+     * invariant in `content_store_file_to_worktree`, but does not influence
+     * routing inside the content layer. */
     bool encrypted = metadata_get_file_encrypted(metadata, storage_path);
 
     buffer_t content = BUFFER_INIT;
     error_t *err = content_get_from_blob_oid(
-        repo, blob_oid, storage_path, profile, encrypted, keymgr, &content
+        repo, blob_oid, storage_path, profile, keymgr, &content
     );
     if (err) {
         return error_wrap(err, "Failed to get file content");

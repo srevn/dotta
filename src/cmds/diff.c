@@ -215,8 +215,7 @@ static error_t *show_file_diff_from_workspace(
     /* Get content from cache via VWD-cached blob_oid (borrowed reference - don't free) */
     const buffer_t *content = NULL;
     error_t *err = content_cache_get_from_blob_oid(
-        cache, &entry->blob_oid, entry->storage_path, entry->profile,
-        entry->encrypted, &content
+        cache, &entry->blob_oid, entry->storage_path, entry->profile, &content
     );
     if (err) {
         return error_wrap(
@@ -622,7 +621,6 @@ static int print_diff_line_cb(
  *
  * @param repo Repository (must not be NULL)
  * @param manifest Historical manifest to compare (must not be NULL)
- * @param metadata Metadata from historical commit (must not be NULL)
  * @param profile Profile name (must not be NULL)
  * @param file_filter File filter for CLI (can be NULL for no filter)
  * @param opts Command options (must not be NULL)
@@ -634,7 +632,6 @@ static int print_diff_line_cb(
 static error_t *compare_manifest_to_filesystem(
     git_repository *repo,
     const manifest_t *manifest,
-    const metadata_t *metadata,
     const char *profile,
     const path_filter_t *file_filter,
     const cmd_diff_options_t *opts,
@@ -644,7 +641,6 @@ static error_t *compare_manifest_to_filesystem(
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(manifest);
-    CHECK_NULL(metadata);
     CHECK_NULL(profile);
     CHECK_NULL(opts);
     CHECK_NULL(cache);
@@ -666,7 +662,6 @@ static error_t *compare_manifest_to_filesystem(
             continue;
         }
 
-        bool encrypted = metadata_get_file_encrypted(metadata, storage_path);
         git_filemode_t mode = state_type_to_git_filemode(entry->type);
 
         /* Name-only output */
@@ -685,8 +680,7 @@ static error_t *compare_manifest_to_filesystem(
             /* Get content from historical commit (cached) */
             const buffer_t *hist_content = NULL;
             err = content_cache_get_from_blob_oid(
-                cache, &entry->blob_oid, storage_path, profile,
-                encrypted, &hist_content
+                cache, &entry->blob_oid, storage_path, profile, &hist_content
             );
             if (err) {
                 err = error_wrap(
@@ -715,8 +709,7 @@ static error_t *compare_manifest_to_filesystem(
         /* Full diff output */
         const buffer_t *hist_content = NULL;
         err = content_cache_get_from_blob_oid(
-            cache, &entry->blob_oid, storage_path, profile, encrypted,
-            &hist_content
+            cache, &entry->blob_oid, storage_path, profile, &hist_content
         );
         if (err) {
             err = error_wrap(
@@ -1043,7 +1036,7 @@ static error_t *diff_commit_to_workspace(
     /* Step 6: Compare historical manifest against current filesystem */
     size_t diff_count = 0;
     err = compare_manifest_to_filesystem(
-        repo, manifest, metadata, profile, file_filter, opts, cache, out, &diff_count
+        repo, manifest, profile, file_filter, opts, cache, out, &diff_count
     );
     if (err) {
         goto cleanup;

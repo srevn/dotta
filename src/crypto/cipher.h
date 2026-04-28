@@ -81,11 +81,11 @@
 /**
  * Detection-prefix length (magic + version).
  *
- * `infra/content.h:content_classify_bytes` matches the first 6 bytes
- * against `"DOTTA" || CIPHER_VERSION`; a non-current version byte
- * yields CONTENT_UNSUPPORTED_VERSION, distinguished from CONTENT_ENCRYPTED.
- * The 3-valued classification is the single source of truth for "is
- * this blob encrypted?" — see infra/content.h for the cache discipline.
+ * Callers sample the first `CIPHER_DETECT_BYTES` to discriminate a
+ * current-build cipher blob (`"DOTTA" || CIPHER_VERSION`) from
+ * arbitrary plaintext. Classification lives at the infra layer
+ * (see `content_classify` in `infra/content.h`); cipher exports
+ * only the format constants.
  */
 #define CIPHER_DETECT_BYTES   6
 

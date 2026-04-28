@@ -101,9 +101,15 @@ error_t *compare_buffer_to_disk(
  * file using the standard git blob hash algorithm and compares to the
  * expected blob OID. This avoids expensive blob loading from pack files.
  *
- * IMPORTANT: Only call for NON-ENCRYPTED files. For encrypted files, the
- * blob_oid is the hash of ciphertext, while the filesystem contains plaintext.
- * Use compare_buffer_to_disk with decrypted content instead.
+ * IMPORTANT: Only call for plaintext blobs. For encrypted blobs the
+ * blob_oid is the hash of ciphertext, while the filesystem contains
+ * plaintext, so OID comparison would never match. Two safe paths:
+ *   - The kind-routing primitive `content_compare_blob_to_disk` decides
+ *     internally and is always safe.
+ *   - Direct callers must gate on a byte-truth flag (e.g.,
+ *     `manifest_entry->encrypted`, byte-derived via the Phase 2 write-time
+ *     invariant in `content_store_file_to_worktree`); a stale or
+ *     wrong-blob flag silently misroutes.
  *
  * Stat propagation optimization:
  * - If in_stat != NULL: Uses provided stat data (zero syscalls)

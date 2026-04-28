@@ -265,18 +265,14 @@ static error_t *discover_file(
  *
  * Uses content layer to transparently decrypt encrypted files before diffing,
  * so users see readable plaintext diffs instead of encrypted gibberish.
- *
- * Encryption flags are passed separately for current and target blobs because
- * the encryption state may have changed between commits (e.g., file encrypted
- * after the target commit). Using a single flag would produce garbled output
- * for the blob whose state doesn't match.
+ * The content layer classifies each blob by its own bytes, so blobs with
+ * different encryption states across commits are routed correctly without
+ * any caller-supplied flag.
  */
 static error_t *show_diff_preview(
     git_repository *repo,
     const char *file_path,
     const char *profile,
-    bool current_encrypted,
-    bool target_encrypted,
     keymgr *keymgr,
     const git_oid *current_oid,
     const git_oid *target_oid,
@@ -295,21 +291,17 @@ static error_t *show_diff_preview(
         return NULL;
     }
 
-    /* Get decrypted plaintext content from both blobs
+    /* Get decrypted plaintext content from both blobs.
      *
-     * This transparently decrypts encrypted files so we can show readable diffs.
-     * For plaintext files, this just returns the raw content.
-     *
-     * Each blob uses its own encryption flag since the state may differ
-     * between the current HEAD and the target commit.
-     */
+     * Each call classifies its own blob's bytes — the routing decision lives
+     * with the blob, so encryption-state changes between commits are handled
+     * by the content layer with no caller participation. */
     buffer_t current_plaintext = BUFFER_INIT;
     error_t *err = content_get_from_blob_oid(
         repo,
         current_oid,
         file_path,
         profile,
-        current_encrypted,
         keymgr,
         &current_plaintext
     );
@@ -323,7 +315,6 @@ static error_t *show_diff_preview(
         target_oid,
         file_path,
         profile,
-        target_encrypted,
         keymgr,
         &target_plaintext
     );
@@ -432,42 +423,6 @@ static error_t *verify_branch_unchanged(
             "Another operation changed the branch since the preview.",
             profile, expected_str, current_str
         );
-    }
-
-    return NULL;
-}
-
-/**
- * Load metadata from branch with graceful fallback
- *
- * If metadata.json doesn't exist or can't be parsed, returns empty metadata
- * instead of failing. This is appropriate for operations that want to continue
- * even without metadata (e.g., showing diff preview, handling old commits).
- *
- * @param repo Repository (must not be NULL)
- * @param branch_name Branch name (must not be NULL)
- * @param out Metadata (must not be NULL, caller must free)
- * @return Error or NULL on success
- */
-static error_t *load_metadata_graceful(
-    git_repository *repo,
-    const char *branch_name,
-    metadata_t **out
-) {
-    CHECK_NULL(repo);
-    CHECK_NULL(branch_name);
-    CHECK_NULL(out);
-
-    error_t *err = metadata_load_from_branch(repo, branch_name, out);
-    if (err) {
-        /* Graceful fallback: create empty metadata if loading fails */
-        error_t *create_err = metadata_create_empty(out);
-        if (create_err) {
-            error_free(create_err);
-            error_free(err);
-            return ERROR(ERR_MEMORY, "Failed to create metadata");
-        }
-        error_free(err);
     }
 
     return NULL;
@@ -1010,28 +965,12 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
         );
     } else {
         /* File exists - show detailed diff preview with decryption support.
-         * Load metadata from both current HEAD and target commit separately
-         * to handle encryption state changes between commits correctly. */
-        metadata_t *current_meta = NULL;
-        err = load_metadata_graceful(repo, profile, &current_meta);
-        if (err) goto cleanup;
-
-        metadata_t *target_meta = NULL;
-        err = load_metadata_from_commit(repo, target_commit, &target_meta);
-        if (err) {
-            metadata_free(current_meta);
-            goto cleanup;
-        }
-
-        bool current_encrypted = metadata_get_file_encrypted(current_meta, resolved_path);
-        bool target_encrypted = metadata_get_file_encrypted(target_meta, resolved_path);
-
-        metadata_free(current_meta);
-        metadata_free(target_meta);
-
+         * The content layer classifies each blob by its own bytes, so the
+         * "current vs target may differ in encryption state" case is handled
+         * inside show_diff_preview without caller-side metadata gymnastics. */
         err = show_diff_preview(
-            repo, resolved_path, profile, current_encrypted, target_encrypted,
-            keymgr, current_blob_oid, target_blob_oid, out
+            repo, resolved_path, profile, keymgr, current_blob_oid,
+            target_blob_oid, out
         );
         if (err) {
             /* Non-fatal: the revert itself doesn't need decryption (copies blobs).

@@ -449,7 +449,6 @@ error_t *deploy_file(
         &entry->blob_oid,
         entry->storage_path,
         entry->profile ? entry->profile : "unknown",
-        entry->encrypted,
         &content_buffer
     );
 

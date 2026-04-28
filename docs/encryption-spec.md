@@ -237,18 +237,48 @@ The full 9-byte header is bound into the SIV computation as the first absorbed i
 
 ### Encryption detection
 
-`cipher_is_encrypted` tests the 6-byte detection window (magic + current build's version). A blob whose first 5 bytes are `"DOTTA"` but whose version byte is not `CIPHER_VERSION` reports as **not encrypted** — coincidental plaintext starting with `"DOTTA"` is not misrouted into the decrypt path.
+`content_classify_bytes` (in `infra/content.c`) inspects the 6-byte detection window and returns one of three verdicts:
 
-The deploy decision in `infra/content.c` is a 4-case truth table joining `metadata.encrypted` (declared at add-time) with the magic-byte sniff:
+| First 5 bytes | Version byte         | Verdict                       |
+|---------------|----------------------|-------------------------------|
+| `"DOTTA"`     | `CIPHER_VERSION`     | `CONTENT_ENCRYPTED`           |
+| `"DOTTA"`     | other                | `CONTENT_UNSUPPORTED_VERSION` |
+| anything else | n/a                  | `CONTENT_PLAINTEXT`           |
+| `< 6 bytes`   | n/a                  | `CONTENT_PLAINTEXT`           |
 
-| metadata.encrypted | sniff                | Action                                                          |
-|--------------------|----------------------|-----------------------------------------------------------------|
-| true               | true                 | Decrypt via `keymgr_decrypt`.                                   |
-| false              | false                | Plaintext deploy.                                               |
-| true               | false                | `ERR_CRYPTO`: "metadata says encrypted but blob magic missing." |
-| false              | true                 | `ERR_CRYPTO`: "metadata says plaintext but blob has magic."     |
+Bytes are the single authoritative source for "is this blob encrypted?" — the cipher's MAC binds the magic header into authentication, so any byte-level claim about encryption state is cryptographically grounded. The deploy decision routes purely on the verdict:
 
-A v7 blob encountered by a v6 build sniffs as not-encrypted; row 3 of the truth table fires before any decrypt attempt.
+- `CONTENT_PLAINTEXT` → copy bytes through to the worktree.
+- `CONTENT_ENCRYPTED` → decrypt via `keymgr_decrypt`.
+- `CONTENT_UNSUPPORTED_VERSION` → `ERR_CRYPTO` with a version-skew diagnostic citing the unrecognized version byte; tells the user this blob was written by a different dotta build.
+
+External proxies (`metadata.encrypted`, the state DB column) exist as caches keyed on this verdict, populated at the write boundary (`content_store_file_to_worktree` classifies the bytes it just wrote and returns the verdict for callers to stamp). The read path never cross-checks against these caches — bytes win, and the cross-check that previously lived at the read boundary was theater that papered over a missing write-time invariant. See *Cache hierarchy and the write-time invariant* below.
+
+### Cache hierarchy and the write-time invariant
+
+`metadata.encrypted` is the **byte-derived cache** of the cipher's authenticated wire format. Bytes are authoritative; the cache exists because reconcile-time access to "is this blob encrypted?" must be O(1), and `metadata.json` is loaded as a single small blob per profile, while sniffing every managed blob would force O(N) Git inflations against libgit2's pack backend on a hot path.
+
+The cache hierarchy, populated at the boundary where the source is in scope:
+
+```
+WRITE TIME (in cmds/add.c, cmds/update.c):
+  cipher output bytes
+    │
+    ▼ content_classify_bytes(written_bytes)
+  metadata.json:encrypted
+    │
+    ▼ apply_metadata_to_entry (during manifest_build)
+  state.virtual_manifest.encrypted
+    │
+    ▼ workspace_build_manifest_from_state
+  manifest_entry->encrypted
+```
+
+**Invariant** (debug-build asserted): after `content_store_file_to_worktree` writes any blob dotta produces, `content_classify_bytes(written_bytes) == CONTENT_ENCRYPTED iff should_encrypt`. Caller then stamps `metadata.encrypted = (kind != CONTENT_PLAINTEXT)`. The state column and manifest entry project from that source.
+
+After the invariant holds, the read path consults the cache without re-sniffing. Drift is a write-path bug, not a runtime drift class — the assert in `content_store_file_to_worktree` is the tripwire. The single edge case it catches is the magic-collision: a plaintext file whose first 6 bytes happen to be `"DOTTA" || CIPHER_VERSION`. In release builds that file would silently classify as encrypted on next read; the debug assert surfaces the collision before the file is committed.
+
+The deployment anchor (`anchor.blob_oid` in the state DB) does **not** carry an encryption flag. Anchor staleness checks route through `content_compare_blob_to_disk`, which classifies the anchor blob's bytes directly — there is no anchor-side cache to keep in sync. This avoids the bug class where routing on the *current* blob's flag silently misclassified the *historical* anchor blob's comparison across encryption-policy transitions.
 
 ### Session cache (`SESSION_CACHE_VERSION = 0x02`)
 
@@ -345,10 +375,10 @@ Verification is constant-time via `crypto_verify32`. Domain-separated under `CRY
 
 3. For each managed file (infra/content.c):
    - Read blob from Git tree.
-   - Detect dotta magic + version with cipher_is_encrypted; cross-check
-     against metadata.encrypted via the 4-case truth table.
+   - Classify via content_classify_bytes (magic + version sniff). Bytes are
+     authoritative; no external claim is consulted.
 
-   IF ENCRYPTED:
+   IF CONTENT_ENCRYPTED:
      - cipher_peek_params reads (memory_mib, passes) from blob header.
      - keymgr resolves master_key for the BLOB's params (not current config).
      - kdf_siv_subkeys → mac_key, prf_key.
@@ -357,8 +387,14 @@ Verification is constant-time via `crypto_verify32`. Domain-separated under `CRY
                        wipes candidate on mismatch.
      - keys wiped on every exit path.
 
-   ELSE:
+   IF CONTENT_PLAINTEXT:
      - Use blob content directly.
+
+   IF CONTENT_UNSUPPORTED_VERSION:
+     - Surface ERR_CRYPTO with a version-skew diagnostic citing the
+       unrecognized version byte. The blob carries encryption intent at a
+       version this build cannot decrypt; deploying the bytes verbatim
+       would publish ciphertext to the user's filesystem.
 
 4. Deploy:
    - Copy plaintext to target path.
@@ -634,7 +670,7 @@ Crypto-boundary checks (`kdf_master_key`, `cipher_peek_params`, `cipher_encrypt`
 - Argon2 work area wiped twice on every exit path (Monocypher's internal zero plus an explicit `crypto_wipe`).
 - Header validation runs at every boundary that sees the bytes (`cipher_peek_params`, `cipher_encrypt`, `cipher_decrypt`).
 - Session cache load: MAC verify before expiry check (trusted bytes drive the comparison).
-- Magic + version mismatch routes through the metadata-vs-sniff truth table before any decrypt attempt.
+- Magic + version mismatch surfaces as `CONTENT_UNSUPPORTED_VERSION` with an actionable error, before any decrypt attempt.
 
 ### Limitations
 
@@ -650,15 +686,15 @@ Crypto-boundary checks (`kdf_master_key`, `cipher_peek_params`, `cipher_encrypt`
 |-------------------------------|-----------------------|----------------------------------------------------------------|
 | Memory-hard derivation        | `src/crypto/kdf`      | `kdf_master_key`, `kdf_siv_subkeys`, `kdf_validate_params`     |
 | Keyed-BLAKE2b chokepoint      | `src/crypto/mac`      | `crypto_mac_init/absorb/final/oneshot`, `crypto_domain_t`      |
-| SIV encrypt/decrypt + format  | `src/crypto/cipher`   | `cipher_encrypt`, `cipher_decrypt`, `cipher_is_encrypted`, `cipher_peek_params` |
+| SIV encrypt/decrypt + format  | `src/crypto/cipher`   | `cipher_encrypt`, `cipher_decrypt`, `cipher_peek_params`. Detection by bytes lives in `infra/content` (`content_classify`, `content_classify_bytes`). |
 | Master-key lifecycle          | `src/crypto/keymgr`   | `keymgr_create/encrypt/decrypt/set_passphrase/clear/probe_key/time_until_expiry/free` |
 | On-disk session cache         | `src/crypto/session`  | `session_save`, `session_load`, `session_clear`                |
 | Passphrase prompt + env       | `src/sys/passphrase`  | `passphrase_prompt`, `passphrase_from_env`                     |
 | Cryptographic random bytes    | `src/sys/entropy`     | `entropy_fill`                                                 |
-| Encryption policy             | `src/core/policy`     | `encryption_policy_should_encrypt`, `encryption_policy_matches_auto_patterns`, `encryption_policy_is_active` |
-| Content cache (decrypt cache) | `src/infra/content`   | `content_cache_*`                                              |
+| Encryption policy             | `src/core/policy`     | `encryption_policy_should_encrypt`, `encryption_policy_matches_auto_patterns`, `encryption_policy_is_active`, `encryption_policy_violation` |
+| Content cache (decrypt cache) | `src/infra/content`   | `content_cache_*`, `content_classify*`, `content_compare_blob_to_disk`, `content_store_file_to_worktree` |
 
-`policy` and `passphrase` moved out of `src/crypto/` in this rewrite. Neither calls a cryptographic primitive — `policy` resolves a boolean from `config_t` and `metadata_t`; `passphrase` is TTY UX with `mlock`-backed buffer ownership — so they did not belong in the crypto layer.
+`policy` and `passphrase` moved out of `src/crypto/` in this rewrite. Neither calls a cryptographic primitive — `policy` resolves a boolean from `config_t` and a `bool previously_encrypted` (the latter threaded by callers from byte-truth via `content_classify*`); `passphrase` is TTY UX with `mlock`-backed buffer ownership — so they did not belong in the crypto layer.
 
 ## References
 

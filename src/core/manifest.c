@@ -103,6 +103,14 @@ error_t *manifest_persist_profile_head(
  * across profiles with distinct custom_prefix values from cross-contaminating
  * the row (each entry's metadata-owned fields belong to exactly one profile).
  *
+ * The `encrypted` field specifically is a metadata-projected cache: the
+ * upstream cache is `metadata.json:encrypted`, populated byte-derived at
+ * the write boundary (cmds/add.c, cmds/update.c via
+ * content_store_file_to_worktree's out_kind). Reconcile projects it through
+ * apply_metadata_to_entry without re-classifying the blob — runtime trusts
+ * the cache; write-time establishes the invariant. See
+ * docs/encryption-spec.md → "Cache hierarchy and write-time invariant".
+ *
  * The witness columns (deployed_blob_oid, deployed_at, stat_*) are left
  * untouched — the UPSERT preserves them on UPDATE, and on INSERT they
  * start at zero. Lifecycle stamping is state_update_anchor's job;

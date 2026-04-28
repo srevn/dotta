@@ -183,10 +183,7 @@ static error_t *copy_file_to_worktree(
             memcpy(out_stat, &file_stat, sizeof(struct stat));
         }
 
-        /* Propagate encryption status to caller — byte-derived, NOT policy.
-         * Per Rule 6 in CLAUDE.md, downstream consumers (metadata.encrypted
-         * stamp at update.c:545, then state DB column, then manifest entry)
-         * inherit byte truth from this single source. */
+        /* Propagate encryption status to caller — byte-derived, NOT policy */
         if (out_was_encrypted) {
             *out_was_encrypted = (written_kind != CONTENT_PLAINTEXT);
         }

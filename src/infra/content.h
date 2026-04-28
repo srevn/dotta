@@ -10,14 +10,15 @@
  * - Transparent decryption (callers always get plaintext)
  * - Caching for batch operations (avoid redundant decryption)
  * - Type-safe ownership (const for borrowed references)
- * - Metadata validation (cross-check magic header for defense in depth)
- * - Magic header as source of truth for encryption detection
+ * - Magic header is the single source of truth for encryption state;
+ *   callers do NOT pass an "expected encrypted" flag and the read path
+ *   does NOT cross-check against any external claim. Bytes win.
  *
  * Two-tier API:
  *
  * Simple API (single-file operations):
  *   buffer_t *content;
- *   content_get_from_blob_oid(repo, &oid, path, profile, encrypted, keymgr, &content);
+ *   content_get_from_blob_oid(repo, &oid, path, profile, keymgr, &content);
  *   // ... use content ...
  *   buffer_free(content);  // Caller owns buffer
  *
@@ -25,7 +26,7 @@
  *   content_cache_t *cache = content_cache_create(repo, keymgr);
  *   for (each file) {
  *       const buffer_t *content;  // Note: const
- *       content_cache_get_from_blob_oid(cache, &oid, path, profile, encrypted, &content);
+ *       content_cache_get_from_blob_oid(cache, &oid, path, profile, &content);
  *       // ... use content (don't free - cache owns it) ...
  *   }
  *   content_cache_free(cache);  // Frees all cached buffers
@@ -42,6 +43,8 @@
 #include <git2.h>
 #include <sys/stat.h>
 #include <types.h>
+
+#include "infra/compare.h"
 
 /* Forward declarations */
 typedef struct keymgr keymgr;
@@ -187,25 +190,25 @@ typedef struct content_cache content_cache_t;
  *
  * Process:
  * 1. Load blob from OID
- * 2. Check magic header for encryption
- * 3. Validate encryption matches expectation (defense in depth)
- * 4. If encrypted: decrypt using profile key from keymgr
- * 5. If plaintext: return blob content
+ * 2. Classify by magic header (the authoritative source of encryption state)
+ * 3. PLAINTEXT      → copy bytes
+ *    ENCRYPTED      → decrypt using profile key from keymgr
+ *    UNSUPPORTED_VERSION → ERR_CRYPTO with version-skew diagnostic
  *
  * @param repo Git repository (must not be NULL)
  * @param blob_oid Blob OID (must not be NULL)
  * @param storage_path Path in profile (must not be NULL)
  *          SECURITY: Used as AAD in encryption. Must match Git tree path.
  * @param profile Profile name for key derivation (must not be NULL)
- * @param expected_encrypted Expected encryption state (for validation)
- * @param keymgr Key manager (can be NULL if file is known to be plaintext)
+ * @param keymgr Key manager (can be NULL if file is known to be plaintext;
+ *          required for ENCRYPTED blobs, returns ERR_CRYPTO otherwise)
  * @param out_content Output buffer (CALLER OWNS - must free with buffer_free)
  * @return Error or NULL on success
  *
  * Errors:
  * - ERR_CRYPTO: File is encrypted but no keymgr provided
  * - ERR_CRYPTO: Decryption failed (wrong key, corruption, or path mismatch)
- * - ERR_STATE_INVALID: Magic header doesn't match expected encryption state
+ * - ERR_CRYPTO: Blob version unsupported by this build
  * - ERR_NOT_FOUND: Blob not found
  * - ERR_INVALID_ARG: Required arguments are NULL
  */
@@ -214,9 +217,51 @@ error_t *content_get_from_blob_oid(
     const git_oid *blob_oid,
     const char *storage_path,
     const char *profile,
-    bool expected_encrypted,
     keymgr *keymgr,
     buffer_t *out_content
+);
+
+/**
+ * Compare a Git blob against a filesystem path (encryption-aware).
+ *
+ * The single seam for "is this blob equal to this disk file?". Internally
+ * classifies the blob by magic header and routes:
+ *   - PLAINTEXT           → fast path: stream-hash disk, compare to OID.
+ *                           Avoids inflating the stored Git blob.
+ *   - ENCRYPTED           → slow path: decrypt via cache, byte-compare to disk.
+ *   - UNSUPPORTED_VERSION → slow path; surfaces ERR_CRYPTO with a clear
+ *                           version-skew message via the content reader.
+ *
+ * Centralizing the routing decision here eliminates the bug class where
+ * callers route on a stale or wrong-blob "encrypted" flag. The fact about
+ * the blob lives with the blob, not with any external proxy.
+ *
+ * @param repo Git repository (must not be NULL)
+ * @param blob_oid Blob OID to compare against (must not be NULL)
+ * @param fs_path Filesystem path to compare to (must not be NULL)
+ * @param expected_mode Expected git filemode (BLOB, BLOB_EXECUTABLE, or LINK)
+ * @param initial_stat Pre-captured stat to skip an lstat (can be NULL)
+ * @param storage_path Storage path; used as AAD when blob is encrypted
+ *          (must not be NULL, must match Git tree path)
+ * @param profile Profile name for key derivation when encrypted (must not be NULL)
+ * @param cache Content cache (must not be NULL; used by the encrypted route
+ *          so repeated callers do not redecrypt the same blob)
+ * @param out_result Comparison result (must not be NULL)
+ * @param out_stat Optional stat output (can be NULL)
+ * @return Error or NULL on success. Errors propagate from classification,
+ *          decryption, or the underlying compare primitives.
+ */
+error_t *content_compare_blob_to_disk(
+    git_repository *repo,
+    const git_oid *blob_oid,
+    const char *fs_path,
+    git_filemode_t expected_mode,
+    const struct stat *initial_stat,
+    const char *storage_path,
+    const char *profile,
+    content_cache_t *cache,
+    compare_result_t *out_result,
+    struct stat *out_stat
 );
 
 /**
@@ -242,8 +287,9 @@ content_cache_t *content_cache_create(
  * Returns borrowed reference valid until cache is freed.
  *
  * On first access for a given blob OID:
- * - Loads and decrypts (if needed)
- * - Stores in cache
+ * - Loads and classifies the blob (PLAINTEXT / ENCRYPTED / UNSUPPORTED_VERSION)
+ * - Decrypts if needed; UNSUPPORTED_VERSION surfaces ERR_CRYPTO
+ * - Stores plaintext in cache
  *
  * On subsequent access for same OID:
  * - Returns cached buffer (O(1) lookup)
@@ -252,7 +298,6 @@ content_cache_t *content_cache_create(
  * @param blob_oid Blob OID (must not be NULL)
  * @param storage_path Path in profile (must not be NULL, used as AAD for encryption)
  * @param profile Profile name (must not be NULL)
- * @param expected_encrypted Expected encryption state (for validation)
  * @param out_content Output buffer (BORROWED - cache owns, don't free)
  * @return Error or NULL on success
  */
@@ -261,7 +306,6 @@ error_t *content_cache_get_from_blob_oid(
     const git_oid *blob_oid,
     const char *storage_path,
     const char *profile,
-    bool expected_encrypted,
     const buffer_t **out_content
 );
 

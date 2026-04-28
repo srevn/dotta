@@ -1801,6 +1801,6 @@ const args_command_t spec_add = {
     .opts_size   = sizeof(cmd_add_options_t),
     .opts        = add_opts,
     .post_parse  = add_post_parse,
-    .payload     = &dotta_ext_write_key,
+    .payload     = &dotta_ext_write_crypto,
     .dispatch    = add_dispatch,
 };

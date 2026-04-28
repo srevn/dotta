@@ -881,6 +881,6 @@ const args_command_t spec_show = {
     .opts_size   = sizeof(cmd_show_options_t),
     .opts        = show_opts,
     .post_parse  = show_post_parse,
-    .payload     = &dotta_ext_read_key,
+    .payload     = &dotta_ext_read_crypto,
     .dispatch    = show_dispatch,
 };

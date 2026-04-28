@@ -503,6 +503,6 @@ const args_command_t spec_key = {
     .opts_size   = sizeof(cmd_key_options_t),
     .opts        = key_opts,
     .post_parse  = key_post_parse,
-    .payload     = &dotta_ext_read_key,
+    .payload     = &dotta_ext_read_crypto,
     .dispatch    = key_dispatch,
 };

@@ -11,7 +11,7 @@
  * Contents:
  *   - `dotta_repo_mode_t`   — repo-open contract honored by the dispatcher;
  *   - `dotta_state_mode_t`  — state-open contract honored by the dispatcher;
- *   - `dotta_crypto_mode_t` — crypto-resources contract (keymgr +/- content_cache);
+ *   - `dotta_crypto_mode_t` — crypto-resources contract (keymgr when REQUIRED);
  *   - `dotta_spec_ext_t`    — payload referenced by `args_command_t::payload`,
  *                             letting each command declare its dispatch
  *                             preconditions in a typed way without the
@@ -110,30 +110,32 @@ typedef enum dotta_state_mode {
  * handles are borrowed by the handler; the dispatcher tears them down
  * LIFO (cache, then keymgr) before state teardown.
  *
- * Mode split rationale
- * --------------------
- *   - KEY is enough for commands that read or write a single blob via
- *     the non-caching content API (`add` writes; `show`, `revert` read
- *     single blobs). 4 of 9 crypto-aware commands want only this.
- *   - KEY_CACHE is required by commands that iterate workspace divergence
- *     or a historical manifest, where the same blob OID can be fetched
- *     multiple times (`apply`, `diff`, `status`, `sync`, `update`).
+ * Two modes — why no split between "key only" and "key + cache"
+ * -------------------------------------------------------------
+ * The codebase has exactly one cache primitive (`infra/content`'s
+ * blob-OID → plaintext map). With one cache, the dispatcher carries
+ * no information by distinguishing "needs keymgr" from "needs keymgr
+ * and cache" — it would just be a hint about whether the handler
+ * iterates blobs in batch. Single-blob handlers (`add`, `show`,
+ * `revert`, `key`) tolerate an unused empty cache (one calloc plus a
+ * 64-entry hashmap, freed in LIFO teardown) in exchange for a uniform
+ * handle shape across every crypto-aware command. If a second cache
+ * primitive ever lands, this rationale is the place to revisit the
+ * split.
  *
  * Disabled-encryption semantics
  * -----------------------------
  * When `config->encryption_enabled == false`, `ctx->keymgr` stays NULL
- * regardless of mode. Under KEY_CACHE the cache is still created (with
- * NULL keymgr) so callers deal with one shape. Under KEY, both handles
- * stay NULL. Handlers forward `ctx->keymgr` to the content layer
- * unconditionally — it surfaces ERR_CRYPTO with a user-facing message
- * naming the file if a per-file operation asks to encrypt or decrypt
- * without a key, so commands never need to gate on "do I have a key?"
- * before calling through.
+ * regardless of mode; the cache is still created with a NULL keymgr so
+ * callers deal with one shape. Handlers forward `ctx->keymgr` to the
+ * content layer unconditionally — it surfaces ERR_CRYPTO with a
+ * user-facing message naming the file if a per-file operation asks to
+ * encrypt or decrypt without a key, so commands never need to gate on
+ * "do I have a key?" before calling through.
  */
 typedef enum dotta_crypto_mode {
-    DOTTA_CRYPTO_NONE,        /* Neither handle acquired */
-    DOTTA_CRYPTO_KEY,         /* ctx->keymgr only (NULL if encryption disabled) */
-    DOTTA_CRYPTO_KEY_CACHE    /* Both; cache always acquired, keymgr may be NULL */
+    DOTTA_CRYPTO_NONE,       /* Neither handle acquired */
+    DOTTA_CRYPTO_REQUIRED    /* keymgr acquired iff encryption_enabled */
 } dotta_crypto_mode_t;
 
 /**
@@ -168,15 +170,15 @@ typedef struct dotta_spec_ext {
  *     spec declaring STATE_READ or STATE_WRITE on a repo_mode that
  *     produced a handle receives a borrowed state; dispatch closes it
  *     on return. Commands never free `ctx->state`.
- *   - `content_cache != NULL`  iff  `crypto_mode == KEY_CACHE AND
+ *   - `content_cache != NULL`  iff  `crypto_mode == REQUIRED AND
  *     repo != NULL`. The cache carries a borrowed pointer to
  *     `ctx->keymgr` (which may be NULL if encryption is disabled) and
  *     is torn down before the keymgr.
  *   - `keymgr != NULL` implies `config->encryption_enabled`. A spec
- *     declaring KEY or KEY_CACHE on a disabled config receives NULL
- *     keymgr; handlers forward the NULL straight into the content
- *     layer, which returns ERR_CRYPTO with a user-facing message if
- *     any per-file operation actually asks to encrypt or decrypt. No
+ *     declaring REQUIRED on a disabled config receives NULL keymgr;
+ *     handlers forward the NULL straight into the content layer,
+ *     which returns ERR_CRYPTO with a user-facing message if any
+ *     per-file operation actually asks to encrypt or decrypt. No
  *     caller-side gate is required.
  *   - `arena != NULL` always. The command arena is created before
  *     dispatch and destroyed after the handler returns; `run_spec`
@@ -244,7 +246,7 @@ typedef struct dotta_ctx {
     const char *repo_path;              /* Set by REQUIRED and PATH_ONLY modes */
     state_t *state;                     /* NULL unless state_mode acquires; borrowed */
     keymgr *keymgr;                     /* NULL unless crypto_mode acquires + encryption enabled */
-    content_cache_t *content_cache;     /* NULL unless crypto_mode == KEY_CACHE */
+    content_cache_t *content_cache;     /* NULL unless crypto_mode == REQUIRED */
     arena_t *arena;                     /* Borrowed; command-scoped, owned by run_spec */
     const config_t *config;
     output_t *out;
@@ -255,16 +257,14 @@ typedef struct dotta_ctx {
 
 /* Per-combination payloads. Each command's spec sets `.payload =
  * &dotta_ext_X` for its needed (repo_mode, state_mode, crypto_mode) */
-extern const dotta_spec_ext_t dotta_ext_none;          /* NONE,            NONE,  NONE      */
-extern const dotta_spec_ext_t dotta_ext_path_only;     /* PATH_ONLY,       NONE,  NONE      */
-extern const dotta_spec_ext_t dotta_ext_repo_only;     /* REQUIRED,        NONE,  NONE      */
-extern const dotta_spec_ext_t dotta_ext_read;          /* REQUIRED,        READ,  NONE      */
-extern const dotta_spec_ext_t dotta_ext_write;         /* REQUIRED,        WRITE, NONE      */
-extern const dotta_spec_ext_t dotta_ext_read_silent;   /* OPTIONAL_SILENT, READ,  NONE      */
-extern const dotta_spec_ext_t dotta_ext_read_key;      /* REQUIRED,        READ,  KEY       */
-extern const dotta_spec_ext_t dotta_ext_write_key;     /* REQUIRED,        WRITE, KEY       */
-extern const dotta_spec_ext_t dotta_ext_read_crypto;   /* REQUIRED,        READ,  KEY_CACHE */
-extern const dotta_spec_ext_t dotta_ext_write_crypto;  /* REQUIRED,        WRITE, KEY_CACHE */
+extern const dotta_spec_ext_t dotta_ext_none;          /* NONE,            NONE,  NONE     */
+extern const dotta_spec_ext_t dotta_ext_path_only;     /* PATH_ONLY,       NONE,  NONE     */
+extern const dotta_spec_ext_t dotta_ext_repo_only;     /* REQUIRED,        NONE,  NONE     */
+extern const dotta_spec_ext_t dotta_ext_read;          /* REQUIRED,        READ,  NONE     */
+extern const dotta_spec_ext_t dotta_ext_write;         /* REQUIRED,        WRITE, NONE     */
+extern const dotta_spec_ext_t dotta_ext_read_silent;   /* OPTIONAL_SILENT, READ,  NONE     */
+extern const dotta_spec_ext_t dotta_ext_read_crypto;   /* REQUIRED,        READ,  REQUIRED */
+extern const dotta_spec_ext_t dotta_ext_write_crypto;  /* REQUIRED,        WRITE, REQUIRED */
 
 /**
  * Accessor for the root command registry.

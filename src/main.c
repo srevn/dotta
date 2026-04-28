@@ -74,11 +74,12 @@ static const args_command_t *const dotta_commands[] = {
 };
 
 /* Per-combination dispatch payloads — one const per (repo_mode,
- * state_mode) pair actually used by the registry. Each command's spec
- * sets `.payload = &dotta_ext_X` for its needed pair; the dispatcher
- * reads it back in `run_spec` to decide how to acquire the repository
- * and state handles before calling the handler. Only the combinations
- * used in the registry are defined; new pairings earn new constants. */
+ * state_mode, crypto_mode) tuple actually used by the registry. Each
+ * command's spec sets `.payload = &dotta_ext_X` for its needed tuple;
+ * the dispatcher reads it back in `run_spec` to decide how to acquire
+ * the repository, state, and crypto handles before calling the handler.
+ * Only the combinations used in the registry are defined; new tuples
+ * earn new constants. */
 const dotta_spec_ext_t dotta_ext_none = {
     .repo_mode  = DOTTA_REPO_NONE,
     .state_mode = DOTTA_STATE_NONE,
@@ -103,25 +104,15 @@ const dotta_spec_ext_t dotta_ext_read_silent = {
     .repo_mode  = DOTTA_REPO_OPTIONAL_SILENT,
     .state_mode = DOTTA_STATE_READ,
 };
-const dotta_spec_ext_t dotta_ext_read_key = {
-    .repo_mode   = DOTTA_REPO_REQUIRED,
-    .state_mode  = DOTTA_STATE_READ,
-    .crypto_mode = DOTTA_CRYPTO_KEY,
-};
-const dotta_spec_ext_t dotta_ext_write_key = {
-    .repo_mode   = DOTTA_REPO_REQUIRED,
-    .state_mode  = DOTTA_STATE_WRITE,
-    .crypto_mode = DOTTA_CRYPTO_KEY,
-};
 const dotta_spec_ext_t dotta_ext_read_crypto = {
     .repo_mode   = DOTTA_REPO_REQUIRED,
     .state_mode  = DOTTA_STATE_READ,
-    .crypto_mode = DOTTA_CRYPTO_KEY_CACHE,
+    .crypto_mode = DOTTA_CRYPTO_REQUIRED,
 };
 const dotta_spec_ext_t dotta_ext_write_crypto = {
     .repo_mode   = DOTTA_REPO_REQUIRED,
     .state_mode  = DOTTA_STATE_WRITE,
-    .crypto_mode = DOTTA_CRYPTO_KEY_CACHE,
+    .crypto_mode = DOTTA_CRYPTO_REQUIRED,
 };
 
 /**
@@ -248,15 +239,14 @@ static int open_state_for_mode(
  * Returns 0 on success, 1 on unrecoverable error (error is printed).
  * On success, `*keymgr_out` and `*cache_out` are set per mode:
  *
- *   DOTTA_CRYPTO_NONE       → both NULL
- *   DOTTA_CRYPTO_KEY        → keymgr set iff encryption enabled;   cache NULL
- *   DOTTA_CRYPTO_KEY_CACHE  → cache always set; keymgr set iff encryption enabled
+ *   DOTTA_CRYPTO_NONE      → both NULL
+ *   DOTTA_CRYPTO_REQUIRED  → cache always set; keymgr set iff encryption enabled
  *
  * Parallel in shape to `open_repo_for_mode` and `open_state_for_mode`.
  * No crypto is acquired when `repo == NULL` (content_cache needs a repo
  * to read blobs from, and a standalone keymgr has no use site downstream).
  *
- * Under KEY_CACHE with encryption disabled, the cache is still created
+ * Under REQUIRED with encryption disabled, the cache is still created
  * with a NULL keymgr; it handles plaintext blobs uniformly and surfaces
  * ERR_CRYPTO on any decrypt attempt — per the runtime.h invariant on
  * `ctx->content_cache`.
@@ -305,9 +295,12 @@ static int open_crypto_for_mode(
         }
     }
 
-    if (mode == DOTTA_CRYPTO_KEY) return 0;
-
-    /* KEY_CACHE: cache always created, possibly with NULL keymgr. */
+    /* Cache always created under REQUIRED, possibly with NULL keymgr.
+     * Single-blob handlers (`add`, `show`, `revert`, `key`) leave it
+     * empty; batch handlers populate it across many blob fetches. The
+     * uniform handle shape lets every crypto-aware command read
+     * `ctx->content_cache` without first checking which mode it ran
+     * under. See runtime.h's two-mode rationale. */
     *cache_out = content_cache_create(repo, *keymgr_out);
     if (*cache_out == NULL) {
         keymgr_free(*keymgr_out);

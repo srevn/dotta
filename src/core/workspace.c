@@ -35,11 +35,9 @@
 #include "core/manifest.h"
 #include "core/policy.h"
 #include "core/scope.h"
-#include "crypto/cipher.h"
 #include "infra/compare.h"
 #include "infra/content.h"
 #include "sys/filesystem.h"
-#include "sys/gitops.h"
 #include "sys/source.h"
 #include "utils/privilege.h"
 
@@ -2048,27 +2046,24 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
  * Detects files that should be encrypted (per auto-encrypt patterns)
  * but are stored as plaintext in the profile.
  *
- * Uses two-tier validation to determine actual encryption state:
- * - Tier 1 (Source of Truth): Checks magic header in git blob
- * - Tier 2 (Defense in Depth): Cross-validates with metadata
+ * Trusts the cache. After the write-time invariant established in
+ * cmds/add.c and cmds/update.c, manifest_entry->encrypted is byte-truth
+ * (metadata.json:encrypted is stamped from content_classify_bytes at
+ * the write boundary, then projected to the state DB column, then to
+ * the in-memory manifest entry). The audit reads the cached bool and
+ * defers to encryption_policy_violation. Zero blob inflations.
  *
- * If magic header and metadata disagree, warns about corruption but
- * uses magic header truth for policy enforcement. This ensures policy
- * violations are always detected even with corrupted metadata.
+ * Per-blob byte-classification was the previous implementation's
+ * regression: O(N) inflations per workspace_load against libgit2's
+ * pack backend, on a hot path. The cache discipline makes the cached
+ * answer authoritative.
  *
  * Only fires when encryption is active — i.e. the config has a compiled
  * auto-encrypt ruleset (see encryption_policy_is_active). Nothing to
  * check without one.
  *
- * Error handling:
- * - Git read errors: Non-fatal, warns and skips file
- * - Metadata corruption: Non-fatal, warns and uses magic header
- *
  * This is a security-focused check: files matching sensitive patterns
  * (e.g., "*.key", ".ssh/id_*") should be encrypted.
- *
- * The compiled auto-encrypt ruleset lives on the config handle; matching
- * is pure computation and cannot fail.
  */
 static error_t *analyze_encryption_policy_mismatch(
     workspace_t *ws,
@@ -2090,66 +2085,26 @@ static error_t *analyze_encryption_policy_mismatch(
         const char *storage_path = manifest_entry->storage_path;
         const char *profile = manifest_entry->profile;
 
-        /* Check if file should be auto-encrypted (pure computation) */
-        if (!encryption_policy_matches_auto_patterns(config, storage_path)) {
+        /* Project the cached bool to a content_kind_t for the policy
+         * predicate. The 3-valued enum's UNSUPPORTED_VERSION case is
+         * unreachable here — manifest_entry->encrypted is a bool and
+         * collapses ENCRYPTED + UNSUPPORTED_VERSION onto true. That
+         * collapse is exhaustive for encryption_policy_violation: any
+         * non-PLAINTEXT kind carries encryption intent and is treated
+         * as not-a-violation. The version-skew distinction surfaces
+         * via the content read path, not here. */
+        content_kind_t kind = manifest_entry->encrypted
+                            ? CONTENT_ENCRYPTED
+                            : CONTENT_PLAINTEXT;
+
+        if (!encryption_policy_violation(config, storage_path, kind)) {
             continue;
         }
 
-        /* Validate actual encryption state using two-tier validation */
-        bool is_encrypted = false;
-
-        /* Tier 1: Check magic header in blob (source of truth).
-         * Uses VWD-cached blob_oid directly — no tree entry loading needed.
-         * Zero-copy view — we only peek at the first few header bytes,
-         * so copying the full blob here would be wasteful. */
-        gitops_blob_view_t blob_view;
-        error_t *view_err = gitops_blob_view_open(
-            ws->repo,
-            &manifest_entry->blob_oid,
-            &blob_view
-        );
-        if (view_err) {
-            /* Non-fatal: can't read blob - skip this file */
-            fprintf(
-                stderr, "warning: failed to read blob for '%s' in profile '%s': %s\n",
-                storage_path, profile,
-                view_err->message ? view_err->message : "unknown error"
-            );
-            error_free(view_err);
-            continue;
-        }
-
-        is_encrypted = cipher_is_encrypted(blob_view.data, blob_view.size);
-
-        /* Close view immediately — only needed for magic header check above.
-         * Prevents leak if future code adds early returns in metadata block. */
-        gitops_blob_view_close(&blob_view);
-
-        /* Tier 2: Cross-validate against VWD expected state (defense in depth)
-         *
-         * manifest_entry->encrypted is set from metadata by sync_entry_to_state()
-         * (run via manifest_reconcile when profile HEAD drifts). It always
-         * equals what metadata says — zero Git reads needed. */
-        if (is_encrypted != manifest_entry->encrypted) {
-            fprintf(
-                stderr,
-                "warning: encryption mismatch for '%s' in profile '%s'\n"
-                "  Blob content says: %s\n"
-                "  VWD expected state says: %s\n"
-                "  Using actual state from blob content. To fix, run:\n"
-                "    dotta update -p %s '%s'\n",
-                storage_path, profile,
-                is_encrypted ? "encrypted" : "plaintext",
-                is_encrypted ? "plaintext" : "encrypted",
-                profile, storage_path
-            );
-        }
-
-        /* Policy mismatch: should be encrypted but isn't.
-         * At this point we know the pattern matched (continue above would
-         * have skipped otherwise), so the original `should_auto_encrypt &&`
-         * guard collapses to the plaintext check. */
-        if (!is_encrypted) {
+        /* Policy mismatch: file is plaintext and matches an auto-encrypt
+         * pattern. Flag DIVERGENCE_ENCRYPTION on the existing item if
+         * already diverged, or create a new item. */
+        {
             /* Check if file already has divergence (O(1) index lookup).
              * This prevents last-write-wins bug when multiple analysis functions
              * detect different divergence types for the same file. */

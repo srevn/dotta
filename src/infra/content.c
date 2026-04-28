@@ -7,9 +7,11 @@
 #include "infra/content.h"
 
 #include <errno.h>
+#include <fcntl.h>
 #include <git2.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 #include "base/buffer.h"
 #include "base/error.h"
@@ -58,6 +60,119 @@ static void buffer_destroy_secure(void *ptr) {
     buffer_destroy(buf);
 }
 
+content_kind_t content_classify_bytes(
+    const uint8_t *data,
+    size_t size
+) {
+    /* Boundary handling:
+     *   - NULL or short → PLAINTEXT. Real cipher blobs are at least
+     *     CIPHER_OVERHEAD bytes; even a bare "DOTTA" prefix lacks both
+     *     the version byte and the SIV, so plaintext is the only safe
+     *     interpretation.
+     *   - Magic prefix mismatch → PLAINTEXT.
+     *   - Magic match + current version → ENCRYPTED.
+     *   - Magic match + non-current version → UNSUPPORTED_VERSION.
+     *
+     * Indexing the version byte by CIPHER_MAGIC_SIZE keeps cipher's
+     * internal field offsets opaque to this layer; cipher.c's
+     * static_assert guards their equivalence with CIPHER_OFFSET_VERSION.
+     */
+    if (!data || size < CIPHER_DETECT_BYTES) {
+        return CONTENT_PLAINTEXT;
+    }
+
+    if (memcmp(data, CIPHER_MAGIC, CIPHER_MAGIC_SIZE) != 0) {
+        return CONTENT_PLAINTEXT;
+    }
+
+    return data[CIPHER_MAGIC_SIZE] == CIPHER_VERSION
+        ? CONTENT_ENCRYPTED
+        : CONTENT_UNSUPPORTED_VERSION;
+}
+
+error_t *content_classify(
+    git_repository *repo,
+    const git_oid *blob_oid,
+    content_kind_t *out_kind
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(blob_oid);
+    CHECK_NULL(out_kind);
+
+    gitops_blob_view_t view;
+    error_t *err = gitops_blob_view_open(repo, blob_oid, &view);
+    if (err) {
+        return error_wrap(err, "Failed to load blob for classification");
+    }
+
+    *out_kind = content_classify_bytes(
+        (const uint8_t *) view.data, view.size
+    );
+
+    gitops_blob_view_close(&view);
+    return NULL;
+}
+
+error_t *content_classify_path(
+    const char *fs_path,
+    content_kind_t *out_kind
+) {
+    CHECK_NULL(fs_path);
+    CHECK_NULL(out_kind);
+
+    /* Read only the cipher detection window. For files on the order of
+     * megabytes this is materially cheaper than fs_read_file + classify
+     * — we never inflate past the header. EINTR loop covers signals on
+     * slow filesystems (NFS, FUSE). */
+    int fd = open(fs_path, O_RDONLY | O_CLOEXEC);
+    if (fd < 0) {
+        int saved_errno = errno;
+        if (saved_errno == ENOENT) {
+            return ERROR(ERR_NOT_FOUND, "File not found: %s", fs_path);
+        }
+        return ERROR(
+            ERR_FS, "Failed to open '%s': %s",
+            fs_path, strerror(saved_errno)
+        );
+    }
+
+    uint8_t header[CIPHER_DETECT_BYTES];
+    size_t got = 0;
+    while (got < sizeof(header)) {
+        ssize_t r = read(fd, header + got, sizeof(header) - got);
+        if (r < 0) {
+            if (errno == EINTR) continue;
+            int saved_errno = errno;
+            close(fd);
+            return ERROR(
+                ERR_FS, "Failed to read '%s': %s",
+                fs_path, strerror(saved_errno)
+            );
+        }
+        if (r == 0) break;  /* EOF before window filled — short file */
+        got += (size_t) r;
+    }
+    close(fd);
+
+    *out_kind = content_classify_bytes(header, got);
+    return NULL;
+}
+
+size_t content_estimated_plaintext_size(
+    content_kind_t kind, size_t blob_size
+) {
+    /* Only ENCRYPTED blobs carry the cipher's framing overhead. For
+     * PLAINTEXT and UNSUPPORTED_VERSION, blob_size is the only honest
+     * number — subtracting overhead under UNSUPPORTED_VERSION would be
+     * a lie, since this build cannot decrypt to confirm. */
+    if (kind != CONTENT_ENCRYPTED) {
+        return blob_size;
+    }
+    return blob_size > CIPHER_OVERHEAD
+                     ? blob_size - CIPHER_OVERHEAD
+                     : blob_size;
+}
+
 /**
  * Get plaintext from blob (internal workhorse)
  *
@@ -100,8 +215,13 @@ static error_t *get_plaintext_from_blob(
 
     *out_content = (buffer_t){ 0 };
 
-    /* Step 1: Check magic header for encryption (source of truth) */
-    bool is_encrypted = cipher_is_encrypted(blob_data, blob_size);
+    /* Step 1: Classify by magic header (the single source of truth).
+     * Collapse the 3-valued kind to the bool the existing cross-check
+     * speaks: an UNSUPPORTED_VERSION blob carries encryption intent
+     * and routes the same as ENCRYPTED through the mismatch logic
+     * below, surfacing as ERR_STATE_INVALID when metadata disagrees. */
+    bool is_encrypted = (content_classify_bytes(blob_data, blob_size)
+                         == CONTENT_ENCRYPTED);
 
     /* Step 2: Validate encryption state matches expectation (defense in depth)
      *
@@ -311,68 +431,6 @@ void content_cache_free(content_cache_t *cache) {
     free(cache);
 }
 
-error_t *content_store_to_blob(
-    git_repository *repo,
-    const buffer_t *plaintext,
-    const char *storage_path,
-    const char *profile,
-    keymgr *keymgr,
-    bool should_encrypt,
-    git_oid *out_oid
-) {
-    CHECK_NULL(repo);
-    CHECK_NULL(plaintext);
-    CHECK_NULL(storage_path);
-    CHECK_NULL(profile);
-    CHECK_NULL(out_oid);
-
-    const uint8_t *data = (const uint8_t *) plaintext->data;
-    size_t size = plaintext->size;
-
-    buffer_t ciphertext = BUFFER_INIT;
-
-    /* Handle encryption if requested */
-    if (should_encrypt) {
-        if (!keymgr) {
-            return ERROR(
-                ERR_CRYPTO,
-                "Cannot encrypt '%s': encryption key is not available.\n\n"
-                "To enable encryption, edit config.toml:\n\n"
-                "  [encryption]\n"
-                "  enabled = true\n\n"
-                "Then set a passphrase: dotta key set", storage_path
-            );
-        }
-
-        error_t *err = keymgr_encrypt(
-            keymgr, profile, storage_path, data, size, &ciphertext
-        );
-        if (err) {
-            return error_wrap(err, "Failed to encrypt '%s'", storage_path);
-        }
-
-        /* Use encrypted data */
-        data = (const uint8_t *) ciphertext.data;
-        size = ciphertext.size;
-    }
-
-    /* Create git blob */
-    int ret = git_blob_create_from_buffer(out_oid, repo, data, size);
-
-    /* Free ciphertext */
-    buffer_free(&ciphertext);
-
-    if (ret < 0) {
-        const git_error *git_err = git_error_last();
-        return ERROR(
-            ERR_GIT, "Failed to create git blob: %s",
-            git_err ? git_err->message : "unknown error"
-        );
-    }
-
-    return NULL;
-}
-
 error_t *content_store_file_to_worktree(
     const char *filesystem_path,
     const char *worktree_path,
@@ -380,7 +438,8 @@ error_t *content_store_file_to_worktree(
     const char *profile,
     keymgr *keymgr,
     bool should_encrypt,
-    struct stat *out_stat
+    struct stat *out_stat,
+    content_kind_t *out_kind
 ) {
     CHECK_NULL(filesystem_path);
     CHECK_NULL(worktree_path);
@@ -465,7 +524,16 @@ error_t *content_store_file_to_worktree(
         data_to_write = &ciphertext;
     }
 
-    /* Step 5: Write to worktree with original mode
+    /* Step 5: Classify the bytes about to be written.
+     *
+     * Write-time invariant: out_kind is byte-truth for what hits the
+     * worktree. Callers stamp metadata.encrypted from this verdict, not
+     * from should_encrypt. */
+    content_kind_t kind = content_classify_bytes(
+        (const uint8_t *) data_to_write->data, data_to_write->size
+    );
+
+    /* Step 6: Write to worktree with original mode
      * CRITICAL: Use source file's mode so git commits with correct permissions.
      * This ensures git mode matches metadata mode, preventing spurious MODE diffs. */
     err = fs_write_file_raw(
@@ -487,6 +555,10 @@ error_t *content_store_file_to_worktree(
             err, "Failed to write to worktree '%s'", worktree_path
         );
     }
+
+    /* Publish byte truth to caller. Done last so a write failure does
+     * not leave a stale kind in the caller's slot. */
+    if (out_kind) *out_kind = kind;
 
     return NULL;
 }

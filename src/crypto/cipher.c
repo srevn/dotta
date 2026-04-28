@@ -147,22 +147,6 @@ static void compute_siv(
     crypto_wipe(&ctx, sizeof(ctx));
 }
 
-bool cipher_is_encrypted(const uint8_t *data, size_t data_len) {
-    /* Require magic AND version so we only identify blobs we can
-     * actually decrypt. A non-current version byte is treated as
-     * plaintext; the metadata cross-check in infra/content.c routes
-     * the mismatch case before any decrypt attempt. */
-    if (!data || data_len < CIPHER_DETECT_BYTES) {
-        return false;
-    }
-
-    if (memcmp(data + CIPHER_OFFSET_MAGIC, CIPHER_MAGIC, CIPHER_MAGIC_SIZE) != 0) {
-        return false;
-    }
-
-    return data[CIPHER_OFFSET_VERSION] == CIPHER_VERSION;
-}
-
 error_t *cipher_peek_params(
     const uint8_t *data,
     size_t data_len,

@@ -249,6 +249,18 @@ static error_t *add_file_to_worktree(
         return ERROR(ERR_MEMORY, "Failed to allocate destination path");
     }
 
+    /* Encryption policy priority-3 source: prior committed bytes.
+     *
+     * Captured here so the sniff happens BEFORE the existing-file
+     * removal below — that removal would destroy the byte-truth source.
+     * The dotta worktree is checked out to the profile's HEAD upstream
+     * of this call, so when dest_path exists it holds the previously-
+     * committed bytes — the cheapest source of byte truth for priority-3.
+     * For first-time adds dest_path does not exist and the flag stays
+     * false; priorities 4/5 then decide. Only consumed in the regular-
+     * file branch below (symlinks carry no encryption state to maintain). */
+    bool previously_encrypted = false;
+
     /* Handle existing files */
     if (fs_lexists(dest_path)) {
         if (!opts->force) {
@@ -260,6 +272,19 @@ static error_t *add_file_to_worktree(
             free(dest_path);
             return exists_err;
         }
+
+        /* Sniff the prior committed bytes BEFORE removing them. Tolerate
+         * a transient I/O blip on dest_path: defaulting to "no prior
+         * encryption known" lets priorities 4/5 decide; the next dotta
+         * update will surface any divergence. */
+        content_kind_t prior_kind = CONTENT_PLAINTEXT;
+        error_t *classify_err = content_classify_path(dest_path, &prior_kind);
+        if (classify_err) {
+            error_free(classify_err);
+        } else {
+            previously_encrypted = (prior_kind != CONTENT_PLAINTEXT);
+        }
+
         err = fs_remove_file(dest_path);
         if (err) {
             error_t *wrapped = error_wrap(
@@ -326,14 +351,17 @@ static error_t *add_file_to_worktree(
             filesystem_path, storage_path
         );
     } else {
-        /* Regular file - determine encryption policy using centralized logic */
+        /* Regular file. previously_encrypted was captured from prior
+         * committed bytes in the existing-file removal block above (force
+         * re-add) or stays false (first-time add); priority-3 in the
+         * encryption policy reads byte truth either way. */
         bool should_encrypt = false;
         err = encryption_policy_should_encrypt(
             config,
             storage_path,
             opts->encrypt_mode == ADD_ENCRYPT_FORCE_ON,
             opts->encrypt_mode == ADD_ENCRYPT_FORCE_OFF,
-            metadata,  /* Existing metadata (preserves encryption state on --force re-add) */
+            previously_encrypted,
             &should_encrypt
         );
         if (err) {
@@ -344,8 +372,12 @@ static error_t *add_file_to_worktree(
             );
         }
 
-        /* Store file to worktree with optional encryption (handles read → encrypt → write)
-         * IMPORTANT: This captures stat data to share with metadata layer */
+        /* Store file to worktree (handles read → encrypt → write) and
+         * capture both stat data and the byte-derived content kind.
+         * SECURITY: Single stat() call eliminates a race condition.
+         * INVARIANT: written_kind is byte-truth for the bytes that hit
+         * the worktree; metadata.encrypted is stamped from it below. */
+        content_kind_t written_kind = CONTENT_PLAINTEXT;
         err = content_store_file_to_worktree(
             filesystem_path,
             dest_path,
@@ -353,7 +385,8 @@ static error_t *add_file_to_worktree(
             opts->profile,
             keymgr,
             should_encrypt,
-            &file_stat  /* Capture stat data */
+            &file_stat,
+            &written_kind
         );
         if (err) {
             free(dest_path);
@@ -373,13 +406,17 @@ static error_t *add_file_to_worktree(
             );
         }
 
-        /* Update metadata item with encryption status */
-        if (item) {
-            item->file.encrypted = should_encrypt;
+        /* Stamp metadata.encrypted from byte truth, NOT from policy.
+         * This is the write-time invariant: bytes-on-disk and the
+         * metadata cache are bound at the same boundary, by construction.
+         * Per Rule 6 in CLAUDE.md, downstream readers (state DB column,
+         * manifest_entry->encrypted) trust this cache without re-sniffing. */
+        if (item && item->kind == METADATA_ITEM_FILE) {
+            item->file.encrypted = (written_kind != CONTENT_PLAINTEXT);
         }
 
         /* Verbose output */
-        if (should_encrypt) {
+        if (written_kind == CONTENT_ENCRYPTED) {
             output_info(
                 out, OUTPUT_VERBOSE, "Encrypted: %s -> %s",
                 filesystem_path, storage_path

@@ -24,7 +24,7 @@
 #include "core/metadata.h"
 #include "core/profiles.h"
 #include "core/state.h"
-#include "crypto/cipher.h"
+#include "infra/content.h"
 #include "infra/path.h"
 #include "sys/gitops.h"
 #include "sys/stats.h"
@@ -36,60 +36,6 @@
 #define LIST_MAX_MSG_ALIGN 60
 #define LIST_MAX_NAME_ALIGN 40
 #define LIST_MIN_NAME_ALIGN 12
-
-/**
- * Check if file is encrypted
- *
- * Strategy:
- * 1. Check metadata first (fast O(1) lookup if available)
- * 2. Fall back to blob magic header check if metadata unavailable
- *
- * @param metadata Metadata (can be NULL)
- * @param repo Repository (must not be NULL)
- * @param entry Tree entry (must not be NULL)
- * @param storage_path Storage path (must not be NULL)
- * @return true if file is encrypted, false otherwise
- */
-static bool is_file_encrypted(
-    const metadata_t *metadata,
-    git_repository *repo,
-    const git_tree_entry *entry,
-    const char *storage_path
-) {
-    /* Fast path: Check metadata if available */
-    if (metadata) {
-        const metadata_item_t *item = NULL;
-        error_t *err = metadata_get_item(metadata, storage_path, &item);
-        if (!err && item) {
-            /* Defensive: Ensure it's a file (directories shouldn't appear here) */
-            if (item->kind == METADATA_ITEM_FILE) {
-                return item->file.encrypted;
-            }
-            /* If it's a directory, fall through to blob check (shouldn't happen) */
-        }
-        error_free(err);  /* Not found or error - fall through to blob check */
-    }
-
-    /* Fallback: Check blob magic header */
-    const git_oid *blob_oid = git_tree_entry_id(entry);
-    if (!blob_oid) {
-        return false;
-    }
-
-    git_blob *blob = NULL;
-    int git_err = git_blob_lookup(&blob, repo, blob_oid);
-    if (git_err != 0) {
-        return false;  /* Can't load blob - assume not encrypted */
-    }
-
-    const uint8_t *data = (const uint8_t *) git_blob_rawcontent(blob);
-    size_t size = git_blob_rawsize(blob);
-    bool encrypted = cipher_is_encrypted(data, size);
-
-    git_blob_free(blob);
-
-    return encrypted;
-}
 
 /**
  * Print upstream state indicator
@@ -487,7 +433,7 @@ static error_t *list_files(
             int git_err = tree ? git_tree_entry_bypath(&entry, tree, file_path) : -1;
             if (git_err == 0) {
                 /* Check encryption status and display indicator */
-                bool encrypted = is_file_encrypted(metadata, repo, entry, file_path);
+                bool encrypted = metadata_get_file_encrypted(metadata, file_path);
                 if (encrypted) {
                     output_styled(
                         out, OUTPUT_VERBOSE, "  {yellow}[E]{reset} "
@@ -505,9 +451,16 @@ static error_t *list_files(
                     repo, git_tree_entry_id(entry), &size
                 );
                 if (!stats_err) {
-                    /* For encrypted files, show content size (subtract fixed overhead) */
-                    size_t display_size = encrypted && size > CIPHER_OVERHEAD
-                                        ? size - CIPHER_OVERHEAD : size;
+                    /* Show plaintext content size for encrypted blobs by
+                     * subtracting the cipher's framing overhead. The
+                     * helper keeps crypto/cipher.h imports out of the
+                     * command layer (only infra/content and the crypto
+                     * layer itself import cipher.h). */
+                    content_kind_t kind = encrypted
+                                        ? CONTENT_ENCRYPTED
+                                        : CONTENT_PLAINTEXT;
+                    size_t display_size =
+                        content_estimated_plaintext_size(kind, size);
 
                     char size_str[32];
                     output_format_size(display_size, size_str, sizeof(size_str));

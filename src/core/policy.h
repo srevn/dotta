@@ -13,7 +13,7 @@
  * 0. Meta-file protection → PLAINTEXT or ERROR (system integrity)
  * 1. Explicit --encrypt flag → ENCRYPT (highest priority)
  * 2. Explicit --no-encrypt flag → PLAINTEXT (override auto-encrypt)
- * 3. File previously encrypted (metadata) → ENCRYPT (maintain state)
+ * 3. File previously encrypted (byte truth) → ENCRYPT (maintain state)
  * 4. Auto-encrypt patterns → ENCRYPT (pattern match)
  * 5. Default → PLAINTEXT (safe default)
  *
@@ -30,8 +30,7 @@
 #include <stdbool.h>
 #include <types.h>
 
-/* Forward declaration */
-typedef struct metadata metadata_t;
+#include "infra/content.h"
 
 /**
  * Report whether auto-encrypt policy applies to this config.
@@ -66,7 +65,7 @@ bool encryption_policy_is_active(const config_t *config);
  * 2. If explicit_no_encrypt=true → PLAINTEXT (override auto-encrypt)
  *    Example: User ran `dotta add --no-encrypt file`
  *
- * 3. If file previously encrypted (in metadata) → ENCRYPT (maintain state)
+ * 3. If previously_encrypted=true → ENCRYPT (maintain state)
  *    Example: `dotta update` on already-encrypted file
  *    Rationale: Preserve encryption state to avoid accidental decryption
  *
@@ -77,8 +76,6 @@ bool encryption_policy_is_active(const config_t *config);
  *    Rationale: Encryption is opt-in, not opt-out (safer default)
  *
  * Implementation notes:
- * - Metadata lookup errors (except ERR_NOT_FOUND) are propagated
- * - NULL metadata is valid (means file is new or metadata unavailable)
  * - NULL config (or config without compiled rules) disables priority-4
  * - Priorities 1 and 3 are NOT gated on `config->encryption_enabled`.
  *   This is intentional: if the user explicitly asked to encrypt or a
@@ -89,24 +86,33 @@ bool encryption_policy_is_active(const config_t *config);
  *   to plaintext, because doing so on a previously-encrypted file
  *   would leak its content.
  *
+ * Source of `previously_encrypted`:
+ *   The caller computes this from byte truth — typically via
+ *   content_classify (Git-side) or content_classify_path (worktree-side).
+ *   For first-time adds with no prior bytes, the caller passes false.
+ *   Policy never opens a metadata side-channel; bytes are the single
+ *   authority for whether a file IS encrypted, and metadata.encrypted
+ *   is itself a byte-derived cache (established at the write boundary
+ *   in cmds/add.c and cmds/update.c).
+ *
  * @param config Configuration (can be NULL; disables priority-4)
  * @param storage_path File path in profile (e.g., "home/.bashrc", must not be NULL)
  * @param explicit_encrypt Explicit --encrypt flag from user
  * @param explicit_no_encrypt Explicit --no-encrypt flag from user
- * @param metadata Metadata for checking previous encryption state (can be NULL)
+ * @param previously_encrypted Whether the file's prior bytes were encrypted
+ *                             (or attempt-encrypted at an unsupported version)
  * @param out_should_encrypt Output decision (must not be NULL)
  * @return Error or NULL on success
  *
  * Errors:
  * - ERR_INVALID_ARG: Required arguments are NULL
- * - ERR_*: Propagated from metadata lookup (serious errors only)
  */
 error_t *encryption_policy_should_encrypt(
     const config_t *config,
     const char *storage_path,
     bool explicit_encrypt,
     bool explicit_no_encrypt,
-    const metadata_t *metadata,
+    bool previously_encrypted,
     bool *out_should_encrypt
 );
 
@@ -150,6 +156,36 @@ error_t *encryption_policy_should_encrypt(
 bool encryption_policy_matches_auto_patterns(
     const config_t *config,
     const char *storage_path
+);
+
+/**
+ * Check whether a file is in violation of the auto-encrypt policy.
+ *
+ * Returns true iff:
+ *   - The blob's classified kind is `CONTENT_PLAINTEXT`, AND
+ *   - The path matches an active auto-encrypt rule.
+ *
+ * Used by workspace audit to flag DIVERGENCE_ENCRYPTION when a managed
+ * file matches an auto-encrypt pattern but is stored plaintext in Git.
+ *
+ * Why kind, not bool: a blob whose first bytes match cipher magic but
+ * with a non-current version byte (CONTENT_UNSUPPORTED_VERSION) carries
+ * encryption intent at a version this build does not understand. Flagging
+ * it as "missing encryption" would be misleading; a version-skew error
+ * surfaces from the content read path when a caller actually tries to
+ * decrypt. The audit treats UNSUPPORTED_VERSION as not-a-violation.
+ *
+ * NULL-safe (returns false if config is NULL or storage_path is NULL).
+ *
+ * @param config Configuration (can be NULL)
+ * @param storage_path File path in profile (can be NULL)
+ * @param kind Classified content kind of the blob in question
+ * @return true iff the blob/path combination violates auto-encrypt policy
+ */
+bool encryption_policy_violation(
+    const config_t *config,
+    const char *storage_path,
+    content_kind_t kind
 );
 
 #endif /* DOTTA_POLICY_H */

@@ -14,7 +14,6 @@
 
 #include "base/error.h"
 #include "base/gitignore.h"
-#include "core/metadata.h"
 #include "infra/path.h"
 
 /**
@@ -73,7 +72,7 @@ error_t *encryption_policy_should_encrypt(
     const char *storage_path,
     bool explicit_encrypt,
     bool explicit_no_encrypt,
-    const metadata_t *metadata,
+    bool previously_encrypted,
     bool *out_should_encrypt
 ) {
     CHECK_NULL(storage_path);
@@ -130,40 +129,20 @@ error_t *encryption_policy_should_encrypt(
         return NULL;
     }
 
-    /* Priority 3: Maintain previous encryption state (update.c pattern)
+    /* Priority 3: Maintain previous encryption state.
      *
-     * If file was previously encrypted, maintain encryption to avoid
-     * accidental decryption. This is important for workflows like:
+     * Source: byte truth, threaded in by the caller. The caller has
+     * already classified the relevant blob (or passed false when no
+     * prior blob exists) — policy reads it as a pure bool with no
+     * metadata side-channel, no I/O, no allocation. Important for
+     * workflows like:
      *   1. dotta add --encrypt file
      *   2. ... modify file on disk ...
      *   3. dotta update file  (should stay encrypted)
      */
-    if (metadata) {
-        const metadata_item_t *existing = NULL;
-        error_t *err = metadata_get_item(
-            metadata, storage_path, &existing
-        );
-
-        if (err == NULL && existing &&
-            existing->kind == METADATA_ITEM_FILE &&
-            existing->file.encrypted) {
-            /* File was previously encrypted - maintain encryption */
-            *out_should_encrypt = true;
-            return NULL;
-        }
-
-        /* ERR_NOT_FOUND is expected for new files - not an error */
-        if (err && err->code != ERR_NOT_FOUND) {
-            /* Real error (corruption, etc.) - propagate */
-            return error_wrap(
-                err, "Failed to check metadata for '%s'", storage_path
-            );
-        }
-
-        /* Clean up ERR_NOT_FOUND */
-        if (err) {
-            error_free(err);
-        }
+    if (previously_encrypted) {
+        *out_should_encrypt = true;
+        return NULL;
     }
 
     /* Priority 4: Check auto-encrypt patterns.
@@ -195,4 +174,24 @@ bool encryption_policy_matches_auto_patterns(
     return gitignore_is_ignored(
         config->auto_encrypt.rules, path_for_matching, false
     );
+}
+
+bool encryption_policy_violation(
+    const config_t *config,
+    const char *storage_path,
+    content_kind_t kind
+) {
+    /* Only plaintext blobs can violate the auto-encrypt policy.
+     *
+     * ENCRYPTED blobs satisfy the intent. UNSUPPORTED_VERSION blobs
+     * also carry encryption intent (just at a version this build does
+     * not understand) — flagging them as "missing encryption" would be
+     * misleading; the version-skew surfaces from the content read path
+     * when callers actually attempt to decrypt. */
+    if (kind != CONTENT_PLAINTEXT) {
+        return false;
+    }
+
+    /* matches_auto_patterns is NULL-safe and pure. */
+    return encryption_policy_matches_auto_patterns(config, storage_path);
 }

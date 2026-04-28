@@ -81,10 +81,11 @@
 /**
  * Detection-prefix length (magic + version).
  *
- * `cipher_is_encrypted` matches the first 6 bytes against
- * `"DOTTA" || CIPHER_VERSION`; a different version byte reports as
- * not-encrypted so the metadata cross-check in infra/content.c can
- * route the mismatch before any decrypt attempt.
+ * `infra/content.h:content_classify_bytes` matches the first 6 bytes
+ * against `"DOTTA" || CIPHER_VERSION`; a non-current version byte
+ * yields CONTENT_UNSUPPORTED_VERSION, distinguished from CONTENT_ENCRYPTED.
+ * The 3-valued classification is the single source of truth for "is
+ * this blob encrypted?" — see infra/content.h for the cache discipline.
  */
 #define CIPHER_DETECT_BYTES   6
 
@@ -127,20 +128,6 @@ _Static_assert(
     CIPHER_OVERHEAD == CIPHER_HEADER_SIZE + CIPHER_SIV_SIZE,
     "OVERHEAD must equal HEADER + SIV"
 );
-
-/**
- * Test whether a byte buffer is a dotta-encrypted blob this build
- * can decrypt.
- *
- * Sniffs the 6-byte detection window (magic + version). A blob with
- * a non-current version byte reports false; the metadata cross-check
- * in infra/content.c routes that case before any decrypt attempt.
- *
- * @param data     File content (may be NULL when len == 0)
- * @param data_len Content length
- * @return true iff data begins with magic + current-build version
- */
-bool cipher_is_encrypted(const uint8_t *data, size_t data_len);
 
 /**
  * Read the Argon2 params from a cipher-blob header without

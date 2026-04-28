@@ -125,18 +125,25 @@ static error_t *copy_file_to_worktree(
             *out_was_encrypted = false;
         }
     } else {
-        /* Handle regular file - determine encryption policy using centralized logic
+        /* Handle regular file - determine encryption policy using centralized logic.
          *
-         * The policy function handles the critical "maintain encryption" logic:
-         * If file was previously encrypted, it stays encrypted (security-critical).
-         */
+         * Source of `previously_encrypted`: the existing metadata's
+         * encrypted flag for this path. Update.c always operates on a
+         * file already in the manifest, so metadata is loaded for
+         * permission preservation. After Phase 2's write-time invariant
+         * (this commit), metadata.encrypted is byte-truth — reading it
+         * here is equivalent to classifying the existing worktree blob,
+         * but cheaper (no fs read). */
+        bool previously_encrypted =
+            metadata_get_file_encrypted(metadata, storage_path);
+
         bool should_encrypt = false;
         err = encryption_policy_should_encrypt(
             config,
             storage_path,
-            false,           /* No explicit --encrypt flag in update.c */
-            false,           /* No explicit --no-encrypt flag in update.c */
-            metadata,        /* Critical: checks previous encryption state */
+            false,                  /* No explicit --encrypt flag in update.c */
+            false,                  /* No explicit --no-encrypt flag in update.c */
+            previously_encrypted,
             &should_encrypt
         );
         if (err) {
@@ -147,10 +154,15 @@ static error_t *copy_file_to_worktree(
             goto cleanup;
         }
 
-        /* Store file to worktree and capture stat atomically
-         * ARCHITECTURE: Single lstat() inside content_store_file_to_worktree() is captured
-         * and propagated to caller for metadata operations, eliminating race condition. */
+        /* Store file to worktree (handles read → encrypt → write) and
+         * capture stat + byte-derived content kind atomically.
+         * ARCHITECTURE: Single lstat() inside content_store_file_to_worktree
+         * is captured and propagated to caller for metadata operations,
+         * eliminating a race condition.
+         * INVARIANT: written_kind is byte-truth for the bytes that hit
+         * the worktree; out_was_encrypted reflects byte truth, not policy. */
         struct stat file_stat;
+        content_kind_t written_kind = CONTENT_PLAINTEXT;
         err = content_store_file_to_worktree(
             filesystem_path,
             dest_path,
@@ -158,7 +170,8 @@ static error_t *copy_file_to_worktree(
             profile,
             keymgr,
             should_encrypt,
-            &file_stat  /* Capture stat for metadata - eliminates race condition */
+            &file_stat,
+            &written_kind
         );
         if (err) {
             err = error_wrap(err, "Failed to store file to worktree");
@@ -170,9 +183,12 @@ static error_t *copy_file_to_worktree(
             memcpy(out_stat, &file_stat, sizeof(struct stat));
         }
 
-        /* Propagate encryption status to caller */
+        /* Propagate encryption status to caller — byte-derived, NOT policy.
+         * Per Rule 6 in CLAUDE.md, downstream consumers (metadata.encrypted
+         * stamp at update.c:545, then state DB column, then manifest entry)
+         * inherit byte truth from this single source. */
         if (out_was_encrypted) {
-            *out_was_encrypted = should_encrypt;
+            *out_was_encrypted = (written_kind != CONTENT_PLAINTEXT);
         }
     }
 

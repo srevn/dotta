@@ -212,9 +212,9 @@ static error_t *cmd_key_status(
 
         /* Show Argon2id derivation parameters. The pair is what the
          * config schema exposes (either as a `strength` preset or as
-         * raw `argon2_memory_mib` / `argon2_passes`); printing the
-         * resolved values keeps the status output independent of which
-         * input form the user wrote. */
+         * raw `memory` (MiB) / `passes`); printing the resolved values
+         * keeps the status output independent of which input form the
+         * user wrote. */
         output_print(
             out, OUTPUT_VERBOSE, "  Argon2id: %u MiB, %u passes\n",
             (unsigned) config->encryption_argon2_memory_mib,

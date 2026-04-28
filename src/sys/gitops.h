@@ -43,7 +43,7 @@
   * @param repo Repository (must not be NULL)
   * @return Error or NULL on success
   */
- error_t *gitops_get_signature(git_signature **out, git_repository *repo);
+error_t *gitops_get_signature(git_signature **out, git_repository *repo);
 
 /**
  * Open git repository at path
@@ -638,6 +638,37 @@ error_t *gitops_get_remote_url(
     git_repository *repo,
     const char *remote_name,
     char **out_url
+);
+
+/**
+ * Resolve the default remote (name + optional URL) into arena.
+ *
+ * Selection strategy:
+ *   1. Prefer "origin" if it exists.
+ *   2. Otherwise use the only configured remote.
+ *   3. Multiple remotes without "origin" → error (require explicit choice).
+ *   4. No remotes → error with a hint to add one.
+ *
+ * When `out_url` is non-NULL, also looks up the remote's URL. A remote
+ * configured without a URL yields `*out_url = NULL` and a successful
+ * return — credentialed transfers tolerate a NULL URL (helper approve /
+ * reject become no-ops, SSH/anonymous still works), so this stays a
+ * happy-path outcome rather than an error.
+ *
+ * Outputs are arena-borrowed; the caller does not free them, and they
+ * remain valid for the lifetime of the arena.
+ *
+ * @param repo     Repository (must not be NULL)
+ * @param arena    Arena for output strings (must not be NULL)
+ * @param out_name Remote name (must not be NULL; arena-borrowed on success)
+ * @param out_url  Optional URL out-param (NULL skips URL lookup)
+ * @return Error or NULL on success
+ */
+error_t *gitops_resolve_default_remote(
+    git_repository *repo,
+    arena_t *arena,
+    const char **out_name,
+    const char **out_url
 );
 
 /**

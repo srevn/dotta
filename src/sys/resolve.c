@@ -345,7 +345,7 @@ error_t *resolve_verify(
     CHECK_NULL(ctx->branch_name);
 
     /* Analyze current branch state */
-    upstream_info_t *info = NULL;
+    upstream_info_t info;
     error_t *err = upstream_analyze_profile(
         ctx->repo, ctx->remote_name, ctx->branch_name, &info
     );
@@ -356,14 +356,12 @@ error_t *resolve_verify(
         );
     }
 
-    /* Extract results */
-    if (out_ahead) *out_ahead = info->ahead;
-    if (out_behind) *out_behind = info->behind;
+    if (out_ahead) *out_ahead = info.ahead;
+    if (out_behind) *out_behind = info.behind;
 
-    upstream_state_t state = info->state;
-    size_t ahead = info->ahead;
-    size_t behind = info->behind;
-    upstream_info_free(info);
+    upstream_state_t state = info.state;
+    size_t ahead = info.ahead;
+    size_t behind = info.behind;
 
     /* After successful resolution, we should be ahead of remote (or equal) */
     if (state == UPSTREAM_NO_REMOTE) {

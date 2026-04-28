@@ -493,20 +493,26 @@ static void display_workspace_status(
  */
 static error_t *display_remote_status(
     git_repository *repo,
+    arena_t *arena,
     const string_array_t *profiles,
     output_t *out,
     bool show_all_profiles,
     bool no_fetch
 ) {
     CHECK_NULL(repo);
+    CHECK_NULL(arena);
     CHECK_NULL(profiles);
     CHECK_NULL(out);
 
     bool verbose = output_is_verbose(out);
 
-    /* Detect remote */
-    char *remote_name = NULL;
-    error_t *err = upstream_detect_remote(repo, &remote_name);
+    /* Detect remote (name + URL — URL feeds the credential helper when we
+     * fetch below). Both outputs are arena-borrowed for the call's lifetime. */
+    const char *remote_name = NULL;
+    const char *remote_url = NULL;
+    error_t *err = gitops_resolve_default_remote(
+        repo, arena, &remote_name, no_fetch ? NULL : &remote_url
+    );
     if (err) {
         /* No remote configured - not an error, just skip this section */
         error_free(err);
@@ -521,7 +527,6 @@ static error_t *display_remote_status(
         /* Explicit request: show ALL local profiles (lightweight, no ref resolution) */
         err = profile_list_all_local(repo, &all_local);
         if (err) {
-            free(remote_name);
             return error_wrap(err, "Failed to list all profiles");
         }
         check = all_local;
@@ -529,7 +534,6 @@ static error_t *display_remote_status(
 
     if (check->count == 0) {
         string_array_free(all_local);
-        free(remote_name);
         return NULL;
     }
 
@@ -539,10 +543,6 @@ static error_t *display_remote_status(
          * + approve/reject are needed even without verbose progress).
          * Status's fetch is a background refresh: progress is always
          * ephemeral so it never persists between status sections. */
-        char *remote_url = NULL;
-        error_t *url_err = gitops_get_remote_url(repo, remote_name, &remote_url);
-        error_free(url_err);
-
         transfer_options_t xfer_opts = {
             .output             = out,
             .url                = remote_url,
@@ -550,7 +550,6 @@ static error_t *display_remote_status(
         };
         transfer_context_t *xfer = NULL;
         error_t *xfer_err = transfer_context_create(&xfer_opts, &xfer);
-        free(remote_url);
 
         if (xfer_err) {
             /* Non-fatal: skip the fetch and fall through to cached status
@@ -621,7 +620,7 @@ static error_t *display_remote_status(
         const char *profile = check->items[i];
 
         /* Analyze upstream state */
-        upstream_info_t *info = NULL;
+        upstream_info_t info;
         err = upstream_analyze_profile(repo, remote_name, profile, &info);
         if (err) {
             /* Show error for this profile but continue */
@@ -630,14 +629,15 @@ static error_t *display_remote_status(
             continue;
         }
 
-        /* Format display based on state */
-        const char *symbol = upstream_state_symbol(info->state);
-        output_color_t color;
+        /* Format display based on state. Color comes from the shared
+         * map; only the descriptive text and the per-state counter are
+         * caller-specific. */
+        const char *symbol = upstream_state_symbol(info.state);
+        output_color_t color = upstream_state_color(info.state);
         char status_str[128];
 
-        switch (info->state) {
+        switch (info.state) {
             case UPSTREAM_UP_TO_DATE:
-                color = OUTPUT_COLOR_GREEN;
                 snprintf(
                     status_str, sizeof(status_str), "%s up-to-date",
                     symbol
@@ -645,31 +645,27 @@ static error_t *display_remote_status(
                 up_to_date++;
                 break;
             case UPSTREAM_LOCAL_AHEAD:
-                color = OUTPUT_COLOR_YELLOW;
                 snprintf(
                     status_str, sizeof(status_str), "%s %zu ahead",
-                    symbol, info->ahead
+                    symbol, info.ahead
                 );
                 ahead++;
                 break;
             case UPSTREAM_REMOTE_AHEAD:
-                color = OUTPUT_COLOR_YELLOW;
                 snprintf(
                     status_str, sizeof(status_str), "%s %zu behind",
-                    symbol, info->behind
+                    symbol, info.behind
                 );
                 behind++;
                 break;
             case UPSTREAM_DIVERGED:
-                color = OUTPUT_COLOR_RED;
                 snprintf(
                     status_str, sizeof(status_str), "%s diverged (%zu ahead, %zu behind)",
-                    symbol, info->ahead, info->behind
+                    symbol, info.ahead, info.behind
                 );
                 diverged++;
                 break;
             case UPSTREAM_NO_REMOTE:
-                color = OUTPUT_COLOR_CYAN;
                 snprintf(
                     status_str, sizeof(status_str), "%s no remote",
                     symbol
@@ -678,16 +674,19 @@ static error_t *display_remote_status(
                 break;
             case UPSTREAM_UNKNOWN:
             default:
-                color = OUTPUT_COLOR_DIM;
                 snprintf(
-                    status_str, sizeof(status_str), "? unknown"
+                    status_str, sizeof(status_str), "%s unknown",
+                    symbol
                 );
                 break;
         }
 
         /* Display with colors */
-        if (verbose && info->state != UPSTREAM_NO_REMOTE && info->state != UPSTREAM_UNKNOWN) {
-            /* Verbose mode: show detailed commit info */
+        if (verbose && info.state != UPSTREAM_NO_REMOTE && info.state != UPSTREAM_UNKNOWN) {
+            /* Verbose mode: show detailed commit info. The enclosing branch
+             * has already filtered out NO_REMOTE/UNKNOWN, so both local and
+             * remote refs are guaranteed to exist on every state reaching
+             * this block. */
             output_newline(out, OUTPUT_VERBOSE);
             output_print(out, OUTPUT_VERBOSE, "Profile: %s\n", profile);
 
@@ -724,44 +723,41 @@ static error_t *display_remote_status(
             }
             error_free(commit_err);
 
-            /* Get remote commit info if it exists */
-            if (info->exists_remotely) {
-                char remote_ref[DOTTA_REFNAME_MAX];
-                error_t *remote_ref_err = gitops_build_refname(
-                    remote_ref, sizeof(remote_ref), "refs/remotes/%s/%s",
-                    remote_name, profile
+            /* Remote commit info — guaranteed reachable per the enclosing
+             * filter above. */
+            char remote_ref[DOTTA_REFNAME_MAX];
+            error_t *remote_ref_err = gitops_build_refname(
+                remote_ref, sizeof(remote_ref), "refs/remotes/%s/%s",
+                remote_name, profile
+            );
+            git_commit *remote_commit = NULL;
+            commit_err = remote_ref_err ? remote_ref_err
+                                        : gitops_get_commit(repo, remote_ref, &remote_commit);
+
+            if (!commit_err && remote_commit) {
+                const git_oid *remote_oid = git_commit_id(remote_commit);
+                char remote_oid_str[8];
+                git_oid_tostr(remote_oid_str, sizeof(remote_oid_str), remote_oid);
+
+                const char *remote_summary = git_commit_summary(remote_commit);
+                git_time_t remote_time = git_commit_time(remote_commit);
+
+                char time_str[64];
+                format_relative_time(remote_time, time_str, sizeof(time_str));
+
+                output_print(
+                    out, OUTPUT_VERBOSE, "  Remote commit:  %s %s (%s)\n",
+                    remote_oid_str, remote_summary, time_str
                 );
-                git_commit *remote_commit = NULL;
-                commit_err = remote_ref_err ? remote_ref_err
-                                            : gitops_get_commit(repo, remote_ref, &remote_commit);
 
-                if (!commit_err && remote_commit) {
-                    const git_oid *remote_oid = git_commit_id(remote_commit);
-                    char remote_oid_str[8];
-                    git_oid_tostr(remote_oid_str, sizeof(remote_oid_str), remote_oid);
-
-                    const char *remote_summary = git_commit_summary(remote_commit);
-                    git_time_t remote_time = git_commit_time(remote_commit);
-
-                    char time_str[64];
-                    format_relative_time(remote_time, time_str, sizeof(time_str));
-
-                    output_print(
-                        out, OUTPUT_VERBOSE, "  Remote commit:  %s %s (%s)\n",
-                        remote_oid_str, remote_summary, time_str
-                    );
-
-                    git_commit_free(remote_commit);
-                }
-                error_free(commit_err);
+                git_commit_free(remote_commit);
             }
+            error_free(commit_err);
         } else {
             /* Compact mode: single line matching enabled profiles format */
             output_styled(out, OUTPUT_NORMAL, "  {cyan}%s{reset}", profile);
             output_styled(out, OUTPUT_NORMAL, "  {dim}(%s){reset}\n", status_str);
         }
-
-        upstream_info_free(info);
     }
 
     /* Display summary section */
@@ -783,9 +779,8 @@ static error_t *display_remote_status(
         output_styled(out, OUTPUT_NORMAL, "  {cyan}%zu{reset} no remote\n", no_remote);
     }
 
-    /* Free name resources */
+    /* remote_name is arena-borrowed; no free here. */
     string_array_free(all_local);
-    free(remote_name);
 
     return NULL;
 }
@@ -986,7 +981,8 @@ error_t *cmd_status(const dotta_ctx_t *ctx, const cmd_status_options_t *opts) {
     /* Show remote sync status (if requested) */
     if (opts->show_remote) {
         err = display_remote_status(
-            repo, scope_active(scope), out, opts->all_profiles, opts->no_fetch
+            repo, ctx->arena, scope_active(scope), out,
+            opts->all_profiles, opts->no_fetch
         );
         if (err) {
             /* Non-fatal: might not have remote configured */

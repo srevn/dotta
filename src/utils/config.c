@@ -26,10 +26,10 @@
  * Argon2id strength presets.
  *
  * The user-friendly knob is `strength = "fast" | "balanced" | "paranoid"`;
- * `argon2_memory_mib` and `argon2_passes` exist as raw overrides for
- * users who want exact control. Wall-clock timings below are
- * indicative only — they were measured on a 2024-era laptop and
- * scale with single-thread memory bandwidth and L3 cache size.
+ * `memory` (MiB) and `passes` exist as raw overrides for users who
+ * want exact control. Wall-clock timings below are indicative only —
+ * they were measured on a 2024-era laptop and scale with single-thread
+ * memory bandwidth and L3 cache size.
  *
  * Adding a preset: append a row here. The lookup is linear; the
  * three-row count is the design ceiling, not a vector limit.
@@ -253,7 +253,7 @@ config_t *config_create_default(void) {
 
     /* [encryption] defaults — match the "balanced" preset (~1.0 s
      * derivation on commodity HW). The parser overwrites these if the
-     * user sets `strength`, `argon2_memory_mib`, or `argon2_passes`. */
+     * user sets `strength`, `memory`, or `passes`. */
     config->encryption_enabled = false;            /* Default: disabled (opt-in) */
     config->auto_encrypt_patterns = NULL;
     config->auto_encrypt_pattern_count = 0;
@@ -594,8 +594,8 @@ error_t *config_load(const char *config_path, config_t **out) {
     toml_datum_t encryption = toml_get(result.toptab, "encryption");
     if (encryption.type == TOML_TABLE) {
         static const char *known[] = {
-            "enabled",           "auto_encrypt",  "strength",
-            "argon2_memory_mib", "argon2_passes", "session_timeout"
+            "enabled", "auto_encrypt", "strength",
+            "memory",  "passes",       "session_timeout"
         };
         err = validate_known_keys(encryption, "encryption", known, 6);
         if (err) goto cleanup;
@@ -631,14 +631,14 @@ error_t *config_load(const char *config_path, config_t **out) {
         }
 
         /* Argon2id derivation parameters — sketch §9.3 resolution:
-         *   - Both `argon2_memory_mib` and `argon2_passes` set → use them.
+         *   - Both `memory` and `passes` set → use them.
          *     Warn-once if `strength` is also set (raw wins).
          *   - Exactly one of the raw pair set → ERR_INVALID_ARG.
          *   - Only `strength` set → look up preset.
          *   - Nothing set → defaults from config_create_default stand. */
         toml_datum_t strength = toml_get(encryption, "strength");
-        toml_datum_t mib = toml_get(encryption, "argon2_memory_mib");
-        toml_datum_t passes = toml_get(encryption, "argon2_passes");
+        toml_datum_t mib = toml_get(encryption, "memory");
+        toml_datum_t passes = toml_get(encryption, "passes");
 
         const bool strength_set = (strength.type == TOML_STRING);
         const bool mib_set = (mib.type == TOML_INT64);
@@ -647,8 +647,8 @@ error_t *config_load(const char *config_path, config_t **out) {
         if (mib_set != passes_set) {
             err = ERROR(
                 ERR_INVALID_ARG,
-                "[encryption] argon2_memory_mib and argon2_passes must be set "
-                "together (set both, or neither and use `strength` instead)"
+                "[encryption] memory and passes must be set together "
+                "(set both, or neither and use `strength` instead)"
             );
             goto cleanup;
         }
@@ -661,7 +661,7 @@ error_t *config_load(const char *config_path, config_t **out) {
                 || mib.u.int64 > KDF_ARGON2_MEMORY_MIB_MAX) {
                 err = ERROR(
                     ERR_INVALID_ARG,
-                    "Invalid argon2_memory_mib: %lld (must be %u..%u)",
+                    "Invalid [encryption] memory: %lld MiB (must be %u..%u)",
                     (long long) mib.u.int64,
                     (unsigned) KDF_ARGON2_MEMORY_MIB_MIN,
                     (unsigned) KDF_ARGON2_MEMORY_MIB_MAX
@@ -672,7 +672,7 @@ error_t *config_load(const char *config_path, config_t **out) {
                 || passes.u.int64 > KDF_ARGON2_PASSES_MAX) {
                 err = ERROR(
                     ERR_INVALID_ARG,
-                    "Invalid argon2_passes: %lld (must be %u..%u)",
+                    "Invalid [encryption] passes: %lld (must be %u..%u)",
                     (long long) passes.u.int64,
                     (unsigned) KDF_ARGON2_PASSES_MIN,
                     (unsigned) KDF_ARGON2_PASSES_MAX
@@ -686,7 +686,7 @@ error_t *config_load(const char *config_path, config_t **out) {
                 fprintf(
                     stderr,
                     "Warning: [encryption] strength = \"%s\" is ignored because "
-                    "argon2_memory_mib and argon2_passes are set explicitly.\n",
+                    "memory and passes are set explicitly.\n",
                     strength.u.s
                 );
             }

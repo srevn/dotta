@@ -29,7 +29,7 @@
  */
 typedef struct {
     char *profile;
-    sync_branch_state_t state;
+    upstream_state_t state;
     size_t ahead;
     size_t behind;
     bool pushed;
@@ -418,7 +418,7 @@ static error_t *sync_analyze_phase(
         }
 
         /* Analyze state */
-        upstream_info_t *info = NULL;
+        upstream_info_t info;
         error_t *err = upstream_analyze_profile(
             repo, remote_name, profiles->items[i], &info
         );
@@ -431,10 +431,9 @@ static error_t *sync_analyze_phase(
             continue;
         }
 
-        result->state = info->state;
-        result->ahead = info->ahead;
-        result->behind = info->behind;
-        upstream_info_free(info);
+        result->state = info.state;
+        result->ahead = info.ahead;
+        result->behind = info.behind;
 
         /* Update counters */
         switch (result->state) {
@@ -1326,13 +1325,13 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
     const config_t *config = ctx->config;
     output_t *out = ctx->out;
 
-    /* Declare all resources, initialized to NULL */
+    /* Declare all resources, initialized to NULL. */
     error_t *err = NULL;
     workspace_t *ws = NULL;
     scope_t *scope = NULL;
     sync_results_t *results = NULL;
-    char *remote_name = NULL;
-    char *remote_url = NULL;
+    const char *remote_name = NULL;
+    const char *remote_url = NULL;
     transfer_context_t *xfer = NULL;
     char *current_branch = NULL;
 
@@ -1388,8 +1387,12 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
         goto cleanup;
     }
 
-    /* Auto-detect remote early — fail fast before expensive workspace load */
-    err = upstream_detect_remote(repo, &remote_name);
+    /* Auto-detect remote early — fail fast before expensive workspace load.
+     * URL is resolved alongside the name; the credential helper consumes it
+     * when transfer_context_create runs further down. */
+    err = gitops_resolve_default_remote(
+        repo, ctx->arena, &remote_name, &remote_url
+    );
     if (err) {
         goto cleanup;
     }
@@ -1568,7 +1571,6 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
                 output_info(out, OUTPUT_VERBOSE, "  %zu untracked", untracked_count);
             }
 
-            output_newline(out, OUTPUT_NORMAL);
             output_info(out, OUTPUT_NORMAL, "Syncing before 'update' may hide remote conflicts.");
             output_newline(out, OUTPUT_NORMAL);
 
@@ -1589,21 +1591,14 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
         }
     }
 
-    /* Get remote URL for credential handling */
-    error_t *url_err = gitops_get_remote_url(repo, remote_name, &remote_url);
-    error_free(url_err);
-
-    /* Create transfer context for progress reporting. Ephemeral progress
-     * is enabled so the fetch progress line is cleared on completion,
-     * leaving a clean framing around sync's subsequent status output. */
+    /* Create transfer context for progress reporting. URL was resolved
+     * alongside the remote name above; it feeds the credential helper here */
     transfer_options_t xfer_opts = {
         .output             = out,
         .url                = remote_url,
         .ephemeral_progress = true,
     };
     err = transfer_context_create(&xfer_opts, &xfer);
-    free(remote_url);
-    remote_url = NULL;
     if (err) goto cleanup;
 
     /* Determine auto_pull setting: CLI --no-pull overrides config */
@@ -1901,8 +1896,6 @@ cleanup:
     if (current_branch) free(current_branch);
     if (ws) workspace_free(ws);
     if (xfer) transfer_context_free(xfer);
-    if (remote_url) free(remote_url);
-    if (remote_name) free(remote_name);
     if (results) sync_results_free(results);
     if (scope) scope_free(scope);
 

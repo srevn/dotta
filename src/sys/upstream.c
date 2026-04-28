@@ -5,9 +5,6 @@
 #include "sys/upstream.h"
 
 #include <git2.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
 
 #include "base/array.h"
 #include "base/error.h"
@@ -20,24 +17,15 @@ error_t *upstream_analyze_profile(
     git_repository *repo,
     const char *remote_name,
     const char *profile_name,
-    upstream_info_t **out_info
+    upstream_info_t *out
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(remote_name);
     CHECK_NULL(profile_name);
-    CHECK_NULL(out_info);
+    CHECK_NULL(out);
 
-    /* Allocate info structure */
-    upstream_info_t *info = calloc(1, sizeof(upstream_info_t));
-    if (!info) {
-        return ERROR(ERR_MEMORY, "Failed to allocate upstream info");
-    }
-
-    info->profile_name = strdup(profile_name);
-    if (!info->profile_name) {
-        free(info);
-        return ERROR(ERR_MEMORY, "Failed to allocate profile name");
-    }
+    /* Defined-state on every path; callers must not read after error. */
+    *out = (upstream_info_t){ .state = UPSTREAM_UNKNOWN };
 
     /* Build reference names */
     char local_refname[DOTTA_REFNAME_MAX];
@@ -49,7 +37,6 @@ error_t *upstream_analyze_profile(
         profile_name
     );
     if (err) {
-        upstream_info_free(info);
         return error_wrap(
             err, "Invalid profile name '%s'",
             profile_name
@@ -61,43 +48,32 @@ error_t *upstream_analyze_profile(
         remote_name, profile_name
     );
     if (err) {
-        upstream_info_free(info);
         return error_wrap(
             err, "Invalid remote/profile name '%s/%s'",
             remote_name, profile_name
         );
     }
 
-    /* Check local branch exists */
+    /* Local branch absent → UNKNOWN (already set above). */
     git_reference *local_ref = NULL;
     int git_err = git_reference_lookup(&local_ref, repo, local_refname);
     if (git_err == GIT_ENOTFOUND) {
-        info->exists_locally = false;
-        info->state = UPSTREAM_UNKNOWN;
-        *out_info = info;
         return NULL;
     } else if (git_err < 0) {
-        upstream_info_free(info);
         return error_from_git(git_err);
     }
-    info->exists_locally = true;
 
-    /* Check remote branch exists */
+    /* Remote branch absent → NO_REMOTE. */
     git_reference *remote_ref = NULL;
     git_err = git_reference_lookup(&remote_ref, repo, remote_refname);
     if (git_err == GIT_ENOTFOUND) {
-        /* No remote tracking branch */
         git_reference_free(local_ref);
-        info->exists_remotely = false;
-        info->state = UPSTREAM_NO_REMOTE;
-        *out_info = info;
+        out->state = UPSTREAM_NO_REMOTE;
         return NULL;
     } else if (git_err < 0) {
         git_reference_free(local_ref);
-        upstream_info_free(info);
         return error_from_git(git_err);
     }
-    info->exists_remotely = true;
 
     /* Get OIDs */
     const git_oid *local_oid = git_reference_target(local_ref);
@@ -106,7 +82,6 @@ error_t *upstream_analyze_profile(
     if (!local_oid || !remote_oid) {
         git_reference_free(local_ref);
         git_reference_free(remote_ref);
-        upstream_info_free(info);
         return ERROR(ERR_GIT, "Branch reference has no target OID");
     }
 
@@ -114,10 +89,7 @@ error_t *upstream_analyze_profile(
     if (git_oid_equal(local_oid, remote_oid)) {
         git_reference_free(local_ref);
         git_reference_free(remote_ref);
-        info->state = UPSTREAM_UP_TO_DATE;
-        info->ahead = 0;
-        info->behind = 0;
-        *out_info = info;
+        out->state = UPSTREAM_UP_TO_DATE;
         return NULL;
     }
 
@@ -130,37 +102,23 @@ error_t *upstream_analyze_profile(
     git_reference_free(remote_ref);
 
     if (git_err < 0) {
-        upstream_info_free(info);
         return error_from_git(git_err);
     }
 
-    info->ahead = ahead;
-    info->behind = behind;
+    out->ahead = ahead;
+    out->behind = behind;
 
-    /* Determine state */
     if (ahead > 0 && behind == 0) {
-        info->state = UPSTREAM_LOCAL_AHEAD;
+        out->state = UPSTREAM_LOCAL_AHEAD;
     } else if (ahead == 0 && behind > 0) {
-        info->state = UPSTREAM_REMOTE_AHEAD;
+        out->state = UPSTREAM_REMOTE_AHEAD;
     } else if (ahead > 0 && behind > 0) {
-        info->state = UPSTREAM_DIVERGED;
+        out->state = UPSTREAM_DIVERGED;
     } else {
-        info->state = UPSTREAM_UP_TO_DATE;
+        out->state = UPSTREAM_UP_TO_DATE;
     }
 
-    *out_info = info;
     return NULL;
-}
-
-/**
- * Free upstream info
- */
-void upstream_info_free(upstream_info_t *info) {
-    if (!info) {
-        return;
-    }
-    free(info->profile_name);
-    free(info);
 }
 
 /**
@@ -179,61 +137,18 @@ const char *upstream_state_symbol(upstream_state_t state) {
 }
 
 /**
- * Detect default remote name for tracking
+ * Get display color for upstream state
  */
-error_t *upstream_detect_remote(git_repository *repo, char **out_remote) {
-    CHECK_NULL(repo);
-    CHECK_NULL(out_remote);
-
-    *out_remote = NULL;
-
-    /* Get list of remotes */
-    git_strarray remotes = { 0 };
-    int git_err = git_remote_list(&remotes, repo);
-    if (git_err < 0) {
-        return error_from_git(git_err);
+output_color_t upstream_state_color(upstream_state_t state) {
+    switch (state) {
+        case UPSTREAM_UP_TO_DATE:   return OUTPUT_COLOR_GREEN;
+        case UPSTREAM_LOCAL_AHEAD:  return OUTPUT_COLOR_YELLOW;
+        case UPSTREAM_REMOTE_AHEAD: return OUTPUT_COLOR_YELLOW;
+        case UPSTREAM_DIVERGED:     return OUTPUT_COLOR_RED;
+        case UPSTREAM_NO_REMOTE:    return OUTPUT_COLOR_CYAN;
+        case UPSTREAM_UNKNOWN:
+        default:                    return OUTPUT_COLOR_DIM;
     }
-
-    if (remotes.count == 0) {
-        git_strarray_dispose(&remotes);
-        return ERROR(
-            ERR_NOT_FOUND, "No remotes configured\n"
-            "Hint: Add a remote with 'dotta remote add <name> <url>'"
-        );
-    }
-
-    /* Check if "origin" exists */
-    bool has_origin = false;
-    for (size_t i = 0; i < remotes.count; i++) {
-        if (strcmp(remotes.strings[i], "origin") == 0) {
-            has_origin = true;
-            break;
-        }
-    }
-
-    if (has_origin) {
-        *out_remote = strdup("origin");
-        git_strarray_dispose(&remotes);
-        return *out_remote ? NULL : ERROR(
-            ERR_MEMORY, "Failed to allocate remote name"
-        );
-    }
-
-    /* If exactly one remote, use it */
-    if (remotes.count == 1) {
-        *out_remote = strdup(remotes.strings[0]);
-        git_strarray_dispose(&remotes);
-        return *out_remote ? NULL : ERROR(
-            ERR_MEMORY, "Failed to allocate remote name"
-        );
-    }
-
-    /* Multiple remotes, no origin - need explicit remote name */
-    git_strarray_dispose(&remotes);
-    return ERROR(
-        ERR_INVALID_ARG, "Multiple remotes configured, but no 'origin' found\n"
-        "Hint: Specify remote explicitly or rename preferred remote to 'origin'"
-    );
 }
 
 /**

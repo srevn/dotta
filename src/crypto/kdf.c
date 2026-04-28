@@ -167,11 +167,14 @@ error_t *kdf_master_key(
 
     /* Build Argon2 inputs.
      *
-     * lanes = 1: monocypher is single-threaded; the Argon2 standard
-     * lanes-=-4 recommendation requires parallel computation that
-     * monocypher does not support. With lanes=1 the memory hardness
-     * metric is `nb_blocks * passes`; sketch §3.2 documents how the
-     * preset numbers compensate via pass count.
+     * lanes = 1: monocypher accepts nb_lanes > 1 only for output
+     * compatibility with parallel Argon2 implementations — it
+     * simulates lanes sequentially, so any value > 1 costs strictly
+     * more time for the same memory hardness. RFC 9106's lanes = 4
+     * recommendation assumes real parallelism that monocypher does
+     * not provide. With lanes = 1 the memory hardness metric is
+     * `nb_blocks * passes`; sketch §3.2 documents how the preset
+     * numbers compensate via pass count.
      *
      * `nb_blocks` is in 1024-byte Argon2 blocks: memory_mib MiB =
      * memory_mib * 1024 blocks. Bounded by KDF_ARGON2_MEMORY_MIB_MAX

@@ -82,8 +82,8 @@ struct config {
     /* Argon2id derivation parameters resolved at config_load.
      *
      * Either set the user-friendly `strength` preset (fast/balanced/paranoid)
-     * or override the raw `argon2_memory_mib` / `argon2_passes` pair; the
-     * parser materialises the resolved values into the two fields below.
+     * or override the raw `memory` (MiB) / `passes` pair; the parser
+     * materialises the resolved values into the two fields below.
      * Defaults to the "balanced" preset (256 MiB, 3 passes ≈ 1 s on
      * commodity hardware).
      *

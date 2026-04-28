@@ -52,51 +52,35 @@ static void print_upstream_state(
     }
 
     const char *symbol = upstream_state_symbol(info->state);
-    output_color_t color;
-    char label[64];
+    output_color_t color = upstream_state_color(info->state);
+    char label[32];
 
     switch (info->state) {
-        case UPSTREAM_UP_TO_DATE:
-            color = OUTPUT_COLOR_GREEN;
-            snprintf(
-                label, sizeof(label),
-                "[%s]", symbol
-            );
-            break;
         case UPSTREAM_LOCAL_AHEAD:
-            color = OUTPUT_COLOR_YELLOW;
             snprintf(
-                label, sizeof(label),
-                "[%s%zu]", symbol, info->ahead
+                label, sizeof(label), "[%s%zu]",
+                symbol, info->ahead
             );
             break;
         case UPSTREAM_REMOTE_AHEAD:
-            color = OUTPUT_COLOR_YELLOW;
             snprintf(
-                label, sizeof(label),
-                "[%s%zu]", symbol, info->behind
+                label, sizeof(label), "[%s%zu]",
+                symbol, info->behind
             );
             break;
         case UPSTREAM_DIVERGED:
-            color = OUTPUT_COLOR_RED;
             snprintf(
-                label, sizeof(label),
-                "[%s%zu+%zu]", symbol, info->ahead, info->behind
+                label, sizeof(label), "[%s%zu+%zu]",
+                symbol, info->ahead, info->behind
             );
             break;
+        case UPSTREAM_UP_TO_DATE:
         case UPSTREAM_NO_REMOTE:
-            color = OUTPUT_COLOR_CYAN;
-            snprintf(
-                label, sizeof(label),
-                "[%s]", symbol
-            );
-            break;
         case UPSTREAM_UNKNOWN:
         default:
-            color = OUTPUT_COLOR_DIM;
             snprintf(
-                label, sizeof(label),
-                "[%s]", symbol
+                label, sizeof(label), "[%s]",
+                symbol
             );
             break;
     }
@@ -114,11 +98,13 @@ static void print_upstream_state(
 static error_t *list_profiles(
     git_repository *repo,
     state_t *state,
+    arena_t *arena,
     const cmd_list_options_t *opts,
     output_t *out
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(state);
+    CHECK_NULL(arena);
     CHECK_NULL(opts);
     CHECK_NULL(out);
 
@@ -138,10 +124,10 @@ static error_t *list_profiles(
     }
 
     /* Detect remote if --remote flag is set */
-    char *remote_name = NULL;
+    const char *remote_name = NULL;
     bool show_remote = false;
     if (opts->remote) {
-        err = upstream_detect_remote(repo, &remote_name);
+        err = gitops_resolve_default_remote(repo, arena, &remote_name, NULL);
         if (err) {
             output_warning(
                 out, OUTPUT_NORMAL, "Could not detect remote: %s",
@@ -277,11 +263,10 @@ static error_t *list_profiles(
 
         /* Remote: Add tracking state */
         if (show_remote) {
-            upstream_info_t *info = NULL;
+            upstream_info_t info;
             error_t *upstream_err = upstream_analyze_profile(repo, remote_name, profile, &info);
-            if (!upstream_err && info) {
-                print_upstream_state(out, info);
-                upstream_info_free(info);
+            if (!upstream_err) {
+                print_upstream_state(out, &info);
             } else {
                 error_free(upstream_err);
             }
@@ -312,8 +297,6 @@ static error_t *list_profiles(
         );
     }
 
-    /* Cleanup */
-    free(remote_name);
     string_array_free(branches);
 
     return NULL;
@@ -752,7 +735,7 @@ error_t *cmd_list(const dotta_ctx_t *ctx, const cmd_list_options_t *opts) {
 
     /* Dispatch to appropriate list function based on mode */
     if (opts->mode == LIST_PROFILES) {
-        err = list_profiles(repo, ctx->state, opts, out);
+        err = list_profiles(repo, ctx->state, ctx->arena, opts, out);
     } else if (opts->mode == LIST_FILES) {
         err = list_files(repo, opts, out);
     } else if (opts->mode == LIST_FILE_HISTORY) {

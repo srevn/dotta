@@ -12,6 +12,7 @@
 #include <string.h>
 #include <unistd.h>
 
+#include "base/arena.h"
 #include "base/array.h"
 #include "base/error.h"
 #include "base/string.h"
@@ -1820,6 +1821,86 @@ error_t *gitops_get_remote_url(
     if (!*out_url) {
         return ERROR(ERR_MEMORY, "Failed to duplicate remote URL");
     }
+
+    return NULL;
+}
+
+error_t *gitops_resolve_default_remote(
+    git_repository *repo,
+    arena_t *arena,
+    const char **out_name,
+    const char **out_url
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(arena);
+    CHECK_NULL(out_name);
+
+    *out_name = NULL;
+    if (out_url) *out_url = NULL;
+
+    git_strarray remotes = { 0 };
+    int git_err = git_remote_list(&remotes, repo);
+    if (git_err < 0) {
+        return error_from_git(git_err);
+    }
+
+    if (remotes.count == 0) {
+        git_strarray_dispose(&remotes);
+        return ERROR(
+            ERR_NOT_FOUND, "No remotes configured\n"
+            "Hint: Add a remote with 'dotta remote add <name> <url>'"
+        );
+    }
+
+    /* Select: "origin" wins; otherwise sole remote; otherwise ambiguous. */
+    const char *selected = NULL;
+    for (size_t i = 0; i < remotes.count; i++) {
+        if (strcmp(remotes.strings[i], "origin") == 0) {
+            selected = "origin";
+            break;
+        }
+    }
+    if (!selected && remotes.count == 1) {
+        selected = remotes.strings[0];
+    }
+    if (!selected) {
+        git_strarray_dispose(&remotes);
+        return ERROR(
+            ERR_INVALID_ARG,
+            "Multiple remotes configured, but no 'origin' found\n"
+            "Hint: Specify remote explicitly or rename preferred remote to 'origin'"
+        );
+    }
+
+    const char *name = arena_strdup(arena, selected);
+    git_strarray_dispose(&remotes);
+    if (!name) {
+        return ERROR(ERR_MEMORY, "Failed to allocate remote name");
+    }
+
+    /* URL is optional. A remote without URL is legal — credentialed
+     * transfer tolerates a NULL URL — so leave *out_url = NULL on that
+     * branch instead of erroring. */
+    if (out_url) {
+        git_remote *remote = NULL;
+        int lookup_err = git_remote_lookup(&remote, repo, name);
+        if (lookup_err < 0) {
+            return error_from_git(lookup_err);
+        }
+
+        const char *url = git_remote_url(remote);
+        if (url) {
+            *out_url = arena_strdup(arena, url);
+            git_remote_free(remote);
+            if (!*out_url) {
+                return ERROR(ERR_MEMORY, "Failed to allocate remote URL");
+            }
+        } else {
+            git_remote_free(remote);
+        }
+    }
+
+    *out_name = name;
 
     return NULL;
 }

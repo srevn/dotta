@@ -1215,10 +1215,10 @@ static error_t *delete_profile_branch(
     CHECK_NULL(arena);
     CHECK_NULL(opts);
 
-    /* Initialize all resources to NULL for safe cleanup */
+    /* Initialize all resources to NULL */
     error_t *err = NULL;
-    char *remote_name = NULL;
-    upstream_info_t *upstream_info = NULL;
+    const char *remote_name = NULL;
+    const char *remote_url = NULL;
     string_array_t *all_profiles = NULL;
     string_array_t *files = NULL;
     string_array_t *hook_fs_paths = NULL;
@@ -1291,23 +1291,29 @@ static error_t *delete_profile_branch(
     bool has_unpushed = false;
     bool is_local_only = false;
 
-    err = upstream_detect_remote(repo, &remote_name);
+    /* Resolve remote name + URL up-front: the URL feeds the credential
+     * helper for the deletion-push xfer further down (see line where
+     * transfer_context_create is called). One resolve, two consumers. */
+    err = gitops_resolve_default_remote(
+        repo, arena, &remote_name, &remote_url
+    );
     if (!err && remote_name) {
         /* Remote exists - check upstream state */
+        upstream_info_t upstream_info;
         err = upstream_analyze_profile(
             repo, remote_name, opts->profile, &upstream_info
         );
-        if (!err && upstream_info) {
+        if (!err) {
             /* Determine if profile has actual remote tracking */
-            if (upstream_info->state == UPSTREAM_NO_REMOTE) {
+            if (upstream_info.state == UPSTREAM_NO_REMOTE) {
                 /* Profile exists locally but was never pushed to remote */
                 is_local_only = true;
-            } else if (upstream_info->state == UPSTREAM_LOCAL_AHEAD ||
-                upstream_info->state == UPSTREAM_DIVERGED){
+            } else if (upstream_info.state == UPSTREAM_LOCAL_AHEAD ||
+                upstream_info.state == UPSTREAM_DIVERGED){
                 /* Profile has remote tracking and has unpushed changes */
                 has_unpushed = true;
             }
-        } else if (err) {
+        } else {
             /* Non-fatal: can't determine upstream state */
             error_free(err);
             err = NULL;
@@ -1331,12 +1337,6 @@ static error_t *delete_profile_branch(
             out, OUTPUT_VERBOSE, "Note: Profile '%s' is local-only (not pushed to remote)",
             opts->profile
         );
-    }
-
-    /* Free upstream_info after we're done using is_local_only */
-    if (upstream_info) {
-        upstream_info_free(upstream_info);
-        upstream_info = NULL;
     }
 
     /* Informational queries and enabled check on the borrowed state. Under
@@ -1585,17 +1585,12 @@ static error_t *delete_profile_branch(
             remote_name
         );
 
-        /* Resolve remote URL for credential handling. A NULL url is legal
-         * (unauthenticated paths still work); if the lookup fails we let
-         * the push attempt with whatever SSH/default auth is available. */
-        char *del_url = NULL;
-        error_t *del_url_err = gitops_get_remote_url(repo, remote_name, &del_url);
-        error_free(del_url_err);
-
+        /* remote_url was resolved alongside remote_name above. NULL is
+         * legal — unauthenticated paths still work, helper approve/reject
+         * become no-ops. */
         transfer_context_t *del_xfer = NULL;
-        transfer_options_t del_opts = { .output = out, .url = del_url };
+        transfer_options_t del_opts = { .output = out, .url = remote_url };
         error_t *del_xfer_err = transfer_context_create(&del_opts, &del_xfer);
-        free(del_url);
 
         if (del_xfer_err) {
             output_warning(
@@ -1632,9 +1627,6 @@ static error_t *delete_profile_branch(
         } else {
             output_info(out, OUTPUT_NORMAL, "Profile deletion pushed to remote");
         }
-
-        free(remote_name);
-        remote_name = NULL;
     }
 
     /*
@@ -1673,8 +1665,6 @@ cleanup:
 
     if (hook_fs_paths) string_array_free(hook_fs_paths);
     if (hook_custom_prefix) free(hook_custom_prefix);
-    if (upstream_info) upstream_info_free(upstream_info);
-    if (remote_name) free(remote_name);
     if (files) string_array_free(files);
     if (all_profiles) string_array_free(all_profiles);
 

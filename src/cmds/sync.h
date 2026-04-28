@@ -13,11 +13,6 @@
 #include <runtime.h>
 #include <types.h>
 
-#include "sys/upstream.h"
-
-/* Use upstream module's state tracking */
-typedef upstream_state_t sync_branch_state_t;
-
 /**
  * Divergence resolution strategy for sync command
  *

@@ -12,8 +12,14 @@
 #include <stdbool.h>
 #include <types.h>
 
+#include "base/output.h"
+
 /**
  * Sync state for a profile relative to remote
+ *
+ * UNKNOWN encodes "no local branch": the analysis could not start.
+ * NO_REMOTE encodes "local branch exists but no remote tracking branch."
+ * The other four states all imply both branches exist.
  */
 typedef enum {
     UPSTREAM_UP_TO_DATE,   /* Local and remote are identical */
@@ -25,39 +31,37 @@ typedef enum {
 } upstream_state_t;
 
 /**
- * Remote profile metadata
+ * Sync state plus commit counts.
+ *
+ * `ahead` and `behind` are meaningful only when state is one of
+ * LOCAL_AHEAD / REMOTE_AHEAD / DIVERGED / UP_TO_DATE; for NO_REMOTE
+ * and UNKNOWN they are zero.
  */
 typedef struct {
-    char *profile_name;          /* Profile/branch name */
-    bool exists_locally;         /* Local branch exists */
-    bool exists_remotely;        /* Remote tracking branch exists */
-    upstream_state_t state;      /* Sync state */
-    size_t ahead;                /* Commits ahead of remote */
-    size_t behind;               /* Commits behind remote */
+    upstream_state_t state;
+    size_t ahead;
+    size_t behind;
 } upstream_info_t;
 
 /**
  * Analyze upstream state for a single profile
  *
  * Compares local branch with remote tracking branch to determine sync state.
+ * Zero-initializes *out at function entry so the struct is in a defined
+ * state on every code path; callers must not read *out after an error.
  *
  * @param repo Repository (must not be NULL)
  * @param remote_name Remote name (e.g., "origin")
  * @param profile_name Profile/branch name
- * @param out_info Upstream info (caller must free with upstream_info_free)
+ * @param out Upstream info (must not be NULL; populated on success)
  * @return Error or NULL on success
  */
 error_t *upstream_analyze_profile(
     git_repository *repo,
     const char *remote_name,
     const char *profile_name,
-    upstream_info_t **out_info
+    upstream_info_t *out
 );
-
-/**
- * Free upstream info
- */
-void upstream_info_free(upstream_info_t *info);
 
 /**
  * Get compact symbol for upstream state
@@ -65,6 +69,22 @@ void upstream_info_free(upstream_info_t *info);
  * Returns symbols like "=", "↑", "↓", "↕" for display
  */
 const char *upstream_state_symbol(upstream_state_t state);
+
+/**
+ * Get display color for an upstream state.
+ *
+ * Sibling to upstream_state_symbol — pure function of state, no policy:
+ *   UP_TO_DATE   → GREEN
+ *   LOCAL_AHEAD  → YELLOW   (we have local changes to push)
+ *   REMOTE_AHEAD → YELLOW   (remote has changes to pull)
+ *   DIVERGED     → RED      (manual resolution required)
+ *   NO_REMOTE    → CYAN     (informational, not an issue)
+ *   UNKNOWN      → DIM      (state could not be determined)
+ *
+ * Centralizing the map keeps every display path in agreement on what each
+ * state looks like.
+ */
+output_color_t upstream_state_color(upstream_state_t state);
 
 /**
  * Discover remote branches that don't exist locally
@@ -112,20 +132,5 @@ error_t *upstream_create_tracking_branch(
     const char *remote_name,
     const char *branch_name
 );
-
-/**
- * Detect default remote name for tracking
- *
- * Strategy:
- *   1. Prefer "origin" if it exists (standard convention)
- *   2. If exactly one remote, use it
- *   3. If multiple remotes without origin, error (require explicit choice)
- *   4. If no remotes, error with helpful hint
- *
- * @param repo Repository (must not be NULL)
- * @param out_remote Remote name (caller must free)
- * @return Error or NULL on success
- */
-error_t *upstream_detect_remote(git_repository *repo, char **out_remote);
 
 #endif /* DOTTA_UPSTREAM_H */

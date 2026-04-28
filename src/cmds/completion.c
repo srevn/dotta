@@ -61,7 +61,7 @@ static void complete_enabled_profiles(state_t *state) {
  * Lists all local branches and remote-tracking branches,
  * excluding the internal dotta-worktree branch.
  */
-static void complete_all_profiles(git_repository *repo) {
+static void complete_all_profiles(git_repository *repo, arena_t *arena) {
     /* 1. Local branches */
     string_array_t *branches = NULL;
     error_t *err = gitops_list_branches(repo, &branches);
@@ -79,8 +79,8 @@ static void complete_all_profiles(git_repository *repo) {
     }
 
     /* 2. Remote tracking branches */
-    char *remote_name = NULL;
-    if (upstream_detect_remote(repo, &remote_name) == NULL) {
+    const char *remote_name = NULL;
+    if (gitops_resolve_default_remote(repo, arena, &remote_name, NULL) == NULL) {
         string_array_t *remote_branches = NULL;
         if (upstream_discover_branches(repo, remote_name, &remote_branches) == NULL) {
             string_array_sort(remote_branches);
@@ -92,7 +92,6 @@ static void complete_all_profiles(git_repository *repo) {
             }
             string_array_free(remote_branches);
         }
-        free(remote_name);
     }
 
     if (branches) {
@@ -306,9 +305,7 @@ error_t *cmd_completion(const dotta_ctx_t *ctx, const cmd_completion_options_t *
              * Repo presence is the signal; silent_failure turns a
              * missing repo into exit 1 with no output. */
             if (!repo) {
-                return error_create(
-                    ERR_NOT_FOUND, "not in a dotta repository"
-                );
+                return error_create(ERR_NOT_FOUND, "not in a dotta repository");
             }
             break;
 
@@ -317,7 +314,7 @@ error_t *cmd_completion(const dotta_ctx_t *ctx, const cmd_completion_options_t *
                 return NULL;
             }
             if (opts->all) {
-                complete_all_profiles(repo);
+                complete_all_profiles(repo, ctx->arena);
             } else {
                 complete_enabled_profiles(state);
             }

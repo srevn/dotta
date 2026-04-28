@@ -427,9 +427,8 @@ auto_encrypt = [
 # so this is the parameter that meaningfully resists brute-force on
 # GPUs / ASICs.
 #
-# Each key derivation temporarily allocates `argon2_memory_mib` MiB of
-# RAM and reads it `argon2_passes` times. On commodity hardware
-# (2024-era laptop):
+# Each key derivation temporarily allocates `memory` MiB of RAM and
+# reads it `passes` times. On commodity hardware (2024-era laptop):
 #
 #   - "fast"       64 MiB,  3 passes   ≈ 250–400 ms   (CI / test)
 #   - "balanced"  256 MiB,  3 passes   ≈ 1.0 s        (recommended)
@@ -447,19 +446,18 @@ auto_encrypt = [
 strength = "balanced"
 
 # Raw Argon2id parameter overrides (advanced).
-# When set, both `argon2_memory_mib` and `argon2_passes` MUST be set
-# together — setting only one is a config error. When both are set,
-# `strength` is ignored.
+# When set, both `memory` and `passes` MUST be set together — setting
+# only one is a config error. When both are set, `strength` is ignored.
 #
 # Bounds:
-#   argon2_memory_mib in [8, 4096] MiB
-#   argon2_passes     in [1, 20]
+#   memory in [8, 4096]  (units: MiB)
+#   passes in [1, 20]
 #
 # Defaults come from the chosen `strength` preset; the lines below are
 # illustrative and intentionally commented out.
 #
-# argon2_memory_mib = 256
-# argon2_passes     = 3
+# memory = 256   # MiB
+# passes = 3
 
 # Session Timeout
 # How long (in seconds) to cache the encryption key

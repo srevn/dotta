@@ -209,20 +209,23 @@ static void print_manifest_disable_stats(
 static error_t *profile_list(
     git_repository *repo,
     state_t *state,
+    arena_t *arena,
     const cmd_profile_options_t *opts,
     output_t *out
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(state);
+    CHECK_NULL(arena);
     CHECK_NULL(opts);
     CHECK_NULL(out);
 
-    /* Resource tracking for cleanup */
+    /* Resource tracking for cleanup. remote_name/remote_url are
+     * arena-borrowed when the --remote branch resolves them. */
     string_array_t *enabled_profiles = NULL;
     string_array_t *all_branches = NULL;
     string_array_t *available = NULL;
-    char *remote_name = NULL;
-    char *remote_url = NULL;
+    const char *remote_name = NULL;
+    const char *remote_url = NULL;
     transfer_context_t *xfer = NULL;
     string_array_t *remote_branches = NULL;
     string_array_t *remote_only = NULL;
@@ -329,7 +332,9 @@ static error_t *profile_list(
 
     /* Show remote profiles if requested */
     if (opts->show_remote) {
-        error_t *remote_err = upstream_detect_remote(repo, &remote_name);
+        error_t *remote_err = gitops_resolve_default_remote(
+            repo, arena, &remote_name, &remote_url
+        );
         if (remote_err) {
             output_warning(
                 out, OUTPUT_NORMAL, "Could not detect remote: %s",
@@ -337,10 +342,6 @@ static error_t *profile_list(
             );
             error_free(remote_err);
         } else {
-            /* Get remote URL for credential handling */
-            error_t *url_err = gitops_get_remote_url(repo, remote_name, &remote_url);
-            error_free(url_err);
-
             /* Create transfer context for credentials */
             transfer_options_t xfer_opts = {
                 .output = out,
@@ -395,12 +396,10 @@ static error_t *profile_list(
     }
 
 cleanup:
-    /* Cleanup all resources */
+    /* Cleanup all resources. remote_name/remote_url are arena-borrowed. */
     string_array_free(remote_only);
     string_array_free(remote_branches);
     transfer_context_free(xfer);
-    free(remote_url);
-    free(remote_name);
     string_array_free(available);
     string_array_free(all_branches);
     string_array_free(enabled_profiles);
@@ -415,16 +414,19 @@ cleanup:
  */
 static error_t *profile_fetch(
     git_repository *repo,
+    arena_t *arena,
     const cmd_profile_options_t *opts,
     output_t *out
 ) {
     CHECK_NULL(repo);
+    CHECK_NULL(arena);
     CHECK_NULL(opts);
     CHECK_NULL(out);
 
-    /* Resource tracking for cleanup */
-    char *remote_name = NULL;
-    char *remote_url = NULL;
+    /* Resource tracking for cleanup. remote_name/remote_url are
+     * arena-borrowed. */
+    const char *remote_name = NULL;
+    const char *remote_url = NULL;
     transfer_context_t *xfer = NULL;
     string_array_t *remote_branches = NULL;
     error_t *err = NULL;
@@ -433,16 +435,14 @@ static error_t *profile_fetch(
     size_t fetched_count = 0;
     size_t failed_count = 0;
 
-    /* Detect remote */
-    err = upstream_detect_remote(repo, &remote_name);
+    /* Detect remote (name + URL — URL feeds the credential helper). */
+    err = gitops_resolve_default_remote(
+        repo, arena, &remote_name, &remote_url
+    );
     if (err) {
         err = error_wrap(err, "No remote configured");
         goto cleanup;
     }
-
-    /* Get remote URL for credential handling */
-    error_t *url_err = gitops_get_remote_url(repo, remote_name, &remote_url);
-    error_free(url_err);
 
     /* Create transfer context for progress reporting and credentials */
     transfer_options_t xfer_opts = {
@@ -632,8 +632,6 @@ cleanup:
     /* Cleanup all resources */
     string_array_free(remote_branches);
     transfer_context_free(xfer);
-    free(remote_url);
-    free(remote_name);
 
     /* If there's an error, return it now */
     if (err) {
@@ -1746,11 +1744,11 @@ error_t *cmd_profile(const dotta_ctx_t *ctx, const cmd_profile_options_t *opts) 
     error_t *result = NULL;
     switch (opts->subcommand) {
         case PROFILE_LIST:
-            result = profile_list(repo, state, opts, out);
+            result = profile_list(repo, state, ctx->arena, opts, out);
             break;
 
         case PROFILE_FETCH:
-            result = profile_fetch(repo, opts, out);
+            result = profile_fetch(repo, ctx->arena, opts, out);
             break;
 
         case PROFILE_ENABLE:

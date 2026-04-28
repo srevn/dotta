@@ -63,6 +63,9 @@ struct keymgr {
     uint8_t current_passes;
     int32_t session_timeout;        /* seconds; 0 = always prompt, -1 = never expire */
 
+    /* Per-repo Argon2id salt — set at create time, never mutated.*/
+    uint8_t salt[KDF_SALT_SIZE];
+
     /* Cache slot — params recorded so cross-params transitions can
      * detect a stale slot and evict before re-deriving. */
     bool has_key;
@@ -154,9 +157,11 @@ static void install_slot(
 
 error_t *keymgr_create(
     const config_t *config,
+    const uint8_t salt[KDF_SALT_SIZE],
     keymgr **out
 ) {
     CHECK_NULL(config);
+    CHECK_NULL(salt);
     CHECK_NULL(out);
 
     keymgr *km = calloc(1, sizeof(*km));
@@ -168,6 +173,7 @@ error_t *keymgr_create(
     km->current_memory_mib = config->encryption_argon2_memory_mib;
     km->current_passes = config->encryption_argon2_passes;
     km->session_timeout = config->session_timeout;
+    memcpy(km->salt, salt, KDF_SALT_SIZE);
 
     /* Best-effort mlock to keep the cached master off swap. Failure
      * is non-fatal; the advisory is process-wide so the user sees
@@ -258,7 +264,7 @@ static bool try_disk_hit(
     uint16_t loaded_memory_mib = 0;
     uint8_t loaded_passes = 0;
     error_t *err = session_load(
-        out_master_key, &loaded_memory_mib, &loaded_passes
+        out_master_key, &loaded_memory_mib, &loaded_passes, km->salt
     );
 
     if (err == NULL) {
@@ -374,7 +380,7 @@ static error_t *derive_and_install(
     uint8_t out_master_key[KDF_KEY_SIZE]
 ) {
     error_t *err = kdf_master_key(
-        passphrase, passphrase_len,
+        passphrase, passphrase_len, km->salt,
         target_memory_mib, target_passes,
         out_master_key
     );
@@ -400,7 +406,7 @@ static error_t *derive_and_install(
         && target_passes == km->current_passes) {
         error_t *save_err = session_save(
             out_master_key, target_memory_mib, target_passes,
-            km->session_timeout
+            km->salt, km->session_timeout
         );
         if (save_err) {
             /* Non-fatal. The in-memory slot is authoritative for this
@@ -521,7 +527,7 @@ error_t *keymgr_set_passphrase(
      * success. */
     uint8_t new_master[KDF_KEY_SIZE];
     error_t *err = kdf_master_key(
-        passphrase, passphrase_len, km->current_memory_mib,
+        passphrase, passphrase_len, km->salt, km->current_memory_mib,
         km->current_passes, new_master
     );
 
@@ -550,7 +556,7 @@ error_t *keymgr_set_passphrase(
     /* Persist to disk so the next process inherits the cached key. */
     error_t *save_err = session_save(
         new_master, km->current_memory_mib, km->current_passes,
-        km->session_timeout
+        km->salt, km->session_timeout
     );
     if (save_err) {
         fprintf(
@@ -594,7 +600,9 @@ bool keymgr_probe_key(keymgr *km) {
     uint8_t loaded[KDF_KEY_SIZE];
     uint16_t loaded_memory_mib = 0;
     uint8_t loaded_passes = 0;
-    error_t *err = session_load(loaded, &loaded_memory_mib, &loaded_passes);
+    error_t *err = session_load(
+        loaded, &loaded_memory_mib, &loaded_passes, km->salt
+    );
     if (err) {
         /* ERR_NOT_FOUND, ERR_CRYPTO, ERR_FS — all "no current key
          * available without prompting". Forget the error; probe is a

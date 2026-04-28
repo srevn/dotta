@@ -28,8 +28,22 @@
 #define DOTTA_MESSAGE_MAX 512    /* For commit messages and prompts */
 
 /**
- * Repository operations
- */
+  * Build a commit signature with fallback for missing git config.
+  *
+  * Tries git_signature_default first (reads user.name / user.email from
+  * .gitconfig); on failure (common on fresh machines before dotfiles are
+  * deployed) falls back to "$USER@$HOSTNAME" via getenv / gethostname,
+  * defaulting to "dotta@localhost" when even those are unavailable.
+  *
+  * Used by every dotta path that creates a commit object — orphan-branch
+  * creation, profile commits, and the repository config ref. Caller frees
+  * the returned signature via `git_signature_free`.
+  *
+  * @param out  Output signature (caller frees with git_signature_free)
+  * @param repo Repository (must not be NULL)
+  * @return Error or NULL on success
+  */
+ error_t *gitops_get_signature(git_signature **out, git_repository *repo);
 
 /**
  * Open git repository at path

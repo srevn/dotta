@@ -25,6 +25,7 @@
 #include "core/profiles.h"
 #include "core/state.h"
 #include "infra/path.h"
+#include "infra/salt.h"
 #include "sys/bootstrap.h"
 #include "sys/gitops.h"
 #include "sys/transfer.h"
@@ -402,6 +403,26 @@ error_t *cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
     if (err) {
         final_err = error_wrap(err, "Failed to clone repository");
         goto cleanup;
+    }
+
+    /* Fetch the synced repo-wide config ref (refs/dotta/salt) before
+     * any encryption-touching path runs. The ref carries the per-repo
+     * Argon2id salt; without it, every encrypted blob is undecryptable. */
+    err = salt_fetch(repo, "origin", xfer);
+    if (err) {
+        if (err->code == ERR_NOT_FOUND) {
+            output_warning(
+                out, OUTPUT_NORMAL,
+                "Remote does not advertise %s. Encryption operations "
+                "will fail until the ref is fetched or 'dotta init' is "
+                "run locally.", SALT_REF
+            );
+            error_free(err);
+            err = NULL;
+        } else {
+            final_err = error_wrap(err, "Failed to fetch repository config");
+            goto cleanup;
+        }
     }
 
     /* Determine which profiles to fetch */

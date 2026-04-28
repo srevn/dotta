@@ -9,19 +9,29 @@
  * File format (108 bytes; little-endian; fully specified in session.c):
  *
  *     magic[8]            "DOTTASES"
- *     version             SESSION_CACHE_VERSION (= 0x02)
+ *     version             SESSION_CACHE_VERSION (= 0x03)
  *     memory_mib_le[2]    LE16 — Argon2 memory params for this key
  *     passes              uint8 — Argon2 pass count
  *     created_at_le[8]    LE64 — Unix seconds, informational
  *     expires_at_le[8]    LE64 — Unix seconds; 0 = never expire
  *     machine_salt[16]    entropy_fill
  *     obfuscated_key[32]  master XOR XChaCha20(cache_key, zero_nonce)
- *     mac[32]             keyed BLAKE2b over bytes [0..76)
+ *     mac[32]             keyed BLAKE2b over bytes [0..76) AND repo_salt
  *
  * The cached key is bound to the Argon2 params it was derived under.
  * keymgr consults those params before installing the cached key —
  * different params yield no install, just a fresh prompt under the
  * target params.
+ *
+ * The cached key is ALSO bound to the per-repo Argon2id salt via the
+ * MAC input: a cache produced under repo A's salt fails MAC verification
+ * when loaded against repo B's salt. The salt itself is not stored in
+ * the file (the caller supplies it on every save/load); binding via the
+ * MAC means the consequences of a mismatch are uniform with every other
+ * "wrong cache" failure (unlink + ERR_CRYPTO + fresh prompt). Without
+ * this binding, two repos sharing a passphrase would silently swap
+ * masters via the cache, and the failure would surface confusingly as
+ * a downstream SIV "authentication failed".
  *
  * Security properties:
  *   - Obfuscated, not encrypted. The stored key is XORed with a
@@ -71,11 +81,15 @@
  *
  * The (memory_mib, passes) parameters live alongside the key so the
  * loader can decide whether the cached master matches the params the
- * caller is asking about.
+ * caller is asking about. The 32-byte `repo_salt` is bound into the
+ * MAC input — see header file overview for the cross-repo confusion
+ * threat this defends against — and is NOT persisted in the file.
  *
  * @param master_key      Secret to persist (32 bytes; non-NULL)
  * @param memory_mib      Argon2 memory params (validated)
  * @param passes          Argon2 pass count (validated)
+ * @param repo_salt       Per-repo Argon2id salt (32 bytes; non-NULL;
+ *                        bound into MAC, not stored in the cache file)
  * @param timeout_seconds > 0: cache expires this many seconds from now;
  *                        < 0: cache never expires;
  *                        0:  caller must not invoke — always-prompt
@@ -88,6 +102,7 @@ error_t *session_save(
     const uint8_t master_key[KDF_KEY_SIZE],
     uint16_t memory_mib,
     uint8_t passes,
+    const uint8_t repo_salt[KDF_SALT_SIZE],
     int32_t timeout_seconds
 );
 
@@ -98,23 +113,29 @@ error_t *session_save(
  *   1. regular file, mode 0600, owned by the current uid
  *   2. exactly SESSION_FILE_SIZE bytes
  *   3. magic + version
- *   4. MAC (constant-time) under cache_key derived from machine identity
+ *   4. MAC (constant-time) under cache_key derived from machine identity,
+ *      with `repo_salt` absorbed as additional MAC input
  *   5. expiry (wall-clock)
  *   6. recorded Argon2 params within KDF_ARGON2_*_MIN/MAX
  *
  * MAC verification fires before expiry so trusted bytes drive the
  * comparison. File-caused failures (corruption, mismatch, expiry,
  * wrong perms) unlink the file so the next call starts fresh;
- * transient I/O failure leaves the file in place.
+ * transient I/O failure leaves the file in place. A cache produced
+ * under a different `repo_salt` fails MAC verification — same
+ * unlink-and-reprompt path as any other tampered cache.
  *
  * @param out_master_key Buffer for the 32-byte secret (caller wipes
  *                       after use via crypto_wipe)
  * @param out_memory_mib Argon2 memory params (set on success only)
  * @param out_passes     Argon2 pass count (set on success only)
+ * @param repo_salt      Per-repo Argon2id salt (32 bytes; non-NULL;
+ *                       bound into MAC; cross-repo mismatch surfaces
+ *                       as ERR_CRYPTO)
  * @return NULL on success;
  *         ERR_NOT_FOUND if missing or expired;
  *         ERR_CRYPTO for corruption / bad perms / version mismatch /
- *             MAC failure;
+ *             MAC failure (including cross-repo cache);
  *         ERR_FS for unexpected I/O errors.
  *
  * Every error path scrubs `out_master_key` via crypto_wipe before
@@ -124,7 +145,8 @@ error_t *session_save(
 error_t *session_load(
     uint8_t out_master_key[KDF_KEY_SIZE],
     uint16_t *out_memory_mib,
-    uint8_t *out_passes
+    uint8_t *out_passes,
+    const uint8_t repo_salt[KDF_SALT_SIZE]
 );
 
 /**

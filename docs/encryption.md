@@ -13,6 +13,23 @@ Enable encryption in `~/.config/dotta/config.toml`:
 enabled = true
 ```
 
+## Repository Salt
+
+Each dotta repository has its own 32-byte Argon2id salt, generated automatically at `dotta init`. The salt makes every dotta repository a distinct cracking target: a precomputation table built against one repo's passphrase guesses cannot be reused against any other.
+
+The salt lives at `refs/dotta/salt:salt` and travels with the repository — `dotta clone` fetches it, `dotta sync` pushes it. There is nothing to configure or remember; the salt is public, machine-portable, and managed entirely by dotta.
+
+**Recovery story.** Backing up your repository plus your passphrase is sufficient to recover plaintext on any machine. The repository carries the salt; the passphrase is the only secret. (Hostname binding via Argon2 `extras.ad` would have broken this property and is intentionally not used.)
+
+**Cloning a remote without a salt.** If you `dotta clone` a remote that was never `dotta init`ed (or predates per-repo salts), you'll see a warning at clone time:
+
+```
+Warning: Remote does not advertise refs/dotta/salt. Encryption operations
+will fail until the ref is fetched or 'dotta init' is run locally.
+```
+
+Encryption-disabled use of the clone still works. To use encryption in such a clone, run `dotta init` locally to generate the salt — but understand that any encrypted blobs already on the remote were sealed under a different (or no) salt and will not decrypt.
+
 ## Adding Encrypted Files
 
 Three modes:

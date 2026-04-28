@@ -37,7 +37,7 @@ Dotta encrypts sensitive dotfiles transparently so they can be stored in a Git r
 
 | What leaks                            | Brute-force cost                                    | Notes                                                                                    |
 |---------------------------------------|-----------------------------------------------------|------------------------------------------------------------------------------------------|
-| Repo only                             | Passphrase entropy × Argon2id memory cost           | Salt is hardcoded; attacker has it from source. Memory-hardness is the only wall.        |
+| Repo only                             | Passphrase entropy × Argon2id memory cost           | 256-bit per-repo salt forecloses cross-installation precomputation; memory-hardness is the only wall against this specific repo. |
 | Plaintext sizes (any leaked repo)     | N/A — leaked unconditionally                        | Stream cipher; out-of-scope by design.                                                   |
 | `~/.cache/dotta/session` + repo       | Master key recoverable without passphrase           | Cache is machine-bound obfuscation, not crypto. Possession of both reduces decryption to a hostname/username lookup. |
 
@@ -85,7 +85,7 @@ The 8-byte tag is absorbed *unframed* (fixed-length by construction); all subseq
                     ▼  Argon2id (RFC 9106)
                        memory_mib, passes from blob header / current config
                        lanes = 1 (Monocypher is single-threaded)
-                       salt = 16-byte hardcoded constant in kdf.c
+                       salt = 32-byte per-repo random in `refs/dotta/salt:salt`
         ┌────────────────────────────────────────────┐
         │              Master key (32 B)             │
         │      Cached by keymgr (memory + disk)      │
@@ -135,16 +135,44 @@ The 8-byte tag is absorbed *unframed* (fixed-length by construction); all subseq
 
 ### Salt
 
-The Argon2id salt is a 16-byte constant compiled into `kdf.c`. A salt's job is to prevent attackers from amortising cracking work across multiple targets. Dotta is single-user / single-target; with one target there is nothing to amortise, so per-install random salt and constant salt produce identical per-guess attacker cost.
+The Argon2id salt is **32 random bytes generated once at `dotta init`** and stored at `refs/dotta/salt:salt`. The ref is part of the synced repo-wide infrastructure tier (see *Repository config ref* below); it travels alongside profile branches in clone, fetch, and push.
 
-The constant satisfies the API; it contributes no security claims to the threat model. Changing the bytes invalidates every encrypted blob in every user's repo — treat it as a format-defining value alongside `CIPHER_VERSION`.
+A salt's job is to make each target distinct so an attacker cannot amortise precomputation across multiple targets. The relevant target unit is **the repository** (the bytes a passphrase guess gets compared against): every dotta install with a constant salt would share a single precomputation surface — invest the work once, recover plaintext for every user with a guessable passphrase. Per-repo random salt forecloses this. Within one user's repo, the salt is uniform across machines and across time; cross-machine sync of encrypted dotfiles works because every clone derives the same master key from the same passphrase + salt pair.
+
+**Size: 256 bits.** RFC 9106 §4 SHOULDs 128 bits; mainstream guidance treats 256 as "further reassurance that the salt won't repeat" with anything above explicitly excessive. 256 is chosen here for codebase uniformity (every key buffer in dotta is 32 bytes via `KDF_KEY_SIZE`) and because the cost over 128 bits is 16 extra bytes once per repository — invisible in storage, MAC bandwidth, and Argon2 input.
+
+**The salt is public.** Argon2 requires uniqueness across attack targets, not secrecy. The bytes are stored in plaintext in a Git blob, transmitted unencrypted over Git wire, and copied freely between machines. Dotta does not `mlock` or `secure_wipe` the salt; it is treated as ordinary input.
+
+**Rotation is out of scope.** Per the alpha policy, regenerating the salt is equivalent to "nuke the repo and start over": every encrypted blob keyed under the prior salt becomes undecryptable. There is no migration tool. If rotation is ever needed, the design would land as a re-encryption sweep, not a quiet salt-blob update.
 
 `extras.key` (pepper) and `extras.ad` (binding to host/install-id) are not used (`crypto_argon2_no_extras`):
 
-- **Pepper** narrows to a scenario (repo exfiltrated, pepper not exfiltrated) that rarely applies for a single-user manager and adds a second loss-of-data failure mode.
+- **Pepper** narrows to a scenario (repo exfiltrated, pepper not exfiltrated) that rarely applies for a single-user manager and adds a second loss-of-data failure mode. Unlike the per-repo salt, a pepper would need a separate distribution channel — defeating the "back up your repo + passphrase = recover" property.
 - **`ad`** would break "back up your repo + passphrase = recover anywhere".
 
-## SIV construction (cipher format v6)
+### Repository salt ref
+
+```
+refs/dotta/salt
+  └── commit
+        └── tree
+              └── salt   (32 bytes — Argon2id salt)
+```
+
+A custom-namespace ref sits alongside the local-only `refs/heads/dotta-worktree` (machine-bound infrastructure) and the user-facing profile branches (`refs/heads/<profile>`). Pushing and fetching dotta repositories ships this ref like any other, but the existing branch-listing filters target `refs/heads/...` and so do not need to grow.
+
+The commit→tree→blob structure (rather than ref-points-directly-at-blob) is standard Git citizenship: it lets `dotta git show refs/dotta/salt` render a meaningful object header and keeps tree-walk and history tools working.
+
+| Operation                       | Where                                          |
+|---------------------------------|------------------------------------------------|
+| Generated                       | `dotta init` via `salt_init` + `entropy_fill` |
+| Loaded                          | `main.c::open_crypto_for_mode` before `keymgr_create` |
+| Fetched                         | `dotta clone` (soft-fail when remote lacks the ref) |
+| Pushed                          | `dotta sync` (push phase, after profile pushes; warn-only on failure) |
+| Inspected (raw)                 | `dotta git show refs/dotta/salt:salt`        |
+| Visible in dotta UX surfaces    | No (profile/list/status walk `refs/heads/...`) |
+
+## SIV construction (cipher format v7)
 
 Implemented in `src/crypto/cipher.c`. SIV deterministic AEAD in the spirit of RFC 5297, built from BLAKE2b (MAC) and XChaCha20 (keystream).
 
@@ -155,7 +183,7 @@ Inputs: `(plaintext, mac_key, prf_key, storage_path, memory_mib, passes)`.
 1. **Build the 9-byte authenticated header:**
    ```
    bytes [0..5)  = "DOTTA"
-   byte   [5]    = CIPHER_VERSION (0x06)
+   byte   [5]    = CIPHER_VERSION (0x07)
    bytes [6..8)  = LE16(argon2_memory_mib)
    byte   [8]    = argon2_passes
    ```
@@ -216,14 +244,14 @@ SIV gives the same security as a nonce-based AEAD when nonces are unique and sta
 
 ## File formats
 
-### Encrypted blob (`CIPHER_VERSION = 0x06`)
+### Encrypted blob (`CIPHER_VERSION = 0x07`)
 
 ```
 ┌─────────┬────────────────────────────────────────┬─────────┬──────────────────┐
 │ offset  │ field                                  │ size    │ encoding         │
 ├─────────┼────────────────────────────────────────┼─────────┼──────────────────┤
 │      0  │ magic                                  │   5 B   │ ASCII "DOTTA"    │
-│      5  │ version                                │   1 B   │ 0x06             │
+│      5  │ version                                │   1 B   │ 0x07             │
 │      6  │ argon2_memory_mib                      │   2 B   │ LE16, 8..4096    │
 │      8  │ argon2_passes                          │   1 B   │ uint8, 1..20     │
 │      9  │ SIV / MAC tag                          │  32 B   │ BLAKE2b keyed    │
@@ -280,14 +308,14 @@ After the invariant holds, the read path consults the cache without re-sniffing.
 
 The deployment anchor (`anchor.blob_oid` in the state DB) does **not** carry an encryption flag. Anchor staleness checks route through `content_compare_blob_to_disk`, which classifies the anchor blob's bytes directly — there is no anchor-side cache to keep in sync. This avoids the bug class where routing on the *current* blob's flag silently misclassified the *historical* anchor blob's comparison across encryption-policy transitions.
 
-### Session cache (`SESSION_CACHE_VERSION = 0x02`)
+### Session cache (`SESSION_CACHE_VERSION = 0x03`)
 
 ```
 ┌─────────┬────────────────────────────────────────┬─────────┬──────────────────┐
 │ offset  │ field                                  │ size    │ encoding         │
 ├─────────┼────────────────────────────────────────┼─────────┼──────────────────┤
 │      0  │ magic                                  │   8 B   │ ASCII "DOTTASES" │
-│      8  │ version                                │   1 B   │ 0x02             │
+│      8  │ version                                │   1 B   │ 0x03             │
 │      9  │ argon2_memory_mib                      │   2 B   │ LE16             │
 │     11  │ argon2_passes                          │   1 B   │ uint8            │
 │     12  │ created_at                             │   8 B   │ LE64 Unix sec    │
@@ -298,6 +326,9 @@ The deployment anchor (`anchor.blob_oid` in the state DB) does **not** carry an 
 └─────────┴────────────────────────────────────────┴─────────┴──────────────────┘
 
 Total: 108 bytes.  All multi-byte fields are little-endian on disk.
+
+The on-disk layout is unchanged from 0x02. The version bumped because the
+MAC input grew: see the MAC section below.
 ```
 
 `expires_at = 0` means "never expire" (configured `session_timeout = -1`).
@@ -330,8 +361,13 @@ This is **obfuscation, not encryption**: an attacker with read access to the cac
 
 ```
 mac = crypto_mac_oneshot(cache_key, CRYPTO_DOMAIN_SESSION_MAC,
-                         /*data=*/&cache[0..76], /*data_len=*/76);
+                         /*data=*/&cache[0..76], /*data_len=*/76,
+                         /*extra=*/repo_salt, /*extra_len=*/32);
 ```
+
+The MAC binds **the 76-byte struct prefix AND the caller-supplied 32-byte `repo_salt`**. The salt is not stored in the cache file — `keymgr` re-supplies it from the current repository's `refs/dotta/salt:salt` on every save and load.
+
+**Why the salt is bound here:** with per-repo Argon2id salts, two dotta repositories sharing a passphrase derive *different* master keys. Without this binding, a session cache produced under repo A's salt would authenticate cleanly when loaded against repo B (same machine identity → same `cache_key` → same MAC), silently handing back A's master for use with B's blobs. The downstream consequence — every B-blob fails SIV verification with "authentication failed" — surfaces three layers below the actual problem and gives the user no actionable diagnostic. Binding the salt into the MAC moves the failure to the cache layer, where it's handled uniformly with every other "wrong target" miss (unlink + ERR_CRYPTO + fresh prompt).
 
 Verification is constant-time via `crypto_verify32`. Domain-separated under `CRYPTO_DOMAIN_SESSION_MAC` so a forged cache cannot pass as a SIV-style MAC under another module's key.
 
@@ -637,7 +673,8 @@ Crypto-boundary checks (`kdf_master_key`, `cipher_peek_params`, `cipher_encrypt`
 | Constant                  | Value                          | Rationale                                                   |
 |---------------------------|--------------------------------|-------------------------------------------------------------|
 | Algorithm                 | Argon2id                       | RFC 9106; only memory-hard primitive in Monocypher          |
-| Argon2id salt             | 16-byte constant in `kdf.c`    | Single user, no cross-target benefit                        |
+| Argon2id salt size        | 32 bytes (256 bits)            | RFC 9106 §4 SHOULDs 128 bits; 256 chosen for codebase uniformity (matches every key-buffer width) |
+| Argon2id salt source      | Per-repo random in `refs/dotta/salt:salt` | Forecloses cross-installation precomputation; syncs with repository |
 | Argon2 lanes              | 1                              | Forced by Monocypher's single-threaded implementation       |
 | Cipher MAC tag size       | 32 bytes (BLAKE2b output)      | Long-term Git storage; 256-bit collision boundary           |
 | Cipher nonce size         | 24 bytes (XChaCha20 nonce)     | First 24 bytes of the 32-byte SIV                           |

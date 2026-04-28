@@ -18,6 +18,7 @@
 #include "core/scope.h"
 #include "core/state.h"
 #include "core/workspace.h"
+#include "infra/salt.h"
 #include "sys/gitops.h"
 #include "sys/resolve.h"
 #include "sys/transfer.h"
@@ -1794,6 +1795,19 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
 
     if (err) {
         goto cleanup;
+    }
+
+    /* Push refs/dotta/salt to the remote so the per-repo salt
+     * propagates from a fresh `dotta init` to other clones. */
+    if (!no_push) {
+        error_t *cfg_err = salt_push(repo, remote_name, xfer);
+        if (cfg_err) {
+            output_warning(
+                out, OUTPUT_NORMAL, "Failed to push %s: %s",
+                SALT_REF, error_message(cfg_err)
+            );
+            error_free(cfg_err);
+        }
     }
 
     /* Commit manifest changes */

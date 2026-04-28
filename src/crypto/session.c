@@ -7,21 +7,25 @@
  *                       → entropy_fill(salt)
  *                       → derive_cache_key(salt)
  *                       → XChaCha20 obfuscate (master XOR keystream)
- *                       → MAC over [0..76)
+ *                       → MAC over [0..76) || repo_salt
  *                       → atomic-mode 0600 open + write + fsync
  *
  *   load:  open(O_NOFOLLOW) + fstat (size/mode/uid)
  *                       → read 108 bytes
  *                       → magic + version
  *                       → derive_cache_key(loaded_salt)
- *                       → MAC verify (constant-time)
+ *                       → MAC verify (constant-time) over [0..76) || repo_salt
  *                       → expiry check (after MAC, on trusted bytes)
  *                       → params range check
  *                       → XChaCha20 deobfuscate into out_master_key
  *
  * Both halves share `derive_cache_key`, so the absorbed byte stream
  * is identical on the same machine; a copy to another host produces
- * a different cache_key and fails MAC.
+ * a different cache_key and fails MAC. The MAC also absorbs the
+ * caller-supplied `repo_salt` as additional input — a cache produced
+ * under repo A's salt fails MAC verification when loaded against
+ * repo B's salt, defending against cross-repo cache confusion when
+ * two dotta repositories share a passphrase.
  *
  * Wiping: the 108-byte struct, `cache_key`, and `computed_mac` are
  * scrubbed on every exit path. `out_master_key` is scrubbed on every
@@ -69,8 +73,13 @@
 #define SESSION_CACHE_MAGIC_SIZE 8
 
 /* Format version. Bumps invalidate prior caches without migration —
- * unsupported versions surface as ERR_CRYPTO and are unlinked. */
-#define SESSION_CACHE_VERSION    0x02
+ * unsupported versions surface as ERR_CRYPTO and are unlinked.
+ *
+ *   0x02 → 0x03: MAC input grew to absorb the caller-supplied
+ *                `repo_salt`. Old caches fail MAC under the new
+ *                input shape; bumping the version surfaces the
+ *                rejection as a clean format diagnostic instead. */
+#define SESSION_CACHE_VERSION    0x03
 
 /* Field offsets within the on-disk layout. Named so parser and
  * builder share one source of truth.
@@ -293,9 +302,11 @@ error_t *session_save(
     const uint8_t master_key[KDF_KEY_SIZE],
     uint16_t memory_mib,
     uint8_t passes,
+    const uint8_t repo_salt[KDF_SALT_SIZE],
     int32_t timeout_seconds
 ) {
     CHECK_NULL(master_key);
+    CHECK_NULL(repo_salt);
 
     if (timeout_seconds == 0) {
         return ERROR(
@@ -373,13 +384,19 @@ error_t *session_save(
         cache_key, zero_nonce, /*ctr=*/ 0
     );
 
-    /* MAC over [0..76): magic..obfuscated_key inclusive. Domain-tagged
-     * with CRYPTO_DOMAIN_SESSION_MAC so it cannot be confused with a
-     * cipher-blob SIV under another key. */
+    /* MAC over the 76-byte struct prefix AND the caller-supplied
+     * repo_salt. Domain-tagged with CRYPTO_DOMAIN_SESSION_MAC so it
+     * cannot be confused with a cipher-blob SIV under another key.
+     *
+     * Repo-salt binding: the salt is NOT stored in the cache file;
+     * load callers re-supply it from the current repo's
+     * refs/dotta/salt. A cache produced under one repo's salt fails
+     * MAC verification under another repo's salt — same uniform
+     * "tampered or wrong target" path the rest of the cache uses. */
     crypto_mac_oneshot(
         cache.mac, cache_key, CRYPTO_DOMAIN_SESSION_MAC,
         (const uint8_t *) &cache, SESSION_MAC_INPUT_SIZE,
-        NULL, 0
+        repo_salt, KDF_SALT_SIZE
     );
 
     /* Open with secure permissions atomically. O_NOFOLLOW guards
@@ -458,11 +475,13 @@ cleanup:
 error_t *session_load(
     uint8_t out_master_key[KDF_KEY_SIZE],
     uint16_t *out_memory_mib,
-    uint8_t *out_passes
+    uint8_t *out_passes,
+    const uint8_t repo_salt[KDF_SALT_SIZE]
 ) {
     CHECK_NULL(out_master_key);
     CHECK_NULL(out_memory_mib);
     CHECK_NULL(out_passes);
+    CHECK_NULL(repo_salt);
 
     char *cache_path = NULL;
     char *cache_dir = NULL;
@@ -604,20 +623,27 @@ error_t *session_load(
         goto cleanup;
     }
 
-    /* Recompute MAC over [0..76) under cache_key + SESSION_MAC tag.
-     * crypto_verify32 is constant-time; the comparison runs in the
-     * same number of cycles regardless of how many bytes match. */
+    /* Recompute MAC over the 76-byte prefix AND caller-supplied
+     * repo_salt under cache_key + SESSION_MAC tag. crypto_verify32 is
+     * constant-time; the comparison runs in the same number of cycles
+     * regardless of how many bytes match.
+     *
+     * A cache from a different repo (different repo_salt) reaches
+     * here with a MAC that won't verify under the current salt — the
+     * unlink path handles it as any other tampered cache, and the
+     * caller (keymgr) prompts fresh under the correct repo. */
     crypto_mac_oneshot(
         computed_mac,
         cache_key, CRYPTO_DOMAIN_SESSION_MAC,
         (const uint8_t *) &cache, SESSION_MAC_INPUT_SIZE,
-        NULL, 0
+        repo_salt, KDF_SALT_SIZE
     );
     if (crypto_verify32(computed_mac, cache.mac) != 0) {
         err = ERROR(
             ERR_CRYPTO,
             "Session cache MAC verification failed "
-            "(tampered, copied from another machine, or wrong user)"
+            "(tampered, copied from another machine, wrong user, "
+            "or cache belongs to a different dotta repository)"
         );
         unlink_on_fail = true;
         goto cleanup;

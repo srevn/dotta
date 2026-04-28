@@ -39,6 +39,7 @@
 #include "core/state.h"
 #include "crypto/keymgr.h"
 #include "infra/content.h"
+#include "infra/salt.h"
 #include "utils/config.h"
 #include "utils/privilege.h"
 #include "utils/repo.h"
@@ -273,7 +274,30 @@ static int open_crypto_for_mode(
     if (mode == DOTTA_CRYPTO_NONE || repo == NULL) return 0;
 
     if (config->encryption_enabled) {
-        error_t *err = keymgr_create(config, keymgr_out);
+        /* Load the per-repo Argon2id salt from refs/dotta/salt before
+         * constructing the keymgr — the salt is part of the master-key
+         * derivation contract, so the keymgr cannot exist without it. */
+        uint8_t salt[KDF_SALT_SIZE];
+        error_t *err = salt_load(repo, salt);
+        if (err != NULL) {
+            if (err->code == ERR_NOT_FOUND) {
+                err = error_wrap(
+                    err,
+                    "Encryption requires repository config (%s)\n"
+                    "  - For new repositories: run 'dotta init'\n"
+                    "  - For clones: re-run with the salt fetched "
+                    "(remote may not be a dotta v7 repository)",
+                    SALT_REF
+                );
+            }
+            error_print(err, stderr);
+            error_free(err);
+            return 1;
+        }
+
+        err = keymgr_create(config, salt, keymgr_out);
+        /* Salt is public; no wipe needed. The keymgr has copied it
+         * into its own storage. */
         if (err != NULL) {
             error_print(err, stderr);
             error_free(err);

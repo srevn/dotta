@@ -17,14 +17,7 @@
 #include "base/string.h"
 #include "sys/transfer.h"
 
-/**
- * Get commit signature with fallback for missing git config
- *
- * Tries git_signature_default() first (reads user.name/user.email from
- * .gitconfig). If that fails (common on fresh machines before dotfiles
- * are deployed), falls back to user@hostname from the environment.
- */
-static error_t *gitops_get_signature(git_signature **out, git_repository *repo) {
+error_t *gitops_get_signature(git_signature **out, git_repository *repo) {
     if (git_signature_default(out, repo) == 0) {
         return NULL;
     }

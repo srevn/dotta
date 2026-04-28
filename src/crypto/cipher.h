@@ -20,7 +20,7 @@
  *     │ offset │ field                              │ size   │
  *     ├────────┼────────────────────────────────────┼────────┤
  *     │   0    │ magic "DOTTA"                      │  5 B   │
- *     │   5    │ version = 0x06                     │  1 B   │
+ *     │   5    │ version = 0x07                     │  1 B   │
  *     │   6    │ argon2_memory_mib (LE16)           │  2 B   │
  *     │   8    │ argon2_passes                      │  1 B   │
  *     │   9    │ SIV / MAC tag                      │ 32 B   │
@@ -76,7 +76,7 @@
 #define CIPHER_MAGIC_SIZE     5
 
 /** Cipher format version. See file-level "Format-version policy". */
-#define CIPHER_VERSION        0x06
+#define CIPHER_VERSION        0x07
 
 /**
  * Detection-prefix length (magic + version).

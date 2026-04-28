@@ -23,11 +23,14 @@
  *     version drift, lane-rounding edge cases, and early-return paths
  *     where Argon2 never executed.
  *
- * 16-byte hardcoded salt: a salt prevents an attacker from amortising
- * cracking work across targets. Dotta is single-user / single-target,
- * so per-install random salt and constant salt yield identical
- * per-guess cost — the wall is Argon2 memory hardness × passphrase
- * entropy regardless of salt strategy.
+ * Per-repository salt: the 32-byte `salt` parameter is generated once
+ * at `dotta init` via `entropy_fill` (see KDF_SALT_SIZE for the 256-bit
+ * choice) and stored at `refs/dotta/salt`, where it syncs with the
+ * repository. This makes each dotta repo a distinct attack target: a
+ * precomputation table built against one repo cannot be reused against
+ * any other, even by an attacker who has both repos' encrypted blobs.
+ * The salt is public — its job is uniqueness, not secrecy — and is
+ * treated as ordinary input bytes (no mlock/wipe).
  */
 
 #include "crypto/kdf.h"
@@ -52,19 +55,6 @@ _Static_assert(
     sizeof(size_t) >= 8,
     "dotta requires a 64-bit host for Argon2 work-area sizing"
 );
-
-/* 16 random bytes pinned at format-version 6. Generated once via
- * `head -c 16 /dev/urandom`; these bytes are NOT a derivation of
- * anything — that is the whole point (see file-level comment).
- *
- * Bumping the constant is the same as bumping the cipher-blob format
- * version: every blob keyed under the old salt becomes permanently
- * undecryptable. Use the version-bump channel, not a quiet edit. */
-static const uint8_t SALT[16] = {
-    0x12, 0x43, 0x1c, 0x1f, 0x74, 0x65, 0xf1, 0xcb,
-    0x07, 0x4b, 0xe3, 0xd0, 0x81, 0xfb, 0xef, 0xa7,
-};
-_Static_assert(sizeof(SALT) == 16, "Argon2 salt is 16 bytes");
 
 error_t *kdf_validate_params(uint16_t memory_mib, uint8_t passes) {
     if (memory_mib < KDF_ARGON2_MEMORY_MIB_MIN
@@ -94,11 +84,13 @@ error_t *kdf_validate_params(uint16_t memory_mib, uint8_t passes) {
 error_t *kdf_master_key(
     const uint8_t *passphrase,
     size_t passphrase_len,
+    const uint8_t salt[KDF_SALT_SIZE],
     uint16_t memory_mib,
     uint8_t passes,
     uint8_t out_master_key[KDF_KEY_SIZE]
 ) {
     CHECK_NULL(passphrase);
+    CHECK_NULL(salt);
     CHECK_NULL(out_master_key);
 
     /* Validation early-returns wipe `out_master_key` so the contract
@@ -192,9 +184,9 @@ error_t *kdf_master_key(
     };
     const crypto_argon2_inputs inputs = {
         .pass      = passphrase,
-        .salt      = SALT,
+        .salt      = salt,
         .pass_size = (uint32_t) passphrase_len,
-        .salt_size = (uint32_t) sizeof(SALT),
+        .salt_size = (uint32_t) KDF_SALT_SIZE,
     };
 
     /* `crypto_argon2` returns void — no failure mode inside the

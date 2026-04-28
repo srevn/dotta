@@ -66,6 +66,8 @@
 #include <time.h>
 #include <types.h>
 
+#include "crypto/kdf.h"
+
 /* Forward declarations */
 typedef struct config config_t;
 
@@ -81,22 +83,29 @@ typedef struct keymgr keymgr;
 /**
  * Create a key manager.
  *
- * Snapshots the current-config Argon2 params and session timeout
- * into the struct. Later config edits in the same process do not
- * affect this snapshot, so a single command produces blobs under
- * one consistent (memory_mib, passes) even if the file changes
- * mid-run.
+ * Snapshots the current-config Argon2 params, session timeout, AND
+ * the per-repository salt into the struct. Later config edits in the
+ * same process do not affect this snapshot, so a single command
+ * produces blobs under one consistent (memory_mib, passes) even if
+ * the file changes mid-run; the salt is immutable post-init regardless.
  *
  * No derivation, prompt, or I/O at create time. The first call to
  * encrypt / decrypt / set_passphrase / probe_key triggers the lazy
  * resolution chain.
  *
+ * The 32-byte `salt` parameter is the per-repo random tag from
+ * `refs/dotta/salt:salt`; loading it is the caller's responsibility
+ * (typically `infra/salt::salt_load` at the
+ * dispatcher boundary). The salt is public; treat as ordinary input.
+ *
  * @param config Configuration (non-NULL; encryption fields read)
+ * @param salt   Per-repo Argon2id salt (32 bytes; non-NULL; copied)
  * @param out    Key manager (caller frees with keymgr_free)
  * @return Error or NULL on success
  */
 error_t *keymgr_create(
     const config_t *config,
+    const uint8_t salt[KDF_SALT_SIZE],
     keymgr **out
 );
 

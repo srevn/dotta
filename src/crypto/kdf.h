@@ -39,8 +39,8 @@
 
 #include "crypto/mac.h"
 
-/** All keys in the hierarchy share this size. */
-#define KDF_KEY_SIZE 32
+#define KDF_KEY_SIZE 32            /* All keys in the hierarchy share this size. */
+#define KDF_SALT_SIZE 32           /* Argon2id salt size — 32 bytes (256 bits). */
 
 _Static_assert(
     KDF_KEY_SIZE == CRYPTO_KEY_SIZE,
@@ -81,9 +81,11 @@ error_t *kdf_validate_params(uint16_t memory_mib, uint8_t passes);
 /**
  * Derive the master key from a passphrase using Argon2id.
  *
- * Argon2id (RFC 9106), single-lane, with a compiled-in 16-byte
- * constant salt (see kdf.c's salt declaration for the threat-model
- * rationale).
+ * Argon2id (RFC 9106), single-lane. The 32-byte `salt` is the
+ * per-repository random tag stored at `refs/dotta/salt:salt`;
+ * uniqueness across repositories forecloses cross-installation
+ * precomputation attacks (a precomputed table built against one
+ * dotta repo is useless against any other).
  *
  * Allocates `memory_mib * 1024 * 1024` bytes via aligned_alloc and
  * best-effort mlocks the work area; failure surfaces a one-time-per-
@@ -96,6 +98,7 @@ error_t *kdf_validate_params(uint16_t memory_mib, uint8_t passes);
  *
  * @param passphrase     Passphrase bytes (non-NULL; len > 0)
  * @param passphrase_len Passphrase length in bytes (≤ UINT32_MAX)
+ * @param salt           Per-repo Argon2id salt (32 bytes; non-NULL)
  * @param memory_mib     Argon2 memory budget in MiB
  * @param passes         Argon2 pass count
  * @param out_master_key Output buffer for 32-byte master key
@@ -104,6 +107,7 @@ error_t *kdf_validate_params(uint16_t memory_mib, uint8_t passes);
 error_t *kdf_master_key(
     const uint8_t *passphrase,
     size_t passphrase_len,
+    const uint8_t salt[KDF_SALT_SIZE],
     uint16_t memory_mib,
     uint8_t passes,
     uint8_t out_master_key[KDF_KEY_SIZE]

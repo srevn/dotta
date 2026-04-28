@@ -14,6 +14,7 @@
 #include "base/output.h"
 #include "core/ignore.h"
 #include "core/state.h"
+#include "infra/salt.h"
 #include "sys/filesystem.h"
 #include "sys/gitops.h"
 #include "utils/repo.h"
@@ -59,31 +60,43 @@ static error_t *init_repository(const char *path, git_repository **out, bool *is
 }
 
 /**
- * Check if dotta is already initialized
+ * Ensure the dotta-worktree branch exists and HEAD points at it.
+ *
+ * Idempotent across self-healing re-init: the orphan commit is only
+ * created when the branch is absent. Recreating an existing branch
+ * would silently overwrite its history — including any user-customised
+ * baseline `.dottaignore` blob — which is the bug the old
+ * `is_initialized` short-circuit was guarding against. The guard now
+ * lives here, where it is precisely scoped to the destructive step.
+ *
+ * `set_head` runs unconditionally so a partial prior init that left
+ * HEAD on a profile branch (or on the freshly-init'd repo's default
+ * `main`) gets corrected. The call is a no-op when HEAD already
+ * targets dotta-worktree.
+ *
+ * Worktree-sync strategy:
+ *   - Branch just created on a brand-new repo: FORCE — there is no
+ *     user data anywhere to lose.
+ *   - Any other case (healing path, or fresh creation in a pre-
+ *     existing git repo): SAFE — local workdir modifications abort
+ *     the checkout cleanly with an actionable error.
  */
-static error_t *is_initialized(git_repository *repo, bool *out) {
+static error_t *ensure_worktree_branch(git_repository *repo, bool is_new_repo) {
     CHECK_NULL(repo);
-    CHECK_NULL(out);
 
-    *out = false;
-    error_t *err = gitops_branch_exists(repo, "dotta-worktree", out);
+    bool exists = false;
+    error_t *err = gitops_branch_exists(repo, "dotta-worktree", &exists);
     if (err) {
-        return error_wrap(err, "Failed to check initialization status");
+        return error_wrap(err, "Failed to check for dotta-worktree branch");
     }
 
-    return NULL;
-}
-
-/**
- * Initialize dotta branch structure
- */
-static error_t *init_branches(git_repository *repo, bool is_new_repo) {
-    CHECK_NULL(repo);
-
-    /* Create dotta-worktree branch (empty orphan branch) */
-    error_t *err = gitops_create_orphan_branch(repo, "dotta-worktree");
-    if (err) {
-        return error_wrap(err, "Failed to create dotta-worktree branch");
+    bool just_created = false;
+    if (!exists) {
+        err = gitops_create_orphan_branch(repo, "dotta-worktree");
+        if (err) {
+            return error_wrap(err, "Failed to create dotta-worktree branch");
+        }
+        just_created = true;
     }
 
     /* Set HEAD to dotta-worktree */
@@ -92,13 +105,8 @@ static error_t *init_branches(git_repository *repo, bool is_new_repo) {
         return error_from_git(git_err);
     }
 
-    /*
-     * Sync working directory with the (empty) dotta-worktree branch.
-     *
-     * FORCE is only safe for freshly-created repos where no user data exists.
-     * For existing repos, use SAFE to avoid wiping uncommitted work.
-     */
-    git_checkout_strategy_t strategy = is_new_repo
+    /* Sync working directory with the (empty) dotta-worktree branch */
+    git_checkout_strategy_t strategy = (just_created && is_new_repo)
         ? GIT_CHECKOUT_FORCE
         : GIT_CHECKOUT_SAFE;
 
@@ -185,32 +193,43 @@ error_t *cmd_init(const dotta_ctx_t *ctx, const cmd_init_options_t *opts) {
         goto cleanup;
     }
 
-    /* Check if already initialized */
-    bool initialized = false;
-    err = is_initialized(repo, &initialized);
-    if (err) {
-        goto cleanup;
-    }
-    if (initialized) {
-        output_info(
-            out, OUTPUT_NORMAL, "Dotta already initialized in this repository"
-        );
-        goto cleanup;
-    }
+    /*
+     * Idempotent setup. Each step is safe to re-run on an existing
+     * repository: a fully-healthy repo no-ops at every step, and a
+     * partial prior init (e.g. crashed mid-flow, or a pre-c97374bb
+     * repo predating the salt ref) self-heals on the next `dotta
+     * init`. There is intentionally no "already initialized" short-
+     * circuit — it would key off one signal (dotta-worktree) and
+     * silently skip the other three steps when they are exactly
+     * what needs healing.
+     */
 
-    /* Create branch structure */
-    err = init_branches(repo, is_new_repo);
+    /* dotta-worktree branch + HEAD */
+    err = ensure_worktree_branch(repo, is_new_repo);
     if (err) {
         goto cleanup;
     }
 
-    /* Create initial state */
+    /* state.db schema (state_open creates if missing) */
     err = init_state(repo);
     if (err) {
         goto cleanup;
     }
 
-    /* Seed baseline .dottaignore on dotta-worktree with default patterns */
+    /* Per-repo Argon2id salt at refs/dotta/salt. Idempotent — keeps
+     * an existing valid blob; surfaces a malformed blob as an error
+     * rather than overwriting it. Done unconditionally (not gated on
+     * encryption_enabled) so a later `dotta key set` finds the salt
+     * ready, and so `dotta clone` of this repo can fetch the salt
+     * regardless of the cloner's config. */
+    err = salt_init(repo);
+    if (err) {
+        err = error_wrap(err, "Failed to initialize repository salt");
+        goto cleanup;
+    }
+
+    /* Baseline .dottaignore on dotta-worktree. Idempotent —
+     * gitops_update_file no-ops on identical content. */
     err = ignore_seed_baseline(repo);
     if (err) {
         err = error_wrap(err, "Failed to seed baseline .dottaignore");

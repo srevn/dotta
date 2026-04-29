@@ -29,7 +29,6 @@
 #include "base/string.h"
 #include "base/terminal.h"
 #include "infra/path.h"
-#include "sys/filesystem.h"
 
 /**
  * Check if running with elevated privileges
@@ -88,42 +87,13 @@ bool privilege_paths_require_root(const char **storage_paths, size_t count) {
 }
 
 /**
- * Check if a path is under a parent directory
- *
- * Verifies proper path boundary: /home/user matches /home/user/foo
- * but NOT /home/username/foo. The path can equal the parent (boundary
- * char is '\0').
- *
- * Handles trailing slashes on parent (e.g., "/home/user/" treated
- * identically to "/home/user").
- *
- * @param path Path to check (must not be NULL)
- * @param parent Candidate parent directory (must not be NULL)
- * @return true if path is under (or equal to) parent
- */
-static bool is_path_under(const char *path, const char *parent) {
-    size_t parent_len = strlen(parent);
-
-    /* Strip trailing slashes from parent for consistent boundary checking */
-    while (parent_len > 1 && parent[parent_len - 1] == '/') {
-        parent_len--;
-    }
-
-    if (strncmp(path, parent, parent_len) != 0) {
-        return false;
-    }
-
-    /* Verify boundary: next char after prefix must be '/' or end of string */
-    char boundary = path[parent_len];
-    return boundary == '/' || boundary == '\0';
-}
-
-/**
  * Check if a custom prefix requires elevated privileges
  *
- * Compares the custom prefix against $HOME using canonical paths to handle
- * symlinks (e.g., macOS /tmp → /private/tmp). Checks all combinations of
- * raw and canonical forms to catch symlinks on either side.
+ * Returns true when the prefix is NOT under $HOME — files under it carry
+ * ownership metadata that requires root to read on capture. The
+ * boundary-aware comparison (path_is_under_canonical) cross-checks raw
+ * and canonical forms of both sides, so symlinks (e.g., macOS
+ * /tmp -> /private/tmp) do not produce false negatives.
  */
 bool privilege_custom_prefix_needs_elevation(const char *custom_prefix) {
     if (!custom_prefix || custom_prefix[0] == '\0') {
@@ -137,38 +107,8 @@ bool privilege_custom_prefix_needs_elevation(const char *custom_prefix) {
         return true;  /* Can't determine HOME → conservative default */
     }
 
-    /* Canonicalize both paths to resolve symlinks.
-     * Either may fail (e.g., prefix doesn't exist on this system). */
-    char *home_canonical = NULL;
-    char *prefix_canonical = NULL;
-
-    error_t *h_err = fs_canonicalize_path(home, &home_canonical);
-    if (h_err) {
-        error_free(h_err);
-    }
-
-    error_t *p_err = fs_canonicalize_path(custom_prefix, &prefix_canonical);
-    if (p_err) {
-        error_free(p_err);
-    }
-
-    /* Check all valid combinations of raw/canonical forms.
-     * A single match is sufficient — symlinks may be on either side. */
-    const char *homes[] = { home, home_canonical };
-    const char *prefixes[] = { custom_prefix, prefix_canonical };
-
-    bool under_home = false;
-    for (int h = 0; h < 2 && !under_home; h++) {
-        if (!homes[h]) continue;
-        for (int p = 0; p < 2 && !under_home; p++) {
-            if (!prefixes[p]) continue;
-            under_home = is_path_under(prefixes[p], homes[h]);
-        }
-    }
-
+    bool under_home = path_is_under_canonical(custom_prefix, home);
     free(home);
-    free(home_canonical);
-    free(prefix_canonical);
 
     return !under_home;
 }
@@ -176,10 +116,10 @@ bool privilege_custom_prefix_needs_elevation(const char *custom_prefix) {
 /**
  * Check if filesystem path is under actual user's home (sudo-aware)
  *
- * Resolves symlinks on both sides to avoid false negatives on systems
- * where home or path components go through symlinks (e.g., macOS
- * /var → /private/var). Matches the canonicalization approach used
- * by privilege_custom_prefix_needs_elevation().
+ * Reads the sudo-invoking user's home from getpwuid(SUDO_UID)->pw_dir
+ * (more reliable than $HOME under sudo, which may have been overridden
+ * with `sudo -H`). The boundary-aware comparison cross-checks raw and
+ * canonical forms to avoid symlink false negatives.
  */
 bool privilege_path_is_under_home(const char *filesystem_path) {
     if (!filesystem_path || !privilege_is_sudo()) {
@@ -203,47 +143,17 @@ bool privilege_path_is_under_home(const char *filesystem_path) {
         return false;
     }
 
-    /* Canonicalize both paths to resolve symlinks, then check all
-     * valid combinations of raw/canonical forms (same approach as
-     * privilege_custom_prefix_needs_elevation). */
-    char *home_canonical = NULL;
-    char *path_canonical = NULL;
-
-    error_t *h_err = fs_canonicalize_path(pw->pw_dir, &home_canonical);
-    if (h_err) {
-        error_free(h_err);
-    }
-
-    error_t *p_err = fs_canonicalize_path(filesystem_path, &path_canonical);
-    if (p_err) {
-        error_free(p_err);
-    }
-
-    const char *homes[] = { pw->pw_dir, home_canonical };
-    const char *paths[] = { filesystem_path, path_canonical };
-
-    bool under_home = false;
-    for (int h = 0; h < 2 && !under_home; h++) {
-        if (!homes[h]) continue;
-        for (int p = 0; p < 2 && !under_home; p++) {
-            if (!paths[p]) continue;
-            under_home = is_path_under(paths[p], homes[h]);
-        }
-    }
-
-    free(home_canonical);
-    free(path_canonical);
-
-    return under_home;
+    return path_is_under_canonical(filesystem_path, pw->pw_dir);
 }
 
 /**
  * Check if a storage path requires elevation for pre-flight purposes
  *
  * For custom/ paths, checks whether the resolved filesystem_path is under $HOME.
- * This works because filesystem_path = custom_prefix + /relative, and is_path_under()
- * on the full path gives the same result as on the prefix alone (no traversal allowed
- * in custom paths, enforced by path_validate_custom_prefix).
+ * This works because filesystem_path = custom_prefix + /relative; the
+ * boundary-aware ancestor check on the full path gives the same result as on
+ * the prefix alone (no traversal allowed in custom paths, enforced by
+ * path_validate_custom_prefix).
  */
 bool privilege_needs_elevation(const char *storage_path, const char *filesystem_path) {
     if (!storage_path || storage_path[0] == '\0') {

@@ -162,6 +162,37 @@ const char *path_strip_storage_prefix(const char *storage_path);
  */
 error_t *path_get_home(char **out);
 
+/**
+ * Boundary-aware ancestor check with symlink awareness
+ *
+ * Returns true when `absolute_path` is under (or equal to) `reference_dir`,
+ * comparing both raw and canonical (realpath-resolved) forms of each side.
+ * A single match across the (raw, canonical) × (raw, canonical) cross
+ * product is sufficient, catching symlinks on either side (e.g.,
+ * macOS's /tmp → /private/tmp, or a $HOME that traverses a bind mount).
+ *
+ * Boundary rule (component-aware):
+ *   /home/user matches /home/user and /home/user/.bashrc
+ *   /home/user does NOT match /home/username (false-prefix guard)
+ *
+ * Trailing slashes on `reference_dir` are normalised internally so that
+ * "/home/user/" and "/home/user" behave identically. Either side may
+ * fail to canonicalise (e.g., the path does not exist on this system);
+ * the raw form is then the only comparison candidate on that side.
+ *
+ * Typical use: privilege checks that ask "is this filesystem path under
+ * $HOME / the user's home / the deployment prefix?", where symlinks on
+ * either side would otherwise cause false negatives.
+ *
+ * @param absolute_path Path to test (NULL returns false)
+ * @param reference_dir Candidate parent directory (NULL returns false)
+ * @return true if absolute_path is under reference_dir (any cross-product match)
+ */
+bool path_is_under_canonical(
+    const char *absolute_path,
+    const char *reference_dir
+);
+
 /* Forward declaration for the deployment-topology handle introduced
  * below. path_resolve_input and path_filter_create consume it as the
  * single source of "which prefixes does this command see?". */

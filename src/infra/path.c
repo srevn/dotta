@@ -50,6 +50,60 @@ error_t *path_get_home(char **out) {
     return NULL;
 }
 
+bool path_is_under_canonical(
+    const char *absolute_path,
+    const char *reference_dir
+) {
+    if (!absolute_path || !reference_dir) {
+        return false;
+    }
+
+    /* Best-effort canonicalize both sides; either may fail (e.g., the
+     * path does not exist on this system, or symlink resolution hits
+     * EACCES). On failure, the raw form remains the only comparison
+     * candidate for that side. */
+    char *path_canonical = NULL;
+    char *ref_canonical = NULL;
+
+    error_t *p_err = fs_canonicalize_path(absolute_path, &path_canonical);
+    if (p_err) error_free(p_err);
+
+    error_t *r_err = fs_canonicalize_path(reference_dir, &ref_canonical);
+    if (r_err) error_free(r_err);
+
+    const char *paths[] = { absolute_path, path_canonical };
+    const char *refs[]  = { reference_dir, ref_canonical };
+
+    bool under = false;
+    for (int p = 0; p < 2 && !under; p++) {
+        if (!paths[p]) continue;
+        for (int r = 0; r < 2 && !under; r++) {
+            if (!refs[r]) continue;
+
+            /* Trim trailing slashes from the reference for boundary
+             * parity. getenv("HOME"), pw_dir, and user-supplied prefixes
+             * may carry a stray trailing slash; "/home/user/" and
+             * "/home/user" must classify the same path identically. */
+            size_t ref_len = strlen(refs[r]);
+            while (ref_len > 1 && refs[r][ref_len - 1] == '/') {
+                ref_len--;
+            }
+            if (strncmp(paths[p], refs[r], ref_len) != 0) continue;
+
+            /* Component boundary: next char must be '/' or '\0'.
+             * Rejects /home/username when reference is /home/user. */
+            char boundary = paths[p][ref_len];
+            if (boundary == '/' || boundary == '\0') {
+                under = true;
+            }
+        }
+    }
+
+    free(path_canonical);
+    free(ref_canonical);
+    return under;
+}
+
 /**
  * Validate storage path
  */

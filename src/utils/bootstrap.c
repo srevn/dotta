@@ -65,45 +65,40 @@ static char **env_build(
     extern char **environ;
     *out_count = 0;
 
-    /* Count passthrough parent-env entries so we can allocate once. */
-    size_t parent_count = 0;
-    for (char **e = environ; *e; e++) {
-        if (!str_starts_with(*e, "DOTTA_")) parent_count++;
-    }
-
-    /* 4 DOTTA_* entries + parent entries + 1 NULL terminator. */
-    const size_t dotta_vars = 4;
-    size_t cap = dotta_vars + parent_count + 1;
-    char **env = calloc(cap, sizeof(char *));
+    /* Single-walk build with realloc-grow. */
+    size_t cap = 64;
+    char **env = malloc(cap * sizeof(*env));
     if (!env) return NULL;
-
     size_t n = 0;
 
-    env[n] = str_format("DOTTA_REPO_DIR=%s", repo_dir);
-    if (!env[n]) goto cleanup;
-    n++;
+    /* Append `value` to env, growing the array on demand. */
+    #define APPEND(value) do { \
+        char *_v = (value); \
+        if (!_v) goto cleanup; \
+        if (n + 1 >= cap) { \
+            size_t _new_cap = cap * 2; \
+            char **_grown = realloc(env, _new_cap * sizeof(*env)); \
+            if (!_grown) { free(_v); goto cleanup; } \
+            env = _grown; \
+            cap = _new_cap; \
+        } \
+        env[n++] = _v; \
+    } while (0)
 
-    env[n] = str_format("DOTTA_PROFILE=%s", profile);
-    if (!env[n]) goto cleanup;
-    n++;
-
-    env[n] = str_format("DOTTA_PROFILES=%s", all_profiles);
-    if (!env[n]) goto cleanup;
-    n++;
-
-    env[n] = str_format("DOTTA_DRY_RUN=%s", dry_run ? "1" : "0");
-    if (!env[n]) goto cleanup;
-    n++;
+    APPEND(str_format("DOTTA_REPO_DIR=%s", repo_dir));
+    APPEND(str_format("DOTTA_PROFILE=%s", profile));
+    APPEND(str_format("DOTTA_PROFILES=%s", all_profiles));
+    APPEND(str_format("DOTTA_DRY_RUN=%s", dry_run ? "1" : "0"));
 
     /* Passthrough parent env, skipping DOTTA_* to preserve the
      * invariant that our four variables are the authoritative
      * DOTTA_* surface visible to the child. */
     for (char **e = environ; *e; e++) {
         if (str_starts_with(*e, "DOTTA_")) continue;
-        env[n] = strdup(*e);
-        if (!env[n]) goto cleanup;
-        n++;
+        APPEND(strdup(*e));
     }
+
+    #undef APPEND
 
     env[n] = NULL;
     *out_count = n;

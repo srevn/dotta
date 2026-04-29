@@ -136,114 +136,63 @@ static char **build_hook_env(const hook_context_t *context, size_t *env_count) {
     }
 
     /* Initialize output */
+    extern char **environ;
     *env_count = 0;
 
-    /* Count environment variables we'll include */
-    extern char **environ;
-    size_t system_env_count = 0;
-    for (char **e = environ; *e; e++) {
-        /* Skip DOTTA_* variables to avoid conflicts */
-        if (!str_starts_with(*e, "DOTTA_")) {
-            system_env_count++;
-        }
-    }
-
-    /*
-     * Calculate total environment size:
-     * - DOTTA_REPO_DIR (if set)
-     * - DOTTA_COMMAND (if set)
-     * - DOTTA_PROFILE (if set)
-     * - DOTTA_DRY_RUN (always)
-     * - DOTTA_FILE_COUNT (always)
-     * - DOTTA_FILE_0, DOTTA_FILE_1, ... (indexed file variables)
-     * - System environment variables
-     * - NULL terminator
-     */
-    size_t needed = 3 + /* DOTTA_DRY_RUN, DOTTA_FILE_COUNT, NULL */
-        (context->repo_dir ? 1 : 0) + (context->command ? 1 : 0) +
-        (context->profile ? 1 : 0) + context->file_count + system_env_count;
-
-    /* Allocate environment array */
-    char **env = calloc(needed, sizeof(char *));
+    /* Single-walk build with realloc-grow. */
+    size_t cap = 64;
+    char **env = malloc(cap * sizeof(*env));
     if (!env) {
         return NULL;
     }
+    size_t n = 0;
 
-    size_t count = 0;
+    /* Append `value` to env, growing the array on demand. */
+    #define APPEND(value) do { \
+        char *_v = (value); \
+        if (!_v) goto cleanup; \
+        if (n + 1 >= cap) { \
+            size_t _new_cap = cap * 2; \
+            char **_grown = realloc(env, _new_cap * sizeof(*env)); \
+            if (!_grown) { free(_v); goto cleanup; } \
+            env = _grown; \
+            cap = _new_cap; \
+        } \
+        env[n++] = _v; \
+    } while (0)
 
-    /*
-     * Add DOTTA_* variables
-     * Use goto cleanup on allocation failure to free partial allocations
-     */
+    /* DOTTA_* surface — three optional, two always-on, then per-file. */
+    if (context->repo_dir) APPEND(str_format("DOTTA_REPO_DIR=%s", context->repo_dir));
+    if (context->command)  APPEND(str_format("DOTTA_COMMAND=%s", context->command));
+    if (context->profile)  APPEND(str_format("DOTTA_PROFILE=%s", context->profile));
+    APPEND(str_format("DOTTA_DRY_RUN=%s", context->dry_run ? "1" : "0"));
+    APPEND(str_format("DOTTA_FILE_COUNT=%zu", context->file_count));
 
-    if (context->repo_dir) {
-        env[count] = str_format("DOTTA_REPO_DIR=%s", context->repo_dir);
-        if (!env[count]) {
-            goto cleanup;
-        }
-        count++;
-    }
-
-    if (context->command) {
-        env[count] = str_format("DOTTA_COMMAND=%s", context->command);
-        if (!env[count]) {
-            goto cleanup;
-        }
-        count++;
-    }
-
-    if (context->profile) {
-        env[count] = str_format("DOTTA_PROFILE=%s", context->profile);
-        if (!env[count]) {
-            goto cleanup;
-        }
-        count++;
-    }
-
-    env[count] = str_format("DOTTA_DRY_RUN=%s", context->dry_run ? "1" : "0");
-    if (!env[count]) {
-        goto cleanup;
-    }
-    count++;
-
-    env[count] = str_format("DOTTA_FILE_COUNT=%zu", context->file_count);
-    if (!env[count]) {
-        goto cleanup;
-    }
-    count++;
-
-    /* Add indexed file variables: DOTTA_FILE_0, DOTTA_FILE_1, ... */
+    /* Indexed file variables: DOTTA_FILE_0, DOTTA_FILE_1, ... */
     if (context->files && context->file_count > 0) {
         for (size_t i = 0; i < context->file_count; i++) {
-            env[count] = str_format("DOTTA_FILE_%zu=%s", i, context->files[i]);
-            if (!env[count]) {
-                goto cleanup;
-            }
-            count++;
+            APPEND(str_format("DOTTA_FILE_%zu=%s", i, context->files[i]));
         }
     }
 
-    /* Copy system environment variables (PATH, HOME, etc.) */
+    /* Copy system environment variables (PATH, HOME, etc.) — DOTTA_*
+     * are skipped so our authoritative surface above isn't shadowed. */
     for (char **e = environ; *e; e++) {
-        /* Skip DOTTA_* variables to avoid conflicts */
-        if (!str_starts_with(*e, "DOTTA_")) {
-            env[count] = strdup(*e);
-            if (!env[count]) {
-                goto cleanup;
-            }
-            count++;
-        }
+        if (str_starts_with(*e, "DOTTA_")) continue;
+        APPEND(strdup(*e));
     }
+
+    #undef APPEND
 
     /* NULL-terminate */
-    env[count] = NULL;
-    *env_count = count;
+    env[n] = NULL;
+    *env_count = n;
 
     return env;
 
 cleanup:
     /* Free all allocated strings on failure */
-    for (size_t i = 0; i < count; i++) {
+    for (size_t i = 0; i < n; i++) {
         free(env[i]);
     }
     free(env);

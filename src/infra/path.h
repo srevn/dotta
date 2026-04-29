@@ -338,10 +338,18 @@ error_t *path_roots_classify(
  *   root/X   → /X                                 (profile may be NULL)
  *   custom/X → <profile's deploy_root>/X          (profile must match a binding)
  *
- * Returns ERR_INVALID_ARG when storage_path starts with "custom/" but
- * the profile has no deploy_root in roots — this is the same condition
- * that path_from_storage rejected with a NULL custom_prefix, but now
- * expressed once at the resolver instead of replicated by every caller.
+ * Error semantics:
+ *   - ERR_INVALID_ARG — storage_path is malformed (rejected by
+ *     path_validate_storage: missing label, illegal label, traversal,
+ *     etc.). Always propagate.
+ *   - ERR_NOT_FOUND — storage_path starts with "custom/" but the profile
+ *     has no deploy_root in roots (profile not enabled with --prefix on
+ *     this machine, or a clone before `dotta key set --prefix`). Callers
+ *     that resolve "every storage entry against its source profile"
+ *     (manifest_build_callback, manifest_sync_diff, manifest_sync_directories)
+ *     treat this as a silent skip, since a profile without a deployment
+ *     root contributes nothing to the VWD on this host. Callers that
+ *     resolve a single user-supplied path treat it as a hard error.
  *
  * @param roots Roots handle (must not be NULL)
  * @param profile Owning profile (may be NULL for home/ and root/ paths)

@@ -562,9 +562,15 @@ error_t *path_roots_to_filesystem(
         const char *deploy_root =
             path_roots_deploy_root_for_profile(roots, profile);
         if (!deploy_root) {
+            /* Lookup miss, not malformed input. ERR_NOT_FOUND lets callers
+             * silently skip when a profile has no --prefix on this machine
+             * (e.g., a clone before `dotta key set --prefix`) without
+             * collapsing genuine path validation failures into the same
+             * branch. path_validate_storage above keeps surfacing
+             * ERR_INVALID_ARG for malformed storage paths. */
             return ERROR(
-                ERR_INVALID_ARG,
-                "Storage path '%s' requires deployment root for profile '%s'\n"
+                ERR_NOT_FOUND,
+                "Storage path '%s' has no deployment root for profile '%s'\n"
                 "Profile not enabled with --prefix on this machine",
                 storage_path, profile ? profile : "(none)"
             );

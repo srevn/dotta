@@ -13,7 +13,8 @@
 #include "base/gitignore.h"
 #include "core/profiles.h"
 #include "core/state.h"
-#include "infra/path.h"
+#include "infra/pathspec.h"
+#include "infra/mount.h"
 
 /**
  * Internal scope representation.
@@ -30,17 +31,17 @@
  * engine that powers the layered `.dottaignore` ruleset in core/ignore.
  *
  * `roots` is always non-NULL post-build: scope_build always calls
- * profile_build_path_roots (even when there are no positional file args
- * and no custom prefixes). Downstream consumers (path_filter_create,
+ * profile_build_mount_table (even when there are no positional file args
+ * and no custom prefixes). Downstream consumers (pathspec_create,
  * manifest_build in PR 3+) consult it without per-callsite NULL guards.
  */
 struct scope {
-    string_array_t *enabled;               /* Persistent enabled set; non-NULL, may be empty */
-    string_array_t *filter;                /* CLI filter; NULL when no -p */
+    string_array_t *enabled;            /* Persistent enabled set; non-NULL, may be empty */
+    string_array_t *filter;             /* CLI filter; NULL when no -p */
     gitignore_ruleset_t *excludes_ruleset; /* Compiled -e patterns; arena-borrowed; NULL when no excludes */
-    path_filter_t *paths;                  /* CLI path filter; NULL when no positional args */
-    const path_roots_t *roots;             /* Deployment topology; arena-borrowed; non-NULL post-build */
-    const string_array_t *active;          /* Borrowed: filter if set, else enabled */
+    pathspec_t *paths;                  /* CLI path filter; NULL when no positional args */
+    const mount_table_t *roots;         /* Deployment topology; arena-borrowed; non-NULL post-build */
+    const string_array_t *active;       /* Borrowed: filter if set, else enabled */
 };
 
 /* -------------------------------------------------------------------- */
@@ -163,14 +164,14 @@ error_t *scope_build(
     /* 4. Build the deployment topology from the active set.
      *    Always built — empty active set still yields a usable handle
      *    (HOME + root sentinel only), and downstream consumers
-     *    (path_filter_create, future manifest_build) can rely on a
+     *    (pathspec_create, future manifest_build) can rely on a
      *    non-NULL scope_roots without per-callsite guards.
      *    Narrowing the filter narrows the topology: a profile that is
      *    enabled-but-filtered-out does not contribute its custom prefix
      *    to path classification for this invocation. */
     {
-        path_roots_t *roots = NULL;
-        err = profile_build_path_roots(state, s->active, arena, &roots);
+        mount_table_t *roots = NULL;
+        err = profile_build_mount_table(state, s->active, arena, &roots);
         if (err) {
             err = error_wrap(err, "Failed to build path roots");
             goto fail;
@@ -181,7 +182,7 @@ error_t *scope_build(
     /* 5. Build path filter consuming the topology directly — no
      *    intermediate prefix-array round-trip. */
     if (in->file_count > 0) {
-        err = path_filter_create(
+        err = pathspec_create(
             in->files, in->file_count, s->roots, arena, &s->paths
         );
         if (err) {
@@ -210,7 +211,7 @@ void scope_free(scope_t *s) {
     string_array_free(s->filter);
     /* excludes_ruleset and roots are arena-borrowed — released with the
      * caller's arena, not here. */
-    path_filter_free(s->paths);
+    pathspec_free(s->paths);
     /* s->active is a borrow; do not free. */
     free(s);
 }
@@ -227,11 +228,11 @@ const string_array_t *scope_active(const scope_t *s) {
     return s->active;
 }
 
-const path_filter_t *scope_paths(const scope_t *s) {
+const pathspec_t *scope_paths(const scope_t *s) {
     return s->paths;
 }
 
-const path_roots_t *scope_roots(const scope_t *s) {
+const mount_table_t *scope_roots(const scope_t *s) {
     return s->roots;
 }
 
@@ -265,12 +266,12 @@ bool scope_accepts_profile(const scope_t *s, const char *profile) {
 }
 
 bool scope_accepts_path(const scope_t *s, const char *storage_path) {
-    return path_filter_matches(s->paths, storage_path);
+    return pathspec_matches(s->paths, storage_path);
 }
 
 bool scope_is_excluded(const scope_t *s, const char *storage_path) {
     /* Storage paths always reference files (validated by
-     * path_validate_storage), so is_dir is always false. Directory-
+     * mount_validate_storage), so is_dir is always false. Directory-
      * only exclude patterns (e.g. `-e 'build/'`) still match files
      * inside the directory via gitignore's walk-up semantics. */
     return gitignore_is_ignored(s->excludes_ruleset, storage_path, false);

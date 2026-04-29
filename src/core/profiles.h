@@ -42,7 +42,7 @@
 
 #include "base/hashmap.h"
 #include "core/state.h"
-#include "infra/path.h"
+#include "infra/mount.h"
 
 /**
  * Detect matching profile names from a list of available branches
@@ -118,8 +118,8 @@ error_t *profile_resolve_enabled(
 /**
  * Build a per-machine deployment topology from state
  *
- * Materializes the profile→deploy_root bindings recorded in
- * enabled_profiles into a path_roots_t handle, augmented internally with
+ * Materializes the profile→target bindings recorded in
+ * enabled_profiles into a mount_table_t handle, augmented internally with
  * HOME and the empty-prefix root sentinel. The handle is the single
  * downstream entry point for both filesystem→storage classification and
  * profile-keyed storage→filesystem resolution.
@@ -131,7 +131,7 @@ error_t *profile_resolve_enabled(
  *   - names != NULL: only the named profiles contribute (per-name peek in
  *     the caller's order). Used by scope_build to feed CLI -p narrowing
  *     into path classification. Names outside the enabled set yield
- *     bindings with NULL deploy_root, which path_roots_t records for
+ *     bindings with NULL target, which mount_table_t records for
  *     forward-resolution lookups but does not add to the candidate set.
  *
  * Lifetime contract:
@@ -145,7 +145,7 @@ error_t *profile_resolve_enabled(
  *     enabled_profiles shape mutation runs (state_enable_profile,
  *     state_disable_profile, state_set_profiles, state_rollback,
  *     state_free).
- *   - deploy_root strings are always borrowed from the state row cache
+ *   - target strings are always borrowed from the state row cache
  *     (same shape-mutation invariant).
  *
  * @param state State handle (must not be NULL; borrowed, not freed)
@@ -154,11 +154,11 @@ error_t *profile_resolve_enabled(
  * @param out Output handle (must not be NULL; lifetime tracks arena)
  * @return Error or NULL on success
  */
-error_t *profile_build_path_roots(
+error_t *profile_build_mount_table(
     const state_t *state,
     const string_array_t *names,
     arena_t *arena,
-    path_roots_t **out
+    mount_table_t **out
 );
 
 /**
@@ -223,7 +223,7 @@ error_t *profile_list_files(
  * Check if profile contains any custom/ files
  *
  * Loads profile and scans for files with custom/ prefix.
- * Used by command layer to validate --prefix requirement.
+ * Used by command layer to validate --target requirement.
  *
  * @param repo Repository (must not be NULL)
  * @param profile Profile name (must not be NULL)
@@ -278,7 +278,7 @@ error_t *profile_build_file_index(
  * 2. enabled_only=false: Branch scan, O(M×P) via profile_build_file_index().
  *    Returns ALL profiles containing the file across all local branches.
  *
- * The storage_path must already be resolved (use path_resolve_input() first).
+ * The storage_path must already be resolved (use mount_resolve_input() first).
  *
  * @param repo Repository (must not be NULL)
  * @param state State handle (must not be NULL; borrowed, not freed).

@@ -22,7 +22,7 @@
 #include "core/metadata.h"
 #include "core/profiles.h"
 #include "core/state.h"
-#include "infra/path.h"
+#include "infra/mount.h"
 #include "infra/worktree.h"
 #include "sys/filesystem.h"
 #include "sys/gitops.h"
@@ -72,7 +72,7 @@ static error_t *validate_options(const cmd_remove_options_t *opts) {
  * Complexity: O(M) to build index + O(N) to process inputs = O(M+N)
  * Old implementation: O(N×M) with nested loops
  *
- * @param state Optional state for custom prefix resolution (improves UX, can be NULL)
+ * @param state Optional state for deployment target resolution (improves UX, can be NULL)
  */
 static error_t *resolve_paths_to_remove(
     git_repository *repo,
@@ -101,21 +101,22 @@ static error_t *resolve_paths_to_remove(
     string_array_t *profile_files = NULL;
     hashmap_t *profile_files_map = NULL;
 
-    /* Build a one-shot deployment topology for this profile. The binding
-     * records the profile name + its prefix borrowed from the state row
+    /* Build a one-shot mount table for this profile. The declaration
+     * records the profile name + its target borrowed from the state row
      * cache (stable for the duration of this call — no enabled_profiles
-     * mutation below). path_roots augments with HOME and the empty-prefix
-     * root sentinel internally; a NULL deploy_root yields no custom
-     * candidate but still registers the profile so forward resolution
-     * distinguishes "profile not in roots" from "profile has no prefix".
-     * Roots ride the command arena (released by dispatch). */
-    path_roots_t *roots = NULL;
+     * mutation below). mount_table_build augments with HOME and the
+     * universal root sentinel internally; a NULL target contributes no
+     * mount — backward resolution then surfaces ERR_NOT_FOUND for any
+     * custom/ paths owned by this profile, which the caller treats as
+     * "profile has no target on this machine".
+     * The table rides the command arena (released by dispatch). */
+    mount_table_t *roots = NULL;
     {
-        path_binding_t binding = {
-            .profile     = profile,
-            .deploy_root = state ? state_peek_profile_prefix(state, profile) : NULL
+        mount_decl_t binding = {
+            .profile = profile,
+            .target  = state ? state_peek_profile_target(state, profile) : NULL
         };
-        err = path_roots_build(arena, &binding, 1, &roots);
+        err = mount_table_build(arena, &binding, 1, &roots);
         if (err) {
             err = error_wrap(err, "Failed to build path roots");
             goto cleanup;
@@ -160,7 +161,7 @@ static error_t *resolve_paths_to_remove(
         char *canonical = NULL;
 
         /* Resolve input path to storage format (file need not exist) */
-        err = path_resolve_input(input_path, roots, &storage_path);
+        err = mount_resolve_input(input_path, roots, &storage_path);
         if (err) {
             if (!opts->force) {
                 goto cleanup;
@@ -176,10 +177,10 @@ static error_t *resolve_paths_to_remove(
         }
 
         /* Try to get filesystem path for output (non-fatal if it fails:
-         * ERR_NOT_FOUND when the profile has no --prefix on this machine
+         * ERR_NOT_FOUND when the profile has no --target on this machine
          * leaves canonical NULL, and the storage path serves as fallback). */
         error_t *convert_err =
-            path_roots_to_filesystem(roots, profile, storage_path, &canonical);
+            mount_resolve(roots, profile, storage_path, &canonical);
         if (convert_err) {
             error_free(convert_err);
             canonical = NULL;
@@ -229,7 +230,7 @@ static error_t *resolve_paths_to_remove(
                 if (profile_file[storage_path_len] == '/') {
                     /* Reconstruct filesystem path for this file */
                     char *file_fs_path = NULL;
-                    err = path_roots_to_filesystem(
+                    err = mount_resolve(
                         roots, profile, profile_file, &file_fs_path
                     );
                     if (err) {
@@ -1408,19 +1409,19 @@ static error_t *delete_profile_branch(
      * The file removal path passes filesystem paths to hooks; do the same here.
      *
      * Build a single-binding deployment topology for the profile being
-     * deleted. The deploy_root borrow into the state row cache is valid:
+     * deleted. The target borrow into the state row cache is valid:
      * the state mutation that invalidates row-cache pointers
      * (state_disable_profile) does not run until after this loop returns
      * its heap-owned filesystem paths. Roots ride the command arena.
      * On build failure (rare — OOM) skip the conversion entirely; the
      * hook then receives storage paths as a graceful fallback. */
     if (files) {
-        path_roots_t *hook_roots = NULL;
-        path_binding_t binding = {
-            .profile     = opts->profile,
-            .deploy_root = state_peek_profile_prefix(state, opts->profile)
+        mount_table_t *hook_roots = NULL;
+        mount_decl_t binding = {
+            .profile = opts->profile,
+            .target  = state_peek_profile_target(state, opts->profile)
         };
-        error_t *roots_err = path_roots_build(arena, &binding, 1, &hook_roots);
+        error_t *roots_err = mount_table_build(arena, &binding, 1, &hook_roots);
         if (roots_err) {
             error_free(roots_err);
             hook_roots = NULL;
@@ -1431,7 +1432,7 @@ static error_t *delete_profile_branch(
             if (hook_fs_paths) {
                 for (size_t i = 0; i < files->count; i++) {
                     char *fs_path = NULL;
-                    error_t *conv_err = path_roots_to_filesystem(
+                    error_t *conv_err = mount_resolve(
                         hook_roots, opts->profile, files->items[i], &fs_path
                     );
                     if (!conv_err && fs_path) {

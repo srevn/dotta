@@ -14,7 +14,7 @@
 
 #include "base/error.h"
 #include "base/gitignore.h"
-#include "infra/path.h"
+#include "infra/mount.h"
 
 /**
  * System files that must NEVER be encrypted
@@ -165,7 +165,7 @@ bool encryption_policy_matches_auto_patterns(
 
     /* Strip storage prefix so patterns like ".ssh/id_*" match
      * "home/.ssh/id_rsa" without forcing users to write "home/" in config. */
-    const char *path_for_matching = path_strip_storage_prefix(storage_path);
+    const char *path_for_matching = mount_strip_label(storage_path);
 
     /* Encryption applies to files, not directories — is_dir is always
      * false. Gitignore's last-match-wins with negation support is what

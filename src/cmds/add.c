@@ -25,6 +25,7 @@
 #include "core/state.h"
 #include "infra/content.h"
 #include "infra/path.h"
+#include "infra/mount.h"
 #include "infra/worktree.h"
 #include "sys/filesystem.h"
 #include "sys/gitops.h"
@@ -482,12 +483,14 @@ static error_t *create_commit(
     worktree_handle_t *wt,
     const cmd_add_options_t *opts,
     string_array_t *added_files,
+    const mount_table_t *mounts,
     const config_t *config,
     git_oid *out_commit_oid
 ) {
     CHECK_NULL(wt);
     CHECK_NULL(opts);
     CHECK_NULL(added_files);
+    CHECK_NULL(mounts);
 
     /* Build commit message using storage paths */
     string_array_t *storage_paths = string_array_new(0);
@@ -495,16 +498,14 @@ static error_t *create_commit(
         return ERROR(ERR_MEMORY, "Failed to allocate storage paths array");
     }
 
-    /* Convert filesystem paths to storage paths for commit message */
+    /* Convert filesystem paths to storage paths for commit message.
+     * Files come from the walker output — already absolute and existing. */
     error_t *err = NULL;
     for (size_t i = 0; i < added_files->count; i++) {
         const char *file_path = added_files->items[i];
         char *storage_path = NULL;
-        path_prefix_t prefix;
 
-        err = path_to_storage(
-            file_path, opts->custom_prefix, &storage_path, &prefix
-        );
+        err = mount_classify(mounts, file_path, &storage_path, NULL);
         if (err) {
             /* Skip if conversion fails (shouldn't happen at this point) */
             error_free(err);
@@ -565,19 +566,19 @@ static error_t *create_commit(
  *   1. Open write transaction (creates DB if missing)
  *   2. Read enabled profiles under the transaction snapshot
  *   3. If already enabled: commit (no-op) and return
- *   4. Enable profile in state with custom prefix (makes prefix available)
- *   5. Sync files to manifest with DEPLOYED status (uses custom_prefix;
+ *   4. Enable profile in state with deployment target (makes prefix available)
+ *   5. Sync files to manifest with DEPLOYED status (uses target;
  *      advances deployment anchor for synced entries)
  *   6. Commit transaction atomically
  *
- * CRITICAL ORDER: Step 4 must precede step 5. The custom_prefix stored in step 4
+ * CRITICAL ORDER: Step 4 must precede step 5. The target stored in step 4
  * is required by manifest_add_files() in step 5 (which loads the prefix map
  * internally) to resolve custom/ storage paths. Transaction atomicity ensures:
  * enable + sync succeed together or fail together (automatic rollback on error).
  *
  * @param repo Git repository (must not be NULL)
  * @param profile Profile to auto-enable (must not be NULL, must exist in Git)
- * @param custom_prefix Custom prefix for custom/ files (can be NULL)
+ * @param target Deployment target for custom/ files (can be NULL)
  * @param added_files Filesystem paths that were added (must not be NULL)
  * @param out_updated Output flag: true if successful (must not be NULL)
  * @param out_synced Output: count of files synced (can be NULL)
@@ -588,7 +589,7 @@ static error_t *auto_enable_and_sync_profile(
     state_t *state,
     arena_t *arena,
     const char *profile,
-    const char *custom_prefix,
+    const char *target,
     const string_array_t *added_files,
     bool *out_updated,
     size_t *out_synced
@@ -633,16 +634,16 @@ static error_t *auto_enable_and_sync_profile(
         goto cleanup;
     }
 
-    /* STEP 3: Enable profile in state with custom prefix (if provided).
+    /* STEP 3: Enable profile in state with deployment target (if provided).
      *
-     * CRITICAL ORDER: Must enable BEFORE manifest sync so custom_prefix
+     * CRITICAL ORDER: Must enable BEFORE manifest sync so target
      * is available in state for path resolution during manifest_add_files().
-     * The custom prefix is stored in the enabled_profiles table and loaded
+     * The deployment target is stored in the enabled_profiles table and loaded
      * internally by the manifest layer to resolve custom/ storage paths.
      *
      * Transaction Safety: If manifest sync below fails, the dispatcher's
      * state_free automatically rolls back this change. */
-    err = state_enable_profile(state, profile, custom_prefix);
+    err = state_enable_profile(state, profile, target);
     if (err) {
         err = error_wrap(err, "Failed to enable profile in state");
         goto cleanup;
@@ -650,9 +651,9 @@ static error_t *auto_enable_and_sync_profile(
 
     /* STEP 4: Sync files to manifest with DEPLOYED status
      *
-     * manifest_add_files() loads the prefix map internally to build the
-     * manifest. The custom_prefix stored in STEP 3 is now available for
-     * resolving custom/ storage paths via path_from_storage().
+     * manifest_add_files() loads the mount table internally to build the
+     * manifest. The target stored in STEP 3 is now available for
+     * resolving custom/ storage paths via mount_resolve().
      *
      * manifest_add_files advances the deployment anchor internally for
      * synced entries, so the next status can short-circuit on the fast
@@ -709,17 +710,17 @@ cleanup:
  * Algorithm:
  *   1. Read enabled profiles under the borrowed write transaction
  *   2. If profile not enabled: return (dispatcher's state_free rolls back)
- *   3. If custom_prefix provided: update prefix in state (UPSERT)
+ *   3. If target provided: update target in state (UPSERT)
  *   4. Call manifest_add_files() (builds fresh manifest internally;
  *      advances deployment anchor for synced entries)
  *   5. Commit transaction (state_save)
  *
- * Custom Prefix Update:
- *   When adding custom/ files to an already-enabled profile, the custom_prefix
+ * Target Update:
+ *   When adding custom/ files to an already-enabled profile, the target
  *   must be stored in state BEFORE manifest_add_files(). This is the same
- *   prefix-before-sync ordering enforced by auto_enable_and_sync_profile().
- *   Only called when custom_prefix is non-NULL to avoid clearing an existing
- *   prefix when adding home/ or root/ files.
+ *   target-before-sync ordering enforced by auto_enable_and_sync_profile().
+ *   Only called when target is non-NULL to avoid clearing an existing
+ *   target when adding home/ or root/ files.
  *
  * Lifecycle Tracking:
  *   Files get deployed_at = time(NULL) because ADD captures files FROM the
@@ -738,7 +739,7 @@ cleanup:
  *
  * @param repo Git repository
  * @param profile Profile that files were added to
- * @param custom_prefix Custom prefix for custom/ files (can be NULL)
+ * @param target Deployment target for custom/ files (can be NULL)
  * @param added_files Filesystem paths that were added
  * @param out_updated Output flag: true if manifest was updated (must not be NULL)
  * @param out_synced Output: count of files synced (can be NULL)
@@ -749,7 +750,7 @@ static error_t *update_manifest_after_add(
     state_t *state,
     arena_t *arena,
     const char *profile,
-    const char *custom_prefix,
+    const char *target,
     const string_array_t *added_files,
     bool *out_updated,
     size_t *out_synced
@@ -790,20 +791,20 @@ static error_t *update_manifest_after_add(
         goto cleanup;
     }
 
-    /* STEP 3: Update custom prefix in state if adding custom/ files
+    /* STEP 3: Update deployment target in state if adding custom/ files
      *
      * CRITICAL ORDER: Must store prefix BEFORE manifest_add_files() so
      * the prefix map (loaded internally) can resolve custom/ storage paths
      * during manifest building. Same prefix-before-sync ordering as
      * auto_enable_and_sync_profile().
      *
-     * Only called when custom_prefix is non-NULL to avoid clearing an
+     * Only called when target is non-NULL to avoid clearing an
      * existing prefix when adding home/ or root/ files.
      * state_enable_profile() uses UPSERT - safe on already-enabled profiles. */
-    if (custom_prefix) {
-        err = state_enable_profile(state, profile, custom_prefix);
+    if (target) {
+        err = state_enable_profile(state, profile, target);
         if (err) {
-            err = error_wrap(err, "Failed to update custom prefix for profile");
+            err = error_wrap(err, "Failed to update deployment target for profile");
             goto cleanup;
         }
     }
@@ -877,6 +878,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     size_t added_count = 0;
     bool profile_was_new = false;
     metadata_t *metadata = NULL;
+    mount_table_t *mounts = NULL;
 
     /* Pre-flight privilege check arrays */
     char **preflight_storage_paths = NULL;
@@ -888,10 +890,28 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         output_set_verbosity(out, OUTPUT_VERBOSE);
     }
 
-    /* Validate custom prefix if provided */
-    if (opts->custom_prefix) {
-        err = path_validate_custom_prefix(opts->custom_prefix);
+    /* Validate deployment target if provided */
+    if (opts->target) {
+        err = mount_validate_target(opts->target);
         if (err) goto cleanup;
+    }
+
+    /* Build the per-command mount table once. The single binding pairs
+     * opts->profile with opts->target so that both classify (fs -> storage)
+     * and resolve (custom/X -> fs) work against the same handle. A NULL or
+     * empty target contributes no CUSTOM mount; HOME and the universal
+     * ROOT sentinel are always added by mount_table_build. The table rides
+     * the command arena. */
+    {
+        mount_decl_t binding = {
+            .profile = opts->profile,
+            .target  = opts->target,
+        };
+        err = mount_table_build(ctx->arena, &binding, 1, &mounts);
+        if (err) {
+            err = error_wrap(err, "Failed to build mount table");
+            goto cleanup;
+        }
     }
 
     /* PRE-FLIGHT PRIVILEGE CHECK
@@ -917,10 +937,10 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         goto cleanup;
     }
 
-    /* Pre-compute whether custom prefix needs elevation.
+    /* Pre-compute whether deployment target needs elevation.
      * All paths in this add invocation share the same prefix. */
-    bool custom_needs_elevation = opts->custom_prefix
-        ? privilege_custom_prefix_needs_elevation(opts->custom_prefix)
+    bool custom_needs_elevation = opts->target
+        ? privilege_target_needs_elevation(opts->target)
         : false;  /* No prefix → no custom/ paths → irrelevant */
 
     /* Resolve all paths to storage format (pre-flight for privilege check).
@@ -930,14 +950,14 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         const char *file_path = opts->files[i];
         char *absolute = NULL;
         char *storage_path = NULL;
-        path_prefix_t prefix;
+        mount_kind_t prefix;
 
         /* Storage-path inputs (home/..., root/..., custom/...) — only include
          * paths that actually need elevation in the privilege check. */
-        if (str_starts_with(file_path, "home/") ||
-            str_starts_with(file_path, "root/") || str_starts_with(file_path, "custom/")) {
-            bool needs_elevation = str_starts_with(file_path, "root/") ||
-                (str_starts_with(file_path, "custom/") && custom_needs_elevation);
+        if (mount_is_storage_path(file_path)) {
+            mount_kind_t kind = mount_kind_of(file_path);
+            bool needs_elevation = (kind == MOUNT_ROOT) ||
+                (kind == MOUNT_CUSTOM && custom_needs_elevation);
 
             if (!needs_elevation) continue;
 
@@ -953,29 +973,40 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         }
 
         /* Filesystem path — normalize raw user input to absolute path first */
-        err = path_normalize_input(file_path, opts->custom_prefix, &absolute);
+        err = path_normalize_at(file_path, opts->target, &absolute);
         if (err) {
             err = error_wrap(err, "Failed to resolve path '%s'", file_path);
             goto cleanup;
         }
 
-        err = path_to_storage(absolute, opts->custom_prefix, &storage_path, &prefix);
+        /* Pre-flight policy: skip non-existent paths silently. The main
+         * resolution loop's existence check (search "Path not found" below)
+         * is the canonical user-facing surface for this error; firing it
+         * twice produces no benefit and the pre-flight only exists to
+         * answer "would this op touch a path needing elevation?". A
+         * non-existent path contributes nothing to that question. */
+        if (!fs_lexists(absolute)) {
+            free(absolute);
+            continue;
+        }
+
+        err = mount_classify(mounts, absolute, &storage_path, &prefix);
         free(absolute);
         if (err) {
             /* A directory input equal to a classification root ($HOME, "/",
-             * or --prefix) has no storage representation; path_to_storage
+             * or --target) has no storage representation; mount_classify
              * returns ERR_INVALID_ARG. The main loop's walker will still
              * expand its descendants — the metadata path handles that fine.
              *
              * What DOES need handling here: the pre-flight's only question
              * is "will this op touch a path that needs elevation?" If the
-             * custom prefix needs elevation, the expanded descendants will
+             * deployment target needs elevation, the expanded descendants will
              * land under custom/, so we stub ONE representative "custom/"
              * entry as a proxy. Without this, a directory-typed input would
              * bypass the privilege check entirely.
              *
              * Known pre-existing gap: `dotta add /` as non-root with no
-             * --prefix takes this branch for the root/ classification root;
+             * --target takes this branch for the root/ classification root;
              * the sentinel only fires for custom/, so root/ elevation is
              * missed in that edge case. Very unusual input, not addressed. */
             if (!fs_is_symlink(file_path) && fs_is_directory(file_path)) {
@@ -999,7 +1030,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         }
 
         /* Only include paths that need elevation in the privilege check */
-        if (prefix == PREFIX_ROOT || (prefix == PREFIX_CUSTOM && custom_needs_elevation)) {
+        if (prefix == MOUNT_ROOT || (prefix == MOUNT_CUSTOM && custom_needs_elevation)) {
             preflight_allocated_paths[preflight_storage_count] = storage_path;
             preflight_storage_paths[preflight_storage_count] = storage_path;
             preflight_storage_count++;
@@ -1147,29 +1178,28 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         char *absolute = NULL;
 
         /* Check if input is a storage path */
-        if (str_starts_with(file, "home/") ||
-            str_starts_with(file, "root/") || str_starts_with(file, "custom/")) {
+        if (mount_is_storage_path(file)) {
 
-            /* Determine if we need custom prefix for this storage path */
-            const char *prefix_for_conversion = NULL;
-            if (str_starts_with(file, "custom/")) {
-                /* custom/ paths require --prefix flag */
-                prefix_for_conversion = opts->custom_prefix;
-
-                if (!prefix_for_conversion || prefix_for_conversion[0] == '\0') {
+            /* custom/ paths require --target. Pre-validate at the call
+             * site so the user gets the directive "pass --target" message
+             * rather than mount_resolve's generic "no deployment target
+             * for profile" surface. */
+            if (mount_kind_of(file) == MOUNT_CUSTOM) {
+                if (!opts->target || opts->target[0] == '\0') {
                     err = ERROR(
-                        ERR_INVALID_ARG, "Storage path '%s' requires --prefix flag\n"
-                        "Usage: dotta add -p %s --prefix /path/to/target %s",
+                        ERR_INVALID_ARG, "Storage path '%s' requires --target flag\n"
+                        "Usage: dotta add -p %s --target /path/to/target %s",
                         file, opts->profile, file
                     );
                     goto cleanup;
                 }
             }
-            /* home/ and root/ don't need custom prefix (pass NULL) */
 
-            /* Convert storage path to filesystem path */
+            /* Convert storage path to filesystem path via the mount table.
+             * For home/ and root/ the profile is ignored; for custom/
+             * the per-profile target binding is consulted. */
             char *fs_path = NULL;
-            err = path_from_storage(file, prefix_for_conversion, &fs_path);
+            err = mount_resolve(mounts, opts->profile, file, &fs_path);
             if (err) {
                 err = error_wrap(err, "Failed to convert storage path '%s'", file);
                 goto cleanup;
@@ -1184,7 +1214,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
             }
         } else {
             /* Regular filesystem path - normalize it */
-            err = path_normalize_input(file, opts->custom_prefix, &absolute);
+            err = path_normalize_at(file, opts->target, &absolute);
             if (err) {
                 err = error_wrap(err, "Failed to resolve path '%s'", file);
                 goto cleanup;
@@ -1294,21 +1324,23 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         }
     }
 
-    /* Single-pass: add files and capture metadata inline */
+    /* Single-pass: add files and capture metadata inline.
+     * Files come from the walker output — already absolute and existing,
+     * so mount_classify cannot trip on the existence check that the old
+     * legacy wrapper performed. */
     for (size_t i = 0; i < all_files->count; i++) {
         const char *file_path = all_files->items[i];
 
         /* Compute storage path once */
         char *storage_path = NULL;
-        path_prefix_t prefix;
-        err = path_to_storage(file_path, opts->custom_prefix, &storage_path, &prefix);
+        err = mount_classify(mounts, file_path, &storage_path, NULL);
         if (err) {
             err = error_wrap(err, "Failed to convert path '%s'", file_path);
             goto cleanup;
         }
 
         /* Validate storage path */
-        err = path_validate_storage(storage_path);
+        err = mount_validate_storage(storage_path);
         if (err) {
             free(storage_path);
             goto cleanup;
@@ -1337,8 +1369,8 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      * directory it walks into — including the CLI-arg top-level — so this
      * loop captures the full tree, not just the CLI-named entry points.
      *
-     * Classification roots ($HOME, "/", --prefix) have no storage-path
-     * representation: path_to_storage returns ERR_INVALID_ARG and we skip
+     * Classification roots ($HOME, "/", --target) have no storage-path
+     * representation: mount_classify returns ERR_INVALID_ARG and we skip
      * them by design. Their descendants are captured normally.
      */
     size_t dir_tracked_count = 0;
@@ -1346,13 +1378,12 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         const char *filesystem_path = all_directories->items[i];
 
         char *storage_path = NULL;
-        path_prefix_t prefix;
-        err = path_to_storage(filesystem_path, opts->custom_prefix, &storage_path, &prefix);
+        err = mount_classify(mounts, filesystem_path, &storage_path, NULL);
         if (err) {
-            /* Classification root (filesystem_path equals $HOME, "/", or --prefix):
+            /* Classification root (filesystem_path equals $HOME, "/", or --target):
              * no storage encoding exists. Skip the root itself; its descendants
              * appear as separate entries and are captured normally. The error
-             * message in path.c:path_classify makes this semantic explicit. */
+             * message in mount_classify makes this semantic explicit. */
             if (err->code == ERR_INVALID_ARG) {
                 error_free(err);
                 err = NULL;
@@ -1454,7 +1485,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     }
 
     /* Create commit */
-    err = create_commit(wt, opts, all_files, config, NULL);
+    err = create_commit(wt, opts, all_files, mounts, config, NULL);
     if (err) goto cleanup;
 
     /* Update manifest - auto-enable new profiles, sync existing enabled profiles
@@ -1483,7 +1514,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
          * apply_scope is the scope reconciler; add is the disk-capture path.
          */
         error_t *enable_err = auto_enable_and_sync_profile(
-            repo, ctx->state, ctx->arena, opts->profile, opts->custom_prefix,
+            repo, ctx->state, ctx->arena, opts->profile, opts->target,
             all_files, &manifest_updated, &manifest_synced_count
         );
 
@@ -1508,7 +1539,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
          * If not enabled, skips manifest update (user must explicitly enable).
          */
         error_t *manifest_err = update_manifest_after_add(
-            repo, ctx->state, ctx->arena, opts->profile, opts->custom_prefix,
+            repo, ctx->state, ctx->arena, opts->profile, opts->target,
             all_files, &manifest_updated, &manifest_synced_count
         );
 
@@ -1725,8 +1756,8 @@ static const args_opt_t add_opts[] = {
         "Profile name (alternative to positional)"
     ),
     ARGS_STRING(
-        "prefix",             "<path>",
-        cmd_add_options_t,    custom_prefix,
+        "target",             "<path>",
+        cmd_add_options_t,    target,
         "Declare a relocatable storage root"
     ),
     ARGS_STRING(
@@ -1779,7 +1810,7 @@ const args_command_t spec_add = {
     .description =
         "Import files or directories into a profile branch. The storage\n"
         "prefix derives from the source path — home/ under $HOME, root/\n"
-        "otherwise — unless --prefix declares a relocatable root, in\n"
+        "otherwise — unless --target declares a relocatable root, in\n"
         "which case files are stored as custom/<path-relative-to-root>.\n"
         "Metadata (mode, owner) is captured outside HOME.\n",
     .notes       =
@@ -1793,7 +1824,7 @@ const args_command_t spec_add = {
         "  %s add darwin ~/.config/nvim              # Directory\n"
         "  %s add global ~/.ssh/config -e '*.pub'    # With exclude\n"
         "  %s add global ~/.ssh/id_rsa --encrypt     # Force encryption\n"
-        "  %s add web /mnt/jails/web/nginx.conf --prefix /mnt/jails/web\n",
+        "  %s add web /mnt/jails/web/nginx.conf --target /mnt/jails/web\n",
     .epilogue    =
         "See also:\n"
         "  %s key set                 # Set encryption passphrase\n"

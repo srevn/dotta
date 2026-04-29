@@ -112,7 +112,7 @@ typedef enum {
  * - ALL ITEMS: key = storage_path (e.g., "home/.bashrc", "home/.config/nvim")
  *
  * This ensures metadata portability across machines.
- * Filesystem paths are derived on-demand using path_from_storage() when needed
+ * Filesystem paths are derived on-demand via mount_resolve() when needed
  * for deployment or stat operations.
  *
  * Symlink semantics:

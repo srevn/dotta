@@ -24,11 +24,11 @@
 #include "base/arena.h"
 #include "base/array.h"
 #include "base/error.h"
-#include "infra/path.h"
+#include "infra/mount.h"
 #include "sys/filesystem.h"
 
 /* Schema version - must match database */
-#define STATE_SCHEMA_VERSION "11"
+#define STATE_SCHEMA_VERSION "12"
 
 /* Database file name */
 #define STATE_DB_NAME "dotta.db"
@@ -159,7 +159,7 @@ static error_t *initialize_schema(sqlite3 *db) {
         "    name TEXT NOT NULL UNIQUE,"
         "    enabled_at INTEGER NOT NULL,"
         "    commit_oid BLOB NOT NULL,"
-        "    custom_prefix TEXT"
+        "    target TEXT"
         ") STRICT;"
 
         /* Index for existence checks */
@@ -653,7 +653,7 @@ static error_t *prepare_statements(state_t *state) {
 
     /* Insert profile (used in state_set_profiles) */
     const char *sql_profile =
-        "INSERT INTO enabled_profiles (position, name, enabled_at, commit_oid, custom_prefix) "
+        "INSERT INTO enabled_profiles (position, name, enabled_at, commit_oid, target) "
         "VALUES (?, ?, ?, ?, ?);";
 
     rc = sqlite3_prepare_v2(state->db, sql_profile, -1, &state->stmt_insert_profile, NULL);
@@ -784,7 +784,7 @@ static void invalidate_profile_entries(state_t *state) {
 
     for (size_t i = 0; i < state->profile_entry_count; i++) {
         free(state->profile_entries[i].name);
-        free(state->profile_entries[i].custom_prefix);
+        free(state->profile_entries[i].target);
     }
     free(state->profile_entries);
     state->profile_entries = NULL;
@@ -796,7 +796,7 @@ static void invalidate_profile_entries(state_t *state) {
  * Load the enabled_profiles row cache
  *
  * Lazy loader: performs one SELECT over enabled_profiles and materializes
- * every row (name, custom_prefix, commit_oid) into the cache. Rows are
+ * every row (name, target, commit_oid) into the cache. Rows are
  * ordered by position to match the user's precedence order.
  *
  * The cache replaces four previous query-shape functions (get_prefix_map,
@@ -838,7 +838,7 @@ static error_t *load_profile_entries(state_t *state) {
 
     /* Read all rows in position order. */
     const char *sql =
-        "SELECT name, custom_prefix, commit_oid FROM enabled_profiles "
+        "SELECT name, target, commit_oid FROM enabled_profiles "
         "ORDER BY position ASC;";
 
     sqlite3_stmt *stmt = NULL;
@@ -873,12 +873,12 @@ static error_t *load_profile_entries(state_t *state) {
          * at index i would otherwise leak its successful allocations. */
         state_profile_entry_t *row = &entries[i];
         row->name = strdup(name_db);
-        row->custom_prefix = prefix_db ? strdup(prefix_db) : NULL;
+        row->target = prefix_db ? strdup(prefix_db) : NULL;
         if (oid_blob) memcpy(row->commit_oid.id, oid_blob, GIT_OID_RAWSZ);
 
-        if (!row->name || (prefix_db && !row->custom_prefix)) {
+        if (!row->name || (prefix_db && !row->target)) {
             free(row->name);
-            free(row->custom_prefix);
+            free(row->target);
             err = ERROR(ERR_MEMORY, "Failed to copy enabled profile row");
             break;
         }
@@ -895,7 +895,7 @@ static error_t *load_profile_entries(state_t *state) {
     if (err) {
         for (size_t j = 0; j < i; j++) {
             free(entries[j].name);
-            free(entries[j].custom_prefix);
+            free(entries[j].target);
         }
         free(entries);
         return err;
@@ -947,9 +947,9 @@ error_t *state_peek_profiles(
 }
 
 /**
- * Peek a single profile's custom prefix
+ * Peek a single profile's deployment target
  */
-const char *state_peek_profile_prefix(
+const char *state_peek_profile_target(
     const state_t *state,
     const char *profile
 ) {
@@ -962,7 +962,7 @@ const char *state_peek_profile_prefix(
     }
 
     const state_profile_entry_t *entry = find_profile_entry(state, profile);
-    return entry ? entry->custom_prefix : NULL;
+    return entry ? entry->target : NULL;
 }
 
 /**
@@ -1043,12 +1043,12 @@ bool state_has_profile(const state_t *state, const char *profile) {
 }
 
 /**
- * Enable profile with optional custom prefix
+ * Enable profile with optional deployment target
  */
 error_t *state_enable_profile(
     state_t *state,
     const char *profile,
-    const char *custom_prefix
+    const char *target
 ) {
     CHECK_NULL(state);
     CHECK_NULL(profile);
@@ -1063,12 +1063,12 @@ error_t *state_enable_profile(
      * commit_oid is zeroblob(20) on fresh INSERT — the manifest layer fills it
      * via state_set_profile_commit_oid after syncing entries. On UPSERT conflict
      * (profile already enabled), commit_oid is preserved — it represents the
-     * last-synced HEAD and must not be clobbered by a prefix update. */
+     * last-synced HEAD and must not be clobbered by a target update. */
     const char *sql =
-        "INSERT INTO enabled_profiles (name, custom_prefix, enabled_at, commit_oid, position) "
+        "INSERT INTO enabled_profiles (name, target, enabled_at, commit_oid, position) "
         "VALUES (?1, ?2, ?3, zeroblob(20), "
         "  (SELECT COALESCE(MAX(position), 0) + 1 FROM enabled_profiles)) "
-        "ON CONFLICT(name) DO UPDATE SET custom_prefix = ?2, enabled_at = ?3";
+        "ON CONFLICT(name) DO UPDATE SET target = ?2, enabled_at = ?3";
 
     sqlite3_stmt *stmt = NULL;
     int rc = sqlite3_prepare_v2(state->db, sql, -1, &stmt, NULL);
@@ -1078,8 +1078,8 @@ error_t *state_enable_profile(
 
     /* Bind parameters */
     sqlite3_bind_text(stmt, 1, profile, -1, SQLITE_STATIC);
-    if (custom_prefix && custom_prefix[0] != '\0') {
-        sqlite3_bind_text(stmt, 2, custom_prefix, -1, SQLITE_STATIC);
+    if (target && target[0] != '\0') {
+        sqlite3_bind_text(stmt, 2, target, -1, SQLITE_STATIC);
     } else {
         sqlite3_bind_null(stmt, 2);
     }
@@ -1133,11 +1133,11 @@ error_t *state_disable_profile(
  * Set enabled profiles (bulk operation)
  *
  * Bulk API for atomic profile list replacement (clone, reorder, interactive).
- * Automatically preserves custom_prefix and commit_oid values for profiles
+ * Automatically preserves target and commit_oid values for profiles
  * that remain enabled.
  *
  * For individual profile changes, prefer state_enable_profile()/state_disable_profile()
- * which provide explicit custom prefix management.
+ * which provide explicit deployment target management.
  *
  * Hot path - must be fast even with 10,000 deployed files.
  * Only modifies enabled_profiles table (virtual_manifest untouched).
@@ -1170,7 +1170,7 @@ error_t *state_set_profiles(
     }
 
     /* Ensure the row cache is populated — we read old rows from it to
-     * preserve custom_prefix and commit_oid across DELETE + re-INSERT. */
+     * preserve target and commit_oid across DELETE + re-INSERT. */
     error_t *err = load_profile_entries(state);
     if (err) {
         return error_wrap(err, "Failed to load profile row cache");
@@ -1209,7 +1209,7 @@ error_t *state_set_profiles(
         sqlite3_reset(state->stmt_insert_profile);
         sqlite3_clear_bindings(state->stmt_insert_profile);
 
-        /* Bind parameters: position, name, enabled_at, commit_oid, custom_prefix.
+        /* Bind parameters: position, name, enabled_at, commit_oid, target.
          * SQLITE_TRANSIENT: SQLite copies immediately; source lifetimes are ours. */
         sqlite3_bind_int64(state->stmt_insert_profile, 1, (sqlite3_int64) i);
         sqlite3_bind_text(
@@ -1220,10 +1220,10 @@ error_t *state_set_profiles(
             state->stmt_insert_profile, 4,
             preserved_oid.id, GIT_OID_RAWSZ, SQLITE_TRANSIENT
         );
-        if (preserved && preserved->custom_prefix) {
+        if (preserved && preserved->target) {
             sqlite3_bind_text(
                 state->stmt_insert_profile, 5,
-                preserved->custom_prefix, -1, SQLITE_TRANSIENT
+                preserved->target, -1, SQLITE_TRANSIENT
             );
         } else {
             sqlite3_bind_null(state->stmt_insert_profile, 5);
@@ -1930,7 +1930,7 @@ error_t *state_get_all_files(
  *
  * Converts portable metadata (storage_path) to state entry (both paths).
  * Derives filesystem_path from the storage_path by consulting the
- * deployment topology for `profile`'s deploy_root binding.
+ * deployment topology for `profile`'s target binding.
  *
  * @param meta_item Metadata item (must not be NULL, must be DIRECTORY kind)
  * @param profile Source profile name (must not be NULL)
@@ -1938,12 +1938,12 @@ error_t *state_get_all_files(
  * @param arena Arena for allocations (must not be NULL)
  * @param out State directory entry (must not be NULL, lifetime tied to arena)
  * @return Error or NULL on success; ERR_NOT_FOUND when meta_item->key
- *         is custom/... and profile has no deploy_root in roots.
+ *         is custom/... and profile has no target in roots.
  */
 error_t *state_directory_entry_create_from_metadata(
     const metadata_item_t *meta_item,
     const char *profile,
-    const path_roots_t *roots,
+    const mount_table_t *roots,
     arena_t *arena,
     state_directory_entry_t **out
 ) {
@@ -1976,13 +1976,13 @@ error_t *state_directory_entry_create_from_metadata(
     }
 
     /* Derive filesystem path from storage path against the topology.
-     * path_roots_to_filesystem returns ERR_NOT_FOUND when the storage
-     * path is custom/... and the profile has no deploy_root binding —
+     * mount_resolve returns ERR_NOT_FOUND when the storage
+     * path is custom/... and the profile has no target binding —
      * propagate verbatim so the caller (manifest_sync_directories) can
      * silently skip without distinguishing wrap from raw. Any other
      * error (malformed key, allocation failure) is wrapped. */
     char *heap_path = NULL;
-    error_t *err = path_roots_to_filesystem(
+    error_t *err = mount_resolve(
         roots, profile, meta_item->key, &heap_path
     );
     if (err) {
@@ -3606,8 +3606,8 @@ error_t *state_transition_files_by_profile(
  *
  * Cache discipline: this mutation patches the row cache *in place* rather
  * than invalidating it. Only the commit_oid field of the matching row
- * changes; name and custom_prefix allocations are preserved. Callers
- * holding borrows obtained via state_peek_profile_prefix() or iterating
+ * changes; name and target allocations are preserved. Callers
+ * holding borrows obtained via state_peek_profile_target() or iterating
  * state_peek_profiles()[i].name survive this call without reloading —
  * see the lifetime contract in state.h. state_rollback remains the safety
  * net: a rolled-back transaction discards the optimistic patch along with

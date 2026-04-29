@@ -561,12 +561,12 @@ static void sync_manifest_and_report(
     if (skipped > 0) {
         output_styled(
             out, OUTPUT_NORMAL,
-            "    {yellow}⚠{reset} %zu custom file%s skipped (no prefix configured for '%s')\n",
+            "    {yellow}⚠{reset} %zu custom file%s skipped (no target configured for '%s')\n",
             skipped, skipped == 1 ? "" : "s", profile
         );
         output_hint(
             out, OUTPUT_NORMAL,
-            "    Run: dotta profile enable --prefix <path> %s",
+            "    Run: dotta profile enable --target <path> %s",
             profile
         );
     }
@@ -703,12 +703,12 @@ static void handle_remote_ahead(
     if (skipped > 0) {
         output_styled(
             out, OUTPUT_NORMAL,
-            "    {yellow}⚠{reset} %zu custom file%s skipped (no prefix configured for '%s')\n",
+            "    {yellow}⚠{reset} %zu custom file%s skipped (no target configured for '%s')\n",
             skipped, skipped == 1 ? "" : "s", result->profile
         );
         output_hint(
             out, OUTPUT_NORMAL,
-            "    Run: dotta profile enable --prefix <path> %s",
+            "    Run: dotta profile enable --target <path> %s",
             result->profile
         );
     }

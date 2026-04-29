@@ -25,7 +25,7 @@
 #include "core/profiles.h"
 #include "core/state.h"
 #include "infra/content.h"
-#include "infra/path.h"
+#include "infra/mount.h"
 #include "sys/gitops.h"
 #include "sys/stats.h"
 #include "sys/upstream.h"
@@ -564,11 +564,11 @@ static error_t *list_file_history(
      * resolution. Roots ride the command arena (released by dispatch).
      * On build failure, fall back to an empty topology (HOME + root
      * sentinel only) — preserves the existing graceful degradation. */
-    path_roots_t *roots = NULL;
-    error_t *roots_err = profile_build_path_roots(state, NULL, arena, &roots);
+    mount_table_t *roots = NULL;
+    error_t *roots_err = profile_build_mount_table(state, NULL, arena, &roots);
     if (roots_err) {
         error_free(roots_err);
-        error_t *fallback = path_roots_build(arena, NULL, 0, &roots);
+        error_t *fallback = mount_table_build(arena, NULL, 0, &roots);
         if (fallback) {
             return error_wrap(fallback, "Failed to build fallback path roots");
         }
@@ -577,7 +577,7 @@ static error_t *list_file_history(
     /* Resolve input path to storage format (handles absolute, tilde, relative,
      * and storage paths). File need not exist on disk. */
     char *storage_path = NULL;
-    error_t *err = path_resolve_input(opts->file_path, roots, &storage_path);
+    error_t *err = mount_resolve_input(opts->file_path, roots, &storage_path);
     if (err) {
         return error_wrap(err, "Failed to resolve path '%s'", opts->file_path);
     }

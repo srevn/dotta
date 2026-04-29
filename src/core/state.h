@@ -29,7 +29,7 @@
 #include <types.h>
 
 #include "core/metadata.h"
-#include "infra/path.h"
+#include "infra/mount.h"
 
 /**
  * File type in state
@@ -254,7 +254,7 @@ typedef struct {
  */
 typedef struct {
     char *name;              /* Profile name (owned) */
-    char *custom_prefix;     /* Custom deployment prefix (owned); NULL when unset */
+    char *target;            /* Deployment target for custom/ files (owned); NULL when unset */
     git_oid commit_oid;      /* Last-synced HEAD OID (zero OID if never synced) */
 } state_profile_entry_t;
 
@@ -544,9 +544,9 @@ error_t *state_count_encrypted_files(
 );
 
 /**
- * Enable profile with optional custom prefix
+ * Enable profile with optional deployment target
  *
- * If profile already enabled, updates its custom_prefix (UPSERT behavior).
+ * If profile already enabled, updates its target (UPSERT behavior).
  * Position assigned automatically as MAX(position) + 1 for new profiles.
  *
  * Preconditions:
@@ -555,19 +555,19 @@ error_t *state_count_encrypted_files(
  *
  * Postconditions:
  *   - Profile added to enabled_profiles or existing entry updated
- *   - custom_prefix column set to prefix (or NULL if not provided)
+ *   - target column set to the supplied value (or NULL if not provided)
  *   - enabled_at timestamp updated to current time
  *   - Transaction remains open (caller commits)
  *
  * @param state State handle (must not be NULL, must have active transaction)
  * @param profile Profile name (must not be NULL)
- * @param custom_prefix Custom prefix or NULL for home/root profiles
+ * @param target Deployment target or NULL for home/root profiles
  * @return Error or NULL on success
  */
 error_t *state_enable_profile(
     state_t *state,
     const char *profile,
-    const char *custom_prefix
+    const char *target
 );
 
 /**
@@ -597,17 +597,17 @@ error_t *state_disable_profile(
  *
  * BULK API: For atomic profile list replacement (clone, reorder, interactive).
  * For individual profile enable/disable, prefer state_enable_profile() and
- * state_disable_profile() which provide explicit custom prefix management.
+ * state_disable_profile() which provide explicit deployment target management.
  *
- * Custom Prefix Preservation:
- *   Automatically preserves custom_prefix values for profiles that remain
+ * Target Preservation:
+ *   Automatically preserves target values for profiles that remain
  *   enabled after the operation. This enables safe profile reordering without
- *   losing custom prefix associations.
+ *   losing deployment target associations.
  *
  * Use Cases:
- *   - Clone: Initial profile list setup (no custom prefixes exist yet)
- *   - Reorder: Change precedence order while preserving custom_prefix values
- *   - Interactive: Bulk enable/disable selection with prefix preservation
+ *   - Clone: Initial profile list setup (no deployment targets exist yet)
+ *   - Reorder: Change precedence order while preserving target values
+ *   - Interactive: Bulk enable/disable selection with target preservation
  *
  * Position Assignment:
  *   Profiles are assigned sequential positions starting from 0.
@@ -622,7 +622,7 @@ error_t *state_disable_profile(
  * Postconditions:
  *   - enabled_profiles table replaced with new profile list
  *   - Positions assigned as 0, 1, 2, ... (n-1)
- *   - custom_prefix values preserved for matching profile names
+ *   - target values preserved for matching profile names
  *   - enabled_at timestamp updated to current time for all profiles
  *   - Transaction remains open (caller commits)
  *
@@ -891,7 +891,7 @@ error_t *state_set_profile_commit_oid(
  * matches enabled_profiles.position (the user's precedence order).
  *
  * Lifetime — pointers into the row array and the strings it references
- * (name, custom_prefix) remain valid until the next shape mutation on
+ * (name, target) remain valid until the next shape mutation on
  * enabled_profiles:
  *   - state_enable_profile
  *   - state_disable_profile
@@ -902,7 +902,7 @@ error_t *state_set_profile_commit_oid(
  * state_set_profile_commit_oid does NOT invalidate these borrows — it
  * patches the commit_oid field of the matching row in place. The
  * commit_oid *value* under a previously returned pointer may change as a
- * result, but the pointer itself (and all name / custom_prefix pointers)
+ * result, but the pointer itself (and all name / target pointers)
  * stays valid.
  *
  * When the state has no database (state_empty), returns *out_entries = NULL,
@@ -920,17 +920,17 @@ error_t *state_peek_profiles(
 );
 
 /**
- * Peek a single profile's custom prefix
+ * Peek a single profile's deployment target
  *
  * Returns a borrowed pointer into the row cache. Same lifetime rules as
  * state_peek_profiles.
  *
  * @param state State (must not be NULL)
  * @param profile Profile name to look up (must not be NULL)
- * @return Borrowed custom prefix string, or NULL when the profile has no
- *         custom prefix, is not enabled, or the state has no database.
+ * @return Borrowed deployment target string, or NULL when the profile has no
+ *         deployment target, is not enabled, or the state has no database.
  */
-const char *state_peek_profile_prefix(
+const char *state_peek_profile_target(
     const state_t *state,
     const char *profile
 );
@@ -980,13 +980,13 @@ error_t *state_get_entries_by_profile(
  *
  * Converts portable metadata (storage_path) to state entry (both paths).
  * Derives filesystem_path from the storage_path by consulting the
- * deployment topology for `profile`'s deploy_root binding.
+ * deployment topology for `profile`'s target binding.
  *
  * The entry and its string fields are allocated from the caller's arena.
  *
  * Error semantics: returns ERR_NOT_FOUND when the storage path starts
- * with "custom/" but `profile` has no deploy_root in `roots` (clone
- * before --prefix, or profile enabled without --prefix). The sole
+ * with "custom/" but `profile` has no target in `roots` (clone
+ * before --target, or profile enabled without --target). The sole
  * caller (manifest_sync_directories) treats that as a silent skip.
  *
  * @param meta_item Metadata item (must not be NULL, must be DIRECTORY kind)
@@ -999,7 +999,7 @@ error_t *state_get_entries_by_profile(
 error_t *state_directory_entry_create_from_metadata(
     const metadata_item_t *meta_item,
     const char *profile,
-    const path_roots_t *roots,
+    const mount_table_t *roots,
     arena_t *arena,
     state_directory_entry_t **out
 );

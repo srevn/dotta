@@ -200,17 +200,17 @@ cleanup:
  * Build a per-machine deployment topology from state
  *
  * State-aware adapter that materializes enabled_profiles' (name, prefix)
- * rows into path_binding_t entries and delegates the augmentation (HOME,
- * canonical HOME, root sentinel) to path_roots_build. The single chokepoint
+ * rows into mount_decl_t entries and delegates the augmentation (HOME,
+ * canonical HOME, root sentinel) to mount_table_build. The single chokepoint
  * for "what does the deployment topology look like for this command?" —
  * scope_build feeds the active set, list/show/revert feed NULL for the
  * full enabled set.
  */
-error_t *profile_build_path_roots(
+error_t *profile_build_mount_table(
     const state_t *state,
     const string_array_t *names,
     arena_t *arena,
-    path_roots_t **out
+    mount_table_t **out
 ) {
     CHECK_NULL(state);
     CHECK_NULL(arena);
@@ -223,11 +223,11 @@ error_t *profile_build_path_roots(
      * arena_strdup the profile name into each binding: the caller's array
      * (typically scope's enabled/filter heap-owned strings) may be freed
      * before the arena is destroyed, so a borrow would dangle in the
-     * window between scope_free and arena_destroy. The deploy_root pointer
+     * window between scope_free and arena_destroy. The target pointer
      * is borrowed from the state row cache, which outlives the arena —
      * no copy needed. */
     if (names != NULL) {
-        path_binding_t *bindings = NULL;
+        mount_decl_t *bindings = NULL;
         if (names->count > 0) {
             bindings = arena_calloc(arena, names->count, sizeof(*bindings));
             if (!bindings) {
@@ -242,17 +242,17 @@ error_t *profile_build_path_roots(
                     ERR_MEMORY, "Failed to duplicate profile name '%s'", name
                 );
             }
-            bindings[i] = (path_binding_t){
-                .profile     = arena_name,
-                .deploy_root = state_peek_profile_prefix(state, name)
+            bindings[i] = (mount_decl_t){
+                .profile = arena_name,
+                .target = state_peek_profile_target(state, name)
             };
         }
-        return path_roots_build(arena, bindings, names->count, out);
+        return mount_table_build(arena, bindings, names->count, out);
     }
 
     /* All-enabled mode (row-cache scan).
      *
-     * Both name and custom_prefix are borrowed from the row cache; their
+     * Both name and target are borrowed from the row cache; their
      * lifetime ties to the next enabled_profiles shape mutation, which by
      * VWD-command construction does not occur between scope_build and
      * scope_free. State outlives the arena, so the borrows are sound for
@@ -264,20 +264,20 @@ error_t *profile_build_path_roots(
         return error_wrap(err, "Failed to peek profile rows");
     }
 
-    path_binding_t *bindings = NULL;
+    mount_decl_t *bindings = NULL;
     if (count > 0) {
         bindings = arena_calloc(arena, count, sizeof(*bindings));
         if (!bindings) {
             return ERROR(ERR_MEMORY, "Failed to allocate path bindings");
         }
         for (size_t i = 0; i < count; i++) {
-            bindings[i] = (path_binding_t){
-                .profile     = entries[i].name,
-                .deploy_root = entries[i].custom_prefix
+            bindings[i] = (mount_decl_t){
+                .profile = entries[i].name,
+                .target = entries[i].target
             };
         }
     }
-    return path_roots_build(arena, bindings, count, out);
+    return mount_table_build(arena, bindings, count, out);
 }
 
 /**

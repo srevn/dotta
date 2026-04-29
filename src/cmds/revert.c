@@ -23,7 +23,7 @@
 #include "core/profiles.h"
 #include "core/state.h"
 #include "infra/content.h"
-#include "infra/path.h"
+#include "infra/mount.h"
 #include "sys/gitops.h"
 #include "sys/stats.h"
 #include "utils/commit.h"
@@ -153,18 +153,18 @@ static error_t *discover_file(
      * resolution. Roots ride the command arena (released by dispatch).
      * On build failure, fall back to an empty topology — preserves the
      * existing graceful degradation. */
-    path_roots_t *roots = NULL;
-    error_t *roots_err = profile_build_path_roots(state, NULL, arena, &roots);
+    mount_table_t *roots = NULL;
+    error_t *roots_err = profile_build_mount_table(state, NULL, arena, &roots);
     if (roots_err) {
         error_free(roots_err);
-        error_t *fallback = path_roots_build(arena, NULL, 0, &roots);
+        error_t *fallback = mount_table_build(arena, NULL, 0, &roots);
         if (fallback) {
             return error_wrap(fallback, "Failed to build fallback path roots");
         }
     }
 
     /* Resolve input path to storage format (file need not exist) */
-    err = path_resolve_input(file_path, roots, &storage_path);
+    err = mount_resolve_input(file_path, roots, &storage_path);
     if (err) {
         return err;
     }

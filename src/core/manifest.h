@@ -180,7 +180,7 @@ typedef struct {
  * Preconditions:
  *   - state MUST have an active write transaction.
  *   - enabled_profiles is fully authoritative for the target scope:
- *       name, position (precedence), custom_prefix, commit_oid.
+ *       name, position (precedence), target, commit_oid.
  *   - Git branches are at the commits referenced by
  *     enabled_profiles.commit_oid.
  *   - stats_filter and out_stats are either both NULL or both non-NULL.
@@ -671,10 +671,10 @@ error_t *manifest_sync_diff(
  * file_entry_t shape uniform across every manifest construction path.
  *
  * Custom-prefix resolution is delegated to `roots`. The handle MUST
- * record a binding for `profile` (with deploy_root set) when the tree
+ * record a binding for `profile` (with target set) when the tree
  * contains custom/ entries; otherwise those entries are skipped during
- * the walk (via path_roots_to_filesystem returning ERR_NOT_FOUND, which
- * the callback treats as "this profile has no deploy_root on this
+ * the walk (via mount_resolve returning ERR_NOT_FOUND, which
+ * the callback treats as "this profile has no target on this
  * machine — skip"). Trees without custom/ entries can pass any roots
  * handle, including one with no binding for `profile`.
  *
@@ -693,7 +693,7 @@ error_t *manifest_sync_diff(
 error_t *manifest_build_from_tree(
     git_tree *tree,
     const char *profile,
-    const path_roots_t *roots,
+    const mount_table_t *roots,
     const metadata_t *metadata,
     arena_t *arena,
     manifest_t **out

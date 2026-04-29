@@ -27,7 +27,8 @@
 #include "core/workspace.h"
 #include "infra/compare.h"
 #include "infra/content.h"
-#include "infra/path.h"
+#include "infra/pathspec.h"
+#include "infra/mount.h"
 #include "sys/gitops.h"
 
 /**
@@ -634,7 +635,7 @@ static error_t *compare_manifest_to_filesystem(
     git_repository *repo,
     const manifest_t *manifest,
     const char *profile,
-    const path_filter_t *file_filter,
+    const pathspec_t *file_filter,
     const cmd_diff_options_t *opts,
     content_cache_t *cache,
     output_t *out,
@@ -659,7 +660,7 @@ static error_t *compare_manifest_to_filesystem(
         const char *storage_path = entry->storage_path;
 
         /* Check file filter */
-        if (!path_filter_matches(file_filter, storage_path)) {
+        if (!pathspec_matches(file_filter, storage_path)) {
             continue;
         }
 
@@ -822,7 +823,7 @@ cleanup:
  * @return Number of filter entries that matched no manifest entry (0 = all matched)
  */
 static size_t validate_filter_paths(
-    const path_filter_t *file_filter,
+    const pathspec_t *file_filter,
     const manifest_t *manifest,
     arena_t *arena,
     output_t *out
@@ -960,7 +961,7 @@ static error_t *diff_commit_to_workspace(
     CHECK_NULL(out);
 
     const string_array_t *profiles = scope_enabled(scope);
-    const path_filter_t *file_filter = scope_paths(scope);
+    const pathspec_t *file_filter = scope_paths(scope);
 
     error_t *err = NULL;
     git_oid commit_oid;
@@ -1035,8 +1036,8 @@ static error_t *diff_commit_to_workspace(
         .count = 1,
         .capacity = 0,
     };
-    path_roots_t *roots = NULL;
-    err = profile_build_path_roots(state, &single_profile, arena, &roots);
+    mount_table_t *roots = NULL;
+    err = profile_build_mount_table(state, &single_profile, arena, &roots);
     if (err) {
         err = error_wrap(err, "Failed to build deployment topology for commit");
         goto cleanup;
@@ -1087,7 +1088,7 @@ cleanup:
 /**
  * Build git_strarray pathspec from path filter
  *
- * Converts a path_filter_t (containing exact paths in a hashmap and glob
+ * Converts a pathspec_t (containing exact paths in a hashmap and glob
  * patterns in an array) into a git_strarray pathspec for libgit2's diff
  * operations.
  *
@@ -1108,7 +1109,7 @@ cleanup:
  * @param opts Diff options to populate (must not be NULL)
  */
 static error_t *build_diff_pathspec(
-    const path_filter_t *filter,
+    const pathspec_t *filter,
     git_diff_options *opts
 ) {
     if (!opts) {
@@ -1190,7 +1191,7 @@ static error_t *diff_commits(
     CHECK_NULL(out);
 
     const string_array_t *profiles = scope_enabled(scope);
-    const path_filter_t *file_filter = scope_paths(scope);
+    const pathspec_t *file_filter = scope_paths(scope);
 
     error_t *err = NULL;
     git_oid commit1_oid, commit2_oid;
@@ -1390,7 +1391,7 @@ static error_t *diff_workspace(
     const manifest_t *manifest = workspace_get_manifest(ws);
 
     /* Step 4: Validate file filter paths against manifest */
-    const path_filter_t *file_filter = scope_paths(scope);
+    const pathspec_t *file_filter = scope_paths(scope);
     if (file_filter) {
         size_t unmatched = validate_filter_paths(file_filter, manifest, arena, out);
         if (unmatched > 0) {

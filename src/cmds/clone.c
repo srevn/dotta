@@ -270,7 +270,7 @@ static error_t *initialize_state(
      * state_set_profiles writes the zero-OID sentinel for every newly
      * enabled profile. We replace each sentinel with the real branch HEAD
      * before calling manifest_apply_scope so enabled_profiles is fully
-     * authoritative (name + position + custom_prefix + commit_oid).
+     * authoritative (name + position + target + commit_oid).
      * apply_scope then trusts the table and does not walk branch refs.
      *
      * Fresh clone → virtual_manifest is empty → apply_scope INSERTs one
@@ -549,7 +549,7 @@ error_t *cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
 
     /* Initialize state with fetched profiles.
      *
-     * Profiles with custom/ files require a machine-specific --prefix to resolve
+     * Profiles with custom/ files require a machine-specific --target to resolve
      * deployment paths. Without it, enabling them creates half-configured state
      * that breaks other operations. Filter them out and hint the user instead.
      * The branch data is already fetched and available locally. */
@@ -574,11 +574,11 @@ error_t *cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
 
             if (has_custom) {
                 output_warning(
-                    out, OUTPUT_NORMAL, "Profile '%s' requires --prefix (not enabled)",
+                    out, OUTPUT_NORMAL, "Profile '%s' requires --target (not enabled)",
                     profile
                 );
                 output_hint(
-                    out, OUTPUT_NORMAL, "Run: dotta profile enable --prefix <path> %s",
+                    out, OUTPUT_NORMAL, "Run: dotta profile enable --target <path> %s",
                     profile
                 );
             } else {

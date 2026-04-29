@@ -24,10 +24,9 @@
 #include <string.h>
 #include <unistd.h>
 
-#include "base/array.h"
 #include "base/error.h"
-#include "base/string.h"
 #include "base/terminal.h"
+#include "infra/mount.h"
 #include "infra/path.h"
 
 /**
@@ -54,18 +53,12 @@ bool privilege_is_sudo(void) {
  * Check if a storage path requires root privileges
  */
 bool privilege_path_requires_root(const char *storage_path) {
-    if (!storage_path) {
-        return false;  /* Defensive: NULL path doesn't require root */
+    if (!mount_is_storage_path(storage_path)) {
+        return false;
     }
 
-    if (storage_path[0] == '\0') {
-        return false;  /* Defensive: empty path doesn't require root */
-    }
-
-    /* Both root/ and custom/ prefix files may require root privileges for ownership capture
-     * home/ prefix files always use current user (never need root) */
-    return str_starts_with(storage_path, "root/") ||
-           str_starts_with(storage_path, "custom/");
+    /* root/ and custom/ may carry ownership metadata; home/ never does. */
+    return mount_kind_of(storage_path) != MOUNT_HOME;
 }
 
 /**
@@ -87,16 +80,16 @@ bool privilege_paths_require_root(const char **storage_paths, size_t count) {
 }
 
 /**
- * Check if a custom prefix requires elevated privileges
+ * Check if a deployment target requires elevated privileges
  *
  * Returns true when the prefix is NOT under $HOME — files under it carry
  * ownership metadata that requires root to read on capture. The
- * boundary-aware comparison (path_is_under_canonical) cross-checks raw
- * and canonical forms of both sides, so symlinks (e.g., macOS
+ * boundary-aware comparison (path_is_under) cross-checks raw and
+ * canonical forms of both sides, so symlinks (e.g., macOS
  * /tmp -> /private/tmp) do not produce false negatives.
  */
-bool privilege_custom_prefix_needs_elevation(const char *custom_prefix) {
-    if (!custom_prefix || custom_prefix[0] == '\0') {
+bool privilege_target_needs_elevation(const char *target) {
+    if (!target || target[0] == '\0') {
         return true;  /* No prefix → conservative default */
     }
 
@@ -107,7 +100,7 @@ bool privilege_custom_prefix_needs_elevation(const char *custom_prefix) {
         return true;  /* Can't determine HOME → conservative default */
     }
 
-    bool under_home = path_is_under_canonical(custom_prefix, home);
+    bool under_home = path_is_under(target, home);
     free(home);
 
     return !under_home;
@@ -143,33 +136,33 @@ bool privilege_path_is_under_home(const char *filesystem_path) {
         return false;
     }
 
-    return path_is_under_canonical(filesystem_path, pw->pw_dir);
+    return path_is_under(filesystem_path, pw->pw_dir);
 }
 
 /**
  * Check if a storage path requires elevation for pre-flight purposes
  *
  * For custom/ paths, checks whether the resolved filesystem_path is under $HOME.
- * This works because filesystem_path = custom_prefix + /relative; the
+ * This works because filesystem_path = target + /relative; the
  * boundary-aware ancestor check on the full path gives the same result as on
  * the prefix alone (no traversal allowed in custom paths, enforced by
- * path_validate_custom_prefix).
+ * mount_validate_target).
  */
-bool privilege_needs_elevation(const char *storage_path, const char *filesystem_path) {
-    if (!storage_path || storage_path[0] == '\0') {
+bool privilege_needs_elevation(
+    const char *storage_path,
+    const char *filesystem_path
+) {
+    if (!mount_is_storage_path(storage_path)) {
         return false;
     }
 
-    if (str_starts_with(storage_path, "root/")) {
-        return true;
+    switch (mount_kind_of(storage_path)) {
+        case MOUNT_ROOT:   return true;
+        case MOUNT_CUSTOM: return privilege_target_needs_elevation(filesystem_path);
+        case MOUNT_HOME:   return false;
     }
 
-    if (str_starts_with(storage_path, "custom/")) {
-        return privilege_custom_prefix_needs_elevation(filesystem_path);
-    }
-
-    /* home/ and other prefixes don't need elevation */
-    return false;
+    return false;  /* unreachable */
 }
 
 /**
@@ -229,43 +222,7 @@ error_t *privilege_get_actual_user(uid_t *uid, gid_t *gid) {
     /* Not running under sudo - return current effective UID/GID */
     *uid = geteuid();
     *gid = getegid();
-    return NULL;
-}
 
-/**
- * Collect paths that require elevated privileges
- *
- * Filters input to paths with root/ or custom/ prefix (both may carry
- * ownership metadata requiring root). Allocates a new array of pointers;
- * does NOT duplicate the path strings themselves.
- *
- * @param all_paths Input array of all paths
- * @param count Number of paths in input array
- * @param priv_paths_out Output array of privileged paths (caller must free)
- * @param priv_count_out Number of privileged paths found
- * @return Error or NULL on success
- */
-static error_t *collect_privileged_paths(
-    char *const *all_paths,
-    size_t count,
-    char ***priv_paths_out,
-    size_t *priv_count_out
-) {
-    CHECK_NULL(all_paths);
-    CHECK_NULL(priv_paths_out);
-    CHECK_NULL(priv_count_out);
-
-    *priv_paths_out = NULL;
-    *priv_count_out = 0;
-
-    ptr_array_t matches PTR_ARRAY_AUTO = { 0 };
-    for (size_t i = 0; i < count; i++) {
-        if (privilege_path_requires_root(all_paths[i])) {
-            RETURN_IF_ERROR(ptr_array_push(&matches, all_paths[i]));
-        }
-    }
-
-    *priv_paths_out = (char **) ptr_array_steal(&matches, priv_count_out);
     return NULL;
 }
 
@@ -432,69 +389,34 @@ error_t *privilege_ensure_for_operation(
     CHECK_NULL(argv);
     CHECK_NULL(out);
 
-    /* Early exit: no paths means no privilege check needed */
+    /* Contract: callers pre-filter with privilege_needs_elevation; an empty
+     * array means no path needs root. */
     if (count == 0) {
         return NULL;
     }
 
-    /* Collect paths requiring elevated privileges */
-    char **priv_paths = NULL;
-    size_t priv_count = 0;
-
-    error_t *err = collect_privileged_paths(
-        storage_paths, count, &priv_paths, &priv_count
-    );
-    if (err) {
-        return err;
-    }
-
-    /* Early exit: no privileged paths means no privilege check needed */
-    if (priv_count == 0) {
-        free(priv_paths);
-        return NULL;
-    }
-
-    /* Early exit: already elevated means we have required privileges */
+    /* Already elevated — we have what we need. */
     if (privilege_is_elevated()) {
-        free(priv_paths);
         return NULL;
     }
-
-    /* We need elevation but don't have it - interact with user */
 
     /* Display requirement (always shown, even in non-interactive mode) */
-    display_privilege_requirement(operation_name, priv_paths, priv_count, out);
+    display_privilege_requirement(operation_name, storage_paths, count, out);
 
-    error_t *result = NULL;
-
-    /* Check if we can prompt user interactively */
     if (interactive && terminal_is_tty()) {
-        /* Interactive mode: prompt for confirmation */
         if (output_confirm(out, "\nAuthenticate with sudo?", true)) {
-            /* User approved - re-exec with sudo */
             output_print(out, OUTPUT_NORMAL, "\nRe-executing with sudo...\n\n");
-
-            /* This function does not return on success */
-            result = reexec_with_sudo(argc, argv);
-
-            /* If we reach here, re-exec failed */
-            free(priv_paths);
-            return result;
-        } else {
-            /* User declined elevation */
-            result = ERROR(ERR_PERMISSION, "Elevation declined by user");
+            /* reexec_with_sudo does not return on success. */
+            return reexec_with_sudo(argc, argv);
         }
-    } else {
-        /* Non-interactive mode: cannot prompt, must fail */
-        output_print(out, OUTPUT_NORMAL, "\nTo proceed, run with sudo:\n");
-        output_print(out, OUTPUT_NORMAL, "  sudo %s %s ...\n\n", argv[0], operation_name);
-
-        result = ERROR(
-            ERR_PERMISSION,
-            "Root privileges required but cannot prompt (non-interactive mode)"
-        );
+        return ERROR(ERR_PERMISSION, "Elevation declined by user");
     }
 
-    free(priv_paths);
-    return result;
+    /* Non-interactive: cannot prompt, must fail. */
+    output_print(out, OUTPUT_NORMAL, "\nTo proceed, run with sudo:\n");
+    output_print(out, OUTPUT_NORMAL, "  sudo %s %s ...\n\n", argv[0], operation_name);
+    return ERROR(
+        ERR_PERMISSION,
+        "Root privileges required but cannot prompt (non-interactive mode)"
+    );
 }

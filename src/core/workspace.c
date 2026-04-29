@@ -1735,7 +1735,7 @@ static error_t *analyze_untracked_files(
             }
 
             /* State directory entries contain:
-             * - filesystem_path: Already resolved with custom_prefix (VWD principle)
+             * - filesystem_path: Already resolved with target (VWD principle)
              * - storage_path: Portable path for storage
              */
 
@@ -1800,7 +1800,7 @@ static error_t *analyze_untracked_files(
  * - DIVERGENCE_OWNERSHIP: Directory owner/group changed (requires root)
  *
  * ARCHITECTURE: Uses state (VWD) instead of metadata (Git) for directory resolution.
- * State contains filesystem_path already resolved with custom_prefix, enabling
+ * State contains filesystem_path already resolved with target, enabling
  * correct divergence detection for custom/ prefix directories.
  *
  * @param ws Workspace (must not be NULL, state must be initialized)
@@ -1855,7 +1855,7 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
         }
 
         /* State directory entries contain:
-         * - filesystem_path: Already resolved with custom_prefix (VWD principle)
+         * - filesystem_path: Already resolved with target (VWD principle)
          * - storage_path: Portable path
          * - profile: Source profile
          * - mode, owner, group: Expected metadata

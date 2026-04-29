@@ -33,16 +33,16 @@ typedef enum {
  */
 typedef struct {
     /* User-facing (read by cmd_add). */
-    const char *profile;        /* Profile name (required) */
-    char **files;               /* Array of file paths (required) */
-    size_t file_count;          /* Number of files */
-    const char *custom_prefix;  /* Custom prefix (optional, for custom/ storage) */
-    const char *message;        /* Commit message (optional) */
-    char **exclude_patterns;    /* Exclude patterns (glob) - read-only */
-    size_t exclude_count;       /* Number of exclude patterns */
-    bool force;                 /* Overwrite existing files in profile */
-    bool verbose;               /* Print verbose output */
-    int encrypt_mode;           /* add_encrypt_mode_t (int for ARGS_FLAG_SET) */
+    const char *profile;     /* Profile name (required) */
+    char **files;            /* Array of file paths (required) */
+    size_t file_count;       /* Number of files */
+    const char *target;      /* Deployment target (optional, for custom/ storage) */
+    const char *message;     /* Commit message (optional) */
+    char **exclude_patterns; /* Exclude patterns (glob) - read-only */
+    size_t exclude_count;    /* Number of exclude patterns */
+    bool force;              /* Overwrite existing files in profile */
+    bool verbose;            /* Print verbose output */
+    int encrypt_mode;        /* add_encrypt_mode_t (int for ARGS_FLAG_SET) */
 
     /* Raw positional bucket (engine-populated; interpreted in post_parse). */
     char **positional_args;

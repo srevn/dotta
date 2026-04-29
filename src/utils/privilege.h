@@ -54,7 +54,7 @@ bool privilege_is_sudo(void);
  *
  * For pre-flight privilege checks ("should we prompt for sudo?"), use
  * privilege_needs_elevation() instead, which considers whether the
- * custom prefix is under $HOME.
+ * deployment target is under $HOME.
  *
  * @param storage_path Storage path (e.g., "home/.bashrc", "custom/etc/nginx.conf")
  * @return true if path requires root privileges, false otherwise
@@ -71,7 +71,7 @@ bool privilege_path_requires_root(const char *storage_path);
 bool privilege_paths_require_root(const char **storage_paths, size_t count);
 
 /**
- * Check if a custom prefix requires elevated privileges
+ * Check if a deployment target requires elevated privileges
  *
  * Determines whether a custom deployment prefix points to a location
  * that requires root access. Prefixes under $HOME are accessible to
@@ -85,10 +85,10 @@ bool privilege_paths_require_root(const char **storage_paths, size_t count);
  * or when path resolution fails (can't determine HOME, prefix
  * doesn't exist on this system, etc.).
  *
- * @param custom_prefix Custom prefix path (NULL returns true)
+ * @param target Deployment target path (NULL returns true)
  * @return true if elevation needed, false if prefix is under $HOME
  */
-bool privilege_custom_prefix_needs_elevation(const char *custom_prefix);
+bool privilege_target_needs_elevation(const char *target);
 
 /**
  * Check if a filesystem path is under the actual user's home directory
@@ -152,22 +152,32 @@ error_t *privilege_get_actual_user(uid_t *uid, gid_t *gid);
 /**
  * Ensure proper privileges for an operation
  *
- * This is the main entry point for privilege management. Call this BEFORE
- * starting any operation that might need root privileges.
+ * Main entry point for privilege management. Call this BEFORE starting
+ * any operation that might need root privileges.
  *
- * BEHAVIOR:
- * 1. If no root/ paths: Returns NULL (proceed normally)
- * 2. If already elevated: Returns NULL (proceed with privileges)
- * 3. If interactive && user approves: Re-execs with sudo (DOES NOT RETURN)
- * 4. If interactive && user declines: Returns ERR_PERMISSION
- * 5. If non-interactive: Returns ERR_PERMISSION with helpful message
+ * Contract:
+ *   `storage_paths` MUST already be filtered to paths that need elevation
+ *   (i.e., the caller has run each candidate through
+ *   privilege_needs_elevation and kept only the truthy ones). Pass count=0
+ *   when no path needs elevation; this function does NOT re-filter.
+ *
+ *   The pre-filter is the caller's responsibility because the precise
+ *   answer requires the resolved filesystem path, which call sites have
+ *   on hand but this entry point does not.
+ *
+ * Behavior:
+ *   1. count == 0:                          Returns NULL (proceed)
+ *   2. Already elevated:                    Returns NULL (proceed)
+ *   3. Interactive + user approves:         Re-execs with sudo (DOES NOT RETURN)
+ *   4. Interactive + user declines:         Returns ERR_PERMISSION
+ *   5. Non-interactive:                     Returns ERR_PERMISSION with hint
  *
  * CRITICAL: This function may re-execute the entire process with sudo.
  * If re-execution succeeds, this function DOES NOT RETURN.
  * Any state changes before calling this function will be lost.
  *
- * @param storage_paths Array of storage paths being operated on
- * @param count Number of paths
+ * @param storage_paths Array of storage paths needing elevation (pre-filtered)
+ * @param count Number of paths (0 means "nothing needs root")
  * @param operation_name Operation name (for display, e.g., "add", "update")
  * @param interactive Whether interactive prompts are allowed
  * @param argc Original argc from main() (for re-exec)

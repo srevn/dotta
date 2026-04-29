@@ -66,15 +66,6 @@ typedef struct {
 } buffer_t;
 
 /**
- * Path prefix types (for storage path conversion)
- */
-typedef enum {
-    PREFIX_HOME,    /* Path under $HOME (stored as home/.bashrc) */
-    PREFIX_ROOT,    /* Absolute path (stored as root/etc/hosts) */
-    PREFIX_CUSTOM   /* Custom prefix (stored as custom/etc/nginx.conf) */
-} path_prefix_t;
-
-/**
  * Workspace state - where an item exists
  *
  * Represents the location/deployment status of a file or directory across

@@ -20,7 +20,7 @@
 #include "base/error.h"
 #include "base/hashmap.h"
 #include "base/string.h"
-#include "infra/path.h"
+#include "infra/mount.h"
 #include "sys/filesystem.h"
 #include "sys/gitops.h"
 #include "utils/privilege.h"
@@ -1361,7 +1361,7 @@ error_t *metadata_from_json(const char *json_str, metadata_t **out) {
         }
 
         /* Validate key format (prevent path traversal) */
-        err = path_validate_storage(key_obj->valuestring);
+        err = mount_validate_storage(key_obj->valuestring);
         if (err) {
             metadata_free(metadata);
             cJSON_Delete(root);

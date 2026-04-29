@@ -22,7 +22,7 @@
 #include "core/metadata.h"
 #include "core/profiles.h"
 #include "infra/content.h"
-#include "infra/path.h"
+#include "infra/mount.h"
 #include "sys/gitops.h"
 
 /**
@@ -647,12 +647,12 @@ error_t *cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
      * resolution. Roots ride the command arena (released by dispatch).
      * On build failure, fall back to an empty topology — preserves the
      * existing graceful degradation. */
-    path_roots_t *roots = NULL;
+    mount_table_t *roots = NULL;
     error_t *roots_err =
-        profile_build_path_roots(state, NULL, ctx->arena, &roots);
+        profile_build_mount_table(state, NULL, ctx->arena, &roots);
     if (roots_err) {
         error_free(roots_err);
-        error_t *fallback = path_roots_build(ctx->arena, NULL, 0, &roots);
+        error_t *fallback = mount_table_build(ctx->arena, NULL, 0, &roots);
         if (fallback) {
             err = error_wrap(fallback, "Failed to build fallback path roots");
             goto cleanup;
@@ -661,9 +661,9 @@ error_t *cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
 
     /* Resolve file path to storage format (common to both explicit and implicit paths).
      * On resolution failure, fall back to the original input — it may be a partial-match
-     * pattern that path_resolve_input rejects but the search below accepts. */
+     * pattern that mount_resolve_input rejects but the search below accepts. */
     error_t *convert_err =
-        path_resolve_input(opts->file_path, roots, &converted);
+        mount_resolve_input(opts->file_path, roots, &converted);
     const char *search_path = convert_err ? opts->file_path : converted;
     if (convert_err) error_free(convert_err);
 

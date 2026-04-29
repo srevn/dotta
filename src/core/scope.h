@@ -24,7 +24,7 @@
  *             user asked for, not the underlying world."
  *   paths   — the CLI-derived path filter (NULL when no positional args).
  *             Exposed for the historical diff paths that thread a raw
- *             path_filter_t through libgit2 pathspec APIs and have no
+ *             pathspec_t through libgit2 pathspec APIs and have no
  *             profile or exclude semantics to honor. In-workspace sites
  *             should prefer scope_accepts_path.
  *
@@ -75,11 +75,12 @@
 #include <stdbool.h>
 #include <types.h>
 
-#include "infra/path.h"
+#include "infra/pathspec.h"
+#include "infra/mount.h"
 
 /* Forward decl: state_t's full API lives in core/state.h. scope only
  * passes the pointer through to profile_resolve_enabled and
- * profile_build_path_roots, so the header stays free of the state
+ * profile_build_mount_table, so the header stays free of the state
  * dependency. C11 §6.7p3 permits typedef-name redeclaration. */
 typedef struct state state_t;
 
@@ -121,11 +122,11 @@ typedef struct scope_inputs {
  *   2. If in->profile_count > 0, resolve and validate the CLI filter
  *      against the enabled set (error if any filter name is not enabled).
  *      Strictness of the filter resolution is read from config->strict_mode.
- *   3. Build the path_roots topology from the ACTIVE set (filter if
- *      present, else enabled). Always built — empty active set still
- *      yields a usable handle (HOME + root sentinel only). Narrowing
- *      the filter narrows the topology for path classification.
- *   4. If in->file_count > 0, build the path filter consuming roots.
+ *   3. Build the mount table from the ACTIVE set (filter if present,
+ *      else enabled). Always built — empty active set still yields a
+ *      usable handle (HOME + root sentinel only). Narrowing the filter
+ *      narrows the topology for path classification.
+ *   4. If in->file_count > 0, build the pathspec consuming the mount table.
  *   5. If in->exclude_count > 0, compile patterns into a borrowed-arena
  *      gitignore ruleset.
  *
@@ -187,20 +188,20 @@ const string_array_t *scope_active(const scope_t *s);
  * Raw path filter (NULL when no positional file args were given).
  *
  * Long-term: consumers that only care about the path dimension and
- * inspect the path_filter_t struct directly (e.g., diff's historical
+ * inspect the pathspec_t struct directly (e.g., diff's historical
  * modes passing through to libgit2 pathspecs, filter-coverage
  * validation) use this. Per-iteration path-vs-filter checks should use
  * scope_accepts_path instead.
  *
  * Borrowed; valid until scope_free.
  */
-const path_filter_t *scope_paths(const scope_t *s);
+const pathspec_t *scope_paths(const scope_t *s);
 
 /**
  * Per-machine deployment topology, built from the active set.
  *
  * Always non-NULL after scope_build returns. When the active set is
- * empty or no profile has a custom prefix, the handle still carries
+ * empty or no profile has a deployment target, the handle still carries
  * HOME and the empty-prefix root sentinel, so path classification still
  * works.
  *
@@ -208,13 +209,13 @@ const path_filter_t *scope_paths(const scope_t *s);
  * passed to scope_build is destroyed; that arena MUST outlive scope_t.
  * scope_free does not release the roots — arena_destroy does.
  *
- * Borrow chain: deploy_root strings come from the state row cache.
+ * Borrow chain: target strings come from the state row cache.
  * The VWD-command structure (no enabled_profiles shape mutation between
  * scope_build and scope_free) keeps them valid. profile names are
  * arena_strdup'd into the bindings, so they are decoupled from
  * scope_t's heap-owned filter/enabled arrays.
  */
-const path_roots_t *scope_roots(const scope_t *s);
+const mount_table_t *scope_roots(const scope_t *s);
 
 /* -------------------------------------------------------------------- */
 /* Build-shape predicates                                               */
@@ -243,7 +244,7 @@ bool scope_accepts_profile(const scope_t *s, const char *profile);
  * Path dimension check.
  *
  * When no path filter was built, any non-NULL storage_path matches
- * (matches path_filter_matches semantics). NULL storage_path returns
+ * (matches pathspec_matches semantics). NULL storage_path returns
  * false.
  */
 bool scope_accepts_path(const scope_t *s, const char *storage_path);

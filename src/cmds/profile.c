@@ -20,7 +20,7 @@
 #include "core/manifest.h"
 #include "core/profiles.h"
 #include "core/state.h"
-#include "infra/path.h"
+#include "infra/mount.h"
 #include "sys/gitops.h"
 #include "sys/transfer.h"
 #include "sys/upstream.h"
@@ -678,9 +678,9 @@ cleanup:
  *      filter out already-enabled, missing, and custom-without-prefix
  *      profiles. Emits per-profile warnings; produces to_enable_validated.
  *   2. Commit scope to state — state_enable_profile per target (writes
- *      custom_prefix + zero-OID sentinel), then
- *      manifest_persist_profile_head per target to fill in the real
- *      branch HEAD. enabled_profiles is now authoritative.
+ *      target + zero-OID sentinel), then manifest_persist_profile_head
+ *      per target to fill in the real branch HEAD. enabled_profiles
+ *      is now authoritative.
  *   3. Reconcile once — a single apply_scope call builds the VWD for
  *      the post-enable set, with stats_filter pinned to the newly
  *      enabled profiles so gain-side stats (files_claimed / on-disk /
@@ -791,31 +791,31 @@ static error_t *profile_enable(
         }
     }
 
-    /* Fatal up-front: --prefix binds to a specific profile and cannot
+    /* Fatal up-front: --target binds to a specific profile and cannot
      * disambiguate among many. Caught here before any state mutation. */
-    if (opts->custom_prefix && to_enable->count > 1) {
-        output_error(out, "Cannot use --prefix with multiple profiles");
+    if (opts->target && to_enable->count > 1) {
+        output_error(out, "Cannot use --target with multiple profiles");
         output_hint(out, OUTPUT_NORMAL, "Enable each profile separately:");
 
         for (size_t i = 0; i < to_enable->count; i++) {
             output_hint(
-                out, OUTPUT_NORMAL, "dotta profile enable %s --prefix <path>",
+                out, OUTPUT_NORMAL, "dotta profile enable %s --target <path>",
                 to_enable->items[i]
             );
         }
-        err = ERROR(ERR_INVALID_ARG, "Ambiguous --prefix usage");
+        err = ERROR(ERR_INVALID_ARG, "Ambiguous --target usage");
         goto cleanup;
     }
 
     /* Fatal up-front: validate the prefix value itself. Validating inside
      * the per-profile loop used to categorize a bad prefix as not_found,
      * which mislabels a CLI input problem as a missing profile. With the
-     * --prefix-requires-single-profile rule above, a single validation
+     * --target-requires-single-profile rule above, a single validation
      * here covers every path that can reach Phase 2. */
-    if (opts->custom_prefix) {
-        err = path_validate_custom_prefix(opts->custom_prefix);
+    if (opts->target) {
+        err = mount_validate_target(opts->target);
         if (err) {
-            err = error_wrap(err, "Invalid --prefix value");
+            err = error_wrap(err, "Invalid --target value");
             goto cleanup;
         }
     }
@@ -875,20 +875,20 @@ static error_t *profile_enable(
 
         /* Fatal: the profile exists, but its custom/ files require a
          * mount point the user didn't provide. Mirrors the
-         * --prefix-with-multiple-profiles check above — both are
+         * --target-with-multiple-profiles check above — both are
          * CLI-input errors, not per-profile skips. */
-        if (has_custom && !opts->custom_prefix) {
+        if (has_custom && !opts->target) {
             output_error(
-                out, "Profile '%s' contains custom/ files but --prefix not provided",
+                out, "Profile '%s' contains custom/ files but --target not provided",
                 profile
             );
             output_hint(
-                out, OUTPUT_NORMAL, "dotta profile enable %s --prefix /path/to/target",
+                out, OUTPUT_NORMAL, "dotta profile enable %s --target /path/to/target",
                 profile
             );
             err = ERROR(
                 ERR_INVALID_ARG,
-                "Profile '%s' requires --prefix", profile
+                "Profile '%s' requires --target", profile
             );
             goto cleanup;
         }
@@ -956,7 +956,7 @@ static error_t *profile_enable(
         for (size_t i = 0; i < to_enable_validated->count; i++) {
             const char *profile = to_enable_validated->items[i];
 
-            err = state_enable_profile(state, profile, opts->custom_prefix);
+            err = state_enable_profile(state, profile, opts->target);
             if (err) {
                 err = error_wrap(
                     err, "Failed to enable profile '%s' in state", profile
@@ -1868,9 +1868,9 @@ static const args_opt_t profile_enable_opts[] = {
         "Enable all local profiles"
     ),
     ARGS_STRING(
-        "prefix",             "<path>",
-        cmd_profile_options_t,custom_prefix,
-        "Custom prefix for profiles with custom/ files"
+        "target",             "<path>",
+        cmd_profile_options_t,target,
+        "Deployment target for profiles with custom/ files"
     ),
     ARGS_FLAG(
         "n dry-run",
@@ -1900,8 +1900,8 @@ static const args_command_t spec_profile_enable = {
     .description   =
         "Enables one or more profiles so that 'dotta apply' deploys their files.\n"
         "\n"
-        "  --prefix <path> attaches a custom mount point for profiles that contain\n"
-        "  custom/ files (e.g. --prefix /mnt/jails/web). Only valid for a single\n"
+        "  --target <path> attaches a custom mount point for profiles that contain\n"
+        "  custom/ files (e.g. --target /mnt/jails/web). Only valid for a single\n"
         "  profile per invocation.\n",
     .opts_size     = sizeof(cmd_profile_options_t),
     .opts          = profile_enable_opts,

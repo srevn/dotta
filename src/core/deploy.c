@@ -13,11 +13,11 @@
 #include "base/array.h"
 #include "base/error.h"
 #include "base/hashmap.h"
-#include "base/string.h"
 #include "core/metadata.h"
 #include "core/scope.h"
 #include "core/workspace.h"
 #include "infra/content.h"
+#include "infra/mount.h"
 #include "sys/filesystem.h"
 #include "sys/gitops.h"
 #include "utils/privilege.h"
@@ -204,7 +204,7 @@ error_t *deploy_workspace_preflight(
  * Home detection for sudo de-escalation:
  * - Primary: storage_path starts with "home/" (always deploys to $HOME)
  * - Fallback: filesystem_path is under actual user's home (catches custom/
- *   prefix files reclassified by --prefix that still land under $HOME)
+ *   prefix files reclassified by --target that still land under $HOME)
  *
  * Strict ownership mode (strict_ownership=true):
  * - ERR_NOT_FOUND (user/group missing): Fatal error, abort deployment
@@ -241,14 +241,14 @@ static error_t *resolve_deployment_ownership(
     *out_gid = (gid_t) -1;
 
     /* Determine prefix type */
-    bool is_home_prefix = str_starts_with(storage_path, "home/");
+    bool is_home_prefix = mount_kind_of(storage_path) == MOUNT_HOME;
     bool requires_root_privileges = privilege_path_requires_root(storage_path);
 
     /* Case 1: File deploys to user's home when running as root (sudo handling)
      *
      * Primary: storage_path starts with "home/" (always deploys to $HOME)
      * Fallback: filesystem_path is under actual user's home (catches custom/
-     * prefix files reclassified by --prefix that still land under $HOME) */
+     * prefix files reclassified by --target that still land under $HOME) */
     if (privilege_is_elevated()) {
         bool deploys_to_home = is_home_prefix;
 
@@ -709,8 +709,8 @@ cleanup:
  * directories need updates, enabling convergence of directory metadata.
  *
  * ARCHITECTURE: Uses state (VWD) instead of metadata (Git) for directory resolution.
- * State contains filesystem_path already resolved with custom_prefix during manifest
- * building, eliminating path conversion errors and enabling custom prefix support.
+ * State contains filesystem_path already resolved with target during manifest
+ * building, eliminating path conversion errors and enabling deployment target support.
  *
  * Convergence model (matches file deployment pattern):
  * - Query workspace for divergence (O(1) hashmap lookup)
@@ -854,7 +854,7 @@ static error_t *deploy_tracked_directories(
         }
 
         /* State directory entries contain:
-         * - filesystem_path: Already resolved with custom_prefix (VWD principle)
+         * - filesystem_path: Already resolved with target (VWD principle)
          * - storage_path: Portable path (for ownership resolution)
          * - mode, owner, group: Metadata for deployment
          */

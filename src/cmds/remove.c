@@ -101,28 +101,21 @@ static error_t *resolve_paths_to_remove(
     string_array_t *profile_files = NULL;
     hashmap_t *profile_files_map = NULL;
 
-    /* Look up the profile's custom prefix for custom/ path resolution
-     * (optional, improves UX). Borrowed from the state row cache; stable
-     * for the duration of this call (no enabled_profiles mutation below). */
-    const char *custom_prefix =
-        state ? state_peek_profile_prefix(state, profile) : NULL;
-
-    /* Build a one-shot deployment topology for this profile. The single
-     * binding records the profile name + its prefix; path_roots augments
-     * with HOME and the empty-prefix root sentinel internally. Both
-     * path_resolve_input below and path_from_storage's filesystem-path
-     * synthesis (via custom_prefix) get a consistent view of the topology.
+    /* Build a one-shot deployment topology for this profile. The binding
+     * records the profile name + its prefix borrowed from the state row
+     * cache (stable for the duration of this call — no enabled_profiles
+     * mutation below). path_roots augments with HOME and the empty-prefix
+     * root sentinel internally; a NULL deploy_root yields no custom
+     * candidate but still registers the profile so forward resolution
+     * distinguishes "profile not in roots" from "profile has no prefix".
      * Roots ride the command arena (released by dispatch). */
     path_roots_t *roots = NULL;
     {
         path_binding_t binding = {
             .profile     = profile,
-            .deploy_root = custom_prefix
+            .deploy_root = state ? state_peek_profile_prefix(state, profile) : NULL
         };
-        size_t n = (custom_prefix && custom_prefix[0] != '\0') ? 1 : 0;
-        err = path_roots_build(
-            arena, n > 0 ? &binding : NULL, n, &roots
-        );
+        err = path_roots_build(arena, &binding, 1, &roots);
         if (err) {
             err = error_wrap(err, "Failed to build path roots");
             goto cleanup;
@@ -182,10 +175,12 @@ static error_t *resolve_paths_to_remove(
             continue;
         }
 
-        /* Try to get filesystem path for output (non-fatal if it fails) */
-        error_t *convert_err = path_from_storage(storage_path, custom_prefix, &canonical);
+        /* Try to get filesystem path for output (non-fatal if it fails:
+         * ERR_NOT_FOUND when the profile has no --prefix on this machine
+         * leaves canonical NULL, and the storage path serves as fallback). */
+        error_t *convert_err =
+            path_roots_to_filesystem(roots, profile, storage_path, &canonical);
         if (convert_err) {
-            /* Can still work with storage path only */
             error_free(convert_err);
             canonical = NULL;
         }
@@ -234,7 +229,9 @@ static error_t *resolve_paths_to_remove(
                 if (profile_file[storage_path_len] == '/') {
                     /* Reconstruct filesystem path for this file */
                     char *file_fs_path = NULL;
-                    err = path_from_storage(profile_file, custom_prefix, &file_fs_path);
+                    err = path_roots_to_filesystem(
+                        roots, profile, profile_file, &file_fs_path
+                    );
                     if (err) {
                         if (opts->verbose || !opts->force) {
                             output_warning(
@@ -1243,7 +1240,6 @@ static error_t *delete_profile_branch(
     string_array_t *all_profiles = NULL;
     string_array_t *files = NULL;
     string_array_t *hook_fs_paths = NULL;
-    char *hook_custom_prefix = NULL;
     bool performed = false;
 
     /* CLI flags override config */
@@ -1377,12 +1373,6 @@ static error_t *delete_profile_branch(
         deployed_count = 0;
     }
 
-    /* Save custom prefix for hook filesystem path conversion. The peek
-     * returns a borrowed pointer into the state row cache; copy it so hook
-     * formatting survives independent of any later state mutation. */
-    const char *pfx = state_peek_profile_prefix(state, opts->profile);
-    if (pfx) hook_custom_prefix = strdup(pfx);
-
     /* Inform about deployed files (informational, not a warning) */
     if (deployed_count > 0) {
         output_newline(out, OUTPUT_VERBOSE);
@@ -1415,22 +1405,43 @@ static error_t *delete_profile_branch(
     }
 
     /* Convert storage paths to filesystem paths for hook consistency.
-     * The file removal path passes filesystem paths to hooks; do the same here. */
+     * The file removal path passes filesystem paths to hooks; do the same here.
+     *
+     * Build a single-binding deployment topology for the profile being
+     * deleted. The deploy_root borrow into the state row cache is valid:
+     * the state mutation that invalidates row-cache pointers
+     * (state_disable_profile) does not run until after this loop returns
+     * its heap-owned filesystem paths. Roots ride the command arena.
+     * On build failure (rare — OOM) skip the conversion entirely; the
+     * hook then receives storage paths as a graceful fallback. */
     if (files) {
-        hook_fs_paths = string_array_new(0);
-        if (hook_fs_paths) {
-            for (size_t i = 0; i < files->count; i++) {
-                char *fs_path = NULL;
-                error_t *conv_err = path_from_storage(
-                    files->items[i], hook_custom_prefix, &fs_path
-                );
-                if (!conv_err && fs_path) {
-                    string_array_push(hook_fs_paths, fs_path);
-                    free(fs_path);
-                } else {
-                    /* Fall back to storage path (e.g., custom/ without prefix) */
-                    string_array_push(hook_fs_paths, files->items[i]);
-                    if (conv_err) error_free(conv_err);
+        path_roots_t *hook_roots = NULL;
+        path_binding_t binding = {
+            .profile     = opts->profile,
+            .deploy_root = state_peek_profile_prefix(state, opts->profile)
+        };
+        error_t *roots_err = path_roots_build(arena, &binding, 1, &hook_roots);
+        if (roots_err) {
+            error_free(roots_err);
+            hook_roots = NULL;
+        }
+
+        if (hook_roots) {
+            hook_fs_paths = string_array_new(0);
+            if (hook_fs_paths) {
+                for (size_t i = 0; i < files->count; i++) {
+                    char *fs_path = NULL;
+                    error_t *conv_err = path_roots_to_filesystem(
+                        hook_roots, opts->profile, files->items[i], &fs_path
+                    );
+                    if (!conv_err && fs_path) {
+                        string_array_push(hook_fs_paths, fs_path);
+                        free(fs_path);
+                    } else {
+                        /* Fall back to storage path (e.g., custom/ without prefix) */
+                        string_array_push(hook_fs_paths, files->items[i]);
+                        if (conv_err) error_free(conv_err);
+                    }
                 }
             }
         }
@@ -1685,7 +1696,6 @@ cleanup:
     state_rollback(state);
 
     if (hook_fs_paths) string_array_free(hook_fs_paths);
-    if (hook_custom_prefix) free(hook_custom_prefix);
     if (files) string_array_free(files);
     if (all_profiles) string_array_free(all_profiles);
 

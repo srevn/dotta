@@ -519,7 +519,8 @@ error_t *content_store_file_to_worktree(
             ERR_INVALID_ARG,
             "Cannot store '%s': it is a %s, not a regular file.\n\n"
             "Dotta only manages regular configuration files.\n"
-            "Symlinks and special files are not supported.", filesystem_path, type
+            "Symlinks and special files are not supported.",
+            filesystem_path, type
         );
     }
 

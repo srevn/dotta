@@ -47,9 +47,23 @@
 #ifndef DOTTA_PROCESS_H
 #define DOTTA_PROCESS_H
 
+#include <signal.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <types.h>
+
+/**
+ * Pgid of the currently running PROCESS_PGRP_NEW child, or 0 when no
+ * such child is active. Defined in main.c and read by the host
+ * program's SIGINT/SIGTERM handler — see the "Threading and signal
+ * model" comment above for the contract. Declared here so the
+ * cross-TU type contract is enforced at compile time rather than
+ * tracked by hand in a bare `extern` inside process.c.
+ *
+ * Volatile sig_atomic_t for async-signal-safe access from a handler
+ * (POSIX requirement).
+ */
+extern volatile sig_atomic_t active_child_pgid;
 
 /**
  * Stdin policy for the spawned child.

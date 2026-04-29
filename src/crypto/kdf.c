@@ -134,7 +134,7 @@ error_t *kdf_master_key(
     /* memory_mib ∈ [8, 4096] (validated above); product is at most
      * 4096 * 2^20 = 2^32 bytes, fits size_t on the 64-bit hosts the
      * static assert above admits. */
-    const size_t bytes = (size_t) memory_mib * 1024u * 1024u;
+    const size_t bytes = (size_t) memory_mib * 1024U * 1024U;
 
     /* Argon2 wants u64-aligned blocks. `aligned_alloc(_Alignof(uint64_t), bytes)`
      * makes the contract explicit; the multiple-of-alignment rule is
@@ -181,7 +181,7 @@ error_t *kdf_master_key(
      * (= 4096 * 1024 = 4M blocks), well within `uint32_t`. */
     const crypto_argon2_config config = {
         .algorithm = CRYPTO_ARGON2_ID,
-        .nb_blocks = (uint32_t) memory_mib * 1024u,
+        .nb_blocks = (uint32_t) memory_mib * 1024U,
         .nb_passes = passes,
         .nb_lanes  = 1,
     };

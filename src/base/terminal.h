@@ -55,18 +55,23 @@ typedef struct {
  *
  * Regular ASCII characters (a-z, 0-9, etc.) are returned as-is.
  * These codes represent special keys that need multi-byte sequences.
+ *
+ * Every enumerator carries an explicit value so the split stays
+ * audit-friendly: inserting a new synthetic key cannot silently shift
+ * neighbours into another enumerator's slot, and the ASCII band cannot
+ * accidentally collide with the 1000+ band.
  */
 typedef enum {
-    TERM_KEY_UNKNOWN = -1,
-    TERM_KEY_UP      = 1000,
-    TERM_KEY_DOWN,
-    TERM_KEY_LEFT,
-    TERM_KEY_RIGHT,
-    TERM_KEY_HOME,
-    TERM_KEY_END,
-    TERM_KEY_PAGE_UP,
-    TERM_KEY_PAGE_DOWN,
-    TERM_KEY_DELETE,
+    TERM_KEY_UNKNOWN   = -1,
+    TERM_KEY_UP        = 1000,
+    TERM_KEY_DOWN      = 1001,
+    TERM_KEY_LEFT      = 1002,
+    TERM_KEY_RIGHT     = 1003,
+    TERM_KEY_HOME      = 1004,
+    TERM_KEY_END       = 1005,
+    TERM_KEY_PAGE_UP   = 1006,
+    TERM_KEY_PAGE_DOWN = 1007,
+    TERM_KEY_DELETE    = 1008,
     TERM_KEY_BACKSPACE = 127,
     TERM_KEY_ENTER     = '\r',
     TERM_KEY_ESCAPE    = 27,

@@ -28,12 +28,6 @@
 #include "base/error.h"
 #include "base/secure.h"
 
-/* Defined in main.c. See sys/process.h "Threading and signal model"
- * for the host-program contract. Updated only by process_run() —
- * read by main.c's signal_cleanup_handler to forward terminating
- * signals to a PROCESS_PGRP_NEW child's group before dotta dies. */
-extern volatile sig_atomic_t active_child_pgid;
-
 /* Initial capture buffer size; doubles on demand up to SIZE_MAX/2. */
 #define PROCESS_CAPTURE_INITIAL 4096
 
@@ -505,10 +499,9 @@ error_t *process_run(const process_spec_t *spec, process_result_t *result) {
     clock_gettime(CLOCK_MONOTONIC, &start);
 
     char buf[PROCESS_READ_CHUNK];
-    bool got_eof = false;
     bool stream_broken = false;
 
-    while (!got_eof) {
+    for (;;) {
         long remaining = process_remaining(&start, spec->timeout_seconds);
         if (spec->timeout_seconds > 0 && remaining == 0) {
             timed_out = true;
@@ -549,8 +542,7 @@ error_t *process_run(const process_spec_t *spec, process_result_t *result) {
             goto cleanup;
         }
         if (n == 0) {
-            got_eof = true;
-            break;
+            break;  /* child closed its end of the pipe */
         }
 
         if (spec->capture) {
@@ -626,9 +618,9 @@ error_t *process_run(const process_spec_t *spec, process_result_t *result) {
         }
         pid = -1;
     } else {
-        /* Pipe drained (got_eof). Child usually exits in the same
-         * instant; the loop's first WNOHANG catches that. The 50ms
-         * polling fallback handles "child closed stdout but kept
+        /* Pipe drained (read returned 0). Child usually exits in the
+         * same instant; the loop's first WNOHANG catches that. The
+         * 50ms polling fallback handles "child closed stdout but kept
          * running" (e.g., `exec >&-; sleep 9999`). */
         for ( ; ;) {
             pid_t r = waitpid(pid, &status, WNOHANG);

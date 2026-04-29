@@ -70,8 +70,8 @@ time_t portable_timegm(struct tm *tm) {
 
     /* Convert to seconds and add time components */
     time_t result = days * 86400LL +            /* days to seconds */
-        tm->tm_hour * 3600 +                    /* hours to seconds */
-        tm->tm_min * 60 +                       /* minutes to seconds */
+        tm->tm_hour * 3600LL +                  /* hours to seconds */
+        tm->tm_min * 60LL +                     /* minutes to seconds */
         tm->tm_sec;                             /* seconds */
 
     return result;

@@ -29,7 +29,7 @@
  * This list acts as a safeguard against both user error (explicit --encrypt)
  * and accidental encryption via auto-encrypt patterns (e.g., ".*").
  */
-static const char *PROTECTED_META_FILES[] = {
+static const char *const PROTECTED_META_FILES[] = {
     ".bootstrap",
     ".dottaignore",
     ".dotta/metadata.json",

@@ -354,7 +354,7 @@ error_t *session_save(
     /* timeout < 0 ("never expire") encodes as expires_at == 0; load
      * treats 0 as the never-expire sentinel. */
     const uint64_t expires_at = (timeout_seconds < 0)
-        ? 0u
+        ? 0U
         : now_seconds + (uint64_t) timeout_seconds;
     store_le64(cache.expires_at_le, expires_at);
 

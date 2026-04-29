@@ -16,6 +16,7 @@
 #include "base/args.h"
 #include "base/error.h"
 #include "base/output.h"
+#include "sys/process.h"
 #include "cmds/add.h"
 #include "cmds/apply.h"
 #include "cmds/bootstrap.h"
@@ -331,7 +332,7 @@ static int run_spec(
      * needs ~few KB, but workspace/scope/manifest paths fit ~140 KB
      * worst case in one or two blocks at this initial size.
      * Borrowed by handlers via ctx->arena; destroyed below. */
-    arena_t *arena = arena_create(32 * 1024);
+    arena_t *arena = arena_create(32UL * 1024);
     if (arena == NULL) {
         fprintf(stderr, "Failed to allocate memory\n");
         return 1;
@@ -450,18 +451,16 @@ static int run_spec(
     return exit_override;
 }
 
-/* Published by sys/process.c::process_run() while a PROCESS_PGRP_NEW
- * child is alive; zero otherwise. The signal handler reads it to
- * forward terminating signals to the child's process group before
+/* Definition of the cross-TU symbol declared in sys/process.h.
+ * Published by sys/process.c::process_run() while a PROCESS_PGRP_NEW
+ * child is alive; zero otherwise. The signal handler below reads it
+ * to forward terminating signals to the child's process group before
  * dotta dies, so a Ctrl+C kills both atomically rather than
  * orphaning the spawned hook.
  *
  * PROCESS_PGRP_SHARED children leave this at zero — the kernel
  * already delivers terminal SIGINT/SIGTERM to the entire foreground
- * group, so parent and child receive it without forwarding.
- *
- * volatile sig_atomic_t is required for async-signal-safe access
- * from the handler (POSIX). */
+ * group, so parent and child receive it without forwarding. */
 volatile sig_atomic_t active_child_pgid = 0;
 
 /**

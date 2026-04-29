@@ -215,7 +215,7 @@ static void display_workspace_status(
     /* Show sectioned output for dirty/invalid workspace */
     if (ws_status != WORKSPACE_CLEAN) {
         /* When filter active and filtered profile is clean, skip detailed sections */
-        if (!scope_has_filter(scope) || filtered_diverged > 0) {
+        if ((!scope_has_filter(scope) || filtered_diverged > 0) && all_count > 0) {
 
             /* Single allocation for all category pointers (5 categories × all_count slots)
              * Memory layout: [uncommitted][undeployed][new_files][orphaned][reassigned]

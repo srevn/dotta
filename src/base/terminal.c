@@ -299,6 +299,8 @@ static int read_escape_sequence(void) {
             return TERM_KEY_HOME;
         case 'F':
             return TERM_KEY_END;
+        default:
+            break;
     }
 
     /* Multi-character sequences (e.g., ESC [ 3 ~) */
@@ -320,6 +322,8 @@ static int read_escape_sequence(void) {
                     return TERM_KEY_HOME;
                 case '8':
                     return TERM_KEY_END;
+                default:
+                    break;
             }
         }
     }

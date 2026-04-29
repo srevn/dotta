@@ -221,8 +221,7 @@ error_t *cipher_encrypt(
     }
 
     /* Policy cap: dotta manages small configuration files. A single
-     * cap on the crypto entry point enforces the rule for every
-     * caller. */
+     * cap on the crypto entry point enforces the rule for every caller. */
     if (plaintext_len > CIPHER_MAX_CONTENT) {
         err = ERROR(
             ERR_INVALID_ARG,

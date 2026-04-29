@@ -313,8 +313,7 @@ error_t *repo_fix_ownership_if_needed(const char *repo_path) {
     size_t fixed_count = 0;
     size_t failed_count = 0;
     err = fs_fix_ownership_recursive(
-        git_dir, actual_uid, actual_gid,
-        &fixed_count, &failed_count
+        git_dir, actual_uid, actual_gid, &fixed_count, &failed_count
     );
     free(git_dir);
 

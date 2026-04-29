@@ -266,7 +266,6 @@ error_t *passphrase_prompt(
         fprintf(stderr, "\n");  /* the Enter keypress echo was suppressed */
         saved_term_active = 0;
         passphrase_restore_signal_handlers();
-        echo_disabled = false;
     }
 
     /* Check read result */

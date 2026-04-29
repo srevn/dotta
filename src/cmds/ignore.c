@@ -13,6 +13,7 @@
 
 #include "base/args.h"
 #include "base/array.h"
+#include "base/buffer.h"
 #include "base/error.h"
 #include "base/gitignore.h"
 #include "base/output.h"
@@ -440,45 +441,20 @@ static error_t *edit_content_via_editor(
         return err;
     }
 
-    FILE *f = fopen(tmpfile, "r");
-    if (!f) {
-        unlink(tmpfile);
-        free(tmpfile);
-        return ERROR(ERR_FS, "Failed to read temporary file");
-    }
-
-    if (fseek(f, 0, SEEK_END) != 0) {
-        fclose(f);
-        unlink(tmpfile);
-        free(tmpfile);
-        return ERROR(ERR_FS, "Failed to seek temporary file");
-    }
-
-    long fsize = ftell(f);
-    if (fsize < 0) {
-        fclose(f);
-        unlink(tmpfile);
-        free(tmpfile);
-        return ERROR(ERR_FS, "Failed to determine temporary file size");
-    }
-    rewind(f);
-
-    char *buf = malloc((size_t) fsize + 1);
-    if (!buf) {
-        fclose(f);
-        unlink(tmpfile);
-        free(tmpfile);
-        return ERROR(ERR_MEMORY, "Failed to allocate content buffer");
-    }
-
-    size_t read_size = fread(buf, 1, (size_t) fsize, f);
-    buf[read_size] = '\0';
-    fclose(f);
+    buffer_t content = BUFFER_INIT;
+    err = fs_read_file(tmpfile, &content);
     unlink(tmpfile);
     free(tmpfile);
+    if (err) {
+        buffer_free(&content);
+        return err;
+    }
 
-    *out_content = buf;
-    *out_size = read_size;
+    *out_size = content.size;
+    *out_content = buffer_detach(&content);
+    if (!*out_content) {
+        return ERROR(ERR_MEMORY, "Failed to allocate content buffer");
+    }
     return NULL;
 }
 

@@ -11,6 +11,7 @@
 
 #include <errno.h>
 #include <git2.h>
+#include <limits.h>
 #include <signal.h>
 #include <stdlib.h>
 #include <string.h>
@@ -120,15 +121,15 @@ static void cleanup_orphaned_worktrees(git_repository *repo) {
         }
 
         /* Extract PID from name: dotta-temp-{pid}-{timestamp} */
-        pid_t pid = 0;
-        if (sscanf(name, "dotta-temp-%d-", &pid) != 1) {
-            continue; /* Invalid format - skip */
+        const char *digits = name + 11;
+        char *end = NULL;
+        errno = 0;
+        long parsed = strtol(digits, &end, 10);
+        if (errno == ERANGE || end == digits || *end != '-' ||
+            parsed <= 0 || parsed > INT_MAX) {
+            continue; /* Invalid format, overflow, or non-positive PID */
         }
-
-        /* Skip PID 0 or negative (invalid) */
-        if (pid <= 0) {
-            continue;
-        }
+        pid_t pid = (pid_t) parsed;
 
         /* Check if process is alive
          * kill(pid, 0) performs error checking without sending a signal */

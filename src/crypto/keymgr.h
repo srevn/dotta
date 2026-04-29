@@ -124,7 +124,7 @@ error_t *keymgr_create(
  * profile-naming message; `cipher_encrypt` errors pass through
  * unwrapped so the caller can attach file-level context.
  *
- * @param keymgr         Key manager (non-NULL)
+ * @param km             Key manager (non-NULL)
  * @param profile        Profile name (non-NULL, non-empty)
  * @param storage_path   File path (non-NULL; bound into SIV)
  * @param plaintext      Plaintext bytes (non-NULL when len > 0)
@@ -133,7 +133,7 @@ error_t *keymgr_create(
  * @return Error or NULL on success
  */
 error_t *keymgr_encrypt(
-    keymgr *keymgr,
+    keymgr *km,
     const char *profile,
     const char *storage_path,
     const uint8_t *plaintext,
@@ -158,7 +158,7 @@ error_t *keymgr_encrypt(
  * callers can render file-level diagnostics (e.g. "wrong passphrase,
  * try: dotta key clear") without stacking wraps.
  *
- * @param keymgr         Key manager (non-NULL)
+ * @param km             Key manager (non-NULL)
  * @param profile        Profile name (non-NULL, non-empty)
  * @param storage_path   File path (non-NULL; must match the path used
  *                       at encryption — mismatch fails SIV verify)
@@ -168,7 +168,7 @@ error_t *keymgr_encrypt(
  * @return Error or NULL on success (ERR_CRYPTO on auth/parse failure)
  */
 error_t *keymgr_decrypt(
-    keymgr *keymgr,
+    keymgr *km,
     const char *profile,
     const char *storage_path,
     const uint8_t *ciphertext,
@@ -198,13 +198,13 @@ error_t *keymgr_decrypt(
  * and must scrub it after the call returns (`buffer_secure_free` is
  * canonical for `passphrase_prompt` buffers).
  *
- * @param keymgr         Key manager (non-NULL)
+ * @param km             Key manager (non-NULL)
  * @param passphrase     Passphrase bytes (non-NULL, len > 0)
  * @param passphrase_len Passphrase length (excluding NUL)
  * @return Error or NULL on success
  */
 error_t *keymgr_set_passphrase(
-    keymgr *keymgr,
+    keymgr *km,
     const uint8_t *passphrase,
     size_t passphrase_len
 );
@@ -217,9 +217,9 @@ error_t *keymgr_set_passphrase(
  * at process shutdown via the cleanup chain. Safe to call multiple
  * times and on a never-warmed keymgr.
  *
- * @param keymgr Key manager (NULL-safe)
+ * @param km Key manager (NULL-safe)
  */
-void keymgr_clear(keymgr *keymgr);
+void keymgr_clear(keymgr *km);
 
 /**
  * Probe whether the current-config master key is available without
@@ -236,10 +236,10 @@ void keymgr_clear(keymgr *keymgr);
  * Never prompts and never reads `DOTTA_ENCRYPTION_PASSPHRASE`. For
  * the full resolution chain use `keymgr_encrypt` / `keymgr_decrypt`.
  *
- * @param keymgr Key manager (NULL-safe; returns false)
+ * @param km Key manager (NULL-safe; returns false)
  * @return true iff the current-config key is cached
  */
-bool keymgr_probe_key(keymgr *keymgr);
+bool keymgr_probe_key(keymgr *km);
 
 /**
  * Get time until the cached slot expires.
@@ -249,14 +249,14 @@ bool keymgr_probe_key(keymgr *keymgr);
  * not a per-params query. For "is the current-config key warm?"
  * use `keymgr_probe_key` first, then this for the time component.
  *
- * @param keymgr         Key manager (NULL-safe; returns 0)
+ * @param km             Key manager (NULL-safe; returns 0)
  * @param out_expires_at Optional output for the wall-clock expiry
  *                       time; 0 when cache is cold or never expires
  * @return Seconds until expiration; 0 if not cached or expired;
  *         -1 if the slot never expires
  */
 int64_t keymgr_time_until_expiry(
-    const keymgr *keymgr,
+    const keymgr *km,
     time_t *out_expires_at
 );
 
@@ -266,8 +266,8 @@ int64_t keymgr_time_until_expiry(
  * Securely zeros the cached key, releases the mlock pin (if held), and
  * frees the struct. NULL-safe.
  *
- * @param keymgr Key manager (NULL-safe)
+ * @param km Key manager (NULL-safe)
  */
-void keymgr_free(keymgr *keymgr);
+void keymgr_free(keymgr *km);
 
 #endif /* DOTTA_KEYMGR_H */

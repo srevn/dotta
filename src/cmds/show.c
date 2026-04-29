@@ -648,19 +648,15 @@ error_t *cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
     error_t *prefix_err = profile_load_custom_prefixes(repo, state, NULL, &prefixes);
     if (prefix_err) error_free(prefix_err);
 
-    /* Resolve file path to storage format (common to both explicit and implicit paths) */
-    const char *search_path = opts->file_path;
+    /* Resolve file path to storage format (common to both explicit and implicit paths).
+     * On resolution failure, fall back to the original input — it may be a partial-match
+     * pattern that path_resolve_input rejects but the search below accepts. */
     error_t *convert_err = path_resolve_input(
         opts->file_path, prefixes ? (const char *const *) prefixes->items : NULL,
         prefixes ? prefixes->count : 0, &converted
     );
-    if (convert_err) {
-        error_free(convert_err);
-        /* Fall back to original path (may be a partial match pattern) */
-        search_path = opts->file_path;
-    } else {
-        search_path = converted;
-    }
+    const char *search_path = convert_err ? opts->file_path : converted;
+    if (convert_err) error_free(convert_err);
 
     if (opts->profile) {
         /* Profile specified - show from that profile */

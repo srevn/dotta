@@ -43,7 +43,7 @@ typedef struct {
 
 /* --- Static dispatch tables --------------------------------------------- */
 
-static const char *HOOK_NAMES[] = {
+static const char *const HOOK_NAMES[] = {
     [HOOK_PRE_ADD] = "pre-add",
     [HOOK_POST_ADD] = "post-add",
     [HOOK_PRE_REMOVE] = "pre-remove",
@@ -79,6 +79,7 @@ static bool hook_is_enabled(const config_t *config, hook_type_t type) {
         case HOOK_PRE_UPDATE:  return config->pre_update;
         case HOOK_POST_UPDATE: return config->post_update;
     }
+
     return false;
 }
 
@@ -383,11 +384,13 @@ static error_t *hook_execute(
         *result_out = result;
         result.output = NULL;
     }
+
     process_result_dispose(&result);
 
 cleanup:
     if (env) free_hook_env(env, env_count);
     free(hook_path);
+
     return err;
 }
 

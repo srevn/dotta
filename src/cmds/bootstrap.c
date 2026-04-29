@@ -25,7 +25,7 @@
 #include "utils/bootstrap.h"
 
 /* Bootstrap script template */
-static const char *BOOTSTRAP_TEMPLATE =
+static const char *const BOOTSTRAP_TEMPLATE =
     "#!/usr/bin/env bash\n"
     "#\n"
     "# Bootstrap script for %s profile\n"

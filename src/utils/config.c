@@ -731,7 +731,6 @@ error_t *config_load(const char *config_path, config_t **out) {
 
     /* Normal path: free TOML result, then validate config */
     toml_free(result);
-    toml_needs_free = false;
 
     /* Validate */
     err = config_validate(config);

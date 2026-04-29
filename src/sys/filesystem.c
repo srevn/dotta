@@ -25,7 +25,7 @@
 #define IO_BUFFER_SIZE 8192
 
 /* Maximum file size for fs_read_file (256 MB) */
-#define FS_MAX_READ_SIZE (256 * 1024 * 1024)
+#define FS_MAX_READ_SIZE ((size_t) 256 * 1024 * 1024)
 
 /**
  * Helper: Validate path argument
@@ -118,12 +118,14 @@ error_t *fs_read_file(const char *path, buffer_t *out) {
         );
     }
 
-    /* Guard against unreasonably large files */
-    if (st.st_size > FS_MAX_READ_SIZE) {
+    /* Guard against unreasonably large files. st_size is signed
+     * (off_t); reject negatives (pathological) before the unsigned
+     * comparison so we never widen a negative into a huge size_t. */
+    if (st.st_size < 0 || (size_t) st.st_size > FS_MAX_READ_SIZE) {
         close(fd);
         return ERROR(
-            ERR_FS, "File '%s' too large (%lld bytes, max %d)",
-            path, (long long) st.st_size, FS_MAX_READ_SIZE
+            ERR_FS, "File '%s' too large (%lld bytes, max %zu)",
+            path, (long long) st.st_size, (size_t) FS_MAX_READ_SIZE
         );
     }
 

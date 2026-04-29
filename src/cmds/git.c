@@ -88,8 +88,7 @@ int cmd_git(const char *repo_path, const cmd_git_options_t *opts) {
     free(argv);
 
     int status;
-    pid_t wait_result;
-    while ((wait_result = waitpid(pid, &status, 0)) == -1) {
+    while (waitpid(pid, &status, 0) == -1) {
         if (errno != EINTR) {
             perror("waitpid");
             return 1;

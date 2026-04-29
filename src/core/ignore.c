@@ -40,19 +40,12 @@
 #include "sys/filesystem.h"
 #include "sys/gitops.h"
 
-/* Origin tags round-trip through the engine's uint8_t tag during
- * append. If someone ever adds a layer that pushes the enum past 255,
- * this catches it at compile time instead of letting `(gitignore_origin_t)`
- * silently truncate. */
-_Static_assert(
-    IGNORE_ORIGIN_COUNT_ <= UINT8_MAX,
-    "ignore_origin_t must round-trip through gitignore_origin_t (uint8_t)"
-);
-
 /* Size cap on `.dottaignore` blobs — an ignore-specific policy
  * guarding against a runaway file pulled in from Git. The underlying
- * gitignore engine already caps per-pattern length and rule count. */
-#define MAX_DOTTAIGNORE_SIZE (1024 * 1024)   /* 1 MB */
+ * gitignore engine already caps per-pattern length and rule count.
+ * Typed as size_t so the multiplication happens in size_t and the
+ * comparison against blob sizes stays warning-clean. */
+#define MAX_DOTTAIGNORE_SIZE ((size_t) 1024 * 1024)   /* 1 MB */
 
 /* Initial profile-cache capacity. Profile counts are almost always
  * single-digit so the cache rarely grows. */
@@ -65,7 +58,7 @@ _Static_assert(
  * the BUILTIN fallback whenever the baseline blob is absent so safety
  * patterns stay active regardless of repo state.
  */
-static const char *DEFAULT_DOTTAIGNORE =
+static const char *const DEFAULT_DOTTAIGNORE =
     "# Dotta Ignore Patterns\n"
     "#\n"
     "# This file uses .gitignore syntax:\n"
@@ -134,7 +127,7 @@ static const char *DEFAULT_DOTTAIGNORE =
 /**
  * Minimal `.dottaignore` template for new profiles.
  */
-static const char *PROFILE_DOTTAIGNORE =
+static const char *const PROFILE_DOTTAIGNORE =
     "# Dotta Ignore Patterns\n"
     "#\n"
     "# This profile's ignore patterns work in layers (in precedence order):\n"
@@ -351,8 +344,8 @@ error_t *ignore_blob_read(
         return ERROR(
             ERR_VALIDATION,
             ".dottaignore on branch '%s' exceeds capacity "
-            "(max %d bytes, actual %zu)",
-            branch, MAX_DOTTAIGNORE_SIZE, size
+            "(max %zu bytes, actual %zu)",
+            branch, (size_t) MAX_DOTTAIGNORE_SIZE, size
         );
     }
 
@@ -385,8 +378,8 @@ error_t *ignore_blob_write(
         return ERROR(
             ERR_VALIDATION,
             ".dottaignore content exceeds capacity "
-            "(max %d bytes, actual %zu)",
-            MAX_DOTTAIGNORE_SIZE, size
+            "(max %zu bytes, actual %zu)",
+            (size_t) MAX_DOTTAIGNORE_SIZE, size
         );
     }
 
@@ -519,7 +512,6 @@ const char *ignore_origin_describe(ignore_origin_t origin) {
         case IGNORE_ORIGIN_PROFILE:  return "profile .dottaignore";
         case IGNORE_ORIGIN_CONFIG:   return "config file patterns";
         case IGNORE_ORIGIN_CLI:      return "CLI --exclude patterns";
-        case IGNORE_ORIGIN_COUNT_:   break;  /* fall through to unknown */
     }
     return "unknown";
 }

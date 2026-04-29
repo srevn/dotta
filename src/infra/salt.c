@@ -177,23 +177,21 @@ error_t *salt_init(git_repository *repo) {
      * the right size, treat as success. A user re-running `dotta init`
      * on an existing repo must not regenerate the salt — that would
      * silently invalidate every encrypted blob in the repo. */
-    {
-        uint8_t existing_salt[KDF_SALT_SIZE];
-        error_t *probe_err = salt_load(repo, existing_salt);
-        if (probe_err == NULL) {
-            return NULL;  /* already initialized */
-        }
-        /* Any error other than ERR_NOT_FOUND propagates: a partially
-         * formed ref (e.g. wrong-size salt blob) needs human attention,
-         * not silent overwrite. */
-        if (probe_err->code != ERR_NOT_FOUND) {
-            return error_wrap(
-                probe_err,
-                "Repository salt exists but is malformed"
-            );
-        }
-        error_free(probe_err);
+    uint8_t existing_salt[KDF_SALT_SIZE];
+    error_t *probe_err = salt_load(repo, existing_salt);
+    if (probe_err == NULL) {
+        return NULL;  /* already initialized */
     }
+    /* Any error other than ERR_NOT_FOUND propagates: a partially
+     * formed ref (e.g. wrong-size salt blob) needs human attention,
+     * not silent overwrite. */
+    if (probe_err->code != ERR_NOT_FOUND) {
+        return error_wrap(
+            probe_err,
+            "Repository salt exists but is malformed"
+        );
+    }
+    error_free(probe_err);
 
     /* Generate the salt. entropy_fill scrubs the buffer to zeros on
      * any failure, so a half-populated salt cannot leak out. */

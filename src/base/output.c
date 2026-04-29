@@ -59,7 +59,7 @@ static const char *ANSI_CODES[] = {
 #define ANSI_CODE_COUNT (sizeof(ANSI_CODES) / sizeof(ANSI_CODES[0]))
 
 /* Empty string returned when colors are disabled */
-static const char *EMPTY = "";
+static const char *const EMPTY = "";
 
 /* ═══════════════════════════════════════════════════════════════════
  * Style Buffer
@@ -754,7 +754,7 @@ void output_format_size(size_t bytes, char *buffer, size_t buffer_size) {
             buffer, buffer_size, "%zu B",
             bytes
         );
-    else if (bytes < 1024 * 1024)
+    else if (bytes < (size_t) 1024 * 1024)
         snprintf(
             buffer, buffer_size, "%.1f KiB",
             bytes / 1024.0

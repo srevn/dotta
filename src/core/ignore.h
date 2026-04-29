@@ -77,9 +77,7 @@ typedef struct ignore_rules ignore_rules_t;
  *
  * Declared in ascending precedence so a larger numeric value means
  * "this layer overrides lower ones." Values round-trip through
- * `gitignore_origin_t` (8-bit) when the builder tags rules during
- * append; a `_Static_assert` in ignore.c guards against truncation if
- * this enum ever grows past UINT8_MAX.
+ * gitignore_origin_t (8-bit) when the builder tags rules during append.
  */
 typedef enum {
     IGNORE_ORIGIN_NONE = 0,   /* No rule matched */
@@ -87,8 +85,7 @@ typedef enum {
     IGNORE_ORIGIN_BASELINE,   /* Baseline .dottaignore on dotta-worktree */
     IGNORE_ORIGIN_PROFILE,    /* Profile .dottaignore on its branch */
     IGNORE_ORIGIN_CONFIG,     /* Config file patterns */
-    IGNORE_ORIGIN_CLI,        /* --exclude flags (highest priority) */
-    IGNORE_ORIGIN_COUNT_      /* Sentinel; not a value */
+    IGNORE_ORIGIN_CLI         /* --exclude flags (highest priority) */
 } ignore_origin_t;
 
 /**

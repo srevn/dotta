@@ -187,11 +187,12 @@ const string_array_t *scope_active(const scope_t *s);
 /**
  * Raw path filter (NULL when no positional file args were given).
  *
- * Long-term: consumers that only care about the path dimension and
- * inspect the pathspec_t struct directly (e.g., diff's historical
- * modes passing through to libgit2 pathspecs, filter-coverage
- * validation) use this. Per-iteration path-vs-filter checks should use
- * scope_accepts_path instead.
+ * Consumers that need to enumerate the compiled entries (e.g. diff's
+ * historical modes flattening the filter into a libgit2 git_strarray,
+ * filter-coverage validation) use this with the pathspec indexed
+ * accessors (pathspec_count / pathspec_exact_at / pathspec_glob_at /
+ * pathspec_glob_matches_at). Per-iteration path-vs-filter checks
+ * should use scope_accepts_path instead.
  *
  * Borrowed; valid until scope_free.
  */

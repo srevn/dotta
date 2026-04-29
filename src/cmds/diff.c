@@ -4,6 +4,7 @@
 
 #include "cmds/diff.h"
 
+#include <assert.h>
 #include <config.h>
 #include <git2.h>
 #include <stdio.h>
@@ -11,10 +12,8 @@
 #include <string.h>
 #include <time.h>
 
-#include "base/arena.h"
 #include "base/args.h"
 #include "base/error.h"
-#include "base/gitignore.h"
 #include "base/hashmap.h"
 #include "base/output.h"
 #include "base/string.h"
@@ -816,31 +815,32 @@ cleanup:
  * manifest storage paths. Outputs a warning for each unmatched entry,
  * which likely indicates a typo.
  *
+ * Per-pattern isolation matters here: a combined-ruleset evaluation
+ * folds one pattern's negation into another's verdict and would under-
+ * count coverage on overlap. The pathspec_glob_matches_at primitive
+ * gives each glob independent attribution.
+ *
  * @param file_filter File filter to validate (NULL = no validation, returns 0)
  * @param manifest Manifest to check against (must not be NULL if filter is non-NULL)
- * @param arena Borrowed scratch arena for per-pattern rulesets
  * @param out Output context for warnings
  * @return Number of filter entries that matched no manifest entry (0 = all matched)
  */
 static size_t validate_filter_paths(
     const pathspec_t *file_filter,
     const manifest_t *manifest,
-    arena_t *arena,
     output_t *out
 ) {
     if (!file_filter || !manifest) return 0;
 
     size_t unmatched = 0;
 
-    /* Check exact paths from hashmap */
-    hashmap_iter_t iter;
-    hashmap_iter_init(&iter, file_filter->exact_paths);
-    const char *filter_path;
-
-    while (hashmap_iter_next(&iter, &filter_path, NULL)) {
-        bool found = false;
+    /* Exact paths: literal equality, then directory-prefix walk-up. */
+    size_t exact_count = pathspec_exact_count(file_filter);
+    for (size_t e = 0; e < exact_count; e++) {
+        const char *filter_path = pathspec_exact_at(file_filter, e);
         size_t filter_len = strlen(filter_path);
 
+        bool found = false;
         for (size_t i = 0; i < manifest->count; i++) {
             const char *sp = manifest->entries[i].storage_path;
             if (strcmp(sp, filter_path) == 0) {
@@ -864,57 +864,24 @@ static size_t validate_filter_paths(
         }
     }
 
-    /* Check glob patterns via per-pattern rulesets.
-     *
-     * Each glob becomes its own single-rule ruleset so a negation in
-     * one pattern cannot silently un-match another — a combined
-     * ruleset's last-match-wins would conflate the verdicts. Allocations
-     * back into the borrowed command arena; block-OOM degrades to a
-     * stderr warning and skips the glob check (exact-path validation
-     * already ran). */
-    if (file_filter->glob_count > 0) {
-        gitignore_ruleset_t **per_pattern = arena_calloc(
-            arena, file_filter->glob_count, sizeof(*per_pattern)
-        );
-
-        bool build_ok = (per_pattern != NULL);
-        for (size_t g = 0; build_ok && g < file_filter->glob_count; g++) {
-            error_t *err = gitignore_ruleset_create(arena, &per_pattern[g]);
-            if (!err) {
-                err = gitignore_ruleset_append(
-                    per_pattern[g], file_filter->glob_patterns[g], 0
-                );
-            }
-            if (err) {
-                error_free(err);
-                build_ok = false;
+    /* Glob patterns: per-pattern isolated coverage check. */
+    size_t glob_count = pathspec_glob_count(file_filter);
+    for (size_t g = 0; g < glob_count; g++) {
+        bool found = false;
+        for (size_t i = 0; i < manifest->count; i++) {
+            if (pathspec_glob_matches_at(
+                file_filter, g, manifest->entries[i].storage_path
+                )) {
+                found = true;
+                break;
             }
         }
-
-        if (!build_ok) {
+        if (!found) {
             output_warning(
-                out, OUTPUT_NORMAL, "Skipping filter-pattern validation"
+                out, OUTPUT_NORMAL, "No managed file matches pattern '%s'",
+                pathspec_glob_at(file_filter, g)
             );
-            return unmatched;
-        }
-
-        for (size_t g = 0; g < file_filter->glob_count; g++) {
-            bool found = false;
-            for (size_t i = 0; i < manifest->count; i++) {
-                if (gitignore_is_ignored(
-                    per_pattern[g], manifest->entries[i].storage_path, false
-                    )) {
-                    found = true;
-                    break;
-                }
-            }
-            if (!found) {
-                output_warning(
-                    out, OUTPUT_NORMAL, "No managed file matches pattern '%s'",
-                    file_filter->glob_patterns[g]
-                );
-                unmatched++;
-            }
+            unmatched++;
         }
     }
 
@@ -1032,8 +999,8 @@ static error_t *diff_commit_to_workspace(
      * manifest_build_from_tree and the subsequent compare_manifest_to_filesystem
      * call, then live until command end. */
     string_array_t single_profile = {
-        .items = &profile,
-        .count = 1,
+        .items    = &profile,
+        .count    = 1,
         .capacity = 0,
     };
     mount_table_t *roots = NULL;
@@ -1061,14 +1028,14 @@ static error_t *diff_commit_to_workspace(
     }
 
     if (diff_count == 0 && !opts->name_only) {
-        size_t unmatched = validate_filter_paths(file_filter, manifest, arena, out);
+        size_t unmatched = validate_filter_paths(file_filter, manifest, out);
 
         if (unmatched > 0) {
             output_hint(
                 out, OUTPUT_NORMAL, "Use 'dotta list <profile>' to see managed files"
             );
         }
-        if (unmatched == 0 || (file_filter && unmatched < file_filter->count)) {
+        if (unmatched == 0 || unmatched < pathspec_count(file_filter)) {
             output_info(
                 out, OUTPUT_NORMAL, "No differences between commit and workspace\n"
             );
@@ -1086,84 +1053,62 @@ cleanup:
 }
 
 /**
- * Build git_strarray pathspec from path filter
+ * Build a git_strarray pathspec from a path filter
  *
- * Converts a pathspec_t (containing exact paths in a hashmap and glob
- * patterns in an array) into a git_strarray pathspec for libgit2's diff
- * operations.
+ * Flattens the pathspec's exact paths and glob patterns into a single
+ * borrowed-pointer array suitable for libgit2's diff pathspec field.
  *
  * Memory ownership:
- *   - The returned strings array is allocated and must be freed by caller
- *   - Individual string pointers are borrowed from the filter (not duplicated)
- *   - Filter must outlive the diff operation (caller's responsibility)
+ *   - The returned strings array is heap-allocated; the caller frees
+ *     opts->pathspec.strings after the diff operation completes.
+ *   - Individual string pointers borrow from the filter and remain
+ *     valid for the filter's lifetime; the filter MUST outlive the
+ *     diff operation.
  *
- * The caller should free only the array after use:
- *   if (diff_opts.pathspec.strings) free(diff_opts.pathspec.strings);
+ * Behaviour:
+ *   - NULL filter or empty filter: no-op (libgit2 treats unset
+ *     pathspec as "match all").
+ *   - Allocation failure: returns ERR_MEMORY; opts->pathspec is left
+ *     untouched.
  *
- * Fail-safe behavior:
- *   - NULL filter: no-op (matches all files)
- *   - Empty filter: no-op (matches all files)
- *   - Allocation failure: no-op (matches all files, best-effort)
- *
- * @param filter Path filter (can be NULL for no filtering)
- * @param opts Diff options to populate (must not be NULL)
+ * @param filter Path filter (can be NULL)
+ * @param opts   Diff options to populate (must not be NULL)
+ * @return Error or NULL on success
  */
 static error_t *build_diff_pathspec(
     const pathspec_t *filter,
     git_diff_options *opts
 ) {
-    if (!opts) {
-        return NULL;
-    }
+    if (!opts) return NULL;
 
-    /* NULL or empty filter = match all files (leave pathspec at defaults) */
-    if (!filter || filter->count == 0) {
-        return NULL;
-    }
+    size_t total = pathspec_count(filter);
+    if (total == 0) return NULL;
 
-    /* Allocate pointer array for all paths (exact + globs) */
-    char **strings = calloc(filter->count, sizeof(char *));
+    char **strings = calloc(total, sizeof(*strings));
     if (!strings) {
         return ERROR(
-            ERR_MEMORY,
-            "Failed to allocate memory for diff pathspec"
+            ERR_MEMORY, "Failed to allocate memory for diff pathspec"
         );
     }
 
     size_t index = 0;
 
-    /*
-     * Phase 1: Collect exact paths from hashmap
-     *
-     * Hashmap keys are owned by the hashmap (duplicated on insert).
-     * We borrow pointers here - safe because filter outlives diff operation.
-     */
-    hashmap_iter_t iter;
-    hashmap_iter_init(&iter, filter->exact_paths);
-    const char *key;
-
-    while (hashmap_iter_next(&iter, &key, NULL)) {
-        if (index < filter->count) {
-            strings[index++] = (char *) key;  /* Borrow pointer from hashmap */
-        }
+    size_t exact_count = pathspec_exact_count(filter);
+    for (size_t i = 0; i < exact_count; i++) {
+        strings[index++] = (char *) pathspec_exact_at(filter, i);
     }
 
-    /*
-     * Phase 2: Collect glob patterns from array
-     *
-     * Glob patterns are owned by filter->glob_patterns[].
-     * We borrow pointers here - safe because filter outlives diff operation.
-     */
-    for (size_t i = 0; i < filter->glob_count; i++) {
-        if (index < filter->count) {
-            strings[index++] = filter->glob_patterns[i];  /* Borrow pointer */
-        }
+    size_t glob_count = pathspec_glob_count(filter);
+    for (size_t i = 0; i < glob_count; i++) {
+        strings[index++] = (char *) pathspec_glob_at(filter, i);
     }
 
-    /* Populate pathspec in diff options */
+    /* Structural invariant: pathspec_count == exact_count + glob_count.
+     * Held by pathspec_create; the pathspec is immutable thereafter. */
+    assert(index == total);
+
     opts->pathspec.strings = strings;
-    opts->pathspec.count = index;
-
+    opts->pathspec.count = total;
     return NULL;
 }
 
@@ -1393,10 +1338,10 @@ static error_t *diff_workspace(
     /* Step 4: Validate file filter paths against manifest */
     const pathspec_t *file_filter = scope_paths(scope);
     if (file_filter) {
-        size_t unmatched = validate_filter_paths(file_filter, manifest, arena, out);
+        size_t unmatched = validate_filter_paths(file_filter, manifest, out);
         if (unmatched > 0) {
             output_hint(out, OUTPUT_NORMAL, "Use 'dotta list <profile>' to see managed files");
-            if (unmatched == file_filter->count) {
+            if (unmatched == pathspec_count(file_filter)) {
                 /* All filter paths are invalid — nothing to diff */
                 goto cleanup;
             }

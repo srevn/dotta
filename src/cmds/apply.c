@@ -823,10 +823,10 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     }
 
     if (scope_has_paths(scope)) {
+        size_t filter_count = pathspec_count(scope_paths(scope));
         output_print(
             out, OUTPUT_VERBOSE, "\nFile filter: %zu file%s specified\n",
-            scope_paths(scope)->count,
-            scope_paths(scope)->count == 1 ? "" : "s"
+            filter_count, filter_count == 1 ? "" : "s"
         );
     }
 

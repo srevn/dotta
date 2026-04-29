@@ -14,6 +14,11 @@
  * ordering, negation, anchoring, and `**` recursive globs.
  *
  * NULL semantics: a NULL pathspec matches all paths (no filtering).
+ *
+ * The pathspec is opaque. Callers that need to enumerate the compiled
+ * entries (e.g. building a libgit2 git_strarray, validating coverage)
+ * use the indexed accessors below; the internal layout is private to
+ * pathspec.c.
  */
 
 #ifndef DOTTA_PATHSPEC_H
@@ -23,36 +28,8 @@
 #include <stddef.h>
 #include <types.h>
 
-/* Forward declarations — keep this header light. */
 typedef struct mount_table mount_table_t;
-typedef struct gitignore_ruleset gitignore_ruleset_t;
-struct hashmap;
-
-/**
- * Compiled path matcher.
- *
- * The struct is intentionally visible so the few consumers that need
- * to inspect the matcher's internals (cmds/diff.c builds libgit2
- * pathspecs from the same data) can do so without a fan-out of
- * accessors. New consumers should prefer pathspec_matches.
- *
- * Storage layout:
- *   - exact_paths is heap-owned; lifetime ends at pathspec_free.
- *   - glob_ruleset and glob_patterns are arena-borrowed; their
- *     lifetime is the arena passed to pathspec_create. The arena MUST
- *     outlive the pathspec, otherwise the glob fields dangle.
- *
- * (Lifetime hazard noted as observation: pathspec mixes heap + arena
- * ownership. A future cleanup may move the entire structure into the
- * arena and reduce pathspec_free to a no-op.)
- */
-typedef struct {
-    struct hashmap *exact_paths;         /* heap-owned; O(1) lookup */
-    gitignore_ruleset_t *glob_ruleset;   /* arena-borrowed; NULL when glob_count == 0 */
-    char **glob_patterns;                /* arena-borrowed; raw strings for diagnostics */
-    size_t glob_count;                   /* number of glob patterns */
-    size_t count;                        /* total entries (exact + globs) */
-} pathspec_t;
+typedef struct pathspec pathspec_t;
 
 /**
  * Compile a pathspec from a list of user-provided inputs.
@@ -76,7 +53,8 @@ typedef struct {
  * @param inputs User-provided strings (may be NULL when count is 0)
  * @param count  Number of inputs
  * @param table  Mount table for filesystem-input resolution (must not be NULL)
- * @param arena  Arena backing the compiled glob ruleset (must not be NULL)
+ * @param arena  Arena backing the compiled glob storage (must not be NULL,
+ *               must outlive the pathspec)
  * @param out    Pathspec or NULL when inputs were empty (must not be NULL)
  * @return Error or NULL on success
  */
@@ -93,9 +71,10 @@ error_t *pathspec_create(
  *
  * Lookup order:
  *   1. NULL pathspec -> matches all.
- *   2. Exact match in `exact_paths` (O(1)).
- *   3. Walk-up: any ancestor directory in `exact_paths` matches.
- *   4. Glob ruleset evaluation (gitignore semantics).
+ *   2. Exact match in the exact-path set (O(1)).
+ *   3. Walk-up: any ancestor directory in the exact-path set matches.
+ *   4. Combined glob ruleset evaluation (gitignore last-match-wins
+ *      semantics; honours negation across patterns).
  *
  * @param spec         Pathspec (NULL = match all)
  * @param storage_path Storage path to test (must not be NULL)
@@ -104,10 +83,69 @@ error_t *pathspec_create(
 bool pathspec_matches(const pathspec_t *spec, const char *storage_path);
 
 /**
- * Free a pathspec. Releases the heap-owned exact_paths hashmap; the
- * arena-borrowed glob fields are reclaimed when the arena is destroyed.
+ * Free a pathspec. Releases the heap-owned exact-path storage; the
+ * arena-borrowed glob storage is reclaimed when the arena is destroyed.
  * Safe with NULL.
  */
 void pathspec_free(pathspec_t *spec);
+
+/**
+ * Total number of compiled entries (exact paths + glob patterns).
+ *
+ * NULL-safe (returns 0 for a NULL pathspec, matching the "no filter"
+ * semantics of pathspec_matches).
+ */
+size_t pathspec_count(const pathspec_t *spec);
+
+/**
+ * Number of compiled exact paths. NULL-safe (returns 0).
+ */
+size_t pathspec_exact_count(const pathspec_t *spec);
+
+/**
+ * Number of compiled glob patterns. NULL-safe (returns 0).
+ */
+size_t pathspec_glob_count(const pathspec_t *spec);
+
+/**
+ * Exact path at index `i`. The pointer borrows into pathspec storage;
+ * its lifetime ends at pathspec_free.
+ *
+ * Iteration order is stable for a given pathspec but otherwise
+ * unspecified.
+ *
+ * `i` MUST be < pathspec_exact_count(spec). Out-of-bounds is undefined
+ * behaviour (asserted in debug builds).
+ */
+const char *pathspec_exact_at(const pathspec_t *spec, size_t i);
+
+/**
+ * Glob pattern (raw user input string) at index `i`. The pointer
+ * borrows into pathspec storage; its lifetime ends at pathspec_free.
+ *
+ * Insertion order: index `i` corresponds to the i-th glob encountered
+ * during pathspec_create's input scan.
+ *
+ * `i` MUST be < pathspec_glob_count(spec). Out-of-bounds is undefined
+ * behaviour (asserted in debug builds).
+ */
+const char *pathspec_glob_at(const pathspec_t *spec, size_t i);
+
+/**
+ * Per-pattern isolated match: tests whether the glob at index `i`
+ * matches `storage_path` *as if it were the only rule in the ruleset*.
+ *
+ * Used by filter-coverage validation: a combined-ruleset evaluation
+ * folds one pattern's negation (or shadowing) into another's verdict,
+ * which under-counts coverage on overlap. Per-pattern isolation gives
+ * each input independent attribution.
+ *
+ * Returns false for a NULL pathspec or NULL path. `i` MUST be <
+ * pathspec_glob_count(spec); out-of-bounds is undefined behaviour
+ * (asserted in debug builds).
+ */
+bool pathspec_glob_matches_at(
+    const pathspec_t *spec, size_t i, const char *storage_path
+);
 
 #endif /* DOTTA_PATHSPEC_H */

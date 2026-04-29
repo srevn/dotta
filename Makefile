@@ -318,6 +318,45 @@ format-check:
 	if [ $$? -eq 0 ]; then echo "Formatting issues found. Run 'make format' to fix."; exit 1; \
 	else echo "All files formatted correctly."; fi
 
+# Static analysis with clang-tidy (requires compile_commands.json)
+TIDY ?= clang-tidy
+RUN_TIDY ?= run-clang-tidy
+TIDY_JOBS ?= $(shell sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4)
+TIDY_FILTER ?= ^.*/src/.*\.c$$
+TIDY_FILES ?= $(LIB_SRC) $(MAIN_SRC)
+
+.PHONY: tidy
+tidy:
+	@if [ ! -f compile_commands.json ]; then \
+		echo "Error: compile_commands.json not found. Generate it with 'make compile-commands'."; \
+		exit 1; \
+	fi
+	@echo "Running clang-tidy in parallel ($(TIDY_JOBS) jobs)..."
+	@$(RUN_TIDY) -p . -quiet -j $(TIDY_JOBS) '$(TIDY_FILTER)'
+
+.PHONY: tidy-fix
+tidy-fix:
+	@if [ ! -f compile_commands.json ]; then \
+		echo "Error: compile_commands.json not found. Generate it with 'make compile-commands'."; \
+		exit 1; \
+	fi
+	@echo "Running clang-tidy with --fix in parallel ($(TIDY_JOBS) jobs)..."
+	@$(RUN_TIDY) -p . -quiet -j $(TIDY_JOBS) -fix '$(TIDY_FILTER)'
+
+# Scan a single file (serial, useful for targeted checks)
+.PHONY: tidy-file
+tidy-file:
+	@if [ -z "$(FILE)" ]; then echo "Usage: make tidy-file FILE=src/path/to/file.c"; exit 1; fi
+	@$(TIDY) -p . --quiet $(FILE)
+
+# Regenerate compile_commands.json via bear
+.PHONY: compile-commands
+compile-commands:
+	@command -v bear >/dev/null 2>&1 || \
+		{ echo "Error: 'bear' not installed. Install via: brew install bear"; exit 1; }
+	@$(MAKE) clean
+	@bear -- $(MAKE) -j$$(sysctl -n hw.ncpu 2>/dev/null || nproc)
+
 # Check dependencies
 .PHONY: check-deps
 check-deps:
@@ -342,6 +381,10 @@ help:
 	@echo "  uninstall-completions - Remove shell completions only"
 	@echo "  format                - Format code with uncrustify"
 	@echo "  format-check          - Check formatting without modifying files"
+	@echo "  tidy                  - Run clang-tidy static analysis (parallel)"
+	@echo "  tidy-fix              - Run clang-tidy and apply safe fixes (parallel)"
+	@echo "  tidy-file FILE=...    - Run clang-tidy on a single file"
+	@echo "  compile-commands      - Regenerate compile_commands.json via bear"
 	@echo "  check-deps            - Check for required dependencies"
 	@echo "  help                  - Show this help message"
 	@echo ""

@@ -21,6 +21,7 @@
 #include "base/timeutil.h"
 #include "core/manifest.h"
 #include "core/metadata.h"
+#include "core/profiles.h"
 #include "core/scope.h"
 #include "core/state.h"
 #include "core/workspace.h"
@@ -1016,17 +1017,33 @@ static error_t *diff_commit_to_workspace(
     }
 
     /* Step 5: Build manifest from historical tree.
-     * Borrow the profile's custom_prefix from the state row cache — stable
-     * for the duration of this call (no enabled_profiles mutation).
      *
-     * Per-entry strings (storage_path, filesystem_path, owner, group) are
-     * allocated into the borrowed command arena; they outlive both
+     * Build a single-binding deployment topology for `profile` (which
+     * resolve_commit_in_profiles found on `scope_enabled`, NOT
+     * `scope_active` — so scope_roots can't be reused: it is keyed by
+     * the active set and could omit `profile` whenever the user
+     * narrowed with -p). A one-shot from `[profile]` peeks the row
+     * cache for that one entry and yields a roots that resolves
+     * custom/ paths exactly as the historical tree expects.
+     *
+     * Per-entry strings (storage_path, filesystem_path, owner, group)
+     * are allocated into the borrowed command arena; they outlive both
      * manifest_build_from_tree and the subsequent compare_manifest_to_filesystem
      * call, then live until command end. */
-    const char *custom_prefix = state_peek_profile_prefix(state, profile);
+    string_array_t single_profile = {
+        .items = &profile,
+        .count = 1,
+        .capacity = 0,
+    };
+    path_roots_t *roots = NULL;
+    err = profile_build_path_roots(state, &single_profile, arena, &roots);
+    if (err) {
+        err = error_wrap(err, "Failed to build deployment topology for commit");
+        goto cleanup;
+    }
 
     err = manifest_build_from_tree(
-        tree, profile, custom_prefix, metadata, arena, &manifest
+        tree, profile, roots, metadata, arena, &manifest
     );
     if (err) {
         err = error_wrap(err, "Failed to build manifest from commit");

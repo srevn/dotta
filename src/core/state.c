@@ -1929,24 +1929,27 @@ error_t *state_get_all_files(
  * Create state directory entry from metadata item
  *
  * Converts portable metadata (storage_path) to state entry (both paths).
- * Derives filesystem_path from metadata's storage_path using path_from_storage().
+ * Derives filesystem_path from the storage_path by consulting the
+ * deployment topology for `profile`'s deploy_root binding.
  *
  * @param meta_item Metadata item (must not be NULL, must be DIRECTORY kind)
  * @param profile Source profile name (must not be NULL)
- * @param custom_prefix Custom prefix for this profile (NULL for home/root)
+ * @param roots Per-machine deployment topology (must not be NULL)
  * @param arena Arena for allocations (must not be NULL)
  * @param out State directory entry (must not be NULL, lifetime tied to arena)
- * @return Error or NULL on success
+ * @return Error or NULL on success; ERR_NOT_FOUND when meta_item->key
+ *         is custom/... and profile has no deploy_root in roots.
  */
 error_t *state_directory_entry_create_from_metadata(
     const metadata_item_t *meta_item,
     const char *profile,
-    const char *custom_prefix,
+    const path_roots_t *roots,
     arena_t *arena,
     state_directory_entry_t **out
 ) {
     CHECK_NULL(meta_item);
     CHECK_NULL(profile);
+    CHECK_NULL(roots);
     CHECK_NULL(arena);
     CHECK_NULL(out);
 
@@ -1972,12 +1975,18 @@ error_t *state_directory_entry_create_from_metadata(
         return ERROR(ERR_MEMORY, "Failed to allocate state directory entry");
     }
 
-    /* Derive filesystem path from storage path with appropriate prefix.
-     * path_from_storage always returns a heap-allocated string; copy it
-     * into the arena and release the heap original. */
+    /* Derive filesystem path from storage path against the topology.
+     * path_roots_to_filesystem returns ERR_NOT_FOUND when the storage
+     * path is custom/... and the profile has no deploy_root binding —
+     * propagate verbatim so the caller (manifest_sync_directories) can
+     * silently skip without distinguishing wrap from raw. Any other
+     * error (malformed key, allocation failure) is wrapped. */
     char *heap_path = NULL;
-    error_t *err = path_from_storage(meta_item->key, custom_prefix, &heap_path);
+    error_t *err = path_roots_to_filesystem(
+        roots, profile, meta_item->key, &heap_path
+    );
     if (err) {
+        if (err->code == ERR_NOT_FOUND) return err;
         return error_wrap(
             err, "Failed to derive filesystem path from storage path: %s",
             meta_item->key

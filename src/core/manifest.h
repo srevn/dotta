@@ -3,7 +3,9 @@
  *
  * Owns the Virtual Working Directory (VWD) types and all manifest operations:
  *   - Type definitions: file_entry_t, manifest_t
- *   - Construction: manifest_build(), manifest_build_from_tree(), manifest_free()
+ *   - Construction: manifest_build_from_tree(), manifest_free()
+ *     (multi-profile precedence resolution lives behind the consistency
+ *      layer entry points and is not exposed)
  *   - Consistency layer: manifest_apply_scope(), manifest_sync_diff(), etc.
  *
  * The manifest module is the single authority for all manifest table modifications.
@@ -12,7 +14,7 @@
  *
  * Core Principles:
  *   - Single Authority: Only this module modifies the manifest table
- *   - Precedence Oracle: Uses manifest_build() for correctness
+ *   - Precedence Oracle: Internal precedence builder ensures correctness
  *   - Eager Consistency: Manifest updated immediately when inputs change
  *   - Transaction Safety: All operations are atomic (rollback on error)
  *   - Convergence Model: VWD defines scope and expected state, workspace analyzes runtime divergence
@@ -21,8 +23,8 @@
  *   Commands → manifest layer → state API → SQLite
  *
  * The manifest layer orchestrates existing components:
- *   - manifest_build() for precedence resolution and per-profile metadata
- *     attribution (each entry carries its source profile's metadata claim)
+ *   - Internal precedence builder for per-profile metadata attribution
+ *     (each entry carries its source profile's metadata claim)
  *   - blob_oid extraction from tree entries for content identity
  *   - state_*() API for persistence
  */
@@ -655,103 +657,26 @@ error_t *manifest_sync_diff(
 );
 
 /**
- * Sync tracked directories from enabled profiles
- *
- * Rebuilds the tracked_directories table from profile metadata.
- * Part of the Virtual Working Directory (VWD) consistency model.
- *
- * Called by profile operations (enable/disable/reorder) to keep directory
- * tracking synchronized with the enabled profile set.
- *
- * Unlike files (which have lifecycle states: pending/deployed/removal),
- * directories are simply tracked for profile attribution and metadata
- * preservation. This function uses a rebuild pattern (clear + repopulate)
- * rather than incremental updates.
- *
- * Algorithm:
- *   1. Clear all tracked directories
- *   2. For each enabled profile:
- *      a. Load metadata from Git (skip if not found)
- *      b. Extract directories from metadata
- *      c. Add to state with profile attribution
- *   3. All within caller's active transaction
- *
- * Preconditions:
- *   - state MUST have active transaction (via state_open)
- *   - enabled_profiles MUST be current enabled set
- *
- * Postconditions:
- *   - tracked_directories table reflects enabled_profiles
- *   - Transaction remains open (caller commits)
- *   - Missing metadata handled gracefully (not an error)
- *
- * Error Conditions:
- *   - ERR_GIT: Git operation failed
- *   - ERR_STATE: Database operation failed
- *   - ERR_NOMEM: Memory allocation failed
- *
- * Performance: O(D) where D = total directories (typically < 50)
- *
- * @param repo Git repository (must not be NULL)
- * @param state State with active transaction (must not be NULL)
- * @param arena Scratch arena for per-directory state-entry construction.
- *              Allocations live until the caller destroys the arena
- *              (typically command end). Must not be NULL.
- * @param enabled_profiles Current enabled profiles (must not be NULL)
- * @return Error or NULL on success
- */
-error_t *manifest_sync_directories(
-    git_repository *repo,
-    state_t *state,
-    arena_t *arena,
-    const string_array_t *enabled_profiles
-);
-
-/**
- * Build manifest from profile names
- *
- * Merges files from all profiles according to precedence rules.
- * Later profiles override earlier ones. Loads each profile's Git tree
- * internally via gitops_load_branch_tree (one tree alive per iteration).
- *
- * Custom prefix resolution is handled internally: when state is non-NULL,
- * loads the prefix map from the state database to resolve custom/ files.
- * Profiles without a custom prefix deploy to home/root normally.
- * Custom/ files are skipped for profiles without a prefix entry.
- *
- * Memory: per-entry strings (storage_path, filesystem_path, owner, group)
- * are allocated from the caller's arena. The arena must outlive the
- * manifest, since manifest_free() abandons those strings to the arena.
- * Entries also borrow `profile` from the caller's profiles array, which
- * must outlive the manifest.
- *
- * @param repo Repository (must not be NULL)
- * @param profiles Profile names in precedence order (must not be NULL)
- * @param state State handle for custom prefix resolution (NULL = no custom prefixes)
- * @param arena Arena for string allocations (must not be NULL)
- * @param out Manifest (must not be NULL, caller must free with manifest_free)
- * @return Error or NULL on success
- */
-error_t *manifest_build(
-    git_repository *repo,
-    const string_array_t *profiles,
-    const state_t *state,
-    arena_t *arena,
-    manifest_t **out
-);
-
-/**
  * Build manifest from a single Git tree
  *
  * Creates a manifest from a specific Git tree, useful for historical diffs.
- * This is a simplified version of manifest_build() for a single tree.
+ * The single-tree counterpart to the internal multi-profile precedence
+ * builder used by the consistency-layer entry points.
  *
  * Metadata, when supplied, is applied to entries in lockstep with the tree
  * walk — mode, owner, group, and encrypted are filled from the tree's own
  * metadata.json. Pass NULL to skip metadata application (entries keep
  * Git-derived defaults). Callers that have already loaded the tree's
  * metadata for their own purposes should pass it here to keep the
- * file_entry_t shape uniform across all manifest_build* paths.
+ * file_entry_t shape uniform across every manifest construction path.
+ *
+ * Custom-prefix resolution is delegated to `roots`. The handle MUST
+ * record a binding for `profile` (with deploy_root set) when the tree
+ * contains custom/ entries; otherwise those entries are skipped during
+ * the walk (via path_roots_to_filesystem returning ERR_NOT_FOUND, which
+ * the callback treats as "this profile has no deploy_root on this
+ * machine — skip"). Trees without custom/ entries can pass any roots
+ * handle, including one with no binding for `profile`.
  *
  * Memory: per-entry strings (storage_path, filesystem_path, owner, group)
  * are allocated from the caller's arena. The arena must outlive the
@@ -759,7 +684,7 @@ error_t *manifest_build(
  *
  * @param tree Git tree to build manifest from (must not be NULL)
  * @param profile Profile name for entries (must not be NULL)
- * @param custom_prefix Custom prefix for custom/ paths (NULL for graceful degradation)
+ * @param roots Per-machine deployment topology (must not be NULL)
  * @param metadata Optional per-tree metadata to apply to entries (can be NULL)
  * @param arena Arena for per-entry string allocations (must not be NULL)
  * @param out Manifest (must not be NULL, caller must free with manifest_free)
@@ -768,7 +693,7 @@ error_t *manifest_build(
 error_t *manifest_build_from_tree(
     git_tree *tree,
     const char *profile,
-    const char *custom_prefix,
+    const path_roots_t *roots,
     const metadata_t *metadata,
     arena_t *arena,
     manifest_t **out

@@ -104,9 +104,9 @@ const char *mount_strip_label(const char *storage_path);
  * Reads only the leading label; does not validate the rest of the path.
  * Returns true and writes `*out_kind` when the input is a storage path
  * (starts with "home/", "root/", or "custom/"). Returns false and leaves
- * `*out_kind` unmodified for NULL, empty, or non-storage input — callers
- * that previously paired `mount_is_storage_path` with `mount_kind_of` can
- * collapse to a single check.
+ * `*out_kind` unmodified for NULL, empty, or non-storage input — call
+ * sites that only need the boolean pass a discardable `mount_kind_t`
+ * and ignore the return.
  *
  * No silent default: a malformed input never silently lands as MOUNT_ROOT.
  *
@@ -115,20 +115,6 @@ const char *mount_strip_label(const char *storage_path);
  * @return true when storage_path is a storage path; false otherwise
  */
 bool mount_kind_extract(const char *storage_path, mount_kind_t *out_kind);
-
-/**
- * Return true when `path` syntactically begins with a known storage label.
- *
- * Pure string-prefix check; no allocation, no filesystem access. NULL and
- * empty inputs return false.
- *
- * Equivalent to `mount_kind_extract(path, &unused)`; kept as a separate
- * predicate for call sites that only need the boolean and not the kind.
- *
- * @param path Path to test (may be NULL)
- * @return true when `path` starts with "home/", "root/", or "custom/"
- */
-bool mount_is_storage_path(const char *path);
 
 /**
  * Opaque mount-table handle. Built by `mount_table_build`; lifetime
@@ -202,6 +188,31 @@ error_t *mount_table_build(
 );
 
 /**
+ * Build a mount table for a single (profile, target) pairing.
+ *
+ * Convenience wrapper over mount_table_build for the common single-mount
+ * idiom (one CLI-supplied profile + target, e.g. `dotta add --target /jail`,
+ * or a single state-derived binding for a remove operation). HOME and the
+ * ROOT sentinel are still added internally; a NULL or empty `target`
+ * contributes no CUSTOM mount (yielding HOME + ROOT only).
+ *
+ * Borrowed-pointer rules and arena lifetime match mount_table_build.
+ *
+ * @param arena   Arena for the table and its internal storage
+ * @param profile Profile name (may be NULL for target-only contexts)
+ * @param target  Absolute filesystem path with no trailing slash; NULL
+ *                or empty contributes no CUSTOM mount
+ * @param out     Output handle (must not be NULL)
+ * @return Error or NULL on success
+ */
+error_t *mount_table_build_for_profile(
+    arena_t *arena,
+    const char *profile,
+    const char *target,
+    mount_table_t **out
+);
+
+/**
  * Classify an absolute filesystem path into a storage path.
  *
  * Picks the longest-matching mount target (tightest container wins).
@@ -230,6 +241,31 @@ error_t *mount_classify(
 );
 
 /**
+ * Classify an absolute filesystem path into a mount kind only.
+ *
+ * Same longest-match algorithm as `mount_classify`, but skips the
+ * storage-path materialization and the "path equals classification
+ * root" error branch. Returns the kind even when `fs_path` exactly
+ * equals a mount target — useful for callers that ask "what kind would
+ * this path land in?" without needing the encoded storage path
+ * (privilege pre-flight, kind-only filtering).
+ *
+ * The empty-target ROOT mount has length 0 so it always loses to any
+ * non-empty match and serves as the universal fallback when no other
+ * mount contains the path.
+ *
+ * @param table    Mount table (must not be NULL)
+ * @param fs_path  Absolute path to classify (must not be NULL)
+ * @param out_kind Receives the winning mount's kind (must not be NULL)
+ * @return Error or NULL on success
+ */
+error_t *mount_classify_kind(
+    const mount_table_t *table,
+    const char *fs_path,
+    mount_kind_t *out_kind
+);
+
+/**
  * Convert a storage path to a filesystem path using a profile's mount.
  *
  * Resolution table:
@@ -237,23 +273,26 @@ error_t *mount_classify(
  *   root/X   -> /X                       (profile may be NULL)
  *   custom/X -> <profile's target>/X     (profile must match a CUSTOM mount)
  *
- * Error semantics:
+ * Outcome:
+ *   - Success with binding: `*out_fs` is non-NULL and heap-allocated
+ *     (caller frees).
+ *   - Success without binding: `*out_fs == NULL` and the function
+ *     returns NULL. This happens only for `custom/` paths whose
+ *     `profile` has no --target on this host (e.g., a clone before the
+ *     user has configured a target). HOME and ROOT always resolve.
+ *     Callers branch on the NULL — silent skip in batch contexts
+ *     (manifest_build_callback, manifest_sync_diff,
+ *     manifest_sync_directories), display fallback in user-facing
+ *     contexts (remove.c).
  *   - ERR_INVALID_ARG when `storage_path` is malformed (rejected by
  *     mount_validate_storage). Always propagate.
- *   - ERR_NOT_FOUND when `storage_path` starts with "custom/" but
- *     `profile` has no CUSTOM mount in the table (profile not enabled
- *     with --target on this machine, or a clone before the user has
- *     configured a target). Callers that resolve every storage entry
- *     against its source profile (manifest_build_callback,
- *     manifest_sync_diff, manifest_sync_directories) treat this as a
- *     silent skip — a profile without a target contributes nothing to
- *     the VWD on this host. Callers that resolve a single user-supplied
- *     path treat it as a hard error.
+ *   - ERR_MEMORY on allocation failure.
  *
  * @param table        Mount table (must not be NULL)
  * @param profile      Owning profile (may be NULL for home/ and root/ paths)
  * @param storage_path Storage-format path (must not be NULL, validated)
- * @param out_fs       Allocated filesystem path on success (caller frees)
+ * @param out_fs       Filesystem path on success-with-binding (caller frees);
+ *                     NULL on success-without-binding (see above)
  * @return Error or NULL on success
  */
 error_t *mount_resolve(
@@ -299,14 +338,14 @@ error_t *mount_resolve(
  *   /mnt/jail/etc/nginx.conf    -> custom/etc/nginx.conf (when /mnt/jail in table)
  *   config (no slash)           -> ERROR: ambiguous (use ./config)
  *
- * @param input       User-provided path string (must not be NULL)
  * @param table       Mount table (must not be NULL)
+ * @param input       User-provided path string (must not be NULL)
  * @param out_storage Allocated storage path on success (caller frees)
  * @return Error or NULL on success
  */
 error_t *mount_resolve_input(
-    const char *input,
     const mount_table_t *table,
+    const char *input,
     char **out_storage
 );
 

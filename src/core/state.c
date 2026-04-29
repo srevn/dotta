@@ -1932,13 +1932,21 @@ error_t *state_get_all_files(
  * Derives filesystem_path from the storage_path by consulting the
  * mount table for `profile`'s target binding.
  *
+ * Outcome:
+ *   - Success with binding: `*out` is non-NULL, arena-allocated.
+ *   - Success without binding: `*out == NULL` and the function returns
+ *     NULL. Mirrors mount_resolve's NULL-out contract — happens only
+ *     when meta_item->key is custom/... and `profile` has no target
+ *     binding on this host. The caller (manifest_sync_directories)
+ *     branches on the NULL for silent skip.
+ *   - Error otherwise (malformed key, allocation failure).
+ *
  * @param meta_item Metadata item (must not be NULL, must be DIRECTORY kind)
  * @param profile Source profile name (must not be NULL)
  * @param mounts Per-machine mount table (must not be NULL)
  * @param arena Arena for allocations (must not be NULL)
  * @param out State directory entry (must not be NULL, lifetime tied to arena)
- * @return Error or NULL on success; ERR_NOT_FOUND when meta_item->key
- *         is custom/... and profile has no target in mounts.
+ * @return Error or NULL on success
  */
 error_t *state_directory_entry_create_from_metadata(
     const metadata_item_t *meta_item,
@@ -1953,6 +1961,8 @@ error_t *state_directory_entry_create_from_metadata(
     CHECK_NULL(arena);
     CHECK_NULL(out);
 
+    *out = NULL;
+
     /* Validate that this is a directory item */
     if (meta_item->kind != METADATA_ITEM_DIRECTORY) {
         const char *kind_str = "UNKNOWN";
@@ -1965,6 +1975,23 @@ error_t *state_directory_entry_create_from_metadata(
         );
     }
 
+    /* Derive filesystem path from storage path against the mount table.
+     * A NULL heap_path means meta_item->key is custom/... and `profile`
+     * has no target binding on this host — surface as success-with-NULL
+     * for the caller (manifest_sync_directories) to skip. Any error
+     * (malformed key, allocation failure) is wrapped. The arena-side
+     * entry allocation is deferred until after the mount lookup so a
+     * skip path performs no allocation. */
+    char *heap_path = NULL;
+    error_t *err = mount_resolve(mounts, profile, meta_item->key, &heap_path);
+    if (err) {
+        return error_wrap(
+            err, "Failed to derive filesystem path from storage path: %s",
+            meta_item->key
+        );
+    }
+    if (!heap_path) return NULL;  /* Skip — no binding for custom/ on this host. */
+
     /* Helper macros: route allocations through arena */
     #define DUP(s)      arena_strdup(arena, (s))
     #define DUP_OPT(s)  ((s) ? DUP(s) : NULL)
@@ -1972,24 +1999,10 @@ error_t *state_directory_entry_create_from_metadata(
     state_directory_entry_t *entry =
         arena_calloc(arena, 1, sizeof(state_directory_entry_t));
     if (!entry) {
+        free(heap_path);
         return ERROR(ERR_MEMORY, "Failed to allocate state directory entry");
     }
 
-    /* Derive filesystem path from storage path against the mount table.
-     * mount_resolve returns ERR_NOT_FOUND when the storage
-     * path is custom/... and the profile has no target binding —
-     * propagate verbatim so the caller (manifest_sync_directories) can
-     * silently skip without distinguishing wrap from raw. Any other
-     * error (malformed key, allocation failure) is wrapped. */
-    char *heap_path = NULL;
-    error_t *err = mount_resolve(mounts, profile, meta_item->key, &heap_path);
-    if (err) {
-        if (err->code == ERR_NOT_FOUND) return err;
-        return error_wrap(
-            err, "Failed to derive filesystem path from storage path: %s",
-            meta_item->key
-        );
-    }
     entry->filesystem_path = arena_strdup(arena, heap_path);
     free(heap_path);
 

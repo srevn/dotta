@@ -103,11 +103,11 @@ static error_t *resolve_paths_to_remove(
 
     /* Build a one-shot mount table for this profile. */
     mount_table_t *mounts = NULL;
-    mount_t mount = {
-        .profile = profile,
-        .target  = state ? state_peek_profile_target(state, profile) : NULL
-    };
-    err = mount_table_build(arena, &mount, 1, &mounts);
+    err = mount_table_build_for_profile(
+        arena, profile,
+        state ? state_peek_profile_target(state, profile) : NULL,
+        &mounts
+    );
     if (err) {
         err = error_wrap(err, "Failed to build mount table");
         goto cleanup;
@@ -151,7 +151,7 @@ static error_t *resolve_paths_to_remove(
         char *canonical = NULL;
 
         /* Resolve input path to storage format (file need not exist) */
-        err = mount_resolve_input(input_path, mounts, &storage_path);
+        err = mount_resolve_input(mounts, input_path, &storage_path);
         if (err) {
             if (!opts->force) {
                 goto cleanup;
@@ -166,11 +166,11 @@ static error_t *resolve_paths_to_remove(
             continue;
         }
 
-        /* Try to get filesystem path for output (non-fatal if it fails:
-         * ERR_NOT_FOUND when the profile has no --target on this machine
-         * leaves canonical NULL, and the storage path serves as fallback). */
-        error_t *convert_err =
-            mount_resolve(mounts, profile, storage_path, &canonical);
+        /* Try to get filesystem path for output. mount_resolve sets
+         * canonical to NULL when the profile has no --target on this
+         * machine; the storage path serves as fallback. Allocation
+         * errors are non-fatal here — same fallback. */
+        error_t *convert_err = mount_resolve(mounts, profile, storage_path, &canonical);
         if (convert_err) {
             error_free(convert_err);
             canonical = NULL;
@@ -218,7 +218,10 @@ static error_t *resolve_paths_to_remove(
             if (str_starts_with(profile_file, storage_path)) {
                 /* Ensure it's a directory boundary */
                 if (profile_file[storage_path_len] == '/') {
-                    /* Reconstruct filesystem path for this file */
+                    /* Reconstruct filesystem path for this file. mount_resolve
+                     * sets file_fs_path = NULL when the profile has no
+                     * --target on this machine — fall back to the storage
+                     * path so the hook context still names the file. */
                     char *file_fs_path = NULL;
                     err = mount_resolve(
                         mounts, profile, profile_file, &file_fs_path
@@ -238,9 +241,11 @@ static error_t *resolve_paths_to_remove(
 
                     err = string_array_push(storage_paths, profile_file);
                     if (!err) {
-                        err = string_array_push(filesystem_paths, file_fs_path);
+                        err = string_array_push(
+                            filesystem_paths,
+                            file_fs_path ? file_fs_path : profile_file
+                        );
                     }
-
                     free(file_fs_path);
 
                     if (err) {
@@ -249,7 +254,6 @@ static error_t *resolve_paths_to_remove(
                         err = error_wrap(err, "Failed to track path for removal");
                         goto cleanup;
                     }
-
                     matches_found++;
                 }
             }
@@ -1399,11 +1403,11 @@ static error_t *delete_profile_branch(
      * The file removal path passes filesystem paths to hooks; do the same here. */
     if (files) {
         mount_table_t *hook_mounts = NULL;
-        mount_t mount = {
-            .profile = opts->profile,
-            .target  = state_peek_profile_target(state, opts->profile)
-        };
-        error_t *mounts_err = mount_table_build(arena, &mount, 1, &hook_mounts);
+        error_t *mounts_err = mount_table_build_for_profile(
+            arena, opts->profile,
+            state_peek_profile_target(state, opts->profile),
+            &hook_mounts
+        );
         if (mounts_err) {
             error_free(mounts_err);
             hook_mounts = NULL;
@@ -1417,13 +1421,14 @@ static error_t *delete_profile_branch(
                     error_t *conv_err = mount_resolve(
                         hook_mounts, opts->profile, files->items[i], &fs_path
                     );
-                    if (!conv_err && fs_path) {
+                    if (conv_err) error_free(conv_err);
+                    if (fs_path) {
                         string_array_push(hook_fs_paths, fs_path);
                         free(fs_path);
                     } else {
-                        /* Fall back to storage path (e.g., custom/ without prefix) */
+                        /* Fall back to storage path (custom/ without binding,
+                         * or allocation failure). */
                         string_array_push(hook_fs_paths, files->items[i]);
-                        if (conv_err) error_free(conv_err);
                     }
                 }
             }

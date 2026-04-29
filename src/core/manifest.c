@@ -617,23 +617,20 @@ error_t *manifest_remove_files(
     for (size_t i = 0; i < removed_storage_paths->count; i++) {
         const char *storage_path = removed_storage_paths->items[i];
 
-        /* Resolve to filesystem path against the mount table. ERR_NOT_FOUND
-         * here means the removed_profile has no target binding for a
-         * custom/ path — the file could never have been deployed on this
-         * machine, so there is nothing to reassign or release. Skip. */
+        /* Resolve to filesystem path against the mount table. A NULL
+         * filesystem_path means removed_profile has no target binding
+         * for a custom/ path — the file could never have been deployed
+         * on this machine, so there is nothing to reassign or release.
+         * Skip. */
         char *filesystem_path = NULL;
         err = mount_resolve(mounts, removed_profile, storage_path, &filesystem_path);
         if (err) {
-            if (err->code == ERR_NOT_FOUND) {
-                error_free(err);
-                err = NULL;
-                continue;
-            }
             err = error_wrap(
                 err, "Failed to resolve path: %s", storage_path
             );
             goto cleanup;
         }
+        if (!filesystem_path) continue;
 
         /* Lookup current manifest entry */
         state_file_entry_t *current_entry = NULL;
@@ -1773,11 +1770,11 @@ error_t *manifest_sync_diff(
         /* Resolve filesystem path against the mount table. Two distinct
          * outcomes route differently:
          *
-         *   ERR_NOT_FOUND — custom/ entry but `profile` has no
-         *                   target binding. Counted as skipped so
+         *   filesystem_path == NULL — custom/ entry but `profile` has
+         *                   no target binding. Counted as skipped so
          *                   the caller can surface "deferred until
          *                   --target is set" in the user-visible report.
-         *   any other err — malformed storage path (invalid_arg from
+         *   err != NULL   — malformed storage path (invalid_arg from
          *                   mount_validate_storage) or allocation
          *                   failure. Skip silently — the Git commit
          *                   already advanced the branch, the next
@@ -1785,11 +1782,12 @@ error_t *manifest_sync_diff(
         char *filesystem_path = NULL;
         err = mount_resolve(mounts, profile, storage_path, &filesystem_path);
         if (err) {
-            if (err->code == ERR_NOT_FOUND) {
-                skipped++;
-            }
             error_free(err);
             err = NULL;
+            continue;
+        }
+        if (!filesystem_path) {
+            skipped++;
             continue;
         }
 
@@ -2083,7 +2081,7 @@ static error_t *manifest_sync_directories(
          *
          * The custom/ skip-guard from the prior implementation now lives
          * in the entry-creation primitive: state_directory_entry_create_from_metadata
-         * returns ERR_NOT_FOUND when the storage path is custom/... and
+         * sets *state_dir = NULL when the storage path is custom/... and
          * `profile` has no target binding in `mounts`. We surface that
          * as a silent skip and let any other failure propagate.
          */
@@ -2098,12 +2096,6 @@ static error_t *manifest_sync_directories(
                 &state_dir
             );
 
-            if (err && err->code == ERR_NOT_FOUND) {
-                error_free(err);
-                err = NULL;
-                continue;
-            }
-
             if (err) {
                 err = error_wrap(
                     err, "Failed to create state directory entry for '%s'",
@@ -2111,6 +2103,7 @@ static error_t *manifest_sync_directories(
                 );
                 break;
             }
+            if (!state_dir) continue;  /* No binding for custom/ on this host. */
 
             /* Check if directory already exists in state (may be inactive) */
             state_directory_entry_t *existing = NULL;
@@ -2387,7 +2380,7 @@ static int manifest_build_callback(
 
     /* Convert storage path to filesystem path against the mount table.
      *
-     * mount_resolve returns ERR_NOT_FOUND when storage_path is
+     * mount_resolve sets *heap_path = NULL when storage_path is
      * custom/... and ctx->profile has no target binding in mounts —
      * machine-specific configuration (e.g., /jails/proxy/root) stored in
      * the per-machine state database. During clone or when a profile is
@@ -2398,16 +2391,13 @@ static int manifest_build_callback(
     char *heap_path = NULL;
     error_t *err = mount_resolve(ctx->mounts, ctx->profile, storage_path, &heap_path);
     if (err) {
-        if (err->code == ERR_NOT_FOUND) {
-            error_free(err);
-            return 0;  /* Skip, continue walk */
-        }
         ctx->error = error_wrap(
             err, "Failed to convert path '%s' from profile '%s'",
             storage_path, ctx->profile
         );
         return -1;
     }
+    if (!heap_path) return 0;  /* No binding for custom/ on this host — skip. */
     filesystem_path = arena_strdup(ctx->arena, heap_path);
     free(heap_path);
     if (!filesystem_path) {

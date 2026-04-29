@@ -570,7 +570,7 @@ static error_t *list_file_history(
     /* Resolve input path to storage format (handles absolute, tilde, relative,
      * and storage paths). File need not exist on disk. */
     char *storage_path = NULL;
-    error_t *err = mount_resolve_input(opts->file_path, mounts, &storage_path);
+    error_t *err = mount_resolve_input(mounts, opts->file_path, &storage_path);
     if (err) {
         return error_wrap(err, "Failed to resolve path '%s'", opts->file_path);
     }

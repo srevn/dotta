@@ -147,10 +147,9 @@ error_t *pathspec_create(
         /* Glob pattern */
         if (input && strpbrk(input, "*?[")) {
             /* Patterns with '/' must use a storage label or recursive prefix. */
+            mount_kind_t kind_unused;
             if (strchr(input, '/') != NULL &&
-                !str_starts_with(input, "home/") &&
-                !str_starts_with(input, "root/") &&
-                !str_starts_with(input, "custom/") &&
+                !mount_kind_extract(input, &kind_unused) &&
                 !str_starts_with(input, "**/") &&
                 !str_starts_with(input, "*/")) {
                 err = ERROR(
@@ -205,7 +204,7 @@ error_t *pathspec_create(
 
         /* Exact path: resolve via shared mount table, store in hashmap. */
         char *resolved = NULL;
-        err = mount_resolve_input(input, table, &resolved);
+        err = mount_resolve_input(table, input, &resolved);
         if (err) {
             err = error_wrap(err, "Invalid path '%s'", input);
             goto cleanup;

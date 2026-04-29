@@ -1121,12 +1121,11 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      * opts->profile with opts->target so that both classify (fs -> storage)
      * and resolve (custom/X -> fs) work against the same handle. A NULL or
      * empty target contributes no CUSTOM mount; HOME and the universal
-     * ROOT sentinel are always added by mount_table_build. The table rides
-     * the command arena. */
-    mount_t mount = {
-        .profile = opts->profile, .target = opts->target,
-    };
-    err = mount_table_build(ctx->arena, &mount, 1, &mounts);
+     * ROOT sentinel are always added internally. The table rides the
+     * command arena. */
+    err = mount_table_build_for_profile(
+        ctx->arena, opts->profile, opts->target, &mounts
+    );
     if (err) {
         err = error_wrap(err, "Failed to build mount table");
         goto cleanup;
@@ -1173,10 +1172,10 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         /* Storage-path inputs (home/..., root/..., custom/...) — only include
          * paths that actually need elevation in the privilege check. */
         if (mount_kind_extract(file_path, &kind)) {
-            bool needs_elevation = (kind == MOUNT_ROOT) ||
-                (kind == MOUNT_CUSTOM && custom_needs_elevation);
-
-            if (!needs_elevation) continue;
+            if (kind != MOUNT_ROOT &&
+                !(kind == MOUNT_CUSTOM && custom_needs_elevation)) {
+                continue;
+            }
 
             storage_path = strdup(file_path);
             if (!storage_path) {
@@ -1208,7 +1207,6 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         }
 
         err = mount_classify(mounts, absolute, &storage_path, &kind);
-        free(absolute);
         if (err) {
             /* A directory input equal to a classification root ($HOME, "/",
              * or --target) has no storage representation; mount_classify
@@ -1216,44 +1214,55 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
              * expand its descendants — the metadata path handles that fine.
              *
              * What DOES need handling here: the pre-flight's only question
-             * is "will this op touch a path that needs elevation?" If the
-             * deployment target needs elevation, the expanded descendants will
-             * land under custom/, so we stub ONE representative "custom/"
-             * entry as a proxy. Without this, a directory-typed input would
-             * bypass the privilege check entirely.
-             *
-             * Known pre-existing gap: `dotta add /` as non-root with no
-             * --target takes this branch for the root/ classification root;
-             * the sentinel only fires for custom/, so root/ elevation is
-             * missed in that edge case. Very unusual input, not addressed. */
-            if (!fs_is_symlink(file_path) && fs_is_directory(file_path)) {
+             * is "will this path's expanded descendants need elevation?".
+             * mount_classify_kind answers exactly that — same longest-match
+             * algorithm, but skips the root-equality error branch. We use
+             * a kind-typed stub for display since no concrete descendant
+             * path is in scope yet. */
+            if (err->code == ERR_INVALID_ARG &&
+                !fs_is_symlink(file_path) && fs_is_directory(file_path)) {
                 error_free(err);
-                err = NULL;
-                if (custom_needs_elevation) {
-                    storage_path = strdup("custom/");
-                    if (!storage_path) {
-                        err = ERROR(ERR_MEMORY, "Failed to allocate representative path");
-                        goto cleanup;
-                    }
-                    preflight_allocated_paths[preflight_storage_count] = storage_path;
-                    preflight_storage_paths[preflight_storage_count] = storage_path;
-                    preflight_storage_count++;
+                err = mount_classify_kind(mounts, absolute, &kind);
+                free(absolute);
+                if (err) {
+                    err = error_wrap(err, "Failed to classify '%s'", file_path);
+                    goto cleanup;
                 }
-                continue;
+                /* storage_path stays NULL; the synthesis branch below
+                 * supplies a kind-typed representative if needed. */
+            } else {
+                free(absolute);
+                err = error_wrap(err, "Failed to resolve path '%s'", file_path);
+                goto cleanup;
             }
-            /* Actual error for regular files */
-            err = error_wrap(err, "Failed to resolve path '%s'", file_path);
-            goto cleanup;
+        } else {
+            free(absolute);
         }
 
         /* Only include paths that need elevation in the privilege check */
-        if (kind == MOUNT_ROOT || (kind == MOUNT_CUSTOM && custom_needs_elevation)) {
-            preflight_allocated_paths[preflight_storage_count] = storage_path;
-            preflight_storage_paths[preflight_storage_count] = storage_path;
-            preflight_storage_count++;
-        } else {
-            free(storage_path);
+        if (kind != MOUNT_ROOT &&
+            !(kind == MOUNT_CUSTOM && custom_needs_elevation)) {
+            free(storage_path);  /* may be NULL — free(NULL) is well-defined */
+            continue;
         }
+
+        /* Synthesize a kind-typed representative when classify produced
+         * no concrete storage path (the root-equality branch above).
+         * Closes the "dotta add /" and "dotta add --target X X" gaps —
+         * the privilege check now fires for both ROOT and CUSTOM roots
+         * uniformly. */
+        if (!storage_path) {
+            const char *label = (kind == MOUNT_ROOT) ? "root/" : "custom/";
+            storage_path = strdup(label);
+            if (!storage_path) {
+                err = ERROR(ERR_MEMORY, "Failed to allocate representative path");
+                goto cleanup;
+            }
+        }
+
+        preflight_allocated_paths[preflight_storage_count] = storage_path;
+        preflight_storage_paths[preflight_storage_count] = storage_path;
+        preflight_storage_count++;
     }
 
     /* Check privilege requirements

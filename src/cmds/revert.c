@@ -157,7 +157,7 @@ static error_t *discover_file(
     }
 
     /* Resolve input path to storage format (file need not exist) */
-    err = mount_resolve_input(file_path, mounts, &storage_path);
+    err = mount_resolve_input(mounts, file_path, &storage_path);
     if (err) {
         return err;
     }

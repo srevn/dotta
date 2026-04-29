@@ -673,10 +673,10 @@ error_t *manifest_sync_diff(
  * Custom-prefix resolution is delegated to `mounts`. The handle MUST
  * record a binding for `profile` (with target set) when the tree
  * contains custom/ entries; otherwise those entries are skipped during
- * the walk (via mount_resolve returning ERR_NOT_FOUND, which
- * the callback treats as "this profile has no target on this
- * machine — skip"). Trees without custom/ entries can pass any mount
- * table handle, including one with no binding for `profile`.
+ * the walk (via mount_resolve setting *out_fs to NULL, which the
+ * callback treats as "this profile has no target on this machine —
+ * skip"). Trees without custom/ entries can pass any mount table
+ * handle, including one with no binding for `profile`.
  *
  * Memory: per-entry strings (storage_path, filesystem_path, owner, group)
  * are allocated from the caller's arena. The arena must outlive the

@@ -17,6 +17,93 @@
 #include "base/string.h"
 #include "sys/filesystem.h"
 
+/**
+ * Decode a storage path's leading label.
+ *
+ * Single source of truth for the `home/` | `root/` | `custom/` -> kind
+ * mapping. Both outputs are optional — pass NULL for either to discard.
+ *
+ *   storage_path = "home/.bashrc"   -> *kind=MOUNT_HOME,   *tail=".bashrc"
+ *   storage_path = "custom/etc/foo" -> *kind=MOUNT_CUSTOM, *tail="etc/foo"
+ *   storage_path = "/abs/path"      -> false, outputs unchanged
+ *   storage_path = NULL             -> false, outputs unchanged
+ *
+ * The returned tail aliases `storage_path`; it shares the input's
+ * lifetime. Adding a fourth label class is a one-row table edit.
+ */
+static bool mount_decode_label(
+    const char *storage_path,
+    mount_kind_t *out_kind,
+    const char **out_tail
+) {
+    if (!storage_path) return false;
+
+    static const struct {
+        const char *prefix;
+        size_t prefix_len;
+        mount_kind_t kind;
+    } labels[] = {
+        { "home/",   5, MOUNT_HOME   },
+        { "root/",   5, MOUNT_ROOT   },
+        { "custom/", 7, MOUNT_CUSTOM },
+    };
+
+    for (size_t i = 0; i < sizeof(labels) / sizeof(labels[0]); i++) {
+        if (str_starts_with(storage_path, labels[i].prefix)) {
+            if (out_kind) *out_kind = labels[i].kind;
+            if (out_tail) *out_tail = storage_path + labels[i].prefix_len;
+            return true;
+        }
+    }
+    return false;
+}
+
+/**
+ * Reject `..`, `.`, and empty components in a slash-delimited path.
+ *
+ * Pure rule check shared by mount_validate_storage and
+ * mount_validate_target. `components` is the substring to tokenize
+ * (storage paths start at byte 0; targets start at byte 1 to skip the
+ * leading '/'); `display_path` is the original user-visible string used
+ * only in error messages — separated so each caller surfaces the form
+ * the user typed, not its tail.
+ *
+ * No filesystem access; no arena. Heap-strdups for tokenization, frees
+ * before return.
+ */
+static error_t *validate_path_components(
+    const char *components,
+    const char *display_path
+) {
+    char *path_copy = strdup(components);
+    if (!path_copy) {
+        return ERROR(ERR_MEMORY, "Failed to allocate path copy");
+    }
+
+    error_t *err = NULL;
+    char *saveptr = NULL;
+    char *component = strtok_r(path_copy, "/", &saveptr);
+    while (component != NULL) {
+        if (strcmp(component, "..") == 0) {
+            err = ERROR(
+                ERR_INVALID_ARG, "Path traversal not allowed "
+                "(component '..' in '%s')", display_path
+            );
+            break;
+        }
+        if (strcmp(component, ".") == 0) {
+            err = ERROR(
+                ERR_INVALID_ARG, "Invalid path component '.' in '%s'",
+                display_path
+            );
+            break;
+        }
+        component = strtok_r(NULL, "/", &saveptr);
+    }
+    free(path_copy);
+    return err;
+}
+
 error_t *mount_validate_storage(const char *storage_path) {
     CHECK_NULL(storage_path);
 
@@ -33,9 +120,8 @@ error_t *mount_validate_storage(const char *storage_path) {
     }
 
     /* SECURITY: Must start with home/, root/, or custom/ */
-    if (!str_starts_with(storage_path, "home/") &&
-        !str_starts_with(storage_path, "root/") &&
-        !str_starts_with(storage_path, "custom/")) {
+    const char *tail = NULL;
+    if (!mount_decode_label(storage_path, NULL, &tail)) {
         return ERROR(
             ERR_INVALID_ARG, "Storage path must start with "
             "'home/', 'root/', or 'custom/' (got '%s')", storage_path
@@ -58,78 +144,21 @@ error_t *mount_validate_storage(const char *storage_path) {
         );
     }
 
-    /* SECURITY: Validate path component-by-component to catch traversal. */
-    char *path_copy = strdup(storage_path);
-    if (!path_copy) {
-        return ERROR(ERR_MEMORY, "Failed to allocate path copy");
-    }
-
-    char *saveptr = NULL;
-    char *component = strtok_r(path_copy, "/", &saveptr);
-    while (component != NULL) {
-        if (strcmp(component, "..") == 0) {
-            free(path_copy);
-            return ERROR(
-                ERR_INVALID_ARG, "Path traversal not allowed "
-                "(component '..' in '%s')", storage_path
-            );
-        }
-        if (strcmp(component, ".") == 0) {
-            free(path_copy);
-            return ERROR(
-                ERR_INVALID_ARG, "Invalid path component '.' in '%s'",
-                storage_path
-            );
-        }
-        component = strtok_r(NULL, "/", &saveptr);
-    }
-    free(path_copy);
-
-    return NULL;
+    /* SECURITY: Tail components must not be `.`, `..`, or empty. The
+     * label itself ("home"/"root"/"custom") is constant and never a
+     * traversal token — walking only the tail saves one iteration. */
+    return validate_path_components(tail, storage_path);
 }
 
 const char *mount_strip_label(const char *storage_path) {
     if (!storage_path) return NULL;
-    /* "home/" and "root/" are 5 chars; "custom/" is 7. */
-    if (str_starts_with(storage_path, "home/") ||
-        str_starts_with(storage_path, "root/")) {
-        return storage_path + 5;
-    }
-
-    if (str_starts_with(storage_path, "custom/")) {
-        return storage_path + 7;
-    }
-
-    return storage_path;
+    const char *tail = NULL;
+    return mount_decode_label(storage_path, NULL, &tail) ? tail : storage_path;
 }
 
 bool mount_kind_extract(const char *storage_path, mount_kind_t *out_kind) {
-    if (!storage_path || !out_kind) return false;
-
-    if (str_starts_with(storage_path, "home/")) {
-        *out_kind = MOUNT_HOME;
-        return true;
-    }
-
-    if (str_starts_with(storage_path, "root/")) {
-        *out_kind = MOUNT_ROOT;
-        return true;
-    }
-
-    if (str_starts_with(storage_path, "custom/")) {
-        *out_kind = MOUNT_CUSTOM;
-        return true;
-    }
-
-    return false;
-}
-
-bool mount_is_storage_path(const char *path) {
-    if (!path) return false;
-
-    return str_starts_with(path, "home/") ||
-           str_starts_with(path, "root/") ||
-           str_starts_with(path, "custom/");
+    if (!out_kind) return false;
+    return mount_decode_label(storage_path, out_kind, NULL);
 }
 
 error_t *mount_validate_target(const char *target) {
@@ -162,27 +191,15 @@ error_t *mount_validate_target(const char *target) {
         );
     }
 
-    /* 4. Validate each component (catches . and .. at any position) */
-    char *target_copy = strdup(target + 1);  /* skip leading / */
-    if (!target_copy) {
-        return ERROR(ERR_MEMORY, "Failed to allocate path copy");
+    /* 4. Validate each component (catches . and .. at any position).
+     *    Skip the leading '/' — mount targets are always absolute. */
+    error_t *comp_err = validate_path_components(target + 1, target);
+    if (comp_err) {
+        return error_wrap(
+            comp_err,
+            "Use canonical paths without '.', '..', or '//'"
+        );
     }
-    char *saveptr = NULL;
-    char *comp = strtok_r(target_copy, "/", &saveptr);
-    while (comp) {
-        if (strcmp(comp, ".") == 0 || strcmp(comp, "..") == 0) {
-            const char *bad = strcmp(comp, ".") == 0 ? "." : "..";
-            free(target_copy);
-            return ERROR(
-                ERR_INVALID_ARG,
-                "Mount target contains '%s' component: '%s'\n"
-                "Use canonical paths without '.', '..', or '//'",
-                bad, target
-            );
-        }
-        comp = strtok_r(NULL, "/", &saveptr);
-    }
-    free(target_copy);
 
     /* 5. Must not end with slash */
     size_t len = strlen(target);
@@ -281,7 +298,6 @@ typedef struct {
 struct mount_table {
     mount_entry_t *entries;
     size_t entry_count;
-    const char *home;         /* Cached raw $HOME */
 };
 
 /**
@@ -466,11 +482,20 @@ error_t *mount_table_build(
 
     table->entries = entries;
     table->entry_count = n;
-    table->home = home;
 
     *out = table;
 
     return NULL;
+}
+
+error_t *mount_table_build_for_profile(
+    arena_t *arena,
+    const char *profile,
+    const char *target,
+    mount_table_t **out
+) {
+    mount_t mount = { .profile = profile, .target = target };
+    return mount_table_build(arena, &mount, 1, out);
 }
 
 /**
@@ -517,21 +542,23 @@ static bool entry_match_longest(
     return true;
 }
 
-error_t *mount_classify(
+/**
+ * Inner winner-pick: longest matching surface form across all entries.
+ *
+ * Tightest container wins. Each entry contributes up to two forms (raw
+ * and realpath-canonical); intra-entry tiebreak picks the longer
+ * surface form (entry_match_longest), inter-entry tiebreak keeps the
+ * earlier-declared mount (stable). On match, *out_relative is the tail
+ * after the winning prefix — empty when fs_path equals the mount root,
+ * non-empty otherwise. Returns NULL when no entry matches; with the
+ * ROOT sentinel ("" target) present, this only happens for malformed
+ * tables.
+ */
+static const mount_entry_t *find_classify_winner(
     const mount_table_t *table,
     const char *fs_path,
-    char **out_storage,
-    mount_kind_t *out_kind
+    const char **out_relative
 ) {
-    CHECK_NULL(table);
-    CHECK_NULL(fs_path);
-    CHECK_NULL(out_storage);
-
-    /* Tightest container wins: longest matching surface form across
-     * all entries. Each entry contributes up to two forms (raw and
-     * realpath-canonical); intra-entry tiebreak picks the longer
-     * surface form, inter-entry tiebreak keeps the earlier-declared
-     * mount (stable). */
     const mount_entry_t *winner = NULL;
     const char *winner_relative = NULL;
     size_t winner_len = 0;
@@ -550,19 +577,35 @@ error_t *mount_classify(
         }
     }
 
+    if (winner && out_relative) *out_relative = winner_relative;
+    return winner;
+}
+
+error_t *mount_classify(
+    const mount_table_t *table,
+    const char *fs_path,
+    char **out_storage,
+    mount_kind_t *out_kind
+) {
+    CHECK_NULL(table);
+    CHECK_NULL(fs_path);
+    CHECK_NULL(out_storage);
+
+    const char *winner_relative = NULL;
+    const mount_entry_t *winner =
+        find_classify_winner(table, fs_path, &winner_relative);
+
     if (!winner) {
-        /* Unreachable when the ROOT sentinel ("" target) is present;
-         * defensive guard for callers that build malformed tables. */
-        return ERROR(
-            ERR_INTERNAL, "No mount matched: %s", fs_path
-        );
+        return ERROR(ERR_INTERNAL, "No mount matched: %s", fs_path);
     }
 
     if (*winner_relative == '\0') {
         /* Path equals the winning mount root exactly. No storage-path
          * encoding exists for the mount root itself. Callers walking a
          * directory tree handle this as "skip this entry, descendants
-         * appear separately"; callers expecting a file get an error. */
+         * appear separately"; callers expecting a file get an error.
+         * Callers that only need the kind (e.g., privilege pre-flight)
+         * use mount_classify_kind to avoid this branch. */
         return ERROR(
             ERR_INVALID_ARG,
             "Path equals the %s classification root; "
@@ -583,31 +626,81 @@ error_t *mount_classify(
     return NULL;
 }
 
-/**
- * Look up the deployment target string for a profile's CUSTOM mount.
- *
- * Sole consumer is mount_resolve below — kept private since storage <->
- * filesystem conversion is the only documented use, and external callers
- * already go through mount_resolve / mount_classify for that.
- *
- * Returns the raw (user-supplied) form: backward resolution should
- * surface the path the user typed, not its realpath-resolved sibling.
- * NULL when `table` is NULL, `profile` is NULL, or no CUSTOM mount for
- * `profile` exists. The returned pointer borrows into the arena.
- */
-static const char *mount_target_for_profile(
+error_t *mount_classify_kind(
     const mount_table_t *table,
-    const char *profile
+    const char *fs_path,
+    mount_kind_t *out_kind
 ) {
-    if (!table || !profile) return NULL;
+    CHECK_NULL(table);
+    CHECK_NULL(fs_path);
+    CHECK_NULL(out_kind);
 
-    for (size_t i = 0; i < table->entry_count; i++) {
-        const mount_entry_t *m = &table->entries[i];
-        if (m->kind != MOUNT_CUSTOM) continue;
-        if (!m->profile) continue;
-        if (strcmp(m->profile, profile) == 0) return m->target_raw;
+    const mount_entry_t *winner =
+        find_classify_winner(table, fs_path, NULL);
+
+    if (!winner) {
+        return ERROR(ERR_INTERNAL, "No mount matched: %s", fs_path);
     }
 
+    *out_kind = winner->kind;
+    return NULL;
+}
+
+/**
+ * Look up the entry for a (kind, profile) pair.
+ *
+ * HOME and ROOT each contribute exactly one entry (profile-less);
+ * walking returns the first match. CUSTOM entries are profile-keyed; a
+ * NULL caller-side profile or a NULL entry-side profile excludes the
+ * match defensively. Returns NULL when no entry satisfies the query.
+ *
+ * Sole consumer today is mount_resolve. The intra-entry surface-form
+ * walk for forward classification stays in entry_match_longest.
+ */
+static const mount_entry_t *find_entry_for(
+    const mount_table_t *table,
+    mount_kind_t kind,
+    const char *profile
+) {
+    for (size_t i = 0; i < table->entry_count; i++) {
+        const mount_entry_t *m = &table->entries[i];
+        if (m->kind != kind) continue;
+        if (kind != MOUNT_CUSTOM) return m;
+        if (profile && m->profile && strcmp(m->profile, profile) == 0) {
+            return m;
+        }
+    }
+    return NULL;
+}
+
+/**
+ * Concatenate a mount target prefix with a label-stripped tail.
+ *
+ * Format `"%s/%s"` is uniform across all three kinds:
+ *   ROOT:   "" + "/" + "etc/hosts"         -> "/etc/hosts"
+ *   HOME:   "/home/user" + "/" + ".bashrc" -> "/home/user/.bashrc"
+ *   CUSTOM: "/jail/web" + "/" + "etc/foo"  -> "/jail/web/etc/foo"
+ *
+ * `tail` is non-empty (mount_validate_storage rejects trailing slashes
+ * on the storage path). A defensive trailing-slash strip on
+ * `target_raw` keeps a malformed `$HOME` like `/home/user/` from
+ * producing `/home/user//.bashrc`; CUSTOM targets are validated to have
+ * no trailing slash, ROOT is always empty.
+ */
+static error_t *join_target_with_tail(
+    const char *target_raw,
+    const char *tail,
+    char **out
+) {
+    size_t target_len = strlen(target_raw);
+    if (target_len > 0 && target_raw[target_len - 1] == '/') {
+        target_len--;
+    }
+    char *result = str_format("%.*s/%s", (int) target_len, target_raw, tail);
+    if (!result) {
+        return ERROR(ERR_MEMORY, "Failed to allocate filesystem path");
+    }
+    *out = result;
     return NULL;
 }
 
@@ -624,51 +717,26 @@ error_t *mount_resolve(
     error_t *err = mount_validate_storage(storage_path);
     if (err) return err;
 
-    if (str_starts_with(storage_path, "home/")) {
-        const char *relative = storage_path + strlen("home/");
-        return fs_path_join(table->home, relative, out_fs);
-    }
+    /* mount_validate_storage above ensures mount_decode_label succeeds. */
+    mount_kind_t kind;
+    const char *tail = NULL;
+    (void) mount_decode_label(storage_path, &kind, &tail);
 
-    if (str_starts_with(storage_path, "root/")) {
-        /* root/etc/hosts -> /etc/hosts (skip "root", keep leading slash) */
-        const char *abs = storage_path + strlen("root");
-        char *result = strdup(abs);
-        if (!result) {
-            return ERROR(ERR_MEMORY, "Failed to allocate filesystem path");
-        }
-        *out_fs = result;
+    const mount_entry_t *entry = find_entry_for(table, kind, profile);
+    if (!entry) {
+        /* Only CUSTOM lookups can miss here: HOME and ROOT entries are
+         * unconditional (mount_table_build adds them every time). A
+         * CUSTOM miss means the profile has no --target on this machine
+         * — e.g., a clone before the user has configured a target. The
+         * NULL-out contract collapses both the "skip" (batch tree walks)
+         * and the "fall back to display" (user-facing commands) idioms
+         * into a single branch on `*out_fs == NULL`; malformed-input
+         * failures still surface as ERR_INVALID_ARG above. */
+        *out_fs = NULL;
         return NULL;
     }
 
-    if (str_starts_with(storage_path, "custom/")) {
-        const char *target = mount_target_for_profile(table, profile);
-        if (!target) {
-            /* Lookup miss, not malformed input. ERR_NOT_FOUND lets callers
-             * silently skip when a profile has no --target on this machine
-             * (e.g., a clone before `dotta key set --target`) without
-             * collapsing genuine path validation failures into the same
-             * branch. mount_validate_storage above keeps surfacing
-             * ERR_INVALID_ARG for malformed storage paths. */
-            return ERROR(
-                ERR_NOT_FOUND,
-                "Storage path '%s' has no mount target for profile '%s'\n"
-                "Profile not enabled with --target on this machine",
-                storage_path, profile ? profile : "(none)"
-            );
-        }
-        /* custom/etc/nginx.conf -> <target>/etc/nginx.conf
-         * (skip "custom", keep leading slash; target has no trailing slash). */
-        const char *relative = storage_path + strlen("custom");
-        char *result = str_format("%s%s", target, relative);
-        if (!result) {
-            return ERROR(ERR_MEMORY, "Failed to format custom filesystem path");
-        }
-        *out_fs = result;
-        return NULL;
-    }
-
-    /* Unreachable: mount_validate_storage rejects anything else. */
-    return ERROR(ERR_INTERNAL, "Invalid storage path label: '%s'", storage_path);
+    return join_target_with_tail(entry->target_raw, tail, out_fs);
 }
 
 /**
@@ -724,9 +792,7 @@ static bool input_is_relative(const char *input) {
     if (!input || input[0] == '\0') return false;
     if (input[0] == '.') return true;
     if (input[0] == '/' || input[0] == '~') return false;
-    if (str_starts_with(input, "home/") ||
-        str_starts_with(input, "root/") ||
-        str_starts_with(input, "custom/")) return false;
+    if (mount_decode_label(input, NULL, NULL)) return false;
     /* Contains slash but not a storage label — treat as relative. */
     if (strchr(input, '/') != NULL) return true;
     /* Single component without slash — ambiguous, not relative.
@@ -735,12 +801,12 @@ static bool input_is_relative(const char *input) {
 }
 
 error_t *mount_resolve_input(
-    const char *input,
     const mount_table_t *table,
+    const char *input,
     char **out_storage
 ) {
-    CHECK_NULL(input);
     CHECK_NULL(table);
+    CHECK_NULL(input);
     CHECK_NULL(out_storage);
 
     error_t *err = NULL;
@@ -754,10 +820,7 @@ error_t *mount_resolve_input(
     }
 
     /* Case 1: Storage path — validate and return a duplicate. */
-    if (str_starts_with(input, "home/") ||
-        str_starts_with(input, "root/") ||
-        str_starts_with(input, "custom/")) {
-
+    if (mount_decode_label(input, NULL, NULL)) {
         err = mount_validate_storage(input);
         if (err) {
             err = error_wrap(err, "Invalid storage path '%s'", input);

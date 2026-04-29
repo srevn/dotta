@@ -654,7 +654,7 @@ error_t *cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
     /* Resolve file path to storage format (common to both explicit and implicit paths).
      * On resolution failure, fall back to the original input — it may be a partial-match
      * pattern that mount_resolve_input rejects but the search below accepts. */
-    error_t *convert_err = mount_resolve_input(opts->file_path, mounts, &converted);
+    error_t *convert_err = mount_resolve_input(mounts, opts->file_path, &converted);
     const char *search_path = convert_err ? opts->file_path : converted;
     if (convert_err) error_free(convert_err);
 

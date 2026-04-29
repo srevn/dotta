@@ -42,6 +42,7 @@
 
 #include "base/hashmap.h"
 #include "core/state.h"
+#include "infra/path.h"
 
 /**
  * Detect matching profile names from a list of available branches
@@ -115,32 +116,49 @@ error_t *profile_resolve_enabled(
 );
 
 /**
- * Collect custom prefixes from state for a set of profiles
+ * Build a per-machine deployment topology from state
  *
- * Reads the row cache and packages the non-NULL custom_prefix values into
- * a fresh string_array_t. An empty array is a valid result when none of
- * the selected profiles has set a custom prefix.
+ * Materializes the profile→deploy_root bindings recorded in
+ * enabled_profiles into a path_roots_t handle, augmented internally with
+ * HOME and the empty-prefix root sentinel. The handle is the single
+ * downstream entry point for both filesystem→storage classification and
+ * profile-keyed storage→filesystem resolution.
  *
- * Two modes:
- *   - names == NULL: collect prefixes from every enabled profile (full
- *     row-cache scan, in position order). Used by read-only callers
- *     (list/show/revert) that need the complete set for path resolution.
- *   - names != NULL: collect prefixes only for the named profiles
- *     (per-name peek, in the caller's order). Used when path resolution
- *     is narrowed to a filter's active set. Names outside the enabled set
- *     yield no prefix (peek returns NULL) and are silently skipped.
+ * Two modes (selected by the names argument):
+ *   - names == NULL: every enabled profile contributes a binding (full
+ *     row-cache scan in position order). Used by read-only callers
+ *     (list/show/revert) that resolve paths without a narrowing filter.
+ *   - names != NULL: only the named profiles contribute (per-name peek in
+ *     the caller's order). Used by scope_build to feed CLI -p narrowing
+ *     into path classification. Names outside the enabled set yield
+ *     bindings with NULL deploy_root, which path_roots_t records for
+ *     forward-resolution lookups but does not add to the candidate set.
  *
- * @param repo Repository (must not be NULL)
+ * Lifetime contract:
+ *   - The returned handle is allocated entirely from `arena`.
+ *   - In the names != NULL branch, profile names are arena_strdup'd into
+ *     the bindings (decoupled from the caller's array lifetime). This
+ *     makes the handle safe to consult between any caller-side cleanup
+ *     of `names` and arena destruction.
+ *   - In the names == NULL branch, profile names are borrowed directly
+ *     from the state row cache. The borrow stays valid as long as no
+ *     enabled_profiles shape mutation runs (state_enable_profile,
+ *     state_disable_profile, state_set_profiles, state_rollback,
+ *     state_free).
+ *   - deploy_root strings are always borrowed from the state row cache
+ *     (same shape-mutation invariant).
+ *
  * @param state State handle (must not be NULL; borrowed, not freed)
- * @param names Profile names to collect prefixes for, or NULL for all enabled
- * @param out_prefixes Non-NULL custom prefixes (must not be NULL, caller frees)
- * @return Error or NULL on success (empty array if no custom prefixes)
+ * @param names Profile names to build bindings for, or NULL for all enabled
+ * @param arena Arena backing the handle (must not be NULL; outlives handle)
+ * @param out Output handle (must not be NULL; lifetime tracks arena)
+ * @return Error or NULL on success
  */
-error_t *profile_load_custom_prefixes(
-    git_repository *repo,
+error_t *profile_build_path_roots(
     const state_t *state,
     const string_array_t *names,
-    string_array_t **out_prefixes
+    arena_t *arena,
+    path_roots_t **out
 );
 
 /**

@@ -83,7 +83,8 @@ static error_t *resolve_paths_to_remove(
     string_array_t **filesystem_paths_out,
     const cmd_remove_options_t *opts,
     output_t *out,
-    state_t *state
+    state_t *state,
+    arena_t *arena
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(profile);
@@ -91,6 +92,7 @@ static error_t *resolve_paths_to_remove(
     CHECK_NULL(storage_paths_out);
     CHECK_NULL(filesystem_paths_out);
     CHECK_NULL(opts);
+    CHECK_NULL(arena);
 
     /* Initialize all resources to NULL for safe cleanup */
     error_t *err = NULL;
@@ -104,6 +106,28 @@ static error_t *resolve_paths_to_remove(
      * for the duration of this call (no enabled_profiles mutation below). */
     const char *custom_prefix =
         state ? state_peek_profile_prefix(state, profile) : NULL;
+
+    /* Build a one-shot deployment topology for this profile. The single
+     * binding records the profile name + its prefix; path_roots augments
+     * with HOME and the empty-prefix root sentinel internally. Both
+     * path_resolve_input below and path_from_storage's filesystem-path
+     * synthesis (via custom_prefix) get a consistent view of the topology.
+     * Roots ride the command arena (released by dispatch). */
+    path_roots_t *roots = NULL;
+    {
+        path_binding_t binding = {
+            .profile     = profile,
+            .deploy_root = custom_prefix
+        };
+        size_t n = (custom_prefix && custom_prefix[0] != '\0') ? 1 : 0;
+        err = path_roots_build(
+            arena, n > 0 ? &binding : NULL, n, &roots
+        );
+        if (err) {
+            err = error_wrap(err, "Failed to build path roots");
+            goto cleanup;
+        }
+    }
 
     /* Allocate arrays */
     storage_paths = string_array_new(0);
@@ -143,10 +167,7 @@ static error_t *resolve_paths_to_remove(
         char *canonical = NULL;
 
         /* Resolve input path to storage format (file need not exist) */
-        err = path_resolve_input(
-            input_path, custom_prefix ? &custom_prefix : NULL,
-            custom_prefix ? 1 : 0, &storage_path
-        );
+        err = path_resolve_input(input_path, roots, &storage_path);
         if (err) {
             if (!opts->force) {
                 goto cleanup;
@@ -843,7 +864,7 @@ static error_t *remove_files_from_profile(
     /* Resolve paths */
     err = resolve_paths_to_remove(
         repo, opts->profile, opts->paths, opts->path_count, &storage_paths,
-        &filesystem_paths, opts, out, state
+        &filesystem_paths, opts, out, state, arena
     );
     if (err) {
         goto cleanup;

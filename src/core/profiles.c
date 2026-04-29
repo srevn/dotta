@@ -11,6 +11,7 @@
 #include <sys/utsname.h>
 #include <unistd.h>
 
+#include "base/arena.h"
 #include "base/array.h"
 #include "base/error.h"
 #include "base/hashmap.h"
@@ -196,63 +197,87 @@ cleanup:
 }
 
 /**
- * Collect every enabled profile's custom prefix from state
+ * Build a per-machine deployment topology from state
  *
- * Narrow adapter for read-only callers (list/show/revert) that need the
- * full set of custom prefixes for path resolution. Peeks the row cache
- * on the borrowed state handle, filters to entries with a non-NULL
- * custom_prefix, and packages them into a fresh string_array_t in
- * position order.
+ * State-aware adapter that materializes enabled_profiles' (name, prefix)
+ * rows into path_binding_t entries and delegates the augmentation (HOME,
+ * canonical HOME, root sentinel) to path_roots_build. The single chokepoint
+ * for "what does the deployment topology look like for this command?" —
+ * scope_build feeds the active set, list/show/revert feed NULL for the
+ * full enabled set.
  */
-error_t *profile_load_custom_prefixes(
-    git_repository *repo,
+error_t *profile_build_path_roots(
     const state_t *state,
     const string_array_t *names,
-    string_array_t **out_prefixes
+    arena_t *arena,
+    path_roots_t **out
 ) {
-    CHECK_NULL(repo);
     CHECK_NULL(state);
-    CHECK_NULL(out_prefixes);
+    CHECK_NULL(arena);
+    CHECK_NULL(out);
 
-    string_array_t *prefixes = string_array_new(0);
-    if (!prefixes) {
-        return ERROR(ERR_MEMORY, "Failed to allocate prefixes array");
-    }
+    *out = NULL;
 
-    if (names) {
-        /* Narrowed: per-name peek. Non-enabled names yield NULL and skip. */
-        for (size_t i = 0; i < names->count; i++) {
-            const char *pfx =
-                state_peek_profile_prefix(state, names->items[i]);
-            if (!pfx) continue;
-            error_t *err = string_array_push(prefixes, pfx);
-            if (err) {
-                string_array_free(prefixes);
-                return error_wrap(err, "Failed to collect custom prefix");
+    /* Names mode (CLI-narrowed harvest).
+     *
+     * arena_strdup the profile name into each binding: the caller's array
+     * (typically scope's enabled/filter heap-owned strings) may be freed
+     * before the arena is destroyed, so a borrow would dangle in the
+     * window between scope_free and arena_destroy. The deploy_root pointer
+     * is borrowed from the state row cache, which outlives the arena —
+     * no copy needed. */
+    if (names != NULL) {
+        path_binding_t *bindings = NULL;
+        if (names->count > 0) {
+            bindings = arena_calloc(arena, names->count, sizeof(*bindings));
+            if (!bindings) {
+                return ERROR(ERR_MEMORY, "Failed to allocate path bindings");
             }
         }
-    } else {
-        /* All enabled: row-cache scan, position order. */
-        const state_profile_entry_t *entries = NULL;
-        size_t count = 0;
-        error_t *err = state_peek_profiles(state, &entries, &count);
-        if (err) {
-            string_array_free(prefixes);
-            return error_wrap(err, "Failed to peek profile rows");
+        for (size_t i = 0; i < names->count; i++) {
+            const char *name = names->items[i];
+            const char *arena_name = arena_strdup(arena, name);
+            if (!arena_name) {
+                return ERROR(
+                    ERR_MEMORY, "Failed to duplicate profile name '%s'", name
+                );
+            }
+            bindings[i] = (path_binding_t){
+                .profile     = arena_name,
+                .deploy_root = state_peek_profile_prefix(state, name)
+            };
+        }
+        return path_roots_build(arena, bindings, names->count, out);
+    }
+
+    /* All-enabled mode (row-cache scan).
+     *
+     * Both name and custom_prefix are borrowed from the row cache; their
+     * lifetime ties to the next enabled_profiles shape mutation, which by
+     * VWD-command construction does not occur between scope_build and
+     * scope_free. State outlives the arena, so the borrows are sound for
+     * the arena's lifetime. */
+    const state_profile_entry_t *entries = NULL;
+    size_t count = 0;
+    error_t *err = state_peek_profiles(state, &entries, &count);
+    if (err) {
+        return error_wrap(err, "Failed to peek profile rows");
+    }
+
+    path_binding_t *bindings = NULL;
+    if (count > 0) {
+        bindings = arena_calloc(arena, count, sizeof(*bindings));
+        if (!bindings) {
+            return ERROR(ERR_MEMORY, "Failed to allocate path bindings");
         }
         for (size_t i = 0; i < count; i++) {
-            if (!entries[i].custom_prefix) continue;
-            err = string_array_push(prefixes, entries[i].custom_prefix);
-            if (err) {
-                string_array_free(prefixes);
-                return error_wrap(err, "Failed to collect custom prefix");
-            }
+            bindings[i] = (path_binding_t){
+                .profile     = entries[i].name,
+                .deploy_root = entries[i].custom_prefix
+            };
         }
     }
-
-    *out_prefixes = prefixes;
-
-    return NULL;
+    return path_roots_build(arena, bindings, count, out);
 }
 
 /**

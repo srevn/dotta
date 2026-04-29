@@ -126,6 +126,7 @@ static error_t *discover_file_in_history(
 static error_t *discover_file(
     git_repository *repo,
     const state_t *state,
+    arena_t *arena,
     const char *file_path,
     const char *profile_hint,
     const output_t *out,
@@ -135,6 +136,7 @@ static error_t *discover_file(
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(state);
+    CHECK_NULL(arena);
     CHECK_NULL(file_path);
     CHECK_NULL(out);
     CHECK_NULL(found_in_history);
@@ -147,16 +149,22 @@ static error_t *discover_file(
     /* Initialize output flag */
     *found_in_history = false;
 
-    /* Load custom prefixes for path resolution (non-fatal) */
-    string_array_t *prefixes STRING_ARRAY_CLEANUP = NULL;
-    error_t *prefix_err = profile_load_custom_prefixes(repo, state, NULL, &prefixes);
-    if (prefix_err) error_free(prefix_err);
+    /* Build deployment topology over all enabled profiles for path
+     * resolution. Roots ride the command arena (released by dispatch).
+     * On build failure, fall back to an empty topology — preserves the
+     * existing graceful degradation. */
+    path_roots_t *roots = NULL;
+    error_t *roots_err = profile_build_path_roots(state, NULL, arena, &roots);
+    if (roots_err) {
+        error_free(roots_err);
+        error_t *fallback = path_roots_build(arena, NULL, 0, &roots);
+        if (fallback) {
+            return error_wrap(fallback, "Failed to build fallback path roots");
+        }
+    }
 
     /* Resolve input path to storage format (file need not exist) */
-    err = path_resolve_input(
-        file_path, prefixes ? (const char *const *) prefixes->items : NULL,
-        prefixes ? prefixes->count : 0, &storage_path
-    );
+    err = path_resolve_input(file_path, roots, &storage_path);
     if (err) {
         return err;
     }
@@ -814,8 +822,8 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
 
     bool found_in_history = false;
     err = discover_file(
-        repo, state, opts->file_path, opts->profile, out, &found_in_history,
-        &profile, &resolved_path
+        repo, state, ctx->arena, opts->file_path, opts->profile, out,
+        &found_in_history, &profile, &resolved_path
     );
     if (err) goto cleanup;
 

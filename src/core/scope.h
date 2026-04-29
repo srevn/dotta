@@ -79,7 +79,7 @@
 
 /* Forward decl: state_t's full API lives in core/state.h. scope only
  * passes the pointer through to profile_resolve_enabled and
- * profile_load_custom_prefixes, so the header stays free of the state
+ * profile_build_path_roots, so the header stays free of the state
  * dependency. C11 §6.7p3 permits typedef-name redeclaration. */
 typedef struct state state_t;
 
@@ -121,10 +121,11 @@ typedef struct scope_inputs {
  *   2. If in->profile_count > 0, resolve and validate the CLI filter
  *      against the enabled set (error if any filter name is not enabled).
  *      Strictness of the filter resolution is read from config->strict_mode.
- *   3. Harvest custom prefixes from the ACTIVE set (filter if present,
- *      else enabled) — narrowing the filter narrows prefix harvest for
- *      path resolution.
- *   4. If in->file_count > 0, build the path filter using those prefixes.
+ *   3. Build the path_roots topology from the ACTIVE set (filter if
+ *      present, else enabled). Always built — empty active set still
+ *      yields a usable handle (HOME + root sentinel only). Narrowing
+ *      the filter narrows the topology for path classification.
+ *   4. If in->file_count > 0, build the path filter consuming roots.
  *   5. If in->exclude_count > 0, compile patterns into a borrowed-arena
  *      gitignore ruleset.
  *
@@ -194,6 +195,26 @@ const string_array_t *scope_active(const scope_t *s);
  * Borrowed; valid until scope_free.
  */
 const path_filter_t *scope_paths(const scope_t *s);
+
+/**
+ * Per-machine deployment topology, built from the active set.
+ *
+ * Always non-NULL after scope_build returns. When the active set is
+ * empty or no profile has a custom prefix, the handle still carries
+ * HOME and the empty-prefix root sentinel, so path classification still
+ * works.
+ *
+ * Lifetime: arena-borrowed. The pointer is valid until the arena
+ * passed to scope_build is destroyed; that arena MUST outlive scope_t.
+ * scope_free does not release the roots — arena_destroy does.
+ *
+ * Borrow chain: deploy_root strings come from the state row cache.
+ * The VWD-command structure (no enabled_profiles shape mutation between
+ * scope_build and scope_free) keeps them valid. profile names are
+ * arena_strdup'd into the bindings, so they are decoupled from
+ * scope_t's heap-owned filter/enabled arrays.
+ */
+const path_roots_t *scope_roots(const scope_t *s);
 
 /* -------------------------------------------------------------------- */
 /* Build-shape predicates                                               */

@@ -568,7 +568,6 @@ error_t *cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
     error_t *err = NULL;
     string_array_t *profiles = NULL;
     string_array_t *matches = NULL;
-    string_array_t *prefixes = NULL;
     char *converted = NULL;
     const char *found_profile = NULL;
 
@@ -644,17 +643,27 @@ error_t *cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
     /* Handle SHOW_FILE mode */
     CHECK_NULL(opts->file_path);
 
-    /* Load custom prefixes for path resolution (non-fatal) */
-    error_t *prefix_err = profile_load_custom_prefixes(repo, state, NULL, &prefixes);
-    if (prefix_err) error_free(prefix_err);
+    /* Build deployment topology over all enabled profiles for path
+     * resolution. Roots ride the command arena (released by dispatch).
+     * On build failure, fall back to an empty topology — preserves the
+     * existing graceful degradation. */
+    path_roots_t *roots = NULL;
+    error_t *roots_err =
+        profile_build_path_roots(state, NULL, ctx->arena, &roots);
+    if (roots_err) {
+        error_free(roots_err);
+        error_t *fallback = path_roots_build(ctx->arena, NULL, 0, &roots);
+        if (fallback) {
+            err = error_wrap(fallback, "Failed to build fallback path roots");
+            goto cleanup;
+        }
+    }
 
     /* Resolve file path to storage format (common to both explicit and implicit paths).
      * On resolution failure, fall back to the original input — it may be a partial-match
      * pattern that path_resolve_input rejects but the search below accepts. */
-    error_t *convert_err = path_resolve_input(
-        opts->file_path, prefixes ? (const char *const *) prefixes->items : NULL,
-        prefixes ? prefixes->count : 0, &converted
-    );
+    error_t *convert_err =
+        path_resolve_input(opts->file_path, roots, &converted);
     const char *search_path = convert_err ? opts->file_path : converted;
     if (convert_err) error_free(convert_err);
 
@@ -719,7 +728,6 @@ error_t *cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
 
 cleanup:
     string_array_free(profiles);
-    string_array_free(prefixes);
     if (matches) string_array_free(matches);
     if (converted) free(converted);
 

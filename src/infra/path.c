@@ -333,6 +333,257 @@ static error_t *path_classify(
     return NULL;
 }
 
+/* -------------------------------------------------------------------- */
+/* Per-machine deployment topology (path_roots_t)                       */
+/* -------------------------------------------------------------------- */
+
+/**
+ * Resolve $HOME and its canonical form into the arena.
+ *
+ * On success, *out_home is non-NULL and arena-allocated. *out_canonical
+ * is set only when realpath(3) succeeds AND the canonical form differs
+ * from the raw value — callers consume both as candidate rows, and a
+ * duplicate-row guard would be the only thing the equal case adds.
+ *
+ * Replaces the duplicated canonicalize-with-fallback dance previously at
+ * path_to_storage's lines 486-491 and path_resolve_input's lines 826-832.
+ */
+static error_t *resolve_home_pair(
+    arena_t *arena,
+    const char **out_home,
+    const char **out_canonical
+) {
+    *out_home = NULL;
+    *out_canonical = NULL;
+
+    char *raw_home = NULL;
+    error_t *err = path_get_home(&raw_home);
+    if (err) return err;
+
+    const char *arena_home = arena_strdup(arena, raw_home);
+    free(raw_home);
+    if (!arena_home) {
+        return ERROR(ERR_MEMORY, "Failed to copy HOME into arena");
+    }
+
+    /* Canonicalize HOME to handle symlinks (e.g., /tmp -> /private/tmp on
+     * macOS). Best-effort: on failure, the raw HOME alone is the only
+     * candidate and the caller still classifies correctly. */
+    char *raw_canonical = NULL;
+    error_t *canon_err = fs_canonicalize_path(arena_home, &raw_canonical);
+    if (canon_err) {
+        error_free(canon_err);
+        *out_home = arena_home;
+        return NULL;
+    }
+
+    if (strcmp(raw_canonical, arena_home) != 0) {
+        const char *arena_canonical = arena_strdup(arena, raw_canonical);
+        if (!arena_canonical) {
+            free(raw_canonical);
+            return ERROR(ERR_MEMORY, "Failed to copy canonical HOME into arena");
+        }
+        *out_canonical = arena_canonical;
+    }
+    free(raw_canonical);
+
+    *out_home = arena_home;
+    return NULL;
+}
+
+/**
+ * Internal layout of a path_roots handle.
+ *
+ * `candidates` is the augmented set ready for path_classify consumption:
+ * customs (in input order) + HOME + canonical HOME (when distinct) +
+ * empty-prefix root sentinel. `bindings` is the raw input array (shallow-
+ * copied — string fields stay borrowed) used for forward-resolution
+ * lookups via linear scan; profiles count is small enough (typical N < 10,
+ * worst case ~30) that hashmap overhead would not pay back.
+ *
+ * `home` is the raw $HOME captured at build time. Stored separately so
+ * forward resolution of `home/X` paths needs no candidate scan.
+ */
+struct path_roots {
+    path_candidate_t *candidates;
+    size_t candidate_count;
+    path_binding_t *bindings;       /* arena-copied; .profile/.deploy_root borrowed */
+    size_t binding_count;
+    const char *home;               /* arena-allocated by resolve_home_pair */
+};
+
+error_t *path_roots_build(
+    arena_t *arena,
+    const path_binding_t *bindings,
+    size_t binding_count,
+    path_roots_t **out
+) {
+    CHECK_NULL(arena);
+    CHECK_NULL(out);
+    if (binding_count > 0) {
+        CHECK_NULL(bindings);
+    }
+
+    *out = NULL;
+
+    const char *home = NULL;
+    const char *home_canonical = NULL;
+    error_t *err = resolve_home_pair(arena, &home, &home_canonical);
+    if (err) return err;
+
+    /* Reserve candidate slots: customs (filtering NULL/empty deploy_roots)
+     * + HOME + canonical HOME (when distinct) + root sentinel. */
+    size_t custom_count = 0;
+    for (size_t i = 0; i < binding_count; i++) {
+        if (bindings[i].deploy_root && bindings[i].deploy_root[0] != '\0') {
+            custom_count++;
+        }
+    }
+    size_t cand_capacity = custom_count + 1U
+                         + (home_canonical ? 1U : 0U)
+                         + 1U;
+
+    path_roots_t *roots = arena_calloc(arena, 1, sizeof(*roots));
+    if (!roots) {
+        return ERROR(ERR_MEMORY, "Failed to allocate path_roots");
+    }
+
+    path_candidate_t *cands =
+        arena_calloc(arena, cand_capacity, sizeof(*cands));
+    if (!cands) {
+        return ERROR(ERR_MEMORY, "Failed to allocate path_roots candidates");
+    }
+
+    path_binding_t *binds = NULL;
+    if (binding_count > 0) {
+        binds = arena_calloc(arena, binding_count, sizeof(*binds));
+        if (!binds) {
+            return ERROR(ERR_MEMORY, "Failed to allocate path_roots bindings");
+        }
+        /* Shallow copy: pointer fields stay borrowed from the caller. */
+        for (size_t i = 0; i < binding_count; i++) {
+            binds[i] = bindings[i];
+        }
+    }
+
+    /* Populate candidates: customs first (input order — stable tiebreak),
+     * then HOME, then canonical HOME (when distinct), then root sentinel. */
+    size_t n = 0;
+    for (size_t i = 0; i < binding_count; i++) {
+        const char *deploy_root = bindings[i].deploy_root;
+        if (!deploy_root || deploy_root[0] == '\0') continue;
+        cands[n++] = (path_candidate_t){
+            deploy_root, "custom", "custom prefix", PREFIX_CUSTOM
+        };
+    }
+    cands[n++] = (path_candidate_t){ home, "home", "HOME", PREFIX_HOME };
+    if (home_canonical) {
+        cands[n++] = (path_candidate_t){
+            home_canonical, "home", "HOME", PREFIX_HOME
+        };
+    }
+    cands[n++] = (path_candidate_t){ "", "root", "root", PREFIX_ROOT };
+
+    roots->candidates = cands;
+    roots->candidate_count = n;
+    roots->bindings = binds;
+    roots->binding_count = binding_count;
+    roots->home = home;
+
+    *out = roots;
+    return NULL;
+}
+
+error_t *path_roots_classify(
+    const path_roots_t *roots,
+    const char *filesystem_path,
+    char **out_storage_path,
+    path_prefix_t *out_kind
+) {
+    CHECK_NULL(roots);
+    CHECK_NULL(filesystem_path);
+    CHECK_NULL(out_storage_path);
+
+    return path_classify(
+        filesystem_path,
+        roots->candidates, roots->candidate_count,
+        out_storage_path, out_kind
+    );
+}
+
+const char *path_roots_deploy_root_for_profile(
+    const path_roots_t *roots,
+    const char *profile
+) {
+    if (!roots || !profile) return NULL;
+
+    for (size_t i = 0; i < roots->binding_count; i++) {
+        const char *bound_profile = roots->bindings[i].profile;
+        if (!bound_profile) continue;
+        if (strcmp(bound_profile, profile) == 0) {
+            const char *deploy_root = roots->bindings[i].deploy_root;
+            if (!deploy_root || deploy_root[0] == '\0') return NULL;
+            return deploy_root;
+        }
+    }
+    return NULL;
+}
+
+error_t *path_roots_to_filesystem(
+    const path_roots_t *roots,
+    const char *profile,
+    const char *storage_path,
+    char **out_filesystem_path
+) {
+    CHECK_NULL(roots);
+    CHECK_NULL(storage_path);
+    CHECK_NULL(out_filesystem_path);
+
+    error_t *err = path_validate_storage(storage_path);
+    if (err) return err;
+
+    if (str_starts_with(storage_path, "home/")) {
+        const char *relative = storage_path + strlen("home/");
+        return fs_path_join(roots->home, relative, out_filesystem_path);
+    }
+
+    if (str_starts_with(storage_path, "root/")) {
+        /* root/etc/hosts -> /etc/hosts (skip "root", keep leading slash) */
+        const char *abs = storage_path + strlen("root");
+        char *result = strdup(abs);
+        if (!result) {
+            return ERROR(ERR_MEMORY, "Failed to allocate filesystem path");
+        }
+        *out_filesystem_path = result;
+        return NULL;
+    }
+
+    if (str_starts_with(storage_path, "custom/")) {
+        const char *deploy_root =
+            path_roots_deploy_root_for_profile(roots, profile);
+        if (!deploy_root) {
+            return ERROR(
+                ERR_INVALID_ARG,
+                "Storage path '%s' requires deployment root for profile '%s'\n"
+                "Profile not enabled with --prefix on this machine",
+                storage_path, profile ? profile : "(none)"
+            );
+        }
+        /* custom/etc/nginx.conf -> <deploy_root>/etc/nginx.conf
+         * (skip "custom", keep leading slash; deploy_root has no trailing slash). */
+        const char *relative = storage_path + strlen("custom");
+        char *result = str_format("%s%s", deploy_root, relative);
+        if (!result) {
+            return ERROR(ERR_MEMORY, "Failed to format custom filesystem path");
+        }
+        *out_filesystem_path = result;
+        return NULL;
+    }
+
+    /* Unreachable: path_validate_storage rejects anything else. */
+    return ERROR(ERR_INTERNAL, "Invalid storage path prefix: '%s'", storage_path);
+}
+
 /**
  * Normalize user input path to absolute filesystem path.
  *
@@ -447,10 +698,12 @@ error_t *path_normalize_input(
  * Pure classifier — requires pre-normalized absolute path.
  * Callers must call path_normalize_input() first for raw user input.
  *
- * Selection is delegated to path_classify: longest matching prefix
- * wins. An explicit --prefix naturally wins over HOME when it is
- * more specific, and loses to HOME when HOME is more specific. The
- * empty-prefix root is the universal fallback.
+ * Builds a one-shot path_roots_t over the caller's single CLI prefix,
+ * routing the candidate-set construction and HOME canonicalization
+ * through the shared primitive. Selection is delegated to path_classify:
+ * longest matching prefix wins. An explicit --prefix naturally wins over
+ * HOME when it is more specific, and loses to HOME when HOME is more
+ * specific. The empty-prefix root is the universal fallback.
  */
 error_t *path_to_storage(
     const char *filesystem_path,
@@ -474,46 +727,31 @@ error_t *path_to_storage(
         return ERROR(ERR_NOT_FOUND, "File not found: %s", filesystem_path);
     }
 
-    char *home = NULL;
-    char *home_canonical = NULL;
-    char *result = NULL;
-
-    error_t *err = path_get_home(&home);
-    if (err) {
-        goto cleanup;
+    /* Scratch arena for the single-call roots handle. arena_destroy
+     * reclaims the candidate array, the HOME copy, and the roots struct
+     * in one shot. */
+    arena_t *scratch = arena_create(0);
+    if (!scratch) {
+        return ERROR(ERR_MEMORY, "Failed to allocate scratch arena");
     }
 
-    /* Canonicalize HOME to handle symlinks (e.g., /tmp -> /private/tmp on macOS).
-     * Best-effort: if it fails, fall back to the original HOME. */
-    error_t *canon_err = fs_canonicalize_path(home, &home_canonical);
-    if (canon_err) {
-        error_free(canon_err);
-    }
-
-    /* Build candidate set: explicit custom (if any), HOME (with canonical
-     * fallback for symlinks), and the root fallback. classify picks the
-     * tightest matching prefix — order only breaks length ties. */
-    path_candidate_t cands[4];
-    size_t n = 0;
+    path_binding_t bindings[1];
+    size_t binding_count = 0;
     if (custom_prefix && custom_prefix[0] != '\0') {
-        cands[n++] = (path_candidate_t){
-            custom_prefix, "custom", "custom prefix", PREFIX_CUSTOM
+        bindings[binding_count++] = (path_binding_t){
+            .profile = NULL, .deploy_root = custom_prefix
         };
     }
-    cands[n++] = (path_candidate_t){ home, "home", "HOME", PREFIX_HOME };
-    if (home_canonical && strcmp(home_canonical, home) != 0) {
-        cands[n++] = (path_candidate_t){
-            home_canonical, "home", "HOME", PREFIX_HOME
-        };
-    }
-    cands[n++] = (path_candidate_t){ "", "root", "root", PREFIX_ROOT };
 
-    err = path_classify(filesystem_path, cands, n, &result, prefix_out);
-    if (err) {
-        goto cleanup;
-    }
+    path_roots_t *roots = NULL;
+    error_t *err =
+        path_roots_build(scratch, bindings, binding_count, &roots);
+    if (err) goto cleanup;
 
-    /* Validate generated storage path format */
+    char *result = NULL;
+    err = path_roots_classify(roots, filesystem_path, &result, prefix_out);
+    if (err) goto cleanup;
+
     err = path_validate_storage(result);
     if (err) {
         free(result);
@@ -523,9 +761,7 @@ error_t *path_to_storage(
     *storage_path = result;
 
 cleanup:
-    free(home);
-    free(home_canonical);
-
+    arena_destroy(scratch);
     return err;
 }
 
@@ -713,50 +949,45 @@ static bool path_is_relative(const char *input) {
 }
 
 /**
- * Resolve flexible path input to canonical storage format
+ * Resolve flexible path input to canonical storage format using a
+ * pre-built path_roots_t.
  *
- * This is the unified path resolution function used by all commands.
- * Handles both filesystem and storage path formats intelligently.
+ * Internal hot path shared by path_resolve_input (per-call scratch
+ * roots) and path_filter_create (one shared roots for all inputs).
+ * Handles the four input shapes (storage path, absolute / tilde,
+ * relative, ambiguous) and routes filesystem paths through the roots'
+ * classifier.
  */
-error_t *path_resolve_input(
+static error_t *resolve_input_with_roots(
     const char *input,
-    const char *const *prefixes,
-    size_t prefix_count,
+    const path_roots_t *roots,
     char **out_storage_path
 ) {
     CHECK_NULL(input);
+    CHECK_NULL(roots);
     CHECK_NULL(out_storage_path);
 
-    /* Initialize all resources to NULL for goto cleanup */
     error_t *err = NULL;
     char *storage_path = NULL;
     char *expanded = NULL;
     char *absolute = NULL;
     char *normalized = NULL;
-    char *home = NULL;
-    char *home_canonical = NULL;
-    path_candidate_t *cands = NULL;
 
     if (input[0] == '\0') {
         return ERROR(ERR_INVALID_ARG, "Path cannot be empty");
     }
 
-    /* Detect path type and route to appropriate handler */
-
-    /* Case 1: Storage path (home/..., root/..., or custom/...)
-     * Check this first to avoid unnecessary processing */
+    /* Case 1: Storage path — validate and return a duplicate. */
     if (str_starts_with(input, "home/") ||
         str_starts_with(input, "root/") ||
         str_starts_with(input, "custom/")) {
 
-        /* Validate storage path format */
         err = path_validate_storage(input);
         if (err) {
             err = error_wrap(err, "Invalid storage path '%s'", input);
             goto cleanup;
         }
 
-        /* Already in storage format - duplicate and return */
         storage_path = strdup(input);
         if (!storage_path) {
             err = ERROR(ERR_MEMORY, "Failed to allocate storage path");
@@ -764,11 +995,8 @@ error_t *path_resolve_input(
         goto cleanup;
     }
 
-    /* Resolve input to absolute path */
-
     /* Case 2: Filesystem path (absolute or tilde-prefixed) */
     if (input[0] == '/' || input[0] == '~') {
-        /* Expand tilde if needed */
         if (input[0] == '~') {
             err = path_expand_home(input, &expanded);
             if (err) {
@@ -783,7 +1011,6 @@ error_t *path_resolve_input(
             }
         }
 
-        /* Make absolute */
         err = fs_make_absolute(expanded, &absolute);
         if (err) {
             err = error_wrap(err, "Failed to resolve path '%s'", input);
@@ -792,7 +1019,6 @@ error_t *path_resolve_input(
     }
     /* Case 3: Relative path (./foo, ../bar, or path/with/slash) */
     else if (path_is_relative(input)) {
-        /* Resolve via CWD without existence check */
         err = path_resolve_relative(input, &absolute);
         if (err) {
             err = error_wrap(err, "Failed to resolve relative path '%s'", input);
@@ -810,55 +1036,17 @@ error_t *path_resolve_input(
         goto cleanup;
     }
 
-    /* Normalize path to resolve any .. components before storage conversion */
+    /* Normalize ., .., and consecutive slashes before classification.
+     * For relative paths (Case 3), getcwd() returns canonical paths but
+     * $HOME may contain symlinks — the roots' canonical-HOME candidate
+     * is what makes the boundary check land. */
     err = fs_normalize_path(absolute, &normalized);
     if (err) {
         err = error_wrap(err, "Failed to normalize path '%s'", input);
         goto cleanup;
     }
 
-    /* Convert to storage format via shared classifier (no existence check). */
-
-    err = path_get_home(&home);
-    if (err) goto cleanup;
-
-    /* Canonicalize HOME to handle symlinks (e.g., /tmp -> /private/tmp on macOS).
-     * For relative paths (Case 3), this matters because getcwd() returns
-     * canonical paths, but $HOME may contain symlinks. Best-effort: on
-     * failure, fall back to the original HOME path. */
-    error_t *canon_err = fs_canonicalize_path(home, &home_canonical);
-    if (canon_err) {
-        error_free(canon_err);
-    }
-
-    /* Build candidate set: each custom prefix, HOME (with canonical fallback
-     * for symlinks), and the root fallback. classify picks the tightest
-     * matching prefix — overlapping customs resolve by length, not by
-     * enable order. */
-    size_t cap = prefix_count + 3;
-    cands = calloc(cap, sizeof(*cands));
-    if (!cands) {
-        err = ERROR(ERR_MEMORY, "Failed to allocate classification candidates");
-        goto cleanup;
-    }
-    size_t n = 0;
-    for (size_t i = 0; i < prefix_count; i++) {
-        const char *p = prefixes ? prefixes[i] : NULL;
-        if (p && p[0]) {
-            cands[n++] = (path_candidate_t){
-                p, "custom", "custom prefix", PREFIX_CUSTOM
-            };
-        }
-    }
-    cands[n++] = (path_candidate_t){ home, "home", "HOME", PREFIX_HOME };
-    if (home_canonical && strcmp(home_canonical, home) != 0) {
-        cands[n++] = (path_candidate_t){
-            home_canonical, "home", "HOME", PREFIX_HOME
-        };
-    }
-    cands[n++] = (path_candidate_t){ "", "root", "root", PREFIX_ROOT };
-
-    err = path_classify(normalized, cands, n, &storage_path, NULL);
+    err = path_roots_classify(roots, normalized, &storage_path, NULL);
     if (err) goto cleanup;
 
     err = path_validate_storage(storage_path);
@@ -868,18 +1056,38 @@ cleanup:
     free(expanded);
     free(absolute);
     free(normalized);
-    free(home);
-    free(home_canonical);
-    free(cands);
 
     if (err) {
         free(storage_path);
         return err;
     }
 
-    /* Success - transfer ownership */
     *out_storage_path = storage_path;
     return NULL;
+}
+
+/**
+ * Resolve flexible path input to canonical storage format
+ *
+ * This is the unified path resolution function used by all commands.
+ * Handles both filesystem and storage path formats intelligently.
+ *
+ * Roots is supplied by the caller (built once at the command boundary
+ * via profile_build_path_roots, or as a one-shot scratch via
+ * path_roots_build). Callers without state-derived prefixes pass a
+ * zero-binding roots — HOME and the empty-prefix root sentinel are
+ * always present internally.
+ */
+error_t *path_resolve_input(
+    const char *input,
+    const path_roots_t *roots,
+    char **out_storage_path
+) {
+    CHECK_NULL(input);
+    CHECK_NULL(roots);
+    CHECK_NULL(out_storage_path);
+
+    return resolve_input_with_roots(input, roots, out_storage_path);
 }
 
 /**
@@ -897,11 +1105,11 @@ cleanup:
 error_t *path_filter_create(
     char *const *inputs,
     size_t count,
-    const char *const *prefixes,
-    size_t prefix_count,
+    const path_roots_t *roots,
     arena_t *arena,
     path_filter_t **out
 ) {
+    CHECK_NULL(roots);
     CHECK_NULL(arena);
     CHECK_NULL(out);
 
@@ -923,6 +1131,8 @@ error_t *path_filter_create(
         return ERROR(ERR_MEMORY, "Failed to allocate filter hashmap");
     }
 
+    error_t *err = NULL;
+
     /* First pass: count glob patterns so we can size the storage array
      * exactly. The borrowed arena is only touched when at least one
      * glob is present, keeping the "exact paths only" common path
@@ -942,23 +1152,20 @@ error_t *path_filter_create(
             arena, &filter->glob_ruleset
         );
         if (rules_err) {
-            hashmap_free(filter->exact_paths, NULL);
-            free(filter);
-            return error_wrap(rules_err, "Failed to allocate glob ruleset");
+            err = error_wrap(rules_err, "Failed to allocate glob ruleset");
+            goto cleanup;
         }
 
         filter->glob_patterns = arena_calloc(
             arena, glob_count, sizeof(*filter->glob_patterns)
         );
         if (!filter->glob_patterns) {
-            hashmap_free(filter->exact_paths, NULL);
-            free(filter);
-            return ERROR(ERR_MEMORY, "Failed to allocate glob pattern table");
+            err = ERROR(ERR_MEMORY, "Failed to allocate glob pattern table");
+            goto cleanup;
         }
     }
 
     /* Second pass: populate hashmap and glob storage */
-    error_t *err = NULL;
     for (size_t i = 0; i < count; i++) {
         const char *input = inputs[i];
 
@@ -1004,9 +1211,9 @@ error_t *path_filter_create(
             continue;
         }
 
-        /* Case 2: Exact path - resolve and store in hashmap */
+        /* Case 2: Exact path - resolve via shared roots, store in hashmap. */
         char *resolved = NULL;
-        err = path_resolve_input(input, prefixes, prefix_count, &resolved);
+        err = resolve_input_with_roots(input, roots, &resolved);
         if (err) {
             err = error_wrap(err, "Invalid path '%s'", input);
             goto cleanup;

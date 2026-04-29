@@ -162,6 +162,11 @@ const char *path_strip_storage_prefix(const char *storage_path);
  */
 error_t *path_get_home(char **out);
 
+/* Forward declaration for the deployment-topology handle introduced
+ * below. path_resolve_input and path_filter_create consume it as the
+ * single source of "which prefixes does this command see?". */
+typedef struct path_roots path_roots_t;
+
 /**
  * Resolve flexible path input to canonical storage format
  *
@@ -181,11 +186,13 @@ error_t *path_get_home(char **out);
  * show/revert/remove/filter commands that query Git data, not the filesystem.
  *
  * Custom prefix detection:
- *   When custom_prefixes is provided (non-NULL with count > 0),
- *   filesystem paths are classified against the union of custom prefixes,
- *   $HOME, and the root fallback. This enables proper resolution of paths
- *   like /mnt/jail/etc/nginx.conf to custom/etc/nginx.conf when /mnt/jail
- *   is in the custom_prefixes array, even when the path is under $HOME.
+ *   `roots` carries the per-machine (storage label → deployment root)
+ *   topology — every custom prefix the caller wants recognized, plus
+ *   HOME and the empty-prefix root sentinel that path_roots_build adds
+ *   internally. Filesystem-path inputs are classified against the
+ *   handle's candidate set; the longest-matching prefix wins. Callers
+ *   that have no custom prefixes still pass a roots built with zero
+ *   bindings (HOME + root only).
  *
  *   Classification semantic (tightest container wins):
  *   The candidate with the longest matching prefix is selected. When two
@@ -206,20 +213,170 @@ error_t *path_get_home(char **out);
  *   ../file (in $HOME/project)  -> home/file (.. resolved)
  *   home/.bashrc                -> validated and returned as home/.bashrc
  *   /etc/hosts                  -> root/etc/hosts
- *   /mnt/jail/etc/nginx.conf    -> custom/etc/nginx.conf (if /mnt/jail in prefixes)
+ *   /mnt/jail/etc/nginx.conf    -> custom/etc/nginx.conf (if /mnt/jail in roots)
  *   config (no slash)           -> ERROR: ambiguous (use ./config)
  *
  * @param input User-provided path string (must not be NULL)
- * @param prefixes Borrowed custom-prefix strings (NULL if prefix_count == 0)
- * @param prefix_count Number of entries in prefixes
+ * @param roots Deployment topology handle (must not be NULL)
  * @param out_storage_path Output in storage format (must not be NULL, caller must free)
  * @return Error or NULL on success
  */
 error_t *path_resolve_input(
     const char *input,
-    const char *const *prefixes,
-    size_t prefix_count,
+    const path_roots_t *roots,
     char **out_storage_path
+);
+
+/**
+ * Per-machine deployment topology
+ *
+ * Captures the union of (storage label → deployment root) mappings active
+ * on this machine as a single first-class value:
+ *
+ *   home/   → $HOME            (process-global, derived from getenv)
+ *   root/   → /                (universal sentinel)
+ *   custom/ → per-profile      (configured via --prefix at enable time)
+ *
+ * Built once per command at the boundary where the binding source is in
+ * scope (CLI, state row cache), then consulted many times downstream.
+ * Replaces the duplicated candidate-set construction and HOME
+ * canonicalization that was sprinkled across every reader.
+ *
+ * Two views over the same data:
+ *   - Backward (filesystem → storage): path_roots_classify picks the
+ *     longest-matching prefix from the augmented candidate set.
+ *   - Forward (profile + storage → filesystem): path_roots_to_filesystem
+ *     looks up the per-profile deployment root.
+ *
+ * Lifetime: arena-allocated. All borrowed strings (binding fields) must
+ * outlive the arena passed to path_roots_build. There is no destructor —
+ * arena_destroy reclaims everything.
+ *
+ * (path_roots_t itself is forward-declared earlier in this header so
+ * path_resolve_input and path_filter_create can reference it before the
+ * full topology API is introduced below.)
+ */
+
+/**
+ * Profile ↔ deployment-root binding
+ *
+ * POD value type. Both fields are borrowed pointers; their lifetime is
+ * the caller's responsibility and must outlive the arena used to build
+ * the roots handle.
+ *
+ * - profile: NULL when the binding has no profile association (e.g.,
+ *   PR 1 internal scratch use where the caller has only prefix strings,
+ *   not profile names).
+ * - deploy_root: NULL when the profile contributes no custom row (the
+ *   profile is recorded for forward-resolution lookups, but it has no
+ *   custom deployment root configured on this machine).
+ */
+typedef struct {
+    const char *profile;       /* may be NULL */
+    const char *deploy_root;   /* absolute path, no trailing slash; may be NULL */
+} path_binding_t;
+
+/**
+ * Build a path_roots handle from a flat array of profile bindings.
+ *
+ * The handle is augmented internally with HOME (raw + canonical when
+ * distinct from raw) and the empty-prefix root sentinel — callers do
+ * not pass these. Bindings whose deploy_root is NULL or empty
+ * contribute no candidate row; their profile names (when non-NULL)
+ * are still recorded so forward-resolution lookups can distinguish
+ * "profile not in roots" from "profile has no deploy_root".
+ *
+ * Lifetime:
+ *   - Output is allocated entirely from `arena`.
+ *   - Borrowed string fields in `bindings` must outlive `arena`.
+ *   - $HOME is captured into the arena at build time, immune to later
+ *     setenv mutations.
+ *
+ * Errors:
+ *   - ERR_FS if HOME cannot be resolved (env unset and passwd lookup fails).
+ *   - ERR_MEMORY on arena allocation failure.
+ *
+ * @param arena Arena for the handle and its internal storage (must not be NULL)
+ * @param bindings Profile bindings; may be NULL when binding_count == 0
+ * @param binding_count Number of bindings (zero is valid — yields HOME + root only)
+ * @param out Output handle (must not be NULL; lifetime tracks arena)
+ * @return Error or NULL on success
+ */
+error_t *path_roots_build(
+    arena_t *arena,
+    const path_binding_t *bindings,
+    size_t binding_count,
+    path_roots_t **out
+);
+
+/**
+ * Classify an absolute filesystem path into a storage path
+ *
+ * Picks the longest-matching prefix from the roots' candidate set
+ * (tightest container wins). Same semantics as path_to_storage's
+ * classifier core, but the candidate set is supplied by `roots` rather
+ * than rebuilt per call.
+ *
+ * @param roots Roots handle (must not be NULL)
+ * @param filesystem_path Absolute path to classify (must not be NULL)
+ * @param out_storage_path Allocated storage path on success (caller frees)
+ * @param out_kind Optional: receives the winning candidate's kind
+ * @return Error or NULL on success
+ */
+error_t *path_roots_classify(
+    const path_roots_t *roots,
+    const char *filesystem_path,
+    char **out_storage_path,
+    path_prefix_t *out_kind
+);
+
+/**
+ * Convert a storage path to a filesystem path using the profile's binding
+ *
+ * Resolution table:
+ *   home/X   → $HOME/X                            (profile may be NULL)
+ *   root/X   → /X                                 (profile may be NULL)
+ *   custom/X → <profile's deploy_root>/X          (profile must match a binding)
+ *
+ * Returns ERR_INVALID_ARG when storage_path starts with "custom/" but
+ * the profile has no deploy_root in roots — this is the same condition
+ * that path_from_storage rejected with a NULL custom_prefix, but now
+ * expressed once at the resolver instead of replicated by every caller.
+ *
+ * @param roots Roots handle (must not be NULL)
+ * @param profile Owning profile (may be NULL for home/ and root/ paths)
+ * @param storage_path Storage-format path (must not be NULL, validated)
+ * @param out_filesystem_path Allocated filesystem path on success (caller frees)
+ * @return Error or NULL on success
+ */
+error_t *path_roots_to_filesystem(
+    const path_roots_t *roots,
+    const char *profile,
+    const char *storage_path,
+    char **out_filesystem_path
+);
+
+/**
+ * Look up a profile's deployment root
+ *
+ * Direct accessor for callers that need only the per-profile prefix
+ * (e.g., diagnostic output, external command invocation). For
+ * storage→filesystem conversion, prefer path_roots_to_filesystem.
+ *
+ * Returns NULL when:
+ *   - roots or profile is NULL
+ *   - the profile is not in roots (not enabled, filtered out at build, etc.)
+ *   - the binding exists but has no deploy_root (profile has no --prefix)
+ *
+ * The returned pointer is borrowed; lifetime tracks the arena.
+ *
+ * @param roots Roots handle (NULL returns NULL)
+ * @param profile Profile name (NULL returns NULL)
+ * @return Borrowed deploy_root or NULL
+ */
+const char *path_roots_deploy_root_for_profile(
+    const path_roots_t *roots,
+    const char *profile
 );
 
 /* Forward declaration for the compiled glob ruleset; defined in
@@ -271,15 +428,17 @@ typedef struct {
  * - Recursive patterns (doublestar followed by /foo) match at any depth
  *
  * Custom prefix detection:
- *   When custom_prefixes is provided (non-NULL with count > 0),
- *   filesystem path inputs are checked against each prefix during resolution.
- *   This enables users to specify /mnt/jail/etc/nginx.conf as a filter and
- *   have it correctly match custom/etc/nginx.conf in the manifest.
+ *   `roots` carries every (storage label → deployment root) mapping the
+ *   filter should recognize. Filesystem-path inputs are classified
+ *   against the handle's candidate set (longest match wins), so users
+ *   can specify /mnt/jail/etc/nginx.conf and have it correctly match
+ *   custom/etc/nginx.conf when /mnt/jail is bound in roots.
  *
  * NULL semantics:
  * - If inputs is NULL or count is 0, returns NULL filter (matches all)
  * - A NULL filter passed to path_filter_matches() matches all paths
- * - custom_prefixes can be NULL (no custom prefix resolution)
+ * - `roots` must be non-NULL even when no custom prefixes are configured
+ *   (callers without state pass a zero-binding roots — HOME + root only)
  *
  * Error handling:
  * - If any path resolution fails, returns error and cleans up
@@ -287,8 +446,7 @@ typedef struct {
  *
  * @param inputs User-provided path or pattern strings (can be NULL if count is 0)
  * @param count Number of inputs
- * @param prefixes Borrowed custom-prefix strings (NULL if prefix_count == 0)
- * @param prefix_count Number of entries in prefixes
+ * @param roots Deployment topology handle (must not be NULL)
  * @param arena Borrowed allocator backing glob_ruleset and glob_patterns
  *              entries; must outlive the filter (must not be NULL)
  * @param out Path filter (must not be NULL, receives NULL if no filter)
@@ -297,8 +455,7 @@ typedef struct {
 error_t *path_filter_create(
     char *const *inputs,
     size_t count,
-    const char *const *prefixes,
-    size_t prefix_count,
+    const path_roots_t *roots,
     arena_t *arena,
     path_filter_t **out
 );

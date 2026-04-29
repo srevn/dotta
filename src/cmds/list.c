@@ -546,11 +546,13 @@ static bool format_time(git_time_t timestamp, char *buf, size_t buf_size) {
 static error_t *list_file_history(
     git_repository *repo,
     const state_t *state,
+    arena_t *arena,
     const cmd_list_options_t *opts,
     output_t *out
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(state);
+    CHECK_NULL(arena);
     CHECK_NULL(opts);
     CHECK_NULL(opts->file_path);
     CHECK_NULL(out);
@@ -558,18 +560,24 @@ static error_t *list_file_history(
     bool verbose = output_is_verbose(out);
     char *discovered_profile = NULL;
 
-    /* Load custom prefixes for path resolution (non-fatal) */
-    string_array_t *prefixes STRING_ARRAY_CLEANUP = NULL;
-    error_t *prefix_err = profile_load_custom_prefixes(repo, state, NULL, &prefixes);
-    if (prefix_err) error_free(prefix_err);
+    /* Build deployment topology over all enabled profiles for path
+     * resolution. Roots ride the command arena (released by dispatch).
+     * On build failure, fall back to an empty topology (HOME + root
+     * sentinel only) — preserves the existing graceful degradation. */
+    path_roots_t *roots = NULL;
+    error_t *roots_err = profile_build_path_roots(state, NULL, arena, &roots);
+    if (roots_err) {
+        error_free(roots_err);
+        error_t *fallback = path_roots_build(arena, NULL, 0, &roots);
+        if (fallback) {
+            return error_wrap(fallback, "Failed to build fallback path roots");
+        }
+    }
 
     /* Resolve input path to storage format (handles absolute, tilde, relative,
      * and storage paths). File need not exist on disk. */
     char *storage_path = NULL;
-    error_t *err = path_resolve_input(
-        opts->file_path, prefixes ? (const char *const *) prefixes->items : NULL,
-        prefixes ? prefixes->count : 0, &storage_path
-    );
+    error_t *err = path_resolve_input(opts->file_path, roots, &storage_path);
     if (err) {
         return error_wrap(err, "Failed to resolve path '%s'", opts->file_path);
     }
@@ -739,7 +747,7 @@ error_t *cmd_list(const dotta_ctx_t *ctx, const cmd_list_options_t *opts) {
     } else if (opts->mode == LIST_FILES) {
         err = list_files(repo, opts, out);
     } else if (opts->mode == LIST_FILE_HISTORY) {
-        err = list_file_history(repo, ctx->state, opts, out);
+        err = list_file_history(repo, ctx->state, ctx->arena, opts, out);
     } else {
         err = ERROR(ERR_INVALID_ARG, "Invalid list mode");
     }

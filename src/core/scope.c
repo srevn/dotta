@@ -23,17 +23,23 @@
  * `filter` — set once during build, dangles after scope_free returns
  * (which is fine: no one is meant to dereference it post-free).
  *
- * `excludes_ruleset` is borrowed from the caller's arena (typically
- * `ctx->arena`). NULL when no -e patterns were given. Matching goes
- * through base/gitignore for full `!`-negation, directory walk-up, and
- * anchoring semantics — the same engine that powers the layered
- * `.dottaignore` ruleset in core/ignore.
+ * `excludes_ruleset` and `roots` are arena-borrowed (typically from
+ * `ctx->arena`); both are released by arena_destroy, not scope_free.
+ * Matching for the excludes ruleset goes through base/gitignore for full
+ * `!`-negation, directory walk-up, and anchoring semantics — the same
+ * engine that powers the layered `.dottaignore` ruleset in core/ignore.
+ *
+ * `roots` is always non-NULL post-build: scope_build always calls
+ * profile_build_path_roots (even when there are no positional file args
+ * and no custom prefixes). Downstream consumers (path_filter_create,
+ * manifest_build in PR 3+) consult it without per-callsite NULL guards.
  */
 struct scope {
     string_array_t *enabled;               /* Persistent enabled set; non-NULL, may be empty */
     string_array_t *filter;                /* CLI filter; NULL when no -p */
     gitignore_ruleset_t *excludes_ruleset; /* Compiled -e patterns; arena-borrowed; NULL when no excludes */
     path_filter_t *paths;                  /* CLI path filter; NULL when no positional args */
+    const path_roots_t *roots;             /* Deployment topology; arena-borrowed; non-NULL post-build */
     const string_array_t *active;          /* Borrowed: filter if set, else enabled */
 };
 
@@ -150,34 +156,41 @@ error_t *scope_build(
         if (err) goto fail;  /* validate_filter returns a user-facing message */
     }
 
-    /* 3. Derive active pointer — used for prefix harvest and by
+    /* 3. Derive active pointer — used for the topology build and by
      *    scope_active accessor. Valid as long as scope is alive. */
     s->active = s->filter ? s->filter : s->enabled;
 
-    /* 4. Build path filter with prefixes harvested from the active set.
-     *    Narrowing the filter narrows prefix harvest: a profile that
-     *    is enabled-but-filtered-out does not contribute its custom
-     *    prefix to path resolution for this invocation. */
-    if (in->file_count > 0) {
-        string_array_t *prefixes = NULL;
-        err = profile_load_custom_prefixes(repo, state, s->active, &prefixes);
+    /* 4. Build the deployment topology from the active set.
+     *    Always built — empty active set still yields a usable handle
+     *    (HOME + root sentinel only), and downstream consumers
+     *    (path_filter_create, future manifest_build) can rely on a
+     *    non-NULL scope_roots without per-callsite guards.
+     *    Narrowing the filter narrows the topology: a profile that is
+     *    enabled-but-filtered-out does not contribute its custom prefix
+     *    to path classification for this invocation. */
+    {
+        path_roots_t *roots = NULL;
+        err = profile_build_path_roots(state, s->active, arena, &roots);
         if (err) {
-            err = error_wrap(err, "Failed to harvest custom prefixes");
+            err = error_wrap(err, "Failed to build path roots");
             goto fail;
         }
+        s->roots = roots;
+    }
 
+    /* 5. Build path filter consuming the topology directly — no
+     *    intermediate prefix-array round-trip. */
+    if (in->file_count > 0) {
         err = path_filter_create(
-            in->files, in->file_count, (const char *const *) prefixes->items,
-            prefixes->count, arena, &s->paths
+            in->files, in->file_count, s->roots, arena, &s->paths
         );
-        string_array_free(prefixes);
         if (err) {
             err = error_wrap(err, "Failed to build path filter");
             goto fail;
         }
     }
 
-    /* 5. Compile excludes into a ruleset borrowed from the caller's arena. */
+    /* 6. Compile excludes into a ruleset borrowed from the caller's arena. */
     err = compile_excludes(
         in->exclude_patterns, in->exclude_count, arena, &s->excludes_ruleset
     );
@@ -195,7 +208,8 @@ void scope_free(scope_t *s) {
     if (!s) return;
     string_array_free(s->enabled);
     string_array_free(s->filter);
-    /* excludes_ruleset is arena-borrowed — released with the caller's arena. */
+    /* excludes_ruleset and roots are arena-borrowed — released with the
+     * caller's arena, not here. */
     path_filter_free(s->paths);
     /* s->active is a borrow; do not free. */
     free(s);
@@ -215,6 +229,10 @@ const string_array_t *scope_active(const scope_t *s) {
 
 const path_filter_t *scope_paths(const scope_t *s) {
     return s->paths;
+}
+
+const path_roots_t *scope_roots(const scope_t *s) {
+    return s->roots;
 }
 
 /* -------------------------------------------------------------------- */

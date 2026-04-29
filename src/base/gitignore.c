@@ -33,6 +33,7 @@
 
 #include "base/gitignore.h"
 
+#include <stdlib.h>
 #include <string.h>
 
 #include "base/arena.h"
@@ -42,7 +43,7 @@
 /* Size limits — match the existing core/ignore.c conventions. */
 #define MAX_PATTERN_LENGTH 4096
 #define MAX_RULES          10000
-#define PATH_BUFFER_SIZE   4096
+#define PATH_STACK_BUFFER  4096
 #define INITIAL_CAPACITY   16
 
 /* Rule flags — module-private. */
@@ -479,18 +480,31 @@ void gitignore_eval(
     /* Copy to a mutable, NUL-terminated buffer. Walk-up shortens the
      * logical path in place by inserting NUL at each `/`; strrchr and
      * wildmatch both read until NUL, so no explicit length tracking
-     * is needed. Paths longer than the buffer leave out->decided=false. */
-    char buf[PATH_BUFFER_SIZE];
+     * is needed.
+     *
+     * Buffer strategy: stack covers the common case; longer paths
+     * borrow heap so the matcher never silently degrades. A heap-alloc
+     * failure on a single path-sized block means the system is in dire
+     * straits; we keep the never-fails contract by leaving
+     * out->decided = false (caller treats as not-ignored). */
+    char stack_buf[PATH_STACK_BUFFER];
+    char *buf = stack_buf;
+    char *heap = NULL;
     size_t n = strlen(path);
-    if (n >= sizeof(buf))
-        return;
+
+    if (n >= sizeof(stack_buf)) {
+        heap = malloc(n + 1);
+        if (!heap)
+            return;
+        buf = heap;
+    }
     memcpy(buf, path, n + 1);
 
     char *p = buf;
     while (*p == '/')
         p++;
     if (*p == '\0')
-        return;
+        goto cleanup;
 
     /* A trailing slash conveys "directory"; strip and flip is_dir so
      * callers may pass either form. */
@@ -500,7 +514,7 @@ void gitignore_eval(
         is_dir = true;
     }
     if (len == 0)
-        return;
+        goto cleanup;
 
     while (true) {
         char *slash = strrchr(p, '/');
@@ -526,7 +540,7 @@ void gitignore_eval(
                 out->ignored = !(r->flags & GITIGNORE_FLAG_NEGATIVE);
                 out->origin = r->origin;
                 out->rule_index = i - 1;
-                return;
+                goto cleanup;
             }
         }
 
@@ -538,6 +552,9 @@ void gitignore_eval(
         *slash = '\0';
         is_dir = true;
     }
+
+cleanup:
+    free(heap);
 }
 
 bool gitignore_is_ignored(

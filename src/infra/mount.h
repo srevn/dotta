@@ -157,12 +157,17 @@ typedef struct {
 /**
  * Build a mount table from a flat array of mounts.
  *
+ * Each mount in the table is a symlink-aware equivalence class:
+ * internally it caches both the user-supplied target and its
+ * realpath-canonical sibling (when distinct), so forward
+ * classification matches a path against either surface form. Backward
+ * resolution (mount_resolve) returns the raw target the user typed.
+ *
  * The table is augmented internally with:
- *   - A HOME mount whose target is $HOME (raw form captured from
- *     getenv at build time).
- *   - A second HOME mount whose target is the realpath-canonical $HOME,
- *     when distinct from the raw form. Catches symlinks like macOS's
- *     /tmp -> /private/tmp on the classification side.
+ *   - A HOME mount whose target is $HOME (captured from getenv at
+ *     build time, expanded into its raw + canonical pair). Catches
+ *     symlinks like macOS's /tmp -> /private/tmp on the classification
+ *     side without leaking a separate row into the table.
  *   - A ROOT mount whose target is the empty string (universal
  *     fallback for absolute paths that match no other mount).
  *
@@ -200,8 +205,10 @@ error_t *mount_table_build(
  * Classify an absolute filesystem path into a storage path.
  *
  * Picks the longest-matching mount target (tightest container wins).
- * Ties on equal target length are broken by declaration order
- * (stable, earlier wins). Returns ERR_INVALID_ARG when the path
+ * Each entry contributes up to two surface forms (raw + realpath-
+ * canonical); a path matching either form is considered to belong to
+ * that mount. Ties on equal target length are broken by declaration
+ * order (stable, earlier wins). Returns ERR_INVALID_ARG when the path
  * exactly equals a mount target — there is no storage representation
  * for the mount root itself.
  *

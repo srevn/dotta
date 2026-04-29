@@ -254,21 +254,26 @@ static const char *mount_kind_display(mount_kind_t kind) {
 }
 
 /**
- * One mount entry. Both views (forward classify, backward resolve) walk
- * this same array.
+ * One mount entry — a symlink-aware equivalence class for one mount.
+ * Both views (forward classify, backward resolve) walk this same array.
  *
- * - target: filesystem prefix to match against during classification.
- *           "" for the universal root sentinel.
+ * - target_raw: filesystem prefix as supplied by the caller (the form
+ *           the user typed; "" for the universal root sentinel).
+ * - target_canonical: realpath(target_raw); NULL when same as raw or
+ *           when realpath() failed at build time. The two forms are
+ *           treated as equivalent for forward classification — a path
+ *           matching either surface form belongs to this mount.
  * - kind:   storage label class.
  * - profile: NULL for static mounts (HOME, ROOT). For CUSTOM mounts,
  *           the owning profile name; participates in profile-keyed
  *           backward resolution.
  *
- * Borrowed pointers — `target` and `profile` outlive the table because
- * the arena holds them (or the caller does, if explicitly noted).
+ * Borrowed pointers — every string outlives the table because the
+ * arena holds them.
  */
 typedef struct {
-    const char *target;
+    const char *target_raw;
+    const char *target_canonical;
     mount_kind_t kind;
     const char *profile;
 } mount_entry_t;
@@ -280,54 +285,77 @@ struct mount_table {
 };
 
 /**
- * Resolve $HOME and its canonical form into the arena.
+ * Resolve a path into its raw + realpath-canonical surface forms,
+ * arena-allocating both.
  *
- * On success, *out_home is non-NULL and arena-allocated. *out_canonical
+ * On success, *out_raw is non-NULL and arena-allocated. *out_canonical
  * is set only when realpath(3) succeeds AND the canonical form differs
- * from the raw value.
+ * from the raw value — leaving it NULL when same lets the classifier
+ * short-circuit a redundant second-form check.
+ *
+ * Best-effort on canonicalization: realpath() failure (e.g., target
+ * deleted since validation, EACCES) is non-fatal — *out_canonical
+ * stays NULL and the caller still classifies correctly against the
+ * raw form alone.
+ *
+ * The raw input is only borrowed — the function arena-copies it before
+ * returning, so the caller may free `raw_path` after the call.
+ */
+static error_t *resolve_path_pair(
+    arena_t *arena,
+    const char *raw_path,
+    const char **out_raw,
+    const char **out_canonical
+) {
+    *out_raw = NULL;
+    *out_canonical = NULL;
+
+    const char *arena_raw = arena_strdup(arena, raw_path);
+    if (!arena_raw) {
+        return ERROR(ERR_MEMORY, "Failed to copy path into arena");
+    }
+
+    char *raw_canonical = NULL;
+    error_t *canon_err = fs_canonicalize_path(arena_raw, &raw_canonical);
+    if (canon_err) {
+        error_free(canon_err);
+        *out_raw = arena_raw;
+        return NULL;
+    }
+
+    if (strcmp(raw_canonical, arena_raw) != 0) {
+        const char *arena_canonical = arena_strdup(arena, raw_canonical);
+        if (!arena_canonical) {
+            free(raw_canonical);
+            return ERROR(ERR_MEMORY, "Failed to copy canonical path into arena");
+        }
+        *out_canonical = arena_canonical;
+    }
+    free(raw_canonical);
+
+    *out_raw = arena_raw;
+
+    return NULL;
+}
+
+/**
+ * HOME-specific wrapper around resolve_path_pair: fetches $HOME via
+ * fs_get_home and delegates the dual-form materialization. Catches the
+ * canonical HOME at build time so symlinked HOMEs (macOS's
+ * /tmp -> /private/tmp, NFS bind mounts, etc.) classify correctly.
  */
 static error_t *resolve_home_pair(
     arena_t *arena,
     const char **out_home,
     const char **out_canonical
 ) {
-    *out_home = NULL;
-    *out_canonical = NULL;
-
     char *raw_home = NULL;
     error_t *err = fs_get_home(&raw_home);
     if (err) return err;
 
-    const char *arena_home = arena_strdup(arena, raw_home);
+    err = resolve_path_pair(arena, raw_home, out_home, out_canonical);
     free(raw_home);
-    if (!arena_home) {
-        return ERROR(ERR_MEMORY, "Failed to copy HOME into arena");
-    }
-
-    /* Canonicalize HOME to handle symlinks (e.g., macOS /tmp -> /private/tmp).
-     * Best-effort: on failure, the raw HOME alone is the only candidate
-     * and the caller still classifies correctly. */
-    char *raw_canonical = NULL;
-    error_t *canon_err = fs_canonicalize_path(arena_home, &raw_canonical);
-    if (canon_err) {
-        error_free(canon_err);
-        *out_home = arena_home;
-        return NULL;
-    }
-
-    if (strcmp(raw_canonical, arena_home) != 0) {
-        const char *arena_canonical = arena_strdup(arena, raw_canonical);
-        if (!arena_canonical) {
-            free(raw_canonical);
-            return ERROR(ERR_MEMORY, "Failed to copy canonical HOME into arena");
-        }
-        *out_canonical = arena_canonical;
-    }
-    free(raw_canonical);
-
-    *out_home = arena_home;
-
-    return NULL;
+    return err;
 }
 
 /**
@@ -386,8 +414,10 @@ error_t *mount_table_build(
         if (mounts[i].target && mounts[i].target[0] != '\0') custom_count++;
     }
 
-    /* Slot reserve: customs + HOME + canonical HOME (when distinct) + ROOT. */
-    size_t cap = custom_count + 1U + (home_canonical ? 1U : 0U) + 1U;
+    /* Slot reserve: one entry per custom + HOME + ROOT sentinel. Each
+     * entry now carries its own raw/canonical pair internally — no
+     * separate row for canonical HOME. */
+    size_t cap = custom_count + 1U + 1U;
 
     mount_table_t *table = arena_calloc(arena, 1, sizeof(*table));
     if (!table) {
@@ -400,25 +430,38 @@ error_t *mount_table_build(
     }
 
     /* Populate: customs first (input order — stable tiebreak in the
-     * classifier), then HOME variants, then ROOT sentinel. */
+     * classifier), then HOME, then ROOT sentinel. Each custom resolves
+     * to its own (raw, canonical) pair so symlinked --target arguments
+     * (e.g., /tmp/jail when /tmp -> /private/tmp) classify both the raw
+     * and resolved surface forms. */
     size_t n = 0;
     for (size_t i = 0; i < mount_count; i++) {
-        const char *target = mounts[i].target;
-        if (!target || target[0] == '\0') continue;
+        const char *raw = mounts[i].target;
+        if (!raw || raw[0] == '\0') continue;
+
+        const char *target_raw = NULL;
+        const char *target_canonical = NULL;
+        err = resolve_path_pair(arena, raw, &target_raw, &target_canonical);
+        if (err) return err;
+
         entries[n++] = (mount_entry_t){
-            .target = target, .kind = MOUNT_CUSTOM, .profile = mounts[i].profile,
+            .target_raw = target_raw,
+            .target_canonical = target_canonical,
+            .kind = MOUNT_CUSTOM,
+            .profile = mounts[i].profile,
         };
     }
     entries[n++] = (mount_entry_t){
-        .target = home, .kind = MOUNT_HOME, .profile = NULL,
+        .target_raw = home,
+        .target_canonical = home_canonical,
+        .kind = MOUNT_HOME,
+        .profile = NULL,
     };
-    if (home_canonical) {
-        entries[n++] = (mount_entry_t){
-            .target = home_canonical, .kind = MOUNT_HOME, .profile = NULL,
-        };
-    }
     entries[n++] = (mount_entry_t){
-        .target = "", .kind = MOUNT_ROOT, .profile = NULL,
+        .target_raw = "",
+        .target_canonical = NULL,
+        .kind = MOUNT_ROOT,
+        .profile = NULL,
     };
 
     table->entries = entries;
@@ -428,6 +471,50 @@ error_t *mount_table_build(
     *out = table;
 
     return NULL;
+}
+
+/**
+ * Pick the longest matching surface form within one mount entry.
+ *
+ * Each entry contributes up to two forms (raw, canonical). When both
+ * match the same `fs_path`, the longer surface form wins as the
+ * intra-entry representative; the outer scan in mount_classify then
+ * picks the longest match across all entries. Stable tiebreak: the
+ * raw form is tried first and wins ties on equal length.
+ *
+ * Returns true on any match, with `*out_relative` and `*out_target_len`
+ * populated for the winning surface form. Returns false (and leaves
+ * the outputs untouched) when neither form matches.
+ */
+static bool entry_match_longest(
+    const mount_entry_t *entry,
+    const char *fs_path,
+    const char **out_relative,
+    size_t *out_target_len
+) {
+    const char *forms[2] = { entry->target_raw, entry->target_canonical };
+
+    bool any = false;
+    size_t best_len = 0;
+    const char *best_relative = NULL;
+
+    for (int f = 0; f < 2; f++) {
+        if (!forms[f]) continue;
+        const char *relative = relative_after_target(fs_path, forms[f]);
+        if (!relative) continue;
+
+        size_t len = strlen(forms[f]);
+        if (!any || len > best_len) {
+            any = true;
+            best_relative = relative;
+            best_len = len;
+        }
+    }
+
+    if (!any) return false;
+    *out_relative = best_relative;
+    *out_target_len = best_len;
+    return true;
 }
 
 error_t *mount_classify(
@@ -440,18 +527,22 @@ error_t *mount_classify(
     CHECK_NULL(fs_path);
     CHECK_NULL(out_storage);
 
-    /* Tightest container wins: pick the longest-matching target. Ties
-     * on equal length keep the earlier-declared mount (stable). */
+    /* Tightest container wins: longest matching surface form across
+     * all entries. Each entry contributes up to two forms (raw and
+     * realpath-canonical); intra-entry tiebreak picks the longer
+     * surface form, inter-entry tiebreak keeps the earlier-declared
+     * mount (stable). */
     const mount_entry_t *winner = NULL;
     const char *winner_relative = NULL;
     size_t winner_len = 0;
 
     for (size_t i = 0; i < table->entry_count; i++) {
         const mount_entry_t *m = &table->entries[i];
-        const char *relative = relative_after_target(fs_path, m->target);
-        if (!relative) continue;
 
-        size_t len = strlen(m->target);
+        const char *relative = NULL;
+        size_t len = 0;
+        if (!entry_match_longest(m, fs_path, &relative, &len)) continue;
+
         if (!winner || len > winner_len) {
             winner = m;
             winner_relative = relative;
@@ -499,8 +590,10 @@ error_t *mount_classify(
  * filesystem conversion is the only documented use, and external callers
  * already go through mount_resolve / mount_classify for that.
  *
- * Returns NULL when `table` is NULL, `profile` is NULL, or no CUSTOM mount
- * for `profile` exists. The returned pointer borrows into the arena.
+ * Returns the raw (user-supplied) form: backward resolution should
+ * surface the path the user typed, not its realpath-resolved sibling.
+ * NULL when `table` is NULL, `profile` is NULL, or no CUSTOM mount for
+ * `profile` exists. The returned pointer borrows into the arena.
  */
 static const char *mount_target_for_profile(
     const mount_table_t *table,
@@ -512,7 +605,7 @@ static const char *mount_target_for_profile(
         const mount_entry_t *m = &table->entries[i];
         if (m->kind != MOUNT_CUSTOM) continue;
         if (!m->profile) continue;
-        if (strcmp(m->profile, profile) == 0) return m->target;
+        if (strcmp(m->profile, profile) == 0) return m->target_raw;
     }
 
     return NULL;
@@ -719,9 +812,10 @@ error_t *mount_resolve_input(
     }
 
     /* Normalize ., .., and consecutive slashes before classification.
-     * For relative paths (Case 3), getcwd() returns canonical paths, but
-     * $HOME may contain symlinks — the table's canonical-HOME mount is
-     * what makes the boundary check land. */
+     * Each mount entry carries up to two surface forms (raw and
+     * realpath-canonical), so canonical inputs (e.g., from getcwd
+     * returning a symlink-resolved CWD on Case 3) classify correctly
+     * against raw-stored targets without input canonicalization here. */
     err = fs_normalize_path(absolute, &normalized);
     if (err) {
         err = error_wrap(err, "Failed to normalize path '%s'", input);

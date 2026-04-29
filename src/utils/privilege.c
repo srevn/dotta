@@ -27,7 +27,78 @@
 #include "base/error.h"
 #include "base/terminal.h"
 #include "infra/mount.h"
-#include "infra/path.h"
+#include "sys/filesystem.h"
+
+/**
+ * Boundary-aware ancestor check with symlink awareness.
+ *
+ * Returns true when `absolute_path` is under (or equal to) `reference_dir`,
+ * comparing both raw and canonical (realpath-resolved) forms of each side.
+ * A single match across the (raw, canonical) x (raw, canonical) cross
+ * product is sufficient, catching symlinks on either side (e.g.,
+ * macOS's /tmp -> /private/tmp, or a $HOME that traverses a bind mount).
+ *
+ * Boundary rule (component-aware):
+ *   /home/user matches /home/user and /home/user/.bashrc
+ *   /home/user does NOT match /home/username (false-prefix guard)
+ *
+ * Trailing slashes on `reference_dir` are normalised internally so that
+ * "/home/user/" and "/home/user" behave identically.
+ *
+ * Privilege-internal: the only callers are the HOME-boundary checks below.
+ * Generic-looking but specifically tuned for "is this filesystem path under
+ * the user's home / the deployment target?" — moving it elsewhere when no
+ * second consumer exists would be premature indirection.
+ */
+static bool is_under(
+    const char *absolute_path,
+    const char *reference_dir
+) {
+    if (!absolute_path || !reference_dir) return false;
+
+    /* Best-effort canonicalize both sides; either may fail (e.g., the
+     * path does not exist on this system, or symlink resolution hits
+     * EACCES). On failure, the raw form is the only comparison
+     * candidate for that side. */
+    char *path_canonical = NULL;
+    char *ref_canonical = NULL;
+
+    error_t *p_err = fs_canonicalize_path(absolute_path, &path_canonical);
+    if (p_err) error_free(p_err);
+
+    error_t *r_err = fs_canonicalize_path(reference_dir, &ref_canonical);
+    if (r_err) error_free(r_err);
+
+    const char *paths[] = { absolute_path, path_canonical };
+    const char *refs[] = { reference_dir, ref_canonical };
+
+    bool under = false;
+    for (int p = 0; p < 2 && !under; p++) {
+        if (!paths[p]) continue;
+        for (int r = 0; r < 2 && !under; r++) {
+            if (!refs[r]) continue;
+
+            /* Trim trailing slashes from the reference for boundary
+             * parity. getenv("HOME"), pw_dir, and user-supplied targets
+             * may carry a stray trailing slash; "/home/user/" and
+             * "/home/user" must classify the same path identically. */
+            size_t ref_len = strlen(refs[r]);
+            while (ref_len > 1 && refs[r][ref_len - 1] == '/') {
+                ref_len--;
+            }
+            if (strncmp(paths[p], refs[r], ref_len) != 0) continue;
+
+            /* Component boundary: next char must be '/' or '\0'.
+             * Rejects /home/username when reference is /home/user. */
+            char boundary = paths[p][ref_len];
+            if (boundary == '/' || boundary == '\0') under = true;
+        }
+    }
+
+    free(path_canonical);
+    free(ref_canonical);
+    return under;
+}
 
 /**
  * Check if running with elevated privileges
@@ -53,12 +124,13 @@ bool privilege_is_sudo(void) {
  * Check if a storage path requires root privileges
  */
 bool privilege_path_requires_root(const char *storage_path) {
-    if (!mount_is_storage_path(storage_path)) {
+    mount_kind_t kind;
+    if (!mount_kind_extract(storage_path, &kind)) {
         return false;
     }
 
     /* root/ and custom/ may carry ownership metadata; home/ never does. */
-    return mount_kind_of(storage_path) != MOUNT_HOME;
+    return kind != MOUNT_HOME;
 }
 
 /**
@@ -82,25 +154,25 @@ bool privilege_paths_require_root(const char **storage_paths, size_t count) {
 /**
  * Check if a deployment target requires elevated privileges
  *
- * Returns true when the prefix is NOT under $HOME — files under it carry
+ * Returns true when the target is NOT under $HOME — files under it carry
  * ownership metadata that requires root to read on capture. The
- * boundary-aware comparison (path_is_under) cross-checks raw and
- * canonical forms of both sides, so symlinks (e.g., macOS
- * /tmp -> /private/tmp) do not produce false negatives.
+ * boundary-aware comparison (is_under) cross-checks raw and canonical
+ * forms of both sides, so symlinks (e.g., macOS /tmp -> /private/tmp)
+ * do not produce false negatives.
  */
 bool privilege_target_needs_elevation(const char *target) {
     if (!target || target[0] == '\0') {
-        return true;  /* No prefix → conservative default */
+        return true;  /* No target → conservative default */
     }
 
     char *home = NULL;
-    error_t *err = path_get_home(&home);
+    error_t *err = fs_get_home(&home);
     if (err) {
         error_free(err);
         return true;  /* Can't determine HOME → conservative default */
     }
 
-    bool under_home = path_is_under(target, home);
+    bool under_home = is_under(target, home);
     free(home);
 
     return !under_home;
@@ -136,7 +208,7 @@ bool privilege_path_is_under_home(const char *filesystem_path) {
         return false;
     }
 
-    return path_is_under(filesystem_path, pw->pw_dir);
+    return is_under(filesystem_path, pw->pw_dir);
 }
 
 /**
@@ -145,18 +217,19 @@ bool privilege_path_is_under_home(const char *filesystem_path) {
  * For custom/ paths, checks whether the resolved filesystem_path is under $HOME.
  * This works because filesystem_path = target + /relative; the
  * boundary-aware ancestor check on the full path gives the same result as on
- * the prefix alone (no traversal allowed in custom paths, enforced by
+ * the target alone (no traversal allowed in custom paths, enforced by
  * mount_validate_target).
  */
 bool privilege_needs_elevation(
     const char *storage_path,
     const char *filesystem_path
 ) {
-    if (!mount_is_storage_path(storage_path)) {
+    mount_kind_t kind;
+    if (!mount_kind_extract(storage_path, &kind)) {
         return false;
     }
 
-    switch (mount_kind_of(storage_path)) {
+    switch (kind) {
         case MOUNT_ROOT:   return true;
         case MOUNT_CUSTOM: return privilege_target_needs_elevation(filesystem_path);
         case MOUNT_HOME:   return false;
@@ -362,10 +435,10 @@ static error_t *reexec_with_sudo(int argc, char **argv) {
  * Ensure proper privileges for an operation
  *
  * Main entry point for privilege management. Call this BEFORE starting
- * any operation that might need elevated privileges (root/ or custom/ prefix files).
+ * any operation that might need elevated privileges (root/ or custom/ files).
  *
  * WORKFLOW:
- * 1. Filter paths to find privileged prefixes (root/, custom/)
+ * 1. Filter paths to find privileged labels (root/, custom/)
  * 2. Check if already elevated - if yes, proceed
  * 3. Display requirement to user
  * 4. If interactive: prompt for confirmation
@@ -391,14 +464,10 @@ error_t *privilege_ensure_for_operation(
 
     /* Contract: callers pre-filter with privilege_needs_elevation; an empty
      * array means no path needs root. */
-    if (count == 0) {
-        return NULL;
-    }
+    if (count == 0) return NULL;
 
     /* Already elevated — we have what we need. */
-    if (privilege_is_elevated()) {
-        return NULL;
-    }
+    if (privilege_is_elevated()) return NULL;
 
     /* Display requirement (always shown, even in non-interactive mode) */
     display_privilege_requirement(operation_name, storage_paths, count, out);

@@ -24,9 +24,9 @@
 #include "core/manifest.h"
 #include "core/profiles.h"
 #include "core/state.h"
-#include "infra/path.h"
 #include "infra/salt.h"
 #include "sys/bootstrap.h"
+#include "sys/filesystem.h"
 #include "sys/gitops.h"
 #include "sys/transfer.h"
 #include "sys/upstream.h"
@@ -364,7 +364,7 @@ error_t *cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
         if (config->repo_dir) {
             /* Use default repo location from config */
             char *expanded_path = NULL;
-            err = path_expand_home(config->repo_dir, &expanded_path);
+            err = fs_expand_tilde(config->repo_dir, &expanded_path);
             if (err) {
                 final_err = error_wrap(
                     err, "Failed to expand default repo path"

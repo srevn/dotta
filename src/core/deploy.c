@@ -240,17 +240,20 @@ static error_t *resolve_deployment_ownership(
     *out_uid = (uid_t) -1;
     *out_gid = (gid_t) -1;
 
-    /* Determine prefix type */
-    bool is_home_prefix = mount_kind_of(storage_path) == MOUNT_HOME;
+    /* Determine label kind. Storage paths reaching here are validated
+     * (manifest-derived), so mount_kind_extract is always expected to
+     * succeed; treat a false return as "not home/" to fail closed. */
+    mount_kind_t kind;
+    bool is_home_label = mount_kind_extract(storage_path, &kind) && kind == MOUNT_HOME;
     bool requires_root_privileges = privilege_path_requires_root(storage_path);
 
     /* Case 1: File deploys to user's home when running as root (sudo handling)
      *
      * Primary: storage_path starts with "home/" (always deploys to $HOME)
      * Fallback: filesystem_path is under actual user's home (catches custom/
-     * prefix files reclassified by --target that still land under $HOME) */
+     * label files reclassified by --target that still land under $HOME) */
     if (privilege_is_elevated()) {
-        bool deploys_to_home = is_home_prefix;
+        bool deploys_to_home = is_home_label;
 
         if (!deploys_to_home && filesystem_path) {
             deploys_to_home = privilege_path_is_under_home(filesystem_path);

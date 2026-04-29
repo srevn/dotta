@@ -15,12 +15,7 @@
 #include "base/arena.h"
 #include "base/error.h"
 #include "base/string.h"
-#include "infra/path.h"
 #include "sys/filesystem.h"
-
-/* ---------------------------------------------------------------- */
-/* Storage-path rules                                                */
-/* ---------------------------------------------------------------- */
 
 error_t *mount_validate_storage(const char *storage_path) {
     CHECK_NULL(storage_path);
@@ -89,6 +84,7 @@ error_t *mount_validate_storage(const char *storage_path) {
         component = strtok_r(NULL, "/", &saveptr);
     }
     free(path_copy);
+
     return NULL;
 }
 
@@ -99,21 +95,38 @@ const char *mount_strip_label(const char *storage_path) {
         str_starts_with(storage_path, "root/")) {
         return storage_path + 5;
     }
+
     if (str_starts_with(storage_path, "custom/")) {
         return storage_path + 7;
     }
+
     return storage_path;
 }
 
-mount_kind_t mount_kind_of(const char *storage_path) {
-    if (!storage_path) return MOUNT_ROOT;
-    if (str_starts_with(storage_path, "home/")) return MOUNT_HOME;
-    if (str_starts_with(storage_path, "custom/")) return MOUNT_CUSTOM;
-    return MOUNT_ROOT;
+bool mount_kind_extract(const char *storage_path, mount_kind_t *out_kind) {
+    if (!storage_path || !out_kind) return false;
+
+    if (str_starts_with(storage_path, "home/")) {
+        *out_kind = MOUNT_HOME;
+        return true;
+    }
+
+    if (str_starts_with(storage_path, "root/")) {
+        *out_kind = MOUNT_ROOT;
+        return true;
+    }
+
+    if (str_starts_with(storage_path, "custom/")) {
+        *out_kind = MOUNT_CUSTOM;
+        return true;
+    }
+
+    return false;
 }
 
 bool mount_is_storage_path(const char *path) {
     if (!path) return false;
+
     return str_starts_with(path, "home/") ||
            str_starts_with(path, "root/") ||
            str_starts_with(path, "custom/");
@@ -144,7 +157,8 @@ error_t *mount_validate_target(const char *target) {
     /* 3. No path traversal or redundant components */
     if (strstr(target, "//") != NULL) {
         return ERROR(
-            ERR_INVALID_ARG, "Mount target contains '//': '%s'", target
+            ERR_INVALID_ARG, "Mount target contains '//': '%s'",
+            target
         );
     }
 
@@ -162,7 +176,8 @@ error_t *mount_validate_target(const char *target) {
             return ERROR(
                 ERR_INVALID_ARG,
                 "Mount target contains '%s' component: '%s'\n"
-                "Use canonical paths without '.', '..', or '//'", bad, target
+                "Use canonical paths without '.', '..', or '//'",
+                bad, target
             );
         }
         comp = strtok_r(NULL, "/", &saveptr);
@@ -207,16 +222,14 @@ error_t *mount_validate_target(const char *target) {
     if (!S_ISDIR(st.st_mode)) {
         free(resolved);
         return ERROR(
-            ERR_INVALID_ARG, "Mount target must be a directory: '%s'", target
+            ERR_INVALID_ARG, "Mount target must be a directory: '%s'",
+            target
         );
     }
     free(resolved);
+
     return NULL;
 }
-
-/* ---------------------------------------------------------------- */
-/* Mount-table internals                                             */
-/* ---------------------------------------------------------------- */
 
 /**
  * Storage label and human-readable display name for a kind.
@@ -261,12 +274,9 @@ typedef struct {
 } mount_entry_t;
 
 struct mount_table {
-    mount_entry_t *mounts;
-    size_t mount_count;
-    /* Cached raw $HOME for fast forward resolution of home/X. The
-     * mounts array also holds it (as a HOME entry's target), but the
-     * cache lets us skip a scan on every backward resolution. */
-    const char *home;
+    mount_entry_t *entries;
+    size_t entry_count;
+    const char *home;         /* Cached raw $HOME */
 };
 
 /**
@@ -285,7 +295,7 @@ static error_t *resolve_home_pair(
     *out_canonical = NULL;
 
     char *raw_home = NULL;
-    error_t *err = path_get_home(&raw_home);
+    error_t *err = fs_get_home(&raw_home);
     if (err) return err;
 
     const char *arena_home = arena_strdup(arena, raw_home);
@@ -316,6 +326,7 @@ static error_t *resolve_home_pair(
     free(raw_canonical);
 
     *out_home = arena_home;
+
     return NULL;
 }
 
@@ -345,22 +356,19 @@ static const char *relative_after_target(
 
     const char *relative = absolute + target_len;
     if (*relative == '/') relative++;
+
     return relative;  /* "" on exact match, non-empty otherwise */
 }
 
-/* ---------------------------------------------------------------- */
-/* Mount-table API                                                   */
-/* ---------------------------------------------------------------- */
-
 error_t *mount_table_build(
     arena_t *arena,
-    const mount_decl_t *decls,
-    size_t decl_count,
+    const mount_t *mounts,
+    size_t mount_count,
     mount_table_t **out
 ) {
     CHECK_NULL(arena);
     CHECK_NULL(out);
-    if (decl_count > 0) CHECK_NULL(decls);
+    if (mount_count > 0) CHECK_NULL(mounts);
 
     *out = NULL;
 
@@ -369,13 +377,13 @@ error_t *mount_table_build(
     error_t *err = resolve_home_pair(arena, &home, &home_canonical);
     if (err) return err;
 
-    /* Count CUSTOM mounts: declarations with a non-empty target. Drop
-     * declarations with NULL/empty target — they were dead weight in
-     * the prior architecture (their profile-only entries served no
-     * observable purpose). */
+    /* Count CUSTOM mounts: input mounts with a non-empty target. Drop
+     * those with NULL/empty target — they were dead weight in the prior
+     * architecture (their profile-only entries served no observable
+     * purpose). */
     size_t custom_count = 0;
-    for (size_t i = 0; i < decl_count; i++) {
-        if (decls[i].target && decls[i].target[0] != '\0') custom_count++;
+    for (size_t i = 0; i < mount_count; i++) {
+        if (mounts[i].target && mounts[i].target[0] != '\0') custom_count++;
     }
 
     /* Slot reserve: customs + HOME + canonical HOME (when distinct) + ROOT. */
@@ -386,40 +394,39 @@ error_t *mount_table_build(
         return ERROR(ERR_MEMORY, "Failed to allocate mount table");
     }
 
-    mount_entry_t *mounts = arena_calloc(arena, cap, sizeof(*mounts));
-    if (!mounts) {
+    mount_entry_t *entries = arena_calloc(arena, cap, sizeof(*entries));
+    if (!entries) {
         return ERROR(ERR_MEMORY, "Failed to allocate mount entries");
     }
 
     /* Populate: customs first (input order — stable tiebreak in the
      * classifier), then HOME variants, then ROOT sentinel. */
     size_t n = 0;
-    for (size_t i = 0; i < decl_count; i++) {
-        const char *target = decls[i].target;
+    for (size_t i = 0; i < mount_count; i++) {
+        const char *target = mounts[i].target;
         if (!target || target[0] == '\0') continue;
-        mounts[n++] = (mount_entry_t){
-            .target = target,
-            .kind = MOUNT_CUSTOM,
-            .profile = decls[i].profile,
+        entries[n++] = (mount_entry_t){
+            .target = target, .kind = MOUNT_CUSTOM, .profile = mounts[i].profile,
         };
     }
-    mounts[n++] = (mount_entry_t){
+    entries[n++] = (mount_entry_t){
         .target = home, .kind = MOUNT_HOME, .profile = NULL,
     };
     if (home_canonical) {
-        mounts[n++] = (mount_entry_t){
+        entries[n++] = (mount_entry_t){
             .target = home_canonical, .kind = MOUNT_HOME, .profile = NULL,
         };
     }
-    mounts[n++] = (mount_entry_t){
+    entries[n++] = (mount_entry_t){
         .target = "", .kind = MOUNT_ROOT, .profile = NULL,
     };
 
-    table->mounts = mounts;
-    table->mount_count = n;
+    table->entries = entries;
+    table->entry_count = n;
     table->home = home;
 
     *out = table;
+
     return NULL;
 }
 
@@ -439,8 +446,8 @@ error_t *mount_classify(
     const char *winner_relative = NULL;
     size_t winner_len = 0;
 
-    for (size_t i = 0; i < table->mount_count; i++) {
-        const mount_entry_t *m = &table->mounts[i];
+    for (size_t i = 0; i < table->entry_count; i++) {
+        const mount_entry_t *m = &table->entries[i];
         const char *relative = relative_after_target(fs_path, m->target);
         if (!relative) continue;
 
@@ -467,32 +474,47 @@ error_t *mount_classify(
          * appear separately"; callers expecting a file get an error. */
         return ERROR(
             ERR_INVALID_ARG,
-            "Path equals the %s classification root; no storage-path representation",
+            "Path equals the %s classification root; "
+            "no storage-path representation",
             mount_kind_display(winner->kind)
         );
     }
 
-    char *result = str_format("%s/%s", mount_kind_label(winner->kind), winner_relative);
+    char *result = str_format(
+        "%s/%s", mount_kind_label(winner->kind), winner_relative
+    );
     if (!result) {
         return ERROR(ERR_MEMORY, "Failed to format storage path");
     }
     *out_storage = result;
     if (out_kind) *out_kind = winner->kind;
+
     return NULL;
 }
 
-const char *mount_target_for_profile(
+/**
+ * Look up the deployment target string for a profile's CUSTOM mount.
+ *
+ * Sole consumer is mount_resolve below — kept private since storage <->
+ * filesystem conversion is the only documented use, and external callers
+ * already go through mount_resolve / mount_classify for that.
+ *
+ * Returns NULL when `table` is NULL, `profile` is NULL, or no CUSTOM mount
+ * for `profile` exists. The returned pointer borrows into the arena.
+ */
+static const char *mount_target_for_profile(
     const mount_table_t *table,
     const char *profile
 ) {
     if (!table || !profile) return NULL;
 
-    for (size_t i = 0; i < table->mount_count; i++) {
-        const mount_entry_t *m = &table->mounts[i];
+    for (size_t i = 0; i < table->entry_count; i++) {
+        const mount_entry_t *m = &table->entries[i];
         if (m->kind != MOUNT_CUSTOM) continue;
         if (!m->profile) continue;
         if (strcmp(m->profile, profile) == 0) return m->target;
     }
+
     return NULL;
 }
 
@@ -555,10 +577,6 @@ error_t *mount_resolve(
     /* Unreachable: mount_validate_storage rejects anything else. */
     return ERROR(ERR_INTERNAL, "Invalid storage path label: '%s'", storage_path);
 }
-
-/* ---------------------------------------------------------------- */
-/* mount_resolve_input — flexible user input resolver                */
-/* ---------------------------------------------------------------- */
 
 /**
  * Resolve a relative path to absolute using CWD.
@@ -663,7 +681,7 @@ error_t *mount_resolve_input(
     /* Case 2: Filesystem path (absolute or tilde-prefixed) */
     if (input[0] == '/' || input[0] == '~') {
         if (input[0] == '~') {
-            err = path_expand_home(input, &expanded);
+            err = fs_expand_tilde(input, &expanded);
             if (err) {
                 err = error_wrap(err, "Failed to expand path '%s'", input);
                 goto cleanup;

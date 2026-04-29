@@ -361,6 +361,32 @@ error_t *fs_get_parent_dir(const char *path, char **out);
 error_t *fs_path_join(const char *base, const char *component, char **out);
 
 /**
+ * Get $HOME directory.
+ *
+ * Tries $HOME from getenv(3) first, falls back to passwd database.
+ *
+ * @param out HOME directory path (must not be NULL, caller must free)
+ * @return Error or NULL on success
+ */
+error_t *fs_get_home(char **out);
+
+/**
+ * Expand a leading tilde to $HOME.
+ *
+ * Examples:
+ *   ~/.bashrc -> /home/user/.bashrc
+ *   ~/foo/bar -> /home/user/foo/bar
+ *
+ * Inputs without a leading '~' are duplicated verbatim. ~user/foo
+ * (other-user expansion) is rejected.
+ *
+ * @param path Path with optional ~ prefix (must not be NULL)
+ * @param out  Expanded path (must not be NULL, caller must free)
+ * @return Error or NULL on success
+ */
+error_t *fs_expand_tilde(const char *path, char **out);
+
+/**
  * Check if path is writable
  *
  * @param path Path to check (must not be NULL)

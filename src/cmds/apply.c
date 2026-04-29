@@ -795,7 +795,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      *     per-iteration filter gates below.
      *
      * Scope_build resolves enabled (lenient on empty), resolves and
-     * validates the CLI filter, harvests custom prefixes from the active
+     * validates the CLI filter, harvests custom targets from the active
      * set, builds the path filter, and deep-copies excludes. */
     output_print(out, OUTPUT_VERBOSE, "Loading profiles...\n");
 

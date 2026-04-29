@@ -13,7 +13,6 @@
 #include "base/error.h"
 #include "base/gitignore.h"
 #include "crypto/kdf.h"
-#include "infra/path.h"
 #include "sys/filesystem.h"
 
 /* Default values */
@@ -310,12 +309,12 @@ error_t *config_get_path(char **out) {
     /* Check environment variable */
     const char *env_path = getenv("DOTTA_CONFIG_FILE");
     if (env_path && env_path[0] != '\0') {
-        return path_expand_home(env_path, out);
+        return fs_expand_tilde(env_path, out);
     }
 
     /* Use default location */
     char *config_dir = NULL;
-    error_t *err = path_expand_home(DEFAULT_CONFIG_DIR, &config_dir);
+    error_t *err = fs_expand_tilde(DEFAULT_CONFIG_DIR, &config_dir);
     if (err) {
         return err;
     }
@@ -875,14 +874,14 @@ error_t *config_get_repo_dir(const config_t *config, char **out) {
     /* Priority 1: Environment variable */
     const char *env_dir = getenv("DOTTA_REPO_DIR");
     if (env_dir && env_dir[0] != '\0') {
-        return path_expand_home(env_dir, out);
+        return fs_expand_tilde(env_dir, out);
     }
 
     /* Priority 2: Config file */
     if (config && config->repo_dir) {
-        return path_expand_home(config->repo_dir, out);
+        return fs_expand_tilde(config->repo_dir, out);
     }
 
     /* Priority 3: Default */
-    return path_expand_home(DEFAULT_REPO_DIR, out);
+    return fs_expand_tilde(DEFAULT_REPO_DIR, out);
 }

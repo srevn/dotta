@@ -75,8 +75,8 @@
 #include <stdbool.h>
 #include <types.h>
 
-#include "infra/pathspec.h"
 #include "infra/mount.h"
+#include "infra/pathspec.h"
 
 /* Forward decl: state_t's full API lives in core/state.h. scope only
  * passes the pointer through to profile_resolve_enabled and
@@ -125,7 +125,7 @@ typedef struct scope_inputs {
  *   3. Build the mount table from the ACTIVE set (filter if present,
  *      else enabled). Always built — empty active set still yields a
  *      usable handle (HOME + root sentinel only). Narrowing the filter
- *      narrows the topology for path classification.
+ *      narrows the mount table for path classification.
  *   4. If in->file_count > 0, build the pathspec consuming the mount table.
  *   5. If in->exclude_count > 0, compile patterns into a borrowed-arena
  *      gitignore ruleset.
@@ -199,7 +199,7 @@ const string_array_t *scope_active(const scope_t *s);
 const pathspec_t *scope_paths(const scope_t *s);
 
 /**
- * Per-machine deployment topology, built from the active set.
+ * Per-machine mount table, built from the active set.
  *
  * Always non-NULL after scope_build returns. When the active set is
  * empty or no profile has a deployment target, the handle still carries
@@ -208,7 +208,7 @@ const pathspec_t *scope_paths(const scope_t *s);
  *
  * Lifetime: arena-borrowed. The pointer is valid until the arena
  * passed to scope_build is destroyed; that arena MUST outlive scope_t.
- * scope_free does not release the roots — arena_destroy does.
+ * scope_free does not release the mount table — arena_destroy does.
  *
  * Borrow chain: target strings come from the state row cache.
  * The VWD-command structure (no enabled_profiles shape mutation between
@@ -216,7 +216,7 @@ const pathspec_t *scope_paths(const scope_t *s);
  * arena_strdup'd into the bindings, so they are decoupled from
  * scope_t's heap-owned filter/enabled arrays.
  */
-const mount_table_t *scope_roots(const scope_t *s);
+const mount_table_t *scope_mounts(const scope_t *s);
 
 /* -------------------------------------------------------------------- */
 /* Build-shape predicates                                               */

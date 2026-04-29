@@ -670,13 +670,13 @@ error_t *manifest_sync_diff(
  * metadata for their own purposes should pass it here to keep the
  * file_entry_t shape uniform across every manifest construction path.
  *
- * Custom-prefix resolution is delegated to `roots`. The handle MUST
+ * Custom-prefix resolution is delegated to `mounts`. The handle MUST
  * record a binding for `profile` (with target set) when the tree
  * contains custom/ entries; otherwise those entries are skipped during
  * the walk (via mount_resolve returning ERR_NOT_FOUND, which
  * the callback treats as "this profile has no target on this
- * machine — skip"). Trees without custom/ entries can pass any roots
- * handle, including one with no binding for `profile`.
+ * machine — skip"). Trees without custom/ entries can pass any mount
+ * table handle, including one with no binding for `profile`.
  *
  * Memory: per-entry strings (storage_path, filesystem_path, owner, group)
  * are allocated from the caller's arena. The arena must outlive the
@@ -684,7 +684,7 @@ error_t *manifest_sync_diff(
  *
  * @param tree Git tree to build manifest from (must not be NULL)
  * @param profile Profile name for entries (must not be NULL)
- * @param roots Per-machine deployment topology (must not be NULL)
+ * @param mounts Per-machine mount table (must not be NULL)
  * @param metadata Optional per-tree metadata to apply to entries (can be NULL)
  * @param arena Arena for per-entry string allocations (must not be NULL)
  * @param out Manifest (must not be NULL, caller must free with manifest_free)
@@ -693,7 +693,7 @@ error_t *manifest_sync_diff(
 error_t *manifest_build_from_tree(
     git_tree *tree,
     const char *profile,
-    const mount_table_t *roots,
+    const mount_table_t *mounts,
     const metadata_t *metadata,
     arena_t *arena,
     manifest_t **out

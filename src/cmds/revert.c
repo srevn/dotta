@@ -149,22 +149,15 @@ static error_t *discover_file(
     /* Initialize output flag */
     *found_in_history = false;
 
-    /* Build deployment topology over all enabled profiles for path
-     * resolution. Roots ride the command arena (released by dispatch).
-     * On build failure, fall back to an empty topology — preserves the
-     * existing graceful degradation. */
-    mount_table_t *roots = NULL;
-    error_t *roots_err = profile_build_mount_table(state, NULL, arena, &roots);
-    if (roots_err) {
-        error_free(roots_err);
-        error_t *fallback = mount_table_build(arena, NULL, 0, &roots);
-        if (fallback) {
-            return error_wrap(fallback, "Failed to build fallback path roots");
-        }
+    /* Build mount table over all enabled profiles for path resolution. */
+    mount_table_t *mounts = NULL;
+    error_t *mounts_err = profile_build_mount_table(state, NULL, arena, &mounts);
+    if (mounts_err) {
+        return error_wrap(mounts_err, "Failed to build mount table");
     }
 
     /* Resolve input path to storage format (file need not exist) */
-    err = mount_resolve_input(file_path, roots, &storage_path);
+    err = mount_resolve_input(file_path, mounts, &storage_path);
     if (err) {
         return err;
     }

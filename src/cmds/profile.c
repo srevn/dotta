@@ -675,7 +675,7 @@ cleanup:
  *
  * Four-phase flow (see manifest_apply_scope's ORDERING RULE):
  *   1. Gather & validate — resolve --all/args to a request set, then
- *      filter out already-enabled, missing, and custom-without-prefix
+ *      filter out already-enabled, missing, and custom-without-target
  *      profiles. Emits per-profile warnings; produces to_enable_validated.
  *   2. Commit scope to state — state_enable_profile per target (writes
  *      target + zero-OID sentinel), then manifest_persist_profile_head
@@ -821,7 +821,7 @@ static error_t *profile_enable(
     }
 
     /* Filter: already-enabled and missing-branch are non-fatal per-profile
-     * skips. Custom-without-prefix is fatal — the profile exists but the
+     * skips. Custom-without-target is fatal — the profile exists but the
      * user's input is incomplete, which is categorically different from
      * "not found". Treating it as a per-profile skip previously leaked
      * into the not_found tally and produced contradictory diagnostics.

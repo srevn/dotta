@@ -643,27 +643,18 @@ error_t *cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
     /* Handle SHOW_FILE mode */
     CHECK_NULL(opts->file_path);
 
-    /* Build deployment topology over all enabled profiles for path
-     * resolution. Roots ride the command arena (released by dispatch).
-     * On build failure, fall back to an empty topology — preserves the
-     * existing graceful degradation. */
-    mount_table_t *roots = NULL;
-    error_t *roots_err =
-        profile_build_mount_table(state, NULL, ctx->arena, &roots);
-    if (roots_err) {
-        error_free(roots_err);
-        error_t *fallback = mount_table_build(ctx->arena, NULL, 0, &roots);
-        if (fallback) {
-            err = error_wrap(fallback, "Failed to build fallback path roots");
-            goto cleanup;
-        }
+    /* Build mount table over all enabled profiles for path resolution. */
+    mount_table_t *mounts = NULL;
+    error_t *mounts_err = profile_build_mount_table(state, NULL, ctx->arena, &mounts);
+    if (mounts_err) {
+        err = error_wrap(mounts_err, "Failed to build mount table");
+        goto cleanup;
     }
 
     /* Resolve file path to storage format (common to both explicit and implicit paths).
      * On resolution failure, fall back to the original input — it may be a partial-match
      * pattern that mount_resolve_input rejects but the search below accepts. */
-    error_t *convert_err =
-        mount_resolve_input(opts->file_path, roots, &converted);
+    error_t *convert_err = mount_resolve_input(opts->file_path, mounts, &converted);
     const char *search_path = convert_err ? opts->file_path : converted;
     if (convert_err) error_free(convert_err);
 

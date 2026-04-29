@@ -986,12 +986,12 @@ static error_t *diff_commit_to_workspace(
 
     /* Step 5: Build manifest from historical tree.
      *
-     * Build a single-binding deployment topology for `profile` (which
+     * Build a single-binding mount table for `profile` (which
      * resolve_commit_in_profiles found on `scope_enabled`, NOT
-     * `scope_active` — so scope_roots can't be reused: it is keyed by
+     * `scope_active` — so scope_mounts can't be reused: it is keyed by
      * the active set and could omit `profile` whenever the user
      * narrowed with -p). A one-shot from `[profile]` peeks the row
-     * cache for that one entry and yields a roots that resolves
+     * cache for that one entry and yields a mount table that resolves
      * custom/ paths exactly as the historical tree expects.
      *
      * Per-entry strings (storage_path, filesystem_path, owner, group)
@@ -1003,15 +1003,15 @@ static error_t *diff_commit_to_workspace(
         .count    = 1,
         .capacity = 0,
     };
-    mount_table_t *roots = NULL;
-    err = profile_build_mount_table(state, &single_profile, arena, &roots);
+    mount_table_t *mounts = NULL;
+    err = profile_build_mount_table(state, &single_profile, arena, &mounts);
     if (err) {
-        err = error_wrap(err, "Failed to build deployment topology for commit");
+        err = error_wrap(err, "Failed to build mount table for commit");
         goto cleanup;
     }
 
     err = manifest_build_from_tree(
-        tree, profile, roots, metadata, arena, &manifest
+        tree, profile, mounts, metadata, arena, &manifest
     );
     if (err) {
         err = error_wrap(err, "Failed to build manifest from commit");

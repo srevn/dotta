@@ -789,7 +789,7 @@ static error_t *display_remote_status(
  * Extract paths needing elevation from manifest for privilege checking
  *
  * Uses privilege_needs_elevation() to filter paths, considering whether
- * each entry's custom prefix is under $HOME. Allocates array of storage
+ * each entry's custom target is under $HOME. Allocates array of storage
  * path pointers. Caller must free the array (but not the strings, which
  * are borrowed from manifest).
  *

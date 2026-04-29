@@ -12,6 +12,7 @@
 #include <ftw.h>
 #include <libgen.h>
 #include <limits.h>
+#include <pwd.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -1189,6 +1190,62 @@ error_t *fs_path_join(const char *base, const char *component, char **out) {
 
     *out = result;
     return NULL;
+}
+
+error_t *fs_get_home(char **out) {
+    CHECK_NULL(out);
+
+    /* Try $HOME environment variable first */
+    const char *home = getenv("HOME");
+    if (home && home[0] != '\0') {
+        *out = strdup(home);
+        if (!*out) {
+            return ERROR(ERR_MEMORY, "Failed to allocate HOME path");
+        }
+        return NULL;
+    }
+
+    /* Fall back to passwd database */
+    struct passwd *pw = getpwuid(getuid());
+    if (!pw || !pw->pw_dir) {
+        return ERROR(ERR_FS, "Unable to determine HOME directory");
+    }
+
+    *out = strdup(pw->pw_dir);
+    if (!*out) {
+        return ERROR(ERR_MEMORY, "Failed to allocate HOME path");
+    }
+    return NULL;
+}
+
+error_t *fs_expand_tilde(const char *path, char **out) {
+    CHECK_NULL(path);
+    CHECK_NULL(out);
+
+    if (path[0] != '~') {
+        *out = strdup(path);
+        if (!*out) {
+            return ERROR(ERR_MEMORY, "Failed to duplicate path");
+        }
+        return NULL;
+    }
+
+    char *home = NULL;
+    error_t *err = fs_get_home(&home);
+    if (err) return err;
+
+    const char *rest = path + 1;  /* skip ~ */
+    if (rest[0] == '/' || rest[0] == '\0') {
+        err = fs_path_join(home, rest[0] == '/' ? rest + 1 : "", out);
+    } else {
+        free(home);
+        return ERROR(
+            ERR_INVALID_ARG, "~user syntax not supported (got '%s')",
+            path
+        );
+    }
+    free(home);
+    return err;
 }
 
 bool fs_is_writable(const char *path) {

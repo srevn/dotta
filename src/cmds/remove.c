@@ -101,26 +101,16 @@ static error_t *resolve_paths_to_remove(
     string_array_t *profile_files = NULL;
     hashmap_t *profile_files_map = NULL;
 
-    /* Build a one-shot mount table for this profile. The declaration
-     * records the profile name + its target borrowed from the state row
-     * cache (stable for the duration of this call — no enabled_profiles
-     * mutation below). mount_table_build augments with HOME and the
-     * universal root sentinel internally; a NULL target contributes no
-     * mount — backward resolution then surfaces ERR_NOT_FOUND for any
-     * custom/ paths owned by this profile, which the caller treats as
-     * "profile has no target on this machine".
-     * The table rides the command arena (released by dispatch). */
-    mount_table_t *roots = NULL;
-    {
-        mount_decl_t binding = {
-            .profile = profile,
-            .target  = state ? state_peek_profile_target(state, profile) : NULL
-        };
-        err = mount_table_build(arena, &binding, 1, &roots);
-        if (err) {
-            err = error_wrap(err, "Failed to build path roots");
-            goto cleanup;
-        }
+    /* Build a one-shot mount table for this profile. */
+    mount_table_t *mounts = NULL;
+    mount_t mount = {
+        .profile = profile,
+        .target  = state ? state_peek_profile_target(state, profile) : NULL
+    };
+    err = mount_table_build(arena, &mount, 1, &mounts);
+    if (err) {
+        err = error_wrap(err, "Failed to build mount table");
+        goto cleanup;
     }
 
     /* Allocate arrays */
@@ -161,7 +151,7 @@ static error_t *resolve_paths_to_remove(
         char *canonical = NULL;
 
         /* Resolve input path to storage format (file need not exist) */
-        err = mount_resolve_input(input_path, roots, &storage_path);
+        err = mount_resolve_input(input_path, mounts, &storage_path);
         if (err) {
             if (!opts->force) {
                 goto cleanup;
@@ -180,7 +170,7 @@ static error_t *resolve_paths_to_remove(
          * ERR_NOT_FOUND when the profile has no --target on this machine
          * leaves canonical NULL, and the storage path serves as fallback). */
         error_t *convert_err =
-            mount_resolve(roots, profile, storage_path, &canonical);
+            mount_resolve(mounts, profile, storage_path, &canonical);
         if (convert_err) {
             error_free(convert_err);
             canonical = NULL;
@@ -231,7 +221,7 @@ static error_t *resolve_paths_to_remove(
                     /* Reconstruct filesystem path for this file */
                     char *file_fs_path = NULL;
                     err = mount_resolve(
-                        roots, profile, profile_file, &file_fs_path
+                        mounts, profile, profile_file, &file_fs_path
                     );
                     if (err) {
                         if (opts->verbose || !opts->force) {
@@ -1406,34 +1396,26 @@ static error_t *delete_profile_branch(
     }
 
     /* Convert storage paths to filesystem paths for hook consistency.
-     * The file removal path passes filesystem paths to hooks; do the same here.
-     *
-     * Build a single-binding deployment topology for the profile being
-     * deleted. The target borrow into the state row cache is valid:
-     * the state mutation that invalidates row-cache pointers
-     * (state_disable_profile) does not run until after this loop returns
-     * its heap-owned filesystem paths. Roots ride the command arena.
-     * On build failure (rare — OOM) skip the conversion entirely; the
-     * hook then receives storage paths as a graceful fallback. */
+     * The file removal path passes filesystem paths to hooks; do the same here. */
     if (files) {
-        mount_table_t *hook_roots = NULL;
-        mount_decl_t binding = {
+        mount_table_t *hook_mounts = NULL;
+        mount_t mount = {
             .profile = opts->profile,
             .target  = state_peek_profile_target(state, opts->profile)
         };
-        error_t *roots_err = mount_table_build(arena, &binding, 1, &hook_roots);
-        if (roots_err) {
-            error_free(roots_err);
-            hook_roots = NULL;
+        error_t *mounts_err = mount_table_build(arena, &mount, 1, &hook_mounts);
+        if (mounts_err) {
+            error_free(mounts_err);
+            hook_mounts = NULL;
         }
 
-        if (hook_roots) {
+        if (hook_mounts) {
             hook_fs_paths = string_array_new(0);
             if (hook_fs_paths) {
                 for (size_t i = 0; i < files->count; i++) {
                     char *fs_path = NULL;
                     error_t *conv_err = mount_resolve(
-                        hook_roots, opts->profile, files->items[i], &fs_path
+                        hook_mounts, opts->profile, files->items[i], &fs_path
                     );
                     if (!conv_err && fs_path) {
                         string_array_push(hook_fs_paths, fs_path);

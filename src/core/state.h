@@ -980,18 +980,18 @@ error_t *state_get_entries_by_profile(
  *
  * Converts portable metadata (storage_path) to state entry (both paths).
  * Derives filesystem_path from the storage_path by consulting the
- * deployment topology for `profile`'s target binding.
+ * mount table for `profile`'s target binding.
  *
  * The entry and its string fields are allocated from the caller's arena.
  *
  * Error semantics: returns ERR_NOT_FOUND when the storage path starts
- * with "custom/" but `profile` has no target in `roots` (clone
+ * with "custom/" but `profile` has no target in `mounts` (clone
  * before --target, or profile enabled without --target). The sole
  * caller (manifest_sync_directories) treats that as a silent skip.
  *
  * @param meta_item Metadata item (must not be NULL, must be DIRECTORY kind)
  * @param profile Source profile name (must not be NULL)
- * @param roots Per-machine deployment topology (must not be NULL)
+ * @param mounts Per-machine mount table (must not be NULL)
  * @param arena Arena for allocations (must not be NULL)
  * @param out State directory entry (must not be NULL, lifetime tied to arena)
  * @return Error or NULL on success
@@ -999,7 +999,7 @@ error_t *state_get_entries_by_profile(
 error_t *state_directory_entry_create_from_metadata(
     const metadata_item_t *meta_item,
     const char *profile,
-    const mount_table_t *roots,
+    const mount_table_t *mounts,
     arena_t *arena,
     state_directory_entry_t **out
 );

@@ -37,16 +37,12 @@
 #include <stddef.h>
 #include <types.h>
 
-/* ---------------------------------------------------------------- */
-/* Storage labels                                                   */
-/* ---------------------------------------------------------------- */
-
 /**
  * Mount classes — the three storage label namespaces.
  */
 typedef enum {
-    MOUNT_HOME,    /* home/...   -> $HOME/...                     */
-    MOUNT_ROOT,    /* root/...   -> /...                          */
+    MOUNT_HOME,    /* home/...   -> $HOME/... */
+    MOUNT_ROOT,    /* root/...   -> /... */
     MOUNT_CUSTOM,  /* custom/... -> per-profile deployment target */
 } mount_kind_t;
 
@@ -103,38 +99,36 @@ error_t *mount_validate_target(const char *target);
 const char *mount_strip_label(const char *storage_path);
 
 /**
- * Return the mount kind a storage path belongs to.
+ * Extract the mount kind from a storage path.
  *
  * Reads only the leading label; does not validate the rest of the path.
- * Returns MOUNT_ROOT when the input is NULL or starts with no recognized
- * label (graceful default — callers that need stricter checking should
- * call `mount_validate_storage` first).
+ * Returns true and writes `*out_kind` when the input is a storage path
+ * (starts with "home/", "root/", or "custom/"). Returns false and leaves
+ * `*out_kind` unmodified for NULL, empty, or non-storage input — callers
+ * that previously paired `mount_is_storage_path` with `mount_kind_of` can
+ * collapse to a single check.
+ *
+ * No silent default: a malformed input never silently lands as MOUNT_ROOT.
  *
  * @param storage_path Storage path (may be NULL)
- * @return Mount kind for the leading label
+ * @param out_kind     Mount kind for the leading label (must not be NULL)
+ * @return true when storage_path is a storage path; false otherwise
  */
-mount_kind_t mount_kind_of(const char *storage_path);
+bool mount_kind_extract(const char *storage_path, mount_kind_t *out_kind);
 
 /**
  * Return true when `path` syntactically begins with a known storage label.
  *
- * Pairs with `mount_kind_of` for callers that need to distinguish "this is
- * a storage-format path" from "this is a filesystem path or garbage."
- * `mount_kind_of` defaults to MOUNT_ROOT for unrecognized input, which is
- * the wrong answer for dispatch sites that route storage paths to one
- * codepath and filesystem paths to another.
- *
  * Pure string-prefix check; no allocation, no filesystem access. NULL and
  * empty inputs return false.
+ *
+ * Equivalent to `mount_kind_extract(path, &unused)`; kept as a separate
+ * predicate for call sites that only need the boolean and not the kind.
  *
  * @param path Path to test (may be NULL)
  * @return true when `path` starts with "home/", "root/", or "custom/"
  */
 bool mount_is_storage_path(const char *path);
-
-/* ---------------------------------------------------------------- */
-/* Mount table                                                      */
-/* ---------------------------------------------------------------- */
 
 /**
  * Opaque mount-table handle. Built by `mount_table_build`; lifetime
@@ -144,25 +138,24 @@ bool mount_is_storage_path(const char *path);
 typedef struct mount_table mount_table_t;
 
 /**
- * Profile <-> mount-target binding declared by a caller.
+ * A single mount: profile <-> deployment-target pairing.
  *
- * POD value type. Both fields are borrowed pointers; their lifetimes
- * are the caller's responsibility and must outlive the arena passed to
- * `mount_table_build`.
+ * POD value type passed by callers to `mount_table_build`. Both fields
+ * are borrowed pointers; their lifetimes are the caller's responsibility
+ * and must outlive the arena passed to `mount_table_build`.
  *
  * - profile: Profile name (NULL for callers that have only target
  *   strings, no profile names — e.g. one-shot internal scratch use).
  * - target: Absolute filesystem path with no trailing slash. NULL or
- *   empty contributes no mount; the declaration is dropped at build
- *   time.
+ *   empty contributes no mount; the entry is dropped at build time.
  */
 typedef struct {
     const char *profile;
     const char *target;
-} mount_decl_t;
+} mount_t;
 
 /**
- * Build a mount table from a flat array of declarations.
+ * Build a mount table from a flat array of mounts.
  *
  * The table is augmented internally with:
  *   - A HOME mount whose target is $HOME (raw form captured from
@@ -173,15 +166,15 @@ typedef struct {
  *   - A ROOT mount whose target is the empty string (universal
  *     fallback for absolute paths that match no other mount).
  *
- * Declarations with NULL or empty `target` contribute no mount — they
- * are filtered at build time. (The previous binding-table architecture
+ * Mounts with NULL or empty `target` contribute nothing — they are
+ * filtered at build time. (The previous binding-table architecture
  * recorded such entries to distinguish "profile not in table" from
  * "profile in table but no target on this machine"; both cases were
  * indistinguishable at every call site, so the entries were dead.)
  *
  * Lifetime:
  *   - Output is allocated entirely from `arena`.
- *   - Borrowed string fields in `decls` must outlive `arena`.
+ *   - Borrowed string fields in `mounts` must outlive `arena`.
  *   - $HOME is captured into the arena at build time, immune to later
  *     setenv mutations.
  *
@@ -190,16 +183,16 @@ typedef struct {
  *             fails).
  *   - ERR_MEMORY on arena allocation failure.
  *
- * @param arena      Arena for the table and its internal storage
- * @param decls      Declarations (may be NULL when count is 0)
- * @param decl_count Number of declarations
- * @param out        Output handle (must not be NULL)
+ * @param arena       Arena for the table and its internal storage
+ * @param mounts      Caller-declared mounts (may be NULL when count is 0)
+ * @param mount_count Number of mounts
+ * @param out         Output handle (must not be NULL)
  * @return Error or NULL on success
  */
 error_t *mount_table_build(
     arena_t *arena,
-    const mount_decl_t *decls,
-    size_t decl_count,
+    const mount_t *mounts,
+    size_t mount_count,
     mount_table_t **out
 );
 
@@ -261,29 +254,6 @@ error_t *mount_resolve(
     const char *profile,
     const char *storage_path,
     char **out_fs
-);
-
-/**
- * Look up a profile's mount target.
- *
- * Direct accessor for callers that need only the per-profile target
- * string (e.g. diagnostic output, external command invocation). For
- * storage <-> filesystem conversion, prefer `mount_resolve` /
- * `mount_classify`.
- *
- * Returns NULL when:
- *   - `table` or `profile` is NULL
- *   - the profile has no CUSTOM mount in `table`
- *
- * The returned pointer is borrowed; lifetime tracks the arena.
- *
- * @param table   Mount table (NULL returns NULL)
- * @param profile Profile name (NULL returns NULL)
- * @return Borrowed target string or NULL
- */
-const char *mount_target_for_profile(
-    const mount_table_t *table,
-    const char *profile
 );
 
 /**

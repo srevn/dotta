@@ -197,12 +197,12 @@ cleanup:
 }
 
 /**
- * Build a per-machine deployment topology from state
+ * Build a per-machine mount table from state
  *
  * State-aware adapter that materializes enabled_profiles' (name, prefix)
- * rows into mount_decl_t entries and delegates the augmentation (HOME,
+ * rows into mount_t entries and delegates the augmentation (HOME,
  * canonical HOME, root sentinel) to mount_table_build. The single chokepoint
- * for "what does the deployment topology look like for this command?" —
+ * for "what does the mount table look like for this command?" —
  * scope_build feeds the active set, list/show/revert feed NULL for the
  * full enabled set.
  */
@@ -220,18 +220,18 @@ error_t *profile_build_mount_table(
 
     /* Names mode (CLI-narrowed harvest).
      *
-     * arena_strdup the profile name into each binding: the caller's array
+     * arena_strdup the profile name into each mount: the caller's array
      * (typically scope's enabled/filter heap-owned strings) may be freed
      * before the arena is destroyed, so a borrow would dangle in the
      * window between scope_free and arena_destroy. The target pointer
      * is borrowed from the state row cache, which outlives the arena —
      * no copy needed. */
     if (names != NULL) {
-        mount_decl_t *bindings = NULL;
+        mount_t *mounts = NULL;
         if (names->count > 0) {
-            bindings = arena_calloc(arena, names->count, sizeof(*bindings));
-            if (!bindings) {
-                return ERROR(ERR_MEMORY, "Failed to allocate path bindings");
+            mounts = arena_calloc(arena, names->count, sizeof(*mounts));
+            if (!mounts) {
+                return ERROR(ERR_MEMORY, "Failed to allocate mounts");
             }
         }
         for (size_t i = 0; i < names->count; i++) {
@@ -242,12 +242,12 @@ error_t *profile_build_mount_table(
                     ERR_MEMORY, "Failed to duplicate profile name '%s'", name
                 );
             }
-            bindings[i] = (mount_decl_t){
+            mounts[i] = (mount_t){
                 .profile = arena_name,
                 .target = state_peek_profile_target(state, name)
             };
         }
-        return mount_table_build(arena, bindings, names->count, out);
+        return mount_table_build(arena, mounts, names->count, out);
     }
 
     /* All-enabled mode (row-cache scan).
@@ -256,28 +256,37 @@ error_t *profile_build_mount_table(
      * lifetime ties to the next enabled_profiles shape mutation, which by
      * VWD-command construction does not occur between scope_build and
      * scope_free. State outlives the arena, so the borrows are sound for
-     * the arena's lifetime. */
+     * the arena's lifetime.
+     *
+     * Lenient on state-read failure: a cold clone or transient DB issue
+     * means there are no per-profile mounts to materialize, but HOME
+     * and the universal root sentinel are still useful for input
+     * classification. Falling back to a bare table here makes the call
+     * sites (revert/list/show) unconditional — they no longer carry
+     * boilerplate to recover from this exact failure. */
     const state_profile_entry_t *entries = NULL;
     size_t count = 0;
     error_t *err = state_peek_profiles(state, &entries, &count);
     if (err) {
-        return error_wrap(err, "Failed to peek profile rows");
+        error_free(err);
+        return mount_table_build(arena, NULL, 0, out);
     }
 
-    mount_decl_t *bindings = NULL;
+    mount_t *mounts = NULL;
     if (count > 0) {
-        bindings = arena_calloc(arena, count, sizeof(*bindings));
-        if (!bindings) {
-            return ERROR(ERR_MEMORY, "Failed to allocate path bindings");
+        mounts = arena_calloc(arena, count, sizeof(*mounts));
+        if (!mounts) {
+            return ERROR(ERR_MEMORY, "Failed to allocate mounts");
         }
         for (size_t i = 0; i < count; i++) {
-            bindings[i] = (mount_decl_t){
+            mounts[i] = (mount_t){
                 .profile = entries[i].name,
                 .target = entries[i].target
             };
         }
     }
-    return mount_table_build(arena, bindings, count, out);
+
+    return mount_table_build(arena, mounts, count, out);
 }
 
 /**

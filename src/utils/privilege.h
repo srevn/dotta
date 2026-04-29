@@ -73,20 +73,20 @@ bool privilege_paths_require_root(const char **storage_paths, size_t count);
 /**
  * Check if a deployment target requires elevated privileges
  *
- * Determines whether a custom deployment prefix points to a location
- * that requires root access. Prefixes under $HOME are accessible to
+ * Determines whether a custom deployment target points to a location
+ * that requires root access. Targets under $HOME are accessible to
  * the current user without elevation.
  *
  * Uses canonical path comparison (resolves symlinks) with proper
  * path boundary checks to avoid false matches (e.g., /home/user
  * vs /home/username).
  *
- * Safe defaults: returns true (needs elevation) when prefix is NULL
- * or when path resolution fails (can't determine HOME, prefix
+ * Safe defaults: returns true (needs elevation) when target is NULL
+ * or when path resolution fails (can't determine HOME, target
  * doesn't exist on this system, etc.).
  *
  * @param target Deployment target path (NULL returns true)
- * @return true if elevation needed, false if prefix is under $HOME
+ * @return true if elevation needed, false if target is under $HOME
  */
 bool privilege_target_needs_elevation(const char *target);
 

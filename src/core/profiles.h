@@ -116,7 +116,7 @@ error_t *profile_resolve_enabled(
 );
 
 /**
- * Build a per-machine deployment topology from state
+ * Build a per-machine mount table from state
  *
  * Materializes the profile→target bindings recorded in
  * enabled_profiles into a mount_table_t handle, augmented internally with
@@ -147,6 +147,12 @@ error_t *profile_resolve_enabled(
  *     state_free).
  *   - target strings are always borrowed from the state row cache
  *     (same shape-mutation invariant).
+ *
+ * Failure modes:
+ *   - State-read failure (cold clone, transient DB issue) is absorbed:
+ *     the function falls back to a bare table (HOME + root sentinel
+ *     only). Callers do not need to handle this case.
+ *   - Arena allocation failure surfaces as ERR_MEMORY.
  *
  * @param state State handle (must not be NULL; borrowed, not freed)
  * @param names Profile names to build bindings for, or NULL for all enabled

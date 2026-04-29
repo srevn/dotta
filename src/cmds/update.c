@@ -1950,7 +1950,7 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
         if (file_count > 0) {
             /* Extract paths needing elevation from file items.
              * Uses privilege_needs_elevation() which considers whether each
-             * entry's custom prefix is under $HOME. */
+             * entry's custom target is under $HOME. */
             char **storage_paths = calloc(file_count, sizeof(char *));
             if (!storage_paths) {
                 err = ERROR(ERR_MEMORY, "Failed to allocate storage paths array");

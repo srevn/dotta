@@ -24,7 +24,6 @@
 #include "core/policy.h"
 #include "core/state.h"
 #include "infra/content.h"
-#include "infra/path.h"
 #include "infra/mount.h"
 #include "infra/worktree.h"
 #include "sys/filesystem.h"
@@ -46,6 +45,154 @@ static error_t *validate_options(const cmd_add_options_t *opts) {
 
     if (!opts->files || opts->file_count == 0) {
         return ERROR(ERR_INVALID_ARG, "At least one file is required");
+    }
+
+    return NULL;
+}
+
+/**
+ * Normalize a CLI filesystem-path argument to an absolute path,
+ * honoring `--target` jail semantics.
+ *
+ * Transformation order:
+ *   1. Tilde expansion (~/ -> $HOME)               — bypasses jail
+ *   2. Jail interpretation (when virtual_root set):
+ *      - Relative paths: join with virtual_root
+ *      - Absolute paths under virtual_root: pass through
+ *      - Absolute paths NOT under virtual_root: prepend virtual_root
+ *   3. CWD joining (relative paths, no jail)
+ *   4. Lexical normalization (resolves '.', '..', '//')
+ *   5. Post-condition: when virtual_root is set, the final result
+ *      MUST remain under virtual_root. This catches `/jail/../etc/secret`
+ *      style inputs that pass step 2 (already_under is true) but escape
+ *      after lexical normalization in step 4.
+ *
+ * Examples:
+ *   ("~/file", NULL)              -> "$HOME/file"
+ *   ("rel/file", "/jail")         -> "/jail/rel/file"
+ *   ("/etc/hosts", "/jail")       -> "/jail/etc/hosts"
+ *   ("/jail/etc/hosts", "/jail")  -> "/jail/etc/hosts" (already under root)
+ *   ("rel/file", NULL)            -> "$CWD/rel/file"
+ *   ("../escape", "/jail")        -> ERROR (relative traversal)
+ *   ("/jail/../escape", "/jail")  -> ERROR (post-condition trips)
+ *
+ * Privacy: this helper is `dotta add`-specific. The jail mode encodes
+ * the user's mental model when they pass `--target` ("operate inside
+ * this directory"). Other commands convert input via mount_resolve_input,
+ * which classifies against the mount table without re-rooting absolute
+ * paths.
+ *
+ * @param user_path    User-provided path (filesystem or tilde)
+ * @param virtual_root Optional jail root from `--target` (NULL = no jail)
+ * @param out          Normalized absolute path (caller must free)
+ * @return Error or NULL on success
+ */
+static error_t *add_normalize_input(
+    const char *user_path,
+    const char *virtual_root,
+    char **out
+) {
+    CHECK_NULL(user_path);
+    CHECK_NULL(out);
+
+    error_t *err = NULL;
+    char *expanded = NULL;
+    char *joined = NULL;
+    const char *path_to_make_absolute = user_path;
+
+    /* Step 1: Expand tilde (canonical, bypasses virtual_root). */
+    if (user_path[0] == '~') {
+        err = fs_expand_tilde(user_path, &expanded);
+        if (err) return err;
+        path_to_make_absolute = expanded;
+    }
+    /* Step 2: Resolve paths within virtual_root context. Tilde paths
+     * skip this — ~/file always means $HOME/file regardless of root. */
+    else if (virtual_root && virtual_root[0] != '\0') {
+        const char *path = path_to_make_absolute;
+
+        if (path[0] != '/') {
+            /* SECURITY: Reject '..' as a path component (not as substring).
+             * Prevents virtual_root escape: ../foo + /jail -> /jail/../foo -> /foo */
+            for (const char *p = path; *p; p++) {
+                if ((p == path || *(p - 1) == '/') && p[0] == '.' && p[1] == '.' &&
+                    (p[2] == '/' || p[2] == '\0')) {
+                    free(expanded);
+                    return ERROR(
+                        ERR_INVALID_ARG,
+                        "Path traversal (..) not allowed in relative paths "
+                        "with --target.\nUse absolute paths if you need to "
+                        "reference files outside the deployment target."
+                    );
+                }
+            }
+
+            err = fs_path_join(virtual_root, path, &joined);
+            if (err) {
+                free(expanded);
+                return error_wrap(
+                    err,
+                    "Failed to join deployment target with relative path"
+                );
+            }
+            path_to_make_absolute = joined;
+        } else {
+            /* Absolute path: prepend virtual_root unless already under it. */
+            size_t root_len = strlen(virtual_root);
+            bool already_under =
+                strncmp(path, virtual_root, root_len) == 0 &&
+                (path[root_len] == '/' || path[root_len] == '\0');
+
+            if (!already_under) {
+                joined = str_format("%s%s", virtual_root, path);
+                if (!joined) {
+                    free(expanded);
+                    return ERROR(
+                        ERR_MEMORY,
+                        "Failed to prepend deployment target to path"
+                    );
+                }
+                path_to_make_absolute = joined;
+            }
+            /* Otherwise already under virtual_root, pass through. The
+             * post-condition below catches lexical traversal that escapes. */
+        }
+    }
+
+    /* Step 3: Make absolute (handles absolute pass-through and CWD joining). */
+    char *absolute = NULL;
+    err = fs_make_absolute(path_to_make_absolute, &absolute);
+    if (!err) {
+        /* Step 4: Normalize (resolve ., .., consecutive slashes). */
+        err = fs_normalize_path(absolute, out);
+        free(absolute);
+    }
+
+    free(expanded);
+    free(joined);
+
+    if (err) return err;
+
+    /* Step 5: Post-condition — when target mode is active, the normalized
+     * result MUST remain under virtual_root. Step 2 only verifies the input
+     * shape; lexical .. resolution in step 4 can move an already_under
+     * absolute path back outside (e.g., * /jail/../etc/secret -> /etc/secret) */
+    if (virtual_root && virtual_root[0] != '\0') {
+        size_t root_len = strlen(virtual_root);
+        if (strncmp(*out, virtual_root, root_len) != 0 || ((*out)[root_len] != '/'
+            && (*out)[root_len] != '\0')) {
+            char *bad = *out;
+            *out = NULL;
+            error_t *escape = ERROR(
+                ERR_INVALID_ARG,
+                "Path '%s' resolves outside deployment target '%s' after "
+                "normalization.\n"
+                "Path traversal (..) cannot be used to escape --target.",
+                bad, virtual_root
+            );
+            free(bad);
+            return escape;
+        }
     }
 
     return NULL;
@@ -566,13 +713,13 @@ static error_t *create_commit(
  *   1. Open write transaction (creates DB if missing)
  *   2. Read enabled profiles under the transaction snapshot
  *   3. If already enabled: commit (no-op) and return
- *   4. Enable profile in state with deployment target (makes prefix available)
+ *   4. Enable profile in state with deployment target (makes binding available)
  *   5. Sync files to manifest with DEPLOYED status (uses target;
  *      advances deployment anchor for synced entries)
  *   6. Commit transaction atomically
  *
  * CRITICAL ORDER: Step 4 must precede step 5. The target stored in step 4
- * is required by manifest_add_files() in step 5 (which loads the prefix map
+ * is required by manifest_add_files() in step 5 (which loads the mount table
  * internally) to resolve custom/ storage paths. Transaction atomicity ensures:
  * enable + sync succeed together or fail together (automatic rollback on error).
  *
@@ -793,14 +940,17 @@ static error_t *update_manifest_after_add(
 
     /* STEP 3: Update deployment target in state if adding custom/ files
      *
-     * CRITICAL ORDER: Must store prefix BEFORE manifest_add_files() so
-     * the prefix map (loaded internally) can resolve custom/ storage paths
-     * during manifest building. Same prefix-before-sync ordering as
+     * CRITICAL ORDER: Must store target BEFORE manifest_add_files() so
+     * the mount table (loaded internally) can resolve custom/ storage paths
+     * during manifest building. Same target-before-sync ordering as
      * auto_enable_and_sync_profile().
      *
      * Only called when target is non-NULL to avoid clearing an
-     * existing prefix when adding home/ or root/ files.
-     * state_enable_profile() uses UPSERT - safe on already-enabled profiles. */
+     * existing target when adding home/ or root/ files.
+     * state_enable_profile() uses UPSERT — cmd_add's pre-flight has
+     * already refused the case where target differs from any existing
+     * binding, so reaching here means either no prior binding or an
+     * idempotent re-bind to the same value. */
     if (target) {
         err = state_enable_profile(state, profile, target);
         if (err) {
@@ -894,24 +1044,38 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     if (opts->target) {
         err = mount_validate_target(opts->target);
         if (err) goto cleanup;
+
+        /* Pre-flight: refuse silent re-targeting. If the profile is already
+         * enabled with a different target, fail BEFORE the Git commit so
+         * the user does not end up with a wasted commit + stale binding.
+         * Setting a target on a profile that previously had none is fine. */
+        const char *existing = state_peek_profile_target(ctx->state, opts->profile);
+        if (existing && existing[0] != '\0' && strcmp(existing, opts->target) != 0) {
+            err = ERROR(
+                ERR_INVALID_ARG,
+                "Profile '%s' already has deployment target '%s'.\n"
+                "Cannot change target via 'dotta add'. To re-target:\n"
+                "  dotta profile disable %s\n"
+                "  dotta profile enable %s --target %s",
+                opts->profile, existing, opts->profile, opts->profile, opts->target
+            );
+            goto cleanup;
+        }
     }
 
-    /* Build the per-command mount table once. The single binding pairs
+    /* Build the per-command mount table once. The single mount pairs
      * opts->profile with opts->target so that both classify (fs -> storage)
      * and resolve (custom/X -> fs) work against the same handle. A NULL or
      * empty target contributes no CUSTOM mount; HOME and the universal
      * ROOT sentinel are always added by mount_table_build. The table rides
      * the command arena. */
-    {
-        mount_decl_t binding = {
-            .profile = opts->profile,
-            .target  = opts->target,
-        };
-        err = mount_table_build(ctx->arena, &binding, 1, &mounts);
-        if (err) {
-            err = error_wrap(err, "Failed to build mount table");
-            goto cleanup;
-        }
+    mount_t mount = {
+        .profile = opts->profile, .target = opts->target,
+    };
+    err = mount_table_build(ctx->arena, &mount, 1, &mounts);
+    if (err) {
+        err = error_wrap(err, "Failed to build mount table");
+        goto cleanup;
     }
 
     /* PRE-FLIGHT PRIVILEGE CHECK
@@ -938,24 +1102,23 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     }
 
     /* Pre-compute whether deployment target needs elevation.
-     * All paths in this add invocation share the same prefix. */
+     * All paths in this add invocation share the same target. */
     bool custom_needs_elevation = opts->target
         ? privilege_target_needs_elevation(opts->target)
-        : false;  /* No prefix → no custom/ paths → irrelevant */
+        : false;  /* No target → no custom/ paths → irrelevant */
 
     /* Resolve all paths to storage format (pre-flight for privilege check).
      * Only paths that actually need elevation are included — home/ never does,
-     * and custom/ only does when the prefix is outside $HOME. */
+     * and custom/ only does when the deployment target is outside $HOME. */
     for (size_t i = 0; i < opts->file_count; i++) {
         const char *file_path = opts->files[i];
         char *absolute = NULL;
         char *storage_path = NULL;
-        mount_kind_t prefix;
+        mount_kind_t kind;
 
         /* Storage-path inputs (home/..., root/..., custom/...) — only include
          * paths that actually need elevation in the privilege check. */
-        if (mount_is_storage_path(file_path)) {
-            mount_kind_t kind = mount_kind_of(file_path);
+        if (mount_kind_extract(file_path, &kind)) {
             bool needs_elevation = (kind == MOUNT_ROOT) ||
                 (kind == MOUNT_CUSTOM && custom_needs_elevation);
 
@@ -973,7 +1136,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         }
 
         /* Filesystem path — normalize raw user input to absolute path first */
-        err = path_normalize_at(file_path, opts->target, &absolute);
+        err = add_normalize_input(file_path, opts->target, &absolute);
         if (err) {
             err = error_wrap(err, "Failed to resolve path '%s'", file_path);
             goto cleanup;
@@ -990,7 +1153,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
             continue;
         }
 
-        err = mount_classify(mounts, absolute, &storage_path, &prefix);
+        err = mount_classify(mounts, absolute, &storage_path, &kind);
         free(absolute);
         if (err) {
             /* A directory input equal to a classification root ($HOME, "/",
@@ -1030,7 +1193,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         }
 
         /* Only include paths that need elevation in the privilege check */
-        if (prefix == MOUNT_ROOT || (prefix == MOUNT_CUSTOM && custom_needs_elevation)) {
+        if (kind == MOUNT_ROOT || (kind == MOUNT_CUSTOM && custom_needs_elevation)) {
             preflight_allocated_paths[preflight_storage_count] = storage_path;
             preflight_storage_paths[preflight_storage_count] = storage_path;
             preflight_storage_count++;
@@ -1178,13 +1341,14 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         char *absolute = NULL;
 
         /* Check if input is a storage path */
-        if (mount_is_storage_path(file)) {
+        mount_kind_t kind;
+        if (mount_kind_extract(file, &kind)) {
 
             /* custom/ paths require --target. Pre-validate at the call
              * site so the user gets the directive "pass --target" message
              * rather than mount_resolve's generic "no deployment target
              * for profile" surface. */
-            if (mount_kind_of(file) == MOUNT_CUSTOM) {
+            if (kind == MOUNT_CUSTOM) {
                 if (!opts->target || opts->target[0] == '\0') {
                     err = ERROR(
                         ERR_INVALID_ARG, "Storage path '%s' requires --target flag\n"
@@ -1214,7 +1378,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
             }
         } else {
             /* Regular filesystem path - normalize it */
-            err = path_normalize_at(file, opts->target, &absolute);
+            err = add_normalize_input(file, opts->target, &absolute);
             if (err) {
                 err = error_wrap(err, "Failed to resolve path '%s'", file);
                 goto cleanup;

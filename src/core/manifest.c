@@ -46,7 +46,7 @@
 static error_t *manifest_build(
     git_repository *repo,
     const string_array_t *profiles,
-    const mount_table_t *roots,
+    const mount_table_t *mounts,
     arena_t *arena,
     manifest_t **out
 );
@@ -56,7 +56,7 @@ static error_t *manifest_sync_directories(
     state_t *state,
     arena_t *arena,
     const string_array_t *enabled_profiles,
-    const mount_table_t *roots
+    const mount_table_t *mounts
 );
 
 /**
@@ -282,7 +282,7 @@ error_t *manifest_apply_scope(
 
     error_t *err = NULL;
     string_array_t *enabled = NULL;
-    mount_table_t *roots = NULL;
+    mount_table_t *mounts = NULL;
     manifest_t *new_manifest = NULL;
     state_file_entry_t *old_entries = NULL;
     size_t old_count = 0;
@@ -300,25 +300,25 @@ error_t *manifest_apply_scope(
         goto cleanup;
     }
 
-    /* Build the deployment topology once for the full enabled set. The
+    /* Build the mount table once for the full enabled set. The
      * SAME handle threads through both manifest_build (storage→fs path
      * resolution per profile during the tree walk) and the directory
-     * rebuild below. The topology covers exactly the profiles the engine
+     * rebuild below. The mount table covers exactly the profiles the engine
      * iterates — never narrowed by a caller's CLI filter, since the
      * VWD's authoritative scope is the persistent enabled set. */
-    err = profile_build_mount_table(state, enabled, arena, &roots);
+    err = profile_build_mount_table(state, enabled, arena, &mounts);
     if (err) {
-        err = error_wrap(err, "Failed to build deployment topology for scope reconcile");
+        err = error_wrap(err, "Failed to build mount table for scope reconcile");
         goto cleanup;
     }
 
     /* Step 2: Build fresh precedence manifest.
      *
-     * manifest_build consults the topology only for profiles in the
+     * manifest_build consults the mount table only for profiles in the
      * passed list — disabled profiles are never considered, so the
      * ordering rule ("update state first, then reconcile") is enforced
      * by the oracle's own read scope. */
-    err = manifest_build(repo, enabled, roots, arena, &new_manifest);
+    err = manifest_build(repo, enabled, mounts, arena, &new_manifest);
     if (err) {
         err = error_wrap(err, "Failed to build manifest for scope reconcile");
         goto cleanup;
@@ -503,9 +503,9 @@ error_t *manifest_apply_scope(
      * reactivated with the new owner; directories that left scope
      * remain STATE_INACTIVE for apply-time cleanup.
      *
-     * Reuses the topology built above — directories share the same
+     * Reuses the mount table built above — directories share the same
      * profile→target resolution as files. */
-    err = manifest_sync_directories(repo, state, arena, enabled, roots);
+    err = manifest_sync_directories(repo, state, arena, enabled, mounts);
     if (err) {
         err = error_wrap(err, "Failed to sync tracked directories");
         goto cleanup;
@@ -587,17 +587,17 @@ error_t *manifest_remove_files(
     CHECK_NULL(enabled_profiles);
 
     error_t *err = NULL;
-    mount_table_t *roots = NULL;
+    mount_table_t *mounts = NULL;
     manifest_t *fresh_manifest = NULL;
     size_t removed_count = 0;
     size_t fallback_count = 0;
 
-    /* Build the deployment topology once; reused by manifest_build for the
+    /* Build the mount table once; reused by manifest_build for the
      * tree walk, by the per-removed-path resolution below, and by the
      * directory rebuild at the end. */
-    err = profile_build_mount_table(state, enabled_profiles, arena, &roots);
+    err = profile_build_mount_table(state, enabled_profiles, arena, &mounts);
     if (err) {
-        return error_wrap(err, "Failed to build deployment topology");
+        return error_wrap(err, "Failed to build mount table");
     }
 
     /* 1. Build fresh manifest from current Git state (post-removal).
@@ -606,7 +606,7 @@ error_t *manifest_remove_files(
      * during the tree walk, so any fallback selected from this manifest
      * already carries the correct mode/owner/group/encrypted for its
      * source profile. */
-    err = manifest_build(repo, enabled_profiles, roots, arena, &fresh_manifest);
+    err = manifest_build(repo, enabled_profiles, mounts, arena, &fresh_manifest);
     if (err) {
         return error_wrap(
             err, "Failed to build manifest for fallback detection"
@@ -617,14 +617,12 @@ error_t *manifest_remove_files(
     for (size_t i = 0; i < removed_storage_paths->count; i++) {
         const char *storage_path = removed_storage_paths->items[i];
 
-        /* Resolve to filesystem path against the topology. ERR_NOT_FOUND
+        /* Resolve to filesystem path against the mount table. ERR_NOT_FOUND
          * here means the removed_profile has no target binding for a
          * custom/ path — the file could never have been deployed on this
          * machine, so there is nothing to reassign or release. Skip. */
         char *filesystem_path = NULL;
-        err = mount_resolve(
-            roots, removed_profile, storage_path, &filesystem_path
-        );
+        err = mount_resolve(mounts, removed_profile, storage_path, &filesystem_path);
         if (err) {
             if (err->code == ERR_NOT_FOUND) {
                 error_free(err);
@@ -744,7 +742,7 @@ error_t *manifest_remove_files(
     if (err) goto cleanup;
 
     /* 3. Sync tracked directories */
-    err = manifest_sync_directories(repo, state, arena, enabled_profiles, roots);
+    err = manifest_sync_directories(repo, state, arena, enabled_profiles, mounts);
     if (err) {
         goto cleanup;
     }
@@ -863,7 +861,7 @@ static error_t *manifest_repair_stale(
     hashmap_t *profile_scope = NULL;
     hashmap_t *stale_profiles = NULL;
     manifest_t *fresh_manifest = NULL;
-    mount_table_t *roots = NULL;
+    mount_table_t *mounts = NULL;
 
     /* Phase 1: Detect stale profiles via per-profile commit_oid comparison.
      *
@@ -905,15 +903,15 @@ static error_t *manifest_repair_stale(
      * below propagates the correct metadata for whichever profile won
      * precedence after Git moved underneath us.
      *
-     * Topology built from the same enabled set the manifest_build pass
+     * Mount table built from the same enabled set the manifest_build pass
      * iterates — the directory rebuild at Phase 4 reuses the handle. */
-    err = profile_build_mount_table(state, enabled_profiles, arena, &roots);
+    err = profile_build_mount_table(state, enabled_profiles, arena, &mounts);
     if (err) {
-        err = error_wrap(err, "Failed to build deployment topology for stale repair");
+        err = error_wrap(err, "Failed to build mount table for stale repair");
         goto cleanup;
     }
 
-    err = manifest_build(repo, enabled_profiles, roots, arena, &fresh_manifest);
+    err = manifest_build(repo, enabled_profiles, mounts, arena, &fresh_manifest);
     if (err) {
         err = error_wrap(err, "Failed to build fresh manifest for stale repair");
         goto cleanup;
@@ -1026,7 +1024,7 @@ static error_t *manifest_repair_stale(
      *
      * External Git changes may have added/removed directories in metadata.
      * Re-syncing ensures the tracked_directories table is consistent. */
-    err = manifest_sync_directories(repo, state, arena, enabled_profiles, roots);
+    err = manifest_sync_directories(repo, state, arena, enabled_profiles, mounts);
     if (err) {
         err = error_wrap(err, "Failed to sync directories after stale repair");
         goto cleanup;
@@ -1187,20 +1185,20 @@ error_t *manifest_update_files(
     *out_fallbacks = 0;
 
     error_t *err = NULL;
-    mount_table_t *roots = NULL;
+    mount_table_t *mounts = NULL;
     manifest_t *fresh_manifest = NULL;
 
-    /* Build the deployment topology once for both the directory sync
+    /* Build the mount table once for both the directory sync
      * (zero-items short circuit below) and the precedence builder. */
-    err = profile_build_mount_table(state, enabled_profiles, arena, &roots);
+    err = profile_build_mount_table(state, enabled_profiles, arena, &mounts);
     if (err) {
-        return error_wrap(err, "Failed to build deployment topology");
+        return error_wrap(err, "Failed to build mount table");
     }
 
     if (item_count == 0) {
         /* No file items to process, but still sync directories.
          * Handles cases where only directory metadata changed. */
-        return manifest_sync_directories(repo, state, arena, enabled_profiles, roots);
+        return manifest_sync_directories(repo, state, arena, enabled_profiles, mounts);
     }
 
     /* 1. Build FRESH manifest from Git (post-commit state).
@@ -1209,7 +1207,7 @@ error_t *manifest_update_files(
      * entry, so the sync loop below feeds sync_entry_to_state entries
      * that already carry the correct mode/owner/group/encrypted for
      * their source profile. */
-    err = manifest_build(repo, enabled_profiles, roots, arena, &fresh_manifest);
+    err = manifest_build(repo, enabled_profiles, mounts, arena, &fresh_manifest);
     if (err) {
         return error_wrap(err, "Failed to build fresh manifest for bulk sync");
     }
@@ -1408,7 +1406,7 @@ error_t *manifest_update_files(
     string_array_free(updated_profiles);
 
     /* 6. Sync tracked directories */
-    err = manifest_sync_directories(repo, state, arena, enabled_profiles, roots);
+    err = manifest_sync_directories(repo, state, arena, enabled_profiles, mounts);
     if (err) {
         goto cleanup;
     }
@@ -1498,21 +1496,21 @@ error_t *manifest_add_files(
     *out_synced = 0;
 
     error_t *err = NULL;
-    mount_table_t *roots = NULL;
+    mount_table_t *mounts = NULL;
     manifest_t *fresh_manifest = NULL;
 
-    /* Build the deployment topology once for both the directory sync
+    /* Build the mount table once for both the directory sync
      * (zero-files short circuit below) and the precedence builder. */
-    err = profile_build_mount_table(state, enabled_profiles, arena, &roots);
+    err = profile_build_mount_table(state, enabled_profiles, arena, &mounts);
     if (err) {
-        return error_wrap(err, "Failed to build deployment topology");
+        return error_wrap(err, "Failed to build mount table");
     }
 
     if (filesystem_paths->count == 0) {
         /* No files to add, but still sync directories.
          * Handles directory-only adds where filesystem_paths
          * is empty but metadata.json has tracked directories. */
-        return manifest_sync_directories(repo, state, arena, enabled_profiles, roots);
+        return manifest_sync_directories(repo, state, arena, enabled_profiles, mounts);
     }
 
     /* 1. Build FRESH manifest from Git (post-commit state).
@@ -1521,7 +1519,7 @@ error_t *manifest_add_files(
      * entry, so sync_entry_to_state below writes the correct
      * mode/owner/group/encrypted for the profile that won precedence
      * (the only attribution that matters for the row being inserted). */
-    err = manifest_build(repo, enabled_profiles, roots, arena, &fresh_manifest);
+    err = manifest_build(repo, enabled_profiles, mounts, arena, &fresh_manifest);
     if (err) {
         return error_wrap(err, "Failed to build fresh manifest for bulk sync");
     }
@@ -1613,7 +1611,7 @@ error_t *manifest_add_files(
     if (err) goto cleanup;
 
     /* 4. Sync tracked directories */
-    err = manifest_sync_directories(repo, state, arena, enabled_profiles, roots);
+    err = manifest_sync_directories(repo, state, arena, enabled_profiles, mounts);
     if (err) {
         goto cleanup;
     }
@@ -1698,7 +1696,7 @@ error_t *manifest_sync_diff(
     error_t *err = NULL;
 
     /* Resources to clean up */
-    mount_table_t *roots = NULL;
+    mount_table_t *mounts = NULL;
     manifest_t *fresh_manifest = NULL;
     git_tree *old_tree = NULL;
     git_tree *new_tree = NULL;
@@ -1707,13 +1705,13 @@ error_t *manifest_sync_diff(
     size_t synced = 0, removed = 0, fallbacks = 0, skipped = 0;
 
     /* PHASE 1: BUILD CONTEXT (O(M)) */
-    /* 1.0. Build the deployment topology once for the full enabled set.
+    /* 1.0. Build the mount table once for the full enabled set.
      * Reused by manifest_build (storage→fs resolution per profile during
      * the tree walk), by the per-delta resolution in PHASE 3, and by the
      * directory rebuild at the tail. */
-    err = profile_build_mount_table(state, enabled_profiles, arena, &roots);
+    err = profile_build_mount_table(state, enabled_profiles, arena, &mounts);
     if (err) {
-        err = error_wrap(err, "Failed to build deployment topology");
+        err = error_wrap(err, "Failed to build mount table");
         goto cleanup;
     }
 
@@ -1724,7 +1722,7 @@ error_t *manifest_sync_diff(
      * that already carry the correct mode/owner/group/encrypted for
      * their source profile — fallbacks pick up the right metadata for
      * the *fallback* profile, not the deleting one. */
-    err = manifest_build(repo, enabled_profiles, roots, arena, &fresh_manifest);
+    err = manifest_build(repo, enabled_profiles, mounts, arena, &fresh_manifest);
     if (err) {
         err = error_wrap(err, "Failed to build fresh manifest");
         goto cleanup;
@@ -1772,7 +1770,7 @@ error_t *manifest_sync_diff(
             storage_path = delta->old_file.path;
         }
 
-        /* Resolve filesystem path against the topology. Two distinct
+        /* Resolve filesystem path against the mount table. Two distinct
          * outcomes route differently:
          *
          *   ERR_NOT_FOUND — custom/ entry but `profile` has no
@@ -1785,9 +1783,7 @@ error_t *manifest_sync_diff(
          *                   already advanced the branch, the next
          *                   reconcile will revisit. */
         char *filesystem_path = NULL;
-        err = mount_resolve(
-            roots, profile, storage_path, &filesystem_path
-        );
+        err = mount_resolve(mounts, profile, storage_path, &filesystem_path);
         if (err) {
             if (err->code == ERR_NOT_FOUND) {
                 skipped++;
@@ -1963,7 +1959,7 @@ error_t *manifest_sync_diff(
     }
 
     /* 4. Sync tracked directories */
-    err = manifest_sync_directories(repo, state, arena, enabled_profiles, roots);
+    err = manifest_sync_directories(repo, state, arena, enabled_profiles, mounts);
     if (err) {
         goto cleanup;
     }
@@ -2002,7 +1998,7 @@ cleanup:
  * Preconditions:
  *   - state MUST have active transaction (via state_open)
  *   - enabled_profiles MUST be the engine's iteration set (caller built
- *     `roots` from the same list)
+ *     `mounts` from the same list)
  *
  * Postconditions:
  *   - tracked_directories table reflects enabled_profiles
@@ -2015,7 +2011,7 @@ cleanup:
  * @param repo Git repository (must not be NULL)
  * @param state State with active transaction (must not be NULL)
  * @param enabled_profiles Current enabled profiles (must not be NULL)
- * @param roots Per-machine deployment topology covering enabled_profiles
+ * @param mounts Per-machine mount table covering enabled_profiles
  *              (must not be NULL)
  * @return Error or NULL on success
  */
@@ -2024,13 +2020,13 @@ static error_t *manifest_sync_directories(
     state_t *state,
     arena_t *arena,
     const string_array_t *enabled_profiles,
-    const mount_table_t *roots
+    const mount_table_t *mounts
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(state);
     CHECK_NULL(arena);
     CHECK_NULL(enabled_profiles);
-    CHECK_NULL(roots);
+    CHECK_NULL(mounts);
 
     error_t *err = NULL;
     metadata_t *metadata = NULL;
@@ -2088,7 +2084,7 @@ static error_t *manifest_sync_directories(
          * The custom/ skip-guard from the prior implementation now lives
          * in the entry-creation primitive: state_directory_entry_create_from_metadata
          * returns ERR_NOT_FOUND when the storage path is custom/... and
-         * `profile` has no target binding in `roots`. We surface that
+         * `profile` has no target binding in `mounts`. We surface that
          * as a silent skip and let any other failure propagate.
          */
         for (size_t j = 0; j < dir_count; j++) {
@@ -2097,7 +2093,7 @@ static error_t *manifest_sync_directories(
             err = state_directory_entry_create_from_metadata(
                 directories[j],
                 profile,
-                roots,
+                mounts,
                 arena,
                 &state_dir
             );
@@ -2206,7 +2202,7 @@ cleanup:
  * Memory ownership:
  * - manifest: borrowed, caller retains ownership
  * - path_map: borrowed, caller retains ownership
- * - roots: borrowed, must not be NULL — keyed by ctx->profile to resolve
+ * - mounts: borrowed, must not be NULL — keyed by ctx->profile to resolve
  *          custom/ entries; missing-binding lookups surface as
  *          ERR_NOT_FOUND and the callback skips silently
  * - metadata: borrowed (per-profile, reloaded for each profile in the outer
@@ -2219,7 +2215,7 @@ struct manifest_build_ctx {
     size_t capacity;               /* Current entries capacity (updated on growth) */
     hashmap_t *path_map;           /* For O(1) dedup/override detection */
     const char *profile;           /* Profile name for entries and error messages */
-    const mount_table_t *roots;    /* Topology for storage→filesystem resolution */
+    const mount_table_t *mounts;   /* Mount table for storage→filesystem resolution */
     const metadata_t *metadata;    /* Per-profile metadata (NULL if absent) */
     arena_t *arena;                /* Arena for string allocations (must not be NULL) */
     error_t *error;                /* Error propagation (set on failure) */
@@ -2389,10 +2385,10 @@ static int manifest_build_callback(
         return 0;
     }
 
-    /* Convert storage path to filesystem path against the topology.
+    /* Convert storage path to filesystem path against the mount table.
      *
      * mount_resolve returns ERR_NOT_FOUND when storage_path is
-     * custom/... and ctx->profile has no target binding in roots —
+     * custom/... and ctx->profile has no target binding in mounts —
      * machine-specific configuration (e.g., /jails/proxy/root) stored in
      * the per-machine state database. During clone or when a profile is
      * enabled without --target, we can't resolve where those files
@@ -2400,9 +2396,7 @@ static int manifest_build_callback(
      * by mount_validate_storage) is a real fault and propagates. */
     char *filesystem_path = NULL;
     char *heap_path = NULL;
-    error_t *err = mount_resolve(
-        ctx->roots, ctx->profile, storage_path, &heap_path
-    );
+    error_t *err = mount_resolve(ctx->mounts, ctx->profile, storage_path, &heap_path);
     if (err) {
         if (err->code == ERR_NOT_FOUND) {
             error_free(err);
@@ -2606,7 +2600,7 @@ static int manifest_build_callback(
  * Uses manifest_build_callback for single-pass tree traversal.
  * One Git tree alive per iteration (loaded, walked, freed).
  *
- * `roots` MUST cover every profile in `profiles` (callers build it from
+ * `mounts` MUST cover every profile in `profiles` (callers build it from
  * the same list). Custom/ entries belonging to a profile with no
  * target binding are skipped silently by the callback — that
  * branch is the only place "no --target on this machine" is allowed to
@@ -2616,13 +2610,13 @@ static int manifest_build_callback(
 static error_t *manifest_build(
     git_repository *repo,
     const string_array_t *profiles,
-    const mount_table_t *roots,
+    const mount_table_t *mounts,
     arena_t *arena,
     manifest_t **out
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(profiles);
-    CHECK_NULL(roots);
+    CHECK_NULL(mounts);
     CHECK_NULL(out);
 
     error_t *err = NULL;
@@ -2702,7 +2696,7 @@ static error_t *manifest_build(
          * directly — all in O(N) time.
          *
          * profile borrows from caller's profiles array — must outlive manifest.
-         * roots is borrowed from the caller; the bindings are keyed by
+         * mounts is borrowed from the caller; the bindings are keyed by
          * `profile` (which the callback feeds verbatim into
          * mount_resolve).
          * metadata borrows from profile_metadata, scoped to this iteration. */
@@ -2711,7 +2705,7 @@ static error_t *manifest_build(
             .capacity = capacity,
             .path_map = path_map,
             .profile  = profile,
-            .roots    = roots,
+            .mounts   = mounts,
             .metadata = profile_metadata,
             .arena    = arena,
             .error    = NULL
@@ -2755,7 +2749,7 @@ cleanup:
  *
  * @param tree Git tree to build manifest from (must not be NULL)
  * @param profile Profile name for entries (must not be NULL)
- * @param roots Per-machine deployment topology (must not be NULL); MUST
+ * @param mounts Per-machine mount table (must not be NULL); MUST
  *              record a binding for `profile` when the tree contains
  *              custom/ entries that should resolve, otherwise those
  *              entries are skipped silently.
@@ -2767,14 +2761,14 @@ cleanup:
 error_t *manifest_build_from_tree(
     git_tree *tree,
     const char *profile,
-    const mount_table_t *roots,
+    const mount_table_t *mounts,
     const metadata_t *metadata,
     arena_t *arena,
     manifest_t **out
 ) {
     CHECK_NULL(tree);
     CHECK_NULL(profile);
-    CHECK_NULL(roots);
+    CHECK_NULL(mounts);
     CHECK_NULL(arena);
     CHECK_NULL(out);
 
@@ -2823,14 +2817,14 @@ error_t *manifest_build_from_tree(
      * applies any supplied metadata to mode/owner/group/encrypted, and
      * populates file_entry_t directly — all in O(N) time.
      *
-     * roots and metadata borrow from function parameters — both outlive
+     * mounts and metadata borrow from function parameters — both outlive
      * the tree walk. */
     struct manifest_build_ctx ctx = {
         .manifest = manifest,
         .capacity = capacity,
         .path_map = path_map,
         .profile  = owned_profile,
-        .roots    = roots,
+        .mounts   = mounts,
         .metadata = metadata,
         .arena    = arena,
         .error    = NULL

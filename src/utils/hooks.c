@@ -11,7 +11,6 @@
 #include "base/error.h"
 #include "base/output.h"
 #include "base/string.h"
-#include "infra/path.h"
 #include "sys/filesystem.h"
 #include "sys/process.h"
 
@@ -104,10 +103,10 @@ static error_t *hook_get_path(
     error_t *err = NULL;
 
     if (config->hooks_dir) {
-        err = path_expand_home(config->hooks_dir, &hooks_dir);
+        err = fs_expand_tilde(config->hooks_dir, &hooks_dir);
     } else {
         /* Use default */
-        err = path_expand_home("~/.config/dotta/hooks", &hooks_dir);
+        err = fs_expand_tilde("~/.config/dotta/hooks", &hooks_dir);
     }
 
     if (err) {

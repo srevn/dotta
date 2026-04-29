@@ -1028,8 +1028,8 @@ error_t *metadata_capture_from_symlink(
     CHECK_NULL(st);
     CHECK_NULL(out);
 
-    /* Only capture metadata for root/custom prefix when running as root.
-     * home/ prefix symlinks are always owned by the current user — no metadata needed.
+    /* Only capture metadata for root/ and custom/ labels when running as root.
+     * home/ symlinks are always owned by the current user — no metadata needed.
      * Non-root users can't lchown anyway — no metadata needed. */
     if (!privilege_path_requires_root(storage_path) || !privilege_is_elevated()) {
         *out = NULL;

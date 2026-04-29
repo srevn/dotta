@@ -13,8 +13,8 @@
 #include "base/gitignore.h"
 #include "core/profiles.h"
 #include "core/state.h"
-#include "infra/pathspec.h"
 #include "infra/mount.h"
+#include "infra/pathspec.h"
 
 /**
  * Internal scope representation.
@@ -24,15 +24,15 @@
  * `filter` — set once during build, dangles after scope_free returns
  * (which is fine: no one is meant to dereference it post-free).
  *
- * `excludes_ruleset` and `roots` are arena-borrowed (typically from
+ * `excludes_ruleset` and `mounts` are arena-borrowed (typically from
  * `ctx->arena`); both are released by arena_destroy, not scope_free.
  * Matching for the excludes ruleset goes through base/gitignore for full
  * `!`-negation, directory walk-up, and anchoring semantics — the same
  * engine that powers the layered `.dottaignore` ruleset in core/ignore.
  *
- * `roots` is always non-NULL post-build: scope_build always calls
+ * `mounts` is always non-NULL post-build: scope_build always calls
  * profile_build_mount_table (even when there are no positional file args
- * and no custom prefixes). Downstream consumers (pathspec_create,
+ * and no custom targets). Downstream consumers (pathspec_create,
  * manifest_build in PR 3+) consult it without per-callsite NULL guards.
  */
 struct scope {
@@ -40,7 +40,7 @@ struct scope {
     string_array_t *filter;             /* CLI filter; NULL when no -p */
     gitignore_ruleset_t *excludes_ruleset; /* Compiled -e patterns; arena-borrowed; NULL when no excludes */
     pathspec_t *paths;                  /* CLI path filter; NULL when no positional args */
-    const mount_table_t *roots;         /* Deployment topology; arena-borrowed; non-NULL post-build */
+    const mount_table_t *mounts;        /* Mount table; arena-borrowed; non-NULL post-build */
     const string_array_t *active;       /* Borrowed: filter if set, else enabled */
 };
 
@@ -157,33 +157,31 @@ error_t *scope_build(
         if (err) goto fail;  /* validate_filter returns a user-facing message */
     }
 
-    /* 3. Derive active pointer — used for the topology build and by
+    /* 3. Derive active pointer — used for the mount-table build and by
      *    scope_active accessor. Valid as long as scope is alive. */
     s->active = s->filter ? s->filter : s->enabled;
 
-    /* 4. Build the deployment topology from the active set.
+    /* 4. Build the mount table from the active set.
      *    Always built — empty active set still yields a usable handle
      *    (HOME + root sentinel only), and downstream consumers
      *    (pathspec_create, future manifest_build) can rely on a
-     *    non-NULL scope_roots without per-callsite guards.
-     *    Narrowing the filter narrows the topology: a profile that is
-     *    enabled-but-filtered-out does not contribute its custom prefix
+     *    non-NULL scope_mounts without per-callsite guards.
+     *    Narrowing the filter narrows the mount table: a profile that is
+     *    enabled-but-filtered-out does not contribute its custom target
      *    to path classification for this invocation. */
-    {
-        mount_table_t *roots = NULL;
-        err = profile_build_mount_table(state, s->active, arena, &roots);
-        if (err) {
-            err = error_wrap(err, "Failed to build path roots");
-            goto fail;
-        }
-        s->roots = roots;
+    mount_table_t *mounts = NULL;
+    err = profile_build_mount_table(state, s->active, arena, &mounts);
+    if (err) {
+        err = error_wrap(err, "Failed to build mount table");
+        goto fail;
     }
+    s->mounts = mounts;
 
-    /* 5. Build path filter consuming the topology directly — no
+    /* 5. Build path filter consuming the mount table directly — no
      *    intermediate prefix-array round-trip. */
     if (in->file_count > 0) {
         err = pathspec_create(
-            in->files, in->file_count, s->roots, arena, &s->paths
+            in->files, in->file_count, s->mounts, arena, &s->paths
         );
         if (err) {
             err = error_wrap(err, "Failed to build path filter");
@@ -209,7 +207,7 @@ void scope_free(scope_t *s) {
     if (!s) return;
     string_array_free(s->enabled);
     string_array_free(s->filter);
-    /* excludes_ruleset and roots are arena-borrowed — released with the
+    /* excludes_ruleset and mounts are arena-borrowed — released with the
      * caller's arena, not here. */
     pathspec_free(s->paths);
     /* s->active is a borrow; do not free. */
@@ -232,8 +230,8 @@ const pathspec_t *scope_paths(const scope_t *s) {
     return s->paths;
 }
 
-const mount_table_t *scope_roots(const scope_t *s) {
-    return s->roots;
+const mount_table_t *scope_mounts(const scope_t *s) {
+    return s->mounts;
 }
 
 /* -------------------------------------------------------------------- */

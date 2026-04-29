@@ -1930,26 +1930,26 @@ error_t *state_get_all_files(
  *
  * Converts portable metadata (storage_path) to state entry (both paths).
  * Derives filesystem_path from the storage_path by consulting the
- * deployment topology for `profile`'s target binding.
+ * mount table for `profile`'s target binding.
  *
  * @param meta_item Metadata item (must not be NULL, must be DIRECTORY kind)
  * @param profile Source profile name (must not be NULL)
- * @param roots Per-machine deployment topology (must not be NULL)
+ * @param mounts Per-machine mount table (must not be NULL)
  * @param arena Arena for allocations (must not be NULL)
  * @param out State directory entry (must not be NULL, lifetime tied to arena)
  * @return Error or NULL on success; ERR_NOT_FOUND when meta_item->key
- *         is custom/... and profile has no target in roots.
+ *         is custom/... and profile has no target in mounts.
  */
 error_t *state_directory_entry_create_from_metadata(
     const metadata_item_t *meta_item,
     const char *profile,
-    const mount_table_t *roots,
+    const mount_table_t *mounts,
     arena_t *arena,
     state_directory_entry_t **out
 ) {
     CHECK_NULL(meta_item);
     CHECK_NULL(profile);
-    CHECK_NULL(roots);
+    CHECK_NULL(mounts);
     CHECK_NULL(arena);
     CHECK_NULL(out);
 
@@ -1975,16 +1975,14 @@ error_t *state_directory_entry_create_from_metadata(
         return ERROR(ERR_MEMORY, "Failed to allocate state directory entry");
     }
 
-    /* Derive filesystem path from storage path against the topology.
+    /* Derive filesystem path from storage path against the mount table.
      * mount_resolve returns ERR_NOT_FOUND when the storage
      * path is custom/... and the profile has no target binding —
      * propagate verbatim so the caller (manifest_sync_directories) can
      * silently skip without distinguishing wrap from raw. Any other
      * error (malformed key, allocation failure) is wrapped. */
     char *heap_path = NULL;
-    error_t *err = mount_resolve(
-        roots, profile, meta_item->key, &heap_path
-    );
+    error_t *err = mount_resolve(mounts, profile, meta_item->key, &heap_path);
     if (err) {
         if (err->code == ERR_NOT_FOUND) return err;
         return error_wrap(

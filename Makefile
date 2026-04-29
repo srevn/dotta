@@ -48,8 +48,7 @@ INCLUDES := -Iinclude -Isrc $(LIB_INCLUDES)
 # Version build flags (recursive expansion so target-specific BUILD_TYPE wins)
 VERSION_FLAGS = -DDOTTA_BUILD_COMMIT="\"$(GIT_COMMIT)$(GIT_DIRTY)\"" \
                 -DDOTTA_BUILD_BRANCH="\"$(GIT_BRANCH)\"" \
-                -DDOTTA_BUILD_OS="\"$(BUILD_OS)\"" \
-                -DDOTTA_BUILD_ARCH="\"$(BUILD_ARCH)\"" \
+                -DDOTTA_BUILD_PLATFORM="\"$(BUILD_OS)/$(BUILD_ARCH)\"" \
                 -DDOTTA_BUILD_TYPE="\"$(BUILD_TYPE)\"" \
                 -DDOTTA_BUILD_CC="\"$(CC_VERSION)\""
 

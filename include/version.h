@@ -75,8 +75,7 @@
  *
  *   -DDOTTA_BUILD_COMMIT="abc1234-dirty"   short git SHA + dirty flag
  *   -DDOTTA_BUILD_BRANCH="main"            current git branch
- *   -DDOTTA_BUILD_OS="darwin"              kernel name (lowercased)
- *   -DDOTTA_BUILD_ARCH="arm64"             machine architecture
+ *   -DDOTTA_BUILD_PLATFORM="darwin/arm64"  kernel name + machine arch
  *   -DDOTTA_BUILD_TYPE="release"           "release" | "debug"
  *   -DDOTTA_BUILD_CC="clang version ..."   compiler identity
  *
@@ -91,11 +90,8 @@
 #ifndef DOTTA_BUILD_BRANCH
 #define DOTTA_BUILD_BRANCH "unknown"
 #endif
-#ifndef DOTTA_BUILD_OS
-#define DOTTA_BUILD_OS "unknown"
-#endif
-#ifndef DOTTA_BUILD_ARCH
-#define DOTTA_BUILD_ARCH "unknown"
+#ifndef DOTTA_BUILD_PLATFORM
+#define DOTTA_BUILD_PLATFORM "unknown"
 #endif
 #ifndef DOTTA_BUILD_TYPE
 #define DOTTA_BUILD_TYPE "release"

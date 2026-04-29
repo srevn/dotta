@@ -29,9 +29,8 @@ void version_print(FILE *out) {
     }
 
     /* Print platform information */
-    if (strcmp(DOTTA_BUILD_OS, "unknown") != 0 &&
-        strcmp(DOTTA_BUILD_ARCH, "unknown") != 0) {
-        fprintf(out, "Platform: %s/%s\n", DOTTA_BUILD_OS, DOTTA_BUILD_ARCH);
+    if (strcmp(DOTTA_BUILD_PLATFORM, "unknown") != 0) {
+        fprintf(out, "Platform: %s\n", DOTTA_BUILD_PLATFORM);
     }
 
     /* Print build information */

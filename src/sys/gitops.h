@@ -338,14 +338,23 @@ error_t *gitops_get_commit(
 );
 
 /**
- * Resolve commit reference within a branch
+ * Resolve a commit reference reachable from a branch
  *
- * Resolves commit references (HEAD, HEAD~N, SHA, etc.) relative to a branch.
- * Supports:
- * - "HEAD" (branch HEAD)
- * - "HEAD~N" or "HEAD^N" (ancestry)
- * - Full/short SHA
- * - Tags
+ * Resolves commit_ref to a commit OID and verifies that commit is reachable
+ * from branch_name's tip — i.e. equals the tip or is one of its ancestors.
+ *
+ * Supported syntax:
+ * - "HEAD"             — branch's tip
+ * - "HEAD~N", "HEAD^N" — ancestry relative to the branch (not repo HEAD)
+ * - Full or short SHA  — must point to a commit reachable from the branch
+ * - Annotated/lightweight tags — peeled to commit, must be reachable
+ *
+ * Reachability invariant: git_revparse_single resolves repository-wide, so
+ * a SHA from another branch would otherwise succeed and silently misattribute
+ * the commit. This function enforces the constraint the name implies.
+ *
+ * Returns ERR_NOT_FOUND if commit_ref cannot be resolved or if it resolves
+ * to a commit not reachable from branch_name's tip.
  *
  * @param repo Repository (must not be NULL)
  * @param branch_name Branch name (must not be NULL)

@@ -2194,50 +2194,46 @@ error_t *gitops_resolve_commit_in_branch(
     CHECK_NULL(commit_ref);
     CHECK_NULL(out_oid);
 
-    git_object *obj = NULL;
-
-    /* Build reference name for branch */
+    /* Build the branch refname. */
     char ref_name[DOTTA_REFNAME_MAX];
     error_t *err_build = gitops_build_refname(
         ref_name, sizeof(ref_name), "refs/heads/%s", branch_name
     );
     if (err_build) {
         return error_wrap(
-            err_build, "Invalid branch name '%s'",
-            branch_name
+            err_build, "Invalid branch name '%s'", branch_name
         );
     }
 
-    /* Get the branch reference */
+    /* Look up the branch and capture its tip OID by value.
+     *
+     * The tip is the authoritative reference for downstream reachability
+     * checks. Copying the OID (20 bytes) decouples this function from the
+     * git_reference handle's lifetime, so we can release branch_ref
+     * immediately and operate on the OID alone. */
     git_reference *branch_ref = NULL;
     int ret = git_reference_lookup(&branch_ref, repo, ref_name);
-
     if (ret < 0) {
         return error_from_git(ret);
     }
 
-    /* Parse commit_ref relative to this branch.
-     *
-     * We check for "HEAD" exactly first, then for "HEAD~" / "HEAD^" prefixes.
-     * Using str_starts_with("HEAD") alone would be too broad — any string
-     * beginning with those four characters (e.g. a hypothetical tag named
-     * "HEADLESS") would be misrouted into the ancestry resolution path. */
-    char *allocated_ref = NULL;
-    const char *resolve_ref = commit_ref;
-
-    if (strcmp(commit_ref, "HEAD") == 0) {
-        /* Exact HEAD: return the branch tip OID directly */
-        const git_oid *branch_oid = git_reference_target(branch_ref);
-        if (!branch_oid) {
-            git_reference_free(branch_ref);
-            return ERROR(
-                ERR_GIT, "Branch '%s' has no target",
-                branch_name
-            );
-        }
-        git_oid_cpy(out_oid, branch_oid);
+    const git_oid *tip_target = git_reference_target(branch_ref);
+    if (!tip_target) {
         git_reference_free(branch_ref);
+        return ERROR(
+            ERR_GIT, "Branch '%s' has no target", branch_name
+        );
+    }
+    git_oid branch_tip_oid;
+    git_oid_cpy(&branch_tip_oid, tip_target);
+    git_reference_free(branch_ref);
 
+    /* Fast path: "HEAD" resolves to the tip we just captured.
+     *
+     * Skips revparse and the reachability check below — both would be
+     * redundant since the tip is, by definition, reachable from itself. */
+    if (strcmp(commit_ref, "HEAD") == 0) {
+        git_oid_cpy(out_oid, &branch_tip_oid);
         if (out_commit) {
             ret = git_commit_lookup(out_commit, repo, out_oid);
             if (ret < 0) {
@@ -2245,26 +2241,34 @@ error_t *gitops_resolve_commit_in_branch(
             }
         }
         return NULL;
-    } else if (str_starts_with(commit_ref, "HEAD~") ||
+    }
+
+    /* Build the input string for git_revparse_single.
+     *
+     * "HEAD~N" / "HEAD^N" must resolve relative to branch_name (not the
+     * repository's HEAD), so we rewrite them as "<branch>~N" / "<branch>^N".
+     * Anything else (raw SHA, tag, "<branch>~N") is passed through as-is —
+     * the reachability check below catches inputs that resolve to commits
+     * on other branches, regardless of input syntax.
+     *
+     * Exact "HEAD" was matched above; using str_starts_with("HEAD") alone
+     * would also match strings like a hypothetical "HEADLESS" tag and
+     * misroute them into the ancestry-rewrite path. */
+    char *allocated_ref = NULL;
+    const char *resolve_ref = commit_ref;
+
+    if (str_starts_with(commit_ref, "HEAD~") ||
         str_starts_with(commit_ref, "HEAD^")) {
-        /* HEAD~N or HEAD^N - resolve relative to branch name.
-         * Strip "HEAD" (4 chars) and prepend the branch name, giving e.g.
-         * "mybranch~2" which git_revparse_single understands natively. */
         allocated_ref = str_format("%s%s", branch_name, commit_ref + 4);
         if (!allocated_ref) {
-            git_reference_free(branch_ref);
             return ERROR(ERR_MEMORY, "Failed to allocate ref string");
         }
         resolve_ref = allocated_ref;
     }
-    /* else: commit SHA or other ref — use commit_ref directly */
 
-    git_reference_free(branch_ref);
-
-    /* Resolve the reference */
+    git_object *obj = NULL;
     ret = git_revparse_single(&obj, repo, resolve_ref);
     free(allocated_ref);  /* NULL-safe */
-
     if (ret < 0) {
         return ERROR(
             ERR_NOT_FOUND, "Commit '%s' not found in branch '%s'",
@@ -2272,27 +2276,65 @@ error_t *gitops_resolve_commit_in_branch(
         );
     }
 
-    /* Get the commit OID */
-    const git_oid *obj_oid = git_object_id(obj);
-    if (!obj_oid) {
-        git_object_free(obj);
-        return ERROR(ERR_GIT, "Failed to get object ID");
+    /* Peel to a commit object.
+     *
+     * Annotated tags wrap commits — git_revparse_single returns the tag
+     * object whose OID is the tag's, not the commit's. Peeling normalises
+     * tag/commit/symbolic-ref inputs to a commit so out_oid always names a
+     * commit and the reachability check below operates on commit OIDs (as
+     * git_graph_descendant_of requires).
+     *
+     * For inputs that are already commits, peel returns a refcount-bumped
+     * reference to the same object — which is why obj is freed separately.
+     *
+     * Inputs that cannot be peeled to a commit (trees, blobs) yield an
+     * error here rather than a confusing failure later. */
+    git_object *commit_obj = NULL;
+    ret = git_object_peel(&commit_obj, obj, GIT_OBJECT_COMMIT);
+    git_object_free(obj);
+    if (ret < 0) {
+        return error_wrap(
+            error_from_git(ret),
+            "Reference '%s' does not point to a commit", commit_ref
+        );
     }
 
-    git_oid_cpy(out_oid, obj_oid);
-
-    /* If caller wants the commit object, look it up */
-    if (out_commit) {
-        git_commit *commit = NULL;
-        ret = git_commit_lookup(&commit, repo, out_oid);
-        git_object_free(obj);
-
-        if (ret < 0) {
-            return error_from_git(ret);
+    /* Constrain the resolved commit to ones reachable from branch_name.
+     *
+     * git_revparse_single resolves repository-wide; without this check, a
+     * SHA that exists on a different branch would resolve successfully and
+     * silently misattribute the commit. The invariant we enforce: the
+     * resolved OID must equal the branch tip or be one of its ancestors.
+     *
+     * git_graph_descendant_of returns 0 for self, so an exact tip match
+     * needs an explicit oid_equal short-circuit (the same pairing sync.c
+     * uses for fast-forward checks). */
+    const git_oid *resolved_oid = git_object_id(commit_obj);
+    if (!git_oid_equal(resolved_oid, &branch_tip_oid)) {
+        int reach = git_graph_descendant_of(
+            repo, &branch_tip_oid, resolved_oid
+        );
+        if (reach < 0) {
+            git_object_free(commit_obj);
+            return error_from_git(reach);
         }
-        *out_commit = commit;
+        if (reach == 0) {
+            git_object_free(commit_obj);
+            return ERROR(
+                ERR_NOT_FOUND,
+                "Commit '%s' is not reachable from branch '%s'",
+                commit_ref, branch_name
+            );
+        }
+    }
+
+    git_oid_cpy(out_oid, resolved_oid);
+
+    if (out_commit) {
+        /* SAFETY: peel(GIT_OBJECT_COMMIT) guarantees commit_obj's type. */
+        *out_commit = (git_commit *) commit_obj;
     } else {
-        git_object_free(obj);
+        git_object_free(commit_obj);
     }
 
     return NULL;

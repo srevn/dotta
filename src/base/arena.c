@@ -8,6 +8,8 @@
 
 #include "base/arena.h"
 
+#include <stdarg.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -131,6 +133,39 @@ char *arena_strndup(arena_t *arena, const char *str, size_t n) {
     if (n > 0) memcpy(dst, str, n);
     dst[n] = '\0';
     return dst;
+}
+
+char *arena_str_format(arena_t *arena, const char *fmt, ...) {
+    if (!fmt) return NULL;
+
+    va_list args;
+    va_start(args, fmt);
+
+    /* Pass 1: size the buffer. */
+    va_list args_copy;
+    va_copy(args_copy, args);
+    int len = vsnprintf(NULL, 0, fmt, args_copy);
+    va_end(args_copy);
+
+    if (len < 0) {
+        va_end(args);
+        return NULL;
+    }
+
+    /* Pass 2: allocate and format. The +1 is the null terminator;
+     * vsnprintf's `len` excludes it but its `size` argument includes it. */
+    char *buf = arena_alloc(arena, (size_t) len + 1);
+    if (!buf) {
+        va_end(args);
+        return NULL;
+    }
+
+    int written = vsnprintf(buf, (size_t) len + 1, fmt, args);
+    va_end(args);
+
+    if (written < 0) return NULL;
+
+    return buf;
 }
 
 void arena_reset(arena_t *arena) {

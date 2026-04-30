@@ -281,6 +281,22 @@ error_t *mount_classify_kind(
 );
 
 /**
+ * Outcome of mount_resolve. Encodes "did the (kind, profile) lookup find
+ * a binding?" as data so callers don't pattern-match on a NULL pointer.
+ *
+ * BOUND   — `*out_fs` is set to an arena-borrowed filesystem path.
+ * UNBOUND — the lookup hit a `custom/` profile that has no --target on
+ *           this host (e.g., a clone before the user has configured a
+ *           target). `*out_fs` is unspecified; callers must not read it.
+ *           HOME and ROOT lookups never produce UNBOUND — those entries
+ *           are unconditional in every well-formed mount table.
+ */
+typedef enum {
+    MOUNT_RESOLVE_BOUND,
+    MOUNT_RESOLVE_UNBOUND,
+} mount_resolve_outcome_t;
+
+/**
  * Convert a storage path to a filesystem path using a profile's mount.
  *
  * Resolution table:
@@ -288,33 +304,35 @@ error_t *mount_classify_kind(
  *   root/X   -> /X                       (profile may be NULL)
  *   custom/X -> <profile's target>/X     (profile must match a CUSTOM mount)
  *
- * Outcome:
- *   - Success with binding: `*out_fs` is non-NULL and heap-allocated
- *     (caller frees).
- *   - Success without binding: `*out_fs == NULL` and the function
- *     returns NULL. This happens only for `custom/` paths whose
- *     `profile` has no --target on this host (e.g., a clone before the
- *     user has configured a target). HOME and ROOT always resolve.
- *     Callers branch on the NULL — silent skip in batch contexts
- *     (manifest_build_callback, manifest_sync_diff,
- *     manifest_sync_directories), display fallback in user-facing
+ * Outcome contract:
+ *   - MOUNT_RESOLVE_BOUND: `*out_fs` is set to an arena-borrowed
+ *     filesystem path. The pointer's lifetime tracks `arena`; callers
+ *     do not free it.
+ *   - MOUNT_RESOLVE_UNBOUND: `*out_fs` is unspecified. Callers branch on
+ *     the outcome — silent skip in batch contexts (manifest tree-walks,
+ *     state directory entry creation), display fallback in user-facing
  *     contexts (remove.c).
- *   - ERR_INVALID_ARG when `storage_path` is malformed (rejected by
- *     mount_validate_storage). Always propagate.
- *   - ERR_MEMORY on allocation failure.
+ *   - ERR_INTERNAL when `storage_path` lacks a known label (the input
+ *     boundary is supposed to validate before reaching here; this guards
+ *     against contract drift).
+ *   - ERR_MEMORY on arena allocation failure.
  *
  * @param table        Mount table (must not be NULL)
  * @param profile      Owning profile (may be NULL for home/ and root/ paths)
  * @param storage_path Storage-format path (must not be NULL, validated)
- * @param out_fs       Filesystem path on success-with-binding (caller frees);
- *                     NULL on success-without-binding (see above)
+ * @param arena        Arena that owns `*out_fs` allocation when BOUND
+ * @param outcome      Receives the lookup outcome (must not be NULL)
+ * @param out_fs       Arena-borrowed filesystem path when BOUND; unspecified
+ *                     when UNBOUND. (must not be NULL)
  * @return Error or NULL on success
  */
 error_t *mount_resolve(
     const mount_table_t *table,
     const char *profile,
     const char *storage_path,
-    char **out_fs
+    arena_t *arena,
+    mount_resolve_outcome_t *outcome,
+    const char **out_fs
 );
 
 /**

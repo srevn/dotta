@@ -62,6 +62,20 @@ char *arena_strdup(arena_t *arena, const char *str);
 char *arena_strndup(arena_t *arena, const char *str, size_t n);
 
 /**
+ * Arena-backed printf-style string formatter.
+ *
+ * Mirrors `str_format` from base/string but allocates the result from the
+ * arena instead of the heap. Two-pass implementation: vsnprintf once to
+ * size the buffer, allocate, vsnprintf again to fill. Never returns a
+ * partial string.
+ *
+ * @return Arena-allocated formatted string, or NULL if `fmt` is NULL,
+ *         on encoding error, or on OOM.
+ */
+char *arena_str_format(arena_t *arena, const char *fmt, ...)
+    __attribute__((format(printf, 2, 3)));
+
+/**
  * Reset arena to empty, retaining only the initial block.
  *
  * Frees all expansion blocks and resets the initial block's bump

@@ -1976,21 +1976,24 @@ error_t *state_directory_entry_create_from_metadata(
     }
 
     /* Derive filesystem path from storage path against the mount table.
-     * A NULL heap_path means meta_item->key is custom/... and `profile`
-     * has no target binding on this host — surface as success-with-NULL
-     * for the caller (manifest_sync_directories) to skip. Any error
-     * (malformed key, allocation failure) is wrapped. The arena-side
-     * entry allocation is deferred until after the mount lookup so a
-     * skip path performs no allocation. */
-    char *heap_path = NULL;
-    error_t *err = mount_resolve(mounts, profile, meta_item->key, &heap_path);
+     * UNBOUND means meta_item->key is custom/... and `profile` has no
+     * target binding on this host — surface as success-with-NULL for the
+     * caller (manifest_sync_directories) to skip. Any error (malformed
+     * key, allocation failure) is wrapped. The arena-side entry
+     * allocation is deferred until after the mount lookup so a skip path
+     * performs no allocation. */
+    mount_resolve_outcome_t outcome;
+    const char *fs_path = NULL;
+    error_t *err = mount_resolve(
+        mounts, profile, meta_item->key, arena, &outcome, &fs_path
+    );
     if (err) {
         return error_wrap(
             err, "Failed to derive filesystem path from storage path: %s",
             meta_item->key
         );
     }
-    if (!heap_path) return NULL;  /* Skip — no binding for custom/ on this host. */
+    if (outcome == MOUNT_RESOLVE_UNBOUND) return NULL;
 
     /* Helper macros: route allocations through arena */
     #define DUP(s)      arena_strdup(arena, (s))
@@ -1999,12 +2002,13 @@ error_t *state_directory_entry_create_from_metadata(
     state_directory_entry_t *entry =
         arena_calloc(arena, 1, sizeof(state_directory_entry_t));
     if (!entry) {
-        free(heap_path);
         return ERROR(ERR_MEMORY, "Failed to allocate state directory entry");
     }
 
-    entry->filesystem_path = arena_strdup(arena, heap_path);
-    free(heap_path);
+    /* filesystem_path is arena-borrowed via mount_resolve; the cast
+     * accommodates the legacy `char *` field typing without implying
+     * mutability. */
+    entry->filesystem_path = (char *) fs_path;
 
     entry->storage_path = DUP(meta_item->key);
     entry->profile = DUP(profile);

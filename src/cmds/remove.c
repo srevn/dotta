@@ -75,8 +75,8 @@ static error_t *validate_options(const cmd_remove_options_t *opts) {
  * @param mounts Per-machine mount table (must not be NULL). Caller passes
  *               ctx->mounts; the table covers HOME, ROOT, and every enabled
  *               profile's binding. Unenabled-profile lookups (custom/X)
- *               return NULL fs through mount_resolve, which the caller
- *               handles as "no filesystem path on this machine".
+ *               surface MOUNT_RESOLVE_UNBOUND, which the caller handles as
+ *               "no filesystem path on this machine".
  */
 static error_t *resolve_paths_to_remove(
     git_repository *repo,
@@ -141,7 +141,6 @@ static error_t *resolve_paths_to_remove(
     for (size_t i = 0; i < path_count; i++) {
         const char *input_path = input_paths[i];
         char *storage_path = NULL;
-        char *canonical = NULL;
 
         /* Resolve input path to storage format (file need not exist) */
         err = mount_resolve_input(mounts, input_path, &storage_path);
@@ -159,13 +158,19 @@ static error_t *resolve_paths_to_remove(
             continue;
         }
 
-        /* Try to get filesystem path for output. mount_resolve sets
-         * canonical to NULL when the profile has no --target on this
-         * machine; the storage path serves as fallback. Allocation
-         * errors are non-fatal here — same fallback. */
-        error_t *convert_err = mount_resolve(mounts, profile, storage_path, &canonical);
+        /* Try to get filesystem path for output. UNBOUND fires when the
+         * profile has no --target on this machine; the storage path
+         * serves as fallback. Genuine resolve errors (malformed input,
+         * OOM) are also non-fatal here — same fallback. */
+        mount_resolve_outcome_t canonical_outcome;
+        const char *canonical = NULL;
+        error_t *convert_err = mount_resolve(
+            mounts, profile, storage_path, arena, &canonical_outcome, &canonical
+        );
         if (convert_err) {
             error_free(convert_err);
+            canonical = NULL;
+        } else if (canonical_outcome == MOUNT_RESOLVE_UNBOUND) {
             canonical = NULL;
         }
 
@@ -175,22 +180,16 @@ static error_t *resolve_paths_to_remove(
 
         /* Check exact match first - O(1) with hashmap */
         if (hashmap_has(profile_files_map, storage_path)) {
-            /* Exact file match found */
-            char *fs_path = canonical ? strdup(canonical) : NULL;
-
             err = string_array_push(storage_paths, storage_path);
             if (!err) {
                 /* If filesystem path unavailable (custom/ without prefix context),
                  * fall back to storage path. Downstream consumers handle gracefully:
                  * state lookups return "not found", display shows storage format. */
-                err = string_array_push(filesystem_paths, fs_path ? fs_path : storage_path);
+                err = string_array_push(filesystem_paths, canonical ? canonical : storage_path);
             }
-
-            free(fs_path);
 
             if (err) {
                 free(storage_path);
-                free(canonical);
                 err = error_wrap(err, "Failed to track path for removal");
                 goto cleanup;
             }
@@ -211,13 +210,15 @@ static error_t *resolve_paths_to_remove(
             if (str_starts_with(profile_file, storage_path)) {
                 /* Ensure it's a directory boundary */
                 if (profile_file[storage_path_len] == '/') {
-                    /* Reconstruct filesystem path for this file. mount_resolve
-                     * sets file_fs_path = NULL when the profile has no
-                     * --target on this machine — fall back to the storage
-                     * path so the hook context still names the file. */
-                    char *file_fs_path = NULL;
+                    /* Reconstruct filesystem path for this file. UNBOUND
+                     * fires when the profile has no --target on this
+                     * machine — fall back to the storage path so the
+                     * hook context still names the file. */
+                    mount_resolve_outcome_t file_outcome;
+                    const char *file_fs_path = NULL;
                     err = mount_resolve(
-                        mounts, profile, profile_file, &file_fs_path
+                        mounts, profile, profile_file, arena,
+                        &file_outcome, &file_fs_path
                     );
                     if (err) {
                         if (opts->verbose || !opts->force) {
@@ -231,19 +232,18 @@ static error_t *resolve_paths_to_remove(
                         err = NULL;
                         continue;
                     }
+                    bool bound = (file_outcome == MOUNT_RESOLVE_BOUND);
 
                     err = string_array_push(storage_paths, profile_file);
                     if (!err) {
                         err = string_array_push(
                             filesystem_paths,
-                            file_fs_path ? file_fs_path : profile_file
+                            bound ? file_fs_path : profile_file
                         );
                     }
-                    free(file_fs_path);
 
                     if (err) {
                         free(storage_path);
-                        free(canonical);
                         err = error_wrap(err, "Failed to track path for removal");
                         goto cleanup;
                     }
@@ -259,7 +259,6 @@ static error_t *resolve_paths_to_remove(
                 snprintf(error_storage_path, sizeof(error_storage_path), "%s", storage_path);
 
                 free(storage_path);
-                free(canonical);
 
                 err = ERROR(
                     ERR_NOT_FOUND, "File '%s' not found in profile '%s'\n"
@@ -276,7 +275,6 @@ static error_t *resolve_paths_to_remove(
         }
 
         free(storage_path);
-        free(canonical);
     }
 
     /* Check if we found any files */
@@ -1403,23 +1401,29 @@ static error_t *delete_profile_branch(
      * Borrows the caller-supplied mount table. HOME and ROOT are always
      * present, so home/ and root/ paths resolve unconditionally. CUSTOM
      * paths resolve only when the profile is enabled with a binding;
-     * otherwise mount_resolve's NULL-out contract fires and the loop
-     * substitutes the storage path as the user-visible fallback. */
+     * otherwise MOUNT_RESOLVE_UNBOUND fires and the loop substitutes the
+     * storage path as the user-visible fallback. */
     if (files) {
         hook_fs_paths = string_array_new(0);
         if (hook_fs_paths) {
             for (size_t i = 0; i < files->count; i++) {
-                char *fs_path = NULL;
+                mount_resolve_outcome_t outcome;
+                const char *fs_path = NULL;
                 error_t *conv_err = mount_resolve(
-                    mounts, opts->profile, files->items[i], &fs_path
+                    mounts, opts->profile, files->items[i], arena,
+                    &outcome, &fs_path
                 );
-                if (conv_err) error_free(conv_err);
-                if (fs_path) {
+                if (conv_err) {
+                    error_free(conv_err);
+                    /* Fall back to storage path (allocation failure or
+                     * malformed input — non-fatal here). */
+                    string_array_push(hook_fs_paths, files->items[i]);
+                } else if (outcome == MOUNT_RESOLVE_BOUND) {
                     string_array_push(hook_fs_paths, fs_path);
-                    free(fs_path);
                 } else {
-                    /* Fall back to storage path (custom/ without binding,
-                     * or allocation failure). */
+                    /* UNBOUND: custom/ profile without binding on this
+                     * host. Fall back to storage path so the hook sees a
+                     * meaningful name. */
                     string_array_push(hook_fs_paths, files->items[i]);
                 }
             }

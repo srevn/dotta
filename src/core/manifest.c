@@ -589,20 +589,22 @@ error_t *manifest_remove_files(
     for (size_t i = 0; i < removed_storage_paths->count; i++) {
         const char *storage_path = removed_storage_paths->items[i];
 
-        /* Resolve to filesystem path against the mount table. A NULL
-         * filesystem_path means removed_profile has no target binding
-         * for a custom/ path — the file could never have been deployed
-         * on this machine, so there is nothing to reassign or release.
-         * Skip. */
-        char *filesystem_path = NULL;
-        err = mount_resolve(mounts, removed_profile, storage_path, &filesystem_path);
+        /* Resolve to filesystem path against the mount table. UNBOUND
+         * means removed_profile has no target binding for a custom/ path
+         * — the file could never have been deployed on this machine, so
+         * there is nothing to reassign or release. Skip. */
+        mount_resolve_outcome_t outcome;
+        const char *filesystem_path = NULL;
+        err = mount_resolve(
+            mounts, removed_profile, storage_path, arena, &outcome, &filesystem_path
+        );
         if (err) {
             err = error_wrap(
                 err, "Failed to resolve path: %s", storage_path
             );
             goto cleanup;
         }
-        if (!filesystem_path) continue;
+        if (outcome == MOUNT_RESOLVE_UNBOUND) continue;
 
         /* Lookup current manifest entry */
         state_file_entry_t *current_entry = NULL;
@@ -613,7 +615,6 @@ error_t *manifest_remove_files(
             if (get_err) {
                 error_free(get_err);
             }
-            free(filesystem_path);
             continue;
         }
 
@@ -621,7 +622,6 @@ error_t *manifest_remove_files(
         if (strcmp(current_entry->profile, removed_profile) != 0) {
             /* Different profile owns it, skip */
             state_free_entry(current_entry);
-            free(filesystem_path);
             continue;
         }
 
@@ -647,7 +647,6 @@ error_t *manifest_remove_files(
                     err, "Failed to sync fallback for %s", filesystem_path
                 );
                 state_free_entry(current_entry);
-                free(filesystem_path);
                 goto cleanup;
             }
 
@@ -698,7 +697,6 @@ error_t *manifest_remove_files(
         }
 
         state_free_entry(current_entry);
-        free(filesystem_path);
     }
 
     /* Set output counts */
@@ -1689,23 +1687,26 @@ error_t *manifest_sync_diff(
         /* Resolve filesystem path against the mount table. Two distinct
          * outcomes route differently:
          *
-         *   filesystem_path == NULL — custom/ entry but `profile` has
+         *   MOUNT_RESOLVE_UNBOUND — custom/ entry but `profile` has
          *                   no target binding. Counted as skipped so
          *                   the caller can surface "deferred until
          *                   --target is set" in the user-visible report.
-         *   err != NULL   — malformed storage path (invalid_arg from
-         *                   mount_validate_storage) or allocation
-         *                   failure. Skip silently — the Git commit
-         *                   already advanced the branch, the next
-         *                   reconcile will revisit. */
-        char *filesystem_path = NULL;
-        err = mount_resolve(mounts, profile, storage_path, &filesystem_path);
+         *   err != NULL   — malformed storage path (ERR_INTERNAL from
+         *                   mount_decode_label) or allocation failure.
+         *                   Skip silently — the Git commit already
+         *                   advanced the branch, the next reconcile
+         *                   will revisit. */
+        mount_resolve_outcome_t outcome;
+        const char *filesystem_path = NULL;
+        err = mount_resolve(
+            mounts, profile, storage_path, arena, &outcome, &filesystem_path
+        );
         if (err) {
             error_free(err);
             err = NULL;
             continue;
         }
-        if (!filesystem_path) {
+        if (outcome == MOUNT_RESOLVE_UNBOUND) {
             skipped++;
             continue;
         }
@@ -1725,7 +1726,6 @@ error_t *manifest_sync_diff(
             if (!entry) {
                 /* File not in fresh manifest (filtered by .dottaignore or other rules)
                  * This is expected behavior - skip gracefully */
-                free(filesystem_path);
                 continue;
             }
 
@@ -1736,7 +1736,6 @@ error_t *manifest_sync_diff(
              * it when its changes are synced. */
             if (entry->profile && strcmp(entry->profile, profile) != 0) {
                 /* Different profile won precedence - skip this file */
-                free(filesystem_path);
                 continue;
             }
 
@@ -1748,7 +1747,6 @@ error_t *manifest_sync_diff(
                 err = error_wrap(
                     err, "Failed to sync '%s' to manifest", filesystem_path
                 );
-                free(filesystem_path);
                 goto cleanup;
             }
 
@@ -1778,7 +1776,6 @@ error_t *manifest_sync_diff(
                     err = error_wrap(
                         err, "Failed to sync fallback for '%s'", filesystem_path
                     );
-                    free(filesystem_path);
                     goto cleanup;
                 }
 
@@ -1796,11 +1793,9 @@ error_t *manifest_sync_diff(
                         /* File not in state (never deployed) - nothing to do */
                         error_free(err);
                         err = NULL;
-                        free(filesystem_path);
                         continue;
                     }
                     /* Fatal state error - propagate */
-                    free(filesystem_path);
                     goto cleanup;
                 }
 
@@ -1854,8 +1849,6 @@ error_t *manifest_sync_diff(
                 state_free_entry(state_entry);
             }
         }
-
-        free(filesystem_path);
     }
 
     /* Set output counters */
@@ -2299,16 +2292,19 @@ static int manifest_build_callback(
 
     /* Convert storage path to filesystem path against the mount table.
      *
-     * mount_resolve sets *heap_path = NULL when storage_path is
-     * custom/... and ctx->profile has no target binding in mounts —
-     * machine-specific configuration (e.g., /jails/proxy/root) stored in
-     * the per-machine state database. During clone or when a profile is
-     * enabled without --target, we can't resolve where those files
-     * belong, so the entry is skipped silently. ERR_INVALID_ARG (rejected
-     * by mount_validate_storage) is a real fault and propagates. */
-    char *filesystem_path = NULL;
-    char *heap_path = NULL;
-    error_t *err = mount_resolve(ctx->mounts, ctx->profile, storage_path, &heap_path);
+     * MOUNT_RESOLVE_UNBOUND fires when storage_path is custom/... and
+     * ctx->profile has no target binding in mounts — machine-specific
+     * configuration (e.g., /jails/proxy/root) stored in the per-machine
+     * state database. During clone or when a profile is enabled without
+     * --target, we can't resolve where those files belong, so the entry
+     * is skipped silently. Genuine errors (malformed path, OOM)
+     * propagate. */
+    mount_resolve_outcome_t outcome;
+    const char *filesystem_path = NULL;
+    error_t *err = mount_resolve(
+        ctx->mounts, ctx->profile, storage_path, ctx->arena,
+        &outcome, &filesystem_path
+    );
     if (err) {
         ctx->error = error_wrap(
             err, "Failed to convert path '%s' from profile '%s'",
@@ -2316,13 +2312,7 @@ static int manifest_build_callback(
         );
         return -1;
     }
-    if (!heap_path) return 0;  /* No binding for custom/ on this host — skip. */
-    filesystem_path = arena_strdup(ctx->arena, heap_path);
-    free(heap_path);
-    if (!filesystem_path) {
-        ctx->error = ERROR(ERR_MEMORY, "Failed to arena-copy filesystem path");
-        return -1;
-    }
+    if (outcome == MOUNT_RESOLVE_UNBOUND) return 0;
 
     /* Check for existing entry (profile precedence override) */
     void *idx_ptr = hashmap_get(ctx->path_map, filesystem_path);
@@ -2357,9 +2347,12 @@ static int manifest_build_callback(
         override->group = NULL;
         override->encrypted = false;
 
-        /* Update with new values from higher-precedence profile */
+        /* Update with new values from higher-precedence profile.
+         * filesystem_path is arena-borrowed via mount_resolve; the
+         * cast accommodates the legacy `char *` field typing without
+         * implying mutability. */
         override->storage_path = dup_storage_path;
-        override->filesystem_path = filesystem_path;
+        override->filesystem_path = (char *) filesystem_path;
         override->profile = ctx->profile;
 
         /* Extract identity from borrowed tree entry (blob_oid, type, mode).
@@ -2436,7 +2429,9 @@ static int manifest_build_callback(
         file_entry_t *new_entry = &ctx->manifest->entries[ctx->manifest->count];
         memset(new_entry, 0, sizeof(*new_entry));
         new_entry->storage_path = dup_storage_path;
-        new_entry->filesystem_path = filesystem_path;
+        /* filesystem_path is arena-borrowed via mount_resolve; the cast
+         * accommodates the legacy `char *` field typing. */
+        new_entry->filesystem_path = (char *) filesystem_path;
         new_entry->profile = ctx->profile;
 
         /* Extract identity from borrowed tree entry (blob_oid, type, mode) */

@@ -672,7 +672,8 @@ static const mount_entry_t *find_entry_for(
 }
 
 /**
- * Concatenate a mount target prefix with a label-stripped tail.
+ * Concatenate a mount target prefix with a label-stripped tail into an
+ * arena-borrowed filesystem path.
  *
  * Format `"%s/%s"` is uniform across all three kinds:
  *   ROOT:   "" + "/" + "etc/hosts"         -> "/etc/hosts"
@@ -686,15 +687,17 @@ static const mount_entry_t *find_entry_for(
  * no trailing slash, ROOT is always empty.
  */
 static error_t *join_target_with_tail(
+    arena_t *arena,
     const char *target_raw,
     const char *tail,
-    char **out
+    const char **out
 ) {
     size_t target_len = strlen(target_raw);
     if (target_len > 0 && target_raw[target_len - 1] == '/') {
         target_len--;
     }
-    char *result = str_format("%.*s/%s", (int) target_len, target_raw, tail);
+    const char *result =
+        arena_str_format(arena, "%.*s/%s", (int) target_len, target_raw, tail);
     if (!result) {
         return ERROR(ERR_MEMORY, "Failed to allocate filesystem path");
     }
@@ -706,10 +709,14 @@ error_t *mount_resolve(
     const mount_table_t *table,
     const char *profile,
     const char *storage_path,
-    char **out_fs
+    arena_t *arena,
+    mount_resolve_outcome_t *outcome,
+    const char **out_fs
 ) {
     CHECK_NULL(table);
     CHECK_NULL(storage_path);
+    CHECK_NULL(arena);
+    CHECK_NULL(outcome);
     CHECK_NULL(out_fs);
 
     /* Storage paths arriving here are validated at their write boundary —
@@ -717,8 +724,8 @@ error_t *mount_resolve(
      * validate before commit), state DB INSERT (validated upstream), or
      * an explicit CLI-input check at the calling site (add.c). The
      * decode-label path below tolerates any non-validated leading-label
-     * input by surfacing ERR_INTERNAL via the kind switch — but the
-     * invariant is upstream, not here. */
+     * input by surfacing ERR_INTERNAL — but the invariant is upstream,
+     * not here. */
     mount_kind_t kind;
     const char *tail = NULL;
     if (!mount_decode_label(storage_path, &kind, &tail)) {
@@ -733,16 +740,19 @@ error_t *mount_resolve(
         /* Only CUSTOM lookups can miss here: HOME and ROOT entries are
          * unconditional (mount_table_build adds them every time). A
          * CUSTOM miss means the profile has no --target on this machine
-         * — e.g., a clone before the user has configured a target. The
-         * NULL-out contract collapses both the "skip" (batch tree walks)
-         * and the "fall back to display" (user-facing commands) idioms
-         * into a single branch on `*out_fs == NULL`; malformed-input
-         * failures still surface as ERR_INVALID_ARG above. */
-        *out_fs = NULL;
+         * — e.g., a clone before the user has configured a target.
+         * Surface as UNBOUND so callers branch on outcome rather than
+         * pattern-matching on a NULL pointer; malformed-input failures
+         * still surface as ERR_INTERNAL above. */
+        *outcome = MOUNT_RESOLVE_UNBOUND;
         return NULL;
     }
 
-    return join_target_with_tail(entry->target_raw, tail, out_fs);
+    error_t *err = join_target_with_tail(arena, entry->target_raw, tail, out_fs);
+    if (err) return err;
+
+    *outcome = MOUNT_RESOLVE_BOUND;
+    return NULL;
 }
 
 /**

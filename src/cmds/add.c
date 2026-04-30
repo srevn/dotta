@@ -1468,17 +1468,31 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
 
             /* Convert storage path to filesystem path via the mount table.
              * For home/ and root/ the profile is ignored; for custom/
-             * the per-profile target binding is consulted. */
-            char *fs_path = NULL;
-            err = mount_resolve(mounts, opts->profile, file, &fs_path);
+             * the per-profile target binding is consulted. The earlier
+             * `kind == MOUNT_CUSTOM` precondition above (--target check)
+             * guarantees the lookup binds — surface a contract violation
+             * via ERR_INTERNAL if a future change weakens that
+             * invariant. */
+            mount_resolve_outcome_t outcome;
+            const char *fs_path = NULL;
+            err = mount_resolve(
+                mounts, opts->profile, file, ctx->arena, &outcome, &fs_path
+            );
             if (err) {
                 err = error_wrap(err, "Failed to convert storage path '%s'", file);
+                goto cleanup;
+            }
+            if (outcome != MOUNT_RESOLVE_BOUND) {
+                err = ERROR(
+                    ERR_INTERNAL,
+                    "mount_resolve unexpectedly UNBOUND for '%s' "
+                    "after --target precondition", file
+                );
                 goto cleanup;
             }
 
             /* Make absolute without following symlinks */
             err = fs_make_absolute(fs_path, &absolute);
-            free(fs_path);
             if (err) {
                 err = error_wrap(err, "Failed to resolve path '%s'", file);
                 goto cleanup;

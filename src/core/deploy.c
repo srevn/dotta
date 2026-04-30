@@ -240,35 +240,34 @@ static error_t *resolve_deployment_ownership(
     *out_uid = (uid_t) -1;
     *out_gid = (gid_t) -1;
 
-    /* Determine label kind. Storage paths reaching here are validated
-     * (manifest-derived), so mount_kind_extract is always expected to
-     * succeed; treat a false return as "not home/" to fail closed. */
-    mount_kind_t kind;
-    bool is_home_label = mount_kind_extract(storage_path, &kind) && kind == MOUNT_HOME;
-    bool requires_root_privileges = privilege_path_requires_root(storage_path);
+    const mount_spec_t *spec = mount_spec_for_label(storage_path);
+    bool requires_root_privileges = spec && spec->tracks_ownership;
 
-    /* Case 1: File deploys to user's home when running as root (sudo handling)
+    /* Case 1: file lands in the invoking user's HOME when running as
+     * root.
      *
-     * Primary: storage_path starts with "home/" (always deploys to $HOME)
-     * Fallback: filesystem_path is under actual user's home (catches custom/
-     * label files reclassified by --target that still land under $HOME) */
-    if (privilege_is_elevated()) {
-        bool deploys_to_home = is_home_label;
-
-        if (!deploys_to_home && filesystem_path) {
-            deploys_to_home = privilege_path_is_under_home(filesystem_path);
+     * fs_get_home is the single source of truth for "the user's home"
+     * (sudo-aware via SUDO_UID's pw_dir); privilege_path_is_user_home
+     * trusts it. No label dispatch needed:
+     *   home/X    → resolves under HOME → de-escalate
+     *   root/X    → /X, never under HOME → fall through
+     *   custom/X with --target $HOME/jail → under HOME → de-escalate
+     *   custom/X with --target /jail      → outside HOME → fall through
+     *
+     * The fs path tells us directly. The kind dispatch this replaces
+     * was a workaround for HOME-truth divergence between fs_get_home
+     * and the inlined SUDO_UID lookup; once both share fs_get_home,
+     * the dispatch collapses. */
+    if (privilege_is_elevated()
+        && filesystem_path && privilege_path_is_user_home(filesystem_path)) {
+        error_t *err = privilege_get_actual_user(out_uid, out_gid);
+        if (err) {
+            return error_wrap(
+                err, "Failed to determine actual user for home path: %s",
+                storage_path
+            );
         }
-
-        if (deploys_to_home) {
-            error_t *err = privilege_get_actual_user(out_uid, out_gid);
-            if (err) {
-                return error_wrap(
-                    err, "Failed to determine actual user for home path: %s",
-                    storage_path
-                );
-            }
-            return NULL;
-        }
+        return NULL;
     }
 
     /* Case 2: root/ or custom/ prefix with ownership metadata -> resolve to UID/GID */

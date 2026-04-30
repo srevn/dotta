@@ -43,73 +43,48 @@ bool privilege_is_elevated(void);
 bool privilege_is_sudo(void);
 
 /**
- * Check if a storage path requires root privileges
+ * Check if a filesystem path is under the invoking user's home directory.
  *
- * Paths with root/ or custom/ prefix require root privileges for complete
- * metadata capture (ownership information). Paths with home/ prefix do not.
+ * Single boundary predicate replacing the prior pair
+ * (privilege_target_needs_elevation, privilege_path_is_under_home):
+ * one polarity, one implementation, one source of HOME truth via
+ * fs_get_home (sudo-aware).
  *
- * NOTE: This answers "could this path type carry ownership metadata?" —
- * the correct predicate for metadata capture and deployment layers, which
- * self-correct via privilege_is_elevated() and (owner || group) guards.
+ * Symlink-aware: cross-checks raw and realpath-canonical forms of
+ * both sides, so /tmp -> /private/tmp on macOS and similar bind/loop
+ * arrangements do not produce false negatives. Component-aware
+ * boundary so /home/user does not falsely match /home/username.
  *
- * For pre-flight privilege checks ("should we prompt for sudo?"), use
- * privilege_needs_elevation() instead, which considers whether the
- * deployment target is under $HOME.
+ * Returns false when:
+ *   - filesystem_path is NULL
+ *   - HOME cannot be resolved (no $HOME, no passwd entry)
+ *   - filesystem_path is genuinely outside HOME
  *
- * @param storage_path Storage path (e.g., "home/.bashrc", "custom/etc/nginx.conf")
- * @return true if path requires root privileges, false otherwise
+ * The "false on lookup failure" bias keeps callers conservative: a
+ * caller asking "should I de-escalate ownership?" gets "no" when in
+ * doubt; a caller asking "no elevation needed?" gets "elevation
+ * needed" when in doubt (via the natural negation).
+ *
+ * @param filesystem_path Absolute filesystem path to check (may be NULL)
+ * @return true iff filesystem_path is under the user's HOME
  */
-bool privilege_path_requires_root(const char *storage_path);
-
-/**
- * Check if a deployment target requires elevated privileges
- *
- * Determines whether a custom deployment target points to a location
- * that requires root access. Targets under $HOME are accessible to
- * the current user without elevation.
- *
- * Uses canonical path comparison (resolves symlinks) with proper
- * path boundary checks to avoid false matches (e.g., /home/user
- * vs /home/username).
- *
- * Safe defaults: returns true (needs elevation) when target is NULL
- * or when path resolution fails (can't determine HOME, target
- * doesn't exist on this system, etc.).
- *
- * @param target Deployment target path (NULL returns true)
- * @return true if elevation needed, false if target is under $HOME
- */
-bool privilege_target_needs_elevation(const char *target);
-
-/**
- * Check if a filesystem path is under the actual user's home directory
- *
- * Under sudo: resolves actual user's home from SUDO_UID via passwd database,
- * which is reliable regardless of how sudo configures $HOME.
- * Not under sudo: returns false (no de-escalation context).
- *
- * Used by deployment ownership resolution: custom/ prefix files that deploy
- * under $HOME should get actual user ownership when running under sudo,
- * matching the behavior of home/ prefix files.
- *
- * @param filesystem_path Absolute filesystem path to check (must not be NULL)
- * @return true if under sudo and path is under actual user's home
- */
-bool privilege_path_is_under_home(const char *filesystem_path);
+bool privilege_path_is_user_home(const char *filesystem_path);
 
 /**
  * Check if a storage path requires elevation for pre-flight purposes
  *
  * Pre-flight decision function: "should we prompt for sudo?"
  *
- * Unlike privilege_path_requires_root() which answers "could this path
- * type carry ownership metadata?" (used by metadata/deploy layers),
- * this function answers the narrower pre-flight question by considering
- * whether the resolved filesystem path is under $HOME.
+ * Composes the label vocabulary (mount spec) with the resolved
+ * filesystem path's home-membership:
  *
- * - home/ paths: never need elevation
+ * - home/ paths: never need elevation (no ownership metadata)
  * - root/ paths: always need elevation
  * - custom/ paths: need elevation only if filesystem_path is NOT under $HOME
+ *
+ * For metadata-capture/deploy layers' "could this path carry ownership
+ * metadata?" question, read mount_spec_for_label(p)->tracks_ownership
+ * directly — the label vocabulary lives in infra/mount.
  *
  * @param storage_path Storage path (e.g., "custom/etc/nginx.conf")
  * @param filesystem_path Resolved filesystem path (NULL if unknown → conservative true)
@@ -155,8 +130,8 @@ error_t *privilege_get_actual_user(uid_t *uid, gid_t *gid);
  * Callers that have only a kind on hand (e.g., add.c's storage-path
  * inputs and classification-root case) compute the predicate locally
  * — they have no filesystem_path and use a precomputed
- * "custom target needs elevation" bool instead of consulting
- * privilege_target_needs_elevation per file.
+ * "target outside HOME" bool (one fs_get_home / is_under per command)
+ * instead of consulting privilege_path_is_user_home per file.
  *
  * Lifetime: storage_path is copied into `labels` (string_array_push
  * strdups), so the array is independent of the entry's lifetime.

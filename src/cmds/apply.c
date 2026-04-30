@@ -602,7 +602,7 @@ static error_t *ensure_complete_apply_privileges(
     size_t cap = manifest->count + file_orphan_count + dir_orphan_count;
     if (cap == 0) return NULL;
 
-    string_array_t labels STRING_ARRAY_AUTO = {0};
+    string_array_t labels STRING_ARRAY_AUTO = { 0 };
     error_t *err = string_array_init_cap(&labels, cap);
     if (err) return error_wrap(err, "Failed to reserve privilege label array");
 

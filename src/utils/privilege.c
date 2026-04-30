@@ -46,10 +46,10 @@
  * Trailing slashes on `reference_dir` are normalised internally so that
  * "/home/user/" and "/home/user" behave identically.
  *
- * Privilege-internal: the only callers are the HOME-boundary checks below.
- * Generic-looking but specifically tuned for "is this filesystem path under
- * the user's home / the deployment target?" — moving it elsewhere when no
- * second consumer exists would be premature indirection.
+ * Privilege-internal: the sole caller is privilege_path_is_user_home.
+ * Generic-looking but specifically tuned for the HOME-boundary query —
+ * moving it elsewhere when no second consumer exists would be premature
+ * indirection.
  */
 static bool is_under(
     const char *absolute_path,
@@ -80,7 +80,7 @@ static bool is_under(
             if (!refs[r]) continue;
 
             /* Trim trailing slashes from the reference for boundary
-             * parity. getenv("HOME"), pw_dir, and user-supplied targets
+             * parity. fs_get_home, pw_dir, and user-supplied targets
              * may carry a stray trailing slash; "/home/user/" and
              * "/home/user" must classify the same path identically. */
             size_t ref_len = strlen(refs[r]);
@@ -122,81 +122,50 @@ bool privilege_is_sudo(void) {
 }
 
 /**
- * Check if a storage path requires root privileges
- */
-bool privilege_path_requires_root(const char *storage_path) {
-    const mount_spec_t *spec = mount_spec_for_label(storage_path);
-    return spec && spec->tracks_ownership;
-}
-
-/**
- * Check if a deployment target requires elevated privileges
+ * Check if a filesystem path is under the invoking user's HOME.
  *
- * Returns true when the target is NOT under $HOME — files under it carry
- * ownership metadata that requires root to read on capture. The
- * boundary-aware comparison (is_under) cross-checks raw and canonical
- * forms of both sides, so symlinks (e.g., macOS /tmp -> /private/tmp)
- * do not produce false negatives.
+ * Single boundary predicate. fs_get_home is the chokepoint that
+ * reconciles env, sudo, and passwd inputs into one HOME answer; we
+ * trust it here. The boundary-aware comparison cross-checks raw and
+ * canonical forms to avoid symlink false negatives.
+ *
+ * Returns false when:
+ *   - filesystem_path is NULL
+ *   - fs_get_home fails (no env, no passwd) — caller's natural
+ *     negation then yields "needs elevation" / "do not de-escalate",
+ *     both conservative.
  */
-bool privilege_target_needs_elevation(const char *target) {
-    if (!target || target[0] == '\0') {
-        return true;  /* No target → conservative default */
-    }
+bool privilege_path_is_user_home(const char *filesystem_path) {
+    if (!filesystem_path) return false;
 
     char *home = NULL;
     error_t *err = fs_get_home(&home);
     if (err) {
         error_free(err);
-        return true;  /* Can't determine HOME → conservative default */
+        return false;
     }
 
-    bool under_home = is_under(target, home);
+    bool under = is_under(filesystem_path, home);
     free(home);
-
-    return !under_home;
+    return under;
 }
 
 /**
- * Check if filesystem path is under actual user's home (sudo-aware)
+ * Check if a storage path requires elevation for pre-flight purposes.
  *
- * Reads the sudo-invoking user's home from getpwuid(SUDO_UID)->pw_dir
- * (more reliable than $HOME under sudo, which may have been overridden
- * with `sudo -H`). The boundary-aware comparison cross-checks raw and
- * canonical forms to avoid symlink false negatives.
- */
-bool privilege_path_is_under_home(const char *filesystem_path) {
-    if (!filesystem_path || !privilege_is_sudo()) {
-        return false;
-    }
-
-    const char *sudo_uid_str = getenv("SUDO_UID");
-    if (!sudo_uid_str) {
-        return false;
-    }
-
-    char *endptr;
-    errno = 0;
-    long parsed_uid = strtol(sudo_uid_str, &endptr, 10);
-    if (errno != 0 || *endptr != '\0' || parsed_uid < 0) {
-        return false;
-    }
-
-    struct passwd *pw = getpwuid((uid_t) parsed_uid);
-    if (!pw || !pw->pw_dir) {
-        return false;
-    }
-
-    return is_under(filesystem_path, pw->pw_dir);
-}
-
-/**
- * Check if a storage path requires elevation for pre-flight purposes
+ * Composer: label vocabulary (does this kind track ownership? is it
+ * profile-keyed?) crossed with the resolved filesystem path's
+ * home-membership.
  *
- * For custom/ paths, checks whether the resolved filesystem_path is under $HOME.
- * This works because filesystem_path = target + /relative; the
- * boundary-aware ancestor check on the full path gives the same result as on
- * the target alone (no traversal allowed in custom paths, enforced by
- * mount_validate_target).
+ *   home/   → spec->tracks_ownership=false  → no elevation
+ *   root/   → spec->tracks_ownership=true,
+ *              spec->per_profile=false        → always elevation
+ *   custom/ → spec->tracks_ownership=true,
+ *              spec->per_profile=true         → elevation iff fs path
+ *                                               is outside the user's HOME
+ *
+ * NULL filesystem_path is treated conservatively (assume elevation
+ * needed) for ownership-tracking labels — matches the prior contract.
  */
 bool privilege_needs_elevation(
     const char *storage_path,
@@ -204,12 +173,10 @@ bool privilege_needs_elevation(
 ) {
     const mount_spec_t *spec = mount_spec_for_label(storage_path);
     if (!spec || !spec->tracks_ownership) return false;
-
-    /* Two ownership-tracking kinds today:
-     *   ROOT (!per_profile): always needs elevation.
-     *   CUSTOM (per_profile): elevation depends on deployment target */
     if (!spec->per_profile) return true;
-    return privilege_target_needs_elevation(filesystem_path);
+
+    if (!filesystem_path) return true;
+    return !privilege_path_is_user_home(filesystem_path);
 }
 
 /**

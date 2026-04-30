@@ -361,9 +361,20 @@ error_t *fs_get_parent_dir(const char *path, char **out);
 error_t *fs_path_join(const char *base, const char *component, char **out);
 
 /**
- * Get $HOME directory.
+ * Get the invoking user's HOME directory.
  *
- * Tries $HOME from getenv(3) first, falls back to passwd database.
+ * Single source of truth for "the actual user's home", sudo-aware so
+ * every downstream consumer agrees regardless of how sudo configured
+ * $HOME. Resolution order:
+ *
+ *   1. Under sudo (SUDO_UID set): getpwuid(SUDO_UID)->pw_dir.
+ *      Bypasses `sudo -H` rewrites and varying env_keep policies.
+ *   2. Not under sudo: $HOME from getenv(3). Honors the test
+ *      isolation pattern (HOME=/tmp/dotta-test...).
+ *   3. Last resort: passwd lookup of the effective uid.
+ *
+ * Returns ERR_FS only when no source yields a usable directory
+ * (no HOME env, no passwd entry).
  *
  * @param out HOME directory path (must not be NULL, caller must free)
  * @return Error or NULL on success

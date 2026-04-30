@@ -868,7 +868,7 @@ error_t *cmd_status(const dotta_ctx_t *ctx, const cmd_status_options_t *opts) {
 
         /* Check privileges for complete status (may re-exec with sudo) */
         if (!opts->no_sudo && manifest->count > 0) {
-            string_array_t labels STRING_ARRAY_AUTO = {0};
+            string_array_t labels STRING_ARRAY_AUTO = { 0 };
             error_t *extract_err = NULL;
             for (size_t i = 0; i < manifest->count; i++) {
                 extract_err = privilege_collect_label(

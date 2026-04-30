@@ -25,8 +25,8 @@
  * etc. reads spec attributes — no switches to update.
  */
 static const mount_spec_t SPECS[] = {
-    [MOUNT_HOME]   = { "home",   "HOME",              false, false },
-    [MOUNT_ROOT]   = { "root",   "root",              false, true  },
+    [MOUNT_HOME] =   { "home",   "HOME",              false, false },
+    [MOUNT_ROOT] =   { "root",   "root",              false, true  },
     [MOUNT_CUSTOM] = { "custom", "deployment target", true,  true  },
 };
 

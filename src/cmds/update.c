@@ -1945,7 +1945,7 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
      * If re-exec succeeds, this function DOES NOT RETURN.
      */
     {
-        string_array_t labels STRING_ARRAY_AUTO = {0};
+        string_array_t labels STRING_ARRAY_AUTO = { 0 };
         for (size_t i = 0; i < update_count; i++) {
             const workspace_item_t *item = update_items[i];
             if (item->item_kind != WORKSPACE_ITEM_FILE) continue;

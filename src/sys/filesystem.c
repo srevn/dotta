@@ -1195,27 +1195,62 @@ error_t *fs_path_join(const char *base, const char *component, char **out) {
 error_t *fs_get_home(char **out) {
     CHECK_NULL(out);
 
-    /* Try $HOME environment variable first */
+    /* Single source of truth for "the invoking user's HOME". Every
+     * downstream consumer (mount table HOME entry, tilde expansion,
+     * privilege home-membership predicate, session cache, credentials
+     * lookup, bootstrap work_dir) trusts this answer.
+     *
+     * Sudo-aware: under sudo, $HOME is unreliable — `sudo -H` rewrites
+     * it to /root, env_keep policies vary, and dropping all of those
+     * onto consumers produces a kaleidoscope of disagreements. The
+     * invoking user is authoritative via SUDO_UID's passwd entry.
+     *
+     *   1. Under sudo (SUDO_UID set & parseable):
+     *        getpwuid(SUDO_UID)->pw_dir
+     *      Falls through to (2) on lookup failure so a transient
+     *      passwd error doesn't deny the entire command.
+     *   2. Not under sudo: $HOME from env. The CLAUDE.md test
+     *      isolation pattern (HOME=/tmp/dotta-test) depends on this
+     *      branch firing for ordinary user invocations.
+     *   3. Last resort: passwd lookup of the effective uid. Catches
+     *      service-account / no-env contexts. */
+
+    const char *suid = getenv("SUDO_UID");
+    if (suid && suid[0] != '\0') {
+        char *end = NULL;
+        errno = 0;
+        long uid = strtol(suid, &end, 10);
+        if (errno == 0 && end != suid && *end == '\0' && uid >= 0) {
+            struct passwd *pw = getpwuid((uid_t) uid);
+            if (pw && pw->pw_dir && pw->pw_dir[0] != '\0') {
+                *out = strdup(pw->pw_dir);
+                return *out
+                    ? NULL
+                    : ERROR(ERR_MEMORY, "Failed to allocate HOME path");
+            }
+        }
+        /* SUDO_UID malformed or its passwd lookup failed — fall
+         * through. The privilege module's parser surfaces malformation
+         * when the actual UID itself is needed; here we just want a
+         * reasonable HOME. */
+    }
+
     const char *home = getenv("HOME");
     if (home && home[0] != '\0') {
         *out = strdup(home);
-        if (!*out) {
-            return ERROR(ERR_MEMORY, "Failed to allocate HOME path");
-        }
-        return NULL;
+        return *out
+            ? NULL
+            : ERROR(ERR_MEMORY, "Failed to allocate HOME path");
     }
 
-    /* Fall back to passwd database */
     struct passwd *pw = getpwuid(getuid());
     if (!pw || !pw->pw_dir) {
         return ERROR(ERR_FS, "Unable to determine HOME directory");
     }
-
     *out = strdup(pw->pw_dir);
-    if (!*out) {
-        return ERROR(ERR_MEMORY, "Failed to allocate HOME path");
-    }
-    return NULL;
+    return *out
+        ? NULL
+        : ERROR(ERR_MEMORY, "Failed to allocate HOME path");
 }
 
 error_t *fs_expand_tilde(const char *path, char **out) {

@@ -14,6 +14,7 @@
 #include "base/error.h"
 #include "base/secure.h"
 #include "base/string.h"
+#include "sys/filesystem.h"
 #include "sys/process.h"
 
 /* Credential helper subprocess timeout. Accommodates TouchID/Keychain
@@ -594,10 +595,16 @@ static bool file_exists(const char *path) {
 
 /**
  * Find an SSH private key in standard locations.
+ *
+ * Routes through fs_get_home so the search lands under the invoking
+ * user's home regardless of sudo: under `sudo git fetch`, we want the
+ * user's keys, not /root/.ssh/.
  */
 static char *find_ssh_key(void) {
-    const char *home = getenv("HOME");
-    if (!home) {
+    char *home = NULL;
+    error_t *err = fs_get_home(&home);
+    if (err) {
+        error_free(err);
         return NULL;
     }
 
@@ -610,7 +617,6 @@ static char *find_ssh_key(void) {
     };
 
     for (int i = 0; key_names[i] != NULL; i++) {
-        /* Build full path */
         size_t path_len = strlen(home) + strlen(key_names[i]) + 2;
         char *key_path = malloc(path_len);
         if (!key_path) {
@@ -620,12 +626,14 @@ static char *find_ssh_key(void) {
         snprintf(key_path, path_len, "%s/%s", home, key_names[i]);
 
         if (file_exists(key_path)) {
+            free(home);
             return key_path;
         }
 
         free(key_path);
     }
 
+    free(home);
     return NULL;
 }
 

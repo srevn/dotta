@@ -177,32 +177,41 @@ _Static_assert(
  * Resolve the cache file path (~/.cache/dotta/session) and its
  * parent directory. Caller frees both pointers.
  *
+ * Routes through fs_get_home so the cache lives under the invoking
+ * user's home regardless of sudo: a master key set without sudo
+ * lands at /home/user/.cache/dotta/session, and a later
+ * `sudo dotta apply` finds it there rather than under /root.
+ *
  * @param out_file Cache file path (caller frees)
  * @param out_dir  Parent directory path (caller frees)
- * @return ERR_FS if HOME is unset; ERR_MEMORY on allocation failure
+ * @return ERR_FS if HOME cannot be resolved; ERR_MEMORY on allocation failure
  */
 static error_t *resolve_cache_paths(char **out_file, char **out_dir) {
     *out_file = NULL;
     *out_dir = NULL;
 
-    const char *home = getenv("HOME");
-    if (!home || home[0] == '\0') {
-        return ERROR(ERR_FS, "HOME environment variable not set");
+    char *home = NULL;
+    error_t *err = fs_get_home(&home);
+    if (err) {
+        return error_wrap(err, "Cannot resolve session cache directory");
     }
 
     char *file = NULL;
     char *dir = NULL;
     if (asprintf(&dir, "%s/.cache/dotta", home) < 0 || !dir) {
+        free(home);
         return ERROR(
             ERR_MEMORY, "Failed to allocate session cache dir path"
         );
     }
     if (asprintf(&file, "%s/session", dir) < 0 || !file) {
+        free(home);
         free(dir);
         return ERROR(
             ERR_MEMORY, "Failed to allocate session cache file path"
         );
     }
+    free(home);
 
     *out_file = file;
     *out_dir = dir;

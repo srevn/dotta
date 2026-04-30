@@ -1205,16 +1205,16 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         goto cleanup;
     }
 
-    /* Pre-compute whether deployment target needs elevation. Every
-     * input in this add invocation shares opts->target, so the answer
-     * is identical for the whole batch — evaluate once, reuse below.
-     * The kind-keyed predicate that consumes this mirrors
+    /* Pre-compute whether deployment target lies outside the user's
+     * HOME. Every input in this add invocation shares opts->target,
+     * so the answer is identical for the whole batch — evaluate once,
+     * reuse below. The kind-keyed predicate that consumes this mirrors
      * privilege_needs_elevation's rule (ROOT always; CUSTOM iff target
-     * outside $HOME); kept inline because the precomputed bool would
+     * outside HOME); kept inline because the precomputed bool would
      * leak the privilege module's CUSTOM-vs-ROOT branch through any
      * public helper signature. */
     bool custom_needs_elevation = opts->target
-        ? privilege_target_needs_elevation(opts->target)
+        ? !privilege_path_is_user_home(opts->target)
         : false;  /* No target → no custom/ paths → irrelevant */
 
     /* Collect labels for inputs whose kind needs elevation. Only kinds

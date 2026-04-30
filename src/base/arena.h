@@ -73,7 +73,7 @@ char *arena_strndup(arena_t *arena, const char *str, size_t n);
  *         on encoding error, or on OOM.
  */
 char *arena_str_format(arena_t *arena, const char *fmt, ...)
-    __attribute__((format(printf, 2, 3)));
+__attribute__((format(printf, 2, 3)));
 
 /**
  * Reset arena to empty, retaining only the initial block.

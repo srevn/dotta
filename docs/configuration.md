@@ -185,16 +185,16 @@ Bootstrap scripts are stored as `.bootstrap` in each profile branch and receive:
 
 Scripts execute in profile layering order (global, then OS, then host). After cloning, dotta prompts to run detected bootstrap scripts (override with `--bootstrap` or `--no-bootstrap`).
 
-## Custom Prefix
+## Custom Deployment Root
 
 Deploy files to arbitrary filesystem locations (containers, jails, chroots):
 
 ```bash
-# Add files with a custom prefix
-dotta add --profile jail/web --prefix /mnt/jails/web /mnt/jails/web/etc/nginx.conf
+# Add files with a custom deployment root
+dotta add --profile jail/web --target /mnt/jails/web /mnt/jails/web/etc/nginx.conf
 
-# Enable with the prefix
-dotta profile enable jail/web --prefix /mnt/jails/web
+# Enable with the target root
+dotta profile enable jail/web --target /mnt/jails/web
 ```
 
-Files are stored as `custom/<path>` and deployed under the specified prefix. Custom prefix requires exactly one profile per operation.
+Files are stored as `custom/<path>` and deployed under the specified target. Custom target requires exactly one profile per operation.

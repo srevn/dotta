@@ -68,8 +68,8 @@ void source_filter_free(source_filter_t *f);
  *
  * Preconditions: `abs_path` must start with `/`. Callers with possibly-
  * relative input must resolve it first (in-tree callers either ride
- * add.c's `add_normalize_input`, path_input_resolve, realpath, or feed
- * a pre-resolved state filesystem path).
+ * path_input_normalize, path_input_resolve, realpath, or feed a
+ * pre-resolved state filesystem path).
  *
  * @param f        Filter (must not be NULL)
  * @param abs_path Absolute path (must start with `/`)

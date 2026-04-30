@@ -1,10 +1,20 @@
 /**
  * path.c - User-input path resolution
  *
- * Parses CLI path arguments (storage labels, absolute, tilde, relative)
- * into canonical storage paths. Single chokepoint for input-shape
- * dispatch; topology lookups (mount_classify) and filesystem primitives
- * (fs_expand_tilde, fs_make_absolute, fs_normalize_path) are delegated.
+ * Two views over flexible CLI path arguments:
+ *
+ *   path_input_resolve    - filesystem path -> canonical storage path
+ *                           (commands that query Git data: show, revert,
+ *                           remove, list, filter)
+ *
+ *   path_input_normalize  - filesystem path -> absolute filesystem path,
+ *                           optionally re-rooted under a virtual root
+ *                           (commands that walk the filesystem: add)
+ *
+ * Both share input-shape dispatch (storage labels, absolute, tilde,
+ * relative). Topology lookups (mount_classify) and filesystem
+ * primitives (fs_expand_tilde, fs_make_absolute, fs_normalize_path)
+ * are delegated to the layers below.
  */
 
 #include "infra/path.h"
@@ -17,8 +27,26 @@
 
 #include "base/arena.h"
 #include "base/error.h"
+#include "base/string.h"
 #include "infra/mount.h"
 #include "sys/filesystem.h"
+
+/**
+ * Boundary-aware "is `path` under `dir`" predicate.
+ *
+ * Pure string check; no syscalls. Matches when `path` equals `dir`
+ * exactly, or has a '/' at the dir-length offset — rejects false
+ * prefixes like `/home/userX` against `/home/user`. NULL `dir`
+ * returns false, gating the cross-product canonical check below
+ * when realpath() yielded no distinct second form.
+ */
+static bool path_under_dir(const char *path, const char *dir) {
+    if (!path || !dir) return false;
+    size_t dir_len = strlen(dir);
+    if (strncmp(path, dir, dir_len) != 0) return false;
+    char boundary = path[dir_len];
+    return boundary == '/' || boundary == '\0';
+}
 
 /**
  * Resolve a relative path to absolute using CWD.
@@ -195,6 +223,127 @@ cleanup:
     free(expanded);
     free(absolute);
     free(normalized);
+
+    return err;
+}
+
+error_t *path_input_normalize(
+    const char *input,
+    const char *target_root,
+    char **out
+) {
+    CHECK_NULL(input);
+    CHECK_NULL(out);
+
+    *out = NULL;
+
+    if (input[0] == '\0') {
+        return ERROR(ERR_INVALID_ARG, "Path cannot be empty");
+    }
+
+    error_t *err = NULL;
+    char *expanded = NULL;
+    char *composed = NULL;
+    char *absolute = NULL;
+    char *target_canonical = NULL;
+    const char *to_absolute = input;
+
+    bool has_target = target_root && target_root[0] != '\0';
+    bool is_tilde = (input[0] == '~');
+
+    /* Pre-resolve target's symlink-canonical form once when re-rooting
+     * applies. Best-effort: realpath() failure leaves it NULL and the
+     * dual checks degrade to raw-only (correct when the target has no
+     * symlinks on its path). When canonical equals raw, drop it so
+     * path_under_dir's NULL gate skips the redundant second comparison. */
+    if (has_target && !is_tilde) {
+        error_t *canon_err =
+            fs_canonicalize_path(target_root, &target_canonical);
+        if (canon_err) {
+            error_free(canon_err);
+            target_canonical = NULL;
+        }
+        if (target_canonical &&
+            strcmp(target_canonical, target_root) == 0) {
+            free(target_canonical);
+            target_canonical = NULL;
+        }
+    }
+
+    if (is_tilde) {
+        /* Tilde always means $HOME — `~/file` is HOME's namespace by
+         * design, not subject to target_root re-rooting. Mirrors how
+         * the shell resolves tilde before any cd context applies. */
+        err = fs_expand_tilde(input, &expanded);
+        if (err) goto cleanup;
+        to_absolute = expanded;
+    } else if (has_target) {
+        /* Re-root: prepend target_root unless input is already inside
+         * it (raw or canonical surface form). Uniform compose for
+         * relative ("etc/foo") and host-absolute ("/etc/foo") — the
+         * leading '/' of an absolute input doubles as the join
+         * separator, so absolute uses an empty separator and relative
+         * an explicit "/".
+         *
+         *   etc/foo                   -> <target>/etc/foo
+         *   /etc/foo                  -> <target>/etc/foo
+         *   /<target>/etc/foo         -> /<target>/etc/foo (already inside)
+         *   /<target-canonical>/.../X -> /<target-canonical>/.../X
+         *                                (canonical alias inside) */
+        bool already_inside =
+            path_under_dir(input, target_root) ||
+            path_under_dir(input, target_canonical);
+
+        if (!already_inside) {
+            const char *separator = (input[0] == '/') ? "" : "/";
+            composed = str_format(
+                "%s%s%s", target_root, separator, input
+            );
+            if (!composed) {
+                err = ERROR(
+                    ERR_MEMORY,
+                    "Failed to prepend target root to path"
+                );
+                goto cleanup;
+            }
+            to_absolute = composed;
+        }
+    }
+
+    err = fs_make_absolute(to_absolute, &absolute);
+    if (err) goto cleanup;
+
+    err = fs_normalize_path(absolute, out);
+    if (err) goto cleanup;
+
+    /* Post-condition: when target_root applies, the normalized output
+     * must remain inside it. Lexical `..` resolution can move an
+     * already-inside path back outside (e.g., `/jail/../etc/secret`
+     * -> `/etc/secret`), and a relative `../foo` joined to `/jail`
+     * normalizes to `/foo`. One uniform check catches every traversal
+     * escape — no per-shape pre-validation needed in the compose
+     * step. Tilde inputs are exempt: HOME is its own namespace, never
+     * required to live inside target_root. */
+    if (has_target && !is_tilde) {
+        if (!path_under_dir(*out, target_root) &&
+            !path_under_dir(*out, target_canonical)) {
+            char *escaped = *out;
+            *out = NULL;
+            err = ERROR(
+                ERR_INVALID_ARG,
+                "Path '%s' resolves outside target root '%s'.\n"
+                "Path traversal (..) cannot escape the target.",
+                escaped, target_root
+            );
+            free(escaped);
+        }
+    }
+
+cleanup:
+    free(expanded);
+    free(composed);
+    free(absolute);
+    free(target_canonical);
 
     return err;
 }

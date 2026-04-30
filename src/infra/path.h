@@ -66,4 +66,68 @@ error_t *path_input_resolve(
     const char **out_storage
 );
 
+/**
+ * Normalize a CLI filesystem-path argument to an absolute path,
+ * optionally re-rooted under `target_root`.
+ *
+ * When `target_root` is non-NULL, it acts as a virtual root: every
+ * typed path is resolved as if the user were operating inside that
+ * directory (chroot-style). Generalises any "operate within this
+ * tree" usage — chroots, container overlays, fakeroot trees, vendor
+ * directories, staging areas, project subroots. Tilde paths bypass
+ * the re-rooting: `~/X` always lands under $HOME, since HOME is its
+ * own namespace.
+ *
+ * Compose model (target_root="/jail", canonical="/private/jail"):
+ *   ~/file                  -> $HOME/file       (tilde bypass)
+ *   rel/file                -> /jail/rel/file   (relative + target)
+ *   /etc/foo                -> /jail/etc/foo    (host-absolute re-rooted)
+ *   /jail/etc/foo           -> /jail/etc/foo    (already inside, raw)
+ *   /private/jail/etc/foo   -> /private/jail/etc/foo
+ *                                               (already inside,
+ *                                                canonical surface form)
+ *   /jail/../etc/secret     -> ERROR            (escapes after `..`
+ *                                                resolution)
+ *
+ * Without `target_root`:
+ *   ~/file                  -> $HOME/file
+ *   /etc/foo                -> /etc/foo
+ *   rel/file                -> $CWD/rel/file
+ *
+ * Symlink-aware re-rooting: each "already inside" check cross-products
+ * the raw `target_root` with its realpath-canonical sibling, so a
+ * canonical CLI input (from getcwd / find / tab-completion) under a
+ * raw-typed target — or the reverse, e.g. macOS's `/tmp -> /private/tmp`
+ * with `--target /tmp/web` — is recognised as inside without being
+ * re-prepended to nonsense.
+ *
+ * Pairs with path_input_resolve. This function stops at the absolute
+ * filesystem path; path_input_resolve continues through mount
+ * classification to a storage path. Callers that walk directories
+ * (need filesystem paths to opendir / stat) use this; callers that
+ * query Git data (need storage paths) use the resolver. The output
+ * is fed into mount_classify per-file when the storage path is
+ * needed.
+ *
+ * Storage-path inputs ("home/", "root/", "custom/") are not handled
+ * here — those are validated and consumed via mount_validate_storage
+ * + mount_resolve at the call site. This function answers the
+ * "filesystem path" arm of the input-shape dispatch.
+ *
+ * @param input        User-provided path (filesystem or tilde; must
+ *                     not be NULL)
+ * @param target_root  Optional virtual root that re-roots every
+ *                     non-tilde input. NULL or empty disables
+ *                     re-rooting; relative inputs then resolve via
+ *                     the actual CWD.
+ * @param out          Normalized absolute path (caller must free,
+ *                     must not be NULL)
+ * @return Error or NULL on success
+ */
+error_t *path_input_normalize(
+    const char *input,
+    const char *target_root,
+    char **out
+);
+
 #endif /* DOTTA_PATH_H */

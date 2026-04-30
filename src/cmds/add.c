@@ -26,6 +26,7 @@
 #include "core/state.h"
 #include "infra/content.h"
 #include "infra/mount.h"
+#include "infra/path.h"
 #include "infra/worktree.h"
 #include "sys/filesystem.h"
 #include "sys/gitops.h"
@@ -49,208 +50,6 @@ static error_t *validate_options(const cmd_add_options_t *opts) {
     }
 
     return NULL;
-}
-
-/**
- * Boundary-aware "is `path` under `dir`" predicate.
- *
- * Pure string check; no syscalls. Callers that need symlink equivalence
- * pre-resolve the canonical form of `dir` and call this twice (once
- * per surface form). NULL `dir` returns false — gates the cross-product
- * canonical check when realpath() yielded no distinct second form.
- *
- * Boundary rule: matches when `path` equals `dir` exactly, or has a
- * '/' at the dir-length offset (rejects /home/user against /home/userX
- * false-prefixes).
- */
-static bool path_under_dir(const char *path, const char *dir) {
-    if (!path || !dir) return false;
-    size_t dir_len = strlen(dir);
-    if (strncmp(path, dir, dir_len) != 0) return false;
-    char boundary = path[dir_len];
-    return boundary == '/' || boundary == '\0';
-}
-
-/**
- * Normalize a CLI filesystem-path argument to an absolute path,
- * honoring `--target` jail semantics.
- *
- * Transformation order:
- *   1. Tilde expansion (~/ -> $HOME)               — bypasses jail
- *   2. Jail interpretation (when virtual_root set):
- *      - Relative paths: join with virtual_root
- *      - Absolute paths under virtual_root: pass through
- *      - Absolute paths NOT under virtual_root: prepend virtual_root
- *   3. CWD joining (relative paths, no jail)
- *   4. Lexical normalization (resolves '.', '..', '//')
- *   5. Post-condition: when virtual_root is set, the final result
- *      MUST remain under virtual_root. This catches `/jail/../etc/secret`
- *      style inputs that pass step 2 (already_under is true) but escape
- *      after lexical normalization in step 4.
- *
- * Symlink awareness: in steps 2 and 5, the boundary check against
- * `virtual_root` cross-products both raw and realpath-canonical forms
- * (computed once at function entry) so canonical inputs (from getcwd,
- * find, tab-completion) under a raw `--target` aren't re-prepended to
- * nonsense. The raw form is preserved in the output — symlink
- * resolution does not leak into the user-visible path.
- *
- * Examples:
- *   ("~/file", NULL)              -> "$HOME/file"
- *   ("rel/file", "/jail")         -> "/jail/rel/file"
- *   ("/etc/hosts", "/jail")       -> "/jail/etc/hosts"
- *   ("/jail/etc/hosts", "/jail")  -> "/jail/etc/hosts" (already under root)
- *   ("rel/file", NULL)            -> "$CWD/rel/file"
- *   ("../escape", "/jail")        -> ERROR (relative traversal)
- *   ("/jail/../escape", "/jail")  -> ERROR (post-condition trips)
- *
- * Privacy: this helper is `dotta add`-specific. The jail mode encodes
- * the user's mental model when they pass `--target` ("operate inside
- * this directory"). Other commands convert input via path_input_resolve,
- * which classifies against the mount table without re-rooting absolute
- * paths.
- *
- * @param user_path    User-provided path (filesystem or tilde)
- * @param virtual_root Optional jail root from `--target` (NULL = no jail)
- * @param out          Normalized absolute path (caller must free)
- * @return Error or NULL on success
- */
-static error_t *add_normalize_input(
-    const char *user_path,
-    const char *virtual_root,
-    char **out
-) {
-    CHECK_NULL(user_path);
-    CHECK_NULL(out);
-
-    error_t *err = NULL;
-    char *expanded = NULL;
-    char *joined = NULL;
-    char *absolute = NULL;
-    char *virtual_root_canonical = NULL;
-    const char *path_to_make_absolute = user_path;
-
-    /* When --target is active, pre-resolve its realpath-canonical form
-     * once. Best-effort: realpath() failure leaves the canonical NULL
-     * and the cross-product checks below degrade to raw-only (correct
-     * when the target genuinely has no symlinks on its path). When
-     * canonical equals raw, drop it so path_under_dir's NULL gate
-     * skips the redundant second comparison. */
-    if (virtual_root && virtual_root[0] != '\0') {
-        error_t *canon_err = fs_canonicalize_path(
-            virtual_root, &virtual_root_canonical
-        );
-        if (canon_err) {
-            error_free(canon_err);
-            virtual_root_canonical = NULL;
-        }
-        if (virtual_root_canonical &&
-            strcmp(virtual_root_canonical, virtual_root) == 0) {
-            free(virtual_root_canonical);
-            virtual_root_canonical = NULL;
-        }
-    }
-
-    /* Step 1: Expand tilde (canonical, bypasses virtual_root). */
-    if (user_path[0] == '~') {
-        err = fs_expand_tilde(user_path, &expanded);
-        if (err) goto out;
-        path_to_make_absolute = expanded;
-    }
-    /* Step 2: Resolve paths within virtual_root context. Tilde paths
-     * skip this — ~/file always means $HOME/file regardless of root. */
-    else if (virtual_root && virtual_root[0] != '\0') {
-        const char *path = path_to_make_absolute;
-
-        if (path[0] != '/') {
-            /* SECURITY: Reject '..' as a path component (not as substring).
-             * Prevents virtual_root escape: ../foo + /jail -> /jail/../foo -> /foo */
-            for (const char *p = path; *p; p++) {
-                if ((p == path || *(p - 1) == '/') && p[0] == '.' && p[1] == '.' &&
-                    (p[2] == '/' || p[2] == '\0')) {
-                    err = ERROR(
-                        ERR_INVALID_ARG,
-                        "Path traversal (..) not allowed in relative paths "
-                        "with --target.\nUse absolute paths if you need to "
-                        "reference files outside the deployment target."
-                    );
-                    goto out;
-                }
-            }
-
-            err = fs_path_join(virtual_root, path, &joined);
-            if (err) {
-                err = error_wrap(
-                    err,
-                    "Failed to join deployment target with relative path"
-                );
-                goto out;
-            }
-            path_to_make_absolute = joined;
-        } else {
-            /* Absolute path: prepend virtual_root unless already under it.
-             * Cross-product the boundary check against both raw and
-             * canonical virtual_root so canonical inputs (from getcwd,
-             * find, tab-completion) under a raw --target don't re-prepend
-             * to nonsense like /jail/<canonical>/jail/etc/x. */
-            bool already_under =
-                path_under_dir(path, virtual_root) ||
-                path_under_dir(path, virtual_root_canonical);
-
-            if (!already_under) {
-                joined = str_format("%s%s", virtual_root, path);
-                if (!joined) {
-                    err = ERROR(
-                        ERR_MEMORY,
-                        "Failed to prepend deployment target to path"
-                    );
-                    goto out;
-                }
-                path_to_make_absolute = joined;
-            }
-            /* Otherwise already under virtual_root (raw or canonical),
-             * pass through. The post-condition catches lexical traversal
-             * that escapes after `..` resolution. */
-        }
-    }
-
-    /* Step 3: Make absolute (handles absolute pass-through and CWD joining). */
-    err = fs_make_absolute(path_to_make_absolute, &absolute);
-    if (err) goto out;
-
-    /* Step 4: Normalize (resolve ., .., consecutive slashes). */
-    err = fs_normalize_path(absolute, out);
-    if (err) goto out;
-
-    /* Step 5: Post-condition — when target mode is active, the normalized
-     * result MUST remain under virtual_root in either surface form. Step 2
-     * only verifies the input shape; lexical .. resolution in step 4 can
-     * move an already_under absolute path back outside (e.g.,
-     * /jail/../etc/secret -> /etc/secret). */
-    if (virtual_root && virtual_root[0] != '\0') {
-        bool under =
-            path_under_dir(*out, virtual_root) ||
-            path_under_dir(*out, virtual_root_canonical);
-        if (!under) {
-            char *bad = *out;
-            *out = NULL;
-            err = ERROR(
-                ERR_INVALID_ARG,
-                "Path '%s' resolves outside deployment target '%s' after "
-                "normalization.\n"
-                "Path traversal (..) cannot be used to escape --target.",
-                bad, virtual_root
-            );
-            free(bad);
-        }
-    }
-
-out:
-    free(expanded);
-    free(joined);
-    free(absolute);
-    free(virtual_root_canonical);
-    return err;
 }
 
 /**
@@ -1248,8 +1047,13 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
             continue;
         }
 
-        /* Filesystem path — normalize raw user input to absolute path first */
-        err = add_normalize_input(file_path, opts->target, &absolute);
+        /* Filesystem path — normalize raw user input to absolute path first.
+         * `--target` acts as a virtual root: every typed path is resolved as
+         * if the user were operating inside that directory (chroot-style).
+         * Tilde inputs bypass — `~/X` always means HOME. Mount classification
+         * below decides which storage namespace each path lands in (longest
+         * match), which for paths under --target is custom/. */
+        err = path_input_normalize(file_path, opts->target, &absolute);
         if (err) {
             err = error_wrap(err, "Failed to resolve path '%s'", file_path);
             goto cleanup;
@@ -1497,7 +1301,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
             }
         } else {
             /* Regular filesystem path - normalize it */
-            err = add_normalize_input(file, opts->target, &absolute);
+            err = path_input_normalize(file, opts->target, &absolute);
             if (err) {
                 err = error_wrap(err, "Failed to resolve path '%s'", file);
                 goto cleanup;

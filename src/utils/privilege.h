@@ -83,7 +83,7 @@ bool privilege_path_is_user_home(const char *filesystem_path);
  * - custom/ paths: need elevation only if filesystem_path is NOT under $HOME
  *
  * For metadata-capture/deploy layers' "could this path carry ownership
- * metadata?" question, read mount_spec_for_label(p)->tracks_ownership
+ * metadata?" question, read mount_spec_for_path(p)->tracks_ownership
  * directly — the label vocabulary lives in infra/mount.
  *
  * @param storage_path Storage path (e.g., "custom/etc/nginx.conf")

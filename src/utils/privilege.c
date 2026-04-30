@@ -147,6 +147,7 @@ bool privilege_path_is_user_home(const char *filesystem_path) {
 
     bool under = is_under(filesystem_path, home);
     free(home);
+
     return under;
 }
 
@@ -171,11 +172,12 @@ bool privilege_needs_elevation(
     const char *storage_path,
     const char *filesystem_path
 ) {
-    const mount_spec_t *spec = mount_spec_for_label(storage_path);
+    const mount_spec_t *spec = mount_spec_for_path(storage_path);
     if (!spec || !spec->tracks_ownership) return false;
     if (!spec->per_profile) return true;
 
     if (!filesystem_path) return true;
+
     return !privilege_path_is_user_home(filesystem_path);
 }
 
@@ -384,6 +386,7 @@ error_t *privilege_collect_label(
     if (!privilege_needs_elevation(storage_path, filesystem_path)) {
         return NULL;
     }
+
     return string_array_push(labels, storage_path);
 }
 

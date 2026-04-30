@@ -1124,7 +1124,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      * backing buffer at scope exit; the privilege call window closes
      * inside this function (or the process re-execs), so the array's
      * lifetime is contained here. */
-    string_array_t preflight_labels STRING_ARRAY_AUTO = {0};
+    string_array_t preflight_labels STRING_ARRAY_AUTO = { 0 };
 
     /* CLI flags override config */
     if (opts->verbose) {
@@ -1217,9 +1217,13 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         ? !privilege_path_is_user_home(opts->target)
         : false;  /* No target → no custom/ paths → irrelevant */
 
-    /* Collect labels for inputs whose kind needs elevation. Only kinds
-     * that actually need elevation are pushed — home/ never does, and
-     * custom/ only does when the deployment target is outside $HOME.
+    /* Collect labels for inputs whose label needs elevation. Only
+     * ownership-tracking labels are pushed — home/ never does, and
+     * custom/ only does when the deployment target is outside HOME.
+     * The shape of the test is uniform across both branches:
+     *   spec->tracks_ownership && (!spec->per_profile || custom_needs_elevation)
+     * — ROOT (per_profile=false) is always; CUSTOM (per_profile=true)
+     * defers to the precomputed bool.
      *
      * Each input branch owns its own display string:
      *   - Storage-path input ("home/X" / "root/X" / "custom/X"): the
@@ -1232,12 +1236,12 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     for (size_t i = 0; i < opts->file_count; i++) {
         const char *file_path = opts->files[i];
         char *absolute = NULL;
-        mount_kind_t kind;
 
         /* Storage-path input: the input itself is the display. */
-        if (mount_kind_extract(file_path, &kind)) {
-            if (kind == MOUNT_ROOT ||
-                (kind == MOUNT_CUSTOM && custom_needs_elevation)) {
+        const mount_spec_t *spec = mount_spec_for_path(file_path);
+        if (spec) {
+            if (spec->tracks_ownership
+                && (!spec->per_profile || custom_needs_elevation)) {
                 err = string_array_push(&preflight_labels, file_path);
                 if (err) goto cleanup;
             }
@@ -1265,13 +1269,13 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         /* Classify the path. ROOT outcome means the input equals a mount
          * root exactly ($HOME, "/", or --target). The main loop's walker
          * will still expand its descendants — what we need here is just
-         * the kind to answer "would this op touch a path needing
-         * elevation?". The merged mount_classify writes the kind in both
-         * outcomes; only the storage-path materialization differs. */
+         * the spec to answer "would this op touch a path needing
+         * elevation?". mount_classify writes the spec in both outcomes;
+         * only the storage-path materialization differs. */
         mount_classify_outcome_t outcome;
         const char *storage_path = NULL;
         err = mount_classify(
-            mounts, absolute, ctx->arena, &outcome, &storage_path, &kind
+            mounts, absolute, ctx->arena, &outcome, &storage_path, &spec
         );
         free(absolute);
         if (err) {
@@ -1281,10 +1285,11 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
 
         bool is_classification_root = (outcome == MOUNT_CLASSIFY_ROOT);
 
-        if (kind == MOUNT_ROOT ||
-            (kind == MOUNT_CUSTOM && custom_needs_elevation)) {
-            const char *display =
-                is_classification_root ? file_path : storage_path;
+        if (spec
+            && spec->tracks_ownership
+            && (!spec->per_profile || custom_needs_elevation)) {
+            const char *display = is_classification_root ? file_path
+                                                         : storage_path;
             err = string_array_push(&preflight_labels, display);
             if (err) goto cleanup;
         }
@@ -1430,14 +1435,14 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         char *absolute = NULL;
 
         /* Check if input is a storage path */
-        mount_kind_t kind;
-        if (mount_kind_extract(file, &kind)) {
+        const mount_spec_t *spec = mount_spec_for_path(file);
+        if (spec) {
 
-            /* custom/ paths require --target. Pre-validate at the call
-             * site so the user gets the directive "pass --target" message
-             * rather than mount_resolve's generic "no deployment target
-             * for profile" surface. */
-            if (kind == MOUNT_CUSTOM) {
+            /* per_profile labels (custom/) require --target. Pre-validate
+             * at the call site so the user gets the directive
+             * "pass --target" message rather than mount_resolve's
+             * generic "no deployment target for profile" surface. */
+            if (spec->per_profile) {
                 if (!opts->target || opts->target[0] == '\0') {
                     err = ERROR(
                         ERR_INVALID_ARG, "Storage path '%s' requires --target flag\n"
@@ -1462,7 +1467,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
             /* Convert storage path to filesystem path via the mount table.
              * For home/ and root/ the profile is ignored; for custom/
              * the per-profile target binding is consulted. The earlier
-             * `kind == MOUNT_CUSTOM` precondition above (--target check)
+             * spec->per_profile precondition above (--target check)
              * guarantees the lookup binds — surface a contract violation
              * via ERR_INTERNAL if a future change weakens that
              * invariant. */

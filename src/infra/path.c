@@ -21,19 +21,6 @@
 #include "sys/filesystem.h"
 
 /**
- * Boolean predicate: does the input begin with a storage label
- * ("home/", "root/", "custom/")? Centralises the "discardable kind"
- * antipattern in one place — every consumer in this TU asks the same
- * boolean question via mount_kind_extract. After a future
- * base/storage_label vocabulary descent this collapses to
- * `storage_label_is(input)`.
- */
-static bool input_looks_like_storage(const char *input) {
-    mount_kind_t kind;
-    return mount_kind_extract(input, &kind);
-}
-
-/**
  * Resolve a relative path to absolute using CWD.
  * Pure string operation — does not check file existence.
  *
@@ -86,7 +73,7 @@ static bool input_is_relative(const char *input) {
     if (!input || input[0] == '\0') return false;
     if (input[0] == '.') return true;
     if (input[0] == '/' || input[0] == '~') return false;
-    if (input_looks_like_storage(input)) return false;
+    if (mount_spec_for_path(input)) return false;
     /* Contains slash but not a storage label — treat as relative. */
     if (strchr(input, '/') != NULL) return true;
     /* Single component without slash — ambiguous, not relative.
@@ -117,7 +104,7 @@ error_t *path_input_resolve(
     }
 
     /* Case 1: Storage path — validate and arena-copy. */
-    if (input_looks_like_storage(input)) {
+    if (mount_spec_for_path(input)) {
         err = mount_validate_storage(input);
         if (err) {
             return error_wrap(err, "Invalid storage path '%s'", input);

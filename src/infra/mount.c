@@ -18,11 +18,11 @@
 /**
  * Per-kind behavioral attributes — the single source of truth.
  *
- * Indexed by `mount_kind_t`. The _Static_assert below pins the enum
- * ordinals so designated initializers and direct indexing stay in
- * lockstep. Adding a fourth kind is one row here plus a matching enum
- * entry; every consumer that asks "does this kind track ownership?"
- * etc. reads spec attributes — no switches to update.
+ * Indexed by `mount_kind_t`; designated initializers keep the row order
+ * in lockstep with the enum ordinals. Adding a fourth kind is one row
+ * here plus a matching enum entry; every consumer that asks "does this
+ * kind track ownership?" etc. reads spec attributes — no switches to
+ * update.
  */
 static const mount_spec_t SPECS[] = {
     [MOUNT_HOME] =   { "home",   "HOME",              false, false },
@@ -70,10 +70,11 @@ static bool mount_decode_label(
         if (out_tail) *out_tail = storage_path + label_len + 1;
         return true;
     }
+
     return false;
 }
 
-const mount_spec_t *mount_spec_for_label(const char *storage_path) {
+const mount_spec_t *mount_spec_for_path(const char *storage_path) {
     mount_kind_t kind;
     if (!mount_decode_label(storage_path, &kind, NULL)) return NULL;
     /* mount_decode_label only emits in-range kinds, so the bounds check
@@ -125,6 +126,7 @@ static error_t *validate_path_components(
         component = strtok_r(NULL, "/", &saveptr);
     }
     free(path_copy);
+
     return err;
 }
 
@@ -178,11 +180,6 @@ const char *mount_strip_label(const char *storage_path) {
     if (!storage_path) return NULL;
     const char *tail = NULL;
     return mount_decode_label(storage_path, NULL, &tail) ? tail : storage_path;
-}
-
-bool mount_kind_extract(const char *storage_path, mount_kind_t *out_kind) {
-    if (!out_kind) return false;
-    return mount_decode_label(storage_path, out_kind, NULL);
 }
 
 error_t *mount_validate_target(const char *target) {
@@ -282,7 +279,7 @@ error_t *mount_validate_target(const char *target) {
  *           when realpath() failed at build time. The two forms are
  *           treated as equivalent for forward classification — a path
  *           matching either surface form belongs to this mount.
- * - kind:   storage label class.
+ * - kind:   mount kind for this entry's storage label.
  * - profile: NULL for static mounts (HOME, ROOT). For CUSTOM mounts,
  *           the owning profile name; participates in profile-keyed
  *           backward resolution.
@@ -373,6 +370,7 @@ static error_t *resolve_home_pair(
 
     err = resolve_path_pair(arena, raw_home, out_home, out_canonical);
     free(raw_home);
+
     return err;
 }
 
@@ -531,6 +529,7 @@ static bool entry_match_longest(
     if (!any) return false;
     *out_relative = best_relative;
     *out_target_len = best_len;
+
     return true;
 }
 
@@ -570,6 +569,7 @@ static const mount_entry_t *find_classify_winner(
     }
 
     if (winner && out_relative) *out_relative = winner_relative;
+
     return winner;
 }
 
@@ -579,7 +579,7 @@ error_t *mount_classify(
     arena_t *arena,
     mount_classify_outcome_t *outcome,
     const char **out_storage,
-    mount_kind_t *out_kind
+    const mount_spec_t **out_spec
 ) {
     CHECK_NULL(table);
     CHECK_NULL(fs_path);
@@ -595,7 +595,13 @@ error_t *mount_classify(
         return ERROR(ERR_INTERNAL, "No mount matched: %s", fs_path);
     }
 
-    if (out_kind) *out_kind = winner->kind;
+    /* The spec is the vocabulary view of the winning mount: its label
+     * string (used to format the storage path) plus the per_profile
+     * and tracks_ownership attributes that callers consume. Expose it
+     * in both outcomes so a single call answers "what kind of mount
+     * matched?" without forcing the caller through a second lookup. */
+    const mount_spec_t *spec = mount_spec_for_kind(winner->kind);
+    if (out_spec) *out_spec = spec;
 
     if (*winner_relative == '\0') {
         /* Path equals the winning mount root exactly. No storage-path
@@ -608,7 +614,6 @@ error_t *mount_classify(
         return NULL;
     }
 
-    const mount_spec_t *spec = mount_spec_for_kind(winner->kind);
     const char *result =
         arena_str_format(arena, "%s/%s", spec->label, winner_relative);
     if (!result) {
@@ -648,6 +653,7 @@ static const mount_entry_t *find_entry_for(
             return m;
         }
     }
+
     return NULL;
 }
 
@@ -682,6 +688,7 @@ static error_t *join_target_with_tail(
         return ERROR(ERR_MEMORY, "Failed to allocate filesystem path");
     }
     *out = result;
+
     return NULL;
 }
 
@@ -732,5 +739,6 @@ error_t *mount_resolve(
     if (err) return err;
 
     *outcome = MOUNT_RESOLVE_BOUND;
+
     return NULL;
 }

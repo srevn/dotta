@@ -148,9 +148,8 @@ error_t *pathspec_create(
         /* Glob pattern */
         if (input && strpbrk(input, "*?[")) {
             /* Patterns with '/' must use a storage label or recursive prefix. */
-            mount_kind_t kind_unused;
             if (strchr(input, '/') != NULL &&
-                !mount_kind_extract(input, &kind_unused) &&
+                mount_spec_for_path(input) == NULL &&
                 !str_starts_with(input, "**/") &&
                 !str_starts_with(input, "*/")) {
                 err = ERROR(

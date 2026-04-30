@@ -240,7 +240,7 @@ static error_t *resolve_deployment_ownership(
     *out_uid = (uid_t) -1;
     *out_gid = (gid_t) -1;
 
-    const mount_spec_t *spec = mount_spec_for_label(storage_path);
+    const mount_spec_t *spec = mount_spec_for_path(storage_path);
     bool requires_root_privileges = spec && spec->tracks_ownership;
 
     /* Case 1: file lands in the invoking user's HOME when running as

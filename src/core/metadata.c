@@ -996,7 +996,7 @@ error_t *metadata_capture_from_file(
     /* Capture ownership for paths whose label tracks it (root/ and
      * custom/). The vocabulary lives in the mount spec; the elevation
      * gate stays here because ownership capture needs root either way. */
-    const mount_spec_t *spec = mount_spec_for_label(storage_path);
+    const mount_spec_t *spec = mount_spec_for_path(storage_path);
     if (spec && spec->tracks_ownership && privilege_is_elevated()) {
         err = capture_ownership(item, st);
         if (err) {
@@ -1034,7 +1034,7 @@ error_t *metadata_capture_from_symlink(
     /* Only capture metadata for root/ and custom/ labels when running as root.
      * home/ symlinks are always owned by the current user — no metadata needed.
      * Non-root users can't lchown anyway — no metadata needed. */
-    const mount_spec_t *spec = mount_spec_for_label(storage_path);
+    const mount_spec_t *spec = mount_spec_for_path(storage_path);
     if (!spec || !spec->tracks_ownership || !privilege_is_elevated()) {
         *out = NULL;
         return NULL;
@@ -1096,7 +1096,7 @@ error_t *metadata_capture_from_directory(
 
     /* Capture ownership for paths whose label tracks it (root/ and
      * custom/). Mirrors the file-capture branch above. */
-    const mount_spec_t *spec = mount_spec_for_label(storage_path);
+    const mount_spec_t *spec = mount_spec_for_path(storage_path);
     if (spec && spec->tracks_ownership && privilege_is_elevated()) {
         err = capture_ownership(item, st);
         if (err) {

@@ -10,7 +10,7 @@
  *   custom/X - X under a per-profile, per-machine deployment target
  *              (configured via `--target` at profile-enable time)
  *
- * The label (`home`, `root`, `custom`) names which mount class a storage
+ * The label (`home`, `root`, `custom`) names which mount kind a storage
  * path belongs to. Storage paths are stable across machines; the per-machine
  * filesystem location of a label is decided by the mount table below.
  *
@@ -38,7 +38,7 @@
 #include <types.h>
 
 /**
- * Mount classes — the three storage label namespaces.
+ * Mount kinds — one per storage label.
  */
 typedef enum {
     MOUNT_HOME,    /* home/...   -> $HOME/... */
@@ -58,7 +58,7 @@ typedef enum {
  * switch (Rule 2 — vocabulary is the dispatch).
  *
  * Stable storage: SPECS rows live in static data, so the pointers
- * returned by `mount_spec_for_kind` and `mount_spec_for_label` are
+ * returned by `mount_spec_for_kind` and `mount_spec_for_path` are
  * valid for the process lifetime. Callers borrow.
  */
 typedef struct mount_spec {
@@ -84,7 +84,7 @@ const mount_spec_t *mount_spec_for_kind(mount_kind_t kind);
  * kind. No tail validation — callers needing full validation use
  * mount_validate_storage.
  */
-const mount_spec_t *mount_spec_for_label(const char *storage_path);
+const mount_spec_t *mount_spec_for_path(const char *storage_path);
 
 /**
  * Validate a storage path's syntactic shape.
@@ -137,24 +137,6 @@ error_t *mount_validate_target(const char *target);
  * @return Pointer past the label, or `storage_path` unchanged
  */
 const char *mount_strip_label(const char *storage_path);
-
-/**
- * Extract the mount kind from a storage path.
- *
- * Reads only the leading label; does not validate the rest of the path.
- * Returns true and writes `*out_kind` when the input is a storage path
- * (starts with "home/", "root/", or "custom/"). Returns false and leaves
- * `*out_kind` unmodified for NULL, empty, or non-storage input — call
- * sites that only need the boolean pass a discardable `mount_kind_t`
- * and ignore the return.
- *
- * No silent default: a malformed input never silently lands as MOUNT_ROOT.
- *
- * @param storage_path Storage path (may be NULL)
- * @param out_kind     Mount kind for the leading label (must not be NULL)
- * @return true when storage_path is a storage path; false otherwise
- */
-bool mount_kind_extract(const char *storage_path, mount_kind_t *out_kind);
 
 /**
  * Opaque mount-table handle. Built by `mount_table_build`; lifetime
@@ -263,9 +245,10 @@ typedef enum {
  *   - MOUNT_CLASSIFY_TAIL: `*out_storage` is set to an arena-borrowed
  *     storage path. Lifetime tracks `arena`; callers do not free it.
  *   - MOUNT_CLASSIFY_ROOT: `fs_path` equals a mount target exactly;
- *     `*out_storage` is NULL. The matched kind (if `out_kind != NULL`)
- *     is still written. Caller decides whether to treat this as an
- *     error or a skip.
+ *     `*out_storage` is NULL. The matched spec (if `out_spec != NULL`)
+ *     is still written so callers can decide on label vocabulary
+ *     without re-classifying. Caller decides whether to treat this as
+ *     an error or a skip.
  *   - ERR_INTERNAL when no entry matched (only possible on a malformed
  *     mount table — the ROOT sentinel always wins in well-formed tables).
  *   - ERR_MEMORY on arena allocation failure.
@@ -276,8 +259,11 @@ typedef enum {
  * @param outcome     Receives the classification outcome (must not be NULL)
  * @param out_storage Arena-borrowed storage path when TAIL; NULL when ROOT
  *                    (must not be NULL)
- * @param out_kind    Optional: receives the winning mount's kind. May be
- *                    NULL when callers only care about the storage path.
+ * @param out_spec    Optional: receives a borrowed pointer to the winning
+ *                    mount's spec (vocabulary attributes — label string,
+ *                    tracks_ownership, per_profile). Populated in both
+ *                    TAIL and ROOT outcomes. Pass NULL when only the
+ *                    storage path is needed.
  * @return Error or NULL on success
  */
 error_t *mount_classify(
@@ -286,7 +272,7 @@ error_t *mount_classify(
     arena_t *arena,
     mount_classify_outcome_t *outcome,
     const char **out_storage,
-    mount_kind_t *out_kind
+    const mount_spec_t **out_spec
 );
 
 /**

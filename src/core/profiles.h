@@ -271,7 +271,7 @@ error_t *profile_build_file_index(
  * 2. enabled_only=false: Branch scan, O(M×P) via profile_build_file_index().
  *    Returns ALL profiles containing the file across all local branches.
  *
- * The storage_path must already be resolved (use mount_resolve_input() first).
+ * The storage_path must already be resolved (use path_input_resolve() first).
  *
  * @param repo Repository (must not be NULL)
  * @param state State handle (must not be NULL; borrowed, not freed).

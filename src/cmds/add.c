@@ -106,7 +106,7 @@ static bool path_under_dir(const char *path, const char *dir) {
  *
  * Privacy: this helper is `dotta add`-specific. The jail mode encodes
  * the user's mental model when they pass `--target` ("operate inside
- * this directory"). Other commands convert input via mount_resolve_input,
+ * this directory"). Other commands convert input via path_input_resolve,
  * which classifies against the mount table without re-rooting absolute
  * paths.
  *

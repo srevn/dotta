@@ -25,6 +25,7 @@
 #include "core/state.h"
 #include "infra/content.h"
 #include "infra/mount.h"
+#include "infra/path.h"
 #include "sys/gitops.h"
 #include "sys/stats.h"
 #include "utils/commit.h"
@@ -154,7 +155,7 @@ static error_t *discover_file(
     *found_in_history = false;
 
     /* Resolve input path to storage format (file need not exist) */
-    err = mount_resolve_input(mounts, file_path, arena, &storage_path);
+    err = path_input_resolve(mounts, file_path, arena, &storage_path);
     if (err) {
         return err;
     }

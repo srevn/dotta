@@ -23,6 +23,7 @@
 #include "core/profiles.h"
 #include "core/state.h"
 #include "infra/mount.h"
+#include "infra/path.h"
 #include "infra/worktree.h"
 #include "sys/filesystem.h"
 #include "sys/gitops.h"
@@ -143,7 +144,7 @@ static error_t *resolve_paths_to_remove(
         const char *storage_path = NULL;
 
         /* Resolve input path to storage format (file need not exist) */
-        err = mount_resolve_input(mounts, input_path, arena, &storage_path);
+        err = path_input_resolve(mounts, input_path, arena, &storage_path);
         if (err) {
             if (!opts->force) {
                 goto cleanup;

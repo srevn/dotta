@@ -15,6 +15,7 @@
 #include "base/hashmap.h"
 #include "base/string.h"
 #include "infra/mount.h"
+#include "infra/path.h"
 
 /* Compiled glob entry: the raw user input string and a single-rule
  * ruleset isolating the pattern from its siblings. Both are arena-
@@ -204,7 +205,7 @@ error_t *pathspec_create(
 
         /* Exact path: resolve via shared mount table, store in hashmap. */
         const char *resolved = NULL;
-        err = mount_resolve_input(table, input, arena, &resolved);
+        err = path_input_resolve(table, input, arena, &resolved);
         if (err) {
             err = error_wrap(err, "Invalid path '%s'", input);
             goto cleanup;

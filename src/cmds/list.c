@@ -26,6 +26,7 @@
 #include "core/state.h"
 #include "infra/content.h"
 #include "infra/mount.h"
+#include "infra/path.h"
 #include "sys/gitops.h"
 #include "sys/stats.h"
 #include "sys/upstream.h"
@@ -565,7 +566,7 @@ static error_t *list_file_history(
     /* Resolve input path to storage format (handles absolute, tilde, relative,
      * and storage paths). File need not exist on disk. */
     const char *storage_path = NULL;
-    error_t *err = mount_resolve_input(mounts, opts->file_path, arena, &storage_path);
+    error_t *err = path_input_resolve(mounts, opts->file_path, arena, &storage_path);
     if (err) {
         return error_wrap(err, "Failed to resolve path '%s'", opts->file_path);
     }

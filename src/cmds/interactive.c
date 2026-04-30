@@ -18,6 +18,7 @@
 #include "core/manifest.h"
 #include "core/profiles.h"
 #include "core/state.h"
+#include "infra/mount.h"
 
 /**
  * Interactive UI state

@@ -24,7 +24,6 @@
 #include "base/arena.h"
 #include "base/array.h"
 #include "base/error.h"
-#include "infra/mount.h"
 #include "sys/filesystem.h"
 
 /* Schema version - must match database */
@@ -1922,116 +1921,6 @@ error_t *state_get_all_files(
     *out = entries;
     *count = i;
 
-    return NULL;
-}
-
-/**
- * Create state directory entry from metadata item
- *
- * Converts portable metadata (storage_path) to state entry (both paths).
- * Derives filesystem_path from the storage_path by consulting the
- * mount table for `profile`'s target binding.
- *
- * Outcome:
- *   - Success with binding: `*out` is non-NULL, arena-allocated.
- *   - Success without binding: `*out == NULL` and the function returns
- *     NULL. Mirrors mount_resolve's NULL-out contract — happens only
- *     when meta_item->key is custom/... and `profile` has no target
- *     binding on this host. The caller (manifest_sync_directories)
- *     branches on the NULL for silent skip.
- *   - Error otherwise (malformed key, allocation failure).
- *
- * @param meta_item Metadata item (must not be NULL, must be DIRECTORY kind)
- * @param profile Source profile name (must not be NULL)
- * @param mounts Per-machine mount table (must not be NULL)
- * @param arena Arena for allocations (must not be NULL)
- * @param out State directory entry (must not be NULL, lifetime tied to arena)
- * @return Error or NULL on success
- */
-error_t *state_directory_entry_create_from_metadata(
-    const metadata_item_t *meta_item,
-    const char *profile,
-    const mount_table_t *mounts,
-    arena_t *arena,
-    state_directory_entry_t **out
-) {
-    CHECK_NULL(meta_item);
-    CHECK_NULL(profile);
-    CHECK_NULL(mounts);
-    CHECK_NULL(arena);
-    CHECK_NULL(out);
-
-    *out = NULL;
-
-    /* Validate that this is a directory item */
-    if (meta_item->kind != METADATA_ITEM_DIRECTORY) {
-        const char *kind_str = "UNKNOWN";
-        if (meta_item->kind == METADATA_ITEM_FILE) kind_str = "FILE";
-        else if (meta_item->kind == METADATA_ITEM_SYMLINK) kind_str = "SYMLINK";
-
-        return ERROR(
-            ERR_INVALID_ARG, "Expected DIRECTORY metadata item, got %s",
-            kind_str
-        );
-    }
-
-    /* Derive filesystem path from storage path against the mount table.
-     * UNBOUND means meta_item->key is custom/... and `profile` has no
-     * target binding on this host — surface as success-with-NULL for the
-     * caller (manifest_sync_directories) to skip. Any error (malformed
-     * key, allocation failure) is wrapped. The arena-side entry
-     * allocation is deferred until after the mount lookup so a skip path
-     * performs no allocation. */
-    mount_resolve_outcome_t outcome;
-    const char *fs_path = NULL;
-    error_t *err = mount_resolve(
-        mounts, profile, meta_item->key, arena, &outcome, &fs_path
-    );
-    if (err) {
-        return error_wrap(
-            err, "Failed to derive filesystem path from storage path: %s",
-            meta_item->key
-        );
-    }
-    if (outcome == MOUNT_RESOLVE_UNBOUND) return NULL;
-
-    /* Helper macros: route allocations through arena */
-    #define DUP(s)      arena_strdup(arena, (s))
-    #define DUP_OPT(s)  ((s) ? DUP(s) : NULL)
-
-    state_directory_entry_t *entry =
-        arena_calloc(arena, 1, sizeof(state_directory_entry_t));
-    if (!entry) {
-        return ERROR(ERR_MEMORY, "Failed to allocate state directory entry");
-    }
-
-    /* filesystem_path is arena-borrowed via mount_resolve; the cast
-     * accommodates the legacy `char *` field typing without implying
-     * mutability. */
-    entry->filesystem_path = (char *) fs_path;
-
-    entry->storage_path = DUP(meta_item->key);
-    entry->profile = DUP(profile);
-    entry->mode = meta_item->mode;
-    entry->owner = DUP_OPT(meta_item->owner);
-    entry->group = DUP_OPT(meta_item->group);
-
-    /* deployed_at intentionally left zero-initialized by calloc. The
-     * INSERT in state_add_directory omits the column (schema DEFAULT
-     * strftime('%s','now') fires for new rows); the UPDATE in
-     * state_update_directory also omits it (preserving the existing
-     * value on refresh). The field on this struct is never persisted. */
-
-    /* Check allocation success */
-    if (!entry->filesystem_path || !entry->storage_path || !entry->profile ||
-        (meta_item->owner && !entry->owner) || (meta_item->group && !entry->group)) {
-        return ERROR(ERR_MEMORY, "Failed to copy directory entry fields");
-    }
-
-    #undef DUP
-    #undef DUP_OPT
-
-    *out = entry;
     return NULL;
 }
 

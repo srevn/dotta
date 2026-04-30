@@ -33,31 +33,6 @@
 #include "infra/mount.h"
 #include "sys/gitops.h"
 
-/* -------------------------------------------------------------------- */
-/* Internal precedence builder + directory rebuild                      */
-/*                                                                      */
-/* These two helpers are the precedence oracle and the directory-table  */
-/* rebuilder used by every consistency-layer entry point. They are not  */
-/* part of the public API — callers reach the same effects through      */
-/* manifest_apply_scope / manifest_sync_diff / manifest_*_files.        */
-/* -------------------------------------------------------------------- */
-
-static error_t *manifest_build(
-    git_repository *repo,
-    const string_array_t *profiles,
-    const mount_table_t *mounts,
-    arena_t *arena,
-    manifest_t **out
-);
-
-static error_t *manifest_sync_directories(
-    git_repository *repo,
-    state_t *state,
-    arena_t *arena,
-    const string_array_t *enabled_profiles,
-    const mount_table_t *mounts
-);
-
 /**
  * Resolve a profile's current branch HEAD and persist it as the
  * stored commit_oid in enabled_profiles.
@@ -1887,6 +1862,87 @@ cleanup:
 }
 
 /**
+ * Project a DIRECTORY metadata item to a state directory entry.
+ *
+ * Resolves filesystem_path via the mount table. UNBOUND ⇒ silent skip:
+ * *out is NULL and the function returns NULL. This happens only for
+ * custom/ items whose owning profile has no target binding on this host
+ * (clone before --target, or profile enabled without --target).
+ *
+ * Caller (manifest_sync_directories) guarantees item->kind is DIRECTORY
+ * via metadata_get_items_by_kind() — the kind filter is the contract,
+ * not a runtime check.
+ *
+ * @param item    Metadata item (must not be NULL, DIRECTORY kind by caller contract)
+ * @param profile Source profile name (must not be NULL)
+ * @param mounts  Per-machine mount table (must not be NULL)
+ * @param arena   Arena for allocations (must not be NULL)
+ * @param out     State directory entry (must not be NULL, lifetime tied to arena)
+ * @return Error or NULL on success
+ */
+static error_t *directory_entry_from_metadata(
+    const metadata_item_t *item,
+    const char *profile,
+    const mount_table_t *mounts,
+    arena_t *arena,
+    state_directory_entry_t **out
+) {
+    CHECK_NULL(item);
+    CHECK_NULL(profile);
+    CHECK_NULL(mounts);
+    CHECK_NULL(arena);
+    CHECK_NULL(out);
+
+    *out = NULL;
+
+    /* Defer entry allocation until after the mount lookup so the skip
+     * path performs no allocation. UNBOUND surfaces only when the storage
+     * path is custom/... and `profile` has no target binding on this host. */
+    mount_resolve_outcome_t outcome;
+    const char *fs_path = NULL;
+    error_t *err = mount_resolve(
+        mounts, profile, item->key, arena, &outcome, &fs_path
+    );
+    if (err) {
+        return error_wrap(
+            err, "Failed to derive filesystem path from storage path: %s",
+            item->key
+        );
+    }
+    if (outcome == MOUNT_RESOLVE_UNBOUND) return NULL;
+
+    state_directory_entry_t *entry = arena_calloc(arena, 1, sizeof(*entry));
+    if (!entry) {
+        return ERROR(ERR_MEMORY, "Failed to allocate state directory entry");
+    }
+
+    /* filesystem_path is arena-borrowed via mount_resolve; the cast
+     * accommodates the struct field's `char *` typing without implying
+     * mutability. The borrow shares the arena lifetime of the strdup'd
+     * siblings below.
+     *
+     * deployed_at intentionally left zero-initialized by calloc. The
+     * INSERT in state_add_directory omits the column (schema DEFAULT
+     * strftime('%s','now') fires for new rows); the UPDATE in
+     * state_update_directory also omits it (preserving the existing
+     * value on refresh). The field on this struct is never persisted. */
+    entry->filesystem_path = (char *) fs_path;
+    entry->storage_path = arena_strdup(arena, item->key);
+    entry->profile = arena_strdup(arena, profile);
+    entry->mode = item->mode;
+    entry->owner = item->owner ? arena_strdup(arena, item->owner) : NULL;
+    entry->group = item->group ? arena_strdup(arena, item->group) : NULL;
+
+    if (!entry->storage_path || !entry->profile ||
+        (item->owner && !entry->owner) || (item->group && !entry->group)) {
+        return ERROR(ERR_MEMORY, "Failed to copy directory entry fields");
+    }
+
+    *out = entry;
+    return NULL;
+}
+
+/**
  * Sync tracked directories from enabled profiles
  *
  * Rebuilds the tracked_directories table from metadata.
@@ -1925,7 +1981,7 @@ cleanup:
  *              (must not be NULL)
  * @return Error or NULL on success
  */
-static error_t *manifest_sync_directories(
+error_t *manifest_sync_directories(
     git_repository *repo,
     state_t *state,
     arena_t *arena,
@@ -1991,21 +2047,15 @@ static error_t *manifest_sync_directories(
          *
          * This preserves deployed_at timestamps and enables clean orphan detection.
          *
-         * The custom/ skip-guard from the prior implementation now lives
-         * in the entry-creation primitive: state_directory_entry_create_from_metadata
-         * sets *state_dir = NULL when the storage path is custom/... and
-         * `profile` has no target binding in `mounts`. We surface that
-         * as a silent skip and let any other failure propagate.
+         * directory_entry_from_metadata sets *state_dir = NULL on the
+         * custom/-without-binding case (silent skip); any other failure
+         * propagates.
          */
         for (size_t j = 0; j < dir_count; j++) {
             state_directory_entry_t *state_dir = NULL;
 
-            err = state_directory_entry_create_from_metadata(
-                directories[j],
-                profile,
-                mounts,
-                arena,
-                &state_dir
+            err = directory_entry_from_metadata(
+                directories[j], profile, mounts, arena, &state_dir
             );
 
             if (err) {
@@ -2511,7 +2561,7 @@ static int manifest_build_callback(
  * influence the manifest, ensuring policy lives in one site instead of
  * being replicated by each engine entry point.
  */
-static error_t *manifest_build(
+error_t *manifest_build(
     git_repository *repo,
     const string_array_t *profiles,
     const mount_table_t *mounts,

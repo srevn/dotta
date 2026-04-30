@@ -28,6 +28,7 @@
 #include "core/state.h"
 #include "core/workspace.h"
 #include "infra/content.h"
+#include "infra/mount.h"
 #include "infra/worktree.h"
 #include "sys/filesystem.h"
 #include "utils/commit.h"

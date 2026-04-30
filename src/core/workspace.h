@@ -25,6 +25,7 @@
 #include "base/output.h"
 #include "core/state.h"
 #include "infra/content.h"
+#include "infra/mount.h"
 
 /* Maximum number of display tags that can be extracted from a workspace item */
 #define WORKSPACE_ITEM_MAX_DISPLAY_TAGS 5

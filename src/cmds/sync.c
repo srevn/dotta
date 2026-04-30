@@ -18,6 +18,7 @@
 #include "core/scope.h"
 #include "core/state.h"
 #include "core/workspace.h"
+#include "infra/mount.h"
 #include "infra/salt.h"
 #include "sys/gitops.h"
 #include "sys/resolve.h"

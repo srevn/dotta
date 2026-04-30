@@ -24,6 +24,7 @@
 #include "core/manifest.h"
 #include "core/profiles.h"
 #include "core/state.h"
+#include "infra/mount.h"
 #include "infra/salt.h"
 #include "sys/bootstrap.h"
 #include "sys/filesystem.h"

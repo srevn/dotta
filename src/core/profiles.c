@@ -17,6 +17,7 @@
 #include "base/hashmap.h"
 #include "base/string.h"
 #include "core/state.h"
+#include "infra/mount.h"
 #include "sys/gitops.h"
 
 /**

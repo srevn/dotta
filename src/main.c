@@ -16,6 +16,7 @@
 #include "base/args.h"
 #include "base/error.h"
 #include "base/output.h"
+#include "infra/mount.h"
 #include "sys/process.h"
 #include "cmds/add.h"
 #include "cmds/apply.h"

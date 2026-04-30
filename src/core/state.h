@@ -28,9 +28,6 @@
 #include <time.h>
 #include <types.h>
 
-#include "core/metadata.h"
-#include "infra/mount.h"
-
 /**
  * File type in state
  */
@@ -976,35 +973,6 @@ error_t *state_get_entries_by_profile(
 );
 
 /**
- * Create state directory entry from metadata item
- *
- * Converts portable metadata (storage_path) to state entry (both paths).
- * Derives filesystem_path from the storage_path by consulting the
- * mount table for `profile`'s target binding.
- *
- * The entry and its string fields are allocated from the caller's arena.
- *
- * Error semantics: returns ERR_NOT_FOUND when the storage path starts
- * with "custom/" but `profile` has no target in `mounts` (clone
- * before --target, or profile enabled without --target). The sole
- * caller (manifest_sync_directories) treats that as a silent skip.
- *
- * @param meta_item Metadata item (must not be NULL, must be DIRECTORY kind)
- * @param profile Source profile name (must not be NULL)
- * @param mounts Per-machine mount table (must not be NULL)
- * @param arena Arena for allocations (must not be NULL)
- * @param out State directory entry (must not be NULL, lifetime tied to arena)
- * @return Error or NULL on success
- */
-error_t *state_directory_entry_create_from_metadata(
-    const metadata_item_t *meta_item,
-    const char *profile,
-    const mount_table_t *mounts,
-    arena_t *arena,
-    state_directory_entry_t **out
-);
-
-/**
  * Add directory entry to state
  *
  * @param state State (must not be NULL)
@@ -1097,6 +1065,11 @@ error_t *state_remove_directory(state_t *state, const char *filesystem_path);
  *
  * Retrieves single directory entry by filesystem path.
  * Caller owns the returned entry and must free it with state_free_directory_entry().
+ *
+ * Out-parameter contract: `*out` is set to NULL up front on every code
+ * path (success-with-row, ERR_NOT_FOUND, and any other error). Callers
+ * may treat *out as definitively NULL on any non-success return without
+ * a defensive guard before state_free_directory_entry().
  *
  * @param state State (must not be NULL)
  * @param filesystem_path Directory path to lookup (must not be NULL)

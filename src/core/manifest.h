@@ -38,6 +38,7 @@
 #include "core/metadata.h"
 #include "core/state.h"
 #include "core/workspace.h"
+#include "infra/mount.h"
 
 /**
  * File entry in manifest
@@ -72,23 +73,20 @@
  */
 typedef struct file_entry {
     /* Paths */
-    char *storage_path;              /* Path in profile (home/.bashrc) */
-    char *filesystem_path;           /* Deployed path (/home/user/.bashrc) */
+    char *storage_path;        /* Path in profile (home/.bashrc) */
+    char *filesystem_path;     /* Deployed path (/home/user/.bashrc) */
 
     /* Profile ownership */
-    const char *profile;             /* Profile name (borrowed, used for all name-based operations) */
-    char *old_profile;               /* Previous owner if changed, NULL otherwise (VWD cache) */
+    const char *profile;       /* Profile name (borrowed, used for all name-based operations) */
+    char *old_profile;         /* Previous owner if changed, NULL otherwise (VWD cache) */
 
     /* VWD cache (git-derived, reconcile-maintained) */
-    git_oid blob_oid;                /* Blob the composed profile layer expects on disk */
-    state_file_type_t type;          /* File type (REGULAR, SYMLINK, EXECUTABLE) */
-    mode_t mode;                     /* Permission mode (e.g., 0644), 0 if no metadata tracked */
-    char *owner;                     /* Owner username (root/ files only, can be NULL) */
-    char *group;                     /* Group name (root/ files only, can be NULL) */
-    bool encrypted;                  /* Metadata-projected cache; byte-truth via the
-                                      * Phase 2 write-time invariant in
-                                      * content_store_file_to_worktree. See
-                                      * docs/encryption-spec.md → "Cache hierarchy". */
+    git_oid blob_oid;          /* Blob the composed profile layer expects on disk */
+    state_file_type_t type;    /* File type (REGULAR, SYMLINK, EXECUTABLE) */
+    mode_t mode;               /* Permission mode (e.g., 0644), 0 if no metadata tracked */
+    char *owner;               /* Owner username (root/ files only, can be NULL) */
+    char *group;               /* Group name (root/ files only, can be NULL) */
+    bool encrypted;            /* Metadata-projected cache; byte-truth via the write-time invariant */
 
     /* Deployment anchor (dotta-authored, advances only via state_update_anchor) */
     deployment_anchor_t anchor;
@@ -683,6 +681,87 @@ error_t *manifest_sync_diff(
     size_t *out_removed,
     size_t *out_fallbacks,
     size_t *out_skipped
+);
+
+/**
+ * Sync tracked directories from enabled profiles
+ *
+ * Rebuilds the tracked_directories table from metadata.
+ * Called after profile enable/disable/reorder to maintain directory tracking.
+ *
+ * Algorithm:
+ *   1. Clear all tracked directories (idempotent start)
+ *   2. For each enabled profile:
+ *      a. Load metadata from Git (or skip if doesn't exist)
+ *      b. Extract directories via metadata_get_items_by_kind()
+ *      c. Add to state via state_add_directory() with profile attribution
+ *   3. All within caller's active transaction
+ *
+ * Pattern: Rebuild (not incremental)
+ *   - Directories have no lifecycle states to preserve
+ *   - Clear + repopulate is simple, correct, and fast
+ *   - Already idempotent via INSERT OR REPLACE
+ *
+ * Preconditions:
+ *   - state MUST have active transaction (via state_open)
+ *   - enabled_profiles MUST be the engine's iteration set (caller built
+ *     `mounts` from the same list)
+ *
+ * Postconditions:
+ *   - tracked_directories table reflects enabled_profiles
+ *   - Transaction remains open (caller commits)
+ *   - Missing metadata handled gracefully (not an error)
+ *
+ * Performance: O(D) where D = total directories across enabled profiles
+ *              (typically < 50 even for large configs)
+ *
+ * @param repo Git repository (must not be NULL)
+ * @param state State with active transaction (must not be NULL)
+ * @param enabled_profiles Current enabled profiles (must not be NULL)
+ * @param mounts Per-machine mount table covering enabled_profiles
+ *              (must not be NULL)
+ * @return Error or NULL on success
+ */
+error_t *manifest_sync_directories(
+    git_repository *repo,
+    state_t *state,
+    arena_t *arena,
+    const string_array_t *enabled_profiles,
+    const mount_table_t *mounts
+);
+
+/**
+ * Build manifest from profile names
+ *
+ * Merges files from all profiles according to precedence rules.
+ * Later profiles override earlier ones. Loads each profile's Git tree
+ * internally via gitops_load_branch_tree (one tree alive per iteration).
+ *
+ * Custom prefix resolution is handled internally: when state is non-NULL,
+ * loads the prefix map from the state database to resolve custom/ files.
+ * Profiles without a custom prefix deploy to home/root normally.
+ * Custom/ files are skipped for profiles without a prefix entry.
+ *
+ * Memory: per-entry strings (storage_path, filesystem_path, owner, group)
+ * are allocated from the caller's arena. The arena must outlive the
+ * manifest, since manifest_free() abandons those strings to the arena.
+ * Entries also borrow `profile` from the caller's profiles array, which
+ * must outlive the manifest.
+ *
+ * @param repo Repository (must not be NULL)
+ * @param profiles Profile names in precedence order (must not be NULL)
+ * @param mounts Per-machine mount table covering enabled_profiles
+ *              (must not be NULL)
+ * @param arena Arena for string allocations (must not be NULL)
+ * @param out Manifest (must not be NULL, caller must free with manifest_free)
+ * @return Error or NULL on success
+ */
+error_t *manifest_build(
+    git_repository *repo,
+    const string_array_t *profiles,
+    const mount_table_t *mounts,
+    arena_t *arena,
+    manifest_t **out
 );
 
 /**

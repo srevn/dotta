@@ -568,7 +568,7 @@ error_t *cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
     error_t *err = NULL;
     string_array_t *profiles = NULL;
     string_array_t *matches = NULL;
-    char *converted = NULL;
+    const char *converted = NULL;
     const char *found_profile = NULL;
 
     /* Handle SHOW_COMMIT mode */
@@ -649,7 +649,9 @@ error_t *cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
     /* Resolve file path to storage format (common to both explicit and implicit paths).
      * On resolution failure, fall back to the original input — it may be a partial-match
      * pattern that mount_resolve_input rejects but the search below accepts. */
-    error_t *convert_err = mount_resolve_input(mounts, opts->file_path, &converted);
+    error_t *convert_err = mount_resolve_input(
+        mounts, opts->file_path, ctx->arena, &converted
+    );
     const char *search_path = convert_err ? opts->file_path : converted;
     if (convert_err) error_free(convert_err);
 
@@ -715,7 +717,6 @@ error_t *cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
 cleanup:
     string_array_free(profiles);
     if (matches) string_array_free(matches);
-    if (converted) free(converted);
 
     return err;
 }

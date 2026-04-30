@@ -564,8 +564,8 @@ static error_t *list_file_history(
 
     /* Resolve input path to storage format (handles absolute, tilde, relative,
      * and storage paths). File need not exist on disk. */
-    char *storage_path = NULL;
-    error_t *err = mount_resolve_input(mounts, opts->file_path, &storage_path);
+    const char *storage_path = NULL;
+    error_t *err = mount_resolve_input(mounts, opts->file_path, arena, &storage_path);
     if (err) {
         return error_wrap(err, "Failed to resolve path '%s'", opts->file_path);
     }
@@ -585,14 +585,12 @@ static error_t *list_file_history(
                     storage_path, opts->file_path
                 );
             }
-            free(storage_path);
             return err;
         }
 
         discovered_profile = strdup(matches->items[0]);
         string_array_free(matches);
         if (!discovered_profile) {
-            free(storage_path);
             return ERROR(ERR_MEMORY, "Failed to allocate profile name");
         }
         profile = discovered_profile;
@@ -606,7 +604,6 @@ static error_t *list_file_history(
     if (err) {
         error_t *wrapped = error_wrap(err, "Profile '%s' not found", profile);
         free(discovered_profile);
-        free(storage_path);
         return wrapped;
     }
 
@@ -627,7 +624,6 @@ static error_t *list_file_history(
             storage_path, profile
         );
         free(discovered_profile);
-        free(storage_path);
         return wrapped;
     }
 
@@ -701,7 +697,6 @@ static error_t *list_file_history(
     /* Cleanup */
     stats_free_file_history(history);
     free(discovered_profile);
-    free(storage_path);
 
     return NULL;
 }

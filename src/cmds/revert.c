@@ -11,6 +11,7 @@
 #include <string.h>
 #include <time.h>
 
+#include "base/arena.h"
 #include "base/args.h"
 #include "base/array.h"
 #include "base/buffer.h"
@@ -41,22 +42,25 @@
  * @param repo Repository (must not be NULL)
  * @param storage_path Storage path (must not be NULL)
  * @param profile Profile name (must not be NULL)
+ * @param arena Arena that owns the returned strings
  * @param out Output context (must not be NULL)
- * @param out_profile Output profile name (must not be NULL, caller must free)
- * @param out_resolved_path Output storage path (must not be NULL, caller must free)
+ * @param out_profile Arena-borrowed profile name (must not be NULL)
+ * @param out_resolved_path Arena-borrowed storage path (must not be NULL)
  * @return Error or NULL on success
  */
 static error_t *discover_file_in_history(
     git_repository *repo,
     const char *storage_path,
     const char *profile,
+    arena_t *arena,
     const output_t *out,
-    char **out_profile,
-    char **out_resolved_path
+    const char **out_profile,
+    const char **out_resolved_path
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(storage_path);
     CHECK_NULL(profile);
+    CHECK_NULL(arena);
     CHECK_NULL(out);
     CHECK_NULL(out_profile);
     CHECK_NULL(out_resolved_path);
@@ -98,13 +102,11 @@ static error_t *discover_file_in_history(
 
     stats_free_file_history(history);
 
-    /* Return profile and path */
-    *out_profile = strdup(profile);
-    *out_resolved_path = strdup(storage_path);
+    /* Return profile and path (arena-borrowed) */
+    *out_profile = arena_strdup(arena, profile);
+    *out_resolved_path = arena_strdup(arena, storage_path);
 
     if (!*out_profile || !*out_resolved_path) {
-        if (*out_profile) free(*out_profile);
-        if (*out_resolved_path) free(*out_resolved_path);
         return ERROR(ERR_MEMORY, "Failed to allocate strings");
     }
 
@@ -132,8 +134,8 @@ static error_t *discover_file(
     const char *profile_hint,
     const output_t *out,
     bool *found_in_history,
-    char **out_profile,
-    char **out_resolved_path
+    const char **out_profile,
+    const char **out_resolved_path
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(state);
@@ -146,13 +148,13 @@ static error_t *discover_file(
     CHECK_NULL(out_resolved_path);
 
     error_t *err = NULL;
-    char *storage_path = NULL;
+    const char *storage_path = NULL;
 
     /* Initialize output flag */
     *found_in_history = false;
 
     /* Resolve input path to storage format (file need not exist) */
-    err = mount_resolve_input(mounts, file_path, &storage_path);
+    err = mount_resolve_input(mounts, file_path, arena, &storage_path);
     if (err) {
         return err;
     }
@@ -162,7 +164,6 @@ static error_t *discover_file(
         git_tree *tree = NULL;
         err = gitops_load_branch_tree(repo, profile_hint, &tree, NULL);
         if (err) {
-            free(storage_path);
             return error_wrap(err, "Failed to load profile '%s'", profile_hint);
         }
 
@@ -179,10 +180,9 @@ static error_t *discover_file(
         if (!exists) {
             /* File not in HEAD - try history search as fallback */
             err = discover_file_in_history(
-                repo, storage_path, profile_hint, out, out_profile, out_resolved_path
+                repo, storage_path, profile_hint, arena, out,
+                out_profile, out_resolved_path
             );
-            free(storage_path);
-
             if (err) {
                 return err;
             }
@@ -193,9 +193,8 @@ static error_t *discover_file(
         }
 
         /* Found in HEAD (fast path) */
-        *out_profile = strdup(profile_hint);
+        *out_profile = arena_strdup(arena, profile_hint);
         if (!*out_profile) {
-            free(storage_path);
             return ERROR(ERR_MEMORY, "Failed to allocate profile name");
         }
 
@@ -217,17 +216,15 @@ static error_t *discover_file(
                 "Use 'dotta list --all' to see all profiles.", storage_path, file_path
             );
         }
-        free(storage_path);
         return err;
     }
 
     if (matches->count == 1) {
         /* Found in exactly one profile */
-        *out_profile = strdup(matches->items[0]);
+        *out_profile = arena_strdup(arena, matches->items[0]);
         string_array_free(matches);
 
         if (!*out_profile) {
-            free(storage_path);
             return ERROR(ERR_MEMORY, "Failed to allocate profile name");
         }
 
@@ -251,7 +248,6 @@ static error_t *discover_file(
     output_hintline(out, OUTPUT_NORMAL, "  dotta revert --profile <name> %s", storage_path);
 
     string_array_free(matches);
-    free(storage_path);
 
     return ERROR(ERR_INVALID_ARG, "Ambiguous file reference");
 }
@@ -784,8 +780,8 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
     output_t *out = ctx->out;
 
     error_t *err = NULL;
-    char *profile = NULL;
-    char *resolved_path = NULL;
+    const char *profile = NULL;
+    const char *resolved_path = NULL;
     git_oid current_oid = { { 0 } };
     git_oid target_oid = { { 0 } };
     git_commit *current_commit = NULL;
@@ -1188,9 +1184,6 @@ cleanup:
     if (target_tree) git_tree_free(target_tree);
     if (current_commit) git_commit_free(current_commit);
     if (target_commit) git_commit_free(target_commit);
-    if (profile) free(profile);
-    if (resolved_path) free(resolved_path);
-
     /* Don't return error if user aborted */
     if (user_aborted) return NULL;
 

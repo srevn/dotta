@@ -686,6 +686,7 @@ static error_t *create_commit(
     const cmd_add_options_t *opts,
     string_array_t *added_files,
     const mount_table_t *mounts,
+    arena_t *arena,
     const config_t *config,
     git_oid *out_commit_oid
 ) {
@@ -693,6 +694,7 @@ static error_t *create_commit(
     CHECK_NULL(opts);
     CHECK_NULL(added_files);
     CHECK_NULL(mounts);
+    CHECK_NULL(arena);
 
     /* Build commit message using storage paths */
     string_array_t *storage_paths = string_array_new(0);
@@ -701,23 +703,31 @@ static error_t *create_commit(
     }
 
     /* Convert filesystem paths to storage paths for commit message.
-     * Files come from the walker output — already absolute and existing. */
+     * Files come from the walker output — already absolute and existing,
+     * so the walker never emits a top-level mount root. ROOT outcome is
+     * impossible here by construction; treat it as a skip should the
+     * invariant ever drift. */
     error_t *err = NULL;
     for (size_t i = 0; i < added_files->count; i++) {
         const char *file_path = added_files->items[i];
-        char *storage_path = NULL;
+        mount_classify_outcome_t outcome;
+        const char *storage_path = NULL;
 
-        err = mount_classify(mounts, file_path, &storage_path, NULL);
+        err = mount_classify(
+            mounts, file_path, arena, &outcome, &storage_path, NULL
+        );
         if (err) {
             /* Skip if conversion fails (shouldn't happen at this point) */
             error_free(err);
+            err = NULL;
             continue;
         }
+        if (outcome == MOUNT_CLASSIFY_ROOT) continue;
 
         err = string_array_push(storage_paths, storage_path);
-        free(storage_path);
         if (err) {
             error_free(err);
+            err = NULL;
             break;
         }
     }
@@ -1222,7 +1232,6 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     for (size_t i = 0; i < opts->file_count; i++) {
         const char *file_path = opts->files[i];
         char *absolute = NULL;
-        char *storage_path_heap = NULL;
         mount_kind_t kind;
 
         /* Storage-path input: the input itself is the display. */
@@ -1253,48 +1262,32 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
             continue;
         }
 
-        bool is_classification_root = false;
-        err = mount_classify(mounts, absolute, &storage_path_heap, &kind);
+        /* Classify the path. ROOT outcome means the input equals a mount
+         * root exactly ($HOME, "/", or --target). The main loop's walker
+         * will still expand its descendants — what we need here is just
+         * the kind to answer "would this op touch a path needing
+         * elevation?". The merged mount_classify writes the kind in both
+         * outcomes; only the storage-path materialization differs. */
+        mount_classify_outcome_t outcome;
+        const char *storage_path = NULL;
+        err = mount_classify(
+            mounts, absolute, ctx->arena, &outcome, &storage_path, &kind
+        );
+        free(absolute);
         if (err) {
-            /* A directory input equal to a classification root ($HOME, "/",
-             * or --target) has no storage representation; mount_classify
-             * returns ERR_INVALID_ARG. The main loop's walker will still
-             * expand its descendants — the metadata path handles that fine.
-             *
-             * What DOES need handling here: the pre-flight's only question
-             * is "will this path's expanded descendants need elevation?".
-             * mount_classify_kind answers exactly that — same longest-match
-             * algorithm, but skips the root-equality error branch. */
-            if (err->code == ERR_INVALID_ARG &&
-                !fs_is_symlink(file_path) && fs_is_directory(file_path)) {
-                error_free(err);
-                err = mount_classify_kind(mounts, absolute, &kind);
-                free(absolute);
-                if (err) {
-                    err = error_wrap(err, "Failed to classify '%s'", file_path);
-                    goto cleanup;
-                }
-                is_classification_root = true;
-            } else {
-                free(absolute);
-                err = error_wrap(err, "Failed to resolve path '%s'", file_path);
-                goto cleanup;
-            }
-        } else {
-            free(absolute);
+            err = error_wrap(err, "Failed to resolve path '%s'", file_path);
+            goto cleanup;
         }
+
+        bool is_classification_root = (outcome == MOUNT_CLASSIFY_ROOT);
 
         if (kind == MOUNT_ROOT ||
             (kind == MOUNT_CUSTOM && custom_needs_elevation)) {
             const char *display =
-                is_classification_root ? file_path : storage_path_heap;
+                is_classification_root ? file_path : storage_path;
             err = string_array_push(&preflight_labels, display);
-            if (err) {
-                free(storage_path_heap);
-                goto cleanup;
-            }
+            if (err) goto cleanup;
         }
-        free(storage_path_heap);  /* may be NULL — free(NULL) is well-defined */
     }
 
     /* Check privilege requirements
@@ -1611,25 +1604,35 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
 
     /* Single-pass: add files and capture metadata inline.
      * Files come from the walker output — already absolute and existing,
-     * so mount_classify cannot trip on the existence check that the old
-     * legacy wrapper performed. */
+     * never equal to a mount root. ROOT outcome is impossible by
+     * construction; surface as ERR_INTERNAL if the invariant ever drifts. */
     for (size_t i = 0; i < all_files->count; i++) {
         const char *file_path = all_files->items[i];
 
         /* Compute storage path once */
-        char *storage_path = NULL;
-        err = mount_classify(mounts, file_path, &storage_path, NULL);
+        mount_classify_outcome_t outcome;
+        const char *storage_path = NULL;
+        err = mount_classify(
+            mounts, file_path, ctx->arena, &outcome, &storage_path, NULL
+        );
         if (err) {
             err = error_wrap(err, "Failed to convert path '%s'", file_path);
             goto cleanup;
         }
-
-        /* Validate storage path */
-        err = mount_validate_storage(storage_path);
-        if (err) {
-            free(storage_path);
+        if (outcome != MOUNT_CLASSIFY_TAIL) {
+            err = ERROR(
+                ERR_INTERNAL,
+                "Walker emitted classification root for '%s'", file_path
+            );
             goto cleanup;
         }
+
+        /* Validate storage path: this is the write boundary into the
+         * worktree (and thence into Git). Establish the well-formed
+         * invariant here so downstream readers (manifest, sync, remove)
+         * can trust the bytes they read. */
+        err = mount_validate_storage(storage_path);
+        if (err) goto cleanup;
 
         /* Add file to worktree and capture metadata
          * ARCHITECTURE: add_file_to_worktree handles both operations atomically,
@@ -1638,12 +1641,9 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
             wt, file_path, storage_path, opts, ctx->keymgr, config, metadata, out
         );
         if (err) {
-            free(storage_path);
             err = error_wrap(err, "Failed to add file '%s'", file_path);
             goto cleanup;
         }
-
-        free(storage_path);
         added_count++;
     }
 
@@ -1655,29 +1655,28 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      * loop captures the full tree, not just the CLI-named entry points.
      *
      * Classification roots ($HOME, "/", --target) have no storage-path
-     * representation: mount_classify returns ERR_INVALID_ARG and we skip
-     * them by design. Their descendants are captured normally.
+     * representation: mount_classify surfaces MOUNT_CLASSIFY_ROOT and we
+     * skip them by design. Their descendants are captured normally.
      */
     size_t dir_tracked_count = 0;
     for (size_t i = 0; i < all_directories->count; i++) {
         const char *filesystem_path = all_directories->items[i];
 
-        char *storage_path = NULL;
-        err = mount_classify(mounts, filesystem_path, &storage_path, NULL);
+        mount_classify_outcome_t outcome;
+        const char *storage_path = NULL;
+        err = mount_classify(
+            mounts, filesystem_path, ctx->arena, &outcome, &storage_path, NULL
+        );
         if (err) {
-            /* Classification root (filesystem_path equals $HOME, "/", or --target):
-             * no storage encoding exists. Skip the root itself; its descendants
-             * appear as separate entries and are captured normally. The error
-             * message in mount_classify makes this semantic explicit. */
-            if (err->code == ERR_INVALID_ARG) {
-                error_free(err);
-                err = NULL;
-                continue;
-            }
             err = error_wrap(
                 err, "Failed to convert directory path '%s'", filesystem_path
             );
             goto cleanup;
+        }
+        if (outcome == MOUNT_CLASSIFY_ROOT) {
+            /* Skip the root itself; its descendants appear as separate
+             * entries and are captured normally. */
+            continue;
         }
 
         /* Stat directory to capture mode (and ownership if root/custom). */
@@ -1687,7 +1686,6 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
                 out, OUTPUT_VERBOSE, "Failed to stat directory '%s': %s",
                 filesystem_path, strerror(errno)
             );
-            free(storage_path);
             continue;
         }
 
@@ -1703,7 +1701,6 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
             );
             error_free(err);
             err = NULL;
-            free(storage_path);
             continue;
         }
 
@@ -1743,7 +1740,6 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
                 filesystem_path, storage_path
             );
         }
-        free(storage_path);
     }
 
     /* Save metadata to worktree */
@@ -1770,7 +1766,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     }
 
     /* Create commit */
-    err = create_commit(wt, opts, all_files, mounts, config, NULL);
+    err = create_commit(wt, opts, all_files, mounts, ctx->arena, config, NULL);
     if (err) goto cleanup;
 
     /* Update manifest - auto-enable new profiles, sync existing enabled profiles

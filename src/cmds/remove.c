@@ -140,10 +140,10 @@ static error_t *resolve_paths_to_remove(
     /* Process each input path */
     for (size_t i = 0; i < path_count; i++) {
         const char *input_path = input_paths[i];
-        char *storage_path = NULL;
+        const char *storage_path = NULL;
 
         /* Resolve input path to storage format (file need not exist) */
-        err = mount_resolve_input(mounts, input_path, &storage_path);
+        err = mount_resolve_input(mounts, input_path, arena, &storage_path);
         if (err) {
             if (!opts->force) {
                 goto cleanup;
@@ -189,7 +189,6 @@ static error_t *resolve_paths_to_remove(
             }
 
             if (err) {
-                free(storage_path);
                 err = error_wrap(err, "Failed to track path for removal");
                 goto cleanup;
             }
@@ -243,7 +242,6 @@ static error_t *resolve_paths_to_remove(
                     }
 
                     if (err) {
-                        free(storage_path);
                         err = error_wrap(err, "Failed to track path for removal");
                         goto cleanup;
                     }
@@ -254,16 +252,10 @@ static error_t *resolve_paths_to_remove(
 
         if (matches_found == 0) {
             if (!opts->force) {
-                /* Save storage_path for error message before freeing */
-                char error_storage_path[PATH_MAX];
-                snprintf(error_storage_path, sizeof(error_storage_path), "%s", storage_path);
-
-                free(storage_path);
-
                 err = ERROR(
                     ERR_NOT_FOUND, "File '%s' not found in profile '%s'\n"
                     "Hint: Use 'dotta list --profile %s' to see tracked files",
-                    error_storage_path, profile, profile
+                    storage_path, profile, profile
                 );
                 goto cleanup;
             }
@@ -273,8 +265,6 @@ static error_t *resolve_paths_to_remove(
                 storage_path
             );
         }
-
-        free(storage_path);
     }
 
     /* Check if we found any files */

@@ -203,15 +203,14 @@ error_t *pathspec_create(
         }
 
         /* Exact path: resolve via shared mount table, store in hashmap. */
-        char *resolved = NULL;
-        err = mount_resolve_input(table, input, &resolved);
+        const char *resolved = NULL;
+        err = mount_resolve_input(table, input, arena, &resolved);
         if (err) {
             err = error_wrap(err, "Invalid path '%s'", input);
             goto cleanup;
         }
 
         err = hashmap_set(spec->exact_paths, resolved, (void *) 1);
-        free(resolved);
         if (err) goto cleanup;
     }
 

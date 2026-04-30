@@ -8,13 +8,13 @@
 
 #include <errno.h>
 #include <limits.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
 #include "base/arena.h"
 #include "base/error.h"
-#include "base/string.h"
 #include "sys/filesystem.h"
 
 /**
@@ -578,11 +578,15 @@ static const mount_entry_t *find_classify_winner(
 error_t *mount_classify(
     const mount_table_t *table,
     const char *fs_path,
-    char **out_storage,
+    arena_t *arena,
+    mount_classify_outcome_t *outcome,
+    const char **out_storage,
     mount_kind_t *out_kind
 ) {
     CHECK_NULL(table);
     CHECK_NULL(fs_path);
+    CHECK_NULL(arena);
+    CHECK_NULL(outcome);
     CHECK_NULL(out_storage);
 
     const char *winner_relative = NULL;
@@ -593,50 +597,28 @@ error_t *mount_classify(
         return ERROR(ERR_INTERNAL, "No mount matched: %s", fs_path);
     }
 
-    const mount_spec_t *spec = mount_spec_for_kind(winner->kind);
+    if (out_kind) *out_kind = winner->kind;
 
     if (*winner_relative == '\0') {
         /* Path equals the winning mount root exactly. No storage-path
-         * encoding exists for the mount root itself. Callers walking a
-         * directory tree handle this as "skip this entry, descendants
-         * appear separately"; callers expecting a file get an error.
-         * Callers that only need the kind (e.g., privilege pre-flight)
-         * use mount_classify_kind to avoid this branch. */
-        return ERROR(
-            ERR_INVALID_ARG,
-            "Path equals the %s classification root; "
-            "no storage-path representation",
-            spec->display
-        );
+         * encoding exists for the mount root itself. Surface as ROOT;
+         * callers walking a directory tree treat this as "skip this
+         * entry, descendants appear separately"; callers expecting a
+         * file translate ROOT into their own error. */
+        *outcome = MOUNT_CLASSIFY_ROOT;
+        *out_storage = NULL;
+        return NULL;
     }
 
-    char *result = str_format("%s/%s", spec->label, winner_relative);
+    const mount_spec_t *spec = mount_spec_for_kind(winner->kind);
+    const char *result =
+        arena_str_format(arena, "%s/%s", spec->label, winner_relative);
     if (!result) {
         return ERROR(ERR_MEMORY, "Failed to format storage path");
     }
     *out_storage = result;
-    if (out_kind) *out_kind = winner->kind;
+    *outcome = MOUNT_CLASSIFY_TAIL;
 
-    return NULL;
-}
-
-error_t *mount_classify_kind(
-    const mount_table_t *table,
-    const char *fs_path,
-    mount_kind_t *out_kind
-) {
-    CHECK_NULL(table);
-    CHECK_NULL(fs_path);
-    CHECK_NULL(out_kind);
-
-    const mount_entry_t *winner =
-        find_classify_winner(table, fs_path, NULL);
-
-    if (!winner) {
-        return ERROR(ERR_INTERNAL, "No mount matched: %s", fs_path);
-    }
-
-    *out_kind = winner->kind;
     return NULL;
 }
 
@@ -819,14 +801,17 @@ static bool input_is_relative(const char *input) {
 error_t *mount_resolve_input(
     const mount_table_t *table,
     const char *input,
-    char **out_storage
+    arena_t *arena,
+    const char **out_storage
 ) {
     CHECK_NULL(table);
     CHECK_NULL(input);
+    CHECK_NULL(arena);
     CHECK_NULL(out_storage);
 
+    *out_storage = NULL;
+
     error_t *err = NULL;
-    char *storage_path = NULL;
     char *expanded = NULL;
     char *absolute = NULL;
     char *normalized = NULL;
@@ -835,19 +820,18 @@ error_t *mount_resolve_input(
         return ERROR(ERR_INVALID_ARG, "Path cannot be empty");
     }
 
-    /* Case 1: Storage path — validate and return a duplicate. */
+    /* Case 1: Storage path — validate and arena-copy. */
     if (mount_decode_label(input, NULL, NULL)) {
         err = mount_validate_storage(input);
         if (err) {
-            err = error_wrap(err, "Invalid storage path '%s'", input);
-            goto cleanup;
+            return error_wrap(err, "Invalid storage path '%s'", input);
         }
-
-        storage_path = strdup(input);
-        if (!storage_path) {
-            err = ERROR(ERR_MEMORY, "Failed to allocate storage path");
+        const char *copy = arena_strdup(arena, input);
+        if (!copy) {
+            return ERROR(ERR_MEMORY, "Failed to allocate storage path");
         }
-        goto cleanup;
+        *out_storage = copy;
+        return NULL;
     }
 
     /* Case 2: Filesystem path (absolute or tilde-prefixed) */
@@ -907,19 +891,27 @@ error_t *mount_resolve_input(
      * which strips a validated mount target from a normalized absolute
      * path. Re-validating the classifier's own output is theater (Rule 6
      * — establish at the boundary, trust downstream). */
-    err = mount_classify(table, normalized, &storage_path, NULL);
+    mount_classify_outcome_t outcome;
+    err = mount_classify(table, normalized, arena, &outcome, out_storage, NULL);
     if (err) goto cleanup;
+
+    if (outcome == MOUNT_CLASSIFY_ROOT) {
+        /* User input matched a classification root exactly ($HOME, /, or
+         * a CUSTOM target). No storage-path encoding exists for the root
+         * itself — surface to the caller as an explicit error rather
+         * than the internal MOUNT_CLASSIFY_ROOT signal. */
+        err = ERROR(
+            ERR_INVALID_ARG,
+            "Path '%s' is a mount root and has no storage representation",
+            input
+        );
+        *out_storage = NULL;
+    }
 
 cleanup:
     free(expanded);
     free(absolute);
     free(normalized);
 
-    if (err) {
-        free(storage_path);
-        return err;
-    }
-
-    *out_storage = storage_path;
-    return NULL;
+    return err;
 }

@@ -228,55 +228,64 @@ error_t *mount_table_build(
 );
 
 /**
+ * Outcome of mount_classify. Encodes "did the path land under a mount,
+ * or did it equal a mount root exactly?" as data so callers don't catch
+ * ERR_INVALID_ARG as control flow.
+ *
+ * TAIL — `*out_storage` is set to an arena-borrowed storage path
+ *        ("home/X", "root/X", "custom/X") for the path's tail under
+ *        the winning mount.
+ * ROOT — `fs_path` exactly equals a mount target ($HOME, /, or a
+ *        --target). No storage-path encoding exists for the mount
+ *        root itself; `*out_storage` is NULL. `*out_kind` (if
+ *        requested) still receives the matched kind. Walker callers
+ *        treat this as "skip this entry, descendants appear separately."
+ */
+typedef enum {
+    MOUNT_CLASSIFY_TAIL,
+    MOUNT_CLASSIFY_ROOT,
+} mount_classify_outcome_t;
+
+/**
  * Classify an absolute filesystem path into a storage path.
  *
  * Picks the longest-matching mount target (tightest container wins).
  * Each entry contributes up to two surface forms (raw + realpath-
  * canonical); a path matching either form is considered to belong to
  * that mount. Ties on equal target length are broken by declaration
- * order (stable, earlier wins). Returns ERR_INVALID_ARG when the path
- * exactly equals a mount target — there is no storage representation
- * for the mount root itself.
+ * order (stable, earlier wins).
  *
  * The empty-target ROOT mount has length 0, so it always loses to any
  * non-empty match and serves as the universal fallback when no other
  * mount contains the path.
  *
+ * Outcome contract:
+ *   - MOUNT_CLASSIFY_TAIL: `*out_storage` is set to an arena-borrowed
+ *     storage path. Lifetime tracks `arena`; callers do not free it.
+ *   - MOUNT_CLASSIFY_ROOT: `fs_path` equals a mount target exactly;
+ *     `*out_storage` is NULL. The matched kind (if `out_kind != NULL`)
+ *     is still written. Caller decides whether to treat this as an
+ *     error or a skip.
+ *   - ERR_INTERNAL when no entry matched (only possible on a malformed
+ *     mount table — the ROOT sentinel always wins in well-formed tables).
+ *   - ERR_MEMORY on arena allocation failure.
+ *
  * @param table       Mount table (must not be NULL)
  * @param fs_path     Absolute path to classify (must not be NULL)
- * @param out_storage Allocated storage path on success (caller frees)
- * @param out_kind    Optional: receives the winning mount's kind
+ * @param arena       Arena that owns `*out_storage` allocation when TAIL
+ * @param outcome     Receives the classification outcome (must not be NULL)
+ * @param out_storage Arena-borrowed storage path when TAIL; NULL when ROOT
+ *                    (must not be NULL)
+ * @param out_kind    Optional: receives the winning mount's kind. May be
+ *                    NULL when callers only care about the storage path.
  * @return Error or NULL on success
  */
 error_t *mount_classify(
     const mount_table_t *table,
     const char *fs_path,
-    char **out_storage,
-    mount_kind_t *out_kind
-);
-
-/**
- * Classify an absolute filesystem path into a mount kind only.
- *
- * Same longest-match algorithm as `mount_classify`, but skips the
- * storage-path materialization and the "path equals classification
- * root" error branch. Returns the kind even when `fs_path` exactly
- * equals a mount target — useful for callers that ask "what kind would
- * this path land in?" without needing the encoded storage path
- * (privilege pre-flight, kind-only filtering).
- *
- * The empty-target ROOT mount has length 0 so it always loses to any
- * non-empty match and serves as the universal fallback when no other
- * mount contains the path.
- *
- * @param table    Mount table (must not be NULL)
- * @param fs_path  Absolute path to classify (must not be NULL)
- * @param out_kind Receives the winning mount's kind (must not be NULL)
- * @return Error or NULL on success
- */
-error_t *mount_classify_kind(
-    const mount_table_t *table,
-    const char *fs_path,
+    arena_t *arena,
+    mount_classify_outcome_t *outcome,
+    const char **out_storage,
     mount_kind_t *out_kind
 );
 
@@ -373,13 +382,15 @@ error_t *mount_resolve(
  *
  * @param table       Mount table (must not be NULL)
  * @param input       User-provided path string (must not be NULL)
- * @param out_storage Allocated storage path on success (caller frees)
+ * @param arena       Arena that owns the returned storage path
+ * @param out_storage Arena-borrowed storage path on success (must not be NULL)
  * @return Error or NULL on success
  */
 error_t *mount_resolve_input(
     const mount_table_t *table,
     const char *input,
-    char **out_storage
+    arena_t *arena,
+    const char **out_storage
 );
 
 #endif /* DOTTA_MOUNT_H */

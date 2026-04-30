@@ -37,6 +37,7 @@
 #include "cmds/status.h"
 #include "cmds/sync.h"
 #include "cmds/update.h"
+#include "core/profiles.h"
 #include "core/state.h"
 #include "crypto/keymgr.h"
 #include "infra/content.h"
@@ -235,6 +236,43 @@ static int open_state_for_mode(
 }
 
 /**
+ * Build the per-machine mount table iff state was opened.
+ *
+ * Returns 0 on success, 1 on unrecoverable error (error is printed).
+ * On success, `*mounts_out` is set per the runtime invariant
+ * `mounts != NULL iff state != NULL`:
+ *
+ *   state == NULL  → NULL (init/clone/version/completion path)
+ *   state != NULL  → full-enabled topology (HOME + root sentinel + bindings)
+ *
+ * Binding-mutating commands (profile enable/disable, clone,
+ * interactive, add-with-implicit-enable) build a *local* fresh table
+ * post-mutation rather than refreshing this handle — the immutable-ctx
+ * contract (see runtime.h "Members not welcome") rules out an in-place
+ * rebuild here. Per-site visibility of "the bindings just changed" is
+ * the design intent, not centralized auto-invalidation.
+ */
+static int open_mounts_for_state(
+    state_t *state,
+    arena_t *arena,
+    const mount_table_t **mounts_out
+) {
+    *mounts_out = NULL;
+
+    if (state == NULL) return 0;
+
+    mount_table_t *mounts = NULL;
+    error_t *err = profile_build_mount_table(state, arena, &mounts);
+    if (err != NULL) {
+        error_print(err, stderr);
+        error_free(err);
+        return 1;
+    }
+    *mounts_out = mounts;
+    return 0;
+}
+
+/**
  * Acquire crypto handles according to the command's declared mode.
  *
  * Returns 0 on success, 1 on unrecoverable error (error is printed).
@@ -394,6 +432,7 @@ static int run_spec(
     state_t *state = NULL;
     keymgr *keymgr = NULL;
     content_cache_t *cache = NULL;
+    const mount_table_t *mounts = NULL;
 
     if (open_repo_for_mode(repo_mode, config, &repo, &repo_path) != 0) {
         arena_destroy(arena);
@@ -412,6 +451,15 @@ static int run_spec(
         arena_destroy(arena);
         return 1;
     }
+    if (open_mounts_for_state(state, arena, &mounts) != 0) {
+        content_cache_free(cache);
+        keymgr_free(keymgr);
+        state_free(state);
+        if (repo != NULL) git_repository_free(repo);
+        free(repo_path);
+        arena_destroy(arena);
+        return 1;
+    }
 
     int exit_override = 0;
     dotta_ctx_t ctx = {
@@ -420,6 +468,7 @@ static int run_spec(
         .state         = state,
         .keymgr        = keymgr,
         .content_cache = cache,
+        .mounts        = mounts,
         .arena         = arena,
         .config        = config,
         .out           = out,

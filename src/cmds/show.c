@@ -643,13 +643,8 @@ error_t *cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
     /* Handle SHOW_FILE mode */
     CHECK_NULL(opts->file_path);
 
-    /* Build mount table over all enabled profiles for path resolution. */
-    mount_table_t *mounts = NULL;
-    error_t *mounts_err = profile_build_mount_table(state, NULL, ctx->arena, &mounts);
-    if (mounts_err) {
-        err = error_wrap(mounts_err, "Failed to build mount table");
-        goto cleanup;
-    }
+    /* Borrow the dispatcher's mount table over all enabled profiles. */
+    const mount_table_t *mounts = ctx->mounts;
 
     /* Resolve file path to storage format (common to both explicit and implicit paths).
      * On resolution failure, fall back to the original input — it may be a partial-match

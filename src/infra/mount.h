@@ -47,6 +47,46 @@ typedef enum {
 } mount_kind_t;
 
 /**
+ * Behavioral attributes for a mount kind.
+ *
+ * The kind names *what the storage label is*; the spec carries *what the
+ * label implies*. Single source of truth for label/display strings and
+ * for the per-kind invariants every consumer ultimately asks for:
+ * "is resolution profile-keyed?" and "do files of this kind carry
+ * ownership metadata?". Adding a fourth kind is one row in the internal
+ * SPECS table; consumers read attributes directly without growing a
+ * switch (Rule 2 — vocabulary is the dispatch).
+ *
+ * Stable storage: SPECS rows live in static data, so the pointers
+ * returned by `mount_spec_for_kind` and `mount_spec_for_label` are
+ * valid for the process lifetime. Callers borrow.
+ */
+typedef struct mount_spec {
+    const char *label;            /* Storage-label string ("home", "root", "custom") */
+    const char *display;          /* Human-readable display name */
+    bool per_profile;             /* True iff resolution is profile-keyed (CUSTOM) */
+    bool tracks_ownership;        /* True iff files of this kind carry ownership metadata */
+} mount_spec_t;
+
+/**
+ * Resolve a mount kind to its spec.
+ *
+ * Returns NULL when `kind` falls outside the known range (e.g., a
+ * cast from an unrelated integer). Otherwise returns a borrowed pointer
+ * into the static SPECS table; valid for the process lifetime.
+ */
+const mount_spec_t *mount_spec_for_kind(mount_kind_t kind);
+
+/**
+ * Resolve a storage path to its kind's spec by reading the leading
+ * label. Returns NULL when `storage_path` is NULL or does not begin
+ * with a known label; otherwise the borrowed spec for the matching
+ * kind. No tail validation — callers needing full validation use
+ * mount_validate_storage.
+ */
+const mount_spec_t *mount_spec_for_label(const char *storage_path);
+
+/**
  * Validate a storage path's syntactic shape.
  *
  * Checks:
@@ -184,31 +224,6 @@ error_t *mount_table_build(
     arena_t *arena,
     const mount_t *mounts,
     size_t mount_count,
-    mount_table_t **out
-);
-
-/**
- * Build a mount table for a single (profile, target) pairing.
- *
- * Convenience wrapper over mount_table_build for the common single-mount
- * idiom (one CLI-supplied profile + target, e.g. `dotta add --target /jail`,
- * or a single state-derived binding for a remove operation). HOME and the
- * ROOT sentinel are still added internally; a NULL or empty `target`
- * contributes no CUSTOM mount (yielding HOME + ROOT only).
- *
- * Borrowed-pointer rules and arena lifetime match mount_table_build.
- *
- * @param arena   Arena for the table and its internal storage
- * @param profile Profile name (may be NULL for target-only contexts)
- * @param target  Absolute filesystem path with no trailing slash; NULL
- *                or empty contributes no CUSTOM mount
- * @param out     Output handle (must not be NULL)
- * @return Error or NULL on success
- */
-error_t *mount_table_build_for_profile(
-    arena_t *arena,
-    const char *profile,
-    const char *target,
     mount_table_t **out
 );
 

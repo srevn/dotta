@@ -45,6 +45,11 @@ struct git_repository;
  * any TU that includes both. Mirrors the struct-tag forward decl above. */
 typedef struct state state_t;
 
+/* Per-machine mount-table handle. The full API lives in `src/infra/mount.h`;
+ * consumers that call mount functions include that header. Same C11 §6.7p3
+ * typedef-redeclaration rationale as state_t above. */
+typedef struct mount_table mount_table_t;
+
 /* Crypto handles. Full APIs in `crypto/keymgr.h` and `infra/content.h`;
  * TUs that call their functions include those headers. */
 typedef struct keymgr keymgr;
@@ -180,6 +185,18 @@ typedef struct dotta_spec_ext {
  *     which returns ERR_CRYPTO with a user-facing message if any
  *     per-file operation actually asks to encrypt or decrypt. No
  *     caller-side gate is required.
+ *   - `mounts != NULL`  iff  `state != NULL`. The mount table is a
+ *     derived view of state's `enabled_profiles` row cache plus the
+ *     process-global `$HOME`. Built once in `run_spec` after state
+ *     acquisition, immutable for the lifetime of dispatch. Borrowed
+ *     into the command arena; reclaimed by `arena_destroy`. The mount
+ *     table arena-borrows row-cache strings via state — the existing
+ *     LIFO teardown (state_free before arena_destroy) keeps the borrow
+ *     chain valid through dispatch return. Commands that mutate the
+ *     binding set (profile enable/disable, clone, interactive,
+ *     add-with-implicit-enable) build a *local* fresh mount table for
+ *     any post-mutation manifest call — `ctx->mounts` is never
+ *     reassigned (see "Members not welcome" #1 below).
  *   - `arena != NULL` always. The command arena is created before
  *     dispatch and destroyed after the handler returns; `run_spec`
  *     is the sole owner. Handlers and every layer beneath borrow the
@@ -247,6 +264,7 @@ typedef struct dotta_ctx {
     state_t *state;                     /* NULL unless state_mode acquires; borrowed */
     keymgr *keymgr;                     /* NULL unless crypto_mode acquires + encryption enabled */
     content_cache_t *content_cache;     /* NULL unless crypto_mode == REQUIRED */
+    const mount_table_t *mounts;        /* NULL iff state == NULL; full-enabled topology */
     arena_t *arena;                     /* Borrowed; command-scoped, owned by run_spec */
     const config_t *config;
     output_t *out;

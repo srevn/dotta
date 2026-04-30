@@ -18,6 +18,28 @@
 #include "sys/filesystem.h"
 
 /**
+ * Per-kind behavioral attributes — the single source of truth.
+ *
+ * Indexed by `mount_kind_t`. The _Static_assert below pins the enum
+ * ordinals so designated initializers and direct indexing stay in
+ * lockstep. Adding a fourth kind is one row here plus a matching enum
+ * entry; every consumer that asks "does this kind track ownership?"
+ * etc. reads spec attributes — no switches to update.
+ */
+static const mount_spec_t SPECS[] = {
+    [MOUNT_HOME]   = { "home",   "HOME",              false, false },
+    [MOUNT_ROOT]   = { "root",   "root",              false, true  },
+    [MOUNT_CUSTOM] = { "custom", "deployment target", true,  true  },
+};
+
+#define SPECS_COUNT (sizeof(SPECS) / sizeof(SPECS[0]))
+
+const mount_spec_t *mount_spec_for_kind(mount_kind_t kind) {
+    if ((unsigned int) kind >= SPECS_COUNT) return NULL;
+    return &SPECS[kind];
+}
+
+/**
  * Decode a storage path's leading label.
  *
  * Single source of truth for the `home/` | `root/` | `custom/` -> kind
@@ -29,7 +51,8 @@
  *   storage_path = NULL             -> false, outputs unchanged
  *
  * The returned tail aliases `storage_path`; it shares the input's
- * lifetime. Adding a fourth label class is a one-row table edit.
+ * lifetime. Walks SPECS so the label set has one canonical home —
+ * adding a fourth kind needs no edit here.
  */
 static bool mount_decode_label(
     const char *storage_path,
@@ -38,24 +61,27 @@ static bool mount_decode_label(
 ) {
     if (!storage_path) return false;
 
-    static const struct {
-        const char *prefix;
-        size_t prefix_len;
-        mount_kind_t kind;
-    } labels[] = {
-        { "home/",   5, MOUNT_HOME   },
-        { "root/",   5, MOUNT_ROOT   },
-        { "custom/", 7, MOUNT_CUSTOM },
-    };
+    for (size_t i = 0; i < SPECS_COUNT; i++) {
+        const char *label = SPECS[i].label;
+        size_t label_len = strlen(label);
 
-    for (size_t i = 0; i < sizeof(labels) / sizeof(labels[0]); i++) {
-        if (str_starts_with(storage_path, labels[i].prefix)) {
-            if (out_kind) *out_kind = labels[i].kind;
-            if (out_tail) *out_tail = storage_path + labels[i].prefix_len;
-            return true;
-        }
+        if (strncmp(storage_path, label, label_len) != 0) continue;
+        if (storage_path[label_len] != '/') continue;
+
+        if (out_kind) *out_kind = (mount_kind_t) i;
+        if (out_tail) *out_tail = storage_path + label_len + 1;
+        return true;
     }
     return false;
+}
+
+const mount_spec_t *mount_spec_for_label(const char *storage_path) {
+    mount_kind_t kind;
+    if (!mount_decode_label(storage_path, &kind, NULL)) return NULL;
+    /* mount_decode_label only emits in-range kinds, so the bounds check
+     * inside mount_spec_for_kind is redundant — but borrowing the
+     * accessor keeps a single chokepoint for kind→spec resolution. */
+    return mount_spec_for_kind(kind);
 }
 
 /**
@@ -246,28 +272,6 @@ error_t *mount_validate_target(const char *target) {
     free(resolved);
 
     return NULL;
-}
-
-/**
- * Storage label and human-readable display name for a kind.
- * Lookup tables instead of per-mount fields — derivable from kind.
- */
-static const char *mount_kind_label(mount_kind_t kind) {
-    switch (kind) {
-        case MOUNT_HOME:   return "home";
-        case MOUNT_ROOT:   return "root";
-        case MOUNT_CUSTOM: return "custom";
-    }
-    return "";  /* unreachable */
-}
-
-static const char *mount_kind_display(mount_kind_t kind) {
-    switch (kind) {
-        case MOUNT_HOME:   return "HOME";
-        case MOUNT_ROOT:   return "root";
-        case MOUNT_CUSTOM: return "deployment target";
-    }
-    return "";  /* unreachable */
 }
 
 /**
@@ -488,16 +492,6 @@ error_t *mount_table_build(
     return NULL;
 }
 
-error_t *mount_table_build_for_profile(
-    arena_t *arena,
-    const char *profile,
-    const char *target,
-    mount_table_t **out
-) {
-    mount_t mount = { .profile = profile, .target = target };
-    return mount_table_build(arena, &mount, 1, out);
-}
-
 /**
  * Pick the longest matching surface form within one mount entry.
  *
@@ -599,6 +593,8 @@ error_t *mount_classify(
         return ERROR(ERR_INTERNAL, "No mount matched: %s", fs_path);
     }
 
+    const mount_spec_t *spec = mount_spec_for_kind(winner->kind);
+
     if (*winner_relative == '\0') {
         /* Path equals the winning mount root exactly. No storage-path
          * encoding exists for the mount root itself. Callers walking a
@@ -610,13 +606,11 @@ error_t *mount_classify(
             ERR_INVALID_ARG,
             "Path equals the %s classification root; "
             "no storage-path representation",
-            mount_kind_display(winner->kind)
+            spec->display
         );
     }
 
-    char *result = str_format(
-        "%s/%s", mount_kind_label(winner->kind), winner_relative
-    );
+    char *result = str_format("%s/%s", spec->label, winner_relative);
     if (!result) {
         return ERROR(ERR_MEMORY, "Failed to format storage path");
     }
@@ -649,10 +643,11 @@ error_t *mount_classify_kind(
 /**
  * Look up the entry for a (kind, profile) pair.
  *
- * HOME and ROOT each contribute exactly one entry (profile-less);
- * walking returns the first match. CUSTOM entries are profile-keyed; a
- * NULL caller-side profile or a NULL entry-side profile excludes the
- * match defensively. Returns NULL when no entry satisfies the query.
+ * Profile-less kinds (per_profile == false: HOME, ROOT) contribute
+ * exactly one entry; the first kind match wins. Profile-keyed kinds
+ * (per_profile == true: CUSTOM) require a non-NULL caller profile that
+ * equals the entry's stored profile; a NULL on either side defensively
+ * excludes the match. Returns NULL when no entry satisfies the query.
  *
  * Sole consumer today is mount_resolve. The intra-entry surface-form
  * walk for forward classification stays in entry_match_longest.
@@ -662,10 +657,13 @@ static const mount_entry_t *find_entry_for(
     mount_kind_t kind,
     const char *profile
 ) {
+    const mount_spec_t *spec = mount_spec_for_kind(kind);
+    if (!spec) return NULL;
+
     for (size_t i = 0; i < table->entry_count; i++) {
         const mount_entry_t *m = &table->entries[i];
         if (m->kind != kind) continue;
-        if (kind != MOUNT_CUSTOM) return m;
+        if (!spec->per_profile) return m;
         if (profile && m->profile && strcmp(m->profile, profile) == 0) {
             return m;
         }
@@ -714,13 +712,21 @@ error_t *mount_resolve(
     CHECK_NULL(storage_path);
     CHECK_NULL(out_fs);
 
-    error_t *err = mount_validate_storage(storage_path);
-    if (err) return err;
-
-    /* mount_validate_storage above ensures mount_decode_label succeeds. */
+    /* Storage paths arriving here are validated at their write boundary —
+     * metadata.json parse (metadata.c), Git tree commit (add.c, update.c
+     * validate before commit), state DB INSERT (validated upstream), or
+     * an explicit CLI-input check at the calling site (add.c). The
+     * decode-label path below tolerates any non-validated leading-label
+     * input by surfacing ERR_INTERNAL via the kind switch — but the
+     * invariant is upstream, not here. */
     mount_kind_t kind;
     const char *tail = NULL;
-    (void) mount_decode_label(storage_path, &kind, &tail);
+    if (!mount_decode_label(storage_path, &kind, &tail)) {
+        return ERROR(
+            ERR_INTERNAL, "mount_resolve received non-storage path '%s'",
+            storage_path
+        );
+    }
 
     const mount_entry_t *entry = find_entry_for(table, kind, profile);
     if (!entry) {
@@ -885,10 +891,13 @@ error_t *mount_resolve_input(
         goto cleanup;
     }
 
+    /* mount_classify produces a well-formed storage path by construction:
+     * the label is one of three compile-time constants ("home", "root",
+     * "custom"), and the tail is the result of relative_after_target
+     * which strips a validated mount target from a normalized absolute
+     * path. Re-validating the classifier's own output is theater (Rule 6
+     * — establish at the boundary, trust downstream). */
     err = mount_classify(table, normalized, &storage_path, NULL);
-    if (err) goto cleanup;
-
-    err = mount_validate_storage(storage_path);
     if (err) goto cleanup;
 
 cleanup:

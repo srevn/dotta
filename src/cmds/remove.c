@@ -72,7 +72,11 @@ static error_t *validate_options(const cmd_remove_options_t *opts) {
  * Complexity: O(M) to build index + O(N) to process inputs = O(M+N)
  * Old implementation: O(N×M) with nested loops
  *
- * @param state Optional state for deployment target resolution (improves UX, can be NULL)
+ * @param mounts Per-machine mount table (must not be NULL). Caller passes
+ *               ctx->mounts; the table covers HOME, ROOT, and every enabled
+ *               profile's binding. Unenabled-profile lookups (custom/X)
+ *               return NULL fs through mount_resolve, which the caller
+ *               handles as "no filesystem path on this machine".
  */
 static error_t *resolve_paths_to_remove(
     git_repository *repo,
@@ -83,7 +87,7 @@ static error_t *resolve_paths_to_remove(
     string_array_t **filesystem_paths_out,
     const cmd_remove_options_t *opts,
     output_t *out,
-    state_t *state,
+    const mount_table_t *mounts,
     arena_t *arena
 ) {
     CHECK_NULL(repo);
@@ -92,6 +96,7 @@ static error_t *resolve_paths_to_remove(
     CHECK_NULL(storage_paths_out);
     CHECK_NULL(filesystem_paths_out);
     CHECK_NULL(opts);
+    CHECK_NULL(mounts);
     CHECK_NULL(arena);
 
     /* Initialize all resources to NULL for safe cleanup */
@@ -100,18 +105,6 @@ static error_t *resolve_paths_to_remove(
     string_array_t *filesystem_paths = NULL;
     string_array_t *profile_files = NULL;
     hashmap_t *profile_files_map = NULL;
-
-    /* Build a one-shot mount table for this profile. */
-    mount_table_t *mounts = NULL;
-    err = mount_table_build_for_profile(
-        arena, profile,
-        state ? state_peek_profile_target(state, profile) : NULL,
-        &mounts
-    );
-    if (err) {
-        err = error_wrap(err, "Failed to build mount table");
-        goto cleanup;
-    }
 
     /* Allocate arrays */
     storage_paths = string_array_new(0);
@@ -826,6 +819,7 @@ static error_t *remove_files_from_profile(
     git_repository *repo,
     state_t *state,
     arena_t *arena,
+    const mount_table_t *mounts,
     const config_t *config,
     output_t *out,
     const char *repo_path,
@@ -834,6 +828,7 @@ static error_t *remove_files_from_profile(
     CHECK_NULL(repo);
     CHECK_NULL(state);
     CHECK_NULL(arena);
+    CHECK_NULL(mounts);
     CHECK_NULL(opts);
 
     /* Initialize all resources to NULL for safe cleanup */
@@ -856,7 +851,7 @@ static error_t *remove_files_from_profile(
     /* Resolve paths */
     err = resolve_paths_to_remove(
         repo, opts->profile, opts->paths, opts->path_count, &storage_paths,
-        &filesystem_paths, opts, out, state, arena
+        &filesystem_paths, opts, out, mounts, arena
     );
     if (err) {
         goto cleanup;
@@ -1104,8 +1099,9 @@ static error_t *remove_files_from_profile(
                 }
 
                 manifest_err = manifest_remove_files(
-                    repo, state, arena, opts->profile, removed_paths, enabled_profiles,
-                    marked_paths, &manifest_removed_count, &manifest_fallback_count
+                    repo, state, arena, mounts, opts->profile, removed_paths,
+                    enabled_profiles, marked_paths, &manifest_removed_count,
+                    &manifest_fallback_count
                 );
 
                 if (manifest_err) {
@@ -1218,6 +1214,7 @@ static error_t *delete_profile_branch(
     git_repository *repo,
     state_t *state,
     arena_t *arena,
+    const mount_table_t *mounts,
     const config_t *config,
     output_t *out,
     const char *repo_path,
@@ -1226,6 +1223,7 @@ static error_t *delete_profile_branch(
     CHECK_NULL(repo);
     CHECK_NULL(state);
     CHECK_NULL(arena);
+    CHECK_NULL(mounts);
     CHECK_NULL(opts);
 
     /* Initialize all resources to NULL */
@@ -1400,36 +1398,29 @@ static error_t *delete_profile_branch(
     }
 
     /* Convert storage paths to filesystem paths for hook consistency.
-     * The file removal path passes filesystem paths to hooks; do the same here. */
+     * The file removal path passes filesystem paths to hooks; do the same here.
+     *
+     * Borrows the caller-supplied mount table. HOME and ROOT are always
+     * present, so home/ and root/ paths resolve unconditionally. CUSTOM
+     * paths resolve only when the profile is enabled with a binding;
+     * otherwise mount_resolve's NULL-out contract fires and the loop
+     * substitutes the storage path as the user-visible fallback. */
     if (files) {
-        mount_table_t *hook_mounts = NULL;
-        error_t *mounts_err = mount_table_build_for_profile(
-            arena, opts->profile,
-            state_peek_profile_target(state, opts->profile),
-            &hook_mounts
-        );
-        if (mounts_err) {
-            error_free(mounts_err);
-            hook_mounts = NULL;
-        }
-
-        if (hook_mounts) {
-            hook_fs_paths = string_array_new(0);
-            if (hook_fs_paths) {
-                for (size_t i = 0; i < files->count; i++) {
-                    char *fs_path = NULL;
-                    error_t *conv_err = mount_resolve(
-                        hook_mounts, opts->profile, files->items[i], &fs_path
-                    );
-                    if (conv_err) error_free(conv_err);
-                    if (fs_path) {
-                        string_array_push(hook_fs_paths, fs_path);
-                        free(fs_path);
-                    } else {
-                        /* Fall back to storage path (custom/ without binding,
-                         * or allocation failure). */
-                        string_array_push(hook_fs_paths, files->items[i]);
-                    }
+        hook_fs_paths = string_array_new(0);
+        if (hook_fs_paths) {
+            for (size_t i = 0; i < files->count; i++) {
+                char *fs_path = NULL;
+                error_t *conv_err = mount_resolve(
+                    mounts, opts->profile, files->items[i], &fs_path
+                );
+                if (conv_err) error_free(conv_err);
+                if (fs_path) {
+                    string_array_push(hook_fs_paths, fs_path);
+                    free(fs_path);
+                } else {
+                    /* Fall back to storage path (custom/ without binding,
+                     * or allocation failure). */
+                    string_array_push(hook_fs_paths, files->items[i]);
                 }
             }
         }
@@ -1491,7 +1482,20 @@ static error_t *delete_profile_branch(
             goto cleanup;
         }
 
-        err = manifest_apply_scope(repo, state, arena, NULL, NULL);
+        /* Build a fresh mount table from the post-disable row cache:
+         * the borrowed `mounts` parameter still references the disabled
+         * profile, which would let custom/ paths under its target keep
+         * classifying after it has left scope. */
+        mount_table_t *post_disable_mounts = NULL;
+        err = profile_build_mount_table(state, arena, &post_disable_mounts);
+        if (err) {
+            err = error_wrap(err, "Failed to build mount table after disable");
+            goto cleanup;
+        }
+
+        err = manifest_apply_scope(
+            repo, state, arena, post_disable_mounts, NULL, NULL
+        );
         if (err) {
             err = error_wrap(err, "Failed to reconcile manifest after disable");
             goto cleanup;
@@ -1713,12 +1717,14 @@ error_t *cmd_remove(const dotta_ctx_t *ctx, const cmd_remove_options_t *opts) {
     /* Branch: Delete profile or remove files */
     if (opts->delete_profile) {
         return delete_profile_branch(
-            repo, state, ctx->arena, config, out, ctx->repo_path, opts
+            repo, state, ctx->arena, ctx->mounts, config, out,
+            ctx->repo_path, opts
         );
     }
 
     return remove_files_from_profile(
-        repo, state, ctx->arena, config, out, ctx->repo_path, opts
+        repo, state, ctx->arena, ctx->mounts, config, out,
+        ctx->repo_path, opts
     );
 }
 

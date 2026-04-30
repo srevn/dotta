@@ -346,8 +346,26 @@ static error_t *interactive_save_profile_order(
      * persist_profile_head loop needed for reorder. apply_scope's orphan
      * pass is a no-op here because the set membership is unchanged; it
      * just re-UPSERTs entries whose precedence owner shifted (deployed_at
-     * preserved by SQL, old_profile auto-captured when profile changes). */
-    err = manifest_apply_scope(repo, deploy_state, arena, NULL, NULL);
+     * preserved by SQL, old_profile auto-captured when profile changes).
+     *
+     * Build a fresh mount table reflecting the post-mutation binding set:
+     * state_set_profiles invalidated ctx->mounts' borrows from the row
+     * cache, and a reorder may have changed which profile a custom-target
+     * binding belongs to. */
+    mount_table_t *post_mutation_mounts = NULL;
+    err = profile_build_mount_table(
+        deploy_state, arena, &post_mutation_mounts
+    );
+    if (err) {
+        state_rollback(deploy_state);
+        return error_wrap(
+            err, "Failed to rebuild mount table after profile reorder"
+        );
+    }
+
+    err = manifest_apply_scope(
+        repo, deploy_state, arena, post_mutation_mounts, NULL, NULL
+    );
     if (err) {
         state_rollback(deploy_state);
         return error_wrap(

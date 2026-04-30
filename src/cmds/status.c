@@ -786,54 +786,6 @@ static error_t *display_remote_status(
 }
 
 /**
- * Extract paths needing elevation from manifest for privilege checking
- *
- * Uses privilege_needs_elevation() to filter paths, considering whether
- * each entry's custom target is under $HOME. Allocates array of storage
- * path pointers. Caller must free the array (but not the strings, which
- * are borrowed from manifest).
- *
- * @param manifest Manifest (must not be NULL)
- * @param paths_out Output array of paths needing elevation (must not be NULL)
- * @param count_out Output count (must not be NULL)
- * @return Error or NULL on success
- */
-static error_t *extract_elevation_paths_from_manifest(
-    const manifest_t *manifest,
-    char ***paths_out,
-    size_t *count_out
-) {
-    CHECK_NULL(manifest);
-    CHECK_NULL(paths_out);
-    CHECK_NULL(count_out);
-
-    if (manifest->count == 0) {
-        *paths_out = NULL;
-        *count_out = 0;
-        return NULL;
-    }
-
-    char **paths = calloc(manifest->count, sizeof(char *));
-    if (!paths) {
-        return ERROR(ERR_MEMORY, "Failed to allocate storage paths array");
-    }
-
-    size_t count = 0;
-    for (size_t i = 0; i < manifest->count; i++) {
-        if (privilege_needs_elevation(
-            manifest->entries[i].storage_path, manifest->entries[i].filesystem_path
-            )) {
-            paths[count++] = manifest->entries[i].storage_path;
-        }
-    }
-
-    *paths_out = paths;
-    *count_out = count;
-
-    return NULL;
-}
-
-/**
  * Status command implementation
  */
 error_t *cmd_status(const dotta_ctx_t *ctx, const cmd_status_options_t *opts) {
@@ -871,7 +823,9 @@ error_t *cmd_status(const dotta_ctx_t *ctx, const cmd_status_options_t *opts) {
         .profiles      = opts->profiles,
         .profile_count = opts->profile_count,
     };
-    err = scope_build(repo, state, &scope_inputs, config, ctx->arena, &scope);
+    err = scope_build(
+        repo, state, &scope_inputs, config, ctx->mounts, ctx->arena, &scope
+    );
     if (err) goto cleanup;
 
     /* Load workspace for divergence analysis (only needed for local status)
@@ -888,8 +842,8 @@ error_t *cmd_status(const dotta_ctx_t *ctx, const cmd_status_options_t *opts) {
             .analyze_encryption  = true
         };
         err = workspace_load(
-            repo, state, scope, config, ctx->content_cache, &ws_opts,
-            ctx->arena, &ws
+            repo, state, scope, config, ctx->content_cache, ctx->mounts,
+            &ws_opts, ctx->arena, &ws
         );
         if (err) {
             err = error_wrap(err, "Failed to load workspace");
@@ -914,19 +868,22 @@ error_t *cmd_status(const dotta_ctx_t *ctx, const cmd_status_options_t *opts) {
 
         /* Check privileges for complete status (may re-exec with sudo) */
         if (!opts->no_sudo && manifest->count > 0) {
-            /* Extract paths that need elevation from manifest */
-            char **storage_paths = NULL;
-            size_t path_count = 0;
+            string_array_t labels STRING_ARRAY_AUTO = {0};
+            error_t *extract_err = NULL;
+            for (size_t i = 0; i < manifest->count; i++) {
+                extract_err = privilege_collect_label(
+                    &labels,
+                    manifest->entries[i].storage_path,
+                    manifest->entries[i].filesystem_path
+                );
+                if (extract_err) break;
+            }
 
-            error_t *extract_err = extract_elevation_paths_from_manifest(
-                manifest, &storage_paths, &path_count
-            );
-
-            if (!extract_err && path_count > 0) {
+            if (!extract_err && labels.count > 0) {
                 /* Check if privileges needed (may re-exec) */
                 error_t *priv_err = privilege_ensure_for_operation(
-                    storage_paths,
-                    path_count,
+                    (const char *const *) labels.items,
+                    labels.count,
                     "status",
                     true,  /* interactive mode (prompt allowed) */
                     ctx->argc,
@@ -955,12 +912,10 @@ error_t *cmd_status(const dotta_ctx_t *ctx, const cmd_status_options_t *opts) {
                     error_free(priv_err);
                     /* Continue with partial status */
                 }
-            } else {
+            } else if (extract_err) {
                 /* Extraction failed - non-fatal, continue without privilege check */
                 error_free(extract_err);
             }
-
-            free(storage_paths);
         }
     }
 

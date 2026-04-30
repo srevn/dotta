@@ -24,6 +24,7 @@
 #include <string.h>
 #include <unistd.h>
 
+#include "base/array.h"
 #include "base/error.h"
 #include "base/terminal.h"
 #include "infra/mount.h"
@@ -124,31 +125,8 @@ bool privilege_is_sudo(void) {
  * Check if a storage path requires root privileges
  */
 bool privilege_path_requires_root(const char *storage_path) {
-    mount_kind_t kind;
-    if (!mount_kind_extract(storage_path, &kind)) {
-        return false;
-    }
-
-    /* root/ and custom/ may carry ownership metadata; home/ never does. */
-    return kind != MOUNT_HOME;
-}
-
-/**
- * Check if any paths in array require root privileges
- */
-bool privilege_paths_require_root(const char **storage_paths, size_t count) {
-    if (!storage_paths || count == 0) {
-        return false;  /* Defensive: NULL or empty array doesn't require root */
-    }
-
-    /* Check each path - return true on first match */
-    for (size_t i = 0; i < count; i++) {
-        if (privilege_path_requires_root(storage_paths[i])) {
-            return true;
-        }
-    }
-
-    return false;  /* No paths require root */
+    const mount_spec_t *spec = mount_spec_for_label(storage_path);
+    return spec && spec->tracks_ownership;
 }
 
 /**
@@ -224,18 +202,14 @@ bool privilege_needs_elevation(
     const char *storage_path,
     const char *filesystem_path
 ) {
-    mount_kind_t kind;
-    if (!mount_kind_extract(storage_path, &kind)) {
-        return false;
-    }
+    const mount_spec_t *spec = mount_spec_for_label(storage_path);
+    if (!spec || !spec->tracks_ownership) return false;
 
-    switch (kind) {
-        case MOUNT_ROOT:   return true;
-        case MOUNT_CUSTOM: return privilege_target_needs_elevation(filesystem_path);
-        case MOUNT_HOME:   return false;
-    }
-
-    return false;  /* unreachable */
+    /* Two ownership-tracking kinds today:
+     *   ROOT (!per_profile): always needs elevation.
+     *   CUSTOM (per_profile): elevation depends on deployment target */
+    if (!spec->per_profile) return true;
+    return privilege_target_needs_elevation(filesystem_path);
 }
 
 /**
@@ -300,53 +274,42 @@ error_t *privilege_get_actual_user(uid_t *uid, gid_t *gid) {
 }
 
 /**
- * Display privilege requirement message to user
+ * Display privilege requirement message to user.
  *
- * Shows which files require root and explains why. Limits output to
- * first 10 files to avoid overwhelming the user.
+ * Shows which items require root and explains why. Limits output to
+ * first 10 items to avoid overwhelming the user. The header is a
+ * warning, not an error: the operation will still proceed cleanly
+ * after the user authenticates with sudo.
  *
  * @param operation Operation name (e.g., "add", "update")
- * @param priv_paths Array of paths requiring root
- * @param priv_count Number of paths
+ * @param labels Storage paths needing root (pre-filtered, must not be NULL when count > 0)
+ * @param count Number of labels
  * @param out Output context
  */
 static void display_privilege_requirement(
     const char *operation,
-    char *const *priv_paths,
-    size_t priv_count,
+    const char *const *labels,
+    size_t count,
     output_t *out
 ) {
-    /* Header */
-    output_error(
-        out, "\nRoot privileges required for this operation.\n"
+    output_warning(
+        out, OUTPUT_NORMAL, "\nRoot privileges required for this operation.\n"
     );
 
-    /* Operation name */
-    output_print(
-        out, OUTPUT_NORMAL, "\nOperation: %s\n", operation
-    );
+    output_print(out, OUTPUT_NORMAL, "\nOperation: %s\n", operation);
+    output_print(out, OUTPUT_NORMAL, "\nFiles requiring root privileges:\n");
 
-    /* List files requiring root (limit to 10 for readability) */
-    output_print(
-        out, OUTPUT_NORMAL, "\nFiles requiring root privileges:\n"
-    );
-
-    size_t display_count = priv_count > 10 ? 10 : priv_count;
+    size_t display_count = count > 10 ? 10 : count;
     for (size_t i = 0; i < display_count; i++) {
+        output_print(out, OUTPUT_NORMAL, "  %s\n", labels[i]);
+    }
+
+    if (count > 10) {
         output_print(
-            out, OUTPUT_NORMAL, "  %s\n",
-            priv_paths[i]
+            out, OUTPUT_NORMAL, "  ... and %zu more\n", count - 10
         );
     }
 
-    if (priv_count > 10) {
-        output_print(
-            out, OUTPUT_NORMAL, "  ... and %zu more\n",
-            priv_count - 10
-        );
-    }
-
-    /* Explain why root is needed */
     output_print(
         out, OUTPUT_NORMAL,
         "\nReason: These files require ownership metadata capture,\n"
@@ -432,24 +395,53 @@ static error_t *reexec_with_sudo(int argc, char **argv) {
 }
 
 /**
- * Ensure proper privileges for an operation
+ * Append a label iff this entry needs elevation.
+ *
+ * Self-enforcing filter at the collection boundary: callers cannot
+ * surface entries that don't actually need elevation. The privilege
+ * decision and the push live in one call; there is no intermediate
+ * state where a caller could forget the predicate.
+ *
+ * The label that goes into the array is always the storage_path —
+ * stable, user-recognizable, already what every VWD-driven caller
+ * wants displayed.
+ */
+error_t *privilege_collect_label(
+    string_array_t *labels,
+    const char *storage_path,
+    const char *filesystem_path
+) {
+    CHECK_NULL(labels);
+    CHECK_NULL(storage_path);
+
+    if (!privilege_needs_elevation(storage_path, filesystem_path)) {
+        return NULL;
+    }
+    return string_array_push(labels, storage_path);
+}
+
+/**
+ * Ensure proper privileges for an operation.
  *
  * Main entry point for privilege management. Call this BEFORE starting
- * any operation that might need elevated privileges (root/ or custom/ files).
+ * any operation that might need elevated privileges (kinds whose spec
+ * marks tracks_ownership: root/ files always; custom/ files when the
+ * deployment target is outside $HOME).
  *
  * WORKFLOW:
- * 1. Filter paths to find privileged labels (root/, custom/)
- * 2. Check if already elevated - if yes, proceed
- * 3. Display requirement to user
- * 4. If interactive: prompt for confirmation
- * 5. If approved: re-exec with sudo (DOES NOT RETURN)
- * 6. If declined or non-interactive: return error
+ * 1. count == 0 → already nothing to elevate for, proceed.
+ * 2. Already elevated → we have what we need, proceed.
+ * 3. Display requirement to user.
+ * 4. Interactive: prompt for confirmation.
+ *    - Approved  → re-exec with sudo (DOES NOT RETURN).
+ *    - Declined  → return ERR_PERMISSION.
+ * 5. Non-interactive → return ERR_PERMISSION with hint.
  *
  * CRITICAL: May re-execute entire process. Any state changes before
  * calling this function will be lost.
  */
 error_t *privilege_ensure_for_operation(
-    char *const *storage_paths,
+    const char *const *labels,
     size_t count,
     const char *operation_name,
     bool interactive,
@@ -457,20 +449,18 @@ error_t *privilege_ensure_for_operation(
     char **argv,
     output_t *out
 ) {
-    CHECK_NULL(storage_paths);
     CHECK_NULL(operation_name);
     CHECK_NULL(argv);
     CHECK_NULL(out);
 
-    /* Contract: callers pre-filter with privilege_needs_elevation; an empty
-     * array means no path needs root. */
     if (count == 0) return NULL;
+    CHECK_NULL(labels);
 
     /* Already elevated — we have what we need. */
     if (privilege_is_elevated()) return NULL;
 
     /* Display requirement (always shown, even in non-interactive mode) */
-    display_privilege_requirement(operation_name, storage_paths, count, out);
+    display_privilege_requirement(operation_name, labels, count, out);
 
     if (interactive && terminal_is_tty()) {
         if (output_confirm(out, "\nAuthenticate with sudo?", true)) {

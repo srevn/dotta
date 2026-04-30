@@ -597,73 +597,50 @@ static error_t *ensure_complete_apply_privileges(
         return NULL;  /* Read-only operation, no privileges needed */
     }
 
-    string_array_t *root_paths = string_array_new(0);
-    if (!root_paths) {
-        return ERROR(ERR_MEMORY, "Failed to allocate root paths list");
-    }
+    /* Strict upper bound — every entry across the three sources may need
+     * elevation. Reserve once to keep growth out of the hot loop. */
+    size_t cap = manifest->count + file_orphan_count + dir_orphan_count;
+    if (cap == 0) return NULL;
 
-    /* 1. Collect paths needing elevation from manifest (files being deployed).
-     * Uses privilege_needs_elevation() which considers whether the resolved
-     * filesystem path is under $HOME — custom/ paths under $HOME don't need sudo. */
+    string_array_t labels STRING_ARRAY_AUTO = {0};
+    error_t *err = string_array_init_cap(&labels, cap);
+    if (err) return error_wrap(err, "Failed to reserve privilege label array");
+
+    /* Collect labels for entries needing elevation. The collect helper
+     * runs the predicate and pushes the storage_path in one step — the
+     * filter is enforced by the privilege module, not the call site. */
     for (size_t i = 0; i < manifest->count; i++) {
-        if (privilege_needs_elevation(
-            manifest->entries[i].storage_path, manifest->entries[i].filesystem_path
-            )) {
-            error_t *err = string_array_push(root_paths, manifest->entries[i].storage_path);
-            if (err) {
-                string_array_free(root_paths);
-                return error_wrap(err, "Failed to add manifest root path");
-            }
-        }
-    }
-
-    /* 2. Collect paths needing elevation from file orphans (files being removed) */
-    if (file_orphans && file_orphan_count > 0) {
-        for (size_t i = 0; i < file_orphan_count; i++) {
-            if (privilege_needs_elevation(
-                file_orphans[i]->storage_path, file_orphans[i]->filesystem_path
-                )) {
-                error_t *err = string_array_push(root_paths, file_orphans[i]->storage_path);
-                if (err) {
-                    string_array_free(root_paths);
-                    return error_wrap(err, "Failed to add file orphan root path");
-                }
-            }
-        }
-    }
-
-    /* 3. Collect paths needing elevation from directory orphans (directories being removed) */
-    if (dir_orphans && dir_orphan_count > 0) {
-        for (size_t i = 0; i < dir_orphan_count; i++) {
-            if (privilege_needs_elevation(
-                dir_orphans[i]->storage_path, dir_orphans[i]->filesystem_path
-                )) {
-                error_t *err = string_array_push(root_paths, dir_orphans[i]->storage_path);
-                if (err) {
-                    string_array_free(root_paths);
-                    return error_wrap(err, "Failed to add directory orphan root path");
-                }
-            }
-        }
-    }
-
-    /* 4. Check privileges if any root/ paths found */
-    error_t *err = NULL;
-    if (root_paths->count > 0) {
-        err = privilege_ensure_for_operation(
-            root_paths->items,
-            root_paths->count,
-            "apply",
-            true,  /* interactive: prompt user if elevation needed */
-            ctx->argc,
-            ctx->argv,
-            out
+        err = privilege_collect_label(
+            &labels,
+            manifest->entries[i].storage_path,
+            manifest->entries[i].filesystem_path
         );
+        if (err) return err;
     }
 
-    string_array_free(root_paths);
+    for (size_t i = 0; i < file_orphan_count; i++) {
+        err = privilege_collect_label(
+            &labels,
+            file_orphans[i]->storage_path,
+            file_orphans[i]->filesystem_path
+        );
+        if (err) return err;
+    }
 
-    return err;
+    for (size_t i = 0; i < dir_orphan_count; i++) {
+        err = privilege_collect_label(
+            &labels,
+            dir_orphans[i]->storage_path,
+            dir_orphans[i]->filesystem_path
+        );
+        if (err) return err;
+    }
+
+    return privilege_ensure_for_operation(
+        (const char *const *) labels.items, labels.count, "apply",
+        true,  /* interactive: prompt user if elevation needed */
+        ctx->argc, ctx->argv, out
+    );
 }
 
 /**
@@ -807,7 +784,9 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         .exclude_patterns = opts->exclude_patterns,
         .exclude_count    = opts->exclude_count,
     };
-    err = scope_build(repo, state, &scope_inputs, config, ctx->arena, &scope);
+    err = scope_build(
+        repo, state, &scope_inputs, config, ctx->mounts, ctx->arena, &scope
+    );
     if (err) goto cleanup;
 
     output_print(
@@ -850,7 +829,8 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         .analyze_encryption  = false             /* Not needed for deployment */
     };
     err = workspace_load(
-        repo, state, scope, config, ctx->content_cache, &ws_opts, ctx->arena, &ws
+        repo, state, scope, config, ctx->content_cache, ctx->mounts,
+        &ws_opts, ctx->arena, &ws
     );
     if (err) {
         err = error_wrap(err, "Failed to load workspace");

@@ -983,8 +983,20 @@ static error_t *profile_enable(
             goto cleanup;
         }
 
+        /* Build a fresh mount table from the post-mutation row cache.
+         * The state_enable_profile loop above invalidated ctx->mounts'
+         * borrows; the new bindings (including any --target supplied
+         * for new entries) need to be reflected in classification for
+         * apply_scope's tree walk. */
+        mount_table_t *post_enable_mounts = NULL;
+        err = profile_build_mount_table(state, arena, &post_enable_mounts);
+        if (err) {
+            err = error_wrap(err, "Failed to build mount table after enable");
+            goto cleanup;
+        }
+
         err = manifest_apply_scope(
-            repo, state, arena, to_enable_validated, stats
+            repo, state, arena, post_enable_mounts, to_enable_validated, stats
         );
         if (err) {
             err = error_wrap(err, "Failed to reconcile manifest after enable");
@@ -1251,8 +1263,19 @@ static error_t *profile_disable(
             goto cleanup;
         }
 
+        /* Build a fresh mount table from the post-mutation row cache.
+         * The state_disable_profile loop above invalidated ctx->mounts'
+         * borrows; the disabled profiles' bindings must drop out of
+         * classification for apply_scope's tree walk. */
+        mount_table_t *post_disable_mounts = NULL;
+        err = profile_build_mount_table(state, arena, &post_disable_mounts);
+        if (err) {
+            err = error_wrap(err, "Failed to build mount table after disable");
+            goto cleanup;
+        }
+
         err = manifest_apply_scope(
-            repo, state, arena, to_disable_validated, stats
+            repo, state, arena, post_disable_mounts, to_disable_validated, stats
         );
         if (err) {
             err = error_wrap(err, "Failed to reconcile manifest after disable");
@@ -1494,8 +1517,22 @@ static error_t *profile_reorder(
      *
      * state_set_profiles preserves commit_oid for profiles that remain
      * enabled, so enabled_profiles is already fully authoritative — no
-     * persist_profile_head loop needed for reorder. */
-    err = manifest_apply_scope(repo, state, arena, NULL, NULL);
+     * persist_profile_head loop needed for reorder.
+     *
+     * Build a fresh mount table from the post-mutation row cache:
+     * state_set_profiles invalidated ctx->mounts' borrows, and a
+     * reorder may have shifted which profile a custom-target binding
+     * belongs to (precedence drives custom/ ownership). */
+    mount_table_t *post_reorder_mounts = NULL;
+    err = profile_build_mount_table(state, arena, &post_reorder_mounts);
+    if (err) {
+        err = error_wrap(err, "Failed to build mount table after reorder");
+        goto cleanup;
+    }
+
+    err = manifest_apply_scope(
+        repo, state, arena, post_reorder_mounts, NULL, NULL
+    );
     if (err) {
         err = error_wrap(err, "Failed to reconcile manifest with new precedence");
         goto cleanup;

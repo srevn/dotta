@@ -2282,6 +2282,7 @@ error_t *workspace_load(
     const scope_t *scope,
     const config_t *config,
     content_cache_t *content_cache,
+    const mount_table_t *mounts,
     const workspace_load_t *options,
     arena_t *arena,
     workspace_t **out
@@ -2290,6 +2291,7 @@ error_t *workspace_load(
     CHECK_NULL(state);
     CHECK_NULL(scope);
     CHECK_NULL(content_cache);
+    CHECK_NULL(mounts);
     CHECK_NULL(options);
     CHECK_NULL(arena);
     CHECK_NULL(out);
@@ -2328,7 +2330,7 @@ error_t *workspace_load(
      * Transaction scoping is internal to manifest_reconcile: uses the
      * caller's transaction when locked, opens a scoped BEGIN IMMEDIATE
      * otherwise. Common case (no drift) is O(P) and zero writes. */
-    err = manifest_reconcile(repo, state, arena, NULL);
+    err = manifest_reconcile(repo, state, arena, mounts, NULL);
     if (err) {
         return error_wrap(err, "Failed to reconcile manifest with Git");
     }

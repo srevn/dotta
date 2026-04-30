@@ -126,6 +126,7 @@ static error_t *discover_file_in_history(
 static error_t *discover_file(
     git_repository *repo,
     const state_t *state,
+    const mount_table_t *mounts,
     arena_t *arena,
     const char *file_path,
     const char *profile_hint,
@@ -136,6 +137,7 @@ static error_t *discover_file(
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(state);
+    CHECK_NULL(mounts);
     CHECK_NULL(arena);
     CHECK_NULL(file_path);
     CHECK_NULL(out);
@@ -148,13 +150,6 @@ static error_t *discover_file(
 
     /* Initialize output flag */
     *found_in_history = false;
-
-    /* Build mount table over all enabled profiles for path resolution. */
-    mount_table_t *mounts = NULL;
-    error_t *mounts_err = profile_build_mount_table(state, NULL, arena, &mounts);
-    if (mounts_err) {
-        return error_wrap(mounts_err, "Failed to build mount table");
-    }
 
     /* Resolve input path to storage format (file need not exist) */
     err = mount_resolve_input(mounts, file_path, &storage_path);
@@ -815,8 +810,8 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
 
     bool found_in_history = false;
     err = discover_file(
-        repo, state, ctx->arena, opts->file_path, opts->profile, out,
-        &found_in_history, &profile, &resolved_path
+        repo, state, ctx->mounts, ctx->arena, opts->file_path, opts->profile,
+        out, &found_in_history, &profile, &resolved_path
     );
     if (err) goto cleanup;
 
@@ -1122,6 +1117,7 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
         repo,
         state,
         ctx->arena,
+        ctx->mounts,
         profile,
         &current_oid,       /* Before revert (captured at step 3) */
         &new_head_oid,      /* After revert */

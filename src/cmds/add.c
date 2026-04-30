@@ -22,6 +22,7 @@
 #include "core/manifest.h"
 #include "core/metadata.h"
 #include "core/policy.h"
+#include "core/profiles.h"
 #include "core/state.h"
 #include "infra/content.h"
 #include "infra/mount.h"
@@ -850,11 +851,21 @@ static error_t *auto_enable_and_sync_profile(
         goto cleanup;
     }
 
-    /* STEP 4: Sync files to manifest with DEPLOYED status
+    /* Build a fresh mount table from the post-enable row cache.
      *
-     * manifest_add_files() loads the mount table internally to build the
-     * manifest. The target stored in STEP 3 is now available for
-     * resolving custom/ storage paths via mount_resolve().
+     * STEP 3 mutated enabled_profiles (a new row + target binding), so
+     * ctx->mounts (built in run_spec from the pre-mutation snapshot) is
+     * stale here. The fresh table is the only handle that classifies
+     * paths under the just-bound target as custom/ for manifest_add_files
+     * below. Allocated into ctx->arena, reclaimed at command end. */
+    mount_table_t *post_enable_mounts = NULL;
+    err = profile_build_mount_table(state, arena, &post_enable_mounts);
+    if (err) {
+        err = error_wrap(err, "Failed to build mount table after enable");
+        goto cleanup;
+    }
+
+    /* STEP 4: Sync files to manifest with DEPLOYED status
      *
      * manifest_add_files advances the deployment anchor internally for
      * synced entries, so the next status can short-circuit on the fast
@@ -868,6 +879,7 @@ static error_t *auto_enable_and_sync_profile(
         repo,
         state,
         arena,
+        post_enable_mounts,
         profile,
         added_files,
         enabled_profiles,
@@ -1013,6 +1025,19 @@ static error_t *update_manifest_after_add(
         }
     }
 
+    /* Build a fresh mount table from the (possibly post-mutation) row
+     * cache. When `target` is non-NULL, STEP 3's UPSERT may have rebound
+     * the target, invalidating ctx->mounts' classification for paths
+     * under the new binding. Build unconditionally so the call shape
+     * stays uniform — when no UPSERT ran, the fresh table is equivalent
+     * to ctx->mounts (one extra build is the cost of a uniform site). */
+    mount_table_t *post_mutation_mounts = NULL;
+    err = profile_build_mount_table(state, arena, &post_mutation_mounts);
+    if (err) {
+        err = error_wrap(err, "Failed to build mount table after add");
+        goto cleanup;
+    }
+
     /* STEP 4: Bulk sync operation (O(M+N))
      *
      * manifest_add_files advances the deployment anchor internally for
@@ -1024,6 +1049,7 @@ static error_t *update_manifest_after_add(
         repo,
         state,
         arena,
+        post_mutation_mounts,
         profile,
         added_files,
         enabled_profiles,
@@ -1082,12 +1108,13 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     size_t added_count = 0;
     bool profile_was_new = false;
     metadata_t *metadata = NULL;
-    mount_table_t *mounts = NULL;
+    const mount_table_t *mounts = NULL;
 
-    /* Pre-flight privilege check arrays */
-    char **preflight_storage_paths = NULL;
-    char **preflight_allocated_paths = NULL;
-    size_t preflight_storage_count = 0;
+    /* Pre-flight privilege labels. STRING_ARRAY_AUTO releases the
+     * backing buffer at scope exit; the privilege call window closes
+     * inside this function (or the process re-execs), so the array's
+     * lifetime is contained here. */
+    string_array_t preflight_labels STRING_ARRAY_AUTO = {0};
 
     /* CLI flags override config */
     if (opts->verbose) {
@@ -1117,18 +1144,35 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         }
     }
 
-    /* Build the per-command mount table once. The single mount pairs
-     * opts->profile with opts->target so that both classify (fs -> storage)
-     * and resolve (custom/X -> fs) work against the same handle. A NULL or
-     * empty target contributes no CUSTOM mount; HOME and the universal
-     * ROOT sentinel are always added internally. The table rides the
-     * command arena. */
-    err = mount_table_build_for_profile(
-        ctx->arena, opts->profile, opts->target, &mounts
-    );
-    if (err) {
-        err = error_wrap(err, "Failed to build mount table");
-        goto cleanup;
+    /* Build the per-command mount table.
+     *
+     * Two modes selected by --target:
+     *
+     *   --target given: a single-mount table pairing opts->profile with
+     *     opts->target. Other enabled profiles' bindings are deliberately
+     *     excluded — narrows classification to "what would adding to THIS
+     *     profile see?", so a path under another profile's --target does
+     *     NOT classify as that profile's custom/ namespace. The narrow
+     *     view also covers the brand-new-profile case (no row in
+     *     ctx->mounts yet) and the existing-profile-same-target case
+     *     (idempotent re-bind already verified at the pre-flight check
+     *     at the top of this function).
+     *
+     *   --target absent: borrow ctx->mounts. The full enabled set covers
+     *     opts->profile's existing binding (if any) plus HOME and ROOT.
+     *     Paths under opts->profile's stored target classify as custom/X
+     *     correctly without re-deriving the binding. */
+    if (opts->target) {
+        mount_table_t *local_mounts = NULL;
+        mount_t mount = { .profile = opts->profile, .target = opts->target };
+        err = mount_table_build(ctx->arena, &mount, 1, &local_mounts);
+        if (err) {
+            err = error_wrap(err, "Failed to build mount table");
+            goto cleanup;
+        }
+        mounts = local_mounts;
+    } else {
+        mounts = ctx->mounts;
     }
 
     /* PRE-FLIGHT PRIVILEGE CHECK
@@ -1145,46 +1189,49 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      * If re-exec succeeds, this function DOES NOT RETURN.
      */
 
-    /* Build array of storage paths by pre-resolving all file paths */
-    preflight_storage_paths = calloc(opts->file_count, sizeof(char *));
-    preflight_allocated_paths = calloc(opts->file_count, sizeof(char *));
-
-    if (!preflight_storage_paths || !preflight_allocated_paths) {
-        err = ERROR(ERR_MEMORY, "Failed to allocate storage paths array");
+    err = string_array_init_cap(&preflight_labels, opts->file_count);
+    if (err) {
+        err = error_wrap(err, "Failed to reserve privilege label array");
         goto cleanup;
     }
 
-    /* Pre-compute whether deployment target needs elevation.
-     * All paths in this add invocation share the same target. */
+    /* Pre-compute whether deployment target needs elevation. Every
+     * input in this add invocation shares opts->target, so the answer
+     * is identical for the whole batch — evaluate once, reuse below.
+     * The kind-keyed predicate that consumes this mirrors
+     * privilege_needs_elevation's rule (ROOT always; CUSTOM iff target
+     * outside $HOME); kept inline because the precomputed bool would
+     * leak the privilege module's CUSTOM-vs-ROOT branch through any
+     * public helper signature. */
     bool custom_needs_elevation = opts->target
         ? privilege_target_needs_elevation(opts->target)
         : false;  /* No target → no custom/ paths → irrelevant */
 
-    /* Resolve all paths to storage format (pre-flight for privilege check).
-     * Only paths that actually need elevation are included — home/ never does,
-     * and custom/ only does when the deployment target is outside $HOME. */
+    /* Collect labels for inputs whose kind needs elevation. Only kinds
+     * that actually need elevation are pushed — home/ never does, and
+     * custom/ only does when the deployment target is outside $HOME.
+     *
+     * Each input branch owns its own display string:
+     *   - Storage-path input ("home/X" / "root/X" / "custom/X"): the
+     *     user-typed string IS the display.
+     *   - Filesystem input that classifies cleanly: the classified
+     *     storage path the descendants will hit (e.g. "root/etc/hosts").
+     *   - Classification root (e.g. "dotta add /"): the typed filesystem
+     *     path itself. No storage tail exists for the directory-of-a-mount
+     *     case, so the input path is the most informative label. */
     for (size_t i = 0; i < opts->file_count; i++) {
         const char *file_path = opts->files[i];
         char *absolute = NULL;
-        char *storage_path = NULL;
+        char *storage_path_heap = NULL;
         mount_kind_t kind;
 
-        /* Storage-path inputs (home/..., root/..., custom/...) — only include
-         * paths that actually need elevation in the privilege check. */
+        /* Storage-path input: the input itself is the display. */
         if (mount_kind_extract(file_path, &kind)) {
-            if (kind != MOUNT_ROOT &&
-                !(kind == MOUNT_CUSTOM && custom_needs_elevation)) {
-                continue;
+            if (kind == MOUNT_ROOT ||
+                (kind == MOUNT_CUSTOM && custom_needs_elevation)) {
+                err = string_array_push(&preflight_labels, file_path);
+                if (err) goto cleanup;
             }
-
-            storage_path = strdup(file_path);
-            if (!storage_path) {
-                err = ERROR(ERR_MEMORY, "Failed to duplicate storage path");
-                goto cleanup;
-            }
-            preflight_allocated_paths[preflight_storage_count] = storage_path;
-            preflight_storage_paths[preflight_storage_count] = storage_path;
-            preflight_storage_count++;
             continue;
         }
 
@@ -1206,7 +1253,8 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
             continue;
         }
 
-        err = mount_classify(mounts, absolute, &storage_path, &kind);
+        bool is_classification_root = false;
+        err = mount_classify(mounts, absolute, &storage_path_heap, &kind);
         if (err) {
             /* A directory input equal to a classification root ($HOME, "/",
              * or --target) has no storage representation; mount_classify
@@ -1216,9 +1264,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
              * What DOES need handling here: the pre-flight's only question
              * is "will this path's expanded descendants need elevation?".
              * mount_classify_kind answers exactly that — same longest-match
-             * algorithm, but skips the root-equality error branch. We use
-             * a kind-typed stub for display since no concrete descendant
-             * path is in scope yet. */
+             * algorithm, but skips the root-equality error branch. */
             if (err->code == ERR_INVALID_ARG &&
                 !fs_is_symlink(file_path) && fs_is_directory(file_path)) {
                 error_free(err);
@@ -1228,8 +1274,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
                     err = error_wrap(err, "Failed to classify '%s'", file_path);
                     goto cleanup;
                 }
-                /* storage_path stays NULL; the synthesis branch below
-                 * supplies a kind-typed representative if needed. */
+                is_classification_root = true;
             } else {
                 free(absolute);
                 err = error_wrap(err, "Failed to resolve path '%s'", file_path);
@@ -1239,35 +1284,22 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
             free(absolute);
         }
 
-        /* Only include paths that need elevation in the privilege check */
-        if (kind != MOUNT_ROOT &&
-            !(kind == MOUNT_CUSTOM && custom_needs_elevation)) {
-            free(storage_path);  /* may be NULL — free(NULL) is well-defined */
-            continue;
-        }
-
-        /* Synthesize a kind-typed representative when classify produced
-         * no concrete storage path (the root-equality branch above).
-         * Closes the "dotta add /" and "dotta add --target X X" gaps —
-         * the privilege check now fires for both ROOT and CUSTOM roots
-         * uniformly. */
-        if (!storage_path) {
-            const char *label = (kind == MOUNT_ROOT) ? "root/" : "custom/";
-            storage_path = strdup(label);
-            if (!storage_path) {
-                err = ERROR(ERR_MEMORY, "Failed to allocate representative path");
+        if (kind == MOUNT_ROOT ||
+            (kind == MOUNT_CUSTOM && custom_needs_elevation)) {
+            const char *display =
+                is_classification_root ? file_path : storage_path_heap;
+            err = string_array_push(&preflight_labels, display);
+            if (err) {
+                free(storage_path_heap);
                 goto cleanup;
             }
         }
-
-        preflight_allocated_paths[preflight_storage_count] = storage_path;
-        preflight_storage_paths[preflight_storage_count] = storage_path;
-        preflight_storage_count++;
+        free(storage_path_heap);  /* may be NULL — free(NULL) is well-defined */
     }
 
     /* Check privilege requirements
      *
-     * If root/ files detected without root privileges:
+     * If kinds needing root detected without root privileges:
      * - Interactive: Prompts user, re-execs with sudo if approved
      * - Non-interactive: Returns error with clear message
      *
@@ -1275,7 +1307,8 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      * If re-exec fails or user declines, returns error.
      */
     err = privilege_ensure_for_operation(
-        preflight_storage_paths, preflight_storage_count, "add",
+        (const char *const *) preflight_labels.items,
+        preflight_labels.count, "add",
         true, ctx->argc, ctx->argv, out
     );
 
@@ -1420,6 +1453,17 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
                     );
                     goto cleanup;
                 }
+            }
+
+            /* CLI input is the write boundary for storage-path arguments.
+             * Validate the syntactic shape here so mount_resolve below can
+             * trust its input — establishes the invariant once and
+             * downstream readers (manifest tree-walk, sync, remove) trust
+             * it for the rest of the command. */
+            err = mount_validate_storage(file);
+            if (err) {
+                err = error_wrap(err, "Invalid storage path '%s'", file);
+                goto cleanup;
             }
 
             /* Convert storage path to filesystem path via the mount table.
@@ -1914,13 +1958,6 @@ cleanup:
     if (wt) worktree_cleanup(&wt);
     source_filter_free(source_filter);
     ignore_rules_free(ignore_rules);
-    if (preflight_allocated_paths) {
-        for (size_t i = 0; i < preflight_storage_count; i++) {
-            free(preflight_allocated_paths[i]);
-        }
-        free(preflight_allocated_paths);
-    }
-    if (preflight_storage_paths) free(preflight_storage_paths);
 
     return err;
 }

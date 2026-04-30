@@ -62,15 +62,6 @@ bool privilege_is_sudo(void);
 bool privilege_path_requires_root(const char *storage_path);
 
 /**
- * Check if any paths in array require root privileges
- *
- * @param storage_paths Array of storage paths
- * @param count Number of paths in array
- * @return true if any path requires root, false otherwise
- */
-bool privilege_paths_require_root(const char **storage_paths, size_t count);
-
-/**
  * Check if a deployment target requires elevated privileges
  *
  * Determines whether a custom deployment target points to a location
@@ -150,20 +141,43 @@ bool privilege_needs_elevation(const char *storage_path, const char *filesystem_
 error_t *privilege_get_actual_user(uid_t *uid, gid_t *gid);
 
 /**
- * Ensure proper privileges for an operation
+ * Append `storage_path` to `labels` iff this entry needs elevation.
+ *
+ * Wraps the predicate-and-push idiom that the manifest- and workspace-
+ * driven callers (apply, update, status) repeat for every entry: if the
+ * (storage_path, filesystem_path) pair triggers privilege_needs_elevation,
+ * push storage_path onto the label collection.
+ *
+ * Pulls the filter into the privilege module so callers cannot mistakenly
+ * surface entries that don't actually need elevation — the predicate is
+ * now self-enforcing at the collection boundary.
+ *
+ * Callers that have only a kind on hand (e.g., add.c's storage-path
+ * inputs and classification-root case) compute the predicate locally
+ * — they have no filesystem_path and use a precomputed
+ * "custom target needs elevation" bool instead of consulting
+ * privilege_target_needs_elevation per file.
+ *
+ * Lifetime: storage_path is copied into `labels` (string_array_push
+ * strdups), so the array is independent of the entry's lifetime.
+ *
+ * @param labels Output collection (must not be NULL)
+ * @param storage_path Storage path (must not be NULL)
+ * @param filesystem_path Resolved filesystem path (NULL → conservative)
+ * @return Error on allocation failure; NULL otherwise (including the
+ *         "no elevation needed" no-op success)
+ */
+error_t *privilege_collect_label(
+    string_array_t *labels,
+    const char *storage_path,
+    const char *filesystem_path
+);
+
+/**
+ * Ensure proper privileges for an operation.
  *
  * Main entry point for privilege management. Call this BEFORE starting
  * any operation that might need root privileges.
- *
- * Contract:
- *   `storage_paths` MUST already be filtered to paths that need elevation
- *   (i.e., the caller has run each candidate through
- *   privilege_needs_elevation and kept only the truthy ones). Pass count=0
- *   when no path needs elevation; this function does NOT re-filter.
- *
- *   The pre-filter is the caller's responsibility because the precise
- *   answer requires the resolved filesystem path, which call sites have
- *   on hand but this entry point does not.
  *
  * Behavior:
  *   1. count == 0:                          Returns NULL (proceed)
@@ -176,8 +190,9 @@ error_t *privilege_get_actual_user(uid_t *uid, gid_t *gid);
  * If re-execution succeeds, this function DOES NOT RETURN.
  * Any state changes before calling this function will be lost.
  *
- * @param storage_paths Array of storage paths needing elevation (pre-filtered)
- * @param count Number of paths (0 means "nothing needs root")
+ * @param labels Storage paths for items needing elevation (must outlive
+ *               the call; an empty array means "nothing needs root")
+ * @param count Number of labels
  * @param operation_name Operation name (for display, e.g., "add", "update")
  * @param interactive Whether interactive prompts are allowed
  * @param argc Original argc from main() (for re-exec)
@@ -186,7 +201,7 @@ error_t *privilege_get_actual_user(uid_t *uid, gid_t *gid);
  * @return NULL if OK to proceed, error otherwise (or does not return if re-exec)
  */
 error_t *privilege_ensure_for_operation(
-    char *const *storage_paths,
+    const char *const *labels,
     size_t count,
     const char *operation_name,
     bool interactive,

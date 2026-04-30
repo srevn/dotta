@@ -230,6 +230,11 @@ typedef struct {
  *              the orphan-pass state snapshot. Allocations live until the
  *              caller destroys the arena (typically command end). Must not
  *              be NULL.
+ * @param mounts Per-machine mount table reflecting the post-mutation
+ *               binding set the caller is reconciling to. Must not be NULL.
+ *               Binding-mutating callers (profile enable/disable/reorder,
+ *               clone, interactive) build a fresh local table after the
+ *               state mutation; ctx->mounts is stale at those sites.
  * @param stats_filter Optional: profiles to attribute stats to (NULL = none)
  * @param out_stats Parallel array (length stats_filter->count); zero-initialized
  *                  and populated during the call (must be non-NULL iff
@@ -240,6 +245,7 @@ error_t *manifest_apply_scope(
     git_repository *repo,
     state_t *state,
     arena_t *arena,
+    const mount_table_t *mounts,
     const string_array_t *stats_filter,
     manifest_scope_stats_t *out_stats
 );
@@ -334,6 +340,9 @@ error_t *manifest_persist_profile_head(
  * @param arena Scratch arena for the fresh-manifest precedence oracle.
  *              Allocations live until the caller destroys the arena
  *              (typically command end). Must not be NULL.
+ * @param mounts Per-machine mount table covering enabled_profiles. Must not
+ *               be NULL. Update doesn't mutate bindings, so callers pass
+ *               ctx->mounts directly.
  * @param items Array of workspace items to sync (must not be NULL)
  * @param item_count Number of items
  * @param enabled_profiles All enabled profiles (must not be NULL)
@@ -346,6 +355,7 @@ error_t *manifest_update_files(
     git_repository *repo,
     state_t *state,
     arena_t *arena,
+    const mount_table_t *mounts,
     const workspace_item_t **items,
     size_t item_count,
     const string_array_t *enabled_profiles,
@@ -413,6 +423,11 @@ error_t *manifest_update_files(
  * @param arena Scratch arena for the fresh-manifest precedence oracle.
  *              Allocations live until the caller destroys the arena
  *              (typically command end). Must not be NULL.
+ * @param mounts Per-machine mount table reflecting the post-add binding
+ *               set. Must not be NULL. Add may implicitly enable a profile
+ *               (or store its --target) before this call, so callers build
+ *               a fresh local table after that mutation; ctx->mounts is
+ *               stale on the implicit-enable path.
  * @param profile Profile files were added to (must not be NULL)
  * @param filesystem_paths Array of filesystem paths (must not be NULL)
  * @param enabled_profiles All enabled profiles (must not be NULL)
@@ -423,6 +438,7 @@ error_t *manifest_add_files(
     git_repository *repo,
     state_t *state,
     arena_t *arena,
+    const mount_table_t *mounts,
     const char *profile,
     const string_array_t *filesystem_paths,
     const string_array_t *enabled_profiles,
@@ -474,6 +490,9 @@ error_t *manifest_add_files(
  *              (used for fallback detection). Allocations live until the
  *              caller destroys the arena (typically command end). Must not
  *              be NULL.
+ * @param mounts Per-machine mount table covering enabled_profiles. Must not
+ *               be NULL. Remove does not mutate the binding set before
+ *               this call, so callers pass ctx->mounts directly.
  * @param removed_profile Profile files were removed from (must not be NULL)
  * @param removed_storage_paths Storage paths of removed files (must not be NULL)
  * @param enabled_profiles All enabled profiles (must not be NULL)
@@ -486,6 +505,7 @@ error_t *manifest_remove_files(
     git_repository *repo,
     state_t *state,
     arena_t *arena,
+    const mount_table_t *mounts,
     const char *removed_profile,
     const string_array_t *removed_storage_paths,
     const string_array_t *enabled_profiles,
@@ -547,6 +567,10 @@ error_t *manifest_remove_files(
  * @param arena Scratch arena for stale-profile detection and fresh-manifest
  *              construction during repair. Allocations live until the caller
  *              destroys the arena (typically command end). Must not be NULL.
+ * @param mounts Per-machine mount table covering the current enabled set.
+ *               Must not be NULL. Reconcile does not mutate bindings; the
+ *               only callers (workspace_load and sync's force branch)
+ *               pass ctx->mounts.
  * @param out_stats Optional: repair statistics (NULL = don't care)
  * @return Error or NULL on success
  */
@@ -554,6 +578,7 @@ error_t *manifest_reconcile(
     git_repository *repo,
     state_t *state,
     arena_t *arena,
+    const mount_table_t *mounts,
     manifest_repair_stats_t *out_stats
 );
 
@@ -632,6 +657,9 @@ error_t *manifest_reconcile(
  * @param arena Scratch arena for the fresh-manifest precedence oracle.
  *              Allocations live until the caller destroys the arena
  *              (typically command end). Must not be NULL.
+ * @param mounts Per-machine mount table covering enabled_profiles. Must not
+ *               be NULL. Sync does not mutate bindings; callers pass
+ *               ctx->mounts.
  * @param profile Profile being synced (must not be NULL)
  * @param old_oid Old commit before sync (must not be NULL)
  * @param new_oid New commit after sync (must not be NULL)
@@ -646,6 +674,7 @@ error_t *manifest_sync_diff(
     git_repository *repo,
     state_t *state,
     arena_t *arena,
+    const mount_table_t *mounts,
     const char *profile,
     const git_oid *old_oid,
     const git_oid *new_oid,

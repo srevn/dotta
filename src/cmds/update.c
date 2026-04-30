@@ -1110,6 +1110,7 @@ static error_t *update_manifest_after_update(
     git_repository *repo,
     state_t *state,
     arena_t *arena,
+    const mount_table_t *mounts,
     const scope_t *scope,
     const hashmap_t *items_by_profile,
     const cmd_update_options_t *opts,
@@ -1119,6 +1120,7 @@ static error_t *update_manifest_after_update(
     CHECK_NULL(repo);
     CHECK_NULL(state);
     CHECK_NULL(arena);
+    CHECK_NULL(mounts);
     CHECK_NULL(scope);
     CHECK_NULL(items_by_profile);
     CHECK_NULL(opts);
@@ -1162,6 +1164,7 @@ static error_t *update_manifest_after_update(
         repo,
         state,
         arena,
+        mounts,
         all_items,
         item_count,
         enabled_profiles,
@@ -1827,7 +1830,9 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
         .exclude_patterns = opts->exclude_patterns,
         .exclude_count    = opts->exclude_count,
     };
-    err = scope_build(repo, state, &scope_inputs, config, ctx->arena, &scope);
+    err = scope_build(
+        repo, state, &scope_inputs, config, ctx->mounts, ctx->arena, &scope
+    );
     if (err) goto cleanup;
 
     if (scope_enabled(scope)->count == 0) {
@@ -1883,7 +1888,8 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
         .analyze_encryption  = true                     /* Encryption policy validation */
     };
     err = workspace_load(
-        repo, state, scope, config, ctx->content_cache, &ws_opts, ctx->arena, &ws
+        repo, state, scope, config, ctx->content_cache, ctx->mounts,
+        &ws_opts, ctx->arena, &ws
     );
     if (err) {
         err = error_wrap(err, "Failed to analyze workspace");
@@ -1939,64 +1945,41 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
      * If re-exec succeeds, this function DOES NOT RETURN.
      */
     {
-        /* Count files that need privilege check (exclude directories) */
-        size_t file_count = 0;
+        string_array_t labels STRING_ARRAY_AUTO = {0};
         for (size_t i = 0; i < update_count; i++) {
-            if (update_items[i]->item_kind == WORKSPACE_ITEM_FILE) {
-                file_count++;
-            }
-        }
-
-        if (file_count > 0) {
-            /* Extract paths needing elevation from file items.
-             * Uses privilege_needs_elevation() which considers whether each
-             * entry's custom target is under $HOME. */
-            char **storage_paths = calloc(file_count, sizeof(char *));
-            if (!storage_paths) {
-                err = ERROR(ERR_MEMORY, "Failed to allocate storage paths array");
-                goto cleanup;
-            }
-
-            size_t elevation_count = 0;
-            for (size_t i = 0; i < update_count; i++) {
-                const workspace_item_t *item = update_items[i];
-                if (item->item_kind == WORKSPACE_ITEM_FILE) {
-                    if (privilege_needs_elevation(
-                        item->storage_path, item->filesystem_path
-                        )) {
-                        storage_paths[elevation_count++] = item->storage_path;
-                    }
-                }
-            }
-
-            /* Check privilege requirements
-             *
-             * If paths needing root detected without root privileges:
-             * - Interactive: Prompts user, re-execs with sudo if approved
-             * - Non-interactive: Returns error with clear message
-             *
-             * If re-exec succeeds, this function DOES NOT RETURN.
-             * If re-exec fails or user declines, returns error.
-             */
-            err = privilege_ensure_for_operation(
-                storage_paths,
-                elevation_count,
-                "update",
-                opts->interactive,  /* Use existing interactive flag */
-                ctx->argc,
-                ctx->argv,
-                out
+            const workspace_item_t *item = update_items[i];
+            if (item->item_kind != WORKSPACE_ITEM_FILE) continue;
+            err = privilege_collect_label(
+                &labels, item->storage_path, item->filesystem_path
             );
-
-            free(storage_paths);
-
-            if (err) {
-                /* User declined elevation or non-interactive mode blocked it */
-                goto cleanup;
-            }
-
-            /* If we reach here, privileges are OK - proceed with operation */
+            if (err) goto cleanup;
         }
+
+        /* Check privilege requirements
+         *
+         * If labels needing root were collected without root privileges:
+         * - Interactive: Prompts user, re-execs with sudo if approved
+         * - Non-interactive: Returns error with clear message
+         *
+         * If re-exec succeeds, this function DOES NOT RETURN.
+         * If re-exec fails or user declines, returns error.
+         */
+        err = privilege_ensure_for_operation(
+            (const char *const *) labels.items,
+            labels.count,
+            "update",
+            opts->interactive,  /* Use existing interactive flag */
+            ctx->argc,
+            ctx->argv,
+            out
+        );
+
+        if (err) {
+            /* User declined elevation or non-interactive mode blocked it */
+            goto cleanup;
+        }
+
+        /* If we reach here, privileges are OK - proceed with operation */
     }
 
     /* Display summary of items to update */
@@ -2075,7 +2058,8 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
      */
     bool manifest_updated = false;
     error_t *manifest_err = update_manifest_after_update(
-        repo, state, ctx->arena, scope, by_profile, opts, out, &manifest_updated
+        repo, state, ctx->arena, ctx->mounts, scope, by_profile, opts, out,
+        &manifest_updated
     );
 
     /* Free by_profile hashmap after manifest sync */

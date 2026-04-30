@@ -199,16 +199,27 @@ cleanup:
 /**
  * Build a per-machine mount table from state
  *
- * State-aware adapter that materializes enabled_profiles' (name, prefix)
+ * State-aware adapter that materializes enabled_profiles' (name, target)
  * rows into mount_t entries and delegates the augmentation (HOME,
- * canonical HOME, root sentinel) to mount_table_build. The single chokepoint
- * for "what does the mount table look like for this command?" —
- * scope_build feeds the active set, list/show/revert feed NULL for the
- * full enabled set.
+ * canonical HOME, root sentinel) to mount_table_build. Single chokepoint
+ * for "what does the mount table look like for this command?".
+ *
+ * Both name and target are borrowed from the state row cache; their
+ * lifetime ties to the next enabled_profiles shape mutation, which by
+ * dispatcher construction is the next state_enable_profile /
+ * state_disable_profile / state_set_profiles call (always paired with
+ * a fresh local rebuild at binding-mutation sites). State outlives the
+ * arena, so the borrows are sound for the arena's lifetime.
+ *
+ * Lenient on state-read failure: a cold clone or transient DB issue
+ * means there are no per-profile mounts to materialize, but HOME and
+ * the universal root sentinel are still useful for input classification.
+ * Falling back to a bare table here makes the call sites (run_spec,
+ * binding-mutation rebuilders) unconditional — they no longer carry
+ * boilerplate to recover from this exact failure.
  */
 error_t *profile_build_mount_table(
     const state_t *state,
-    const string_array_t *names,
     arena_t *arena,
     mount_table_t **out
 ) {
@@ -218,52 +229,6 @@ error_t *profile_build_mount_table(
 
     *out = NULL;
 
-    /* Names mode (CLI-narrowed harvest).
-     *
-     * arena_strdup the profile name into each mount: the caller's array
-     * (typically scope's enabled/filter heap-owned strings) may be freed
-     * before the arena is destroyed, so a borrow would dangle in the
-     * window between scope_free and arena_destroy. The target pointer
-     * is borrowed from the state row cache, which outlives the arena —
-     * no copy needed. */
-    if (names != NULL) {
-        mount_t *mounts = NULL;
-        if (names->count > 0) {
-            mounts = arena_calloc(arena, names->count, sizeof(*mounts));
-            if (!mounts) {
-                return ERROR(ERR_MEMORY, "Failed to allocate mounts");
-            }
-        }
-        for (size_t i = 0; i < names->count; i++) {
-            const char *name = names->items[i];
-            const char *arena_name = arena_strdup(arena, name);
-            if (!arena_name) {
-                return ERROR(
-                    ERR_MEMORY, "Failed to duplicate profile name '%s'", name
-                );
-            }
-            mounts[i] = (mount_t){
-                .profile = arena_name,
-                .target = state_peek_profile_target(state, name)
-            };
-        }
-        return mount_table_build(arena, mounts, names->count, out);
-    }
-
-    /* All-enabled mode (row-cache scan).
-     *
-     * Both name and target are borrowed from the row cache; their
-     * lifetime ties to the next enabled_profiles shape mutation, which by
-     * VWD-command construction does not occur between scope_build and
-     * scope_free. State outlives the arena, so the borrows are sound for
-     * the arena's lifetime.
-     *
-     * Lenient on state-read failure: a cold clone or transient DB issue
-     * means there are no per-profile mounts to materialize, but HOME
-     * and the universal root sentinel are still useful for input
-     * classification. Falling back to a bare table here makes the call
-     * sites (revert/list/show) unconditional — they no longer carry
-     * boilerplate to recover from this exact failure. */
     const state_profile_entry_t *entries = NULL;
     size_t count = 0;
     error_t *err = state_peek_profiles(state, &entries, &count);

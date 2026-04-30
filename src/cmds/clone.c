@@ -293,7 +293,21 @@ static error_t *initialize_state(
             }
         }
 
-        err = manifest_apply_scope(repo, state, arena, NULL, NULL);
+        /* Build a fresh mount table from the post-mutation row cache.
+         * Clone's run_spec sees state_mode == NONE (the DB doesn't
+         * exist yet), so ctx->mounts is NULL even after this point. The
+         * mount table built here covers the freshly-bootstrapped
+         * binding set for manifest_apply_scope's tree walk. */
+        mount_table_t *post_mutation_mounts = NULL;
+        err = profile_build_mount_table(state, arena, &post_mutation_mounts);
+        if (err) {
+            state_free(state);
+            return error_wrap(err, "Failed to build mount table");
+        }
+
+        err = manifest_apply_scope(
+            repo, state, arena, post_mutation_mounts, NULL, NULL
+        );
         if (err) {
             state_free(state);
             return error_wrap(err, "Failed to reconcile manifest scope");

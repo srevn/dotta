@@ -546,12 +546,14 @@ static bool format_time(git_time_t timestamp, char *buf, size_t buf_size) {
 static error_t *list_file_history(
     git_repository *repo,
     const state_t *state,
+    const mount_table_t *mounts,
     arena_t *arena,
     const cmd_list_options_t *opts,
     output_t *out
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(state);
+    CHECK_NULL(mounts);
     CHECK_NULL(arena);
     CHECK_NULL(opts);
     CHECK_NULL(opts->file_path);
@@ -559,13 +561,6 @@ static error_t *list_file_history(
 
     bool verbose = output_is_verbose(out);
     char *discovered_profile = NULL;
-
-    /* Build mount table over all enabled profiles for path resolution. */
-    mount_table_t *mounts = NULL;
-    error_t *mounts_err = profile_build_mount_table(state, NULL, arena, &mounts);
-    if (mounts_err) {
-        return error_wrap(mounts_err, "Failed to build mount table");
-    }
 
     /* Resolve input path to storage format (handles absolute, tilde, relative,
      * and storage paths). File need not exist on disk. */
@@ -740,7 +735,9 @@ error_t *cmd_list(const dotta_ctx_t *ctx, const cmd_list_options_t *opts) {
     } else if (opts->mode == LIST_FILES) {
         err = list_files(repo, opts, out);
     } else if (opts->mode == LIST_FILE_HISTORY) {
-        err = list_file_history(repo, ctx->state, ctx->arena, opts, out);
+        err = list_file_history(
+            repo, ctx->state, ctx->mounts, ctx->arena, opts, out
+        );
     } else {
         err = ERROR(ERR_INVALID_ARG, "Invalid list mode");
     }

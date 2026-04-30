@@ -79,9 +79,9 @@
 #include "infra/pathspec.h"
 
 /* Forward decl: state_t's full API lives in core/state.h. scope only
- * passes the pointer through to profile_resolve_enabled and
- * profile_build_mount_table, so the header stays free of the state
- * dependency. C11 §6.7p3 permits typedef-name redeclaration. */
+ * passes the pointer through to profile_resolve_enabled, so the header
+ * stays free of the state dependency. C11 §6.7p3 permits typedef-name
+ * redeclaration. */
 typedef struct state state_t;
 
 /**
@@ -122,18 +122,18 @@ typedef struct scope_inputs {
  *   2. If in->profile_count > 0, resolve and validate the CLI filter
  *      against the enabled set (error if any filter name is not enabled).
  *      Strictness of the filter resolution is read from config->strict_mode.
- *   3. Build the mount table from the ACTIVE set (filter if present,
- *      else enabled). Always built — empty active set still yields a
- *      usable handle (HOME + root sentinel only). Narrowing the filter
- *      narrows the mount table for path classification.
- *   4. If in->file_count > 0, build the pathspec consuming the mount table.
- *   5. If in->exclude_count > 0, compile patterns into a borrowed-arena
+ *   3. If in->file_count > 0, build the pathspec consuming the
+ *      caller-supplied mount table.
+ *   4. If in->exclude_count > 0, compile patterns into a borrowed-arena
  *      gitignore ruleset.
  *
  * @param repo   Repository (must not be NULL)
  * @param state  State handle (must not be NULL, borrowed for the call)
  * @param in     Inputs (must not be NULL)
  * @param config Configuration (must not be NULL, read for strict_mode)
+ * @param mounts Per-machine mount table covering enabled profiles
+ *               (must not be NULL; arena-borrowed; consumed by
+ *               pathspec_create only — scope_t does not store it)
  * @param arena  Borrowed allocator backing the compiled exclude ruleset
  *               and the path filter's glob storage; must outlive the
  *               returned scope (must not be NULL)
@@ -145,6 +145,7 @@ error_t *scope_build(
     const state_t *state,
     const scope_inputs_t *in,
     const config_t *config,
+    const mount_table_t *mounts,
     arena_t *arena,
     scope_t **out
 );
@@ -197,26 +198,6 @@ const string_array_t *scope_active(const scope_t *s);
  * Borrowed; valid until scope_free.
  */
 const pathspec_t *scope_paths(const scope_t *s);
-
-/**
- * Per-machine mount table, built from the active set.
- *
- * Always non-NULL after scope_build returns. When the active set is
- * empty or no profile has a deployment target, the handle still carries
- * HOME and the empty-prefix root sentinel, so path classification still
- * works.
- *
- * Lifetime: arena-borrowed. The pointer is valid until the arena
- * passed to scope_build is destroyed; that arena MUST outlive scope_t.
- * scope_free does not release the mount table — arena_destroy does.
- *
- * Borrow chain: target strings come from the state row cache.
- * The VWD-command structure (no enabled_profiles shape mutation between
- * scope_build and scope_free) keeps them valid. profile names are
- * arena_strdup'd into the bindings, so they are decoupled from
- * scope_t's heap-owned filter/enabled arrays.
- */
-const mount_table_t *scope_mounts(const scope_t *s);
 
 /* -------------------------------------------------------------------- */
 /* Build-shape predicates                                               */

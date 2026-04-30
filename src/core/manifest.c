@@ -29,7 +29,6 @@
 #include "base/hashmap.h"
 #include "base/string.h"
 #include "core/metadata.h"
-#include "core/profiles.h"
 #include "core/state.h"
 #include "infra/mount.h"
 #include "sys/gitops.h"
@@ -260,12 +259,14 @@ error_t *manifest_apply_scope(
     git_repository *repo,
     state_t *state,
     arena_t *arena,
+    const mount_table_t *mounts,
     const string_array_t *stats_filter,
     manifest_scope_stats_t *out_stats
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(state);
     CHECK_NULL(arena);
+    CHECK_NULL(mounts);
 
     /* Parallel-NULL contract: either both stats arguments are NULL
      * (caller doesn't want stats) or both are non-NULL (caller owns a
@@ -282,7 +283,6 @@ error_t *manifest_apply_scope(
 
     error_t *err = NULL;
     string_array_t *enabled = NULL;
-    mount_table_t *mounts = NULL;
     manifest_t *new_manifest = NULL;
     state_file_entry_t *old_entries = NULL;
     size_t old_count = 0;
@@ -297,18 +297,6 @@ error_t *manifest_apply_scope(
     err = state_get_profiles(state, &enabled);
     if (err) {
         err = error_wrap(err, "Failed to read enabled profiles for scope reconcile");
-        goto cleanup;
-    }
-
-    /* Build the mount table once for the full enabled set. The
-     * SAME handle threads through both manifest_build (storage→fs path
-     * resolution per profile during the tree walk) and the directory
-     * rebuild below. The mount table covers exactly the profiles the engine
-     * iterates — never narrowed by a caller's CLI filter, since the
-     * VWD's authoritative scope is the persistent enabled set. */
-    err = profile_build_mount_table(state, enabled, arena, &mounts);
-    if (err) {
-        err = error_wrap(err, "Failed to build mount table for scope reconcile");
         goto cleanup;
     }
 
@@ -558,20 +546,12 @@ cleanup:
  *   - ERR_NOMEM: Memory allocation failed
  *
  * Performance: O(M + N) where M = total files in profiles, N = files removed
- *
- * @param repo Git repository (must not be NULL)
- * @param state State handle (with active transaction, must not be NULL)
- * @param removed_profile Profile files were removed from (must not be NULL)
- * @param removed_storage_paths Storage paths of removed files (must not be NULL)
- * @param enabled_profiles All enabled profiles (must not be NULL)
- * @param out_removed Output: files without fallback (entries remain for orphan detection) (can be NULL)
- * @param out_fallbacks Output: files updated to fallback (can be NULL)
- * @return Error or NULL on success
  */
 error_t *manifest_remove_files(
     git_repository *repo,
     state_t *state,
     arena_t *arena,
+    const mount_table_t *mounts,
     const char *removed_profile,
     const string_array_t *removed_storage_paths,
     const string_array_t *enabled_profiles,
@@ -582,23 +562,15 @@ error_t *manifest_remove_files(
     CHECK_NULL(repo);
     CHECK_NULL(state);
     CHECK_NULL(arena);
+    CHECK_NULL(mounts);
     CHECK_NULL(removed_profile);
     CHECK_NULL(removed_storage_paths);
     CHECK_NULL(enabled_profiles);
 
     error_t *err = NULL;
-    mount_table_t *mounts = NULL;
     manifest_t *fresh_manifest = NULL;
     size_t removed_count = 0;
     size_t fallback_count = 0;
-
-    /* Build the mount table once; reused by manifest_build for the
-     * tree walk, by the per-removed-path resolution below, and by the
-     * directory rebuild at the end. */
-    err = profile_build_mount_table(state, enabled_profiles, arena, &mounts);
-    if (err) {
-        return error_wrap(err, "Failed to build mount table");
-    }
 
     /* 1. Build fresh manifest from current Git state (post-removal).
      *
@@ -841,12 +813,14 @@ static error_t *manifest_repair_stale(
     git_repository *repo,
     state_t *state,
     arena_t *arena,
+    const mount_table_t *mounts,
     const string_array_t *enabled_profiles,
     manifest_repair_stats_t *out_stats
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(state);
     CHECK_NULL(arena);
+    CHECK_NULL(mounts);
     CHECK_NULL(enabled_profiles);
     CHECK_NULL(out_stats);
 
@@ -858,7 +832,6 @@ static error_t *manifest_repair_stale(
     hashmap_t *profile_scope = NULL;
     hashmap_t *stale_profiles = NULL;
     manifest_t *fresh_manifest = NULL;
-    mount_table_t *mounts = NULL;
 
     /* Phase 1: Detect stale profiles via per-profile commit_oid comparison.
      *
@@ -900,14 +873,9 @@ static error_t *manifest_repair_stale(
      * below propagates the correct metadata for whichever profile won
      * precedence after Git moved underneath us.
      *
-     * Mount table built from the same enabled set the manifest_build pass
-     * iterates — the directory rebuild at Phase 4 reuses the handle. */
-    err = profile_build_mount_table(state, enabled_profiles, arena, &mounts);
-    if (err) {
-        err = error_wrap(err, "Failed to build mount table for stale repair");
-        goto cleanup;
-    }
-
+     * The caller-supplied mount table covers the same enabled set the
+     * manifest_build pass iterates — the directory rebuild at Phase 4
+     * reuses the handle. */
     err = manifest_build(repo, enabled_profiles, mounts, arena, &fresh_manifest);
     if (err) {
         err = error_wrap(err, "Failed to build fresh manifest for stale repair");
@@ -1049,11 +1017,13 @@ error_t *manifest_reconcile(
     git_repository *repo,
     state_t *state,
     arena_t *arena,
+    const mount_table_t *mounts,
     manifest_repair_stats_t *out_stats
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(state);
     CHECK_NULL(arena);
+    CHECK_NULL(mounts);
 
     string_array_t *profiles = NULL;
     error_t *err = state_get_profiles(state, &profiles);
@@ -1089,7 +1059,7 @@ error_t *manifest_reconcile(
     manifest_repair_stats_t local_stats;
     manifest_repair_stats_t *stats_target = out_stats ? out_stats : &local_stats;
 
-    err = manifest_repair_stale(repo, state, arena, profiles, stats_target);
+    err = manifest_repair_stale(repo, state, arena, mounts, profiles, stats_target);
 
     if (needs_tx) {
         if (err) {
@@ -1145,21 +1115,12 @@ error_t *manifest_reconcile(
  *   - Transaction remains open (caller commits)
  *
  * Performance: O(M + N) where M = total files in profiles, N = items to sync
- *
- * @param repo Git repository (must not be NULL)
- * @param state State handle (with active transaction, must not be NULL)
- * @param items Array of workspace items to sync (must not be NULL)
- * @param item_count Number of items
- * @param enabled_profiles All enabled profiles (must not be NULL)
- * @param out_synced Output: count of files synced (must not be NULL)
- * @param out_removed Output: count of files removed (must not be NULL)
- * @param out_fallbacks Output: count of fallback resolutions (must not be NULL)
- * @return Error or NULL on success
  */
 error_t *manifest_update_files(
     git_repository *repo,
     state_t *state,
     arena_t *arena,
+    const mount_table_t *mounts,
     const workspace_item_t **items,
     size_t item_count,
     const string_array_t *enabled_profiles,
@@ -1170,6 +1131,7 @@ error_t *manifest_update_files(
     CHECK_NULL(repo);
     CHECK_NULL(state);
     CHECK_NULL(arena);
+    CHECK_NULL(mounts);
     CHECK_NULL(items);
     CHECK_NULL(enabled_profiles);
     CHECK_NULL(out_synced);
@@ -1182,15 +1144,7 @@ error_t *manifest_update_files(
     *out_fallbacks = 0;
 
     error_t *err = NULL;
-    mount_table_t *mounts = NULL;
     manifest_t *fresh_manifest = NULL;
-
-    /* Build the mount table once for both the directory sync
-     * (zero-items short circuit below) and the precedence builder. */
-    err = profile_build_mount_table(state, enabled_profiles, arena, &mounts);
-    if (err) {
-        return error_wrap(err, "Failed to build mount table");
-    }
 
     if (item_count == 0) {
         /* No file items to process, but still sync directories.
@@ -1463,19 +1417,12 @@ cleanup:
  *   - Transactional: on error, entire batch fails
  *   - Returns error on first failure (fail-fast)
  *   - Path resolution errors are fatal
- *
- * @param repo Git repository (must not be NULL)
- * @param state State handle (with active transaction, must not be NULL)
- * @param profile Profile files were added to (must not be NULL)
- * @param filesystem_paths Array of filesystem paths (must not be NULL)
- * @param enabled_profiles All enabled profiles (must not be NULL)
- * @param out_synced Output: count of files synced (must not be NULL)
- * @return Error or NULL on success
  */
 error_t *manifest_add_files(
     git_repository *repo,
     state_t *state,
     arena_t *arena,
+    const mount_table_t *mounts,
     const char *profile,
     const string_array_t *filesystem_paths,
     const string_array_t *enabled_profiles,
@@ -1484,6 +1431,7 @@ error_t *manifest_add_files(
     CHECK_NULL(repo);
     CHECK_NULL(state);
     CHECK_NULL(arena);
+    CHECK_NULL(mounts);
     CHECK_NULL(profile);
     CHECK_NULL(filesystem_paths);
     CHECK_NULL(enabled_profiles);
@@ -1493,15 +1441,7 @@ error_t *manifest_add_files(
     *out_synced = 0;
 
     error_t *err = NULL;
-    mount_table_t *mounts = NULL;
     manifest_t *fresh_manifest = NULL;
-
-    /* Build the mount table once for both the directory sync
-     * (zero-files short circuit below) and the precedence builder. */
-    err = profile_build_mount_table(state, enabled_profiles, arena, &mounts);
-    if (err) {
-        return error_wrap(err, "Failed to build mount table");
-    }
 
     if (filesystem_paths->count == 0) {
         /* No files to add, but still sync directories.
@@ -1656,23 +1596,12 @@ cleanup:
  * Convergence: Sync updates VWD expected state (commit_oid, blob_oid) but doesn't
  * Semantics    deploy to filesystem. User must run 'dotta apply' which uses runtime
  *              divergence analysis to deploy changes.
- *
- * @param repo Repository (must not be NULL)
- * @param state State with active transaction (must not be NULL)
- * @param profile Profile being synced (must not be NULL)
- * @param old_oid Old commit before sync (must not be NULL)
- * @param new_oid New commit after sync (must not be NULL)
- * @param enabled_profiles All enabled profiles for precedence (must not be NULL)
- * @param out_synced Output: number of files synced (can be NULL)
- * @param out_removed Output: number of files removed (can be NULL)
- * @param out_fallbacks Output: number of fallback resolutions (can be NULL)
- * @param out_skipped Output: number of custom/ files skipped due to missing prefix (can be NULL)
- * @return Error or NULL on success
  */
 error_t *manifest_sync_diff(
     git_repository *repo,
     state_t *state,
     arena_t *arena,
+    const mount_table_t *mounts,
     const char *profile,
     const git_oid *old_oid,
     const git_oid *new_oid,
@@ -1685,6 +1614,7 @@ error_t *manifest_sync_diff(
     CHECK_NULL(repo);
     CHECK_NULL(state);
     CHECK_NULL(arena);
+    CHECK_NULL(mounts);
     CHECK_NULL(profile);
     CHECK_NULL(old_oid);
     CHECK_NULL(new_oid);
@@ -1693,7 +1623,6 @@ error_t *manifest_sync_diff(
     error_t *err = NULL;
 
     /* Resources to clean up */
-    mount_table_t *mounts = NULL;
     manifest_t *fresh_manifest = NULL;
     git_tree *old_tree = NULL;
     git_tree *new_tree = NULL;
@@ -1702,16 +1631,6 @@ error_t *manifest_sync_diff(
     size_t synced = 0, removed = 0, fallbacks = 0, skipped = 0;
 
     /* PHASE 1: BUILD CONTEXT (O(M)) */
-    /* 1.0. Build the mount table once for the full enabled set.
-     * Reused by manifest_build (storage→fs resolution per profile during
-     * the tree walk), by the per-delta resolution in PHASE 3, and by the
-     * directory rebuild at the tail. */
-    err = profile_build_mount_table(state, enabled_profiles, arena, &mounts);
-    if (err) {
-        err = error_wrap(err, "Failed to build mount table");
-        goto cleanup;
-    }
-
     /* 1.1. Build fresh manifest from Git (post-sync state).
      *
      * The precedence builder attributes per-profile metadata to each

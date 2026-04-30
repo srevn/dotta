@@ -138,6 +138,11 @@ typedef struct {
  * @param content_cache Shared blob-content cache (must not be NULL;
  *              borrowed — lifetime must extend past workspace_free.
  *              Obtain from `ctx->content_cache` under crypto_mode == KEY_CACHE)
+ * @param mounts Per-machine mount table covering scope_enabled(scope).
+ *               Must not be NULL. Threaded through to manifest_reconcile
+ *               in the load prelude. Callers pass `ctx->mounts` — read-
+ *               only commands hold no binding-mutation between dispatch
+ *               and workspace_load, so ctx->mounts is current.
  * @param options Analysis options (must not be NULL)
  * @param arena Borrowed allocator backing every workspace-lifetime
  *              string (manifest entries, diverged items, cached state
@@ -152,6 +157,7 @@ error_t *workspace_load(
     const scope_t *scope,
     const struct config *config,
     content_cache_t *content_cache,
+    const mount_table_t *mounts,
     const workspace_load_t *options,
     arena_t *arena,
     workspace_t **out

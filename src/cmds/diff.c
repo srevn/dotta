@@ -20,7 +20,6 @@
 #include "base/timeutil.h"
 #include "core/manifest.h"
 #include "core/metadata.h"
-#include "core/profiles.h"
 #include "core/scope.h"
 #include "core/state.h"
 #include "core/workspace.h"
@@ -912,9 +911,9 @@ static size_t validate_filter_paths(
  */
 static error_t *diff_commit_to_workspace(
     git_repository *repo,
-    const state_t *state,
     const char *commit_ref,
     const scope_t *scope,
+    const mount_table_t *mounts,
     arena_t *arena,
     const cmd_diff_options_t *opts,
     content_cache_t *cache,
@@ -923,6 +922,7 @@ static error_t *diff_commit_to_workspace(
     CHECK_NULL(repo);
     CHECK_NULL(commit_ref);
     CHECK_NULL(scope);
+    CHECK_NULL(mounts);
     CHECK_NULL(arena);
     CHECK_NULL(opts);
     CHECK_NULL(out);
@@ -986,30 +986,10 @@ static error_t *diff_commit_to_workspace(
 
     /* Step 5: Build manifest from historical tree.
      *
-     * Build a single-binding mount table for `profile` (which
-     * resolve_commit_in_profiles found on `scope_enabled`, NOT
-     * `scope_active` — so scope_mounts can't be reused: it is keyed by
-     * the active set and could omit `profile` whenever the user
-     * narrowed with -p). A one-shot from `[profile]` peeks the row
-     * cache for that one entry and yields a mount table that resolves
-     * custom/ paths exactly as the historical tree expects.
-     *
      * Per-entry strings (storage_path, filesystem_path, owner, group)
      * are allocated into the borrowed command arena; they outlive both
      * manifest_build_from_tree and the subsequent compare_manifest_to_filesystem
      * call, then live until command end. */
-    string_array_t single_profile = {
-        .items    = &profile,
-        .count    = 1,
-        .capacity = 0,
-    };
-    mount_table_t *mounts = NULL;
-    err = profile_build_mount_table(state, &single_profile, arena, &mounts);
-    if (err) {
-        err = error_wrap(err, "Failed to build mount table for commit");
-        goto cleanup;
-    }
-
     err = manifest_build_from_tree(
         tree, profile, mounts, metadata, arena, &manifest
     );
@@ -1289,6 +1269,7 @@ static error_t *diff_workspace(
     const scope_t *scope,
     const config_t *config,
     content_cache_t *cache,
+    const mount_table_t *mounts,
     const cmd_diff_options_t *opts,
     arena_t *arena,
     output_t *out
@@ -1296,6 +1277,7 @@ static error_t *diff_workspace(
     CHECK_NULL(repo);
     CHECK_NULL(scope);
     CHECK_NULL(cache);
+    CHECK_NULL(mounts);
     CHECK_NULL(opts);
     CHECK_NULL(arena);
     CHECK_NULL(out);
@@ -1313,7 +1295,7 @@ static error_t *diff_workspace(
     };
 
     err = workspace_load(
-        repo, state, scope, config, cache, &ws_opts, arena, &ws
+        repo, state, scope, config, cache, mounts, &ws_opts, arena, &ws
     );
     if (err) {
         return error_wrap(err, "Failed to load workspace");
@@ -1440,7 +1422,9 @@ error_t *cmd_diff(const dotta_ctx_t *ctx, const cmd_diff_options_t *opts) {
         .files         = opts->files,
         .file_count    = opts->file_count,
     };
-    err = scope_build(repo, state, &scope_inputs, config, ctx->arena, &scope);
+    err = scope_build(
+        repo, state, &scope_inputs, config, ctx->mounts, ctx->arena, &scope
+    );
     if (err) goto cleanup;
 
     if (scope_enabled(scope)->count == 0) {
@@ -1463,16 +1447,16 @@ error_t *cmd_diff(const dotta_ctx_t *ctx, const cmd_diff_options_t *opts) {
         case DIFF_COMMIT_TO_WORKSPACE:
             /* Commit-to-workspace — historical mode, path filter only */
             err = diff_commit_to_workspace(
-                repo, state, opts->commit1, scope, ctx->arena, opts,
-                ctx->content_cache, out
+                repo, opts->commit1, scope, ctx->mounts, ctx->arena,
+                opts, ctx->content_cache, out
             );
             goto cleanup;
 
         case DIFF_WORKSPACE:
             /* Workspace diff — full scope (profile + path dimensions) */
             err = diff_workspace(
-                repo, state, scope, config, ctx->content_cache, opts,
-                ctx->arena, out
+                repo, state, scope, config, ctx->content_cache, ctx->mounts,
+                opts, ctx->arena, out
             );
             goto cleanup;
     }

@@ -118,35 +118,24 @@ error_t *profile_resolve_enabled(
 /**
  * Build a per-machine mount table from state
  *
- * Materializes the profile→target bindings recorded in
- * enabled_profiles into a mount_table_t handle, augmented internally with
- * HOME and the empty-prefix root sentinel. The handle is the single
- * downstream entry point for both filesystem→storage classification and
- * profile-keyed storage→filesystem resolution.
+ * Materializes the profile→target bindings recorded in enabled_profiles
+ * into a mount_table_t handle, augmented internally with HOME and the
+ * empty-prefix root sentinel. The handle is the single downstream entry
+ * point for both filesystem→storage classification and profile-keyed
+ * storage→filesystem resolution.
  *
- * Two modes (selected by the names argument):
- *   - names == NULL: every enabled profile contributes a binding (full
- *     row-cache scan in position order). Used by read-only callers
- *     (list/show/revert) that resolve paths without a narrowing filter.
- *   - names != NULL: only the named profiles contribute (per-name peek in
- *     the caller's order). Used by scope_build to feed CLI -p narrowing
- *     into path classification. Names outside the enabled set yield
- *     bindings with NULL target, which mount_table_t records for
- *     forward-resolution lookups but does not add to the candidate set.
+ * Single mode: every enabled profile contributes a binding (full
+ * row-cache scan in position order). The mount table is per-machine
+ * topology, not a CLI artifact — narrowing happens at the operation
+ * level (scope filters, profile predicates), never on the topology view.
  *
  * Lifetime contract:
  *   - The returned handle is allocated entirely from `arena`.
- *   - In the names != NULL branch, profile names are arena_strdup'd into
- *     the bindings (decoupled from the caller's array lifetime). This
- *     makes the handle safe to consult between any caller-side cleanup
- *     of `names` and arena destruction.
- *   - In the names == NULL branch, profile names are borrowed directly
- *     from the state row cache. The borrow stays valid as long as no
+ *   - Profile names and target strings are borrowed directly from the
+ *     state row cache. The borrow stays valid as long as no
  *     enabled_profiles shape mutation runs (state_enable_profile,
  *     state_disable_profile, state_set_profiles, state_rollback,
  *     state_free).
- *   - target strings are always borrowed from the state row cache
- *     (same shape-mutation invariant).
  *
  * Failure modes:
  *   - State-read failure (cold clone, transient DB issue) is absorbed:
@@ -155,14 +144,12 @@ error_t *profile_resolve_enabled(
  *   - Arena allocation failure surfaces as ERR_MEMORY.
  *
  * @param state State handle (must not be NULL; borrowed, not freed)
- * @param names Profile names to build bindings for, or NULL for all enabled
  * @param arena Arena backing the handle (must not be NULL; outlives handle)
  * @param out Output handle (must not be NULL; lifetime tracks arena)
  * @return Error or NULL on success
  */
 error_t *profile_build_mount_table(
     const state_t *state,
-    const string_array_t *names,
     arena_t *arena,
     mount_table_t **out
 );

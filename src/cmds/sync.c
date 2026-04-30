@@ -491,6 +491,7 @@ static bool sync_manifest(
     git_repository *repo,
     state_t *state,
     arena_t *arena,
+    const mount_table_t *mounts,
     const char *profile,
     const git_oid *old_oid,
     const git_oid *new_oid,
@@ -503,7 +504,7 @@ static bool sync_manifest(
 ) {
     size_t synced = 0, removed = 0, fallbacks = 0, skipped = 0;
     error_t *err = manifest_sync_diff(
-        repo, state, arena, profile, old_oid, new_oid, enabled_profiles,
+        repo, state, arena, mounts, profile, old_oid, new_oid, enabled_profiles,
         &synced, &removed, &fallbacks, &skipped
     );
 
@@ -539,6 +540,7 @@ static void sync_manifest_and_report(
     git_repository *repo,
     state_t *state,
     arena_t *arena,
+    const mount_table_t *mounts,
     const char *profile,
     const git_oid *old_oid,
     const git_oid *new_oid,
@@ -547,7 +549,7 @@ static void sync_manifest_and_report(
 ) {
     size_t synced = 0, removed = 0, fallbacks = 0, skipped = 0;
     bool ok = sync_manifest(
-        repo, state, arena, profile, old_oid, new_oid, enabled_profiles,
+        repo, state, arena, mounts, profile, old_oid, new_oid, enabled_profiles,
         out, &synced, &removed, &fallbacks, &skipped
     );
 
@@ -618,6 +620,7 @@ static void handle_remote_ahead(
     bool no_pull,
     state_t *state,
     arena_t *arena,
+    const mount_table_t *mounts,
     const string_array_t *enabled_profiles
 ) {
     if (!auto_pull) {
@@ -681,7 +684,7 @@ static void handle_remote_ahead(
     /* Sync manifest — stats needed for success message */
     size_t synced = 0, removed = 0, fallbacks = 0, skipped = 0;
     bool manifest_ok = sync_manifest(
-        repo, state, arena, result->profile, &old_oid, &new_oid,
+        repo, state, arena, mounts, result->profile, &old_oid, &new_oid,
         enabled_profiles, out, &synced, &removed, &fallbacks, &skipped
     );
 
@@ -734,6 +737,7 @@ static error_t *resolve_and_push_divergence(
     transfer_context_t *xfer,
     state_t *state,
     arena_t *arena,
+    const mount_table_t *mounts,
     const string_array_t *enabled_profiles,
     bool no_push
 ) {
@@ -840,7 +844,7 @@ static error_t *resolve_and_push_divergence(
 
     /* Sync manifest with changes from resolution */
     sync_manifest_and_report(
-        repo, state, arena, result->profile, &ctx.saved_oid,
+        repo, state, arena, mounts, result->profile, &ctx.saved_oid,
         &new_oid, enabled_profiles, out
     );
 
@@ -916,6 +920,7 @@ static error_t *handle_diverged_theirs(
     bool confirm_destructive,
     state_t *state,
     arena_t *arena,
+    const mount_table_t *mounts,
     const string_array_t *enabled_profiles
 ) {
     output_info(
@@ -995,7 +1000,7 @@ static error_t *handle_diverged_theirs(
 
     /* Sync manifest with changes from reset */
     sync_manifest_and_report(
-        repo, state, arena, result->profile, &ctx.saved_oid,
+        repo, state, arena, mounts, result->profile, &ctx.saved_oid,
         &new_oid, enabled_profiles, out
     );
 
@@ -1018,6 +1023,7 @@ static error_t *handle_diverged(
     bool confirm_destructive,
     state_t *state,
     arena_t *arena,
+    const mount_table_t *mounts,
     const string_array_t *enabled_profiles,
     bool no_push
 ) {
@@ -1043,14 +1049,14 @@ static error_t *handle_diverged(
         case DIVERGE_REBASE: {
             return resolve_and_push_divergence(
                 repo, remote_name, result, results, out, RESOLVE_STRATEGY_REBASE,
-                "rebase", xfer, state, arena, enabled_profiles, no_push
+                "rebase", xfer, state, arena, mounts, enabled_profiles, no_push
             );
         }
 
         case DIVERGE_MERGE: {
             return resolve_and_push_divergence(
                 repo, remote_name, result, results, out, RESOLVE_STRATEGY_MERGE,
-                "merge", xfer, state, arena, enabled_profiles, no_push
+                "merge", xfer, state, arena, mounts, enabled_profiles, no_push
             );
         }
 
@@ -1069,7 +1075,7 @@ static error_t *handle_diverged(
             size_t before = results->pulled_count;
             error_t *err = handle_diverged_theirs(
                 repo, remote_name, result, results, out, confirm_destructive,
-                state, arena, enabled_profiles
+                state, arena, mounts, enabled_profiles
             );
             if (!err && results->pulled_count > before) {
                 if (results->diverged_count > 0) results->diverged_count--;
@@ -1102,6 +1108,7 @@ static error_t *sync_push_phase(
     bool confirm_destructive,
     state_t *state,                           /* For manifest updates */
     arena_t *arena,                           /* For manifest scratch */
+    const mount_table_t *mounts,              /* For path classification */
     const string_array_t *enabled_profiles    /* For precedence resolution */
 ) {
     CHECK_NULL(repo);
@@ -1110,6 +1117,7 @@ static error_t *sync_push_phase(
     CHECK_NULL(out);
     CHECK_NULL(state);
     CHECK_NULL(arena);
+    CHECK_NULL(mounts);
     CHECK_NULL(enabled_profiles);
 
     if (!ephemeral) {
@@ -1151,7 +1159,7 @@ static error_t *sync_push_phase(
                     );
                     error_t *err = handle_diverged_theirs(
                         repo, remote_name, result, results, out, confirm_destructive,
-                        state, arena, enabled_profiles
+                        state, arena, mounts, enabled_profiles
                     );
                     if (err) return err;
                     break;
@@ -1261,7 +1269,7 @@ static error_t *sync_push_phase(
                 }
                 handle_remote_ahead(
                     repo, remote_name, result, results, out, auto_pull, no_pull,
-                    state, arena, enabled_profiles
+                    state, arena, mounts, enabled_profiles
                 );
                 break;
             }
@@ -1289,7 +1297,7 @@ static error_t *sync_push_phase(
                 }
                 error_t *err = handle_diverged(
                     repo, remote_name, result, results, out, diverged_strategy, xfer,
-                    confirm_destructive, state, arena, enabled_profiles, no_push
+                    confirm_destructive, state, arena, mounts, enabled_profiles, no_push
                 );
                 if (err) {
                     return err;  /* Critical rollback failure */
@@ -1368,7 +1376,9 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
         .profiles      = opts->profiles,
         .profile_count = opts->profile_count,
     };
-    err = scope_build(repo, state, &scope_inputs, config, ctx->arena, &scope);
+    err = scope_build(
+        repo, state, &scope_inputs, config, ctx->mounts, ctx->arena, &scope
+    );
     if (err) goto cleanup;
 
     if (scope_enabled(scope)->count == 0) {
@@ -1423,8 +1433,8 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
             .analyze_encryption  = false   /* Encryption is apply's concern */
         };
         err = workspace_load(
-            repo, state, scope, config, ctx->content_cache, &ws_opts,
-            ctx->arena, &ws
+            repo, state, scope, config, ctx->content_cache, ctx->mounts,
+            &ws_opts, ctx->arena, &ws
         );
         if (err) {
             err = error_wrap(err, "Failed to load workspace");
@@ -1724,7 +1734,7 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
      *   transaction via state_locked() and writes directly (no nested
      *   begin/commit). */
     if (opts->force) {
-        err = manifest_reconcile(repo, state, ctx->arena, &drift);
+        err = manifest_reconcile(repo, state, ctx->arena, ctx->mounts, &drift);
         if (err) {
             err = error_wrap(err, "Failed to reconcile manifest before sync");
             goto cleanup;
@@ -1781,7 +1791,7 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
     err = sync_push_phase(
         repo, remote_name, results, out, sync_ephemeral, auto_pull, opts->no_pull,
         no_push, diverged_strategy, xfer, config->confirm_destructive,
-        state, ctx->arena, scope_enabled(scope)
+        state, ctx->arena, ctx->mounts, scope_enabled(scope)
     );
 
     if (sync_ephemeral) {

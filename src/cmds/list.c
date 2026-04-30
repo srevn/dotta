@@ -344,9 +344,10 @@ static error_t *list_files(
     /* Sort for consistent output */
     string_array_sort(files);
 
-    /* Load tree and build file→commit map if verbose */
+    /* Load tree, file→commit map, and metadata if verbose */
     git_tree *tree = NULL;
     file_commit_map_t *commit_map = NULL;
+    metadata_t *metadata = NULL;
     if (verbose) {
         err = gitops_load_branch_tree(repo, opts->profile, &tree, NULL);
         if (!err) {
@@ -361,17 +362,15 @@ static error_t *list_files(
             error_free(err);
             err = NULL;
         }
-    }
 
-    /* Load metadata for encryption status (verbose mode only) */
-    metadata_t *metadata = NULL;
-    if (verbose) {
-        err = metadata_load_from_branch(repo, opts->profile, &metadata);
-        if (err) {
-            /* Non-fatal: continue without encryption indicators */
-            /* Don't warn - metadata may not exist yet (perfectly normal) */
-            error_free(err);
-            err = NULL;
+        /* Load metadata for encryption status from the tree we just opened.
+         * Don't warn — metadata may not exist yet (perfectly normal). */
+        if (tree) {
+            err = metadata_load_from_tree(repo, tree, opts->profile, &metadata);
+            if (err) {
+                error_free(err);
+                err = NULL;
+            }
         }
     }
 

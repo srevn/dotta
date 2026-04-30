@@ -1478,8 +1478,15 @@ error_t *metadata_from_json(const char *json_str, metadata_t **out) {
 /**
  * Load metadata from profile branch
  *
- * Reads .dotta/metadata.json from Git tree.
- * Returns ERR_NOT_FOUND if branch or file doesn't exist.
+ * Reads .dotta/metadata.json from the branch's tree. Handles both
+ * commit-backed branches (the common shape) and orphan refs that point
+ * directly to a tree (no enclosing commit) — the same shape distinction
+ * gitops.c:resolve_ref_to_tree handles for general tree loads.
+ *
+ * Returns ERR_NOT_FOUND if either the branch ref or the metadata blob
+ * is absent, distinguished by the error message prefix. Other failures
+ * (peel error, unexpected ref target type, blob read, JSON parse) propagate
+ * as ERR_GIT or wrapped causes.
  */
 error_t *metadata_load_from_branch(
     git_repository *repo,
@@ -1492,7 +1499,7 @@ error_t *metadata_load_from_branch(
 
     error_t *err = NULL;
     git_reference *ref = NULL;
-    git_commit *commit = NULL;
+    git_object *peeled = NULL;
     git_tree *tree = NULL;
     git_tree_entry *entry = NULL;
     char *json_str = NULL;
@@ -1518,17 +1525,40 @@ error_t *metadata_load_from_branch(
         goto cleanup;
     }
 
-    /* Get commit */
-    git_err = git_commit_lookup(&commit, repo, git_reference_target(ref));
+    /* Peel ref to its underlying object, then dispatch on type:
+     *   - GIT_OBJECT_COMMIT → derive tree via git_commit_tree (common case)
+     *   - GIT_OBJECT_TREE   → ref points directly at a tree (orphan-tree
+     *                         ref); use it as-is.
+     * Anything else is a malformed ref. Mirrors the dispatch in
+     * gitops.c:resolve_ref_to_tree so both entry points accept the same
+     * set of ref shapes. */
+    git_err = git_reference_peel(&peeled, ref, GIT_OBJECT_ANY);
     if (git_err < 0) {
         err = error_from_git(git_err);
         goto cleanup;
     }
 
-    /* Get tree */
-    git_err = git_commit_tree(&tree, commit);
-    if (git_err < 0) {
-        err = error_from_git(git_err);
+    git_object_t peeled_type = git_object_type(peeled);
+    if (peeled_type == GIT_OBJECT_COMMIT) {
+        /* SAFETY: type-checked above. git_commit_tree allocates a fresh
+         * git_tree; peeled (the commit) and tree have independent lifetimes
+         * and are both freed in cleanup. */
+        git_err = git_commit_tree(&tree, (git_commit *) peeled);
+        if (git_err < 0) {
+            err = error_from_git(git_err);
+            goto cleanup;
+        }
+    } else if (peeled_type == GIT_OBJECT_TREE) {
+        /* SAFETY: type-checked above. The peeled object IS the tree —
+         * transfer ownership to `tree` and null out `peeled` to avoid
+         * double-free in cleanup (git_tree_free will dispose of it). */
+        tree = (git_tree *) peeled;
+        peeled = NULL;
+    } else {
+        err = ERROR(
+            ERR_GIT, "Branch '%s' points to unexpected object type: %d",
+            branch_name, peeled_type
+        );
         goto cleanup;
     }
 
@@ -1571,7 +1601,7 @@ cleanup:
     if (json_str) free(json_str);
     if (entry) git_tree_entry_free(entry);
     if (tree) git_tree_free(tree);
-    if (commit) git_commit_free(commit);
+    if (peeled) git_object_free(peeled);
     if (ref) git_reference_free(ref);
     if (metadata) metadata_free(metadata);
 

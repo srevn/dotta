@@ -2620,14 +2620,15 @@ error_t *manifest_build(
             goto cleanup;
         }
 
-        /* Load this profile's metadata.json (if present). Per-profile
-         * lookup is the correctness boundary for VWD attribution: each
-         * profile claims its own files via its own metadata, never via a
-         * cross-profile merge. ERR_NOT_FOUND is normal — old or freshly
-         * created profiles may not have a metadata.json yet, and the
-         * callback degrades gracefully (Git-derived defaults stand). */
+        /* Load this profile's metadata.json from the tree we just opened
+         * (avoid a second ref/commit/tree walk). Per-profile lookup is the
+         * correctness boundary for VWD attribution: each profile claims its
+         * own files via its own metadata, never via a cross-profile merge.
+         * ERR_NOT_FOUND here means "no metadata blob in this tree" — normal
+         * for old or freshly created profiles, and the callback degrades
+         * gracefully (Git-derived defaults stand). */
         metadata_t *profile_metadata = NULL;
-        err = metadata_load_from_branch(repo, profile, &profile_metadata);
+        err = metadata_load_from_tree(repo, tree, profile, &profile_metadata);
         if (err) {
             if (err->code != ERR_NOT_FOUND) {
                 git_tree_free(tree);

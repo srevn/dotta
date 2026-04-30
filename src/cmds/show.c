@@ -220,22 +220,7 @@ static error_t *show_file(
     git_oid commit_oid;
     metadata_t *metadata = NULL;
 
-    /* Load metadata for encryption state validation */
-    err = metadata_load_from_branch(repo, profile, &metadata);
-    if (err) {
-        /* Non-fatal: metadata file might not exist yet (new profile) */
-        /* Create empty metadata for validation (won't have file entries) */
-        error_t *create_err = metadata_create_empty(&metadata);
-        if (create_err) {
-            error_free(create_err);
-            err = ERROR(ERR_MEMORY, "Failed to create metadata");
-            goto cleanup;
-        }
-        error_free(err);
-        err = NULL;
-    }
-
-    /* Load tree from profile */
+    /* Step 1: Load the tree (HEAD or historical commit) */
     if (commit_ref) {
         /* Resolve commit and load its tree */
         err = gitops_resolve_commit_in_branch(
@@ -298,7 +283,20 @@ static error_t *show_file(
         }
     }
 
-    /* Find file in tree */
+    /* Step 2: Load metadata from that same tree for encryption-state validation */
+    err = metadata_load_from_tree(repo, tree, profile, &metadata);
+    if (err) {
+        /* Non-fatal: metadata file might not exist yet (new profile) */
+        /* Create empty metadata for validation (won't have file entries) */
+        error_free(err);
+        err = metadata_create_empty(&metadata);
+        if (err) {
+            err = error_wrap(err, "Failed to create metadata");
+            goto cleanup;
+        }
+    }
+
+    /* Step 3: Find file in tree */
     err = gitops_find_file_in_tree(tree, file_path, &entry);
     if (err) {
         goto cleanup;

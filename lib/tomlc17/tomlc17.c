@@ -138,7 +138,8 @@ static int ucs_to_utf8(uint32_t code, char buf[4]);
 // stack overflow during recursive descent of the parser.
 #define BRACKET_LEVEL_MAX 30
 #define BRACE_LEVEL_MAX 30
-#define TABLE_MAX (1 << 16)
+#define TABLE_MAX (1 << 14) // 16k
+#define ARRAY_MAX (1 << 14) // 16k
 
 static inline size_t align8(size_t x) { return (((x) + 7) & ~7); }
 
@@ -329,6 +330,10 @@ static int tab_add(toml_datum_t *tab, span_t newkey, toml_datum_t newvalue,
 static toml_datum_t *arr_emplace(toml_datum_t *arr, const char **reason) {
   assert(arr->type == TOML_ARRAY);
   int n = arr->u.arr.size;
+  if (n >= ARRAY_MAX) {
+    *reason = "array too large";
+    return NULL;
+  }
   toml_datum_t *elem = REALLOC(arr->u.arr.elem, sizeof(*elem) * align8(n + 1));
   if (!elem) {
     *reason = "out of memory";
@@ -1196,6 +1201,7 @@ static int parse_inline_table(parser_t *pp, token_t tok,
     DO(parse_key(pp, tok, &keypart));
 
     // Descend to one keypart before last
+    assert(keypart.nspan > 0);
     span_t lastkeypart = keypart.span[--keypart.nspan];
     toml_datum_t *tab =
         descend_keypart(pp, keylineno, ret_datum, &keypart, false);
@@ -1378,6 +1384,7 @@ static int parse_array_table_expr(parser_t *pp, token_t tok) {
   }
 
   // remove the last keypart from keypart[]
+  assert(keypart.nspan > 0);
   span_t lastkeypart = keypart.span[--keypart.nspan];
 
   // descend the key from the toptab

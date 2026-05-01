@@ -146,7 +146,7 @@ static const char *get_status_message_from_item(
  */
 static error_t *show_file_diff_from_workspace(
     const workspace_item_t *item,
-    const file_entry_t *entry,
+    const state_file_entry_t *file,
     content_cache_t *cache,
     git_repository *repo,
     diff_direction_t direction,
@@ -154,7 +154,7 @@ static error_t *show_file_diff_from_workspace(
     output_t *out
 ) {
     CHECK_NULL(item);
-    CHECK_NULL(entry);
+    CHECK_NULL(file);
     CHECK_NULL(cache);
     CHECK_NULL(repo);
     CHECK_NULL(opts);
@@ -169,11 +169,11 @@ static error_t *show_file_diff_from_workspace(
     /* Show file header */
     output_styled(
         out, OUTPUT_NORMAL, "{dim}# Profile:{reset} %s\n",
-        entry->profile
+        file->profile
     );
     output_styled(
         out, OUTPUT_NORMAL, "{dim}# Path:{reset}    %s\n",
-        entry->storage_path
+        file->storage_path
     );
 
     /* Get status message from workspace item (no re-analysis needed) */
@@ -215,7 +215,7 @@ static error_t *show_file_diff_from_workspace(
     /* Get content from cache via VWD-cached blob_oid (borrowed reference - don't free) */
     const buffer_t *content = NULL;
     error_t *err = content_cache_get_from_blob_oid(
-        cache, &entry->blob_oid, entry->storage_path, entry->profile, &content
+        cache, &file->blob_oid, file->storage_path, file->profile, &content
     );
     if (err) {
         return error_wrap(
@@ -225,13 +225,13 @@ static error_t *show_file_diff_from_workspace(
     }
 
     /* Generate diff */
-    git_filemode_t mode = state_type_to_git_filemode(entry->type);
+    git_filemode_t mode = state_type_to_git_filemode(file->type);
     compare_direction_t cmp_dir = (direction == DIFF_UPSTREAM)
                                 ? CMP_DIR_UPSTREAM : CMP_DIR_DOWNSTREAM;
 
     file_diff_t *diff = NULL;
     err = compare_generate_diff(
-        content, item->filesystem_path, entry->storage_path, mode, NULL,
+        content, item->filesystem_path, file->storage_path, mode, NULL,
         cmp_dir, &diff
     );
 
@@ -258,14 +258,9 @@ static error_t *show_file_diff_from_workspace(
  * Filters pre-analyzed divergence and generates diffs for display.
  * Uses cached metadata and content from workspace/caches.
  *
- * Key improvement over old show_diffs_for_direction():
- * - No metadata loading (uses cache parameter)
- * - No redundant comparisons (uses workspace divergence)
- * - Single comparison per file
- *
+ * @param ws Workspace handle for active-row lookup (must not be NULL)
  * @param diverged Array of diverged items from workspace (must not be NULL)
  * @param diverged_count Number of diverged items
- * @param manifest Manifest for tree entry lookup (must not be NULL)
  * @param content_cache Content cache for blob access (must not be NULL)
  * @param repo Repository (must not be NULL)
  * @param direction Diff direction (UPSTREAM or DOWNSTREAM)
@@ -276,9 +271,9 @@ static error_t *show_file_diff_from_workspace(
  * @return Error or NULL on success
  */
 static error_t *present_diffs_for_direction(
+    const workspace_t *ws,
     const workspace_item_t *diverged,
     size_t diverged_count,
-    const manifest_t *manifest,
     content_cache_t *content_cache,
     git_repository *repo,
     diff_direction_t direction,
@@ -287,7 +282,7 @@ static error_t *present_diffs_for_direction(
     output_t *out,
     size_t *diff_count
 ) {
-    CHECK_NULL(manifest);
+    CHECK_NULL(ws);
     CHECK_NULL(content_cache);
     CHECK_NULL(repo);
     CHECK_NULL(scope);
@@ -326,26 +321,13 @@ static error_t *present_diffs_for_direction(
             continue;
         }
 
-        /* Lookup manifest entry using O(1) index */
-        if (!manifest->index) {
-            /* Manifest must have index for O(1) lookup */
-            return ERROR(ERR_INTERNAL, "Manifest missing index");
-        }
-
-        void *idx_ptr = hashmap_get(manifest->index, item->filesystem_path);
-        if (!idx_ptr) {
-            /* Item in diverged but not in manifest
-             * This can happen for untracked/orphaned items - skip */
+        /* Resolve to active state row via workspace's active index (O(1)).
+         * Untracked or orphaned items have no active row — skip them. */
+        const state_file_entry_t *file =
+            workspace_lookup_active(ws, item->filesystem_path);
+        if (!file) {
             continue;
         }
-
-        size_t idx = (size_t) (uintptr_t) idx_ptr - 1;
-        if (idx >= manifest->count) {
-            /* Index out of bounds - shouldn't happen */
-            continue;
-        }
-
-        const file_entry_t *entry = &manifest->entries[idx];
 
         /* Blank line between entries for readability */
         if (*diff_count > 0 && !opts->name_only) {
@@ -354,7 +336,7 @@ static error_t *present_diffs_for_direction(
 
         /* Show the diff (content already analyzed by workspace) */
         err = show_file_diff_from_workspace(
-            item, entry, content_cache, repo, direction, opts, out
+            item, file, content_cache, repo, direction, opts, out
         );
         if (err) {
             return err;
@@ -808,7 +790,7 @@ cleanup:
 }
 
 /**
- * Validate file filter entries against manifest
+ * Validate file filter entries against a historical manifest
  *
  * Checks each filter entry (exact paths and glob patterns) against all
  * manifest storage paths. Outputs a warning for each unmatched entry,
@@ -818,6 +800,10 @@ cleanup:
  * folds one pattern's negation into another's verdict and would under-
  * count coverage on overlap. The pathspec_glob_matches_at primitive
  * gives each glob independent attribution.
+ *
+ * Used by the historical-diff path (commit-to-workspace), which still
+ * speaks manifest_t. The workspace-diff path uses
+ * validate_filter_paths_files instead, since it consumes state rows.
  *
  * @param file_filter File filter to validate (NULL = no validation, returns 0)
  * @param manifest Manifest to check against (must not be NULL if filter is non-NULL)
@@ -870,6 +856,83 @@ static size_t validate_filter_paths(
         for (size_t i = 0; i < manifest->count; i++) {
             if (pathspec_glob_matches_at(
                 file_filter, g, manifest->entries[i].storage_path
+                )) {
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            output_warning(
+                out, OUTPUT_NORMAL, "No managed file matches pattern '%s'",
+                pathspec_glob_at(file_filter, g)
+            );
+            unmatched++;
+        }
+    }
+
+    return unmatched;
+}
+
+/**
+ * Validate file filter entries against the workspace's active slice
+ *
+ * Mirrors validate_filter_paths but consumes a state_files_t carrier so
+ * the workspace-diff path can validate filter coverage without speaking
+ * manifest_t. Both paths report identical messages and counts; the
+ * duplication is the price of bridging two element types and resolves
+ * when manifest_t is eventually retired.
+ *
+ * @param file_filter File filter to validate (NULL = no validation, returns 0)
+ * @param files Active state slice (passed by value)
+ * @param out Output context for warnings
+ * @return Number of filter entries that matched no managed file (0 = all matched)
+ */
+static size_t validate_filter_paths_files(
+    const pathspec_t *file_filter,
+    state_files_t files,
+    output_t *out
+) {
+    if (!file_filter) return 0;
+
+    size_t unmatched = 0;
+
+    /* Exact paths: literal equality, then directory-prefix walk-up. */
+    size_t exact_count = pathspec_exact_count(file_filter);
+    for (size_t e = 0; e < exact_count; e++) {
+        const char *filter_path = pathspec_exact_at(file_filter, e);
+        size_t filter_len = strlen(filter_path);
+
+        bool found = false;
+        for (size_t i = 0; i < files.count; i++) {
+            const char *sp = files.entries[i]->storage_path;
+            if (strcmp(sp, filter_path) == 0) {
+                found = true;
+                break;
+            }
+            /* Directory prefix: filter path is ancestor of storage path */
+            if (strncmp(sp, filter_path, filter_len) == 0 &&
+                sp[filter_len] == '/') {
+                found = true;
+                break;
+            }
+        }
+
+        if (!found) {
+            output_warning(
+                out, OUTPUT_NORMAL, "No managed file matches '%s'",
+                filter_path
+            );
+            unmatched++;
+        }
+    }
+
+    /* Glob patterns: per-pattern isolated coverage check. */
+    size_t glob_count = pathspec_glob_count(file_filter);
+    for (size_t g = 0; g < glob_count; g++) {
+        bool found = false;
+        for (size_t i = 0; i < files.count; i++) {
+            if (pathspec_glob_matches_at(
+                file_filter, g, files.entries[i]->storage_path
                 )) {
                 found = true;
                 break;
@@ -1314,13 +1377,13 @@ static error_t *diff_workspace(
     size_t diverged_count = 0;
     const workspace_item_t *diverged = workspace_get_all_diverged(ws, &diverged_count);
 
-    /* Step 3: Get cached resources from workspace */
-    const manifest_t *manifest = workspace_get_manifest(ws);
+    /* Step 3: Borrow the active state slice for filter validation */
+    state_files_t active = workspace_active(ws);
 
-    /* Step 4: Validate file filter paths against manifest */
+    /* Step 4: Validate file filter paths against the active slice */
     const pathspec_t *file_filter = scope_paths(scope);
     if (file_filter) {
-        size_t unmatched = validate_filter_paths(file_filter, manifest, out);
+        size_t unmatched = validate_filter_paths_files(file_filter, active, out);
         if (unmatched > 0) {
             output_hint(out, OUTPUT_NORMAL, "Use 'dotta list <profile>' to see managed files");
             if (unmatched == pathspec_count(file_filter)) {
@@ -1342,7 +1405,7 @@ static error_t *diff_workspace(
         output_info(out, OUTPUT_NORMAL, "Shows what 'dotta apply' would change\n");
 
         err = present_diffs_for_direction(
-            diverged, diverged_count, manifest, cache, repo, DIFF_UPSTREAM,
+            ws, diverged, diverged_count, cache, repo, DIFF_UPSTREAM,
             scope, opts, out, &upstream_count
         );
         if (err) goto cleanup;
@@ -1356,7 +1419,7 @@ static error_t *diff_workspace(
         output_info(out, OUTPUT_NORMAL, "Shows what 'dotta update' would commit\n");
 
         err = present_diffs_for_direction(
-            diverged, diverged_count, manifest, cache, repo, DIFF_DOWNSTREAM,
+            ws, diverged, diverged_count, cache, repo, DIFF_DOWNSTREAM,
             scope, opts, out, &downstream_count
         );
         if (err) goto cleanup;
@@ -1370,7 +1433,7 @@ static error_t *diff_workspace(
     } else {
         /* Single direction */
         err = present_diffs_for_direction(
-            diverged, diverged_count, manifest, cache, repo, opts->direction,
+            ws, diverged, diverged_count, cache, repo, opts->direction,
             scope, opts, out, &total_diff_count
         );
         if (err) goto cleanup;

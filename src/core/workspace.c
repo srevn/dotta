@@ -71,8 +71,20 @@ struct workspace {
     git_repository *repo;            /* Borrowed reference */
     arena_t *arena;                  /* Borrowed; backs every workspace-lifetime string */
 
+    /* Active in-scope state slice
+     *
+     * Pointer array into the arena snapshot returned by state_get_all_files
+     * at load time. Pointers are mutable to permit in-place anchor patches
+     * via workspace_advance_anchor; external accessors cast to const.
+     *
+     * Stable storage — no realloc during workspace lifetime — so the
+     * active_index can store row pointers directly (no idx+1 encoding).
+     */
+    state_file_entry_t **active;     /* Active rows (mutable; arena-allocated) */
+    size_t active_count;             /* Number of active rows */
+    hashmap_t *active_index;         /* fs_path → state_file_entry_t * (heap-allocated) */
+
     /* State data */
-    manifest_t *manifest;            /* Profile state (owned) */
     state_t *state;                  /* Deployment state (borrowed from caller) */
     const string_array_t *profiles;  /* Borrowed from caller — valid for workspace lifetime */
     hashmap_t *profile_index;        /* Maps profile -> NULL (membership set, O(1) lookup) */
@@ -80,8 +92,15 @@ struct workspace {
     /* Content cache for encrypted blob reads during divergence analysis */
     content_cache_t *content_cache;  /* Borrowed — NOT freed in workspace_free */
 
-    /* Divergence tracking */
-    workspace_item_t *diverged;      /* Array of diverged items (files and directories) */
+    /* Divergence tracking
+     *
+     * The diverged array grows via realloc as workspace_add_diverged appends
+     * items during analysis, so pointers into it would dangle on growth.
+     * diverged_index stores (idx+1) cast to void* and decodes back to the
+     * array index at lookup time. The +1 disambiguates idx=0 from
+     * hashmap_get's "absent key" return value (which is also NULL)
+     */
+    workspace_item_t *diverged;      /* Diverged items (files + directories) */
     size_t diverged_count;           /* Number of diverged items */
     size_t diverged_capacity;        /* Allocated capacity of diverged array */
     hashmap_t *diverged_index;       /* Maps filesystem_path -> array index+1 (as void*) */
@@ -158,8 +177,8 @@ static error_t *workspace_create_empty(
  * ownership independently, setting flags for each.
  *
  * Data-centric approach: Accepts values directly instead of structs, enabling use with
- * both VWD cache (file_entry_t) and metadata (metadata_item_t) without conversion.
- * This eliminates Git loads for files (uses VWD cache) while preserving metadata
+ * both state rows (state_file_entry_t) and metadata (metadata_item_t) without conversion.
+ * This eliminates Git loads for files (uses cached VWD fields) while preserving metadata
  * functionality for directories.
  *
  * @param expected_mode Expected permission mode (0 = skip mode check, no metadata tracked)
@@ -378,38 +397,34 @@ static void workspace_record_anchor_update(
 }
 
 /**
- * Analyze divergence for a single file using VWD cache
+ * Analyze divergence for a single active row using VWD cache
  *
- * This function uses the VWD (Virtual Working Directory) cache stored in
- * manifest_entry to perform divergence detection without database queries.
- * All expected state (blob_oid, type, deployed_at, etc.) is cached in
- * the manifest entry during workspace load.
+ * Uses the VWD (Virtual Working Directory) cache embedded in the state
+ * row to perform divergence detection without database queries. All
+ * expected state (blob_oid, type, anchor, etc.) is already in the row.
  *
  * @param ws Workspace (must not be NULL)
- * @param manifest_entry Manifest entry with VWD cache (must not be NULL)
+ * @param row Active state row with VWD cache (must not be NULL)
  * @return Error or NULL on success
  */
 static error_t *analyze_file_divergence(
     workspace_t *ws,
-    const file_entry_t *manifest_entry
+    const state_file_entry_t *row
 ) {
     CHECK_NULL(ws);
-    CHECK_NULL(manifest_entry);
+    CHECK_NULL(row);
 
-    const char *fs_path = manifest_entry->filesystem_path;
-    const char *storage_path = manifest_entry->storage_path;
-    const char *profile = manifest_entry->profile;
+    const char *fs_path = row->filesystem_path;
+    const char *storage_path = row->storage_path;
+    const char *profile = row->profile;
 
-    /* Determine if entry came from state database using VWD cache
+    /* Determine if the row carries a hydrated VWD cache.
      *
-     * Workspace manifests are always built from state (via
-     * workspace_build_manifest_from_state), so blob_oid is always a real OID
-     * here. The zero-check is a defensive guard — not a type discriminant.
-     *
-     * Note: Git-built manifests (from manifest_build) now also carry
-     * non-zero blob_oid, but those manifests are transient and never enter the
-     * workspace divergence pipeline. */
-    bool in_state = !git_oid_is_zero(&manifest_entry->blob_oid);
+     * Active rows reaching this analysis path always come from the state
+     * snapshot, so blob_oid is a real OID by construction. The zero-check
+     * is a defensive guard against an un-hydrated row, not a type
+     * discriminant. */
+    bool in_state = !git_oid_is_zero(&row->blob_oid);
 
     /* Single stat capture for the entire analysis
      *
@@ -461,14 +476,14 @@ static error_t *analyze_file_divergence(
         /* VWD cache blob_oid is already a 20-byte binary OID — no parse step.
          * The in_state guard above (git_oid_is_zero check) protects us from
          * operating on an un-populated entry. */
-        const git_oid *blob_oid_ptr = &manifest_entry->blob_oid;
+        const git_oid *blob_oid_ptr = &row->blob_oid;
 
         /* Extract expected filemode from VWD cache type field
          *
          * Extracted before comparison strategy selection because both paths
          * need this value. Uses shared helper for consistent mapping.
          */
-        git_filemode_t expected_mode = state_type_to_git_filemode(manifest_entry->type);
+        git_filemode_t expected_mode = state_type_to_git_filemode(row->type);
 
         /* Prepare for comparison - both paths capture stat for permission checking */
         struct stat file_stat;
@@ -492,7 +507,7 @@ static error_t *analyze_file_divergence(
          * equals anchor.blob_oid — no re-hash needed.
          *
          * Cross-check anchor.blob_oid against the Git-expected blob_oid
-         * (manifest_entry->blob_oid) to classify:
+         * (row->blob_oid) to classify:
          *   - equal   → CMP_EQUAL.  disk == anchor == expected (clean).
          *   - differ  → CMP_DIFFERENT + DIVERGENCE_STALE.
          *                disk == anchor ≠ expected (external Git drift;
@@ -502,7 +517,7 @@ static error_t *analyze_file_divergence(
          * fast path, without loading blobs or hashing. The slow-path
          * straggler case (touch(1) / editor rename-write invalidated the
          * stat witness) is still handled by Phase 3. */
-        const deployment_anchor_t *anchor = &manifest_entry->anchor;
+        const deployment_anchor_t *anchor = &row->anchor;
         if (anchor->stat.mtime != 0
             && anchor->stat.mtime == (int64_t) initial_stat.st_mtime
             && anchor->stat.size == (int64_t) initial_stat.st_size
@@ -529,12 +544,12 @@ static error_t *analyze_file_divergence(
              *
              * Asymmetry with the Phase 3 anchor-staleness site below: that site routes
              * through content_compare_blob_to_disk (byte-classify internally) because
-             * anchor.blob_oid can differ from manifest_entry->blob_oid and there is
-             * no anchor-side cache to trust. Here we route on manifest_entry->encrypted
+             * anchor.blob_oid can differ from row->blob_oid and there is no
+             * anchor-side cache to trust. Here we route on row->encrypted
              * directly — the cache IS byte-truth for *this* blob via the Phase 2
              * write-time invariant in content_store_file_to_worktree.
              */
-            if (!manifest_entry->encrypted) {
+            if (!row->encrypted) {
                 err = compare_oid_to_disk(
                     blob_oid_ptr,
                     fs_path,
@@ -647,16 +662,16 @@ static error_t *analyze_file_divergence(
 
             /* PHASE B: Check full metadata using VWD cache
              *
-             * Mode sentinel: manifest_entry->mode == 0 means "no metadata tracked",
-             * check will be skipped by check_item_metadata_divergence().
+             * Mode sentinel: row->mode == 0 means "no metadata tracked";
+             * the check will be skipped by check_item_metadata_divergence().
              */
             bool mode_differs = false;
             bool ownership_differs = false;
 
             error_t *check_err = check_item_metadata_divergence(
-                manifest_entry->mode,     /* From VWD cache (mode_t, 0 = no metadata) */
-                manifest_entry->owner,    /* From VWD cache (can be NULL) */
-                manifest_entry->group,    /* From VWD cache (can be NULL) */
+                row->mode,     /* From VWD cache (mode_t, 0 = no metadata) */
+                row->owner,    /* From VWD cache (can be NULL) */
+                row->group,    /* From VWD cache (can be NULL) */
                 &file_stat,
                 &mode_differs,
                 &ownership_differs
@@ -704,17 +719,17 @@ static error_t *analyze_file_divergence(
      * longer controls classification.
      */
     if (!on_filesystem) {
-        /* File in manifest but missing from filesystem */
+        /* Row claims this path but the filesystem doesn't have it. */
 
         /* Use anchor.observed_at to distinguish ghost files from deletions
          * (see classification table above for the full decision matrix). */
-        if (in_state && manifest_entry->anchor.observed_at > 0) {
+        if (in_state && row->anchor.observed_at > 0) {
             /* Path has been lstat-observed on disk in scope; current
              * absence means the user deleted a previously-seen file. */
             state = WORKSPACE_STATE_DELETED;
         } else {
-            /* Path has never been observed (ghost file) or the manifest
-             * was built directly from Git with no state row (in_state = false). */
+            /* Path has never been observed (ghost file) or the row was
+             * never hydrated with a real blob (in_state = false). */
             state = WORKSPACE_STATE_UNDEPLOYED;
         }
 
@@ -734,7 +749,7 @@ static error_t *analyze_file_divergence(
      * the stat witness was invalidated (touch(1), editor rename-write, fresh
      * checkout) but disk content may still match the blob dotta last deployed.
      *
-     * Source of truth: the persistent deployment anchor (manifest_entry->anchor),
+     * Source of truth: the persistent deployment anchor (row->anchor),
      * populated from the virtual_manifest.deployed_blob_oid column. Cross-process
      * correct by construction — every invocation sees the same answer.
      *
@@ -755,10 +770,10 @@ static error_t *analyze_file_divergence(
      *   [stale, modified]    — expected state changed, file has old deployed content
      */
     if (on_filesystem && (divergence & DIVERGENCE_CONTENT) && !(divergence & DIVERGENCE_STALE)
-        && !git_oid_is_zero(&manifest_entry->anchor.blob_oid)
-        && !git_oid_equal(&manifest_entry->anchor.blob_oid, &manifest_entry->blob_oid)) {
+        && !git_oid_is_zero(&row->anchor.blob_oid)
+        && !git_oid_equal(&row->anchor.blob_oid, &row->blob_oid)) {
 
-        git_filemode_t expected_mode = state_type_to_git_filemode(manifest_entry->type);
+        git_filemode_t expected_mode = state_type_to_git_filemode(row->type);
         compare_result_t verify_result = CMP_UNVERIFIED;
 
         struct stat verify_stat;
@@ -766,7 +781,7 @@ static error_t *analyze_file_divergence(
 
         /* Route the anchor comparison by the anchor blob's own bytes.
          *
-         * The latent bug class this avoids: routing on manifest_entry->encrypted
+         * The latent bug class this avoids: routing on row->encrypted
          * silently miscategorised the staleness check across encryption-policy
          * transitions. Both directions failed:
          *   - encrypted anchor / plaintext current → compare_oid_to_disk
@@ -781,7 +796,7 @@ static error_t *analyze_file_divergence(
          * routing-on-stale-flag bug is structurally impossible. */
         verify_err = content_compare_blob_to_disk(
             ws->repo,
-            &manifest_entry->anchor.blob_oid,
+            &row->anchor.blob_oid,
             fs_path,
             expected_mode,
             &initial_stat,
@@ -801,17 +816,14 @@ static error_t *analyze_file_divergence(
 
     /* PHASE 4: Profile reassignment detection
      *
-     * Check VWD cache for old_profile to detect reassignments.
-     * old_profile is set by manifest layer when a file's owning profile changes
-     * (e.g., removed from high-precedence profile, fell back to lower).
-     *
-     * The old_profile field is persisted in the database and populated
-     * into the VWD cache during workspace_build_manifest_from_state().
-     * It remains set until acknowledged by successful deployment.
-     * Borrow from arena-backed manifest entry (same lifetime as workspace)
+     * Read old_profile from the row to detect reassignments. The manifest
+     * layer sets it when a file's owning profile changes (e.g., removed
+     * from high-precedence profile, fell back to lower). It is persisted
+     * in the database and remains set until acknowledged by successful
+     * deployment. The pointer is arena-backed (same lifetime as workspace).
      */
-    bool profile_changed = (manifest_entry->old_profile != NULL);
-    char *old_profile = profile_changed ? manifest_entry->old_profile : NULL;
+    bool profile_changed = (row->old_profile != NULL);
+    char *old_profile = profile_changed ? row->old_profile : NULL;
 
     /* Maintain invariant: profile_changed implies old_profile is non-NULL */
     if (profile_changed && !old_profile) profile_changed = false;
@@ -1046,9 +1058,9 @@ static divergence_type_t compute_orphan_divergence(
 }
 
 /**
- * Analyze partitioned orphan candidates from the manifest build
+ * Analyze partitioned orphan candidates from the active-slice build
  *
- * Each candidate was rejected by workspace_build_manifest_from_state for
+ * Each candidate was rejected by workspace_build_active for
  * exactly one of two reasons:
  *   - Profile out of workspace scope (disabled or branch deleted)
  *   - Lifecycle terminal (STATE_INACTIVE / STATE_DELETED / STATE_RELEASED)
@@ -1206,7 +1218,7 @@ static error_t *analyze_orphaned_files(
  *   - active_dirs: profile in scope AND state not in {INACTIVE, DELETED}
  *   - orphan_dirs: everything else
  *
- * Mirrors the partition logic in workspace_build_manifest_from_state for
+ * Mirrors the partition logic in workspace_build_active for
  * symmetry: filter is established here, consumers trust the partition.
  *
  * manifest_reconcile (run upstream from workspace_load) has already synced
@@ -1346,32 +1358,21 @@ static error_t *analyze_orphaned_directories(
 }
 
 /**
- * Analyze divergence for all files in manifest using VWD cache
+ * Analyze divergence for every active row using VWD cache
  *
- * Compares each file in the manifest against filesystem reality to detect
- * modifications, deletions, and undeployed files.
+ * Walks ws->active and compares each row against filesystem reality.
  *
- * Performance: O(N) where N = manifest count. No database queries needed
- * because all expected state is cached in the manifest entries (VWD cache).
- * This eliminates the previous N+1 query problem.
+ * Performance: O(N) where N = active row count. The row's VWD cache
+ * (blob_oid, type, anchor, etc.) eliminates N+1 database queries.
  */
 static error_t *analyze_files_divergence(workspace_t *ws) {
     CHECK_NULL(ws);
-    CHECK_NULL(ws->manifest);
     CHECK_NULL(ws->state);
 
-    /* Analyze each file in manifest using VWD cache
-     *
-     * The manifest_entry contains all necessary state information in its
-     * VWD cache fields (blob_oid, type, deployed_at, etc.), so we
-     * don't need to query the database for each file. This eliminates
-     * N individual state_get_file() queries. */
-    for (size_t i = 0; i < ws->manifest->count; i++) {
-        const file_entry_t *manifest_entry = &ws->manifest->entries[i];
+    for (size_t i = 0; i < ws->active_count; i++) {
+        const state_file_entry_t *row = ws->active[i];
 
-        /* Analyze this file using VWD cache (no database query needed) */
-        error_t *err = analyze_file_divergence(ws, manifest_entry);
-
+        error_t *err = analyze_file_divergence(ws, row);
         if (err) {
             return err;
         }
@@ -1524,14 +1525,14 @@ static error_t *scan_directory_for_untracked(
             /* Check if this file is already tracked.
              *
              * Two checks needed:
-             * 1. Manifest index: file is in an active enabled profile
+             * 1. Active index: file is in an active enabled profile
              * 2. Diverged index: file already classified (e.g., as released
              *    or orphaned by prior analysis phases). Released files are
-             *    excluded from manifest but already have diverged entries —
-             *    adding them as untracked would create duplicates.
+             *    excluded from the active slice but already have diverged
+             *    entries — adding them as untracked would create duplicates.
              */
             bool already_tracked =
-                (hashmap_get(ws->manifest->index, full_path) != NULL) ||
+                (hashmap_get(ws->active_index, full_path) != NULL) ||
                 (hashmap_get(ws->diverged_index, full_path) != NULL);
 
             if (!already_tracked) {
@@ -1970,10 +1971,10 @@ static error_t *analyze_directory_metadata_divergence(
  * but are stored as plaintext in the profile.
  *
  * Trusts the cache. After the write-time invariant established in
- * cmds/add.c and cmds/update.c, manifest_entry->encrypted is byte-truth
+ * cmds/add.c and cmds/update.c, row->encrypted is byte-truth
  * (metadata.json:encrypted is stamped from content_classify_bytes at
  * the write boundary, then projected to the state DB column, then to
- * the in-memory manifest entry). The audit reads the cached bool and
+ * the in-memory state row). The audit reads the cached bool and
  * defers to encryption_policy_violation. Zero blob inflations.
  *
  * Per-blob byte-classification was the previous implementation's
@@ -1993,28 +1994,27 @@ static error_t *analyze_encryption_policy_mismatch(
     const config_t *config
 ) {
     CHECK_NULL(ws);
-    CHECK_NULL(ws->manifest);
 
     /* Fast-path: no auto-encrypt ruleset means nothing to validate. */
     if (!encryption_policy_is_active(config)) return NULL;
 
     error_t *err = NULL;
 
-    /* Check each file in manifest */
-    for (size_t i = 0; i < ws->manifest->count; i++) {
-        const file_entry_t *manifest_entry = &ws->manifest->entries[i];
-        const char *storage_path = manifest_entry->storage_path;
-        const char *profile = manifest_entry->profile;
+    /* Check each active row */
+    for (size_t i = 0; i < ws->active_count; i++) {
+        const state_file_entry_t *row = ws->active[i];
+        const char *storage_path = row->storage_path;
+        const char *profile = row->profile;
 
         /* Project the cached bool to a content_kind_t for the policy predicate.
          * The 3-valued enum's UNSUPPORTED_VERSION case is unreachable here -
-         * manifest_entry->encrypted is a bool and collapses ENCRYPTED +
+         * row->encrypted is a bool and collapses ENCRYPTED +
          * UNSUPPORTED_VERSION onto true. That collapse is exhaustive for
          * encryption_policy_violation: any non-PLAINTEXT kind carries encryption
          * intent and is treated as not-a-violation. The version-skew distinction
          * surfaces ia the content read path, not here. */
-        content_kind_t kind = manifest_entry->encrypted ? CONTENT_ENCRYPTED
-                                                        : CONTENT_PLAINTEXT;
+        content_kind_t kind = row->encrypted ? CONTENT_ENCRYPTED
+                                             : CONTENT_PLAINTEXT;
 
         if (!encryption_policy_violation(config, storage_path, kind)) {
             continue;
@@ -2023,7 +2023,7 @@ static error_t *analyze_encryption_policy_mismatch(
         /* Merge the violation into the existing divergence index — the file may already have
          * CONTENT/MODE/etc. divergence, in which case we OR the ENCRYPTION flag in alongside.
          * The O(1) index lookup prevents last-write-wins between analysis passes. */
-        void *idx_ptr = hashmap_get(ws->diverged_index, manifest_entry->filesystem_path);
+        void *idx_ptr = hashmap_get(ws->diverged_index, row->filesystem_path);
         workspace_item_t *existing = NULL;
         if (idx_ptr) {
             size_t idx = (size_t) (uintptr_t) idx_ptr - 1;  /* Convert index+1 back to index */
@@ -2043,12 +2043,12 @@ static error_t *analyze_encryption_policy_mismatch(
              * analyze_file_divergence Phase 2: a file on disk is DEPLOYED, a missing file is
              * DELETED if ever observed (observed_at > 0), else UNDEPLOYED (ghost). */
             struct stat enc_stat;
-            bool on_filesystem = (lstat(manifest_entry->filesystem_path, &enc_stat) == 0);
+            bool on_filesystem = (lstat(row->filesystem_path, &enc_stat) == 0);
 
             workspace_state_t item_state;
             if (on_filesystem) {
                 item_state = WORKSPACE_STATE_DEPLOYED;
-            } else if (manifest_entry->anchor.observed_at > 0) {
+            } else if (row->anchor.observed_at > 0) {
                 item_state = WORKSPACE_STATE_DELETED;
             } else {
                 item_state = WORKSPACE_STATE_UNDEPLOYED;
@@ -2056,7 +2056,7 @@ static error_t *analyze_encryption_policy_mismatch(
 
             err = workspace_add_diverged(
                 ws,
-                manifest_entry->filesystem_path,
+                row->filesystem_path,
                 storage_path,
                 profile,
                 NULL,
@@ -2078,34 +2078,37 @@ static error_t *analyze_encryption_policy_mismatch(
 }
 
 /**
- * Build in-memory manifest from state manifest table; partition rejected rows
+ * Partition state rows into the active slice and orphan candidates
  *
  * Walks the state DB once and produces two outputs:
- *   1. ws->manifest — projection of in-scope ACTIVE state rows into file_entry_t
- *   2. orphan_candidates — pointers into the state buffer for rejected rows
- *      (out-of-scope profile or terminal lifecycle: INACTIVE/DELETED/RELEASED)
+ *   1. ws->active — pointer array into the arena snapshot for in-scope
+ *      ACTIVE rows; ws->active_index maps fs_path → row pointer.
+ *   2. orphan_candidates — pointers into the same snapshot for rejected
+ *      rows (out-of-scope profile or terminal lifecycle:
+ *      INACTIVE/DELETED/RELEASED).
  *
  * The partition is the single source of truth for "is this row in the
- * workspace?". analyze_orphaned_files consumes the candidate slice directly
- * — it does not re-derive the filter via a manifest hashmap probe.
+ * workspace?". analyze_orphaned_files consumes the candidate slice
+ * directly; analyses over the active set walk ws->active.
  *
  * Drift repair is handled upstream by workspace_load's manifest_reconcile
  * call, so state entries read here are current with Git by construction.
  *
- * Lifetime: candidate pointers reference rows in the state buffer that
- * state_get_all_files arena-allocates. The arena outlives the workspace,
- * so the pointers are valid until arena destruction.
+ * Lifetime: every pointer (active rows, orphan candidates, the active
+ * pointer array, the snapshot rows themselves) lives in ws->arena. The
+ * arena outlives the workspace, so all pointers are valid until arena
+ * destruction. Only ws->active_index is heap-allocated (hashmap_borrow).
  *
  * Performance: O(M) where M = state entries. One pass, no probes.
  *
  * @param ws Workspace (must not be NULL, state must be loaded)
  * @param out_orphan_candidates Arena-allocated array of pointers to state
- *        rows that did not enter the manifest. NULL if none. Caller does
- *        not free (arena-owned).
+ *        rows that did not enter the active slice. NULL if none. Caller
+ *        does not free (arena-owned).
  * @param out_orphan_count Number of entries in out_orphan_candidates.
  * @return Error or NULL on success
  */
-static error_t *workspace_build_manifest_from_state(
+static error_t *workspace_build_active(
     workspace_t *ws,
     const state_file_entry_t ***out_orphan_candidates,
     size_t *out_orphan_count
@@ -2120,82 +2123,62 @@ static error_t *workspace_build_manifest_from_state(
     *out_orphan_candidates = NULL;
     *out_orphan_count = 0;
 
-    error_t *err = NULL;
-    state_file_entry_t *state_entries = NULL;
-    size_t state_count = 0;
+    state_file_entry_t *snapshot = NULL;
+    size_t snap_count = 0;
 
-    /* Read all entries from manifest table (arena-allocated).
-     * Arena handles cleanup; the buffer outlives this function via
-     * candidate pointers that reference its rows. */
-    err = state_get_all_files(ws->state, ws->arena, &state_entries, &state_count);
+    /* Read every manifest row into the workspace arena. The snapshot
+     * outlives this function; every active and orphan pointer below
+     * references rows inside it. */
+    error_t *err = state_get_all_files(
+        ws->state, ws->arena, &snapshot, &snap_count
+    );
     if (err) {
         return error_wrap(err, "Failed to read manifest from state");
     }
 
-    /* Allocate manifest structure */
-    ws->manifest = calloc(1, sizeof(manifest_t));
-    if (!ws->manifest) {
-        return ERROR(ERR_MEMORY, "Failed to allocate manifest");
+    /* Active index always exists, even when empty. Sized to the snapshot
+     * (worst case = every row is active). hashmap_borrow keeps fs_path
+     * keys by reference — they live in the arena alongside the rows. */
+    ws->active_index = hashmap_borrow(snap_count > 0 ? snap_count : 64);
+    if (!ws->active_index) {
+        return ERROR(ERR_MEMORY, "Failed to create active index");
     }
 
-    /* Allocate entries array and orphan candidate pointer array.
-     *
-     * calloc(0, X) is implementation-defined per C17 §7.22.3.2p2 — may
-     * return NULL or a unique non-NULL pointer depending on the libc.
-     * Skip the allocation entirely for empty state: a manifest_t with
-     * entries=NULL, count=0 is a valid empty manifest, and manifest_free
-     * already tolerates entries == NULL (free(NULL) is a no-op).
-     *
-     * Both arrays are sized to state_count (worst case). The split between
-     * them is determined per-row inside the loop; either may end up empty. */
-    const state_file_entry_t **candidates = NULL;
-    if (state_count > 0) {
-        ws->manifest->entries = calloc(state_count, sizeof(file_entry_t));
-        if (!ws->manifest->entries) {
-            free(ws->manifest);
-            ws->manifest = NULL;
-            return ERROR(ERR_MEMORY, "Failed to allocate manifest entries");
-        }
-
-        candidates = arena_calloc(ws->arena, state_count, sizeof(*candidates));
-        if (!candidates) {
-            free(ws->manifest->entries);
-            free(ws->manifest);
-            ws->manifest = NULL;
-            return ERROR(ERR_MEMORY, "Failed to allocate orphan candidate array");
-        }
+    if (snap_count == 0) {
+        ws->active = NULL;
+        ws->active_count = 0;
+        return NULL;
     }
 
-    /*
-     * Create hash map for O(1) lookups
-     * Maps: filesystem_path -> index in entries array (offset by 1)
-     * Use state_count as initial capacity (optimal sizing, no rehashing needed)
-     */
-    hashmap_t *path_map = hashmap_borrow(state_count > 0 ? state_count : 64);
-    if (!path_map) {
-        free(ws->manifest->entries);
-        free(ws->manifest);
-        ws->manifest = NULL;
-        return ERROR(ERR_MEMORY, "Failed to create manifest index");
+    /* Allocate the active pointer array and the orphan candidate array
+     * at worst-case size. Both partitions share the snapshot — the row
+     * buffer never gets duplicated. */
+    ws->active = arena_calloc(ws->arena, snap_count, sizeof(*ws->active));
+    const state_file_entry_t **candidates = arena_calloc(
+        ws->arena, snap_count, sizeof(*candidates)
+    );
+    if (!ws->active || !candidates) {
+        hashmap_free(ws->active_index, NULL);
+        ws->active_index = NULL;
+        ws->active = NULL;
+        return ERROR(ERR_MEMORY, "Failed to allocate active partition");
     }
 
-    size_t manifest_idx = 0;
+    size_t active_count = 0;
     size_t candidate_count = 0;
 
-    /* Partition state rows: in-scope active → manifest, others → candidates */
-    for (size_t i = 0; i < state_count; i++) {
-        const state_file_entry_t *state_entry = &state_entries[i];
+    /* Partition state rows: in-scope active → ws->active, others → candidates */
+    for (size_t i = 0; i < snap_count; i++) {
+        state_file_entry_t *row = &snapshot[i];
 
-        bool profile_in_scope =
-            hashmap_has(ws->profile_index, state_entry->profile);
+        bool profile_in_scope = hashmap_has(ws->profile_index, row->profile);
 
-        /* Lifecycle terminal states are rejected from the manifest and
-         * surfaced to orphan detection. NULL state defaults to active per
-         * state.c read path. */
-        bool lifecycle_terminal = state_entry->state && (
-            strcmp(state_entry->state, STATE_INACTIVE) == 0 ||
-            strcmp(state_entry->state, STATE_DELETED) == 0 ||
-            strcmp(state_entry->state, STATE_RELEASED) == 0);
+        /* Lifecycle terminal states are rejected from the active slice and surfaced
+         * to orphan detection. NULL state defaults to active per state.c read path */
+        bool lifecycle_terminal = row->state && (
+            strcmp(row->state, STATE_INACTIVE) == 0 ||
+            strcmp(row->state, STATE_DELETED) == 0 ||
+            strcmp(row->state, STATE_RELEASED) == 0);
 
         if (!profile_in_scope || lifecycle_terminal) {
             /* Rejected: surface to orphan analysis.
@@ -2204,73 +2187,31 @@ static error_t *workspace_build_manifest_from_state(
              *   analyze_orphaned_files handles via profile_enabled flag.
              * - Lifecycle terminal: INACTIVE/DELETED/RELEASED. The
              *   RELEASED branch (loss of authority) is detected from
-             *   state_entry->state inside analyze_orphaned_files. */
-            candidates[candidate_count++] = state_entry;
+             *   row->state inside analyze_orphaned_files. */
+            candidates[candidate_count++] = row;
             continue;
         }
 
-        /* In-scope active row: project to manifest. Strings and the
-         * VWD/anchor cache are arena-borrowed from state_entry — same
-         * lifetime as workspace. */
-        file_entry_t *entry = &ws->manifest->entries[manifest_idx];
-        entry->profile = state_entry->profile;
+        ws->active[active_count++] = row;
 
-        /* Borrow paths from arena-backed state entries (same lifetime) */
-        entry->storage_path = state_entry->storage_path;
-        entry->filesystem_path = state_entry->filesystem_path;
-
-        /* Borrow VWD cache and anchor from arena-backed state entries.
-         *
-         * These fields enable O(1) divergence checking without N database queries.
-         * They represent the cached expected state that workspace divergence
-         * analysis will compare against filesystem reality.
-         *
-         * Both state entries and manifest entries share the workspace lifetime. */
-        entry->old_profile = state_entry->old_profile;
-        entry->blob_oid = state_entry->blob_oid;
-        entry->type = state_entry->type;
-        entry->mode = state_entry->mode;
-        entry->owner = state_entry->owner;
-        entry->group = state_entry->group;
-        entry->encrypted = state_entry->encrypted;
-        entry->anchor = state_entry->anchor;
-
-        /* Track entry for cleanup — must precede any further fallible operations
-         * so the centralized cleanup loop (j < manifest_idx) covers this entry. */
-        manifest_idx++;
-
-        /* Store index in hashmap (offset by 1 to distinguish from NULL).
-         * manifest_idx already holds the 1-based value after the increment above.
-         * The cast through uintptr_t is safe: indices are much smaller than
-         * SIZE_MAX, and we never dereference these "pointers". */
-        err = hashmap_set(path_map, entry->filesystem_path, (void *) (uintptr_t) manifest_idx);
+        /* Index by row pointer directly: the active array is allocated at
+         * load time and never grows, so pointers into it are stable for
+         * the workspace lifetime — no idx+1 encoding needed. */
+        err = hashmap_set(ws->active_index, row->filesystem_path, row);
         if (err) {
-            err = error_wrap(err, "Failed to populate manifest index");
-            goto cleanup;
+            hashmap_free(ws->active_index, NULL);
+            ws->active_index = NULL;
+            ws->active = NULL;
+            return error_wrap(err, "Failed to populate active index");
         }
     }
 
-    /* Transfer index ownership to manifest */
-    ws->manifest->index = path_map;
-    path_map = NULL;  /* Prevent double-free on cleanup */
-
-    /* Set final count (may be less than state_count due to filtering) */
-    ws->manifest->count = manifest_idx;
+    ws->active_count = active_count;
 
     *out_orphan_candidates = (candidate_count > 0) ? candidates : NULL;
     *out_orphan_count = candidate_count;
 
     return NULL;
-
-cleanup:
-    /* Simplified error cleanup — arena handles all string fields and the
-     * candidate pointer array. Only free heap-allocated structures. */
-    hashmap_free(path_map, NULL);
-    free(ws->manifest->entries);
-    free(ws->manifest);
-    ws->manifest = NULL;
-
-    return err;
 }
 
 /**
@@ -2348,36 +2289,24 @@ error_t *workspace_load(
     ws->content_cache = content_cache;
     ws->arena = arena;
 
-    /* Build manifest from state (Virtual Working Directory architecture).
-     * This replaces the old manifest_build() which walked Git trees.
-     * Now we read from the manifest table (expected state cache) for O(M)
-     * performance where M = entries in manifest, not O(N) where N = all
-     * files in Git.
+    /* Partition the state snapshot into the active slice and orphan
+     * candidates. The active slice (ws->active + ws->active_index) is
+     * borrowed pointers into the arena snapshot returned by
+     * state_get_all_files — no parallel projection, no second cache.
      *
-     * The build also partitions out rejected rows (out-of-scope or
-     * lifecycle-terminal) into orphan_candidates for analyze_orphaned_files.
-     * The partition is the single source of truth for orphan-ness — no
-     * later hashmap probe is needed.
+     * Orphan candidates (rows out-of-scope or in a terminal lifecycle
+     * state) flow to analyze_orphaned_files. The partition is the
+     * single source of truth for orphan-ness — no later hashmap probe
+     * is needed.
      *
-     * Staleness was already repaired by manifest_reconcile above; this
+     * Drift was already repaired by manifest_reconcile above; this
      * function reads current state directly. */
     const state_file_entry_t **file_orphans = NULL;
     size_t file_orphan_count = 0;
-    err = workspace_build_manifest_from_state(ws, &file_orphans, &file_orphan_count);
+    err = workspace_build_active(ws, &file_orphans, &file_orphan_count);
     if (err) {
         workspace_free(ws);
-        return error_wrap(err, "Failed to build manifest from state");
-    }
-
-    /* Verify manifest index was populated (architectural invariant)
-     * This check ensures workspace_build_manifest_from_state() correctly
-     * built the index, maintaining consistency with the write path pattern. */
-    if (!ws->manifest->index) {
-        workspace_free(ws);
-        return ERROR(
-            ERR_INTERNAL, "Manifest index not populated by "
-            "workspace_build_manifest_from_state() - programming error"
-        );
+        return error_wrap(err, "Failed to build active slice from state");
     }
 
     /* Load and partition tracked directories once when any consumer needs them.
@@ -2388,6 +2317,7 @@ error_t *workspace_load(
     size_t active_dir_count = 0;
     const state_directory_entry_t **orphan_dirs = NULL;
     size_t orphan_dir_count = 0;
+
     if (resolved_opts.analyze_orphans || resolved_opts.analyze_directories) {
         state_directory_entry_t *all_dirs = NULL;
         size_t all_dir_count = 0;
@@ -2513,26 +2443,24 @@ const workspace_item_t *workspace_get_all_diverged(
 error_t *workspace_extract_orphans(
     const workspace_t *ws,
     const scope_t *scope,
-    const workspace_item_t ***out_file_orphans,
-    size_t *out_file_count,
-    const workspace_item_t ***out_dir_orphans,
-    size_t *out_dir_count,
-    const workspace_item_t ***out_excluded,
+    workspace_items_t *out_files,
+    workspace_items_t *out_dirs,
+    workspace_items_t *out_excluded,
     size_t *out_excluded_count
 ) {
     CHECK_NULL(ws);
 
-    /* Initialize all outputs to safe defaults */
-    if (out_file_orphans) *out_file_orphans = NULL;
-    if (out_file_count) *out_file_count = 0;
-    if (out_dir_orphans) *out_dir_orphans = NULL;
-    if (out_dir_count) *out_dir_count = 0;
-    if (out_excluded) *out_excluded = NULL;
+    /* Initialize all outputs to safe defaults — first thing, before any
+     * work that can fail, so an early error path leaves callers with
+     * clean zero values rather than uninitialized garbage. */
+    if (out_files) *out_files = (workspace_items_t){ 0 };
+    if (out_dirs) *out_dirs = (workspace_items_t){ 0 };
+    if (out_excluded) *out_excluded = (workspace_items_t){ 0 };
     if (out_excluded_count) *out_excluded_count = 0;
 
     /* Early exit if nothing requested */
-    bool want_files = (out_file_orphans != NULL);
-    bool want_dirs = (out_dir_orphans != NULL);
+    bool want_files = (out_files != NULL);
+    bool want_dirs = (out_dirs != NULL);
     bool want_excluded = (out_excluded != NULL);
     if (!want_files && !want_dirs && !want_excluded) return NULL;
 
@@ -2574,23 +2502,20 @@ error_t *workspace_extract_orphans(
         }
     }
 
-    if (out_file_orphans) {
-        *out_file_orphans =
-            (const workspace_item_t **) ptr_array_steal(&files, out_file_count);
+    if (want_files) {
+        out_files->entries = (const workspace_item_t *const *)
+            ptr_array_steal(&files, &out_files->count);
     }
-    if (out_dir_orphans) {
-        *out_dir_orphans =
-            (const workspace_item_t **) ptr_array_steal(&dirs, out_dir_count);
+    if (want_dirs) {
+        out_dirs->entries = (const workspace_item_t *const *)
+            ptr_array_steal(&dirs, &out_dirs->count);
     }
     if (want_excluded) {
-        /* ptr_array_steal requires a non-NULL count pointer; use a
-         * local when the caller didn't request out_excluded_count. */
-        size_t stolen = 0;
-        *out_excluded =
-            (const workspace_item_t **) ptr_array_steal(&excluded_items, &stolen);
+        out_excluded->entries = (const workspace_item_t *const *)
+            ptr_array_steal(&excluded_items, &out_excluded->count);
 
         if (out_excluded_count) {
-            *out_excluded_count = stolen;
+            *out_excluded_count = out_excluded->count;
         }
     } else if (out_excluded_count) {
         *out_excluded_count = excluded;
@@ -2625,14 +2550,32 @@ const workspace_item_t *workspace_get_item(
 }
 
 /**
- * Get the manifest of files managed by the workspace
+ * Get the active in-scope state file slice
+ *
+ * The cast adds const at both pointer levels — safe per the C standard's
+ * "T**  → const T *const *" rule (no diagnostic required).
  */
-const manifest_t *workspace_get_manifest(const workspace_t *ws) {
-    if (!ws) {
-        return NULL;
-    }
+state_files_t workspace_active(const workspace_t *ws) {
+    if (!ws) return (state_files_t){ 0 };
+    return (state_files_t){
+        .entries = (const state_file_entry_t *const *) ws->active,
+        .count = ws->active_count,
+    };
+}
 
-    return ws->manifest;
+/**
+ * Look up an active row by filesystem path
+ *
+ * O(1) hashmap probe over the active slice. The map's value is a
+ * mutable row pointer (workspace_advance_anchor patches in place);
+ * external callers receive a const view via narrowing cast.
+ */
+const state_file_entry_t *workspace_lookup_active(
+    const workspace_t *ws,
+    const char *filesystem_path
+) {
+    if (!ws || !filesystem_path) return NULL;
+    return hashmap_get(ws->active_index, filesystem_path);
 }
 
 /**
@@ -2884,14 +2827,18 @@ bool workspace_item_extract_display_info(
  * Advance the deployment anchor with in-memory consistency
  *
  * Single workspace-scope writer for anchor advances: persists via
- * state_update_anchor, then patches ws->manifest's entry so the two
- * views cannot drift. Mirrors state_update_anchor's preserve-on-zero
- * semantic on deployed_at (a zero timestamp preserves the in-memory
- * value) and the monotonic-once-set semantic on observed_at (the first
- * non-zero value wins).
+ * state_update_anchor, then patches the active row's anchor so the
+ * snapshot does not drift from the DB. Mirrors state_update_anchor's
+ * preserve-on-zero semantic on deployed_at (a zero timestamp preserves
+ * the in-memory value) and the monotonic-once-set semantic on
+ * observed_at (the first non-zero value wins).
  *
  * DB write runs first; on error we return without touching memory so a
  * failed write cannot leave the in-memory view ahead of reality.
+ *
+ * Partition safety: ws->active_index covers exactly the rows in the
+ * active partition, which is disjoint from orphan candidates. So a
+ * lookup hit never lands on a row outside the active set.
  */
 error_t *workspace_advance_anchor(
     workspace_t *ws,
@@ -2907,29 +2854,20 @@ error_t *workspace_advance_anchor(
         return err;
     }
 
-    /* Patch the in-memory manifest entry to match what the DB now holds.
+    /* Patch the snapshot row; state_update_anchor wrote the DB above.
      * Not-found is tolerated: the DB write already no-op'd for rows
-     * filtered by precedence / disabled profile, and the in-memory
-     * manifest may likewise not carry the path. */
-    if (!ws->manifest || !ws->manifest->index) {
-        return NULL;
-    }
+     * filtered by precedence / disabled profile, and the active index
+     * may likewise not carry the path. */
+    state_file_entry_t *row = hashmap_get(ws->active_index, filesystem_path);
+    if (!row) return NULL;
 
-    void *idx_ptr = hashmap_get(ws->manifest->index, filesystem_path);
-    if (!idx_ptr) {
-        return NULL;
-    }
-
-    size_t idx = (size_t) (uintptr_t) idx_ptr - 1;
-    deployment_anchor_t *in_mem = &ws->manifest->entries[idx].anchor;
-
-    in_mem->blob_oid = anchor->blob_oid;
-    in_mem->stat = anchor->stat;
+    row->anchor.blob_oid = anchor->blob_oid;
+    row->anchor.stat = anchor->stat;
     if (anchor->deployed_at != 0) {
-        in_mem->deployed_at = anchor->deployed_at;
+        row->anchor.deployed_at = anchor->deployed_at;
     }
-    if (in_mem->observed_at == 0 && anchor->observed_at != 0) {
-        in_mem->observed_at = anchor->observed_at;   /* monotonic once set */
+    if (row->anchor.observed_at == 0 && anchor->observed_at != 0) {
+        row->anchor.observed_at = anchor->observed_at;   /* monotonic once set */
     }
 
     return NULL;
@@ -2949,7 +2887,7 @@ error_t *workspace_advance_anchor(
  * not create a new deployment lifecycle event (apply owns that).
  *
  * Routed through workspace_advance_anchor so each persisted update also
- * patches ws->manifest's in-memory anchor; no staleness window opens
+ * patches the active row's anchor in place; no staleness window opens
  * between DB and memory for downstream readers in the same run.
  *
  * Begins its own transaction only when state isn't already in one
@@ -3027,18 +2965,15 @@ void workspace_free(workspace_t *ws) {
     /* Free anchor updates (paths are borrowed, anchor is plain data) */
     free(ws->anchor_updates);
 
-    /* Free indices (values are borrowed, so pass NULL for value free function) */
+    /* Free indices (values are borrowed, so pass NULL for value free function).
+     * active_index values are state-row pointers into ws->arena — also borrowed. */
     hashmap_free(ws->profile_index, NULL);
     hashmap_free(ws->diverged_index, NULL);
+    hashmap_free(ws->active_index, NULL);
 
-    /* Free manifest spine (entries array, index hashmap, struct).
-     * Per-entry strings are arena-borrowed; the caller's arena
-     * (ctx->arena) releases them when destroyed. */
-    manifest_free(ws->manifest);
-
-    /* ws->arena is borrowed — never destroyed here. Arena-allocated
-     * data (manifest entry strings, partition pointer arrays, diverged
-     * item strings) remains valid until the caller destroys the arena. */
+    /* ws->active is arena-allocated (pointer array into the snapshot);
+     * the caller's arena releases it when destroyed. ws->arena is
+     * borrowed — never destroyed here. */
 
     free(ws);
 }

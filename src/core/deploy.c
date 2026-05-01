@@ -35,12 +35,11 @@
  */
 error_t *deploy_workspace_preflight(
     const workspace_t *ws,
-    const manifest_t *manifest,
+    state_files_t files,
     const deploy_options_t *opts,
     preflight_result_t **out
 ) {
     CHECK_NULL(ws);
-    CHECK_NULL(manifest);
     CHECK_NULL(opts);
     CHECK_NULL(out);
 
@@ -73,9 +72,9 @@ error_t *deploy_workspace_preflight(
         return ERROR(ERR_MEMORY, "Failed to allocate reassignments array");
     }
 
-    for (size_t i = 0; i < manifest->count; i++) {
-        const file_entry_t *entry = &manifest->entries[i];
-        const char *path = entry->filesystem_path;
+    for (size_t i = 0; i < files.count; i++) {
+        const state_file_entry_t *file = files.entries[i];
+        const char *path = file->filesystem_path;
 
         /* Query workspace for divergence (O(1) hashmap lookup) */
         const workspace_item_t *ws_item = workspace_get_item(ws, path);
@@ -151,7 +150,7 @@ error_t *deploy_workspace_preflight(
 
     /* Check directories for type conflicts
      *
-     * File preflight checks manifest entries, but directories are tracked
+     * File preflight checks the input file slice, but directories are tracked
      * separately in state database. Directory type divergence (dir replaced
      * by file/symlink) must also block deployment unless --force.
      *
@@ -328,12 +327,12 @@ static error_t *resolve_deployment_ownership(
 error_t *deploy_file(
     git_repository *repo,
     content_cache_t *cache,
-    file_entry_t *entry,
+    const state_file_entry_t *file,
     const deploy_options_t *opts
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(cache);
-    CHECK_NULL(entry);
+    CHECK_NULL(file);
     CHECK_NULL(opts);
 
     /* Declare all resources at top, initialized to NULL */
@@ -344,28 +343,28 @@ error_t *deploy_file(
     if (opts->dry_run) {
         /* Dry-run mode - just print */
         if (opts->verbose) {
-            printf("  Would deploy: %s\n", entry->filesystem_path);
+            printf("  Would deploy: %s\n", file->filesystem_path);
         }
         return NULL;
     }
 
-    /* Validate blob_oid from VWD cache. A zero OID means the entry was never
+    /* Validate blob_oid from VWD cache. A zero OID means the row was never
      * populated from state — should be impossible for entries reaching the
      * deploy path, but we keep the defensive check. */
-    if (git_oid_is_zero(&entry->blob_oid)) {
+    if (git_oid_is_zero(&file->blob_oid)) {
         return ERROR(
             ERR_INTERNAL, "Missing blob_oid for '%s' (state corruption?)",
-            entry->filesystem_path
+            file->filesystem_path
         );
     }
 
     /* Handle symlinks - these are never encrypted, so handle separately */
-    if (entry->type == STATE_FILE_SYMLINK) {
+    if (file->type == STATE_FILE_SYMLINK) {
         /* For symlinks, we load the blob directly since the content layer
          * is designed for regular files with potential encryption. */
         size_t target_len = 0;
         err = gitops_read_blob_content(
-            repo, &entry->blob_oid, (void **) &target_str, &target_len
+            repo, &file->blob_oid, (void **) &target_str, &target_len
         );
         if (err) goto cleanup;
 
@@ -378,7 +377,7 @@ error_t *deploy_file(
          *
          * Safety: Only reached with --force (preflight blocks DIVERGENCE_TYPE)
          */
-        err = fs_clear_path(entry->filesystem_path);
+        err = fs_clear_path(file->filesystem_path);
         if (err) {
             err = error_wrap(
                 err, "Failed to prepare path for symlink deployment"
@@ -387,11 +386,11 @@ error_t *deploy_file(
         }
 
         /* Create symlink */
-        err = fs_create_symlink(target_str, entry->filesystem_path);
+        err = fs_create_symlink(target_str, file->filesystem_path);
         if (err) {
             err = error_wrap(
                 err, "Failed to deploy symlink '%s'",
-                entry->filesystem_path
+                file->filesystem_path
             );
             goto cleanup;
         }
@@ -405,10 +404,10 @@ error_t *deploy_file(
         uid_t link_uid;
         gid_t link_gid;
         err = resolve_deployment_ownership(
-            entry->storage_path,
-            entry->filesystem_path,
-            entry->owner,
-            entry->group,
+            file->storage_path,
+            file->filesystem_path,
+            file->owner,
+            file->group,
             &link_uid,
             &link_gid,
             opts->strict_ownership,
@@ -418,16 +417,16 @@ error_t *deploy_file(
         if (err) {
             err = error_wrap(
                 err, "Failed to resolve ownership for symlink '%s'",
-                entry->filesystem_path
+                file->filesystem_path
             );
             goto cleanup;
         }
 
         if (link_uid != (uid_t) -1 || link_gid != (gid_t) -1) {
-            if (lchown(entry->filesystem_path, link_uid, link_gid) != 0) {
+            if (lchown(file->filesystem_path, link_uid, link_gid) != 0) {
                 err = ERROR(
                     ERR_FS, "Failed to set ownership on symlink '%s': %s",
-                    entry->filesystem_path, strerror(errno)
+                    file->filesystem_path, strerror(errno)
                 );
                 goto cleanup;
             }
@@ -436,7 +435,7 @@ error_t *deploy_file(
         if (opts->verbose) {
             printf(
                 "Deployed symlink: %s\n",
-                entry->filesystem_path
+                file->filesystem_path
             );
         }
 
@@ -448,14 +447,14 @@ error_t *deploy_file(
     /* Handle regular files - get content from cache with transparent decryption */
     err = content_cache_get_from_blob_oid(
         cache,
-        &entry->blob_oid,
-        entry->storage_path,
-        entry->profile ? entry->profile : "unknown",
+        &file->blob_oid,
+        file->storage_path,
+        file->profile ? file->profile : "unknown",
         &content_buffer
     );
 
     if (err) {
-        err = error_wrap(err, "Failed to get content for '%s'", entry->storage_path);
+        err = error_wrap(err, "Failed to get content for '%s'", file->storage_path);
         goto cleanup;
     }
 
@@ -463,26 +462,26 @@ error_t *deploy_file(
     const unsigned char *content = (const unsigned char *) content_buffer->data;
     size_t size = content_buffer->size;
 
-    /* Determine permissions from manifest cache
+    /* Determine permissions from state row
      *
-     * In VWD operations, state database should always have mode populated
-     * by manifest layer. If mode==0, this indicates state corruption or
-     * manifest sync failure. Fall back to git mode defensively.
-     */
-    mode_t file_mode = entry->mode;
+     * In VWD operations, the state row should always have mode populated
+     * by the manifest layer at write time. If mode==0, this indicates state
+     * corruption or manifest sync failure. Fall back to a safe default keyed
+     * on file type. */
+    mode_t file_mode = file->mode;
     if (file_mode == 0) {
         /* Defensive fallback - indicates unexpected state corruption */
-        file_mode = (entry->type == STATE_FILE_EXECUTABLE) ? 0755 : 0644;
+        file_mode = (file->type == STATE_FILE_EXECUTABLE) ? 0755 : 0644;
 
         if (opts->verbose) {
             fprintf(
                 stderr,
-                "Warning: Missing mode in state for '%s', using git mode %04o\n"
+                "Warning: Missing mode in state for '%s', using default %04o\n"
                 "         This may indicate state database corruption. Consider running:\n"
                 "         dotta profile disable %s && dotta profile enable %s\n",
-                entry->filesystem_path, file_mode,
-                entry->profile ? entry->profile : "<profile>",
-                entry->profile ? entry->profile : "<profile>"
+                file->filesystem_path, file_mode,
+                file->profile ? file->profile : "<profile>",
+                file->profile ? file->profile : "<profile>"
             );
         }
     }
@@ -493,7 +492,7 @@ error_t *deploy_file(
      * atomic ownership via fchown() on the file descriptor. This eliminates
      * the security window where files exist with incorrect ownership.
      *
-     * VWD Authority: Uses entry->owner and entry->group from state cache.
+     * VWD Authority: uses file->owner and file->group from the state cache.
      * - root/ prefix files: owner/group are username/groupname strings from state
      * - home/ prefix files: owner/group are NULL (current user ownership)
      *
@@ -504,10 +503,10 @@ error_t *deploy_file(
      */
     uid_t target_uid, target_gid;
     err = resolve_deployment_ownership(
-        entry->storage_path,
-        entry->filesystem_path,
-        entry->owner,  /* From manifest cache */
-        entry->group,  /* From manifest cache */
+        file->storage_path,
+        file->filesystem_path,
+        file->owner,
+        file->group,
         &target_uid,
         &target_gid,
         opts->strict_ownership,
@@ -517,7 +516,7 @@ error_t *deploy_file(
     if (err) {
         err = error_wrap(
             err, "Failed to resolve ownership for '%s'",
-            entry->filesystem_path
+            file->filesystem_path
         );
         goto cleanup;
     }
@@ -535,12 +534,12 @@ error_t *deploy_file(
      * Safety: Only reached with --force (preflight blocks DIVERGENCE_TYPE)
      */
     struct stat target_stat;
-    if (lstat(entry->filesystem_path, &target_stat) == 0 && S_ISDIR(target_stat.st_mode)) {
-        err = fs_remove_dir(entry->filesystem_path, true);
+    if (lstat(file->filesystem_path, &target_stat) == 0 && S_ISDIR(target_stat.st_mode)) {
+        err = fs_remove_dir(file->filesystem_path, true);
         if (err) {
             err = error_wrap(
                 err, "Failed to clear directory at '%s'",
-                entry->filesystem_path
+                file->filesystem_path
             );
             goto cleanup;
         }
@@ -551,7 +550,7 @@ error_t *deploy_file(
      * fchown() and fchmod() on the file descriptor, eliminating any security window.
      * This is the ONLY place where ownership is applied - metadata layer only resolves. */
     err = fs_write_file_raw(
-        entry->filesystem_path,
+        file->filesystem_path,
         content,
         size,
         file_mode,
@@ -562,26 +561,26 @@ error_t *deploy_file(
     if (err) {
         err = error_wrap(
             err, "Failed to deploy file '%s'",
-            entry->filesystem_path
+            file->filesystem_path
         );
         goto cleanup;
     }
 
     /* Verbose output */
     if (opts->verbose) {
-        bool has_ownership = (entry->owner || entry->group) && target_uid != (uid_t) -1;
+        bool has_ownership = (file->owner || file->group) && target_uid != (uid_t) -1;
 
         if (has_ownership) {
             printf(
                 "Deployed: %s (mode: %04o, owner: %s:%s)\n",
-                entry->filesystem_path, file_mode,
-                entry->owner ? entry->owner : "?",
-                entry->group ? entry->group : "?"
+                file->filesystem_path, file_mode,
+                file->owner ? file->owner : "?",
+                file->group ? file->group : "?"
             );
         } else {
             printf(
                 "Deployed: %s (mode: %04o)\n",
-                entry->filesystem_path, file_mode
+                file->filesystem_path, file_mode
             );
         }
     }
@@ -597,28 +596,27 @@ cleanup:
 }
 
 /**
- * Calculate directories required for deploying manifest files
+ * Calculate directories required for deploying state rows
  *
  * When the caller passes a path-scoped operation (scope_has_paths), only
- * directories that are ancestors of files in the manifest should be
+ * directories that are ancestors of files being deployed should be
  * processed. This function builds a hashmap of tracked directory paths
- * that are ancestors of any file being deployed.
+ * that are ancestors of any file in `files`.
  *
- * Performance: O(F * D) where F = files in manifest, D = average path depth
+ * Performance: O(F * D) where F = files.count, D = average path depth
  * Memory: Caller owns returned hashmap and must free with hashmap_free(h, NULL)
  *
- * @param manifest Files being deployed (must not be NULL)
+ * @param files Slice of state rows being deployed (passed by value)
  * @param state State database for tracked directory lookup (must not be NULL)
  * @param out Hashmap of required directory filesystem_paths (caller frees)
  * @return Error or NULL on success
  */
 static error_t *calculate_required_directories(
-    const manifest_t *manifest,
+    state_files_t files,
     const state_t *state,
     arena_t *arena,
     hashmap_t **out
 ) {
-    CHECK_NULL(manifest);
     CHECK_NULL(state);
     CHECK_NULL(arena);
     CHECK_NULL(out);
@@ -655,15 +653,15 @@ static error_t *calculate_required_directories(
         }
     }
 
-    /* Build set of required directories from manifest file ancestors */
+    /* Build set of required directories from input file ancestors */
     required = hashmap_create(0);
     if (!required) {
         err = ERROR(ERR_MEMORY, "Failed to create required directory hashmap");
         goto cleanup;
     }
 
-    for (size_t i = 0; i < manifest->count; i++) {
-        const char *filepath = manifest->entries[i].filesystem_path;
+    for (size_t i = 0; i < files.count; i++) {
+        const char *filepath = files.entries[i]->filesystem_path;
 
         /* Walk up directory tree, adding tracked ancestors */
         size_t len = strlen(filepath);
@@ -868,9 +866,10 @@ static error_t *deploy_tracked_directories(
 
         /* Validate directory mode from state (before skip/dry-run checks)
          *
-         * In VWD operations, state database should always have mode populated
-         * by manifest layer. If mode==0, this indicates state corruption or
-         * manifest sync failure. Warn and use safe default (0755 for directories).
+         * In VWD operations, state should always have mode populated by the
+         * manifest layer at write time. If mode==0, this indicates state
+         * corruption or manifest sync failure. Warn and use safe default
+         * (0755 for directories).
          */
         mode_t dir_mode = dir_entry->mode;
         if (dir_mode == 0) {
@@ -1092,7 +1091,7 @@ cleanup:
 error_t *deploy_execute(
     git_repository *repo,
     const workspace_t *ws,
-    const manifest_t *manifest,
+    state_files_t files,
     const state_t *state,
     arena_t *arena,
     const deploy_options_t *opts,
@@ -1101,7 +1100,6 @@ error_t *deploy_execute(
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(ws);
-    CHECK_NULL(manifest);
     CHECK_NULL(arena);
     CHECK_NULL(opts);
     CHECK_NULL(cache);
@@ -1128,7 +1126,7 @@ error_t *deploy_execute(
 
     /* Calculate required directories when ANY scope filter is active
      *
-     * Required directories are ancestors of files in the manifest. They must
+     * Required directories are ancestors of files being deployed. They must
      * be processed regardless of profile ownership to ensure file deployment.
      *
      * Scope filters:
@@ -1143,8 +1141,8 @@ error_t *deploy_execute(
     hashmap_t *required_dirs = NULL;
     bool scope_narrows = opts->scope &&
         (scope_has_paths(opts->scope) || scope_has_filter(opts->scope));
-    if (scope_narrows && manifest->count > 0 && state) {
-        err = calculate_required_directories(manifest, state, arena, &required_dirs);
+    if (scope_narrows && files.count > 0 && state) {
+        err = calculate_required_directories(files, state, arena, &required_dirs);
         if (err) {
             deploy_result_free(result);
             return error_wrap(err, "Failed to calculate required directories");
@@ -1162,20 +1160,19 @@ error_t *deploy_execute(
     }
 
     /* Deploy each file */
-    if (opts->verbose && manifest->count > 0) {
+    if (opts->verbose && files.count > 0) {
         printf(
             "Processing %zu file%s for deployment...\n",
-            manifest->count, manifest->count == 1 ? "" : "s"
+            files.count, files.count == 1 ? "" : "s"
         );
     }
 
-    for (size_t i = 0; i < manifest->count; i++) {
-        /* Non-const: deploy_file may lazy-load git tree entry */
-        file_entry_t *entry = &manifest->entries[i];
+    for (size_t i = 0; i < files.count; i++) {
+        const state_file_entry_t *file = files.entries[i];
 
         /* Check --skip-existing first (user explicitly chose not to overwrite) */
-        if (opts->skip_existing && fs_exists(entry->filesystem_path) && !opts->force) {
-            err = string_array_push(result->skipped_existing, entry->filesystem_path);
+        if (opts->skip_existing && fs_exists(file->filesystem_path) && !opts->force) {
+            err = string_array_push(result->skipped_existing, file->filesystem_path);
             if (err) {
                 deploy_result_free(result);
                 return error_wrap(err, "Failed to record skipped file");
@@ -1183,29 +1180,29 @@ error_t *deploy_execute(
             continue;
         }
 
-        /* Every entry reaching this loop is divergent by construction:
+        /* Every row reaching this loop is divergent by construction:
          * cmd_apply's needs_deployment() filter drops clean entries before
-         * building deploy_manifest, so deploy_execute never sees a
-         * ws_item == NULL case. Clean in-scope entries with deployed_at == 0
+         * building the deploy slice, so deploy_execute never sees a
+         * ws_item == NULL case. Clean in-scope rows with deployed_at == 0
          * are handled by cmd_apply's adoption step, which stamps the
          * lifecycle anchor without invoking deploy_file. */
 
         /* Deploy the file */
-        err = deploy_file(repo, cache, entry, opts);
+        err = deploy_file(repo, cache, file, opts);
         if (err) {
             /* Record failure and return partial results.
              * string_array_push failure is non-fatal here (already error-pathing). */
-            string_array_push(result->failed, entry->filesystem_path);
+            string_array_push(result->failed, file->filesystem_path);
             result->error_message = strdup(error_message(err));
             *out = result;
             return error_wrap(
                 err, "Deployment failed at '%s'",
-                entry->filesystem_path
+                file->filesystem_path
             );
         }
 
         /* Record success */
-        err = string_array_push(result->deployed, entry->filesystem_path);
+        err = string_array_push(result->deployed, file->filesystem_path);
         if (err) {
             deploy_result_free(result);
             return error_wrap(err, "Failed to record deployed file");

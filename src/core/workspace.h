@@ -65,6 +65,22 @@ typedef struct {
 } workspace_item_t;
 
 /**
+ * Bound carrier for a borrowed slice of workspace items
+ *
+ * Structural type — parallels state_files_t. Used at the
+ * workspace_extract_orphans boundary so callers receive a typed handle
+ * instead of triple-star out-params.
+ *
+ * Pass by value. Lifetime is dictated by the producer's documented
+ * contract — workspace_extract_orphans returns heap-allocated buffers
+ * (caller frees `entries`), other producers may borrow.
+ */
+typedef struct {
+    const workspace_item_t *const *entries;
+    size_t count;
+} workspace_items_t;
+
+/**
  * Workspace structure (opaque)
  *
  * Contains all three states and divergence analysis results.
@@ -74,7 +90,6 @@ typedef struct workspace workspace_t;
 /**
  * Forward declarations
  */
-typedef struct manifest manifest_t;
 typedef struct scope scope_t;
 
 /**
@@ -194,19 +209,21 @@ const workspace_item_t *workspace_get_all_diverged(
 /**
  * Extract orphaned files and directories from workspace
  *
- * On-demand extraction that produces separated file and directory arrays.
+ * On-demand extraction that produces separated file and directory slices.
  * Encapsulates orphan filtering logic within the workspace module.
  *
  * Algorithm: Single pass over diverged items, pushing orphans into
  * per-kind ptr_array_t accumulators, then stealing the buffers into
- * the output arrays.
+ * the workspace_items_t outputs.
  *
  * Performance: O(N) where N = diverged count (single pass).
- * Memory: Caller owns returned arrays and must free them.
- *         Items in arrays are borrowed (point into workspace's diverged array).
  *
- * Selective extraction: Pass NULL for out_file_orphans or out_dir_orphans
- * to skip that extraction. The corresponding count will be set to 0.
+ * Memory: Each output's `entries` field is heap-allocated (per
+ * ptr_array_steal). Caller frees with `free(out_files->entries)` etc.
+ * Items in the slice are borrowed (point into workspace's diverged array).
+ *
+ * Selective extraction: Pass NULL for any of out_files / out_dirs /
+ * out_excluded to skip that extraction.
  *
  * Scope filtering: When `scope` is non-NULL, the full operation-scope
  * triplet (profile filter ∧ path filter ∧ ¬exclude) is applied. Orphans
@@ -217,22 +234,19 @@ const workspace_item_t *workspace_get_all_diverged(
  * without re-walking the workspace. A NULL scope is treated as match-all.
  *
  * Edge cases:
- * - No orphans: Returns success with counts=0, arrays=NULL
- * - analyze_orphans=false during load: Returns success with counts=0
- * - Memory failure: Returns error, no partial allocation
- * - scope filter with no matches: Returns success with counts=0
+ * - No orphans: Returns success with all outputs zero-initialized.
+ * - analyze_orphans=false during load: Returns success with zeros.
+ * - Memory failure: Returns error, no partial allocation.
+ * - scope filter with no matches: Returns success with zeros.
  *
  * @param ws Workspace (must not be NULL)
  * @param scope Optional operation scope (NULL = all orphans). When
  *              non-NULL, applies scope_accepts_profile ∧ scope_accepts_path
  *              ∧ ¬scope_is_excluded.
- * @param out_file_orphans Output file array (caller frees, NULL to skip)
- * @param out_file_count Output file count (set to 0 if out_file_orphans is NULL)
- * @param out_dir_orphans Output directory array (caller frees, NULL to skip)
- * @param out_dir_count Output directory count (set to 0 if out_dir_orphans is NULL)
- * @param out_excluded Optional: array of orphans dropped by the exclude
- *                     dimension (caller frees the array; items are
- *                     borrowed from workspace). NULL to skip collection.
+ * @param out_files Output file slice (caller frees entries, NULL to skip)
+ * @param out_dirs Output directory slice (caller frees entries, NULL to skip)
+ * @param out_excluded Output excluded-orphan slice (caller frees entries,
+ *                     NULL to skip collection)
  * @param out_excluded_count Optional: count of orphans preserved because the
  *                           exclude dimension matched (NULL to skip).
  *                           Populated whether or not out_excluded is asked for.
@@ -241,11 +255,9 @@ const workspace_item_t *workspace_get_all_diverged(
 error_t *workspace_extract_orphans(
     const workspace_t *ws,
     const scope_t *scope,
-    const workspace_item_t ***out_file_orphans,
-    size_t *out_file_count,
-    const workspace_item_t ***out_dir_orphans,
-    size_t *out_dir_count,
-    const workspace_item_t ***out_excluded,
+    workspace_items_t *out_files,
+    workspace_items_t *out_dirs,
+    workspace_items_t *out_excluded,
     size_t *out_excluded_count
 );
 
@@ -276,7 +288,7 @@ const workspace_item_t *workspace_get_item(
  * permissions (mode) and ownership (user/group). Checks both independently.
  *
  * Data-centric approach: Accepts values directly instead of structs, enabling use with
- * both VWD cache (file_entry_t) and metadata (metadata_item_t) without conversion.
+ * both state rows (state_file_entry_t) and metadata (metadata_item_t) without conversion.
  *
  * Stat propagation: Caller must provide pre-captured stat to avoid redundant
  * syscalls. This function performs zero filesystem operations.
@@ -299,17 +311,44 @@ error_t *check_item_metadata_divergence(
 );
 
 /**
- * Get the manifest of files managed by the workspace
+ * Get the active in-scope state file slice
  *
- * Returns borrowed reference to the manifest built during workspace_load().
- * The manifest represents all files across all profiles in the workspace scope.
- * The manifest is owned by the workspace and remains valid until workspace_free()
- * is called.
+ * Returns a borrowed view over the state rows that the workspace
+ * partitioned as in-scope and active (i.e., profile is in the enabled
+ * set and lifecycle state is ACTIVE). Pure value return — no allocation,
+ * no error path.
  *
- * @param ws Workspace (must not be NULL)
- * @return Manifest (borrowed reference, never NULL for valid workspace)
+ * The pointers reference rows in the arena snapshot returned by
+ * state_get_all_files at workspace_load time; the arena outlives the
+ * workspace so the slice is valid for the workspace's lifetime.
+ *
+ * Iterate via:
+ *   state_files_t active = workspace_active(ws);
+ *   for (size_t i = 0; i < active.count; i++) {
+ *       const state_file_entry_t *file = active.entries[i];
+ *       ...
+ *   }
+ *
+ * @param ws Workspace (NULL returns an empty slice)
+ * @return Borrowed slice over the active rows
  */
-const manifest_t *workspace_get_manifest(const workspace_t *ws);
+state_files_t workspace_active(const workspace_t *ws);
+
+/**
+ * Look up an active row by filesystem path
+ *
+ * O(1) random access over the active slice. Returns NULL if the path is
+ * not in scope or its row is in a terminal lifecycle state — the
+ * single chokepoint for "is this path managed and active?" probes.
+ *
+ * @param ws Workspace (NULL returns NULL)
+ * @param filesystem_path Path to look up (NULL returns NULL)
+ * @return Borrowed row pointer, or NULL if not active
+ */
+const state_file_entry_t *workspace_lookup_active(
+    const workspace_t *ws,
+    const char *filesystem_path
+);
 
 /**
  * Extract display tags and metadata from workspace item
@@ -356,24 +395,21 @@ bool workspace_item_extract_display_info(
 /**
  * Advance the deployment anchor with in-memory consistency
  *
- * Unified writer for workspace-scope anchor advances. Wraps
- * state_update_anchor so callers cannot drift the DB ahead of
- * ws->manifest: every successful DB write is mirrored onto the in-memory
- * manifest entry's anchor, preserving state_update_anchor's
- * preserve-on-zero semantic on deployed_at.
+ * Workspace-scope side of the routing invariant defined on
+ * state_update_anchor (see state.h): wraps state_update_anchor and then
+ * mirrors the write onto the matching active row's anchor in place, so
+ * the SQL row and the snapshot stay in agreement for the rest of the run.
+ * The mirror preserves state_update_anchor's preserve-on-zero semantic on
+ * deployed_at and monotonic-once-set semantic on observed_at.
  *
- * This is the single entry point for workspace-scope anchor advances:
+ * Single entry point for the live-workspace anchor writers:
  *   - workspace_flush_anchor_updates (witness advance from slow-path)
  *   - apply's adoption loop (ownership advance on first claim)
  *   - apply's post-deploy loop (ownership advance after write)
  *
- * Manifest-layer writers (manifest_add_files / manifest_update_files)
- * continue to call state_update_anchor directly — they run without a
- * live workspace and have no in-memory manifest to patch.
- *
  * Not-found tolerance matches state_update_anchor: if the DB row is
  * absent (filtered by precedence, disabled profile) the write silently
- * no-ops; if the path isn't in the in-memory index, the patch step is
+ * no-ops; if the path isn't in the active index, the patch step is
  * skipped. Neither case is an error.
  *
  * @param ws Workspace (must not be NULL, state must be open)
@@ -398,7 +434,7 @@ error_t *workspace_advance_anchor(
  * fast path instead of re-hashing.
  *
  * Routes through workspace_advance_anchor, so each persisted update also
- * patches the in-memory manifest entry's anchor — DB and memory stay
+ * patches the active row's anchor in place — DB and memory stay
  * consistent for downstream readers in the same run.
  *
  * Self-healing: the first status/apply after profile enable verifies all

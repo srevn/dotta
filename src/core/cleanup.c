@@ -144,7 +144,7 @@ void cleanup_preflight_result_free(cleanup_preflight_result_t *result) {
  * @param repo Repository (must not be NULL)
  * @param state State for safety check lookups (must not be NULL)
  * @param result Cleanup result to update (must not be NULL)
- * @param opts Cleanup options (must not be NULL, orphaned_files can be NULL when count is 0)
+ * @param opts Cleanup options (must not be NULL, orphaned_files slice may be empty)
  * @return Error or NULL on success
  */
 static error_t *prune_orphaned_files(
@@ -164,11 +164,10 @@ static error_t *prune_orphaned_files(
     bool dry_run = opts->dry_run;
     bool force = opts->force;
 
-    const workspace_item_t **orphans = opts->orphaned_files;
-    size_t orphan_count = opts->orphaned_files_count;
+    workspace_items_t orphans = opts->orphaned_files;
 
     /* Early exit if no orphaned files */
-    if (orphan_count == 0) {
+    if (orphans.count == 0) {
         return NULL;
     }
 
@@ -236,7 +235,6 @@ static error_t *prune_orphaned_files(
                 repo,
                 state,
                 orphans,
-                orphan_count,
                 force,
                 &result->safety_violations
             );
@@ -271,8 +269,8 @@ static error_t *prune_orphaned_files(
     }
 
     /* Remove orphaned files and populate result arrays for caller display */
-    for (size_t i = 0; i < orphan_count; i++) {
-        const char *path = orphans[i]->filesystem_path;
+    for (size_t i = 0; i < orphans.count; i++) {
+        const char *path = orphans.entries[i]->filesystem_path;
 
         /* Check for safety violations using O(1) hashmap lookup */
         const safety_violation_t *violation = violations_map ?
@@ -374,7 +372,7 @@ static error_t *prune_orphaned_files(
  * @param removed_path Path of directory that was just removed
  */
 static void reset_parent_directory_state_orphans(
-    const workspace_item_t **orphan_entries,
+    const workspace_item_t *const *orphan_entries,
     size_t dir_count,
     directory_state_t *states,
     const char *removed_path
@@ -439,14 +437,13 @@ static void reset_parent_directory_state_orphans(
  * - DIR_STATE_FAILED: Skip in all future iterations
  * - DIR_STATE_UNKNOWN: Check in this iteration
  *
- * @param orphaned_dirs Pre-computed orphan list (can be NULL when orphan_count is 0)
+ * @param orphaned_dirs Pre-computed orphan slice (count == 0 is valid)
  * @param result Cleanup result to update (must not be NULL)
  * @param opts Cleanup options (must not be NULL)
  * @return Error or NULL on success
  */
 static error_t *prune_orphaned_directories(
-    const workspace_item_t **orphaned_dirs,
-    size_t orphan_count,
+    workspace_items_t orphaned_dirs,
     cleanup_result_t *result,
     const cleanup_options_t *opts
 ) {
@@ -455,14 +452,14 @@ static error_t *prune_orphaned_directories(
 
     bool dry_run = opts->dry_run;
 
-    const workspace_item_t **orphans = orphaned_dirs;
+    const workspace_item_t *const *orphans = orphaned_dirs.entries;
 
     /* Early exit: no orphaned directories */
-    if (orphan_count == 0) {
+    if (orphaned_dirs.count == 0) {
         return NULL;
     }
 
-    size_t dir_count = orphan_count;
+    size_t dir_count = orphaned_dirs.count;
 
     /* Allocate state tracking array */
     directory_state_t *states = calloc(dir_count, sizeof(directory_state_t));
@@ -639,10 +636,10 @@ error_t *cleanup_preflight_check(
     string_array_t *orphaned_files = NULL;
     string_array_t *orphaned_dirs_display = NULL;
 
-    const workspace_item_t **file_orphans = opts->orphaned_files;
-    size_t file_orphan_count = opts->orphaned_files_count;
-    const workspace_item_t **dir_orphans = opts->orphaned_directories;
-    size_t dir_orphan_count = opts->orphaned_directories_count;
+    workspace_items_t file_orphans = opts->orphaned_files;
+    workspace_items_t dir_orphans = opts->orphaned_directories;
+    size_t file_orphan_count = file_orphans.count;
+    size_t dir_orphan_count = dir_orphans.count;
 
     /* Allocate result structure */
     result = calloc(1, sizeof(cleanup_preflight_result_t));
@@ -673,7 +670,7 @@ error_t *cleanup_preflight_check(
         }
 
         for (size_t i = 0; i < file_orphan_count; i++) {
-            err = string_array_push(orphaned_files, file_orphans[i]->filesystem_path);
+            err = string_array_push(orphaned_files, file_orphans.entries[i]->filesystem_path);
             if (err) {
                 err = error_wrap(err, "Failed to add orphaned file to display list");
                 goto cleanup;
@@ -695,7 +692,6 @@ error_t *cleanup_preflight_check(
                 repo,
                 state,
                 file_orphans,
-                file_orphan_count,
                 false,  /* Always false here (guarded by !opts->force above) */
                 &result->safety_violations
             );
@@ -738,7 +734,7 @@ error_t *cleanup_preflight_check(
 
         /* Check which orphaned directories are non-empty (read-only preview) */
         for (size_t i = 0; i < dir_orphan_count; i++) {
-            const char *dir_path = dir_orphans[i]->filesystem_path;
+            const char *dir_path = dir_orphans.entries[i]->filesystem_path;
 
             /* Add to display list */
             err = string_array_push(orphaned_dirs_display, dir_path);
@@ -811,9 +807,7 @@ error_t *cleanup_execute(
     }
 
     /* Step 2: Prune orphaned directories (with inline safety check) */
-    err = prune_orphaned_directories(
-        opts->orphaned_directories, opts->orphaned_directories_count, result, opts
-    );
+    err = prune_orphaned_directories(opts->orphaned_directories, result, opts);
     if (err) {
         cleanup_result_free(result);
         return error_wrap(err, "Failed to prune orphaned directories");

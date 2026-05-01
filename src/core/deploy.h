@@ -17,8 +17,8 @@
 #include <git2.h>
 #include <types.h>
 
-#include "core/manifest.h"
 #include "core/metadata.h"
+#include "core/state.h"
 
 /* Forward declarations */
 typedef struct hashmap hashmap_t;
@@ -110,14 +110,14 @@ typedef struct {
  * - Writability checks - filesystem-level (not in workspace)
  *
  * @param ws Workspace with pre-loaded divergence analysis (must not be NULL)
- * @param manifest Manifest for iteration (must not be NULL)
+ * @param files Borrowed slice of state rows to deploy (passed by value)
  * @param opts Deployment options (must not be NULL)
  * @param out Pre-flight results (must not be NULL, caller must free)
  * @return Error or NULL on success
  */
 error_t *deploy_workspace_preflight(
     const workspace_t *ws,
-    const manifest_t *manifest,
+    state_files_t files,
     const deploy_options_t *opts,
     preflight_result_t **out
 );
@@ -125,22 +125,24 @@ error_t *deploy_workspace_preflight(
 /**
  * Execute deployment
  *
- * Deploys all files in manifest to filesystem.
+ * Deploys every state row in `files` to the filesystem.
  *
  * Uses workspace for smart skip optimization - queries pre-computed divergence
  * analysis instead of re-analyzing files. This eliminates redundant content
  * comparisons and decryption operations.
  *
- * Architecture (Manifest Authority):
+ * Architecture:
  * - Workspace: Single source of truth for divergence (already computed)
  * - Deploy: Pure execution engine, queries workspace for skip decisions
  * - State: Source of truth for directory entries and file metadata (VWD principle)
- * - File entries: Self-contained (mode, owner, group, encrypted from state cache)
+ * - State rows: Self-contained (mode, owner, group, encrypted, blob_oid).
+ *   Pointers in `files` borrow into the workspace's arena snapshot — valid
+ *   for the workspace's lifetime, no allocation transfer to the deploy path.
  * - State management: Handled by caller after deployment succeeds
  *
  * @param repo Repository (must not be NULL)
  * @param ws Workspace with pre-computed divergence analysis (must not be NULL)
- * @param manifest Manifest to deploy (must not be NULL)
+ * @param files Borrowed slice of state rows to deploy (passed by value)
  * @param state State database for tracked directories (can be NULL)
  * @param arena Scratch arena for the tracked-directories snapshot and
  *              required-ancestor scan. Allocations live until the caller
@@ -153,7 +155,7 @@ error_t *deploy_workspace_preflight(
 error_t *deploy_execute(
     git_repository *repo,
     const workspace_t *ws,
-    const manifest_t *manifest,
+    state_files_t files,
     const state_t *state,
     arena_t *arena,
     const deploy_options_t *opts,
@@ -164,29 +166,29 @@ error_t *deploy_execute(
 /**
  * Deploy single file
  *
- * Deploys a single file from the manifest to its target location.
+ * Deploys a single state row to its target filesystem location.
  *
  * Architecture (VWD Authority):
- * - file_entry_t is self-contained (contains mode, owner, group, encrypted from state)
- * - No separate metadata parameter needed (eliminated redundant O(n) lookup)
+ * - state_file_entry_t is self-contained (mode, owner, group, encrypted, blob_oid)
+ * - No separate metadata parameter (state cache already has everything)
  * - Encryption handled transparently by content cache
  *
  * VWD Model:
- * - entry->mode: Permission mode from state database (0 = use git mode fallback)
- * - entry->owner/group: Ownership strings for root/ prefix files (NULL for home/)
- * - entry->encrypted: Encryption flag from state (validated at manifest sync)
+ * - file->mode: Permission mode from state (0 = use safe fallback by type)
+ * - file->owner/group: Ownership strings for root/ prefix files (NULL for home/)
+ * - file->encrypted: Encryption flag from state (validated at manifest sync)
  *
  * @param repo Repository (must not be NULL)
  * @param cache Content cache for batch operations (must not be NULL)
- * @param entry File entry to deploy (must not be NULL, contains all deployment metadata).
- *              Non-const: may lazy-load git tree entry on first access.
+ * @param file State row to deploy (must not be NULL; borrowed from the
+ *             workspace's arena snapshot, read-only for deploy).
  * @param opts Deployment options (must not be NULL)
  * @return Error or NULL on success
  */
 error_t *deploy_file(
     git_repository *repo,
     content_cache_t *cache,
-    file_entry_t *entry,
+    const state_file_entry_t *file,
     const deploy_options_t *opts
 );
 

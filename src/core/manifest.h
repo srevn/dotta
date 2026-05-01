@@ -98,14 +98,13 @@ typedef struct file_entry {
  * The index field provides O(1) lookups by filesystem_path. It maps
  * filesystem_path -> array index (offset by 1 to distinguish NULL from index 0).
  * The index is populated by manifest_build() and can be NULL for
- * manifests built by other means (e.g., workspace_build_manifest_from_state).
+ * manifests built by other means (e.g., manifest_build_from_tree()).
  *
  * Per-entry string fields (storage_path, filesystem_path, owner, group, plus
- * the borrowed profile pointer) live in a caller-owned arena. The arena is
- * supplied by the construction path: manifest_build() takes it as a parameter,
- * manifest_build_from_tree() takes it as a parameter, and
- * workspace_build_manifest_from_state() draws from ws->arena. The arena must
- * outlive the manifest; manifest_free() leaves the strings to it.
+ * the borrowed profile pointer) live in a caller-owned arena. Both
+ * manifest_build() and manifest_build_from_tree() take the arena as a
+ * parameter. The arena must outlive the manifest; manifest_free() leaves
+ * the strings to it.
  */
 typedef struct manifest {
     file_entry_t *entries;

@@ -57,32 +57,28 @@
  */
 typedef struct {
     /**
-     * Pre-computed file orphan array from workspace
+     * Pre-computed file orphan slice from workspace
      *
-     * Must be extracted by caller from workspace using workspace_extract_orphans().
-     * Treated as borrowed reference (cleanup does not free).
+     * Must be extracted by caller via workspace_extract_orphans(). Treated
+     * as borrowed reference (cleanup does not free).
      *
      * Rationale: Workspace already detected orphans during workspace_load().
-     * Eliminates redundant orphan detection in cleanup module.
-     *
-     * Performance: Single orphan detection pass instead of multiple.
+     * Eliminates redundant orphan detection in cleanup module. Empty slice
+     * (count == 0) is valid.
      */
-    const workspace_item_t **orphaned_files;     /* Workspace item array (must not be NULL) */
-    size_t orphaned_files_count;                 /* Number of orphaned files */
+    workspace_items_t orphaned_files;
 
     /**
-     * Pre-computed directory orphan array from workspace
+     * Pre-computed directory orphan slice from workspace
      *
-     * Must be extracted by caller from workspace using workspace_extract_orphans().
-     * Treated as borrowed reference (cleanup does not free).
+     * Must be extracted by caller via workspace_extract_orphans(). Treated
+     * as borrowed reference (cleanup does not free).
      *
-     * Rationale: Workspace already detected directory orphans during workspace_load().
-     * Eliminates redundant orphan detection in cleanup module.
-     *
-     * Performance: Single orphan detection pass instead of multiple.
+     * Rationale: Workspace already detected directory orphans during
+     * workspace_load(). Eliminates redundant orphan detection in cleanup
+     * module. Empty slice (count == 0) is valid.
      */
-    const workspace_item_t **orphaned_directories;  /* Workspace item array (must not be NULL) */
-    size_t orphaned_directories_count;              /* Number of orphaned directories */
+    workspace_items_t orphaned_directories;
 
     /**
      * Pre-computed safety violations from preflight check
@@ -216,8 +212,8 @@ typedef struct {
  *
  * Architecture:
  * Orphans are PRE-DETECTED by workspace module and passed via opts:
- * - opts->orphaned_files: workspace_item_t** array from workspace
- * - opts->orphaned_directories: workspace_item_t** array from workspace
+ * - opts->orphaned_files: workspace_items_t slice from workspace
+ * - opts->orphaned_directories: workspace_items_t slice from workspace
  *
  * This function focuses on safety validation and preview, not detection.
  *
@@ -272,8 +268,8 @@ error_t *cleanup_preflight_check(
  *
  * Architecture:
  * Orphans are PRE-DETECTED by workspace module and passed via opts:
- * - opts->orphaned_files: workspace_item_t** array
- * - opts->orphaned_directories: workspace_item_t** array
+ * - opts->orphaned_files: workspace_items_t slice
+ * - opts->orphaned_directories: workspace_items_t slice
  *
  * This function focuses on removal operations, not detection.
  *

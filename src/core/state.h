@@ -240,6 +240,30 @@ typedef struct {
 } state_file_entry_t;
 
 /**
+ * Bound carrier for a borrowed slice of state file entries
+ *
+ * Structural type — parallels libgit2's git_strarray and base/array's
+ * string_array_t. The producer's signature dictates lifetime via the
+ * arena (or other allocator) that backs the rows.
+ *
+ * Lifetime examples:
+ *   workspace_active(ws)            → backed by ws->arena (workspace lifetime).
+ *   apply's local divergent buffer  → backed by a ptr_array_t on the heap;
+ *                                     valid for the caller's stack scope.
+ *
+ * Both fields are read-only views: callers iterate with
+ *   for (size_t i = 0; i < files.count; i++) {
+ *       const state_file_entry_t *file = files.entries[i];
+ *       ...
+ *   }
+ * No allocation, no free contract — the struct is a value, not a handle.
+ */
+typedef struct {
+    const state_file_entry_t *const *entries;
+    size_t count;
+} state_files_t;
+
+/**
  * Enabled profile entry
  *
  * One row from the enabled_profiles table, materialized as an in-memory record.
@@ -716,6 +740,18 @@ void state_free_entry(state_file_entry_t *entry);
  * The sole writer of the deployment columns (deployed_blob_oid, deployed_at,
  * observed_at, stat_*). Call after confirming disk content matches
  * anchor->blob_oid.
+ *
+ * ROUTING INVARIANT — this is load-bearing:
+ *   - If a workspace is live for this transaction, anchor advances MUST
+ *     route through workspace_advance_anchor (workspace.h). That wrapper
+ *     calls this function and then mirrors the write onto the workspace's
+ *     in-memory snapshot row, so downstream readers in the same run see
+ *     DB and memory in agreement. Calling state_update_anchor directly
+ *     while a workspace is live silently desyncs the snapshot.
+ *   - If no workspace is live (manifest layer paths: manifest_add_files,
+ *     manifest_update_files, sync_entry_to_state), this function is the
+ *     legitimate direct caller. There is no snapshot to patch, and the
+ *     next workspace_load reads SQL fresh.
  *
  * Semantics:
  *   - anchor->blob_oid must be non-zero. A zero blob_oid is only valid as

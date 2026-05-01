@@ -18,7 +18,6 @@
 #include "base/string.h"
 #include "core/cleanup.h"
 #include "core/deploy.h"
-#include "core/manifest.h"
 #include "core/safety.h"
 #include "core/scope.h"
 #include "core/state.h"
@@ -565,31 +564,28 @@ static void print_cleanup_preflight_results(
 /**
  * Check privileges for complete apply operation
  *
- * Examines manifest (files being deployed), file orphans (files being removed),
- * AND directory orphans (directories being removed) for root/ paths. This ensures
- * we have required privileges BEFORE attempting any filesystem modifications.
+ * Examines files being deployed, file orphans (files being removed), AND
+ * directory orphans (directories being removed) for root/ paths. This
+ * ensures we have required privileges BEFORE attempting any filesystem
+ * modifications.
  *
- * @param manifest Files being deployed (must not be NULL)
- * @param file_orphans Files being removed (can be NULL if --keep-orphans)
- * @param file_orphan_count Number of file orphans
- * @param dir_orphans Directories being removed (can be NULL if --keep-orphans)
- * @param dir_orphan_count Number of directory orphans
+ * @param ctx Command context (must not be NULL)
+ * @param files Files being deployed (passed by value)
+ * @param file_orphans Files being removed (zeroed if --keep-orphans)
+ * @param dir_orphans Directories being removed (zeroed if --keep-orphans)
  * @param opts Apply command options (must not be NULL)
  * @param out Output context for messages (must not be NULL)
  * @return NULL if OK to proceed, error otherwise (or does not return if re-exec with sudo)
  */
 static error_t *ensure_complete_apply_privileges(
     const dotta_ctx_t *ctx,
-    const manifest_t *manifest,
-    const workspace_item_t **file_orphans,
-    size_t file_orphan_count,
-    const workspace_item_t **dir_orphans,
-    size_t dir_orphan_count,
+    state_files_t files,
+    workspace_items_t file_orphans,
+    workspace_items_t dir_orphans,
     const cmd_apply_options_t *opts,
     output_t *out
 ) {
     CHECK_NULL(ctx);
-    CHECK_NULL(manifest);
     CHECK_NULL(opts);
     CHECK_NULL(out);
 
@@ -599,7 +595,7 @@ static error_t *ensure_complete_apply_privileges(
 
     /* Strict upper bound — every entry across the three sources may need
      * elevation. Reserve once to keep growth out of the hot loop. */
-    size_t cap = manifest->count + file_orphan_count + dir_orphan_count;
+    size_t cap = files.count + file_orphans.count + dir_orphans.count;
     if (cap == 0) return NULL;
 
     string_array_t labels STRING_ARRAY_AUTO = { 0 };
@@ -609,29 +605,29 @@ static error_t *ensure_complete_apply_privileges(
     /* Collect labels for entries needing elevation. The collect helper
      * runs the predicate and pushes the storage_path in one step — the
      * filter is enforced by the privilege module, not the call site. */
-    for (size_t i = 0; i < manifest->count; i++) {
+    for (size_t i = 0; i < files.count; i++) {
         err = privilege_collect_label(
             &labels,
-            manifest->entries[i].storage_path,
-            manifest->entries[i].filesystem_path
+            files.entries[i]->storage_path,
+            files.entries[i]->filesystem_path
         );
         if (err) return err;
     }
 
-    for (size_t i = 0; i < file_orphan_count; i++) {
+    for (size_t i = 0; i < file_orphans.count; i++) {
         err = privilege_collect_label(
             &labels,
-            file_orphans[i]->storage_path,
-            file_orphans[i]->filesystem_path
+            file_orphans.entries[i]->storage_path,
+            file_orphans.entries[i]->filesystem_path
         );
         if (err) return err;
     }
 
-    for (size_t i = 0; i < dir_orphan_count; i++) {
+    for (size_t i = 0; i < dir_orphans.count; i++) {
         err = privilege_collect_label(
             &labels,
-            dir_orphans[i]->storage_path,
-            dir_orphans[i]->filesystem_path
+            dir_orphans.entries[i]->storage_path,
+            dir_orphans.entries[i]->filesystem_path
         );
         if (err) return err;
     }
@@ -695,9 +691,9 @@ static bool needs_deployment(const workspace_item_t *ws_item) {
         case WORKSPACE_STATE_ORPHANED:
             /* File exists in deployment state but not in any enabled profile.
              *
-             * Architectural invariant: Orphaned files should NOT appear in the manifest
-             * (manifest only contains files from enabled profiles). If we reach here,
-             * it's a programming error in workspace or manifest building.
+             * Architectural invariant: Orphaned files should NOT appear in the active
+             * slice (which is partitioned to enabled profiles only). If we reach here,
+             * it's a programming error in the workspace partition.
              *
              * Defensive: Return false (don't deploy orphans, cleanup handles removal). */
             return false;
@@ -705,9 +701,9 @@ static bool needs_deployment(const workspace_item_t *ws_item) {
         case WORKSPACE_STATE_UNTRACKED:
             /* File exists on filesystem in a tracked directory but not in Git.
              *
-             * Architectural invariant: Untracked files should NOT appear in the manifest
-             * (manifest is built from Git, not filesystem). If we reach here, it's a
-             * programming error.
+             * Architectural invariant: Untracked files should NOT appear in the active
+             * slice (which is built from state rows, not filesystem scans). If we
+             * reach here, it's a programming error.
              *
              * Defensive: Return false (don't deploy untracked files, user must 'add' them). */
             return false;
@@ -736,19 +732,17 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     const config_t *config = ctx->config;
     output_t *out = ctx->out;
 
-    /* Declare all resources at the top, initialized to NULL */
+    /* Declare all resources at the top, initialized to NULL/zero */
     error_t *err = NULL;
-    state_t *state = ctx->state;  /* Borrowed from dispatcher (WRITE) */
+    state_t *state = ctx->state;                /* Borrowed from dispatcher (WRITE) */
     scope_t *scope = NULL;
-    const manifest_t *manifest = NULL;
-    manifest_t *deploy_manifest = NULL;
-    ptr_array_t divergent = { 0 };
+    state_files_t active = { 0 };               /* Workspace's borrowed slice (no free) */
+    state_files_t to_deploy = { 0 };            /* Aliases divergent.items below (no free) */
+    ptr_array_t divergent = { 0 };              /* Heap-backed pointer array */
     workspace_t *ws = NULL;
-    const workspace_item_t **file_orphans = NULL;
-    size_t file_orphan_count = 0;
-    const workspace_item_t **dir_orphans = NULL;
-    size_t dir_orphan_count = 0;
-    const workspace_item_t **excluded_orphans = NULL;
+    workspace_items_t file_orphans = { 0 };     /* heap-allocated entries (must free) */
+    workspace_items_t dir_orphans = { 0 };      /* heap-allocated entries (must free) */
+    workspace_items_t excluded_orphans = { 0 }; /* heap-allocated entries (must free) */
     content_cache_t *cache = NULL;
     preflight_result_t *preflight = NULL;
     cleanup_preflight_result_t *cleanup_preflight = NULL;
@@ -809,11 +803,11 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         );
     }
 
-    /* Load workspace (includes manifest building and metadata loading)
+    /* Load workspace (partitions active state rows and runs divergence analysis)
      *
-     * The workspace builds the manifest internally during initialization,
-     * eliminating redundant manifest building. We extract the manifest
-     * immediately after loading for use throughout the command.
+     * After workspace_load returns, workspace_active(ws) yields the in-scope
+     * active slice; we use that view throughout the command instead of
+     * building a separate manifest.
      *
      * Pass state handle to workspace so it analyzes within our write transaction.
      * This ensures consistency and eliminates redundant database connections.
@@ -840,7 +834,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     /* Persist deployment-anchor advances for files verified clean via the
      * slow path. Within apply's transaction — committed atomically with
      * deployment changes. Routed through workspace_advance_anchor, so each
-     * persisted update also patches ws->manifest's in-memory anchor —
+     * persisted update also patches the workspace's snapshot row in place —
      * downstream readers in this run see DB and memory agreeing. */
     err = workspace_flush_anchor_updates(ws);
     if (err) {
@@ -848,24 +842,20 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         goto cleanup;
     }
 
-    /* Extract manifest from workspace (borrowed reference, owned by workspace) */
-    manifest = workspace_get_manifest(ws);
-    if (!manifest) {
-        err = ERROR(ERR_INTERNAL, "Workspace manifest is NULL");
-        goto cleanup;
-    }
+    /* Borrow the active in-scope slice (no allocation, no free contract) */
+    active = workspace_active(ws);
 
     output_print(
-        out, OUTPUT_VERBOSE, "Workspace loaded: %zu file%s in manifest\n",
-        manifest->count, manifest->count == 1 ? "" : "s"
+        out, OUTPUT_VERBOSE, "Workspace loaded: %zu active file%s in scope\n",
+        active.count, active.count == 1 ? "" : "s"
     );
 
     /* CONVERGENCE MODEL: Analyze files for divergence and build deployment list
      *
      * Single-pass algorithm:
-     *   - Walk the manifest once, applying filters and divergence analysis
-     *   - Borrow divergent entries into a scratch ptr_array_t
-     *   - Materialize the deployment manifest by exact-size copy
+     *   - Walk the active slice once, applying filters and divergence analysis
+     *   - Push divergent state-row pointers into a scratch ptr_array_t
+     *   - Bind that buffer into a state_files_t carrier for deploy
      *
      * Architecture:
      * - workspace_load() already computed fresh divergence for ALL files
@@ -879,26 +869,26 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     size_t excluded_deploy_count = 0;  /* Track deployment exclusions */
     size_t excluded_orphan_count = 0;  /* Track orphan exclusions */
 
-    for (size_t i = 0; i < manifest->count; i++) {
-        const file_entry_t *entry = &manifest->entries[i];
+    for (size_t i = 0; i < active.count; i++) {
+        const state_file_entry_t *file = active.entries[i];
 
         /* Filter by operation profiles (skip files not in filter).
          * scope_accepts_profile already rejects NULL profiles. */
-        if (!scope_accepts_profile(scope, entry->profile)) {
+        if (!scope_accepts_profile(scope, file->profile)) {
             continue;
         }
 
         /* Filter by file filter (skip files not in CLI file list) */
-        if (!scope_accepts_path(scope, entry->storage_path)) {
+        if (!scope_accepts_path(scope, file->storage_path)) {
             continue;
         }
 
         /* Filter by exclusion pattern (skip excluded files; count by reason) */
-        if (scope_is_excluded(scope, entry->storage_path)) {
+        if (scope_is_excluded(scope, file->storage_path)) {
             excluded_deploy_count++;
             output_print(
                 out, OUTPUT_VERBOSE, "  Skipping (excluded): %s\n",
-                entry->filesystem_path
+                file->filesystem_path
             );
             continue;
         }
@@ -909,7 +899,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
          *   - NULL if file is clean (no divergence, not in index)
          *   - workspace_item_t* if file has state/divergence issues
          */
-        const workspace_item_t *ws_item = workspace_get_item(ws, entry->filesystem_path);
+        const workspace_item_t *ws_item = workspace_get_item(ws, file->filesystem_path);
 
         if (needs_deployment(ws_item)) {
             /* File needs deployment - either missing or has property divergence
@@ -925,7 +915,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
              *   - DIVERGENCE_TYPE: Type changed (file->symlink, etc.)
              *   - DIVERGENCE_ENCRYPTION: Encryption policy violation
              */
-            err = ptr_array_push(&divergent, entry);
+            err = ptr_array_push(&divergent, file);
             if (err) {
                 err = error_wrap(err, "Failed to record divergent entry");
                 goto cleanup;
@@ -936,42 +926,18 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         }
     }
 
-    /* Allocate deployment manifest structure (always, for consistency) */
-    deploy_manifest = calloc(1, sizeof(manifest_t));
-    if (!deploy_manifest) {
-        err = ERROR(ERR_MEMORY, "Failed to allocate deployment manifest");
-        goto cleanup;
-    }
-    deploy_manifest->count = 0;
-
-    /* Materialize entries by exact-size copy. When zero divergent files exist,
-     * entries remains NULL — saves memory in the common (clean) case and
-     * preserves the consumer-facing contract that count==0 implies entries==NULL.
+    /* Bind the divergent buffer into a typed carrier for deploy.
      *
-     * Shallow copy: all pointers inside file_entry_t (tree entries, profile
-     * pointers) are borrowed from workspace manifest; memory stays workspace-owned.
-     */
-    if (divergent.count > 0) {
-        deploy_manifest->entries = calloc(divergent.count, sizeof(file_entry_t));
-        if (!deploy_manifest->entries) {
-            free(deploy_manifest);
-            deploy_manifest = NULL;
-            err = ERROR(ERR_MEMORY, "Failed to allocate deployment entries");
-            goto cleanup;
-        }
-
-        for (size_t i = 0; i < divergent.count; i++) {
-            deploy_manifest->entries[i] = *(const file_entry_t *) divergent.items[i];
-        }
-        deploy_manifest->count = divergent.count;
-    } else {
-        /* No divergent files - entries array remains NULL (saves memory) */
-        deploy_manifest->entries = NULL;
-    }
+     * Lifetime: to_deploy.entries aliases divergent.items; the row pointers
+     * live in the workspace's arena snapshot (workspace lifetime). The
+     * scratch buffer itself is freed at the cleanup label via
+     * ptr_array_deinit(&divergent). No allocator dance, no shallow copy. */
+    to_deploy.entries = (const state_file_entry_t *const *) divergent.items;
+    to_deploy.count = divergent.count;
 
     output_print(
         out, OUTPUT_VERBOSE, "  %zu file%s need deployment (missing or divergent)\n",
-        deploy_manifest->count, deploy_manifest->count == 1 ? "" : "s"
+        to_deploy.count, to_deploy.count == 1 ? "" : "s"
     );
     output_print(
         out, OUTPUT_VERBOSE, "  %zu file%s already up-to-date (skipped)\n",
@@ -979,7 +945,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     );
 
     /* Warn if file filter was specified but no files matched */
-    if (scope_has_paths(scope) && deploy_manifest->count == 0 && clean_count == 0) {
+    if (scope_has_paths(scope) && to_deploy.count == 0 && clean_count == 0) {
         output_warning(out, OUTPUT_NORMAL, "No matching files found in enabled profiles");
         output_hint(out, OUTPUT_NORMAL, "Check if the file path is correct and profile is enabled");
     }
@@ -1018,23 +984,23 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     size_t adopted_count = 0;
     time_t adopt_now = time(NULL);
 
-    for (size_t i = 0; i < manifest->count; i++) {
-        const file_entry_t *entry = &manifest->entries[i];
+    for (size_t i = 0; i < active.count; i++) {
+        const state_file_entry_t *file = active.entries[i];
 
-        if (entry->anchor.deployed_at > 0) continue;
-        if (!scope_accepts_entry(scope, entry->profile, entry->storage_path)) {
+        if (file->anchor.deployed_at > 0) continue;
+        if (!scope_accepts_entry(scope, file->profile, file->storage_path)) {
             continue;
         }
 
-        const workspace_item_t *ws_item = workspace_get_item(ws, entry->filesystem_path);
+        const workspace_item_t *ws_item = workspace_get_item(ws, file->filesystem_path);
         if (needs_deployment(ws_item)) continue;  /* handled by deploy path */
 
         if (!opts->dry_run) {
             deployment_anchor_t anchor = capture_anchor_from_disk(
-                entry->filesystem_path, &entry->blob_oid, adopt_now
+                file->filesystem_path, &file->blob_oid, adopt_now
             );
             error_t *adopt_err = workspace_advance_anchor(
-                ws, entry->filesystem_path, &anchor
+                ws, file->filesystem_path, &anchor
             );
             if (adopt_err) {
                 /* Non-fatal: file is correct on disk; next status's slow-path
@@ -1042,7 +1008,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
                  * re-adopted on the next apply. */
                 output_warning(
                     out, OUTPUT_NORMAL, "Failed to record adoption anchor for %s: %s",
-                    entry->filesystem_path, error_message(adopt_err)
+                    file->filesystem_path, error_message(adopt_err)
                 );
                 error_free(adopt_err);
                 continue;  /* Failed writes don't count — preview still accurate */
@@ -1100,55 +1066,55 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
          * Coherent Scope principle: the workspace applies the full
          * operation-scope triplet — orphans outside the profile/path
          * dimensions are silently skipped, and orphans matched by an
-         * --exclude pattern are counted via excluded_orphan_count so the
-         * post-run summary can report them by reason. */
+         * --exclude pattern land in excluded_orphans so the post-run
+         * summary can report them by reason. */
         err = workspace_extract_orphans(
-            ws, scope, &file_orphans, &file_orphan_count, &dir_orphans, &dir_orphan_count,
-            &excluded_orphans, &excluded_orphan_count
+            ws, scope, &file_orphans, &dir_orphans, &excluded_orphans, NULL
         );
         if (err) {
             err = error_wrap(err, "Failed to extract orphans from workspace");
             goto cleanup;
         }
+        excluded_orphan_count = excluded_orphans.count;
 
         /* Mirror the deployment-loop trace: for each orphan held back by
          * --exclude, emit a per-file line. output_print gates on the
          * verbosity level, so non-verbose runs pay only the loop cost. */
-        for (size_t i = 0; i < excluded_orphan_count; i++) {
+        for (size_t i = 0; i < excluded_orphans.count; i++) {
             output_print(
                 out, OUTPUT_VERBOSE, "  Preserving orphan (excluded): %s\n",
-                excluded_orphans[i]->filesystem_path
+                excluded_orphans.entries[i]->filesystem_path
             );
         }
 
-        if (file_orphan_count > 0) {
+        if (file_orphans.count > 0) {
             output_print(
                 out, OUTPUT_VERBOSE, "Found %zu orphaned file%s\n",
-                file_orphan_count, file_orphan_count == 1 ? "" : "s"
+                file_orphans.count, file_orphans.count == 1 ? "" : "s"
             );
         }
-        if (dir_orphan_count > 0) {
+        if (dir_orphans.count > 0) {
             output_print(
                 out, OUTPUT_VERBOSE, "Found %zu orphaned director%s\n",
-                dir_orphan_count, dir_orphan_count == 1 ? "y" : "ies"
+                dir_orphans.count, dir_orphans.count == 1 ? "y" : "ies"
             );
         }
 
         /* Show breakdown by profile status */
-        if (file_orphan_count > 0 || dir_orphan_count > 0) {
+        if (file_orphans.count > 0 || dir_orphans.count > 0) {
             size_t disabled_count = 0;
             size_t enabled_count = 0;
 
             /* Count using already-extracted orphan arrays */
-            for (size_t i = 0; i < file_orphan_count; i++) {
-                if (file_orphans[i]->profile_enabled) {
+            for (size_t i = 0; i < file_orphans.count; i++) {
+                if (file_orphans.entries[i]->profile_enabled) {
                     enabled_count++;
                 } else {
                     disabled_count++;
                 }
             }
-            for (size_t i = 0; i < dir_orphan_count; i++) {
-                if (dir_orphans[i]->profile_enabled) {
+            for (size_t i = 0; i < dir_orphans.count; i++) {
+                if (dir_orphans.entries[i]->profile_enabled) {
                     enabled_count++;
                 } else {
                     disabled_count++;
@@ -1179,20 +1145,20 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * Profile reassignment (old_profile set in state) is state bookkeeping,
      * not deployment: no bytes need to move to disk since content may be
      * identical. needs_deployment() correctly returns false for these, so
-     * they never enter deploy_manifest. But the old_profile flag must still
+     * they never enter to_deploy. But the old_profile flag must still
      * be cleared to prevent the workspace from reporting stale divergence.
      *
      * DIVERGENCE_STALE is tagged inside analyze_file_divergence from the
-     * persistent anchor.blob_oid vs manifest.blob_oid comparison — a
+     * persistent anchor.blob_oid vs row.blob_oid comparison — a
      * cross-invocation signal that survives status→apply sequences and
      * reports correctly even when reconcile had nothing new to repair.
      *
      * Counted before the early-exit check to prevent the infinite dirty-status
      * loop: status reports DIRTY (profile_changed), but needs_deployment()
-     * correctly returns false (no content divergence), so deploy_manifest is
+     * correctly returns false (no content divergence), so to_deploy is
      * empty. Without this check, the acknowledgment code is never reached.
      *
-     * Applies the same three filters as deploy_manifest construction:
+     * Applies the same three filters as the to_deploy build loop:
      *   1. Profile filter (-p): Coherent Scope — only acknowledge within scope
      *   2. Path filter (file args): Only acknowledge targeted files
      *   3. Exclusion filter (--exclude): Respect explicit exclusions
@@ -1222,9 +1188,9 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     }
 
     /* Check if there's anything to do */
-    bool no_orphans = opts->keep_orphans || (file_orphan_count == 0 && dir_orphan_count == 0);
+    bool no_orphans = opts->keep_orphans || (file_orphans.count == 0 && dir_orphans.count == 0);
 
-    if (deploy_manifest->count == 0 && acknowledged_count == 0 && no_orphans) {
+    if (to_deploy.count == 0 && acknowledged_count == 0 && no_orphans) {
         /* Nothing to deploy, acknowledge, or clean */
         size_t total_excluded = excluded_deploy_count + excluded_orphan_count;
         if (total_excluded > 0) {
@@ -1252,7 +1218,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * When only profile bookkeeping is pending (no deployment, no orphans),
      * skip privilege checks, preflight, hooks, and confirmation — none apply
      * to pure state bookkeeping that doesn't touch the filesystem. */
-    if (deploy_manifest->count == 0 && no_orphans) {
+    if (to_deploy.count == 0 && no_orphans) {
         if (!opts->dry_run) {
             size_t cleared = 0;
 
@@ -1304,7 +1270,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      *
      * This ensures we have required privileges upfront, preventing partial
      * deployments and cryptic mid-operation failures. Checks occur AFTER
-     * manifest building AND orphan identification (know all files/dirs) but BEFORE
+     * the active slice and orphan identification (know all files/dirs) but BEFORE
      * any filesystem modifications.
      *
      * Skip check if dry-run (read-only operation, no privileges needed).
@@ -1316,8 +1282,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         output_print(out, OUTPUT_VERBOSE, "\nChecking privilege requirements...\n");
 
         err = ensure_complete_apply_privileges(
-            ctx, deploy_manifest, file_orphans, file_orphan_count, dir_orphans,
-            dir_orphan_count, opts, out
+            ctx, to_deploy, file_orphans, dir_orphans, opts, out
         );
         if (err) {
             err = error_wrap(err, "Insufficient privileges for operation");
@@ -1351,7 +1316,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         .scope            = scope
     };
 
-    err = deploy_workspace_preflight(ws, deploy_manifest, &deploy_opts, &preflight);
+    err = deploy_workspace_preflight(ws, to_deploy, &deploy_opts, &preflight);
     if (err) {
         err = error_wrap(err, "Pre-flight checks failed");
         goto cleanup;
@@ -1374,14 +1339,12 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         output_print(out, OUTPUT_VERBOSE, "\nChecking orphaned files...\n");
 
         cleanup_options_t cleanup_opts = {
-            .orphaned_files             = file_orphans, /* Workspace item array */
-            .orphaned_files_count       = file_orphan_count,
-            .orphaned_directories       = dir_orphans,  /* Workspace item array */
-            .orphaned_directories_count = dir_orphan_count,
-            .preflight_violations       = NULL,         /* No preflight violations yet */
-            .dry_run                    = false,        /* Preflight is always read-only */
-            .force                      = opts->force,
-            .skip_safety_check          = false         /* Run safety check in preflight */
+            .orphaned_files       = file_orphans,
+            .orphaned_directories = dir_orphans,
+            .preflight_violations = NULL,         /* No preflight violations yet */
+            .dry_run              = false,        /* Preflight is always read-only */
+            .force                = opts->force,
+            .skip_safety_check    = false         /* Run safety check in preflight */
         };
 
         err = cleanup_preflight_check(repo, state, &cleanup_opts, &cleanup_preflight);
@@ -1478,16 +1441,16 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         }
 
         /* Build prompt based on pending actions */
-        if (deploy_manifest->count > 0 && removal_count > 0) {
+        if (to_deploy.count > 0 && removal_count > 0) {
             snprintf(
                 prompt, sizeof(prompt), "Deploy %zu file%s and remove %zu orphaned file%s?",
-                deploy_manifest->count, deploy_manifest->count == 1 ? "" : "s",
+                to_deploy.count, to_deploy.count == 1 ? "" : "s",
                 removal_count, removal_count == 1 ? "" : "s"
             );
-        } else if (deploy_manifest->count > 0) {
+        } else if (to_deploy.count > 0) {
             snprintf(
                 prompt, sizeof(prompt), "Deploy %zu file%s to filesystem?",
-                deploy_manifest->count, deploy_manifest->count == 1 ? "" : "s"
+                to_deploy.count, to_deploy.count == 1 ? "" : "s"
             );
         } else if (removal_count > 0) {
             snprintf(
@@ -1506,7 +1469,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     }
 
     /* Execute deployment (only if there are divergent files) */
-    if (deploy_manifest->count > 0) {
+    if (to_deploy.count > 0) {
         if (opts->dry_run) {
             output_print(
                 out, OUTPUT_VERBOSE, "\nDry-run mode - no files will be modified\n"
@@ -1514,31 +1477,22 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         } else {
             output_print(
                 out, OUTPUT_VERBOSE, "\nDeploying %zu divergent file%s...\n",
-                deploy_manifest->count, deploy_manifest->count == 1 ? "" : "s"
+                to_deploy.count, to_deploy.count == 1 ? "" : "s"
             );
         }
 
         err = deploy_execute(
-            repo, ws, deploy_manifest, state, ctx->arena, &deploy_opts, cache, &deploy_res
+            repo, ws, to_deploy, state, ctx->arena, &deploy_opts, cache, &deploy_res
         );
         if (err) {
             if (deploy_res) {
                 print_deploy_results(out, deploy_res, opts->dry_run);
             }
-            /* Free deploy_manifest before error exit */
-            free(deploy_manifest->entries);
-            free(deploy_manifest);
-            deploy_manifest = NULL;
             err = error_wrap(err, "Deployment failed");
             goto cleanup;
         }
 
         print_deploy_results(out, deploy_res, opts->dry_run);
-
-        /* Free deploy_manifest after successful deployment */
-        free(deploy_manifest->entries);
-        free(deploy_manifest);
-        deploy_manifest = NULL;
 
     } else {
         /* No divergent files - workspace is clean */
@@ -1626,16 +1580,14 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
              */
             bool interactive_delay = config->confirm_destructive && !opts->force;
             cleanup_options_t cleanup_opts = {
-                .orphaned_files             = file_orphans, /* Workspace item array */
-                .orphaned_files_count       = file_orphan_count,
-                .orphaned_directories       = dir_orphans,  /* Workspace item array */
-                .orphaned_directories_count = dir_orphan_count,
-                .preflight_violations       = interactive_delay
-                    ? NULL                                  /* Stale - force fresh safety check */
+                .orphaned_files       = file_orphans,
+                .orphaned_directories = dir_orphans,
+                .preflight_violations = interactive_delay
+                    ? NULL                            /* Stale - force fresh safety check */
                     : (cleanup_preflight ? cleanup_preflight->safety_violations : NULL),
-                .dry_run                    = false,        /* Dry-run handled at deployment level */
-                .force                      = opts->force,
-                .skip_safety_check          = false         /* Run safety when preflight_violations is NULL */
+                .dry_run              = false,        /* Dry-run handled at deployment level */
+                .force                = opts->force,
+                .skip_safety_check    = false         /* Run safety when preflight_violations is NULL */
             };
 
             /* Execute cleanup (non-fatal - deployment already succeeded)
@@ -1869,28 +1821,24 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
             for (size_t i = 0; i < deploy_res->deployed->count; i++) {
                 const char *path = deploy_res->deployed->items[i];
 
-                /* Resolve path -> workspace manifest entry via the index (O(1),
-                 * no DB query). The index is an architectural invariant of the
-                 * workspace manifest — see workspace.c. The offset-by-1 encoding
-                 * distinguishes a real index-0 entry from a hashmap miss. */
-                void *idx_ptr = hashmap_get(manifest->index, path);
-                if (!idx_ptr) {
+                /* Look up the active row for the just-deployed path (O(1)
+                 * hashmap probe into the workspace's arena snapshot). */
+                const state_file_entry_t *file = workspace_lookup_active(ws, path);
+                if (!file) {
                     /* Shouldn't happen for just-deployed files, but guard defensively. */
                     output_warning(
                         out, OUTPUT_NORMAL,
-                        "No manifest entry found for %s — skipping anchor advance", path
+                        "No active state row found for %s — skipping anchor advance", path
                     );
                     continue;
                 }
-                const file_entry_t *entry =
-                    &manifest->entries[(size_t) (uintptr_t) idx_ptr - 1];
 
                 /* Snapshot disk state (mtime/size/ino) for the fast-path witness.
                  * The file was just written and fsynced by deploy_file(); lstat()
                  * is a cheap inode-cache read. If lstat fails, the anchor is still
                  * advanced with a zero stat (slow-path fallback on next run). */
                 deployment_anchor_t anchor = capture_anchor_from_disk(
-                    path, &entry->blob_oid, now
+                    path, &file->blob_oid, now
                 );
 
                 err = workspace_advance_anchor(ws, path, &anchor);
@@ -1979,18 +1927,18 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
 
 cleanup:
     if (deploy_res) deploy_result_free(deploy_res);
-    if (deploy_manifest) {
-        /* Free deploy_manifest structure */
-        free(deploy_manifest->entries);
-        free(deploy_manifest);
-    }
+    /* divergent backs to_deploy.entries; freeing the buffer also drops the
+     * carrier's view. The pointed-to rows live in the workspace arena. */
     ptr_array_deinit(&divergent);
     if (cleanup_preflight) cleanup_preflight_result_free(cleanup_preflight);
     if (preflight) preflight_result_free(preflight);
     if (profiles_str) free(profiles_str);
-    if (excluded_orphans) free(excluded_orphans);
-    if (dir_orphans) free(dir_orphans);
-    if (file_orphans) free(file_orphans);
+    /* workspace_extract_orphans hands us heap-allocated buffers (per
+     * ptr_array_steal). Items inside borrow into the workspace's diverged
+     * array — only the entries buffer is ours to free. */
+    free((void *) excluded_orphans.entries);
+    free((void *) dir_orphans.entries);
+    free((void *) file_orphans.entries);
     if (ws) workspace_free(ws);
     if (scope) scope_free(scope);
 

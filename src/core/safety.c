@@ -633,8 +633,7 @@ static check_result_t check_branch_existence(
 error_t *safety_check_orphans(
     git_repository *repo,
     const state_t *state,
-    const workspace_item_t **orphans,
-    size_t orphan_count,
+    workspace_items_t orphans,
     bool force,
     safety_result_t **out_result
 ) {
@@ -642,10 +641,10 @@ error_t *safety_check_orphans(
     CHECK_NULL(state);
     CHECK_NULL(out_result);
 
-    /* Allow NULL orphans if orphan_count is 0 */
-    if (orphan_count > 0 && !orphans) {
+    /* Empty slice with NULL entries is valid; non-empty slice with NULL is not. */
+    if (orphans.count > 0 && !orphans.entries) {
         return ERROR(
-            ERR_INVALID_ARG, "orphans cannot be NULL when orphan_count > 0"
+            ERR_INVALID_ARG, "orphans.entries cannot be NULL when count > 0"
         );
     }
 
@@ -660,7 +659,7 @@ error_t *safety_check_orphans(
     }
 
     /* Force mode or empty input: return empty result */
-    if (force || orphan_count == 0) {
+    if (force || orphans.count == 0) {
         *out_result = result;
         return NULL;
     }
@@ -673,8 +672,8 @@ error_t *safety_check_orphans(
     }
 
     /* Main processing loop */
-    for (size_t i = 0; i < orphan_count; i++) {
-        const workspace_item_t *orphan = orphans[i];
+    for (size_t i = 0; i < orphans.count; i++) {
+        const workspace_item_t *orphan = orphans.entries[i];
 
         /* Skip if file already gone (workspace may have stale info) */
         if (!orphan->on_filesystem) {

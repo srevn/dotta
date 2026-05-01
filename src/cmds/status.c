@@ -15,7 +15,6 @@
 #include "base/error.h"
 #include "base/output.h"
 #include "base/timeutil.h"
-#include "core/manifest.h"
 #include "core/profiles.h"
 #include "core/scope.h"
 #include "core/state.h"
@@ -27,11 +26,16 @@
 
 /**
  * Display enabled profiles and last deployment info
+ *
+ * @param out Output context (must not be NULL)
+ * @param profiles Enabled profile names (must not be NULL)
+ * @param files Active state slice for verbose per-profile counts
+ * @param state State handle for last-deployed timestamp lookup
  */
 static void display_enabled_profiles(
     output_t *out,
     const string_array_t *profiles,
-    const manifest_t *manifest,
+    state_files_t files,
     const state_t *state
 ) {
     if (!out || !profiles) return;
@@ -63,11 +67,11 @@ static void display_enabled_profiles(
         }
 
         /* In verbose mode, show file count for this profile */
-        if (output_is_verbose(out) && manifest) {
+        if (output_is_verbose(out)) {
             size_t profile_file_count = 0;
-            for (size_t j = 0; j < manifest->count; j++) {
-                if (manifest->entries[j].profile &&
-                    strcmp(manifest->entries[j].profile, profile) == 0) {
+            for (size_t j = 0; j < files.count; j++) {
+                const state_file_entry_t *file = files.entries[j];
+                if (file->profile && strcmp(file->profile, profile) == 0) {
                     profile_file_count++;
                 }
             }
@@ -94,13 +98,13 @@ static void display_enabled_profiles(
  *
  * @param ws Workspace (must not be NULL, borrowed from caller)
  * @param scope Operation scope (must not be NULL; its filter dimension drives display)
- * @param manifest Manifest for file counting (can be NULL, used with profile filter)
+ * @param files Active state slice (used for profile-scoped file counts)
  * @param out Output context (must not be NULL)
  */
 static void display_workspace_status(
     workspace_t *ws,
     const scope_t *scope,
-    const manifest_t *manifest,
+    state_files_t files,
     output_t *out
 ) {
     if (!ws || !out) return;
@@ -119,12 +123,10 @@ static void display_workspace_status(
     size_t hidden_count = 0;
 
     if (scope_has_filter(scope)) {
-        /* Count total managed files from manifest for filtered profile(s) */
-        if (manifest) {
-            for (size_t i = 0; i < manifest->count; i++) {
-                if (scope_accepts_profile(scope, manifest->entries[i].profile)) {
-                    profile_file_count++;
-                }
+        /* Count managed files in scope for the filtered profile(s) */
+        for (size_t i = 0; i < files.count; i++) {
+            if (scope_accepts_profile(scope, files.entries[i]->profile)) {
+                profile_file_count++;
             }
         }
 
@@ -179,11 +181,11 @@ static void display_workspace_status(
         /* Global status */
         switch (ws_status) {
             case WORKSPACE_CLEAN:
-                if (manifest && manifest->count > 0) {
+                if (files.count > 0) {
                     output_colored(
                         out, OUTPUT_NORMAL, OUTPUT_COLOR_GREEN,
                         "  Clean - %zu file%s aligned\n",
-                        manifest->count, manifest->count == 1 ? "" : "s"
+                        files.count, files.count == 1 ? "" : "s"
                     );
                 } else {
                     output_colored(
@@ -797,11 +799,11 @@ error_t *cmd_status(const dotta_ctx_t *ctx, const cmd_status_options_t *opts) {
     const config_t *config = ctx->config;
     output_t *out = ctx->out;
 
-    /* Declare all resources at top and initialize to NULL */
+    /* Declare all resources at top and initialize to NULL/zero */
     error_t *err = NULL;
     workspace_t *ws = NULL;
     state_t *state = ctx->state;  /* Borrowed from dispatcher; do not free */
-    const manifest_t *manifest = NULL;
+    state_files_t active = { 0 }; /* Borrowed slice when workspace is loaded */
     scope_t *scope = NULL;
 
     /* CLI flags override config */
@@ -859,22 +861,18 @@ error_t *cmd_status(const dotta_ctx_t *ctx, const cmd_status_options_t *opts) {
             error_free(flush_err);
         }
 
-        /* Extract manifest from workspace (borrowed reference, owned by workspace) */
-        manifest = workspace_get_manifest(ws);
-        if (!manifest) {
-            err = ERROR(ERR_INTERNAL, "Workspace manifest is NULL");
-            goto cleanup;
-        }
+        /* Borrow the active in-scope slice (no allocation, no free contract) */
+        active = workspace_active(ws);
 
         /* Check privileges for complete status (may re-exec with sudo) */
-        if (!opts->no_sudo && manifest->count > 0) {
+        if (!opts->no_sudo && active.count > 0) {
             string_array_t labels STRING_ARRAY_AUTO = { 0 };
             error_t *extract_err = NULL;
-            for (size_t i = 0; i < manifest->count; i++) {
+            for (size_t i = 0; i < active.count; i++) {
                 extract_err = privilege_collect_label(
                     &labels,
-                    manifest->entries[i].storage_path,
-                    manifest->entries[i].filesystem_path
+                    active.entries[i]->storage_path,
+                    active.entries[i]->filesystem_path
                 );
                 if (extract_err) break;
             }
@@ -920,7 +918,7 @@ error_t *cmd_status(const dotta_ctx_t *ctx, const cmd_status_options_t *opts) {
     }
 
     /* Display enabled profiles and last deployment info */
-    display_enabled_profiles(out, scope_active(scope), manifest, state);
+    display_enabled_profiles(out, scope_active(scope), active, state);
 
     /* Display workspace status (with profile filtering for Coherent Scope)
      *
@@ -930,7 +928,7 @@ error_t *cmd_status(const dotta_ctx_t *ctx, const cmd_status_options_t *opts) {
      * `dotta status -p work` matches `dotta apply -p work` behavior.
      */
     if (opts->show_local) {
-        display_workspace_status(ws, scope, manifest, out);
+        display_workspace_status(ws, scope, active, out);
     }
 
     /* Show remote sync status (if requested) */

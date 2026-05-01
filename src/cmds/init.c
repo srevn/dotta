@@ -196,12 +196,7 @@ error_t *cmd_init(const dotta_ctx_t *ctx, const cmd_init_options_t *opts) {
     /*
      * Idempotent setup. Each step is safe to re-run on an existing
      * repository: a fully-healthy repo no-ops at every step, and a
-     * partial prior init (e.g. crashed mid-flow, or a pre-c97374bb
-     * repo predating the salt ref) self-heals on the next `dotta
-     * init`. There is intentionally no "already initialized" short-
-     * circuit — it would key off one signal (dotta-worktree) and
-     * silently skip the other three steps when they are exactly
-     * what needs healing.
+     * partial prior init.
      */
 
     /* dotta-worktree branch + HEAD */

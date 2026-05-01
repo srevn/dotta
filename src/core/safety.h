@@ -122,8 +122,7 @@ typedef struct {
  *
  * @param repo Git repository (must not be NULL)
  * @param state State database for lifecycle queries (must not be NULL)
- * @param orphans Workspace items marked as orphaned (can be NULL if count is 0)
- * @param orphan_count Number of orphan items
+ * @param orphans Workspace items marked as orphaned (empty slice valid)
  * @param force If true, skip all checks (emergency override)
  * @param out_result Output safety result (must not be NULL, caller must free)
  * @return Error on fatal failure, NULL on success
@@ -131,8 +130,7 @@ typedef struct {
 error_t *safety_check_orphans(
     git_repository *repo,
     const state_t *state,
-    const workspace_item_t **orphans,
-    size_t orphan_count,
+    workspace_items_t orphans,
     bool force,
     safety_result_t **out_result
 );

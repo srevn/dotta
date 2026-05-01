@@ -748,7 +748,7 @@ error_t *cmd_list(const dotta_ctx_t *ctx, const cmd_list_options_t *opts) {
  * Infer list mode from positionals and derive `profile` / `file_path`.
  *
  * Legacy form:
- *   - No positional:           mode = LIST_PROFILES
+ *   - No positional:            mode = LIST_PROFILES
  *   - 1 positional (file path): mode = LIST_FILE_HISTORY (profile inferred)
  *   - 1 positional (profile):   mode = LIST_FILES
  *   - 2 positionals:            mode = LIST_FILE_HISTORY (profile, file)

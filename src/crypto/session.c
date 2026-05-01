@@ -73,12 +73,7 @@
 #define SESSION_CACHE_MAGIC_SIZE 8
 
 /* Format version. Bumps invalidate prior caches without migration —
- * unsupported versions surface as ERR_CRYPTO and are unlinked.
- *
- *   0x02 → 0x03: MAC input grew to absorb the caller-supplied
- *                `repo_salt`. Old caches fail MAC under the new
- *                input shape; bumping the version surfaces the
- *                rejection as a clean format diagnostic instead. */
+ * unsupported versions surface as ERR_CRYPTO and are unlinked. */
 #define SESSION_CACHE_VERSION    0x03
 
 /* Field offsets within the on-disk layout. Named so parser and

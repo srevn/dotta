@@ -575,7 +575,8 @@ error_t *deploy_file(
             printf(
                 "Deployed: %s (mode: %04o, owner: %s:%s)\n",
                 entry->filesystem_path, file_mode,
-                entry->owner ? entry->owner : "?", entry->group ? entry->group : "?"
+                entry->owner ? entry->owner : "?",
+                entry->group ? entry->group : "?"
             );
         } else {
             printf(
@@ -700,6 +701,7 @@ cleanup:
     free(parent);
     if (tracked) hashmap_free(tracked, NULL);
     if (required) hashmap_free(required, NULL);
+
     return err;
 }
 

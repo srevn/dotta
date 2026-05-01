@@ -141,13 +141,13 @@ static error_t *read_salt_blob(
         return ERROR(
             ERR_CRYPTO,
             "Salt blob in %s has wrong size: %lld bytes (expected %u)",
-            SALT_REF, (long long) size,
-            (unsigned) KDF_SALT_SIZE
+            SALT_REF, (long long) size, (unsigned) KDF_SALT_SIZE
         );
     }
 
     memcpy(out_salt, git_blob_rawcontent(blob), KDF_SALT_SIZE);
     git_blob_free(blob);
+
     return NULL;
 }
 
@@ -260,7 +260,9 @@ error_t *salt_init(git_repository *repo) {
     error_t *sig_err = gitops_get_signature(&sig, repo);
     if (sig_err) {
         git_tree_free(tree);
-        return error_wrap(sig_err, "Failed to get signature for salt commit");
+        return error_wrap(
+            sig_err, "Failed to get signature for salt commit"
+        );
     }
 
     /* Orphan commit (no parents) writing directly to refs/dotta/salt.
@@ -332,8 +334,7 @@ error_t *salt_push(
      * understands they need to reconcile. */
     char refspec[DOTTA_REFSPEC_MAX];
     int n = snprintf(
-        refspec, sizeof(refspec), "%s:%s",
-        SALT_REF, SALT_REF
+        refspec, sizeof(refspec), "%s:%s", SALT_REF, SALT_REF
     );
     if (n < 0 || (size_t) n >= sizeof(refspec)) {
         git_remote_free(remote);
@@ -483,8 +484,7 @@ error_t *salt_fetch(
     if (git_err < 0) {
         return error_wrap(
             error_from_git(git_err),
-            "Failed to fetch '%s' from '%s'",
-            SALT_REF, remote_name
+            "Failed to fetch '%s' from '%s'", SALT_REF, remote_name
         );
     }
 

@@ -146,8 +146,8 @@ typedef struct {
  *               and workspace_load, so ctx->mounts is current.
  * @param options Analysis options (must not be NULL)
  * @param arena Borrowed allocator backing every workspace-lifetime
- *              string (manifest entries, diverged items, cached state
- *              rows). Must outlive workspace_free; in practice
+ *              string (manifest entries, diverged items, partition
+ *              pointer arrays). Must outlive workspace_free; in practice
  *              `ctx->arena` (must not be NULL).
  * @param out Workspace (must not be NULL, caller must free with workspace_free)
  * @return Error or NULL on success

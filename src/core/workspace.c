@@ -77,18 +77,8 @@ struct workspace {
     const string_array_t *profiles;  /* Borrowed from caller — valid for workspace lifetime */
     hashmap_t *profile_index;        /* Maps profile -> NULL (membership set, O(1) lookup) */
 
-    /* Cached state query (shared between workspace_build_manifest_from_state
-     * and analyze_orphaned_files to avoid redundant full-table scan) */
-    state_file_entry_t *cached_state_files;  /* Arena-allocated (NULL if empty) */
-    size_t cached_state_count;               /* Number of entries in cached_state_files */
-
     /* Content cache for encrypted blob reads during divergence analysis */
     content_cache_t *content_cache;  /* Borrowed — NOT freed in workspace_free */
-
-    /* Cached directory state (shared between analyze_orphaned_directories
-     * and analyze_directory_metadata_divergence to avoid redundant table scans) */
-    state_directory_entry_t *cached_state_dirs;  /* Arena-allocated (NULL until first load) */
-    size_t cached_state_dir_count;               /* Number of cached directory entries */
 
     /* Divergence tracking */
     workspace_item_t *diverged;      /* Array of diverged items (files and directories) */
@@ -1056,267 +1046,152 @@ static divergence_type_t compute_orphan_divergence(
 }
 
 /**
- * Analyze state for orphaned file entries
+ * Analyze partitioned orphan candidates from the manifest build
  *
- * Detects ALL orphaned files (enabled + disabled profiles) using cleanup
- * module's robust algorithm. Each orphan is marked with profile_enabled
- * flag to enable caller filtering.
+ * Each candidate was rejected by workspace_build_manifest_from_state for
+ * exactly one of two reasons:
+ *   - Profile out of workspace scope (disabled or branch deleted)
+ *   - Lifecycle terminal (STATE_INACTIVE / STATE_DELETED / STATE_RELEASED)
  *
- * An entry is orphaned if it exists in state but not in manifest.
- * - Enabled profile orphans: File removed from branch (profile_enabled=true)
- * - Disabled profile orphans: Profile disabled, needs cleanup (profile_enabled=false)
+ * No manifest probe is needed: the partition itself is the orphan
+ * predicate. The RELEASED branch (loss of authority via external Git
+ * removal) is detected from state_entry->state — the lifecycle column
+ * is the single source of truth, set by manifest_reconcile.
  *
- * Callers filter by profile_enabled:
+ * Each orphan is tagged with profile_enabled so callers can filter:
  * - status: only show profile_enabled=true (enabled profiles)
  * - apply: use all (cleanup disabled profiles too)
  */
-static error_t *analyze_orphaned_files(workspace_t *ws) {
+static error_t *analyze_orphaned_files(
+    workspace_t *ws,
+    const state_file_entry_t * const *candidates,
+    size_t candidate_count
+) {
     CHECK_NULL(ws);
-    CHECK_NULL(ws->state);
-    CHECK_NULL(ws->manifest);
-    CHECK_NULL(ws->manifest->index);
     CHECK_NULL(ws->profile_index);
+
+    if (candidate_count == 0) return NULL;
+    CHECK_NULL(candidates);
 
     error_t *err = NULL;
 
-    /* Reuse state entries cached by workspace_build_manifest_from_state.
-     * Both functions need the same full-table scan — caching avoids the
-     * redundant query. Entries are owned by ws, freed in workspace_free(). */
-    const state_file_entry_t *state_files = ws->cached_state_files;
-    size_t state_count = ws->cached_state_count;
-
-    /* Early exit: no files in state means no orphans */
-    if (state_count == 0) {
-        return NULL;
-    }
-
-    /* Identify orphans: in state, not in manifest */
-    for (size_t i = 0; i < state_count; i++) {
-        const state_file_entry_t *state_entry = &state_files[i];
+    for (size_t i = 0; i < candidate_count; i++) {
+        const state_file_entry_t *state_entry = candidates[i];
 
         const char *fs_path = state_entry->filesystem_path;
         const char *storage_path = state_entry->storage_path;
         const char *profile = state_entry->profile;
 
-        /* Check if file exists in manifest (O(1) lookup using index) */
-        void *idx_ptr = hashmap_get(ws->manifest->index, fs_path);
-        file_entry_t *manifest_entry = NULL;
-        if (idx_ptr) {
-            size_t idx = (size_t) (uintptr_t) idx_ptr - 1;
-            manifest_entry = &ws->manifest->entries[idx];
-        }
+        bool is_released = state_entry->state &&
+            strcmp(state_entry->state, STATE_RELEASED) == 0;
 
-        if (!manifest_entry) {
-            /* In state but not in manifest — either released or orphaned.
+        bool profile_enabled = hashmap_has(ws->profile_index, profile);
+
+        if (is_released) {
+            /* RELEASED: File removed from Git externally (loss of authority)
              *
-             * Released: File removed from Git externally (loss of authority).
-             * manifest_reconcile (run from workspace_load's prelude) marked
-             * the row STATE_RELEASED before we got here; state_entry's
-             * lifecycle column is the single source of truth.
-             *
-             * Orphaned: File out of scope for other reasons (profile
-             * disabled, branch deleted, etc.). Standard orphan handling
-             * applies. */
-            bool is_released = state_entry->state &&
-                strcmp(state_entry->state, STATE_RELEASED) == 0;
-
-            bool profile_enabled = hashmap_has(ws->profile_index, profile);
-
-            if (is_released) {
-                /* RELEASED: File removed from Git externally (loss of authority)
-                 *
-                 * No divergence computation needed — we're not deleting this file.
-                 * It will be left on filesystem and state entry cleaned up.
-                 * Check filesystem presence only for display purposes.
-                 */
-                bool on_filesystem = (lstat(fs_path, &(struct stat){ 0 }) == 0);
-
-                err = workspace_add_diverged(
-                    ws,
-                    fs_path,
-                    storage_path,
-                    profile,
-                    NULL,
-                    WORKSPACE_STATE_RELEASED,
-                    DIVERGENCE_NONE,
-                    WORKSPACE_ITEM_FILE,
-                    on_filesystem,
-                    profile_enabled,
-                    false
-                );
-            } else {
-                /* Standard orphan analysis */
-
-                /* Single stat capture for orphan analysis
-                 *
-                 * This stat is reused for type verification, content comparison,
-                 * and metadata checks - eliminating redundant lstat syscalls.
-                 *
-                 * stat_valid tracks whether we have usable stat data:
-                 * - true: lstat succeeded, orphan_stat contains valid data
-                 * - false: lstat failed, orphan_stat is zeroed (unusable)
-                 */
-                struct stat orphan_stat;
-                bool on_filesystem;
-                bool stat_valid = false;
-
-                if (lstat(fs_path, &orphan_stat) != 0) {
-                    if (errno == ENOENT) {
-                        /* File doesn't exist - orphan was already removed manually */
-                        on_filesystem = false;
-                    } else {
-                        /* Cannot stat file (EACCES, EIO, ELOOP, etc.)
-                         *
-                         * Conservative handling: Assume file exists but is inaccessible.
-                         * We lack valid stat data, so divergence cannot be computed.
-                         * Mark as UNVERIFIED below so:
-                         * - Status shows [orphaned, unverified] (user visibility)
-                         * - Apply skips removal (safety - can't verify what we can't stat)
-                         */
-                        on_filesystem = true;
-                    }
-                    memset(&orphan_stat, 0, sizeof(orphan_stat));
-                } else {
-                    on_filesystem = true;
-                    stat_valid = true;
-                }
-
-                /* Compute divergence for orphaned file
-                 *
-                 * Only compute if file exists AND we have valid stat data.
-                 *
-                 * Cases:
-                 * - File doesn't exist (ENOENT): divergence = NONE (nothing to compare)
-                 * - File inaccessible (other error): divergence = UNVERIFIED (unsafe to act)
-                 * - File accessible: divergence = computed from content/metadata analysis
-                 *
-                 * This enables status to predict apply behavior:
-                 * - DIVERGENCE_NONE -> Clean orphan, will be removed
-                 * - DIVERGENCE_CONTENT/TYPE -> Modified, apply will skip (safety check)
-                 * - DIVERGENCE_MODE/OWNERSHIP -> Metadata changed, apply will skip
-                 * - DIVERGENCE_UNVERIFIED -> Cannot verify, apply will skip
-                 */
-                divergence_type_t divergence = DIVERGENCE_NONE;
-                if (stat_valid) {
-                    divergence = compute_orphan_divergence(
-                        ws,
-                        state_entry,
-                        fs_path,
-                        storage_path,
-                        profile,
-                        &orphan_stat
-                    );
-                } else if (on_filesystem) {
-                    /* File exists but stat failed - cannot verify divergence safely */
-                    divergence = DIVERGENCE_UNVERIFIED;
-                }
-
-                err = workspace_add_diverged(
-                    ws,
-                    fs_path,
-                    storage_path,
-                    profile,
-                    NULL,                       /* No old_profile for orphans */
-                    WORKSPACE_STATE_ORPHANED,   /* State: in deployment state, not in profile */
-                    divergence,                 /* Divergence: computed from filesystem comparison */
-                    WORKSPACE_ITEM_FILE,
-                    on_filesystem,
-                    profile_enabled,
-                    false                       /* No profile change for orphans */
-                );
-            }
-
-            if (err) {
-                return error_wrap(err, "Failed to add orphaned/released file");
-            }
-        }
-    }
-
-    return NULL;
-}
-
-/**
- * Analyze state for orphaned directory entries
- *
- * Uses the tracked_directories state column as the VWD authority for directories.
- * manifest_sync_directories() maintains this column with mark-inactive-then-reactivate
- * semantics on every manifest write operation, making it the single source of truth.
- *
- * Trust model (mirrors file orphan detection against the manifest):
- *   - Profile not in workspace scope -> ORPHANED (disabled or deleted profile)
- *   - State column not ACTIVE -> ORPHANED (manifest_sync_directories marked it)
- *   - Otherwise -> trust the state column (ACTIVE = valid)
- *
- * manifest_reconcile (run upstream from workspace_load) has already synced
- * tracked directories against current Git, so the state column is
- * authoritative here.
- *
- * Detects ALL orphaned directories (enabled + disabled profiles) and marks
- * each with profile_enabled flag for caller filtering.
- */
-static error_t *analyze_orphaned_directories(workspace_t *ws) {
-    CHECK_NULL(ws);
-    CHECK_NULL(ws->state);
-    CHECK_NULL(ws->profile_index);
-
-    error_t *err = NULL;
-
-    /* Load directories from state (cached for analyze_directory_metadata_divergence) */
-    if (!ws->cached_state_dirs) {
-        error_t *load_err = state_get_all_directories(
-            ws->state,
-            ws->arena,
-            &ws->cached_state_dirs,
-            &ws->cached_state_dir_count
-        );
-        if (load_err) {
-            return error_wrap(load_err, "Failed to load state directories");
-        }
-    }
-
-    if (ws->cached_state_dir_count == 0) return NULL;
-
-    for (size_t i = 0; i < ws->cached_state_dir_count; i++) {
-        const state_directory_entry_t *dir = &ws->cached_state_dirs[i];
-
-        const char *profile = dir->profile;
-        bool profile_in_scope = hashmap_has(ws->profile_index, profile);
-
-        /* Determine orphan status from the state column — manifest_reconcile
-         * (from workspace_load's prelude) already ran manifest_sync_directories
-         * for any drift, so the lifecycle column reflects current Git truth. */
-        bool is_orphaned = false;
-
-        if (!profile_in_scope) {
-            /* Profile disabled or deleted — directory is orphaned */
-            is_orphaned = true;
-        } else if (dir->state && (strcmp(dir->state, STATE_INACTIVE) == 0 ||
-            strcmp(dir->state, STATE_DELETED) == 0)) {
-            /* manifest_sync_directories() marked it non-active */
-            is_orphaned = true;
-        }
-        /* else: profile in scope, state ACTIVE -> trust state column */
-
-        if (is_orphaned) {
-            bool profile_enabled = profile_in_scope;
-            bool on_filesystem = fs_exists(dir->filesystem_path);
+             * No divergence computation needed — we're not deleting this file.
+             * It will be left on filesystem and state entry cleaned up.
+             * Check filesystem presence only for display purposes.
+             */
+            bool on_filesystem = (lstat(fs_path, &(struct stat){ 0 }) == 0);
 
             err = workspace_add_diverged(
                 ws,
-                dir->filesystem_path,       /* Already arena-allocated */
-                dir->storage_path,          /* Already arena-allocated */
+                fs_path,
+                storage_path,
+                profile,
+                NULL,
+                WORKSPACE_STATE_RELEASED,
+                DIVERGENCE_NONE,
+                WORKSPACE_ITEM_FILE,
+                on_filesystem,
+                profile_enabled,
+                false
+            );
+        } else {
+            /* Standard orphan analysis
+             *
+             * Single stat capture, reused for type verification, content
+             * comparison, and metadata checks — eliminates redundant lstat
+             * syscalls.
+             *
+             * stat_valid tracks whether we have usable stat data:
+             * - true: lstat succeeded, orphan_stat contains valid data
+             * - false: lstat failed, orphan_stat is zeroed (unusable)
+             */
+            struct stat orphan_stat;
+            bool on_filesystem;
+            bool stat_valid = false;
+
+            if (lstat(fs_path, &orphan_stat) != 0) {
+                if (errno == ENOENT) {
+                    /* File doesn't exist - orphan was already removed manually */
+                    on_filesystem = false;
+                } else {
+                    /* Cannot stat file (EACCES, EIO, ELOOP, etc.)
+                     *
+                     * Conservative handling: Assume file exists but is inaccessible.
+                     * We lack valid stat data, so divergence cannot be computed.
+                     * Mark as UNVERIFIED below so:
+                     * - Status shows [orphaned, unverified] (user visibility)
+                     * - Apply skips removal (safety - can't verify what we can't stat)
+                     */
+                    on_filesystem = true;
+                }
+                memset(&orphan_stat, 0, sizeof(orphan_stat));
+            } else {
+                on_filesystem = true;
+                stat_valid = true;
+            }
+
+            /* Compute divergence for orphaned file
+             *
+             * Only compute if file exists AND we have valid stat data.
+             *
+             * Cases:
+             * - File doesn't exist (ENOENT): divergence = NONE (nothing to compare)
+             * - File inaccessible (other error): divergence = UNVERIFIED (unsafe to act)
+             * - File accessible: divergence = computed from content/metadata analysis
+             *
+             * This enables status to predict apply behavior:
+             * - DIVERGENCE_NONE -> Clean orphan, will be removed
+             * - DIVERGENCE_CONTENT/TYPE -> Modified, apply will skip (safety check)
+             * - DIVERGENCE_MODE/OWNERSHIP -> Metadata changed, apply will skip
+             * - DIVERGENCE_UNVERIFIED -> Cannot verify, apply will skip
+             */
+            divergence_type_t divergence = DIVERGENCE_NONE;
+            if (stat_valid) {
+                divergence = compute_orphan_divergence(
+                    ws,
+                    state_entry,
+                    fs_path,
+                    storage_path,
+                    profile,
+                    &orphan_stat
+                );
+            } else if (on_filesystem) {
+                /* File exists but stat failed - cannot verify divergence safely */
+                divergence = DIVERGENCE_UNVERIFIED;
+            }
+
+            err = workspace_add_diverged(
+                ws,
+                fs_path,
+                storage_path,
                 profile,
                 NULL,                       /* No old_profile for orphans */
-                WORKSPACE_STATE_ORPHANED,   /* State: in state, not in profile */
-                DIVERGENCE_NONE,            /* Divergence: none */
-                WORKSPACE_ITEM_DIRECTORY,
+                WORKSPACE_STATE_ORPHANED,   /* State: in deployment state, not in profile */
+                divergence,                 /* Divergence: computed from filesystem comparison */
+                WORKSPACE_ITEM_FILE,
                 on_filesystem,
                 profile_enabled,
                 false                       /* No profile change for orphans */
             );
-            if (err) {
-                return error_wrap(err, "Failed to add orphaned directory");
-            }
+        }
+
+        if (err) {
+            return error_wrap(err, "Failed to add orphaned/released file");
         }
     }
 
@@ -1324,27 +1199,147 @@ static error_t *analyze_orphaned_directories(workspace_t *ws) {
 }
 
 /**
- * Analyze state for orphaned entries (files + directories)
+ * Partition tracked_directories rows by orphan status
  *
- * Unified orphan detection for both files and directories.
- * Detects ALL orphans regardless of profile scope, marking each
- * with profile_enabled flag for caller filtering.
+ * Single pass over loaded directory rows producing two arena-allocated
+ * pointer arrays:
+ *   - active_dirs: profile in scope AND state not in {INACTIVE, DELETED}
+ *   - orphan_dirs: everything else
+ *
+ * Mirrors the partition logic in workspace_build_manifest_from_state for
+ * symmetry: filter is established here, consumers trust the partition.
+ *
+ * manifest_reconcile (run upstream from workspace_load) has already synced
+ * tracked_directories against current Git, so dir->state reflects current
+ * Git truth — STATE_INACTIVE / STATE_DELETED are authoritative.
+ *
+ * Note: state_directory_entry_t never carries STATE_RELEASED (file-only
+ * lifecycle); the partition predicates intentionally only check INACTIVE
+ * and DELETED.
+ *
+ * Lifetime: pointers reference rows in `all_dirs`, which itself is
+ * arena-allocated by state_get_all_directories. The arena outlives the
+ * workspace, so the pointers remain valid until arena destruction.
+ *
+ * @param ws Workspace (must not be NULL, profile_index populated)
+ * @param all_dirs Buffer returned by state_get_all_directories (may be NULL when count=0)
+ * @param all_count Number of rows in all_dirs
+ * @param out_active Arena-allocated pointer array; NULL if no actives
+ * @param out_active_count Number of entries in out_active
+ * @param out_orphans Arena-allocated pointer array; NULL if no orphans
+ * @param out_orphan_count Number of entries in out_orphans
+ * @return Error or NULL on success
  */
-static error_t *analyze_orphaned_state(workspace_t *ws) {
+static error_t *partition_state_directories(
+    workspace_t *ws,
+    const state_directory_entry_t *all_dirs,
+    size_t all_count,
+    const state_directory_entry_t ***out_active,
+    size_t *out_active_count,
+    const state_directory_entry_t ***out_orphans,
+    size_t *out_orphan_count
+) {
     CHECK_NULL(ws);
+    CHECK_NULL(ws->arena);
+    CHECK_NULL(ws->profile_index);
+    CHECK_NULL(out_active);
+    CHECK_NULL(out_active_count);
+    CHECK_NULL(out_orphans);
+    CHECK_NULL(out_orphan_count);
 
-    error_t *err = NULL;
+    *out_active = NULL;
+    *out_active_count = 0;
+    *out_orphans = NULL;
+    *out_orphan_count = 0;
 
-    /* Analyze file orphans */
-    err = analyze_orphaned_files(ws);
-    if (err) {
-        return error_wrap(err, "Failed to analyze orphaned files");
+    if (all_count == 0) return NULL;
+    CHECK_NULL(all_dirs);
+
+    /* Allocate worst-case arrays (all-active or all-orphan are both possible). */
+    const state_directory_entry_t **actives =
+        arena_calloc(ws->arena, all_count, sizeof(*actives));
+    if (!actives) {
+        return ERROR(ERR_MEMORY, "Failed to allocate active directory partition");
     }
 
-    /* Analyze directory orphans */
-    err = analyze_orphaned_directories(ws);
-    if (err) {
-        return error_wrap(err, "Failed to analyze orphaned directories");
+    const state_directory_entry_t **orphans =
+        arena_calloc(ws->arena, all_count, sizeof(*orphans));
+    if (!orphans) {
+        return ERROR(ERR_MEMORY, "Failed to allocate orphan directory partition");
+    }
+
+    size_t active_count = 0;
+    size_t orphan_count = 0;
+
+    for (size_t i = 0; i < all_count; i++) {
+        const state_directory_entry_t *dir = &all_dirs[i];
+
+        bool profile_in_scope = hashmap_has(ws->profile_index, dir->profile);
+
+        /* NULL state defaults to active per state.c read path. */
+        bool lifecycle_terminal = dir->state && (
+            strcmp(dir->state, STATE_INACTIVE) == 0 ||
+            strcmp(dir->state, STATE_DELETED) == 0);
+
+        if (!profile_in_scope || lifecycle_terminal) {
+            orphans[orphan_count++] = dir;
+        } else {
+            actives[active_count++] = dir;
+        }
+    }
+
+    *out_active = (active_count > 0) ? actives : NULL;
+    *out_active_count = active_count;
+    *out_orphans = (orphan_count > 0) ? orphans : NULL;
+    *out_orphan_count = orphan_count;
+
+    return NULL;
+}
+
+/**
+ * Analyze partitioned orphan-directory candidates
+ *
+ * Each entry in the candidate slice was rejected from active scope by
+ * partition_state_directories: profile out of scope, or state INACTIVE/DELETED.
+ * No skip checks here — every input is by construction an orphan.
+ *
+ * Each orphan is tagged with profile_enabled so callers can filter:
+ *   - status: only show profile_enabled=true (enabled profiles)
+ *   - apply: use all (cleanup disabled profiles too)
+ */
+static error_t *analyze_orphaned_directories(
+    workspace_t *ws,
+    const state_directory_entry_t * const *candidates,
+    size_t candidate_count
+) {
+    CHECK_NULL(ws);
+    CHECK_NULL(ws->profile_index);
+
+    if (candidate_count == 0) return NULL;
+    CHECK_NULL(candidates);
+
+    for (size_t i = 0; i < candidate_count; i++) {
+        const state_directory_entry_t *dir = candidates[i];
+
+        bool profile_enabled = hashmap_has(ws->profile_index, dir->profile);
+        bool on_filesystem = fs_exists(dir->filesystem_path);
+
+        error_t *err = workspace_add_diverged(
+            ws,
+            dir->filesystem_path,       /* Already arena-allocated */
+            dir->storage_path,          /* Already arena-allocated */
+            dir->profile,
+            NULL,                       /* No old_profile for orphans */
+            WORKSPACE_STATE_ORPHANED,   /* State: in state, not in profile */
+            DIVERGENCE_NONE,            /* Divergence: none */
+            WORKSPACE_ITEM_DIRECTORY,
+            on_filesystem,
+            profile_enabled,
+            false                       /* No profile change for orphans */
+        );
+        if (err) {
+            return error_wrap(err, "Failed to add orphaned directory");
+        }
     }
 
     return NULL;
@@ -1788,6 +1783,7 @@ static error_t *analyze_untracked_files(
 
     ignore_rules_free(ignore_rules);
     source_filter_free(source_filter);
+
     return NULL;
 }
 
@@ -1803,56 +1799,29 @@ static error_t *analyze_untracked_files(
  * State contains filesystem_path already resolved with target, enabling
  * correct divergence detection for custom/ prefix directories.
  *
- * @param ws Workspace (must not be NULL, state must be initialized)
+ * Consumes the active slice from partition_state_directories — every input
+ * is by construction profile_in_scope AND state ACTIVE. No skip checks.
+ *
+ * @param ws Workspace (must not be NULL)
+ * @param actives Pointer slice of active in-scope dirs from the partition
+ * @param active_count Number of entries in actives
  * @return Error or NULL on success
  */
-static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
+static error_t *analyze_directory_metadata_divergence(
+    workspace_t *ws,
+    const state_directory_entry_t * const *actives,
+    size_t active_count
+) {
     CHECK_NULL(ws);
-    CHECK_NULL(ws->state);
+
+    if (active_count == 0) return NULL;
+    CHECK_NULL(actives);
 
     error_t *err = NULL;
 
-    /* Use cached directories (shared with analyze_orphaned_directories) */
-    if (!ws->cached_state_dirs) {
-        error_t *load_err = state_get_all_directories(
-            ws->state,
-            ws->arena,
-            &ws->cached_state_dirs,
-            &ws->cached_state_dir_count
-        );
-        if (load_err) {
-            return error_wrap(
-                load_err, "Failed to load tracked directories from state"
-            );
-        }
-    }
-
-    if (ws->cached_state_dir_count == 0) {
-        return NULL;  /* No tracked directories */
-    }
-
-    /* Check each tracked directory for divergence */
-    for (size_t i = 0; i < ws->cached_state_dir_count; i++) {
-        const state_directory_entry_t *dir_entry = &ws->cached_state_dirs[i];
-
-        /* Skip removal-pending directories (STATE_INACTIVE, STATE_DELETED)
-         *
-         * ARCHITECTURE: These directories are staged for removal and shouldn't
-         * participate in divergence analysis. They'll be detected as orphans
-         * by analyze_orphaned_directories() and cleaned by apply.
-         *
-         * This mirrors file handling pattern and the untracked directory scan skip.
-         */
-        if (dir_entry->state && (strcmp(dir_entry->state, STATE_INACTIVE) == 0 ||
-            strcmp(dir_entry->state, STATE_DELETED) == 0)) {
-            continue;  /* Skip silently - orphan detection will handle this */
-        }
-
-        /* Skip directories from profiles not in the enabled set.
-         * Metadata divergence is only meaningful for active profiles. */
-        if (!hashmap_has(ws->profile_index, dir_entry->profile)) {
-            continue;
-        }
+    /* Check each active in-scope directory for divergence */
+    for (size_t i = 0; i < active_count; i++) {
+        const state_directory_entry_t *dir_entry = actives[i];
 
         /* State directory entries contain:
          * - filesystem_path: Already resolved with target (VWD principle)
@@ -2109,44 +2078,59 @@ static error_t *analyze_encryption_policy_mismatch(
 }
 
 /**
- * Build in-memory manifest from state manifest table
+ * Build in-memory manifest from state manifest table; partition rejected rows
  *
- * Reads manifest entries from state DB and constructs manifest_t structure.
- * Does NOT load git_tree_entry* pointers (set to NULL). Consumers use the
- * VWD-cached blob_oid for content access instead of tree entry loading.
+ * Walks the state DB once and produces two outputs:
+ *   1. ws->manifest — projection of in-scope ACTIVE state rows into file_entry_t
+ *   2. orphan_candidates — pointers into the state buffer for rejected rows
+ *      (out-of-scope profile or terminal lifecycle: INACTIVE/DELETED/RELEASED)
+ *
+ * The partition is the single source of truth for "is this row in the
+ * workspace?". analyze_orphaned_files consumes the candidate slice directly
+ * — it does not re-derive the filter via a manifest hashmap probe.
  *
  * Drift repair is handled upstream by workspace_load's manifest_reconcile
  * call, so state entries read here are current with Git by construction.
- * This function just projects state rows into the in-memory manifest shape.
  *
- * Files from profiles not in the workspace scope are filtered out silently.
- * This can happen if a profile is disabled but manifest still has orphaned entries.
+ * Lifetime: candidate pointers reference rows in the state buffer that
+ * state_get_all_files arena-allocates. The arena outlives the workspace,
+ * so the pointers are valid until arena destruction.
  *
- * Performance: O(M) where M = state entries.
+ * Performance: O(M) where M = state entries. One pass, no probes.
  *
  * @param ws Workspace (must not be NULL, state must be loaded)
+ * @param out_orphan_candidates Arena-allocated array of pointers to state
+ *        rows that did not enter the manifest. NULL if none. Caller does
+ *        not free (arena-owned).
+ * @param out_orphan_count Number of entries in out_orphan_candidates.
  * @return Error or NULL on success
  */
-static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
+static error_t *workspace_build_manifest_from_state(
+    workspace_t *ws,
+    const state_file_entry_t ***out_orphan_candidates,
+    size_t *out_orphan_count
+) {
     CHECK_NULL(ws);
     CHECK_NULL(ws->state);
     CHECK_NULL(ws->arena);
     CHECK_NULL(ws->profile_index);
+    CHECK_NULL(out_orphan_candidates);
+    CHECK_NULL(out_orphan_count);
+
+    *out_orphan_candidates = NULL;
+    *out_orphan_count = 0;
 
     error_t *err = NULL;
     state_file_entry_t *state_entries = NULL;
     size_t state_count = 0;
 
     /* Read all entries from manifest table (arena-allocated).
-     *
-     * Cached on workspace for reuse by analyze_orphaned_files().
-     * Arena handles cleanup. */
+     * Arena handles cleanup; the buffer outlives this function via
+     * candidate pointers that reference its rows. */
     err = state_get_all_files(ws->state, ws->arena, &state_entries, &state_count);
     if (err) {
         return error_wrap(err, "Failed to read manifest from state");
     }
-    ws->cached_state_files = state_entries;
-    ws->cached_state_count = state_count;
 
     /* Allocate manifest structure */
     ws->manifest = calloc(1, sizeof(manifest_t));
@@ -2154,19 +2138,31 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
         return ERROR(ERR_MEMORY, "Failed to allocate manifest");
     }
 
-    /* Allocate entries array (max size = state_count).
+    /* Allocate entries array and orphan candidate pointer array.
      *
      * calloc(0, X) is implementation-defined per C17 §7.22.3.2p2 — may
      * return NULL or a unique non-NULL pointer depending on the libc.
      * Skip the allocation entirely for empty state: a manifest_t with
      * entries=NULL, count=0 is a valid empty manifest, and manifest_free
-     * already tolerates entries == NULL (free(NULL) is a no-op). */
+     * already tolerates entries == NULL (free(NULL) is a no-op).
+     *
+     * Both arrays are sized to state_count (worst case). The split between
+     * them is determined per-row inside the loop; either may end up empty. */
+    const state_file_entry_t **candidates = NULL;
     if (state_count > 0) {
         ws->manifest->entries = calloc(state_count, sizeof(file_entry_t));
         if (!ws->manifest->entries) {
             free(ws->manifest);
             ws->manifest = NULL;
             return ERROR(ERR_MEMORY, "Failed to allocate manifest entries");
+        }
+
+        candidates = arena_calloc(ws->arena, state_count, sizeof(*candidates));
+        if (!candidates) {
+            free(ws->manifest->entries);
+            free(ws->manifest);
+            ws->manifest = NULL;
+            return ERROR(ERR_MEMORY, "Failed to allocate orphan candidate array");
         }
     }
 
@@ -2184,43 +2180,44 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
     }
 
     size_t manifest_idx = 0;
+    size_t candidate_count = 0;
 
-    /* Build manifest entries from state */
+    /* Partition state rows: in-scope active → manifest, others → candidates */
     for (size_t i = 0; i < state_count; i++) {
         const state_file_entry_t *state_entry = &state_entries[i];
-        file_entry_t *entry = &ws->manifest->entries[manifest_idx];
 
-        /* Check profile is in workspace scope (O(1) hashmap lookup) */
-        if (!hashmap_has(ws->profile_index, state_entry->profile)) {
-            /* Profile not in workspace scope - this is expected when:
-             * 1. Profile was disabled but manifest has orphaned entries
-             * 2. Profile branch was deleted outside dotta
+        bool profile_in_scope =
+            hashmap_has(ws->profile_index, state_entry->profile);
+
+        /* Lifecycle terminal states are rejected from the manifest and
+         * surfaced to orphan detection. NULL state defaults to active per
+         * state.c read path. */
+        bool lifecycle_terminal = state_entry->state && (
+            strcmp(state_entry->state, STATE_INACTIVE) == 0 ||
+            strcmp(state_entry->state, STATE_DELETED) == 0 ||
+            strcmp(state_entry->state, STATE_RELEASED) == 0);
+
+        if (!profile_in_scope || lifecycle_terminal) {
+            /* Rejected: surface to orphan analysis.
              *
-             * Skip silently. Orphan detection (analyze_orphaned_files) will identify
-             * these entries and status will show them clearly to the user. This
-             * follows the Git staging model where profile disable stages removal
-             * and apply executes it. */
+             * - Out-of-scope profile: profile disabled or branch deleted.
+             *   analyze_orphaned_files handles via profile_enabled flag.
+             * - Lifecycle terminal: INACTIVE/DELETED/RELEASED. The
+             *   RELEASED branch (loss of authority) is detected from
+             *   state_entry->state inside analyze_orphaned_files. */
+            candidates[candidate_count++] = state_entry;
             continue;
         }
 
-        /* Borrow profile from state entry (same arena lifetime as workspace) */
+        /* In-scope active row: project to manifest. Strings and the
+         * VWD/anchor cache are arena-borrowed from state_entry — same
+         * lifetime as workspace. */
+        file_entry_t *entry = &ws->manifest->entries[manifest_idx];
         entry->profile = state_entry->profile;
 
         /* Borrow paths from arena-backed state entries (same lifetime) */
         entry->storage_path = state_entry->storage_path;
         entry->filesystem_path = state_entry->filesystem_path;
-
-        /* Skip non-active entries (marked for removal or stale)
-         *
-         * These entries remain in the manifest table for orphan detection.
-         * The orphan detection phase (analyze_orphaned_files) will load them
-         * and mark them as ORPHANED or RELEASED for cleanup by apply.
-         */
-        if (state_entry->state && (strcmp(state_entry->state, STATE_INACTIVE) == 0 ||
-            strcmp(state_entry->state, STATE_DELETED) == 0 ||
-            strcmp(state_entry->state, STATE_RELEASED) == 0)) {
-            continue;  /* Don't increment manifest_idx */
-        }
 
         /* Borrow VWD cache and anchor from arena-backed state entries.
          *
@@ -2260,11 +2257,14 @@ static error_t *workspace_build_manifest_from_state(workspace_t *ws) {
     /* Set final count (may be less than state_count due to filtering) */
     ws->manifest->count = manifest_idx;
 
+    *out_orphan_candidates = (candidate_count > 0) ? candidates : NULL;
+    *out_orphan_count = candidate_count;
+
     return NULL;
 
 cleanup:
-    /* Simplified error cleanup — arena handles all string fields.
-     * Only free heap-allocated structures. */
+    /* Simplified error cleanup — arena handles all string fields and the
+     * candidate pointer array. Only free heap-allocated structures. */
     hashmap_free(path_map, NULL);
     free(ws->manifest->entries);
     free(ws->manifest);
@@ -2348,14 +2348,22 @@ error_t *workspace_load(
     ws->content_cache = content_cache;
     ws->arena = arena;
 
-    /* Build manifest from state (Virtual Working Directory architecture)
+    /* Build manifest from state (Virtual Working Directory architecture).
      * This replaces the old manifest_build() which walked Git trees.
-     * Now we read from the manifest table (expected state cache) for O(M) performance
-     * where M = entries in manifest, not O(N) where N = all files in Git.
+     * Now we read from the manifest table (expected state cache) for O(M)
+     * performance where M = entries in manifest, not O(N) where N = all
+     * files in Git.
+     *
+     * The build also partitions out rejected rows (out-of-scope or
+     * lifecycle-terminal) into orphan_candidates for analyze_orphaned_files.
+     * The partition is the single source of truth for orphan-ness — no
+     * later hashmap probe is needed.
      *
      * Staleness was already repaired by manifest_reconcile above; this
-     * function now reads current state directly. */
-    err = workspace_build_manifest_from_state(ws);
+     * function reads current state directly. */
+    const state_file_entry_t **file_orphans = NULL;
+    size_t file_orphan_count = 0;
+    err = workspace_build_manifest_from_state(ws, &file_orphans, &file_orphan_count);
     if (err) {
         workspace_free(ws);
         return error_wrap(err, "Failed to build manifest from state");
@@ -2372,6 +2380,34 @@ error_t *workspace_load(
         );
     }
 
+    /* Load and partition tracked directories once when any consumer needs them.
+     * Both analyze_orphaned_directories and analyze_directory_metadata_divergence
+     * read disjoint slices of the partition, so a single load + single partition
+     * serves both. */
+    const state_directory_entry_t **active_dirs = NULL;
+    size_t active_dir_count = 0;
+    const state_directory_entry_t **orphan_dirs = NULL;
+    size_t orphan_dir_count = 0;
+    if (resolved_opts.analyze_orphans || resolved_opts.analyze_directories) {
+        state_directory_entry_t *all_dirs = NULL;
+        size_t all_dir_count = 0;
+        err = state_get_all_directories(state, arena, &all_dirs, &all_dir_count);
+        if (err) {
+            workspace_free(ws);
+            return error_wrap(err, "Failed to load tracked directories from state");
+        }
+
+        err = partition_state_directories(
+            ws, all_dirs, all_dir_count,
+            &active_dirs, &active_dir_count,
+            &orphan_dirs, &orphan_dir_count
+        );
+        if (err) {
+            workspace_free(ws);
+            return error_wrap(err, "Failed to partition tracked directories");
+        }
+    }
+
     /* Execute analyses based on resolved_opts flags. Each analysis is
      * independently controllable for optimal performance. */
 
@@ -2384,12 +2420,19 @@ error_t *workspace_load(
         }
     }
 
-    /* Analyze orphaned state entries (requires files) */
+    /* Analyze orphaned state entries (files + directories).
+     * Both consume partition slices produced above; no probe-based filter. */
     if (resolved_opts.analyze_orphans) {
-        err = analyze_orphaned_state(ws);
+        err = analyze_orphaned_files(ws, file_orphans, file_orphan_count);
         if (err) {
             workspace_free(ws);
-            return error_wrap(err, "Failed to analyze orphaned state");
+            return error_wrap(err, "Failed to analyze orphaned files");
+        }
+
+        err = analyze_orphaned_directories(ws, orphan_dirs, orphan_dir_count);
+        if (err) {
+            workspace_free(ws);
+            return error_wrap(err, "Failed to analyze orphaned directories");
         }
     }
 
@@ -2404,7 +2447,9 @@ error_t *workspace_load(
 
     /* Analyze directory metadata divergence */
     if (resolved_opts.analyze_directories) {
-        err = analyze_directory_metadata_divergence(ws);
+        err = analyze_directory_metadata_divergence(
+            ws, active_dirs, active_dir_count
+        );
         if (err) {
             workspace_free(ws);
             return error_wrap(err, "Failed to analyze directory metadata");
@@ -2586,6 +2631,7 @@ const manifest_t *workspace_get_manifest(const workspace_t *ws) {
     if (!ws) {
         return NULL;
     }
+
     return ws->manifest;
 }
 
@@ -2991,8 +3037,8 @@ void workspace_free(workspace_t *ws) {
     manifest_free(ws->manifest);
 
     /* ws->arena is borrowed — never destroyed here. Arena-allocated
-     * data (manifest entries, cached state rows, diverged item strings)
-     * remains valid until the caller destroys the arena. */
+     * data (manifest entry strings, partition pointer arrays, diverged
+     * item strings) remains valid until the caller destroys the arena. */
 
     free(ws);
 }

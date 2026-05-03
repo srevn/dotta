@@ -369,8 +369,7 @@ static bool deployed_from_other_profile(
 
     bool is_other = false;
     if (!err && state_entry &&
-        state_entry->state &&
-        strcmp(state_entry->state, STATE_ACTIVE) == 0 &&
+        state_entry->lifecycle == LIFECYCLE_ACTIVE &&
         strcmp(state_entry->profile, current_profile) != 0) {
         is_other = true;
     }
@@ -1076,7 +1075,7 @@ static error_t *remove_files_from_profile(
                 /* Without --delete-files we release management immediately;
                  * collect the precise paths manifest_remove_files marks so
                  * the post-call cleanup acts only on this invocation's set,
-                 * not every STATE_DELETED row for the profile (which would
+                 * not every LIFECYCLE_DELETED row for the profile (which would
                  * include rows from prior `remove --delete-files` calls
                  * still awaiting apply). */
                 string_array_t *marked_paths = NULL;
@@ -1105,7 +1104,7 @@ static error_t *remove_files_from_profile(
                     error_free(manifest_err);
                     state_rollback(state);
                 } else {
-                    /* manifest_remove_files() marks entries STATE_DELETED.
+                    /* manifest_remove_files() marks entries LIFECYCLE_DELETED.
                      * With --delete-files: leave them for apply to clean up.
                      * Default: release exactly the paths just marked. */
                     if (marked_paths) {
@@ -1469,8 +1468,8 @@ static error_t *delete_profile_branch(
         /* Ordering rule: mutate enabled_profiles first, then reconcile manifest.
          * state_disable_profile drops the row from enabled_profiles; apply_scope
          * then rebuilds virtual_manifest against the remaining set (orphans
-         * without a fallback flip to STATE_INACTIVE, which the post-deletion
-         * pass below upgrades to STATE_DELETED after gitops_delete_branch). */
+         * without a fallback flip to LIFECYCLE_INACTIVE, which the post-deletion
+         * pass below upgrades to LIFECYCLE_DELETED after gitops_delete_branch). */
         err = state_disable_profile(state, opts->profile);
         if (err) {
             err = error_wrap(err, "Failed to remove profile from state");
@@ -1517,13 +1516,13 @@ static error_t *delete_profile_branch(
 
     performed = true;
 
-    /* Post-deletion: upgrade STATE_INACTIVE entries to STATE_DELETED
+    /* Post-deletion: upgrade LIFECYCLE_INACTIVE entries to LIFECYCLE_DELETED
      * (or release immediately without --delete-files)
      *
-     * After branch deletion, STATE_INACTIVE entries left by the earlier
+     * After branch deletion, LIFECYCLE_INACTIVE entries left by the earlier
      * manifest_apply_scope() call (or from a prior profile disable) must be
-     * upgraded to STATE_DELETED. Without this, the safety module would RELEASE
-     * these files (branch gone + STATE_INACTIVE = irrecoverable), when the
+     * upgraded to LIFECYCLE_DELETED. Without this, the safety module would RELEASE
+     * these files (branch gone + LIFECYCLE_INACTIVE = irrecoverable), when the
      * user's intent is to delete them.
      *
      * Without --delete-files: remove state entries entirely (release from management).
@@ -1537,28 +1536,30 @@ static error_t *delete_profile_branch(
          * is either INACTIVE (just-orphaned by reconcile) or DELETED (carried
          * over from a prior dotta remove). Fallback-having entries already
          * moved to other profiles in step 1, so by-profile scope is precise. */
-        static const char *const sweep_states[] = { STATE_INACTIVE, STATE_DELETED };
-        const size_t sweep_count = sizeof(sweep_states) / sizeof(sweep_states[0]);
+        static const state_lifecycle_t sweep_lifecycles[] = {
+            LIFECYCLE_INACTIVE, LIFECYCLE_DELETED
+        };
+        const size_t sweep_count = sizeof(sweep_lifecycles) / sizeof(sweep_lifecycles[0]);
         size_t files_changed = 0, dirs_changed = 0;
 
         if (opts->delete_files) {
             delete_err = state_transition_files_by_profile(
-                state, opts->profile, sweep_states, sweep_count,
-                STATE_DELETED, &files_changed
+                state, opts->profile, sweep_lifecycles, sweep_count,
+                LIFECYCLE_DELETED, &files_changed
             );
             if (!delete_err) {
                 delete_err = state_transition_directories_by_profile(
-                    state, opts->profile, sweep_states, sweep_count,
-                    STATE_DELETED, &dirs_changed
+                    state, opts->profile, sweep_lifecycles, sweep_count,
+                    LIFECYCLE_DELETED, &dirs_changed
                 );
             }
         } else {
             delete_err = state_purge_files_by_profile(
-                state, opts->profile, sweep_states, sweep_count, &files_changed
+                state, opts->profile, sweep_lifecycles, sweep_count, &files_changed
             );
             if (!delete_err) {
                 delete_err = state_purge_directories_by_profile(
-                    state, opts->profile, sweep_states, sweep_count, &dirs_changed
+                    state, opts->profile, sweep_lifecycles, sweep_count, &dirs_changed
                 );
             }
         }
@@ -1649,9 +1650,9 @@ static error_t *delete_profile_branch(
     }
 
     /*
-     * Architectural note: State entries were upgraded to STATE_DELETED (or
+     * Architectural note: State entries were upgraded to LIFECYCLE_DELETED (or
      * released without --delete-files) in the post-deletion block above.
-     * Final filesystem cleanup for STATE_DELETED entries happens on `apply`.
+     * Final filesystem cleanup for LIFECYCLE_DELETED entries happens on `apply`.
      */
 
     /* Execute post-remove hook */

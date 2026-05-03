@@ -124,6 +124,34 @@ static error_t *sqlite_error(sqlite3 *db, const char *context) {
 }
 
 /**
+ * Lifecycle ↔ SQL text — the single boundary between the in-memory enum
+ * and the on-disk text representation. The strings are file-scope literals
+ * so SQLITE_STATIC is valid at every bind site.
+ *
+ * lifecycle_from_sql_text canonicalizes NULL and unknown text to
+ * LIFECYCLE_ACTIVE. The CHECK constraint at the SQL level rejects unknown
+ * values on write; this read-side fallback exists only as graceful
+ * degradation against a manually edited DB.
+ */
+static const char *lifecycle_to_sql_text(state_lifecycle_t lc) {
+    switch (lc) {
+        case LIFECYCLE_INACTIVE: return "inactive";
+        case LIFECYCLE_DELETED:  return "deleted";
+        case LIFECYCLE_RELEASED: return "released";
+        case LIFECYCLE_ACTIVE:
+        default:                 return "active";
+    }
+}
+
+static state_lifecycle_t lifecycle_from_sql_text(const char *s) {
+    if (!s)                         return LIFECYCLE_ACTIVE;
+    if (strcmp(s, "inactive") == 0) return LIFECYCLE_INACTIVE;
+    if (strcmp(s, "deleted") == 0)  return LIFECYCLE_DELETED;
+    if (strcmp(s, "released") == 0) return LIFECYCLE_RELEASED;
+    return LIFECYCLE_ACTIVE;
+}
+
+/**
  * Initialize database schema
  *
  * Creates tables if they don't exist:
@@ -1320,11 +1348,9 @@ error_t *state_add_file(state_t *state, const state_file_entry_t *entry) {
     sqlite3_bind_int(state->stmt_insert_file, 10, entry->encrypted ? 1 : 0);
 
     /* 11. state */
-    if (entry->state && entry->state[0] != '\0') {
-        sqlite3_bind_text(state->stmt_insert_file, 11, entry->state, -1, SQLITE_TRANSIENT);
-    } else {
-        sqlite3_bind_text(state->stmt_insert_file, 11, STATE_ACTIVE, -1, SQLITE_STATIC);
-    }
+    sqlite3_bind_text(
+        state->stmt_insert_file, 11, lifecycle_to_sql_text(entry->lifecycle), -1, SQLITE_STATIC
+    );
 
     /* 12. deployed_blob_oid — 20 bytes. Zero sentinel is legitimate (never
      * confirmed); the UPSERT's preserve-on-zero CASE keeps any prior anchor. */
@@ -1484,7 +1510,9 @@ error_t *state_get_file(
     const char *owner = (const char *) sqlite3_column_text(stmt, 6);
     const char *group = (const char *) sqlite3_column_text(stmt, 7);
     int encrypted = sqlite3_column_int(stmt, 8);
-    const char *state_str = (const char *) sqlite3_column_text(stmt, 9);
+    state_lifecycle_t lifecycle = lifecycle_from_sql_text(
+        (const char *) sqlite3_column_text(stmt, 9)
+    );
 
     /* Deployment anchor (column 10: deployed_blob_oid BLOB NOT NULL, always 20 bytes) */
     deployment_anchor_t anchor = { 0 };
@@ -1517,7 +1545,7 @@ error_t *state_get_file(
     state_file_entry_t *entry = NULL;
     error_t *err = state_create_entry(
         storage_path, filesystem_path, profile, old_profile, type, &blob_oid,
-        mode, owner, group, encrypted != 0, state_str, &entry
+        mode, owner, group, encrypted != 0, lifecycle, &entry
     );
 
     if (err) return err;
@@ -1582,7 +1610,9 @@ error_t *state_get_file_by_storage(
     const char *owner = (const char *) sqlite3_column_text(stmt, 6);
     const char *group = (const char *) sqlite3_column_text(stmt, 7);
     int encrypted = sqlite3_column_int(stmt, 8);
-    const char *state_str = (const char *) sqlite3_column_text(stmt, 9);
+    state_lifecycle_t lifecycle = lifecycle_from_sql_text(
+        (const char *) sqlite3_column_text(stmt, 9)
+    );
 
     /* Deployment anchor */
     deployment_anchor_t anchor = { 0 };
@@ -1612,7 +1642,7 @@ error_t *state_get_file_by_storage(
     state_file_entry_t *entry = NULL;
     error_t *err = state_create_entry(
         storage_path, filesystem_path, profile, old_profile, type, &blob_oid,
-        mode, owner, group, encrypted != 0, state_str, &entry
+        mode, owner, group, encrypted != 0, lifecycle, &entry
     );
 
     if (err) return err;
@@ -1906,11 +1936,10 @@ error_t *state_get_all_files(
 
         /* Set other fields */
         entries[i].encrypted = (encrypted != 0);
-        entries[i].state = state_str ? DUP(state_str) : DUP(STATE_ACTIVE);
+        entries[i].lifecycle = lifecycle_from_sql_text(state_str);
 
         /* Check allocation success */
-        if (!entries[i].filesystem_path || !entries[i].storage_path ||
-            !entries[i].profile || !entries[i].state) {
+        if (!entries[i].filesystem_path || !entries[i].storage_path || !entries[i].profile) {
             sqlite3_finalize(stmt);
             return ERROR(ERR_MEMORY, "Failed to copy entry strings");
         }
@@ -1992,12 +2021,8 @@ error_t *state_add_directory(state_t *state, const state_directory_entry_t *entr
         sqlite3_bind_null(stmt, 6);
     }
 
-    /* State (defaults to STATE_ACTIVE if not set) */
-    if (entry->state && entry->state[0] != '\0') {
-        sqlite3_bind_text(stmt, 7, entry->state, -1, SQLITE_STATIC);
-    } else {
-        sqlite3_bind_text(stmt, 7, STATE_ACTIVE, -1, SQLITE_STATIC);
-    }
+    /* State */
+    sqlite3_bind_text(stmt, 7, lifecycle_to_sql_text(entry->lifecycle), -1, SQLITE_STATIC);
 
     /* Execute */
     int rc = sqlite3_step(stmt);
@@ -2122,12 +2147,11 @@ error_t *state_get_all_directories(
         entries[i].mode = mode;
         entries[i].owner = DUP_OPT(owner);
         entries[i].group = DUP_OPT(group);
-        entries[i].state = state_str ? DUP(state_str) : DUP(STATE_ACTIVE);
+        entries[i].lifecycle = lifecycle_from_sql_text(state_str);
         entries[i].deployed_at = (time_t) deployed_at;
 
         /* Check allocation success */
-        if (!entries[i].filesystem_path || !entries[i].storage_path ||
-            !entries[i].profile || !entries[i].state) {
+        if (!entries[i].filesystem_path || !entries[i].storage_path || !entries[i].profile) {
             sqlite3_reset(stmt);
             return ERROR(ERR_MEMORY, "Failed to copy directory entry strings");
         }
@@ -2270,12 +2294,11 @@ error_t *state_get_directories_by_profile(
         entries[i].mode = mode;
         entries[i].owner = DUP_OPT(owner);
         entries[i].group = DUP_OPT(group);
-        entries[i].state = state_str ? DUP(state_str) : DUP(STATE_ACTIVE);
+        entries[i].lifecycle = lifecycle_from_sql_text(state_str);
         entries[i].deployed_at = (time_t) deployed_at;
 
         /* Check allocation success */
-        if (!entries[i].filesystem_path || !entries[i].storage_path ||
-            !entries[i].profile || !entries[i].state) {
+        if (!entries[i].filesystem_path || !entries[i].storage_path || !entries[i].profile) {
             sqlite3_reset(stmt);
             return ERROR(ERR_MEMORY, "Failed to copy directory entry strings");
         }
@@ -2533,10 +2556,9 @@ error_t *state_get_directory(
     }
 
     /* state (column 6) */
-    const char *state_str = (const char *) sqlite3_column_text(stmt, 6);
-    if (state_str) {
-        entry->state = strdup(state_str);
-    }
+    entry->lifecycle = lifecycle_from_sql_text(
+        (const char *) sqlite3_column_text(stmt, 6)
+    );
 
     /* deployed_at (column 7) */
     entry->deployed_at = sqlite3_column_int64(stmt, 7);
@@ -2548,10 +2570,11 @@ error_t *state_get_directory(
 }
 
 /**
- * Set directory lifecycle state
+ * Set directory lifecycle phase
  *
- * Updates the state column for a directory entry.
- * Mirrors state_set_file_state() pattern for consistency.
+ * Updates the state column for a directory entry. Vocabulary mirrors the
+ * tracked_directories CHECK constraint — LIFECYCLE_RELEASED is rejected here
+ * (and at the SQL level as defense-in-depth). Other phases are valid by type.
  *
  * @param state State handle (must not be NULL, must have active transaction)
  * @param filesystem_path Directory path (must not be NULL)
@@ -2561,19 +2584,16 @@ error_t *state_get_directory(
 error_t *state_set_directory_state(
     state_t *state,
     const char *filesystem_path,
-    const char *new_state
+    state_lifecycle_t new_lifecycle
 ) {
     CHECK_NULL(state);
     CHECK_NULL(state->db);
     CHECK_NULL(filesystem_path);
-    CHECK_NULL(new_state);
 
     /* Validate state value */
-    if (strcmp(new_state, STATE_ACTIVE) != 0 && strcmp(new_state, STATE_INACTIVE) != 0 &&
-        strcmp(new_state, STATE_DELETED) != 0) {
+    if (new_lifecycle == LIFECYCLE_RELEASED) {
         return ERROR(
-            ERR_INVALID_ARG,
-            "Invalid state '%s' (must be 'active', 'inactive' or 'deleted')", new_state
+            ERR_INVALID_ARG, "LIFECYCLE_RELEASED is not valid for directory entries"
         );
     }
 
@@ -2589,7 +2609,7 @@ error_t *state_set_directory_state(
 
     sqlite3_stmt *stmt = state->stmt_set_directory_state;
     sqlite3_reset(stmt);
-    sqlite3_bind_text(stmt, 1, new_state, -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 1, lifecycle_to_sql_text(new_lifecycle), -1, SQLITE_STATIC);
     sqlite3_bind_text(stmt, 2, filesystem_path, -1, SQLITE_TRANSIENT);
 
     /* Execute */
@@ -2599,13 +2619,7 @@ error_t *state_set_directory_state(
         return sqlite_error(state->db, "Failed to update directory state");
     }
 
-    /* Check if any row was actually updated */
-    int changes = sqlite3_changes(state->db);
-    if (changes == 0) {
-        /* Directory not found - this is non-fatal, just log */
-        return NULL;  /* Graceful degradation */
-    }
-
+    /* Directory not found is non-fatal — graceful degradation. */
     return NULL;
 }
 
@@ -2614,8 +2628,8 @@ error_t *state_set_directory_state(
  *
  * Bulk operation for manifest_sync_directories to prepare for rebuild.
  *
- * Only STATE_ACTIVE rows are downgraded to STATE_INACTIVE. STATE_DELETED and
- * STATE_RELEASED are preserved — they represent downstream intent (controlled
+ * Only LIFECYCLE_ACTIVE rows are downgraded to LIFECYCLE_INACTIVE. LIFECYCLE_DELETED and
+ * LIFECYCLE_RELEASED are preserved — they represent downstream intent (controlled
  * deletion via remove command, authority loss from external Git changes) that
  * must survive a scope-reconciliation sweep. Downgrading them would re-engage
  * the safety branch-existence check and can flip a staged delete into a
@@ -2677,50 +2691,49 @@ static int build_in_placeholders(char *buf, size_t bufsz, size_t n) {
     return (int) pos;
 }
 
-/* Bulk DELETE on a per-profile state-set, shared by file and directory
+/* Bulk DELETE on a per-profile lifecycle-set, shared by file and directory
  * primitives. Uses an index-backed query (idx_manifest_profile or
  * idx_tracked_directories_profile). The table parameter is a code-controlled
  * constant — never user input — so SQL injection is not a concern.
  *
  * Returns rows-affected via *out_purged when provided. Empty DB and unknown
- * profile both yield zero rows-affected with no error. Empty state-set is
- * a caller bug (ERR_INVALID_ARG). */
+ * profile both yield zero rows-affected with no error. Empty lifecycle-set
+ * is a caller bug (ERR_INVALID_ARG). */
 static error_t *bulk_purge_by_profile(
     state_t *state,
     const char *table,
     const char *profile,
-    const char *const *states,
-    size_t state_count,
+    const state_lifecycle_t *lifecycles,
+    size_t lifecycle_count,
     size_t *out_purged
 ) {
     CHECK_NULL(state);
     CHECK_NULL(profile);
-    CHECK_NULL(states);
+    CHECK_NULL(lifecycles);
 
     if (out_purged) *out_purged = 0;
 
     /* Empty state (no DB file) — nothing to delete, success. */
     if (!state->db) return NULL;
 
-    if (state_count == 0) {
+    if (lifecycle_count == 0) {
         return ERROR(
             ERR_INVALID_ARG,
-            "bulk purge requires at least one state value"
+            "bulk purge requires at least one lifecycle value"
         );
     }
 
     char placeholders[64];
-    if (build_in_placeholders(placeholders, sizeof(placeholders), state_count) < 0) {
+    if (build_in_placeholders(placeholders, sizeof(placeholders), lifecycle_count) < 0) {
         return ERROR(
             ERR_INTERNAL,
-            "Too many state values for bulk purge (got %zu)", state_count
+            "Too many lifecycle values for bulk purge (got %zu)", lifecycle_count
         );
     }
 
     char sql[256];
     int n = snprintf(
-        sql, sizeof(sql),
-        "DELETE FROM %s WHERE profile = ? AND state IN (%s);",
+        sql, sizeof(sql), "DELETE FROM %s WHERE profile = ? AND state IN (%s);",
         table, placeholders
     );
     if (n < 0 || (size_t) n >= sizeof(sql)) {
@@ -2734,8 +2747,10 @@ static error_t *bulk_purge_by_profile(
     }
 
     sqlite3_bind_text(stmt, 1, profile, -1, SQLITE_TRANSIENT);
-    for (size_t i = 0; i < state_count; i++) {
-        sqlite3_bind_text(stmt, (int) (i + 2), states[i], -1, SQLITE_TRANSIENT);
+    for (size_t i = 0; i < lifecycle_count; i++) {
+        sqlite3_bind_text(
+            stmt, (int) (i + 2), lifecycle_to_sql_text(lifecycles[i]), -1, SQLITE_STATIC
+        );
     }
 
     rc = sqlite3_step(stmt);
@@ -2751,48 +2766,45 @@ static error_t *bulk_purge_by_profile(
     return NULL;
 }
 
-/* Bulk UPDATE on a per-profile state-set, shared by file and directory
- * primitives. The new_state value is bound as ?1; callers are responsible
- * for validating it against the appropriate table's CHECK vocabulary
- * before invoking this helper (vocabularies differ between
- * virtual_manifest and tracked_directories). */
+/* Bulk UPDATE on a per-profile lifecycle-set, shared by file and directory
+ * primitives. Vocabulary correctness is enforced by the type system; the
+ * directory-only LIFECYCLE_RELEASED rejection lives at the public-facing
+ * directory wrappers, mirroring state_set_directory_state. */
 static error_t *bulk_transition_by_profile(
     state_t *state,
     const char *table,
     const char *profile,
-    const char *const *from_states,
-    size_t from_state_count,
-    const char *new_state,
+    const state_lifecycle_t *from_lifecycles,
+    size_t from_count,
+    state_lifecycle_t new_lifecycle,
     size_t *out_changed
 ) {
     CHECK_NULL(state);
     CHECK_NULL(profile);
-    CHECK_NULL(from_states);
-    CHECK_NULL(new_state);
+    CHECK_NULL(from_lifecycles);
 
     if (out_changed) *out_changed = 0;
 
     if (!state->db) return NULL;
 
-    if (from_state_count == 0) {
+    if (from_count == 0) {
         return ERROR(
             ERR_INVALID_ARG,
-            "bulk transition requires at least one source state value"
+            "bulk transition requires at least one source lifecycle value"
         );
     }
 
     char placeholders[64];
-    if (build_in_placeholders(placeholders, sizeof(placeholders), from_state_count) < 0) {
+    if (build_in_placeholders(placeholders, sizeof(placeholders), from_count) < 0) {
         return ERROR(
             ERR_INTERNAL,
-            "Too many state values for bulk transition (got %zu)", from_state_count
+            "Too many lifecycle values for bulk transition (got %zu)", from_count
         );
     }
 
     char sql[256];
     int n = snprintf(
-        sql, sizeof(sql),
-        "UPDATE %s SET state = ? WHERE profile = ? AND state IN (%s);",
+        sql, sizeof(sql), "UPDATE %s SET state = ? WHERE profile = ? AND state IN (%s);",
         table, placeholders
     );
     if (n < 0 || (size_t) n >= sizeof(sql)) {
@@ -2805,10 +2817,12 @@ static error_t *bulk_transition_by_profile(
         return sqlite_error(state->db, "Failed to prepare bulk transition");
     }
 
-    sqlite3_bind_text(stmt, 1, new_state, -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 1, lifecycle_to_sql_text(new_lifecycle), -1, SQLITE_STATIC);
     sqlite3_bind_text(stmt, 2, profile, -1, SQLITE_TRANSIENT);
-    for (size_t i = 0; i < from_state_count; i++) {
-        sqlite3_bind_text(stmt, (int) (i + 3), from_states[i], -1, SQLITE_TRANSIENT);
+    for (size_t i = 0; i < from_count; i++) {
+        sqlite3_bind_text(
+            stmt, (int) (i + 3), lifecycle_to_sql_text(from_lifecycles[i]), -1, SQLITE_STATIC
+        );
     }
 
     rc = sqlite3_step(stmt);
@@ -2827,40 +2841,36 @@ static error_t *bulk_transition_by_profile(
 error_t *state_purge_directories_by_profile(
     state_t *state,
     const char *profile,
-    const char *const *states,
-    size_t state_count,
+    const state_lifecycle_t *lifecycles,
+    size_t lifecycle_count,
     size_t *out_purged
 ) {
     return bulk_purge_by_profile(
-        state, "tracked_directories", profile, states, state_count, out_purged
+        state, "tracked_directories", profile,
+        lifecycles, lifecycle_count, out_purged
     );
 }
 
 error_t *state_transition_directories_by_profile(
     state_t *state,
     const char *profile,
-    const char *const *from_states,
-    size_t from_state_count,
-    const char *new_state,
+    const state_lifecycle_t *from_lifecycles,
+    size_t from_count,
+    state_lifecycle_t new_lifecycle,
     size_t *out_changed
 ) {
-    /* Directory CHECK vocabulary excludes 'released' — see schema at
-     * tracked_directories.state. Mirror state_set_directory_state's
-     * validation message so caller-facing errors stay consistent. */
-    if (!new_state ||
-        (strcmp(new_state, STATE_ACTIVE) != 0 &&
-        strcmp(new_state, STATE_INACTIVE) != 0 &&
-        strcmp(new_state, STATE_DELETED) != 0)) {
+    /* Directory rows do not carry LIFECYCLE_RELEASED (no Git blob identity).
+     * Mirror state_set_directory_state's rejection. */
+    if (new_lifecycle == LIFECYCLE_RELEASED) {
         return ERROR(
             ERR_INVALID_ARG,
-            "Invalid state '%s' (must be 'active', 'inactive' or 'deleted')",
-            new_state ? new_state : "(null)"
+            "LIFECYCLE_RELEASED is not valid for directory entries"
         );
     }
 
     return bulk_transition_by_profile(
         state, "tracked_directories", profile,
-        from_states, from_state_count, new_state, out_changed
+        from_lifecycles, from_count, new_lifecycle, out_changed
     );
 }
 
@@ -2877,7 +2887,6 @@ void state_free_directory_entry(state_directory_entry_t *entry) {
     free(entry->profile);
     free(entry->owner);
     free(entry->group);
-    free(entry->state);
     free(entry);
 }
 
@@ -3241,7 +3250,7 @@ error_t *state_create_entry(
     const char *owner,
     const char *group,
     bool encrypted,
-    const char *state_value,
+    state_lifecycle_t lifecycle,
     state_file_entry_t **out
 ) {
     CHECK_NULL(storage_path);
@@ -3267,17 +3276,16 @@ error_t *state_create_entry(
     entry->old_profile = old_profile ? strdup(old_profile) : NULL;
     entry->owner = owner ? strdup(owner) : NULL;
     entry->group = group ? strdup(group) : NULL;
-    entry->state = state_value ? strdup(state_value) : strdup(STATE_ACTIVE);
 
     /* Set non-string fields */
     entry->mode = mode;
     entry->type = type;
     entry->encrypted = encrypted;
+    entry->lifecycle = lifecycle;
     entry->anchor = DEPLOYMENT_ANCHOR_UNSET;
 
     /* Validate required allocations */
-    if (!entry->storage_path || !entry->filesystem_path ||
-        !entry->profile || !entry->state) {
+    if (!entry->storage_path || !entry->filesystem_path || !entry->profile) {
         state_free_entry(entry);
         return ERROR(ERR_MEMORY, "Failed to copy entry fields");
     }
@@ -3433,14 +3441,14 @@ error_t *state_clear_old_profile(
  * to mark files for removal (inactive for staging, deleted for confirmed removal).
  *
  * Valid states:
- *   - STATE_ACTIVE   - Normal entry, file is in scope
- *   - STATE_INACTIVE - Staged for removal, reversible (profile disable)
- *   - STATE_DELETED  - Confirmed deletion via remove command
+ *   - LIFECYCLE_ACTIVE   - Normal entry, file is in scope
+ *   - LIFECYCLE_INACTIVE - Staged for removal, reversible (profile disable)
+ *   - LIFECYCLE_DELETED  - Confirmed deletion via remove command
  *
  * Preconditions:
  *   - state MUST have active transaction (via state_open)
  *   - filesystem_path MUST exist in virtual_manifest
- *   - new_state MUST be STATE_ACTIVE, STATE_INACTIVE, STATE_DELETED, etc
+ *   - new_state MUST be LIFECYCLE_ACTIVE, LIFECYCLE_INACTIVE, LIFECYCLE_DELETED, etc
  *
  * @param state State handle (must not be NULL, must have active transaction)
  * @param filesystem_path File to update (must not be NULL)
@@ -3450,22 +3458,11 @@ error_t *state_clear_old_profile(
 error_t *state_set_file_state(
     state_t *state,
     const char *filesystem_path,
-    const char *new_state
+    state_lifecycle_t new_lifecycle
 ) {
     CHECK_NULL(state);
     CHECK_NULL(state->db);
     CHECK_NULL(filesystem_path);
-    CHECK_NULL(new_state);
-
-    /* Validate state value */
-    if (strcmp(new_state, STATE_ACTIVE) != 0 && strcmp(new_state, STATE_INACTIVE) != 0 &&
-        strcmp(new_state, STATE_DELETED) != 0 && strcmp(new_state, STATE_RELEASED) != 0) {
-        return ERROR(
-            ERR_INVALID_ARG,
-            "Invalid state '%s' (must be 'active', 'inactive', 'deleted', or 'released')",
-            new_state
-        );
-    }
 
     const char *sql = "UPDATE virtual_manifest SET state = ? WHERE filesystem_path = ?";
 
@@ -3475,7 +3472,7 @@ error_t *state_set_file_state(
         return sqlite_error(state->db, "Failed to prepare state update");
     }
 
-    sqlite3_bind_text(stmt, 1, new_state, -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 1, lifecycle_to_sql_text(new_lifecycle), -1, SQLITE_STATIC);
     sqlite3_bind_text(stmt, 2, filesystem_path, -1, SQLITE_TRANSIENT);
 
     rc = sqlite3_step(stmt);
@@ -3496,41 +3493,27 @@ error_t *state_set_file_state(
 error_t *state_purge_files_by_profile(
     state_t *state,
     const char *profile,
-    const char *const *states,
-    size_t state_count,
+    const state_lifecycle_t *lifecycles,
+    size_t lifecycle_count,
     size_t *out_purged
 ) {
     return bulk_purge_by_profile(
-        state, "virtual_manifest", profile, states, state_count, out_purged
+        state, "virtual_manifest", profile,
+        lifecycles, lifecycle_count, out_purged
     );
 }
 
 error_t *state_transition_files_by_profile(
     state_t *state,
     const char *profile,
-    const char *const *from_states,
-    size_t from_state_count,
-    const char *new_state,
+    const state_lifecycle_t *from_lifecycles,
+    size_t from_count,
+    state_lifecycle_t new_lifecycle,
     size_t *out_changed
 ) {
-    /* virtual_manifest CHECK vocabulary includes 'released'. Mirror
-     * state_set_file_state's validation message so caller-facing errors
-     * stay consistent. */
-    if (!new_state ||
-        (strcmp(new_state, STATE_ACTIVE) != 0 &&
-        strcmp(new_state, STATE_INACTIVE) != 0 &&
-        strcmp(new_state, STATE_DELETED) != 0 &&
-        strcmp(new_state, STATE_RELEASED) != 0)) {
-        return ERROR(
-            ERR_INVALID_ARG,
-            "Invalid state '%s' (must be 'active', 'inactive', 'deleted', or 'released')",
-            new_state ? new_state : "(null)"
-        );
-    }
-
     return bulk_transition_by_profile(
         state, "virtual_manifest", profile,
-        from_states, from_state_count, new_state, out_changed
+        from_lifecycles, from_count, new_lifecycle, out_changed
     );
 }
 
@@ -3750,10 +3733,9 @@ error_t *state_get_entries_by_profile(
         }
 
         entries[i].encrypted = (encrypted != 0);
-        entries[i].state = state_str ? DUP(state_str) : DUP(STATE_ACTIVE);
+        entries[i].lifecycle = lifecycle_from_sql_text(state_str);
 
-        if (!entries[i].filesystem_path || !entries[i].storage_path ||
-            !entries[i].profile || !entries[i].state) {
+        if (!entries[i].filesystem_path || !entries[i].storage_path || !entries[i].profile) {
             sqlite3_reset(stmt);
             return ERROR(ERR_MEMORY, "Failed to copy entry strings");
         }
@@ -3821,21 +3803,11 @@ void state_free_entry(state_file_entry_t *entry) {
         return;
     }
 
-    /* blob_oid is an inline binary field — no allocation to free.
-     *
-     * entry->state is declared const char * to document its read-only
-     * intent at every consumer. The cast here acknowledges that this
-     * function — paired with strdup at the assignment sites in state.c
-     * (load and state_create_entry) — owns the lifetime of heap-backed
-     * state strings. Tree-built rows that carry the STATE_ACTIVE literal
-     * never pass through this free path; they are arena-scoped via the
-     * precedence-view's lifetime in manifest.c. */
     free(entry->storage_path);
     free(entry->filesystem_path);
     free(entry->profile);
     free(entry->old_profile);
     free(entry->owner);
     free(entry->group);
-    free((char *) entry->state);
     free(entry);
 }

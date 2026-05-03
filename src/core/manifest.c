@@ -312,14 +312,14 @@ static int precedence_view_build_callback(
          * owner, group) are arena-borrowed and abandoned to the caller's
          * arena when overwritten below.
          *
-         * state, old_profile, and anchor are mirrored from the new-entry
+         * lifecycle, old_profile, and anchor are mirrored from the new-entry
          * branch to keep the override path self-contained — any tree-built
-         * row carries STATE_ACTIVE, no reassignment witness, and a zero
+         * row carries LIFECYCLE_ACTIVE, no reassignment witness, and a zero
          * deployment anchor regardless of construction order. */
         override->owner = NULL;
         override->group = NULL;
         override->encrypted = false;
-        override->state = STATE_ACTIVE;
+        override->lifecycle = LIFECYCLE_ACTIVE;
         override->old_profile = NULL;
         override->anchor = DEPLOYMENT_ANCHOR_UNSET;
 
@@ -424,10 +424,11 @@ static int precedence_view_build_callback(
          * discards the const qualifier from mount_resolve's output type. */
         new_entry->filesystem_path = (char *) filesystem_path;
         new_entry->profile = (char *) ctx->profile;
-        /* Tree-built rows always carry STATE_ACTIVE. The literal lives at
-         * process scope; manifest_project_row's UPSERT binds it via
-         * SQLITE_TRANSIENT (SQLite copies the bytes immediately). */
-        new_entry->state = STATE_ACTIVE;
+        /* Tree-built rows always carry LIFECYCLE_ACTIVE. The enum's zero
+         * default already covers this via memset above; the explicit
+         * assignment documents intent and survives any future allocator
+         * change that drops the calloc semantic. */
+        new_entry->lifecycle = LIFECYCLE_ACTIVE;
         /* old_profile, anchor stay zero from memset. */
 
         /* Extract identity from borrowed tree entry (blob_oid, type, mode) */
@@ -1219,7 +1220,7 @@ static error_t *manifest_detect_stale_profiles(
  *
  * Persistent repair: detects state entries whose commit_oid no longer
  * matches the profile branch HEAD, then either updates them from fresh Git
- * state or marks them STATE_RELEASED for release. The deployment anchor
+ * state or marks them LIFECYCLE_RELEASED for release. The deployment anchor
  * (deployed_blob_oid, deployed_at, stat_*) is preserved by the UPSERT
  * across repair — reconcile advances the VWD cache's blob_oid to track Git
  * while leaving the anchor pinned to dotta's last disk confirmation. The
@@ -1315,7 +1316,7 @@ static error_t *manifest_repair_stale(
         state_file_entry_t *entry = &all_entries[i];
 
         /* Only repair ACTIVE entries from stale profiles */
-        if (!entry->state || strcmp(entry->state, STATE_ACTIVE) != 0) {
+        if (entry->lifecycle != LIFECYCLE_ACTIVE) {
             continue;
         }
         if (!entry->profile || !hashmap_get(stale_profiles, entry->profile)) {
@@ -1379,13 +1380,13 @@ static error_t *manifest_repair_stale(
         } else {
             /* File removed from all enabled profiles — loss of authority.
              *
-             * Mark STATE_RELEASED so the orphan→safety→cleanup pipeline releases
+             * Mark LIFECYCLE_RELEASED so the orphan→safety→cleanup pipeline releases
              * it (leaves file on filesystem, removes state entry).
              *
              * Do NOT remove the state entry here — the full pipeline ensures
              * user visibility and safety checks before any cleanup.
              */
-            err = state_set_file_state(state, entry->filesystem_path, STATE_RELEASED);
+            err = state_set_file_state(state, entry->filesystem_path, LIFECYCLE_RELEASED);
             if (err) {
                 err = error_wrap(
                     err, "Failed to mark '%s' as stale",
@@ -1445,12 +1446,12 @@ cleanup:
  *   3. UPSERT every entry in the new manifest. The SQL UPSERT preserves
  *      the deployment anchor on UPDATE, auto-captures old_profile when
  *      the profile column changes, and unconditionally writes
- *      state=STATE_ACTIVE (which reactivates any STATE_INACTIVE row
+ *      state=LIFECYCLE_ACTIVE (which reactivates any LIFECYCLE_INACTIVE row
  *      whose path re-entered scope).
  *   4. Orphan pass. For every pre-reconcile row:
  *        - In new manifest: owner-change stats only (row already updated).
- *        - Not in new manifest: STATE_ACTIVE → STATE_INACTIVE.
- *          STATE_INACTIVE / STATE_DELETED / STATE_RELEASED preserved.
+ *        - Not in new manifest: LIFECYCLE_ACTIVE → LIFECYCLE_INACTIVE.
+ *          LIFECYCLE_INACTIVE / LIFECYCLE_DELETED / LIFECYCLE_RELEASED preserved.
  *   5. Rebuild tracked_directories (mark-ACTIVE-inactive then reactivate).
  */
 error_t *manifest_apply_scope(
@@ -1569,8 +1570,8 @@ error_t *manifest_apply_scope(
      *     the deployment anchor (deployed_blob_oid, deployed_at, stat_*).
      *     The CASE on old_profile auto-captures the prior profile when
      *     the profile column changes, and preserves it otherwise.
-     *   - state column overwritten with STATE_ACTIVE unconditionally,
-     *     which reactivates STATE_INACTIVE rows whose path re-entered
+     *   - state column overwritten with LIFECYCLE_ACTIVE unconditionally,
+     *     which reactivates LIFECYCLE_INACTIVE rows whose path re-entered
      *     scope (typical on profile re-enable).
      *
      * Gain-side stats are attributed here: files_claimed counts every
@@ -1619,10 +1620,10 @@ error_t *manifest_apply_scope(
     /* Step 5: Orphan pass over the pre-reconcile snapshot.
      *
      * A row whose filesystem_path is NOT in the new view's index
-     * left scope entirely. Flip STATE_ACTIVE → STATE_INACTIVE; leave
-     * STATE_INACTIVE (no-op), STATE_DELETED (staged for removal via
+     * left scope entirely. Flip LIFECYCLE_ACTIVE → LIFECYCLE_INACTIVE; leave
+     * LIFECYCLE_INACTIVE (no-op), LIFECYCLE_DELETED (staged for removal via
      * remove --delete-profile; downgrading would break the post-
-     * deletion upgrade path in remove.c), and STATE_RELEASED (external
+     * deletion upgrade path in remove.c), and LIFECYCLE_RELEASED (external
      * drift classification; downgrading would clobber it) untouched.
      *
      * A row still in the new view was already updated in step 4;
@@ -1653,13 +1654,13 @@ error_t *manifest_apply_scope(
         }
 
         /* Not covered — orphan. Only downgrade ACTIVE rows. */
-        if (old->state && strcmp(old->state, STATE_ACTIVE) == 0) {
+        if (old->lifecycle == LIFECYCLE_ACTIVE) {
             error_t *flip_err = state_set_file_state(
-                state, old->filesystem_path, STATE_INACTIVE
+                state, old->filesystem_path, LIFECYCLE_INACTIVE
             );
             if (flip_err) {
                 /* Non-fatal: orphan detection at workspace-load time
-                 * still catches it (STATE_ACTIVE + missing-from-Git
+                 * still catches it (LIFECYCLE_ACTIVE + missing-from-Git
                  * surfaces a warning, and cleanup proceeds). Mirrors
                  * the policy in the primitives this one subsumes. */
                 fprintf(
@@ -1683,11 +1684,11 @@ error_t *manifest_apply_scope(
      *
      * manifest_sync_directories uses the mark-ACTIVE-as-INACTIVE then
      * reactivate pattern (see state_mark_all_directories_inactive —
-     * narrowed in a prior commit to preserve STATE_DELETED/RELEASED).
+     * narrowed in a prior commit to preserve LIFECYCLE_DELETED/RELEASED).
      * Directory fallback and orphan semantics fall out of the rebuild:
      * directories still in any enabled profile's metadata are
      * reactivated with the new owner; directories that left scope
-     * remain STATE_INACTIVE for apply-time cleanup.
+     * remain LIFECYCLE_INACTIVE for apply-time cleanup.
      *
      * Reuses the mount table built above — directories share the same
      * profile→target resolution as files. */
@@ -1925,10 +1926,10 @@ error_t *manifest_remove_files(
         } else {
             /* No fallback - mark as deleted (controlled deletion)
              *
-             * Entry marked STATE_DELETED (controlled deletion via remove command)
+             * Entry marked LIFECYCLE_DELETED (controlled deletion via remove command)
              * and remains in state for orphan detection.
              *
-             * STATE_DELETED bypasses branch existence checks in safety module,
+             * LIFECYCLE_DELETED bypasses branch existence checks in safety module,
              * since user intent is unambiguous (explicit remove command).
              *
              * The orphan cleanup flow:
@@ -1941,7 +1942,7 @@ error_t *manifest_remove_files(
              */
 
             /* Mark entry as deleted for controlled deletion */
-            err = state_set_file_state(state, filesystem_path, STATE_DELETED);
+            err = state_set_file_state(state, filesystem_path, LIFECYCLE_DELETED);
             if (err) {
                 /* Non-fatal: log warning but continue */
                 fprintf(
@@ -1953,12 +1954,12 @@ error_t *manifest_remove_files(
             } else if (out_marked) {
                 /* Record the precise path so callers releasing management
                  * immediately can scope state_remove_file to paths just
-                 * touched, not every STATE_DELETED row for the profile. */
+                 * touched, not every LIFECYCLE_DELETED row for the profile. */
                 error_t *push_err = string_array_push(out_marked, filesystem_path);
                 if (push_err) {
                     /* Non-fatal: row is marked, just absent from the
                      * caller's release list. The caller skips it; the
-                     * row stays STATE_DELETED for apply to clean up. */
+                     * row stays LIFECYCLE_DELETED for apply to clean up. */
                     error_free(push_err);
                 }
             }
@@ -2067,7 +2068,9 @@ error_t *manifest_update_files(
     if (item_count == 0) {
         /* No file items to process, but still sync directories.
          * Handles cases where only directory metadata changed. */
-        return manifest_sync_directories(repo, state, arena, enabled_profiles, mounts);
+        return manifest_sync_directories(
+            repo, state, arena, enabled_profiles, mounts
+        );
     }
 
     /* 1. Build FRESH precedence view from Git (post-commit state).
@@ -2078,7 +2081,9 @@ error_t *manifest_update_files(
      * their source profile. */
     err = precedence_view_build(repo, enabled_profiles, mounts, arena, &fresh);
     if (err) {
-        return error_wrap(err, "Failed to build fresh precedence view for bulk sync");
+        return error_wrap(
+            err, "Failed to build fresh precedence view for bulk sync"
+        );
     }
 
     /* 2. Process each item */
@@ -2118,7 +2123,7 @@ error_t *manifest_update_files(
                  * reality:
                  *
                  *   absent  → purge (apply has no filesystem work to do)
-                 *   present → STATE_DELETED (apply removes via safety
+                 *   present → LIFECYCLE_DELETED (apply removes via safety
                  *             PHASE 1 bypass, sidestepping the PHASE 4
                  *             tree check that would otherwise misroute
                  *             this internal deletion through the
@@ -2129,7 +2134,7 @@ error_t *manifest_update_files(
                  * outcome. The stat runs again inside the transaction to
                  * catch the narrow race where the user recreates the file
                  * between workspace load and commit — that path then
-                 * falls through to STATE_DELETED and apply re-evaluates
+                 * falls through to LIFECYCLE_DELETED and apply re-evaluates
                  * with divergence routing instead of silently dropping
                  * the row.
                  *
@@ -2150,7 +2155,7 @@ error_t *manifest_update_files(
                     }
                 } else {
                     rm_err = state_set_file_state(
-                        state, item->filesystem_path, STATE_DELETED
+                        state, item->filesystem_path, LIFECYCLE_DELETED
                     );
                 }
                 if (rm_err) {
@@ -2197,7 +2202,8 @@ error_t *manifest_update_files(
             err = manifest_capture_row(repo, state, entry);
             if (err) {
                 err = error_wrap(
-                    err, "Failed to sync '%s' to manifest", item->filesystem_path
+                    err, "Failed to sync '%s' to manifest",
+                    item->filesystem_path
                 );
                 goto cleanup;
             }
@@ -2206,7 +2212,7 @@ error_t *manifest_update_files(
         }
     }
 
-    /* 4. After updating files, synchronize commit_oid for ALL files from affected profiles.
+    /* 3. After updating files, synchronize commit_oid for ALL files from affected profiles.
      * Each profile that had files updated has a new HEAD commit.
      * Build set of unique profile names from items and sync each. */
     string_array_t *updated_profiles = string_array_new(0);
@@ -2236,9 +2242,11 @@ error_t *manifest_update_files(
         }
     }
 
-    /* 5. Set stored commit_oid for each profile whose HEAD moved */
+    /* 4. Set stored commit_oid for each profile whose HEAD moved */
     for (size_t i = 0; i < updated_profiles->count; i++) {
-        err = manifest_persist_profile_head(repo, state, updated_profiles->items[i]);
+        err = manifest_persist_profile_head(
+            repo, state, updated_profiles->items[i]
+        );
         if (err) {
             string_array_free(updated_profiles);
             goto cleanup;
@@ -2247,7 +2255,7 @@ error_t *manifest_update_files(
 
     string_array_free(updated_profiles);
 
-    /* 6. Sync tracked directories */
+    /* 5. Sync tracked directories */
     err = manifest_sync_directories(repo, state, arena, enabled_profiles, mounts);
     if (err) {
         goto cleanup;
@@ -2339,7 +2347,9 @@ error_t *manifest_add_files(
         /* No files to add, but still sync directories.
          * Handles directory-only adds where filesystem_paths
          * is empty but metadata.json has tracked directories. */
-        return manifest_sync_directories(repo, state, arena, enabled_profiles, mounts);
+        return manifest_sync_directories(
+            repo, state, arena, enabled_profiles, mounts
+        );
     }
 
     /* 1. Build FRESH precedence view from Git (post-commit state).
@@ -2398,7 +2408,8 @@ error_t *manifest_add_files(
         err = manifest_capture_row(repo, state, entry);
         if (err) {
             err = error_wrap(
-                err, "Failed to sync '%s' to manifest", filesystem_path
+                err, "Failed to sync '%s' to manifest",
+                filesystem_path
             );
             goto cleanup;
         }
@@ -2406,8 +2417,7 @@ error_t *manifest_add_files(
         (*out_synced)++;
     }
 
-    /* After adding files, the profile's branch HEAD has moved to a new commit.
-     * Update the per-profile commit_oid in enabled_profiles. */
+    /* 3. Update the per-profile commit_oid in enabled_profiles */
     err = manifest_persist_profile_head(repo, state, profile);
     if (err) goto cleanup;
 
@@ -2669,7 +2679,7 @@ error_t *manifest_sync_diff(
                      * reality:
                      *
                      *   absent  → purge (apply has nothing to clean up)
-                     *   present → STATE_DELETED (apply removes via safety
+                     *   present → LIFECYCLE_DELETED (apply removes via safety
                      *             PHASE 1 bypass, sidestepping the PHASE 4
                      *             tree check that would otherwise misroute
                      *             this internal deletion through the
@@ -2693,7 +2703,7 @@ error_t *manifest_sync_diff(
                         }
                     } else {
                         err = state_set_file_state(
-                            state, filesystem_path, STATE_DELETED
+                            state, filesystem_path, LIFECYCLE_DELETED
                         );
                     }
                     if (err) {
@@ -2720,7 +2730,7 @@ error_t *manifest_sync_diff(
     if (out_fallbacks) *out_fallbacks = fallbacks;
     if (out_skipped) *out_skipped = skipped;
 
-    /* Update the per-profile commit_oid in enabled_profiles to match the new HEAD.
+    /* 4. Update the per-profile commit_oid in enabled_profiles to match the new HEAD.
      * Use new_oid directly — it's the explicit sync target passed by the caller,
      * and matches the branch HEAD that gitops_resolve_branch_head_oid would resolve. */
     err = state_set_profile_commit_oid(state, profile, new_oid);
@@ -2731,7 +2741,7 @@ error_t *manifest_sync_diff(
         goto cleanup;
     }
 
-    /* 4. Sync tracked directories */
+    /* 5. Sync tracked directories */
     err = manifest_sync_directories(repo, state, arena, enabled_profiles, mounts);
     if (err) {
         goto cleanup;
@@ -2842,16 +2852,17 @@ error_t *manifest_sync_directories(
 
         /* Extract directories from metadata */
         size_t dir_count = 0;
-        directories =
-            metadata_get_items_by_kind(metadata, METADATA_ITEM_DIRECTORY, &dir_count);
+        directories = metadata_get_items_by_kind(
+            metadata, METADATA_ITEM_DIRECTORY, &dir_count
+        );
 
         /* Reactivate or add each directory to state
          *
          * ARCHITECTURE: Mark-inactive-then-reactivate pattern.
          *
          * For each directory in enabled profile metadata:
-         *   - If exists in state → reactivate (STATE_ACTIVE) and update metadata
-         *   - If not in state → add new entry with STATE_ACTIVE
+         *   - If exists in state → reactivate (LIFECYCLE_ACTIVE) and update metadata
+         *   - If not in state → add new entry with LIFECYCLE_ACTIVE
          *
          * This preserves deployed_at timestamps and enables clean orphan detection.
          *
@@ -2887,14 +2898,8 @@ error_t *manifest_sync_directories(
             }
 
             if (get_err && get_err->code == ERR_NOT_FOUND) {
-                /* New directory. state_add_directory defaults state to STATE_ACTIVE
-                 * when entry->state is NULL/empty, so we don't need to set it. */
+                /* New directory; defaults to LIFECYCLE_ACTIVE via arena_calloc zero-init. */
                 error_free(get_err);
-                state_dir->state = arena_strdup(arena, STATE_ACTIVE);
-                if (!state_dir->state) {
-                    err = ERROR(ERR_MEMORY, "Failed to allocate state string");
-                    break;
-                }
                 err = state_add_directory(state, state_dir);
             } else {
                 /* Existing directory - reactivate and always update
@@ -2908,7 +2913,9 @@ error_t *manifest_sync_directories(
                  * - Ensures state consistency regardless of metadata changes
                  * - deployed_at is preserved (stmt_update_entry excludes it)
                  */
-                err = state_set_directory_state(state, state_dir->filesystem_path, STATE_ACTIVE);
+                err = state_set_directory_state(
+                    state, state_dir->filesystem_path, LIFECYCLE_ACTIVE
+                );
 
                 /* Always update profile, storage_path, and metadata (preserves deployed_at) */
                 if (!err) {
@@ -2945,7 +2952,7 @@ cleanup:
     if (directories) free(directories);
     if (metadata) metadata_free(metadata);
 
-    /* After rebuild, any directories still in STATE_INACTIVE are orphaned
+    /* After rebuild, any directories still in LIFECYCLE_INACTIVE are orphaned
      * (belonged to disabled profiles with no fallback).
      *
      * They will be detected by workspace orphan analysis and cleaned by apply.

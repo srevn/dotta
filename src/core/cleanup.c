@@ -280,7 +280,7 @@ static error_t *prune_orphaned_files(
             if (strcmp(violation->reason, SAFETY_REASON_RELEASED) == 0) {
                 /* RELEASED: File removed from Git externally (loss of authority)
                  *
-                 * Triggers: branch deleted, file removed from branch, STATE_RELEASED.
+                 * Triggers: branch deleted, file removed from branch, LIFECYCLE_RELEASED.
                  * - DO NOT remove file (Git cannot back it, protect user data)
                  * - DO track for state cleanup (can't manage without Git backing)
                  *

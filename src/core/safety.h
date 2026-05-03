@@ -91,12 +91,12 @@ typedef struct {
  * Algorithm:
  * 1. Skip if file not on filesystem (already deleted)
  * 2. Check lifecycle state, branch existence, and file-in-tree:
- *    - STATE_DELETED: skip branch check (confirmed deletion via remove command)
- *    - STATE_RELEASED: auto-release (file removed from Git externally)
- *    - STATE_INACTIVE/STATE_ACTIVE + branch gone: RELEASED violation
- *    - STATE_INACTIVE/STATE_ACTIVE + branch exists, file not in tree: RELEASED violation
- *    - STATE_INACTIVE/STATE_ACTIVE + branch exists, tree lookup error: CANNOT_VERIFY violation
- *    - STATE_INACTIVE/STATE_ACTIVE + branch exists, file in tree: proceed to divergence
+ *    - LIFECYCLE_DELETED: skip branch check (confirmed deletion via remove command)
+ *    - LIFECYCLE_RELEASED: auto-release (file removed from Git externally)
+ *    - LIFECYCLE_INACTIVE/LIFECYCLE_ACTIVE + branch gone: RELEASED violation
+ *    - LIFECYCLE_INACTIVE/LIFECYCLE_ACTIVE + branch exists, file not in tree: RELEASED violation
+ *    - LIFECYCLE_INACTIVE/LIFECYCLE_ACTIVE + branch exists, tree lookup error: CANNOT_VERIFY violation
+ *    - LIFECYCLE_INACTIVE/LIFECYCLE_ACTIVE + branch exists, file in tree: proceed to divergence
  * 3. Route by divergence type (TRUST WORKSPACE):
  *    - DIVERGENCE_NONE: safe to remove (no violation)
  *    - DIVERGENCE_CONTENT: MODIFIED violation
@@ -113,9 +113,9 @@ typedef struct {
  * - External branch deletion: RELEASED violation (protects user data)
  * - External file removal (branch exists, file gone): RELEASED violation (file-in-tree check)
  * - Tree lookup error (corrupt tree, OOM): CANNOT_VERIFY violation (degrade gracefully)
- * - Stale entry (STATE_RELEASED): Auto-release (decision already made by repair/patching)
+ * - Stale entry (LIFECYCLE_RELEASED): Auto-release (decision already made by repair/patching)
  * - Staged removal with branch gone (profile disable then branch deleted): RELEASED
- * - Controlled deletion (remove command): Safe to remove (STATE_DELETED bypasses branch check)
+ * - Controlled deletion (remove command): Safe to remove (LIFECYCLE_DELETED bypasses branch check)
  * - Large non-encrypted files: Verified (streaming OID, any size)
  * - Large encrypted files (>100MB): CANNOT_VERIFY (OOM protection)
  * - File deleted during check: Safe (no violation)

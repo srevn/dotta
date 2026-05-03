@@ -69,7 +69,7 @@ typedef struct {
 
     /* Loss-side */
     size_t files_reassigned;     /* Files reassigned to a different profile */
-    size_t files_orphaned;       /* Files that left scope entirely (→ STATE_INACTIVE) */
+    size_t files_orphaned;       /* Files that left scope entirely (→ LIFECYCLE_INACTIVE) */
 } manifest_scope_stats_t;
 
 /**
@@ -82,7 +82,7 @@ typedef struct {
 typedef struct {
     size_t updated;     /* Files with changed blob_oid (content changed in Git) */
     size_t refreshed;   /* Files with only HEAD refresh (content unchanged) */
-    size_t released;    /* Files set to STATE_RELEASED (removed from Git externally) */
+    size_t released;    /* Files set to LIFECYCLE_RELEASED (removed from Git externally) */
     size_t reassigned;  /* Files whose owning profile shifted during repair */
 } manifest_repair_stats_t;
 
@@ -154,8 +154,8 @@ error_t *manifest_persist_profile_head(
  *   - virtual_manifest reflects (enabled_profiles × Git trees) with
  *     correct precedence.
  *   - Rows whose filesystem_path left scope:
- *       STATE_ACTIVE  → STATE_INACTIVE (staged for removal by apply).
- *       STATE_INACTIVE / STATE_DELETED / STATE_RELEASED: preserved
+ *       LIFECYCLE_ACTIVE  → LIFECYCLE_INACTIVE (staged for removal by apply).
+ *       LIFECYCLE_INACTIVE / LIFECYCLE_DELETED / LIFECYCLE_RELEASED: preserved
  *       (downgrading them would break downstream intent signals).
  *   - tracked_directories rebuilt via manifest_sync_directories.
  *   - The deployment anchor (deployed_blob_oid, deployed_at, stat_*) is
@@ -295,7 +295,7 @@ error_t *manifest_reconcile(
  *      d. If yes:
  *         - Check fresh precedence view for fallback
  *         - Fallback exists: Update to fallback profile (deployed_at preserved)
- *         - No fallback: Mark as STATE_DELETED (controlled deletion)
+ *         - No fallback: Mark as LIFECYCLE_DELETED (controlled deletion)
  *      e. If no (different profile owns): Skip
  *
  * Preconditions:
@@ -306,7 +306,7 @@ error_t *manifest_reconcile(
  *
  * Postconditions:
  *   - Files with fallback updated to fallback profile (deployed_at preserved)
- *   - Files without fallback marked STATE_DELETED (controlled deletion)
+ *   - Files without fallback marked LIFECYCLE_DELETED (controlled deletion)
  *   - Files not owned by removed_profile unchanged
  *   - Tracked directories synced from all enabled profiles
  *   - Transaction remains open (caller commits)
@@ -329,8 +329,8 @@ error_t *manifest_reconcile(
  * @param removed_profile Profile files were removed from (must not be NULL)
  * @param removed_storage_paths Storage paths of removed files (must not be NULL)
  * @param enabled_profiles All enabled profiles (must not be NULL)
- * @param out_marked Output: filesystem paths just marked STATE_DELETED (can be NULL)
- * @param out_removed Output: files without fallback (marked STATE_DELETED) (can be NULL)
+ * @param out_marked Output: filesystem paths just marked LIFECYCLE_DELETED (can be NULL)
+ * @param out_removed Output: files without fallback (marked LIFECYCLE_DELETED) (can be NULL)
  * @param out_fallbacks Output: files updated to fallback (can be NULL)
  * @return Error or NULL on success
  */
@@ -374,7 +374,7 @@ error_t *manifest_remove_files(
  *          (WORKSPACE_STATE_DELETED precondition held through the
  *          transaction) — purges the row so apply has no spurious
  *          orphan to clean up. If a racing recreation placed the path
- *          back on disk, the row is marked STATE_DELETED instead so
+ *          back on disk, the row is marked LIFECYCLE_DELETED instead so
  *          apply's divergence routing can protect the user's edits.
  *      - Else (modified/new): lookup in fresh precedence view
  *        → Found + precedence matches: sync to state (deployed_at = time(NULL))
@@ -395,7 +395,7 @@ error_t *manifest_remove_files(
  *     status falls through to the slow path, which self-heals the anchor.
  *   - Deleted files: fallback reassigns the row to the fallback profile
  *     (deployed_at preserved); no-fallback purges the row if the path
- *     is absent on disk, or marks it STATE_DELETED if a race has placed
+ *     is absent on disk, or marks it LIFECYCLE_DELETED if a race has placed
  *     it back. Anchor left untouched (no disk confirmation for deleted
  *     / fallback paths).
  *   - Tracked directories synced from all enabled profiles
@@ -539,7 +539,7 @@ error_t *manifest_add_files(
  *   Phase 3: Process Deltas (O(D))
  *     - For additions/modifications: sync (deployed_at preserved if exists, else 0 for new files)
  *     - For deletions: check for fallbacks. No-fallback terminates on
- *       disk reality: purge if the path is absent, else mark STATE_DELETED.
+ *       disk reality: purge if the path is absent, else mark LIFECYCLE_DELETED.
  *     - Handle precedence: only sync if profile won the file
  *
  * Deletion & Fallback Logic:
@@ -549,7 +549,7 @@ error_t *manifest_add_files(
  *     3. If no other profile has it: check current state
  *     4. If profile-A owns it in state: the terminal row state comes
  *        from disk reality — purge when the path is absent (apply has
- *        no filesystem work), STATE_DELETED when it is still present
+ *        no filesystem work), LIFECYCLE_DELETED when it is still present
  *        (apply removes it via safety PHASE 1 bypass, sidestepping the
  *        RELEASED pathway).
  *     5. Otherwise: skip (file wasn't ours to begin with)
@@ -564,7 +564,7 @@ error_t *manifest_add_files(
  *   - Added/modified files synced (deployed_at preserved if exists, else 0 for new files)
  *   - Deleted files with fallbacks updated to new owner (deployed_at preserved)
  *   - Deleted files without fallbacks terminate on disk reality: the row
- *     is purged if the path is absent on disk, or marked STATE_DELETED
+ *     is purged if the path is absent on disk, or marked LIFECYCLE_DELETED
  *     if still present (apply removes it via safety PHASE 1 bypass)
  *   - Files filtered by .dottaignore are skipped (expected behavior)
  *   - Files won by other profiles are skipped (they'll sync when their changes arrive)

@@ -1071,7 +1071,7 @@ static divergence_type_t compute_orphan_divergence(
  * Each candidate was rejected by workspace_build_active for
  * exactly one of two reasons:
  *   - Profile out of workspace scope (disabled or branch deleted)
- *   - Lifecycle terminal (STATE_INACTIVE / STATE_DELETED / STATE_RELEASED)
+ *   - Lifecycle terminal (LIFECYCLE_INACTIVE / LIFECYCLE_DELETED / LIFECYCLE_RELEASED)
  *
  * No manifest probe is needed: the partition itself is the orphan
  * predicate. The RELEASED branch (loss of authority via external Git
@@ -1102,8 +1102,7 @@ static error_t *analyze_orphaned_files(
         const char *storage_path = state_entry->storage_path;
         const char *profile = state_entry->profile;
 
-        bool is_released = state_entry->state &&
-            strcmp(state_entry->state, STATE_RELEASED) == 0;
+        bool is_released = (state_entry->lifecycle == LIFECYCLE_RELEASED);
 
         bool profile_enabled = hashmap_has(ws->profile_index, profile);
 
@@ -1231,9 +1230,9 @@ static error_t *analyze_orphaned_files(
  *
  * manifest_reconcile (run upstream from workspace_load) has already synced
  * tracked_directories against current Git, so dir->state reflects current
- * Git truth — STATE_INACTIVE / STATE_DELETED are authoritative.
+ * Git truth — LIFECYCLE_INACTIVE / LIFECYCLE_DELETED are authoritative.
  *
- * Note: state_directory_entry_t never carries STATE_RELEASED (file-only
+ * Note: state_directory_entry_t never carries LIFECYCLE_RELEASED (file-only
  * lifecycle); the partition predicates intentionally only check INACTIVE
  * and DELETED.
  *
@@ -1295,11 +1294,7 @@ static error_t *partition_state_directories(
         const state_directory_entry_t *dir = &all_dirs[i];
 
         bool profile_in_scope = hashmap_has(ws->profile_index, dir->profile);
-
-        /* NULL state defaults to active per state.c read path. */
-        bool lifecycle_terminal = dir->state && (
-            strcmp(dir->state, STATE_INACTIVE) == 0 ||
-            strcmp(dir->state, STATE_DELETED) == 0);
+        bool lifecycle_terminal = (dir->lifecycle != LIFECYCLE_ACTIVE);
 
         if (!profile_in_scope || lifecycle_terminal) {
             orphans[orphan_count++] = dir;
@@ -1710,7 +1705,7 @@ static error_t *analyze_untracked_files(
         for (size_t i = 0; i < dir_count; i++) {
             const state_directory_entry_t *dir_entry = &directories[i];
 
-            /* Skip removal-pending directories (STATE_INACTIVE or STATE_DELETED)
+            /* Skip removal-pending directories (LIFECYCLE_INACTIVE or LIFECYCLE_DELETED)
              *
              * ARCHITECTURE: These directories are staged for removal.
              * We should NOT scan them for untracked files because:
@@ -1720,8 +1715,7 @@ static error_t *analyze_untracked_files(
              *
              * This ensures untracked file detection only applies to active directories.
              */
-            if (dir_entry->state && (strcmp(dir_entry->state, STATE_INACTIVE) == 0 ||
-                strcmp(dir_entry->state, STATE_DELETED) == 0)) {
+            if (dir_entry->lifecycle != LIFECYCLE_ACTIVE) {
                 continue;  /* Skip silently - these will be handled by orphan detection */
             }
 
@@ -2181,12 +2175,9 @@ static error_t *workspace_build_active(
 
         bool profile_in_scope = hashmap_has(ws->profile_index, row->profile);
 
-        /* Lifecycle terminal states are rejected from the active slice and surfaced
-         * to orphan detection. NULL state defaults to active per state.c read path */
-        bool lifecycle_terminal = row->state && (
-            strcmp(row->state, STATE_INACTIVE) == 0 ||
-            strcmp(row->state, STATE_DELETED) == 0 ||
-            strcmp(row->state, STATE_RELEASED) == 0);
+        /* Lifecycle terminal phases are rejected from the active slice and
+         * surfaced to orphan detection. */
+        bool lifecycle_terminal = (row->lifecycle != LIFECYCLE_ACTIVE);
 
         if (!profile_in_scope || lifecycle_terminal) {
             /* Rejected: surface to orphan analysis.
@@ -2195,7 +2186,7 @@ static error_t *workspace_build_active(
              *   analyze_orphaned_files handles via profile_enabled flag.
              * - Lifecycle terminal: INACTIVE/DELETED/RELEASED. The
              *   RELEASED branch (loss of authority) is detected from
-             *   row->state inside analyze_orphaned_files. */
+             *   row->lifecycle inside analyze_orphaned_files. */
             candidates[candidate_count++] = row;
             continue;
         }
@@ -2271,7 +2262,7 @@ error_t *workspace_load(
      * runs leave the manifest's commit_oid references behind the branch HEAD.
      * manifest_reconcile detects drift per profile and persists corrections
      * in state — advances blob_oid for entries whose content changed and
-     * marks externally-removed entries STATE_RELEASED. The deployment anchor
+     * marks externally-removed entries LIFECYCLE_RELEASED. The deployment anchor
      * is preserved by the UPSERT across this repair, so analyze_file_divergence
      * can classify staleness from the persistent (anchor, blob_oid) pair
      * regardless of whether reconcile actually ran on this invocation.

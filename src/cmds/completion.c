@@ -158,9 +158,8 @@ static void complete_files(
 
     for (size_t i = 0; i < count; i++) {
         /* Skip entries staged for removal */
-        if (entries[i].state &&
-            (strcmp(entries[i].state, STATE_DELETED) == 0 ||
-            strcmp(entries[i].state, STATE_RELEASED) == 0)) {
+        if (entries[i].lifecycle == LIFECYCLE_DELETED ||
+            entries[i].lifecycle == LIFECYCLE_RELEASED) {
             continue;
         }
         const char *path = storage_paths ? entries[i].storage_path

@@ -839,13 +839,12 @@ static error_t *deploy_tracked_directories(
         }
         /* else: no filter, process all (full sync mode) */
 
-        /* Skip removal-pending directories (STATE_INACTIVE or STATE_DELETED)
+        /* Skip removal-pending directories (any non-ACTIVE lifecycle phase).
          *
          * ARCHITECTURE: These directories are staged for removal (by profile disable
          * or confirmed deletion). They should NOT be deployed.
          */
-        if (dir_entry->state && (strcmp(dir_entry->state, STATE_INACTIVE) == 0 ||
-            strcmp(dir_entry->state, STATE_DELETED) == 0)) {
+        if (dir_entry->lifecycle != LIFECYCLE_ACTIVE) {
             if (opts->verbose) {
                 printf(
                     "  Skipped: %s (staged for removal)\n",

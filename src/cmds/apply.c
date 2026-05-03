@@ -1737,7 +1737,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
              *
              * The flow for orphaned directories:
              *   1. Profile disabled -> entry stays in state (manifest_sync_directories
-             *      left the row STATE_INACTIVE during scope reconciliation)
+             *      left the row LIFECYCLE_INACTIVE during scope reconciliation)
              *   2. Workspace detects orphan -> entry in state, profile not enabled
              *   3. cleanup_execute() -> directory removed from filesystem (just happened)
              *   4. THIS CODE -> entry removed from state (completing the cycle)

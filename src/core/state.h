@@ -38,15 +38,28 @@ typedef enum {
 } state_file_type_t;
 
 /**
- * State lifecycle constants
+ * Lifecycle phase of a manifest row
  *
- * These constants define the lifecycle state of manifest entries.
- * The state field implements an explicit state machine for file management.
+ * Persistent finite-state machine attached to every virtual_manifest and
+ * tracked_directories row. Distinct from `workspace_state_t` (types.h),
+ * which classifies *where* an item exists at runtime — this enum records
+ * the row's *phase* across commands.
+ *
+ * LIFECYCLE_ACTIVE = 0 by design: zero-init from arena_calloc / memset
+ * yields the default phase, matching the SQL schema's `DEFAULT 'active'`.
+ *
+ * Vocabulary asymmetry: tracked_directories' CHECK constraint excludes
+ * 'released' — directories cannot lose authority externally because they
+ * have no blob-level identity in Git. state_set_directory_state and
+ * state_transition_directories_by_profile reject LIFECYCLE_RELEASED at
+ * their boundary; the SQL CHECK is defense-in-depth.
  */
-#define STATE_ACTIVE "active"       /* Normal entry, file is in scope and should be managed */
-#define STATE_INACTIVE "inactive"   /* Staged for removal, reversible (profile disable) */
-#define STATE_DELETED "deleted"     /* Confirmed deletion, awaiting filesystem cleanup by apply */
-#define STATE_RELEASED "released"   /* File removed from Git externally, loss of authority */
+typedef enum {
+    LIFECYCLE_ACTIVE = 0,    /* Normal entry, file is in scope and should be managed */
+    LIFECYCLE_INACTIVE,      /* Staged for removal, reversible (profile disable) */
+    LIFECYCLE_DELETED,       /* Confirmed deletion, awaiting filesystem cleanup by apply */
+    LIFECYCLE_RELEASED       /* File removed from Git externally, loss of authority (file-only) */
+} state_lifecycle_t;
 
 /**
  * Convert state file type to git filemode
@@ -233,11 +246,7 @@ typedef struct {
     char *owner;                /* Owner username (root/ files only, can be NULL) */
     char *group;                /* Group name (root/ files only, can be NULL) */
     bool encrypted;             /* Encryption flag */
-    const char *state;          /* Lifecycle state (STATE_ACTIVE/STATE_INACTIVE/...);
-                                 * read-only at every consumer — assignments live in
-                                 * state.c (strdup'd from DB or state_create_entry's
-                                 * argument) and manifest.c (string-literal STATE_ACTIVE
-                                 * for tree-built rows). */
+    state_lifecycle_t lifecycle; /* Lifecycle phase (default LIFECYCLE_ACTIVE on zero-init) */
 
     /* Deployment anchor (dotta-authored, advances only via state_update_anchor) */
     deployment_anchor_t anchor;
@@ -275,7 +284,7 @@ typedef struct {
  *
  *   manifest_load_tree_files(tree, …)
  *     Rows derive from a Git tree walk. Identity and VWD cache are
- *     populated; the lifecycle `state` field carries the STATE_ACTIVE
+ *     populated; the lifecycle `state` field carries the LIFECYCLE_ACTIVE
  *     literal; the deployment anchor is zero (DEPLOYMENT_ANCHOR_UNSET).
  *     Tree-built rows are scratch projections, not deployment witnesses —
  *     reading anchor.deployed_at on them yields zero by construction.
@@ -317,7 +326,7 @@ typedef struct {
     char *group;              /* Group (optional, root/ prefix only) */
 
     /* Lifecycle tracking */
-    char *state;              /* Lifecycle state (STATE_ACTIVE/STATE_INACTIVE etc.) */
+    state_lifecycle_t lifecycle; /* Lifecycle phase; LIFECYCLE_RELEASED is rejected for directories */
     time_t deployed_at;       /* Lifecycle timestamp (0 = never deployed, >0 = known) */
 } state_directory_entry_t;
 
@@ -485,8 +494,8 @@ error_t *state_get_file(
  * Get file entry by storage path
  *
  * Like state_get_file() but keyed on storage_path instead of filesystem_path.
- * Only returns active entries (state = 'active'). Uses idx_manifest_storage
- * index for O(1) lookup.
+ * Only returns active entries (lifecycle = LIFECYCLE_ACTIVE). Uses
+ * idx_manifest_storage index for O(1) lookup.
  *
  * Since the manifest resolves precedence, each active storage_path maps to
  * exactly one entry for home/ and root/ paths. For custom/ paths with
@@ -576,8 +585,8 @@ error_t *state_get_distinct_file_profiles(
  *
  * Pure SQL aggregate (SELECT COUNT(*) WHERE encrypted = 1 AND state =
  * 'active'). Used by the key command to summarize how many files the
- * cached passphrase will decrypt. Inactive/deleted/released rows are
- * excluded — they are not part of the live working set.
+ * cached passphrase will decrypt. Non-active rows are excluded — they
+ * are not part of the live working set.
  *
  * On empty state (no DB), returns *out_count = 0 with no error.
  *
@@ -734,7 +743,7 @@ time_t state_get_profile_timestamp(const state_t *state, const char *profile);
  * @param owner Owner username (can be NULL)
  * @param group Group name (can be NULL)
  * @param encrypted Encryption flag
- * @param state Lifecycle state (can be NULL for default)
+ * @param lifecycle Lifecycle phase (pass LIFECYCLE_ACTIVE for the default)
  * @param out Entry (must not be NULL, caller must free with state_free_entry)
  * @return Error or NULL on success
  */
@@ -749,7 +758,7 @@ error_t *state_create_entry(
     const char *owner,
     const char *group,
     bool encrypted,
-    const char *state,
+    state_lifecycle_t lifecycle,
     state_file_entry_t **out
 );
 
@@ -836,35 +845,32 @@ error_t *state_clear_old_profile(
 );
 
 /**
- * Set file entry state (active/inactive/deleted)
+ * Set file entry lifecycle phase
  *
  * Updates the state column for a manifest entry. Used by manifest layer
  * to mark files as inactive when they become orphaned (removed with no fallback).
  *
- * Valid states:
- *   - STATE_ACTIVE   - Normal entry, file is in scope
- *   - STATE_INACTIVE - Staged for removal, reversible (profile disable)
- *   - STATE_DELETED  - Dotta-committed deletion (remove, update, sync), blob gone from tree
- *   - STATE_RELEASED    - File removed from Git externally, loss of authority
+ * The vocabulary is the full file CHECK set: LIFECYCLE_ACTIVE,
+ * LIFECYCLE_INACTIVE, LIFECYCLE_DELETED, LIFECYCLE_RELEASED. The type
+ * system enforces vocabulary validity — no runtime check is needed.
  *
  * Preconditions:
  *   - state MUST have active transaction (via state_open)
  *   - filesystem_path MUST exist in virtual_manifest
- *   - new_state MUST be STATE_ACTIVE, STATE_INACTIVE, STATE_DELETED, or STATE_RELEASED
  *
  * @param state State handle (must not be NULL, must have active transaction)
  * @param filesystem_path File to update (must not be NULL)
- * @param new_state New state value (must not be NULL)
+ * @param new_lifecycle Target lifecycle phase
  * @return Error or NULL on success (not found returns ERR_NOT_FOUND)
  */
 error_t *state_set_file_state(
     state_t *state,
     const char *filesystem_path,
-    const char *new_state
+    state_lifecycle_t new_lifecycle
 );
 
 /**
- * Bulk DELETE: virtual_manifest entries by (profile, state-set)
+ * Bulk DELETE: virtual_manifest entries by (profile, lifecycle-set)
  *
  * Single SQL statement: DELETE FROM virtual_manifest
  *                       WHERE profile = ? AND state IN (?, ?, ...)
@@ -875,28 +881,27 @@ error_t *state_set_file_state(
  *
  * Edge cases:
  *   - state->db == NULL (no DB file)         → no-op success, *out_purged = 0
- *   - state_count == 0                       → ERR_INVALID_ARG (caller bug;
+ *   - lifecycle_count == 0                   → ERR_INVALID_ARG (caller bug;
  *                                              empty IN-set is meaningless)
- *   - states[i] not in CHECK vocabulary      → matches zero rows (harmless)
  *   - profile name unknown                   → zero rows affected (success)
  *
  * @param state State (must not be NULL, must have active transaction)
  * @param profile Profile name to filter on (must not be NULL)
- * @param states Array of lifecycle state values to match (must not be NULL)
- * @param state_count Number of entries in states (must be > 0)
+ * @param lifecycles Array of lifecycle phases to match (must not be NULL)
+ * @param lifecycle_count Number of entries in lifecycles (must be > 0)
  * @param out_purged Output: rows deleted (optional, may be NULL)
  * @return Error or NULL on success
  */
 error_t *state_purge_files_by_profile(
     state_t *state,
     const char *profile,
-    const char *const *states,
-    size_t state_count,
+    const state_lifecycle_t *lifecycles,
+    size_t lifecycle_count,
     size_t *out_purged
 );
 
 /**
- * Bulk UPDATE: virtual_manifest entries' state by (profile, from-state-set)
+ * Bulk UPDATE: virtual_manifest entries' lifecycle by (profile, from-set)
  *
  * Single SQL statement: UPDATE virtual_manifest SET state = ?
  *                       WHERE profile = ? AND state IN (?, ?, ...)
@@ -905,29 +910,26 @@ error_t *state_purge_files_by_profile(
  * Atomic: a failure aborts the operation; a success transitions every matching
  * row in one round-trip.
  *
- * new_state is validated against the table's CHECK vocabulary
- * (active, inactive, deleted, released). from_states values are not validated
- * — invalid values just match zero rows (harmless).
+ * Vocabulary is enforced by the type system — no runtime validation needed.
  *
  * Edge cases:
- *   - state->db == NULL                      → no-op success, *out_changed = 0
- *   - from_state_count == 0                  → ERR_INVALID_ARG
- *   - new_state not in CHECK vocabulary      → ERR_INVALID_ARG
+ *   - state->db == NULL              → no-op success, *out_changed = 0
+ *   - from_count == 0                → ERR_INVALID_ARG
  *
  * @param state State (must not be NULL, must have active transaction)
  * @param profile Profile name to filter on (must not be NULL)
- * @param from_states Array of source state values to match (must not be NULL)
- * @param from_state_count Number of entries in from_states (must be > 0)
- * @param new_state Target state value (must not be NULL, must be valid)
+ * @param from_lifecycles Array of source lifecycle phases (must not be NULL)
+ * @param from_count Number of entries in from_lifecycles (must be > 0)
+ * @param new_lifecycle Target lifecycle phase
  * @param out_changed Output: rows updated (optional, may be NULL)
  * @return Error or NULL on success
  */
 error_t *state_transition_files_by_profile(
     state_t *state,
     const char *profile,
-    const char *const *from_states,
-    size_t from_state_count,
-    const char *new_state,
+    const state_lifecycle_t *from_lifecycles,
+    size_t from_count,
+    state_lifecycle_t new_lifecycle,
     size_t *out_changed
 );
 
@@ -1156,20 +1158,21 @@ error_t *state_get_directory(
 );
 
 /**
- * Set directory lifecycle state
+ * Set directory lifecycle phase
  *
- * Updates the state column for a directory entry.
- * Used by manifest operations to mark directories as active/inactive/deleted.
+ * Updates the state column for a directory entry. Vocabulary is the file
+ * set minus LIFECYCLE_RELEASED — directories cannot lose authority externally
+ * (no Git blob identity). LIFECYCLE_RELEASED is rejected with ERR_INVALID_ARG.
  *
  * @param state State handle (must not be NULL, must have active transaction)
  * @param filesystem_path Directory path (must not be NULL)
- * @param new_state Lifecycle state (STATE_ACTIVE/STATE_INACTIVE/STATE_DELETED)
+ * @param new_lifecycle Target lifecycle phase (must not be LIFECYCLE_RELEASED)
  * @return Error or NULL on success
  */
 error_t *state_set_directory_state(
     state_t *state,
     const char *filesystem_path,
-    const char *new_state
+    state_lifecycle_t new_lifecycle
 );
 
 /**
@@ -1177,9 +1180,10 @@ error_t *state_set_directory_state(
  *
  * Bulk operation for manifest_sync_directories to prepare for rebuild.
  *
- * Only STATE_ACTIVE rows are downgraded to STATE_INACTIVE. STATE_DELETED and
- * STATE_RELEASED are preserved (they represent downstream intent that must
- * survive a reconciliation sweep).
+ * Only LIFECYCLE_ACTIVE rows are downgraded to LIFECYCLE_INACTIVE.
+ * LIFECYCLE_DELETED is preserved (it represents downstream intent that must
+ * survive a reconciliation sweep). Directory rows do not carry
+ * LIFECYCLE_RELEASED — see state_set_directory_state.
  *
  * @param state State handle (must not be NULL, must have active transaction)
  * @return Error or NULL on success
@@ -1187,7 +1191,7 @@ error_t *state_set_directory_state(
 error_t *state_mark_all_directories_inactive(state_t *state);
 
 /**
- * Bulk DELETE: tracked_directories entries by (profile, state-set)
+ * Bulk DELETE: tracked_directories entries by (profile, lifecycle-set)
  *
  * Single SQL statement: DELETE FROM tracked_directories
  *                       WHERE profile = ? AND state IN (?, ?, ...)
@@ -1197,44 +1201,43 @@ error_t *state_mark_all_directories_inactive(state_t *state);
  *
  * @param state State (must not be NULL, must have active transaction)
  * @param profile Profile name to filter on (must not be NULL)
- * @param states Array of lifecycle state values to match (must not be NULL)
- * @param state_count Number of entries in states (must be > 0)
+ * @param lifecycles Array of lifecycle phases to match (must not be NULL)
+ * @param lifecycle_count Number of entries in lifecycles (must be > 0)
  * @param out_purged Output: rows deleted (optional, may be NULL)
  * @return Error or NULL on success
  */
 error_t *state_purge_directories_by_profile(
     state_t *state,
     const char *profile,
-    const char *const *states,
-    size_t state_count,
+    const state_lifecycle_t *lifecycles,
+    size_t lifecycle_count,
     size_t *out_purged
 );
 
 /**
- * Bulk UPDATE: tracked_directories entries' state by (profile, from-state-set)
+ * Bulk UPDATE: tracked_directories entries' lifecycle by (profile, from-set)
  *
  * Single SQL statement: UPDATE tracked_directories SET state = ?
  *                       WHERE profile = ? AND state IN (?, ?, ...)
  *
  * Mirror of state_transition_files_by_profile for the tracked_directories
- * table. The new_state vocabulary is the directory CHECK constraint:
- * (active, inactive, deleted) — STATE_RELEASED is NOT permitted on
- * directory rows. See state_transition_files_by_profile for shared semantics.
+ * table. new_lifecycle must not be LIFECYCLE_RELEASED — directory rows do
+ * not carry that phase. The runtime guard mirrors state_set_directory_state.
  *
  * @param state State (must not be NULL, must have active transaction)
  * @param profile Profile name to filter on (must not be NULL)
- * @param from_states Array of source state values to match (must not be NULL)
- * @param from_state_count Number of entries in from_states (must be > 0)
- * @param new_state Target state value (must not be NULL, must be valid)
+ * @param from_lifecycles Array of source lifecycle phases (must not be NULL)
+ * @param from_count Number of entries in from_lifecycles (must be > 0)
+ * @param new_lifecycle Target lifecycle phase (must not be LIFECYCLE_RELEASED)
  * @param out_changed Output: rows updated (optional, may be NULL)
  * @return Error or NULL on success
  */
 error_t *state_transition_directories_by_profile(
     state_t *state,
     const char *profile,
-    const char *const *from_states,
-    size_t from_state_count,
-    const char *new_state,
+    const state_lifecycle_t *from_lifecycles,
+    size_t from_count,
+    state_lifecycle_t new_lifecycle,
     size_t *out_changed
 );
 

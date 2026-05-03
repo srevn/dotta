@@ -7,8 +7,8 @@
  *
  * Architecture:
  * - Trusts workspace divergence completely (no re-verification)
- * - Lifecycle state: STATE_DELETED bypasses branch check (controlled deletion)
- * - Branch existence check: Detects external profile deletion for STATE_INACTIVE/ACTIVE
+ * - Lifecycle state: LIFECYCLE_DELETED bypasses branch check (controlled deletion)
+ * - Branch existence check: Detects external profile deletion for LIFECYCLE_INACTIVE/ACTIVE
  * - UNVERIFIED treated conservatively: Don't delete what we can't verify
  *
  * Workspace provides accurate divergence for orphans:
@@ -386,7 +386,7 @@ static check_result_t map_divergence_to_violation(
  *
  * Four-phase check implementing safety hierarchy:
  *
- * PHASE 1: Controlled Deletion (STATE_DELETED)
+ * PHASE 1: Controlled Deletion (LIFECYCLE_DELETED)
  * - Skip branch and tree checks entirely — the lifecycle state already
  *   encodes "dotta committed this deletion, the blob is gone from the
  *   tree by design." Reached via remove, update, or sync whenever a
@@ -394,24 +394,24 @@ static check_result_t map_divergence_to_violation(
  * - Proceed to divergence routing (divergence decides safe-remove vs.
  *   MODIFIED violation)
  *
- * PHASE 2: Stale Entry (STATE_RELEASED)
+ * PHASE 2: Stale Entry (LIFECYCLE_RELEASED)
  * - File already identified as removed from Git externally
  * - Auto-release: RELEASED violation, skip all further checks
  *
- * PHASE 3: Branch Existence (STATE_INACTIVE and STATE_ACTIVE)
+ * PHASE 3: Branch Existence (LIFECYCLE_INACTIVE and LIFECYCLE_ACTIVE)
  * - Branch gone: RELEASED violation (irrecoverable, protect user data)
  * - Branch exists: continue to Phase 4
  *
  * PHASE 4: File-in-Tree (defense in depth)
  * - Branch exists but file not in tree: RELEASED violation. Reached only
- *   when a STATE_INACTIVE/ACTIVE row's tree was edited externally
+ *   when a LIFECYCLE_INACTIVE/ACTIVE row's tree was edited externally
  *   between the scope change and apply — genuinely external loss. All
- *   internal committed-deletion paths route through STATE_DELETED and
+ *   internal committed-deletion paths route through LIFECYCLE_DELETED and
  *   bypass this phase at PHASE 1.
  * - File in tree: proceed to divergence routing
  *
- * Key Invariant: Only STATE_DELETED (dotta-confirmed deletion) bypasses
- * safety checks. STATE_RELEASED auto-releases. All other states require both
+ * Key Invariant: Only LIFECYCLE_DELETED (dotta-confirmed deletion) bypasses
+ * safety checks. LIFECYCLE_RELEASED auto-releases. All other states require both
  * branch existence AND file-in-tree verification for safe removal.
  *
  * @param repo Git repository
@@ -453,12 +453,9 @@ static check_result_t check_branch_existence(
         return SAFETY_CHECK_DONE;
     }
 
-    /* Extract lifecycle state and storage_path before freeing entry */
-    bool is_controlled_deletion = state_entry->state &&
-        strcmp(state_entry->state, STATE_DELETED) == 0;
-
-    bool is_stale = state_entry->state &&
-        strcmp(state_entry->state, STATE_RELEASED) == 0;
+    /* Extract lifecycle phase and storage_path before freeing entry */
+    bool is_controlled_deletion = (state_entry->lifecycle == LIFECYCLE_DELETED);
+    bool is_stale = (state_entry->lifecycle == LIFECYCLE_RELEASED);
 
     char *storage_path = state_entry->storage_path
                        ? strdup(state_entry->storage_path) : NULL;
@@ -466,9 +463,9 @@ static check_result_t check_branch_existence(
     state_free_entry(state_entry);
 
     if (is_controlled_deletion) {
-        /* PHASE 1: CONTROLLED DELETION (STATE_DELETED)
+        /* PHASE 1: CONTROLLED DELETION (LIFECYCLE_DELETED)
          *
-         * Entry marked STATE_DELETED by a dotta-committed deletion
+         * Entry marked LIFECYCLE_DELETED by a dotta-committed deletion
          * (remove, update, sync). The blob is gone from the tree by
          * design, so the PHASE 3/4 branch/tree lookups would only
          * confirm that absence and misattribute it as external
@@ -485,7 +482,7 @@ static check_result_t check_branch_existence(
     }
 
     if (is_stale) {
-        /* PHASE 2: STALE ENTRY (STATE_RELEASED)
+        /* PHASE 2: STALE ENTRY (LIFECYCLE_RELEASED)
          *
          * File removed from Git externally. Manifest repair (or workspace
          * in-memory patching) already identified this as loss of authority.
@@ -503,7 +500,7 @@ static check_result_t check_branch_existence(
         return SAFETY_CHECK_DONE;
     }
 
-    /* PHASE 3: BRANCH EXISTENCE CHECK (STATE_INACTIVE and STATE_ACTIVE)
+    /* PHASE 3: BRANCH EXISTENCE CHECK (LIFECYCLE_INACTIVE and LIFECYCLE_ACTIVE)
      *
      * For both staged removals (profile disable) and active entries,
      * verify the profile branch still exists. If the branch is gone,
@@ -557,8 +554,8 @@ static check_result_t check_branch_existence(
      * Verify the specific file still exists in the profile's current tree.
      * This catches: git rm <file> && git commit (branch alive, file gone).
      *
-     * Only reachable for STATE_INACTIVE/ACTIVE rows — internal committed
-     * deletions (remove/update/sync) route through STATE_DELETED and are
+     * Only reachable for LIFECYCLE_INACTIVE/ACTIVE rows — internal committed
+     * deletions (remove/update/sync) route through LIFECYCLE_DELETED and are
      * short-circuited at PHASE 1. A PHASE 4 failure here therefore
      * genuinely represents loss of authority, and the RELEASED outcome
      * below is semantically correct.
@@ -621,7 +618,7 @@ static check_result_t check_branch_existence(
  * Check removal safety for orphaned workspace items
  *
  * Validates that orphaned files can be safely removed by checking:
- * 1. Lifecycle state (STATE_DELETED bypasses, STATE_RELEASED auto-releases)
+ * 1. Lifecycle state (LIFECYCLE_DELETED bypasses, LIFECYCLE_RELEASED auto-releases)
  * 2. Branch existence (external deletion detection)
  * 3. File-in-tree (defense in depth — branch exists but file removed)
  * 4. Workspace divergence (trusted completely - no re-verification)
@@ -683,9 +680,9 @@ error_t *safety_check_orphans(
         /* Lifecycle State and Branch Existence Check
          *
          * Determines safety based on lifecycle state and branch existence:
-         * - STATE_DELETED: Skip branch check (controlled deletion)
-         * - STATE_INACTIVE/ACTIVE + branch exists: Proceed to divergence routing
-         * - STATE_INACTIVE/ACTIVE + branch gone: RELEASED violation
+         * - LIFECYCLE_DELETED: Skip branch check (controlled deletion)
+         * - LIFECYCLE_INACTIVE/ACTIVE + branch exists: Proceed to divergence routing
+         * - LIFECYCLE_INACTIVE/ACTIVE + branch gone: RELEASED violation
          */
         check_result_t check_result = check_branch_existence(
             repo, state, orphan, cache, result, &err

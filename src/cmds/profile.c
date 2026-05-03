@@ -141,7 +141,7 @@ static void print_manifest_enable_stats(
  *
  * Reports loss-side attribution for one disabled profile from a single
  * apply_scope call: files_reassigned (picked up by a fallback profile)
- * + files_orphaned (left scope entirely → STATE_INACTIVE).
+ * + files_orphaned (left scope entirely → LIFECYCLE_INACTIVE).
  */
 static void print_manifest_disable_stats(
     const output_t *out,

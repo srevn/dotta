@@ -555,7 +555,13 @@ static error_t *prepare_statements(state_t *state) {
      * caller passes 0 (first-observation / workspace-flush case) and writes
      * a new timestamp otherwise (apply post-deploy / adoption case). The
      * CASE on observed_at keys off the row's current value, not the bound
-     * one, so the first non-zero caller wins regardless of order. */
+     * one, so the first non-zero caller wins regardless of order.
+     *
+     * RETURNING projects the post-write column values so callers that mirror
+     * an in-memory snapshot (workspace_advance_anchor, the slow-path flush)
+     * can assign the canonical anchor without re-deriving the CASE rules in
+     * C. Zero matched rows yields zero RETURNING rows — the not-found-is-OK
+     * contract is preserved. */
     const char *sql_update_anchor =
         "UPDATE virtual_manifest SET "
         "  deployed_blob_oid = ?1, "
@@ -564,7 +570,8 @@ static error_t *prepare_statements(state_t *state) {
         "  stat_size         = ?4, "
         "  stat_ino          = ?5, "
         "  observed_at       = CASE WHEN observed_at != 0 THEN observed_at ELSE ?6 END "
-        "WHERE filesystem_path = ?7;";
+        "WHERE filesystem_path = ?7 "
+        "RETURNING deployed_blob_oid, deployed_at, stat_mtime, stat_size, stat_ino, observed_at;";
 
     rc = sqlite3_prepare_v2(
         state->db, sql_update_anchor, -1, &state->stmt_update_anchor, NULL
@@ -3295,11 +3302,19 @@ error_t *state_create_entry(
  *     safe no-op; a non-zero existing value always wins.
  *   - anchor->stat is always written.
  *   - Not-found is not an error.
+ *
+ * The SQL UPDATE encodes those rules via CASE expressions and RETURNING
+ * projects the post-write column values. Callers that mirror an in-memory
+ * snapshot pass a non-NULL resolved_out and assign it directly into the
+ * snapshot row — the SQL is the single specification, no C-side mirror of
+ * the rules exists. resolved_out is left untouched if the WHERE clause
+ * matches no row (precedence-filtered, disabled profile).
  */
 error_t *state_update_anchor(
     state_t *state,
     const char *filesystem_path,
-    const deployment_anchor_t *anchor
+    const deployment_anchor_t *anchor,
+    deployment_anchor_t *resolved_out
 ) {
     CHECK_NULL(state);
     CHECK_NULL(filesystem_path);
@@ -3334,13 +3349,34 @@ error_t *state_update_anchor(
     sqlite3_bind_int64(stmt, 6, (sqlite3_int64) anchor->observed_at);
     sqlite3_bind_text(stmt, 7, filesystem_path, -1, SQLITE_TRANSIENT);
 
-    /* Execute */
+    /* RETURNING yields one row when the WHERE matched, zero rows otherwise.
+     * filesystem_path is a PRIMARY KEY, so at most one row matches and a
+     * single follow-up step drains to SQLITE_DONE. */
     int rc = sqlite3_step(stmt);
+
+    if (rc == SQLITE_ROW) {
+        if (resolved_out) {
+            /* Column layout matches RETURNING list: deployed_blob_oid (BLOB
+             * NOT NULL, always 20 bytes), deployed_at, stat_mtime, stat_size,
+             * stat_ino, observed_at. */
+            memcpy(resolved_out->blob_oid.id, sqlite3_column_blob(stmt, 0), GIT_OID_RAWSZ);
+            resolved_out->deployed_at = (time_t) sqlite3_column_int64(stmt, 1);
+            resolved_out->stat = (stat_cache_t){
+                .mtime = sqlite3_column_int64(stmt, 2),
+                .size = sqlite3_column_int64(stmt, 3),
+                .ino = (uint64_t) sqlite3_column_int64(stmt, 4),
+            };
+            resolved_out->observed_at = (time_t) sqlite3_column_int64(stmt, 5);
+        }
+        rc = sqlite3_step(stmt);
+    }
+
     if (rc != SQLITE_DONE) {
         return sqlite_error(state->db, "Failed to update deployment anchor");
     }
 
-    /* Not-found is OK — entry may not exist (disabled profile, filtered by precedence) */
+    /* Not-found is OK — entry may not exist (disabled profile, filtered by
+     * precedence). resolved_out is left untouched in that case. */
     return NULL;
 }
 

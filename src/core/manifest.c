@@ -1282,7 +1282,7 @@ error_t *manifest_update_files(
                 entry->filesystem_path, &entry->blob_oid, time(NULL)
             );
             error_t *anchor_err = state_update_anchor(
-                state, entry->filesystem_path, &anchor
+                state, entry->filesystem_path, &anchor, NULL
             );
             if (anchor_err) error_free(anchor_err);
         }
@@ -1510,7 +1510,7 @@ error_t *manifest_add_files(
             entry->filesystem_path, &entry->blob_oid, time(NULL)
         );
         error_t *anchor_err = state_update_anchor(
-            state, entry->filesystem_path, &anchor
+            state, entry->filesystem_path, &anchor, NULL
         );
         if (anchor_err) error_free(anchor_err);
     }

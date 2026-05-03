@@ -53,10 +53,13 @@
  * blob_oid is carried alongside stat because the anchor ties its witness to
  * a specific blob — a stat triple without a blob pointer is meaningless.
  *
- * Path is borrowed from the manifest entry (valid for workspace lifetime).
+ * The row pointer is borrowed from ws->active (workspace lifetime). Carrying
+ * the row directly lets the flush call state_update_anchor with the row's
+ * filesystem_path AND assign the resolved anchor straight into row->anchor —
+ * no second hashmap probe to recover the snapshot handle.
  */
 typedef struct {
-    const char *filesystem_path;     /* Target path (borrowed from manifest entry) */
+    state_file_entry_t *row;         /* Active row this update targets (borrowed) */
     git_oid blob_oid;                /* Blob dotta just verified disk matches */
     stat_cache_t stat;               /* Captured stat triple (fast-path witness) */
 } anchor_update_t;
@@ -365,13 +368,13 @@ static error_t *workspace_add_diverged(
  * worse UX for zero correctness gain.
  *
  * @param ws Workspace (must not be NULL)
- * @param filesystem_path Path (borrowed from manifest, valid for workspace lifetime)
+ * @param row Active row whose anchor should advance (borrowed; workspace lifetime)
  * @param blob_oid Blob dotta just confirmed disk matches (must not be NULL)
  * @param st Verified filesystem stat
  */
 static void workspace_record_anchor_update(
     workspace_t *ws,
-    const char *filesystem_path,
+    state_file_entry_t *row,
     const git_oid *blob_oid,
     const struct stat *st
 ) {
@@ -390,7 +393,7 @@ static void workspace_record_anchor_update(
     }
 
     ws->anchor_updates[ws->anchor_update_count++] = (anchor_update_t){
-        .filesystem_path = filesystem_path,
+        .row = row,
         .blob_oid = *blob_oid,
         .stat = stat_cache_from_stat(st),
     };
@@ -403,13 +406,18 @@ static void workspace_record_anchor_update(
  * row to perform divergence detection without database queries. All
  * expected state (blob_oid, type, anchor, etc.) is already in the row.
  *
+ * The row pointer is non-const because a slow-path CMP_EQUAL outcome enqueues
+ * an anchor advance against this exact row (workspace_record_anchor_update);
+ * the function does not mutate the row directly, but the deferred mutation
+ * is real, so const would mislead.
+ *
  * @param ws Workspace (must not be NULL)
  * @param row Active state row with VWD cache (must not be NULL)
  * @return Error or NULL on success
  */
 static error_t *analyze_file_divergence(
     workspace_t *ws,
-    const state_file_entry_t *row
+    state_file_entry_t *row
 ) {
     CHECK_NULL(ws);
     CHECK_NULL(row);
@@ -589,7 +597,7 @@ static error_t *analyze_file_divergence(
              * with the current (blob_oid, stat) pair so the next run can
              * short-circuit via the fast path above. */
             if (cmp_result == CMP_EQUAL) {
-                workspace_record_anchor_update(ws, fs_path, blob_oid_ptr, &file_stat);
+                workspace_record_anchor_update(ws, row, blob_oid_ptr, &file_stat);
             }
         }
 
@@ -1370,7 +1378,7 @@ static error_t *analyze_files_divergence(workspace_t *ws) {
     CHECK_NULL(ws->state);
 
     for (size_t i = 0; i < ws->active_count; i++) {
-        const state_file_entry_t *row = ws->active[i];
+        state_file_entry_t *row = ws->active[i];
 
         error_t *err = analyze_file_divergence(ws, row);
         if (err) {
@@ -2827,14 +2835,14 @@ bool workspace_item_extract_display_info(
  * Advance the deployment anchor with in-memory consistency
  *
  * Single workspace-scope writer for anchor advances: persists via
- * state_update_anchor, then patches the active row's anchor so the
- * snapshot does not drift from the DB. Mirrors state_update_anchor's
- * preserve-on-zero semantic on deployed_at (a zero timestamp preserves
- * the in-memory value) and the monotonic-once-set semantic on
- * observed_at (the first non-zero value wins).
+ * state_update_anchor and assigns the canonical post-write anchor
+ * (returned by SQL RETURNING) into the matching active row. The SQL
+ * UPDATE is the single specification of preserve-on-zero / monotonic-
+ * once-set rules; this function holds none of that logic.
  *
- * DB write runs first; on error we return without touching memory so a
- * failed write cannot leave the in-memory view ahead of reality.
+ * Probe-first: when the path is not in our active partition there is no
+ * snapshot to mirror, so resolved_out is omitted from the SQL call to
+ * avoid the RETURNING decode work for a value that would be discarded.
  *
  * Partition safety: ws->active_index covers exactly the rows in the
  * active partition, which is disjoint from orphan candidates. So a
@@ -2849,27 +2857,14 @@ error_t *workspace_advance_anchor(
     CHECK_NULL(filesystem_path);
     CHECK_NULL(anchor);
 
-    error_t *err = state_update_anchor(ws->state, filesystem_path, anchor);
-    if (err) {
-        return err;
-    }
-
-    /* Patch the snapshot row; state_update_anchor wrote the DB above.
-     * Not-found is tolerated: the DB write already no-op'd for rows
-     * filtered by precedence / disabled profile, and the active index
-     * may likewise not carry the path. */
     state_file_entry_t *row = hashmap_get(ws->active_index, filesystem_path);
-    if (!row) return NULL;
+    deployment_anchor_t resolved;
+    error_t *err = state_update_anchor(
+        ws->state, filesystem_path, anchor, row ? &resolved : NULL
+    );
+    if (err) return err;
 
-    row->anchor.blob_oid = anchor->blob_oid;
-    row->anchor.stat = anchor->stat;
-    if (anchor->deployed_at != 0) {
-        row->anchor.deployed_at = anchor->deployed_at;
-    }
-    if (row->anchor.observed_at == 0 && anchor->observed_at != 0) {
-        row->anchor.observed_at = anchor->observed_at;   /* monotonic once set */
-    }
-
+    if (row) row->anchor = resolved;
     return NULL;
 }
 
@@ -2886,9 +2881,11 @@ error_t *workspace_advance_anchor(
  * existing timestamp — this flush confirms the anchor witness but does
  * not create a new deployment lifecycle event (apply owns that).
  *
- * Routed through workspace_advance_anchor so each persisted update also
- * patches the active row's anchor in place; no staleness window opens
- * between DB and memory for downstream readers in the same run.
+ * Bypasses workspace_advance_anchor: the accumulator already carries the
+ * row pointer (recorded at analyze time), so the flush calls
+ * state_update_anchor directly and assigns the resolved anchor straight
+ * into row->anchor — no second active_index probe to recover the same
+ * snapshot handle the recorder already had.
  *
  * Begins its own transaction only when state isn't already in one
  * (status/diff/sync). Apply always passes state already-in-transaction.
@@ -2917,24 +2914,26 @@ error_t *workspace_flush_anchor_updates(workspace_t *ws) {
     time_t now = time(NULL);
     for (size_t i = 0; i < ws->anchor_update_count; i++) {
         const anchor_update_t *update = &ws->anchor_updates[i];
-        deployment_anchor_t anchor = {
+        state_file_entry_t *row = update->row;
+        deployment_anchor_t input = {
             .blob_oid    = update->blob_oid,
             .deployed_at = 0,      /* preserve — flush is a witness advance, not a deploy */
             .observed_at = now,    /* monotonic CASE in SQL preserves any prior observation stamp */
             .stat        = update->stat,
         };
-        error_t *err = workspace_advance_anchor(
-            ws, update->filesystem_path, &anchor
+        deployment_anchor_t resolved;
+        error_t *err = state_update_anchor(
+            ws->state, row->filesystem_path, &input, &resolved
         );
         if (err) {
             if (needs_transaction) {
                 state_rollback(ws->state);
             }
             return error_wrap(
-                err, "Failed to flush anchor for '%s'",
-                update->filesystem_path
+                err, "Failed to flush anchor for '%s'", row->filesystem_path
             );
         }
+        row->anchor = resolved;
     }
 
     if (needs_transaction) {
@@ -2962,7 +2961,7 @@ void workspace_free(workspace_t *ws) {
     /* Free diverged array (string fields are arena-borrowed, not freed individually) */
     free(ws->diverged);
 
-    /* Free anchor updates (paths are borrowed, anchor is plain data) */
+    /* Free anchor updates (row pointers are borrowed from ws->arena snapshot) */
     free(ws->anchor_updates);
 
     /* Free indices (values are borrowed, so pass NULL for value free function).

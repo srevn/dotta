@@ -744,16 +744,16 @@ void state_free_entry(state_file_entry_t *entry);
  * ROUTING INVARIANT — this is load-bearing:
  *   - If a workspace is live for this transaction, anchor advances MUST
  *     route through workspace_advance_anchor (workspace.h). That wrapper
- *     calls this function and then mirrors the write onto the workspace's
- *     in-memory snapshot row, so downstream readers in the same run see
- *     DB and memory in agreement. Calling state_update_anchor directly
- *     while a workspace is live silently desyncs the snapshot.
+ *     calls this function with resolved_out pointing at the matching active
+ *     row's anchor field, so the snapshot receives the canonical post-write
+ *     value the SQL produced. Calling state_update_anchor directly while a
+ *     workspace is live silently desyncs the snapshot.
  *   - If no workspace is live (manifest layer paths: manifest_add_files,
  *     manifest_update_files, sync_entry_to_state), this function is the
- *     legitimate direct caller. There is no snapshot to patch, and the
- *     next workspace_load reads SQL fresh.
+ *     legitimate direct caller. There is no snapshot to patch, so callers
+ *     pass resolved_out=NULL and the next workspace_load reads SQL fresh.
  *
- * Semantics:
+ * Semantics (encoded in the SQL UPDATE — single source of truth):
  *   - anchor->blob_oid must be non-zero. A zero blob_oid is only valid as
  *     the "never confirmed" initial row state written by the UPSERT on
  *     first INSERT; it is never a legal advance target.
@@ -767,6 +767,14 @@ void state_free_entry(state_file_entry_t *entry);
  *     passed here also preserves (safe no-op).
  *   - anchor->stat is always written.
  *
+ * resolved_out semantics:
+ *   - If non-NULL and the WHERE matched a row, populated with the post-write
+ *     anchor (the values RETURNING projected after the SQL CASE rules ran).
+ *     Snapshot mirrors should assign this directly into the row's anchor —
+ *     no C-side rule logic is needed because the DB already applied them.
+ *   - If non-NULL and the WHERE matched no row, left untouched.
+ *   - May be NULL when the caller does not maintain an in-memory snapshot.
+ *
  * Not-found is not an error: the entry may not exist if the profile is
  * disabled or the file was filtered by precedence. Callers do not need
  * to check existence before calling.
@@ -774,12 +782,15 @@ void state_free_entry(state_file_entry_t *entry);
  * @param state State (must not be NULL, must have open database)
  * @param filesystem_path File path to update (must not be NULL)
  * @param anchor Deployment anchor to write (must not be NULL, blob_oid non-zero)
+ * @param resolved_out Optional out-param for the post-write canonical anchor
+ *                     (may be NULL; see semantics above)
  * @return Error or NULL on success
  */
 error_t *state_update_anchor(
     state_t *state,
     const char *filesystem_path,
-    const deployment_anchor_t *anchor
+    const deployment_anchor_t *anchor,
+    deployment_anchor_t *resolved_out
 );
 
 /**

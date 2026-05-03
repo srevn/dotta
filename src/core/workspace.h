@@ -396,20 +396,24 @@ bool workspace_item_extract_display_info(
  * Advance the deployment anchor with in-memory consistency
  *
  * Workspace-scope side of the routing invariant defined on
- * state_update_anchor (see state.h): wraps state_update_anchor and then
- * mirrors the write onto the matching active row's anchor in place, so
- * the SQL row and the snapshot stay in agreement for the rest of the run.
- * The mirror preserves state_update_anchor's preserve-on-zero semantic on
- * deployed_at and monotonic-once-set semantic on observed_at.
+ * state_update_anchor (see state.h): wraps state_update_anchor and assigns
+ * the canonical post-write anchor (returned by SQL RETURNING) into the
+ * matching active row, so the SQL row and the snapshot stay in agreement
+ * for the rest of the run. No C-side mirror of the SQL write rules lives
+ * here — the snapshot receives whatever the DB produced.
  *
- * Single entry point for the live-workspace anchor writers:
- *   - workspace_flush_anchor_updates (witness advance from slow-path)
+ * Single entry point for the public live-workspace anchor writers:
  *   - apply's adoption loop (ownership advance on first claim)
  *   - apply's post-deploy loop (ownership advance after write)
  *
+ * The slow-path flush (workspace_flush_anchor_updates) bypasses this
+ * wrapper: its accumulator already holds the row pointer, so it calls
+ * state_update_anchor directly and assigns the resolved anchor without
+ * the redundant active_index probe.
+ *
  * Not-found tolerance matches state_update_anchor: if the DB row is
  * absent (filtered by precedence, disabled profile) the write silently
- * no-ops; if the path isn't in the active index, the patch step is
+ * no-ops; if the path isn't in the active index, the snapshot patch is
  * skipped. Neither case is an error.
  *
  * @param ws Workspace (must not be NULL, state must be open)

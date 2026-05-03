@@ -2836,35 +2836,32 @@ bool workspace_item_extract_display_info(
  *
  * Single workspace-scope writer for anchor advances: persists via
  * state_update_anchor and assigns the canonical post-write anchor
- * (returned by SQL RETURNING) into the matching active row. The SQL
- * UPDATE is the single specification of preserve-on-zero / monotonic-
- * once-set rules; this function holds none of that logic.
+ * (returned by SQL RETURNING) into the caller's row. The SQL UPDATE is
+ * the single specification of preserve-on-zero / monotonic-once-set
+ * rules; this function holds none of that logic.
  *
- * Probe-first: when the path is not in our active partition there is no
- * snapshot to mirror, so resolved_out is omitted from the SQL call to
- * avoid the RETURNING decode work for a value that would be discarded.
- *
- * Partition safety: ws->active_index covers exactly the rows in the
- * active partition, which is disjoint from orphan candidates. So a
- * lookup hit never lands on a row outside the active set.
+ * The row is borrowed from ws->active. The workspace owns that storage
+ * as mutable (state_file_entry_t **active); the const decoration on the
+ * parameter is a public-API guard against mutation by non-anchor callers
+ * — internally we exercise the workspace's mutability privilege to write
+ * the resolved anchor in place.
  */
 error_t *workspace_advance_anchor(
     workspace_t *ws,
-    const char *filesystem_path,
+    const state_file_entry_t *row,
     const deployment_anchor_t *anchor
 ) {
     CHECK_NULL(ws);
-    CHECK_NULL(filesystem_path);
+    CHECK_NULL(row);
     CHECK_NULL(anchor);
 
-    state_file_entry_t *row = hashmap_get(ws->active_index, filesystem_path);
     deployment_anchor_t resolved;
     error_t *err = state_update_anchor(
-        ws->state, filesystem_path, anchor, row ? &resolved : NULL
+        ws->state, row->filesystem_path, anchor, &resolved
     );
     if (err) return err;
 
-    if (row) row->anchor = resolved;
+    ((state_file_entry_t *) row)->anchor = resolved;
     return NULL;
 }
 
@@ -2881,11 +2878,10 @@ error_t *workspace_advance_anchor(
  * existing timestamp — this flush confirms the anchor witness but does
  * not create a new deployment lifecycle event (apply owns that).
  *
- * Bypasses workspace_advance_anchor: the accumulator already carries the
- * row pointer (recorded at analyze time), so the flush calls
- * state_update_anchor directly and assigns the resolved anchor straight
- * into row->anchor — no second active_index probe to recover the same
- * snapshot handle the recorder already had.
+ * Routes through workspace_advance_anchor — the accumulator already
+ * carries the row pointer (recorded at analyze time), which is exactly
+ * what the wrapper expects. One snapshot-write API for every workspace
+ * anchor advance; no parallel inline path.
  *
  * Begins its own transaction only when state isn't already in one
  * (status/diff/sync). Apply always passes state already-in-transaction.
@@ -2914,26 +2910,21 @@ error_t *workspace_flush_anchor_updates(workspace_t *ws) {
     time_t now = time(NULL);
     for (size_t i = 0; i < ws->anchor_update_count; i++) {
         const anchor_update_t *update = &ws->anchor_updates[i];
-        state_file_entry_t *row = update->row;
         deployment_anchor_t input = {
             .blob_oid    = update->blob_oid,
             .deployed_at = 0,      /* preserve — flush is a witness advance, not a deploy */
             .observed_at = now,    /* monotonic CASE in SQL preserves any prior observation stamp */
             .stat        = update->stat,
         };
-        deployment_anchor_t resolved;
-        error_t *err = state_update_anchor(
-            ws->state, row->filesystem_path, &input, &resolved
-        );
+        error_t *err = workspace_advance_anchor(ws, update->row, &input);
         if (err) {
             if (needs_transaction) {
                 state_rollback(ws->state);
             }
             return error_wrap(
-                err, "Failed to flush anchor for '%s'", row->filesystem_path
+                err, "Failed to flush anchor for '%s'", update->row->filesystem_path
             );
         }
-        row->anchor = resolved;
     }
 
     if (needs_transaction) {

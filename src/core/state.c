@@ -558,10 +558,12 @@ static error_t *prepare_statements(state_t *state) {
      * one, so the first non-zero caller wins regardless of order.
      *
      * RETURNING projects the post-write column values so callers that mirror
-     * an in-memory snapshot (workspace_advance_anchor, the slow-path flush)
-     * can assign the canonical anchor without re-deriving the CASE rules in
-     * C. Zero matched rows yields zero RETURNING rows — the not-found-is-OK
-     * contract is preserved. */
+     * an in-memory snapshot (workspace_advance_anchor — the sole workspace-
+     * scope writer, used by apply's adoption + post-deploy and the slow-path
+     * flush) can assign the canonical anchor without re-deriving the CASE
+     * rules in C. Zero matched rows yields zero RETURNING rows — the
+     * not-found-is-OK contract is preserved for manifest-layer direct
+     * callers (resolved_out NULL). */
     const char *sql_update_anchor =
         "UPDATE virtual_manifest SET "
         "  deployed_blob_oid = ?1, "

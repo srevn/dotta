@@ -396,34 +396,32 @@ bool workspace_item_extract_display_info(
  * Advance the deployment anchor with in-memory consistency
  *
  * Workspace-scope side of the routing invariant defined on
- * state_update_anchor (see state.h): wraps state_update_anchor and assigns
- * the canonical post-write anchor (returned by SQL RETURNING) into the
- * matching active row, so the SQL row and the snapshot stay in agreement
- * for the rest of the run. No C-side mirror of the SQL write rules lives
- * here — the snapshot receives whatever the DB produced.
+ * state_update_anchor (see state.h): persists via state_update_anchor and
+ * assigns the canonical post-write anchor (returned by SQL RETURNING)
+ * directly into the caller's row. The SQL UPDATE is the single specification
+ * of preserve-on-zero / monotonic-once-set rules; this function holds none
+ * of that logic.
  *
- * Single entry point for the public live-workspace anchor writers:
+ * Single entry point for every workspace-scope anchor writer:
  *   - apply's adoption loop (ownership advance on first claim)
  *   - apply's post-deploy loop (ownership advance after write)
+ *   - workspace_flush_anchor_updates (witness advance from slow-path)
  *
- * The slow-path flush (workspace_flush_anchor_updates) bypasses this
- * wrapper: its accumulator already holds the row pointer, so it calls
- * state_update_anchor directly and assigns the resolved anchor without
- * the redundant active_index probe.
- *
- * Not-found tolerance matches state_update_anchor: if the DB row is
- * absent (filtered by precedence, disabled profile) the write silently
- * no-ops; if the path isn't in the active index, the snapshot patch is
- * skipped. Neither case is an error.
+ * The row pointer is borrowed from the workspace's active partition (where
+ * the workspace owns the storage as mutable; see workspace_active(),
+ * workspace_lookup_active(), and ws->active in workspace.c). The const
+ * decoration is a public-API guard against mutation by non-anchor callers;
+ * this function casts internally to assign anchor in place.
  *
  * @param ws Workspace (must not be NULL, state must be open)
- * @param filesystem_path File path (must not be NULL)
+ * @param row Active row whose anchor should advance (must not be NULL,
+ *            borrowed from workspace's active partition)
  * @param anchor New anchor (must not be NULL; blob_oid must be non-zero)
  * @return Error from state_update_anchor, or NULL on success
  */
 error_t *workspace_advance_anchor(
     workspace_t *ws,
-    const char *filesystem_path,
+    const state_file_entry_t *row,
     const deployment_anchor_t *anchor
 );
 
@@ -438,8 +436,8 @@ error_t *workspace_advance_anchor(
  * fast path instead of re-hashing.
  *
  * Routes through workspace_advance_anchor, so each persisted update also
- * patches the active row's anchor in place — DB and memory stay
- * consistent for downstream readers in the same run.
+ * assigns the canonical post-write anchor into its row — DB and memory
+ * stay consistent for downstream readers in the same run.
  *
  * Self-healing: the first status/apply after profile enable verifies all
  * files via the slow path and seeds the anchor. The second call hits the

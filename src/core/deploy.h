@@ -87,15 +87,32 @@ typedef struct {
  * in-scope entries never reach deploy_execute (apply's needs_deployment
  * filter drops them upstream) and apply's own adoption step handles their
  * lifecycle stamp.
+ *
+ * Each bucket carries borrowed state-row pointers (workspace-arena lifetime,
+ * outlives the deploy_result_t). Consumers get a typed read-only view via
+ * deploy_result_view() — same idiom as workspace_active().
  */
 typedef struct {
-    /* Result arrays */
-    string_array_t *deployed;          /* Files written to disk */
-    string_array_t *skipped_existing;  /* --skip-existing flag applied */
-    string_array_t *failed;            /* Deployment failures */
+    ptr_array_t deployed;          /* Files written to disk (state_file_entry_t *) */
+    ptr_array_t skipped_existing;  /* --skip-existing flag applied */
+    ptr_array_t failed;            /* Deployment failures */
 
-    char *error_message;               /* Error message if deployment failed */
+    char *error_message;           /* Error message if deployment failed */
 } deploy_result_t;
+
+/**
+ * Project a deploy_result bucket as a typed read-only state-row slice.
+ *
+ * The cast layers const onto both pointer levels — safe per the same C rule
+ * workspace_active() relies on (T** → const T *const *). Returned view aliases
+ * the bucket's storage; valid for the result's lifetime.
+ */
+static inline state_files_t deploy_result_view(const ptr_array_t *bucket) {
+    return (state_files_t){
+        .entries = (const state_file_entry_t *const *) bucket->items,
+        .count = bucket->count,
+    };
+}
 
 /**
  * Run pre-flight checks using workspace divergence analysis

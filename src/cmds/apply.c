@@ -97,35 +97,39 @@ static void print_deploy_results(
 ) {
     if (!result) return;
 
+    state_files_t deployed = deploy_result_view(&result->deployed);
+    state_files_t skipped  = deploy_result_view(&result->skipped_existing);
+    state_files_t failed   = deploy_result_view(&result->failed);
+
     /* Verbose mode: show individual files per category */
-    if (result->deployed && result->deployed->count > 0) {
+    if (deployed.count > 0) {
         output_section(out, OUTPUT_VERBOSE, dry_run ? "Would deploy" : "Deployed files");
-        for (size_t i = 0; i < result->deployed->count; i++) {
+        for (size_t i = 0; i < deployed.count; i++) {
             output_styled(
                 out, OUTPUT_VERBOSE, "  {green}✓{reset} %s\n",
-                result->deployed->items[i]
+                deployed.entries[i]->filesystem_path
             );
         }
     }
 
     /* Skipped files (--skip-existing) */
-    if (result->skipped_existing && result->skipped_existing->count > 0) {
+    if (skipped.count > 0) {
         output_section(out, OUTPUT_VERBOSE, "Skipped files (--skip-existing)");
-        for (size_t i = 0; i < result->skipped_existing->count; i++) {
+        for (size_t i = 0; i < skipped.count; i++) {
             output_styled(
                 out, OUTPUT_VERBOSE, "  {cyan}⊘{reset} %s\n",
-                result->skipped_existing->items[i]
+                skipped.entries[i]->filesystem_path
             );
         }
     }
 
     /* Failed files (always shown, regardless of verbose) */
-    if (result->failed && result->failed->count > 0) {
+    if (failed.count > 0) {
         output_section(out, OUTPUT_NORMAL, "Failed to deploy");
-        for (size_t i = 0; i < result->failed->count; i++) {
+        for (size_t i = 0; i < failed.count; i++) {
             output_styled(
                 out, OUTPUT_NORMAL, "  {red}✗{reset} %s\n",
-                result->failed->items[i]
+                failed.entries[i]->filesystem_path
             );
         }
         if (result->error_message) {
@@ -134,27 +138,20 @@ static void print_deploy_results(
         }
     }
 
-    /* Non-verbose: summary counts only.
-     *
-     * Arrays may be NULL on the empty-result calloc path in apply (no deployment
-     * needed), so guard each read. arr->count is the authoritative source. */
+    /* Non-verbose: summary counts only. */
     if (!output_is_verbose(out)) {
-        /* Deployed count */
-        if (result->deployed && result->deployed->count > 0) {
+        if (deployed.count > 0) {
             output_styled(
                 out, OUTPUT_NORMAL, dry_run ? "Would deploy {green}%zu{reset} file%s\n"
                                             : "Deployed {green}%zu{reset} file%s\n",
-                result->deployed->count,
-                result->deployed->count == 1 ? "" : "s"
+                deployed.count, deployed.count == 1 ? "" : "s"
             );
         }
 
-        /* Skipped existing count (only shown if --skip-existing was used) */
-        if (result->skipped_existing && result->skipped_existing->count > 0) {
+        if (skipped.count > 0) {
             output_styled(
                 out, OUTPUT_NORMAL, "Skipped {cyan}%zu{reset} file%s (--skip-existing)\n",
-                result->skipped_existing->count,
-                result->skipped_existing->count == 1 ? "" : "s"
+                skipped.count, skipped.count == 1 ? "" : "s"
             );
         }
     }
@@ -999,9 +996,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
             deployment_anchor_t anchor = capture_anchor_from_disk(
                 file->filesystem_path, &file->blob_oid, adopt_now
             );
-            error_t *adopt_err = workspace_advance_anchor(
-                ws, file->filesystem_path, &anchor
-            );
+            error_t *adopt_err = workspace_advance_anchor(ws, file, &anchor);
             if (adopt_err) {
                 /* Non-fatal: file is correct on disk; next status's slow-path
                  * CMP_EQUAL re-seeds the witness, and the row will be
@@ -1813,42 +1808,32 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
          * Non-critical operation: deployment already succeeded physically, so
          * anchor advance failures are non-fatal warnings (preserve consistency).
          */
-        if (deploy_res && deploy_res->deployed && deploy_res->deployed->count > 0) {
+        state_files_t deployed = deploy_res ? deploy_result_view(&deploy_res->deployed)
+                                            : (state_files_t){ 0 };
+        if (deployed.count > 0) {
             time_t now = time(NULL);
 
             output_print(out, OUTPUT_VERBOSE, "\nUpdating deployment anchors...\n");
 
-            for (size_t i = 0; i < deploy_res->deployed->count; i++) {
-                const char *path = deploy_res->deployed->items[i];
-
-                /* Look up the active row for the just-deployed path (O(1)
-                 * hashmap probe into the workspace's arena snapshot). */
-                const state_file_entry_t *file = workspace_lookup_active(ws, path);
-                if (!file) {
-                    /* Shouldn't happen for just-deployed files, but guard defensively. */
-                    output_warning(
-                        out, OUTPUT_NORMAL,
-                        "No active state row found for %s — skipping anchor advance", path
-                    );
-                    continue;
-                }
+            for (size_t i = 0; i < deployed.count; i++) {
+                const state_file_entry_t *file = deployed.entries[i];
 
                 /* Snapshot disk state (mtime/size/ino) for the fast-path witness.
                  * The file was just written and fsynced by deploy_file(); lstat()
                  * is a cheap inode-cache read. If lstat fails, the anchor is still
                  * advanced with a zero stat (slow-path fallback on next run). */
                 deployment_anchor_t anchor = capture_anchor_from_disk(
-                    path, &file->blob_oid, now
+                    file->filesystem_path, &file->blob_oid, now
                 );
 
-                err = workspace_advance_anchor(ws, path, &anchor);
+                err = workspace_advance_anchor(ws, file, &anchor);
                 if (err) {
                     /* Non-fatal warning - deployment succeeded, just anchor update failed.
                      * The file is already on the filesystem with correct content.
                      * Failure here should not abort the entire operation. */
                     output_warning(
                         out, OUTPUT_NORMAL, "Failed to update anchor for %s: %s",
-                        path, error_message(err)
+                        file->filesystem_path, error_message(err)
                     );
                     error_free(err);
                     err = NULL;  /* Don't propagate - continue operation */
@@ -1857,8 +1842,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
 
             output_print(
                 out, OUTPUT_VERBOSE, "  Updated %zu anchor%s\n",
-                deploy_res->deployed->count,
-                deploy_res->deployed->count == 1 ? "" : "s"
+                deployed.count, deployed.count == 1 ? "" : "s"
             );
         }
 

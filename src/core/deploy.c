@@ -1109,19 +1109,11 @@ error_t *deploy_execute(
     error_t *err = NULL;
     deploy_result_t *result = NULL;
 
-    /* Allocate result */
+    /* Allocate result. The three ptr_array_t buckets are zero-initialized
+     * by calloc — that IS their empty state, no separate init call needed. */
     result = calloc(1, sizeof(deploy_result_t));
     if (!result) {
         return ERROR(ERR_MEMORY, "Failed to allocate deploy result");
-    }
-
-    result->deployed = string_array_new(0);
-    result->skipped_existing = string_array_new(0);
-    result->failed = string_array_new(0);
-
-    if (!result->deployed || !result->skipped_existing || !result->failed) {
-        deploy_result_free(result);
-        return ERROR(ERR_MEMORY, "Failed to allocate result arrays");
     }
 
     /* Calculate required directories when ANY scope filter is active
@@ -1172,7 +1164,7 @@ error_t *deploy_execute(
 
         /* Check --skip-existing first (user explicitly chose not to overwrite) */
         if (opts->skip_existing && fs_exists(file->filesystem_path) && !opts->force) {
-            err = string_array_push(result->skipped_existing, file->filesystem_path);
+            err = ptr_array_push(&result->skipped_existing, file);
             if (err) {
                 deploy_result_free(result);
                 return error_wrap(err, "Failed to record skipped file");
@@ -1191,8 +1183,8 @@ error_t *deploy_execute(
         err = deploy_file(repo, cache, file, opts);
         if (err) {
             /* Record failure and return partial results.
-             * string_array_push failure is non-fatal here (already error-pathing). */
-            string_array_push(result->failed, file->filesystem_path);
+             * ptr_array_push failure is non-fatal here (already error-pathing). */
+            ptr_array_push(&result->failed, file);
             result->error_message = strdup(error_message(err));
             *out = result;
             return error_wrap(
@@ -1202,7 +1194,7 @@ error_t *deploy_execute(
         }
 
         /* Record success */
-        err = string_array_push(result->deployed, file->filesystem_path);
+        err = ptr_array_push(&result->deployed, file);
         if (err) {
             deploy_result_free(result);
             return error_wrap(err, "Failed to record deployed file");
@@ -1240,15 +1232,18 @@ void preflight_result_free(preflight_result_t *result) {
 
 /**
  * Free deployment result
+ *
+ * Each ptr_array_t holds borrowed row pointers (workspace-arena lifetime),
+ * so deinit only releases the bucket buffers — the rows themselves outlive us.
  */
 void deploy_result_free(deploy_result_t *result) {
     if (!result) {
         return;
     }
 
-    string_array_free(result->deployed);
-    string_array_free(result->skipped_existing);
-    string_array_free(result->failed);
+    ptr_array_deinit(&result->deployed);
+    ptr_array_deinit(&result->skipped_existing);
+    ptr_array_deinit(&result->failed);
     free(result->error_message);
     free(result);
 }

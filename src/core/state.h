@@ -744,7 +744,7 @@ void state_free_entry(state_file_entry_t *entry);
  * ROUTING INVARIANT — this is load-bearing:
  *   - If a workspace is live for this transaction, anchor advances MUST
  *     route through workspace_advance_anchor (workspace.h). That wrapper
- *     calls this function with resolved_out pointing at the matching active
+ *     calls this function with resolved_out pointing at the caller-supplied
  *     row's anchor field, so the snapshot receives the canonical post-write
  *     value the SQL produced. Calling state_update_anchor directly while a
  *     workspace is live silently desyncs the snapshot.

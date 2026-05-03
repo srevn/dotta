@@ -488,7 +488,7 @@ static error_t *prepare_statements(state_t *state) {
      *
      * observed_at has the monotonic-once-set semantic: the CASE preserves
      * any existing non-zero value, otherwise accepts the new value. This
-     * lets sync_entry_to_state's lstat-gated stamp seed the first
+     * lets manifest_project_row's lstat-gated stamp seed the first
      * observation on INSERT, while every subsequent UPSERT (UPDATE path)
      * is a no-op on the column even if the caller passes a different
      * timestamp. The classifier reads this column to distinguish ghost
@@ -3821,13 +3821,21 @@ void state_free_entry(state_file_entry_t *entry) {
         return;
     }
 
-    /* blob_oid is an inline binary field — no allocation to free. */
+    /* blob_oid is an inline binary field — no allocation to free.
+     *
+     * entry->state is declared const char * to document its read-only
+     * intent at every consumer. The cast here acknowledges that this
+     * function — paired with strdup at the assignment sites in state.c
+     * (load and state_create_entry) — owns the lifetime of heap-backed
+     * state strings. Tree-built rows that carry the STATE_ACTIVE literal
+     * never pass through this free path; they are arena-scoped via the
+     * precedence-view's lifetime in manifest.c. */
     free(entry->storage_path);
     free(entry->filesystem_path);
     free(entry->profile);
     free(entry->old_profile);
     free(entry->owner);
     free(entry->group);
-    free(entry->state);
+    free((char *) entry->state);
     free(entry);
 }

@@ -1,32 +1,35 @@
 /**
- * Manifest Module
+ * Manifest Module — consistency layer for the virtual_manifest table
  *
- * Owns the Virtual Working Directory (VWD) types and all manifest operations:
- *   - Type definitions: file_entry_t, manifest_t
- *   - Construction: manifest_build_from_tree(), manifest_free()
- *     (multi-profile precedence resolution lives behind the consistency
- *      layer entry points and is not exposed)
- *   - Consistency layer: manifest_apply_scope(), manifest_sync_diff(), etc.
+ * Single authority for every modification of the manifest table (the
+ * Virtual Working Directory's persistent cache). Surface is two-fold:
  *
- * The manifest module is the single authority for all manifest table modifications.
- * It implements the "Virtual Working Directory" concept - maintaining the manifest
- * table as an expected state cache (scope + Git references + metadata).
+ *   - Consistency layer: manifest_apply_scope, manifest_sync_diff,
+ *     manifest_add_files, manifest_update_files, manifest_remove_files,
+ *     manifest_reconcile, manifest_sync_directories. Each operates within
+ *     a caller-managed transaction and updates the virtual_manifest +
+ *     tracked_directories tables to reflect the post-operation Git
+ *     state.
+ *
+ *   - Tree loader: manifest_load_tree_files projects a single Git
+ *     tree's files into the public state_files_t carrier. Used by the
+ *     historical-diff path (cmd_diff). Mirrors workspace_active and
+ *     deploy_result_view — one carrier shape, three producers.
+ *
+ * The precedence builder that powers every consistency-layer entry is
+ * private to manifest.c (see precedence_view_t). It produces
+ * state_file_entry_t rows directly, removing the type bridge that used
+ * to live between the build step and the persistence step.
  *
  * Core Principles:
  *   - Single Authority: Only this module modifies the manifest table
- *   - Precedence Oracle: Internal precedence builder ensures correctness
  *   - Eager Consistency: Manifest updated immediately when inputs change
  *   - Transaction Safety: All operations are atomic (rollback on error)
- *   - Convergence Model: VWD defines scope and expected state, workspace analyzes runtime divergence
+ *   - Convergence Model: VWD defines scope and expected state; workspace
+ *     analyzes runtime divergence
  *
  * Workflow:
  *   Commands → manifest layer → state API → SQLite
- *
- * The manifest layer orchestrates existing components:
- *   - Internal precedence builder for per-profile metadata attribution
- *     (each entry carries its source profile's metadata claim)
- *   - blob_oid extraction from tree entries for content identity
- *   - state_*() API for persistence
  */
 
 #ifndef DOTTA_MANIFEST_H
@@ -39,78 +42,6 @@
 #include "core/state.h"
 #include "core/workspace.h"
 #include "infra/mount.h"
-
-/**
- * File entry in manifest
- *
- * Represents a single file to be deployed. This structure serves as the
- * Virtual Working Directory (VWD) cache, storing both Git tree information
- * and expected state from the database for efficient divergence detection.
- *
- * Two-domain layout (mirrors state_file_entry_t):
- *   VWD cache    — git-derived expected state (blob_oid, type, mode,
- *                  owner, group, encrypted). Maintained by the manifest
- *                  layer (reconcile/sync/rebuild).
- *   Deployment   — dotta's record of "disk was confirmed to equal this
- *     anchor       blob, at this time, with this stat." Advanced only by
- *                  state_update_anchor() after a disk-matches-blob confirmation.
- *
- * The two domains differ on anchor.blob_oid vs blob_oid iff Git-expected has
- * advanced past the last disk confirmation — i.e., the entry is stale.
- *
- * VWD Architecture:
- * - The manifest is the authoritative cache of expected state
- * - Fields are populated from state database during workspace load
- * - Enables O(1) divergence checking without N database queries
- * - Identity fields (blob_oid, type, mode) are always populated regardless
- *   of construction path (Git tree walk or state DB)
- *
- * Memory ownership:
- * - All string fields are arena-borrowed; the arena outlives the manifest
- *   and releases them at arena_destroy(). manifest_free() does not touch them.
- * - profile is borrowed (from caller's profiles array, workspace profile_index,
- *   state arena, or the arena that backs a tree-based manifest's strings)
- */
-typedef struct file_entry {
-    /* Paths */
-    char *storage_path;        /* Path in profile (home/.bashrc) */
-    char *filesystem_path;     /* Deployed path (/home/user/.bashrc) */
-
-    /* Profile ownership */
-    const char *profile;       /* Profile name (borrowed, used for all name-based operations) */
-    char *old_profile;         /* Previous owner if changed, NULL otherwise (VWD cache) */
-
-    /* VWD cache (git-derived, reconcile-maintained) */
-    git_oid blob_oid;          /* Blob the composed profile layer expects on disk */
-    state_file_type_t type;    /* File type (REGULAR, SYMLINK, EXECUTABLE) */
-    mode_t mode;               /* Permission mode (e.g., 0644), 0 if no metadata tracked */
-    char *owner;               /* Owner username (root/ files only, can be NULL) */
-    char *group;               /* Group name (root/ files only, can be NULL) */
-    bool encrypted;            /* Metadata-projected cache; byte-truth via the write-time invariant */
-
-    /* Deployment anchor (dotta-authored, advances only via state_update_anchor) */
-    deployment_anchor_t anchor;
-} file_entry_t;
-
-/**
- * Manifest - collection of files to deploy
- *
- * The index field provides O(1) lookups by filesystem_path. It maps
- * filesystem_path -> array index (offset by 1 to distinguish NULL from index 0).
- * The index is populated by manifest_build() and can be NULL for
- * manifests built by other means (e.g., manifest_build_from_tree()).
- *
- * Per-entry string fields (storage_path, filesystem_path, owner, group, plus
- * the borrowed profile pointer) live in a caller-owned arena. Both
- * manifest_build() and manifest_build_from_tree() take the arena as a
- * parameter. The arena must outlive the manifest; manifest_free() leaves
- * the strings to it.
- */
-typedef struct manifest {
-    file_entry_t *entries;
-    size_t count;
-    hashmap_t *index;              /* Maps filesystem_path -> index in entries array (offset by 1), can be NULL */
-} manifest_t;
 
 /**
  * Per-profile statistics from a scope transition
@@ -142,7 +73,11 @@ typedef struct {
 } manifest_scope_stats_t;
 
 /**
- * Statistics from stale manifest repair
+ * Statistics from stale-entry drift repair
+ *
+ * Counts row outcomes when the persistent state entries are reconciled
+ * against Git after external moves (the SQL virtual_manifest table; not
+ * the in-memory precedence view).
  */
 typedef struct {
     size_t updated;     /* Files with changed blob_oid (content changed in Git) */
@@ -150,6 +85,36 @@ typedef struct {
     size_t released;    /* Files set to STATE_RELEASED (removed from Git externally) */
     size_t reassigned;  /* Files whose owning profile shifted during repair */
 } manifest_repair_stats_t;
+
+/**
+ * Record a profile's current branch HEAD in enabled_profiles.commit_oid.
+ *
+ * Composes gitops_resolve_branch_head_oid + state_set_profile_commit_oid.
+ * Callers pair this with the state mutation that introduces the profile
+ * (state_enable_profile or state_set_profiles), which writes a zero-OID
+ * sentinel; this call replaces the sentinel with the real HEAD so
+ * enabled_profiles is fully authoritative before manifest_apply_scope.
+ *
+ * Preconditions:
+ *   - state has an active write transaction.
+ *   - profile is currently in enabled_profiles (just written by
+ *     state_enable_profile or state_set_profiles).
+ *   - The profile's Git branch exists and resolves to a commit.
+ *
+ * Postconditions:
+ *   - enabled_profiles.commit_oid for profile equals the branch HEAD.
+ *   - Transaction remains open.
+ *
+ * @param repo Git repository (must not be NULL)
+ * @param state State handle with active transaction (must not be NULL)
+ * @param profile Profile name (must not be NULL)
+ * @return Error or NULL on success
+ */
+error_t *manifest_persist_profile_head(
+    git_repository *repo,
+    state_t *state,
+    const char *profile
+);
 
 /**
  * Reconcile virtual_manifest to the current enabled-profile scope
@@ -217,14 +182,14 @@ typedef struct {
  *   - ERR_MEMORY: Memory allocation failed
  *
  * Performance: O(M + S + D)
- *   M = files in the new manifest (one manifest_build, one metadata load)
+ *   M = files in the new view (one precedence-view build, one metadata load)
  *   S = rows in virtual_manifest (one state_get_all_files for orphan pass)
  *   D = directories across enabled profiles (one sync_directories rebuild)
  *
  * @param repo Git repository (must not be NULL)
  * @param state State handle with active transaction (must not be NULL)
- * @param arena Scratch arena for the fresh-manifest precedence oracle and
- *              the orphan-pass state snapshot. Allocations live until the
+ * @param arena Scratch arena for the fresh precedence view and the
+ *              orphan-pass state snapshot. Allocations live until the
  *              caller destroys the arena (typically command end). Must not
  *              be NULL.
  * @param mounts Per-machine mount table reflecting the post-mutation
@@ -248,55 +213,161 @@ error_t *manifest_apply_scope(
 );
 
 /**
- * Record a profile's current branch HEAD in enabled_profiles.commit_oid.
+ * Reconcile manifest with current Git state (drift repair)
  *
- * Composes gitops_resolve_branch_head_oid + state_set_profile_commit_oid.
- * Callers pair this with the state mutation that introduces the profile
- * (state_enable_profile or state_set_profiles), which writes a zero-OID
- * sentinel; this call replaces the sentinel with the real HEAD so
- * enabled_profiles is fully authoritative before manifest_apply_scope.
+ * The single public entry point for drift-based VWD repair. Brings the
+ * manifest into sync with Git by detecting profiles whose stored commit_oid
+ * no longer matches the branch HEAD and updating affected state entries.
+ * Used by workspace_load at load-start and by sync before push.
+ *
+ * Complements manifest_sync_diff(): reconcile is drift-driven ("don't know
+ * what changed, figure it out"), while sync_diff applies a known old→new
+ * diff. Both write the manifest; this function is the one callers reach for
+ * when they only know "something in Git may have moved."
+ *
+ * Transaction management
+ *   This function handles transactions internally by inspecting state_locked():
+ *     - Caller already holds a transaction (apply's dotta_ext_write, sync's
+ *       state_begin) → writes commit with the caller's transaction.
+ *     - Caller doesn't hold one (workspace loading from status/diff/update) →
+ *       opens a scoped BEGIN IMMEDIATE, commits on success, rolls back on
+ *       failure.
+ *
+ * Callers never need to pre-open a transaction for this function.
+ *
+ * Profile scope
+ *   Current enabled profiles are fetched internally. Callers that have already
+ *   fetched the list for their own reasons need not pass it; the primitive
+ *   reads under whatever transaction is active. Empty enabled set is a valid
+ *   no-op (reconcile early-returns).
  *
  * Preconditions:
- *   - state has an active write transaction.
- *   - profile is currently in enabled_profiles (just written by
- *     state_enable_profile or state_set_profiles).
- *   - The profile's Git branch exists and resolves to a commit.
+ *   - state MUST be opened (read or write; transaction optional)
  *
  * Postconditions:
- *   - enabled_profiles.commit_oid for profile equals the branch HEAD.
- *   - Transaction remains open.
+ *   - Drift repaired; manifest entries' VWD cache (blob_oid, type, mode, …)
+ *     reflects current Git HEAD for each profile
+ *   - The deployment anchor is left untouched — reconcile is a VWD-cache
+ *     writer, not an anchor writer. Workspace divergence analysis reads
+ *     anchor.blob_oid from persistent state to classify staleness; cross-
+ *     process correct by construction
+ *   - Caller's transaction state is unchanged (kept outer lock, or
+ *     committed our scoped one)
+ *
+ * Performance:
+ *   Common case (no staleness): O(P) state queries + O(P) ref lookups
+ *   Stale case: O(M) fresh precedence-view build, M = total files in Git
  *
  * @param repo Git repository (must not be NULL)
- * @param state State handle with active transaction (must not be NULL)
- * @param profile Profile name (must not be NULL)
+ * @param state State handle (must not be NULL)
+ * @param arena Scratch arena for stale-profile detection and fresh
+ *              precedence-view construction during repair. Allocations live
+ *              until the caller destroys the arena (typically command end).
+ *              Must not be NULL.
+ * @param mounts Per-machine mount table covering the current enabled set.
+ *               Must not be NULL. Reconcile does not mutate bindings; the
+ *               only callers (workspace_load and sync's force branch)
+ *               pass ctx->mounts.
+ * @param out_stats Optional: repair statistics (NULL = don't care)
  * @return Error or NULL on success
  */
-error_t *manifest_persist_profile_head(
+error_t *manifest_reconcile(
     git_repository *repo,
     state_t *state,
-    const char *profile
+    arena_t *arena,
+    const mount_table_t *mounts,
+    manifest_repair_stats_t *out_stats
+);
+
+/**
+ * Remove files from manifest (remove command)
+ *
+ * Called after remove command deletes files from a profile branch.
+ * Handles fallback to lower-precedence profiles or marks for removal.
+ *
+ * Algorithm:
+ *   1. Build fresh precedence view from enabled profiles
+ *   2. Sync commit_oid in enabled_profiles after entry sync
+ *   3. For each removed file:
+ *      a. Resolve to filesystem path
+ *      b. Lookup current state entry
+ *      c. Check if removed profile owns it (precedence check)
+ *      d. If yes:
+ *         - Check fresh precedence view for fallback
+ *         - Fallback exists: Update to fallback profile (deployed_at preserved)
+ *         - No fallback: Mark as STATE_DELETED (controlled deletion)
+ *      e. If no (different profile owns): Skip
+ *
+ * Preconditions:
+ *   - state MUST have active transaction
+ *   - Git commit MUST be completed (files removed from branch)
+ *   - removed_storage_paths MUST be in storage format (home/.bashrc)
+ *   - enabled_profiles MUST be current enabled set
+ *
+ * Postconditions:
+ *   - Files with fallback updated to fallback profile (deployed_at preserved)
+ *   - Files without fallback marked STATE_DELETED (controlled deletion)
+ *   - Files not owned by removed_profile unchanged
+ *   - Tracked directories synced from all enabled profiles
+ *   - Transaction remains open (caller commits)
+ *
+ * Error Conditions:
+ *   - ERR_GIT: Git operation failed
+ *   - ERR_STATE: Database operation failed
+ *   - ERR_NOMEM: Memory allocation failed
+ *
+ * Performance: O(M + N) where M = total files in profiles, N = files removed
+ *
+ * @param repo Git repository (must not be NULL)
+ * @param state State handle (with active transaction, must not be NULL)
+ * @param arena Scratch arena for the fresh precedence view (used for
+ *              fallback detection). Allocations live until the caller
+ *              destroys the arena (typically command end). Must not be NULL.
+ * @param mounts Per-machine mount table covering enabled_profiles. Must not
+ *               be NULL. Remove does not mutate the binding set before
+ *               this call, so callers pass ctx->mounts directly.
+ * @param removed_profile Profile files were removed from (must not be NULL)
+ * @param removed_storage_paths Storage paths of removed files (must not be NULL)
+ * @param enabled_profiles All enabled profiles (must not be NULL)
+ * @param out_marked Output: filesystem paths just marked STATE_DELETED (can be NULL)
+ * @param out_removed Output: files without fallback (marked STATE_DELETED) (can be NULL)
+ * @param out_fallbacks Output: files updated to fallback (can be NULL)
+ * @return Error or NULL on success
+ */
+error_t *manifest_remove_files(
+    git_repository *repo,
+    state_t *state,
+    arena_t *arena,
+    const mount_table_t *mounts,
+    const char *removed_profile,
+    const string_array_t *removed_storage_paths,
+    const string_array_t *enabled_profiles,
+    string_array_t *out_marked,
+    size_t *out_removed,
+    size_t *out_fallbacks
 );
 
 /**
  * Update files in manifest (update command)
  *
- * High-performance batch operation that builds a FRESH manifest from Git
- * (post-commit state) instead of using stale workspace manifest. Designed
- * for the update command's workflow where many files are synced at once
- * after Git commits.
+ * High-performance batch operation that builds a fresh precedence view
+ * from Git (post-commit state) instead of using the stale workspace cache.
+ * Designed for the update command's workflow where many files are synced
+ * at once after Git commits.
  *
- * CRITICAL DESIGN DECISION: This function builds a FRESH manifest from Git
- * because the workspace manifest is stale after commits. Using the stale
- * manifest would cause fallback to expensive single-file operations for
- * newly added files, resulting in O(N×M) complexity instead of O(M+N).
+ * CRITICAL DESIGN DECISION: This function builds a fresh precedence view
+ * from Git because the workspace's cached row snapshot is stale after
+ * commits. Using the stale cache would cause fallback to expensive
+ * single-file operations for newly added files, resulting in O(N×M)
+ * complexity instead of O(M+N).
  *
  * Algorithm:
  *   1. Load enabled profiles from Git
- *   2. Build FRESH manifest via manifest_build() (O(M))
- *   3. Use transferred index for O(1) lookups
+ *   2. Build FRESH precedence view (O(M))
+ *   3. Use the view's index for O(1) lookups
  *   4. Sync commit_oid in enabled_profiles after entry sync
  *   5. For each item (O(N)):
- *      - If DELETED: check fresh manifest for fallback
+ *      - If DELETED: check fresh view for fallback
  *        → Fallback exists: update to fallback profile (deployed_at preserved)
  *        → No fallback: decide the terminal row state from disk
  *          reality. The common path — file absent on disk
@@ -305,7 +376,7 @@ error_t *manifest_persist_profile_head(
  *          orphan to clean up. If a racing recreation placed the path
  *          back on disk, the row is marked STATE_DELETED instead so
  *          apply's divergence routing can protect the user's edits.
- *      - Else (modified/new): lookup in fresh manifest
+ *      - Else (modified/new): lookup in fresh precedence view
  *        → Found + precedence matches: sync to state (deployed_at = time(NULL))
  *        → Not found: file filtered/excluded (skip gracefully)
  *   6. All operations within caller's transaction
@@ -334,9 +405,9 @@ error_t *manifest_persist_profile_head(
  *
  * @param repo Git repository (must not be NULL)
  * @param state State handle (with active transaction, must not be NULL)
- * @param arena Scratch arena for the fresh-manifest precedence oracle.
- *              Allocations live until the caller destroys the arena
- *              (typically command end). Must not be NULL.
+ * @param arena Scratch arena for the fresh precedence view. Allocations
+ *              live until the caller destroys the arena (typically
+ *              command end). Must not be NULL.
  * @param mounts Per-machine mount table covering enabled_profiles. Must not
  *               be NULL. Update doesn't mutate bindings, so callers pass
  *               ctx->mounts directly.
@@ -371,17 +442,17 @@ error_t *manifest_update_files(
  * - Files marked with deployed_at = time(NULL) (captured from filesystem)
  *
  * CRITICAL DESIGN: Like manifest_update_files(), this builds a FRESH
- * manifest from Git (post-commit state). This ensures all newly-added files
- * are found during precedence checks, maintaining O(M+N) performance.
+ * precedence view from Git (post-commit state). This ensures all newly-added
+ * files are found during precedence checks, maintaining O(M+N) performance.
  *
  * Algorithm:
  *   1. Load enabled profiles from Git (current HEAD, post-commit)
- *   2. Build fresh manifest with manifest_build() (ONCE)
- *   3. Use transferred index for O(1) precedence lookups
+ *   2. Build fresh precedence view (ONCE)
+ *   3. Use the view's index for O(1) precedence lookups
  *   4. Sync commit_oid in enabled_profiles after entry sync
  *   5. For each file:
  *      - Convert filesystem_path → storage_path
- *      - Lookup in fresh manifest
+ *      - Lookup in fresh view
  *      - If precedence matches: sync to state with deployed_at = time(NULL)
  *      - If lower precedence or filtered: skip silently
  *   6. All operations within caller's transaction
@@ -407,7 +478,7 @@ error_t *manifest_update_files(
  *
  * Performance:
  *   - O(M + N) where M = total files in all profiles, N = files to add
- *   - Single fresh manifest build from Git
+ *   - Single fresh precedence-view build from Git
  *   - Batch-optimized state operations
  *
  * Error Handling:
@@ -417,9 +488,9 @@ error_t *manifest_update_files(
  *
  * @param repo Git repository (must not be NULL)
  * @param state State handle (with active transaction, must not be NULL)
- * @param arena Scratch arena for the fresh-manifest precedence oracle.
- *              Allocations live until the caller destroys the arena
- *              (typically command end). Must not be NULL.
+ * @param arena Scratch arena for the fresh precedence view. Allocations
+ *              live until the caller destroys the arena (typically
+ *              command end). Must not be NULL.
  * @param mounts Per-machine mount table reflecting the post-add binding
  *               set. Must not be NULL. Add may implicitly enable a profile
  *               (or store its --target) before this call, so callers build
@@ -443,143 +514,6 @@ error_t *manifest_add_files(
 );
 
 /**
- * Remove files from manifest (remove command)
- *
- * Called after remove command deletes files from a profile branch.
- * Handles fallback to lower-precedence profiles or marks for removal.
- *
- * Algorithm:
- *   1. Build fresh manifest from enabled profiles (precedence oracle)
- *   2. Sync commit_oid in enabled_profiles after entry sync
- *   3. For each removed file:
- *      a. Resolve to filesystem path
- *      b. Lookup current manifest entry
- *      c. Check if removed profile owns it (precedence check)
- *      d. If yes:
- *         - Check fresh manifest for fallback
- *         - Fallback exists: Update to fallback profile (deployed_at preserved)
- *         - No fallback: Mark as STATE_DELETED (controlled deletion)
- *      e. If no (different profile owns): Skip
- *
- * Preconditions:
- *   - state MUST have active transaction
- *   - Git commit MUST be completed (files removed from branch)
- *   - removed_storage_paths MUST be in storage format (home/.bashrc)
- *   - enabled_profiles MUST be current enabled set
- *
- * Postconditions:
- *   - Files with fallback updated to fallback profile (deployed_at preserved)
- *   - Files without fallback marked STATE_DELETED (controlled deletion)
- *   - Files not owned by removed_profile unchanged
- *   - Tracked directories synced from all enabled profiles
- *   - Transaction remains open (caller commits)
- *
- * Error Conditions:
- *   - ERR_GIT: Git operation failed
- *   - ERR_STATE: Database operation failed
- *   - ERR_NOMEM: Memory allocation failed
- *
- * Performance: O(M + N) where M = total files in profiles, N = files removed
- *
- * @param repo Git repository (must not be NULL)
- * @param state State handle (with active transaction, must not be NULL)
- * @param arena Scratch arena for the fresh-manifest precedence oracle
- *              (used for fallback detection). Allocations live until the
- *              caller destroys the arena (typically command end). Must not
- *              be NULL.
- * @param mounts Per-machine mount table covering enabled_profiles. Must not
- *               be NULL. Remove does not mutate the binding set before
- *               this call, so callers pass ctx->mounts directly.
- * @param removed_profile Profile files were removed from (must not be NULL)
- * @param removed_storage_paths Storage paths of removed files (must not be NULL)
- * @param enabled_profiles All enabled profiles (must not be NULL)
- * @param out_marked Output: filesystem paths just marked STATE_DELETED (can be NULL)
- * @param out_removed Output: files without fallback (marked STATE_DELETED) (can be NULL)
- * @param out_fallbacks Output: files updated to fallback (can be NULL)
- * @return Error or NULL on success
- */
-error_t *manifest_remove_files(
-    git_repository *repo,
-    state_t *state,
-    arena_t *arena,
-    const mount_table_t *mounts,
-    const char *removed_profile,
-    const string_array_t *removed_storage_paths,
-    const string_array_t *enabled_profiles,
-    string_array_t *out_marked,
-    size_t *out_removed,
-    size_t *out_fallbacks
-);
-
-/**
- * Reconcile manifest with current Git state (drift repair)
- *
- * The single public entry point for drift-based VWD repair. Brings the
- * manifest into sync with Git by detecting profiles whose stored commit_oid
- * no longer matches the branch HEAD and updating affected state entries.
- * Used by workspace_load at load-start and by sync before push.
- *
- * Complements manifest_sync_diff(): reconcile is drift-driven ("don't know
- * what changed, figure it out"), while sync_diff applies a known old→new
- * diff. Both write the manifest; this function is the one callers reach for
- * when they only know "something in Git may have moved."
- *
- * Transaction management
- * ----------------------
- * This function handles transactions internally by inspecting state_locked():
- *   - Caller already holds a transaction (apply's dotta_ext_write, sync's
- *     state_begin) → writes commit with the caller's transaction.
- *   - Caller doesn't hold one (workspace loading from status/diff/update) →
- *     opens a scoped BEGIN IMMEDIATE, commits on success, rolls back on
- *     failure.
- *
- * Callers never need to pre-open a transaction for this function.
- *
- * Profile scope
- * -------------
- * Current enabled profiles are fetched internally. Callers that have already
- * fetched the list for their own reasons need not pass it; the primitive
- * reads under whatever transaction is active. Empty enabled set is a valid
- * no-op (reconcile early-returns).
- *
- * Preconditions:
- *   - state MUST be opened (read or write; transaction optional)
- *
- * Postconditions:
- *   - Drift repaired; manifest entries' VWD cache (blob_oid, type, mode, …)
- *     reflects current Git HEAD for each profile
- *   - The deployment anchor is left untouched — reconcile is a VWD-cache
- *     writer, not an anchor writer. Workspace divergence analysis reads
- *     anchor.blob_oid from persistent state to classify staleness; cross-
- *     process correct by construction
- *   - Caller's transaction state is unchanged (kept outer lock, or
- *     committed our scoped one)
- *
- * Performance:
- *   Common case (no staleness): O(P) state queries + O(P) ref lookups
- *   Stale case: O(M) fresh manifest build, M = total files in Git
- *
- * @param repo Git repository (must not be NULL)
- * @param state State handle (must not be NULL)
- * @param arena Scratch arena for stale-profile detection and fresh-manifest
- *              construction during repair. Allocations live until the caller
- *              destroys the arena (typically command end). Must not be NULL.
- * @param mounts Per-machine mount table covering the current enabled set.
- *               Must not be NULL. Reconcile does not mutate bindings; the
- *               only callers (workspace_load and sync's force branch)
- *               pass ctx->mounts.
- * @param out_stats Optional: repair statistics (NULL = don't care)
- * @return Error or NULL on success
- */
-error_t *manifest_reconcile(
-    git_repository *repo,
-    state_t *state,
-    arena_t *arena,
-    const mount_table_t *mounts,
-    manifest_repair_stats_t *out_stats
-);
-
-/**
  * Sync manifest from Git diff (sync command)
  *
  * Updates manifest table based on changes between old_oid and new_oid for a
@@ -593,7 +527,7 @@ error_t *manifest_reconcile(
  * Algorithm:
  *   Phase 1: Build Context (O(M))
  *     - Load all enabled profiles
- *     - Build fresh manifest from current Git state (post-sync)
+ *     - Build fresh precedence view from current Git state (post-sync)
  *     - Use transferred index for O(1) file lookups
  *     - Build profile→oid map
  *     - Load or use cached metadata
@@ -651,12 +585,10 @@ error_t *manifest_reconcile(
  *
  * @param repo Repository (must not be NULL)
  * @param state State with active transaction (must not be NULL)
- * @param arena Scratch arena for the fresh-manifest precedence oracle.
- *              Allocations live until the caller destroys the arena
- *              (typically command end). Must not be NULL.
+ * @param arena Scratch arena for the fresh precedence view. Allocations
+ *              live until the caller destroys the arena (typically command end)
  * @param mounts Per-machine mount table covering enabled_profiles. Must not
- *               be NULL. Sync does not mutate bindings; callers pass
- *               ctx->mounts.
+ *               be NULL. Sync does not mutate bindings; callers pass ctx->mounts.
  * @param profile Profile being synced (must not be NULL)
  * @param old_oid Old commit before sync (must not be NULL)
  * @param new_oid New commit after sync (must not be NULL)
@@ -730,87 +662,47 @@ error_t *manifest_sync_directories(
 );
 
 /**
- * Build manifest from profile names
+ * Project a single Git tree's files into the public state_files_t carrier
  *
- * Merges files from all profiles according to precedence rules.
- * Later profiles override earlier ones. Loads each profile's Git tree
- * internally via gitops_load_branch_tree (one tree alive per iteration).
+ * Used by the historical-diff path (cmd_diff): given a tree, profile,
+ * mount table, and optional per-tree metadata, produces a state_file_entry_t
+ * row for every blob the tree exposes (sans repository metadata files —
+ * .dottaignore, .bootstrap, .git/, .dotta/). Mirrors workspace_active and
+ * deploy_result_view: one carrier shape, three producers.
  *
- * Custom prefix resolution is handled internally: when state is non-NULL,
- * loads the prefix map from the state database to resolve custom/ files.
- * Profiles without a custom prefix deploy to home/root normally.
- * Custom/ files are skipped for profiles without a prefix entry.
- *
- * Memory: per-entry strings (storage_path, filesystem_path, owner, group)
- * are allocated from the caller's arena. The arena must outlive the
- * manifest, since manifest_free() abandons those strings to the arena.
- * Entries also borrow `profile` from the caller's profiles array, which
- * must outlive the manifest.
- *
- * @param repo Repository (must not be NULL)
- * @param profiles Profile names in precedence order (must not be NULL)
- * @param mounts Per-machine mount table covering enabled_profiles
- *              (must not be NULL)
- * @param arena Arena for string allocations (must not be NULL)
- * @param out Manifest (must not be NULL, caller must free with manifest_free)
- * @return Error or NULL on success
- */
-error_t *manifest_build(
-    git_repository *repo,
-    const string_array_t *profiles,
-    const mount_table_t *mounts,
-    arena_t *arena,
-    manifest_t **out
-);
-
-/**
- * Build manifest from a single Git tree
- *
- * Creates a manifest from a specific Git tree, useful for historical diffs.
- * The single-tree counterpart to the internal multi-profile precedence
- * builder used by the consistency-layer entry points.
- *
- * Metadata, when supplied, is applied to entries in lockstep with the tree
- * walk — mode, owner, group, and encrypted are filled from the tree's own
- * metadata.json. Pass NULL to skip metadata application (entries keep
- * Git-derived defaults). Callers that have already loaded the tree's
- * metadata for their own purposes should pass it here to keep the
- * file_entry_t shape uniform across every manifest construction path.
+ * Metadata, when supplied, is applied row-by-row in lockstep with the
+ * tree walk — mode, owner, group, and encrypted are filled from the
+ * tree's own metadata.json. Pass NULL to skip metadata application
+ * (rows keep Git-derived defaults). Callers that have already loaded
+ * the tree's metadata for their own purposes should pass it here.
  *
  * Custom-prefix resolution is delegated to `mounts`. The handle MUST
  * record a binding for `profile` (with target set) when the tree
- * contains custom/ entries; otherwise those entries are skipped during
- * the walk (via mount_resolve setting *out_fs to NULL, which the
- * callback treats as "this profile has no target on this machine —
- * skip"). Trees without custom/ entries can pass any mount table
- * handle, including one with no binding for `profile`.
+ * contains custom/ entries; otherwise those entries are skipped silently
+ * during the walk. Trees without custom/ entries can pass any mount
+ * table, including one with no binding for `profile`.
  *
- * Memory: per-entry strings (storage_path, filesystem_path, owner, group)
- * are allocated from the caller's arena. The arena must outlive the
- * manifest, since manifest_free() abandons those strings to the arena.
+ * Memory: every allocation produced by the call (rows, per-row strings,
+ * pointer array, internal view struct) lives in the caller's arena.
+ * arena_destroy reclaims them at command end. No targeted free required.
  *
- * @param tree Git tree to build manifest from (must not be NULL)
- * @param profile Profile name for entries (must not be NULL)
+ * @param tree Git tree to project (must not be NULL)
+ * @param profile Profile name carried on each row (must not be NULL)
  * @param mounts Per-machine mount table (must not be NULL)
- * @param metadata Optional per-tree metadata to apply to entries (can be NULL)
- * @param arena Arena for per-entry string allocations (must not be NULL)
- * @param out Manifest (must not be NULL, caller must free with manifest_free)
+ * @param metadata Optional per-tree metadata applied to rows (can be NULL)
+ * @param arena Arena backing every allocation produced by the call
+ *              (must not be NULL)
+ * @param out State files slice (must not be NULL; entries borrowed from
+ *            `arena`, lifetime tied to it)
  * @return Error or NULL on success
  */
-error_t *manifest_build_from_tree(
+error_t *manifest_load_tree_files(
     git_tree *tree,
     const char *profile,
     const mount_table_t *mounts,
     const metadata_t *metadata,
     arena_t *arena,
-    manifest_t **out
+    state_files_t *out
 );
-
-/**
- * Free manifest
- *
- * @param manifest Manifest to free (can be NULL)
- */
-void manifest_free(manifest_t *manifest);
 
 #endif /* DOTTA_MANIFEST_H */

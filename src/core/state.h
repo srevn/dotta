@@ -124,7 +124,7 @@ static inline stat_cache_t stat_cache_from_stat(const struct stat *st) {
  *     semantic in both SQL paths (UPSERT and sql_update_anchor).
  *   - observed_at     : first-observation timestamp. Set to now when
  *     lstat first confirms the path exists on disk in scope (enable-
- *     time reconcile via sync_entry_to_state, apply deploy/adopt, add,
+ *     time reconcile via manifest_project_row, apply deploy/adopt, add,
  *     update, CMP_EQUAL flush). Monotonic once set: SQL CASE preserves
  *     any existing non-zero value on every write, so the first non-zero
  *     caller wins.
@@ -147,7 +147,7 @@ static inline stat_cache_t stat_cache_from_stat(const struct stat *st) {
  *
  * The anchor is written only by state_update_anchor() — the sole writer
  * of deployed_blob_oid, deployed_at, observed_at, and stat_*. Manifest-
- * layer writes (reconcile/sync/rebuild via sync_entry_to_state) go
+ * layer writes (reconcile/sync/rebuild via manifest_project_row) go
  * through the UPSERT: preserve-on-zero-sentinel on deployed_blob_oid,
  * unconditional preserve on deployed_at + stat_*, preserve-if-set on
  * observed_at (so an INSERT carrying a non-zero observed_at seeds the
@@ -233,7 +233,11 @@ typedef struct {
     char *owner;                /* Owner username (root/ files only, can be NULL) */
     char *group;                /* Group name (root/ files only, can be NULL) */
     bool encrypted;             /* Encryption flag */
-    char *state;                /* Lifecycle state (STATE_ACTIVE/STATE_INACTIVE/...) */
+    const char *state;          /* Lifecycle state (STATE_ACTIVE/STATE_INACTIVE/...);
+                                 * read-only at every consumer — assignments live in
+                                 * state.c (strdup'd from DB or state_create_entry's
+                                 * argument) and manifest.c (string-literal STATE_ACTIVE
+                                 * for tree-built rows). */
 
     /* Deployment anchor (dotta-authored, advances only via state_update_anchor) */
     deployment_anchor_t anchor;
@@ -257,6 +261,28 @@ typedef struct {
  *       ...
  *   }
  * No allocation, no free contract — the struct is a value, not a handle.
+ *
+ * Field completeness across producers
+ * -----------------------------------
+ * The carrier is one shape, but rows are not uniformly populated:
+ *
+ *   workspace_active(ws), deploy_result_view(bucket)
+ *     Rows derive from state_get_all_files (the SQL virtual_manifest
+ *     table). Every column is populated: identity, VWD cache (type,
+ *     blob_oid, mode, owner, group, encrypted), lifecycle state, and the
+ *     deployment anchor (deployed_blob_oid, deployed_at, observed_at,
+ *     stat_*).
+ *
+ *   manifest_load_tree_files(tree, …)
+ *     Rows derive from a Git tree walk. Identity and VWD cache are
+ *     populated; the lifecycle `state` field carries the STATE_ACTIVE
+ *     literal; the deployment anchor is zero (DEPLOYMENT_ANCHOR_UNSET).
+ *     Tree-built rows are scratch projections, not deployment witnesses —
+ *     reading anchor.deployed_at on them yields zero by construction.
+ *
+ * Consumers that share code across producers (e.g., diff comparators,
+ * filter validators) must restrict reads to identity + VWD cache columns
+ * unless they own one of the producers above and know its discipline.
  */
 typedef struct {
     const state_file_entry_t *const *entries;
@@ -749,7 +775,7 @@ void state_free_entry(state_file_entry_t *entry);
  *     value the SQL produced. Calling state_update_anchor directly while a
  *     workspace is live silently desyncs the snapshot.
  *   - If no workspace is live (manifest layer paths: manifest_add_files,
- *     manifest_update_files, sync_entry_to_state), this function is the
+ *     manifest_update_files, manifest_project_row), this function is the
  *     legitimate direct caller. There is no snapshot to patch, so callers
  *     pass resolved_out=NULL and the next workspace_load reads SQL fresh.
  *

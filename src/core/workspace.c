@@ -704,7 +704,7 @@ static error_t *analyze_file_divergence(
      * Use anchor.observed_at to distinguish lifecycle states for missing
      * files. observed_at is stamped the first time dotta lstat-confirms
      * the path on disk in scope. Writers:
-     *   - sync_entry_to_state INSERT path (scope-entry observation).
+     *   - manifest_project_row INSERT path (scope-entry observation).
      *   - state_update_anchor (every witness/ownership advance — apply
      *     deploy, adoption, add, update, CMP_EQUAL flush).
      * All writes go through the SQL CASE that preserves the first

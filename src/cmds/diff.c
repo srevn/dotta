@@ -595,14 +595,16 @@ static int print_diff_line_cb(
 }
 
 /**
- * Compare historical manifest to filesystem and show diffs
+ * Compare a tree-built file slice against the current filesystem
  *
- * Generic comparison function for commit-to-workspace diffs.
- * Takes a historical manifest (from a specific commit) and compares
- * each file against the current filesystem state.
+ * Generic comparison function for commit-to-workspace diffs. Takes a
+ * state_files_t slice projected from a historical tree (via
+ * manifest_load_tree_files) and compares each file against the current
+ * filesystem state.
  *
  * @param repo Repository (must not be NULL)
- * @param manifest Historical manifest to compare (must not be NULL)
+ * @param files Tree-built file slice (passed by value; rows borrowed from
+ *              the caller's arena and live until command end)
  * @param profile Profile name (must not be NULL)
  * @param file_filter File filter for CLI (can be NULL for no filter)
  * @param opts Command options (must not be NULL)
@@ -611,9 +613,9 @@ static int print_diff_line_cb(
  * @param diff_count Output: number of diffs shown (must not be NULL)
  * @return Error or NULL on success
  */
-static error_t *compare_manifest_to_filesystem(
+static error_t *compare_tree_files_to_filesystem(
     git_repository *repo,
-    const manifest_t *manifest,
+    state_files_t files,
     const char *profile,
     const pathspec_t *file_filter,
     const cmd_diff_options_t *opts,
@@ -622,7 +624,6 @@ static error_t *compare_manifest_to_filesystem(
     size_t *diff_count
 ) {
     CHECK_NULL(repo);
-    CHECK_NULL(manifest);
     CHECK_NULL(profile);
     CHECK_NULL(opts);
     CHECK_NULL(cache);
@@ -633,9 +634,9 @@ static error_t *compare_manifest_to_filesystem(
     error_t *err = NULL;
     file_diff_t *diff = NULL;
 
-    /* Iterate through all files in the historical manifest */
-    for (size_t i = 0; i < manifest->count; i++) {
-        const file_entry_t *entry = &manifest->entries[i];
+    /* Iterate through all files in the historical slice */
+    for (size_t i = 0; i < files.count; i++) {
+        const state_file_entry_t *entry = files.entries[i];
         const char *fs_path = entry->filesystem_path;
         const char *storage_path = entry->storage_path;
 
@@ -790,10 +791,10 @@ cleanup:
 }
 
 /**
- * Validate file filter entries against a historical manifest
+ * Validate file filter entries against a state file slice
  *
- * Checks each filter entry (exact paths and glob patterns) against all
- * manifest storage paths. Outputs a warning for each unmatched entry,
+ * Checks each filter entry (exact paths and glob patterns) against the
+ * slice's storage paths. Outputs a warning for each unmatched entry,
  * which likely indicates a typo.
  *
  * Per-pattern isolation matters here: a combined-ruleset evaluation
@@ -801,93 +802,18 @@ cleanup:
  * count coverage on overlap. The pathspec_glob_matches_at primitive
  * gives each glob independent attribution.
  *
- * Used by the historical-diff path (commit-to-workspace), which still
- * speaks manifest_t. The workspace-diff path uses
- * validate_filter_paths_files instead, since it consumes state rows.
+ * One implementation serves both diff paths — the historical-diff path
+ * (commit-to-workspace) feeds a tree-built slice via
+ * manifest_load_tree_files; the workspace-diff path feeds the
+ * workspace's active slice via workspace_active. Both flow through the
+ * same state_files_t carrier.
  *
  * @param file_filter File filter to validate (NULL = no validation, returns 0)
- * @param manifest Manifest to check against (must not be NULL if filter is non-NULL)
- * @param out Output context for warnings
- * @return Number of filter entries that matched no manifest entry (0 = all matched)
- */
-static size_t validate_filter_paths(
-    const pathspec_t *file_filter,
-    const manifest_t *manifest,
-    output_t *out
-) {
-    if (!file_filter || !manifest) return 0;
-
-    size_t unmatched = 0;
-
-    /* Exact paths: literal equality, then directory-prefix walk-up. */
-    size_t exact_count = pathspec_exact_count(file_filter);
-    for (size_t e = 0; e < exact_count; e++) {
-        const char *filter_path = pathspec_exact_at(file_filter, e);
-        size_t filter_len = strlen(filter_path);
-
-        bool found = false;
-        for (size_t i = 0; i < manifest->count; i++) {
-            const char *sp = manifest->entries[i].storage_path;
-            if (strcmp(sp, filter_path) == 0) {
-                found = true;
-                break;
-            }
-            /* Directory prefix: filter path is ancestor of storage path */
-            if (strncmp(sp, filter_path, filter_len) == 0 &&
-                sp[filter_len] == '/') {
-                found = true;
-                break;
-            }
-        }
-
-        if (!found) {
-            output_warning(
-                out, OUTPUT_NORMAL, "No managed file matches '%s'",
-                filter_path
-            );
-            unmatched++;
-        }
-    }
-
-    /* Glob patterns: per-pattern isolated coverage check. */
-    size_t glob_count = pathspec_glob_count(file_filter);
-    for (size_t g = 0; g < glob_count; g++) {
-        bool found = false;
-        for (size_t i = 0; i < manifest->count; i++) {
-            if (pathspec_glob_matches_at(
-                file_filter, g, manifest->entries[i].storage_path
-                )) {
-                found = true;
-                break;
-            }
-        }
-        if (!found) {
-            output_warning(
-                out, OUTPUT_NORMAL, "No managed file matches pattern '%s'",
-                pathspec_glob_at(file_filter, g)
-            );
-            unmatched++;
-        }
-    }
-
-    return unmatched;
-}
-
-/**
- * Validate file filter entries against the workspace's active slice
- *
- * Mirrors validate_filter_paths but consumes a state_files_t carrier so
- * the workspace-diff path can validate filter coverage without speaking
- * manifest_t. Both paths report identical messages and counts; the
- * duplication is the price of bridging two element types and resolves
- * when manifest_t is eventually retired.
- *
- * @param file_filter File filter to validate (NULL = no validation, returns 0)
- * @param files Active state slice (passed by value)
+ * @param files File slice to check against (passed by value)
  * @param out Output context for warnings
  * @return Number of filter entries that matched no managed file (0 = all matched)
  */
-static size_t validate_filter_paths_files(
+static size_t validate_filter_paths(
     const pathspec_t *file_filter,
     state_files_t files,
     output_t *out
@@ -966,7 +892,7 @@ static size_t validate_filter_paths_files(
  * @param state State handle (must not be NULL)
  * @param commit_ref Commit reference to compare (must not be NULL)
  * @param scope Operation scope (must not be NULL)
- * @param arena Borrowed command arena (backs the historical manifest)
+ * @param arena Borrowed command arena (backs the tree-built file slice)
  * @param opts Command options (must not be NULL)
  * @param cache Shared content cache (borrowed from ctx, must not be NULL)
  * @param out Output context (must not be NULL)
@@ -998,8 +924,8 @@ static error_t *diff_commit_to_workspace(
     git_commit *commit = NULL;
     char *profile = NULL;
     git_tree *tree = NULL;
-    manifest_t *manifest = NULL;
     metadata_t *metadata = NULL;
+    state_files_t tree_files = { 0 };
 
     /* Step 1: Resolve commit to find which profile contains it */
     err = resolve_commit_in_profiles(
@@ -1047,31 +973,31 @@ static error_t *diff_commit_to_workspace(
         if (err) goto cleanup;
     }
 
-    /* Step 5: Build manifest from historical tree.
+    /* Step 5: Project the historical tree into a state_files_t slice.
      *
-     * Per-entry strings (storage_path, filesystem_path, owner, group)
-     * are allocated into the borrowed command arena; they outlive both
-     * manifest_build_from_tree and the subsequent compare_manifest_to_filesystem
-     * call, then live until command end. */
-    err = manifest_build_from_tree(
-        tree, profile, mounts, metadata, arena, &manifest
+     * Rows, per-row strings, and the pointer array are allocated into
+     * the borrowed command arena; they outlive both this call and the
+     * subsequent compare_tree_files_to_filesystem call, then live until
+     * command end. No targeted free required. */
+    err = manifest_load_tree_files(
+        tree, profile, mounts, metadata, arena, &tree_files
     );
     if (err) {
-        err = error_wrap(err, "Failed to build manifest from commit");
+        err = error_wrap(err, "Failed to load tree files from commit");
         goto cleanup;
     }
 
-    /* Step 6: Compare historical manifest against current filesystem */
+    /* Step 6: Compare historical slice against current filesystem */
     size_t diff_count = 0;
-    err = compare_manifest_to_filesystem(
-        repo, manifest, profile, file_filter, opts, cache, out, &diff_count
+    err = compare_tree_files_to_filesystem(
+        repo, tree_files, profile, file_filter, opts, cache, out, &diff_count
     );
     if (err) {
         goto cleanup;
     }
 
     if (diff_count == 0 && !opts->name_only) {
-        size_t unmatched = validate_filter_paths(file_filter, manifest, out);
+        size_t unmatched = validate_filter_paths(file_filter, tree_files, out);
 
         if (unmatched > 0) {
             output_hint(
@@ -1086,8 +1012,10 @@ static error_t *diff_commit_to_workspace(
     }
 
 cleanup:
+    /* tree_files is arena-backed (borrowed from `arena`); the caller owns
+     * the arena's lifetime and reclaims every row, string, and the pointer
+     * array at command end. No targeted free here. */
     metadata_free(metadata);
-    manifest_free(manifest);
     git_tree_free(tree);
     git_commit_free(commit);
     free(profile);
@@ -1383,7 +1311,7 @@ static error_t *diff_workspace(
     /* Step 4: Validate file filter paths against the active slice */
     const pathspec_t *file_filter = scope_paths(scope);
     if (file_filter) {
-        size_t unmatched = validate_filter_paths_files(file_filter, active, out);
+        size_t unmatched = validate_filter_paths(file_filter, active, out);
         if (unmatched > 0) {
             output_hint(out, OUTPUT_NORMAL, "Use 'dotta list <profile>' to see managed files");
             if (unmatched == pathspec_count(file_filter)) {

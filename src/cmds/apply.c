@@ -98,8 +98,8 @@ static void print_deploy_results(
     if (!result) return;
 
     state_files_t deployed = deploy_result_view(&result->deployed);
-    state_files_t skipped  = deploy_result_view(&result->skipped_existing);
-    state_files_t failed   = deploy_result_view(&result->failed);
+    state_files_t skipped = deploy_result_view(&result->skipped_existing);
+    state_files_t failed = deploy_result_view(&result->failed);
 
     /* Verbose mode: show individual files per category */
     if (deployed.count > 0) {

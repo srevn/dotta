@@ -75,7 +75,6 @@ struct state {
 
     /* Directory prepared statements */
     sqlite3_stmt *stmt_insert_directory;           /* INSERT OR REPLACE tracked_directories */
-    sqlite3_stmt *stmt_get_all_directories;        /* SELECT * FROM tracked_directories */
     sqlite3_stmt *stmt_get_directory;              /* SELECT * WHERE filesystem_path = ? */
     sqlite3_stmt *stmt_update_directory;           /* UPDATE tracked_directories (preserves deployed_at) */
     sqlite3_stmt *stmt_remove_directory;           /* DELETE FROM tracked_directories */
@@ -703,6 +702,141 @@ static error_t *prepare_statements(state_t *state) {
         return sqlite_error(state->db, "Failed to prepare profile statement");
     }
 
+    /* Insert/replace tracked directory (per-row in manifest_apply_scope inner loop) */
+    const char *sql_insert_dir =
+        "INSERT OR REPLACE INTO tracked_directories "
+        "(filesystem_path, storage_path, profile, mode, owner, \"group\", state) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?);";
+
+    rc = sqlite3_prepare_v2(
+        state->db, sql_insert_dir, -1, &state->stmt_insert_directory, NULL
+    );
+    if (rc != SQLITE_OK) {
+        sqlite3_finalize(state->stmt_insert_file);
+        sqlite3_finalize(state->stmt_update_anchor);
+        sqlite3_finalize(state->stmt_file_exists);
+        sqlite3_finalize(state->stmt_get_file);
+        sqlite3_finalize(state->stmt_get_file_by_storage);
+        sqlite3_finalize(state->stmt_get_by_profile);
+        sqlite3_finalize(state->stmt_remove_file);
+        sqlite3_finalize(state->stmt_insert_profile);
+        return sqlite_error(state->db, "Failed to prepare insert directory statement");
+    }
+
+    /* Get tracked directory by path (per-row in manifest_apply_scope inner loop) */
+    const char *sql_get_dir =
+        "SELECT filesystem_path, storage_path, profile, mode, owner, \"group\", state, deployed_at "
+        "FROM tracked_directories WHERE filesystem_path = ?;";
+
+    rc = sqlite3_prepare_v2(state->db, sql_get_dir, -1, &state->stmt_get_directory, NULL);
+    if (rc != SQLITE_OK) {
+        sqlite3_finalize(state->stmt_insert_file);
+        sqlite3_finalize(state->stmt_update_anchor);
+        sqlite3_finalize(state->stmt_file_exists);
+        sqlite3_finalize(state->stmt_get_file);
+        sqlite3_finalize(state->stmt_get_file_by_storage);
+        sqlite3_finalize(state->stmt_get_by_profile);
+        sqlite3_finalize(state->stmt_remove_file);
+        sqlite3_finalize(state->stmt_insert_profile);
+        sqlite3_finalize(state->stmt_insert_directory);
+        return sqlite_error(state->db, "Failed to prepare get directory statement");
+    }
+
+    /* Update tracked directory metadata. The UPDATE list intentionally omits
+     * deployed_at so the lifecycle timestamp survives profile-disable fallback
+     * — re-binding it would clobber the original deployment time. */
+    const char *sql_update_dir =
+        "UPDATE tracked_directories "
+        "SET storage_path = ?, profile = ?, mode = ?, owner = ?, \"group\" = ? "
+        "WHERE filesystem_path = ?;";
+
+    rc = sqlite3_prepare_v2(
+        state->db, sql_update_dir, -1, &state->stmt_update_directory, NULL
+    );
+    if (rc != SQLITE_OK) {
+        sqlite3_finalize(state->stmt_insert_file);
+        sqlite3_finalize(state->stmt_update_anchor);
+        sqlite3_finalize(state->stmt_file_exists);
+        sqlite3_finalize(state->stmt_get_file);
+        sqlite3_finalize(state->stmt_get_file_by_storage);
+        sqlite3_finalize(state->stmt_get_by_profile);
+        sqlite3_finalize(state->stmt_remove_file);
+        sqlite3_finalize(state->stmt_insert_profile);
+        sqlite3_finalize(state->stmt_insert_directory);
+        sqlite3_finalize(state->stmt_get_directory);
+        return sqlite_error(state->db, "Failed to prepare update directory statement");
+    }
+
+    /* Remove tracked directory (per-removed-dir loop in apply cleanup) */
+    const char *sql_remove_dir =
+        "DELETE FROM tracked_directories WHERE filesystem_path = ?;";
+
+    rc = sqlite3_prepare_v2(
+        state->db, sql_remove_dir, -1, &state->stmt_remove_directory, NULL
+    );
+    if (rc != SQLITE_OK) {
+        sqlite3_finalize(state->stmt_insert_file);
+        sqlite3_finalize(state->stmt_update_anchor);
+        sqlite3_finalize(state->stmt_file_exists);
+        sqlite3_finalize(state->stmt_get_file);
+        sqlite3_finalize(state->stmt_get_file_by_storage);
+        sqlite3_finalize(state->stmt_get_by_profile);
+        sqlite3_finalize(state->stmt_remove_file);
+        sqlite3_finalize(state->stmt_insert_profile);
+        sqlite3_finalize(state->stmt_insert_directory);
+        sqlite3_finalize(state->stmt_get_directory);
+        sqlite3_finalize(state->stmt_update_directory);
+        return sqlite_error(state->db, "Failed to prepare remove directory statement");
+    }
+
+    /* Set lifecycle on a tracked directory (per-row in manifest_apply_scope) */
+    const char *sql_set_dir_state =
+        "UPDATE tracked_directories SET state = ? WHERE filesystem_path = ?;";
+
+    rc = sqlite3_prepare_v2(
+        state->db, sql_set_dir_state, -1, &state->stmt_set_directory_state, NULL
+    );
+    if (rc != SQLITE_OK) {
+        sqlite3_finalize(state->stmt_insert_file);
+        sqlite3_finalize(state->stmt_update_anchor);
+        sqlite3_finalize(state->stmt_file_exists);
+        sqlite3_finalize(state->stmt_get_file);
+        sqlite3_finalize(state->stmt_get_file_by_storage);
+        sqlite3_finalize(state->stmt_get_by_profile);
+        sqlite3_finalize(state->stmt_remove_file);
+        sqlite3_finalize(state->stmt_insert_profile);
+        sqlite3_finalize(state->stmt_insert_directory);
+        sqlite3_finalize(state->stmt_get_directory);
+        sqlite3_finalize(state->stmt_update_directory);
+        sqlite3_finalize(state->stmt_remove_directory);
+        return sqlite_error(state->db, "Failed to prepare set directory state statement");
+    }
+
+    /* Mark all active directories inactive (1× per manifest_sync_directories sweep) */
+    const char *sql_mark_dirs_inactive =
+        "UPDATE tracked_directories SET state = 'inactive' WHERE state = 'active';";
+
+    rc = sqlite3_prepare_v2(
+        state->db, sql_mark_dirs_inactive, -1,
+        &state->stmt_mark_all_directories_inactive, NULL
+    );
+    if (rc != SQLITE_OK) {
+        sqlite3_finalize(state->stmt_insert_file);
+        sqlite3_finalize(state->stmt_update_anchor);
+        sqlite3_finalize(state->stmt_file_exists);
+        sqlite3_finalize(state->stmt_get_file);
+        sqlite3_finalize(state->stmt_get_file_by_storage);
+        sqlite3_finalize(state->stmt_get_by_profile);
+        sqlite3_finalize(state->stmt_remove_file);
+        sqlite3_finalize(state->stmt_insert_profile);
+        sqlite3_finalize(state->stmt_insert_directory);
+        sqlite3_finalize(state->stmt_get_directory);
+        sqlite3_finalize(state->stmt_update_directory);
+        sqlite3_finalize(state->stmt_remove_directory);
+        sqlite3_finalize(state->stmt_set_directory_state);
+        return sqlite_error(state->db, "Failed to prepare mark directories inactive statement");
+    }
+
     return NULL;
 }
 
@@ -762,11 +896,6 @@ static void finalize_statements(state_t *state) {
     if (state->stmt_insert_directory) {
         sqlite3_finalize(state->stmt_insert_directory);
         state->stmt_insert_directory = NULL;
-    }
-
-    if (state->stmt_get_all_directories) {
-        sqlite3_finalize(state->stmt_get_all_directories);
-        state->stmt_get_all_directories = NULL;
     }
 
     if (state->stmt_get_directory) {
@@ -1973,21 +2102,11 @@ error_t *state_add_directory(state_t *state, const state_directory_entry_t *entr
     CHECK_NULL(entry->storage_path);
     CHECK_NULL(entry->profile);
     CHECK_NULL(state->db);
-
-    /* Prepare statement if not already prepared */
-    if (!state->stmt_insert_directory) {
-        const char *sql =
-            "INSERT OR REPLACE INTO tracked_directories "
-            "(filesystem_path, storage_path, profile, mode, owner, \"group\", state) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?);";
-
-        int rc = sqlite3_prepare_v2(state->db, sql, -1, &state->stmt_insert_directory, NULL);
-        if (rc != SQLITE_OK) {
-            return sqlite_error(state->db, "Failed to prepare insert directory statement");
-        }
-    }
+    CHECK_NULL(state->stmt_insert_directory);
 
     sqlite3_stmt *stmt = state->stmt_insert_directory;
+    sqlite3_reset(stmt);
+    sqlite3_clear_bindings(stmt);
 
     /* Bind parameters */
     sqlite3_bind_text(stmt, 1, entry->filesystem_path, -1, SQLITE_STATIC);
@@ -2020,7 +2139,6 @@ error_t *state_add_directory(state_t *state, const state_directory_entry_t *entr
 
     /* Execute */
     int rc = sqlite3_step(stmt);
-    sqlite3_reset(stmt);
 
     if (rc != SQLITE_DONE) {
         return sqlite_error(state->db, "Failed to insert directory");
@@ -2092,24 +2210,18 @@ error_t *state_get_all_directories(
     #define DUP(s)      arena_strdup(arena, (s))
     #define DUP_OPT(s)  ((s) ? DUP(s) : NULL)
 
-    /* Prepare statement if needed (const cast is safe for read-only ops) */
-    state_t *mutable_state = (state_t *) state;
-    if (!mutable_state->stmt_get_all_directories) {
-        const char *sql_dirs =
-            "SELECT filesystem_path, storage_path, profile, mode, owner, \"group\", state, deployed_at "
-            "FROM tracked_directories ORDER BY filesystem_path;";
+    /* Local prepare+finalize: this is a single-pass, full-table scan run once
+     * per workspace_load. Caching the statement on the handle would buy nothing
+     * — see state_get_all_files for the same pattern. */
+    const char *sql_dirs =
+        "SELECT filesystem_path, storage_path, profile, mode, owner, \"group\", state, deployed_at "
+        "FROM tracked_directories ORDER BY filesystem_path;";
 
-        rc = sqlite3_prepare_v2(
-            mutable_state->db, sql_dirs, -1, &mutable_state->stmt_get_all_directories, NULL
-        );
-        if (rc != SQLITE_OK) {
-            return sqlite_error(
-                mutable_state->db, "Failed to prepare get all directories statement"
-            );
-        }
+    sqlite3_stmt *stmt = NULL;
+    rc = sqlite3_prepare_v2(state->db, sql_dirs, -1, &stmt, NULL);
+    if (rc != SQLITE_OK) {
+        return sqlite_error(state->db, "Failed to prepare directory query");
     }
-
-    sqlite3_stmt *stmt = mutable_state->stmt_get_all_directories;
 
     size_t i = 0;
     while ((rc = sqlite3_step(stmt)) == SQLITE_ROW && i < dir_count) {
@@ -2130,7 +2242,7 @@ error_t *state_get_all_directories(
 
         /* Validate non-nullable columns */
         if (!fs_path || !storage || !profile) {
-            sqlite3_reset(stmt);
+            sqlite3_finalize(stmt);
             return ERROR(ERR_STATE_INVALID, "NULL value in required column at row %zu", i);
         }
 
@@ -2146,17 +2258,20 @@ error_t *state_get_all_directories(
 
         /* Check allocation success */
         if (!entries[i].filesystem_path || !entries[i].storage_path || !entries[i].profile) {
-            sqlite3_reset(stmt);
+            sqlite3_finalize(stmt);
             return ERROR(ERR_MEMORY, "Failed to copy directory entry strings");
         }
 
         i++;
     }
 
-    sqlite3_reset(stmt);
+    sqlite3_finalize(stmt);
 
-    if (rc != SQLITE_DONE && rc != SQLITE_ROW) {
-        return sqlite_error(mutable_state->db, "Failed to query directories");
+    /* Strict post-loop check: the dir_count guard plus our locking discipline
+     * (single connection, no concurrent writer between COUNT and SELECT) makes
+     * SQLITE_ROW unreachable here. Mirrors state_get_all_files. */
+    if (rc != SQLITE_DONE) {
+        return sqlite_error(state->db, "Failed to query directories");
     }
 
     #undef DUP
@@ -2192,27 +2307,7 @@ error_t *state_update_directory(
     CHECK_NULL(entry);
     CHECK_NULL(entry->filesystem_path);
     CHECK_NULL(state->db);
-
-    /* Prepare statement if not already prepared */
-    if (!state->stmt_update_directory) {
-        /* CRITICAL: Do NOT update deployed_at - it must be preserved for lifecycle tracking
-         *
-         * The UPDATE intentionally excludes deployed_at column. This preserves the original
-         * deployment timestamp when updating fallback profile during profile disable.
-         *
-         * Columns updated: storage_path, profile, mode, owner, group
-         * Columns preserved: filesystem_path (WHERE clause), deployed_at (lifecycle)
-         */
-        const char *sql =
-            "UPDATE tracked_directories "
-            "SET storage_path = ?, profile = ?, mode = ?, owner = ?, \"group\" = ? "
-            "WHERE filesystem_path = ?;";
-
-        int rc = sqlite3_prepare_v2(state->db, sql, -1, &state->stmt_update_directory, NULL);
-        if (rc != SQLITE_OK) {
-            return sqlite_error(state->db, "Failed to prepare update directory statement");
-        }
-    }
+    CHECK_NULL(state->stmt_update_directory);
 
     sqlite3_stmt *stmt = state->stmt_update_directory;
     sqlite3_reset(stmt);
@@ -2279,21 +2374,11 @@ error_t *state_remove_directory(state_t *state, const char *filesystem_path) {
     CHECK_NULL(state);
     CHECK_NULL(filesystem_path);
     CHECK_NULL(state->db);
-
-    /* Prepare statement if not already prepared */
-    if (!state->stmt_remove_directory) {
-        const char *sql = "DELETE FROM tracked_directories WHERE filesystem_path = ?;";
-
-        int rc = sqlite3_prepare_v2(state->db, sql, -1, &state->stmt_remove_directory, NULL);
-        if (rc != SQLITE_OK) {
-            return sqlite_error(
-                state->db, "Failed to prepare remove directory statement"
-            );
-        }
-    }
+    CHECK_NULL(state->stmt_remove_directory);
 
     sqlite3_stmt *stmt = state->stmt_remove_directory;
     sqlite3_reset(stmt);
+    sqlite3_clear_bindings(stmt);
     sqlite3_bind_text(stmt, 1, filesystem_path, -1, SQLITE_TRANSIENT);
 
     /* Execute */
@@ -2326,51 +2411,30 @@ error_t *state_get_directory(
     CHECK_NULL(filesystem_path);
     CHECK_NULL(out);
     CHECK_NULL(state->db);
+    CHECK_NULL(state->stmt_get_directory);
 
     *out = NULL;
 
-    /* Prepare statement if needed (const cast is safe for read-only ops) */
-    state_t *mutable_state = (state_t *) state;
-    if (!mutable_state->stmt_get_directory) {
-        const char *sql =
-            "SELECT filesystem_path, storage_path, profile, mode, owner, \"group\", state, deployed_at "
-            "FROM tracked_directories WHERE filesystem_path = ?;";
-
-        int rc = sqlite3_prepare_v2(
-            mutable_state->db, sql, -1,
-            &mutable_state->stmt_get_directory, NULL
-        );
-        if (rc != SQLITE_OK) {
-            return sqlite_error(
-                mutable_state->db, "Failed to prepare get directory statement"
-            );
-        }
-    }
-
-    sqlite3_stmt *stmt = mutable_state->stmt_get_directory;
+    sqlite3_stmt *stmt = state->stmt_get_directory;
     sqlite3_reset(stmt);
+    sqlite3_clear_bindings(stmt);
     sqlite3_bind_text(stmt, 1, filesystem_path, -1, SQLITE_TRANSIENT);
 
     /* Execute query */
     int rc = sqlite3_step(stmt);
     if (rc == SQLITE_DONE) {
-        /* Not found */
-        sqlite3_reset(stmt);
         return ERROR(ERR_NOT_FOUND, "Directory '%s' not found in state", filesystem_path);
     }
     if (rc != SQLITE_ROW) {
-        sqlite3_reset(stmt);
-        return sqlite_error(mutable_state->db, "Failed to query directory");
+        return sqlite_error(state->db, "Failed to query directory");
     }
 
     /* Allocate entry */
     state_directory_entry_t *entry = calloc(1, sizeof(state_directory_entry_t));
     if (!entry) {
-        sqlite3_reset(stmt);
         return ERROR(ERR_MEMORY, "Failed to allocate directory entry");
     }
 
-    /* Parse row */
     /* filesystem_path (column 0) */
     const char *fs_path = (const char *) sqlite3_column_text(stmt, 0);
     entry->filesystem_path = strdup(fs_path ? fs_path : "");
@@ -2392,15 +2456,11 @@ error_t *state_get_directory(
 
     /* owner (column 4, optional) */
     const char *owner = (const char *) sqlite3_column_text(stmt, 4);
-    if (owner) {
-        entry->owner = strdup(owner);
-    }
+    if (owner) entry->owner = strdup(owner);
 
     /* group (column 5, optional) */
     const char *group = (const char *) sqlite3_column_text(stmt, 5);
-    if (group) {
-        entry->group = strdup(group);
-    }
+    if (group) entry->group = strdup(group);
 
     /* state (column 6) */
     entry->lifecycle = lifecycle_from_sql_text(
@@ -2409,8 +2469,6 @@ error_t *state_get_directory(
 
     /* deployed_at (column 7) */
     entry->deployed_at = sqlite3_column_int64(stmt, 7);
-
-    sqlite3_reset(stmt);
 
     *out = entry;
     return NULL;
@@ -2436,6 +2494,7 @@ error_t *state_set_directory_state(
     CHECK_NULL(state);
     CHECK_NULL(state->db);
     CHECK_NULL(filesystem_path);
+    CHECK_NULL(state->stmt_set_directory_state);
 
     /* Validate state value */
     if (new_lifecycle == LIFECYCLE_RELEASED) {
@@ -2444,18 +2503,9 @@ error_t *state_set_directory_state(
         );
     }
 
-    /* Prepare statement if needed */
-    if (!state->stmt_set_directory_state) {
-        const char *sql = "UPDATE tracked_directories SET state = ? WHERE filesystem_path = ?";
-
-        int rc = sqlite3_prepare_v2(state->db, sql, -1, &state->stmt_set_directory_state, NULL);
-        if (rc != SQLITE_OK) {
-            return sqlite_error(state->db, "Failed to prepare set directory state statement");
-        }
-    }
-
     sqlite3_stmt *stmt = state->stmt_set_directory_state;
     sqlite3_reset(stmt);
+    sqlite3_clear_bindings(stmt);
     sqlite3_bind_text(stmt, 1, lifecycle_to_sql_text(new_lifecycle), -1, SQLITE_STATIC);
     sqlite3_bind_text(stmt, 2, filesystem_path, -1, SQLITE_TRANSIENT);
 
@@ -2488,23 +2538,7 @@ error_t *state_set_directory_state(
 error_t *state_mark_all_directories_inactive(state_t *state) {
     CHECK_NULL(state);
     CHECK_NULL(state->db);
-
-    /* Prepare statement if needed */
-    if (!state->stmt_mark_all_directories_inactive) {
-        const char *sql =
-            "UPDATE tracked_directories SET state = 'inactive' "
-            "WHERE state = 'active'";
-
-        int rc = sqlite3_prepare_v2(
-            state->db, sql, -1,
-            &state->stmt_mark_all_directories_inactive, NULL
-        );
-        if (rc != SQLITE_OK) {
-            return sqlite_error(
-                state->db, "Failed to prepare mark all directories inactive statement"
-            );
-        }
-    }
+    CHECK_NULL(state->stmt_mark_all_directories_inactive);
 
     sqlite3_stmt *stmt = state->stmt_mark_all_directories_inactive;
     sqlite3_reset(stmt);

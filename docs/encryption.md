@@ -128,8 +128,8 @@ strength = "balanced"   # Default
 Raw overrides (advanced; both must be set together, ignore `strength`):
 
 ```toml
-argon2_memory_mib = 256   # bounds: 8..4096
-argon2_passes     = 3     # bounds: 1..20
+memory     = 256   # bounds: 8..4096
+passes     = 3     # bounds: 1..20
 ```
 
 The chosen params are **recorded inside every encrypted blob's header**, so `dotta apply` can decrypt files sealed under an older preset even after you change the setting. Workflows that interleave files at different presets re-prompt on each transition (single-slot cache). To converge on one preset, re-encrypt old files with `dotta remove` + `dotta add` after the change.

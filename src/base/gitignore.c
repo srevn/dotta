@@ -138,8 +138,9 @@ static error_t *ensure_capacity(gitignore_ruleset_t *set) {
 
     size_t new_cap = set->capacity ? set->capacity * 2 : INITIAL_CAPACITY;
 
-    gitignore_rule_t *resized =
-        arena_alloc(set->arena, new_cap * sizeof(*resized));
+    gitignore_rule_t *resized = arena_alloc(
+        set->arena, new_cap * sizeof(*resized)
+    );
     if (!resized)
         return ERROR(ERR_MEMORY, "gitignore: arena exhausted");
 

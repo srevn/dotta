@@ -322,9 +322,30 @@ static error_t *resolve_deployment_ownership(
 }
 
 /**
- * Deploy single file
+ * Deploy a single state row to its target filesystem location.
+ *
+ * Architecture (VWD Authority):
+ * - state_file_entry_t is self-contained (mode, owner, group, encrypted, blob_oid)
+ * - No separate metadata parameter (state cache already has everything)
+ * - Encryption handled transparently by content cache
+ *
+ * VWD Model:
+ * - file->mode: Permission mode from state (0 = use safe fallback by type)
+ * - file->owner/group: Ownership strings for root/ prefix files (NULL for home/)
+ * - file->encrypted: Encryption flag from state (validated at manifest sync)
+ *
+ * Self-contained: reads mode, owner, group, blob_oid from the state row;
+ * the content cache handles encryption transparently. The row is borrowed
+ * from the workspace's arena snapshot — read-only for deploy.
+ *
+ * @param repo Repository (must not be NULL)
+ * @param cache Content cache for batch operations (must not be NULL)
+ * @param file State row to deploy (must not be NULL; borrowed from the
+ *             workspace's arena snapshot, read-only for deploy).
+ * @param opts Deployment options (must not be NULL)
+ * @return Error or NULL on success
  */
-error_t *deploy_file(
+static error_t *deploy_file(
     git_repository *repo,
     content_cache_t *cache,
     const state_file_entry_t *file,
@@ -473,17 +494,15 @@ error_t *deploy_file(
         /* Defensive fallback - indicates unexpected state corruption */
         file_mode = (file->type == STATE_FILE_EXECUTABLE) ? 0755 : 0644;
 
-        if (opts->verbose) {
-            fprintf(
-                stderr,
-                "Warning: Missing mode in state for '%s', using default %04o\n"
-                "         This may indicate state database corruption. Consider running:\n"
-                "         dotta profile disable %s && dotta profile enable %s\n",
-                file->filesystem_path, file_mode,
-                file->profile ? file->profile : "<profile>",
-                file->profile ? file->profile : "<profile>"
-            );
-        }
+        fprintf(
+            stderr,
+            "Warning: Missing mode in state for '%s', using default %04o\n"
+            "         This may indicate state database corruption. Consider running:\n"
+            "         dotta profile disable %s && dotta profile enable %s\n",
+            file->filesystem_path, file_mode,
+            file->profile ? file->profile : "<profile>",
+            file->profile ? file->profile : "<profile>"
+        );
     }
 
     /* Resolve ownership for the file based on prefix - RESOLVED BEFORE WRITING
@@ -630,16 +649,29 @@ static error_t *calculate_required_directories(
         goto cleanup;
     }
 
+    /* Single allocation sized to the longest input filesystem path.
+     * hashmap_set is owning-mode (strdup's keys), so reusing the buffer
+     * across iterations is safe — each truncated key lives inside the map. */
+    size_t buf_cap = 0;
+    for (size_t i = 0; i < files.count; i++) {
+        size_t len = strlen(files.entries[i]->filesystem_path);
+        if (len > buf_cap) buf_cap = len;
+    }
+
+    if (buf_cap == 0) {
+        goto done;     /* Empty input — skip allocation */
+    }
+
+    parent = malloc(buf_cap + 1);
+    if (!parent) {
+        err = ERROR(ERR_MEMORY, "Failed to allocate path buffer");
+        goto cleanup;
+    }
+
     for (size_t i = 0; i < files.count; i++) {
         const char *filepath = files.entries[i]->filesystem_path;
-
         size_t len = strlen(filepath);
-        parent = malloc(len + 1);
-        if (!parent) {
-            err = ERROR(ERR_MEMORY, "Failed to allocate path buffer");
-            goto cleanup;
-        }
-        memcpy(parent, filepath, len + 1);
+        memcpy(parent, filepath, len + 1);    /* includes terminator */
 
         while (true) {
             char *slash = strrchr(parent, '/');
@@ -656,10 +688,9 @@ static error_t *calculate_required_directories(
                 }
             }
         }
-        free(parent);
-        parent = NULL;
     }
 
+done:
     *out = required;
     required = NULL;  /* Ownership transferred to caller */
 
@@ -808,17 +839,15 @@ static error_t *deploy_tracked_directories(
             /* Defensive fallback - indicates unexpected state corruption */
             dir_mode = 0755;  /* Safe default for directories */
 
-            if (opts->verbose) {
-                fprintf(
-                    stderr,
-                    "Warning: Missing mode in state for directory '%s', using default %04o\n"
-                    "         This may indicate state database corruption. Consider running:\n"
-                    "         dotta profile disable %s && dotta profile enable %s\n",
-                    filesystem_path, dir_mode,
-                    dir_entry->profile ? dir_entry->profile : "<profile>",
-                    dir_entry->profile ? dir_entry->profile : "<profile>"
-                );
-            }
+            fprintf(
+                stderr,
+                "Warning: Missing mode in state for directory '%s', using default %04o\n"
+                "         This may indicate state database corruption. Consider running:\n"
+                "         dotta profile disable %s && dotta profile enable %s\n",
+                filesystem_path, dir_mode,
+                dir_entry->profile ? dir_entry->profile : "<profile>",
+                dir_entry->profile ? dir_entry->profile : "<profile>"
+            );
         }
 
         /* Query workspace for divergence (O(1) hashmap lookup)

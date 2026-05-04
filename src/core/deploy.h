@@ -152,7 +152,7 @@ error_t *deploy_workspace_preflight(
  * - Workspace: Single source of truth for divergence (already computed)
  * - Deploy: Pure execution engine, queries workspace for skip decisions
  * - State: Source of truth for directory entries and file metadata (VWD principle)
- * - State rows: Self-contained (mode, owner, group, encrypted, blob_oid).
+ * - State rows: Self-contained (mode, owner, group, blob_oid).
  *   Pointers in `files` borrow into the workspace's arena snapshot — valid
  *   for the workspace's lifetime, no allocation transfer to the deploy path.
  * - State management: Handled by caller after deployment succeeds
@@ -172,35 +172,6 @@ error_t *deploy_execute(
     const deploy_options_t *opts,
     content_cache_t *cache,
     deploy_result_t **out
-);
-
-/**
- * Deploy single file
- *
- * Deploys a single state row to its target filesystem location.
- *
- * Architecture (VWD Authority):
- * - state_file_entry_t is self-contained (mode, owner, group, encrypted, blob_oid)
- * - No separate metadata parameter (state cache already has everything)
- * - Encryption handled transparently by content cache
- *
- * VWD Model:
- * - file->mode: Permission mode from state (0 = use safe fallback by type)
- * - file->owner/group: Ownership strings for root/ prefix files (NULL for home/)
- * - file->encrypted: Encryption flag from state (validated at manifest sync)
- *
- * @param repo Repository (must not be NULL)
- * @param cache Content cache for batch operations (must not be NULL)
- * @param file State row to deploy (must not be NULL; borrowed from the
- *             workspace's arena snapshot, read-only for deploy).
- * @param opts Deployment options (must not be NULL)
- * @return Error or NULL on success
- */
-error_t *deploy_file(
-    git_repository *repo,
-    content_cache_t *cache,
-    const state_file_entry_t *file,
-    const deploy_options_t *opts
 );
 
 /**

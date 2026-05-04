@@ -18,4 +18,4 @@
 
 int wildmatch(const char *pattern, const char *text, unsigned int flags);
 
-#endif
+#endif /* DOTTA_WILDMATCH_H */

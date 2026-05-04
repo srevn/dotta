@@ -2838,7 +2838,8 @@ error_t *workspace_flush_anchor_updates(workspace_t *ws) {
                 state_rollback(ws->state);
             }
             return error_wrap(
-                err, "Failed to flush anchor for '%s'", update->row->filesystem_path
+                err, "Failed to flush anchor for '%s'",
+                update->row->filesystem_path
             );
         }
     }

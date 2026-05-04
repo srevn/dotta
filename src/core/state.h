@@ -260,59 +260,14 @@ typedef struct {
  * arena (or other allocator) that backs the rows.
  *
  * Lifetime examples:
- *   workspace_active(ws)            → backed by ws->arena (workspace lifetime).
+ *   workspace_files(ws)             → backed by ws->arena (workspace lifetime).
  *   apply's local divergent buffer  → backed by a ptr_array_t on the heap;
  *                                     valid for the caller's stack scope.
- *
- * Both fields are read-only views: callers iterate with
- *   for (size_t i = 0; i < files.count; i++) {
- *       const state_file_entry_t *file = files.entries[i];
- *       ...
- *   }
- * No allocation, no free contract — the struct is a value, not a handle.
- *
- * Field completeness across producers
- * -----------------------------------
- * The carrier is one shape, but rows are not uniformly populated:
- *
- *   workspace_active(ws), deploy_result_view(bucket)
- *     Rows derive from state_get_all_files (the SQL virtual_manifest
- *     table). Every column is populated: identity, VWD cache (type,
- *     blob_oid, mode, owner, group, encrypted), lifecycle state, and the
- *     deployment anchor (deployed_blob_oid, deployed_at, observed_at,
- *     stat_*).
- *
- *   manifest_load_tree_files(tree, …)
- *     Rows derive from a Git tree walk. Identity and VWD cache are
- *     populated; the lifecycle `state` field carries the LIFECYCLE_ACTIVE
- *     literal; the deployment anchor is zero (DEPLOYMENT_ANCHOR_UNSET).
- *     Tree-built rows are scratch projections, not deployment witnesses —
- *     reading anchor.deployed_at on them yields zero by construction.
- *
- * Consumers that share code across producers (e.g., diff comparators,
- * filter validators) must restrict reads to identity + VWD cache columns
- * unless they own one of the producers above and know its discipline.
  */
 typedef struct {
     const state_file_entry_t *const *entries;
     size_t count;
 } state_files_t;
-
-/**
- * Enabled profile entry
- *
- * One row from the enabled_profiles table, materialized as an in-memory record.
- * The state handle holds a cached array of these entries that is populated lazily
- * on first peek and invalidated whenever the table is mutated.
- *
- * Ownership: state handle owns the strings; callers that peek receive borrowed
- * pointers valid until the next mutation (see state_peek_profiles).
- */
-typedef struct {
-    char *name;              /* Profile name (owned) */
-    char *target;            /* Deployment target for custom/ files (owned); NULL when unset */
-    git_oid commit_oid;      /* Last-synced HEAD OID (zero OID if never synced) */
-} state_profile_entry_t;
 
 /**
  * State directory entry
@@ -329,6 +284,36 @@ typedef struct {
     state_lifecycle_t lifecycle; /* Lifecycle phase; LIFECYCLE_RELEASED is rejected for directories */
     time_t deployed_at;       /* Lifecycle timestamp (0 = never deployed, >0 = known) */
 } state_directory_entry_t;
+
+/**
+ * Bound carrier for a borrowed slice of state directory entries
+ *
+ * Mirrors state_files_t. Producer's signature dictates lifetime via the
+ * arena (or other allocator) backing the rows.
+ *
+ * Lifetime example:
+ *   workspace_directories(ws) → backed by ws->arena (workspace lifetime).
+ */
+typedef struct {
+    const state_directory_entry_t *const *entries;
+    size_t count;
+} state_directories_t;
+
+/**
+ * Enabled profile entry
+ *
+ * One row from the enabled_profiles table, materialized as an in-memory record.
+ * The state handle holds a cached array of these entries that is populated lazily
+ * on first peek and invalidated whenever the table is mutated.
+ *
+ * Ownership: state handle owns the strings; callers that peek receive borrowed
+ * pointers valid until the next mutation (see state_peek_profiles).
+ */
+typedef struct {
+    char *name;              /* Profile name (owned) */
+    char *target;            /* Deployment target for custom/ files (owned); NULL when unset */
+    git_oid commit_oid;      /* Last-synced HEAD OID (zero OID if never synced) */
+} state_profile_entry_t;
 
 /**
  * State structure (opaque)
@@ -1074,29 +1059,6 @@ error_t *state_add_directory(
  */
 error_t *state_get_all_directories(
     const state_t *state,
-    arena_t *arena,
-    state_directory_entry_t **out,
-    size_t *count
-);
-
-/**
- * Get directories by profile
- *
- * Returns all directory entries from the specified profile. Allocations
- * use the caller's arena; lifetime ends when the arena is destroyed.
- *
- * Used by profile disable to determine impact on directories.
- *
- * @param state State (must not be NULL)
- * @param profile Profile name to filter by (must not be NULL)
- * @param arena Arena for allocations (must not be NULL)
- * @param out Output array (must not be NULL, lifetime tied to arena)
- * @param count Output count (must not be NULL)
- * @return Error or NULL on success (empty array if no matches)
- */
-error_t *state_get_directories_by_profile(
-    const state_t *state,
-    const char *profile,
     arena_t *arena,
     state_directory_entry_t **out,
     size_t *count

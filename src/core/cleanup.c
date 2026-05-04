@@ -363,10 +363,12 @@ static error_t *prune_orphaned_files(
 /**
  * Reset parent directory state to UNKNOWN (for orphan directories)
  *
- * Variant for orphaned directory entries. Same logic but works with
- * orphan_directory_entry_t array instead of state_directory_entry_t.
+ * After removing a directory, locate its parent in the orphan list and
+ * downgrade DIR_STATE_NOT_EMPTY → DIR_STATE_UNKNOWN. The parent's earlier
+ * NOT_EMPTY verdict was based on a state of the world that just changed
+ * (one of its children was removed); the next iteration must re-check.
  *
- * @param orphan_entries Array of orphaned directory entries
+ * @param orphan_entries Array of orphaned directory entries (workspace_item_t *)
  * @param dir_count Number of directories
  * @param states Array of directory states (parallel to entries)
  * @param removed_path Path of directory that was just removed

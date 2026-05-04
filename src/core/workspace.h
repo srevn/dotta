@@ -14,6 +14,23 @@
  * - Divergence detection and categorization
  * - Validation gates for destructive operations
  * - Foundation for future features (auto-apply, conflict resolution)
+ *
+ * Snapshot ownership:
+ *   The workspace is the authority for state-derived data within its
+ *   lifetime. state_t exposes per-row CRUD and per-table snapshot loaders;
+ *   downstream consumers (deploy, command-internal analyses) read snapshots
+ *   through workspace accessors (workspace_files, workspace_lookup_file,
+ *   workspace_directories, workspace_lookup_directory) rather than calling
+ *   state_get_all_* directly. Freshness is established by the consistency
+ *   layer: manifest_reconcile runs upstream of every workspace_load, and
+ *   manifest_sync_directories is the sole writer of tracked_directories,
+ *   so the workspace inherits a current view by construction.
+ *
+ *   Exceptions:
+ *     (a) the consistency layer (manifest_reconcile, manifest_apply_scope,
+ *         manifest_repair_stale, manifest_sync_*) runs before the workspace
+ *         exists and serves a different invariant;
+ *     (b) read-only paths that don't load a workspace at all (cmd_completion).
  */
 
 #ifndef DOTTA_WORKSPACE_H
@@ -323,16 +340,16 @@ error_t *check_item_metadata_divergence(
  * workspace so the slice is valid for the workspace's lifetime.
  *
  * Iterate via:
- *   state_files_t active = workspace_active(ws);
- *   for (size_t i = 0; i < active.count; i++) {
- *       const state_file_entry_t *file = active.entries[i];
+ *   state_files_t files = workspace_files(ws);
+ *   for (size_t i = 0; i < files.count; i++) {
+ *       const state_file_entry_t *file = files.entries[i];
  *       ...
  *   }
  *
  * @param ws Workspace (NULL returns an empty slice)
  * @return Borrowed slice over the active rows
  */
-state_files_t workspace_active(const workspace_t *ws);
+state_files_t workspace_files(const workspace_t *ws);
 
 /**
  * Look up an active row by filesystem path
@@ -345,7 +362,40 @@ state_files_t workspace_active(const workspace_t *ws);
  * @param filesystem_path Path to look up (NULL returns NULL)
  * @return Borrowed row pointer, or NULL if not active
  */
-const state_file_entry_t *workspace_lookup_active(
+const state_file_entry_t *workspace_lookup_file(
+    const workspace_t *ws,
+    const char *filesystem_path
+);
+
+/**
+ * Get the active in-scope state directory slice
+ *
+ * Mirror of workspace_files(ws) for tracked_directories. Returns a borrowed
+ * view over the directory rows the workspace partitioned as in-scope and
+ * active (profile in enabled set, lifecycle ACTIVE). Pure value return — no
+ * allocation, no error path.
+ *
+ * The pointers reference rows in the arena snapshot returned by
+ * state_get_all_directories at workspace_load time; the arena outlives the
+ * workspace so the slice is valid for the workspace's lifetime.
+ *
+ * @param ws Workspace (NULL returns an empty slice)
+ * @return Borrowed slice over the active directory rows
+ */
+state_directories_t workspace_directories(const workspace_t *ws);
+
+/**
+ * Look up an active directory row by filesystem path
+ *
+ * Mirror of workspace_lookup_file. O(1) probe over the active directory
+ * slice; returns NULL if the path is not tracked or its row is in a terminal
+ * lifecycle state.
+ *
+ * @param ws Workspace (NULL returns NULL)
+ * @param filesystem_path Path to look up (NULL returns NULL)
+ * @return Borrowed row pointer, or NULL if not active
+ */
+const state_directory_entry_t *workspace_lookup_directory(
     const workspace_t *ws,
     const char *filesystem_path
 );
@@ -408,8 +458,8 @@ bool workspace_item_extract_display_info(
  *   - workspace_flush_anchor_updates (witness advance from slow-path)
  *
  * The row pointer is borrowed from the workspace's active partition (where
- * the workspace owns the storage as mutable; see workspace_active(),
- * workspace_lookup_active(), and ws->active in workspace.c). The const
+ * the workspace owns the storage as mutable; see workspace_files(),
+ * workspace_lookup_file(), and ws->active_files in workspace.c). The const
  * decoration is a public-API guard against mutation by non-anchor callers;
  * this function casts internally to assign anchor in place.
  *

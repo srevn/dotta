@@ -324,7 +324,7 @@ static error_t *present_diffs_for_direction(
         /* Resolve to active state row via workspace's active index (O(1)).
          * Untracked or orphaned items have no active row — skip them. */
         const state_file_entry_t *file =
-            workspace_lookup_active(ws, item->filesystem_path);
+            workspace_lookup_file(ws, item->filesystem_path);
         if (!file) {
             continue;
         }
@@ -805,7 +805,7 @@ cleanup:
  * One implementation serves both diff paths — the historical-diff path
  * (commit-to-workspace) feeds a tree-built slice via
  * manifest_load_tree_files; the workspace-diff path feeds the
- * workspace's active slice via workspace_active. Both flow through the
+ * workspace's active slice via workspace_files. Both flow through the
  * same state_files_t carrier.
  *
  * @param file_filter File filter to validate (NULL = no validation, returns 0)
@@ -1306,7 +1306,7 @@ static error_t *diff_workspace(
     const workspace_item_t *diverged = workspace_get_all_diverged(ws, &diverged_count);
 
     /* Step 3: Borrow the active state slice for filter validation */
-    state_files_t active = workspace_active(ws);
+    state_files_t active = workspace_files(ws);
 
     /* Step 4: Validate file filter paths against the active slice */
     const pathspec_t *file_filter = scope_paths(scope);

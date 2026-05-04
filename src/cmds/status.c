@@ -862,7 +862,7 @@ error_t *cmd_status(const dotta_ctx_t *ctx, const cmd_status_options_t *opts) {
         }
 
         /* Borrow the active in-scope slice (no allocation, no free contract) */
-        active = workspace_active(ws);
+        active = workspace_files(ws);
 
         /* Check privileges for complete status (may re-exec with sudo) */
         if (!opts->no_sudo && active.count > 0) {

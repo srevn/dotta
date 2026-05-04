@@ -90,7 +90,7 @@ typedef struct {
  *
  * Each bucket carries borrowed state-row pointers (workspace-arena lifetime,
  * outlives the deploy_result_t). Consumers get a typed read-only view via
- * deploy_result_view() — same idiom as workspace_active().
+ * deploy_result_view() — same idiom as workspace_files().
  */
 typedef struct {
     ptr_array_t deployed;          /* Files written to disk (state_file_entry_t *) */
@@ -104,7 +104,7 @@ typedef struct {
  * Project a deploy_result bucket as a typed read-only state-row slice.
  *
  * The cast layers const onto both pointer levels — safe per the same C rule
- * workspace_active() relies on (T** → const T *const *). Returned view aliases
+ * workspace_files() relies on (T** → const T *const *). Returned view aliases
  * the bucket's storage; valid for the result's lifetime.
  */
 static inline state_files_t deploy_result_view(const ptr_array_t *bucket) {
@@ -160,10 +160,6 @@ error_t *deploy_workspace_preflight(
  * @param repo Repository (must not be NULL)
  * @param ws Workspace with pre-computed divergence analysis (must not be NULL)
  * @param files Borrowed slice of state rows to deploy (passed by value)
- * @param state State database for tracked directories (can be NULL)
- * @param arena Scratch arena for the tracked-directories snapshot and
- *              required-ancestor scan. Allocations live until the caller
- *              destroys the arena (typically command end). Must not be NULL.
  * @param opts Deployment options (must not be NULL)
  * @param cache Content cache for batch operations (must not be NULL)
  * @param out Deployment results (must not be NULL, caller must free)
@@ -173,8 +169,6 @@ error_t *deploy_execute(
     git_repository *repo,
     const workspace_t *ws,
     state_files_t files,
-    const state_t *state,
-    arena_t *arena,
     const deploy_options_t *opts,
     content_cache_t *cache,
     deploy_result_t **out

@@ -304,9 +304,9 @@ static bool is_update_candidate(
  * @param scope Operation scope (must not be NULL)
  * @param config Configuration (can be NULL, used for auto_detect_new_files)
  * @param out Output context (for verbose logging, can be NULL)
- * @param out_items Output array of pointers to workspace_item_t (must not be NULL, caller must free array)
- * @param count_out Output count (must not be NULL)
- * @return Error or NULL on success (out_items will be NULL if no matches)
+ * @param out_items Output slice (must not be NULL; entries field is heap-
+ *                  allocated, caller frees with free((void *) out_items->entries))
+ * @return Error or NULL on success (out_items zeroed if no matches)
  */
 static error_t *filter_items_for_update(
     const workspace_t *ws,
@@ -314,17 +314,14 @@ static error_t *filter_items_for_update(
     const scope_t *scope,
     const config_t *config,
     output_t *out,
-    const workspace_item_t ***out_items,
-    size_t *count_out
+    workspace_items_t *out_items
 ) {
     CHECK_NULL(ws);
     CHECK_NULL(opts);
     CHECK_NULL(scope);
     CHECK_NULL(out_items);
-    CHECK_NULL(count_out);
 
-    *out_items = NULL;
-    *count_out = 0;
+    *out_items = (workspace_items_t){ 0 };
 
     /* Get all diverged items from workspace */
     size_t all_count = 0;
@@ -362,7 +359,8 @@ static error_t *filter_items_for_update(
         RETURN_IF_ERROR(ptr_array_push(&matches, item));
     }
 
-    *out_items = (const workspace_item_t **) ptr_array_steal(&matches, count_out);
+    out_items->entries = (const workspace_item_t *const *)
+        ptr_array_steal(&matches, &out_items->count);
 
     return NULL;
 }
@@ -1010,27 +1008,20 @@ cleanup:
 }
 
 /**
- * Flatten items_by_profile hashmap into single array
+ * Flatten items_by_profile hashmap into single slice
  *
- * Converts hashmap<profile → ptr_array_t*> into flat array of item pointers.
- * Items are borrowed references (valid while hashmap lives).
- *
- * @param items_by_profile Hashmap to flatten (must not be NULL)
- * @param out_items Output array of borrowed pointers (caller must free array, not items)
- * @param out_count Output count (must not be NULL)
- * @return Error or NULL on success
+ * Converts hashmap<profile → ptr_array_t*> into a flat workspace_items_t.
+ * Items are borrowed references (valid while hashmap lives); entries field
+ * is heap-allocated, caller frees with free((void *) out_items->entries).
  */
 static error_t *flatten_items_to_array(
     const hashmap_t *items_by_profile,
-    const workspace_item_t ***out_items,
-    size_t *out_count
+    workspace_items_t *out_items
 ) {
     CHECK_NULL(items_by_profile);
     CHECK_NULL(out_items);
-    CHECK_NULL(out_count);
 
-    *out_items = NULL;
-    *out_count = 0;
+    *out_items = (workspace_items_t){ 0 };
 
     ptr_array_t flat PTR_ARRAY_AUTO = { 0 };
     hashmap_iter_t iter;
@@ -1044,7 +1035,8 @@ static error_t *flatten_items_to_array(
         }
     }
 
-    *out_items = (const workspace_item_t **) ptr_array_steal(&flat, out_count);
+    out_items->entries = (const workspace_item_t *const *)
+        ptr_array_steal(&flat, &out_items->count);
 
     return NULL;
 }
@@ -1134,8 +1126,7 @@ static error_t *update_manifest_after_update(
     const string_array_t *enabled_profiles = scope_enabled(scope);
 
     error_t *err = NULL;
-    const workspace_item_t **all_items = NULL;
-    size_t item_count = 0;
+    workspace_items_t all_items = { 0 };
     bool in_transaction = false;
 
     /* Initialize output */
@@ -1148,13 +1139,13 @@ static error_t *update_manifest_after_update(
     }
     in_transaction = true;
 
-    /* Flatten items_by_profile into single array */
-    err = flatten_items_to_array(items_by_profile, &all_items, &item_count);
+    /* Flatten items_by_profile into single slice */
+    err = flatten_items_to_array(items_by_profile, &all_items);
     if (err) {
         goto cleanup;
     }
 
-    if (item_count == 0) {
+    if (all_items.count == 0) {
         /* No items to sync - commit the no-op transaction */
         goto commit;
     }
@@ -1166,8 +1157,8 @@ static error_t *update_manifest_after_update(
         state,
         arena,
         mounts,
-        all_items,
-        item_count,
+        (const workspace_item_t **) all_items.entries,
+        all_items.count,
         enabled_profiles,
         &synced,
         &removed,
@@ -1210,7 +1201,7 @@ cleanup:
     if (in_transaction) {
         state_rollback(state);
     }
-    free(all_items);  /* Free array, not items (borrowed) */
+    free((void *) all_items.entries);  /* Free array, not items (borrowed) */
 
     return err;
 }
@@ -1808,8 +1799,7 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
     workspace_t *ws = NULL;
     scope_t *scope = NULL;
     char *profiles_str = NULL;
-    const workspace_item_t **update_items = NULL;
-    size_t update_count = 0;
+    workspace_items_t update_items = { 0 };
     size_t total_updated = 0;
 
     /* CLI flags override config */
@@ -1914,7 +1904,7 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
     /* Filter items for update (handles all flags and edge cases internally).
      * scope_t carries the path/profile/exclude filter dimensions. */
     err = filter_items_for_update(
-        ws, opts, scope, config, out, &update_items, &update_count
+        ws, opts, scope, config, out, &update_items
     );
     if (err) {
         err = error_wrap(err, "Failed to filter items for update");
@@ -1922,7 +1912,7 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
     }
 
     /* Check if we have anything to update */
-    if (update_count == 0) {
+    if (update_items.count == 0) {
         if (opts->only_new) {
             output_info(out, OUTPUT_NORMAL, "No new files to add");
         } else if (opts->include_new) {
@@ -1947,8 +1937,8 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
      */
     {
         string_array_t labels STRING_ARRAY_AUTO = { 0 };
-        for (size_t i = 0; i < update_count; i++) {
-            const workspace_item_t *item = update_items[i];
+        for (size_t i = 0; i < update_items.count; i++) {
+            const workspace_item_t *item = update_items.entries[i];
             if (item->item_kind != WORKSPACE_ITEM_FILE) continue;
             err = privilege_collect_label(
                 &labels, item->storage_path, item->filesystem_path
@@ -1984,7 +1974,10 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
     }
 
     /* Display summary of items to update */
-    err = update_display_summary(out, update_items, update_count, opts);
+    err = update_display_summary(
+        out, (const workspace_item_t **) update_items.entries,
+        update_items.count, opts
+    );
     if (err) {
         goto cleanup;
     }
@@ -1992,7 +1985,8 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
     /* Handle user confirmations */
     confirm_result_t confirm_result;
     err = update_confirm_operation(
-        out, opts, update_items, update_count, config, &confirm_result
+        out, opts, (const workspace_item_t **) update_items.entries,
+        update_items.count, config, &confirm_result
     );
     if (err) {
         goto cleanup;
@@ -2007,15 +2001,17 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
 
         case CONFIRM_SKIP_NEW_FILES: {
             /* User declined new files - filter them out, keep modified/deleted */
+            const workspace_item_t **writable =
+                (const workspace_item_t **) update_items.entries;
             size_t filtered = 0;
-            for (size_t i = 0; i < update_count; i++) {
-                if (update_items[i]->state != WORKSPACE_STATE_UNTRACKED) {
-                    update_items[filtered++] = update_items[i];
+            for (size_t i = 0; i < update_items.count; i++) {
+                if (writable[i]->state != WORKSPACE_STATE_UNTRACKED) {
+                    writable[filtered++] = writable[i];
                 }
             }
-            update_count = filtered;
+            update_items.count = filtered;
 
-            if (update_count == 0) {
+            if (update_items.count == 0) {
                 output_info(
                     out, OUTPUT_NORMAL,
                     "No modified files remaining after skipping new files"
@@ -2034,7 +2030,8 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
      * is borrowed by update_profile inside per-profile iteration. */
     hashmap_t *by_profile = NULL;
     err = update_execute_for_all_profiles(
-        repo, update_items, update_count, opts, out, config, ctx->keymgr,
+        repo, (const workspace_item_t **) update_items.entries,
+        update_items.count, opts, out, config, ctx->keymgr,
         &total_updated, &by_profile
     );
 
@@ -2120,7 +2117,7 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
     }
 
 cleanup:
-    if (update_items) free(update_items);
+    free((void *) update_items.entries);  /* Free array, items are borrowed */
     if (ws) workspace_free(ws);
     if (profiles_str) free(profiles_str);
     if (scope) scope_free(scope);

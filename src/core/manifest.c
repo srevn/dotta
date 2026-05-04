@@ -531,7 +531,6 @@ static error_t *precedence_view_allocate(
     }
 
     *out_view = view;
-
     return NULL;
 }
 
@@ -937,7 +936,7 @@ static error_t *manifest_capture_row(
  * Load a single Git tree's files into the public state_files_t carrier.
  *
  * The historical-diff path consumes a tree-built file slice that mirrors
- * the workspace's active slice (workspace_active) and apply's deploy result
+ * the workspace's active slice (workspace_files) and apply's deploy result
  * (deploy_result_view). One carrier shape, three producers — a consumer
  * written against state_files_t composes with all of them.
  *
@@ -1021,7 +1020,7 @@ error_t *manifest_load_tree_files(
 
     /* The cast adds const at the outer pointer level (T ** → T *const *) —
      * legal per the C standard's qualifier-conversion rule, no diagnostic
-     * required. Mirrors workspace_active's identical bridge cast. */
+     * required. Mirrors workspace_files's identical bridge cast. */
     out->entries = (const state_file_entry_t *const *) ptrs;
     out->count = view->count;
 

@@ -76,7 +76,6 @@ struct state {
     /* Directory prepared statements */
     sqlite3_stmt *stmt_insert_directory;           /* INSERT OR REPLACE tracked_directories */
     sqlite3_stmt *stmt_get_all_directories;        /* SELECT * FROM tracked_directories */
-    sqlite3_stmt *stmt_get_directories_by_profile; /* SELECT * WHERE profile = ? */
     sqlite3_stmt *stmt_get_directory;              /* SELECT * WHERE filesystem_path = ? */
     sqlite3_stmt *stmt_update_directory;           /* UPDATE tracked_directories (preserves deployed_at) */
     sqlite3_stmt *stmt_remove_directory;           /* DELETE FROM tracked_directories */
@@ -768,11 +767,6 @@ static void finalize_statements(state_t *state) {
     if (state->stmt_get_all_directories) {
         sqlite3_finalize(state->stmt_get_all_directories);
         state->stmt_get_all_directories = NULL;
-    }
-
-    if (state->stmt_get_directories_by_profile) {
-        sqlite3_finalize(state->stmt_get_directories_by_profile);
-        state->stmt_get_directories_by_profile = NULL;
     }
 
     if (state->stmt_get_directory) {
@@ -2144,153 +2138,6 @@ error_t *state_get_all_directories(
         entries[i].filesystem_path = DUP(fs_path);
         entries[i].storage_path = DUP(storage);
         entries[i].profile = DUP(profile);
-        entries[i].mode = mode;
-        entries[i].owner = DUP_OPT(owner);
-        entries[i].group = DUP_OPT(group);
-        entries[i].lifecycle = lifecycle_from_sql_text(state_str);
-        entries[i].deployed_at = (time_t) deployed_at;
-
-        /* Check allocation success */
-        if (!entries[i].filesystem_path || !entries[i].storage_path || !entries[i].profile) {
-            sqlite3_reset(stmt);
-            return ERROR(ERR_MEMORY, "Failed to copy directory entry strings");
-        }
-
-        i++;
-    }
-
-    sqlite3_reset(stmt);
-
-    if (rc != SQLITE_DONE && rc != SQLITE_ROW) {
-        return sqlite_error(mutable_state->db, "Failed to query directories");
-    }
-
-    #undef DUP
-    #undef DUP_OPT
-
-    *out = entries;
-    *count = i;
-
-    return NULL;
-}
-
-/**
- * Get directories by profile
- *
- * Returns all directory entries from the specified profile. Allocations
- * use the caller's arena; lifetime ends when the arena is destroyed.
- *
- * Used by profile disable to determine impact on directories.
- *
- * @param state State (must not be NULL)
- * @param profile Profile name to filter by (must not be NULL)
- * @param arena Arena for allocations (must not be NULL)
- * @param out Output array (must not be NULL, lifetime tied to arena)
- * @param count Output count (must not be NULL)
- * @return Error or NULL on success (empty array if no matches)
- */
-error_t *state_get_directories_by_profile(
-    const state_t *state,
-    const char *profile,
-    arena_t *arena,
-    state_directory_entry_t **out,
-    size_t *count
-) {
-    CHECK_NULL(state);
-    CHECK_NULL(profile);
-    CHECK_NULL(arena);
-    CHECK_NULL(out);
-    CHECK_NULL(count);
-
-    *out = NULL;
-    *count = 0;
-
-    /* Empty state (no DB file) — return empty results */
-    if (!state->db) return NULL;
-
-    /* Count directories first (avoid realloc, required for arena allocation) */
-    const char *sql_count = "SELECT COUNT(*) FROM tracked_directories WHERE profile = ?;";
-    sqlite3_stmt *stmt_count = NULL;
-
-    int rc = sqlite3_prepare_v2(state->db, sql_count, -1, &stmt_count, NULL);
-    if (rc != SQLITE_OK) {
-        return sqlite_error(state->db, "Failed to prepare directory count query");
-    }
-
-    sqlite3_bind_text(stmt_count, 1, profile, -1, SQLITE_TRANSIENT);
-
-    rc = sqlite3_step(stmt_count);
-    if (rc != SQLITE_ROW) {
-        sqlite3_finalize(stmt_count);
-        return sqlite_error(state->db, "Failed to count directories by profile");
-    }
-
-    size_t dir_count = (size_t) sqlite3_column_int64(stmt_count, 0);
-    sqlite3_finalize(stmt_count);
-
-    if (dir_count == 0) {
-        return NULL;  /* Success, no directories */
-    }
-
-    /* Allocate array */
-    state_directory_entry_t *entries =
-        arena_calloc(arena, dir_count, sizeof(state_directory_entry_t));
-    if (!entries) {
-        return ERROR(ERR_MEMORY, "Failed to allocate directories array");
-    }
-
-    /* Helper macros: route allocations through arena */
-    #define DUP(s)      arena_strdup(arena, (s))
-    #define DUP_OPT(s)  ((s) ? DUP(s) : NULL)
-
-    /* Prepare statement if needed (const cast is safe for read-only ops) */
-    state_t *mutable_state = (state_t *) state;
-    if (!mutable_state->stmt_get_directories_by_profile) {
-        const char *sql =
-            "SELECT filesystem_path, storage_path, profile, mode, owner, \"group\", state, deployed_at "
-            "FROM tracked_directories WHERE profile = ? ORDER BY filesystem_path;";
-
-        rc = sqlite3_prepare_v2(
-            mutable_state->db, sql, -1, &mutable_state->stmt_get_directories_by_profile, NULL
-        );
-        if (rc != SQLITE_OK) {
-            return sqlite_error(
-                mutable_state->db, "Failed to prepare get directories by profile statement"
-            );
-        }
-    }
-
-    sqlite3_stmt *stmt = mutable_state->stmt_get_directories_by_profile;
-    sqlite3_reset(stmt);
-    sqlite3_bind_text(stmt, 1, profile, -1, SQLITE_TRANSIENT);
-
-    size_t i = 0;
-    while ((rc = sqlite3_step(stmt)) == SQLITE_ROW && i < dir_count) {
-        const char *fs_path = (const char *) sqlite3_column_text(stmt, 0);
-        const char *storage = (const char *) sqlite3_column_text(stmt, 1);
-        const char *profile_str = (const char *) sqlite3_column_text(stmt, 2);
-
-        /* Read mode as integer (0 if NULL) */
-        mode_t mode = 0;
-        if (sqlite3_column_type(stmt, 3) != SQLITE_NULL) {
-            mode = (mode_t) sqlite3_column_int(stmt, 3);
-        }
-
-        const char *owner = (const char *) sqlite3_column_text(stmt, 4);
-        const char *group = (const char *) sqlite3_column_text(stmt, 5);
-        const char *state_str = (const char *) sqlite3_column_text(stmt, 6);
-        sqlite3_int64 deployed_at = sqlite3_column_int64(stmt, 7);
-
-        /* Validate non-nullable columns */
-        if (!fs_path || !storage || !profile_str) {
-            sqlite3_reset(stmt);
-            return ERROR(ERR_STATE_INVALID, "NULL value in required column at row %zu", i);
-        }
-
-        /* Copy strings into arena */
-        entries[i].filesystem_path = DUP(fs_path);
-        entries[i].storage_path = DUP(storage);
-        entries[i].profile = DUP(profile_str);
         entries[i].mode = mode;
         entries[i].owner = DUP_OPT(owner);
         entries[i].group = DUP_OPT(group);

@@ -53,10 +53,10 @@
  * blob_oid is carried alongside stat because the anchor ties its witness to
  * a specific blob — a stat triple without a blob pointer is meaningless.
  *
- * The row pointer is borrowed from ws->active (workspace lifetime). Carrying
- * the row directly lets the flush call state_update_anchor with the row's
- * filesystem_path AND assign the resolved anchor straight into row->anchor —
- * no second hashmap probe to recover the snapshot handle.
+ * The row pointer is borrowed from ws->active_files (workspace lifetime).
+ * Carrying the row directly lets the flush call state_update_anchor with the
+ * row's filesystem_path AND assign the resolved anchor straight into
+ * row->anchor — no second hashmap probe to recover the snapshot handle.
  */
 typedef struct {
     state_file_entry_t *row;         /* Active row this update targets (borrowed) */
@@ -71,50 +71,63 @@ typedef struct {
  * Uses hashmaps for O(1) lookups during analysis.
  */
 struct workspace {
-    git_repository *repo;            /* Borrowed reference */
-    arena_t *arena;                  /* Borrowed; backs every workspace-lifetime string */
+    git_repository *repo;                        /* Borrowed reference */
+    arena_t *arena;                              /* Borrowed; backs every workspace-lifetime string */
 
-    /* Active in-scope state slice
+    /* Active in-scope file slice.
      *
      * Pointer array into the arena snapshot returned by state_get_all_files
      * at load time. Pointers are mutable to permit in-place anchor patches
-     * via workspace_advance_anchor; external accessors cast to const.
-     *
-     * Stable storage — no realloc during workspace lifetime — so the
-     * active_index can store row pointers directly (no idx+1 encoding).
-     */
-    state_file_entry_t **active;     /* Active rows (mutable; arena-allocated) */
-    size_t active_count;             /* Number of active rows */
-    hashmap_t *active_index;         /* fs_path → state_file_entry_t * (heap-allocated) */
+     * via workspace_advance_anchor; external accessors cast to const. Storage
+     * is stable — no realloc during workspace lifetime — so active_file_index
+     * can store row pointers directly (no idx+1 encoding). */
+    state_file_entry_t **active_files;           /* Active rows (mutable; arena-allocated) */
+    size_t active_file_count;                    /* Number of active rows */
+    hashmap_t *active_file_index;                /* fs_path → state_file_entry_t * (heap-allocated) */
 
-    /* State data */
-    state_t *state;                  /* Deployment state (borrowed from caller) */
-    const string_array_t *profiles;  /* Borrowed from caller — valid for workspace lifetime */
-    hashmap_t *profile_index;        /* Maps profile -> NULL (membership set, O(1) lookup) */
+    /* Orphan file slice (out-of-scope or terminal lifecycle).
+     * Mirror of the active slice — pointers borrow into the same arena snapshot. */
+    const state_file_entry_t **orphan_files;     /* Arena-borrowed */
+    size_t orphan_file_count;                    /* Number of orphan files */
+
+    /* Active in-scope directory slice.
+     * Pointers borrow into the arena snapshot returned by state_get_all_directories. */
+    const state_directory_entry_t **active_dirs; /* Arena-borrowed */
+    size_t active_dir_count;                     /* Number of active directories */
+    hashmap_t *active_dir_index;                 /* fs_path → row; heap-allocated */
+
+    /* Orphan directory slice (out-of-scope or terminal lifecycle).
+     * Mirror of the active dir slice — pointers borrow into the same arena snapshot. */
+    const state_directory_entry_t **orphan_dirs; /* Arena-borrowed */
+    size_t orphan_dir_count;                     /* Number of orphan directories */
+
+    /* State and profile scope */
+    state_t *state;                              /* Deployment state (borrowed from caller) */
+    const string_array_t *profiles;              /* Borrowed; valid for workspace lifetime */
+    hashmap_t *profile_index;                    /* Maps profile -> NULL (membership set, O(1) lookup) */
 
     /* Content cache for encrypted blob reads during divergence analysis */
-    content_cache_t *content_cache;  /* Borrowed — NOT freed in workspace_free */
+    content_cache_t *content_cache;              /* Borrowed — NOT freed in workspace_free */
 
-    /* Divergence tracking
+    /* Divergence tracking.
      *
      * The diverged array grows via realloc as workspace_add_diverged appends
      * items during analysis, so pointers into it would dangle on growth.
      * diverged_index stores (idx+1) cast to void* and decodes back to the
      * array index at lookup time. The +1 disambiguates idx=0 from
-     * hashmap_get's "absent key" return value (which is also NULL)
-     */
-    workspace_item_t *diverged;      /* Diverged items (files + directories) */
-    size_t diverged_count;           /* Number of diverged items */
-    size_t diverged_capacity;        /* Allocated capacity of diverged array */
-    hashmap_t *diverged_index;       /* Maps filesystem_path -> array index+1 (as void*) */
+     * hashmap_get's "absent key" return value (which is also NULL). */
+    workspace_item_t *diverged;                  /* Diverged items (files + directories) */
+    size_t diverged_count;                       /* Number of diverged items */
+    size_t diverged_capacity;                    /* Allocated capacity of diverged array */
+    hashmap_t *diverged_index;                   /* Maps filesystem_path -> array index+1 (as void*) */
 
-    /* Anchor updates (accumulated during divergence analysis) */
-    anchor_update_t *anchor_updates; /* Pending slow-path updates (owned) */
-    size_t anchor_update_count;      /* Number of pending updates */
-    size_t anchor_update_capacity;   /* Allocated capacity of updates array */
+    /* Anchor updates accumulated during divergence analysis */
+    anchor_update_t *anchor_updates;             /* Pending slow-path updates (owned) */
+    size_t anchor_update_count;                  /* Number of pending updates */
+    size_t anchor_update_capacity;               /* Allocated capacity of updates array */
 
     /* Status cache */
-    workspace_status_t status;       /* Cached cleanliness assessment */
+    workspace_status_t status;                   /* Cached cleanliness assessment */
 };
 
 /**
@@ -1068,35 +1081,28 @@ static divergence_type_t compute_orphan_divergence(
 /**
  * Analyze partitioned orphan candidates from the active-slice build
  *
- * Each candidate was rejected by workspace_build_active for
+ * Each candidate was rejected by workspace_partition_files for
  * exactly one of two reasons:
  *   - Profile out of workspace scope (disabled or branch deleted)
  *   - Lifecycle terminal (LIFECYCLE_INACTIVE / LIFECYCLE_DELETED / LIFECYCLE_RELEASED)
  *
  * No manifest probe is needed: the partition itself is the orphan
  * predicate. The RELEASED branch (loss of authority via external Git
- * removal) is detected from state_entry->state — the lifecycle column
+ * removal) is detected from state_entry->lifecycle — the lifecycle column
  * is the single source of truth, set by manifest_reconcile.
  *
  * Each orphan is tagged with profile_enabled so callers can filter:
  * - status: only show profile_enabled=true (enabled profiles)
  * - apply: use all (cleanup disabled profiles too)
  */
-static error_t *analyze_orphaned_files(
-    workspace_t *ws,
-    const state_file_entry_t * const *candidates,
-    size_t candidate_count
-) {
+static error_t *analyze_orphaned_files(workspace_t *ws) {
     CHECK_NULL(ws);
     CHECK_NULL(ws->profile_index);
 
-    if (candidate_count == 0) return NULL;
-    CHECK_NULL(candidates);
-
     error_t *err = NULL;
 
-    for (size_t i = 0; i < candidate_count; i++) {
-        const state_file_entry_t *state_entry = candidates[i];
+    for (size_t i = 0; i < ws->orphan_file_count; i++) {
+        const state_file_entry_t *state_entry = ws->orphan_files[i];
 
         const char *fs_path = state_entry->filesystem_path;
         const char *storage_path = state_entry->storage_path;
@@ -1218,132 +1224,126 @@ static error_t *analyze_orphaned_files(
 }
 
 /**
- * Partition tracked_directories rows by orphan status
+ * Partition tracked_directories rows into the active slice and orphan slice
  *
- * Single pass over loaded directory rows producing two arena-allocated
- * pointer arrays:
- *   - active_dirs: profile in scope AND state not in {INACTIVE, DELETED}
- *   - orphan_dirs: everything else
+ * Mirror of workspace_partition_files for tracked_directories. Loads the
+ * directory snapshot via state_get_all_directories and walks it once to
+ * populate both workspace partitions:
+ *   - ws->active_dirs / ws->active_dir_count / ws->active_dir_index:
+ *     in-scope ACTIVE rows (profile in enabled set, lifecycle ACTIVE).
+ *   - ws->orphan_dirs / ws->orphan_dir_count: rows out-of-scope or with
+ *     terminal lifecycle (INACTIVE / DELETED).
  *
- * Mirrors the partition logic in workspace_build_active for
- * symmetry: filter is established here, consumers trust the partition.
- *
- * manifest_reconcile (run upstream from workspace_load) has already synced
- * tracked_directories against current Git, so dir->state reflects current
+ * manifest_reconcile (run upstream of workspace_load) has already synced
+ * tracked_directories against current Git, so dir->lifecycle reflects current
  * Git truth — LIFECYCLE_INACTIVE / LIFECYCLE_DELETED are authoritative.
  *
  * Note: state_directory_entry_t never carries LIFECYCLE_RELEASED (file-only
- * lifecycle); the partition predicates intentionally only check INACTIVE
- * and DELETED.
+ * lifecycle); the predicate uses (lifecycle != LIFECYCLE_ACTIVE) without
+ * needing the file-side RELEASED branch.
  *
- * Lifetime: pointers reference rows in `all_dirs`, which itself is
- * arena-allocated by state_get_all_directories. The arena outlives the
- * workspace, so the pointers remain valid until arena destruction.
- *
- * @param ws Workspace (must not be NULL, profile_index populated)
- * @param all_dirs Buffer returned by state_get_all_directories (may be NULL when count=0)
- * @param all_count Number of rows in all_dirs
- * @param out_active Arena-allocated pointer array; NULL if no actives
- * @param out_active_count Number of entries in out_active
- * @param out_orphans Arena-allocated pointer array; NULL if no orphans
- * @param out_orphan_count Number of entries in out_orphans
- * @return Error or NULL on success
+ * Lifetime: every pointer (active rows, orphan rows, both pointer arrays,
+ * the snapshot rows themselves) lives in ws->arena. Only ws->active_dir_index
+ * is heap-allocated (hashmap_borrow), freed in workspace_free.
  */
-static error_t *partition_state_directories(
-    workspace_t *ws,
-    const state_directory_entry_t *all_dirs,
-    size_t all_count,
-    const state_directory_entry_t ***out_active,
-    size_t *out_active_count,
-    const state_directory_entry_t ***out_orphans,
-    size_t *out_orphan_count
-) {
+static error_t *workspace_partition_directories(workspace_t *ws) {
     CHECK_NULL(ws);
+    CHECK_NULL(ws->state);
     CHECK_NULL(ws->arena);
     CHECK_NULL(ws->profile_index);
-    CHECK_NULL(out_active);
-    CHECK_NULL(out_active_count);
-    CHECK_NULL(out_orphans);
-    CHECK_NULL(out_orphan_count);
 
-    *out_active = NULL;
-    *out_active_count = 0;
-    *out_orphans = NULL;
-    *out_orphan_count = 0;
+    state_directory_entry_t *snapshot = NULL;
+    size_t snap_count = 0;
 
-    if (all_count == 0) return NULL;
-    CHECK_NULL(all_dirs);
-
-    /* Allocate worst-case arrays (all-active or all-orphan are both possible). */
-    const state_directory_entry_t **actives =
-        arena_calloc(ws->arena, all_count, sizeof(*actives));
-    if (!actives) {
-        return ERROR(ERR_MEMORY, "Failed to allocate active directory partition");
+    error_t *err = state_get_all_directories(
+        ws->state, ws->arena, &snapshot, &snap_count
+    );
+    if (err) {
+        return error_wrap(err, "Failed to read tracked directories from state");
     }
 
-    const state_directory_entry_t **orphans =
-        arena_calloc(ws->arena, all_count, sizeof(*orphans));
-    if (!orphans) {
-        return ERROR(ERR_MEMORY, "Failed to allocate orphan directory partition");
+    /* Active index always exists, even when empty. Sized to the snapshot
+     * (worst case = every row is active). */
+    ws->active_dir_index = hashmap_borrow(snap_count > 0 ? snap_count : 64);
+    if (!ws->active_dir_index) {
+        return ERROR(ERR_MEMORY, "Failed to create active directory index");
+    }
+
+    if (snap_count == 0) {
+        return NULL;  /* active_dirs / orphan_dirs / counts left zero by calloc */
+    }
+
+    const state_directory_entry_t **active_dirs = arena_calloc(
+        ws->arena, snap_count, sizeof(*active_dirs)
+    );
+    const state_directory_entry_t **orphan_dirs = arena_calloc(
+        ws->arena, snap_count, sizeof(*orphan_dirs)
+    );
+    if (!active_dirs || !orphan_dirs) {
+        return ERROR(ERR_MEMORY, "Failed to allocate directory partition");
     }
 
     size_t active_count = 0;
     size_t orphan_count = 0;
 
-    for (size_t i = 0; i < all_count; i++) {
-        const state_directory_entry_t *dir = &all_dirs[i];
+    /* Partition state rows: in-scope active → ws->active_dirs, others → orphans */
+    for (size_t i = 0; i < snap_count; i++) {
+        const state_directory_entry_t *row = &snapshot[i];
 
-        bool profile_in_scope = hashmap_has(ws->profile_index, dir->profile);
-        bool lifecycle_terminal = (dir->lifecycle != LIFECYCLE_ACTIVE);
+        bool profile_in_scope = hashmap_has(ws->profile_index, row->profile);
+        bool lifecycle_terminal = (row->lifecycle != LIFECYCLE_ACTIVE);
 
         if (!profile_in_scope || lifecycle_terminal) {
-            orphans[orphan_count++] = dir;
-        } else {
-            actives[active_count++] = dir;
+            orphan_dirs[orphan_count++] = row;
+            continue;
+        }
+
+        active_dirs[active_count++] = row;
+
+        /* hashmap_set casts away const internally; the row remains read-only
+         * to callers (workspace_lookup_directory returns const pointer). */
+        err = hashmap_set(ws->active_dir_index, row->filesystem_path, (void *) row);
+        if (err) {
+            return error_wrap(err, "Failed to populate active directory index");
         }
     }
 
-    *out_active = (active_count > 0) ? actives : NULL;
-    *out_active_count = active_count;
-    *out_orphans = (orphan_count > 0) ? orphans : NULL;
-    *out_orphan_count = orphan_count;
+    /* Commit partition — only after every error path has returned. */
+    ws->active_dirs = (active_count > 0) ? active_dirs : NULL;
+    ws->active_dir_count = active_count;
+    ws->orphan_dirs = (orphan_count > 0) ? orphan_dirs : NULL;
+    ws->orphan_dir_count = orphan_count;
 
     return NULL;
 }
 
 /**
- * Analyze partitioned orphan-directory candidates
+ * Analyze partitioned orphan directories
  *
- * Each entry in the candidate slice was rejected from active scope by
- * partition_state_directories: profile out of scope, or state INACTIVE/DELETED.
- * No skip checks here — every input is by construction an orphan.
+ * Each entry in ws->orphan_dirs was rejected from active scope by
+ * workspace_partition_directories: profile out of scope, or state
+ * INACTIVE/DELETED. No skip checks here — every input is by construction an
+ * orphan.
  *
  * Each orphan is tagged with profile_enabled so callers can filter:
  *   - status: only show profile_enabled=true (enabled profiles)
  *   - apply: use all (cleanup disabled profiles too)
  */
-static error_t *analyze_orphaned_directories(
-    workspace_t *ws,
-    const state_directory_entry_t * const *candidates,
-    size_t candidate_count
-) {
+static error_t *analyze_orphaned_directories(workspace_t *ws) {
     CHECK_NULL(ws);
     CHECK_NULL(ws->profile_index);
 
-    if (candidate_count == 0) return NULL;
-    CHECK_NULL(candidates);
+    for (size_t i = 0; i < ws->orphan_dir_count; i++) {
+        const state_directory_entry_t *row = ws->orphan_dirs[i];
 
-    for (size_t i = 0; i < candidate_count; i++) {
-        const state_directory_entry_t *dir = candidates[i];
-
-        bool profile_enabled = hashmap_has(ws->profile_index, dir->profile);
-        bool on_filesystem = fs_exists(dir->filesystem_path);
+        bool profile_enabled = hashmap_has(ws->profile_index, row->profile);
+        bool on_filesystem = fs_exists(row->filesystem_path);
 
         error_t *err = workspace_add_diverged(
             ws,
-            dir->filesystem_path,       /* Already arena-allocated */
-            dir->storage_path,          /* Already arena-allocated */
-            dir->profile,
+            row->filesystem_path,       /* Already arena-allocated */
+            row->storage_path,          /* Already arena-allocated */
+            row->profile,
             NULL,                       /* No old_profile for orphans */
             WORKSPACE_STATE_ORPHANED,   /* State: in state, not in profile */
             DIVERGENCE_NONE,            /* Divergence: none */
@@ -1363,17 +1363,16 @@ static error_t *analyze_orphaned_directories(
 /**
  * Analyze divergence for every active row using VWD cache
  *
- * Walks ws->active and compares each row against filesystem reality.
+ * Walks ws->active_files and compares each row against filesystem reality.
  *
  * Performance: O(N) where N = active row count. The row's VWD cache
  * (blob_oid, type, anchor, etc.) eliminates N+1 database queries.
  */
 static error_t *analyze_files_divergence(workspace_t *ws) {
     CHECK_NULL(ws);
-    CHECK_NULL(ws->state);
 
-    for (size_t i = 0; i < ws->active_count; i++) {
-        state_file_entry_t *row = ws->active[i];
+    for (size_t i = 0; i < ws->active_file_count; i++) {
+        state_file_entry_t *row = ws->active_files[i];
 
         error_t *err = analyze_file_divergence(ws, row);
         if (err) {
@@ -1535,7 +1534,7 @@ static error_t *scan_directory_for_untracked(
              *    entries — adding them as untracked would create duplicates.
              */
             bool already_tracked =
-                (hashmap_get(ws->active_index, full_path) != NULL) ||
+                (hashmap_get(ws->active_file_index, full_path) != NULL) ||
                 (hashmap_get(ws->diverged_index, full_path) != NULL);
 
             if (!already_tracked) {
@@ -1608,7 +1607,6 @@ static error_t *analyze_untracked_files(
     const config_t *config
 ) {
     CHECK_NULL(ws);
-    CHECK_NULL(ws->state);
     CHECK_NULL(ws->profiles);
 
     error_t *err = NULL;
@@ -1651,37 +1649,26 @@ static error_t *analyze_untracked_files(
         }
     }
 
-    /* Scan tracked directories from each enabled profile's state database */
+    /* Iterate the active directory partition, filtering by profile per
+     * outer iteration. The outer loop runs in scope_enabled order — the
+     * user's enabled-precedence position — so when two profiles share an
+     * ancestor directory, the highest-precedence profile scans first and
+     * claims new files via ws->diverged_index (subsequent profiles' scans
+     * skip the entry via the dedup check in scan_directory_for_untracked).
+     *
+     * The dirs.count × ws->profiles->count strcmp filter below is trivially
+     * negligible (P ≤ 10, D ≤ 10²) and replaces a per-profile SQL query. */
+    state_directories_t dirs = workspace_directories(ws);
+
     for (size_t p = 0; p < ws->profiles->count; p++) {
         const char *profile = ws->profiles->items[p];
-
-        /* Get tracked directories from state database for this profile */
-        state_directory_entry_t *directories = NULL;
-        size_t dir_count = 0;
-        err = state_get_directories_by_profile(
-            ws->state, profile, ws->arena, &directories, &dir_count
-        );
-        if (err) {
-            fprintf(
-                stderr, "warning: failed to load directories for profile '%s': %s\n",
-                profile, err->message
-            );
-            error_free(err);
-            err = NULL;
-            continue;
-        }
-
-        if (dir_count == 0) {
-            /* Profile has no tracked directories - skip */
-            continue;
-        }
 
         /* Resolve the profile-specific ruleset (memoised in the builder).
          *
          * Fatal on failure: scanning a profile without its ignore rules
-         * risks reporting genuinely ignored files as untracked, which
-         * the user could then `dotta add` by accident. A corrupt
-         * .dottaignore must surface so the user can fix it. */
+         * risks reporting genuinely ignored files as untracked, which the
+         * user could then `dotta add` by accident. A corrupt .dottaignore
+         * must surface so the user can fix it. */
         const gitignore_ruleset_t *profile_rules = NULL;
         err = ignore_rules_for_profile(ignore_rules, profile, &profile_rules);
         if (err) {
@@ -1692,43 +1679,28 @@ static error_t *analyze_untracked_files(
             );
         }
 
-        /* Scan each tracked directory.
-         *
-         * Tree-root suppression: entries arrive parent-first thanks to
-         * state_get_directories_by_profile's ORDER BY filesystem_path. If
-         * the last scanned entry is a directory-prefix ancestor of the
-         * current one, this subtree is already covered by the ancestor's
-         * recursive scan — ws->diverged_index dedupes the RESULT either
-         * way, but the IO was still being paid per-level. Resets per
-         * profile (different ignore rules). */
+        /* Per-profile ancestor-suppression cursor — resets per outer
+         * iteration. Profiles with shared-ancestor directories use
+         * independent ignore rules, so each profile's tree must scan from
+         * a clean cursor. */
         const char *last_scanned = NULL;
-        for (size_t i = 0; i < dir_count; i++) {
-            const state_directory_entry_t *dir_entry = &directories[i];
 
-            /* Skip removal-pending directories (LIFECYCLE_INACTIVE or LIFECYCLE_DELETED)
-             *
-             * ARCHITECTURE: These directories are staged for removal.
-             * We should NOT scan them for untracked files because:
-             * 1. The directory is being removed (profile disabled or released)
-             * 2. Scanning would report spurious untracked files
-             * 3. The profile may be re-enabled later (directories reactivated)
-             *
-             * This ensures untracked file detection only applies to active directories.
-             */
-            if (dir_entry->lifecycle != LIFECYCLE_ACTIVE) {
-                continue;  /* Skip silently - these will be handled by orphan detection */
-            }
+        for (size_t i = 0; i < dirs.count; i++) {
+            const state_directory_entry_t *row = dirs.entries[i];
 
-            /* Skip directories already classified as orphaned by prior analysis.
-             *
-             * In the in-memory stale detection path (read-only commands), the
-             * directory state in the database is still ACTIVE (state not modified),
-             * but analyze_orphaned_directories() has already identified it as
-             * orphaned (verified against current Git metadata). Scanning such
-             * directories would report files as [new] that are actually
-             * [released] — creating confusing duplicate entries.
-             */
-            if (hashmap_get(ws->diverged_index, dir_entry->filesystem_path) != NULL) {
+            /* Filter to this profile's rows. dirs is in (filesystem_path)
+             * order from the snapshot; rows for this profile remain in
+             * that relative order, so the ancestor-first invariant the
+             * last_scanned suppression depends on holds within each
+             * profile slice. */
+            if (strcmp(row->profile, profile) != 0) continue;
+
+            /* Skip directories already classified as orphaned by prior
+             * analysis (in-memory stale detection path: state still
+             * ACTIVE, but analyze_orphaned_directories has flagged the
+             * row against current Git). Scanning such directories would
+             * report [new] files that are actually [released]. */
+            if (hashmap_get(ws->diverged_index, row->filesystem_path) != NULL) {
                 continue;
             }
 
@@ -1738,12 +1710,10 @@ static error_t *analyze_untracked_files(
              */
 
             /* Use filesystem path directly from state (already resolved) */
-            const char *filesystem_path = dir_entry->filesystem_path;
+            const char *filesystem_path = row->filesystem_path;
 
             /* Check if directory still exists */
-            if (!fs_exists(filesystem_path)) {
-                continue;
-            }
+            if (!fs_exists(filesystem_path)) continue;
 
             /* Nested-scan suppression: if the previously-scanned directory is
              * a strict directory-prefix ancestor, this subtree was already
@@ -1760,7 +1730,7 @@ static error_t *analyze_untracked_files(
             /* Scan this directory for untracked files */
             err = scan_directory_for_untracked(
                 filesystem_path,           /* Already resolved filesystem path */
-                dir_entry->storage_path,   /* Portable storage path */
+                row->storage_path,         /* Portable storage path */
                 profile,
                 profile_rules,
                 source_filter,
@@ -1798,33 +1768,21 @@ static error_t *analyze_untracked_files(
  * - DIVERGENCE_MODE: Directory permissions changed
  * - DIVERGENCE_OWNERSHIP: Directory owner/group changed (requires root)
  *
- * ARCHITECTURE: Uses state (VWD) instead of metadata (Git) for directory resolution.
- * State contains filesystem_path already resolved with target, enabling
- * correct divergence detection for custom/ prefix directories.
+ * ARCHITECTURE: Uses state (VWD) instead of metadata (Git) for directory
+ * resolution. State contains filesystem_path already resolved with target,
+ * enabling correct divergence detection for custom/ prefix directories.
  *
- * Consumes the active slice from partition_state_directories — every input
- * is by construction profile_in_scope AND state ACTIVE. No skip checks.
- *
- * @param ws Workspace (must not be NULL)
- * @param actives Pointer slice of active in-scope dirs from the partition
- * @param active_count Number of entries in actives
- * @return Error or NULL on success
+ * Consumes ws->active_dirs from workspace_partition_directories — every input
+ * is by construction profile_in_scope AND lifecycle ACTIVE. No skip checks.
  */
-static error_t *analyze_directory_metadata_divergence(
-    workspace_t *ws,
-    const state_directory_entry_t * const *actives,
-    size_t active_count
-) {
+static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
     CHECK_NULL(ws);
 
-    if (active_count == 0) return NULL;
-    CHECK_NULL(actives);
-
     error_t *err = NULL;
+    state_directories_t dirs = workspace_directories(ws);
 
-    /* Check each active in-scope directory for divergence */
-    for (size_t i = 0; i < active_count; i++) {
-        const state_directory_entry_t *dir_entry = actives[i];
+    for (size_t i = 0; i < dirs.count; i++) {
+        const state_directory_entry_t *row = dirs.entries[i];
 
         /* State directory entries contain:
          * - filesystem_path: Already resolved with target (VWD principle)
@@ -1833,9 +1791,9 @@ static error_t *analyze_directory_metadata_divergence(
          * - mode, owner, group: Expected metadata
          *
          * All strings are arena-allocated — no explicit free needed. */
-        const char *filesystem_path = dir_entry->filesystem_path;
-        const char *storage_path = dir_entry->storage_path;
-        const char *profile = dir_entry->profile;
+        const char *filesystem_path = row->filesystem_path;
+        const char *storage_path = row->storage_path;
+        const char *profile = row->profile;
 
         /* Stat directory to get current metadata
          *
@@ -1918,9 +1876,9 @@ static error_t *analyze_directory_metadata_divergence(
         bool ownership_differs = false;
 
         err = check_item_metadata_divergence(
-            dir_entry->mode,   /* Expected mode from state */
-            dir_entry->owner,  /* Expected owner from state */
-            dir_entry->group,  /* Expected group from state */
+            row->mode,   /* Expected mode from state */
+            row->owner,  /* Expected owner from state */
+            row->group,  /* Expected group from state */
             &dir_stat,
             &mode_differs,
             &ownership_differs
@@ -2003,8 +1961,8 @@ static error_t *analyze_encryption_policy_mismatch(
     error_t *err = NULL;
 
     /* Check each active row */
-    for (size_t i = 0; i < ws->active_count; i++) {
-        const state_file_entry_t *row = ws->active[i];
+    for (size_t i = 0; i < ws->active_file_count; i++) {
+        const state_file_entry_t *row = ws->active_files[i];
         const char *storage_path = row->storage_path;
         const char *profile = row->profile;
 
@@ -2080,50 +2038,34 @@ static error_t *analyze_encryption_policy_mismatch(
 }
 
 /**
- * Partition state rows into the active slice and orphan candidates
+ * Partition state file rows into the active slice and orphan slice
  *
- * Walks the state DB once and produces two outputs:
- *   1. ws->active — pointer array into the arena snapshot for in-scope
- *      ACTIVE rows; ws->active_index maps fs_path → row pointer.
- *   2. orphan_candidates — pointers into the same snapshot for rejected
- *      rows (out-of-scope profile or terminal lifecycle:
- *      INACTIVE/DELETED/RELEASED).
+ * Loads the manifest snapshot via state_get_all_files and walks it once to
+ * produce both workspace partitions:
+ *   - ws->active_files / ws->active_file_count / ws->active_file_index:
+ *     in-scope ACTIVE rows (profile in enabled set, lifecycle ACTIVE).
+ *   - ws->orphan_files / ws->orphan_file_count: rejected rows (out-of-scope
+ *     profile or terminal lifecycle: INACTIVE/DELETED/RELEASED).
  *
- * The partition is the single source of truth for "is this row in the
- * workspace?". analyze_orphaned_files consumes the candidate slice
- * directly; analyses over the active set walk ws->active.
+ * The partition is the single source of truth for "is this row in scope?".
+ * analyze_orphaned_files consumes ws->orphan_files; analyses over the active
+ * set walk ws->active_files. No defensive cleanup on error: workspace_free
+ * is the single cleanup authority.
  *
  * Drift repair is handled upstream by workspace_load's manifest_reconcile
  * call, so state entries read here are current with Git by construction.
  *
- * Lifetime: every pointer (active rows, orphan candidates, the active
- * pointer array, the snapshot rows themselves) lives in ws->arena. The
- * arena outlives the workspace, so all pointers are valid until arena
- * destruction. Only ws->active_index is heap-allocated (hashmap_borrow).
+ * Lifetime: every pointer (active rows, orphan rows, both pointer arrays,
+ * the snapshot rows themselves) lives in ws->arena. Only ws->active_file_index
+ * is heap-allocated (hashmap_borrow), freed in workspace_free.
  *
- * Performance: O(M) where M = state entries. One pass, no probes.
- *
- * @param ws Workspace (must not be NULL, state must be loaded)
- * @param out_orphan_candidates Arena-allocated array of pointers to state
- *        rows that did not enter the active slice. NULL if none. Caller
- *        does not free (arena-owned).
- * @param out_orphan_count Number of entries in out_orphan_candidates.
- * @return Error or NULL on success
+ * Performance: O(M) where M = manifest rows. One pass, no probes.
  */
-static error_t *workspace_build_active(
-    workspace_t *ws,
-    const state_file_entry_t ***out_orphan_candidates,
-    size_t *out_orphan_count
-) {
+static error_t *workspace_partition_files(workspace_t *ws) {
     CHECK_NULL(ws);
     CHECK_NULL(ws->state);
     CHECK_NULL(ws->arena);
     CHECK_NULL(ws->profile_index);
-    CHECK_NULL(out_orphan_candidates);
-    CHECK_NULL(out_orphan_count);
-
-    *out_orphan_candidates = NULL;
-    *out_orphan_count = 0;
 
     state_file_entry_t *snapshot = NULL;
     size_t snap_count = 0;
@@ -2141,35 +2083,31 @@ static error_t *workspace_build_active(
     /* Active index always exists, even when empty. Sized to the snapshot
      * (worst case = every row is active). hashmap_borrow keeps fs_path
      * keys by reference — they live in the arena alongside the rows. */
-    ws->active_index = hashmap_borrow(snap_count > 0 ? snap_count : 64);
-    if (!ws->active_index) {
-        return ERROR(ERR_MEMORY, "Failed to create active index");
+    ws->active_file_index = hashmap_borrow(snap_count > 0 ? snap_count : 64);
+    if (!ws->active_file_index) {
+        return ERROR(ERR_MEMORY, "Failed to create active file index");
     }
 
     if (snap_count == 0) {
-        ws->active = NULL;
-        ws->active_count = 0;
-        return NULL;
+        return NULL;  /* active_files / orphan_files / counts left zero by calloc */
     }
 
-    /* Allocate the active pointer array and the orphan candidate array
-     * at worst-case size. Both partitions share the snapshot — the row
-     * buffer never gets duplicated. */
-    ws->active = arena_calloc(ws->arena, snap_count, sizeof(*ws->active));
-    const state_file_entry_t **candidates = arena_calloc(
-        ws->arena, snap_count, sizeof(*candidates)
+    /* Allocate worst-case arrays (both partitions share the snapshot — the
+     * row buffer never gets duplicated). */
+    state_file_entry_t **active_files = arena_calloc(
+        ws->arena, snap_count, sizeof(*active_files)
     );
-    if (!ws->active || !candidates) {
-        hashmap_free(ws->active_index, NULL);
-        ws->active_index = NULL;
-        ws->active = NULL;
-        return ERROR(ERR_MEMORY, "Failed to allocate active partition");
+    const state_file_entry_t **orphan_files = arena_calloc(
+        ws->arena, snap_count, sizeof(*orphan_files)
+    );
+    if (!active_files || !orphan_files) {
+        return ERROR(ERR_MEMORY, "Failed to allocate file partition");
     }
 
     size_t active_count = 0;
-    size_t candidate_count = 0;
+    size_t orphan_count = 0;
 
-    /* Partition state rows: in-scope active → ws->active, others → candidates */
+    /* Partition state rows: in-scope active → ws->active_files, others → orphans */
     for (size_t i = 0; i < snap_count; i++) {
         state_file_entry_t *row = &snapshot[i];
 
@@ -2181,34 +2119,31 @@ static error_t *workspace_build_active(
 
         if (!profile_in_scope || lifecycle_terminal) {
             /* Rejected: surface to orphan analysis.
-             *
-             * - Out-of-scope profile: profile disabled or branch deleted.
-             *   analyze_orphaned_files handles via profile_enabled flag.
-             * - Lifecycle terminal: INACTIVE/DELETED/RELEASED. The
-             *   RELEASED branch (loss of authority) is detected from
-             *   row->lifecycle inside analyze_orphaned_files. */
-            candidates[candidate_count++] = row;
+             *   - Out-of-scope profile: disabled or branch deleted; tagged
+             *     via profile_enabled in analyze_orphaned_files.
+             *   - Lifecycle terminal: INACTIVE/DELETED/RELEASED. RELEASED
+             *     (loss of authority) is detected from row->lifecycle
+             *     inside analyze_orphaned_files. */
+            orphan_files[orphan_count++] = row;
             continue;
         }
 
-        ws->active[active_count++] = row;
+        active_files[active_count++] = row;
 
         /* Index by row pointer directly: the active array is allocated at
          * load time and never grows, so pointers into it are stable for
          * the workspace lifetime — no idx+1 encoding needed. */
-        err = hashmap_set(ws->active_index, row->filesystem_path, row);
+        err = hashmap_set(ws->active_file_index, row->filesystem_path, row);
         if (err) {
-            hashmap_free(ws->active_index, NULL);
-            ws->active_index = NULL;
-            ws->active = NULL;
-            return error_wrap(err, "Failed to populate active index");
+            return error_wrap(err, "Failed to populate active file index");
         }
     }
 
-    ws->active_count = active_count;
-
-    *out_orphan_candidates = (candidate_count > 0) ? candidates : NULL;
-    *out_orphan_count = candidate_count;
+    /* Commit partition — only after every error path has returned. */
+    ws->active_files = active_files;
+    ws->active_file_count = active_count;
+    ws->orphan_files = (orphan_count > 0) ? orphan_files : NULL;
+    ws->orphan_file_count = orphan_count;
 
     return NULL;
 }
@@ -2288,53 +2223,21 @@ error_t *workspace_load(
     ws->content_cache = content_cache;
     ws->arena = arena;
 
-    /* Partition the state snapshot into the active slice and orphan
-     * candidates. The active slice (ws->active + ws->active_index) is
-     * borrowed pointers into the arena snapshot returned by
-     * state_get_all_files — no parallel projection, no second cache.
-     *
-     * Orphan candidates (rows out-of-scope or in a terminal lifecycle
-     * state) flow to analyze_orphaned_files. The partition is the
-     * single source of truth for orphan-ness — no later hashmap probe
-     * is needed.
-     *
-     * Drift was already repaired by manifest_reconcile above; this
-     * function reads current state directly. */
-    const state_file_entry_t **file_orphans = NULL;
-    size_t file_orphan_count = 0;
-    err = workspace_build_active(ws, &file_orphans, &file_orphan_count);
+    /* Partition file and directory snapshots into active + orphan slices.
+     * Both partitions populate workspace fields directly; consumers read
+     * via workspace_files() / workspace_directories() and the *_index
+     * accessors. Drift was repaired upstream by manifest_reconcile, so
+     * the snapshots reflect current Git truth by construction. */
+    err = workspace_partition_files(ws);
     if (err) {
         workspace_free(ws);
-        return error_wrap(err, "Failed to build active slice from state");
+        return error_wrap(err, "Failed to partition file slice");
     }
 
-    /* Load and partition tracked directories once when any consumer needs them.
-     * Both analyze_orphaned_directories and analyze_directory_metadata_divergence
-     * read disjoint slices of the partition, so a single load + single partition
-     * serves both. */
-    const state_directory_entry_t **active_dirs = NULL;
-    size_t active_dir_count = 0;
-    const state_directory_entry_t **orphan_dirs = NULL;
-    size_t orphan_dir_count = 0;
-
-    if (resolved_opts.analyze_orphans || resolved_opts.analyze_directories) {
-        state_directory_entry_t *all_dirs = NULL;
-        size_t all_dir_count = 0;
-        err = state_get_all_directories(state, arena, &all_dirs, &all_dir_count);
-        if (err) {
-            workspace_free(ws);
-            return error_wrap(err, "Failed to load tracked directories from state");
-        }
-
-        err = partition_state_directories(
-            ws, all_dirs, all_dir_count,
-            &active_dirs, &active_dir_count,
-            &orphan_dirs, &orphan_dir_count
-        );
-        if (err) {
-            workspace_free(ws);
-            return error_wrap(err, "Failed to partition tracked directories");
-        }
+    err = workspace_partition_directories(ws);
+    if (err) {
+        workspace_free(ws);
+        return error_wrap(err, "Failed to partition directory slice");
     }
 
     /* Execute analyses based on resolved_opts flags. Each analysis is
@@ -2349,16 +2252,15 @@ error_t *workspace_load(
         }
     }
 
-    /* Analyze orphaned state entries (files + directories).
-     * Both consume partition slices produced above; no probe-based filter. */
+    /* Analyze orphaned state entries (files + directories) */
     if (resolved_opts.analyze_orphans) {
-        err = analyze_orphaned_files(ws, file_orphans, file_orphan_count);
+        err = analyze_orphaned_files(ws);
         if (err) {
             workspace_free(ws);
             return error_wrap(err, "Failed to analyze orphaned files");
         }
 
-        err = analyze_orphaned_directories(ws, orphan_dirs, orphan_dir_count);
+        err = analyze_orphaned_directories(ws);
         if (err) {
             workspace_free(ws);
             return error_wrap(err, "Failed to analyze orphaned directories");
@@ -2376,9 +2278,7 @@ error_t *workspace_load(
 
     /* Analyze directory metadata divergence */
     if (resolved_opts.analyze_directories) {
-        err = analyze_directory_metadata_divergence(
-            ws, active_dirs, active_dir_count
-        );
+        err = analyze_directory_metadata_divergence(ws);
         if (err) {
             workspace_free(ws);
             return error_wrap(err, "Failed to analyze directory metadata");
@@ -2554,11 +2454,11 @@ const workspace_item_t *workspace_get_item(
  * The cast adds const at both pointer levels — safe per the C standard's
  * "T**  → const T *const *" rule (no diagnostic required).
  */
-state_files_t workspace_active(const workspace_t *ws) {
+state_files_t workspace_files(const workspace_t *ws) {
     if (!ws) return (state_files_t){ 0 };
     return (state_files_t){
-        .entries = (const state_file_entry_t *const *) ws->active,
-        .count = ws->active_count,
+        .entries = (const state_file_entry_t *const *) ws->active_files,
+        .count = ws->active_file_count,
     };
 }
 
@@ -2569,12 +2469,37 @@ state_files_t workspace_active(const workspace_t *ws) {
  * mutable row pointer (workspace_advance_anchor patches in place);
  * external callers receive a const view via narrowing cast.
  */
-const state_file_entry_t *workspace_lookup_active(
+const state_file_entry_t *workspace_lookup_file(
     const workspace_t *ws,
     const char *filesystem_path
 ) {
     if (!ws || !filesystem_path) return NULL;
-    return hashmap_get(ws->active_index, filesystem_path);
+    return hashmap_get(ws->active_file_index, filesystem_path);
+}
+
+/**
+ * Get the active in-scope state directory slice
+ */
+state_directories_t workspace_directories(const workspace_t *ws) {
+    if (!ws) return (state_directories_t){ 0 };
+    return (state_directories_t){
+        .entries = ws->active_dirs,
+        .count = ws->active_dir_count,
+    };
+}
+
+/**
+ * Look up an active directory row by filesystem path
+ *
+ * O(1) hashmap probe over the active directory slice. The map stores const
+ * row pointers — directories carry no anchor and are not patched in place.
+ */
+const state_directory_entry_t *workspace_lookup_directory(
+    const workspace_t *ws,
+    const char *filesystem_path
+) {
+    if (!ws || !filesystem_path) return NULL;
+    return hashmap_get(ws->active_dir_index, filesystem_path);
 }
 
 /**
@@ -2831,11 +2756,11 @@ bool workspace_item_extract_display_info(
  * the single specification of preserve-on-zero / monotonic-once-set
  * rules; this function holds none of that logic.
  *
- * The row is borrowed from ws->active. The workspace owns that storage
- * as mutable (state_file_entry_t **active); the const decoration on the
- * parameter is a public-API guard against mutation by non-anchor callers
- * — internally we exercise the workspace's mutability privilege to write
- * the resolved anchor in place.
+ * The row is borrowed from ws->active_files. The workspace owns that
+ * storage as mutable (state_file_entry_t **active_files); the const
+ * decoration on the parameter is a public-API guard against mutation by
+ * non-anchor callers — internally we exercise the workspace's mutability
+ * privilege to write the resolved anchor in place.
  */
 error_t *workspace_advance_anchor(
     workspace_t *ws,
@@ -2947,12 +2872,14 @@ void workspace_free(workspace_t *ws) {
     free(ws->anchor_updates);
 
     /* Free indices (values are borrowed, so pass NULL for value free function).
-     * active_index values are state-row pointers into ws->arena — also borrowed. */
+     * active_file_index / active_dir_index values are state-row pointers into
+     * ws->arena — also borrowed. */
     hashmap_free(ws->profile_index, NULL);
     hashmap_free(ws->diverged_index, NULL);
-    hashmap_free(ws->active_index, NULL);
+    hashmap_free(ws->active_file_index, NULL);
+    hashmap_free(ws->active_dir_index, NULL);
 
-    /* ws->active is arena-allocated (pointer array into the snapshot);
+    /* ws->active_files is arena-allocated (pointer array into the snapshot);
      * the caller's arena releases it when destroyed. ws->arena is
      * borrowed — never destroyed here. */
 

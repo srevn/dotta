@@ -598,62 +598,32 @@ cleanup:
 /**
  * Calculate directories required for deploying state rows
  *
- * When the caller passes a path-scoped operation (scope_has_paths), only
- * directories that are ancestors of files being deployed should be
- * processed. This function builds a hashmap of tracked directory paths
- * that are ancestors of any file in `files`.
+ * Walks each input file's ancestor chain and gathers the tracked-directory
+ * ancestors into a hashmap. Used when a scope filter narrows deployment
+ * (path or profile dimension): the result drives the "ancestors of in-scope
+ * files" inclusion in deploy_tracked_directories.
  *
- * Performance: O(F * D) where F = files.count, D = average path depth
- * Memory: Caller owns returned hashmap and must free with hashmap_free(h, NULL)
+ * Tracked-directory membership is probed via workspace_lookup_directory —
+ * O(1) over the workspace's active_dir_index. No state load, no scratch
+ * hashmap.
  *
- * @param files Slice of state rows being deployed (passed by value)
- * @param state State database for tracked directory lookup (must not be NULL)
- * @param out Hashmap of required directory filesystem_paths (caller frees)
- * @return Error or NULL on success
+ * Performance: O(F × D) where F = files.count, D = average path depth.
+ * Memory: caller owns returned hashmap and must free with hashmap_free(h, NULL).
  */
 static error_t *calculate_required_directories(
+    const workspace_t *ws,
     state_files_t files,
-    const state_t *state,
-    arena_t *arena,
     hashmap_t **out
 ) {
-    CHECK_NULL(state);
-    CHECK_NULL(arena);
+    CHECK_NULL(ws);
     CHECK_NULL(out);
 
     *out = NULL;
 
     error_t *err = NULL;
-    hashmap_t *tracked = NULL;
     hashmap_t *required = NULL;
     char *parent = NULL;
 
-    /* Get all tracked directories for O(1) membership check */
-    state_directory_entry_t *directories = NULL;
-    size_t dir_count = 0;
-    err = state_get_all_directories(state, arena, &directories, &dir_count);
-    if (err) goto cleanup;
-
-    if (dir_count == 0) {
-        goto cleanup;  /* No tracked directories - nothing to filter */
-    }
-
-    /* Build lookup hashmap of tracked directory paths */
-    tracked = hashmap_create(dir_count);
-    if (!tracked) {
-        err = ERROR(ERR_MEMORY, "Failed to create tracked directory hashmap");
-        goto cleanup;
-    }
-
-    for (size_t i = 0; i < dir_count; i++) {
-        err = hashmap_set(tracked, directories[i].filesystem_path, (void *) 1);
-        if (err) {
-            err = error_wrap(err, "Failed to populate tracked directory set");
-            goto cleanup;
-        }
-    }
-
-    /* Build set of required directories from input file ancestors */
     required = hashmap_create(0);
     if (!required) {
         err = ERROR(ERR_MEMORY, "Failed to create required directory hashmap");
@@ -663,7 +633,6 @@ static error_t *calculate_required_directories(
     for (size_t i = 0; i < files.count; i++) {
         const char *filepath = files.entries[i]->filesystem_path;
 
-        /* Walk up directory tree, adding tracked ancestors */
         size_t len = strlen(filepath);
         parent = malloc(len + 1);
         if (!parent) {
@@ -679,8 +648,7 @@ static error_t *calculate_required_directories(
             }
             *slash = '\0'; /* Truncate to parent */
 
-            /* If this parent is tracked, add to required set */
-            if (hashmap_has(tracked, parent)) {
+            if (workspace_lookup_directory(ws, parent) != NULL) {
                 err = hashmap_set(required, parent, (void *) 1);
                 if (err) {
                     err = error_wrap(err, "Failed to add required directory");
@@ -697,7 +665,6 @@ static error_t *calculate_required_directories(
 
 cleanup:
     free(parent);
-    if (tracked) hashmap_free(tracked, NULL);
     if (required) hashmap_free(required, NULL);
 
     return err;
@@ -707,12 +674,12 @@ cleanup:
  * Deploy tracked directories from state
  *
  * Creates or updates tracked directories with proper permissions and ownership
- * before deploying files. Uses workspace divergence analysis to determine which
- * directories need updates, enabling convergence of directory metadata.
+ * before deploying files. Uses workspace divergence analysis to determine
+ * which directories need updates, enabling convergence of directory metadata.
  *
- * ARCHITECTURE: Uses state (VWD) instead of metadata (Git) for directory resolution.
- * State contains filesystem_path already resolved with target during manifest
- * building, eliminating path conversion errors and enabling deployment target support.
+ * ARCHITECTURE: Reads directories via workspace_directories(ws) — the
+ * workspace owns the partitioned active slice (profile in scope ∧ lifecycle
+ * ACTIVE), so neither a state load nor a per-row lifecycle skip is needed.
  *
  * Convergence model (matches file deployment pattern):
  * - Query workspace for divergence (O(1) hashmap lookup)
@@ -725,39 +692,20 @@ cleanup:
  * - Implements coherent scope: file filter scopes all side effects
  *
  * @param ws Workspace with divergence analysis (must not be NULL)
- * @param state State database (can be NULL - returns immediately if NULL)
  * @param opts Deployment options (must not be NULL)
  * @param required_dirs Directories to process (NULL = all, non-NULL = filter)
  * @return Error or NULL on success
  */
 static error_t *deploy_tracked_directories(
     const workspace_t *ws,
-    const state_t *state,
-    arena_t *arena,
     const deploy_options_t *opts,
     const hashmap_t *required_dirs
 ) {
     CHECK_NULL(ws);
-    CHECK_NULL(arena);
     CHECK_NULL(opts);
 
-    /* Gracefully handle NULL state (no database = no tracked directories) */
-    if (!state) {
-        return NULL;
-    }
-
-    /* Get all tracked directories from state database */
-    state_directory_entry_t *directories = NULL;
-    size_t dir_count = 0;
-    error_t *err = state_get_all_directories(state, arena, &directories, &dir_count);
-    if (err) {
-        err = error_wrap(err, "Failed to load tracked directories from state");
-        goto cleanup;
-    }
-
-    if (dir_count == 0) {
-        goto cleanup;  /* No tracked directories */
-    }
+    error_t *err = NULL;
+    state_directories_t dirs = workspace_directories(ws);
 
     /* Verbose output: differentiate scoped vs full sync mode.
      *
@@ -783,14 +731,14 @@ static error_t *deploy_tracked_directories(
             /* Full sync: all directories */
             printf(
                 "Processing %zu tracked director%s...\n",
-                dir_count, dir_count == 1 ? "y" : "ies"
+                dirs.count, dirs.count == 1 ? "y" : "ies"
             );
         }
     }
 
     /* Deploy each tracked directory */
-    for (size_t i = 0; i < dir_count; i++) {
-        const state_directory_entry_t *dir_entry = &directories[i];
+    for (size_t i = 0; i < dirs.count; i++) {
+        const state_directory_entry_t *dir_entry = dirs.entries[i];
 
         /* Scope filtering: path-scoped (strict) and/or profile-scoped (inclusive)
          *
@@ -838,21 +786,6 @@ static error_t *deploy_tracked_directories(
             }
         }
         /* else: no filter, process all (full sync mode) */
-
-        /* Skip removal-pending directories (any non-ACTIVE lifecycle phase).
-         *
-         * ARCHITECTURE: These directories are staged for removal (by profile disable
-         * or confirmed deletion). They should NOT be deployed.
-         */
-        if (dir_entry->lifecycle != LIFECYCLE_ACTIVE) {
-            if (opts->verbose) {
-                printf(
-                    "  Skipped: %s (staged for removal)\n",
-                    dir_entry->filesystem_path
-                );
-            }
-            continue;
-        }
 
         /* State directory entries contain:
          * - filesystem_path: Already resolved with target (VWD principle)
@@ -1079,8 +1012,6 @@ static error_t *deploy_tracked_directories(
     }
 
 cleanup:
-    /* directories array lives in the borrowed arena; the caller's arena
-     * (typically ctx->arena) reclaims it at command end. */
     return err;
 }
 
@@ -1091,15 +1022,12 @@ error_t *deploy_execute(
     git_repository *repo,
     const workspace_t *ws,
     state_files_t files,
-    const state_t *state,
-    arena_t *arena,
     const deploy_options_t *opts,
     content_cache_t *cache,
     deploy_result_t **out
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(ws);
-    CHECK_NULL(arena);
     CHECK_NULL(opts);
     CHECK_NULL(cache);
     CHECK_NULL(out);
@@ -1132,16 +1060,16 @@ error_t *deploy_execute(
     hashmap_t *required_dirs = NULL;
     bool scope_narrows = opts->scope &&
         (scope_has_paths(opts->scope) || scope_has_filter(opts->scope));
-    if (scope_narrows && files.count > 0 && state) {
-        err = calculate_required_directories(files, state, arena, &required_dirs);
+    if (scope_narrows && files.count > 0) {
+        err = calculate_required_directories(ws, files, &required_dirs);
         if (err) {
             deploy_result_free(result);
             return error_wrap(err, "Failed to calculate required directories");
         }
     }
 
-    /* Deploy tracked directories from state database first */
-    err = deploy_tracked_directories(ws, state, arena, opts, required_dirs);
+    /* Deploy tracked directories first (workspace owns the active slice) */
+    err = deploy_tracked_directories(ws, opts, required_dirs);
     if (required_dirs) {
         hashmap_free(required_dirs, NULL);
     }

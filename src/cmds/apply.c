@@ -802,7 +802,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
 
     /* Load workspace (partitions active state rows and runs divergence analysis)
      *
-     * After workspace_load returns, workspace_active(ws) yields the in-scope
+     * After workspace_load returns, workspace_files(ws) yields the in-scope
      * active slice; we use that view throughout the command instead of
      * building a separate manifest.
      *
@@ -840,7 +840,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     }
 
     /* Borrow the active in-scope slice (no allocation, no free contract) */
-    active = workspace_active(ws);
+    active = workspace_files(ws);
 
     output_print(
         out, OUTPUT_VERBOSE, "Workspace loaded: %zu active file%s in scope\n",
@@ -1477,7 +1477,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         }
 
         err = deploy_execute(
-            repo, ws, to_deploy, state, ctx->arena, &deploy_opts, cache, &deploy_res
+            repo, ws, to_deploy, &deploy_opts, cache, &deploy_res
         );
         if (err) {
             if (deploy_res) {

@@ -1408,7 +1408,7 @@ static error_t *manifest_repair_stale(
         if (err) goto cleanup;
     }
 
-    /* Phase 4: Sync tracked directories to reflect current Git state.
+    /* Phase 5: Sync tracked directories to reflect current Git state.
      *
      * External Git changes may have added/removed directories in metadata.
      * Re-syncing ensures the tracked_directories table is consistent. */
@@ -2729,7 +2729,7 @@ error_t *manifest_sync_diff(
     if (out_fallbacks) *out_fallbacks = fallbacks;
     if (out_skipped) *out_skipped = skipped;
 
-    /* 4. Update the per-profile commit_oid in enabled_profiles to match the new HEAD.
+    /* PHASE 4: Update per-profile commit_oid in enabled_profiles to match the new HEAD.
      * Use new_oid directly — it's the explicit sync target passed by the caller,
      * and matches the branch HEAD that gitops_resolve_branch_head_oid would resolve. */
     err = state_set_profile_commit_oid(state, profile, new_oid);
@@ -2740,7 +2740,7 @@ error_t *manifest_sync_diff(
         goto cleanup;
     }
 
-    /* 5. Sync tracked directories */
+    /* PHASE 5: Sync tracked directories */
     err = manifest_sync_directories(repo, state, arena, enabled_profiles, mounts);
     if (err) {
         goto cleanup;

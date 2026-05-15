@@ -548,6 +548,7 @@ void crypto_blake2b_keyed_init(crypto_blake2b_ctx *ctx, size_t hash_size,
 		// same as calling crypto_blake2b_update(ctx, key_block , 128)
 		load64_le_buf(ctx->input, key_block, 16);
 		ctx->input_idx = 128;
+		WIPE_BUFFER(key_block);
 	}
 }
 

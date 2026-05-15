@@ -67,9 +67,8 @@ respect_gitignore = true      # Honor source .gitignore when adding
 
 ```toml
 [output]
-verbosity = "normal"   # quiet, normal, verbose, debug
+verbosity = "normal"   # quiet, normal, verbose
 color = "auto"         # auto, always, never
-format = "compact"     # compact, detailed, json
 ```
 
 ### [commit]

@@ -26,6 +26,18 @@
 #include "sys/upstream.h"
 
 /**
+ * Per-profile sync outcome
+ */
+typedef enum {
+    SYNC_OUTCOME_UP_TO_DATE = 0, /* Genuine no-op (or analyze never reached) */
+    SYNC_OUTCOME_PUSHED,         /* Clean push: LOCAL_AHEAD / NO_REMOTE created */
+    SYNC_OUTCOME_PULLED,         /* Clean FF: REMOTE_AHEAD + auto_pull */
+    SYNC_OUTCOME_RESOLVED,       /* Destructive: rebase / merge / ours / theirs */
+    SYNC_OUTCOME_DIVERGED,       /* Unresolved: warn / --no-push / --no-pull / cancel / unknown */
+    SYNC_OUTCOME_FAILED,         /* Push/pull/resolution error */
+} sync_outcome_t;
+
+/**
  * Per-profile sync result
  */
 typedef struct {
@@ -33,9 +45,8 @@ typedef struct {
     upstream_state_t state;
     size_t ahead;
     size_t behind;
-    bool pushed;
-    bool failed;
-    char *error_message;
+    sync_outcome_t outcome;
+    error_t *error;                 /* Owned; set by mark_result_failed */
 } profile_sync_result_t;
 
 /**
@@ -43,15 +54,7 @@ typedef struct {
  */
 typedef struct {
     profile_sync_result_t *profiles;
-    size_t count;
-    size_t pushed_count;
-    size_t need_pull_count;
-    size_t diverged_count;
-    size_t up_to_date_count;
-    size_t pulled_count;             /* Profiles updated from remote (pull/resolve/reset) */
-    size_t failed_count;
-    size_t fetch_failed_count;       /* Track fetch failures separately */
-    size_t auth_failed_count;        /* Track authentication failures */
+    size_t profile_count;
 } sync_results_t;
 
 /**
@@ -69,7 +72,7 @@ static sync_results_t *sync_results_create(size_t profile_count) {
         return NULL;
     }
 
-    results->count = profile_count;
+    results->profile_count = profile_count;
     return results;
 }
 
@@ -81,13 +84,25 @@ static void sync_results_free(sync_results_t *results) {
         return;
     }
 
-    for (size_t i = 0; i < results->count; i++) {
+    for (size_t i = 0; i < results->profile_count; i++) {
         free(results->profiles[i].profile);
-        free(results->profiles[i].error_message);
+        error_free(results->profiles[i].error);
     }
 
     free(results->profiles);
     free(results);
+}
+
+/**
+ * Single funnel for SYNC_OUTCOME_FAILED. Takes ownership of err.
+ * Caller must print any output_error messages before calling.
+ */
+static void mark_result_failed(
+    profile_sync_result_t *result,
+    error_t *err
+) {
+    result->outcome = SYNC_OUTCOME_FAILED;
+    result->error = err;
 }
 
 /**
@@ -371,10 +386,8 @@ static error_t *sync_fetch_phase(
          * the next transfer_op_begin would overwrite last_outcome. */
         const char *err_msg = error_message(err);
         if (transfer_last_outcome(xfer) == TRANSFER_OUTCOME_AUTH_FAILED) {
-            results->auth_failed_count++;
             output_error(out, "Authentication failed: %s", err_msg);
         } else {
-            results->fetch_failed_count++;
             output_error(out, "Fetch failed: %s", err_msg);
         }
         error_free(err);
@@ -425,57 +438,16 @@ static error_t *sync_analyze_phase(
         );
 
         if (err) {
-            result->failed = true;
-            result->error_message = strdup(error_message(err));
-            results->failed_count++;
-            error_free(err);
+            mark_result_failed(result, err);
             continue;
         }
 
         result->state = info.state;
         result->ahead = info.ahead;
         result->behind = info.behind;
-
-        /* Update counters */
-        switch (result->state) {
-            case UPSTREAM_UP_TO_DATE:
-                results->up_to_date_count++;
-                break;
-            case UPSTREAM_LOCAL_AHEAD:
-                /* Can push */
-                break;
-            case UPSTREAM_REMOTE_AHEAD:
-                results->need_pull_count++;
-                break;
-            case UPSTREAM_DIVERGED:
-                results->diverged_count++;
-                break;
-            case UPSTREAM_NO_REMOTE:
-                break;
-            case UPSTREAM_UNKNOWN:
-                /* Skip unknown states */
-                break;
-        }
     }
 
     return NULL;
-}
-
-/**
- * Record profile operation failure
- *
- * Takes ownership of err (frees it). Caller must print any
- * output_error messages BEFORE calling this function.
- */
-static void mark_result_failed(
-    profile_sync_result_t *result,
-    sync_results_t *results,
-    error_t *err
-) {
-    result->failed = true;
-    result->error_message = strdup(error_message(err));
-    results->failed_count++;
-    error_free(err);
 }
 
 /**
@@ -615,7 +587,6 @@ static void handle_remote_ahead(
     git_repository *repo,
     const char *remote_name,
     profile_sync_result_t *result,
-    sync_results_t *results,
     output_t *out,
     bool auto_pull,
     bool no_pull,
@@ -626,20 +597,25 @@ static void handle_remote_ahead(
 ) {
     if (!auto_pull) {
         /* Just warn - don't auto-pull */
-        output_info(
-            out, OUTPUT_NORMAL, "  ↓ {yellow}%s{reset}: remote has %zu new commit%s",
+        output_colored(
+            out, OUTPUT_NORMAL, upstream_state_color(result->state),
+            "  %s %s: remote has %zu new commit%s\n",
+            upstream_state_symbol(result->state),
             result->profile, result->behind, result->behind == 1 ? "" : "s"
         );
 
         if (no_pull) {
             output_hint(
-                out, OUTPUT_NORMAL, "    Pull skipped (--no-pull)"
+                out, OUTPUT_NORMAL,
+                "    Pull skipped (--no-pull)"
             );
         } else {
             output_hint(
-                out, OUTPUT_NORMAL, "    Enable 'auto_pull' for automatic pull during sync"
+                out, OUTPUT_NORMAL,
+                "    Enable 'auto_pull' for automatic pull during sync"
             );
         }
+        result->outcome = SYNC_OUTCOME_DIVERGED;
         return;
     }
 
@@ -659,28 +635,26 @@ static void handle_remote_ahead(
             out, "  %s: pull failed - %s",
             result->profile, error_message(err)
         );
-        mark_result_failed(result, results, err);
+        mark_result_failed(result, err);
         return;
     }
 
     if (!pulled) {
-        /* Already up-to-date - report in verbose mode */
-        output_info(
-            out, OUTPUT_VERBOSE, "  = {green}%s{reset}: already up-to-date",
-            result->profile
+        /* Race: analyze saw REMOTE_AHEAD but FF found nothing new
+         * (we caught up between phases). Reclassify to reflect reality
+         * so downstream consumers (summary, hooks) see coherent state. */
+        result->state = UPSTREAM_UP_TO_DATE;
+        result->outcome = SYNC_OUTCOME_UP_TO_DATE;
+        output_colored(
+            out, OUTPUT_VERBOSE, upstream_state_color(result->state),
+            "  %s %s: already up-to-date\n",
+            upstream_state_symbol(result->state), result->profile
         );
-        /* Decrement need_pull_count since it was already up-to-date */
-        if (results->need_pull_count > 0) {
-            results->need_pull_count--;
-        }
         return;
     }
 
     /* Pull succeeded */
-    if (results->need_pull_count > 0) {
-        results->need_pull_count--;
-    }
-    results->pulled_count++;
+    result->outcome = SYNC_OUTCOME_PULLED;
 
     /* Sync manifest — stats needed for success message */
     size_t synced = 0, removed = 0, fallbacks = 0, skipped = 0;
@@ -731,7 +705,6 @@ static error_t *resolve_and_push_divergence(
     git_repository *repo,
     const char *remote_name,
     profile_sync_result_t *result,
-    sync_results_t *results,
     output_t *out,
     resolve_strategy_t strategy,
     const char *strategy_name,
@@ -750,7 +723,8 @@ static error_t *resolve_and_push_divergence(
         ? "rebased commits" : "merge commit";
 
     output_info(
-        out, OUTPUT_NORMAL, "    Resolving with %s strategy...",
+        out, OUTPUT_NORMAL,
+        "    Resolving with %s strategy...",
         strategy_name
     );
 
@@ -765,7 +739,7 @@ static error_t *resolve_and_push_divergence(
             "    {red}✗{reset} Failed to initialize divergence context: %s\n",
             error_message(err)
         );
-        mark_result_failed(result, results, err);
+        mark_result_failed(result, err);
         return NULL;
     }
 
@@ -778,7 +752,7 @@ static error_t *resolve_and_push_divergence(
             "    {red}✗{reset} %s failed: %s\n",
             cap_name, error_message(err)
         );
-        mark_result_failed(result, results, err);
+        mark_result_failed(result, err);
         return NULL;
     }
 
@@ -791,7 +765,7 @@ static error_t *resolve_and_push_divergence(
             "    {red}✗{reset} %s verification failed: %s\n",
             cap_name, error_message(err)
         );
-        mark_result_failed(result, results, err);
+        mark_result_failed(result, err);
 
         char reason[64];
         snprintf(
@@ -817,7 +791,7 @@ static error_t *resolve_and_push_divergence(
                 "    {red}✗{reset} Push after %s failed: %s\n",
                 strategy_name, error_message(err)
             );
-            mark_result_failed(result, results, err);
+            mark_result_failed(result, err);
 
             output_info(
                 out, OUTPUT_NORMAL,
@@ -834,14 +808,10 @@ static error_t *resolve_and_push_divergence(
             "    {green}✓{reset} Pushed %s\n",
             push_desc
         );
-        result->pushed = true;
-        results->pushed_count++;
     }
 
-    if (results->diverged_count > 0) {
-        results->diverged_count--;
-    }
-    results->pulled_count++;
+    /* Resolved locally even if push was deferred — next sync sees LOCAL_AHEAD. */
+    result->outcome = SYNC_OUTCOME_RESOLVED;
 
     /* Sync manifest with changes from resolution */
     sync_manifest_and_report(
@@ -859,7 +829,6 @@ static error_t *handle_diverged_ours(
     git_repository *repo,
     const char *remote_name,
     profile_sync_result_t *result,
-    sync_results_t *results,
     output_t *out,
     bool confirm_destructive,
     transfer_context_t *xfer,
@@ -869,6 +838,7 @@ static error_t *handle_diverged_ours(
 
     if (no_push) {
         output_info(out, OUTPUT_NORMAL, "    Force push skipped (--no-push)");
+        result->outcome = SYNC_OUTCOME_DIVERGED;
         return NULL;
     }
 
@@ -883,6 +853,7 @@ static error_t *handle_diverged_ours(
         );
         if (!output_confirm_or_default(out, prompt, false, false)) {
             output_info(out, OUTPUT_NORMAL, "    Operation cancelled by user");
+            result->outcome = SYNC_OUTCOME_DIVERGED;
             return NULL;
         }
     }
@@ -895,7 +866,7 @@ static error_t *handle_diverged_ours(
             "    {red}✗{reset} Force push failed: %s\n",
             error_message(err)
         );
-        mark_result_failed(result, results, err);
+        mark_result_failed(result, err);
         return NULL;
     }
 
@@ -903,8 +874,7 @@ static error_t *handle_diverged_ours(
         out, OUTPUT_NORMAL,
         "    {green}✓{reset} Force pushed to remote (remote commits discarded)\n"
     );
-    result->pushed = true;
-    results->pushed_count++;
+    result->outcome = SYNC_OUTCOME_RESOLVED;
 
     return NULL;
 }
@@ -916,7 +886,6 @@ static error_t *handle_diverged_theirs(
     git_repository *repo,
     const char *remote_name,
     profile_sync_result_t *result,
-    sync_results_t *results,
     output_t *out,
     bool confirm_destructive,
     state_t *state,
@@ -941,6 +910,7 @@ static error_t *handle_diverged_theirs(
             output_info(
                 out, OUTPUT_NORMAL, "    Operation cancelled by user"
             );
+            result->outcome = SYNC_OUTCOME_DIVERGED;
             return NULL;
         }
     }
@@ -956,7 +926,7 @@ static error_t *handle_diverged_theirs(
             "    {red}✗{reset} Failed to initialize divergence context: %s\n",
             error_message(err)
         );
-        mark_result_failed(result, results, err);
+        mark_result_failed(result, err);
         return NULL;
     }
 
@@ -969,7 +939,7 @@ static error_t *handle_diverged_theirs(
             "    {red}✗{reset} Reset failed: %s\n",
             error_message(err)
         );
-        mark_result_failed(result, results, err);
+        mark_result_failed(result, err);
         return NULL;
     }
 
@@ -989,7 +959,7 @@ static error_t *handle_diverged_theirs(
             out, OUTPUT_NORMAL,
             "    {yellow}⚠{reset} Local branch was reset but verification failed\n"
         );
-        mark_result_failed(result, results, err);
+        mark_result_failed(result, err);
         return NULL;
     }
 
@@ -997,7 +967,7 @@ static error_t *handle_diverged_theirs(
         out, OUTPUT_NORMAL,
         "    {green}✓{reset} Reset to remote (local commits discarded)\n"
     );
-    results->pulled_count++;
+    result->outcome = SYNC_OUTCOME_RESOLVED;
 
     /* Sync manifest with changes from reset */
     sync_manifest_and_report(
@@ -1017,7 +987,6 @@ static error_t *handle_diverged(
     git_repository *repo,
     const char *remote_name,
     profile_sync_result_t *result,
-    sync_results_t *results,
     output_t *out,
     sync_strategy_t strategy,
     transfer_context_t *xfer,
@@ -1044,44 +1013,37 @@ static error_t *handle_diverged(
                 out, OUTPUT_NORMAL,
                 "    Strategies: rebase, merge, ours (keep local), theirs (keep remote)"
             );
+            result->outcome = SYNC_OUTCOME_DIVERGED;
             break;
         }
 
+        /* Non-WARN strategies own their outcome inside the inner handler. */
         case DIVERGE_REBASE: {
             return resolve_and_push_divergence(
-                repo, remote_name, result, results, out, RESOLVE_STRATEGY_REBASE,
+                repo, remote_name, result, out, RESOLVE_STRATEGY_REBASE,
                 "rebase", xfer, state, arena, mounts, enabled_profiles, no_push
             );
         }
 
         case DIVERGE_MERGE: {
             return resolve_and_push_divergence(
-                repo, remote_name, result, results, out, RESOLVE_STRATEGY_MERGE,
+                repo, remote_name, result, out, RESOLVE_STRATEGY_MERGE,
                 "merge", xfer, state, arena, mounts, enabled_profiles, no_push
             );
         }
 
         case DIVERGE_OURS: {
-            error_t *err = handle_diverged_ours(
-                repo, remote_name, result, results, out, confirm_destructive,
+            return handle_diverged_ours(
+                repo, remote_name, result, out, confirm_destructive,
                 xfer, no_push
             );
-            if (!err && result->pushed) {
-                if (results->diverged_count > 0) results->diverged_count--;
-            }
-            return err;
         }
 
         case DIVERGE_THEIRS: {
-            size_t before = results->pulled_count;
-            error_t *err = handle_diverged_theirs(
-                repo, remote_name, result, results, out, confirm_destructive,
+            return handle_diverged_theirs(
+                repo, remote_name, result, out, confirm_destructive,
                 state, arena, mounts, enabled_profiles
             );
-            if (!err && results->pulled_count > before) {
-                if (results->diverged_count > 0) results->diverged_count--;
-            }
-            return err;
         }
     }
 
@@ -1125,15 +1087,15 @@ static error_t *sync_push_phase(
         output_section(out, OUTPUT_NORMAL, "Syncing with remote");
     }
 
-    for (size_t i = 0; i < results->count; i++) {
+    for (size_t i = 0; i < results->profile_count; i++) {
         profile_sync_result_t *result = &results->profiles[i];
 
-        /* Skip failed analysis */
-        if (result->failed) {
+        /* Skip rows that already failed in analyze phase. */
+        if (result->outcome == SYNC_OUTCOME_FAILED) {
             output_styled(
                 out, OUTPUT_NORMAL,
                 "  {red}✗{reset} {red}%s{reset}: %s\n",
-                result->profile, result->error_message
+                result->profile, error_message(result->error)
             );
             continue;
         }
@@ -1141,10 +1103,11 @@ static error_t *sync_push_phase(
         /* Handle based on state */
         switch (result->state) {
             case UPSTREAM_UP_TO_DATE: {
-                output_info(
-                    out, OUTPUT_VERBOSE,
-                    "  = {green}%s{reset}: up-to-date",
-                    result->profile
+                /* outcome remains UP_TO_DATE via calloc-default. */
+                output_colored(
+                    out, OUTPUT_VERBOSE, upstream_state_color(result->state),
+                    "  %s %s: up-to-date\n",
+                    upstream_state_symbol(result->state), result->profile
                 );
                 break;
             }
@@ -1153,13 +1116,14 @@ static error_t *sync_push_phase(
                 /* theirs: discard local commits, reset to remote
                  * Blocked by --no-pull since resetting to remote incorporates remote state */
                 if (diverged_strategy == DIVERGE_THEIRS && !no_pull) {
-                    output_info(
-                        out, OUTPUT_NORMAL,
-                        "  ↑ {yellow}%s{reset}: %zu commit%s ahead of remote",
+                    output_colored(
+                        out, OUTPUT_NORMAL, upstream_state_color(result->state),
+                        "  %s %s: %zu commit%s ahead of remote\n",
+                        upstream_state_symbol(result->state),
                         result->profile, result->ahead, result->ahead == 1 ? "" : "s"
                     );
                     error_t *err = handle_diverged_theirs(
-                        repo, remote_name, result, results, out, confirm_destructive,
+                        repo, remote_name, result, out, confirm_destructive,
                         state, arena, mounts, enabled_profiles
                     );
                     if (err) return err;
@@ -1167,11 +1131,13 @@ static error_t *sync_push_phase(
                 }
 
                 if (no_push) {
-                    output_info(
-                        out, OUTPUT_NORMAL,
-                        "  ↑ {yellow}%s{reset}: %zu commit%s ahead (push skipped: --no-push)",
+                    output_colored(
+                        out, OUTPUT_NORMAL, upstream_state_color(result->state),
+                        "  %s %s: %zu commit%s ahead (push skipped: --no-push)\n",
+                        upstream_state_symbol(result->state),
                         result->profile, result->ahead, result->ahead == 1 ? "" : "s"
                     );
+                    result->outcome = SYNC_OUTCOME_DIVERGED;
                     break;
                 }
 
@@ -1188,27 +1154,26 @@ static error_t *sync_push_phase(
                         "  {red}✗{reset} {red}%s{reset}: push failed - %s\n",
                         result->profile, error_message(err)
                     );
-                    mark_result_failed(result, results, err);
+                    mark_result_failed(result, err);
                 } else {
-                    result->pushed = true;
-                    results->pushed_count++;
-
                     output_styled(
                         out, OUTPUT_NORMAL,
                         "  {green}✓{reset} {green}%s{reset}: pushed %zu commit%s\n",
                         result->profile, result->ahead, result->ahead == 1 ? "" : "s"
                     );
+                    result->outcome = SYNC_OUTCOME_PUSHED;
                 }
                 break;
             }
 
             case UPSTREAM_NO_REMOTE: {
                 if (no_push) {
-                    output_info(
-                        out, OUTPUT_NORMAL,
-                        "  • %s: local only (push skipped: --no-push)",
-                        result->profile
+                    output_colored(
+                        out, OUTPUT_NORMAL, upstream_state_color(result->state),
+                        "  %s %s: local only (push skipped: --no-push)\n",
+                        upstream_state_symbol(result->state), result->profile
                     );
+                    result->outcome = SYNC_OUTCOME_DIVERGED;
                     break;
                 }
 
@@ -1226,15 +1191,14 @@ static error_t *sync_push_phase(
                         "  {red}✗{reset} {red}%s{reset}: failed to create remote branch - %s\n",
                         result->profile, error_message(err)
                     );
-                    mark_result_failed(result, results, err);
+                    mark_result_failed(result, err);
                 } else {
-                    result->pushed = true;
-                    results->pushed_count++;
                     output_styled(
                         out, OUTPUT_NORMAL,
                         "  {green}✓{reset} {green}%s{reset}: created remote branch\n",
                         result->profile
                     );
+                    result->outcome = SYNC_OUTCOME_PUSHED;
                 }
                 break;
             }
@@ -1243,9 +1207,10 @@ static error_t *sync_push_phase(
                 /* ours: force push local, discard remote commits */
                 if (diverged_strategy == DIVERGE_OURS) {
 
-                    output_info(
-                        out, OUTPUT_NORMAL,
-                        "  ↓ {yellow}%s{reset}: %zu remote commit%s ahead",
+                    output_colored(
+                        out, OUTPUT_NORMAL, upstream_state_color(result->state),
+                        "  %s %s: %zu remote commit%s ahead\n",
+                        upstream_state_symbol(result->state),
                         result->profile, result->behind, result->behind == 1 ? "" : "s"
                     );
                     output_styled(
@@ -1255,21 +1220,15 @@ static error_t *sync_push_phase(
                     );
 
                     error_t *err = handle_diverged_ours(
-                        repo, remote_name, result, results, out, confirm_destructive, xfer, no_push
+                        repo, remote_name, result, out, confirm_destructive, xfer, no_push
                     );
                     if (err) {
                         return err;
                     }
-                    /* Adjust: analyze phase counted this as needing pull,
-                     * but only decrement if ours actually resolved (pushed).
-                     * If --no-push or user cancelled, profile still needs attention. */
-                    if (result->pushed && results->need_pull_count > 0) {
-                        results->need_pull_count--;
-                    }
                     break;
                 }
                 handle_remote_ahead(
-                    repo, remote_name, result, results, out, auto_pull, no_pull,
+                    repo, remote_name, result, out, auto_pull, no_pull,
                     state, arena, mounts, enabled_profiles
                 );
                 break;
@@ -1294,10 +1253,11 @@ static error_t *sync_push_phase(
                         "    '%s' resolution skipped (--no-pull prevents "
                         "incorporating remote changes)", name
                     );
+                    result->outcome = SYNC_OUTCOME_DIVERGED;
                     break;
                 }
                 error_t *err = handle_diverged(
-                    repo, remote_name, result, results, out, diverged_strategy, xfer,
+                    repo, remote_name, result, out, diverged_strategy, xfer,
                     confirm_destructive, state, arena, mounts, enabled_profiles, no_push
                 );
                 if (err) {
@@ -1307,17 +1267,207 @@ static error_t *sync_push_phase(
             }
 
             case UPSTREAM_UNKNOWN: {
-                output_styled(
-                    out, OUTPUT_NORMAL,
-                    "  {yellow}?{reset} %s: state unknown\n",
-                    result->profile
+                output_colored(
+                    out, OUTPUT_NORMAL, upstream_state_color(result->state),
+                    "  %s %s: state unknown\n",
+                    upstream_state_symbol(result->state), result->profile
                 );
+                result->outcome = SYNC_OUTCOME_DIVERGED;
                 break;
             }
         }
     }
 
     return NULL;
+}
+
+/**
+ * Render dry-run analysis: per-profile state, then closing banner.
+ *
+ * Glyph and color flow from upstream_state_symbol / upstream_state_color
+ * so the visual stays in lockstep with list/status as those maps evolve.
+ * Analyze-phase failures use the outcome glyph (✗), not a state glyph.
+ */
+static void sync_render_dry_run(
+    const sync_results_t *results,
+    output_t *out
+) {
+    output_section(out, OUTPUT_NORMAL, "Dry run analysis");
+
+    for (size_t i = 0; i < results->profile_count; i++) {
+        const profile_sync_result_t *r = &results->profiles[i];
+
+        if (r->outcome == SYNC_OUTCOME_FAILED) {
+            output_styled(
+                out, OUTPUT_NORMAL, "  {red}✗{reset} %s: %s\n",
+                r->profile, error_message(r->error)
+            );
+            continue;
+        }
+
+        const char *glyph = upstream_state_symbol(r->state);
+        output_color_t color = upstream_state_color(r->state);
+
+        switch (r->state) {
+            case UPSTREAM_UP_TO_DATE:
+                output_colored(
+                    out, OUTPUT_NORMAL, color,
+                    "  %s %s: up-to-date\n",
+                    glyph, r->profile
+                );
+                break;
+            case UPSTREAM_LOCAL_AHEAD:
+                output_colored(
+                    out, OUTPUT_NORMAL, color,
+                    "  %s %s: %zu commit%s to push\n",
+                    glyph, r->profile, r->ahead, r->ahead == 1 ? "" : "s"
+                );
+                break;
+            case UPSTREAM_REMOTE_AHEAD:
+                output_colored(
+                    out, OUTPUT_NORMAL, color,
+                    "  %s %s: %zu commit%s to pull\n",
+                    glyph, r->profile, r->behind, r->behind == 1 ? "" : "s"
+                );
+                break;
+            case UPSTREAM_DIVERGED:
+                output_colored(
+                    out, OUTPUT_NORMAL, color,
+                    "  %s %s: diverged (%zu local, %zu remote)\n",
+                    glyph, r->profile, r->ahead, r->behind
+                );
+                break;
+            case UPSTREAM_NO_REMOTE:
+                output_colored(
+                    out, OUTPUT_NORMAL, color,
+                    "  %s %s: local only (no remote branch)\n",
+                    glyph, r->profile
+                );
+                break;
+            case UPSTREAM_UNKNOWN:
+                output_colored(
+                    out, OUTPUT_NORMAL, color,
+                    "  %s %s: unknown state\n",
+                    glyph, r->profile
+                );
+                break;
+        }
+    }
+
+    output_newline(out, OUTPUT_NORMAL);
+    output_info(out, OUTPUT_NORMAL, "Dry run: no changes made");
+}
+
+/**
+ * Render the final sync summary.
+ *
+ * Tallies per-row outcomes (single source of truth), disambiguates the
+ * DIVERGED umbrella by the captured analyze-phase state into
+ * needs_pull / needs_push / diverged buckets, then emits the count lines,
+ * the session-level transfer stats, and the "Run apply" hint.
+ *
+ * The summary keeps the finer-grained user vocabulary; hook env (Tier 2)
+ * will expose the cleaner outcome partition.
+ */
+static void sync_render_summary(
+    const sync_results_t *results,
+    sync_strategy_t diverged_strategy,
+    const transfer_context_t *xfer,
+    output_t *out
+) {
+    output_section(out, OUTPUT_NORMAL, "Sync complete");
+
+    size_t pushed = 0, pulled = 0, resolved = 0;
+    size_t up_to_date = 0, failed = 0;
+    size_t needs_pull = 0, needs_push = 0, diverged = 0;
+
+    for (size_t i = 0; i < results->profile_count; i++) {
+        const profile_sync_result_t *r = &results->profiles[i];
+        switch (r->outcome) {
+            case SYNC_OUTCOME_UP_TO_DATE: up_to_date++; break;
+            case SYNC_OUTCOME_PUSHED:     pushed++; break;
+            case SYNC_OUTCOME_PULLED:     pulled++; break;
+            case SYNC_OUTCOME_RESOLVED:   resolved++; break;
+            case SYNC_OUTCOME_FAILED:     failed++; break;
+            case SYNC_OUTCOME_DIVERGED:
+                switch (r->state) {
+                    case UPSTREAM_REMOTE_AHEAD:
+                        needs_pull++;
+                        break;
+                    case UPSTREAM_LOCAL_AHEAD:
+                    case UPSTREAM_NO_REMOTE:
+                        needs_push++;
+                        break;
+                    case UPSTREAM_DIVERGED:
+                    case UPSTREAM_UNKNOWN:
+                    case UPSTREAM_UP_TO_DATE:
+                        diverged++;
+                        break;
+                }
+                break;
+        }
+    }
+
+    if (pushed > 0) {
+        output_success(
+            out, OUTPUT_NORMAL, "{cyan}%zu{reset} profile%s pushed",
+            pushed, pushed == 1 ? "" : "s"
+        );
+    }
+    if (pulled > 0) {
+        output_success(
+            out, OUTPUT_NORMAL, "{cyan}%zu{reset} profile%s pulled",
+            pulled, pulled == 1 ? "" : "s"
+        );
+    }
+    if (resolved > 0) {
+        output_success(
+            out, OUTPUT_NORMAL, "{cyan}%zu{reset} profile%s resolved",
+            resolved, resolved == 1 ? "" : "s"
+        );
+    }
+    if (up_to_date > 0) {
+        output_info(
+            out, OUTPUT_NORMAL, "{cyan}%zu{reset} profile%s already up-to-date",
+            up_to_date, up_to_date == 1 ? "" : "s"
+        );
+    }
+    if (needs_push > 0) {
+        output_warning(
+            out, OUTPUT_NORMAL, "{cyan}%zu{reset} profile%s need push",
+            needs_push, needs_push == 1 ? "" : "s"
+        );
+    }
+    if (needs_pull > 0) {
+        output_warning(
+            out, OUTPUT_NORMAL, "{cyan}%zu{reset} profile%s need pull",
+            needs_pull, needs_pull == 1 ? "" : "s"
+        );
+    }
+    if (diverged > 0) {
+        output_warning(
+            out, OUTPUT_NORMAL, "{cyan}%zu{reset} profile%s diverged",
+            diverged, diverged == 1 ? "" : "s"
+        );
+    }
+    if (failed > 0) {
+        output_error(
+            out, "{cyan}%zu{reset} profile%s failed",
+            failed, failed == 1 ? "" : "s"
+        );
+    }
+
+    /* Session-level wire stats (silent if nothing moved) */
+    transfer_summarize(xfer, out, OUTPUT_NORMAL);
+
+    /* PULLED always brings remote; RESOLVED brings remote for
+     * rebase/merge/theirs but not 'ours' (which discards remote). */
+    if (pulled > 0 || (resolved > 0 && diverged_strategy != DIVERGE_OURS)) {
+        output_newline(out, OUTPUT_NORMAL);
+        output_hint(
+            out, OUTPUT_NORMAL, "Run 'dotta apply' to deploy, or 'dotta status' to review"
+        );
+    }
 }
 
 /**
@@ -1644,59 +1794,7 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
 
     /* Dry run: display analysis and exit without executing push/pull */
     if (opts->dry_run) {
-        output_section(out, OUTPUT_NORMAL, "Dry run analysis");
-        for (size_t i = 0; i < results->count; i++) {
-            profile_sync_result_t *r = &results->profiles[i];
-            if (r->failed) {
-                output_styled(
-                    out, OUTPUT_NORMAL, "  {red}✗{reset} %s: %s\n",
-                    r->profile, r->error_message
-                );
-                continue;
-            }
-            switch (r->state) {
-                case UPSTREAM_UP_TO_DATE:
-                    output_info(
-                        out, OUTPUT_NORMAL, "  = %s: up-to-date",
-                        r->profile
-                    );
-                    break;
-                case UPSTREAM_LOCAL_AHEAD:
-                    output_info(
-                        out, OUTPUT_NORMAL, "  ↑ %s: %zu commit%s to push",
-                        r->profile, r->ahead, r->ahead == 1 ? "" : "s"
-                    );
-                    break;
-                case UPSTREAM_REMOTE_AHEAD:
-                    output_info(
-                        out, OUTPUT_NORMAL, "  ↓ %s: %zu commit%s to pull",
-                        r->profile, r->behind, r->behind == 1 ? "" : "s"
-                    );
-                    break;
-                case UPSTREAM_DIVERGED:
-                    output_styled(
-                        out, OUTPUT_NORMAL,
-                        "  {yellow}↕{reset} %s: diverged (%zu local, %zu remote)\n",
-                        r->profile, r->ahead, r->behind
-                    );
-                    break;
-                case UPSTREAM_NO_REMOTE:
-                    output_info(
-                        out, OUTPUT_NORMAL, "  • %s: local only (no remote branch)",
-                        r->profile
-                    );
-                    break;
-                case UPSTREAM_UNKNOWN:
-                    output_styled(
-                        out, OUTPUT_NORMAL,
-                        "  {yellow}?{reset} %s: unknown state\n",
-                        r->profile
-                    );
-                    break;
-            }
-        }
-        output_newline(out, OUTPUT_NORMAL);
-        output_info(out, OUTPUT_NORMAL, "Dry run: no changes made");
+        sync_render_dry_run(results, out);
         err = NULL;
         goto cleanup;
     }
@@ -1773,7 +1871,15 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
      * section is ephemeral — shown as progress during execution, cleared after.
      * This avoids noise when there's nothing actionable to report. */
     bool no_push = opts->no_push;
-    bool all_quiet = (results->up_to_date_count == results->count);
+    bool all_quiet = true;
+    for (size_t i = 0; i < results->profile_count; i++) {
+        const profile_sync_result_t *r = &results->profiles[i];
+        if (r->outcome != SYNC_OUTCOME_UP_TO_DATE ||
+            r->state != UPSTREAM_UP_TO_DATE) {
+            all_quiet = false;
+            break;
+        }
+    }
     bool sync_ephemeral = !output_is_verbose(out) && all_quiet;
 
     if (sync_ephemeral) {
@@ -1823,75 +1929,7 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
         goto cleanup;
     }
 
-    /* Final summary */
-    output_section(out, OUTPUT_NORMAL, "Sync complete");
-
-    if (results->pushed_count > 0) {
-        output_success(
-            out, OUTPUT_NORMAL, "{cyan}%zu{reset} profile%s pushed",
-            results->pushed_count, results->pushed_count == 1 ? "" : "s"
-        );
-    }
-
-    if (results->pulled_count > 0) {
-        output_success(
-            out, OUTPUT_NORMAL, "{cyan}%zu{reset} profile%s updated from remote",
-            results->pulled_count, results->pulled_count == 1 ? "" : "s"
-        );
-    }
-
-    if (results->up_to_date_count > 0) {
-        output_info(
-            out, OUTPUT_NORMAL, "{cyan}%zu{reset} profile%s already up-to-date",
-            results->up_to_date_count, results->up_to_date_count == 1 ? "" : "s"
-        );
-    }
-
-    if (results->need_pull_count > 0) {
-        output_warning(
-            out, OUTPUT_NORMAL, "{cyan}%zu{reset} profile%s need pull",
-            results->need_pull_count, results->need_pull_count == 1 ? "" : "s"
-        );
-    }
-
-    if (results->diverged_count > 0) {
-        output_warning(
-            out, OUTPUT_NORMAL, "{cyan}%zu{reset} profile%s diverged",
-            results->diverged_count, results->diverged_count == 1 ? "" : "s"
-        );
-    }
-
-    if (results->failed_count > 0) {
-        output_error(
-            out, "{cyan}%zu{reset} profile%s failed",
-            results->failed_count, results->failed_count == 1 ? "" : "s"
-        );
-    }
-
-    if (results->fetch_failed_count > 0) {
-        output_warning(
-            out, OUTPUT_NORMAL, "{cyan}%zu{reset} fetch operation%s failed",
-            results->fetch_failed_count, results->fetch_failed_count == 1 ? "" : "s"
-        );
-    }
-
-    if (results->auth_failed_count > 0) {
-        output_error(
-            out, "{cyan}%zu{reset} authentication failure%s",
-            results->auth_failed_count, results->auth_failed_count == 1 ? "" : "s"
-        );
-    }
-
-    /* Session-level wire stats (silent if nothing moved) */
-    transfer_summarize(xfer, out, OUTPUT_NORMAL);
-
-    /* Provide guidance on next steps if remote content was pulled/resolved */
-    if (results->pulled_count > 0) {
-        output_newline(out, OUTPUT_NORMAL);
-        output_hint(
-            out, OUTPUT_NORMAL, "Run 'dotta apply' to deploy, or 'dotta status' to review"
-        );
-    }
+    sync_render_summary(results, diverged_strategy, xfer, out);
 
     /* Success - fall through to cleanup */
     err = NULL;

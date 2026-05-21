@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+#
+# post-update hook - Runs after updating profiles with modified files
+#
+# This script runs after dotta has committed filesystem-side changes
+# back to the affected profile branches. Use it to push the new
+# commits upstream, fire CI, or notify collaborators.
+#
+# Exit code is logged but the update has already completed.
+#
+# Environment variables provided by dotta:
+#   DOTTA_REPO_DIR    - Path to dotta repository
+#   DOTTA_COMMAND     - Command being executed ("update")
+#   DOTTA_PROFILE     - Space-separated list of profiles that were updated
+#   DOTTA_FILE_COUNT  - Number of files
+#   DOTTA_FILE_0      - First file path (0-indexed)
+#   DOTTA_FILE_1      - Second file path
+#   DOTTA_FILE_N      - Nth file path (where N = 0 to COUNT-1)
+#   DOTTA_DRY_RUN     - "1" if dry-run, "0" otherwise
+#
+
+set -euo pipefail
+
+if [[ "${DOTTA_DRY_RUN:-0}" == "1" ]]; then
+    echo "Post-update: dry-run, nothing to sync."
+    exit 0
+fi
+
+echo "Post-update: profile(s) '$DOTTA_PROFILE' received $DOTTA_FILE_COUNT change(s)."
+
+# Example: Push the updated profile branches upstream.
+# Prefer 'dotta sync' over a raw 'git push' so divergence handling, hooks,
+# and credential plumbing all behave consistently.
+if command -v dotta &>/dev/null; then
+    echo "Syncing updated profiles to remote..."
+    # shellcheck disable=SC2086
+    dotta sync -p $DOTTA_PROFILE || {
+        echo "  WARNING: dotta sync returned non-zero exit code" >&2
+    }
+fi
+
+echo "Post-update completed successfully!"
+exit 0

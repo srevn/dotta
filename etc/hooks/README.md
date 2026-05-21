@@ -225,6 +225,24 @@ post_update = false                   # Disable post-update (default)
 
 ## Writing Hooks
 
+### Output is captured, not streamed
+
+Dotta captures hook stdout and stderr in memory and only prints them
+when the hook reports a failure (non-zero exit, timeout, signal). On
+the happy path the buffered output is discarded silently, so anything
+your hook prints during normal operation is invisible in the terminal
+running dotta.
+
+This matters for long-running `post-*` scripts (webhook callouts,
+desktop notifications, notification daemons). If you want visible
+progress while the hook runs, do not rely on plain `echo`. Instead,
+direct the output to a destination dotta does not capture:
+
+- `>/dev/tty`  — write straight to the controlling terminal
+- `logger -t dotta`  — append to syslog/journald
+- `>> "$HOME/.local/state/dotta/hook.log"`  — append to a file
+- `notify-send` / `osascript`  — surface a desktop notification
+
 ### Best Practices
 
 1. **Always use `set -euo pipefail`** at the top of bash scripts

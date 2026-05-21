@@ -105,8 +105,10 @@ static error_t *hook_get_path(
     if (config->hooks_dir) {
         err = fs_expand_tilde(config->hooks_dir, &hooks_dir);
     } else {
-        /* Use default */
-        err = fs_expand_tilde("~/.config/dotta/hooks", &hooks_dir);
+        /* Fallback when config->hooks_dir is NULL. Backstops an unchecked
+         * strdup in config_create_default (see DOTTA_DEFAULT_HOOKS_DIR's
+         * docblock in include/config.h). */
+        err = fs_expand_tilde(DOTTA_DEFAULT_HOOKS_DIR, &hooks_dir);
     }
 
     if (err) {

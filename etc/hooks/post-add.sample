@@ -59,37 +59,5 @@ Auto-committed by dotta post-add hook"
     fi
 fi
 
-# Example: Trigger CI/CD
-# if command -v curl &>/dev/null; then
-#     echo "Triggering CI/CD pipeline..."
-#     curl -X POST "https://ci.example.com/api/trigger" \
-#          -H "Authorization: Bearer $CI_TOKEN" \
-#          -d '{"profile": "'$DOTTA_PROFILE'"}' \
-#          2>/dev/null || true
-# fi
-
-# Example: Send notification to team (Slack)
-# if [[ -n "${SLACK_WEBHOOK_URL:-}" ]]; then
-#     echo "Notifying team..."
-#     curl -X POST "$SLACK_WEBHOOK_URL" \
-#          -H 'Content-Type: application/json' \
-#          -d '{
-#              "text": "Dotfiles updated",
-#              "attachments": [{
-#                  "color": "good",
-#                  "fields": [
-#                      {"title": "Profile", "value": "'"$DOTTA_PROFILE"'", "short": true},
-#                      {"title": "Files", "value": "'"$file_count"'", "short": true}
-#                  ]
-#              }]
-#          }' 2>/dev/null || true
-# fi
-
-# Example: Generate documentation
-# if command -v python3 &>/dev/null; then
-#     echo "Generating profile documentation..."
-#     python3 "$DOTTA_REPO_DIR/scripts/generate_docs.py" "$DOTTA_PROFILE" || true
-# fi
-
 echo "Post-add completed successfully!"
 exit 0

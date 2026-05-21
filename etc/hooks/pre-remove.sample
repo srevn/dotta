@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+#
+# pre-remove hook - Runs before removing files or deleting a profile
+#
+# This script runs before dotta removes files from a profile or deletes
+# a profile entirely. Use it to back up files, validate the removal, or
+# prevent accidental deletion of critical configuration.
+#
+# Exit with non-zero status to abort the remove operation.
+#
+# Environment variables provided by dotta:
+#   DOTTA_REPO_DIR    - Path to dotta repository
+#   DOTTA_COMMAND     - Command being executed ("remove")
+#   DOTTA_PROFILE     - Profile name being modified or deleted
+#   DOTTA_FILE_COUNT  - Number of files (0 when deleting the whole profile)
+#   DOTTA_FILE_0      - First file path (0-indexed)
+#   DOTTA_FILE_1      - Second file path
+#   DOTTA_FILE_N      - Nth file path (where N = 0 to COUNT-1)
+#   DOTTA_DRY_RUN     - "1" if dry-run, "0" otherwise
+#
+
+set -euo pipefail
+
+if [[ "${DOTTA_DRY_RUN:-0}" == "1" ]]; then
+    echo "Pre-remove: dry-run, skipping backup."
+    exit 0
+fi
+
+# Example: Snapshot files about to be removed into a timestamped directory
+backup_dir="$HOME/.dotta-backups/remove-$(date +%Y%m%d-%H%M%S)-$DOTTA_PROFILE"
+
+if [[ "$DOTTA_FILE_COUNT" -gt 0 ]]; then
+    mkdir -p "$backup_dir"
+    echo "Pre-remove: backing up $DOTTA_FILE_COUNT file(s) to $backup_dir"
+
+    for ((i=0; i<DOTTA_FILE_COUNT; i++)); do
+        var_name="DOTTA_FILE_$i"
+        file="${!var_name}"
+        if [[ -e "$file" ]]; then
+            # Preserve the source path relative to home for easy restore
+            rel="${file#$HOME/}"
+            target="$backup_dir/$rel"
+            mkdir -p "$(dirname "$target")"
+            cp -aL "$file" "$target" 2>/dev/null || true
+        fi
+    done
+else
+    # Profile deletion: nothing to back up from the filesystem here.
+    # The profile branch itself remains in Git history until pruned.
+    echo "Pre-remove: deleting profile '$DOTTA_PROFILE' (no files to back up)"
+fi
+
+echo "Pre-remove checks passed. Proceeding with remove..."
+exit 0

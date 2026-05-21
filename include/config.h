@@ -11,6 +11,11 @@
 
 #include <types.h>
 
+/**
+ * Default hooks directory
+ */
+#define DOTTA_DEFAULT_HOOKS_DIR "~/.config/dotta/hooks"
+
 /* Forward declaration — kept opaque so consumers of struct config do
  * not transitively pull in the gitignore engine. The full type lives
  * in base/gitignore.h; only utils/config.c and core/policy.c touch
@@ -79,23 +84,12 @@ struct config {
     size_t auto_encrypt_pattern_count;
     config_auto_encrypt_rules_t auto_encrypt; /* Compiled form of auto_encrypt_patterns */
 
-    /* Argon2id derivation parameters resolved at config_load.
-     *
-     * Either set the user-friendly `strength` preset (fast/balanced/paranoid)
-     * or override the raw `memory` (MiB) / `passes` pair; the parser
-     * materialises the resolved values into the two fields below.
-     * Defaults to the "balanced" preset (256 MiB, 3 passes ≈ 1 s on
-     * commodity hardware).
-     *
-     * Bounds are enforced via crypto/kdf.h's KDF_ARGON2_*_MIN/MAX both
-     * at config-load and at the crypto boundary inside kdf_master_key
-     * (defense in depth — a tampered cipher-blob header is rejected
-     * by cipher_peek_params before the keymgr ever invokes the KDF).
-     */
+    /* Argon2id derivation parameters resolved at config_load */
     uint16_t encryption_argon2_memory_mib;    /* 8..4096 MiB */
     uint8_t encryption_argon2_passes;         /* 1..20 */
 
-    int32_t session_timeout;                  /* Key cache timeout in seconds (default: 3600, 0 = always prompt, -1 = never expire) */
+    /* Key cache timeout in seconds */
+    int32_t session_timeout;                  /* default: 3600, 0 = always prompt, -1 = never expire */
 };
 
 #endif /* DOTTA_CONFIG_DEF_H */

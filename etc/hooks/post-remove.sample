@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+#
+# post-remove hook - Runs after removing files or deleting a profile
+#
+# This script runs after dotta has removed files from a profile or
+# deleted a profile. Use it for audit logging, notifications, or
+# cleanup of related external resources.
+#
+# Exit code is logged but the operation has already completed.
+#
+# Environment variables provided by dotta:
+#   DOTTA_REPO_DIR    - Path to dotta repository
+#   DOTTA_COMMAND     - Command being executed ("remove")
+#   DOTTA_PROFILE     - Profile name that was modified or deleted
+#   DOTTA_FILE_COUNT  - Number of files
+#   DOTTA_FILE_0      - First file path (0-indexed)
+#   DOTTA_FILE_1      - Second file path
+#   DOTTA_FILE_N      - Nth file path (where N = 0 to COUNT-1)
+#   DOTTA_DRY_RUN     - "1" if dry-run, "0" otherwise
+#
+
+set -euo pipefail
+
+if [[ "${DOTTA_DRY_RUN:-0}" == "1" ]]; then
+    echo "Post-remove: dry-run, nothing to record."
+    exit 0
+fi
+
+# Example: Append an audit-log line
+audit_log="$HOME/.local/state/dotta/remove.log"
+mkdir -p "$(dirname "$audit_log")"
+
+{
+    printf '%s\tprofile=%s\tcount=%s' \
+        "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+        "$DOTTA_PROFILE" \
+        "$DOTTA_FILE_COUNT"
+    for ((i=0; i<DOTTA_FILE_COUNT; i++)); do
+        var_name="DOTTA_FILE_$i"
+        printf '\t%s' "${!var_name}"
+    done
+    printf '\n'
+} >> "$audit_log"
+
+echo "Post-remove: audit entry appended to $audit_log"
+exit 0

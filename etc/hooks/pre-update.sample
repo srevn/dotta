@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+#
+# pre-update hook - Runs before updating profiles with modified files
+#
+# This script runs before dotta commits filesystem-side changes back
+# to a profile. Use it to validate modified files, check for sensitive
+# data that may have leaked in, or create a recovery checkpoint.
+#
+# Exit with non-zero status to abort the update operation.
+#
+# Environment variables provided by dotta:
+#   DOTTA_REPO_DIR    - Path to dotta repository
+#   DOTTA_COMMAND     - Command being executed ("update")
+#   DOTTA_PROFILE     - Space-separated list of profiles being updated
+#   DOTTA_FILE_COUNT  - Number of files (when specific files given;
+#                       0 when updating the full workspace)
+#   DOTTA_FILE_0      - First file path (0-indexed)
+#   DOTTA_FILE_1      - Second file path
+#   DOTTA_FILE_N      - Nth file path (where N = 0 to COUNT-1)
+#   DOTTA_DRY_RUN     - "1" if dry-run, "0" otherwise
+#
+
+set -euo pipefail
+
+echo "Pre-update: validating changes for profile(s) '$DOTTA_PROFILE'..."
+
+# Example: Refuse to commit files with merge-conflict markers
+if [[ "$DOTTA_FILE_COUNT" -gt 0 ]]; then
+    for ((i=0; i<DOTTA_FILE_COUNT; i++)); do
+        var_name="DOTTA_FILE_$i"
+        file="${!var_name}"
+        if [[ -f "$file" ]] && grep -qE '^(<<<<<<<|=======|>>>>>>>) ' "$file"; then
+            echo "  ERROR: Conflict marker still present in: $file" >&2
+            exit 1
+        fi
+    done
+fi
+
+# Example: Lint shell scripts before committing
+if command -v shellcheck &>/dev/null && [[ "$DOTTA_FILE_COUNT" -gt 0 ]]; then
+    for ((i=0; i<DOTTA_FILE_COUNT; i++)); do
+        var_name="DOTTA_FILE_$i"
+        file="${!var_name}"
+        case "$file" in
+            *.sh|*.bash)
+                if [[ -f "$file" ]]; then
+                    shellcheck -S warning "$file" || {
+                        echo "  ERROR: shellcheck failed for: $file" >&2
+                        exit 1
+                    }
+                fi
+                ;;
+        esac
+    done
+fi
+
+echo "Pre-update validation passed!"
+exit 0

@@ -19,7 +19,6 @@
 #define DEFAULT_REPO_DIR "~/.local/share/dotta/repo"
 #define DEFAULT_CONFIG_DIR "~/.config/dotta"
 #define DEFAULT_CONFIG_FILE "config.toml"
-#define DEFAULT_HOOKS_DIR "~/.config/dotta/hooks"
 
 /**
  * Argon2id strength presets.
@@ -211,7 +210,7 @@ config_t *config_create_default(void) {
     config->strict_mode = false;
     config->auto_detect_new_files = true;  /* Default: detect new files */
 
-    config->hooks_dir = strdup(DEFAULT_HOOKS_DIR);
+    config->hooks_dir = strdup(DOTTA_DEFAULT_HOOKS_DIR);
     config->hook_timeout = 30;  /* Default: 30 seconds */
     config->pre_apply = true;
     config->post_apply = true;

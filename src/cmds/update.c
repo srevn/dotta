@@ -1283,7 +1283,7 @@ static error_t *update_execute_for_all_profiles(
         }
 
         /* Display profile header */
-        output_info(
+        output_section(
             out, OUTPUT_NORMAL, "Updating profile '{cyan}%s{reset}':",
             profile
         );

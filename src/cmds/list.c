@@ -338,7 +338,7 @@ static error_t *list_files(
     }
 
     /* Print header */
-    output_section(out, OUTPUT_NORMAL, "Files in profile '%s'", opts->profile);
+    output_section(out, OUTPUT_NORMAL, "Files in profile '{cyan}%s{reset}'", opts->profile);
     output_newline(out, OUTPUT_NORMAL);
 
     /* Sort for consistent output */
@@ -629,7 +629,7 @@ static error_t *list_file_history(
 
     /* Print header */
     output_section(
-        out, OUTPUT_NORMAL, "History of '%s' in profile '%s'",
+        out, OUTPUT_NORMAL, "History of '{cyan}%s{reset}' in profile '{cyan}%s{reset}'",
         storage_path, profile
     );
     output_newline(out, OUTPUT_NORMAL);

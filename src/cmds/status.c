@@ -609,7 +609,7 @@ static error_t *display_remote_status(
     }
 
     /* Display remote sync status section */
-    output_section(out, OUTPUT_NORMAL, "Remote sync status (%s)", remote_name);
+    output_section(out, OUTPUT_NORMAL, "Remote sync status ({cyan}%s{reset})", remote_name);
 
     /* Analyze and display each profile's sync state */
     size_t up_to_date = 0;

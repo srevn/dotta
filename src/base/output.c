@@ -688,7 +688,7 @@ void output_section(
     fputs(bold, ctx->stream);
     va_list args;
     va_start(args, fmt);
-    vfprintf(ctx->stream, fmt, args);
+    styled_vfprintf(ctx->color_enabled, ctx->stream, fmt, args);
     va_end(args);
     fputs(reset, ctx->stream);
     fputc('\n', ctx->stream);

@@ -341,9 +341,7 @@ static error_t *show_diff_preview(
     git_patch_line_stats(NULL, &additions, &deletions, patch);
 
     /* Show header */
-    output_styled(
-        out, OUTPUT_NORMAL, "\n{bold}Changes preview{reset}\n"
-    );
+    output_section(out, OUTPUT_NORMAL, "Changes preview");
 
     /* Show stats */
     output_styled(
@@ -920,7 +918,7 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
     }
 
     /* Step 6: Show preview (always, including dry-run) */
-    output_styled(out, OUTPUT_NORMAL, "\n{bold}Revert preview:{reset}\n");
+    output_section(out, OUTPUT_NORMAL, "Revert preview:");
 
     char oid_str[8];
     git_oid_tostr(oid_str, sizeof(oid_str), &target_oid);

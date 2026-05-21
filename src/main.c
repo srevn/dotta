@@ -204,7 +204,7 @@ static int open_repo_for_mode(
  * On success, `*state_out` is set per mode:
  *
  *   DOTTA_STATE_NONE   → NULL
- *   DOTTA_STATE_READ   → state_load handle (may be state_empty on missing DB)
+ *   DOTTA_STATE_READ   → state_load handle (DB absent until first scoped write)
  *   DOTTA_STATE_WRITE  → state_open handle (BEGIN IMMEDIATE held)
  *
  * Parallel in shape to `open_repo_for_mode`. No state is acquired when

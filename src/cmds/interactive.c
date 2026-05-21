@@ -95,9 +95,11 @@ error_t *interactive_state_create(
     }
 
     /* Read current enabled profiles from the borrowed state handle. A
-     * missing DB already resolves to state_empty under spec-driven READ,
-     * so state_get_profiles either returns an empty list or a populated
-     * one — never an error for first-run. */
+     * missing DB resolves to a handle with no underlying connection
+     * under spec-driven READ; state_get_profiles returns an empty list
+     * in that case — never an error for first-run. Saving via 'w'
+     * triggers lazy DB creation in state_begin (see interactive_save_
+     * profile_order below). */
     err = state_get_profiles(deploy_state, &state_profiles);
     if (err) {
         error_free(err);

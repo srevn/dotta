@@ -321,13 +321,13 @@ typedef struct {
 typedef struct state state_t;
 
 /**
- * Load state from repository (read-only)
+ * Load state from repository (read-only, scoped-mutation capable)
  *
- * If database doesn't exist, returns empty state.
- * If database is corrupt or wrong version, returns error.
- *
- * Use this function for read-only operations (status, list).
- * For operations that will modify and save state, use state_open().
+ * If .git/dotta.db doesn't exist, returns a usable handle whose
+ * state->db is NULL (lazy promotion by state_begin happens on first
+ * write). If the file exists but is corrupt or wrong version,
+ * returns an error. Use for the READ acquisition shape — see the
+ * "Transaction model" section above.
  *
  * @param repo Repository (must not be NULL)
  * @param out State structure (must not be NULL, caller must free with state_free)
@@ -336,16 +336,14 @@ typedef struct state state_t;
 error_t *state_load(git_repository *repo, state_t **out);
 
 /**
- * Load state for update (with transaction)
+ * Load state for update (whole-dispatch transaction held)
  *
- * Opens database with write lock (BEGIN IMMEDIATE transaction).
- * The transaction is automatically committed when state_save() is called
- * or rolled back when state_free() is called (cleanup on error paths).
- *
- * Use this function for operations that will modify state (add, apply, remove, etc.).
- * For read-only operations, use state_load().
- *
- * If another process holds the write lock, waits up to 3 seconds (SQLITE_BUSY).
+ * Opens (creating if necessary) .git/dotta.db with the write lock
+ * already held (BEGIN IMMEDIATE). The transaction is committed by
+ * state_save() or rolled back by state_free() (cleanup on error
+ * paths). Use for the WRITE acquisition shape — see the "Transaction
+ * model" section above. If another process holds the write lock,
+ * waits up to 3 seconds (SQLITE_BUSY).
  *
  * @param repo Repository (must not be NULL)
  * @param out State structure (must not be NULL, caller must free with state_free)
@@ -366,14 +364,17 @@ error_t *state_open(git_repository *repo, state_t **out);
 error_t *state_save(git_repository *repo, state_t *state);
 
 /**
- * Begin an explicit transaction on a read-only state handle
+ * Begin an explicit transaction on a state handle
  *
  * Acquires a write lock (BEGIN IMMEDIATE). Used by batch operations
  * that need atomicity on a state opened via state_load() (no inherent
- * transaction). Must be paired with state_commit() or
- * state_rollback().
+ * transaction). On a handle whose underlying DB does not yet exist on
+ * disk (state_load() on a repository never touched by `dotta init`),
+ * this lazily creates .git/dotta.db before taking the lock — mirroring
+ * state_open()'s create semantics, deferred to the moment of actual
+ * write intent. Must be paired with state_commit() or state_rollback().
  *
- * @param state State (must not be NULL, must have open database, must not be in transaction)
+ * @param state State (must not be NULL, must not be in transaction)
  * @return Error or NULL on success
  */
 error_t *state_begin(state_t *state);
@@ -399,21 +400,15 @@ void state_rollback(state_t *state);
  * Check if state has an active transaction
  *
  * Returns true if BEGIN IMMEDIATE has been executed and not yet
- * committed or rolled back. Used by workspace_flush_anchor_updates()
- * to decide whether to manage its own transaction.
+ * committed or rolled back. Used by code paths that may run under
+ * either acquisition shape (manifest_apply_scope,
+ * workspace_flush_anchor_updates, ...) to decide whether to start
+ * their own scoped transaction or piggyback on the caller's.
  *
  * @param state State handle (must not be NULL)
  * @return true if transaction is active
  */
 bool state_locked(const state_t *state);
-
-/**
- * Create empty state
- *
- * @param out State structure (must not be NULL, caller must free with state_free)
- * @return Error or NULL on success
- */
-error_t *state_empty(state_t **out);
 
 /**
  * Free state structure
@@ -962,8 +957,9 @@ error_t *state_set_profile_commit_oid(
  * result, but the pointer itself (and all name / target pointers)
  * stays valid.
  *
- * When the state has no database (state_empty), returns *out_entries = NULL,
- * *out_count = 0.
+ * When the state has no database (state_load on a repository without
+ * .git/dotta.db, never promoted via state_begin), returns
+ * *out_entries = NULL, *out_count = 0.
  *
  * @param state State (must not be NULL)
  * @param out_entries Output: borrowed pointer to row array (must not be NULL)

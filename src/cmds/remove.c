@@ -1339,8 +1339,9 @@ static error_t *delete_profile_branch(
 
     /* Informational queries and enabled check on the borrowed state. Under
      * spec-driven READ the handle is always non-NULL here (CHECK_NULL at
-     * entry), and state_load for a missing DB already resolves to
-     * state_empty — no defensive fallback needed. */
+     * entry), and state_load for a missing DB still returns a usable
+     * handle (DB-less, reads degrade to empty) — no defensive fallback
+     * needed. */
     bool profile_was_enabled = state_has_profile(state, opts->profile);
     size_t deployed_count = 0;
 

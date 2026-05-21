@@ -966,8 +966,11 @@ static error_t *load_profile_entries(state_t *state) {
     CHECK_NULL(state);
 
     /* Already loaded — return immediately.
-     * Must precede the db check: state_empty() marks the cache loaded with
-     * db==NULL, representing a state with zero enabled profiles. */
+     * Must precede the db check: state_load() on a repository without
+     * .git/dotta.db allocates a handle with db==NULL and pre-marks the
+     * cache as loaded (zero rows), a valid view of "no enabled profiles".
+     * Lazy promotion via state_begin() opens the DB without disturbing
+     * this cached view; mutations invalidate it on their own. */
     if (state->profile_entries_loaded) return NULL;
 
     CHECK_NULL(state->db);
@@ -2801,34 +2804,39 @@ error_t *state_load(git_repository *repo, state_t **out) {
         return err;
     }
 
-    /* If database doesn't exist, return empty state */
-    if (!db) {
-        free(db_path);
-        return state_empty(out);
-    }
-
-    /* Allocate state */
+    /* Allocate the handle whether or not the DB exists. When the file is
+     * absent, state->db stays NULL while state->db_path is retained so a
+     * later state_begin() can lazily create the DB — honoring the
+     * READ → scoped-write contract advertised by dotta_state_mode
+     * (runtime.h::dotta_state_mode_t). Reads short-circuit through
+     * load_profile_entries on the profile_entries_loaded flag set below;
+     * zero rows is the correct view of a never-initialized state. */
     state = calloc(1, sizeof(state_t));
     if (!state) {
-        sqlite3_close(db);
+        if (db) sqlite3_close(db);
         free(db_path);
         return ERROR(ERR_MEMORY, "Failed to allocate state");
     }
 
-    state->db = db;
-    state->db_path = db_path;
+    state->db = db;                        /* may be NULL */
+    state->db_path = db_path;              /* owned; freed by state_free */
     state->in_transaction = false;
     state->profile_entries = NULL;
     state->profile_entry_count = 0;
-    state->profile_entries_loaded = false;
+    state->profile_entries_loaded = (db == NULL);
 
-    /* Prepare statements */
-    err = prepare_statements(state);
-    if (err) {
-        sqlite3_close(db);
-        free(db_path);
-        free(state);
-        return err;
+    if (db) {
+        /* Prepare statements only when a live connection exists. On lazy
+         * promotion, state_begin() runs the same prepare_statements() call
+         * before taking BEGIN IMMEDIATE. */
+        err = prepare_statements(state);
+        if (err) {
+            sqlite3_close(state->db);
+            state->db = NULL;
+            free(state->db_path);
+            free(state);
+            return err;
+        }
     }
 
     *out = state;
@@ -2915,10 +2923,11 @@ error_t *state_open(git_repository *repo, state_t **out) {
 /**
  * Save state to repository
  *
- * Commits the transaction started by state_open(). A state_empty() handle
- * holds no DB connection; state_save() on such a handle is a no-op because
- * state_empty() is only used by init_state(), which never writes profile
- * rows before saving.
+ * Commits the transaction started by state_open() if one is active.
+ * Safe on any handle shape: a state_load() handle for a repository
+ * without .git/dotta.db that was never promoted via state_begin
+ * holds no connection (state->db == NULL), and the guard below makes
+ * save a no-op for it.
  *
  * @param repo Repository (must not be NULL)
  * @param state State to save (must not be NULL)
@@ -2947,14 +2956,51 @@ error_t *state_save(git_repository *repo, state_t *state) {
 }
 
 /**
- * Begin an explicit transaction on a read-only state handle
+ * Begin an explicit transaction on a state handle
+ *
+ * Post-condition on success: state->db is open and write-locked
+ * (BEGIN IMMEDIATE held). Mirrors state_open()'s create semantics,
+ * deferred to the moment of actual write intent — see the lazy
+ * promotion block below.
  */
 error_t *state_begin(state_t *state) {
     CHECK_NULL(state);
-    CHECK_NULL(state->db);
 
     if (state->in_transaction) {
         return ERROR(ERR_STATE_INVALID, "Transaction already active");
+    }
+
+    /* Lazy promotion: a state_load() on a repository with no
+     * .git/dotta.db leaves this handle with state->db == NULL but
+     * state->db_path populated. Create the DB on first write attempt
+     * to honor the READ → scoped-write contract documented in
+     * runtime.h::dotta_state_mode_t — matching state_open()'s create
+     * semantics, just deferred to the moment of actual mutation.
+     *
+     * The profile_entries_loaded=true cached zero-row view (set by
+     * state_load's empty branch) remains accurate against the
+     * freshly-created empty schema; the first mutating call
+     * (state_set_profiles / state_enable_profile / state_disable_profile)
+     * invalidates the cache on its own per the existing discipline. */
+    if (!state->db) {
+        if (!state->db_path) {
+            return ERROR(
+                ERR_STATE_INVALID,
+                "Cannot begin transaction: state has no database path"
+            );
+        }
+
+        sqlite3 *db = NULL;
+        error_t *err = open_db(state->db_path, true, &db);
+        if (err) return err;
+        state->db = db;
+
+        err = prepare_statements(state);
+        if (err) {
+            sqlite3_close(state->db);
+            state->db = NULL;
+            return err;
+        }
     }
 
     char *errmsg = NULL;
@@ -3022,42 +3068,6 @@ void state_rollback(state_t *state) {
  */
 bool state_locked(const state_t *state) {
     return state && state->in_transaction;
-}
-
-/**
- * Create empty state
- *
- * Returns in-memory state with no database connection.
- * Useful for testing or when database doesn't exist.
- *
- * @param out State structure (must not be NULL, caller must free with state_free)
- * @return Error or NULL on success
- */
-error_t *state_empty(state_t **out) {
-    CHECK_NULL(out);
-
-    state_t *state = calloc(1, sizeof(state_t));
-    if (!state) {
-        return ERROR(ERR_MEMORY, "Failed to allocate state");
-    }
-
-    state->db = NULL;
-    state->db_path = NULL;
-    state->in_transaction = false;
-    state->profile_entries = NULL;
-    state->profile_entry_count = 0;
-    state->profile_entries_loaded = true;  /* Zero rows is a valid loaded state */
-
-    /* No database, no statements */
-    state->stmt_insert_file = NULL;
-    state->stmt_remove_file = NULL;
-    state->stmt_file_exists = NULL;
-    state->stmt_get_file = NULL;
-    state->stmt_get_file_by_storage = NULL;
-    state->stmt_insert_profile = NULL;
-
-    *out = state;
-    return NULL;
 }
 
 /**

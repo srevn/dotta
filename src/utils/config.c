@@ -220,6 +220,8 @@ config_t *config_create_default(void) {
     config->post_remove = false;
     config->pre_update = false;
     config->post_update = false;
+    config->pre_sync = false;
+    config->post_sync = false;
 
     config->confirm_destructive = true;
     config->confirm_new_files = true;  /* Default: confirm before adding new files */
@@ -408,10 +410,11 @@ error_t *config_load(const char *config_path, config_t **out) {
     toml_datum_t hooks = toml_get(result.toptab, "hooks");
     if (hooks.type == TOML_TABLE) {
         static const char *known[] = {
-            "hooks_dir", "timeout",    "pre_apply",   "post_apply", "pre_add",
-            "post_add",  "pre_remove", "post_remove", "pre_update", "post_update"
+            "hooks_dir",  "timeout",     "pre_apply",  "post_apply",
+            "pre_add",    "post_add",    "pre_remove", "post_remove",
+            "pre_update", "post_update", "pre_sync",   "post_sync"
         };
-        err = validate_known_keys(hooks, "hooks", known, 10);
+        err = validate_known_keys(hooks, "hooks", known, 12);
         if (err) goto cleanup;
 
         toml_datum_t hooks_dir = toml_get(hooks, "hooks_dir");
@@ -471,6 +474,16 @@ error_t *config_load(const char *config_path, config_t **out) {
         toml_datum_t post_update = toml_get(hooks, "post_update");
         if (post_update.type == TOML_BOOLEAN) {
             config->post_update = post_update.u.boolean;
+        }
+
+        toml_datum_t pre_sync = toml_get(hooks, "pre_sync");
+        if (pre_sync.type == TOML_BOOLEAN) {
+            config->pre_sync = pre_sync.u.boolean;
+        }
+
+        toml_datum_t post_sync = toml_get(hooks, "post_sync");
+        if (post_sync.type == TOML_BOOLEAN) {
+            config->post_sync = post_sync.u.boolean;
         }
     }
 

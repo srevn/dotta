@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+#
+# post-sync hook - Runs after synchronizing with the remote
+#
+# This script runs after dotta has completed sync at the storage
+# layer (state_commit succeeded). Use it to notify other machines,
+# fire CI, surface a desktop notification, or trigger a downstream
+# apply on another host.
+#
+# Exit code is logged but the sync has already completed.
+#
+# Note: post-sync fires only after state_commit succeeds, so reaching
+# this point means sync completed at the storage layer. Individual
+# profiles may still have diverged or failed — run 'dotta status'
+# inside the hook if per-profile detail is needed.
+#
+# Environment variables provided by dotta:
+#   DOTTA_REPO_DIR    - Path to dotta repository
+#   DOTTA_COMMAND     - Command being executed ("sync")
+#   DOTTA_PROFILE     - Space-separated list of profiles that were synced
+#   DOTTA_REMOTE      - Resolved remote name (e.g., "origin")
+#   DOTTA_FILE_COUNT  - Always "0" for sync
+#   DOTTA_DRY_RUN     - Always "0" — post-sync does not fire on dry-run
+#
+
+set -euo pipefail
+
+echo "Post-sync: profile(s) '$DOTTA_PROFILE' synced with '$DOTTA_REMOTE'."
+
+# Example: Desktop notification (Linux)
+if command -v notify-send &>/dev/null; then
+    notify-send "Dotta sync ($DOTTA_REMOTE)" "Synced: $DOTTA_PROFILE"
+fi
+
+echo "Post-sync completed."
+exit 0

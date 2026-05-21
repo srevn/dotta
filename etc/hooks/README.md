@@ -15,6 +15,8 @@ Hooks allow you to run custom scripts before and after dotta operations.
    cp etc/hooks/post-apply.sample ~/.config/dotta/hooks/post-apply
    cp etc/hooks/pre-add.sample ~/.config/dotta/hooks/pre-add
    cp etc/hooks/post-add.sample ~/.config/dotta/hooks/post-add
+   cp etc/hooks/pre-sync.sample ~/.config/dotta/hooks/pre-sync
+   cp etc/hooks/post-sync.sample ~/.config/dotta/hooks/post-sync
    ```
 
 3. **Make them executable:**
@@ -206,6 +208,62 @@ Hooks allow you to run custom scripts before and after dotta operations.
 **Exit Behavior:**
 - Exit 0 or non-zero: Update already completed, exit code logged only
 
+### `pre-sync`
+
+**When:** Before synchronizing with the remote
+**Use For:** Gating sync on network conditions, host policy, or remote reachability
+
+**Example Use Cases:**
+- Block sync on a metered network
+- Refuse to push from a designated read-only host
+- Verify the remote is reachable before paying the fetch cost
+- Require VPN connection for private remotes
+
+**Environment Variables:**
+- `DOTTA_REPO_DIR` - Path to dotta repository
+- `DOTTA_COMMAND` - Always "sync"
+- `DOTTA_PROFILE` - Space-separated list of profiles being synced
+- `DOTTA_REMOTE` - Resolved remote name (e.g., "origin")
+- `DOTTA_FILE_COUNT` - Always "0" for sync
+- `DOTTA_DRY_RUN` - "1" if dry-run, "0" otherwise
+
+**Exit Behavior:**
+- Exit 0: Continue with sync
+- Exit non-zero: Abort sync operation
+
+**Fire ordering:** Pre-sync fires *after* the workspace dirty-check has
+resolved (clean workspace, `--force`, or user explicitly confirmed dirty
+sync). Reaching pre-sync means sync is committed to attempting network
+operations, so pre/post run as a matched pair on the happy path. Network
+or push failures may still suppress post-sync — the same operational
+asymmetry every hook pair carries.
+
+### `post-sync`
+
+**When:** After synchronizing with the remote (state_commit succeeded)
+**Use For:** Cross-machine signaling, notifications, triggering downstream apply
+
+**Example Use Cases:**
+- Desktop notification on sync completion
+- Webhook ping to a coordinator service ("this host pushed")
+- Auto-trigger `dotta apply` on the same machine after pulling
+- Trigger CI/CD when a profile branch advances
+
+**Environment Variables:**
+- `DOTTA_REPO_DIR` - Path to dotta repository
+- `DOTTA_COMMAND` - Always "sync"
+- `DOTTA_PROFILE` - Space-separated list of profiles that were synced
+- `DOTTA_REMOTE` - Resolved remote name (e.g., "origin")
+- `DOTTA_FILE_COUNT` - Always "0" for sync
+- `DOTTA_DRY_RUN` - Always "0" — post-sync does not fire on dry-run
+
+**Exit Behavior:**
+- Exit 0 or non-zero: Sync already completed, exit code logged only
+
+**Note:** post-sync fires only after `state_commit` succeeds at the
+storage layer. Individual profiles may still have diverged or failed —
+run `dotta status` inside the hook if per-profile detail is needed.
+
 ## Hook Configuration
 
 Control hooks via `~/.config/dotta/config.toml`:
@@ -221,6 +279,8 @@ pre_remove = false                    # Disable pre-remove (default)
 post_remove = false                   # Disable post-remove (default)
 pre_update = false                    # Disable pre-update (default)
 post_update = false                   # Disable post-update (default)
+pre_sync = false                      # Disable pre-sync (default)
+post_sync = false                     # Disable post-sync (default)
 ```
 
 ## Writing Hooks

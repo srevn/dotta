@@ -234,10 +234,9 @@ install: $(TARGET)
 	@echo ""
 	@echo "Installing hook samples..."
 	@install -d $(DATADIR)/hooks
-	@install -m 755 $(ETC_DIR)/hooks/pre-apply.sample $(DATADIR)/hooks/pre-apply.sample
-	@install -m 755 $(ETC_DIR)/hooks/post-apply.sample $(DATADIR)/hooks/post-apply.sample
-	@install -m 755 $(ETC_DIR)/hooks/pre-add.sample $(DATADIR)/hooks/pre-add.sample
-	@install -m 755 $(ETC_DIR)/hooks/post-add.sample $(DATADIR)/hooks/post-add.sample
+	@for f in $(ETC_DIR)/hooks/*.sample; do \
+		install -m 755 "$$f" "$(DATADIR)/hooks/$$(basename "$$f")"; \
+	done
 	@install -m 644 $(ETC_DIR)/hooks/README.md $(DATADIR)/hooks/README.md
 	@echo "  Installed: $(DATADIR)/hooks/*.sample"
 	@echo "  Installed: $(DATADIR)/hooks/README.md"

@@ -12,8 +12,10 @@
 #include <unistd.h>
 
 #include "base/args.h"
+#include "base/array.h"
 #include "base/error.h"
 #include "base/output.h"
+#include "base/string.h"
 #include "core/manifest.h"
 #include "core/scope.h"
 #include "core/state.h"
@@ -24,6 +26,7 @@
 #include "sys/resolve.h"
 #include "sys/transfer.h"
 #include "sys/upstream.h"
+#include "utils/hooks.h"
 
 /**
  * Per-profile sync outcome
@@ -1493,6 +1496,8 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
     const char *remote_url = NULL;
     transfer_context_t *xfer = NULL;
     char *current_branch = NULL;
+    char *profiles_str = NULL;
+    char *remote_env = NULL;
 
     /* Verify main worktree is on dotta-worktree branch */
     err = gitops_current_branch(repo, &current_branch);
@@ -1752,6 +1757,35 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
         }
     }
 
+    /* Build the hook invocation. Same struct is reused for both pre-sync
+     * (here) and post-sync (after state_commit). profiles_str / remote_env
+     * are heap-allocated and freed at cleanup; sync_extras is a stack
+     * literal whose lifetime is cmd_sync's frame — covers both fire sites. */
+    profiles_str = string_array_join(scope_active(scope), " ");
+    if (!profiles_str) {
+        err = ERROR(ERR_MEMORY, "Failed to join profile names for hook env");
+        goto cleanup;
+    }
+
+    remote_env = str_format("DOTTA_REMOTE=%s", remote_name);
+    if (!remote_env) {
+        err = ERROR(ERR_MEMORY, "Failed to build DOTTA_REMOTE for hook env");
+        goto cleanup;
+    }
+
+    char *const sync_extras[] = { remote_env, NULL };
+    const hook_invocation_t hook_inv = {
+        .cmd        = HOOK_CMD_SYNC,
+        .profile    = profiles_str,
+        .files      = NULL,
+        .file_count = 0,
+        .extras     = sync_extras,
+        .dry_run    = opts->dry_run,
+    };
+
+    err = hook_fire_pre(config, out, ctx->repo_path, &hook_inv);
+    if (err) goto cleanup;
+
     /* Create transfer context for progress reporting. URL was resolved
      * alongside the remote name above; it feeds the credential helper here */
     transfer_options_t xfer_opts = {
@@ -1929,6 +1963,10 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
         goto cleanup;
     }
 
+    /* Post-sync fires after state_commit succeeds. */
+    hook_fire_post(config, out, ctx->repo_path, &hook_inv);
+
+    /* Final summary */
     sync_render_summary(results, diverged_strategy, xfer, out);
 
     /* Success - fall through to cleanup */
@@ -1947,6 +1985,8 @@ cleanup:
     if (xfer) transfer_context_free(xfer);
     if (results) sync_results_free(results);
     if (scope) scope_free(scope);
+    if (profiles_str) free(profiles_str);
+    if (remote_env) free(remote_env);
 
     return err;
 }

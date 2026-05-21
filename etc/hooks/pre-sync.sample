@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+#
+# pre-sync hook - Runs before synchronizing with the remote
+#
+# This script runs before dotta exchanges commits with the remote.
+# Use it to block sync on a metered network, validate connectivity,
+# or refuse to sync from a host that should be read-only.
+#
+# Exit with non-zero status to abort the sync operation.
+#
+# Gate semantics: pre-sync fires AFTER the workspace dirty-check has
+# resolved (clean workspace, --force, or user explicitly confirmed
+# dirty sync). Reaching this hook means sync is committed to attempting
+# network operations, so pre-sync and post-sync run as a matched pair
+# on the happy path. Network or push failures may still suppress
+# post-sync — the same operational asymmetry every hook pair carries.
+#
+# Environment variables provided by dotta:
+#   DOTTA_REPO_DIR    - Path to dotta repository
+#   DOTTA_COMMAND     - Command being executed ("sync")
+#   DOTTA_PROFILE     - Space-separated list of profiles being synced
+#   DOTTA_REMOTE      - Resolved remote name (e.g., "origin")
+#   DOTTA_FILE_COUNT  - Always "0" for sync
+#   DOTTA_DRY_RUN     - "1" if dry-run, "0" otherwise
+#
+
+set -euo pipefail
+
+echo "Pre-sync: preparing to sync profile(s) '$DOTTA_PROFILE' with '$DOTTA_REMOTE'..."
+
+# Example: Block sync on a metered network (Linux + NetworkManager)
+if command -v nmcli &>/dev/null && command -v ip &>/dev/null; then
+    iface=$(ip route show default 2>/dev/null | awk '/^default/{print $5; exit}' || true)
+    if [[ -n "$iface" ]] && \
+       nmcli -g GENERAL.METERED dev show "$iface" 2>/dev/null | grep -q YES; then
+        echo "  ERROR: On metered network — refusing to sync to '$DOTTA_REMOTE'" >&2
+        exit 1
+    fi
+fi
+
+echo "Pre-sync checks passed."
+exit 0

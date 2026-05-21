@@ -17,7 +17,7 @@
 /**
  * Hook-bearing command
  *
- * The four commands that invoke pre/post hooks. Maps internally to a
+ * The commands that invoke pre/post hooks. Maps internally to a
  * pre_<cmd> / post_<cmd> hook script pair.
  */
 typedef enum {
@@ -25,6 +25,7 @@ typedef enum {
     HOOK_CMD_REMOVE,
     HOOK_CMD_APPLY,
     HOOK_CMD_UPDATE,
+    HOOK_CMD_SYNC,
 } hook_cmd_t;
 
 /**
@@ -36,11 +37,16 @@ typedef enum {
  * between hook_fire_pre() and hook_fire_post().
  *
  * Fields:
- *   cmd        Which command is firing (ADD/REMOVE/APPLY/UPDATE).
+ *   cmd        Which command is firing (ADD/REMOVE/APPLY/UPDATE/SYNC).
  *   profile    NULL → no DOTTA_PROFILE env. Single profile name for
- *              add/remove; space-joined profile list for apply/update.
+ *              add/remove; space-joined profile list for apply/update/sync.
  *   files      NULL → no DOTTA_FILE_* env. Otherwise borrowed array.
  *   file_count Number of entries in files (0 if files is NULL).
+ *   extras     NULL → no extra env vars. Otherwise NULL-terminated
+ *              "KEY=VALUE" string array, appended after the standard
+ *              DOTTA_* and DOTTA_FILE_N surface (before the system
+ *              environ pass-through, so authoritative values are not
+ *              shadowed). Borrowed pointers — must outlive the fire.
  *   dry_run    Sets DOTTA_DRY_RUN for pre-hook; suppresses post-hook.
  */
 typedef struct {
@@ -48,6 +54,7 @@ typedef struct {
     const char *profile;
     char *const *files;
     size_t file_count;
+    char *const *extras;
     bool dry_run;
 } hook_invocation_t;
 

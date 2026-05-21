@@ -55,6 +55,8 @@ auto_detect_new_files = true
 #   - post-remove  - Runs after removing files or deleting a profile
 #   - pre-update   - Runs before updating profiles with modified files
 #   - post-update  - Runs after updating profiles with modified files
+#   - pre-sync     - Runs before synchronizing with the remote
+#   - post-sync    - Runs after synchronizing with the remote
 #
 # Hooks receive environment variables with context about the operation.
 # If a pre-hook exits with non-zero status, the operation is aborted.
@@ -86,6 +88,8 @@ pre_remove = false   # Run before removing files or deleting a profile (e.g., ba
 post_remove = false  # Run after removing files or deleting a profile (e.g., notify)
 pre_update = false   # Run before updating profiles with modified files (e.g., validate changes)
 post_update = false  # Run after updating profiles with modified files (e.g., sync to remote, notify)
+pre_sync = false     # Run before syncing with the remote (e.g., block on metered network)
+post_sync = false    # Run after syncing with the remote (e.g., notify, trigger downstream apply)
 
 
 # ============================================================================

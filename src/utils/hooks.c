@@ -26,6 +26,8 @@ typedef enum {
     HOOK_POST_APPLY,
     HOOK_PRE_UPDATE,
     HOOK_POST_UPDATE,
+    HOOK_PRE_SYNC,
+    HOOK_POST_SYNC,
 } hook_type_t;
 
 /* Hook environment. Pointers are borrowed from the invocation and its
@@ -37,6 +39,7 @@ typedef struct {
     const char *profile;
     char *const *files;
     size_t file_count;
+    char *const *extras;
     bool dry_run;
 } hook_context_t;
 
@@ -51,6 +54,8 @@ static const char *const HOOK_NAMES[] = {
     [HOOK_POST_APPLY] = "post-apply",
     [HOOK_PRE_UPDATE] = "pre-update",
     [HOOK_POST_UPDATE] = "post-update",
+    [HOOK_PRE_SYNC] = "pre-sync",
+    [HOOK_POST_SYNC] = "post-sync",
 };
 
 static const char *hook_type_name(hook_type_t type) {
@@ -77,6 +82,8 @@ static bool hook_is_enabled(const config_t *config, hook_type_t type) {
         case HOOK_POST_APPLY:  return config->post_apply;
         case HOOK_PRE_UPDATE:  return config->pre_update;
         case HOOK_POST_UPDATE: return config->post_update;
+        case HOOK_PRE_SYNC:    return config->pre_sync;
+        case HOOK_POST_SYNC:   return config->post_sync;
     }
 
     return false;
@@ -173,6 +180,15 @@ static char **build_hook_env(const hook_context_t *context, size_t *env_count) {
     if (context->files && context->file_count > 0) {
         for (size_t i = 0; i < context->file_count; i++) {
             APPEND(str_format("DOTTA_FILE_%zu=%s", i, context->files[i]));
+        }
+    }
+
+    /* Per-command extras (e.g. DOTTA_REMOTE for sync). Appended before
+     * the environ pass-through so the DOTTA_* filter at the next step
+     * doesn't shadow them with stale process-env values. */
+    if (context->extras) {
+        for (char *const *e = context->extras; *e; e++) {
+            APPEND(strdup(*e));
         }
     }
 
@@ -353,6 +369,7 @@ static const char *cmd_name(hook_cmd_t cmd) {
         case HOOK_CMD_REMOVE: return "remove";
         case HOOK_CMD_APPLY:  return "apply";
         case HOOK_CMD_UPDATE: return "update";
+        case HOOK_CMD_SYNC:   return "sync";
     }
     return "unknown";
 }
@@ -363,6 +380,7 @@ static hook_type_t pre_type_for(hook_cmd_t cmd) {
         case HOOK_CMD_REMOVE: return HOOK_PRE_REMOVE;
         case HOOK_CMD_APPLY:  return HOOK_PRE_APPLY;
         case HOOK_CMD_UPDATE: return HOOK_PRE_UPDATE;
+        case HOOK_CMD_SYNC:   return HOOK_PRE_SYNC;
     }
     return HOOK_PRE_ADD;
 }
@@ -373,6 +391,7 @@ static hook_type_t post_type_for(hook_cmd_t cmd) {
         case HOOK_CMD_REMOVE: return HOOK_POST_REMOVE;
         case HOOK_CMD_APPLY:  return HOOK_POST_APPLY;
         case HOOK_CMD_UPDATE: return HOOK_POST_UPDATE;
+        case HOOK_CMD_SYNC:   return HOOK_POST_SYNC;
     }
     return HOOK_POST_ADD;
 }
@@ -406,6 +425,7 @@ static error_t *hook_fire(
         .profile    = inv->profile,
         .files      = inv->files,
         .file_count = inv->file_count,
+        .extras     = inv->extras,
         .dry_run    = inv->dry_run,
     };
 

@@ -56,6 +56,8 @@ struct config {
     bool post_remove;             /* Enable post-remove hook */
     bool pre_update;              /* Enable pre-update hook */
     bool post_update;             /* Enable post-update hook */
+    bool pre_sync;                /* Enable pre-sync hook */
+    bool post_sync;               /* Enable post-sync hook */
 
     /* [security] */
     bool confirm_destructive;     /* Require confirmation before destructive operations */

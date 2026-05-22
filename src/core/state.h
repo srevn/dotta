@@ -629,44 +629,48 @@ error_t *state_disable_profile(
 );
 
 /**
- * Set enabled profiles (bulk operation)
+ * Reorder enabled profiles to match a new precedence order
  *
- * BULK API: For atomic profile list replacement (clone, reorder, interactive).
- * For individual profile enable/disable, prefer state_enable_profile() and
- * state_disable_profile() which provide explicit deployment target management.
+ * Atomically deletes and re-inserts every row in enabled_profiles so the
+ * position column reflects the order of `profiles`. Per-row state (target,
+ * commit_oid) is preserved across the rewrite — only precedence changes.
  *
- * Target Preservation:
- *   Automatically preserves target values for profiles that remain
- *   enabled after the operation. This enables safe profile reordering without
- *   losing deployment target associations.
+ * REORDER-ONLY CONTRACT:
+ *   Reorder permutes membership; it does not add or remove rows. Every
+ *   name in `profiles` MUST already be a row in enabled_profiles, and the
+ *   set of names MUST equal the current enabled set (any caller passing a
+ *   different set is a bug — the function rejects unknown names at the
+ *   boundary but does not synthesize the inverse "rows you forgot to
+ *   include" check; that's the caller's responsibility).
  *
- * Use Cases:
- *   - Clone: Initial profile list setup (no deployment targets exist yet)
- *   - Reorder: Change precedence order while preserving target values
- *   - Interactive: Bulk enable/disable selection with target preservation
+ *   Additions belong to state_enable_profile. Removals belong to
+ *   state_disable_profile. A name not currently enabled returns
+ *   ERR_INVALID_ARG and leaves the table untouched — closing the
+ *   silent (custom-profile, NULL-target) trap at the write boundary.
  *
- * Position Assignment:
- *   Profiles are assigned sequential positions starting from 0.
- *   Any gaps in position numbering from previous operations are eliminated.
- *
- * Hot path - must be fast even with 10,000 deployed files.
- * Only modifies enabled_profiles table (virtual_manifest table untouched).
+ * Direct callers:
+ *   - profile reorder: user-driven precedence change.
+ *   - interactive save: persists the new order after the TUI's own diff
+ *                       has already applied additions/removals via the
+ *                       membership primitives.
  *
  * Preconditions:
- *   - state MUST have active transaction (via state_open)
+ *   - state MUST have an active write transaction.
+ *   - profiles MUST NOT be NULL. profiles->count may be 0 (vacuous reorder).
+ *   - Every name in profiles MUST already be in the row cache.
  *
  * Postconditions:
- *   - enabled_profiles table replaced with new profile list
- *   - Positions assigned as 0, 1, 2, ... (n-1)
- *   - target values preserved for matching profile names
- *   - enabled_at timestamp updated to current time for all profiles
- *   - Transaction remains open (caller commits)
+ *   - enabled_profiles rows hold positions 0..N-1 in the order given.
+ *   - target and commit_oid preserved on every retained row.
+ *   - enabled_at timestamp refreshed for every row.
+ *   - Row cache invalidated; next peek reloads.
+ *   - Transaction remains open (caller commits).
  *
  * @param state State (must not be NULL)
- * @param profiles Profile names (must not be NULL)
+ * @param profiles Profile names in desired order (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *state_set_profiles(state_t *state, const string_array_t *profiles);
+error_t *state_reorder_profiles(state_t *state, const string_array_t *profiles);
 
 /**
  * Get enabled profiles
@@ -947,7 +951,7 @@ error_t *state_set_profile_commit_oid(
  * enabled_profiles:
  *   - state_enable_profile
  *   - state_disable_profile
- *   - state_set_profiles
+ *   - state_reorder_profiles
  *   - state_rollback (any mutation could have happened in the transaction)
  *   - state_free
  *

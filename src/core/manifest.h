@@ -90,15 +90,18 @@ typedef struct {
  * Record a profile's current branch HEAD in enabled_profiles.commit_oid.
  *
  * Composes gitops_resolve_branch_head_oid + state_set_profile_commit_oid.
- * Callers pair this with the state mutation that introduces the profile
- * (state_enable_profile or state_set_profiles), which writes a zero-OID
- * sentinel; this call replaces the sentinel with the real HEAD so
- * enabled_profiles is fully authoritative before manifest_apply_scope.
+ * Callers pair this with state_enable_profile (the membership primitive
+ * that introduces a profile), which writes a zero-OID sentinel; this
+ * call replaces the sentinel with the real HEAD so enabled_profiles is
+ * fully authoritative before manifest_apply_scope.
+ *
+ * Reorder does NOT need this pairing: state_reorder_profiles preserves
+ * the existing commit_oid on every row.
  *
  * Preconditions:
  *   - state has an active write transaction.
  *   - profile is currently in enabled_profiles (just written by
- *     state_enable_profile or state_set_profiles).
+ *     state_enable_profile).
  *   - The profile's Git branch exists and resolves to a commit.
  *
  * Postconditions:
@@ -132,9 +135,15 @@ error_t *manifest_persist_profile_head(
  *                    then manifest_persist_profile_head for each to
  *                    fill the commit_oid column.
  *        disable   → state_disable_profile for each removed profile.
- *        reorder   → state_set_profiles(new_order) (preserves commit_oids).
- *        clone     → state_set_profiles(initial_set),
- *                    then manifest_persist_profile_head for each.
+ *        reorder   → state_reorder_profiles(new_order) (preserves
+ *                    target + commit_oid on every retained row;
+ *                    rejects any name not already enabled).
+ *        clone     → state_enable_profile loop + manifest_persist_profile_head
+ *                    loop (same as enable; clone is enable for an initial
+ *                    set, not a separate primitive).
+ *        interactive save → diff against the persisted set, then apply
+ *                    additions/removals via the membership primitives
+ *                    before state_reorder_profiles.
  *   2. Call manifest_apply_scope().
  *   3. No further state mutations required — apply_scope handles the
  *      virtual_manifest table and tracked_directories.

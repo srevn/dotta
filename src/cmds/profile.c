@@ -1507,7 +1507,7 @@ static error_t *profile_reorder(
         .count    = opts->profile_count,
         .capacity = opts->profile_count
     };
-    err = state_set_profiles(state, &new_order);
+    err = state_reorder_profiles(state, &new_order);
     if (err) {
         err = error_wrap(err, "Failed to update state");
         goto cleanup;
@@ -1515,12 +1515,12 @@ static error_t *profile_reorder(
 
     /* Reconcile manifest against the new precedence order.
      *
-     * state_set_profiles preserves commit_oid for profiles that remain
-     * enabled, so enabled_profiles is already fully authoritative — no
+     * state_reorder_profiles preserves target and commit_oid on every
+     * row, so enabled_profiles is already fully authoritative — no
      * persist_profile_head loop needed for reorder.
      *
      * Build a fresh mount table from the post-mutation row cache:
-     * state_set_profiles invalidated ctx->mounts' borrows, and a
+     * state_reorder_profiles invalidated ctx->mounts' borrows, and a
      * reorder may have shifted which profile a custom-target binding
      * belongs to (precedence drives custom/ ownership). */
     mount_table_t *post_reorder_mounts = NULL;

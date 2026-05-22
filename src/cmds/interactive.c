@@ -10,6 +10,7 @@
 #include <string.h>
 #include <unistd.h>
 
+#include "base/arena.h"
 #include "base/args.h"
 #include "base/array.h"
 #include "base/error.h"
@@ -292,11 +293,27 @@ static void interactive_move_profile_down(interactive_state_t *state) {
 /**
  * Save current profile management and order to state
  *
- * Saves which profiles are enabled and their display order. This is a silent
- * operation that doesn't require terminal restoration. Takes a scoped write
- * transaction on the borrowed READ handle — declaring WRITE at the spec
- * level would hold BEGIN IMMEDIATE for the whole TUI session, blocking
- * other dotta processes on the write lock while the user interacts.
+ * Diff-validate-mutate-reorder. The TUI accepts arbitrary toggle and move
+ * operations in memory; on 'w' this function reconciles the in-memory set
+ * against the persisted set in three phases:
+ *
+ *   1. Diff. Snapshot persisted enabled_profiles, classify each name in
+ *      the new order as addition-or-reorder, and stash removed names in
+ *      arena-owned scratch (the row-cache borrows die at the first
+ *      state_enable/disable call).
+ *   2. Validate. Every addition is checked for custom/ files — the TUI
+ *      has no UI for collecting a --target, so a custom-bearing profile
+ *      cannot be enabled here. The check runs before any DB mutation,
+ *      so a blocked save leaves enabled_profiles untouched.
+ *   3. Mutate. Apply additions (state_enable_profile + persist_head),
+ *      then removals (state_disable_profile), then reorder. Finally
+ *      rebuild the mount table and apply_scope reconciles
+ *      virtual_manifest + tracked_directories.
+ *
+ * Takes a scoped write transaction on the borrowed READ handle —
+ * declaring WRITE at the spec level would hold BEGIN IMMEDIATE for the
+ * whole TUI session, blocking other dotta processes on the write lock
+ * while the user interacts.
  */
 static error_t *interactive_save_profile_order(
     git_repository *repo,
@@ -308,19 +325,21 @@ static error_t *interactive_save_profile_order(
         return error_create(ERR_INVALID_ARG, "invalid arguments");
     }
 
-    /* Check if any profiles enabled (use cached count) */
+    /* Refuse a save that would empty enabled_profiles. The user can
+     * re-enable at least one profile in the TUI and try again.
+     * (Inline-error UX is out of scope — the wrapping dispatcher exits
+     * the TUI with the error.) */
     if (state->enabled_count == 0) {
         return error_create(ERR_INVALID_ARG, "no profiles enabled");
     }
 
-    /* Extract enabled profile names in current display order */
-    string_array_t profiles STRING_ARRAY_AUTO = { 0 };
+    /* Extract the new ordered name list from the TUI items. Strings are
+     * borrowed from state->items[i].name, which outlives this call —
+     * interactive_state owns them for the whole TUI session. */
+    string_array_t new_order STRING_ARRAY_AUTO = { 0 };
     for (size_t i = 0; i < state->item_count; i++) {
         if (state->items[i].enabled) {
-            error_t *push_err = string_array_push(
-                &profiles,
-                state->items[i].name
-            );
+            error_t *push_err = string_array_push(&new_order, state->items[i].name);
             if (push_err) return push_err;
         }
     }
@@ -329,64 +348,185 @@ static error_t *interactive_save_profile_order(
      * duration of this save. state_rollback on any error path is
      * idempotent. */
     error_t *err = state_begin(deploy_state);
-    if (err) {
-        return err;
+    if (err) return err;
+
+    /* Phase 1 — diff against the persisted set BEFORE any mutation.
+     *
+     * state_peek_profiles returns borrowed pointers into the row cache.
+     * The first state_enable_profile / state_disable_profile call below
+     * invalidates the cache and free()s the underlying name/target
+     * strings, so `persisted` is dangling after that point. Capture
+     * everything we need from the borrows in this scope and stash it
+     * in arena-owned scratch before any mutation runs. */
+    const state_profile_entry_t *persisted = NULL;
+    size_t persisted_count = 0;
+    err = state_peek_profiles(deploy_state, &persisted, &persisted_count);
+    if (err) goto rollback;
+
+    /* per-new_order flag: true iff the name is an addition (not currently
+     * enabled). Allocated even at count=0 to keep the deref site uniform;
+     * the loop body never runs at count=0 so the pointer stays unused. */
+    bool *is_addition = NULL;
+    if (new_order.count > 0) {
+        is_addition = arena_calloc(arena, new_order.count, sizeof(*is_addition));
+        if (!is_addition) {
+            err = ERROR(ERR_MEMORY, "Failed to allocate addition flags");
+            goto rollback;
+        }
     }
 
-    /* Set profiles in new order (updates enabled_profiles table) */
-    err = state_set_profiles(deploy_state, &profiles);
-    if (err) {
-        state_rollback(deploy_state);
-        return error_wrap(
-            err, "Failed to update profile order in state"
-        );
+    /* Persisted names not in new_order; arena-strdup'd so the string
+     * survives cache invalidation by the first enable/disable call. */
+    char **removal_names = NULL;
+    size_t removal_count = 0;
+    if (persisted_count > 0) {
+        removal_names = arena_calloc(arena, persisted_count, sizeof(*removal_names));
+        if (!removal_names) {
+            err = ERROR(ERR_MEMORY, "Failed to allocate removal scratch");
+            goto rollback;
+        }
     }
 
-    /* Reconcile manifest against the new precedence order.
+    /* Walk persisted; classify each as retained or removed. Sets are
+     * tiny in practice (typically < 10 profiles), so a nested linear
+     * scan beats a hashmap on both clarity and cycles. */
+    for (size_t i = 0; i < persisted_count; i++) {
+        const char *p_name = persisted[i].name;
+        bool retained = false;
+        for (size_t j = 0; j < new_order.count; j++) {
+            if (strcmp(new_order.items[j], p_name) == 0) {
+                retained = true;
+                break;
+            }
+        }
+        if (!retained) {
+            char *name_dup = arena_strdup(arena, p_name);
+            if (!name_dup) {
+                err = ERROR(ERR_MEMORY, "Failed to duplicate removal name");
+                goto rollback;
+            }
+            removal_names[removal_count++] = name_dup;
+        }
+    }
+
+    /* Walk new_order; classify each as addition or reorder-only. */
+    for (size_t i = 0; i < new_order.count; i++) {
+        bool was_enabled = false;
+        for (size_t j = 0; j < persisted_count; j++) {
+            if (strcmp(persisted[j].name, new_order.items[i]) == 0) {
+                was_enabled = true;
+                break;
+            }
+        }
+        is_addition[i] = !was_enabled;
+    }
+
+    /* Borrowed cache no longer needed; drop the reference so a stray
+     * post-mutation use is a NULL-deref at the test boundary instead of
+     * a quiet use-after-invalidate. */
+    persisted = NULL;
+    persisted_count = 0;
+
+    /* Phase 2 — validate additions before any DB mutation. A profile
+     * with custom/ files cannot be enabled without a deployment target;
+     * the TUI has no UI for collecting one, so block the trap at the
+     * write boundary. A blocked save leaves the DB untouched (apart
+     * from the harmless BEGIN IMMEDIATE that state_rollback releases). */
+    for (size_t i = 0; i < new_order.count; i++) {
+        if (!is_addition[i]) continue;
+        const char *name = new_order.items[i];
+        bool has_custom = false;
+        err = profile_has_custom_files(repo, name, &has_custom);
+        if (err) {
+            err = error_wrap(
+                err, "Failed to inspect profile '%s' for custom files", name
+            );
+            goto rollback;
+        }
+        if (has_custom) {
+            err = ERROR(
+                ERR_INVALID_ARG,
+                "Profile '%s' contains custom/ files; cannot enable interactively "
+                "without a deployment target.\n"
+                "Run: dotta profile enable %s --target /path", name, name
+            );
+            goto rollback;
+        }
+    }
+
+    /* Phase 3 — apply diff, then reorder.
      *
-     * state_set_profiles preserves commit_oid for profiles that remain
-     * enabled, so enabled_profiles is already fully authoritative — no
-     * persist_profile_head loop needed for reorder. apply_scope's orphan
-     * pass is a no-op here because the set membership is unchanged; it
-     * just re-UPSERTs entries whose precedence owner shifted (deployed_at
-     * preserved by SQL, old_profile auto-captured when profile changes).
-     *
-     * Build a fresh mount table reflecting the post-mutation binding set:
-     * state_set_profiles invalidated ctx->mounts' borrows from the row
-     * cache, and a reorder may have changed which profile a custom-target
-     * binding belongs to. */
+     * Additions first so the row cache holds every reorder name when
+     * state_reorder_profiles fires; removals next; the reorder runs last over
+     * the post-diff set. Each state_enable_profile / state_disable_profile
+     * call invalidates the cache, but state_reorder_profiles reloads it on
+     * entry, so the precondition (every name in cache) holds. */
+    for (size_t i = 0; i < new_order.count; i++) {
+        if (!is_addition[i]) continue;
+        const char *name = new_order.items[i];
+
+        err = state_enable_profile(deploy_state, name, NULL);
+        if (err) {
+            err = error_wrap(err, "Failed to enable profile '%s'", name);
+            goto rollback;
+        }
+
+        /* Replace the zero-OID sentinel state_enable_profile writes with
+         * the real branch HEAD so enabled_profiles is fully authoritative
+         * before apply_scope runs. */
+        err = manifest_persist_profile_head(repo, deploy_state, name);
+        if (err) {
+            err = error_wrap(err, "Failed to persist HEAD for profile '%s'", name);
+            goto rollback;
+        }
+    }
+
+    for (size_t i = 0; i < removal_count; i++) {
+        err = state_disable_profile(deploy_state, removal_names[i]);
+        if (err) {
+            err = error_wrap(
+                err, "Failed to disable profile '%s'", removal_names[i]
+            );
+            goto rollback;
+        }
+    }
+
+    err = state_reorder_profiles(deploy_state, &new_order);
+    if (err) {
+        err = error_wrap(err, "Failed to apply new profile order");
+        goto rollback;
+    }
+
+    /* Build a fresh mount table reflecting the post-mutation binding set.
+     * State mutations above invalidated any prior mount table's borrows
+     * from the row cache, and the diff may have added or removed
+     * custom-target bindings. */
     mount_table_t *post_mutation_mounts = NULL;
-    err = profile_build_mount_table(
-        deploy_state, arena, &post_mutation_mounts
-    );
+    err = profile_build_mount_table(deploy_state, arena, &post_mutation_mounts);
     if (err) {
-        state_rollback(deploy_state);
-        return error_wrap(
-            err, "Failed to rebuild mount table after profile reorder"
-        );
+        err = error_wrap(err, "Failed to rebuild mount table after profile diff");
+        goto rollback;
     }
 
     err = manifest_apply_scope(
         repo, deploy_state, arena, post_mutation_mounts, NULL, NULL
     );
     if (err) {
-        state_rollback(deploy_state);
-        return error_wrap(
-            err, "Failed to reconcile manifest with new precedence"
-        );
+        err = error_wrap(err, "Failed to reconcile manifest with new scope");
+        goto rollback;
     }
 
     /* Commit transaction */
     err = state_commit(deploy_state);
-    if (err) {
-        state_rollback(deploy_state);
-        return err;
-    }
+    if (err) goto rollback;
 
     /* Update interactive state on success */
     state->modified = false;
-
     return NULL;
+
+rollback:
+    state_rollback(deploy_state);
+    return err;
 }
 
 /* UI Rendering */

@@ -260,13 +260,21 @@ static int precedence_view_build_callback(
 
     /* Convert storage path to filesystem path against the mount table.
      *
-     * MOUNT_RESOLVE_UNBOUND fires when storage_path is custom/... and
-     * ctx->profile has no target binding in mounts — machine-specific
-     * configuration (e.g., /jails/proxy/root) stored in the per-machine
-     * state database. During clone or when a profile is enabled without
-     * --target, we can't resolve where those files belong, so the row
-     * is skipped silently. Genuine errors (malformed path, OOM)
-     * propagate. */
+     * MOUNT_RESOLVE_UNBOUND fires only when storage_path is custom/...
+     * and ctx->profile has no target binding in mounts. Under the
+     * tightened reorder-only contract on state_reorder_profiles plus
+     * the custom-target preconditions enforced by every command that
+     * can enable a profile (cmd profile enable, cmd add, cmd clone,
+     * interactive save), this state is unreachable through documented
+     * paths — a row in enabled_profiles is now guaranteed to carry a
+     * target whenever its profile has custom/ files.
+     *
+     * Reaching UNBOUND here therefore means external DB tampering or a
+     * code bug. Surface it as a hard error naming the profile and the
+     * repair command instead of silently dropping the row (which used
+     * to leave the user with a profile enabled in the DB whose files
+     * never deploy). Genuine errors (malformed path, OOM) propagate
+     * via the err branch above. */
     mount_resolve_outcome_t outcome;
     const char *filesystem_path = NULL;
     error_t *err = mount_resolve(
@@ -280,7 +288,16 @@ static int precedence_view_build_callback(
         );
         return -1;
     }
-    if (outcome == MOUNT_RESOLVE_UNBOUND) return 0;
+    if (outcome == MOUNT_RESOLVE_UNBOUND) {
+        ctx->error = ERROR(
+            ERR_STATE_INVALID,
+            "Profile '%s' has files under custom/ but no deployment "
+            "target binding.\nHint: Run 'dotta profile disable %s && "
+            "dotta profile enable %s --target /path'",
+            ctx->profile, ctx->profile, ctx->profile
+        );
+        return -1;
+    }
 
     /* Check for existing row (profile precedence override) */
     void *idx_ptr = hashmap_get(ctx->view->index, filesystem_path);
@@ -1032,11 +1049,15 @@ error_t *manifest_load_tree_files(
  * stored commit_oid in enabled_profiles.
  *
  * Composes gitops_resolve_branch_head_oid + state_set_profile_commit_oid.
- * Callers pair this with state_enable_profile / state_set_profiles to
- * complete the authoritative-scope contract before manifest_apply_scope:
- * state_enable_profile writes the zero-OID sentinel; this function
- * replaces it with the real branch HEAD. apply_scope then trusts the
- * commit_oid column and does not walk refs on its own.
+ * Callers pair this with state_enable_profile (the membership primitive
+ * that introduces a profile) to complete the authoritative-scope
+ * contract before manifest_apply_scope: state_enable_profile writes the
+ * zero-OID sentinel; this function replaces it with the real branch
+ * HEAD. apply_scope then trusts the commit_oid column and does not walk
+ * refs on its own.
+ *
+ * state_reorder_profiles preserves the existing commit_oid on every row,
+ * so reorder callers do not need this helper.
  *
  * Sites that bypass this helper:
  *   - manifest_detect_stale_profiles: read-only HEAD comparison.
@@ -1068,10 +1089,14 @@ error_t *manifest_persist_profile_head(
 /**
  * Project a DIRECTORY metadata item to a state directory entry.
  *
- * Resolves filesystem_path via the mount table. UNBOUND ⇒ silent skip:
- * *out is NULL and the function returns NULL. This happens only for
- * custom/ items whose owning profile has no target binding on this host
- * (clone before --target, or profile enabled without --target).
+ * Resolves filesystem_path via the mount table. UNBOUND is treated as a
+ * hard error: under the tightened state_reorder_profiles contract plus
+ * the custom-target preconditions enforced by every enabling command,
+ * a custom/ directory cannot legitimately exist under a profile lacking
+ * a target binding. The previous silent-skip masked corrupted state
+ * (custom/ profile rows with NULL target) — we surface it instead with
+ * a repair hint, matching the precedence-builder's symmetric treatment
+ * for files.
  *
  * Caller (manifest_sync_directories) guarantees item->kind is DIRECTORY
  * via metadata_get_items_by_kind() — the kind filter is the contract,
@@ -1099,9 +1124,11 @@ static error_t *directory_entry_from_metadata(
 
     *out = NULL;
 
-    /* Defer entry allocation until after the mount lookup so the skip
-     * path performs no allocation. UNBOUND surfaces only when the storage
-     * path is custom/... and `profile` has no target binding on this host. */
+    /* Defer entry allocation until after the mount lookup so the error
+     * path performs no allocation. UNBOUND can only surface for a
+     * custom/ key whose owning profile lacks a target on this host —
+     * unreachable through documented paths, so treat it as corruption
+     * with a repair hint instead of silently dropping the row. */
     mount_resolve_outcome_t outcome;
     const char *fs_path = NULL;
     error_t *err = mount_resolve(
@@ -1113,7 +1140,15 @@ static error_t *directory_entry_from_metadata(
             item->key
         );
     }
-    if (outcome == MOUNT_RESOLVE_UNBOUND) return NULL;
+    if (outcome == MOUNT_RESOLVE_UNBOUND) {
+        return ERROR(
+            ERR_STATE_INVALID,
+            "Profile '%s' has directory '%s' under custom/ but no "
+            "deployment target binding.\nHint: Run 'dotta profile "
+            "disable %s && dotta profile enable %s --target /path'",
+            profile, item->key, profile, profile
+        );
+    }
 
     state_directory_entry_t *entry = arena_calloc(arena, 1, sizeof(*entry));
     if (!entry) {

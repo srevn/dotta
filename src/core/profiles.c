@@ -208,7 +208,7 @@ cleanup:
  * Both name and target are borrowed from the state row cache; their
  * lifetime ties to the next enabled_profiles shape mutation, which by
  * dispatcher construction is the next state_enable_profile /
- * state_disable_profile / state_set_profiles call (always paired with
+ * state_disable_profile / state_reorder_profiles call (always paired with
  * a fresh local rebuild at binding-mutation sites). State outlives the
  * arena, so the borrows are sound for the arena's lifetime.
  *

@@ -1927,7 +1927,7 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
      * filtered and warned about at scope_build time) and filter-independent
      * by construction (CLI -p narrows scope_active, never scope_enabled).
      * Nothing between scope_build and here mutates the enabled_profiles
-     * table (state_set_profiles / state_enable_profile / state_disable_profile
+     * table (state_reorder_profiles / state_enable_profile / state_disable_profile
      * are confined to add/remove/profile/clone/interactive). */
     err = sync_push_phase(
         repo, remote_name, results, out, sync_ephemeral, auto_pull, opts->no_pull,

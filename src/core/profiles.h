@@ -134,7 +134,7 @@ error_t *profile_resolve_enabled(
  *   - Profile names and target strings are borrowed directly from the
  *     state row cache. The borrow stays valid as long as no
  *     enabled_profiles shape mutation runs (state_enable_profile,
- *     state_disable_profile, state_set_profiles, state_rollback,
+ *     state_disable_profile, state_reorder_profiles, state_rollback,
  *     state_free).
  *
  * Failure modes:

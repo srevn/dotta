@@ -266,24 +266,29 @@ static error_t *initialize_state(
         return error_wrap(err, "Failed to initialize state database");
     }
 
-    /* Set enabled profiles and reconcile manifest.
+    /* Enable each profile individually and reconcile manifest.
      *
-     * state_set_profiles writes the zero-OID sentinel for every newly
-     * enabled profile. We replace each sentinel with the real branch HEAD
-     * before calling manifest_apply_scope so enabled_profiles is fully
-     * authoritative (name + position + target + commit_oid).
-     * apply_scope then trusts the table and does not walk branch refs.
+     * state_enable_profile is the membership primitive — clone calls it
+     * once per profile (with target=NULL since custom/-bearing profiles
+     * are filtered out by the post-fetch warn-and-skip loop below before
+     * reaching this path). It writes the zero-OID sentinel;
+     * manifest_persist_profile_head replaces it with the real branch HEAD
+     * so enabled_profiles is fully authoritative (name + position +
+     * target + commit_oid) before apply_scope runs. apply_scope then
+     * trusts the table and does not walk branch refs.
      *
      * Fresh clone → virtual_manifest is empty → apply_scope INSERTs one
      * row per entry in the precedence-resolved manifest. */
     if (profiles->count > 0) {
-        err = state_set_profiles(state, profiles);
-        if (err) {
-            state_free(state);
-            return error_wrap(err, "Failed to set profiles in state");
-        }
-
         for (size_t i = 0; i < profiles->count; i++) {
+            err = state_enable_profile(state, profiles->items[i], NULL);
+            if (err) {
+                state_free(state);
+                return error_wrap(
+                    err, "Failed to enable profile '%s'", profiles->items[i]
+                );
+            }
+
             err = manifest_persist_profile_head(repo, state, profiles->items[i]);
             if (err) {
                 state_free(state);

@@ -685,7 +685,7 @@ static error_t *prepare_statements(state_t *state) {
         return sqlite_error(state->db, "Failed to prepare remove statement");
     }
 
-    /* Insert profile (used in state_set_profiles) */
+    /* Insert profile (used in state_reorder_profiles) */
     const char *sql_profile =
         "INSERT INTO enabled_profiles (position, name, enabled_at, commit_oid, target) "
         "VALUES (?, ?, ?, ?, ?);";
@@ -928,7 +928,7 @@ static void finalize_statements(state_t *state) {
  * Free the row cache and mark it unloaded
  *
  * Safe to call repeatedly. Invoked by shape-mutating paths
- * (state_enable_profile, state_disable_profile, state_set_profiles) and by
+ * (state_enable_profile, state_disable_profile, state_reorder_profiles) and by
  * state_rollback / state_free. state_set_profile_commit_oid does NOT call
  * this helper — it patches the cached row in place because only a single
  * fixed-width value field changes. The cache must never outlive the last
@@ -1225,11 +1225,15 @@ error_t *state_enable_profile(
      * commit_oid is zeroblob(20) on fresh INSERT — the manifest layer fills it
      * via state_set_profile_commit_oid after syncing entries. On UPSERT conflict
      * (profile already enabled), commit_oid is preserved — it represents the
-     * last-synced HEAD and must not be clobbered by a target update. */
+     * last-synced HEAD and must not be clobbered by a target update.
+     *
+     * Position is `COALESCE(MAX(position) + 1, 0)`: on an empty table
+     * MAX returns NULL and the COALESCE drops to 0, matching the 0-based
+     * position assignment used by state_reorder_profiles. */
     const char *sql =
         "INSERT INTO enabled_profiles (name, target, enabled_at, commit_oid, position) "
         "VALUES (?1, ?2, ?3, zeroblob(20), "
-        "  (SELECT COALESCE(MAX(position), 0) + 1 FROM enabled_profiles)) "
+        "  (SELECT COALESCE(MAX(position) + 1, 0) FROM enabled_profiles)) "
         "ON CONFLICT(name) DO UPDATE SET target = ?2, enabled_at = ?3";
 
     sqlite3_stmt *stmt = NULL;
@@ -1292,28 +1296,28 @@ error_t *state_disable_profile(
 }
 
 /**
- * Set enabled profiles (bulk operation)
+ * Reorder enabled profiles to match a new precedence order
  *
- * Bulk API for atomic profile list replacement (clone, reorder, interactive).
- * Automatically preserves target and commit_oid values for profiles
- * that remain enabled.
+ * Reorder-only contract: every name in `profiles` must already be a row
+ * in enabled_profiles. Additions and removals belong to the membership
+ * primitives (state_enable_profile / state_disable_profile). A name not
+ * currently enabled returns ERR_INVALID_ARG and leaves the table
+ * untouched — closing the silent (custom-profile, NULL-target) trap at
+ * the write boundary.
  *
- * For individual profile changes, prefer state_enable_profile()/state_disable_profile()
- * which provide explicit deployment target management.
+ * Per-row state (target, commit_oid) is read from the row cache and
+ * preserved across the DELETE + re-INSERT rewrite. Only the position
+ * column changes meaning per call; everything else is byte-for-byte
+ * preserved.
  *
- * Hot path - must be fast even with 10,000 deployed files.
- * Only modifies enabled_profiles table (virtual_manifest untouched).
- *
- * Preservation is driven by the row cache, which already holds every column
- * we need to keep. Previously, this function queried enabled_profiles twice
- * (once per column) to build two hashmaps; now a single cache load covers
- * both lookups via find_profile_entry().
+ * Hot path - must be fast even with 10,000 deployed files. Only modifies
+ * enabled_profiles (virtual_manifest untouched).
  *
  * @param state State (must not be NULL)
- * @param profiles Profile names (must not be NULL)
+ * @param profiles Profile names in desired order (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *state_set_profiles(
+error_t *state_reorder_profiles(
     state_t *state,
     const string_array_t *profiles
 ) {
@@ -1327,15 +1331,32 @@ error_t *state_set_profiles(
      * or state_begin). */
     if (!state->in_transaction) {
         return ERROR(
-            ERR_STATE_INVALID, "state_set_profiles requires an active transaction"
+            ERR_STATE_INVALID, "state_reorder_profiles requires an active transaction"
         );
     }
 
-    /* Ensure the row cache is populated — we read old rows from it to
-     * preserve target and commit_oid across DELETE + re-INSERT. */
+    /* Ensure the row cache is populated — we read every row from it to
+     * verify the in-cache precondition and to preserve target + commit_oid
+     * across DELETE + re-INSERT. */
     error_t *err = load_profile_entries(state);
     if (err) {
         return error_wrap(err, "Failed to load profile row cache");
+    }
+
+    /* Precondition: every name in `profiles` must already be enabled.
+     * Reorder permutes membership; it never adds or removes rows. A name
+     * missing from the cache means the caller wants to add a profile —
+     * they should call state_enable_profile first, which is the only
+     * primitive that can record a target for custom/-bearing profiles. */
+    for (size_t i = 0; i < profiles->count; i++) {
+        if (!find_profile_entry(state, profiles->items[i])) {
+            return ERROR(
+                ERR_INVALID_ARG,
+                "state_reorder_profiles: profile '%s' is not currently enabled "
+                "(use state_enable_profile to add a profile)",
+                profiles->items[i]
+            );
+        }
     }
 
     /* Delete all existing rows under the caller's transaction. On failure,
@@ -1361,11 +1382,10 @@ error_t *state_set_profiles(
         const char *name = profiles->items[i];
         const state_profile_entry_t *preserved = find_profile_entry(state, name);
 
-        /* Compose the OID to bind once: zero for new profiles, the cached
-         * value for profiles that remain enabled. One bind path, no static
-         * scratch buffer. */
-        git_oid preserved_oid = { 0 };
-        if (preserved) git_oid_cpy(&preserved_oid, &preserved->commit_oid);
+        /* The precondition loop above guarantees preserved is non-NULL.
+         * No NULL branch on target either: a profile with no deployment
+         * target (home/root) legitimately has preserved->target == NULL,
+         * which sqlite3_bind_null handles explicitly. */
 
         /* Reset and bind statement */
         sqlite3_reset(state->stmt_insert_profile);
@@ -1380,12 +1400,11 @@ error_t *state_set_profiles(
         sqlite3_bind_int64(state->stmt_insert_profile, 3, (sqlite3_int64) now);
         sqlite3_bind_blob(
             state->stmt_insert_profile, 4,
-            preserved_oid.id, GIT_OID_RAWSZ, SQLITE_TRANSIENT
+            preserved->commit_oid.id, GIT_OID_RAWSZ, SQLITE_TRANSIENT
         );
-        if (preserved && preserved->target) {
+        if (preserved->target) {
             sqlite3_bind_text(
-                state->stmt_insert_profile, 5,
-                preserved->target, -1, SQLITE_TRANSIENT
+                state->stmt_insert_profile, 5, preserved->target, -1, SQLITE_TRANSIENT
             );
         } else {
             sqlite3_bind_null(state->stmt_insert_profile, 5);
@@ -1397,7 +1416,7 @@ error_t *state_set_profiles(
         }
     }
 
-    /* SQL now reflects the new set. Invalidate so the next peek reloads
+    /* SQL now reflects the new order. Invalidate so the next peek reloads
      * fresh rows in the new position order. */
     invalidate_profile_entries(state);
     return NULL;
@@ -2980,7 +2999,7 @@ error_t *state_begin(state_t *state) {
      * The profile_entries_loaded=true cached zero-row view (set by
      * state_load's empty branch) remains accurate against the
      * freshly-created empty schema; the first mutating call
-     * (state_set_profiles / state_enable_profile / state_disable_profile)
+     * (state_reorder_profiles / state_enable_profile / state_disable_profile)
      * invalidates the cache on its own per the existing discipline. */
     if (!state->db) {
         if (!state->db_path) {

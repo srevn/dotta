@@ -22,17 +22,11 @@
 #include "infra/mount.h"
 
 /**
- * Inline prompt state for the target-capture overlay.
- *
- * Active for the duration the user is typing a deployment path; the
- * cursor row is rendered as a one-line text field and key handling
- * shifts to byte-insertion mode. The buffer is allocated once at
- * interactive_state_create time (initial cap 256) and reused across
- * multiple prompt cycles via prompt_close, which resets len/active
- * but keeps the allocation. Growth is geometric on overflow.
+ * Inline prompt state for the target-capture overlay
  */
 typedef struct {
     bool active;             /* True while the prompt is open */
+    bool enable;             /* True iff opened via space-on-disabled-custom */
     size_t item_index;       /* Row anchor (state->items index) */
     char *buffer;            /* Heap-grown, NUL-terminated; freed in free */
     size_t len;              /* Bytes in buffer, excluding NUL */
@@ -372,30 +366,32 @@ static void interactive_move_profile_down(interactive_state_t *state) {
 /**
  * Save current profile management and order to state
  *
- * Diff-validate-mutate-reorder. The TUI accepts arbitrary toggle and move
- * operations in memory; on 'w' this function reconciles the in-memory set
- * against the persisted set in three phases:
+ * Diff-validate-mutate-reorder. The TUI accepts arbitrary toggle, move,
+ * and `t`-key target edits in memory; on 'w' this function reconciles
+ * the in-memory set against the persisted set in three phases:
  *
  *   1. Diff. Build new_order alongside a parallel array of profile_item_t
  *      pointers so each save-time row can be traced back to its in-memory
  *      origin (for the user-supplied target). Snapshot persisted
- *      enabled_profiles, classify each name in the new order as
- *      addition-or-reorder, and stash removed names in arena-owned
- *      scratch (the row-cache borrows die at the first state_enable /
- *      state_disable call).
- *   2. Validate. Every addition's captured target (set via the inline
- *      prompt during the session or seeded from a prior CLI enable) is
- *      checked at the boundary via mount_validate_target — the same
- *      validator `cmd profile enable` uses. Additions without a target
- *      are permitted: legitimate for non-custom profiles, and for
- *      custom profiles the prompt is the source-of-truth gate. If a
- *      bug ever breaches that gate, manifest_apply_scope's UNBOUND
- *      tripwire fires loud one layer downstream — no double guard
- *      lives here.
- *   3. Mutate. Apply additions (state_enable_profile + persist_head),
- *      then removals (state_disable_profile), then reorder. Finally
- *      rebuild the mount table and apply_scope reconciles
- *      virtual_manifest + tracked_directories.
+ *      enabled_profiles, classify each new_order row as needs_enable
+ *      (addition OR retained-but-target-edited) or reorder-only, and
+ *      stash removed names in arena-owned scratch (the row-cache borrows
+ *      die at the first state_enable / state_disable call).
+ *   2. Validate. Every needs_enable row's captured target (set via the
+ *      inline prompt during the session, edited via the `t` key, or
+ *      seeded from a prior CLI enable) is checked at the boundary via
+ *      mount_validate_target — the same validator `cmd profile enable`
+ *      uses. NULL targets are permitted: legitimate for non-custom
+ *      profiles, and for custom profiles the prompt is the
+ *      source-of-truth gate. If a bug ever breaches that gate,
+ *      manifest_apply_scope's UNBOUND tripwire fires loud one layer
+ *      downstream — no double guard lives here.
+ *   3. Mutate. Re-enable each needs_enable row (state_enable_profile +
+ *      persist_head), then removals (state_disable_profile), then
+ *      reorder over the post-diff set (preserves per-row target and
+ *      commit_oid for reorder-only rows). Finally rebuild the mount
+ *      table and apply_scope reconciles virtual_manifest +
+ *      tracked_directories.
  *
  * Takes a scoped write transaction on the borrowed READ handle —
  * declaring WRITE at the spec level would hold BEGIN IMMEDIATE for the
@@ -462,22 +458,31 @@ static error_t *interactive_save_profile_order(
      * state_peek_profiles returns borrowed pointers into the row cache.
      * The first state_enable_profile / state_disable_profile call below
      * invalidates the cache and free()s the underlying name/target
-     * strings, so `persisted` is dangling after that point. Capture
-     * everything we need from the borrows in this scope and stash it
-     * in arena-owned scratch before any mutation runs. */
+     * strings, so `persisted` is dangling after that point. The
+     * classification happens entirely up front so both `needs_enable`
+     * (additions plus retained rows whose target was edited) and
+     * `removal_names` are decided while the borrows are still live. */
     const state_profile_entry_t *persisted = NULL;
     size_t persisted_count = 0;
     err = state_peek_profiles(deploy_state, &persisted, &persisted_count);
     if (err) goto rollback;
 
-    /* per-new_order flag: true iff the name is an addition (not currently
-     * enabled). Allocated even at count=0 to keep the deref site uniform;
-     * the loop body never runs at count=0 so the pointer stays unused. */
-    bool *is_addition = NULL;
+    /* per-new_order flag: true when this row must be (re-)written via
+     * state_enable_profile. Covers two cases:
+     *   - addition: the row is not currently enabled.
+     *   - retained-with-edited-target: the row is enabled but the
+     *     in-TUI target differs from the persisted target (set via
+     *     the `t` key during the session).
+     * Reorder-only rows (retained, target unchanged) get false here
+     * and ride through unchanged — state_reorder_profiles preserves
+     * their target and commit_oid. Allocated even at count=0 to keep
+     * the deref site uniform; the loop body never runs at count=0 so
+     * the pointer stays unused. */
+    bool *needs_enable = NULL;
     if (new_order.count > 0) {
-        is_addition = arena_calloc(arena, new_order.count, sizeof(*is_addition));
-        if (!is_addition) {
-            err = ERROR(ERR_MEMORY, "Failed to allocate addition flags");
+        needs_enable = arena_calloc(arena, new_order.count, sizeof(*needs_enable));
+        if (!needs_enable) {
+            err = ERROR(ERR_MEMORY, "Failed to allocate enable flags");
             goto rollback;
         }
     }
@@ -516,16 +521,31 @@ static error_t *interactive_save_profile_order(
         }
     }
 
-    /* Walk new_order; classify each as addition or reorder-only. */
+    /* Walk new_order; decide which rows need a state_enable_profile
+     * write. The target comparison uses the persisted borrow directly
+     * — safe because no mutation has run yet. */
     for (size_t i = 0; i < new_order.count; i++) {
+        profile_item_t *it = new_order_items[i];
         bool was_enabled = false;
+        const char *persisted_target = NULL;
         for (size_t j = 0; j < persisted_count; j++) {
-            if (strcmp(persisted[j].name, new_order.items[i]) == 0) {
+            if (strcmp(persisted[j].name, it->name) == 0) {
                 was_enabled = true;
+                persisted_target = persisted[j].target;
                 break;
             }
         }
-        is_addition[i] = !was_enabled;
+        if (!was_enabled) {
+            needs_enable[i] = true;
+            continue;
+        }
+        /* Retained: re-enable only when the user changed the target
+         * in-session. Strict equality including NULL-on-both-sides. */
+        const char *a = it->target;
+        const char *b = persisted_target;
+        bool same_target = (a == NULL && b == NULL) ||
+            (a != NULL && b != NULL && strcmp(a, b) == 0);
+        needs_enable[i] = !same_target;
     }
 
     /* Borrowed cache no longer needed; drop the reference so a stray
@@ -536,25 +556,30 @@ static error_t *interactive_save_profile_order(
 
     /* Phase 2 — validate user-supplied targets at the boundary.
      *
-     * The inline prompt is the source-of-truth gate: a custom-bearing
-     * profile cannot leave the TUI as an addition without a captured
-     * target. Trust the gate. The remaining job is to confirm the
-     * string the user typed is a real absolute path — the same check
-     * `cmd profile enable` performs at its own boundary. Wrapping the
-     * validator here keeps the error topology uniform across entry
-     * points (CLI, TUI) so the same input failure produces the same
-     * diagnostic.
+     * The inline prompt (and its `t`-key edit sibling) is the
+     * source-of-truth gate for "is there a target to bind?". Trust
+     * the gate. The remaining job is to confirm the string the user
+     * typed is a real absolute path — the same check `cmd profile
+     * enable` performs at its own boundary. Wrapping the validator
+     * here keeps the error topology uniform across entry points so
+     * the same input failure produces the same diagnostic.
      *
-     * An addition with target == NULL is legitimate when has_custom is
-     * false (no target needed). When has_custom is true, the gate is
-     * supposed to have prevented this — but we deliberately do NOT add
-     * a second guard layer here. A bug that lets a custom-bearing row
-     * through with no target writes NULL into enabled_profiles.target,
-     * and manifest_apply_scope's UNBOUND tripwire (ERR_STATE_INVALID)
-     * fires downstream with the repair hint. Two layers of defense
-     * against the same fault is one too many. */
+     * Validation runs for every row marked needs_enable — additions
+     * AND retained-with-edited-target rows alike. Reorder-only rows
+     * are skipped: their target is already the persisted value, which
+     * the validator already approved at the prior write boundary.
+     *
+     * A needs_enable row with target == NULL is legitimate when
+     * has_custom is false (no target needed). When has_custom is
+     * true the prompt is supposed to have prevented this; we
+     * deliberately do NOT add a second guard layer here. A bug that
+     * lets a custom-bearing row through with no target writes NULL
+     * into enabled_profiles.target, and manifest_apply_scope's
+     * UNBOUND tripwire (ERR_STATE_INVALID) fires downstream with the
+     * repair hint. Two layers of defense against the same fault is
+     * one too many. */
     for (size_t i = 0; i < new_order.count; i++) {
-        if (!is_addition[i]) continue;
+        if (!needs_enable[i]) continue;
         profile_item_t *it = new_order_items[i];
 
         if (!it->target) continue;
@@ -571,19 +596,20 @@ static error_t *interactive_save_profile_order(
 
     /* Phase 3 — apply diff, then reorder.
      *
-     * Additions first so the row cache holds every reorder name when
-     * state_reorder_profiles fires; removals next; the reorder runs last over
-     * the post-diff set. Each state_enable_profile / state_disable_profile
-     * call invalidates the cache, but state_reorder_profiles reloads it on
+     * Enables (additions + retargeted rows) first so the row cache
+     * holds every reorder name when state_reorder_profiles fires;
+     * removals next; the reorder runs last over the post-diff set.
+     * Each state_enable_profile / state_disable_profile call
+     * invalidates the cache, but state_reorder_profiles reloads it on
      * entry, so the precondition (every name in cache) holds.
      *
-     * The user-supplied target rides through state_enable_profile's
-     * UPSERT path; it->target may be NULL (no custom files, or a seeded
-     * row whose CLI-bound target is being preserved through a same-
-     * session disable/enable cycle is moot here because that row would
-     * be reorder-only, not an addition). */
+     * Reorder-only rows ride through state_reorder_profiles
+     * unchanged — its contract preserves per-row target and
+     * commit_oid for rows it merely repositions. The user-supplied
+     * target rides through state_enable_profile's UPSERT path for
+     * everything else. */
     for (size_t i = 0; i < new_order.count; i++) {
-        if (!is_addition[i]) continue;
+        if (!needs_enable[i]) continue;
         profile_item_t *it = new_order_items[i];
 
         err = state_enable_profile(deploy_state, it->name, it->target);
@@ -778,6 +804,7 @@ int interactive_render(const interactive_state_t *state) {
             stdout, "\033[2m↑↓\033[0m navigate  "
             "\033[2mspace\033[0m toggle  "
             "\033[2mJ/K\033[0m move  "
+            "\033[2mt\033[0m target  "
             "\033[1;33mw\033[0m \033[1;33msave\033[0m  "
             "\033[2mq\033[0m quit"
         );
@@ -787,6 +814,7 @@ int interactive_render(const interactive_state_t *state) {
             stdout, "\033[2m↑↓\033[0m navigate  "
             "\033[2mspace\033[0m toggle  "
             "\033[2mJ/K\033[0m move  "
+            "\033[2mt\033[0m target  "
             "\033[2mq\033[0m quit"
         );
     }
@@ -808,6 +836,7 @@ int interactive_render(const interactive_state_t *state) {
  */
 static void prompt_close(prompt_t *p) {
     p->active = false;
+    p->enable = false;
     p->item_index = 0;
     p->len = 0;
     if (p->buffer && p->cap > 0) {
@@ -838,6 +867,48 @@ static int prompt_buffer_push(prompt_t *p, char c) {
     }
     p->buffer[p->len++] = c;
     p->buffer[p->len] = '\0';
+    return 0;
+}
+
+/**
+ * Replace the prompt buffer with a copy of `src` (or empty when src is
+ * NULL). Grows the buffer geometrically until it can hold the source
+ * plus its NUL terminator. Used by the `t` key path to seed the
+ * buffer with the row's current target so the user can edit in place.
+ *
+ * @return 0 on success, -1 on allocation failure (buffer left empty)
+ */
+static int prompt_buffer_set(prompt_t *p, const char *src) {
+    if (!src || *src == '\0') {
+        p->len = 0;
+        if (p->buffer && p->cap > 0) {
+            p->buffer[0] = '\0';
+        }
+        return 0;
+    }
+
+    size_t src_len = strlen(src);
+    size_t need = src_len + 1;
+    if (need > p->cap) {
+        size_t new_cap = p->cap ? p->cap : 256;
+        while (new_cap < need) {
+            new_cap *= 2;
+        }
+        char *new_buf = realloc(p->buffer, new_cap);
+        if (!new_buf) {
+            /* OOM: leave the buffer empty rather than partially-filled. */
+            p->len = 0;
+            if (p->buffer && p->cap > 0) {
+                p->buffer[0] = '\0';
+            }
+            return -1;
+        }
+        p->buffer = new_buf;
+        p->cap = new_cap;
+    }
+    memcpy(p->buffer, src, src_len);
+    p->buffer[src_len] = '\0';
+    p->len = src_len;
     return 0;
 }
 
@@ -873,11 +944,17 @@ static interactive_result_t handle_key_prompt(
                 return INTERACTIVE_CONTINUE;
             }
             profile_item_t *it = &state->items[p->item_index];
-            /* it->target is guaranteed NULL by the gate that opened the
-             * prompt; the free is defensive scar-tissue insurance. */
+            /* Replace whatever target was on the item (NULL for the
+             * capture path, the prior string for the edit path). The
+             * unconditional free covers both shapes — free(NULL) is
+             * safe. */
             free(it->target);
             it->target = captured;
-            it->enabled = true;
+            if (p->enable) {
+                /* Capture path: the row was disabled and the prompt
+                 * was the gate guarding the OFF→ON flip. */
+                it->enabled = true;
+            }
             state->modified = true;
             prompt_close(p);
             return INTERACTIVE_CONTINUE;
@@ -967,9 +1044,11 @@ static interactive_result_t handle_key_normal(
              * captured or seeded yet. The user-supplied target survives
              * transient toggle-off / toggle-on cycles within a session,
              * so a re-enable after a same-session disable skips the
-             * prompt naturally via the third gate. */
+             * prompt naturally via the third gate. The companion `t`
+             * key handles in-place edits when a target already exists. */
             if (toggling_on && it->has_custom && it->target == NULL) {
                 state->prompt.active = true;
+                state->prompt.enable = true;
                 state->prompt.item_index = state->cursor;
                 /* Buffer is empty by prompt_close on the previous cycle
                  * (or by interactive_state_create's calloc on the first
@@ -982,6 +1061,33 @@ static interactive_result_t handle_key_normal(
              * flip. */
             it->enabled = !it->enabled;
             state->modified = true;
+            return INTERACTIVE_CONTINUE;
+        }
+
+        /* Edit the deployment target on a custom-bearing row. Opens
+         * the same inline prompt as space, but seeded with the row's
+         * current target (or empty when none yet) and with
+         * enable cleared so a commit updates the target
+         * string only — the enabled state is the space key's job.
+         *
+         * No-op on rows where has_custom is false: target is only
+         * meaningful for custom-bearing profiles. */
+        case 't':
+        case 'T': {
+            if (state->cursor >= state->item_count) {
+                return INTERACTIVE_CONTINUE;
+            }
+            profile_item_t *it = &state->items[state->cursor];
+            if (!it->has_custom) {
+                return INTERACTIVE_CONTINUE;
+            }
+            state->prompt.active = true;
+            state->prompt.enable = false;
+            state->prompt.item_index = state->cursor;
+            /* Seed with the current target. OOM falls back to an empty
+             * buffer rather than refusing to open the prompt; the user
+             * can still type a fresh path. */
+            (void) prompt_buffer_set(&state->prompt, it->target);
             return INTERACTIVE_CONTINUE;
         }
 
@@ -1231,12 +1337,19 @@ const args_command_t spec_interactive = {
         "  ↑↓, j/k, g/G    Navigate profiles\n"
         "  space           Enable/disable profiles\n"
         "  J/K             Move profile up/down\n"
+        "  t               Set/edit deployment target\n"
         "  w               Save profile order and choice\n"
         "  q, ESC          Quit\n"
+        "\n"
+        "Target prompt:\n"
+        "  enter           Commit the target\n"
+        "  esc             Cancel\n"
+        "  backspace       Delete last character\n"
         "\n"
         "Notes:\n"
         "  - Enabled profiles are saved to state in the displayed order\n"
         "  - Profile order determines layering (later overrides earlier)\n"
+        "  - Toggling on a custom/-bearing profile opens an inline target prompt\n"
         "  - Use regular commands (apply, update, sync) after enabling profiles\n",
     .payload      = &dotta_ext_read,
     .dispatch     = interactive_dispatch,

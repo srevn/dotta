@@ -33,11 +33,18 @@
  * Profile item in UI list
  *
  * Represents a single profile entry with enabled state and metadata.
+ *
+ * Ownership: `name` and `target` are malloc-owned by the item; both are
+ * freed when the parent interactive_state is freed. `target` is NULL
+ * until the user commits a path via the inline prompt or until the
+ * already-enabled state seeds it from the row cache at create time.
  */
 typedef struct {
     char *name;              /* Profile name */
     bool enabled;            /* Enabled for operations */
     bool exists_locally;     /* Exists as local branch */
+    bool has_custom;         /* Profile contains custom/ files (eager probe) */
+    char *target;            /* Deployment target for custom/ files */
 } profile_item_t;
 
 /**

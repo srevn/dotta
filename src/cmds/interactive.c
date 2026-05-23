@@ -22,15 +22,33 @@
 #include "infra/mount.h"
 
 /**
+ * Inline prompt state for the target-capture overlay.
+ *
+ * Active for the duration the user is typing a deployment path; the
+ * cursor row is rendered as a one-line text field and key handling
+ * shifts to byte-insertion mode. The buffer is allocated once at
+ * interactive_state_create time (initial cap 256) and reused across
+ * multiple prompt cycles via prompt_close, which resets len/active
+ * but keeps the allocation. Growth is geometric on overflow.
+ */
+typedef struct {
+    bool active;             /* True while the prompt is open */
+    size_t item_index;       /* Row anchor (state->items index) */
+    char *buffer;            /* Heap-grown, NUL-terminated; freed in free */
+    size_t len;              /* Bytes in buffer, excluding NUL */
+    size_t cap;              /* Allocated capacity */
+} prompt_t;
+
+/**
  * Interactive UI state
  */
 struct interactive_state {
-    git_repository *repo;          /* Repository (borrowed) */
-    profile_item_t *items;         /* Profile items */
-    size_t item_count;             /* Number of items */
-    size_t enabled_count;          /* Number of enabled items (cached) */
-    size_t cursor;                 /* Current cursor position */
-    bool modified;                 /* True if there are unsaved changes */
+    git_repository *repo;    /* Repository (borrowed) */
+    profile_item_t *items;   /* Profile items */
+    size_t item_count;       /* Number of items */
+    size_t cursor;           /* Current cursor position */
+    bool modified;           /* True if there are unsaved changes */
+    prompt_t prompt;         /* Target-capture overlay */
 };
 
 /* Profile Item Utilities */
@@ -50,6 +68,7 @@ static void free_profile_items(profile_item_t *items, size_t count) {
 
     for (size_t i = 0; i < count; i++) {
         free(items[i].name);
+        free(items[i].target);
     }
     free(items);
 }
@@ -188,12 +207,67 @@ error_t *interactive_state_create(
 
     state->item_count = item_idx;
 
-    /* Count enabled items (all from state_profiles) */
-    state->enabled_count = 0;
+    /* Pass 2 — eagerly seed per-item Git/state facts.
+     *
+     * Computing has_custom up front turns "does this profile need a
+     * deployment target?" into a constant-time field lookup at toggle
+     * time. Probing lazily would force a Git tree load while the
+     * terminal is in raw mode — visible latency on the first space
+     * press for a custom-bearing profile. Eager wins on determinism.
+     *
+     * Failure is loud: a profile whose tree we cannot read is a
+     * profile whose enableability we cannot answer; silently
+     * defaulting to has_custom = false would push the trap one layer
+     * downstream (the manifest tripwire). Abort startup instead. */
     for (size_t i = 0; i < state->item_count; i++) {
-        if (state->items[i].enabled) {
-            state->enabled_count++;
+        err = profile_has_custom_files(
+            repo, state->items[i].name, &state->items[i].has_custom
+        );
+        if (err) {
+            err = error_wrap(
+                err, "Failed to inspect profile '%s' for custom files",
+                state->items[i].name
+            );
+            goto cleanup;
         }
+
+        /* Seed target for already-enabled profiles. state_peek_profile_target
+         * returns a borrowed pointer into the row cache whose lifetime is
+         * bounded by the next enabled-set mutation (state_enable_profile /
+         * state_disable_profile / state_reorder_profiles). The save path
+         * runs those calls long after this seeding completes, so we copy
+         * across the lifetime boundary now and free the strdup with the item. */
+        if (state->items[i].enabled) {
+            const char *t = state_peek_profile_target(
+                deploy_state, state->items[i].name
+            );
+            if (t) {
+                state->items[i].target = strdup(t);
+                if (!state->items[i].target) {
+                    err = error_create(
+                        ERR_MEMORY,
+                        "failed to duplicate target for profile '%s'",
+                        state->items[i].name
+                    );
+                    goto cleanup;
+                }
+            }
+        }
+    }
+
+    /* Pre-allocate the prompt buffer at create time. Two reasons:
+     *   1. The keystroke handler stays alloc-failure-free for the common
+     *      typing path; an OOM during typing is recoverable in-session
+     *      (we silently drop bytes) rather than propagating up.
+     *   2. 256 bytes covers typical absolute paths without growth; the
+     *      geometric realloc in prompt_buffer_push handles the long-path
+     *      edge case. */
+    state->prompt.cap = 256;
+    state->prompt.buffer = calloc(state->prompt.cap, sizeof(char));
+    if (!state->prompt.buffer) {
+        state->prompt.cap = 0;
+        err = error_create(ERR_MEMORY, "failed to allocate prompt buffer");
+        goto cleanup;
     }
 
     /* Success - cleanup temporary resources and return.
@@ -219,9 +293,13 @@ cleanup:
     free(used);
     if (state) {
         if (state->items) {
-            /* Free any profile names that were allocated */
+            /* Pass 2 may have allocated targets on items below item_idx,
+             * so free_profile_items walks the full populated range and
+             * releases name + target alike (free(NULL) is safe for
+             * items that never reached pass 2). */
             free_profile_items(state->items, item_idx);
         }
+        free(state->prompt.buffer);
         free(state);
     }
     return err;
@@ -233,6 +311,7 @@ void interactive_state_free(interactive_state_t *state) {
     }
 
     free_profile_items(state->items, state->item_count);
+    free(state->prompt.buffer);
     free(state);
 }
 
@@ -297,14 +376,22 @@ static void interactive_move_profile_down(interactive_state_t *state) {
  * operations in memory; on 'w' this function reconciles the in-memory set
  * against the persisted set in three phases:
  *
- *   1. Diff. Snapshot persisted enabled_profiles, classify each name in
- *      the new order as addition-or-reorder, and stash removed names in
- *      arena-owned scratch (the row-cache borrows die at the first
- *      state_enable/disable call).
- *   2. Validate. Every addition is checked for custom/ files — the TUI
- *      has no UI for collecting a --target, so a custom-bearing profile
- *      cannot be enabled here. The check runs before any DB mutation,
- *      so a blocked save leaves enabled_profiles untouched.
+ *   1. Diff. Build new_order alongside a parallel array of profile_item_t
+ *      pointers so each save-time row can be traced back to its in-memory
+ *      origin (for the user-supplied target). Snapshot persisted
+ *      enabled_profiles, classify each name in the new order as
+ *      addition-or-reorder, and stash removed names in arena-owned
+ *      scratch (the row-cache borrows die at the first state_enable /
+ *      state_disable call).
+ *   2. Validate. Every addition's captured target (set via the inline
+ *      prompt during the session or seeded from a prior CLI enable) is
+ *      checked at the boundary via mount_validate_target — the same
+ *      validator `cmd profile enable` uses. Additions without a target
+ *      are permitted: legitimate for non-custom profiles, and for
+ *      custom profiles the prompt is the source-of-truth gate. If a
+ *      bug ever breaches that gate, manifest_apply_scope's UNBOUND
+ *      tripwire fires loud one layer downstream — no double guard
+ *      lives here.
  *   3. Mutate. Apply additions (state_enable_profile + persist_head),
  *      then removals (state_disable_profile), then reorder. Finally
  *      rebuild the mount table and apply_scope reconciles
@@ -325,23 +412,43 @@ static error_t *interactive_save_profile_order(
         return error_create(ERR_INVALID_ARG, "invalid arguments");
     }
 
+    /* Allocate the parallel item-pointer scratch up front. Sized by the
+     * upper bound (item_count); the loop below fills only the enabled
+     * slots, so new_order.count == k (the fill count) on exit. Arena-
+     * owned for this function's lifetime; no leak on early return. */
+    profile_item_t **new_order_items = NULL;
+    if (state->item_count > 0) {
+        new_order_items = arena_calloc(
+            arena, state->item_count, sizeof(*new_order_items)
+        );
+        if (!new_order_items) {
+            return ERROR(ERR_MEMORY, "Failed to allocate item pointer scratch");
+        }
+    }
+
+    /* Extract the new ordered name list AND the parallel item pointers
+     * in a single sweep. Strings are borrowed from state->items[i].name,
+     * which outlives this call — interactive_state owns them (along
+     * with .target) for the whole TUI session. The two arrays describe
+     * the same row from two angles, indexed identically. */
+    string_array_t new_order STRING_ARRAY_AUTO = { 0 };
+    size_t k = 0;
+    for (size_t i = 0; i < state->item_count; i++) {
+        if (!state->items[i].enabled) continue;
+        error_t *push_err = string_array_push(&new_order, state->items[i].name);
+        if (push_err) return push_err;
+        new_order_items[k++] = &state->items[i];
+    }
+
     /* Refuse a save that would empty enabled_profiles. The user can
      * re-enable at least one profile in the TUI and try again.
      * (Inline-error UX is out of scope — the wrapping dispatcher exits
-     * the TUI with the error.) */
-    if (state->enabled_count == 0) {
+     * the TUI with the error.) Checked here — after the array is built
+     * — instead of via a cached counter on interactive_state. The items
+     * array is the single source of truth for "is this enabled?"; a
+     * sibling counter is a cache of a cache. */
+    if (new_order.count == 0) {
         return error_create(ERR_INVALID_ARG, "no profiles enabled");
-    }
-
-    /* Extract the new ordered name list from the TUI items. Strings are
-     * borrowed from state->items[i].name, which outlives this call —
-     * interactive_state owns them for the whole TUI session. */
-    string_array_t new_order STRING_ARRAY_AUTO = { 0 };
-    for (size_t i = 0; i < state->item_count; i++) {
-        if (state->items[i].enabled) {
-            error_t *push_err = string_array_push(&new_order, state->items[i].name);
-            if (push_err) return push_err;
-        }
     }
 
     /* Promote the borrowed READ handle to a write transaction for the
@@ -427,28 +534,36 @@ static error_t *interactive_save_profile_order(
     persisted = NULL;
     persisted_count = 0;
 
-    /* Phase 2 — validate additions before any DB mutation. A profile
-     * with custom/ files cannot be enabled without a deployment target;
-     * the TUI has no UI for collecting one, so block the trap at the
-     * write boundary. A blocked save leaves the DB untouched (apart
-     * from the harmless BEGIN IMMEDIATE that state_rollback releases). */
+    /* Phase 2 — validate user-supplied targets at the boundary.
+     *
+     * The inline prompt is the source-of-truth gate: a custom-bearing
+     * profile cannot leave the TUI as an addition without a captured
+     * target. Trust the gate. The remaining job is to confirm the
+     * string the user typed is a real absolute path — the same check
+     * `cmd profile enable` performs at its own boundary. Wrapping the
+     * validator here keeps the error topology uniform across entry
+     * points (CLI, TUI) so the same input failure produces the same
+     * diagnostic.
+     *
+     * An addition with target == NULL is legitimate when has_custom is
+     * false (no target needed). When has_custom is true, the gate is
+     * supposed to have prevented this — but we deliberately do NOT add
+     * a second guard layer here. A bug that lets a custom-bearing row
+     * through with no target writes NULL into enabled_profiles.target,
+     * and manifest_apply_scope's UNBOUND tripwire (ERR_STATE_INVALID)
+     * fires downstream with the repair hint. Two layers of defense
+     * against the same fault is one too many. */
     for (size_t i = 0; i < new_order.count; i++) {
         if (!is_addition[i]) continue;
-        const char *name = new_order.items[i];
-        bool has_custom = false;
-        err = profile_has_custom_files(repo, name, &has_custom);
+        profile_item_t *it = new_order_items[i];
+
+        if (!it->target) continue;
+
+        err = mount_validate_target(it->target);
         if (err) {
             err = error_wrap(
-                err, "Failed to inspect profile '%s' for custom files", name
-            );
-            goto rollback;
-        }
-        if (has_custom) {
-            err = ERROR(
-                ERR_INVALID_ARG,
-                "Profile '%s' contains custom/ files; cannot enable interactively "
-                "without a deployment target.\n"
-                "Run: dotta profile enable %s --target /path", name, name
+                err, "Invalid deployment target for profile '%s'",
+                it->name
             );
             goto rollback;
         }
@@ -460,23 +575,31 @@ static error_t *interactive_save_profile_order(
      * state_reorder_profiles fires; removals next; the reorder runs last over
      * the post-diff set. Each state_enable_profile / state_disable_profile
      * call invalidates the cache, but state_reorder_profiles reloads it on
-     * entry, so the precondition (every name in cache) holds. */
+     * entry, so the precondition (every name in cache) holds.
+     *
+     * The user-supplied target rides through state_enable_profile's
+     * UPSERT path; it->target may be NULL (no custom files, or a seeded
+     * row whose CLI-bound target is being preserved through a same-
+     * session disable/enable cycle is moot here because that row would
+     * be reorder-only, not an addition). */
     for (size_t i = 0; i < new_order.count; i++) {
         if (!is_addition[i]) continue;
-        const char *name = new_order.items[i];
+        profile_item_t *it = new_order_items[i];
 
-        err = state_enable_profile(deploy_state, name, NULL);
+        err = state_enable_profile(deploy_state, it->name, it->target);
         if (err) {
-            err = error_wrap(err, "Failed to enable profile '%s'", name);
+            err = error_wrap(err, "Failed to enable profile '%s'", it->name);
             goto rollback;
         }
 
         /* Replace the zero-OID sentinel state_enable_profile writes with
          * the real branch HEAD so enabled_profiles is fully authoritative
          * before apply_scope runs. */
-        err = manifest_persist_profile_head(repo, deploy_state, name);
+        err = manifest_persist_profile_head(repo, deploy_state, it->name);
         if (err) {
-            err = error_wrap(err, "Failed to persist HEAD for profile '%s'", name);
+            err = error_wrap(
+                err, "Failed to persist HEAD for profile '%s'", it->name
+            );
             goto rollback;
         }
     }
@@ -540,6 +663,70 @@ int interactive_get_required_lines(const interactive_state_t *state) {
     return 1 + 1 + (int) state->item_count + 1 + 1;
 }
 
+/**
+ * Render a single row.
+ *
+ * Three shapes:
+ *   1. Prompt-active row: cursor + "Target: <buffer>_" overlay. The
+ *      trailing '_' is the visible caret — the hardware cursor stays
+ *      hidden across the whole session (no per-redraw repositioning).
+ *   2. Enabled with custom + captured target: cursor + checkbox + name
+ *      + dim "→ <target>" annotation.
+ *   3. Disabled with custom (no target yet): cursor + space + dim name
+ *      + dim "(custom)" hint, signaling that toggling will require a
+ *      path.
+ *
+ * Line count is the same across all shapes — the prompt overlay
+ * replaces the cursor row's content but not its existence, so
+ * interactive_get_required_lines stays correct and interactive_run's
+ * cursor-up math is unchanged.
+ *
+ * The optional annotation emits via its own fprintf rather than
+ * composing into a stack buffer; stdout is line-buffered with a
+ * single fflush at the end of interactive_render, so the extra calls
+ * do not flicker and they sidestep the "how big must the buffer be"
+ * question for unbounded target strings.
+ */
+static void render_row(const interactive_state_t *state, size_t i) {
+    const profile_item_t *it = &state->items[i];
+    bool is_cursor = (i == state->cursor);
+    bool is_prompt = (state->prompt.active && i == state->prompt.item_index);
+
+    fprintf(stdout, "\r" ANSI_CLEAR_LINE);
+
+    const char *cursor_glyph = is_cursor ? "\033[1;36m▶\033[0m" : " ";
+
+    if (is_prompt) {
+        /* Replace the checkbox + name area with the input field.
+         * Column alignment: "  " (2) + cursor (1) + "   " (3 spaces in
+         * place of " " + checkbox + " ") = 6 visible chars of prefix,
+         * matching the regular row prefix so "Target:" starts at the
+         * same column as a profile name would. */
+        fprintf(
+            stdout, "  %s   \033[1mTarget:\033[0m %s_\r\n",
+            cursor_glyph, state->prompt.buffer
+        );
+        return;
+    }
+
+    const char *checkbox = it->enabled ? "\033[1;32m✓\033[0m" : " ";
+    const char *name_open = (it->enabled || is_cursor) ? "" : "\033[2m";
+    const char *name_close = (it->enabled || is_cursor) ? "" : "\033[0m";
+
+    fprintf(
+        stdout, "  %s %s %s%s%s",
+        cursor_glyph, checkbox, name_open, it->name, name_close
+    );
+
+    if (it->enabled && it->has_custom && it->target) {
+        fprintf(stdout, " \033[2m→ %s\033[0m", it->target);
+    } else if (!it->enabled && it->has_custom) {
+        fprintf(stdout, " \033[2m(custom)\033[0m");
+    }
+
+    fprintf(stdout, "\r\n");
+}
+
 int interactive_render(const interactive_state_t *state) {
     if (!state) {
         return 0;
@@ -568,28 +755,7 @@ int interactive_render(const interactive_state_t *state) {
 
     /* Profile items */
     for (size_t i = 0; i < state->item_count; i++) {
-        const profile_item_t *item = &state->items[i];
-
-        fprintf(stdout, "\r" ANSI_CLEAR_LINE);
-
-        /* Cursor indicator */
-        const char *cursor = (i == state->cursor) ? "\033[1;36m▶\033[0m" : " ";
-
-        /* Selection checkbox */
-        const char *checkbox = item->enabled ? "\033[1;32m✓\033[0m" : " ";
-
-        /* Profile name (dim if not selected) - all aligned at same column */
-        if (item->enabled || i == state->cursor) {
-            fprintf(
-                stdout, "  %s %s %s\r\n",
-                cursor, checkbox, item->name
-            );
-        } else {
-            fprintf(
-                stdout, "  %s %s \033[2m%s\033[0m\r\n",
-                cursor, checkbox, item->name
-            );
-        }
+        render_row(state, i);
         lines_rendered++;
     }
 
@@ -597,10 +763,17 @@ int interactive_render(const interactive_state_t *state) {
     fprintf(stdout, "\r" ANSI_CLEAR_LINE "\r\n");
     lines_rendered++;
 
-    /* Footer / keybinding help - adapt based on state */
+    /* Footer / keybinding help - adapt to current mode */
     fprintf(stdout, "\r" ANSI_CLEAR_LINE);
-    if (state->modified) {
-        /* Show modified mode keys with save highlighted */
+    if (state->prompt.active) {
+        /* Prompt mode: a tighter key set is in effect */
+        fprintf(
+            stdout, "\033[2menter\033[0m confirm  "
+            "\033[2mesc\033[0m cancel  "
+            "\033[2mbackspace\033[0m delete"
+        );
+    } else if (state->modified) {
+        /* Modified mode keys with save highlighted */
         fprintf(
             stdout, "\033[2m↑↓\033[0m navigate  "
             "\033[2mspace\033[0m toggle  "
@@ -609,7 +782,7 @@ int interactive_render(const interactive_state_t *state) {
             "\033[2mq\033[0m quit"
         );
     } else {
-        /* Show normal mode keys */
+        /* Normal mode keys */
         fprintf(
             stdout, "\033[2m↑↓\033[0m navigate  "
             "\033[2mspace\033[0m toggle  "
@@ -627,21 +800,134 @@ int interactive_render(const interactive_state_t *state) {
 
 /* Input Handling */
 
-interactive_result_t interactive_handle_key(
+/**
+ * Reset the prompt back to its dormant shape.
+ *
+ * Keeps the buffer allocation around so successive prompts reuse it —
+ * the typical typing path stays alloc-free after the first cycle.
+ */
+static void prompt_close(prompt_t *p) {
+    p->active = false;
+    p->item_index = 0;
+    p->len = 0;
+    if (p->buffer && p->cap > 0) {
+        p->buffer[0] = '\0';
+    }
+}
+
+/**
+ * Append one byte to the prompt buffer; grow geometrically on overflow.
+ *
+ * The buffer always carries a NUL terminator one past `len`, so the
+ * trigger condition `len + 1 >= cap` reserves room for the new byte
+ * (at index len) plus its NUL (at index len + 1). On OOM the buffer
+ * is left untouched and the caller (the keystroke handler) drops the
+ * byte silently — the user can retry or Esc.
+ *
+ * @return 0 on success, -1 on allocation failure
+ */
+static int prompt_buffer_push(prompt_t *p, char c) {
+    if (p->len + 1 >= p->cap) {
+        size_t new_cap = p->cap ? p->cap * 2 : 256;
+        char *new_buf = realloc(p->buffer, new_cap);
+        if (!new_buf) {
+            return -1;
+        }
+        p->buffer = new_buf;
+        p->cap = new_cap;
+    }
+    p->buffer[p->len++] = c;
+    p->buffer[p->len] = '\0';
+    return 0;
+}
+
+/**
+ * Key dispatch while the inline target prompt is active.
+ *
+ * Mode shadowing is the entire point: every navigation key (j/k/g/G/J/K),
+ * the save key (w), and the quit key (q) lose their TUI meaning while
+ * `prompt.active` is set, because they are valid bytes in a path. The
+ * prompt branch only responds to Enter (commit), Esc / Ctrl-C / Ctrl-D
+ * (cancel), Backspace (delete-last), and printable bytes (insert).
+ * Everything else — Tab, arrows, Home, End, Delete, Page-Up/Down — is
+ * a no-op.
+ *
+ * No error path: the prompt's effects (buffer mutation, item.target
+ * commit) are in-memory and recoverable. OOM during typing drops the
+ * byte; OOM at commit time keeps the prompt open so the user retries.
+ */
+static interactive_result_t handle_key_prompt(
+    interactive_state_t *state, int key
+) {
+    prompt_t *p = &state->prompt;
+
+    switch (key) {
+        case TERM_KEY_ENTER: {
+            if (p->len == 0) {
+                /* Empty Enter is a no-op; only Esc closes without a value. */
+                return INTERACTIVE_CONTINUE;
+            }
+            char *captured = strdup(p->buffer);
+            if (!captured) {
+                /* Recoverable: keep the prompt open, let the user retry. */
+                return INTERACTIVE_CONTINUE;
+            }
+            profile_item_t *it = &state->items[p->item_index];
+            /* it->target is guaranteed NULL by the gate that opened the
+             * prompt; the free is defensive scar-tissue insurance. */
+            free(it->target);
+            it->target = captured;
+            it->enabled = true;
+            state->modified = true;
+            prompt_close(p);
+            return INTERACTIVE_CONTINUE;
+        }
+
+        case TERM_KEY_ESCAPE:
+        case TERM_KEY_CTRL_C:
+        case TERM_KEY_CTRL_D:
+            /* Cancel: row stays disabled, target stays NULL, modified
+             * flag untouched (no edit happened). */
+            prompt_close(p);
+            return INTERACTIVE_CONTINUE;
+
+        case TERM_KEY_BACKSPACE:
+            if (p->len > 0) {
+                p->buffer[--p->len] = '\0';
+            }
+            return INTERACTIVE_CONTINUE;
+
+        default:
+            /* Accept any non-control byte. The range covers printable
+             * ASCII (0x20..0x7E) and the high-bit band (0x80..0xFF) so
+             * UTF-8 byte sequences in paths pass through verbatim. 0x7F
+             * (DEL) is excluded defensively — the terminal layer maps
+             * both 0x7F and 0x08 to TERM_KEY_BACKSPACE before they
+             * reach this default branch, so 0x7F should be unreachable
+             * here, but the guard makes the policy explicit. */
+            if (key >= 0x20 && key <= 0xFF && key != 0x7F) {
+                (void) prompt_buffer_push(p, (char) key);
+            }
+            return INTERACTIVE_CONTINUE;
+    }
+}
+
+/**
+ * Key dispatch for the normal navigation/reorder mode.
+ *
+ * This is the prior interactive_handle_key body verbatim, except the
+ * space-key branch gains the three-gate prompt trigger and the
+ * (former) cached enabled_count update was removed when that field
+ * was retired.
+ */
+static interactive_result_t handle_key_normal(
     interactive_state_t *state,
     git_repository *repo,
     state_t *deploy_state,
     arena_t *arena,
     int key,
-    terminal_t **term_ptr,
     error_t **out_err
 ) {
-    if (!state || !repo || !deploy_state || !arena || !term_ptr || !out_err) {
-        return INTERACTIVE_EXIT_ERROR;
-    }
-
-    *out_err = NULL;
-
     switch (key) {
         /* Navigation */
         case TERM_KEY_UP:
@@ -668,22 +954,36 @@ interactive_result_t interactive_handle_key(
             state->cursor = state->item_count - 1;
             return INTERACTIVE_CONTINUE;
 
-        /* Toggle enabled state */
-        case TERM_KEY_SPACE:
-            if (state->cursor < state->item_count) {
-                bool was_enabled = state->items[state->cursor].enabled;
-                state->items[state->cursor].enabled = !was_enabled;
-
-                /* Update cached count */
-                if (was_enabled) {
-                    state->enabled_count--;
-                } else {
-                    state->enabled_count++;
-                }
-
-                state->modified = true;
+        /* Toggle enabled state — with target-prompt gate. */
+        case TERM_KEY_SPACE: {
+            if (state->cursor >= state->item_count) {
+                return INTERACTIVE_CONTINUE;
             }
+            profile_item_t *it = &state->items[state->cursor];
+            bool toggling_on = !it->enabled;
+
+            /* Three-gate trigger: prompt opens iff the row has custom/
+             * files, the toggle is OFF→ON, and no target has been
+             * captured or seeded yet. The user-supplied target survives
+             * transient toggle-off / toggle-on cycles within a session,
+             * so a re-enable after a same-session disable skips the
+             * prompt naturally via the third gate. */
+            if (toggling_on && it->has_custom && it->target == NULL) {
+                state->prompt.active = true;
+                state->prompt.item_index = state->cursor;
+                /* Buffer is empty by prompt_close on the previous cycle
+                 * (or by interactive_state_create's calloc on the first
+                 * cycle). No need to reset here. */
+                return INTERACTIVE_CONTINUE;
+            }
+
+            /* Every other shape — toggling-off, plain non-custom toggle,
+             * or re-enabling with a still-present target — is a direct
+             * flip. */
+            it->enabled = !it->enabled;
+            state->modified = true;
             return INTERACTIVE_CONTINUE;
+        }
 
         /* Reorder - move profile up */
         case 'K':
@@ -726,6 +1026,30 @@ interactive_result_t interactive_handle_key(
             /* Unknown key - ignore */
             return INTERACTIVE_CONTINUE;
     }
+}
+
+interactive_result_t interactive_handle_key(
+    interactive_state_t *state,
+    git_repository *repo,
+    state_t *deploy_state,
+    arena_t *arena,
+    int key,
+    terminal_t **term_ptr,
+    error_t **out_err
+) {
+    if (!state || !repo || !deploy_state || !arena || !term_ptr || !out_err) {
+        return INTERACTIVE_EXIT_ERROR;
+    }
+
+    *out_err = NULL;
+
+    /* Mode dispatch. The prompt branch consumes every byte while active
+     * — q/w/J/K/j/k/g/G all lose their navigation meaning, by
+     * construction (key-set shadowing), not by per-key filtering. */
+    if (state->prompt.active) {
+        return handle_key_prompt(state, key);
+    }
+    return handle_key_normal(state, repo, deploy_state, arena, key, out_err);
 }
 
 /* Main Entry Point */
@@ -781,14 +1105,21 @@ error_t *interactive_run(
     }
 
     /* Check terminal width to prevent line wrapping.
-     * Display format: "  ▶ ✓   profile/name"
-     * - 2 spaces prefix
-     * - 1 char cursor indicator
-     * - 1 space
-     * - 1 char checkbox
-     * - 1 space
-     * - 0-2 spaces indent
-     * Total overhead: ~8 chars
+     *
+     * Static row layout:
+     *   "  " + cursor + " " + checkbox + " " + name + annotation
+     *
+     * Prefix is fixed at 6 visible columns ("  " + cursor + " " +
+     * checkbox + " "). The annotation column reserves space for the
+     * widest static tag — " (custom)" — which is 9 visible columns
+     * including its leading separator. The dynamic "→ <target>"
+     * annotation can run longer than that, but it is data the user
+     * already supplied (or a path realpath-bounded by the save) and
+     * its visual overflow is intentionally allowed to wrap rather
+     * than block the TUI startup. Mirror the same accounting for the
+     * mid-session prompt overlay ("Target: " + buffer): the static
+     * gate covers only what we can size up front; the buffer's wrap
+     * is documented per design.
      */
     const profile_item_t *items;
     size_t item_count;
@@ -802,15 +1133,18 @@ error_t *interactive_run(
         }
     }
 
-    /* Check if longest name + UI elements fits in terminal width */
-    const int UI_OVERHEAD = 10;  /* Extra margin for safety */
-    if (max_name_len + UI_OVERHEAD > (size_t) size.cols) {
+    const size_t ROW_PREFIX_WIDTH = 6;
+    const size_t ROW_ANNOTATION_RESERVE = 9; /* " (custom)" */
+    size_t worst_row_width =
+        ROW_PREFIX_WIDTH + max_name_len + ROW_ANNOTATION_RESERVE;
+
+    if (worst_row_width > (size_t) size.cols) {
         interactive_state_free(state);
         terminal_restore(term);
         return error_create(
             ERR_INVALID_ARG, "terminal too narrow (longest profile name: "
-            "%zu chars, need %d columns, have %d)", max_name_len,
-            (int) max_name_len + UI_OVERHEAD, size.cols
+            "%zu chars, need %zu columns, have %d)",
+            max_name_len, worst_row_width, size.cols
         );
     }
 

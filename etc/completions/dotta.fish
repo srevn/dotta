@@ -171,6 +171,75 @@ function __dotta_refspec_commits
     end
 end
 
+function __dotta_target_value
+    # Return the most recent `--target <value>` from the current commandline,
+    # or empty if --target was not supplied. Iterates backwards so a later
+    # occurrence overrides an earlier one (matches the parser's last-wins
+    # behavior).
+    set -l tokens (commandline -opc)
+    set -l n (count $tokens)
+    test $n -lt 1; and return
+    for i in (seq $n -1 1)
+        if test "$tokens[$i]" = --target
+            set -l next_idx (math $i + 1)
+            if test $next_idx -le $n
+                echo $tokens[$next_idx]
+                return
+            end
+        end
+    end
+end
+
+function __dotta_add_paths
+    # Mirror path_input_normalize (src/infra/path.c): when --target /T is
+    # set, positional file paths resolve chroot-style relative to /T. So
+    # complete from /T/ instead of CWD, preserving the user's leading-slash
+    # style on the way back so the inserted token round-trips unchanged.
+    set -l token (commandline -ct)
+    set -l target (__dotta_target_value)
+
+    # No --target → standard filesystem completion (CWD-relative or absolute).
+    # Tilde token → bypass target (path_input_normalize special-cases ~).
+    if test -z "$target"; or string match -q '~*' -- $token
+        __fish_complete_path "$token"
+        return
+    end
+
+    # Strip trailing slashes from target; pathological "--target /" falls back.
+    set target (string replace -r '/+$' '' -- $target)
+    if test -z "$target"
+        __fish_complete_path "$token"
+        return
+    end
+
+    # User already typed the target prefix → already-inside branch, complete
+    # against the real absolute path (matches path_input_normalize's check).
+    if test "$token" = "$target"; or string match -q "$target/*" -- $token
+        __fish_complete_path "$token"
+        return
+    end
+
+    # Preserve leading-slash style: `/etc/foo` stays `/etc/foo`, `etc/foo`
+    # stays relative — both chroot to target on the dotta side.
+    set -l leading ''
+    set -l rel $token
+    if string match -q '/*' -- $token
+        set leading '/'
+        set rel (string sub -s 2 -- $token)
+    end
+
+    set -l prefix_len (math (string length $target) + 2)
+    for path in "$target/$rel"*
+        test -e $path; or continue
+        set -l visible (string sub -s $prefix_len -- $path)
+        if test -d $path
+            printf "%s%s/\n" $leading $visible
+        else
+            printf "%s%s\n" $leading $visible
+        end
+    end
+end
+
 # =============================================================================
 # Condition Helpers - Argument Position Detection
 # =============================================================================
@@ -357,6 +426,10 @@ complete -c dotta -n "__dotta_using_command sync" -l diverged -xa "warn rebase m
 # ignore --test takes a filesystem path, not a profile/file token.
 complete -c dotta -n "__dotta_using_command ignore" -l test -F
 
+# --target takes a deployment-root directory
+complete -c dotta -n "__dotta_using_command add" -l target -xa "(__fish_complete_directories)"
+complete -c dotta -n "__dotta_using_subcommand profile enable" -l target -xa "(__fish_complete_directories)"
+
 # =============================================================================
 # Positional Arguments
 #
@@ -366,9 +439,11 @@ complete -c dotta -n "__dotta_using_command ignore" -l test -F
 # post_parse logic.
 # =============================================================================
 
-# add: First positional is profile (required), remaining are filesystem paths
+# add: First positional is profile (required), remaining are filesystem paths.
+# Paths complete relative to --target when set (chroot-style, mirroring
+# path_input_normalize); otherwise standard CWD-relative completion.
 complete -c dotta -n "__dotta_using_command add; and __dotta_is_nth_arg 1" -xa "(__dotta_profiles_all)"
-complete -c dotta -n "__dotta_using_command add; and not __dotta_is_nth_arg 1" -F
+complete -c dotta -n "__dotta_using_command add; and not __dotta_is_nth_arg 1" -xa "(__dotta_add_paths)"
 
 # remove: First positional is profile (required), remaining are managed files
 complete -c dotta -n "__dotta_using_command remove; and not __dotta_seen_option --delete-profile; and __dotta_is_nth_arg 1" -xa "(__dotta_profiles)"

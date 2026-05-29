@@ -439,15 +439,15 @@ complete -c dotta -n "__dotta_using_subcommand profile enable" -l target -xa "(_
 # post_parse logic.
 # =============================================================================
 
-# add: First positional is profile (required), remaining are filesystem paths.
-# Paths complete relative to --target when set (chroot-style, mirroring
-# path_input_normalize); otherwise standard CWD-relative completion.
-complete -c dotta -n "__dotta_using_command add; and __dotta_is_nth_arg 1" -xa "(__dotta_profiles_all)"
-complete -c dotta -n "__dotta_using_command add; and not __dotta_is_nth_arg 1" -xa "(__dotta_add_paths)"
+# add: First positional is profile (required), remaining are filesystem paths
+complete -c dotta -n "__dotta_using_command add; and not __dotta_seen_option -p --profile; and __dotta_is_nth_arg 1" -xa "(__dotta_profiles_all)"
+complete -c dotta -n "__dotta_using_command add; and not __dotta_seen_option -p --profile; and not __dotta_is_nth_arg 1" -xa "(__dotta_add_paths)"
+complete -c dotta -n "__dotta_using_command add; and __dotta_seen_option -p --profile" -xa "(__dotta_add_paths)"
 
 # remove: First positional is profile (required), remaining are managed files
-complete -c dotta -n "__dotta_using_command remove; and not __dotta_seen_option --delete-profile; and __dotta_is_nth_arg 1" -xa "(__dotta_profiles)"
-complete -c dotta -n "__dotta_using_command remove; and not __dotta_seen_option --delete-profile; and not __dotta_is_nth_arg 1" -xa "(__dotta_files)"
+complete -c dotta -n "__dotta_using_command remove; and not __dotta_seen_option --delete-profile; and not __dotta_seen_option -p --profile; and __dotta_is_nth_arg 1" -xa "(__dotta_profiles)"
+complete -c dotta -n "__dotta_using_command remove; and not __dotta_seen_option --delete-profile; and not __dotta_seen_option -p --profile; and not __dotta_is_nth_arg 1" -xa "(__dotta_files)"
+complete -c dotta -n "__dotta_using_command remove; and not __dotta_seen_option --delete-profile; and __dotta_seen_option -p --profile" -xa "(__dotta_files)"
 
 # apply: Can take profile names OR file paths (heuristic determines type)
 complete -c dotta -n "__dotta_using_command apply" -xa "(__dotta_profiles)"
@@ -463,8 +463,9 @@ complete -c dotta -n "__dotta_using_command update" -F
 complete -c dotta -n "__dotta_using_command status" -xa "(__dotta_profiles)"
 
 # list: 1st arg is profile, 2nd is managed file
-complete -c dotta -n "__dotta_using_command list; and __dotta_is_nth_arg 1" -xa "(__dotta_profiles)"
-complete -c dotta -n "__dotta_using_command list; and __dotta_is_nth_arg 2" -xa "(__dotta_files)"
+complete -c dotta -n "__dotta_using_command list; and not __dotta_seen_option -p --profile; and __dotta_is_nth_arg 1" -xa "(__dotta_profiles)"
+complete -c dotta -n "__dotta_using_command list; and not __dotta_seen_option -p --profile; and __dotta_is_nth_arg 2" -xa "(__dotta_files)"
+complete -c dotta -n "__dotta_using_command list; and __dotta_seen_option -p --profile; and __dotta_is_nth_arg 1" -xa "(__dotta_files)"
 
 # diff: Takes profiles, files, or commits
 complete -c dotta -n "__dotta_using_command diff; and __dotta_is_nth_arg 1" -xa "(__dotta_profiles)"

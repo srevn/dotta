@@ -1541,7 +1541,7 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
         err = ERROR(
             ERR_NOT_FOUND, "No enabled profiles to sync\n"
             "Hint: Run 'dotta profile enable <name>' to enable profiles\n"
-            "      Or run 'dotta profile list --remote' to see available profiles"
+            "      Or run 'dotta profile list --all' to see available profiles"
         );
         goto cleanup;
     }

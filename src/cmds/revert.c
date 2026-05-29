@@ -214,7 +214,7 @@ static error_t *discover_file(
                 ERR_NOT_FOUND, "File '%s' not found in any profile\n\n"
                 "If you are trying to revert a deleted file, specify the profile:\n"
                 "  dotta revert --profile <name> %s <commit>\n\n"
-                "Use 'dotta list --all' to see all profiles.", storage_path, file_path
+                "Use 'dotta list' to see all profiles.", storage_path, file_path
             );
         }
         return err;

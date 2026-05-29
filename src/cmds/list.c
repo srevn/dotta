@@ -745,16 +745,25 @@ error_t *cmd_list(const dotta_ctx_t *ctx, const cmd_list_options_t *opts) {
  * ══════════════════════════════════════════════════════════════════ */
 
 /**
- * Infer list mode from positionals and derive `profile` / `file_path`.
+ * Derive `mode`, `profile`, and `file_path` from the -p flag and the
+ * raw positional bucket.
  *
- * Legacy form:
- *   - No positional:            mode = LIST_PROFILES
- *   - 1 positional (file path): mode = LIST_FILE_HISTORY (profile inferred)
- *   - 1 positional (profile):   mode = LIST_FILES
- *   - 2 positionals:            mode = LIST_FILE_HISTORY (profile, file)
+ * -p <profile> is the leading positional forced to a profile: it names
+ * the profile unambiguously, so every positional is then a file. It is
+ * the escape hatch for profiles whose names would trip the path
+ * heuristic, and it mirrors add/remove's flag-vs-first-positional split.
  *
- * Classification uses str_looks_like_file_path to distinguish a bare
- * profile name from a file path.
+ *   Flag form (-p given):
+ *     0 positionals -> LIST_FILES        (profile = flag)
+ *     1 positional  -> LIST_FILE_HISTORY (profile = flag, file = pos[0])
+ *     2 positionals -> error: only one file may accompany -p
+ *
+ *   Inference form (no -p): the leading positional is a profile or a
+ *   file, disambiguated by str_looks_like_file_path.
+ *     0 positionals -> LIST_PROFILES
+ *     1 positional  -> path? LIST_FILE_HISTORY (profile inferred)
+ *                      name? LIST_FILES
+ *     2 positionals -> LIST_FILE_HISTORY (profile = pos[0], file = pos[1])
  */
 static error_t *list_post_parse(
     void *opts_v, arena_t *arena, const args_command_t *cmd
@@ -762,6 +771,21 @@ static error_t *list_post_parse(
     (void) arena;
     (void) cmd;
     cmd_list_options_t *o = opts_v;
+
+    if (o->profile != NULL) {
+        if (o->positional_count == 0) {
+            o->mode = LIST_FILES;
+        } else if (o->positional_count == 1) {
+            o->mode = LIST_FILE_HISTORY;
+            o->file_path = o->positional_args[0];
+        } else {
+            return ERROR(
+                ERR_INVALID_ARG,
+                "only one file may accompany -p/--profile"
+            );
+        }
+        return NULL;
+    }
 
     if (o->positional_count == 0) {
         o->mode = LIST_PROFILES;

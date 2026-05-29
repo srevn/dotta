@@ -20,6 +20,7 @@
 #include "core/scope.h"
 #include "core/state.h"
 #include "core/workspace.h"
+#include "crypto/keymgr.h"
 #include "infra/mount.h"
 #include "infra/salt.h"
 #include "sys/gitops.h"
@@ -1473,6 +1474,162 @@ static void sync_render_summary(
     }
 }
 
+/*
+ * Render the one unrecoverable cell: the local salt differs from the
+ * remote's canonical salt and local ciphertext depends on the local one.
+ * Warn loudly and continue — plaintext profiles still sync.
+ */
+static void salt_emit_conflict(output_t *out) {
+    output_warning(
+        out, OUTPUT_NORMAL,
+        "Repository salt conflict: local salt differs from the remote's; "
+        "encrypted files pulled by this sync will not decrypt"
+    );
+    output_hint(
+        out, OUTPUT_NORMAL,
+        "Re-clone if this machine's encrypted files came from the remote; "
+        "otherwise reconcile the independent encryption roots manually"
+    );
+}
+
+/*
+ * Apply the CLI gates to salt_resolve's verdict, render the
+ * outcome, and run the chosen git action (establish via salt_push, adopt
+ * via salt_fetch). The fact-finding already happened in infra/salt; this
+ * layer is pure policy + rendering.
+ *
+ * Runs before the fetch phase so the decision's census is never
+ * contaminated by pulled remote ciphertext, and before state_begin so the
+ * salt round-trips stay outside the write-transaction window. Best-effort:
+ * returns NULL on every salt-level outcome (warn-and-continue); a non-NULL
+ * return is reserved for programmer misuse surfaced by the decide call.
+ */
+static error_t *salt_reconcile(
+    const dotta_ctx_t *ctx,
+    const char *remote_name,
+    transfer_context_t *xfer,
+    const cmd_sync_options_t *opts
+) {
+    git_repository *repo = ctx->repo;
+    output_t *out = ctx->out;
+
+    salt_reconcile_t decision;
+    error_t *err = salt_resolve(repo, remote_name, xfer, &decision);
+    if (err) {
+        /* decide errors only on programmer misuse (a NULL argument) — it
+         * folds transport failure to UNREACHABLE. Surface the bug rather
+         * than swallow it as best-effort. */
+        return err;
+    }
+
+    switch (decision) {
+        case SALT_RECONCILE_UNREACHABLE:
+            /* The authoritative "remote unreachable" error comes from the
+             * fetch phase that runs next. */
+            output_info(out, OUTPUT_VERBOSE, "Skipped salt sync (remote unreachable)");
+            return NULL;
+
+        case SALT_RECONCILE_EQUAL:
+            output_info(out, OUTPUT_VERBOSE, "Repository salt up to date");
+            return NULL;
+
+        case SALT_RECONCILE_NO_LOCAL_SALT:
+            /* Nothing to publish; never claim an establish (the guard). */
+            output_info(
+                out, OUTPUT_VERBOSE,
+                "No local repository salt to establish (run 'dotta init')"
+            );
+            return NULL;
+
+        case SALT_RECONCILE_ESTABLISH: {
+            /* Establish is push-shaped: gate on --no-push. */
+            if (opts->no_push) {
+                output_info(
+                    out, OUTPUT_VERBOSE,
+                    "Remote has no repository salt; establish skipped"
+                );
+                return NULL;
+            }
+            if (opts->dry_run) {
+                output_info(
+                    out, OUTPUT_VERBOSE,
+                    "Would establish repository salt on remote"
+                );
+                return NULL;
+            }
+            err = salt_push(repo, remote_name, xfer);
+            if (err) {
+                output_warning(
+                    out, OUTPUT_NORMAL,
+                    "Failed to establish repository salt on remote: %s",
+                    error_message(err)
+                );
+                error_free(err);
+                return NULL;  /* best-effort; retried next sync */
+            }
+            output_success(
+                out, OUTPUT_VERBOSE,
+                "Established repository salt on remote"
+            );
+            return NULL;
+        }
+
+        case SALT_RECONCILE_CONFLICT:
+            salt_emit_conflict(out);
+            return NULL;  /* warn-and-continue; no git op */
+
+        case SALT_RECONCILE_ADOPT: {
+            /* Adopt is pull-shaped: gate on --no-pull. */
+            if (opts->no_pull) {
+                output_info(
+                    out, OUTPUT_VERBOSE,
+                    "Remote repository salt differs; adopt skipped"
+                );
+                return NULL;
+            }
+            if (opts->dry_run) {
+                output_info(
+                    out, OUTPUT_VERBOSE,
+                    "Would adopt repository salt from remote"
+                );
+                return NULL;
+            }
+            err = salt_fetch(repo, remote_name, xfer);
+            if (err) {
+                if (err->code == ERR_CRYPTO) {
+                    /* salt_fetch validated the bytes and rolled the local
+                     * ref back; nothing landed. */
+                    output_warning(
+                        out, OUTPUT_NORMAL,
+                        "Remote salt is malformed; the remote repo may be corrupt"
+                    );
+                } else {
+                    output_warning(
+                        out, OUTPUT_NORMAL,
+                        "Failed to adopt repository salt from remote: %s",
+                        error_message(err)
+                    );
+                }
+                error_free(err);
+                return NULL;  /* best-effort */
+            }
+            output_success(
+                out, OUTPUT_VERBOSE,
+                "Adopted repository salt from remote (local salt was unused)"
+            );
+            /* Hygiene: the in-process keymgr (if any) was derived from the
+             * salt we just replaced. Clear it so a later same-process crypto
+             * op re-derives from the adopted salt. NULL-safe; the on-disk
+             * session cache MAC-binds the salt and self-heals regardless,
+             * and sync itself performs no decrypt. */
+            keymgr_clear(ctx->keymgr);
+            return NULL;
+        }
+    }
+
+    return NULL;  /* unreachable: decide returns one of six decisions */
+}
+
 /**
  * Sync command implementation
  */
@@ -1810,6 +1967,15 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
         goto cleanup;
     }
 
+    /* Reconcile the repository salt with the remote. Placed before the
+     * fetch phase so the in-use census cannot see pulled remote ciphertext,
+     * and before state_begin so its network round-trips stay outside the
+     * write-transaction window. */
+    err = salt_reconcile(ctx, remote_name, xfer, opts);
+    if (err) {
+        goto cleanup;
+    }
+
     /* Phase 1: Fetch profiles in sync scope from remote */
     err = sync_fetch_phase(
         repo, remote_name, scope, results, out, xfer
@@ -1941,19 +2107,6 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
 
     if (err) {
         goto cleanup;
-    }
-
-    /* Push refs/dotta/salt to the remote so the per-repo salt
-     * propagates from a fresh `dotta init` to other clones. */
-    if (!no_push) {
-        error_t *cfg_err = salt_push(repo, remote_name, xfer);
-        if (cfg_err) {
-            output_warning(
-                out, OUTPUT_NORMAL, "Failed to push %s: %s",
-                SALT_REF, error_message(cfg_err)
-            );
-            error_free(cfg_err);
-        }
     }
 
     /* Commit manifest changes */

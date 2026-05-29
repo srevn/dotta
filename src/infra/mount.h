@@ -54,8 +54,7 @@ typedef enum {
  * for the per-kind invariants every consumer ultimately asks for:
  * "is resolution profile-keyed?" and "do files of this kind carry
  * ownership metadata?". Adding a fourth kind is one row in the internal
- * SPECS table; consumers read attributes directly without growing a
- * switch (Rule 2 — vocabulary is the dispatch).
+ * SPECS table; consumers read attributes directly without growing a switch.
  *
  * Stable storage: SPECS rows live in static data, so the pointers
  * returned by `mount_spec_for_kind` and `mount_spec_for_path` are

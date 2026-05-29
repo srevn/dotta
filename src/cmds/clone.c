@@ -439,6 +439,19 @@ error_t *cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
             );
             error_free(err);
             err = NULL;
+        } else if (err->code == ERR_CRYPTO) {
+            /* Malformed remote salt — salt_fetch already rolled back, so
+             * no garbage ref persists. Same soft-warn-and-continue as the
+             * not-advertised case: a plaintext clone is still fine, only
+             * encryption is unavailable until a valid salt arrives. */
+            output_warning(
+                out, OUTPUT_NORMAL,
+                "%s. Encryption operations will fail until a valid salt "
+                "is fetched or 'dotta init' is run locally.",
+                error_message(err)
+            );
+            error_free(err);
+            err = NULL;
         } else {
             final_err = error_wrap(err, "Failed to fetch repository config");
             goto cleanup;

@@ -200,8 +200,7 @@ error_t *path_input_resolve(
      * the label is one of three compile-time constants ("home", "root",
      * "custom"), and the tail is the result of relative_after_target
      * which strips a validated mount target from a normalized absolute
-     * path. Re-validating the classifier's own output is theater (Rule 6
-     * — establish at the boundary, trust downstream). */
+     * path. Re-validating the classifier's own output is theater. */
     mount_classify_outcome_t outcome;
     err = mount_classify(table, normalized, arena, &outcome, out_storage, NULL);
     if (err) goto cleanup;

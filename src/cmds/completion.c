@@ -16,6 +16,7 @@
 #include "base/array.h"
 #include "base/error.h"
 #include "core/state.h"
+#include "infra/mount.h"
 #include "sys/gitops.h"
 #include "sys/upstream.h"
 
@@ -24,6 +25,7 @@
 #define COMPLETE_COMMIT_DEFAULT_LIMIT 20
 #define COMPLETE_COMMIT_MAX_LIMIT 100
 #define COMPLETE_COMMIT_SUMMARY_MAX 60
+#define COMPLETE_REFSPEC_FILES_MAX 2000
 
 /**
  * Output enabled profiles from state database
@@ -168,6 +170,87 @@ static void complete_files(
             printf("%s\t%s\n", path, entries[i].profile);
         }
     }
+}
+
+/* Tree-walk state for complete_refspec_files. */
+typedef struct {
+    const char *branch;   /* current branch (source of the "<branch>:" prefix) */
+    bool prefix;          /* prefix "<branch>:" (all branches) vs bare path (scoped to -p) */
+    size_t cap;
+    size_t emitted;
+    bool truncated;
+} refspec_walk_ctx_t;
+
+/**
+ * Tree-walk callback: emit one token per managed file blob.
+ *
+ * `root` is "" at the top level or "dir/.../" with a trailing slash, so
+ * mount_spec_for_path(root) gates emission to files under a storage label,
+ * skipping top-level blobs, .dotta/, and any non-label root.
+ */
+static int refspec_emit_cb(
+    const char *root,
+    const git_tree_entry *entry,
+    void *payload
+) {
+    refspec_walk_ctx_t *ctx = payload;
+
+    if (git_tree_entry_type(entry) != GIT_OBJECT_BLOB) return 0;  /* descend trees */
+    if (!mount_spec_for_path(root)) return 0;                     /* storage-label gate */
+
+    const char *name = git_tree_entry_name(entry);
+    if (ctx->prefix) {
+        printf("%s:%s%s\n", ctx->branch, root, name);
+    } else {
+        printf("%s%s\t%s\n", root, name, ctx->branch);
+    }
+
+    if (++ctx->emitted >= ctx->cap) {
+        ctx->truncated = true;
+        return -1;  /* abort: wrapped as a git error, marked benign via ctx */
+    }
+    return 0;
+}
+
+/**
+ * Output managed files as completion tokens, sourced from git (not the DB) so
+ * show/revert reach profiles disabled or never enabled here.
+ *
+ * @param repo Repository (borrowed)
+ * @param profile NULL: all branches, emit "<profile>:<path>". Else: that
+ *                branch only, emit bare "<path>" (profile pinned by -p).
+ * @param cap Backstop on total tokens emitted
+ */
+static void complete_refspec_files(
+    git_repository *repo,
+    const char *profile,
+    size_t cap
+) {
+    string_array_t *branches = NULL;
+    error_t *err = gitops_list_branches(repo, &branches);
+    if (err) {
+        error_free(err);  /* silent-failure model */
+        return;
+    }
+    string_array_sort(branches);  /* deterministic order */
+
+    refspec_walk_ctx_t ctx = { .cap = cap, .prefix = (profile == NULL) };
+    for (size_t i = 0; i < branches->count; i++) {
+        const char *branch = branches->items[i];
+        if (strcmp(branch, "dotta-worktree") == 0) continue;
+        if (profile && strcmp(branch, profile) != 0) continue;
+
+        git_tree *tree = NULL;
+        if (gitops_load_branch_tree(repo, branch, &tree, NULL)) continue;
+
+        ctx.branch = branch;
+        error_t *walk_err = gitops_tree_walk(tree, refspec_emit_cb, &ctx);
+        git_tree_free(tree);
+        if (walk_err) error_free(walk_err);  /* benign on cap-abort; else also silent */
+        if (ctx.truncated) break;            /* cap hit (the walk error above was the abort) */
+    }
+
+    string_array_free(branches);
 }
 
 /**
@@ -323,7 +406,11 @@ error_t *cmd_completion(const dotta_ctx_t *ctx, const cmd_completion_options_t *
             if (!repo) {
                 return NULL;
             }
-            complete_files(state, ctx->arena, opts->profile, opts->storage_paths);
+            if (opts->refspec) {
+                complete_refspec_files(repo, opts->profile, COMPLETE_REFSPEC_FILES_MAX);
+            } else {
+                complete_files(state, ctx->arena, opts->profile, opts->storage_paths);
+            }
             break;
 
         case COMPLETE_COMMITS:
@@ -395,6 +482,15 @@ static error_t *completion_post_parse(
     }
 
     const char *mode = o->positional_args[0];
+
+    /* --refspec is files-mode only; reject up front so 'spec' mode (which
+     * early-returns below) can't slip past. */
+    if (o->refspec && strcmp(mode, "files") != 0) {
+        return error_create(
+            ERR_INVALID_ARG, "--refspec is only valid with 'files' mode"
+        );
+    }
+
     if (strcmp(mode, "check") == 0) {
         o->mode = COMPLETE_CHECK;
     } else if (strcmp(mode, "profiles") == 0) {
@@ -450,6 +546,11 @@ static const args_opt_t completion_opts[] = {
         "s storage",
         cmd_completion_options_t,storage_paths,
         "Output storage paths instead of filesystem paths"
+    ),
+    ARGS_FLAG(
+        "refspec",
+        cmd_completion_options_t,refspec,
+        "Emit git-sourced profile:storage_path tokens; overrides --storage"
     ),
     ARGS_STRING(
         "p profile",             "<name>",

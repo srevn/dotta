@@ -16,6 +16,8 @@
  *   dotta __complete files                 # All managed files
  *   dotta __complete files -p <profile>    # Files in specific profile
  *   dotta __complete files --storage       # Storage paths instead of filesystem
+ *   dotta __complete files --refspec       # profile:storage_path from git (all branches)
+ *   dotta __complete files --refspec -p X  # bare storage_path from branch X (git source)
  *   dotta __complete commits               # Recent commits from first enabled profile
  *   dotta __complete commits -p <profile>  # Recent commits from specific profile
  *   dotta __complete commits --limit <n>   # Limit number of commits
@@ -60,6 +62,7 @@ typedef struct {
     const char *profile;      /* Optional: filter by profile */
     bool all;                 /* For profiles: include all (not just enabled) */
     bool storage_paths;       /* For files: output storage_path instead of filesystem_path */
+    bool refspec;             /* For files: git-sourced profile:storage_path */
     long limit;               /* For commits: max results (default 20) */
 
     /* Raw positional bucket (engine-populated; interpreted in post_parse). */

@@ -52,72 +52,85 @@ function __dotta_profiles_all
     dotta __complete profiles --all 2>/dev/null
 end
 
-function __dotta_files
-    # Check if -p/--profile was specified on the command line
+function __dotta_explicit_profile
     set -l tokens (commandline -opc)
-    set -l profile ""
-
     for i in (seq (count $tokens))
         if contains -- "$tokens[$i]" -p --profile
             set -l next_idx (math $i + 1)
             if test $next_idx -le (count $tokens)
-                set profile $tokens[$next_idx]
-                break
+                echo $tokens[$next_idx]
+                return
+            end
+        end
+    end
+end
+
+function __dotta_discover_profile
+    set -l profile (__dotta_explicit_profile)
+    if test -n "$profile"
+        echo $profile
+        return
+    end
+
+    set -l tokens (commandline -opc)
+    set -l cmd ""
+    set -l cmd_idx 0
+    set -l tc (count $tokens)
+    if test $tc -ge 2
+        for i in (seq 2 $tc)
+            switch $tokens[$i]
+                case '-*'
+                    continue
+                case '*'
+                    set cmd $tokens[$i]
+                    set cmd_idx $i
+                    break
             end
         end
     end
 
-    if test -n "$profile"
-        dotta __complete files --storage -p "$profile" 2>/dev/null
-    else
-        # Try to find positional profile for certain commands
-        set -l cmd ""
-        set -l cmd_idx 0
-        set -l tc (count $tokens)
-        if test $tc -ge 2
-            for i in (seq 2 $tc)
-                switch $tokens[$i]
-                    case '-*'
+    switch $cmd
+        case apply update remove list diff show revert
+            # Find first positional after command (skip flags and their values)
+            set -l value_flags $__dotta_value_flags
+            set -l skip_next 0
+            set -l scan_start (math $cmd_idx + 1)
+            if test $scan_start -le $tc
+                for i in (seq $scan_start $tc)
+                    if test $skip_next -eq 1
+                        set skip_next 0
                         continue
-                    case '*'
-                        set cmd $tokens[$i]
-                        set cmd_idx $i
-                        break
-                end
-            end
-        end
-
-        switch $cmd
-            case apply update add remove list show revert ignore diff
-                # Find first positional after command (skip flags and their values)
-                set -l value_flags $__dotta_value_flags
-                set -l skip_next 0
-                set -l scan_start (math $cmd_idx + 1)
-                if test $scan_start -le $tc
-                    for i in (seq $scan_start $tc)
-                        if test $skip_next -eq 1
-                            set skip_next 0
+                    end
+                    switch $tokens[$i]
+                        case '-*'
+                            if contains -- $tokens[$i] $value_flags
+                                set skip_next 1
+                            end
                             continue
-                        end
-                        switch $tokens[$i]
-                            case '-*'
-                                if contains -- $tokens[$i] $value_flags
-                                    set skip_next 1
-                                end
-                                continue
-                            case '*'
-                                set profile $tokens[$i]
-                                break
-                        end
+                        case '*'
+                            echo $tokens[$i]
+                            return
                     end
                 end
-        end
+            end
+    end
+end
 
-        if test -n "$profile"
-            dotta __complete files --storage -p "$profile" 2>/dev/null
-        else
-            dotta __complete files --storage 2>/dev/null
-        end
+function __dotta_files
+    set -l p (__dotta_discover_profile)
+    if test -n "$p"
+        dotta __complete files --storage -p "$p" 2>/dev/null
+    else
+        dotta __complete files --storage 2>/dev/null
+    end
+end
+
+function __dotta_refspec_files
+    set -l p (__dotta_discover_profile)
+    if test -n "$p"
+        dotta __complete files --refspec -p "$p" 2>/dev/null
+    else
+        dotta __complete files --refspec 2>/dev/null
     end
 end
 
@@ -132,20 +145,8 @@ function __dotta_commits
     printf "HEAD~2\t2 commits ago\n"
     printf "HEAD~3\t3 commits ago\n"
 
-    # Hash-based references from profile commit history
-    set -l tokens (commandline -opc)
-    set -l profile ""
-
-    for i in (seq (count $tokens))
-        if contains -- "$tokens[$i]" -p --profile
-            set -l next_idx (math $i + 1)
-            if test $next_idx -le (count $tokens)
-                set profile $tokens[$next_idx]
-                break
-            end
-        end
-    end
-
+    # Hash-based references from the explicitly-scoped profile's history
+    set -l profile (__dotta_explicit_profile)
     if test -n "$profile"
         dotta __complete commits -p "$profile" --limit 20 2>/dev/null
     else
@@ -224,7 +225,7 @@ function __dotta_add_paths
     set -l leading ''
     set -l rel $token
     if string match -q '/*' -- $token
-        set leading '/'
+        set leading /
         set rel (string sub -s 2 -- $token)
     end
 
@@ -252,10 +253,10 @@ function __dotta_needs_command
             case '-*'
                 continue
             case '*'
-                return 1  # Found a command
+                return 1 # Found a command
         end
     end
-    return 0  # No command yet
+    return 0 # No command yet
 end
 
 function __dotta_using_command
@@ -316,14 +317,14 @@ function __dotta_needs_subcommand
                 case '-*'
                     continue
                 case '*'
-                    return 1  # Found a subcommand
+                    return 1 # Found a subcommand
             end
         end
         if test "$tok" = "$parent"
             set found_parent 1
         end
     end
-    return 0  # No subcommand yet
+    return 0 # No subcommand yet
 end
 
 function __dotta_is_nth_arg
@@ -393,16 +394,16 @@ end
 # =============================================================================
 
 # --- remote subcommands ---
-complete -c dotta -n "__dotta_using_command remote; and __dotta_needs_subcommand remote" -a list    -d "List remotes"
-complete -c dotta -n "__dotta_using_command remote; and __dotta_needs_subcommand remote" -a add     -d "Add remote"
-complete -c dotta -n "__dotta_using_command remote; and __dotta_needs_subcommand remote" -a remove  -d "Remove remote"
+complete -c dotta -n "__dotta_using_command remote; and __dotta_needs_subcommand remote" -a list -d "List remotes"
+complete -c dotta -n "__dotta_using_command remote; and __dotta_needs_subcommand remote" -a add -d "Add remote"
+complete -c dotta -n "__dotta_using_command remote; and __dotta_needs_subcommand remote" -a remove -d "Remove remote"
 complete -c dotta -n "__dotta_using_command remote; and __dotta_needs_subcommand remote" -a set-url -d "Set remote URL"
-complete -c dotta -n "__dotta_using_command remote; and __dotta_needs_subcommand remote" -a rename  -d "Rename remote"
-complete -c dotta -n "__dotta_using_command remote; and __dotta_needs_subcommand remote" -a show    -d "Show remote"
+complete -c dotta -n "__dotta_using_command remote; and __dotta_needs_subcommand remote" -a rename -d "Rename remote"
+complete -c dotta -n "__dotta_using_command remote; and __dotta_needs_subcommand remote" -a show -d "Show remote"
 
 # --- key subcommands ---
-complete -c dotta -n "__dotta_using_command key; and __dotta_needs_subcommand key" -a set    -d "Set encryption passphrase"
-complete -c dotta -n "__dotta_using_command key; and __dotta_needs_subcommand key" -a clear  -d "Clear cached passphrase"
+complete -c dotta -n "__dotta_using_command key; and __dotta_needs_subcommand key" -a set -d "Set encryption passphrase"
+complete -c dotta -n "__dotta_using_command key; and __dotta_needs_subcommand key" -a clear -d "Clear cached passphrase"
 complete -c dotta -n "__dotta_using_command key; and __dotta_needs_subcommand key" -a status -d "Show key status"
 
 # =============================================================================
@@ -479,27 +480,27 @@ complete -c dotta -n "__dotta_using_command sync" -xa "(__dotta_profiles)"
 # ignore: Positional argument is profile
 complete -c dotta -n "__dotta_using_command ignore; and __dotta_is_nth_arg 1" -xa "(__dotta_profiles)"
 
-# show: Takes managed files, commits, or file@commit refspecs
-complete -c dotta -n "__dotta_using_command show" -xa "(__dotta_files)"
-complete -c dotta -n "__dotta_using_command show" -xa "(__dotta_commits)"
+# show: git-backed refspec files file@commit refspecs
+complete -c dotta -n "__dotta_using_command show" -xa "(__dotta_refspec_files)"
+complete -c dotta -n "__dotta_using_command show; and __dotta_seen_option -p --profile" -xa "(__dotta_commits)"
 complete -c dotta -n "__dotta_using_command show" -xa "(__dotta_refspec_commits)"
 
-# revert: Takes file@commit refspecs, managed files, or commits
-complete -c dotta -n "__dotta_using_command revert" -xa "(__dotta_files)"
-complete -c dotta -n "__dotta_using_command revert" -xa "(__dotta_commits)"
+# revert: git-backed refspec files file@commit refspecs
+complete -c dotta -n "__dotta_using_command revert" -xa "(__dotta_refspec_files)"
+complete -c dotta -n "__dotta_using_command revert; and __dotta_seen_option -p --profile" -xa "(__dotta_commits)"
 complete -c dotta -n "__dotta_using_command revert" -xa "(__dotta_refspec_commits)"
 
 # profile subcommand argument values
-complete -c dotta -n "__dotta_using_subcommand profile enable"  -xa "(__dotta_profiles_all)"
+complete -c dotta -n "__dotta_using_subcommand profile enable" -xa "(__dotta_profiles_all)"
 complete -c dotta -n "__dotta_using_subcommand profile disable" -xa "(__dotta_profiles)"
-complete -c dotta -n "__dotta_using_subcommand profile fetch"   -xa "(__dotta_profiles_all)"
+complete -c dotta -n "__dotta_using_subcommand profile fetch" -xa "(__dotta_profiles_all)"
 complete -c dotta -n "__dotta_using_subcommand profile reorder" -xa "(__dotta_profiles)"
 
 # remote subcommand argument values (subcommand itself is not in .subcommands)
-complete -c dotta -n "__dotta_using_subcommand remote remove"  -xa "(__dotta_remotes)"
+complete -c dotta -n "__dotta_using_subcommand remote remove" -xa "(__dotta_remotes)"
 complete -c dotta -n "__dotta_using_subcommand remote set-url" -xa "(__dotta_remotes)"
-complete -c dotta -n "__dotta_using_subcommand remote rename"  -xa "(__dotta_remotes)"
-complete -c dotta -n "__dotta_using_subcommand remote show"    -xa "(__dotta_remotes)"
+complete -c dotta -n "__dotta_using_subcommand remote rename" -xa "(__dotta_remotes)"
+complete -c dotta -n "__dotta_using_subcommand remote show" -xa "(__dotta_remotes)"
 
 # =============================================================================
 # Auto-generated schema

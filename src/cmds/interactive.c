@@ -704,15 +704,24 @@ static void render_footer(const view_t *view) {
             UI_DIM "esc" UI_RESET " cancel  "
             UI_DIM "backspace" UI_RESET " delete"
         );
-    } else if (view->modified) {
+        return;
+    }
+
+    const char *target_hint =
+        (view->item_count > 0 && view->items[view->cursor].has_custom)
+            ? UI_DIM "t" UI_RESET " target  "
+            : "";
+
+    if (view->modified) {
         fprintf(
             stdout,
             UI_DIM "↑↓" UI_RESET " navigate  "
             UI_DIM "space" UI_RESET " toggle  "
             UI_DIM "J/K" UI_RESET " move  "
-            UI_DIM "t" UI_RESET " target  "
+            "%s"
             UI_BOLD_YELLOW "w" UI_RESET " " UI_BOLD_YELLOW "save" UI_RESET "  "
-            UI_DIM "q" UI_RESET " quit"
+            UI_DIM "q" UI_RESET " quit",
+            target_hint
         );
     } else {
         fprintf(
@@ -720,8 +729,9 @@ static void render_footer(const view_t *view) {
             UI_DIM "↑↓" UI_RESET " navigate  "
             UI_DIM "space" UI_RESET " toggle  "
             UI_DIM "J/K" UI_RESET " move  "
-            UI_DIM "t" UI_RESET " target  "
-            UI_DIM "q" UI_RESET " quit"
+            "%s"
+            UI_DIM "q" UI_RESET " quit",
+            target_hint
         );
     }
 }

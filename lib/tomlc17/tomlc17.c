@@ -111,6 +111,54 @@ static char *pool_alloc(pool_t *pool, int n) {
   return ret;
 }
 
+// Cell: expandable buffer that behaves like realloc
+typedef struct cell_t cell_t;
+struct cell_t {
+  uint32_t top, max;
+  // first byte of data starts here (i.e. &(*this)[1])
+};
+
+static char *cell_realloc(char *p, int size) {
+  assert(size >= 0);
+  if (p == NULL) {
+    // first malloc
+    cell_t *tmp = REALLOC(NULL, size + sizeof(cell_t));
+    if (!tmp) {
+      return 0; // out of memory
+    }
+    cell_t *cp = tmp;
+    cp->max = size;
+    cp->top = size;
+    return (char *)&cp[1];
+  }
+
+  // obtain a handle to cell info
+  cell_t *cp = (cell_t *)(p - sizeof(cell_t));
+  if ((uint32_t)size <= cp->max) {
+    // cell is big enough for the new size. DONE.
+    cp->top = size;
+    return p;
+  }
+
+  // need to expand. add 30% margin.
+  int newmax = size * 1.3 + 100;
+  cell_t *tmp = REALLOC(cp, newmax + sizeof(cell_t));
+  if (!tmp) {
+    return 0; // out of memory
+  }
+  cp = tmp;
+  cp->max = newmax;
+  cp->top = size;
+  return (char *)&cp[1];
+}
+
+static void cell_free(char *p) {
+  if (p) {
+    cell_t *cp = (cell_t *)(p - sizeof(cell_t));
+    FREE(cp);
+  }
+}
+
 /* This is a string view. */
 typedef struct span_t span_t;
 struct span_t {
@@ -140,8 +188,6 @@ static int ucs_to_utf8(uint32_t code, char buf[4]);
 #define BRACE_LEVEL_MAX 30
 #define TABLE_MAX (1 << 14) // 16k
 #define ARRAY_MAX (1 << 14) // 16k
-
-static inline size_t align8(size_t x) { return (((x) + 7) & ~7); }
 
 enum toktyp_t {
   TOK_DOT = 1,
@@ -245,6 +291,7 @@ struct parser_t {
   toml_datum_t toptab;  // top table
   toml_datum_t *curtab; // current table
   pool_t *pool;         // memory pool for strings
+  const char *srcname;  // source name copied into the pool, or NULL
   ebuf_t ebuf;          // buffer to store last error message
 };
 
@@ -282,11 +329,14 @@ static toml_datum_t *tab_emplace(toml_datum_t *tab, span_t key,
     *reason = "table too large";
     return NULL;
   }
+
   {
-    char **pkey = REALLOC(tab->u.tab.key, sizeof(*pkey) * align8(N + 1));
-    int *plen = REALLOC(tab->u.tab.len, sizeof(*plen) * align8(N + 1));
-    toml_datum_t *value =
-        REALLOC(tab->u.tab.value, sizeof(*value) * align8(N + 1));
+    char **pkey = (char **)cell_realloc((char *)(void *)tab->u.tab.key,
+                                        sizeof(*pkey) * (N + 1));
+    int *plen =
+        (int *)cell_realloc((char *)tab->u.tab.len, sizeof(*plen) * (N + 1));
+    toml_datum_t *value = (toml_datum_t *)cell_realloc(
+        (char *)tab->u.tab.value, sizeof(*value) * (N + 1));
 
     // on success, must save new pointers in tab->u.tab because the
     // old memory areas are gone.
@@ -343,7 +393,8 @@ static toml_datum_t *arr_emplace(toml_datum_t *arr, const char **reason) {
     *reason = "array too large";
     return NULL;
   }
-  toml_datum_t *elem = REALLOC(arr->u.arr.elem, sizeof(*elem) * align8(n + 1));
+  toml_datum_t *elem = (toml_datum_t *)cell_realloc((char *)arr->u.arr.elem,
+                                                    sizeof(*elem) * (n + 1));
   if (!elem) {
     *reason = "out of memory";
     return NULL;
@@ -391,28 +442,80 @@ static void datum_free(toml_datum_t *datum) {
     for (int i = 0, top = datum->u.tab.size; i < top; i++) {
       datum_free(&datum->u.tab.value[i]);
     }
-    FREE(datum->u.tab.key);
-    FREE(datum->u.tab.len);
-    FREE(datum->u.tab.value);
+    cell_free((char *)(void *)datum->u.tab.key);
+    cell_free((char *)datum->u.tab.len);
+    cell_free((char *)datum->u.tab.value);
   } else if (datum->type == TOML_ARRAY) {
     for (int i = 0, top = datum->u.arr.size; i < top; i++) {
       datum_free(&datum->u.arr.elem[i]);
     }
-    FREE(datum->u.arr.elem);
+    cell_free((char *)datum->u.arr.elem);
   }
   // other types do not allocate memory
   *datum = DATUM_ZERO;
 }
 
+// Maps each distinct source-name pointer to a single copy in the destination
+// pool (deduplicated), so the merged pool holds at most one copy of each source
+// name (keeping it within the r1pool->top + r2pool->top budget).
+typedef struct srcmap_t srcmap_t;
+struct srcmap_t {
+  pool_t *pool;
+  const char **olds; // cell buffer of old pointers
+  const char **news; // cell buffer of new (copied) pointers
+  int n, cap;
+};
+
+// Returns the deduplicated copy of src, or NULL for a NULL input or on
+// out-of-memory. Callers distinguish the two: a non-NULL src that yields NULL
+// is a hard failure.
+static const char *dedup_source(srcmap_t *m, const char *src) {
+  if (!src) {
+    return NULL;
+  }
+  for (int i = 0; i < m->n; i++) {
+    if (m->olds[i] == src) {
+      return m->news[i];
+    }
+  }
+  // Grow the memo first, so an allocation failure aborts cleanly.
+  if (m->n == m->cap) {
+    int newcap = m->cap ? m->cap * 2 : 4;
+    const char **no = (const char **)cell_realloc((char *)(void *)m->olds,
+                                                  sizeof(*no) * newcap);
+    if (!no) {
+      return NULL; // out of memory
+    }
+    m->olds = no;
+    const char **nn = (const char **)cell_realloc((char *)(void *)m->news,
+                                                  sizeof(*nn) * newcap);
+    if (!nn) {
+      return NULL; // out of memory
+    }
+    m->news = nn;
+    m->cap = newcap;
+  }
+  int len = (int)strlen(src) + 1;
+  char *p = pool_alloc(m->pool, len);
+  if (!p) {
+    return NULL; // out of memory
+  }
+  memcpy(p, src, len);
+  m->olds[m->n] = src;
+  m->news[m->n] = p;
+  m->n++;
+  return p;
+}
+
 // Make a deep copy of src to dst.
 // Return 0 on success, -1 otherwise.
-static int datum_copy(toml_datum_t *dst, toml_datum_t src, pool_t *pool,
+static int datum_copy(toml_datum_t *dst, toml_datum_t src, srcmap_t *sm,
                       const char **reason) {
   *dst = mkdatum_at(src.type, src.lineno, src.colno);
   dst->flag = src.flag;
   switch (src.type) {
   case TOML_STRING:
-    dst->u.str.ptr = pool_alloc(pool, src.u.str.len + 1);
+    dst->u.str.ptr = pool_alloc(sm->pool, src.u.str.len + 1);
     if (!dst->u.str.ptr) {
       *reason = "out of memory";
       goto bail;
@@ -422,12 +525,18 @@ static int datum_copy(toml_datum_t *dst, toml_datum_t src, pool_t *pool,
     break;
   case TOML_TABLE:
     for (int i = 0; i < src.u.tab.size; i++) {
-      span_t newkey = {src.u.tab.key[i], src.u.tab.len[i]};
+      char *keycopy = pool_alloc(sm->pool, src.u.tab.len[i] + 1);
+      if (!keycopy) {
+        *reason = "out of memory";
+        goto bail;
+      }
+      memcpy(keycopy, src.u.tab.key[i], src.u.tab.len[i] + 1);
+      span_t newkey = {keycopy, src.u.tab.len[i]};
       toml_datum_t *pvalue = tab_emplace(dst, newkey, reason);
       if (!pvalue) {
         goto bail;
       }
-      if (datum_copy(pvalue, src.u.tab.value[i], pool, reason)) {
+      if (datum_copy(pvalue, src.u.tab.value[i], sm, reason)) {
         goto bail;
       }
     }
@@ -438,7 +547,7 @@ static int datum_copy(toml_datum_t *dst, toml_datum_t src, pool_t *pool,
       if (!pelem) {
         goto bail;
       }
-      if (datum_copy(pelem, src.u.arr.elem[i], pool, reason)) {
+      if (datum_copy(pelem, src.u.arr.elem[i], sm, reason)) {
         goto bail;
       }
     }
@@ -448,6 +557,11 @@ static int datum_copy(toml_datum_t *dst, toml_datum_t src, pool_t *pool,
     break;
   }
 
+  dst->source = dedup_source(sm, src.source);
+  if (src.source && !dst->source) {
+    *reason = "out of memory";
+    goto bail;
+  }
   return 0;
 
 bail:
@@ -465,29 +579,35 @@ static inline bool is_array_of_tables(toml_datum_t datum) {
 }
 
 // Merge src into dst. Return 0 on success, -1 otherwise.
-static int datum_merge(toml_datum_t *dst, toml_datum_t src, pool_t *pool,
+static int datum_merge(toml_datum_t *dst, toml_datum_t src, srcmap_t *sm,
                        const char **reason) {
   if (dst->type != src.type) {
     datum_free(dst);
-    return datum_copy(dst, src, pool, reason);
+    return datum_copy(dst, src, sm, reason);
   }
   switch (src.type) {
   case TOML_TABLE:
     // for key-value in src:
     //    override key-value in dst.
     for (int i = 0; i < src.u.tab.size; i++) {
+      char *keycopy = pool_alloc(sm->pool, src.u.tab.len[i] + 1);
+      if (!keycopy) {
+        *reason = "out of memory";
+        return -1;
+      }
+      memcpy(keycopy, src.u.tab.key[i], src.u.tab.len[i] + 1);
       span_t key;
-      key.ptr = src.u.tab.key[i];
+      key.ptr = keycopy;
       key.len = src.u.tab.len[i];
       toml_datum_t *pvalue = tab_emplace(dst, key, reason);
       if (!pvalue) {
         return -1;
       }
       if (pvalue->type) {
-        DO(datum_merge(pvalue, src.u.tab.value[i], pool, reason));
+        DO(datum_merge(pvalue, src.u.tab.value[i], sm, reason));
       } else {
         datum_free(pvalue);
-        DO(datum_copy(pvalue, src.u.tab.value[i], pool, reason));
+        DO(datum_copy(pvalue, src.u.tab.value[i], sm, reason));
       }
     }
     return 0;
@@ -499,7 +619,7 @@ static int datum_merge(toml_datum_t *dst, toml_datum_t src, pool_t *pool,
         if (!pelem) {
           return -1;
         }
-        DO(datum_copy(pelem, src.u.arr.elem[i], pool, reason));
+        DO(datum_copy(pelem, src.u.arr.elem[i], sm, reason));
       }
       return 0;
     }
@@ -508,7 +628,7 @@ static int datum_merge(toml_datum_t *dst, toml_datum_t src, pool_t *pool,
     break;
   }
   datum_free(dst);
-  return datum_copy(dst, src, pool, reason);
+  return datum_copy(dst, src, sm, reason);
 }
 
 // Compare the content of a and b.
@@ -601,6 +721,7 @@ toml_result_t toml_merge(const toml_result_t *r1, const toml_result_t *r2) {
   const char *reason = "";
   toml_result_t ret = {0};
   pool_t *pool = 0;
+  srcmap_t sm = {0};
   if (!r1->ok) {
     reason = "param error: r1 not ok";
     goto bail;
@@ -618,22 +739,27 @@ toml_result_t toml_merge(const toml_result_t *r1, const toml_result_t *r2) {
       goto bail;
     }
   }
+  sm.pool = pool;
 
   // Make a copy of r1
-  if (datum_copy(&ret.toptab, r1->toptab, pool, &reason)) {
+  if (datum_copy(&ret.toptab, r1->toptab, &sm, &reason)) {
     goto bail;
   }
 
   // Merge r2 into the result
-  if (datum_merge(&ret.toptab, r2->toptab, pool, &reason)) {
+  if (datum_merge(&ret.toptab, r2->toptab, &sm, &reason)) {
     goto bail;
   }
 
+  cell_free((char *)(void *)sm.olds);
+  cell_free((char *)(void *)sm.news);
   ret.ok = 1;
   ret.__internal = pool;
   return ret;
 
 bail:
+  cell_free((char *)(void *)sm.olds);
+  cell_free((char *)(void *)sm.news);
   pool_destroy(pool);
   snprintf(ret.errmsg, sizeof(ret.errmsg), "%s", reason);
   return ret;
@@ -653,11 +779,15 @@ bool toml_equiv(const toml_result_t *r1, const toml_result_t *r2) {
 toml_datum_t toml_get(toml_datum_t datum, const char *key) {
   if (datum.type == TOML_TABLE) {
     int n = datum.u.tab.size;
-    const char **pkey = datum.u.tab.key;
-    toml_datum_t *pvalue = datum.u.tab.value;
-    for (int i = 0; i < n; i++) {
-      if (0 == strcmp(pkey[i], key)) {
-        return pvalue[i];
+    if (n > 0) {
+      int key_len = strlen(key);
+      const char **pkey = datum.u.tab.key;
+      int *plen = datum.u.tab.len;
+      toml_datum_t *pvalue = datum.u.tab.value;
+      for (int i = 0; i < n; i++) {
+        if (plen[i] == key_len && 0 == memcmp(pkey[i], key, key_len)) {
+          return pvalue[i];
+        }
       }
     }
   }
@@ -737,63 +867,99 @@ toml_result_t toml_parse_file_ex(const char *fname) {
              strerror(errno));
     return result;
   }
-  result = toml_parse_file(fp);
+  result = toml_parse_file_named(fp, fname);
   fclose(fp);
   return result;
 }
 
-/**
- *  Parse a toml document.
- */
 toml_result_t toml_parse_file(FILE *fp) {
-  toml_result_t result = {0};
-  char *buf = 0;
-  int top, max; // index into buf[]
-  top = max = 0;
+  return toml_parse_file_named(fp, NULL);
+}
 
-  // Read file into memory
-  while (!feof(fp)) {
-    assert(top <= max);
-    if (top == max) {
-      // need to extend buf[]
-      int64_t tmpmax64 = (int64_t)max * 3 / 2 + 1000;
-      int tmpmax = (tmpmax64 > INT_MAX - 1) ? INT_MAX - 1 : (int)tmpmax64;
-      if (tmpmax == INT_MAX - 1) {
-        snprintf(result.errmsg, sizeof(result.errmsg), "file is too big");
-        FREE(buf);
-        return result;
-      }
-      // add an extra byte for terminating NUL
-      char *tmp = REALLOC(buf, tmpmax + 1);
-      if (!tmp) {
-        snprintf(result.errmsg, sizeof(result.errmsg), "out of memory");
-        FREE(buf);
-        return result;
-      }
-      buf = tmp;
-      max = tmpmax;
+/**
+ *  Parse a toml document from a file, tagging datums with name.
+ */
+toml_result_t toml_parse_file_named(FILE *fp, const char *name) {
+  toml_result_t result = {0};
+  if (!fp) {
+    snprintf(result.errmsg, sizeof(result.errmsg), "fp is NULL");
+    return result;
+  }
+  char *buf = 0;
+  int top = 0;                 // number of bytes read into buf[]
+  enum { CHUNKSZ = 8 * 1024 }; // bytes to read per iteration
+
+  // Read file into memory. cell_realloc handles capacity growth, so we only
+  // need to ask for room for one more chunk (plus a terminating NUL) each pass.
+  // Drive the loop off fread's return value rather than feof(): feof() only
+  // reports true after a read has already hit EOF, and this also guarantees buf
+  // is allocated at least once before the NUL terminator below.
+  for (;;) {
+    if (top > INT_MAX - CHUNKSZ - 1) {
+      snprintf(result.errmsg, sizeof(result.errmsg), "file is too big");
+      break;
     }
+    // add 1 to CHUNKSZ so we always have room for terminating NUL.
+    char *tmp = cell_realloc(buf, top + CHUNKSZ + 1);
+    if (!tmp) {
+      snprintf(result.errmsg, sizeof(result.errmsg), "out of memory");
+      break;
+    }
+    buf = tmp;
 
     errno = 0;
-    top += fread(buf + top, 1, max - top, fp);
-    if (ferror(fp)) {
-      snprintf(result.errmsg, sizeof(result.errmsg), "%s",
-               errno ? strerror(errno) : "Error reading file");
-      FREE(buf);
-      return result;
+    size_t n = fread(buf + top, 1, CHUNKSZ, fp);
+    top += n;
+    if (n < CHUNKSZ) { // short read => EOF or error
+      if (ferror(fp)) {
+        snprintf(result.errmsg, sizeof(result.errmsg), "%s",
+                 errno ? strerror(errno) : "Error reading file");
+        break;
+      }
+      if (feof(fp)) {
+        break;
+      }
+      // small probability of short read due to signal, etc.
     }
+  }
+  // error?
+  if (result.errmsg[0]) {
+    cell_free(buf);
+    return result;
   }
   buf[top] = 0; // NUL terminator
 
-  result = toml_parse(buf, top);
-  FREE(buf);
+  result = toml_parse_named(buf, top, name);
+  cell_free(buf);
   return result;
+}
+
+static void set_source_recursive(toml_datum_t *datum, const char *source) {
+  datum->source = source;
+  switch (datum->type) {
+  case TOML_ARRAY:
+    for (int i = 0, top = datum->u.arr.size; i < top; i++) {
+      set_source_recursive(&datum->u.arr.elem[i], source);
+    }
+    break;
+  case TOML_TABLE:
+    for (int i = 0, top = datum->u.tab.size; i < top; i++) {
+      set_source_recursive(&datum->u.tab.value[i], source);
+    }
+    break;
+  default:
+    break;
+  }
 }
 
 /**
  *  Parse a toml document.
  */
 toml_result_t toml_parse(const char *src, int len) {
+  return toml_parse_named(src, len, NULL);
+}
+
+toml_result_t toml_parse_named(const char *src, int len, const char *name) {
   toml_result_t result = {0};
   parser_t parser = {0};
   parser_t *pp = &parser;
@@ -839,12 +1005,21 @@ toml_result_t toml_parse(const char *src, int len) {
   pp->ebuf.ptr = result.errmsg; // parse error will be printed into pp->ebuf
   pp->ebuf.len = sizeof(result.errmsg);
 
-  // Alloc memory pool
-  pp->pool =
-      pool_create(len + 10); // add some extra bytes for NUL term and safety
+  // Alloc memory pool (extra bytes for NUL term, safety, and the source name)
+  int namelen = name ? (int)strlen(name) + 1 : 0;
+  pp->pool = pool_create(len + 10 + namelen);
   if (!pp->pool) {
     snprintf(result.errmsg, sizeof(result.errmsg), "out of memory");
     goto bail;
+  }
+  if (name) {
+    char *p = pool_alloc(pp->pool, namelen);
+    if (!p) {
+      snprintf(result.errmsg, sizeof(result.errmsg), "out of memory");
+      goto bail;
+    }
+    memcpy(p, name, namelen);
+    pp->srcname = p;
   }
 
   // Initialize scanner. Scan error will be printed into pp->ebuf.
@@ -893,6 +1068,7 @@ toml_result_t toml_parse(const char *src, int len) {
 
   // return result
   result.ok = true;
+  set_source_recursive(&pp->toptab, pp->srcname);
   result.toptab = pp->toptab;
   result.__internal = (void *)pp->pool;
   return result;
@@ -1756,11 +1932,11 @@ static inline token_t mktoken(scanner_t *sp, toktyp_t typ) {
 
 static inline bool is_valid_char(int ch) {
   // i.e. (0x20 <= ch && ch <= 0x7e) || (ch & 0x80);
-  return isprint(ch) || (ch & 0x80);
+  return isprint((unsigned char)ch) || (ch & 0x80);
 }
 
 static inline bool is_hex_char(int ch) {
-  ch = toupper(ch);
+  ch = toupper((unsigned char)ch);
   return ('0' <= ch && ch <= '9') || ('A' <= ch && ch <= 'F');
 }
 
@@ -1776,6 +1952,31 @@ static void scan_init(scanner_t *sp, const char *src, int len, char *errbuf,
   sp->line_start = src;
   sp->ebuf.ptr = errbuf;
   sp->ebuf.len = errbufsz;
+}
+
+// Scan escape sequence characters after a backslash.
+// Return #char match on success, 0 if no match, -1 on error.
+static int scan_escape_chars(scanner_t *sp) {
+  const char *p = sp->cur;
+  if (p >= sp->endp) {
+    return 0;
+  }
+  int ch = *p++;
+  if (ch && strchr("btnfre\"\\", ch)) {
+    return p - sp->cur;
+  }
+  int hex = (ch == 'x') ? 2 : (ch == 'u') ? 4 : (ch == 'U') ? 8 : 0;
+  if (hex) {
+    int i = 0;
+    for (; i < hex && p < sp->endp && is_hex_char(*p); i++, p++)
+      ;
+    if (i != hex) {
+      return SETERROR(sp->ebuf, sp->lineno, "expect %d hex digits after \\%c",
+                      hex, ch);
+    }
+    return p - sp->cur;
+  }
+  return 0;
 }
 
 // Scan """ ... """
@@ -1819,40 +2020,23 @@ static int scan_multiline_string(scanner_t *sp, token_t *tok) {
     }
     // ch is backslash
     if (!escp) {
-      escp = sp->cur - 1;
+      escp = sp->cur - 1;	/* mark the first esc position */
       assert(*escp == '\\');
     }
 
     // handle escape char
-    ch = S_GET();
-    if (ch && strchr("btnfre\"\\", ch)) {
-      // skip \", \\, \b, \f, \n, \r, \t
+    int cnt = scan_escape_chars(sp);
+    if (cnt < 0) {
+      return -1;
+    }
+    if (cnt > 0) {
+      sp->cur += cnt; // skip the escape sequence
       continue;
     }
-    int top = 0;
-    switch (ch) {
-    case 'x':
-      top = 2;
-      break;
-    case 'u':
-      top = 4;
-      break;
-    case 'U':
-      top = 8;
-      break;
-    default:
-      break;
-    }
-    if (top) {
-      for (int i = 0; i < top; i++) {
-        if (!is_hex_char(S_GET())) {
-          return SETERROR(sp->ebuf, sp->lineno,
-                          "expect %d hex digits after \\%c", top, ch);
-        }
-      }
-      continue;
-    }
+    assert(cnt == 0);
+
     // handle line-ending backslash
+    ch = S_GET();
     if (ch == ' ' || ch == '\t') {
       // Although the spec does not allow for whitespace following a
       // line-ending backslash, some standard tests expect it.
@@ -1915,31 +2099,15 @@ static int scan_string(scanner_t *sp, token_t *tok) {
     }
 
     // handle escape char
-    ch = S_GET();
-    if (ch && strchr("btnfre\"\\", ch)) {
-      // skip \b, \t, \n, \f, \r, \e, \", \\  .
+    int cnt = scan_escape_chars(sp);
+    if (cnt < 0) {
+      return -1;
+    }
+    if (cnt > 0) {
+      sp->cur += cnt;
       continue;
     }
-    int top = 0;
-    switch (ch) {
-    case 'x':
-      top = 2;
-      break;
-    case 'u':
-      top = 4;
-      break;
-    case 'U':
-      top = 8;
-      break;
-    default:
-      return SETERROR(sp->ebuf, sp->lineno, "bad escape char in string");
-    }
-    for (int i = 0; i < top; i++) {
-      if (!is_hex_char(S_GET())) {
-        return SETERROR(sp->ebuf, sp->lineno, "expect %d hex digits after \\%c",
-                        top, ch);
-      }
-    }
+    return SETERROR(sp->ebuf, sp->lineno, "bad escape char in string");
   }
   tok->str.len = sp->cur - tok->str.ptr;
   tok->u.escp = escp;
@@ -2063,7 +2231,7 @@ static bool is_valid_timezone(int minute) {
 static int read_int(const char *p, int *ret) {
   const char *pp = p;
   int64_t val = 0;
-  for (; isdigit(*p); p++) {
+  for (; isdigit((unsigned char)*p); p++) {
     val = val * 10 + (*p - '0');
     if (val > INT_MAX) {
       return 0; // overflowed
@@ -2130,17 +2298,17 @@ static int read_time(const char *p, int *hour, int *minute, int *second,
     return p - pp;
   }
   p++; // skip the period
-  if (!isdigit(*p)) {
+  if (!isdigit((unsigned char)*p)) {
     // trailing period
     return 0;
   }
   int micro_factor = 100000;
-  while (isdigit(*p) && micro_factor) {
+  while (isdigit((unsigned char)*p) && micro_factor) {
     *usec += (*p - '0') * micro_factor;
     micro_factor /= 10;
     p++;
   }
-  while (isdigit(*p))
+  while (isdigit((unsigned char)*p))
     p++; // consume extra sub-microsecond digits
   return p - pp;
 }
@@ -2224,7 +2392,8 @@ static int scan_timestamp(scanner_t *sp, token_t *tok) {
 
   // See if this a TIME only
   const char *p = buffer;
-  if (isdigit(p[0]) && isdigit(p[1]) && p[2] == ':') {
+  if (isdigit((unsigned char)p[0]) && isdigit((unsigned char)p[1]) &&
+      p[2] == ':') {
     n = read_time(buffer, &hour, &minute, &sec, &usec);
     if (!n) {
       return SETERROR(sp->ebuf, lineno, "invalid time");
@@ -2243,8 +2412,9 @@ static int scan_timestamp(scanner_t *sp, token_t *tok) {
   p += n;
 
   // Check if there is no time component in addition
-  if (!((p[0] == 'T' || p[0] == ' ' || p[0] == 't') && isdigit(p[1]) &&
-        isdigit(p[2]) && p[3] == ':')) {
+  if (!((p[0] == 'T' || p[0] == ' ' || p[0] == 't') &&
+        isdigit((unsigned char)p[1]) && isdigit((unsigned char)p[2]) &&
+        p[3] == ':')) {
     goto done; // no TIME component. we are done.
   }
 
@@ -2333,8 +2503,8 @@ static int process_numstr(char *buffer, int base, const char **reason) {
         *q++ = buffer[i];
         continue;
       }
-      int left = (i == 0) ? 0 : buffer[i - 1];
-      int right = buffer[i + 1];
+      int left = (i == 0) ? 0 : (unsigned char)buffer[i - 1];
+      int right = (unsigned char)buffer[i + 1];
       if (!isdigit(left) && !(base == 16 && is_hex_char(left))) {
         *reason = "underscore only allowed between digits";
         return -1;
@@ -2350,12 +2520,13 @@ static int process_numstr(char *buffer, int base, const char **reason) {
   // decimal points must be surrounded by digits. Also, convert to lowercase.
   for (int i = 0; buffer[i]; i++) {
     if (buffer[i] == '.') {
-      if (i == 0 || !isdigit(buffer[i - 1]) || !isdigit(buffer[i + 1])) {
+      if (i == 0 || !isdigit((unsigned char)buffer[i - 1]) ||
+          !isdigit((unsigned char)buffer[i + 1])) {
         *reason = "decimal point must be surrounded by digits";
         return -1;
       }
     } else if ('A' <= buffer[i] && buffer[i] <= 'Z') {
-      buffer[i] = tolower(buffer[i]);
+      buffer[i] = tolower((unsigned char)buffer[i]);
     }
   }
 
@@ -2363,7 +2534,7 @@ static int process_numstr(char *buffer, int base, const char **reason) {
     // check for leading 0:  '+01' is an error!
     q = buffer;
     q += (*q == '+' || *q == '-') ? 1 : 0;
-    if (q[0] == '0' && isdigit(q[1])) {
+    if (q[0] == '0' && isdigit((unsigned char)q[1])) {
       *reason = "leading 0 in numbers";
       return -1;
     }
@@ -2519,13 +2690,15 @@ static int scan_bool(scanner_t *sp, token_t *tok) {
 
 // Check if the next token may be TIME
 static inline bool test_time(const char *p, const char *endp) {
-  return &p[2] < endp && isdigit(p[0]) && isdigit(p[1]) && p[2] == ':';
+  return &p[2] < endp && isdigit((unsigned char)p[0]) &&
+         isdigit((unsigned char)p[1]) && p[2] == ':';
 }
 
 // Check if the next token may be DATE
 static inline bool test_date(const char *p, const char *endp) {
-  return &p[4] < endp && isdigit(p[0]) && isdigit(p[1]) && isdigit(p[2]) &&
-         isdigit(p[3]) && p[4] == '-';
+  return &p[4] < endp && isdigit((unsigned char)p[0]) &&
+         isdigit((unsigned char)p[1]) && isdigit((unsigned char)p[2]) &&
+         isdigit((unsigned char)p[3]) && p[4] == '-';
 }
 
 // Check if the next token may be BOOL

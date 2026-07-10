@@ -351,6 +351,55 @@ static error_t *initialize_state(
 }
 
 /**
+ * Remove what a failed clone left behind.
+ *
+ * Clone's entire side-effect surface is the target directory (state DB
+ * and branches live under .git/, the seeded .dottaignore in the
+ * workdir), so all-or-nothing means one thing: after a fatal error,
+ * nothing dotta created remains. A pre-existing (empty) target
+ * directory is kept and only emptied; a directory the clone created is
+ * removed outright. Best-effort — the fatal error being unwound still
+ * stands, so a removal failure only warns.
+ */
+static void rollback_clone_dir(
+    const char *path,
+    bool path_preexisted,
+    output_t *out
+) {
+    error_t *err = NULL;
+
+    if (path_preexisted) {
+        string_array_t *entries = NULL;
+        err = fs_list_dir(path, &entries);
+        if (!err) {
+            for (size_t i = 0; i < entries->count && !err; i++) {
+                char *child = NULL;
+                err = fs_path_join(path, entries->items[i], &child);
+                if (!err) {
+                    err = fs_clear_path(child);
+                    free(child);
+                }
+            }
+            string_array_free(entries);
+        }
+    } else {
+        err = fs_remove_dir(path, true);
+    }
+
+    if (err) {
+        output_warning(
+            out, OUTPUT_NORMAL, "Failed to remove partial clone at %s: %s",
+            path, error_message(err)
+        );
+        output_hint(out, OUTPUT_NORMAL, "Remove it manually before retrying");
+        error_free(err);
+        return;
+    }
+
+    output_info(out, OUTPUT_NORMAL, "Rolled back partial clone at %s", path);
+}
+
+/**
  * Clone command implementation
  */
 error_t *cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
@@ -366,6 +415,8 @@ error_t *cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
     git_repository *repo = NULL;
     const char *local_path = NULL;
     bool allocated_path = false;
+    bool path_preexisted = false;
+    bool clone_landed = false;
     transfer_context_t *xfer = NULL;
     string_array_t *fetched_profiles = NULL;
     string_array_t *detected_profiles = NULL;
@@ -418,12 +469,18 @@ error_t *cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
     final_err = transfer_context_create(&xfer_opts, &xfer);
     if (final_err) goto cleanup;
 
+    /* Track whether the target directory predates the clone (git_clone
+     * accepts an existing empty directory): rollback preserves a
+     * pre-existing directory and only empties it. */
+    path_preexisted = fs_is_directory(local_path);
+
     /* Clone repository with progress reporting */
     err = gitops_clone(&repo, opts->url, local_path, xfer);
     if (err) {
         final_err = error_wrap(err, "Failed to clone repository");
         goto cleanup;
     }
+    clone_landed = true;
 
     /* Fetch the synced repo-wide config ref (refs/dotta/salt) before
      * any encryption-touching path runs. The ref carries the per-repo
@@ -620,20 +677,19 @@ error_t *cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
         }
 
         err = initialize_state(repo, ctx->arena, profiles, out);
-        if (err) {
-            output_error(out, "Failed to initialize state: %s", error_message(err));
-            error_free(err);
-        }
-
         string_array_free(profiles);
+        if (err) {
+            final_err = error_wrap(err, "Failed to initialize state");
+            goto cleanup;
+        }
     } else {
         /* No profiles fetched - initialize empty state */
         output_warning(out, OUTPUT_NORMAL, "No profiles were fetched");
         string_array_t empty = { 0 };
         err = initialize_state(repo, ctx->arena, &empty, out);
         if (err) {
-            output_error(out, "Failed to initialize state: %s", error_message(err));
-            error_free(err);
+            final_err = error_wrap(err, "Failed to initialize state");
+            goto cleanup;
         }
     }
 
@@ -788,6 +844,15 @@ cleanup:
     if (repo) {
         gitops_close_repository(repo);
     }
+
+    /* All-or-nothing: a fatal error after the clone landed must not
+     * leave a half-initialized repository that blocks the retry
+     * (git_clone refuses a non-empty directory). Runs after the repo
+     * handle is closed so nothing holds the directory open. */
+    if (final_err && clone_landed) {
+        rollback_clone_dir(local_path, path_preexisted, out);
+    }
+
     if (allocated_path && local_path) {
         /* Safe to cast: we know it's heap-allocated when allocated_path is true */
         free((char *) local_path);

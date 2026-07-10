@@ -482,25 +482,60 @@ error_t *cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
     }
     clone_landed = true;
 
-    /* Fetch the synced repo-wide config ref (refs/dotta/salt) before
-     * any encryption-touching path runs. The ref carries the per-repo
-     * Argon2id salt; without it, every encrypted blob is undecryptable. */
+    /* Identity gate + salt acquisition. refs/dotta/salt is the one
+     * unconditional, synced dotta artifact (dotta-worktree never leaves
+     * the local repo), so a remote that does not advertise it is not a
+     * dotta repository — refuse before any local materialization below
+     * (state DB, dotta-worktree branch, baseline .dottaignore). The ref
+     * also carries the per-repo Argon2id salt; without it, every
+     * encrypted blob is undecryptable. */
     err = salt_fetch(repo, "origin", xfer);
     if (err) {
         if (err->code == ERR_NOT_FOUND) {
-            output_warning(
-                out, OUTPUT_NORMAL,
-                "Remote does not advertise %s. Encryption operations "
-                "will fail until the ref is fetched or 'dotta init' is "
-                "run locally.", SALT_REF
-            );
             error_free(err);
-            err = NULL;
+
+            /* Split the diagnostic: an empty remote is a publish-first
+             * problem, a ref-bearing one is simply not dotta's. On a
+             * listing failure fall through to the foreign diagnostic. */
+            bool remote_empty = false;
+            string_array_t *remote_refs = NULL;
+            error_t *list_err = gitops_list_remote_tracking(
+                repo, "origin", &remote_refs
+            );
+            if (list_err) {
+                error_free(list_err);
+            } else {
+                remote_empty = (remote_refs->count == 0);
+                string_array_free(remote_refs);
+            }
+
+            if (remote_empty) {
+                final_err = ERROR(
+                    ERR_NOT_FOUND,
+                    "Remote is empty - nothing to clone\n\n"
+                    "To publish a new dotta repository:\n"
+                    "  dotta init\n"
+                    "  dotta remote add origin <url>\n"
+                    "  dotta sync"
+                );
+            } else {
+                final_err = ERROR(
+                    ERR_NOT_FOUND,
+                    "Remote is not a dotta repository ('%s' not advertised)\n\n"
+                    "Check the URL. If this remote should be one, run "
+                    "'dotta sync' from a machine that has the repository "
+                    "to establish the ref.",
+                    SALT_REF
+                );
+            }
+            goto cleanup;
         } else if (err->code == ERR_CRYPTO) {
             /* Malformed remote salt — salt_fetch already rolled back, so
-             * no garbage ref persists. Same soft-warn-and-continue as the
-             * not-advertised case: a plaintext clone is still fine, only
-             * encryption is unavailable until a valid salt arrives. */
+             * no garbage ref persists. The advertised ref establishes
+             * identity (the gate above), but its payload is a crypto
+             * concern: warn-and-continue, a plaintext clone is still
+             * fine, only encryption is unavailable until a valid salt
+             * arrives. */
             output_warning(
                 out, OUTPUT_NORMAL,
                 "%s. Encryption operations will fail until a valid salt "

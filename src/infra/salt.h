@@ -5,6 +5,12 @@
  * infrastructure that sits alongside the local-only `dotta-worktree`
  * branch and the user-data profile branches.
  *
+ * The ref doubles as the repository identity marker: `dotta init`
+ * creates it unconditionally and `dotta sync` establishes it on every
+ * remote, so a remote that does not advertise it is not a dotta
+ * repository. `dotta clone` gates on exactly this; `repo_open` is the
+ * local-side counterpart (dotta-worktree branch presence).
+ *
  *     refs/dotta/salt
  *       └── commit
  *             └── tree

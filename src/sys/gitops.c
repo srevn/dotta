@@ -1391,6 +1391,12 @@ error_t *gitops_clone(
     git_clone_options opts;
     git_clone_options_init(&opts, GIT_CLONE_OPTIONS_VERSION);
 
+    /* Skip the default-branch checkout: the sole caller (cmd_clone)
+     * establishes the workdir view itself by checking out dotta-worktree.
+     * Materializing the remote HEAD's tree here is discarded work and
+     * transiently lands profile (or foreign) files in the workdir. */
+    opts.checkout_opts.checkout_strategy = GIT_CHECKOUT_NONE;
+
     transfer_configure_callbacks(
         &opts.fetch_opts.callbacks, xfer, GIT_DIRECTION_FETCH
     );

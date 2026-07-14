@@ -533,13 +533,13 @@ static void print_cleanup_preflight_results(
         print_safety_violations(out, result->safety_violations);
     }
 
-    /* Case 4: Empty directories - only in verbose mode
+    /* Case 4: Empty directories - count at normal verbosity;
      * will_prune_directories implies orphaned_directories is non-NULL */
     if (result->will_prune_directories) {
-        output_section(out, OUTPUT_VERBOSE, "Empty directories");
+        output_section(out, OUTPUT_NORMAL, "Empty directories");
 
         output_styled(
-            out, OUTPUT_VERBOSE, "  {cyan}%zu{reset} orphaned director%s will be pruned\n",
+            out, OUTPUT_NORMAL, "  {cyan}%zu{reset} orphaned director%s will be pruned\n",
             result->orphaned_directories->count,
             result->orphaned_directories->count == 1 ? "y" : "ies"
         );
@@ -1435,6 +1435,13 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
                           ? cleanup_preflight->orphaned_files->count - preflight_excluded : 0;
         }
 
+        /* Directory pruning can be the only pending action (no files move) */
+        size_t dir_count = 0;
+        if (cleanup_preflight && cleanup_preflight->will_prune_directories) {
+            /* will_prune_directories implies orphaned_directories is non-NULL */
+            dir_count = cleanup_preflight->orphaned_directories->count;
+        }
+
         /* Build prompt based on pending actions */
         if (to_deploy.count > 0 && removal_count > 0) {
             snprintf(
@@ -1451,6 +1458,11 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
             snprintf(
                 prompt, sizeof(prompt), "Remove %zu orphaned file%s?",
                 removal_count, removal_count == 1 ? "" : "s"
+            );
+        } else if (dir_count > 0) {
+            snprintf(
+                prompt, sizeof(prompt), "Prune %zu empty director%s?",
+                dir_count, dir_count == 1 ? "y" : "ies"
             );
         } else {
             snprintf(prompt, sizeof(prompt), "Proceed with cleanup?");

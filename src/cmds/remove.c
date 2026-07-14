@@ -751,12 +751,23 @@ static error_t *cleanup_metadata(
     /* Prune redundant directory entries.
      *
      * Removing a file may leave its parent directory metadata entry
-     * with no anchoring descendants. metadata_prune_directories drops
-     * only entries that carry no actionable information (default mode,
-     * no ownership, no descendants); custom-attribute entries are
-     * preserved as potential empty-dir intent. */
+     * with no anchoring descendants. Anchoring is judged against the
+     * post-edit worktree index (removals already unstaged by the
+     * caller) — never against metadata items, which omit unelevated
+     * symlinks. Only entries that carry no actionable information are
+     * dropped (default mode, no ownership, no tracked descendants);
+     * custom-attribute entries are preserved as potential empty-dir
+     * intent. */
+    git_index *index = NULL;
+    err = worktree_get_index(wt, &index);
+    if (err) {
+        metadata_free(metadata);
+        return error_wrap(err, "Failed to get worktree index");
+    }
+
     size_t pruned_dirs = 0;
-    err = metadata_prune_directories(metadata, &pruned_dirs);
+    err = metadata_prune_directories(metadata, index, &pruned_dirs);
+    git_index_free(index);
     if (err) {
         metadata_free(metadata);
         return error_wrap(err, "Failed to prune redundant directories");

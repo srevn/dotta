@@ -438,6 +438,8 @@ static error_t *group_items_by_profile(
  * Only items with copy_results[i].copied == true have valid stat/encryption data.
  *
  * @param wt Worktree handle (must not be NULL)
+ * @param index Post-edit worktree index: deletions removed, updates
+ *              staged (must not be NULL; anchors the directory prune)
  * @param items Array of workspace items to update (must not be NULL)
  * @param item_count Number of items
  * @param copy_results Per-item copy results indexed by item position (can be NULL)
@@ -447,6 +449,7 @@ static error_t *group_items_by_profile(
  */
 static error_t *update_metadata_for_profile(
     worktree_handle_t *wt,
+    git_index *index,
     const workspace_item_t **items,
     size_t item_count,
     const file_copy_result_t *copy_results,
@@ -454,6 +457,7 @@ static error_t *update_metadata_for_profile(
     output_t *out
 ) {
     CHECK_NULL(wt);
+    CHECK_NULL(index);
     CHECK_NULL(items);
     CHECK_NULL(opts);
 
@@ -627,12 +631,24 @@ static error_t *update_metadata_for_profile(
                     continue;
                 }
 
-                /* Stat directory to capture current metadata */
+                /* lstat + S_ISDIR: never capture through a type change.
+                 * A tracked directory replaced by a symlink would stat()
+                 * as its target, laundering the target's attributes into
+                 * metadata while workspace still reports DIVERGENCE_TYPE.
+                 * Skip; resolution is explicit (apply --force / remove). */
                 struct stat dir_stat;
-                if (stat(item->filesystem_path, &dir_stat) != 0) {
+                if (lstat(item->filesystem_path, &dir_stat) != 0) {
                     output_warning(
                         out, OUTPUT_VERBOSE, "Failed to stat directory '%s': %s",
                         item->filesystem_path, strerror(errno)
+                    );
+                    continue;
+                }
+                if (!S_ISDIR(dir_stat.st_mode)) {
+                    output_warning(
+                        out, OUTPUT_NORMAL,
+                        "Skipping '%s': tracked as directory but type changed on disk",
+                        item->filesystem_path
                     );
                     continue;
                 }
@@ -704,15 +720,18 @@ static error_t *update_metadata_for_profile(
 
     /* Prune redundant directory entries.
      *
-     * Catches the implicit-orphaning case (Path A handles explicit
-     * WORKSPACE_STATE_DELETED): file removals can leave a parent
-     * directory's metadata entry with no anchoring descendants. Only
-     * entries that carry no actionable information are pruned —
-     * custom-attribute entries survive as potential empty-dir intent.
-     * Without this, manifest_sync_directories' overlay pass would
-     * re-activate the orphaned entry indefinitely. */
+     * Catches the implicit-orphaning case (the DELETED branch above
+     * handles explicit removals): file removals can leave a parent
+     * directory's metadata entry with no anchoring descendants.
+     * Anchoring is judged against the post-edit index (deletions
+     * removed, updates staged by the caller) — never against metadata
+     * items, which omit unelevated symlinks. Only entries that carry
+     * no actionable information are pruned — custom-attribute entries
+     * survive as potential empty-dir intent. Without this, manifest_
+     * sync_directories' overlay pass would re-activate the orphaned
+     * entry indefinitely. */
     size_t pruned_dirs = 0;
-    err = metadata_prune_directories(metadata, &pruned_dirs);
+    err = metadata_prune_directories(metadata, index, &pruned_dirs);
     if (err) {
         metadata_free(metadata);
         return error_wrap(err, "Failed to prune redundant directories");
@@ -932,7 +951,7 @@ static error_t *update_profile(
 
     /* Update metadata for both files and directories */
     err = update_metadata_for_profile(
-        wt, items, item_count, copy_results, opts, out
+        wt, index, items, item_count, copy_results, opts, out
     );
     if (err) {
         err = error_wrap(err, "Failed to update metadata");

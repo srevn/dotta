@@ -661,9 +661,11 @@ error_t *metadata_remove_item(
  */
 error_t *metadata_prune_directories(
     metadata_t *metadata,
+    git_index *index,
     size_t *out_pruned_count
 ) {
     CHECK_NULL(metadata);
+    CHECK_NULL(index);
     CHECK_NULL(out_pruned_count);
 
     *out_pruned_count = 0;
@@ -677,22 +679,14 @@ error_t *metadata_prune_directories(
         return NULL;
     }
 
-    size_t file_count = 0;
-    const metadata_item_t **files = metadata_get_items_by_kind(
-        metadata, METADATA_ITEM_FILE, &file_count
-    );
-
-    size_t symlink_count = 0;
-    const metadata_item_t **symlinks = metadata_get_items_by_kind(
-        metadata, METADATA_ITEM_SYMLINK, &symlink_count
-    );
-
     error_t *err = NULL;
     string_array_t *prune_keys = string_array_new(0);
     if (!prune_keys) {
         err = ERROR(ERR_MEMORY, "Failed to allocate prune set");
         goto cleanup;
     }
+
+    const size_t entry_count = git_index_entrycount(index);
 
     for (size_t d = 0; d < dir_count; d++) {
         const metadata_item_t *dir = directories[d];
@@ -708,16 +702,15 @@ error_t *metadata_prune_directories(
         size_t dir_key_len = strlen(dir_key);
         bool anchored = false;
 
-        for (size_t f = 0; f < file_count && !anchored; f++) {
-            const char *fk = files[f]->key;
-            if (str_starts_with(fk, dir_key) && fk[dir_key_len] == '/') {
-                anchored = true;
-            }
-        }
-
-        for (size_t s = 0; s < symlink_count && !anchored; s++) {
-            const char *sk = symlinks[s]->key;
-            if (str_starts_with(sk, dir_key) && sk[dir_key_len] == '/') {
+        /* Anchor against the index: any tracked path under the
+         * directory blocks the prune. Metadata items are not the
+         * universe — a symlink tracked without elevation carries no
+         * item, yet still anchors its parent. */
+        for (size_t e = 0; e < entry_count && !anchored; e++) {
+            const git_index_entry *entry = git_index_get_byindex(index, e);
+            if (entry &&
+                str_starts_with(entry->path, dir_key) &&
+                entry->path[dir_key_len] == '/') {
                 anchored = true;
             }
         }
@@ -746,8 +739,6 @@ error_t *metadata_prune_directories(
 
 cleanup:
     string_array_free(prune_keys);
-    free(symlinks);
-    free(files);
     free(directories);
 
     return err;

@@ -316,11 +316,19 @@ error_t *metadata_remove_item(
  * beyond what an unwritten entry would. An entry is "redundant" when
  * ALL of these hold:
  *
- *   - No FILE or SYMLINK item has it as a path prefix (no anchoring
- *     descendants in this metadata collection).
+ *   - No index entry lives under it (no anchoring descendants in the
+ *     tree the impending commit will record).
  *   - mode == DIR_MODE_DEFAULT (no mode override to preserve over the
  *     filesystem's umask default).
  *   - owner == NULL AND group == NULL (no ownership override to preserve).
+ *
+ * Anchoring is judged against the post-edit worktree index — the sole
+ * authority for which paths the profile tracks. Metadata items are
+ * deliberately NOT the universe: the collection is sparse by design
+ * (a symlink carries an item only when captured with ownership, i.e.
+ * elevated), so "no item descendants" does not imply "no tracked
+ * descendants". A directory whose only tracked content is an item-less
+ * symlink is anchored by the index and survives.
  *
  * Such an entry has no role in any downstream pipeline: file deploy
  * already mkdirs ancestors at the same default mode, manifest_sync_
@@ -338,20 +346,21 @@ error_t *metadata_remove_item(
  * on the side of preservation for entries that carry distinguishing
  * information.
  *
- * The descendant scan considers FILE AND SYMLINK items: any storage-
- * path leaf anchors its ancestors and blocks the prune.
- *
- * Caller pattern: invoke after a per-item edit pass and before
- * metadata_save_to_worktree, so the prune lands in the same commit as
- * the triggering removals. *out_pruned_count == 0 indicates nothing
- * was pruned (caller may use this to skip a no-op rewrite).
+ * Caller pattern: invoke after every index edit for the impending
+ * commit (additions staged, deletions removed) and before
+ * metadata_save_to_worktree, so the prune sees the commit's exact
+ * tracked set and lands in the same commit as the triggering removals.
+ * *out_pruned_count == 0 indicates nothing was pruned (caller may use
+ * this to skip a no-op rewrite).
  *
  * @param metadata Metadata collection (must not be NULL; mutated in place)
+ * @param index Post-edit worktree index (must not be NULL)
  * @param out_pruned_count Output: number of entries pruned (must not be NULL)
  * @return Error or NULL on success
  */
 error_t *metadata_prune_directories(
     metadata_t *metadata,
+    git_index *index,
     size_t *out_pruned_count
 );
 

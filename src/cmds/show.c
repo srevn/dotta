@@ -50,19 +50,20 @@ static const char *filemode_type_str(git_filemode_t mode) {
 }
 
 /**
- * Write blob bytes to stdout, optionally ensuring a trailing newline
+ * Write blob bytes to stdout with a trailing newline ensured
  *
- * Flushes before returning so buffered IO failures (ENOSPC, closed
- * pipe with SIGPIPE ignored) surface as a non-zero exit instead of
- * vanishing at process teardown.
+ * Terminal display normalization — byte-faithful extraction lives in
+ * `dotta export`, not here. Flushes before returning so buffered IO
+ * failures (ENOSPC, closed pipe with SIGPIPE ignored) surface as a
+ * non-zero exit instead of vanishing at process teardown.
  */
-static error_t *write_stdout(const buffer_t *content, bool ensure_newline) {
+static error_t *write_stdout(const buffer_t *content) {
     if (content->size > 0 &&
         fwrite(content->data, 1, content->size, stdout) != content->size) {
         return ERROR(ERR_FS, "Failed to write content to stdout");
     }
 
-    if (ensure_newline && content->size > 0) {
+    if (content->size > 0) {
         const char *data = (const char *) content->data;
         if (data[content->size - 1] != '\n' &&
             fputc('\n', stdout) == EOF) {
@@ -132,7 +133,7 @@ static error_t *print_blob_content(
                 (int) content.size, (const char *) content.data
             );
         } else {
-            err = write_stdout(&content, true);
+            err = write_stdout(&content);
         }
         buffer_free(&content);
         return err;
@@ -209,7 +210,7 @@ static error_t *print_blob_content(
     }
 
     /* Write content to stdout (trailing newline normalized) */
-    err = write_stdout(&content, true);
+    err = write_stdout(&content);
     buffer_free(&content);
 
     return err;

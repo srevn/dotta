@@ -1149,6 +1149,47 @@ static error_t *export_post_parse(
         return NULL;
     }
 
+    /* Colon-packed refspec first: ':' is never legal in a branch name,
+     * so the token is self-contained and the next positional is the
+     * destination (cp-style; '-o' stays valid as the explicit form).
+     * Only the colon form earns this — every other shape would need a
+     * heuristic on the destination token to distinguish it from a
+     * path or commit, and heuristics on user paths are how silent
+     * misroutes happen. */
+    if (strchr(args[0], ':') != NULL) {
+        refspec_t rs = { 0 };
+        error_t *err = parse_refspec(arena, args[0], &rs);
+        if (err != NULL) {
+            return error_wrap(err, "Failed to parse target specification");
+        }
+        if (rs.profile == NULL) {
+            return ERROR(
+                ERR_INVALID_ARG, "Failed to parse target specification '%s'",
+                args[0]
+            );
+        }
+        o->profile = rs.profile;
+        o->file_path = rs.file;
+        o->commit = rs.commit;
+
+        if (o->positional_count > 2) {
+            return ERROR(
+                ERR_INVALID_ARG,
+                "Too many arguments for the refspec form\n"
+                "Usage: dotta export <profile>:<path>[@commit] <dest>"
+            );
+        }
+        if (o->output != NULL) {
+            return ERROR(
+                ERR_INVALID_ARG,
+                "Destination given twice: '-o %s' and positional '%s'",
+                o->output, args[1]
+            );
+        }
+        o->output = args[1];
+        return NULL;
+    }
+
     o->profile = args[0];
 
     if (o->positional_count == 2) {
@@ -1187,7 +1228,8 @@ static error_t *export_validate(void *opts_v, const args_command_t *cmd) {
     if (o->output == NULL || o->output[0] == '\0') {
         return ERROR(
             ERR_INVALID_ARG,
-            "-o/--output is required (destination path, or '-' for stdout)"
+            "A destination is required: -o <dest>, or a positional after "
+            "the <profile>:<path> form ('-' streams to stdout)"
         );
     }
     if (strcmp(o->output, "-") == 0 && o->file_path == NULL) {
@@ -1213,7 +1255,7 @@ static const args_opt_t export_opts[] = {
         "Destination path ('-' streams a single file to stdout)"
     ),
     ARGS_FLAG(
-        "dry-run",
+        "n dry-run",
         cmd_export_options_t,dry_run,
         "Resolve and validate everything, write nothing; list the plan"
     ),
@@ -1233,8 +1275,8 @@ const args_command_t spec_export = {
     .name        = "export",
     .summary     = "Materialize profile content to the filesystem",
     .usage       =
-        "%s export <profile> [<path>] -o <dest>\n"
-        "   or: %s export <profile>:<path>[@commit] -o <dest>\n"
+        "%s export <profile>:<path>[@commit] <dest>\n"
+        "   or: %s export <profile> [<path>] -o <dest>\n"
         "   or: %s export <profile>[@commit] [<path>] [<commit>] -o <dest>",
     .description =
         "Copy files out of a profile branch without deploying them:\n"
@@ -1254,19 +1296,23 @@ const args_command_t spec_export = {
         "  profile is exported, storage layout mirrored (home/, root/).\n"
         "\n"
         "Destination:\n"
-        "  An existing directory (or trailing '/') receives the target\n"
-        "  under its original name — '-o .' exports here. Otherwise\n"
-        "  <dest> itself is the target file or directory root. Existing\n"
-        "  files are overwritten (cp semantics); type collisions and\n"
-        "  pre-existing symlinks in content paths refuse the whole\n"
-        "  export before anything is written.\n",
+        "  The refspec form takes its destination as the next argument\n"
+        "  ('export darwin:home/.bashrc .' reads like cp); every other\n"
+        "  shape names it explicitly with -o. An existing directory (or\n"
+        "  trailing '/') receives the target under its original name —\n"
+        "  '.' exports here. Otherwise <dest> itself is the target file\n"
+        "  or directory root. Existing files are overwritten (cp\n"
+        "  semantics); type collisions and pre-existing symlinks in\n"
+        "  content paths refuse the whole export before anything is\n"
+        "  written.\n",
     .examples    =
-        "  %s export hosts/mbp home/.config/nvim -o ./nvim  # Directory\n"
-        "  %s export darwin ~/.bashrc -o .                  # File, original name\n"
-        "  %s export darwin:home/.bashrc@a4f2c8e -o old     # Historical file\n"
+        "  %s export darwin:home/.bashrc .                  # cp-style, original name\n"
+        "  %s export hosts/mbp:home/.config/nvim ./nvim     # Directory\n"
+        "  %s export darwin:home/.bashrc@a4f2c8e old        # Historical file\n"
+        "  %s export darwin ~/.bashrc -o .                  # Explicit -o form\n"
         "  %s export hosts/mbp -o mbp-files                 # Whole profile\n"
         "  %s export hosts/mbp@a4f2c8e -o mbp-old           # Whole profile, historical\n"
-        "  %s export global home/.ssh/config -o -           # Bytes to stdout\n"
+        "  %s export global:home/.ssh/config -              # Bytes to stdout\n"
         "  %s export hosts/vps -o /tmp/vps --dry-run        # Plan only\n",
     .epilogue    =
         "See also:\n"

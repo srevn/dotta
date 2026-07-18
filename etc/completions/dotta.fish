@@ -181,6 +181,38 @@ function __dotta_refspec_commits
     end
 end
 
+function __dotta_export_arg1_packed
+    # True when export's first positional is a colon-packed refspec
+    # (profile:path[@commit]) — the next positional is then the
+    # destination, so exclusive completion rows must stand aside.
+    set -l tokens (commandline -opc)
+    set -l value_flags $__dotta_value_flags
+    set -l seen_cmd 0
+    set -l skip_next 0
+    for t in $tokens[2..-1]
+        if test $skip_next -eq 1
+            set skip_next 0
+            continue
+        end
+        switch $t
+            case '-*'
+                if contains -- $t $value_flags
+                    set skip_next 1
+                end
+                continue
+            case '*'
+                if test $seen_cmd -eq 0
+                    test "$t" = export; or return 1
+                    set seen_cmd 1
+                    continue
+                end
+                string match -q '*:*' -- $t
+                return $status
+        end
+    end
+    return 1
+end
+
 function __dotta_target_value
     # Return the most recent `--target <value>` from the current commandline,
     # or empty if --target was not supplied. Iterates backwards so a later
@@ -500,12 +532,12 @@ complete -c dotta -n "__dotta_using_command revert; and __dotta_seen_option -p -
 complete -c dotta -n "__dotta_using_command revert" -xa "(__dotta_refspec_commits)"
 
 # export: profile first (all local branches), then git-backed refspec
-# files scoped to it, then commits from its history
 complete -c dotta -n "__dotta_using_command export; and __dotta_is_nth_arg 1" -xa "(__dotta_profiles_all)"
 complete -c dotta -n "__dotta_using_command export; and __dotta_is_nth_arg 1" -xa "(__dotta_refspec_files)"
-complete -c dotta -n "__dotta_using_command export; and __dotta_is_nth_arg 2" -xa "(__dotta_refspec_files)"
-complete -c dotta -n "__dotta_using_command export; and __dotta_is_nth_arg 3" -xa "(__dotta_commits)"
-complete -c dotta -n "__dotta_using_command export" -xa "(__dotta_refspec_commits)"
+complete -c dotta -n "__dotta_using_command export; and __dotta_is_nth_arg 1" -xa "(__dotta_refspec_commits)"
+complete -c dotta -n "__dotta_using_command export; and __dotta_is_nth_arg 2; and not __dotta_export_arg1_packed" -xa "(__dotta_refspec_files)"
+complete -c dotta -n "__dotta_using_command export; and __dotta_is_nth_arg 2; and not __dotta_export_arg1_packed" -xa "(__dotta_refspec_commits)"
+complete -c dotta -n "__dotta_using_command export; and __dotta_is_nth_arg 3; and not __dotta_export_arg1_packed" -xa "(__dotta_commits)"
 
 # profile subcommand argument values
 complete -c dotta -n "__dotta_using_subcommand profile enable" -xa "(__dotta_profiles_all)"

@@ -882,7 +882,8 @@ const args_command_t spec_show = {
     .epilogue    =
         "See also:\n"
         "  %s list <profile> <file>   # Commit history for a file\n"
-        "  %s diff <commit> <commit>  # Compare two commits\n",
+        "  %s diff <commit> <commit>  # Compare two commits\n"
+        "  %s export <target> -o <dest>  # Copy content to the filesystem\n",
     .opts_size   = sizeof(cmd_show_options_t),
     .opts        = show_opts,
     .post_parse  = show_post_parse,

@@ -25,6 +25,7 @@ Commands:
   diff           Show differences between profiles and filesystem
   list           List profiles, files, and commit history
   show           Show file content or commit details
+  export         Materialize profile content to the filesystem
   sync           Synchronize profiles with remote repository
   profile        Profile management and layering
   remote         Manage remote repositories

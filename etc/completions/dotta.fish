@@ -90,7 +90,7 @@ function __dotta_discover_profile
     end
 
     switch $cmd
-        case apply update remove list diff show revert
+        case apply update remove list diff show revert export
             # Find first positional after command (skip flags and their values)
             set -l value_flags $__dotta_value_flags
             set -l skip_next 0
@@ -145,10 +145,19 @@ function __dotta_commits
     printf "HEAD~2\t2 commits ago\n"
     printf "HEAD~3\t3 commits ago\n"
 
-    # Hash-based references from the explicitly-scoped profile's history
-    set -l profile (__dotta_explicit_profile)
+    # Hash-based references from the scoped profile's history (-p flag,
+    # or the positional profile for profile-first commands like list and
+    # export). A first positional that is not a branch yields nothing —
+    # fall back to the unscoped enabled-profile history.
+    set -l profile (__dotta_discover_profile)
+    set -l scoped
     if test -n "$profile"
-        dotta __complete commits -p "$profile" --limit 20 2>/dev/null
+        set scoped (dotta __complete commits -p "$profile" --limit 20 2>/dev/null)
+    end
+    if test (count $scoped) -gt 0
+        for line in $scoped
+            echo $line
+        end
     else
         dotta __complete commits --limit 20 2>/dev/null
     end
@@ -489,6 +498,14 @@ complete -c dotta -n "__dotta_using_command show" -xa "(__dotta_refspec_commits)
 complete -c dotta -n "__dotta_using_command revert" -xa "(__dotta_refspec_files)"
 complete -c dotta -n "__dotta_using_command revert; and __dotta_seen_option -p --profile" -xa "(__dotta_commits)"
 complete -c dotta -n "__dotta_using_command revert" -xa "(__dotta_refspec_commits)"
+
+# export: profile first (all local branches), then git-backed refspec
+# files scoped to it, then commits from its history
+complete -c dotta -n "__dotta_using_command export; and __dotta_is_nth_arg 1" -xa "(__dotta_profiles_all)"
+complete -c dotta -n "__dotta_using_command export; and __dotta_is_nth_arg 1" -xa "(__dotta_refspec_files)"
+complete -c dotta -n "__dotta_using_command export; and __dotta_is_nth_arg 2" -xa "(__dotta_refspec_files)"
+complete -c dotta -n "__dotta_using_command export; and __dotta_is_nth_arg 3" -xa "(__dotta_commits)"
+complete -c dotta -n "__dotta_using_command export" -xa "(__dotta_refspec_commits)"
 
 # profile subcommand argument values
 complete -c dotta -n "__dotta_using_subcommand profile enable" -xa "(__dotta_profiles_all)"

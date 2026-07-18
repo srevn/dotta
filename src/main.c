@@ -24,6 +24,7 @@
 #include "cmds/clone.h"
 #include "cmds/completion.h"
 #include "cmds/diff.h"
+#include "cmds/export.h"
 #include "cmds/git.h"
 #include "cmds/ignore.h"
 #include "cmds/init.h"
@@ -67,13 +68,14 @@
  * for `for (size_t i = 0; reg[i] != NULL; i++)` loops.
  */
 static const args_command_t *const dotta_commands[] = {
-    &spec_init,        &spec_clone,      &spec_add,
-    &spec_remove,      &spec_update,     &spec_apply,
-    &spec_revert,      &spec_status,     &spec_diff,
-    &spec_list,        &spec_show,       &spec_sync,
-    &spec_profile,     &spec_remote,     &spec_ignore,
-    &spec_bootstrap,   &spec_key,        &spec_git,
-    &spec_interactive, &spec_completion, NULL
+    &spec_init,   &spec_clone,       &spec_add,
+    &spec_remove, &spec_update,      &spec_apply,
+    &spec_revert, &spec_status,      &spec_diff,
+    &spec_list,   &spec_show,        &spec_export,
+    &spec_sync,   &spec_profile,     &spec_remote,
+    &spec_ignore, &spec_bootstrap,   &spec_key,
+    &spec_git,    &spec_interactive, &spec_completion,
+    NULL
 };
 
 /* Per-combination dispatch payloads — one const per (repo_mode,

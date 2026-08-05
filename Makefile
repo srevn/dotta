@@ -193,23 +193,26 @@ $(BUILD_CONFIG): FORCE | $(BUILD_DIR)
 	   printf '%s\n' "$$NEW" > $@; \
 	 fi
 
+# Header dependencies
+DEPFLAGS = -MMD -MP
+
 # Compile source files
 $(BUILD_DIR)/%.o: $(SRC_DIR)/%.c $(BUILD_CONFIG) | $(BUILD_LAYER_DIRS)
 	@echo "CC $<"
-	@$(CC) $(CFLAGS) $(INCLUDES) $(LIBGIT2_CFLAGS) $(SQLITE3_CFLAGS) $(VERSION_FLAGS) -c $< -o $@
+	@$(CC) $(CFLAGS) $(DEPFLAGS) $(INCLUDES) $(LIBGIT2_CFLAGS) $(SQLITE3_CFLAGS) $(VERSION_FLAGS) -c $< -o $@
 
 # Compile vendor files
 $(BUILD_DIR)/lib/cJSON.o: $(CJSON_SRC) $(BUILD_CONFIG) | $(BUILD_DIR)/lib
 	@echo "CC $<"
-	@$(CC) $(CFLAGS) $(LIB_INCLUDES) -c $< -o $@
+	@$(CC) $(CFLAGS) $(DEPFLAGS) $(LIB_INCLUDES) -c $< -o $@
 
 $(BUILD_DIR)/lib/tomlc17.o: $(TOML_SRC) $(BUILD_CONFIG) | $(BUILD_DIR)/lib
 	@echo "CC $<"
-	@$(CC) $(CFLAGS) $(LIB_INCLUDES) -c $< -o $@
+	@$(CC) $(CFLAGS) $(DEPFLAGS) $(LIB_INCLUDES) -c $< -o $@
 
 $(BUILD_DIR)/lib/monocypher.o: $(MONOCYPHER_SRC) $(BUILD_CONFIG) | $(BUILD_DIR)/lib
 	@echo "CC $<"
-	@$(CC) $(CFLAGS) $(LIB_INCLUDES) -c $< -o $@
+	@$(CC) $(CFLAGS) $(DEPFLAGS) $(LIB_INCLUDES) -c $< -o $@
 
 # Link main executable
 $(TARGET): $(LIB_OBJ) $(MAIN_OBJ) | $(BIN_DIR)
@@ -220,7 +223,7 @@ $(TARGET): $(LIB_OBJ) $(MAIN_OBJ) | $(BIN_DIR)
 .PHONY: debug
 debug: CFLAGS := -std=c11 -Wall -Wextra -Wpedantic -Werror $(DEBUG_FLAGS) $(FEATURE_MACROS)
 debug: BUILD_TYPE := debug
-debug: clean $(TARGET)
+debug: $(TARGET)
 
 # Static build (with libgit2 statically linked for portability)
 .PHONY: static
@@ -485,8 +488,3 @@ help:
 # Dependency tracking
 -include $(LIB_OBJ:.o=.d)
 -include $(MAIN_OBJ:.o=.d)
-
-# Generate dependencies
-$(BUILD_DIR)/%.d: $(SRC_DIR)/%.c
-	@mkdir -p $(dir $@)
-	@$(CC) $(CFLAGS) $(INCLUDES) $(LIBGIT2_CFLAGS) -MM -MT $(BUILD_DIR)/$*.o $< > $@

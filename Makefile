@@ -30,7 +30,7 @@ GIT_COMMIT := $(shell git rev-parse --short=7 HEAD 2>/dev/null || echo "unknown"
 GIT_DIRTY := $(shell git diff-index --quiet HEAD -- 2>/dev/null || echo "-dirty")
 GIT_BRANCH := $(shell git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
 BUILD_ARCH := $(shell uname -m)
-CC_VERSION := $(shell $(CC) --version | head -n1)
+CC_VERSION := $(shell $(CC) --version 2>/dev/null | head -n1)
 
 # Build type is part of the version banner and varies per target
 BUILD_TYPE ?= release
@@ -53,13 +53,65 @@ VERSION_FLAGS = -DDOTTA_BUILD_COMMIT="\"$(GIT_COMMIT)$(GIT_DIRTY)\"" \
                 -DDOTTA_BUILD_CC="\"$(CC_VERSION)\""
 
 # Dependencies
-LIBGIT2_CFLAGS := $(shell pkg-config --cflags libgit2)
-LIBGIT2_LIBS := $(shell pkg-config --libs libgit2)
-LIBGIT2_LIBDIR := $(shell pkg-config --variable=libdir libgit2)
+PKG_CONFIG ?= pkg-config
+HAVE_PKG_CONFIG := $(shell command -v $(PKG_CONFIG) 2>/dev/null)
+
+# Version floors
+LIBGIT2_MIN := 1.5
+SQLITE3_MIN := 3.40
+
+LIBGIT2_VERSION := $(shell $(PKG_CONFIG) --modversion libgit2 2>/dev/null)
+LIBGIT2_OK := $(shell $(PKG_CONFIG) --atleast-version=$(LIBGIT2_MIN) libgit2 2>/dev/null && echo 1)
+LIBGIT2_CFLAGS := $(shell $(PKG_CONFIG) --cflags libgit2 2>/dev/null)
+LIBGIT2_LIBS := $(shell $(PKG_CONFIG) --libs libgit2 2>/dev/null)
+LIBGIT2_LIBDIR := $(shell $(PKG_CONFIG) --variable=libdir libgit2 2>/dev/null)
 LIBGIT2_STATIC_LIB := $(LIBGIT2_LIBDIR)/libgit2.a
-LIBGIT2_STATIC_DEPS := $(shell pkg-config --libs --static libgit2 | sed 's/-lgit2//')
-SQLITE3_CFLAGS := $(shell pkg-config --cflags sqlite3)
-SQLITE3_LIBS := $(shell pkg-config --libs sqlite3)
+LIBGIT2_STATIC_DEPS := $(shell $(PKG_CONFIG) --libs --static libgit2 2>/dev/null | sed 's/-lgit2//')
+
+SQLITE3_VERSION := $(shell $(PKG_CONFIG) --modversion sqlite3 2>/dev/null)
+SQLITE3_OK := $(shell $(PKG_CONFIG) --atleast-version=$(SQLITE3_MIN) sqlite3 2>/dev/null && echo 1)
+SQLITE3_CFLAGS := $(shell $(PKG_CONFIG) --cflags sqlite3 2>/dev/null)
+SQLITE3_LIBS := $(shell $(PKG_CONFIG) --libs sqlite3 2>/dev/null)
+
+# Package-manager hint
+ifeq ($(BUILD_OS),darwin)
+define INSTALL_HINT
+  brew install pkg-config libgit2 sqlite
+endef
+else ifeq ($(BUILD_OS),freebsd)
+define INSTALL_HINT
+  pkg install pkgconf libgit2 sqlite3
+endef
+else
+define INSTALL_HINT
+  Debian:    sudo apt install pkg-config libgit2-dev libsqlite3-dev
+  Fedora:    sudo dnf install pkgconf-pkg-config libgit2-devel sqlite-devel
+  Arch:      sudo pacman -S pkgconf libgit2 sqlite
+endef
+endif
+export INSTALL_HINT
+
+# Goals that need no compiler and no libraries
+BUILDLESS_GOALS := clean help check-deps format format-check uninstall uninstall-completions
+
+# Fail at the point of misconfiguration
+ifneq ($(filter-out $(BUILDLESS_GOALS),$(or $(MAKECMDGOALS),all)),)
+ifeq ($(HAVE_PKG_CONFIG),)
+$(error pkg-config not found — install it, then run 'make check-deps')
+endif
+ifeq ($(LIBGIT2_VERSION),)
+$(error libgit2 not found by pkg-config — run 'make check-deps')
+endif
+ifeq ($(LIBGIT2_OK),)
+$(error libgit2 $(LIBGIT2_MIN)+ required, found $(LIBGIT2_VERSION) — run 'make check-deps')
+endif
+ifeq ($(SQLITE3_VERSION),)
+$(error sqlite3 not found by pkg-config — run 'make check-deps')
+endif
+ifeq ($(SQLITE3_OK),)
+$(error sqlite3 $(SQLITE3_MIN)+ required, found $(SQLITE3_VERSION) — run 'make check-deps')
+endif
+endif
 
 # Check if static library exists
 ifneq ($(wildcard $(LIBGIT2_STATIC_LIB)),)
@@ -359,13 +411,49 @@ compile-commands:
 .PHONY: check-deps
 check-deps:
 	@echo "Checking dependencies..."
-	@pkg-config --exists libgit2 && echo "libgit2 found" || (echo "libgit2 not found" && exit 1)
-	@which $(CC) > /dev/null && echo "$(CC) found" || (echo "$(CC) not found" && exit 1)
+	@fail=0; \
+	 if [ -n "$(HAVE_PKG_CONFIG)" ]; then \
+	   printf '  %-12s %s\n' "pkg-config" "$(HAVE_PKG_CONFIG)"; \
+	 else \
+	   printf '  %-12s %s\n' "pkg-config" "NOT FOUND (required to locate libgit2 and sqlite3)"; \
+	   fail=1; \
+	 fi; \
+	 if command -v $(CC) >/dev/null 2>&1; then \
+	   printf '  %-12s %s\n' "$(CC)" "$$($(CC) --version | head -n1)"; \
+	 else \
+	   printf '  %-12s %s\n' "$(CC)" "NOT FOUND"; \
+	   fail=1; \
+	 fi; \
+	 if [ -z "$(LIBGIT2_VERSION)" ]; then \
+	   printf '  %-12s %s\n' "libgit2" "NOT FOUND (need >= $(LIBGIT2_MIN))"; \
+	   fail=1; \
+	 elif [ -z "$(LIBGIT2_OK)" ]; then \
+	   printf '  %-12s %s\n' "libgit2" "$(LIBGIT2_VERSION) — TOO OLD (need >= $(LIBGIT2_MIN))"; \
+	   fail=1; \
+	 else \
+	   printf '  %-12s %s\n' "libgit2" "$(LIBGIT2_VERSION) (>= $(LIBGIT2_MIN))"; \
+	 fi; \
+	 if [ -z "$(SQLITE3_VERSION)" ]; then \
+	   printf '  %-12s %s\n' "sqlite3" "NOT FOUND (need >= $(SQLITE3_MIN))"; \
+	   fail=1; \
+	 elif [ -z "$(SQLITE3_OK)" ]; then \
+	   printf '  %-12s %s\n' "sqlite3" "$(SQLITE3_VERSION) — TOO OLD (need >= $(SQLITE3_MIN))"; \
+	   fail=1; \
+	 else \
+	   printf '  %-12s %s\n' "sqlite3" "$(SQLITE3_VERSION) (>= $(SQLITE3_MIN))"; \
+	 fi; \
+	 echo ""; \
+	 if [ $$fail -ne 0 ]; then \
+	   echo "Missing or outdated dependencies. Install with:"; \
+	   printf '%s\n' "$$INSTALL_HINT"; \
+	   exit 1; \
+	 fi; \
+	 echo "All dependencies satisfied."
 
 # Help
 .PHONY: help
 help:
-	@echo "Dotta Makefile targets:"
+	@echo "dotta Makefile targets:"
 	@echo "  all                   - Build main executable (default)"
 	@echo "  debug                 - Build with debug symbols"
 	@echo "  static                - Build with libgit2 statically linked (portable)"

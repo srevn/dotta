@@ -38,7 +38,7 @@ static void print_preflight_results(
 
     /* Print conflicts */
     if (result->conflicts && result->conflicts->count > 0) {
-        output_section(out, OUTPUT_NORMAL, "Conflicts (files modified locally)");
+        output_section(out, OUTPUT_NORMAL, "Conflicts (modified locally or wrong type)");
         for (size_t i = 0; i < result->conflicts->count; i++) {
             output_styled(
                 out, OUTPUT_NORMAL, "  {red}✗{reset} %s\n",
@@ -47,6 +47,22 @@ static void print_preflight_results(
         }
         output_newline(out, OUTPUT_NORMAL);
         output_info(out, OUTPUT_NORMAL, "Use --force to overwrite local changes");
+    }
+
+    /* Print blocked paths (a non-directory where a parent must be) */
+    if (result->blocked && result->blocked->count > 0) {
+        output_section(out, OUTPUT_NORMAL, "Blocked (ancestor is not a directory)");
+        for (size_t i = 0; i < result->blocked->count; i++) {
+            output_styled(
+                out, OUTPUT_NORMAL, "  {red}✗{reset} %s\n",
+                result->blocked->items[i]
+            );
+        }
+        output_newline(out, OUTPUT_NORMAL);
+        output_info(
+            out, OUTPUT_NORMAL,
+            "Bring the ancestor into this apply with --force, or fix it by hand"
+        );
     }
 
     /* Print permission errors */
@@ -59,20 +75,76 @@ static void print_preflight_results(
             );
         }
     }
+}
 
-    /* Print profile reassignments */
-    if (result->reassignments && result->reassignment_count > 0) {
-        output_section(out, OUTPUT_NORMAL, "Profile reassignments");
-        for (size_t i = 0; i < result->reassignment_count; i++) {
-            const reassignment_t *change = &result->reassignments[i];
-            output_styled(
-                out, OUTPUT_NORMAL, "  {yellow}→{reset} %s: {cyan}%s{reset} → {cyan}%s{reset}\n",
-                change->filesystem_path, change->old_profile, change->new_profile
-            );
-        }
+/**
+ * Print pending profile reassignments
+ *
+ * `reassigned` holds the in-scope diverged items whose owning profile
+ * changed (workspace_item_t *, borrowed) — the exact set the run will
+ * acknowledge, content-clean reassignments included.
+ */
+static void print_reassignments(const output_t *out, const ptr_array_t *reassigned) {
+    if (reassigned->count == 0) return;
+
+    output_section(out, OUTPUT_NORMAL, "Profile reassignments");
+    for (size_t i = 0; i < reassigned->count; i++) {
+        const workspace_item_t *item = reassigned->items[i];
+        output_styled(
+            out, OUTPUT_NORMAL, "  {yellow}→{reset} %s: {cyan}%s{reset} → {cyan}%s{reset}\n",
+            item->filesystem_path, item->old_profile, item->profile
+        );
+    }
+    output_info(
+        out, OUTPUT_NORMAL,
+        "  These files will now be managed by a different profile."
+    );
+}
+
+/**
+ * Acknowledge profile reassignments — clear old_profile in state
+ *
+ * Reassignment is state bookkeeping, not deployment: content may be
+ * identical, so the row never enters the plan, but the flag must be
+ * cleared or the workspace keeps reporting the transition. Failures are
+ * per-item warnings (the next apply retries). Dry-run prints the count.
+ */
+static void acknowledge_reassignments(
+    state_t *state,
+    const ptr_array_t *reassigned,
+    bool dry_run,
+    output_t *out
+) {
+    if (reassigned->count == 0) return;
+
+    if (dry_run) {
         output_info(
-            out, OUTPUT_NORMAL,
-            "  These files will now be managed by a different profile."
+            out, OUTPUT_NORMAL, "Would acknowledge %zu profile reassignment%s",
+            reassigned->count, reassigned->count == 1 ? "" : "s"
+        );
+        return;
+    }
+
+    size_t cleared = 0;
+    for (size_t i = 0; i < reassigned->count; i++) {
+        const workspace_item_t *item = reassigned->items[i];
+
+        error_t *err = state_clear_old_profile(state, item->filesystem_path);
+        if (err) {
+            output_warning(
+                out, OUTPUT_NORMAL, "Failed to clear profile reassignment flag for %s: %s",
+                item->filesystem_path, error_message(err)
+            );
+            error_free(err);
+            continue;
+        }
+        cleared++;
+    }
+
+    if (cleared > 0) {
+        output_styled(
+            out, OUTPUT_NORMAL, "Acknowledged {cyan}%zu{reset} profile reassignment%s\n",
+            cleared, cleared == 1 ? "" : "s"
         );
     }
 }
@@ -85,6 +157,7 @@ static void print_preflight_results(
  *
  * Categories (each semantically distinct):
  * - deployed: Files written to disk (green)
+ * - converged: Tracked directories created / fixed / replaced (green)
  * - skipped_existing: --skip-existing flag applied (cyan)
  * - failed: Deployment failures (red, always shown)
  *
@@ -98,17 +171,30 @@ static void print_deploy_results(
 ) {
     if (!result) return;
 
-    state_files_t deployed = deploy_result_view(&result->deployed);
-    state_files_t skipped = deploy_result_view(&result->skipped_existing);
-    state_files_t failed = deploy_result_view(&result->failed);
+    state_files_t deployed = state_files_view(&result->deployed);
+    state_directories_t converged = state_directories_view(&result->converged);
+    state_files_t skipped = state_files_view(&result->skipped_existing);
+    state_files_t failed = state_files_view(&result->failed);
 
-    /* Verbose mode: show individual files per category */
+    /* Verbose mode: show individual items per category */
     if (deployed.count > 0) {
         output_section(out, OUTPUT_VERBOSE, dry_run ? "Would deploy" : "Deployed files");
         for (size_t i = 0; i < deployed.count; i++) {
             output_styled(
                 out, OUTPUT_VERBOSE, "  {green}✓{reset} %s\n",
                 deployed.entries[i]->filesystem_path
+            );
+        }
+    }
+
+    if (converged.count > 0) {
+        output_section(
+            out, OUTPUT_VERBOSE, dry_run ? "Would converge" : "Converged tracked directories"
+        );
+        for (size_t i = 0; i < converged.count; i++) {
+            output_styled(
+                out, OUTPUT_VERBOSE, "  {green}✓{reset} %s\n",
+                converged.entries[i]->filesystem_path
             );
         }
     }
@@ -146,6 +232,15 @@ static void print_deploy_results(
                 out, OUTPUT_NORMAL, dry_run ? "Would deploy {green}%zu{reset} file%s\n"
                                             : "Deployed {green}%zu{reset} file%s\n",
                 deployed.count, deployed.count == 1 ? "" : "s"
+            );
+        }
+
+        if (converged.count > 0) {
+            output_styled(
+                out, OUTPUT_NORMAL,
+                dry_run ? "Would converge {green}%zu{reset} tracked director%s\n"
+                        : "Converged {green}%zu{reset} tracked director%s\n",
+                converged.count, converged.count == 1 ? "y" : "ies"
             );
         }
 
@@ -597,31 +692,29 @@ static void print_cleanup_preflight_results(
 /**
  * Check privileges for complete apply operation
  *
- * Examines files being deployed, file orphans (files being removed),
- * directory orphans (directories being removed), AND diverged tracked
- * directories being converged (created / recreated / metadata-fixed) for
- * root/ paths. This ensures we have required privileges BEFORE attempting
- * any filesystem modifications.
+ * Examines the plan's pending files and directories (deployed / converged)
+ * plus the file and directory orphans being removed, for root/ paths. This
+ * ensures we have required privileges BEFORE attempting any filesystem
+ * modifications — and, reading the plan, it is exact by construction.
  *
  * @param ctx Command context (must not be NULL)
- * @param files Files being deployed (passed by value)
+ * @param plan Deployment plan (must not be NULL)
  * @param file_orphans Files being removed (zeroed if --keep-orphans)
  * @param dir_orphans Directories being removed (zeroed if --keep-orphans)
- * @param to_converge Diverged tracked directories deploy will converge
  * @param opts Apply command options (must not be NULL)
  * @param out Output context for messages (must not be NULL)
  * @return NULL if OK to proceed, error otherwise (or does not return if re-exec with sudo)
  */
 static error_t *ensure_complete_apply_privileges(
     const dotta_ctx_t *ctx,
-    state_files_t files,
+    const deploy_plan_t *plan,
     workspace_items_t file_orphans,
     workspace_items_t dir_orphans,
-    workspace_items_t to_converge,
     const cmd_apply_options_t *opts,
     output_t *out
 ) {
     CHECK_NULL(ctx);
+    CHECK_NULL(plan);
     CHECK_NULL(opts);
     CHECK_NULL(out);
 
@@ -629,9 +722,12 @@ static error_t *ensure_complete_apply_privileges(
         return NULL;  /* Read-only operation, no privileges needed */
     }
 
+    state_files_t files = state_files_view(&plan->files.pending);
+    state_directories_t dirs = state_directories_view(&plan->directories.pending);
+
     /* Strict upper bound — every entry across the four sources may need
      * elevation. Reserve once to keep growth out of the hot loop. */
-    size_t cap = files.count + file_orphans.count + dir_orphans.count + to_converge.count;
+    size_t cap = files.count + dirs.count + file_orphans.count + dir_orphans.count;
     if (cap == 0) return NULL;
 
     string_array_t labels STRING_ARRAY_AUTO = { 0 };
@@ -646,6 +742,15 @@ static error_t *ensure_complete_apply_privileges(
             &labels,
             files.entries[i]->storage_path,
             files.entries[i]->filesystem_path
+        );
+        if (err) return err;
+    }
+
+    for (size_t i = 0; i < dirs.count; i++) {
+        err = privilege_collect_label(
+            &labels,
+            dirs.entries[i]->storage_path,
+            dirs.entries[i]->filesystem_path
         );
         if (err) return err;
     }
@@ -668,107 +773,11 @@ static error_t *ensure_complete_apply_privileges(
         if (err) return err;
     }
 
-    for (size_t i = 0; i < to_converge.count; i++) {
-        err = privilege_collect_label(
-            &labels,
-            to_converge.entries[i]->storage_path,
-            to_converge.entries[i]->filesystem_path
-        );
-        if (err) return err;
-    }
-
     return privilege_ensure_for_operation(
         (const char *const *) labels.items, labels.count, "apply",
         true,  /* interactive: prompt user if elevation needed */
         ctx->argc, ctx->argv, out
     );
-}
-
-/**
- * Check if a workspace item needs deployment
- *
- * Kind-agnostic. Files and directories share the two-dimensional model —
- * state (existence) + divergence (quality) — so one predicate routes both:
- * files into to_deploy for deploy_execute, directories into to_converge
- * for deploy_tracked_directories.
- *
- * Architecture:
- * - State dimension (primary): Where does the path exist? (Git/DB/filesystem)
- * - Divergence dimension (secondary): For paths on disk, what's wrong?
- *
- * Directories need no kind-specific arm: workspace analysis tags them only
- * with MODE/OWNERSHIP/TYPE/UNVERIFIED (never content, encryption, or stale),
- * so the DEPLOYED arm's mask already covers every directory divergence.
- *
- * @param ws_item Workspace item from divergence analysis (can be NULL)
- * @return true if the item needs deployment, false if clean
- */
-static bool needs_deployment(const workspace_item_t *ws_item) {
-    if (ws_item == NULL) {
-        /* Not in workspace divergence index -> file is clean */
-        return false;
-    }
-
-    /* Decision tree: state (existence) determines baseline, then check divergence (quality) */
-    switch (ws_item->state) {
-        case WORKSPACE_STATE_UNDEPLOYED:
-            /* File exists in Git but has never been deployed to filesystem.
-             * Needs initial deployment.
-             *
-             * Note: divergence is always NONE for missing files (can't compare
-             * properties of non-existent files). */
-            return true;
-
-        case WORKSPACE_STATE_DELETED:
-            /* File exists in Git and was previously deployed (deployed_at > 0),
-             * but has been removed from filesystem. Needs restoration.
-             *
-             * Note: divergence is always NONE for missing files. */
-            return true;
-
-        case WORKSPACE_STATE_DEPLOYED:
-            /* File exists on filesystem and is tracked in Git.
-             * Needs deployment only if properties diverged (content, mode, ownership, etc.).
-             *
-             * If divergence == NONE: file is clean, matches Git perfectly.
-             * If divergence != NONE: file has property mismatches, needs redeployment.
-             *
-             * DIVERGENCE_STALE is informational (VWD cache was patched in-memory from
-             * fresh Git state). It does NOT indicate a filesystem mismatch — the patched
-             * values are the new expected state. Mask it out to avoid spurious deployment
-             * when the file content already matches the new Git state. */
-            return (ws_item->divergence & ~DIVERGENCE_STALE) != DIVERGENCE_NONE;
-
-        case WORKSPACE_STATE_ORPHANED:
-            /* Path exists in deployment state but not in any enabled profile.
-             *
-             * Legitimately reached: the directory caller screens the full
-             * diverged set, where orphan rows live. (The file caller queries
-             * the active slice, partitioned to enabled profiles, so orphans
-             * cannot reach it from there.)
-             *
-             * Never deployment — cleanup owns orphan removal. */
-            return false;
-
-        case WORKSPACE_STATE_UNTRACKED:
-            /* File exists on filesystem in a tracked directory but not in Git.
-             *
-             * Architectural invariant: Untracked files should NOT appear in the active
-             * slice (which is built from state rows, not filesystem scans). If we
-             * reach here, it's a programming error.
-             *
-             * Defensive: Return false (don't deploy untracked files, user must 'add' them). */
-            return false;
-
-        case WORKSPACE_STATE_RELEASED:
-            /* File removed from Git externally, released from management.
-             * Never needs deployment — cleanup handles state entry removal. */
-            return false;
-    }
-
-    /* Unreachable if all enum values handled.
-     * Defensive fallback for unknown states (forward compatibility). */
-    return false;
 }
 
 /**
@@ -788,12 +797,9 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     error_t *err = NULL;
     state_t *state = ctx->state;                /* Borrowed from dispatcher (WRITE) */
     scope_t *scope = NULL;
-    state_files_t active = { 0 };               /* Workspace's borrowed slice (no free) */
-    state_files_t to_deploy = { 0 };            /* Aliases divergent_files.items below (no free) */
-    workspace_items_t to_converge = { 0 };      /* Aliases divergent_dirs.items below (no free) */
-    ptr_array_t divergent_files = { 0 };        /* Heap-backed pointer array */
-    ptr_array_t divergent_dirs = { 0 };         /* Heap-backed pointer array */
     workspace_t *ws = NULL;
+    deploy_plan_t *plan = NULL;                 /* Rows borrow from ws; free before ws */
+    ptr_array_t reassigned = { 0 };             /* In-scope items with profile_changed (borrowed) */
     workspace_items_t file_orphans = { 0 };     /* heap-allocated entries (must free) */
     workspace_items_t dir_orphans = { 0 };      /* heap-allocated entries (must free) */
     workspace_items_t excluded_orphans = { 0 }; /* heap-allocated entries (must free) */
@@ -896,110 +902,69 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         goto cleanup;
     }
 
-    /* Borrow the active in-scope slice (no allocation, no free contract) */
-    active = workspace_files(ws);
-
     output_print(
         out, OUTPUT_VERBOSE, "Workspace loaded: %zu active file%s in scope\n",
-        active.count, active.count == 1 ? "" : "s"
+        workspace_files(ws).count, workspace_files(ws).count == 1 ? "" : "s"
     );
 
-    /* CONVERGENCE MODEL: Analyze files for divergence and build deployment list
+    /* PLAN: decide once what deploy will do, from (workspace, scope).
      *
-     * Single-pass algorithm:
-     *   - Walk the active slice once, applying filters and divergence analysis
-     *   - Push divergent state-row pointers into a scratch ptr_array_t
-     *   - Bind that buffer into a state_files_t carrier for deploy
-     *
-     * Architecture:
-     * - workspace_load() already computed fresh divergence for ALL files
-     * - workspace_get_item() returns NULL for clean files (no divergence)
-     * - workspace_get_item() returns workspace_item_t* for divergent files
-     * - We deploy only files where divergence != DIVERGENCE_NONE
-     */
-    output_print(out, OUTPUT_VERBOSE, "\nAnalyzing files for convergence...\n");
+     * Every later consumer — preview, adoption, privileges, preflight, the
+     * prompt, execution and the exclusion summary — reads this one object.
+     * The workspace already computed fresh divergence for every active row;
+     * the planner gates each row on scope and classifies it by deploy's
+     * work predicate into pending / clean / excluded (held-back work). */
+    output_print(out, OUTPUT_VERBOSE, "\nPlanning deployment...\n");
 
-    size_t clean_count = 0;
-    size_t excluded_deploy_count = 0;  /* Track deployment exclusions */
-    size_t excluded_orphan_count = 0;  /* Track orphan exclusions */
+    err = deploy_plan_build(ws, scope, &plan);
+    if (err) {
+        err = error_wrap(err, "Failed to plan deployment");
+        goto cleanup;
+    }
 
-    for (size_t i = 0; i < active.count; i++) {
-        const state_file_entry_t *file = active.entries[i];
+    {
+        state_files_t excluded_files = state_files_view(&plan->files.excluded);
+        state_directories_t excluded_dirs = state_directories_view(&plan->directories.excluded);
 
-        /* Filter by operation profiles (skip files not in filter).
-         * scope_accepts_profile already rejects NULL profiles. */
-        if (!scope_accepts_profile(scope, file->profile)) {
-            continue;
-        }
-
-        /* Filter by file filter (skip files not in CLI file list) */
-        if (!scope_accepts_path(scope, file->storage_path, PATH_KIND_FILE)) {
-            continue;
-        }
-
-        /* Filter by exclusion pattern (skip excluded files; count by reason) */
-        if (scope_is_excluded(scope, file->storage_path, PATH_KIND_FILE)) {
-            excluded_deploy_count++;
+        for (size_t i = 0; i < excluded_files.count; i++) {
             output_print(
                 out, OUTPUT_VERBOSE, "  Skipping (excluded): %s\n",
-                file->filesystem_path
+                excluded_files.entries[i]->filesystem_path
             );
-            continue;
         }
-
-        /* Query fresh divergence analysis (O(1) hashmap lookup)
-         *
-         * workspace_get_item() returns:
-         *   - NULL if file is clean (no divergence, not in index)
-         *   - workspace_item_t* if file has state/divergence issues
-         */
-        const workspace_item_t *ws_item = workspace_get_item(ws, file->filesystem_path);
-
-        if (needs_deployment(ws_item)) {
-            /* File needs deployment - either missing or has property divergence
-             *
-             * Missing files (state-based):
-             *   - UNDEPLOYED: File in Git, never deployed to filesystem
-             *   - DELETED: File in Git, was deployed, removed from filesystem
-             *
-             * Divergent files (property-based, bit flags can be combined):
-             *   - DIVERGENCE_CONTENT: File content differs from Git
-             *   - DIVERGENCE_MODE: Permissions changed
-             *   - DIVERGENCE_OWNERSHIP: Owner/group changed (root/ files)
-             *   - DIVERGENCE_TYPE: Type changed (file->symlink, etc.)
-             *   - DIVERGENCE_ENCRYPTION: Encryption policy violation
-             */
-            err = ptr_array_push(&divergent_files, file);
-            if (err) {
-                err = error_wrap(err, "Failed to record divergent file");
-                goto cleanup;
-            }
-        } else {
-            /* Clean file - matches Git perfectly */
-            clean_count++;
+        for (size_t i = 0; i < excluded_dirs.count; i++) {
+            output_print(
+                out, OUTPUT_VERBOSE, "  Skipping (excluded): %s\n",
+                excluded_dirs.entries[i]->filesystem_path
+            );
         }
     }
 
-    /* Bind the divergent-file buffer into a typed carrier for deploy.
-     *
-     * Lifetime: to_deploy.entries aliases divergent_files.items; the row
-     * pointers live in the workspace's arena snapshot (workspace lifetime).
-     * The scratch buffer itself is freed at the cleanup label via
-     * ptr_array_deinit. No allocator dance, no shallow copy. */
-    to_deploy.entries = (const state_file_entry_t *const *) divergent_files.items;
-    to_deploy.count = divergent_files.count;
-
     output_print(
-        out, OUTPUT_VERBOSE, "  %zu file%s need deployment (missing or divergent)\n",
-        to_deploy.count, to_deploy.count == 1 ? "" : "s"
+        out, OUTPUT_VERBOSE, "  %zu %s deployment (missing or divergent)\n",
+        plan->files.pending.count, plan->files.pending.count == 1 ? "file needs" : "files need"
     );
     output_print(
         out, OUTPUT_VERBOSE, "  %zu file%s already up-to-date (skipped)\n",
-        clean_count, clean_count == 1 ? "" : "s"
+        plan->files.clean.count, plan->files.clean.count == 1 ? "" : "s"
+    );
+    output_print(
+        out, OUTPUT_VERBOSE, "  %zu %s convergence\n",
+        plan->directories.pending.count,
+        plan->directories.pending.count == 1 ? "tracked directory needs" : "tracked directories need"
+    );
+    output_print(
+        out, OUTPUT_VERBOSE, "  %zu tracked director%s already converged\n",
+        plan->directories.clean.count, plan->directories.clean.count == 1 ? "y" : "ies"
     );
 
-    /* Warn if file filter was specified but no files matched */
-    if (scope_has_paths(scope) && to_deploy.count == 0 && clean_count == 0) {
+    /* Warn if a file filter was given but matched no managed path at all
+     * (held-back rows count as matched — the filter found them). */
+    if (scope_has_paths(scope) &&
+        plan->files.pending.count == 0 && plan->files.clean.count == 0 &&
+        plan->files.excluded.count == 0 &&
+        plan->directories.pending.count == 0 && plan->directories.clean.count == 0 &&
+        plan->directories.excluded.count == 0) {
         output_warning(out, OUTPUT_NORMAL, "No matching files found in enabled profiles");
         output_hint(out, OUTPUT_NORMAL, "Check if the file path is correct and profile is enabled");
     }
@@ -1034,20 +999,17 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * Write gated by !dry_run: stamping deployed_at is a write-effect that
      * contradicts dry-run's read-only ownership contract, so the
      * state_update_anchor call is skipped. Classification runs regardless,
-     * so --dry-run previews "Would adopt N file(s)". */
+     * so --dry-run previews "Would adopt N file(s)".
+     *
+     * plan->files.clean IS "in scope ∧ no work" — no gates re-derived here. */
     size_t adopted_count = 0;
     time_t adopt_now = time(NULL);
+    state_files_t adoptable = state_files_view(&plan->files.clean);
 
-    for (size_t i = 0; i < active.count; i++) {
-        const state_file_entry_t *file = active.entries[i];
+    for (size_t i = 0; i < adoptable.count; i++) {
+        const state_file_entry_t *file = adoptable.entries[i];
 
         if (file->anchor.deployed_at > 0) continue;
-        if (!scope_accepts_entry(scope, file->profile, file->storage_path, PATH_KIND_FILE)) {
-            continue;
-        }
-
-        const workspace_item_t *ws_item = workspace_get_item(ws, file->filesystem_path);
-        if (needs_deployment(ws_item)) continue;  /* handled by deploy path */
 
         if (!opts->dry_run) {
             deployment_anchor_t anchor = capture_anchor_from_disk(
@@ -1127,7 +1089,6 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
             err = error_wrap(err, "Failed to extract orphans from workspace");
             goto cleanup;
         }
-        excluded_orphan_count = excluded_orphans.count;
 
         /* Mirror the deployment-loop trace: for each orphan held back by
          * --exclude, emit a per-file line. output_print gates on the
@@ -1191,71 +1152,40 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         output_print(out, OUTPUT_VERBOSE, "\nSkipping orphan cleanup (file filter active)\n");
     }
 
-    /* Count pending profile reassignments and external-drift repairs within
-     * operation scope.
+    /* Collect pending profile reassignments and count external-drift
+     * repairs within operation scope.
      *
      * Profile reassignment (old_profile set in state) is state bookkeeping,
-     * not deployment: no bytes need to move to disk since content may be
-     * identical. needs_deployment() correctly returns false for these, so
-     * they never enter to_deploy. But the old_profile flag must still
-     * be cleared to prevent the workspace from reporting stale divergence.
+     * not deployment: content may be identical, so the row never enters
+     * the plan — but the flag must be cleared or the workspace keeps
+     * reporting the transition. Collected before the early exit so a
+     * reassignment-only workspace does not loop DIRTY forever.
      *
      * DIVERGENCE_STALE is tagged inside analyze_file_divergence from the
      * persistent anchor.blob_oid vs row.blob_oid comparison — a
      * cross-invocation signal that survives status→apply sequences and
      * reports correctly even when reconcile had nothing new to repair.
      *
-     * Counted before the early-exit check to prevent the infinite dirty-status
-     * loop: status reports DIRTY (profile_changed), but needs_deployment()
-     * correctly returns false (no content divergence), so to_deploy is
-     * empty. Without this check, the acknowledgment code is never reached.
-     *
-     * Applies the same three filters as the to_deploy build loop:
-     *   1. Profile filter (-p): Coherent Scope — only acknowledge within scope
-     *   2. Path filter (file args): Only acknowledge targeted files
-     *   3. Exclusion filter (--exclude): Respect explicit exclusions
-     */
-    size_t acknowledged_count = 0;
+     * Coherent Scope: the same triplet the planner applies. */
     size_t stale_count = 0;
     size_t all_count = 0;
     const workspace_item_t *all_items = workspace_get_all_diverged(ws, &all_count);
 
-    /* Loop-invariant gate for the directory term below: a path-filtered
-     * apply touches directories only as ancestors of the targeted files
-     * (deploy_tracked_directories' strict mode), so directory-only
-     * convergence is out of scope — same rule as orphan cleanup above. */
-    const bool converge_dirs = !scope_has_paths(scope);
-
     for (size_t i = 0; i < all_count; i++) {
-        /* Coherent Scope: same filters as deployment pipeline */
         if (!scope_accepts_entry(
             scope, all_items[i].profile, all_items[i].storage_path, all_items[i].item_kind
             )) {
             continue;
         }
-        if (all_items[i].profile_changed) acknowledged_count++;
         if (all_items[i].divergence & DIVERGENCE_STALE) stale_count++;
-
-        /* Directory convergence work, routed by the same predicate as the
-         * file pass above — creation, recreation, or metadata/type fix.
-         * to_deploy is files-only, so without this term directory-only
-         * divergence would never converge. Orphan-state directory items
-         * gate via no_orphans; needs_deployment rejects them here. */
-        if (converge_dirs && all_items[i].item_kind == PATH_KIND_DIRECTORY &&
-            needs_deployment(&all_items[i])) {
-            err = ptr_array_push(&divergent_dirs, &all_items[i]);
+        if (all_items[i].profile_changed) {
+            err = ptr_array_push(&reassigned, &all_items[i]);
             if (err) {
-                err = error_wrap(err, "Failed to record divergent directory");
+                err = error_wrap(err, "Failed to record profile reassignment");
                 goto cleanup;
             }
         }
     }
-
-    /* Directory mirror of the to_deploy bind above — same lifetime rule:
-     * to_converge.entries aliases divergent_dirs.items, whose items borrow
-     * into the workspace's diverged array. */
-    to_converge.entries = (const workspace_item_t *const *) divergent_dirs.items;
-    to_converge.count = divergent_dirs.count;
 
     /* Drift signal: external Git changes repaired by workspace_load's
      * reconcile, still visible in the persistent anchor/manifest.blob_oid
@@ -1267,83 +1197,35 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         );
     }
 
-    /* Check if there's anything to do */
+    /* Nothing pends on the filesystem: acknowledge bookkeeping (if any) and
+     * leave. Privilege checks, preflight, hooks and the prompt are for runs
+     * that touch disk — pure state bookkeeping skips them. The save also
+     * persists the reconcile + flush observations, dry-run included, as
+     * status does. */
     bool no_orphans = opts->keep_orphans || (file_orphans.count == 0 && dir_orphans.count == 0);
 
-    if (to_deploy.count == 0 && acknowledged_count == 0 && no_orphans
-        && to_converge.count == 0) {
-        /* Nothing to deploy, acknowledge, or clean */
-        size_t total_excluded = excluded_deploy_count + excluded_orphan_count;
-        if (total_excluded > 0) {
-            output_info(
-                out, OUTPUT_NORMAL, "Nothing to deploy (%zu file%s excluded by --exclude)",
-                total_excluded, total_excluded == 1 ? "" : "s"
-            );
+    if (deploy_plan_is_empty(plan) && no_orphans) {
+        if (reassigned.count > 0) {
+            acknowledge_reassignments(state, &reassigned, opts->dry_run, out);
         } else {
-            output_info(out, OUTPUT_NORMAL, "Nothing to deploy (workspace is clean)");
+            size_t total_excluded = plan->files.excluded.count +
+                                    plan->directories.excluded.count + excluded_orphans.count;
+            if (total_excluded > 0) {
+                output_info(
+                    out, OUTPUT_NORMAL, "Nothing to deploy (%zu path%s excluded by --exclude)",
+                    total_excluded, total_excluded == 1 ? "" : "s"
+                );
+            } else if (scope_has_filter(scope) || scope_has_paths(scope)) {
+                output_info(out, OUTPUT_NORMAL, "Nothing to deploy (no pending work in scope)");
+            } else {
+                output_info(out, OUTPUT_NORMAL, "Nothing to deploy (workspace is clean)");
+            }
         }
 
-        /* Commit transaction to persist stat cache updates from workspace flush */
         err = state_save(repo, state);
         if (err) {
-            err = error_wrap(err, "Failed to commit stat cache updates");
+            err = error_wrap(err, "Failed to commit state changes");
             goto cleanup;
-        }
-
-        err = NULL;
-        goto cleanup;
-    }
-
-    /* Acknowledgement-only fast path: profile reassignments with no filesystem changes
-     *
-     * When only profile bookkeeping is pending (no deployment, no orphans,
-     * no directory convergence), skip privilege checks, preflight, hooks,
-     * and confirmation — none apply to pure state bookkeeping that doesn't
-     * touch the filesystem. */
-    if (to_deploy.count == 0 && no_orphans && to_converge.count == 0) {
-        if (!opts->dry_run) {
-            size_t cleared = 0;
-
-            for (size_t i = 0; i < all_count; i++) {
-                if (!all_items[i].profile_changed) {
-                    continue;
-                }
-
-                if (!scope_accepts_entry(
-                    scope, all_items[i].profile, all_items[i].storage_path, all_items[i].item_kind
-                    )) {
-                    continue;
-                }
-
-                error_t *clear_err = state_clear_old_profile(state, all_items[i].filesystem_path);
-                if (clear_err) {
-                    output_warning(
-                        out, OUTPUT_NORMAL, "Failed to clear profile reassignment flag for %s: %s",
-                        all_items[i].filesystem_path, error_message(clear_err)
-                    );
-                    error_free(clear_err);
-                    continue;
-                }
-                cleared++;
-            }
-
-            if (cleared > 0) {
-                output_styled(
-                    out, OUTPUT_NORMAL, "Acknowledged {cyan}%zu{reset} profile reassignment%s\n",
-                    cleared, cleared == 1 ? "" : "s"
-                );
-            }
-
-            err = state_save(repo, state);
-            if (err) {
-                err = error_wrap(err, "Failed to commit state changes");
-                goto cleanup;
-            }
-        } else {
-            output_info(
-                out, OUTPUT_NORMAL, "Would acknowledge %zu profile reassignment%s (dry-run)",
-                acknowledged_count, acknowledged_count == 1 ? "" : "s"
-            );
         }
 
         err = NULL;
@@ -1366,7 +1248,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         output_print(out, OUTPUT_VERBOSE, "\nChecking privilege requirements...\n");
 
         err = ensure_complete_apply_privileges(
-            ctx, to_deploy, file_orphans, dir_orphans, to_converge, opts, out
+            ctx, plan, file_orphans, dir_orphans, opts, out
         );
         if (err) {
             err = error_wrap(err, "Insufficient privileges for operation");
@@ -1397,16 +1279,16 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         .verbose          = opts->verbose,
         .skip_existing    = opts->skip_existing,
         .strict_ownership = config->strict_mode,
-        .scope            = scope
     };
 
-    err = deploy_workspace_preflight(ws, to_deploy, &deploy_opts, &preflight);
+    err = deploy_preflight(ws, plan, &deploy_opts, &preflight);
     if (err) {
         err = error_wrap(err, "Pre-flight checks failed");
         goto cleanup;
     }
 
     print_preflight_results(out, preflight);
+    print_reassignments(out, &reassigned);
 
     /* Check for errors (conflicts, permissions) */
     if (preflight->has_errors) {
@@ -1536,16 +1418,19 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
          * all-absent orphan set) — non-destructive, no consent needed. */
         bool needs_confirm = true;
 
-        if (to_deploy.count > 0 && removal_count > 0) {
+        size_t file_count = plan->files.pending.count;
+        size_t converge_count = plan->directories.pending.count;
+
+        if (file_count > 0 && removal_count > 0) {
             snprintf(
                 prompt, sizeof(prompt), "Deploy %zu file%s and remove %zu orphaned file%s?",
-                to_deploy.count, to_deploy.count == 1 ? "" : "s",
+                file_count, file_count == 1 ? "" : "s",
                 removal_count, removal_count == 1 ? "" : "s"
             );
-        } else if (to_deploy.count > 0) {
+        } else if (file_count > 0) {
             snprintf(
                 prompt, sizeof(prompt), "Deploy %zu file%s to filesystem?",
-                to_deploy.count, to_deploy.count == 1 ? "" : "s"
+                file_count, file_count == 1 ? "" : "s"
             );
         } else if (removal_count > 0) {
             snprintf(
@@ -1557,10 +1442,10 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
                 prompt, sizeof(prompt), "Prune %zu empty director%s?",
                 dir_count, dir_count == 1 ? "y" : "ies"
             );
-        } else if (to_converge.count > 0) {
+        } else if (converge_count > 0) {
             snprintf(
                 prompt, sizeof(prompt), "Update %zu tracked director%s?",
-                to_converge.count, to_converge.count == 1 ? "y" : "ies"
+                converge_count, converge_count == 1 ? "y" : "ies"
             );
         } else {
             needs_confirm = false;
@@ -1573,35 +1458,18 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         }
     }
 
-    /* Execute deployment when file or directory convergence pends.
-     * deploy_execute handles the files-only, dirs-only, and mixed cases —
-     * deploy_tracked_directories runs inside it, so a directory-only run
-     * must route through it too (to_deploy is files-only by construction). */
-    if (to_deploy.count > 0 || to_converge.count > 0) {
+    /* Execute the plan (files-only, directories-only, or mixed — one call).
+     * Reporting reads the result: outcomes, never plan counts. */
+    if (!deploy_plan_is_empty(plan)) {
         if (opts->dry_run) {
             output_print(
                 out, OUTPUT_VERBOSE, "\nDry-run mode - no files will be modified\n"
             );
-        } else if (to_deploy.count > 0) {
-            output_print(
-                out, OUTPUT_VERBOSE, "\nDeploying %zu divergent file%s...\n",
-                to_deploy.count, to_deploy.count == 1 ? "" : "s"
-            );
+        } else {
+            output_print(out, OUTPUT_VERBOSE, "\nExecuting deployment plan...\n");
         }
 
-        if (to_deploy.count == 0) {
-            /* Directory-only convergence — say so at normal level so the
-             * run isn't mute about the work it is doing. */
-            output_info(
-                out, OUTPUT_NORMAL, "%s %zu tracked director%s",
-                opts->dry_run ? "Would converge" : "Converging",
-                to_converge.count, to_converge.count == 1 ? "y" : "ies"
-            );
-        }
-
-        err = deploy_execute(
-            repo, ws, to_deploy, &deploy_opts, cache, &deploy_res
-        );
+        err = deploy_execute(repo, plan, &deploy_opts, cache, &deploy_res);
         if (err) {
             if (deploy_res) {
                 print_deploy_results(out, deploy_res, opts->dry_run);
@@ -1611,53 +1479,66 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         }
 
         print_deploy_results(out, deploy_res, opts->dry_run);
-
     } else {
-        /* No divergent files - workspace is clean */
-        output_print(
-            out, OUTPUT_VERBOSE,
-            "\nNo files need deployment (workspace is clean)\n"
-        );
+        output_print(out, OUTPUT_VERBOSE, "\nNo deployment work in scope\n");
+    }
 
-        /* Create empty deploy result for consistency */
-        deploy_res = calloc(1, sizeof(deploy_result_t));
-        if (!deploy_res) {
-            err = ERROR(ERR_MEMORY, "Failed to allocate deploy result");
-            goto cleanup;
+    /* Report exclusion statistics (shown regardless of deployment activity):
+     * work held back by -e, per kind — plan buckets for the active side,
+     * the orphan slice split by kind for the removal side. */
+    size_t excluded_orphan_files = 0;
+    size_t excluded_orphan_dirs = 0;
+    for (size_t i = 0; i < excluded_orphans.count; i++) {
+        if (excluded_orphans.entries[i]->item_kind == PATH_KIND_DIRECTORY) {
+            excluded_orphan_dirs++;
+        } else {
+            excluded_orphan_files++;
         }
     }
 
-    /* Report exclusion statistics (shown regardless of deployment activity) */
-    size_t total_excluded = excluded_deploy_count + excluded_orphan_count;
+    size_t total_excluded = plan->files.excluded.count + plan->directories.excluded.count +
+                            excluded_orphans.count;
     if (total_excluded > 0) {
         if (output_is_verbose(out)) {
-            /* Detailed breakdown */
             output_print(
-                out, OUTPUT_VERBOSE, "Skipped %zu file%s (--exclude):\n",
+                out, OUTPUT_VERBOSE, "Skipped %zu path%s (--exclude):\n",
                 total_excluded, total_excluded == 1 ? "" : "s"
             );
-            if (excluded_deploy_count > 0) {
+            if (plan->files.excluded.count > 0) {
                 output_print(
                     out, OUTPUT_VERBOSE, "  • %zu divergent file%s not deployed\n",
-                    excluded_deploy_count, excluded_deploy_count == 1 ? "" : "s"
+                    plan->files.excluded.count, plan->files.excluded.count == 1 ? "" : "s"
                 );
             }
-            if (excluded_orphan_count > 0) {
+            if (plan->directories.excluded.count > 0) {
+                output_print(
+                    out, OUTPUT_VERBOSE, "  • %zu tracked director%s not converged\n",
+                    plan->directories.excluded.count,
+                    plan->directories.excluded.count == 1 ? "y" : "ies"
+                );
+            }
+            if (excluded_orphan_files > 0) {
                 output_print(
                     out, OUTPUT_VERBOSE, "  • %zu orphaned file%s not removed\n",
-                    excluded_orphan_count, excluded_orphan_count == 1 ? "" : "s"
+                    excluded_orphan_files, excluded_orphan_files == 1 ? "" : "s"
+                );
+            }
+            if (excluded_orphan_dirs > 0) {
+                output_print(
+                    out, OUTPUT_VERBOSE, "  • %zu orphaned director%s not removed\n",
+                    excluded_orphan_dirs, excluded_orphan_dirs == 1 ? "y" : "ies"
                 );
             }
         } else {
-            /* Simple summary */
             output_styled(
-                out, OUTPUT_NORMAL, "Skipped {cyan}%zu{reset} file%s (--exclude)\n",
+                out, OUTPUT_NORMAL, "Skipped {cyan}%zu{reset} path%s (--exclude)\n",
                 total_excluded, total_excluded == 1 ? "" : "s"
             );
         }
     }
 
-    /* Save state (only if not dry-run) */
+    /* Record what happened (only if not dry-run): cleanup, anchors,
+     * witnesses, acknowledgements, then commit. */
     if (!opts->dry_run) {
         /* Prune orphaned files and remove from state (unless --keep-orphans)
          *
@@ -1984,7 +1865,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
          * Non-critical operation: deployment already succeeded physically, so
          * anchor advance failures are non-fatal warnings (preserve consistency).
          */
-        state_files_t deployed = deploy_res ? deploy_result_view(&deploy_res->deployed)
+        state_files_t deployed = deploy_res ? state_files_view(&deploy_res->deployed)
                                             : (state_files_t){ 0 };
         if (deployed.count > 0) {
             time_t now = time(NULL);
@@ -2024,12 +1905,13 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
 
         /* Advance the witness for directories this apply materialized
          *
-         * Sibling of the file anchor loop above. deploy_tracked_directories
-         * just created/confirmed the active tracked directories; the
-         * load-time flush only covered directories present at load, and
-         * these did not exist then. Presence is the witness; SQL enforces
-         * monotonicity, so this is idempotent and never regresses a stamp.
-         * Non-fatal on failure, mirroring anchor-advance failures. */
+         * Sibling of the file anchor loop above. deploy_execute just
+         * created/confirmed the planned directories (and, as parents of
+         * written files, possibly others); the load-time flush only
+         * covered directories present at load. Presence is the witness,
+         * so this walks the active slice rather than the result; SQL
+         * enforces monotonicity, so it is idempotent and never regresses
+         * a stamp. Non-fatal on failure, mirroring anchor-advance failures. */
         {
             state_directories_t dirs = workspace_directories(ws);
             time_t dir_now = time(NULL);
@@ -2058,45 +1940,10 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
             }
         }
 
-        /* Acknowledge profile reassignments (clear old_profile in state)
-         *
-         * Profile reassignment may or may not coincide with content divergence.
-         * When content also diverged, the file was redeployed above. Either way,
-         * clear the old_profile flag for in-scope items so the transition doesn't
-         * persist as stale state across future runs. */
-        size_t cleared = 0;
-        size_t all_count = 0;
-        const workspace_item_t *all_items = workspace_get_all_diverged(ws, &all_count);
-
-        for (size_t i = 0; i < all_count; i++) {
-            if (!all_items[i].profile_changed) {
-                continue;
-            }
-
-            if (!scope_accepts_entry(
-                scope, all_items[i].profile, all_items[i].storage_path, all_items[i].item_kind
-                )) {
-                continue;
-            }
-
-            error_t *clear_err = state_clear_old_profile(state, all_items[i].filesystem_path);
-            if (clear_err) {
-                output_warning(
-                    out, OUTPUT_NORMAL, "Failed to clear profile reassignment flag for %s: %s",
-                    all_items[i].filesystem_path, error_message(clear_err)
-                );
-                error_free(clear_err);
-                continue;
-            }
-            cleared++;
-        }
-
-        if (cleared > 0) {
-            output_styled(
-                out, OUTPUT_NORMAL, "Acknowledged {cyan}%zu{reset} profile reassignment%s\n",
-                cleared, cleared == 1 ? "" : "s"
-            );
-        }
+        /* Acknowledge profile reassignments (clear old_profile in state).
+         * When content also diverged the file was redeployed above; either
+         * way the transition must not persist across runs. */
+        acknowledge_reassignments(state, &reassigned, false, out);
 
         /* Commit state transaction (saves both deployment and cleanup state)
          *
@@ -2115,6 +1962,9 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
             err = error_wrap(err, "Failed to commit state changes");
             goto cleanup;
         }
+    } else {
+        /* Preview the bookkeeping the real run would do */
+        acknowledge_reassignments(state, &reassigned, true, out);
     }
 
     /* Execute post-apply hook */
@@ -2124,12 +1974,11 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     err = NULL;
 
 cleanup:
+    /* Result and plan buckets borrow rows from the workspace arena — free
+     * them before workspace_free. reassigned borrows into the diverged array. */
     if (deploy_res) deploy_result_free(deploy_res);
-    /* divergent_files backs to_deploy.entries and divergent_dirs backs
-     * to_converge.entries; freeing a buffer also drops its carrier's view.
-     * The pointed-to rows live in the workspace arena. */
-    ptr_array_deinit(&divergent_files);
-    ptr_array_deinit(&divergent_dirs);
+    if (plan) deploy_plan_free(plan);
+    ptr_array_deinit(&reassigned);
     if (cleanup_preflight) cleanup_preflight_result_free(cleanup_preflight);
     if (preflight) preflight_result_free(preflight);
     if (profiles_str) free(profiles_str);
@@ -2177,7 +2026,7 @@ static const args_opt_t apply_opts[] = {
     ARGS_APPEND(
         "e exclude",        "<pattern>",
         cmd_apply_options_t,exclude_patterns, exclude_count,
-        "Skip matching files (no deploy, no removal)"
+        "Skip matching paths (no deploy, no directory convergence, no removal)"
     ),
     ARGS_FLAG(
         "f force",
@@ -2229,8 +2078,9 @@ const args_command_t spec_apply = {
         "update the deployment state.\n",
     .notes       =
         "Exclusion Patterns:\n"
-        "  Excluded files are protected from both deployment and removal.\n"
-        "  Patterns follow gitignore glob syntax. Flag is repeatable.\n",
+        "  Excluded paths are protected from deployment, directory\n"
+        "  convergence and removal. Patterns follow gitignore glob syntax;\n"
+        "  a trailing slash restricts a pattern to directories. Repeatable.\n",
     .examples    =
         "  %s apply                            # Deploy all enabled profiles\n"
         "  %s apply --force                    # Force overwrite of modifications\n"

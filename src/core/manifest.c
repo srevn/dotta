@@ -954,7 +954,7 @@ static error_t *manifest_capture_row(
  *
  * The historical-diff path consumes a tree-built file slice that mirrors
  * the workspace's active slice (workspace_files) and apply's deploy result
- * (deploy_result_view). One carrier shape, three producers — a consumer
+ * (state_files_view). One carrier shape, three producers — a consumer
  * written against state_files_t composes with all of them.
  *
  * Implementation: delegates to precedence_view_load_tree to build a precedence

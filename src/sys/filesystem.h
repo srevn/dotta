@@ -398,14 +398,6 @@ error_t *fs_get_home(char **out);
 error_t *fs_expand_tilde(const char *path, char **out);
 
 /**
- * Check if path is writable
- *
- * @param path Path to check (must not be NULL)
- * @return true if path is writable (or parent is writable if doesn't exist)
- */
-bool fs_is_writable(const char *path);
-
-/**
  * Symlink operations
  */
 

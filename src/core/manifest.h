@@ -17,7 +17,7 @@
  *   - Tree loader: manifest_load_tree_files projects a single Git
  *     tree's files into the public state_files_t carrier. Used by the
  *     historical-diff path (cmd_diff). Mirrors workspace_files and
- *     deploy_result_view — one carrier shape, three producers.
+ *     state_files_view — one carrier shape, three producers.
  *
  * The precedence builder that powers every consistency-layer entry is
  * private to manifest.c (see precedence_view_t). It produces
@@ -699,7 +699,7 @@ error_t *manifest_sync_directories(
  * mount table, and optional per-tree metadata, produces a state_file_entry_t
  * row for every blob the tree exposes (sans repository metadata files —
  * .dottaignore, .bootstrap, .git/, .dotta/). Mirrors workspace_files and
- * deploy_result_view: one carrier shape, three producers.
+ * state_files_view: one carrier shape, three producers.
  *
  * Metadata, when supplied, is applied row-by-row in lockstep with the
  * tree walk — mode, owner, group, and encrypted are filled from the

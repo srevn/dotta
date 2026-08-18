@@ -60,8 +60,7 @@
  *   deployed to filesystem
  * - Directories (PATH_KIND_DIRECTORY): Metadata-only (mode/ownership,
  *   no content), tracked in profile metadata and in the tracked_directories
- *   state table; created and converged by apply via
- *   deploy_tracked_directories
+ *   state table; planned and converged by core/deploy on apply's behalf
  * - Use item_kind to distinguish between files and directories.
  *
  * Lifetime notes:

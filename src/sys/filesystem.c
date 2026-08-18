@@ -1283,43 +1283,6 @@ error_t *fs_expand_tilde(const char *path, char **out) {
     return err;
 }
 
-bool fs_is_writable(const char *path) {
-    if (!path || path[0] == '\0') {
-        return false;
-    }
-
-    if (fs_exists(path)) {
-        return access(path, W_OK) == 0;
-    }
-
-    /* Check parent directory - walk up until we find an existing directory */
-    char *check_path = NULL;
-    error_t *err = fs_get_parent_dir(path, &check_path);
-    if (err) {
-        error_free(err);
-        return false;
-    }
-
-    /* Walk up the directory tree until we find an existing directory */
-    while (check_path && !fs_exists(check_path)) {
-        char *parent = NULL;
-        err = fs_get_parent_dir(check_path, &parent);
-        if (err) {
-            error_free(err);
-            free(check_path);
-            return false;
-        }
-        free(check_path);
-        check_path = parent;
-    }
-
-    /* Check if the existing ancestor directory is writable */
-    bool writable = check_path && access(check_path, W_OK) == 0;
-    free(check_path);
-
-    return writable;
-}
-
 /**
  * Symlink operations
  */

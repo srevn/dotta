@@ -310,6 +310,30 @@ typedef struct {
 } state_directories_t;
 
 /**
+ * Project a ptr_array_t bucket of borrowed state rows as a typed slice
+ *
+ * Buckets filled by ptr_array_push(&bucket, row) hold `void *`; the cast
+ * layers const onto both pointer levels (T ** → const T *const *, the same
+ * rule workspace_files relies on). The view aliases the bucket's storage
+ * and is valid for the bucket's lifetime — deploy plans and results, and
+ * any other producer that accumulates rows, project through these two so
+ * every consumer reads one carrier shape.
+ */
+static inline state_files_t state_files_view(const ptr_array_t *bucket) {
+    return (state_files_t){
+        .entries = (const state_file_entry_t *const *) bucket->items,
+        .count = bucket->count,
+    };
+}
+
+static inline state_directories_t state_directories_view(const ptr_array_t *bucket) {
+    return (state_directories_t){
+        .entries = (const state_directory_entry_t *const *) bucket->items,
+        .count = bucket->count,
+    };
+}
+
+/**
  * Enabled profile entry
  *
  * One row from the enabled_profiles table, materialized as an in-memory record.

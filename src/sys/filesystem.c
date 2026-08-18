@@ -609,8 +609,7 @@ error_t *fs_create_dir_with_ownership(
     const char *path,
     mode_t mode,
     uid_t uid,
-    gid_t gid,
-    bool parents
+    gid_t gid
 ) {
     RETURN_IF_ERROR(validate_path(path));
 
@@ -641,26 +640,6 @@ error_t *fs_create_dir_with_ownership(
             ERR_FS, "Failed to open directory '%s': %s",
             path, strerror(errno)
         );
-    }
-
-    /* Create parent directories if requested */
-    if (parents) {
-        char *parent = NULL;
-        error_t *err = fs_get_parent_dir(path, &parent);
-        if (err) {
-            return err;
-        }
-
-        if (parent && !fs_is_directory(parent)) {
-            /* Use default 0755 for parent directories */
-            err = fs_create_dir(parent, true);
-            free(parent);
-            if (err) {
-                return err;
-            }
-        } else {
-            free(parent);
-        }
     }
 
     /* Create directory with restrictive initial mode for security

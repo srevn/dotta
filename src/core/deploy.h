@@ -188,9 +188,16 @@ error_t *deploy_preflight(
  * Directories first (a planned directory may be the parent of a planned
  * file, and under --force a squatting symlink must be gone before a file
  * is written beneath it), then files. Every planned item is acted on;
- * nothing outside the plan is touched. Each executor decides *how* from
+ * nothing outside the plan is *fixed*. Each executor decides *how* from
  * a fresh look at disk (a prompt may have sat between plan and
  * execution) and mutates nothing in dry-run.
+ *
+ * Missing parents are the mechanics of landing a planned path, created
+ * top-down as part of its write: a tracked directory (any profile, in
+ * scope or not) with its tracked mode and ownership, anything else 0755
+ * owned like the planned path. Silent, never counted as converged — the
+ * caller's presence witness covers them. The workspace is consulted for
+ * that lookup only; the plan alone decides what is acted on.
  *
  * Fail-stop: on the first error the partial result is returned in *out
  * alongside the wrapped error.
@@ -200,6 +207,7 @@ error_t *deploy_preflight(
  * (anchors, witnesses) are the caller's, after deployment succeeds.
  *
  * @param repo Repository (must not be NULL)
+ * @param ws Workspace the plan was built from (must not be NULL)
  * @param plan Deployment plan (must not be NULL)
  * @param opts Deployment options (must not be NULL)
  * @param cache Content cache for batch operations (must not be NULL)
@@ -208,6 +216,7 @@ error_t *deploy_preflight(
  */
 error_t *deploy_execute(
     git_repository *repo,
+    const workspace_t *ws,
     const deploy_plan_t *plan,
     const deploy_options_t *opts,
     content_cache_t *cache,

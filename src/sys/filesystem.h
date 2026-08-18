@@ -177,13 +177,14 @@ error_t *fs_create_dir_with_mode(const char *path, mode_t mode, bool parents);
  * - If directory doesn't exist: creates with atomic ownership + mode
  * - If directory exists: updates ownership + mode atomically
  * - Use uid=-1 or gid=-1 to skip ownership change
- * - Parent directories created with default ownership (0755)
+ * - The parent must exist: this primitive never invents attributes for
+ *   ancestors — the caller decides those (core/deploy materializes them
+ *   with tracked metadata or the target's ownership)
  *
  * @param path Directory path (must not be NULL)
  * @param mode Permission mode for target directory (e.g., 0700, 0755)
  * @param uid Target UID for directory ownership (use -1 to preserve)
  * @param gid Target GID for directory ownership (use -1 to preserve)
- * @param parents Create parent directories if true
  * @return Error or NULL on success
  *
  * Errors:
@@ -196,8 +197,7 @@ error_t *fs_create_dir_with_ownership(
     const char *path,
     mode_t mode,
     uid_t uid,
-    gid_t gid,
-    bool parents
+    gid_t gid
 );
 
 /**

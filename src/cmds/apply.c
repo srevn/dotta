@@ -1469,7 +1469,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
             output_print(out, OUTPUT_VERBOSE, "\nExecuting deployment plan...\n");
         }
 
-        err = deploy_execute(repo, plan, &deploy_opts, cache, &deploy_res);
+        err = deploy_execute(repo, ws, plan, &deploy_opts, cache, &deploy_res);
         if (err) {
             if (deploy_res) {
                 print_deploy_results(out, deploy_res, opts->dry_run);

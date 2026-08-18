@@ -37,10 +37,11 @@ typedef struct scope scope_t;
  *
  * Three findings, three remedies:
  *   conflicts          modified locally, or wrong type at the path — --force
- *   blocked            a planned file's nearest existing ancestor is not a
- *                      directory and is not itself planned (a planned one
- *                      is judged by its own conflict entry) — bring the
- *                      ancestor into scope with --force, or fix by hand
+ *   blocked            an absent planned path's nearest existing ancestor
+ *                      is not a directory and is not itself planned (a
+ *                      planned one is judged by its own conflict entry) —
+ *                      bring the ancestor into scope with --force, or fix
+ *                      by hand
  *   permission_errors  not writable — privileges
  */
 typedef struct {
@@ -160,11 +161,12 @@ static inline bool deploy_plan_is_empty(const deploy_plan_t *plan) {
  * Maps the workspace's divergence verdicts for the planned rows to
  * blocking decisions:
  * - Files: content or type divergence blocks unless --force (STALE-only
- *   content divergence is safe to overwrite and never blocks); a
- *   non-directory ancestor that is not a planned directory blocks; a
- *   path that is not writable blocks.
+ *   content divergence is safe to overwrite and never blocks); an
+ *   existing path that is not writable blocks.
  * - Directories: type divergence (a non-directory at the tracked path)
  *   blocks unless --force.
+ * - Both kinds, when absent: the nearest existing ancestor must be a
+ *   directory (or a planned one) and writable.
  *
  * Only planned rows are consulted — a directory that will not be touched
  * cannot block.

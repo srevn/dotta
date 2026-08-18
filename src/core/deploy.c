@@ -234,11 +234,63 @@ static bool directory_is_pending(const deploy_plan_t *plan, const char *path) {
 }
 
 /**
+ * Where will an absent planned path land? Beneath its nearest existing
+ * ancestor: a non-directory there blocks the write — unless it is a
+ * planned directory, whose own conflict entry already describes the
+ * situation (and which --force replaces before anything is written
+ * beneath it). An out-of-scope squatter is never touched (Coherent
+ * Scope), so the path cannot land: say so now, not at write time. A
+ * directory ancestor must be writable.
+ */
+static error_t *check_landing(
+    const deploy_plan_t *plan,
+    const char *path,
+    preflight_result_t *result
+) {
+    char *scratch = strdup(path);
+    if (!scratch) {
+        return ERROR(ERR_MEMORY, "Failed to copy path for ancestor check");
+    }
+
+    error_t *err = NULL;
+    struct stat st;
+    size_t k;
+    if (!nearest_ancestor(scratch, &k, &st)) {
+        goto cleanup;                           /* let the write surface the errno */
+    }
+    scratch[k ? k : 1] = '\0';                  /* the ancestor, on its own */
+
+    if (!S_ISDIR(st.st_mode)) {
+        if (!directory_is_pending(plan, scratch)) {
+            char *entry = str_format("%s (%s is not a directory)", path, scratch);
+            if (!entry) {
+                err = ERROR(ERR_MEMORY, "Failed to format blocked entry");
+                goto cleanup;
+            }
+            err = string_array_push_owned(result->blocked, entry);
+            if (err) {
+                free(entry);
+                goto cleanup;
+            }
+            result->has_errors = true;
+        }
+    } else if (access(scratch, W_OK) != 0) {
+        err = string_array_push(result->permission_errors, path);
+        if (err) goto cleanup;
+        result->has_errors = true;
+    }
+
+cleanup:
+    free(scratch);
+    return err;
+}
+
+/**
  * Run pre-flight checks over the plan
  *
  * Workspace = analysis layer, preflight = decision layer, execute =
  * execution layer. Divergence verdicts are O(1) index probes; the
- * ancestor and writability checks are filesystem-level.
+ * landing and writability checks are filesystem-level.
  */
 error_t *deploy_preflight(
     const workspace_t *ws,
@@ -265,7 +317,6 @@ error_t *deploy_preflight(
     }
 
     error_t *err = NULL;
-    char *scratch = NULL;
 
     state_files_t files = state_files_view(&plan->files.pending);
     for (size_t i = 0; i < files.count; i++) {
@@ -283,76 +334,49 @@ error_t *deploy_preflight(
             result->has_errors = true;
         }
 
-        /* Where will the write land? An existing path (any type; stat
-         * follows symlinks, so a broken link counts as absent) must itself
-         * be writable. An absent path is written beneath its nearest
-         * existing ancestor: a non-directory there blocks the write —
-         * unless that ancestor is a planned directory, whose own conflict
-         * entry already describes the situation (and which --force replaces
-         * before any file is written). An out-of-scope squatter is never
-         * touched (Coherent Scope), so the file cannot land: say so now, not
-         * at write time. A directory ancestor must be writable. */
+        /* An existing path (any type; stat follows symlinks, so a broken
+         * link counts as absent) must itself be writable; an absent one
+         * must be able to land. */
         struct stat st;
-        const char *landing = path;
-        if (stat(path, &st) != 0) {
-            free(scratch);
-            scratch = strdup(path);
-            if (!scratch) {
-                err = ERROR(ERR_MEMORY, "Failed to copy path for ancestor check");
-                goto fail;
+        if (stat(path, &st) == 0) {
+            if (access(path, W_OK) != 0) {
+                err = string_array_push(result->permission_errors, path);
+                if (err) goto fail;
+                result->has_errors = true;
             }
-            size_t k;
-            if (!nearest_ancestor(scratch, &k, &st)) {
-                continue;                       /* let the write surface the errno */
-            }
-            scratch[k ? k : 1] = '\0';          /* the ancestor, on its own */
-            landing = scratch;
-            if (!S_ISDIR(st.st_mode)) {
-                if (!directory_is_pending(plan, landing)) {
-                    char *entry = str_format("%s (%s is not a directory)", path, landing);
-                    if (!entry) {
-                        err = ERROR(ERR_MEMORY, "Failed to format blocked entry");
-                        goto fail;
-                    }
-                    err = string_array_push_owned(result->blocked, entry);
-                    if (err) {
-                        free(entry);
-                        goto fail;
-                    }
-                    result->has_errors = true;
-                }
-                continue;
-            }
-        }
-
-        if (access(landing, W_OK) != 0) {
-            err = string_array_push(result->permission_errors, path);
+        } else {
+            err = check_landing(plan, path, result);
             if (err) goto fail;
-            result->has_errors = true;
         }
     }
 
-    /* A planned directory squatted by a non-directory (workspace probes
-     * with lstat, so a symlink to a directory counts) blocks unless --force
-     * lets deploy_directory replace it. Only planned directories are asked. */
     state_directories_t dirs = state_directories_view(&plan->directories.pending);
     for (size_t i = 0; i < dirs.count; i++) {
         const char *path = dirs.entries[i]->filesystem_path;
         const workspace_item_t *item = workspace_get_item(ws, path);
 
+        /* A planned directory squatted by a non-directory (workspace probes
+         * with lstat, so a symlink to a directory counts) blocks unless
+         * --force lets deploy_directory replace it. */
         if (item && !opts->force && (item->divergence & DIVERGENCE_TYPE)) {
             err = string_array_push(result->conflicts, path);
             if (err) goto fail;
             result->has_errors = true;
         }
+
+        /* An existing directory is fixed in place and a squatter is the
+         * conflict above; only an absent one must be able to land. */
+        struct stat st;
+        if (stat(path, &st) != 0) {
+            err = check_landing(plan, path, result);
+            if (err) goto fail;
+        }
     }
 
-    free(scratch);
     *out = result;
     return NULL;
 
 fail:
-    free(scratch);
     preflight_result_free(result);
     return error_wrap(err, "Failed to record preflight finding");
 }
@@ -928,7 +952,10 @@ static error_t *deploy_directory(
                 path
             );
         }
-    } else if (errno == ENOENT) {
+    } else if (errno == ENOENT || errno == ENOTDIR) {
+        /* Absent — or beneath a non-directory, which preflight blocked
+         * when unplanned and the directory pass replaces when planned
+         * (prefix order); one still there is ensure_parents' named error. */
         how = DIR_CREATE;
     } else {
         return ERROR(ERR_FS, "Failed to stat '%s': %s", path, strerror(errno));

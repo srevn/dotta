@@ -1089,7 +1089,10 @@ error_t *state_witness_directory(
  * observed_at == 0 records "no filesystem obligation": dotta never
  * lstat-confirmed the path on disk while the row was in scope, so there
  * is nothing to delete — orphan reporting and cleanup would both be
- * describing work that does not exist. Two one-shot DELETEs:
+ * describing work that does not exist. Without this reclaim the row also
+ * leaks: every downstream deletion path is driven by a filesystem effect
+ * the row does not have, so nothing else would ever retire it. Two
+ * one-shot DELETEs:
  *
  *   DELETE FROM virtual_manifest    WHERE state != 'active' AND observed_at = 0;
  *   DELETE FROM tracked_directories WHERE state != 'active' AND observed_at = 0;

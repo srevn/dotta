@@ -2896,12 +2896,8 @@ static error_t *manifest_sync_directories(
 
         /* Project each directory: one UPSERT (re)activates the row under
          * its current owner and refreshes metadata; the SQL preserves any
-         * existing witness.
-         *
-         * directory_entry_from_metadata sets *state_dir = NULL on the
-         * custom/-without-binding case (silent skip); any other failure
-         * propagates.
-         */
+         * existing witness. directory_entry_from_metadata treats a missing
+         * custom/ binding as a hard error, so success implies a row. */
         for (size_t j = 0; j < dir_count; j++) {
             state_directory_entry_t *state_dir = NULL;
 
@@ -2916,7 +2912,6 @@ static error_t *manifest_sync_directories(
                 );
                 break;
             }
-            if (!state_dir) continue;  /* No binding for custom/ on this host. */
 
             /* Scope-entry observation probe — mirror of manifest_project_row's
              * lstat (manifest_capture_row). Success of any type counts: a

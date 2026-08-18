@@ -525,15 +525,32 @@ static error_t *analyze_file_divergence(
     bool on_filesystem;
 
     if (lstat(fs_path, &initial_stat) != 0) {
-        if (errno == ENOENT) {
-            on_filesystem = false;
-            memset(&initial_stat, 0, sizeof(initial_stat));
-        } else {
-            return ERROR(
-                ERR_FS, "Failed to stat '%s': %s", fs_path,
-                strerror(errno)
+        if (errno != ENOENT) {
+            /* Inaccessible, not absent (EACCES, ELOOP, ENOTDIR, EIO).
+             * Same policy as the orphan path below: assume the path is
+             * there and record the uncertainty, rather than failing the
+             * load and taking every other managed path down with one
+             * unreadable one.
+             *
+             * DEPLOYED is the load-bearing half — absence must never be
+             * inferred from a failure to look, or update commits a
+             * deletion that never happened. UNVERIFIED keeps consumers
+             * conservative: apply retries the write and surfaces the real
+             * errno, safety's CANNOT_VERIFY gate blocks removal.
+             *
+             * Returns here because every phase below needs a valid stat. */
+            return workspace_add_diverged(
+                ws, fs_path, storage_path, profile, row->old_profile,
+                WORKSPACE_STATE_DEPLOYED, DIVERGENCE_UNVERIFIED,
+                WORKSPACE_ITEM_FILE,
+                true,                      /* on_filesystem (assumed present) */
+                true,                      /* profile_enabled */
+                row->old_profile != NULL   /* profile_changed */
             );
         }
+
+        on_filesystem = false;
+        memset(&initial_stat, 0, sizeof(initial_stat));
     } else {
         on_filesystem = true;
     }
@@ -1828,6 +1845,7 @@ static error_t *analyze_untracked_files(
  * - DELETED state: Directory removed from filesystem
  * - DIVERGENCE_MODE: Directory permissions changed
  * - DIVERGENCE_OWNERSHIP: Directory owner/group changed (requires root)
+ * - DIVERGENCE_UNVERIFIED: Directory could not be stat'd (inaccessible)
  *
  * ARCHITECTURE: Uses state (VWD) instead of metadata (Git) for directory
  * resolution. State contains filesystem_path already resolved with target,
@@ -1862,6 +1880,7 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
          *
          * Use lstat() for both existence and type checking:
          * - ENOENT: Directory truly deleted
+         * - Other errno: Inaccessible — state undeterminable, not absent
          * - Success + !S_ISDIR: Type changed (file, symlink - including broken ones)
          * - Success + S_ISDIR: Actual directory, check metadata  */
         struct stat dir_stat;
@@ -1894,12 +1913,31 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
                 continue;  /* Successfully recorded, check next directory */
             }
 
-            /* Stat failed for other reason: race condition or permission issue */
-            fprintf(
-                stderr, "warning: failed to stat directory '%s': %s\n",
-                filesystem_path, strerror(errno)
+            /* Inaccessible, not absent: record the uncertainty rather
+             * than dropping the row, which left status reporting a clean
+             * workspace for a path it had just failed to read. Same
+             * three-way policy as the file rows. */
+            err = workspace_add_diverged(
+                ws,
+                filesystem_path,
+                storage_path,
+                profile,
+                NULL,                     /* No old_profile for directories */
+                WORKSPACE_STATE_DEPLOYED,
+                DIVERGENCE_UNVERIFIED,    /* Divergence: state undeterminable */
+                WORKSPACE_ITEM_DIRECTORY,
+                true,                     /* on_filesystem (assumed present) */
+                true,                     /* profile_enabled */
+                false                     /* No profile change */
             );
-            continue;  /* Non-fatal, skip this directory */
+
+            if (err) {
+                return error_wrap(
+                    err, "Failed to record unverifiable directory '%s'",
+                    filesystem_path
+                );
+            }
+            continue;  /* Successfully recorded, check next directory */
         }
 
         /* Presence flush accumulator — mirror of the file side's CMP_EQUAL

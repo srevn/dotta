@@ -697,8 +697,8 @@ static error_t *ensure_complete_apply_privileges(
  * - Divergence dimension (secondary): For paths on disk, what's wrong?
  *
  * Directories need no kind-specific arm: workspace analysis tags them only
- * with MODE/OWNERSHIP/TYPE (never content, encryption, or stale), so the
- * DEPLOYED arm's mask already covers every directory divergence.
+ * with MODE/OWNERSHIP/TYPE/UNVERIFIED (never content, encryption, or stale),
+ * so the DEPLOYED arm's mask already covers every directory divergence.
  *
  * @param ws_item Workspace item from divergence analysis (can be NULL)
  * @return true if the item needs deployment, false if clean

@@ -151,8 +151,7 @@ static void print_manifest_disable_stats(
 ) {
     if (!stats) return;
 
-    size_t total = stats->files_reassigned + stats->files_orphaned
-                 + stats->files_reclaimed;
+    size_t total = stats->files_reassigned + stats->files_orphaned + stats->files_reclaimed;
     if (total == 0) return;
 
     if (output_is_verbose(out)) {

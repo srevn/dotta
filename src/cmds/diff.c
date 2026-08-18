@@ -1296,7 +1296,7 @@ static error_t *diff_workspace(
      * (self-healing optimization). Seeds the fast path for subsequent
      * status/apply calls. Non-fatal on failure — diff still renders correctly,
      * just won't seed the fast path. */
-    error_t *flush_err = workspace_flush_anchor_updates(ws);
+    error_t *flush_err = workspace_flush_updates(ws);
     if (flush_err) {
         error_free(flush_err);
     }

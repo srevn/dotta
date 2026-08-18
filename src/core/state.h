@@ -88,9 +88,9 @@ static inline git_filemode_t state_type_to_git_filemode(state_file_type_t type) 
 }
 
 /**
- * Stat cache — fast-path witness of a deployment anchor
+ * Stat cache — fast-path field of a deployment anchor
  *
- * Witness field of a deployment_anchor_t: the (mtime, size, ino) triple
+ * Field of a deployment_anchor_t: the (mtime, size, ino) triple
  * captured at the moment dotta confirmed disk content equals
  * anchor.blob_oid. If a later live stat matches all three fields, disk
  * is still equal to anchor.blob_oid without re-hashing — the same
@@ -128,7 +128,7 @@ static inline stat_cache_t stat_cache_from_stat(const struct stat *st) {
  * Deployment anchor — three orthogonal signals about a managed path
  *
  * Three signals, three write rules:
- *   - blob_oid + stat : content-verified witness. Advanced only after
+ *   - blob_oid + stat : content-verified pair. Advanced only after
  *     disk-matches-blob verification (slow-path CMP_EQUAL, apply deploy,
  *     adoption, add, update). Zero blob_oid is rejected by
  *     state_update_anchor; preserve-on-zero-sentinel on UPSERT.
@@ -145,15 +145,15 @@ static inline stat_cache_t stat_cache_from_stat(const struct stat *st) {
  * Invariants:
  *   - blob_oid is non-zero iff dotta has at some point confirmed disk
  *     content matched that blob. Zero means "never confirmed."
- *   - stat matching live stat is a fast-path witness that disk still
+ *   - stat matching live stat is fast-path proof that disk still
  *     equals blob_oid.
  *   - blob_oid ≠ virtual_manifest.blob_oid iff the Git-expected value
  *     has advanced past the last disk confirmation — i.e., stale.
  *   - observed_at is zero iff dotta has never lstat-confirmed the path
  *     on disk in scope (ghost file); any non-zero value is the earliest
- *     observation time and never regresses.
- *     tracked_directories.observed_at carries the identical witness
- *     semantic for directories (see state_directory_entry_t).
+ *     observation time and never regresses. This is the anchor's witness
+ *     field; a directory's entire confirmed-disk record is that same
+ *     witness (see state_directory_entry_t).
  *
  * Classifier reads (workspace.c analyze_file_divergence and the
  * encryption-policy classifier):
@@ -172,7 +172,7 @@ typedef struct {
     git_oid blob_oid;         /* Content-confirmed blob (zero = never confirmed) */
     time_t deployed_at;       /* Last active-ownership event (advances; 0 = never) */
     time_t observed_at;       /* First lstat-observation in scope (monotonic once set; 0 = never) */
-    stat_cache_t stat;        /* Fast-path witness, bound to blob_oid */
+    stat_cache_t stat;        /* Fast-path stat triple, bound to blob_oid */
 } deployment_anchor_t;
 
 #define DEPLOYMENT_ANCHOR_UNSET ((deployment_anchor_t){0})
@@ -185,7 +185,7 @@ typedef struct {
  * blob_oid — this is an anchor advance, not a probe.
  *
  * If lstat fails (rare: file removed in the small window between content
- * confirmation and anchor recording), the stat witness is left zeroed. The
+ * confirmation and anchor recording), the stat triple is left zeroed. The
  * blob_oid and deployed_at fields are still populated so the row's anchor
  * advances correctly; the fast path just can't short-circuit on next read
  * and will fall through to the slow path.
@@ -274,12 +274,13 @@ typedef struct {
 /**
  * State directory entry
  *
- * observed_at carries the identical witness semantic as the file anchor's
- * observed_at (see deployment_anchor_t above): zero means dotta has never
- * lstat-confirmed the path on disk in scope (ghost directory); any
- * non-zero value is the earliest observation time and never regresses
- * (SQL-enforced monotonic in both writers: the state_add_directory UPSERT
- * and state_witness_directory).
+ * observed_at is the directory's witness — the whole of its confirmed-disk
+ * record, where a file carries a four-signal deployment_anchor_t. The
+ * semantic is identical to that anchor's observed_at field: zero means
+ * dotta has never lstat-confirmed the path on disk in scope (ghost
+ * directory); any non-zero value is the earliest observation time and
+ * never regresses (SQL-enforced monotonic in both writers: the
+ * state_add_directory UPSERT and state_update_witness).
  */
 typedef struct {
     char *filesystem_path;    /* Deployed path (PRIMARY KEY, e.g., /home/user/.config/fish) */
@@ -411,7 +412,7 @@ void state_rollback(state_t *state);
  * Returns true if BEGIN IMMEDIATE has been executed and not yet
  * committed or rolled back. Used by code paths that may run under
  * either acquisition shape (manifest_apply_scope,
- * workspace_flush_anchor_updates, ...) to decide whether to start
+ * workspace_flush_updates, ...) to decide whether to start
  * their own scoped transaction or piggyback on the caller's.
  *
  * @param state State handle (must not be NULL)
@@ -1065,19 +1066,20 @@ error_t *state_add_directory(
 );
 
 /**
- * Record first observation of a tracked directory
+ * Advance a tracked directory's witness
  *
- * The directory mirror of the anchor-advance witness channel. Monotonicity
- * lives in the WHERE clause (observed_at = 0), not in C: a row already
- * witnessed is untouched, and a missing row is a no-op (mirrors
- * state_update_anchor's not-found-is-OK contract).
+ * Directory mirror of state_update_anchor: a directory's confirmed-disk
+ * record is the witness alone (observed_at), so this writes one column
+ * where the anchor writes four. Monotonicity lives in the WHERE clause
+ * (observed_at = 0), not in C: a row already witnessed is untouched, and
+ * a missing row is a no-op (same not-found-is-OK contract).
  *
  * @param state State (must not be NULL, must have active transaction)
  * @param filesystem_path Directory path (must not be NULL)
  * @param observed_at Observation timestamp (must be > 0)
  * @return Error or NULL on success
  */
-error_t *state_witness_directory(
+error_t *state_update_witness(
     state_t *state,
     const char *filesystem_path,
     time_t observed_at

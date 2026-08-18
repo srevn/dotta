@@ -1915,7 +1915,7 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
      * Files actually updated by this command get their anchor advanced
      * separately inside update_manifest_after_update(); this flush covers the
      * clean files the analysis verified but didn't modify. */
-    error_t *flush_err = workspace_flush_anchor_updates(ws);
+    error_t *flush_err = workspace_flush_updates(ws);
     if (flush_err) {
         error_free(flush_err);
     }

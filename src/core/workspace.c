@@ -46,11 +46,11 @@
  *
  * Accumulated during analyze_file_divergence() when the slow path confirms
  * CMP_EQUAL. The verified (blob_oid, stat) pair should be persisted so the
- * next run can both short-circuit via the fast-path stat witness and, if
+ * next run can both short-circuit via the fast-path stat and, if
  * Git advances blob_oid in the meantime, classify the file as stale from
  * the fast path instead of re-hashing.
  *
- * blob_oid is carried alongside stat because the anchor ties its witness to
+ * blob_oid is carried alongside stat because the anchor ties that stat to
  * a specific blob — a stat triple without a blob pointer is meaningless.
  *
  * The row pointer is borrowed from ws->active_files (workspace lifetime).
@@ -61,7 +61,7 @@
 typedef struct {
     state_file_entry_t *row;         /* Active row this update targets (borrowed) */
     git_oid blob_oid;                /* Blob dotta just verified disk matches */
-    stat_cache_t stat;               /* Captured stat triple (fast-path witness) */
+    stat_cache_t stat;               /* Captured stat triple (fast-path proof) */
 } anchor_update_t;
 
 /**
@@ -91,10 +91,16 @@ struct workspace {
     size_t orphan_file_count;                    /* Number of orphan files */
 
     /* Active in-scope directory slice.
-     * Pointers borrow into the arena snapshot returned by state_get_all_directories. */
-    const state_directory_entry_t **active_dirs; /* Arena-borrowed */
+     *
+     * Mirror of the active file slice: a pointer array into the arena
+     * snapshot returned by state_get_all_directories at load time. Pointers
+     * are mutable to permit in-place witness patches via
+     * workspace_advance_witness; external accessors cast to const. Storage
+     * is stable — no realloc during workspace lifetime — so active_dir_index
+     * can store row pointers directly. */
+    state_directory_entry_t **active_dirs;       /* Active rows (mutable; arena-allocated) */
     size_t active_dir_count;                     /* Number of active directories */
-    hashmap_t *active_dir_index;                 /* fs_path → row; heap-allocated */
+    hashmap_t *active_dir_index;                 /* fs_path → state_directory_entry_t * (heap-allocated) */
 
     /* Orphan directory slice (out-of-scope or terminal lifecycle).
      * Mirror of the active dir slice — pointers borrow into the same arena snapshot. */
@@ -126,13 +132,14 @@ struct workspace {
     size_t anchor_update_count;                  /* Number of pending updates */
     size_t anchor_update_capacity;               /* Allocated capacity of updates array */
 
-    /* Directory witnesses accumulated during directory analysis.
-     * Rows borrowed from ws->active_dirs; queued when an lstat observed a
-     * path whose row carries no witness yet. Flushed alongside the anchor
-     * updates. */
-    const state_directory_entry_t **pending_dir_witnesses; /* Owned array of borrowed rows */
-    size_t pending_dir_witness_count;
-    size_t pending_dir_witness_capacity;
+    /* Witness updates accumulated during directory analysis.
+     *
+     * Directory counterpart of anchor_updates. A witness advance needs only
+     * the row — the timestamp is the flush's; an anchor advance also carries
+     * the blob and stat it confirmed, hence the richer element type above. */
+    state_directory_entry_t **witness_updates;   /* Rows borrowed from ws->active_dirs (array owned) */
+    size_t witness_update_count;                 /* Number of pending updates */
+    size_t witness_update_capacity;              /* Allocated capacity of updates array */
 
     /* Status cache */
     workspace_status_t status;                   /* Cached cleanliness assessment */
@@ -369,9 +376,9 @@ static error_t *workspace_add_diverged(
  * Record an anchor advance for later flushing
  *
  * Called from analyze_file_divergence() when the slow path confirms CMP_EQUAL.
- * Accumulates the (blob_oid, stat) pair so workspace_flush_anchor_updates() can
+ * Accumulates the (blob_oid, stat) pair so workspace_flush_updates() can
  * persist it via state_update_anchor(). The blob_oid is required because the
- * anchor binds its fast-path witness to a specific blob.
+ * anchor binds its fast-path stat to a specific blob.
  *
  * OOM asymmetry — returns void on realloc failure. Every other path in
  * workspace analysis propagates ERR_MEMORY; this one deliberately does not.
@@ -421,35 +428,41 @@ static void workspace_record_anchor_update(
 }
 
 /**
- * Queue a first-observation witness for a tracked directory
+ * Record a witness advance for later flushing
  *
  * Directory sibling of workspace_record_anchor_update: analysis observed
- * the path on disk but the row carries no witness. The flush persists via
- * state_witness_directory (monotonic in SQL) and patches the snapshot row.
- * Allocation failure silently drops the update — a lost witness only
- * defers the stamp to the next observation event (probe, flush, apply).
+ * the path on disk but the row carries no witness. Only the row is
+ * accumulated — the observation timestamp is the flush's.
+ *
+ * Same OOM asymmetry as the anchor recorder, for the same reason: a
+ * dropped witness costs no correctness, only a deferral to the next
+ * observation event (projection probe, next flush, apply's post-deploy
+ * pass), each of which re-derives it from a live lstat.
+ *
+ * @param ws Workspace (must not be NULL)
+ * @param row Active row whose witness should advance (borrowed; workspace lifetime)
  */
-static void workspace_record_dir_witness(
+static void workspace_record_witness_update(
     workspace_t *ws,
-    const state_directory_entry_t *row
+    state_directory_entry_t *row
 ) {
     if (!ws || !row) return;
 
-    if (ws->pending_dir_witness_count == ws->pending_dir_witness_capacity) {
-        size_t new_cap = ws->pending_dir_witness_capacity
-                       ? ws->pending_dir_witness_capacity * 2 : 16;
+    if (ws->witness_update_count >= ws->witness_update_capacity) {
+        size_t new_cap = ws->witness_update_capacity
+                       ? ws->witness_update_capacity * 2 : 16;
 
-        const state_directory_entry_t **new_arr = realloc(
-            (void *) ws->pending_dir_witnesses,
+        state_directory_entry_t **new_arr = realloc(
+            ws->witness_updates,
             new_cap * sizeof(*new_arr)
         );
         if (!new_arr) return;
 
-        ws->pending_dir_witnesses = new_arr;
-        ws->pending_dir_witness_capacity = new_cap;
+        ws->witness_updates = new_arr;
+        ws->witness_update_capacity = new_cap;
     }
 
-    ws->pending_dir_witnesses[ws->pending_dir_witness_count++] = row;
+    ws->witness_updates[ws->witness_update_count++] = row;
 }
 
 /**
@@ -578,7 +591,7 @@ static error_t *analyze_file_divergence(
          *
          * The anchor is advanced only by state_update_anchor() after dotta
          * has verified disk content. The UPSERT never clobbers it. So a
-         * stat match is a cryptographically-grade witness that disk still
+         * stat match is a cryptographically-grade proof that disk still
          * equals anchor.blob_oid — no re-hash needed.
          *
          * Cross-check anchor.blob_oid against the Git-expected blob_oid
@@ -591,7 +604,7 @@ static error_t *analyze_file_divergence(
          * This is the key Stage-A win: STALE is tagged directly from the
          * fast path, without loading blobs or hashing. The slow-path
          * straggler case (touch(1) / editor rename-write invalidated the
-         * stat witness) is still handled by Phase 3. */
+         * stat triple) is still handled by Phase 3. */
         const deployment_anchor_t *anchor = &row->anchor;
         if (anchor->stat.mtime != 0
             && anchor->stat.mtime == (int64_t) initial_stat.st_mtime
@@ -772,7 +785,7 @@ static error_t *analyze_file_divergence(
      * files. observed_at is stamped the first time dotta lstat-confirms
      * the path on disk in scope. Writers:
      *   - manifest_project_row INSERT path (scope-entry observation).
-     *   - state_update_anchor (every witness/ownership advance — apply
+     *   - state_update_anchor (every observation/ownership advance — apply
      *     deploy, adoption, add, update, CMP_EQUAL flush).
      * All writes go through the SQL CASE that preserves the first
      * non-zero value, so observed_at is monotonic once set.
@@ -812,9 +825,9 @@ static error_t *analyze_file_divergence(
     /* PHASE 3: Staleness flag (slow-path straggler)
      *
      * The fast path in Phase 1 already tagged DIVERGENCE_STALE for the common
-     * case where the anchor's stat witness is still valid (disk untouched since
+     * case where the anchor's stat triple is still valid (disk untouched since
      * dotta last confirmed it). This phase handles the slow-path straggler:
-     * the stat witness was invalidated (touch(1), editor rename-write, fresh
+     * the stat triple was invalidated (touch(1), editor rename-write, fresh
      * checkout) but disk content may still match the blob dotta last deployed.
      *
      * Source of truth: the persistent deployment anchor (row->anchor),
@@ -1320,7 +1333,7 @@ static error_t *workspace_partition_directories(workspace_t *ws) {
         return NULL;  /* active_dirs / orphan_dirs / counts left zero by calloc */
     }
 
-    const state_directory_entry_t **active_dirs = arena_calloc(
+    state_directory_entry_t **active_dirs = arena_calloc(
         ws->arena, snap_count, sizeof(*active_dirs)
     );
     const state_directory_entry_t **orphan_dirs = arena_calloc(
@@ -1335,7 +1348,7 @@ static error_t *workspace_partition_directories(workspace_t *ws) {
 
     /* Partition state rows: in-scope active → ws->active_dirs, others → orphans */
     for (size_t i = 0; i < snap_count; i++) {
-        const state_directory_entry_t *row = &snapshot[i];
+        state_directory_entry_t *row = &snapshot[i];
 
         bool profile_in_scope = hashmap_has(ws->profile_index, row->profile);
         bool lifecycle_terminal = (row->lifecycle != LIFECYCLE_ACTIVE);
@@ -1347,9 +1360,10 @@ static error_t *workspace_partition_directories(workspace_t *ws) {
 
         active_dirs[active_count++] = row;
 
-        /* hashmap_set casts away const internally; the row remains read-only
-         * to callers (workspace_lookup_directory returns const pointer). */
-        err = hashmap_set(ws->active_dir_index, row->filesystem_path, (void *) row);
+        /* The map stores the mutable row pointer (workspace_advance_witness
+         * patches in place); workspace_lookup_directory narrows it to const
+         * for external callers. */
+        err = hashmap_set(ws->active_dir_index, row->filesystem_path, row);
         if (err) {
             return error_wrap(err, "Failed to populate active directory index");
         }
@@ -1826,10 +1840,12 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
     CHECK_NULL(ws);
 
     error_t *err = NULL;
-    state_directories_t dirs = workspace_directories(ws);
 
-    for (size_t i = 0; i < dirs.count; i++) {
-        const state_directory_entry_t *row = dirs.entries[i];
+    /* Iterate the internal slice, not workspace_directories(): the witness
+     * accumulator below needs the mutable row, same as the file loop in
+     * workspace_analyze_files. */
+    for (size_t i = 0; i < ws->active_dir_count; i++) {
+        state_directory_entry_t *row = ws->active_dirs[i];
 
         /* State directory entries contain:
          * - filesystem_path: Already resolved with target (VWD principle)
@@ -1890,11 +1906,10 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
          * anchor flush. The lstat above just observed the path in scope
          * (any type counts, same semantics as the projection probe); if
          * the row carries no witness yet, queue it for the batched write
-         * in workspace_flush_anchor_updates. Closes the "user created the
-         * path after scope entry" gap with the mechanism files already
-         * use. */
+         * in workspace_flush_updates. Closes the "user created the path
+         * after scope entry" gap with the mechanism files already use. */
         if (row->observed_at == 0) {
-            workspace_record_dir_witness(ws, row);
+            workspace_record_witness_update(ws, row);
         }
 
         /* Verify it's actually a directory (type may have changed)
@@ -2534,11 +2549,14 @@ const state_file_entry_t *workspace_lookup_file(
 
 /**
  * Get the active in-scope state directory slice
+ *
+ * The cast adds const at both pointer levels — safe per the C standard's
+ * "T**  → const T *const *" rule (no diagnostic required).
  */
 state_directories_t workspace_directories(const workspace_t *ws) {
     if (!ws) return (state_directories_t){ 0 };
     return (state_directories_t){
-        .entries = ws->active_dirs,
+        .entries = (const state_directory_entry_t *const *) ws->active_dirs,
         .count = ws->active_dir_count,
     };
 }
@@ -2546,8 +2564,9 @@ state_directories_t workspace_directories(const workspace_t *ws) {
 /**
  * Look up an active directory row by filesystem path
  *
- * O(1) hashmap probe over the active directory slice. The map stores const
- * row pointers — directories carry no anchor and are not patched in place.
+ * O(1) hashmap probe over the active directory slice. The map's value is a
+ * mutable row pointer (workspace_advance_witness patches in place);
+ * external callers receive a const view via narrowing cast.
  */
 const state_directory_entry_t *workspace_lookup_directory(
     const workspace_t *ws,
@@ -2837,30 +2856,65 @@ error_t *workspace_advance_anchor(
 }
 
 /**
- * Flush accumulated anchor updates to the state database
+ * Advance a tracked directory's witness with in-memory consistency
  *
- * Advances the deployment anchor for entries that hit CMP_EQUAL on the
- * slow path during analyze_file_divergence. The anchor carries both the
- * fast-path stat witness and the blob_oid it witnesses — persisting them
- * lets the next run short-circuit (fast path) or tag STALE directly
- * (fast path with Git-advanced blob_oid).
+ * Directory sibling of workspace_advance_anchor and the single
+ * workspace-scope writer of tracked_directories.observed_at: persists via
+ * state_update_witness, then patches the snapshot row so DB and memory
+ * agree for downstream readers in the same run.
  *
- * deployed_at is passed as 0 so state_update_anchor preserves the row's
- * existing timestamp — this flush confirms the anchor witness but does
- * not create a new deployment lifecycle event (apply owns that).
+ * Monotonicity is the SQL WHERE clause's job (observed_at = 0), so a row
+ * already witnessed is a no-op in the database. The in-memory assignment
+ * is unconditional but harmless for the same reason — callers gate on
+ * row->observed_at == 0 before advancing.
  *
- * Routes through workspace_advance_anchor — the accumulator already
- * carries the row pointer (recorded at analyze time), which is exactly
- * what the wrapper expects. One snapshot-write API for every workspace
- * anchor advance; no parallel inline path.
+ * The row is borrowed from ws->active_dirs, which the workspace owns as
+ * mutable; the const decoration on the parameter is a public-API guard
+ * against mutation by non-witness callers.
+ */
+error_t *workspace_advance_witness(
+    workspace_t *ws,
+    const state_directory_entry_t *row,
+    time_t observed_at
+) {
+    CHECK_NULL(ws);
+    CHECK_NULL(row);
+
+    error_t *err = state_update_witness(
+        ws->state, row->filesystem_path, observed_at
+    );
+    if (err) return err;
+
+    ((state_directory_entry_t *) row)->observed_at = observed_at;
+    return NULL;
+}
+
+/**
+ * Flush accumulated anchor and witness updates to the state database
+ *
+ * Anchor half: advances the deployment anchor for entries that hit
+ * CMP_EQUAL on the slow path during analyze_file_divergence. The anchor
+ * carries both the fast-path stat triple and the blob_oid it confirms —
+ * persisting them lets the next run short-circuit (fast path) or tag
+ * STALE directly (fast path with Git-advanced blob_oid). deployed_at is
+ * passed as 0 so state_update_anchor preserves the row's existing
+ * timestamp — this flush confirms an observation but does not create a
+ * new deployment lifecycle event (apply owns that).
+ *
+ * Witness half: stamps tracked directories observed during directory
+ * analysis whose row carried no witness.
+ *
+ * Both route through their snapshot-write API — the accumulators already
+ * carry the row pointers recorded at analyze time, which is exactly what
+ * those wrappers expect. One such API per table; no parallel inline path.
  *
  * Begins its own transaction only when state isn't already in one
  * (status/diff/sync). Apply always passes state already-in-transaction.
  */
-error_t *workspace_flush_anchor_updates(workspace_t *ws) {
+error_t *workspace_flush_updates(workspace_t *ws) {
     CHECK_NULL(ws);
 
-    if (ws->anchor_update_count == 0 && ws->pending_dir_witness_count == 0) {
+    if (ws->anchor_update_count == 0 && ws->witness_update_count == 0) {
         return NULL;
     }
 
@@ -2883,7 +2937,7 @@ error_t *workspace_flush_anchor_updates(workspace_t *ws) {
         const anchor_update_t *update = &ws->anchor_updates[i];
         deployment_anchor_t input = {
             .blob_oid    = update->blob_oid,
-            .deployed_at = 0,      /* preserve — flush is a witness advance, not a deploy */
+            .deployed_at = 0,      /* preserve — flush is an observation, not a deploy */
             .observed_at = now,    /* monotonic CASE in SQL preserves any prior observation stamp */
             .stat        = update->stat,
         };
@@ -2899,29 +2953,22 @@ error_t *workspace_flush_anchor_updates(workspace_t *ws) {
         }
     }
 
-    /* Directory witness stamps queued during directory analysis. On
-     * success the snapshot row is patched in place so downstream readers
-     * in this run see DB and memory agreeing (same coherence contract as
-     * workspace_advance_anchor; same const-cast idiom — the workspace
-     * owns the snapshot storage, the const decoration guards external
-     * accessors). */
-    for (size_t i = 0; i < ws->pending_dir_witness_count; i++) {
-        const state_directory_entry_t *row = ws->pending_dir_witnesses[i];
+    /* Witness advances queued during directory analysis. Routes through
+     * workspace_advance_witness for the same reason the loop above routes
+     * through workspace_advance_anchor: one snapshot-write API per table,
+     * no parallel inline path. */
+    for (size_t i = 0; i < ws->witness_update_count; i++) {
+        const state_directory_entry_t *row = ws->witness_updates[i];
 
-        error_t *err = state_witness_directory(
-            ws->state, row->filesystem_path, now
-        );
+        error_t *err = workspace_advance_witness(ws, row, now);
         if (err) {
             if (needs_transaction) {
                 state_rollback(ws->state);
             }
             return error_wrap(
-                err, "Failed to flush directory witness for '%s'",
-                row->filesystem_path
+                err, "Failed to flush witness for '%s'", row->filesystem_path
             );
         }
-
-        ((state_directory_entry_t *) row)->observed_at = now;
     }
 
     if (needs_transaction) {
@@ -2934,7 +2981,7 @@ error_t *workspace_flush_anchor_updates(workspace_t *ws) {
     }
 
     ws->anchor_update_count = 0;
-    ws->pending_dir_witness_count = 0;
+    ws->witness_update_count = 0;
 
     return NULL;
 }
@@ -2950,10 +2997,10 @@ void workspace_free(workspace_t *ws) {
     /* Free diverged array (string fields are arena-borrowed, not freed individually) */
     free(ws->diverged);
 
-    /* Free anchor updates and pending directory witnesses (row pointers are
-     * borrowed from ws->arena snapshot) */
+    /* Free the anchor and witness update arrays (row pointers are borrowed
+     * from ws->arena snapshot) */
     free(ws->anchor_updates);
-    free((void *) ws->pending_dir_witnesses);
+    free(ws->witness_updates);
 
     /* Free indices (values are borrowed, so pass NULL for value free function).
      * active_file_index / active_dir_index values are state-row pointers into

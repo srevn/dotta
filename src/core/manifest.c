@@ -331,7 +331,7 @@ static int precedence_view_build_callback(
          *
          * lifecycle, old_profile, and anchor are mirrored from the new-entry
          * branch to keep the override path self-contained — any tree-built
-         * row carries LIFECYCLE_ACTIVE, no reassignment witness, and a zero
+         * row carries LIFECYCLE_ACTIVE, no reassignment marker, and a zero
          * deployment anchor regardless of construction order. */
         override->owner = NULL;
         override->group = NULL;
@@ -750,9 +750,9 @@ cleanup:
  * SCOPE ("Pure VWD-cache writer, plus observation stamp on INSERT"):
  *   This function is authoritative for the VWD-cache columns (storage_path,
  *   profile, blob_oid, type, mode, owner, group, encrypted, state). It NEVER
- *   advances the deployment witness (deployed_blob_oid, deployed_at, stat_*).
- *   Callers needing to advance the witness must follow with
- *   state_update_anchor(), which is the sole legitimate witness writer.
+ *   advances the deployment anchor (deployed_blob_oid, deployed_at, stat_*).
+ *   Callers needing to advance the anchor must follow with
+ *   state_update_anchor(), which is its sole legitimate writer.
  *
  *   It does stamp anchor.observed_at in-place on the row when the target
  *   path exists on disk (see step 1 of the body). The UPSERT's monotonic
@@ -781,12 +781,12 @@ cleanup:
  * the cache; write-time establishes the invariant. See
  * docs/encryption-spec.md → "Cache hierarchy and write-time invariant".
  *
- * The witness columns (deployed_blob_oid, deployed_at, stat_*) are left
+ * The anchor columns (deployed_blob_oid, deployed_at, stat_*) are left
  * untouched — the UPSERT preserves them on UPDATE, and on INSERT they
  * start at zero. Lifecycle stamping is state_update_anchor's job;
  * capture-from-disk callers (manifest_add_files, manifest_update_files)
  * pair this call with a state_update_anchor(..., now) that stamps
- * deployed_at and the stat witness on both INSERT and UPDATE paths.
+ * deployed_at and the stat triple on both INSERT and UPDATE paths.
  *
  * Note: commit_oid is stored per-profile in enabled_profiles, not per-file.
  * Callers are responsible for calling manifest_persist_profile_head() after
@@ -849,21 +849,21 @@ static error_t *manifest_project_row(
 
 /**
  * Capture a precedence-view row to the manifest, advancing the deployment
- * anchor with a fresh disk witness.
+ * anchor from a fresh disk probe.
  *
  * The manifest layer's CAPTURE primitive — paired with manifest_project_row
  * (PROJECTION). Used by manifest_add_files and manifest_update_files at
  * the modified-or-new branch, the two sites where a user's claim of
- * ownership pairs an immediate VWD-cache write with an anchor advance to
- * a fresh-from-disk witness.
+ * ownership pairs an immediate VWD-cache write with an anchor advance
+ * from a fresh disk probe.
  *
  * Bridges the field-completeness asymmetry documented at state.h's
  * state_files_t doc-block: input is a tree-built row (anchor unset by
  * construction); output is a persisted row carrying both VWD cache and a
  * fully-populated anchor. The wrapper performs ONE lstat() — both
- * observed_at (the row's monotonic-once-set first-observation stamp) and
- * the stat_cache witness on the anchor derive from the same stat result,
- * eliminating the prior triplet's redundant probe.
+ * observed_at (the row's monotonic-once-set witness) and the anchor's
+ * stat_cache derive from the same stat result, eliminating the prior
+ * triplet's redundant probe.
  *
  * Routing invariant (state.h: "ROUTING INVARIANT" on state_update_anchor):
  * manifest-layer path, no live workspace, resolved_out=NULL. Workspace-
@@ -908,12 +908,12 @@ static error_t *manifest_capture_row(
 
     time_t now = time(NULL);
 
-    /* Single lstat: feeds both the observed_at stamp on the row (consumed
-     * by the UPSERT's monotonic CASE) and the stat_cache witness on the
-     * anchor (fast-path validity gate). A successful stat is the
+    /* Single lstat: feeds both the observed_at witness on the row
+     * (consumed by the UPSERT's monotonic CASE) and the anchor's
+     * stat_cache (fast-path validity gate). A successful stat is the
      * "observation" event; failure leaves both signals at sentinel-zero,
-     * and the next status's slow-path CMP_EQUAL re-derives the witness
-     * from disk truth on its own probe. */
+     * and the next status's slow-path CMP_EQUAL re-derives them from disk
+     * truth on its own probe. */
     struct stat st;
     bool stat_ok = (lstat(row->filesystem_path, &st) == 0);
     if (stat_ok) {
@@ -930,7 +930,7 @@ static error_t *manifest_capture_row(
         );
     }
 
-    /* Anchor advance with the witness derived from the same stat above.
+    /* Anchor advance, derived from the same stat above.
      * Failure is non-fatal: VWD cache is already committed; the next
      * status self-heals via the slow-path CMP_EQUAL flush. */
     deployment_anchor_t anchor = {
@@ -2252,8 +2252,8 @@ error_t *manifest_update_files(
                 continue;
             }
 
-            /* CAPTURE: write VWD cache and advance the anchor with a
-             * fresh disk witness. update commits the user's claim of
+            /* CAPTURE: write VWD cache and advance the anchor from a
+             * fresh disk probe. update commits the user's claim of
              * ownership over the just-committed blob, so the anchor stamp
              * is bound to the entry's blob_oid and deployed_at = time(NULL).
              * Skipped (lower-precedence) rows correctly bypass this — only
@@ -2461,8 +2461,8 @@ error_t *manifest_add_files(
             continue;
         }
 
-        /* CAPTURE: write VWD cache and advance the anchor with a fresh
-         * disk witness. add commits the user's claim of ownership over
+        /* CAPTURE: write VWD cache and advance the anchor from a fresh
+         * disk probe. add commits the user's claim of ownership over
          * the just-committed blob, so the anchor stamp is bound to the
          * entry's blob_oid and deployed_at = time(NULL). Skipped (lower-
          * precedence) rows correctly bypass this — only the winning

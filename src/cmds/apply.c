@@ -606,7 +606,7 @@ static void print_cleanup_preflight_results(
  * @param files Files being deployed (passed by value)
  * @param file_orphans Files being removed (zeroed if --keep-orphans)
  * @param dir_orphans Directories being removed (zeroed if --keep-orphans)
- * @param dir_work Diverged tracked directories deploy will converge
+ * @param to_converge Diverged tracked directories deploy will converge
  * @param opts Apply command options (must not be NULL)
  * @param out Output context for messages (must not be NULL)
  * @return NULL if OK to proceed, error otherwise (or does not return if re-exec with sudo)
@@ -616,7 +616,7 @@ static error_t *ensure_complete_apply_privileges(
     state_files_t files,
     workspace_items_t file_orphans,
     workspace_items_t dir_orphans,
-    workspace_items_t dir_work,
+    workspace_items_t to_converge,
     const cmd_apply_options_t *opts,
     output_t *out
 ) {
@@ -630,8 +630,7 @@ static error_t *ensure_complete_apply_privileges(
 
     /* Strict upper bound — every entry across the four sources may need
      * elevation. Reserve once to keep growth out of the hot loop. */
-    size_t cap = files.count + file_orphans.count + dir_orphans.count
-               + dir_work.count;
+    size_t cap = files.count + file_orphans.count + dir_orphans.count + to_converge.count;
     if (cap == 0) return NULL;
 
     string_array_t labels STRING_ARRAY_AUTO = { 0 };
@@ -668,11 +667,11 @@ static error_t *ensure_complete_apply_privileges(
         if (err) return err;
     }
 
-    for (size_t i = 0; i < dir_work.count; i++) {
+    for (size_t i = 0; i < to_converge.count; i++) {
         err = privilege_collect_label(
             &labels,
-            dir_work.entries[i]->storage_path,
-            dir_work.entries[i]->filesystem_path
+            to_converge.entries[i]->storage_path,
+            to_converge.entries[i]->filesystem_path
         );
         if (err) return err;
     }
@@ -782,9 +781,10 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     state_t *state = ctx->state;                /* Borrowed from dispatcher (WRITE) */
     scope_t *scope = NULL;
     state_files_t active = { 0 };               /* Workspace's borrowed slice (no free) */
-    state_files_t to_deploy = { 0 };            /* Aliases divergent.items below (no free) */
-    ptr_array_t divergent = { 0 };              /* Heap-backed pointer array */
-    ptr_array_t dir_work = { 0 };               /* Diverged dir items deploy will act on */
+    state_files_t to_deploy = { 0 };            /* Aliases divergent_files.items below (no free) */
+    workspace_items_t to_converge = { 0 };      /* Aliases divergent_dirs.items below (no free) */
+    ptr_array_t divergent_files = { 0 };        /* Heap-backed pointer array */
+    ptr_array_t divergent_dirs = { 0 };         /* Heap-backed pointer array */
     workspace_t *ws = NULL;
     workspace_items_t file_orphans = { 0 };     /* heap-allocated entries (must free) */
     workspace_items_t dir_orphans = { 0 };      /* heap-allocated entries (must free) */
@@ -882,7 +882,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * deployment changes. Routed through workspace_advance_anchor, so each
      * persisted update also patches the workspace's snapshot row in place —
      * downstream readers in this run see DB and memory agreeing. */
-    err = workspace_flush_anchor_updates(ws);
+    err = workspace_flush_updates(ws);
     if (err) {
         err = error_wrap(err, "Failed to flush anchor updates");
         goto cleanup;
@@ -961,9 +961,9 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
              *   - DIVERGENCE_TYPE: Type changed (file->symlink, etc.)
              *   - DIVERGENCE_ENCRYPTION: Encryption policy violation
              */
-            err = ptr_array_push(&divergent, file);
+            err = ptr_array_push(&divergent_files, file);
             if (err) {
-                err = error_wrap(err, "Failed to record divergent entry");
+                err = error_wrap(err, "Failed to record divergent file");
                 goto cleanup;
             }
         } else {
@@ -972,14 +972,14 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         }
     }
 
-    /* Bind the divergent buffer into a typed carrier for deploy.
+    /* Bind the divergent-file buffer into a typed carrier for deploy.
      *
-     * Lifetime: to_deploy.entries aliases divergent.items; the row pointers
-     * live in the workspace's arena snapshot (workspace lifetime). The
-     * scratch buffer itself is freed at the cleanup label via
-     * ptr_array_deinit(&divergent). No allocator dance, no shallow copy. */
-    to_deploy.entries = (const state_file_entry_t *const *) divergent.items;
-    to_deploy.count = divergent.count;
+     * Lifetime: to_deploy.entries aliases divergent_files.items; the row
+     * pointers live in the workspace's arena snapshot (workspace lifetime).
+     * The scratch buffer itself is freed at the cleanup label via
+     * ptr_array_deinit. No allocator dance, no shallow copy. */
+    to_deploy.entries = (const state_file_entry_t *const *) divergent_files.items;
+    to_deploy.count = divergent_files.count;
 
     output_print(
         out, OUTPUT_VERBOSE, "  %zu file%s need deployment (missing or divergent)\n",
@@ -1009,8 +1009,8 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * file" flow to a coherent (blob, now, stat), so a later `rm file` is
      * classified as [deleted] and `update` commits the deletion.
      *
-     * Independence from the earlier flush: workspace_flush_anchor_updates
-     * above persists slow-path witnesses for the *next* run's fast path.
+     * Independence from the earlier flush: workspace_flush_updates
+     * above persists slow-path anchors for the *next* run's fast path.
      * It is not what proves this run's match — that proof comes from
      * analyze_file_divergence leaving the entry out of ws->diverged. The
      * flush preserves deployed_at by contract, so entry->anchor.deployed_at
@@ -1234,15 +1234,19 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
              (all_items[i].state == WORKSPACE_STATE_DEPLOYED &&
               (all_items[i].divergence &
                (DIVERGENCE_MODE | DIVERGENCE_OWNERSHIP | DIVERGENCE_TYPE))))) {
-            err = ptr_array_push(&dir_work, &all_items[i]);
+            err = ptr_array_push(&divergent_dirs, &all_items[i]);
             if (err) {
-                err = error_wrap(err, "Failed to record directory work item");
+                err = error_wrap(err, "Failed to record divergent directory");
                 goto cleanup;
             }
         }
     }
 
-    size_t dir_work_count = dir_work.count;
+    /* Directory mirror of the to_deploy bind above — same lifetime rule:
+     * to_converge.entries aliases divergent_dirs.items, whose items borrow
+     * into the workspace's diverged array. */
+    to_converge.entries = (const workspace_item_t *const *) divergent_dirs.items;
+    to_converge.count = divergent_dirs.count;
 
     /* Drift signal: external Git changes repaired by workspace_load's
      * reconcile, still visible in the persistent anchor/manifest.blob_oid
@@ -1258,7 +1262,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     bool no_orphans = opts->keep_orphans || (file_orphans.count == 0 && dir_orphans.count == 0);
 
     if (to_deploy.count == 0 && acknowledged_count == 0 && no_orphans
-        && dir_work_count == 0) {
+        && to_converge.count == 0) {
         /* Nothing to deploy, acknowledge, or clean */
         size_t total_excluded = excluded_deploy_count + excluded_orphan_count;
         if (total_excluded > 0) {
@@ -1287,7 +1291,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * no directory convergence), skip privilege checks, preflight, hooks,
      * and confirmation — none apply to pure state bookkeeping that doesn't
      * touch the filesystem. */
-    if (to_deploy.count == 0 && no_orphans && dir_work_count == 0) {
+    if (to_deploy.count == 0 && no_orphans && to_converge.count == 0) {
         if (!opts->dry_run) {
             size_t cleared = 0;
 
@@ -1350,12 +1354,8 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     if (!opts->dry_run) {
         output_print(out, OUTPUT_VERBOSE, "\nChecking privilege requirements...\n");
 
-        workspace_items_t dir_work_items = {
-            .entries = (const workspace_item_t *const *) dir_work.items,
-            .count   = dir_work.count,
-        };
         err = ensure_complete_apply_privileges(
-            ctx, to_deploy, file_orphans, dir_orphans, dir_work_items, opts, out
+            ctx, to_deploy, file_orphans, dir_orphans, to_converge, opts, out
         );
         if (err) {
             err = error_wrap(err, "Insufficient privileges for operation");
@@ -1546,10 +1546,10 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
                 prompt, sizeof(prompt), "Prune %zu empty director%s?",
                 dir_count, dir_count == 1 ? "y" : "ies"
             );
-        } else if (dir_work_count > 0) {
+        } else if (to_converge.count > 0) {
             snprintf(
                 prompt, sizeof(prompt), "Update %zu tracked director%s?",
-                dir_work_count, dir_work_count == 1 ? "y" : "ies"
+                to_converge.count, to_converge.count == 1 ? "y" : "ies"
             );
         } else {
             needs_confirm = false;
@@ -1566,7 +1566,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * deploy_execute handles the files-only, dirs-only, and mixed cases —
      * deploy_tracked_directories runs inside it, so a directory-only run
      * must route through it too (to_deploy is files-only by construction). */
-    if (to_deploy.count > 0 || dir_work_count > 0) {
+    if (to_deploy.count > 0 || to_converge.count > 0) {
         if (opts->dry_run) {
             output_print(
                 out, OUTPUT_VERBOSE, "\nDry-run mode - no files will be modified\n"
@@ -1584,7 +1584,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
             output_info(
                 out, OUTPUT_NORMAL, "%s %zu tracked director%s",
                 opts->dry_run ? "Would converge" : "Converging",
-                dir_work_count, dir_work_count == 1 ? "y" : "ies"
+                to_converge.count, to_converge.count == 1 ? "y" : "ies"
             );
         }
 
@@ -1960,7 +1960,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         /* Advance the deployment anchor for successfully deployed files
          *
          * CRITICAL: This records disk-confirmation for each deployed file — the
-         * blob dotta just wrote, the lifecycle timestamp, and the stat witness
+         * blob dotta just wrote, the lifecycle timestamp, and the stat triple
          * used by the fast path on subsequent runs. The anchor is the
          * authoritative "dotta confirmed disk == this blob" record.
          *
@@ -1983,7 +1983,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
             for (size_t i = 0; i < deployed.count; i++) {
                 const state_file_entry_t *file = deployed.entries[i];
 
-                /* Snapshot disk state (mtime/size/ino) for the fast-path witness.
+                /* Snapshot disk state (mtime/size/ino) for the fast path.
                  * The file was just written and fsynced by deploy_file(); lstat()
                  * is a cheap inode-cache read. If lstat fails, the anchor is still
                  * advanced with a zero stat (slow-path fallback on next run). */
@@ -2011,39 +2011,35 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
             );
         }
 
-        /* Directory witness stamp — sibling of the file anchor loop above.
-         * deploy_tracked_directories just created/confirmed the active
-         * tracked directories; record first observation for rows that have
-         * none (the load-time flush covered directories present at load;
-         * these did not exist then). Presence is the witness; SQL enforces
+        /* Advance the witness for directories this apply materialized
+         *
+         * Sibling of the file anchor loop above. deploy_tracked_directories
+         * just created/confirmed the active tracked directories; the
+         * load-time flush only covered directories present at load, and
+         * these did not exist then. Presence is the witness; SQL enforces
          * monotonicity, so this is idempotent and never regresses a stamp.
          * Non-fatal on failure, mirroring anchor-advance failures. */
         {
-            state_directories_t adirs = workspace_directories(ws);
+            state_directories_t dirs = workspace_directories(ws);
             time_t dir_now = time(NULL);
 
-            for (size_t i = 0; i < adirs.count; i++) {
-                const state_directory_entry_t *d = adirs.entries[i];
+            for (size_t i = 0; i < dirs.count; i++) {
+                const state_directory_entry_t *dir = dirs.entries[i];
 
-                if (d->observed_at > 0) continue;
+                if (dir->observed_at > 0) continue;
 
-                struct stat dst;
-                if (lstat(d->filesystem_path, &dst) != 0) continue;
+                struct stat dir_stat;
+                if (lstat(dir->filesystem_path, &dir_stat) != 0) continue;
 
-                error_t *werr = state_witness_directory(
-                    state, d->filesystem_path, dir_now
-                );
+                error_t *werr = workspace_advance_witness(ws, dir, dir_now);
                 if (werr) {
                     output_warning(
                         out, OUTPUT_NORMAL,
-                        "Failed to record directory witness for %s: %s",
-                        d->filesystem_path, error_message(werr)
+                        "Failed to advance witness for %s: %s",
+                        dir->filesystem_path, error_message(werr)
                     );
                     error_free(werr);
-                    continue;
                 }
-
-                ((state_directory_entry_t *) d)->observed_at = dir_now;
             }
         }
 
@@ -2112,11 +2108,11 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
 
 cleanup:
     if (deploy_res) deploy_result_free(deploy_res);
-    /* divergent backs to_deploy.entries; freeing the buffer also drops the
-     * carrier's view. The pointed-to rows live in the workspace arena.
-     * dir_work's items borrow into the workspace's diverged array. */
-    ptr_array_deinit(&divergent);
-    ptr_array_deinit(&dir_work);
+    /* divergent_files backs to_deploy.entries and divergent_dirs backs
+     * to_converge.entries; freeing a buffer also drops its carrier's view.
+     * The pointed-to rows live in the workspace arena. */
+    ptr_array_deinit(&divergent_files);
+    ptr_array_deinit(&divergent_dirs);
     if (cleanup_preflight) cleanup_preflight_result_free(cleanup_preflight);
     if (preflight) preflight_result_free(preflight);
     if (profiles_str) free(profiles_str);

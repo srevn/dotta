@@ -24,10 +24,10 @@
  *   state_get_all_* directly. Freshness is established by the consistency
  *   layer: manifest_reconcile runs upstream of every workspace_load, and
  *   tracked_directories has exactly three writers — the manifest layer's
- *   directory rebuild (sweep + UPSERT + reclaim), the witness stamp
- *   (state_witness_directory via the flush and apply's post-deploy loop),
- *   and apply's orphan-row removal — so the workspace inherits a current
- *   view by construction.
+ *   directory rebuild (sweep + UPSERT + reclaim), the witness advance
+ *   (workspace_advance_witness, from the flush and apply's post-deploy
+ *   loop), and apply's orphan-row removal — so the workspace inherits a
+ *   current view by construction.
  *
  *   Exceptions:
  *     (a) the consistency layer (manifest_reconcile, manifest_apply_scope,
@@ -460,7 +460,9 @@ bool workspace_item_extract_display_info(
  * Single entry point for every workspace-scope anchor writer:
  *   - apply's adoption loop (ownership advance on first claim)
  *   - apply's post-deploy loop (ownership advance after write)
- *   - workspace_flush_anchor_updates (witness advance from slow-path)
+ *   - workspace_flush_updates (observation advance from slow-path)
+ *
+ * Directories take the same route through workspace_advance_witness.
  *
  * The row pointer is borrowed from the workspace's active partition (where
  * the workspace owns the storage as mutable; see workspace_files(),
@@ -481,18 +483,57 @@ error_t *workspace_advance_anchor(
 );
 
 /**
- * Flush accumulated deployment-anchor advances to the state database
+ * Advance a tracked directory's witness with in-memory consistency
  *
- * During workspace_load(), files verified CMP_EQUAL via the slow path
- * (content hash comparison) accumulate (blob_oid, stat) pairs. This function
- * persists them as deployment-anchor advances so subsequent runs can both
- * short-circuit via the fast-path stat witness AND — if Git advances
- * blob_oid in the meantime — classify the file as stale directly from the
- * fast path instead of re-hashing.
+ * Directory sibling of workspace_advance_anchor, and the same routing
+ * invariant applies: while a workspace is live, witness advances MUST go
+ * through this function rather than calling state_update_witness directly,
+ * or the workspace's snapshot silently desyncs from the database.
  *
- * Routes through workspace_advance_anchor, so each persisted update also
- * assigns the canonical post-write anchor into its row — DB and memory
- * stay consistent for downstream readers in the same run.
+ * A directory's confirmed-disk record is the witness alone (observed_at),
+ * where a file carries a four-signal deployment_anchor_t — hence the
+ * timestamp parameter in place of an anchor struct.
+ *
+ * Single entry point for every workspace-scope witness writer:
+ *   - workspace_flush_updates (paths observed during analysis)
+ *   - apply's post-deploy loop (directories apply just created)
+ *
+ * Monotonicity is SQL's (the UPDATE matches only observed_at = 0), so
+ * repeat calls never regress a stamp. The row pointer is borrowed from the
+ * workspace's active directory partition, where the workspace owns the
+ * storage as mutable; the const decoration is a public-API guard and this
+ * function casts internally to assign observed_at in place.
+ *
+ * @param ws Workspace (must not be NULL, state must be open)
+ * @param row Active row whose witness should advance (must not be NULL,
+ *            borrowed from workspace's active directory partition)
+ * @param observed_at Observation timestamp (must be > 0)
+ * @return Error from state_update_witness, or NULL on success
+ */
+error_t *workspace_advance_witness(
+    workspace_t *ws,
+    const state_directory_entry_t *row,
+    time_t observed_at
+);
+
+/**
+ * Flush the updates accumulated during workspace_load to the state database
+ *
+ * Both tables' observation channels drain here, in one transaction:
+ *
+ *   Anchor updates — files verified CMP_EQUAL via the slow path (content
+ *   hash comparison) accumulate (blob_oid, stat) pairs. Persisting them
+ *   lets subsequent runs short-circuit via the fast-path stat AND — if Git
+ *   advances blob_oid in the meantime — classify the file as stale
+ *   directly from the fast path instead of re-hashing.
+ *
+ *   Witness updates — tracked directories whose path was lstat-observed
+ *   during directory analysis while the row carried no witness.
+ *
+ * Each routes through its snapshot-write API (workspace_advance_anchor,
+ * workspace_advance_witness), so every persisted update also lands in its
+ * row — DB and memory stay consistent for downstream readers in the same
+ * run.
  *
  * Self-healing: the first status/apply after profile enable verifies all
  * files via the slow path and seeds the anchor. The second call hits the
@@ -500,13 +541,8 @@ error_t *workspace_advance_anchor(
  * modified profiles.
  *
  * The deployed_at timestamp is intentionally not advanced here — this
- * flush is a witness advance, not a deployment event. Apply remains the
- * sole writer of anchor.deployed_at.
- *
- * Also persists first-observation witnesses for tracked directories whose
- * path was lstat-observed during directory analysis while the row carried
- * no witness (state_witness_directory; monotonic in SQL). Same batching,
- * same transaction, same snapshot-coherence contract.
+ * flush confirms observations, not deployments. Apply remains the sole
+ * writer of anchor.deployed_at.
  *
  * Safe to call on any workspace — returns immediately if no updates pending.
  * Uses the workspace's internal state handle for database writes.
@@ -514,7 +550,7 @@ error_t *workspace_advance_anchor(
  * @param ws Workspace (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *workspace_flush_anchor_updates(workspace_t *ws);
+error_t *workspace_flush_updates(workspace_t *ws);
 
 /**
  * Free workspace

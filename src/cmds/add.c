@@ -568,7 +568,7 @@ static error_t *create_commit(
  * WHY manifest_add_files (not manifest_apply_scope):
  * - These files were just captured FROM disk; the deployment anchor
  *   (deployed_blob_oid, stat_*, deployed_at) should be stamped from that
- *   witness so the next status hits the fast path.
+ *   capture so the next status hits the fast path.
  * - manifest_apply_scope is a pure VWD-cache writer; it never advances the
  *   anchor, which is correct for scope reconciliation but wrong here — we
  *   want fully deployed rows, not staged-for-deployment rows.
@@ -1600,7 +1600,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
          *
          * Uses manifest_add_files (not manifest_apply_scope) because the files
          * were just captured from disk: we want the deployment anchor stamped
-         * from that witness, not left unset for a later status to fill in.
+         * from that capture, not left unset for a later status to fill in.
          * apply_scope is the scope reconciler; add is the disk-capture path.
          */
         error_t *enable_err = auto_enable_and_sync_profile(

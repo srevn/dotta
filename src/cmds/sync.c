@@ -1758,7 +1758,7 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
          * (self-healing optimization). Seeds the fast path for subsequent
          * status/apply calls. Non-fatal on failure — sync's workspace
          * validation still works correctly. */
-        error_t *flush_err = workspace_flush_anchor_updates(ws);
+        error_t *flush_err = workspace_flush_updates(ws);
         if (flush_err) {
             error_free(flush_err);
         }

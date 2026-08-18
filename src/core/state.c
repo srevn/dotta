@@ -74,9 +74,9 @@ struct state {
     sqlite3_stmt *stmt_insert_profile;      /* INSERT INTO enabled_profiles */
 
     /* Directory prepared statements */
-    sqlite3_stmt *stmt_insert_directory;           /* UPSERT tracked_directories (projection writer) */
-    sqlite3_stmt *stmt_witness_directory;          /* UPDATE observed_at WHERE observed_at = 0 */
-    sqlite3_stmt *stmt_remove_directory;           /* DELETE FROM tracked_directories */
+    sqlite3_stmt *stmt_insert_directory;        /* UPSERT tracked_directories (projection writer) */
+    sqlite3_stmt *stmt_update_witness;          /* Directory witness: UPDATE observed_at WHERE observed_at = 0 */
+    sqlite3_stmt *stmt_remove_directory;        /* DELETE FROM tracked_directories */
     sqlite3_stmt *stmt_mark_all_directories_inactive; /* UPDATE tracked_directories SET state = 'inactive' */
 };
 
@@ -747,12 +747,12 @@ static error_t *prepare_statements(state_t *state) {
      * post-deploy loop). Monotonicity lives in the WHERE clause: a row
      * already witnessed matches nothing, a missing row matches nothing —
      * both are silent no-ops by design. */
-    const char *sql_witness_dir =
+    const char *sql_update_witness =
         "UPDATE tracked_directories SET observed_at = ?2 "
         "WHERE filesystem_path = ?1 AND observed_at = 0;";
 
     rc = sqlite3_prepare_v2(
-        state->db, sql_witness_dir, -1, &state->stmt_witness_directory, NULL
+        state->db, sql_update_witness, -1, &state->stmt_update_witness, NULL
     );
     if (rc != SQLITE_OK) {
         sqlite3_finalize(state->stmt_insert_file);
@@ -764,7 +764,7 @@ static error_t *prepare_statements(state_t *state) {
         sqlite3_finalize(state->stmt_remove_file);
         sqlite3_finalize(state->stmt_insert_profile);
         sqlite3_finalize(state->stmt_insert_directory);
-        return sqlite_error(state->db, "Failed to prepare witness directory statement");
+        return sqlite_error(state->db, "Failed to prepare directory witness statement");
     }
 
     /* Remove tracked directory (per-removed-dir loop in apply cleanup) */
@@ -784,7 +784,7 @@ static error_t *prepare_statements(state_t *state) {
         sqlite3_finalize(state->stmt_remove_file);
         sqlite3_finalize(state->stmt_insert_profile);
         sqlite3_finalize(state->stmt_insert_directory);
-        sqlite3_finalize(state->stmt_witness_directory);
+        sqlite3_finalize(state->stmt_update_witness);
         return sqlite_error(state->db, "Failed to prepare remove directory statement");
     }
 
@@ -806,7 +806,7 @@ static error_t *prepare_statements(state_t *state) {
         sqlite3_finalize(state->stmt_remove_file);
         sqlite3_finalize(state->stmt_insert_profile);
         sqlite3_finalize(state->stmt_insert_directory);
-        sqlite3_finalize(state->stmt_witness_directory);
+        sqlite3_finalize(state->stmt_update_witness);
         sqlite3_finalize(state->stmt_remove_directory);
         return sqlite_error(state->db, "Failed to prepare mark directories inactive statement");
     }
@@ -872,9 +872,9 @@ static void finalize_statements(state_t *state) {
         state->stmt_insert_directory = NULL;
     }
 
-    if (state->stmt_witness_directory) {
-        sqlite3_finalize(state->stmt_witness_directory);
-        state->stmt_witness_directory = NULL;
+    if (state->stmt_update_witness) {
+        sqlite3_finalize(state->stmt_update_witness);
+        state->stmt_update_witness = NULL;
     }
 
     if (state->stmt_remove_directory) {
@@ -1470,7 +1470,7 @@ error_t *state_add_file(state_t *state, const state_file_entry_t *entry) {
     /* 13. deployed_at (anchor) */
     sqlite3_bind_int64(state->stmt_insert_file, 13, (sqlite3_int64) entry->anchor.deployed_at);
 
-    /* 14-16. stat cache (anchor fast-path witness on deployed_blob_oid) */
+    /* 14-16. stat cache (anchor fast-path triple, bound to deployed_blob_oid) */
     sqlite3_bind_int64(state->stmt_insert_file, 14, entry->anchor.stat.mtime);
     sqlite3_bind_int64(state->stmt_insert_file, 15, entry->anchor.stat.size);
     sqlite3_bind_int64(state->stmt_insert_file, 16, (sqlite3_int64) entry->anchor.stat.ino);
@@ -2274,14 +2274,14 @@ error_t *state_get_all_directories(
 }
 
 /**
- * Record first observation of a tracked directory
+ * Advance a tracked directory's witness
  *
- * The directory mirror of the anchor-advance witness channel. The WHERE
- * clause (observed_at = 0) is the monotonicity guard: a row already
- * witnessed matches nothing, a missing row matches nothing — both are
- * silent no-ops (mirrors state_update_anchor's not-found-is-OK contract).
+ * Directory mirror of state_update_anchor. The WHERE clause
+ * (observed_at = 0) is the monotonicity guard: a row already witnessed
+ * matches nothing, a missing row matches nothing — both are silent
+ * no-ops (same not-found-is-OK contract).
  */
-error_t *state_witness_directory(
+error_t *state_update_witness(
     state_t *state,
     const char *filesystem_path,
     time_t observed_at
@@ -2289,13 +2289,13 @@ error_t *state_witness_directory(
     CHECK_NULL(state);
     CHECK_NULL(filesystem_path);
     CHECK_NULL(state->db);
-    CHECK_NULL(state->stmt_witness_directory);
+    CHECK_NULL(state->stmt_update_witness);
 
     if (observed_at <= 0) {
         return ERROR(ERR_INVALID_ARG, "Directory witness timestamp must be > 0");
     }
 
-    sqlite3_stmt *stmt = state->stmt_witness_directory;
+    sqlite3_stmt *stmt = state->stmt_update_witness;
     sqlite3_reset(stmt);
     sqlite3_clear_bindings(stmt);
     sqlite3_bind_text(stmt, 1, filesystem_path, -1, SQLITE_TRANSIENT);

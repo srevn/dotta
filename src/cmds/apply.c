@@ -23,6 +23,7 @@
 #include "core/state.h"
 #include "core/workspace.h"
 #include "infra/content.h"
+#include "sys/filesystem.h"
 #include "utils/hooks.h"
 #include "utils/privilege.h"
 
@@ -684,17 +685,23 @@ static error_t *ensure_complete_apply_privileges(
 }
 
 /**
- * Check if file needs deployment
+ * Check if a workspace item needs deployment
  *
- * Determines whether a file requires deployment based on workspace analysis.
- * Uses two-dimensional model: state (existence) + divergence (quality).
+ * Kind-agnostic. Files and directories share the two-dimensional model —
+ * state (existence) + divergence (quality) — so one predicate routes both:
+ * files into to_deploy for deploy_execute, directories into to_converge
+ * for deploy_tracked_directories.
  *
  * Architecture:
- * - State dimension (primary): Where does the file exist? (Git/DB/filesystem)
- * - Divergence dimension (secondary): For files on filesystem, what's wrong?
+ * - State dimension (primary): Where does the path exist? (Git/DB/filesystem)
+ * - Divergence dimension (secondary): For paths on disk, what's wrong?
+ *
+ * Directories need no kind-specific arm: workspace analysis tags them only
+ * with MODE/OWNERSHIP/TYPE (never content, encryption, or stale), so the
+ * DEPLOYED arm's mask already covers every directory divergence.
  *
  * @param ws_item Workspace item from divergence analysis (can be NULL)
- * @return true if file needs deployment, false if clean
+ * @return true if the item needs deployment, false if clean
  */
 static bool needs_deployment(const workspace_item_t *ws_item) {
     if (ws_item == NULL) {
@@ -733,13 +740,14 @@ static bool needs_deployment(const workspace_item_t *ws_item) {
             return (ws_item->divergence & ~DIVERGENCE_STALE) != DIVERGENCE_NONE;
 
         case WORKSPACE_STATE_ORPHANED:
-            /* File exists in deployment state but not in any enabled profile.
+            /* Path exists in deployment state but not in any enabled profile.
              *
-             * Architectural invariant: Orphaned files should NOT appear in the active
-             * slice (which is partitioned to enabled profiles only). If we reach here,
-             * it's a programming error in the workspace partition.
+             * Legitimately reached: the directory caller screens the full
+             * diverged set, where orphan rows live. (The file caller queries
+             * the active slice, partitioned to enabled profiles, so orphans
+             * cannot reach it from there.)
              *
-             * Defensive: Return false (don't deploy orphans, cleanup handles removal). */
+             * Never deployment — cleanup owns orphan removal. */
             return false;
 
         case WORKSPACE_STATE_UNTRACKED:
@@ -1212,6 +1220,12 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     size_t all_count = 0;
     const workspace_item_t *all_items = workspace_get_all_diverged(ws, &all_count);
 
+    /* Loop-invariant gate for the directory term below: a path-filtered
+     * apply touches directories only as ancestors of the targeted files
+     * (deploy_tracked_directories' strict mode), so directory-only
+     * convergence is out of scope — same rule as orphan cleanup above. */
+    const bool converge_dirs = !scope_has_paths(scope);
+
     for (size_t i = 0; i < all_count; i++) {
         /* Coherent Scope: same filters as deployment pipeline */
         if (!scope_accepts_entry(scope, all_items[i].profile, all_items[i].storage_path)) {
@@ -1220,20 +1234,13 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         if (all_items[i].profile_changed) acknowledged_count++;
         if (all_items[i].divergence & DIVERGENCE_STALE) stale_count++;
 
-        /* Directory convergence work deploy_tracked_directories will act
-         * on: creation (undeployed), recreation (witnessed deletion), or
-         * metadata/type fix. Gates the early exit and routes deployment —
+        /* Directory convergence work, routed by the same predicate as the
+         * file pass above — creation, recreation, or metadata/type fix.
          * to_deploy is files-only, so without this term directory-only
-         * divergence would never converge. Path-filtered applies skip
-         * directory-only work, same rule as orphan cleanup above.
-         * Orphan-state dir items gate via no_orphans, not here. */
-        if (all_items[i].item_kind == WORKSPACE_ITEM_DIRECTORY &&
-            !scope_has_paths(scope) &&
-            (all_items[i].state == WORKSPACE_STATE_UNDEPLOYED ||
-             all_items[i].state == WORKSPACE_STATE_DELETED ||
-             (all_items[i].state == WORKSPACE_STATE_DEPLOYED &&
-              (all_items[i].divergence &
-               (DIVERGENCE_MODE | DIVERGENCE_OWNERSHIP | DIVERGENCE_TYPE))))) {
+         * divergence would never converge. Orphan-state directory items
+         * gate via no_orphans; needs_deployment rejects them here. */
+        if (converge_dirs && all_items[i].item_kind == WORKSPACE_ITEM_DIRECTORY &&
+            needs_deployment(&all_items[i])) {
             err = ptr_array_push(&divergent_dirs, &all_items[i]);
             if (err) {
                 err = error_wrap(err, "Failed to record divergent directory");
@@ -2028,8 +2035,12 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
 
                 if (dir->observed_at > 0) continue;
 
-                struct stat dir_stat;
-                if (lstat(dir->filesystem_path, &dir_stat) != 0) continue;
+                /* lstat semantics, matching the analyzer's probe: a path of
+                 * any type counts as observed (a squatting file is still
+                 * "something was here"; type divergence is a separate
+                 * signal). fs_exists would follow a final symlink and
+                 * witness a path that is not the one being tracked. */
+                if (!fs_lexists(dir->filesystem_path)) continue;
 
                 error_t *werr = workspace_advance_witness(ws, dir, dir_now);
                 if (werr) {

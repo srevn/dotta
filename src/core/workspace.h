@@ -56,9 +56,9 @@
  * Represents a single item (file or directory) with divergence between states.
  *
  * Items can be:
- * - Files (WORKSPACE_ITEM_FILE): Have content, tracked in profile and state,
+ * - Files (PATH_KIND_FILE): Have content, tracked in profile and state,
  *   deployed to filesystem
- * - Directories (WORKSPACE_ITEM_DIRECTORY): Metadata-only (mode/ownership,
+ * - Directories (PATH_KIND_DIRECTORY): Metadata-only (mode/ownership,
  *   no content), tracked in profile metadata and in the tracked_directories
  *   state table; created and converged by apply via
  *   deploy_tracked_directories
@@ -76,9 +76,9 @@ typedef struct {
     char *old_profile;          /* Previous profile from state, NULL if unchanged (arena-borrowed) */
 
     /* Item classification */
-    workspace_state_t state;          /* Where the item exists (deployed/undeployed/etc.) */
-    divergence_type_t divergence;     /* What's wrong with it (bit flags, can combine) */
-    workspace_item_kind_t item_kind;  /* FILE or DIRECTORY (explicit type) */
+    workspace_state_t state;      /* Where the item exists (deployed/undeployed/etc.) */
+    divergence_type_t divergence; /* What's wrong with it (bit flags, can combine) */
+    path_kind_t item_kind;        /* FILE or DIRECTORY (explicit type) */
 
     /* State flags */
     bool on_filesystem;         /* Exists on actual filesystem */

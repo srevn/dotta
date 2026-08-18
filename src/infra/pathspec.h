@@ -76,11 +76,19 @@ error_t *pathspec_create(
  *   4. Combined glob ruleset evaluation (gitignore last-match-wins
  *      semantics; honours negation across patterns).
  *
+ * `kind` is the manifest's kind of the path (a tracked directory squatted
+ * by a file is still a directory). Only step 4 reads it: gitignore's
+ * directory-only patterns (`dir/`) match a directory itself only when the
+ * caller says it is one; files beneath it match via walk-up regardless.
+ *
  * @param spec         Pathspec (NULL = match all)
  * @param storage_path Storage path to test (must not be NULL)
+ * @param kind         What the path refers to in the manifest
  * @return true when matches
  */
-bool pathspec_matches(const pathspec_t *spec, const char *storage_path);
+bool pathspec_matches(
+    const pathspec_t *spec, const char *storage_path, path_kind_t kind
+);
 
 /**
  * Free a pathspec. Releases the heap-owned exact-path storage; the
@@ -140,12 +148,12 @@ const char *pathspec_glob_at(const pathspec_t *spec, size_t i);
  * which under-counts coverage on overlap. Per-pattern isolation gives
  * each input independent attribution.
  *
- * Returns false for a NULL pathspec or NULL path. `i` MUST be <
- * pathspec_glob_count(spec); out-of-bounds is undefined behaviour
- * (asserted in debug builds).
+ * `kind` as for pathspec_matches. Returns false for a NULL pathspec or
+ * NULL path. `i` MUST be < pathspec_glob_count(spec); out-of-bounds is
+ * undefined behaviour (asserted in debug builds).
  */
 bool pathspec_glob_matches_at(
-    const pathspec_t *spec, size_t i, const char *storage_path
+    const pathspec_t *spec, size_t i, const char *storage_path, path_kind_t kind
 );
 
 #endif /* DOTTA_PATHSPEC_H */

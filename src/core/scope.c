@@ -242,24 +242,27 @@ bool scope_accepts_profile(const scope_t *s, const char *profile) {
     return false;
 }
 
-bool scope_accepts_path(const scope_t *s, const char *storage_path) {
-    return pathspec_matches(s->paths, storage_path);
+bool scope_accepts_path(
+    const scope_t *s, const char *storage_path, path_kind_t kind
+) {
+    return pathspec_matches(s->paths, storage_path, kind);
 }
 
-bool scope_is_excluded(const scope_t *s, const char *storage_path) {
-    /* Storage paths always reference files (validated by
-     * mount_validate_storage), so is_dir is always false. Directory-
-     * only exclude patterns (e.g. `-e 'build/'`) still match files
-     * inside the directory via gitignore's walk-up semantics. */
-    return gitignore_is_ignored(s->excludes_ruleset, storage_path, false);
+bool scope_is_excluded(
+    const scope_t *s, const char *storage_path, path_kind_t kind
+) {
+    return gitignore_is_ignored(
+        s->excludes_ruleset, storage_path, kind == PATH_KIND_DIRECTORY
+    );
 }
 
 bool scope_accepts_entry(
     const scope_t *s,
     const char *profile,
-    const char *storage_path
+    const char *storage_path,
+    path_kind_t kind
 ) {
     return scope_accepts_profile(s, profile)
-           && scope_accepts_path(s, storage_path)
-           && !scope_is_excluded(s, storage_path);
+           && scope_accepts_path(s, storage_path, kind)
+           && !scope_is_excluded(s, storage_path, kind);
 }

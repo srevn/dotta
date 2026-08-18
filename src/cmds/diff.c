@@ -302,12 +302,12 @@ static error_t *present_diffs_for_direction(
         const workspace_item_t *item = &diverged[i];
 
         /* Filter 1: Only process FILES (skip directories) */
-        if (item->item_kind != WORKSPACE_ITEM_FILE) {
+        if (item->item_kind != PATH_KIND_FILE) {
             continue;
         }
 
         /* Filter 2: Check file filter (user-specified files) */
-        if (!scope_accepts_path(scope, item->storage_path)) {
+        if (!scope_accepts_path(scope, item->storage_path, PATH_KIND_FILE)) {
             continue;
         }
 
@@ -641,7 +641,7 @@ static error_t *compare_tree_files_to_filesystem(
         const char *storage_path = entry->storage_path;
 
         /* Check file filter */
-        if (!pathspec_matches(file_filter, storage_path)) {
+        if (!pathspec_matches(file_filter, storage_path, PATH_KIND_FILE)) {
             continue;
         }
 
@@ -858,7 +858,7 @@ static size_t validate_filter_paths(
         bool found = false;
         for (size_t i = 0; i < files.count; i++) {
             if (pathspec_glob_matches_at(
-                file_filter, g, files.entries[i]->storage_path
+                file_filter, g, files.entries[i]->storage_path, PATH_KIND_FILE
                 )) {
                 found = true;
                 break;

@@ -341,12 +341,12 @@ static error_t *filter_items_for_update(
         }
 
         /* Apply CLI file filter (using storage_path for canonical matching) */
-        if (!scope_accepts_path(scope, item->storage_path)) {
+        if (!scope_accepts_path(scope, item->storage_path, item->item_kind)) {
             continue;
         }
 
         /* Apply exclusion patterns (granular: preserves verbose "Excluded" log) */
-        if (scope_is_excluded(scope, item->storage_path)) {
+        if (scope_is_excluded(scope, item->storage_path, item->item_kind)) {
             output_info(out, OUTPUT_VERBOSE, "Excluded: %s", item->filesystem_path);
             continue;
         }
@@ -504,7 +504,7 @@ static error_t *update_metadata_for_profile(
 
         /* Dispatch by item kind */
         switch (item->item_kind) {
-            case WORKSPACE_ITEM_FILE: {
+            case PATH_KIND_FILE: {
                 /* Handle file metadata */
 
                 /* Handle deleted files */
@@ -602,7 +602,7 @@ static error_t *update_metadata_for_profile(
                 break;
             }
 
-            case WORKSPACE_ITEM_DIRECTORY: {
+            case PATH_KIND_DIRECTORY: {
                 /* Handle directory metadata */
 
                 /* Handle deleted directories (symmetric with the file
@@ -864,7 +864,7 @@ static error_t *update_profile(
 
         /* Dispatch by item kind */
         switch (item->item_kind) {
-            case WORKSPACE_ITEM_FILE: {
+            case PATH_KIND_FILE: {
                 /* Handle file operations */
                 output_info(out, OUTPUT_VERBOSE, "  %s", item->filesystem_path);
 
@@ -941,7 +941,7 @@ static error_t *update_profile(
                 break;
             }
 
-            case WORKSPACE_ITEM_DIRECTORY: {
+            case PATH_KIND_DIRECTORY: {
                 /* Directories are handled purely in metadata - no file operations needed */
                 /* Metadata update happens in update_metadata_for_profile() call below */
                 break;
@@ -971,7 +971,7 @@ static error_t *update_profile(
     for (size_t i = 0; i < item_count; i++) {
         const workspace_item_t *item = items[i];
 
-        if (item->item_kind == WORKSPACE_ITEM_FILE) {
+        if (item->item_kind == PATH_KIND_FILE) {
             /* Include deleted files (staged for removal) */
             if (item->state == WORKSPACE_STATE_DELETED) {
                 storage_paths[path_count++] = item->storage_path;
@@ -980,7 +980,7 @@ static error_t *update_profile(
                 storage_paths[path_count++] = item->storage_path;
             }
             /* Skip files not processed (e.g., encryption-divergence on missing) */
-        } else if (item->item_kind == WORKSPACE_ITEM_DIRECTORY) {
+        } else if (item->item_kind == PATH_KIND_DIRECTORY) {
             storage_paths[path_count++] = item->storage_path;
         }
     }
@@ -1437,7 +1437,7 @@ static error_t *update_display_summary(
     for (size_t i = 0; i < item_count; i++) {
         const workspace_item_t *item = items[i];
 
-        if (item->item_kind == WORKSPACE_ITEM_FILE) {
+        if (item->item_kind == PATH_KIND_FILE) {
             /* Count by state */
             switch (item->state) {
                 case WORKSPACE_STATE_DEPLOYED:
@@ -1463,7 +1463,7 @@ static error_t *update_display_summary(
                     /* Should not appear in filtered results, but be defensive */
                     break;
             }
-        } else if (item->item_kind == WORKSPACE_ITEM_DIRECTORY) {
+        } else if (item->item_kind == PATH_KIND_DIRECTORY) {
             dir_count++;
         }
     }
@@ -1479,7 +1479,7 @@ static error_t *update_display_summary(
             for (size_t i = 0; i < item_count; i++) {
                 const workspace_item_t *item = items[i];
 
-                if (item->item_kind != WORKSPACE_ITEM_FILE) {
+                if (item->item_kind != PATH_KIND_FILE) {
                     continue;
                 }
 
@@ -1526,7 +1526,7 @@ static error_t *update_display_summary(
             for (size_t i = 0; i < item_count; i++) {
                 const workspace_item_t *item = items[i];
 
-                if (item->item_kind == WORKSPACE_ITEM_FILE &&
+                if (item->item_kind == PATH_KIND_FILE &&
                     item->state == WORKSPACE_STATE_UNTRACKED
                 ) {
                     const char *tags[WORKSPACE_ITEM_MAX_DISPLAY_TAGS];
@@ -1562,7 +1562,7 @@ static error_t *update_display_summary(
             for (size_t i = 0; i < item_count; i++) {
                 const workspace_item_t *item = items[i];
 
-                if (item->item_kind == WORKSPACE_ITEM_FILE &&
+                if (item->item_kind == PATH_KIND_FILE &&
                     item->state == WORKSPACE_STATE_DELETED
                 ) {
                     const char *tags[WORKSPACE_ITEM_MAX_DISPLAY_TAGS];
@@ -1598,7 +1598,7 @@ static error_t *update_display_summary(
             for (size_t i = 0; i < item_count; i++) {
                 const workspace_item_t *item = items[i];
 
-                if (item->item_kind != WORKSPACE_ITEM_DIRECTORY) {
+                if (item->item_kind != PATH_KIND_DIRECTORY) {
                     continue;
                 }
 
@@ -1654,7 +1654,7 @@ static error_t *update_display_summary(
             for (size_t i = 0; i < item_count; i++) {
                 const workspace_item_t *item = items[i];
 
-                if (item->item_kind != WORKSPACE_ITEM_FILE ||
+                if (item->item_kind != PATH_KIND_FILE ||
                     !(item->divergence & DIVERGENCE_ENCRYPTION)) {
                     continue;
                 }
@@ -1730,7 +1730,7 @@ static error_t *update_confirm_operation(
     for (size_t i = 0; i < item_count; i++) {
         const workspace_item_t *item = items[i];
 
-        if (item->item_kind == WORKSPACE_ITEM_FILE) {
+        if (item->item_kind == PATH_KIND_FILE) {
             if (item->state == WORKSPACE_STATE_UNTRACKED) {
                 new_count++;
             } else if (item->state == WORKSPACE_STATE_DELETED) {
@@ -1738,7 +1738,7 @@ static error_t *update_confirm_operation(
             } else {
                 modified_count++;
             }
-        } else if (item->item_kind == WORKSPACE_ITEM_DIRECTORY) {
+        } else if (item->item_kind == PATH_KIND_DIRECTORY) {
             dir_count++;
         }
     }
@@ -1958,7 +1958,7 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
         string_array_t labels STRING_ARRAY_AUTO = { 0 };
         for (size_t i = 0; i < update_items.count; i++) {
             const workspace_item_t *item = update_items.entries[i];
-            if (item->item_kind != WORKSPACE_ITEM_FILE) continue;
+            if (item->item_kind != PATH_KIND_FILE) continue;
             err = privilege_collect_label(
                 &labels, item->storage_path, item->filesystem_path
             );

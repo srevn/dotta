@@ -2151,7 +2151,7 @@ error_t *manifest_update_files(
         const workspace_item_t *item = items[i];
 
         /* Skip directories (not in manifest table) */
-        if (item->item_kind != WORKSPACE_ITEM_FILE) {
+        if (item->item_kind != PATH_KIND_FILE) {
             continue;
         }
 

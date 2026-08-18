@@ -238,7 +238,9 @@ cleanup:
     return err;
 }
 
-bool pathspec_matches(const pathspec_t *spec, const char *storage_path) {
+bool pathspec_matches(
+    const pathspec_t *spec, const char *storage_path, path_kind_t kind
+) {
     /* NULL pathspec matches all (no filter applied). */
     if (!spec) return true;
     if (!storage_path) return false;
@@ -265,9 +267,11 @@ bool pathspec_matches(const pathspec_t *spec, const char *storage_path) {
      *
      * One gitignore_eval scan honours rule ordering, negation, directory
      * walk-up, and `**` recursive globs consistently with the rest of
-     * the ignore stack. Storage paths always reference files, so is_dir
-     * is false; directory-only globs still match via walk-up. */
-    return gitignore_is_ignored(spec->glob_combined, storage_path, false);
+     * the ignore stack. The kind decides whether a directory-only glob
+     * (`dir/`) may match this path itself; walk-up covers its contents. */
+    return gitignore_is_ignored(
+        spec->glob_combined, storage_path, kind == PATH_KIND_DIRECTORY
+    );
 }
 
 void pathspec_free(pathspec_t *spec) {
@@ -311,11 +315,11 @@ const char *pathspec_glob_at(const pathspec_t *spec, size_t i) {
 }
 
 bool pathspec_glob_matches_at(
-    const pathspec_t *spec, size_t i, const char *storage_path
+    const pathspec_t *spec, size_t i, const char *storage_path, path_kind_t kind
 ) {
     if (!spec || !storage_path) return false;
     assert(i < spec->glob_count);
     return gitignore_is_ignored(
-        spec->globs[i].isolated, storage_path, false
+        spec->globs[i].isolated, storage_path, kind == PATH_KIND_DIRECTORY
     );
 }

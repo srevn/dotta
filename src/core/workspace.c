@@ -313,7 +313,7 @@ static error_t *workspace_add_diverged(
     char *old_profile,
     workspace_state_t state,
     divergence_type_t divergence,
-    workspace_item_kind_t item_kind,
+    path_kind_t item_kind,
     bool on_filesystem,
     bool profile_enabled,
     bool profile_changed
@@ -542,7 +542,7 @@ static error_t *analyze_file_divergence(
             return workspace_add_diverged(
                 ws, fs_path, storage_path, profile, row->old_profile,
                 WORKSPACE_STATE_DEPLOYED, DIVERGENCE_UNVERIFIED,
-                WORKSPACE_ITEM_FILE,
+                PATH_KIND_FILE,
                 true,                      /* on_filesystem (assumed present) */
                 true,                      /* profile_enabled */
                 row->old_profile != NULL   /* profile_changed */
@@ -715,7 +715,7 @@ static error_t *analyze_file_divergence(
                  * Return immediately with TYPE divergence. */
                 return workspace_add_diverged(
                     ws, fs_path, storage_path, profile, NULL, WORKSPACE_STATE_DEPLOYED,
-                    DIVERGENCE_TYPE, WORKSPACE_ITEM_FILE, on_filesystem, true, false
+                    DIVERGENCE_TYPE, PATH_KIND_FILE, on_filesystem, true, false
                 );
 
             case CMP_MISSING:
@@ -930,7 +930,7 @@ static error_t *analyze_file_divergence(
     if (state != WORKSPACE_STATE_DEPLOYED || divergence != DIVERGENCE_NONE || profile_changed) {
         error_t *err = workspace_add_diverged(
             ws, fs_path, storage_path, profile, old_profile, state,
-            divergence, WORKSPACE_ITEM_FILE, on_filesystem, true, profile_changed
+            divergence, PATH_KIND_FILE, on_filesystem, true, profile_changed
         );
         if (err) return err;
     }
@@ -1206,7 +1206,7 @@ static error_t *analyze_orphaned_files(workspace_t *ws) {
                 NULL,
                 WORKSPACE_STATE_RELEASED,
                 DIVERGENCE_NONE,
-                WORKSPACE_ITEM_FILE,
+                PATH_KIND_FILE,
                 on_filesystem,
                 profile_enabled,
                 false
@@ -1285,7 +1285,7 @@ static error_t *analyze_orphaned_files(workspace_t *ws) {
                 NULL,                       /* No old_profile for orphans */
                 WORKSPACE_STATE_ORPHANED,   /* State: in deployment state, not in profile */
                 divergence,                 /* Divergence: computed from filesystem comparison */
-                WORKSPACE_ITEM_FILE,
+                PATH_KIND_FILE,
                 on_filesystem,
                 profile_enabled,
                 false                       /* No profile change for orphans */
@@ -1425,7 +1425,7 @@ static error_t *analyze_orphaned_directories(workspace_t *ws) {
             NULL,                       /* No old_profile for orphans */
             WORKSPACE_STATE_ORPHANED,   /* State: in state, not in profile */
             DIVERGENCE_NONE,            /* Divergence: none */
-            WORKSPACE_ITEM_DIRECTORY,
+            PATH_KIND_DIRECTORY,
             on_filesystem,
             profile_enabled,
             false                       /* No profile change for orphans */
@@ -1643,7 +1643,7 @@ static error_t *scan_directory_for_untracked(
                     NULL,                       /* No old_profile for untracked */
                     WORKSPACE_STATE_UNTRACKED,  /* State: on filesystem in tracked dir */
                     DIVERGENCE_NONE,            /* Divergence: none */
-                    WORKSPACE_ITEM_FILE,
+                    PATH_KIND_FILE,
                     true,                       /* on filesystem */
                     true,                       /* profile_enabled */
                     false                       /* No profile change */
@@ -1898,7 +1898,7 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
                     NULL,                     /* No old_profile for directories */
                     classify_absent(row->observed_at),
                     DIVERGENCE_NONE,          /* Divergence: none (path is absent) */
-                    WORKSPACE_ITEM_DIRECTORY,
+                    PATH_KIND_DIRECTORY,
                     false,                    /* on_filesystem (absent) */
                     true,                     /* profile_enabled */
                     false                     /* No profile change */
@@ -1925,7 +1925,7 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
                 NULL,                     /* No old_profile for directories */
                 WORKSPACE_STATE_DEPLOYED,
                 DIVERGENCE_UNVERIFIED,    /* Divergence: state undeterminable */
-                WORKSPACE_ITEM_DIRECTORY,
+                PATH_KIND_DIRECTORY,
                 true,                     /* on_filesystem (assumed present) */
                 true,                     /* profile_enabled */
                 false                     /* No profile change */
@@ -1970,7 +1970,7 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
                 NULL,                      /* No old_profile for directories */
                 WORKSPACE_STATE_DEPLOYED,  /* Path exists, just wrong type */
                 DIVERGENCE_TYPE,           /* Type changed (dir -> file/symlink) */
-                WORKSPACE_ITEM_DIRECTORY,
+                PATH_KIND_DIRECTORY,
                 true,                      /* on_filesystem (path exists, wrong type) */
                 true,                      /* profile_enabled */
                 false                      /* No profile change */
@@ -2020,7 +2020,7 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
                 NULL,                      /* No old_profile for directories */
                 WORKSPACE_STATE_DEPLOYED,  /* State: directory exists as expected */
                 divergence,                /* Divergence: mode/ownership flags */
-                WORKSPACE_ITEM_DIRECTORY,
+                PATH_KIND_DIRECTORY,
                 true,                      /* on_filesystem */
                 true,                      /* profile_enabled */
                 false                      /* No profile change */
@@ -2130,7 +2130,7 @@ static error_t *analyze_encryption_policy_mismatch(
                 NULL,
                 item_state,
                 DIVERGENCE_ENCRYPTION, /* Divergence: encryption policy violated */
-                WORKSPACE_ITEM_FILE,
+                PATH_KIND_FILE,
                 on_filesystem,
                 true,                  /* profile_enabled */
                 false                  /* No profile change */
@@ -2488,12 +2488,12 @@ error_t *workspace_extract_orphans(
             /* Profile / path dimensions: silent rejection — the orphan
              * is outside the user's declared operation scope. */
             if (!scope_accepts_profile(scope, item->profile) ||
-                !scope_accepts_path(scope, item->storage_path)) {
+                !scope_accepts_path(scope, item->storage_path, item->item_kind)) {
                 continue;
             }
             /* Exclude dimension: count, and optionally collect for
              * per-item reporting by the caller. */
-            if (scope_is_excluded(scope, item->storage_path)) {
+            if (scope_is_excluded(scope, item->storage_path, item->item_kind)) {
                 excluded++;
                 if (want_excluded) {
                     RETURN_IF_ERROR(ptr_array_push(&excluded_items, item));
@@ -2502,7 +2502,7 @@ error_t *workspace_extract_orphans(
             }
         }
 
-        if (item->item_kind == WORKSPACE_ITEM_FILE) {
+        if (item->item_kind == PATH_KIND_FILE) {
             if (want_files) RETURN_IF_ERROR(ptr_array_push(&files, item));
         } else {
             if (want_dirs) RETURN_IF_ERROR(ptr_array_push(&dirs, item));

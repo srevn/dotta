@@ -933,12 +933,12 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         }
 
         /* Filter by file filter (skip files not in CLI file list) */
-        if (!scope_accepts_path(scope, file->storage_path)) {
+        if (!scope_accepts_path(scope, file->storage_path, PATH_KIND_FILE)) {
             continue;
         }
 
         /* Filter by exclusion pattern (skip excluded files; count by reason) */
-        if (scope_is_excluded(scope, file->storage_path)) {
+        if (scope_is_excluded(scope, file->storage_path, PATH_KIND_FILE)) {
             excluded_deploy_count++;
             output_print(
                 out, OUTPUT_VERBOSE, "  Skipping (excluded): %s\n",
@@ -1042,7 +1042,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         const state_file_entry_t *file = active.entries[i];
 
         if (file->anchor.deployed_at > 0) continue;
-        if (!scope_accepts_entry(scope, file->profile, file->storage_path)) {
+        if (!scope_accepts_entry(scope, file->profile, file->storage_path, PATH_KIND_FILE)) {
             continue;
         }
 
@@ -1228,7 +1228,9 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
 
     for (size_t i = 0; i < all_count; i++) {
         /* Coherent Scope: same filters as deployment pipeline */
-        if (!scope_accepts_entry(scope, all_items[i].profile, all_items[i].storage_path)) {
+        if (!scope_accepts_entry(
+            scope, all_items[i].profile, all_items[i].storage_path, all_items[i].item_kind
+            )) {
             continue;
         }
         if (all_items[i].profile_changed) acknowledged_count++;
@@ -1239,7 +1241,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
          * to_deploy is files-only, so without this term directory-only
          * divergence would never converge. Orphan-state directory items
          * gate via no_orphans; needs_deployment rejects them here. */
-        if (converge_dirs && all_items[i].item_kind == WORKSPACE_ITEM_DIRECTORY &&
+        if (converge_dirs && all_items[i].item_kind == PATH_KIND_DIRECTORY &&
             needs_deployment(&all_items[i])) {
             err = ptr_array_push(&divergent_dirs, &all_items[i]);
             if (err) {
@@ -1307,7 +1309,9 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
                     continue;
                 }
 
-                if (!scope_accepts_entry(scope, all_items[i].profile, all_items[i].storage_path)) {
+                if (!scope_accepts_entry(
+                    scope, all_items[i].profile, all_items[i].storage_path, all_items[i].item_kind
+                    )) {
                     continue;
                 }
 
@@ -2069,7 +2073,9 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
                 continue;
             }
 
-            if (!scope_accepts_entry(scope, all_items[i].profile, all_items[i].storage_path)) {
+            if (!scope_accepts_entry(
+                scope, all_items[i].profile, all_items[i].storage_path, all_items[i].item_kind
+                )) {
                 continue;
             }
 

@@ -164,7 +164,7 @@ error_t *deploy_workspace_preflight(
         const workspace_item_t *item = &diverged[i];
 
         /* Only check directories with TYPE divergence */
-        if (item->item_kind != WORKSPACE_ITEM_DIRECTORY) {
+        if (item->item_kind != PATH_KIND_DIRECTORY) {
             continue;
         }
         if (!(item->divergence & DIVERGENCE_TYPE)) {

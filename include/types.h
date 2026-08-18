@@ -104,15 +104,17 @@ typedef enum {
 } divergence_type_t;
 
 /**
- * Workspace item kind
+ * Path kind — what a managed storage path refers to
  *
- * Distinguishes between files (which have content and are deployed to the
- * filesystem) and directories (which are metadata-only containers that exist
- * implicitly when files are deployed).
+ * The manifest's kind, not the on-disk kind: a tracked directory currently
+ * squatted by a regular file is still PATH_KIND_DIRECTORY. Symlinks are
+ * files (matching gitignore's treatment — a symlink is never descended).
+ * Layer-neutral: carried by workspace items and consumed by the infra
+ * matchers, whose directory-only patterns (`dir/`) need it.
  */
 typedef enum {
-    WORKSPACE_ITEM_FILE,       /* Regular file, symlink, or executable */
-    WORKSPACE_ITEM_DIRECTORY   /* Directory (never in deployment state) */
-} workspace_item_kind_t;
+    PATH_KIND_FILE,       /* Regular file, symlink, or executable — content + metadata */
+    PATH_KIND_DIRECTORY   /* Tracked directory — metadata only (mode/ownership) */
+} path_kind_t;
 
 #endif /* DOTTA_TYPES_H */

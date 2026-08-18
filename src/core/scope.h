@@ -228,30 +228,41 @@ bool scope_accepts_profile(const scope_t *s, const char *profile);
  * When no path filter was built, any non-NULL storage_path matches
  * (matches pathspec_matches semantics). NULL storage_path returns
  * false.
+ *
+ * `kind` is the manifest's kind of the path — PATH_KIND_DIRECTORY for a
+ * tracked directory even when a file currently squats it on disk. State
+ * file rows are always PATH_KIND_FILE; workspace items carry item_kind.
  */
-bool scope_accepts_path(const scope_t *s, const char *storage_path);
+bool scope_accepts_path(
+    const scope_t *s, const char *storage_path, path_kind_t kind
+);
 
 /**
  * Exclude dimension check.
  *
  * Returns true when storage_path IS excluded by a CLI -e pattern
  * (asymmetric with scope_accepts_* by design — reads naturally at call
- * sites: `if (scope_is_excluded(s, p)) { ... }`).
+ * sites: `if (scope_is_excluded(s, p, k)) { ... }`).
  *
  * Uses gitignore semantics via base/gitignore: `!`-negation, directory
  * walk-up (so `-e 'build/'` matches files under `build/`), anchoring,
- * and `**` recursive globs. NULL storage_path or no exclude patterns
+ * and `**` recursive globs. A directory-only pattern (`build/`) matches
+ * the directory itself only for PATH_KIND_DIRECTORY — the kind is what
+ * makes `-e 'dir/'` mean "leave that directory alone" for the directory
+ * as well as its contents. NULL storage_path or no exclude patterns
  * returns false.
  */
-bool scope_is_excluded(const scope_t *s, const char *storage_path);
+bool scope_is_excluded(
+    const scope_t *s, const char *storage_path, path_kind_t kind
+);
 
 /**
  * Combined per-iteration check.
  *
  * Equivalent to:
  *     scope_accepts_profile(s, profile)
- *         && scope_accepts_path(s, storage_path)
- *         && !scope_is_excluded(s, storage_path)
+ *         && scope_accepts_path(s, storage_path, kind)
+ *         && !scope_is_excluded(s, storage_path, kind)
  *
  * Use at sites that do not need by-reason granularity. Sites that count
  * or report exclusion reasons separately should use the three granular
@@ -260,7 +271,8 @@ bool scope_is_excluded(const scope_t *s, const char *storage_path);
 bool scope_accepts_entry(
     const scope_t *s,
     const char *profile,
-    const char *storage_path
+    const char *storage_path,
+    path_kind_t kind
 );
 
 #endif /* DOTTA_SCOPE_H */

@@ -27,7 +27,7 @@
 #include "sys/filesystem.h"
 
 /* Schema version - must match database */
-#define STATE_SCHEMA_VERSION "12"
+#define STATE_SCHEMA_VERSION "13"
 
 /* Database file name */
 #define STATE_DB_NAME "dotta.db"
@@ -74,11 +74,9 @@ struct state {
     sqlite3_stmt *stmt_insert_profile;      /* INSERT INTO enabled_profiles */
 
     /* Directory prepared statements */
-    sqlite3_stmt *stmt_insert_directory;           /* INSERT OR REPLACE tracked_directories */
-    sqlite3_stmt *stmt_get_directory;              /* SELECT * WHERE filesystem_path = ? */
-    sqlite3_stmt *stmt_update_directory;           /* UPDATE tracked_directories (preserves deployed_at) */
+    sqlite3_stmt *stmt_insert_directory;           /* UPSERT tracked_directories (projection writer) */
+    sqlite3_stmt *stmt_witness_directory;          /* UPDATE observed_at WHERE observed_at = 0 */
     sqlite3_stmt *stmt_remove_directory;           /* DELETE FROM tracked_directories */
-    sqlite3_stmt *stmt_set_directory_state;        /* UPDATE tracked_directories SET state */
     sqlite3_stmt *stmt_mark_all_directories_inactive; /* UPDATE tracked_directories SET state = 'inactive' */
 };
 
@@ -236,7 +234,7 @@ static error_t *initialize_schema(sqlite3 *db) {
         "    \"group\" TEXT,"
         "    state TEXT NOT NULL DEFAULT 'active'"
         "      CHECK(state IN ('active', 'inactive', 'deleted')),"
-        "    deployed_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))"
+        "    observed_at INTEGER NOT NULL DEFAULT 0"
         ") STRICT;"
 
         "CREATE INDEX IF NOT EXISTS idx_tracked_directories_profile "
@@ -702,11 +700,33 @@ static error_t *prepare_statements(state_t *state) {
         return sqlite_error(state->db, "Failed to prepare profile statement");
     }
 
-    /* Insert/replace tracked directory (per-row in manifest_apply_scope inner loop) */
+    /* Tracked-directory projection UPSERT (per-row in the manifest sync loop)
+     *
+     * The directory mirror of sql_insert. state = 'active' is hardcoded on
+     * both arms: the sole caller is the projection loop, and projection
+     * means in-scope — the sweep's INACTIVE downgrade is undone here for
+     * rows still covered by an enabled profile's metadata.
+     *
+     * observed_at has the monotonic-once-set semantic (same CASE shape as
+     * sql_insert): an existing non-zero witness wins; otherwise the bound
+     * value (the projection probe's lstat-gated stamp, 0 when the path is
+     * absent) is written. First non-zero writer wins, enforced in SQL. */
     const char *sql_insert_dir =
-        "INSERT OR REPLACE INTO tracked_directories "
-        "(filesystem_path, storage_path, profile, mode, owner, \"group\", state) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?);";
+        "INSERT INTO tracked_directories "
+        "(filesystem_path, storage_path, profile, mode, owner, \"group\", state, observed_at) "
+        "VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'active', ?7) "
+        "ON CONFLICT(filesystem_path) DO UPDATE SET "
+        "  storage_path = excluded.storage_path, "
+        "  profile      = excluded.profile, "
+        "  mode         = excluded.mode, "
+        "  owner        = excluded.owner, "
+        "  \"group\"    = excluded.\"group\", "
+        "  state        = 'active', "
+        "  observed_at  = CASE "
+        "                   WHEN tracked_directories.observed_at != 0 "
+        "                     THEN tracked_directories.observed_at "
+        "                   ELSE excluded.observed_at "
+        "                 END;";
 
     rc = sqlite3_prepare_v2(
         state->db, sql_insert_dir, -1, &state->stmt_insert_directory, NULL
@@ -723,35 +743,16 @@ static error_t *prepare_statements(state_t *state) {
         return sqlite_error(state->db, "Failed to prepare insert directory statement");
     }
 
-    /* Get tracked directory by path (per-row in manifest_apply_scope inner loop) */
-    const char *sql_get_dir =
-        "SELECT filesystem_path, storage_path, profile, mode, owner, \"group\", state, deployed_at "
-        "FROM tracked_directories WHERE filesystem_path = ?;";
-
-    rc = sqlite3_prepare_v2(state->db, sql_get_dir, -1, &state->stmt_get_directory, NULL);
-    if (rc != SQLITE_OK) {
-        sqlite3_finalize(state->stmt_insert_file);
-        sqlite3_finalize(state->stmt_update_anchor);
-        sqlite3_finalize(state->stmt_file_exists);
-        sqlite3_finalize(state->stmt_get_file);
-        sqlite3_finalize(state->stmt_get_file_by_storage);
-        sqlite3_finalize(state->stmt_get_by_profile);
-        sqlite3_finalize(state->stmt_remove_file);
-        sqlite3_finalize(state->stmt_insert_profile);
-        sqlite3_finalize(state->stmt_insert_directory);
-        return sqlite_error(state->db, "Failed to prepare get directory statement");
-    }
-
-    /* Update tracked directory metadata. The UPDATE list intentionally omits
-     * deployed_at so the lifecycle timestamp survives profile-disable fallback
-     * — re-binding it would clobber the original deployment time. */
-    const char *sql_update_dir =
-        "UPDATE tracked_directories "
-        "SET storage_path = ?, profile = ?, mode = ?, owner = ?, \"group\" = ? "
-        "WHERE filesystem_path = ?;";
+    /* Directory witness advance (per-row in workspace flush + apply's
+     * post-deploy loop). Monotonicity lives in the WHERE clause: a row
+     * already witnessed matches nothing, a missing row matches nothing —
+     * both are silent no-ops by design. */
+    const char *sql_witness_dir =
+        "UPDATE tracked_directories SET observed_at = ?2 "
+        "WHERE filesystem_path = ?1 AND observed_at = 0;";
 
     rc = sqlite3_prepare_v2(
-        state->db, sql_update_dir, -1, &state->stmt_update_directory, NULL
+        state->db, sql_witness_dir, -1, &state->stmt_witness_directory, NULL
     );
     if (rc != SQLITE_OK) {
         sqlite3_finalize(state->stmt_insert_file);
@@ -763,8 +764,7 @@ static error_t *prepare_statements(state_t *state) {
         sqlite3_finalize(state->stmt_remove_file);
         sqlite3_finalize(state->stmt_insert_profile);
         sqlite3_finalize(state->stmt_insert_directory);
-        sqlite3_finalize(state->stmt_get_directory);
-        return sqlite_error(state->db, "Failed to prepare update directory statement");
+        return sqlite_error(state->db, "Failed to prepare witness directory statement");
     }
 
     /* Remove tracked directory (per-removed-dir loop in apply cleanup) */
@@ -784,35 +784,11 @@ static error_t *prepare_statements(state_t *state) {
         sqlite3_finalize(state->stmt_remove_file);
         sqlite3_finalize(state->stmt_insert_profile);
         sqlite3_finalize(state->stmt_insert_directory);
-        sqlite3_finalize(state->stmt_get_directory);
-        sqlite3_finalize(state->stmt_update_directory);
+        sqlite3_finalize(state->stmt_witness_directory);
         return sqlite_error(state->db, "Failed to prepare remove directory statement");
     }
 
-    /* Set lifecycle on a tracked directory (per-row in manifest_apply_scope) */
-    const char *sql_set_dir_state =
-        "UPDATE tracked_directories SET state = ? WHERE filesystem_path = ?;";
-
-    rc = sqlite3_prepare_v2(
-        state->db, sql_set_dir_state, -1, &state->stmt_set_directory_state, NULL
-    );
-    if (rc != SQLITE_OK) {
-        sqlite3_finalize(state->stmt_insert_file);
-        sqlite3_finalize(state->stmt_update_anchor);
-        sqlite3_finalize(state->stmt_file_exists);
-        sqlite3_finalize(state->stmt_get_file);
-        sqlite3_finalize(state->stmt_get_file_by_storage);
-        sqlite3_finalize(state->stmt_get_by_profile);
-        sqlite3_finalize(state->stmt_remove_file);
-        sqlite3_finalize(state->stmt_insert_profile);
-        sqlite3_finalize(state->stmt_insert_directory);
-        sqlite3_finalize(state->stmt_get_directory);
-        sqlite3_finalize(state->stmt_update_directory);
-        sqlite3_finalize(state->stmt_remove_directory);
-        return sqlite_error(state->db, "Failed to prepare set directory state statement");
-    }
-
-    /* Mark all active directories inactive (1× per manifest_sync_directories sweep) */
+    /* Mark all active directories inactive (1× per directory sync sweep) */
     const char *sql_mark_dirs_inactive =
         "UPDATE tracked_directories SET state = 'inactive' WHERE state = 'active';";
 
@@ -830,10 +806,8 @@ static error_t *prepare_statements(state_t *state) {
         sqlite3_finalize(state->stmt_remove_file);
         sqlite3_finalize(state->stmt_insert_profile);
         sqlite3_finalize(state->stmt_insert_directory);
-        sqlite3_finalize(state->stmt_get_directory);
-        sqlite3_finalize(state->stmt_update_directory);
+        sqlite3_finalize(state->stmt_witness_directory);
         sqlite3_finalize(state->stmt_remove_directory);
-        sqlite3_finalize(state->stmt_set_directory_state);
         return sqlite_error(state->db, "Failed to prepare mark directories inactive statement");
     }
 
@@ -898,24 +872,14 @@ static void finalize_statements(state_t *state) {
         state->stmt_insert_directory = NULL;
     }
 
-    if (state->stmt_get_directory) {
-        sqlite3_finalize(state->stmt_get_directory);
-        state->stmt_get_directory = NULL;
-    }
-
-    if (state->stmt_update_directory) {
-        sqlite3_finalize(state->stmt_update_directory);
-        state->stmt_update_directory = NULL;
+    if (state->stmt_witness_directory) {
+        sqlite3_finalize(state->stmt_witness_directory);
+        state->stmt_witness_directory = NULL;
     }
 
     if (state->stmt_remove_directory) {
         sqlite3_finalize(state->stmt_remove_directory);
         state->stmt_remove_directory = NULL;
-    }
-
-    if (state->stmt_set_directory_state) {
-        sqlite3_finalize(state->stmt_set_directory_state);
-        state->stmt_set_directory_state = NULL;
     }
 
     if (state->stmt_mark_all_directories_inactive) {
@@ -2108,10 +2072,10 @@ error_t *state_get_all_files(
 }
 
 /**
- * Add directory entry to state
+ * Add or refresh a tracked directory (projection writer)
  *
- * Uses prepared statement for performance.
- * Replaces existing entry if filesystem_path already exists.
+ * UPSERT: activates the row and preserves the witness — see the SQL
+ * comment on sql_insert_dir and the header contract for semantics.
  *
  * @param state State (must not be NULL)
  * @param entry Directory entry (must not be NULL)
@@ -2156,8 +2120,12 @@ error_t *state_add_directory(state_t *state, const state_directory_entry_t *entr
         sqlite3_bind_null(stmt, 6);
     }
 
-    /* State */
-    sqlite3_bind_text(stmt, 7, lifecycle_to_sql_text(entry->lifecycle), -1, SQLITE_STATIC);
+    /* observed_at — the projection probe's lstat-gated stamp (0 when the
+     * path was absent at sync time). The UPSERT's CASE preserves any
+     * existing non-zero witness, so this bind only ever seeds the first
+     * observation. state is not bound: 'active' is hardcoded in the SQL
+     * (projection means in-scope). */
+    sqlite3_bind_int64(stmt, 7, (sqlite3_int64) entry->observed_at);
 
     /* Execute */
     int rc = sqlite3_step(stmt);
@@ -2236,7 +2204,7 @@ error_t *state_get_all_directories(
      * per workspace_load. Caching the statement on the handle would buy nothing
      * — see state_get_all_files for the same pattern. */
     const char *sql_dirs =
-        "SELECT filesystem_path, storage_path, profile, mode, owner, \"group\", state, deployed_at "
+        "SELECT filesystem_path, storage_path, profile, mode, owner, \"group\", state, observed_at "
         "FROM tracked_directories ORDER BY filesystem_path;";
 
     sqlite3_stmt *stmt = NULL;
@@ -2260,7 +2228,7 @@ error_t *state_get_all_directories(
         const char *owner = (const char *) sqlite3_column_text(stmt, 4);
         const char *group = (const char *) sqlite3_column_text(stmt, 5);
         const char *state_str = (const char *) sqlite3_column_text(stmt, 6);
-        sqlite3_int64 deployed_at = sqlite3_column_int64(stmt, 7);
+        sqlite3_int64 observed_at = sqlite3_column_int64(stmt, 7);
 
         /* Validate non-nullable columns */
         if (!fs_path || !storage || !profile) {
@@ -2276,7 +2244,7 @@ error_t *state_get_all_directories(
         entries[i].owner = DUP_OPT(owner);
         entries[i].group = DUP_OPT(group);
         entries[i].lifecycle = lifecycle_from_sql_text(state_str);
-        entries[i].deployed_at = (time_t) deployed_at;
+        entries[i].observed_at = (time_t) observed_at;
 
         /* Check allocation success */
         if (!entries[i].filesystem_path || !entries[i].storage_path || !entries[i].profile) {
@@ -2306,77 +2274,70 @@ error_t *state_get_all_directories(
 }
 
 /**
- * Update directory entry
+ * Record first observation of a tracked directory
  *
- * Updates all fields except filesystem_path (primary key) and deployed_at.
- * The deployed_at field is preserved to maintain lifecycle tracking.
- *
- * Updated fields: storage_path, profile, mode, owner, group
- * Preserved fields: filesystem_path (WHERE clause), deployed_at (lifecycle)
- *
- * This is used during profile disable to update directory entries to their
- * fallback profiles while preserving the original deployment timestamp.
- *
- * @param state State (must not be NULL)
- * @param entry Entry to update (must not be NULL, filesystem_path must exist)
- * @return Error or NULL on success
+ * The directory mirror of the anchor-advance witness channel. The WHERE
+ * clause (observed_at = 0) is the monotonicity guard: a row already
+ * witnessed matches nothing, a missing row matches nothing — both are
+ * silent no-ops (mirrors state_update_anchor's not-found-is-OK contract).
  */
-error_t *state_update_directory(
+error_t *state_witness_directory(
     state_t *state,
-    const state_directory_entry_t *entry
+    const char *filesystem_path,
+    time_t observed_at
 ) {
     CHECK_NULL(state);
-    CHECK_NULL(entry);
-    CHECK_NULL(entry->filesystem_path);
+    CHECK_NULL(filesystem_path);
     CHECK_NULL(state->db);
-    CHECK_NULL(state->stmt_update_directory);
+    CHECK_NULL(state->stmt_witness_directory);
 
-    sqlite3_stmt *stmt = state->stmt_update_directory;
+    if (observed_at <= 0) {
+        return ERROR(ERR_INVALID_ARG, "Directory witness timestamp must be > 0");
+    }
+
+    sqlite3_stmt *stmt = state->stmt_witness_directory;
     sqlite3_reset(stmt);
     sqlite3_clear_bindings(stmt);
+    sqlite3_bind_text(stmt, 1, filesystem_path, -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int64(stmt, 2, (sqlite3_int64) observed_at);
 
-    /* Bind parameters (5 fields + WHERE clause) */
-    sqlite3_bind_text(stmt, 1, entry->storage_path, -1, SQLITE_TRANSIENT);
-    sqlite3_bind_text(stmt, 2, entry->profile, -1, SQLITE_TRANSIENT);
-
-    /* Mode (optional) */
-    if (entry->mode > 0) {
-        sqlite3_bind_int(stmt, 3, entry->mode);
-    } else {
-        sqlite3_bind_null(stmt, 3);
-    }
-
-    /* Owner (optional) */
-    if (entry->owner) {
-        sqlite3_bind_text(stmt, 4, entry->owner, -1, SQLITE_TRANSIENT);
-    } else {
-        sqlite3_bind_null(stmt, 4);
-    }
-
-    /* Group (optional) */
-    if (entry->group) {
-        sqlite3_bind_text(stmt, 5, entry->group, -1, SQLITE_TRANSIENT);
-    } else {
-        sqlite3_bind_null(stmt, 5);
-    }
-
-    /* WHERE clause: filesystem_path */
-    sqlite3_bind_text(stmt, 6, entry->filesystem_path, -1, SQLITE_TRANSIENT);
-
-    /* Execute */
     int rc = sqlite3_step(stmt);
-
     if (rc != SQLITE_DONE) {
-        return sqlite_error(state->db, "Failed to update directory");
+        return sqlite_error(state->db, "Failed to record directory witness");
     }
 
-    /* Check if row was actually updated */
-    int changes = sqlite3_changes(state->db);
-    if (changes == 0) {
-        return ERROR(
-            ERR_NOT_FOUND, "Directory not found in state: %s",
-            entry->filesystem_path
-        );
+    return NULL;
+}
+
+/**
+ * Retire rows that left scope without ever being materialized
+ *
+ * Cold path — one call per scope transition. Local prepare+finalize per
+ * table; a prepared-statement roster entry would buy nothing (see
+ * state_get_all_directories for the same trade).
+ */
+error_t *state_reclaim_unmaterialized(state_t *state) {
+    CHECK_NULL(state);
+
+    /* Empty state (no DB file) — nothing to reclaim, success. */
+    if (!state->db) return NULL;
+
+    static const char *const reclaim_sql[] = {
+        "DELETE FROM virtual_manifest WHERE state != 'active' AND observed_at = 0;",
+        "DELETE FROM tracked_directories WHERE state != 'active' AND observed_at = 0;",
+    };
+
+    for (size_t i = 0; i < sizeof(reclaim_sql) / sizeof(reclaim_sql[0]); i++) {
+        char *errmsg = NULL;
+        int rc = sqlite3_exec(state->db, reclaim_sql[i], NULL, NULL, &errmsg);
+        if (rc != SQLITE_OK) {
+            error_t *err = ERROR(
+                ERR_STATE_INVALID, "Failed to reclaim unmaterialized rows: %s",
+                errmsg ? errmsg : sqlite3_errstr(rc)
+            );
+            sqlite3_free(errmsg);
+            return err;
+        }
     }
 
     return NULL;
@@ -2414,138 +2375,9 @@ error_t *state_remove_directory(state_t *state, const char *filesystem_path) {
 }
 
 /**
- * Get directory entry from state
- *
- * Retrieves single directory entry by filesystem path.
- * Returns allocated entry that caller must free with state_free_directory_entry().
- *
- * @param state State (must not be NULL)
- * @param filesystem_path Directory path to lookup (must not be NULL)
- * @param out Directory entry (must not be NULL, caller must free)
- * @return Error or NULL on success (ERR_NOT_FOUND if doesn't exist)
- */
-error_t *state_get_directory(
-    const state_t *state,
-    const char *filesystem_path,
-    state_directory_entry_t **out
-) {
-    CHECK_NULL(state);
-    CHECK_NULL(filesystem_path);
-    CHECK_NULL(out);
-    CHECK_NULL(state->db);
-    CHECK_NULL(state->stmt_get_directory);
-
-    *out = NULL;
-
-    sqlite3_stmt *stmt = state->stmt_get_directory;
-    sqlite3_reset(stmt);
-    sqlite3_clear_bindings(stmt);
-    sqlite3_bind_text(stmt, 1, filesystem_path, -1, SQLITE_TRANSIENT);
-
-    /* Execute query */
-    int rc = sqlite3_step(stmt);
-    if (rc == SQLITE_DONE) {
-        return ERROR(ERR_NOT_FOUND, "Directory '%s' not found in state", filesystem_path);
-    }
-    if (rc != SQLITE_ROW) {
-        return sqlite_error(state->db, "Failed to query directory");
-    }
-
-    /* Allocate entry */
-    state_directory_entry_t *entry = calloc(1, sizeof(state_directory_entry_t));
-    if (!entry) {
-        return ERROR(ERR_MEMORY, "Failed to allocate directory entry");
-    }
-
-    /* filesystem_path (column 0) */
-    const char *fs_path = (const char *) sqlite3_column_text(stmt, 0);
-    entry->filesystem_path = strdup(fs_path ? fs_path : "");
-
-    /* storage_path (column 1) */
-    const char *storage = (const char *) sqlite3_column_text(stmt, 1);
-    entry->storage_path = strdup(storage ? storage : "");
-
-    /* profile (column 2) */
-    const char *profile = (const char *) sqlite3_column_text(stmt, 2);
-    entry->profile = strdup(profile ? profile : "");
-
-    /* mode (column 3, optional) */
-    if (sqlite3_column_type(stmt, 3) != SQLITE_NULL) {
-        entry->mode = (mode_t) sqlite3_column_int(stmt, 3);
-    } else {
-        entry->mode = 0;
-    }
-
-    /* owner (column 4, optional) */
-    const char *owner = (const char *) sqlite3_column_text(stmt, 4);
-    if (owner) entry->owner = strdup(owner);
-
-    /* group (column 5, optional) */
-    const char *group = (const char *) sqlite3_column_text(stmt, 5);
-    if (group) entry->group = strdup(group);
-
-    /* state (column 6) */
-    entry->lifecycle = lifecycle_from_sql_text(
-        (const char *) sqlite3_column_text(stmt, 6)
-    );
-
-    /* deployed_at (column 7) */
-    entry->deployed_at = sqlite3_column_int64(stmt, 7);
-
-    *out = entry;
-    return NULL;
-}
-
-/**
- * Set directory lifecycle phase
- *
- * Updates the state column for a directory entry. Vocabulary mirrors the
- * tracked_directories CHECK constraint — LIFECYCLE_RELEASED is rejected here
- * (and at the SQL level as defense-in-depth). Other phases are valid by type.
- *
- * @param state State handle (must not be NULL, must have active transaction)
- * @param filesystem_path Directory path (must not be NULL)
- * @param new_state Lifecycle state (STATE_ACTIVE, STATE_INACTIVE, or STATE_DELETED)
- * @return Error or NULL on success
- */
-error_t *state_set_directory_state(
-    state_t *state,
-    const char *filesystem_path,
-    state_lifecycle_t new_lifecycle
-) {
-    CHECK_NULL(state);
-    CHECK_NULL(state->db);
-    CHECK_NULL(filesystem_path);
-    CHECK_NULL(state->stmt_set_directory_state);
-
-    /* Validate state value */
-    if (new_lifecycle == LIFECYCLE_RELEASED) {
-        return ERROR(
-            ERR_INVALID_ARG, "LIFECYCLE_RELEASED is not valid for directory entries"
-        );
-    }
-
-    sqlite3_stmt *stmt = state->stmt_set_directory_state;
-    sqlite3_reset(stmt);
-    sqlite3_clear_bindings(stmt);
-    sqlite3_bind_text(stmt, 1, lifecycle_to_sql_text(new_lifecycle), -1, SQLITE_STATIC);
-    sqlite3_bind_text(stmt, 2, filesystem_path, -1, SQLITE_TRANSIENT);
-
-    /* Execute */
-    int rc = sqlite3_step(stmt);
-
-    if (rc != SQLITE_DONE) {
-        return sqlite_error(state->db, "Failed to update directory state");
-    }
-
-    /* Directory not found is non-fatal — graceful degradation. */
-    return NULL;
-}
-
-/**
  * Mark all ACTIVE directories as inactive
  *
- * Bulk operation for manifest_sync_directories to prepare for rebuild.
+ * Bulk operation for the manifest layer's directory sweep.
  *
  * Only LIFECYCLE_ACTIVE rows are downgraded to LIFECYCLE_INACTIVE. LIFECYCLE_DELETED and
  * LIFECYCLE_RELEASED are preserved — they represent downstream intent (controlled
@@ -2672,7 +2504,7 @@ static error_t *bulk_purge_by_profile(
 /* Bulk UPDATE on a per-profile lifecycle-set, shared by file and directory
  * primitives. Vocabulary correctness is enforced by the type system; the
  * directory-only LIFECYCLE_RELEASED rejection lives at the public-facing
- * directory wrappers, mirroring state_set_directory_state. */
+ * directory wrapper (state_transition_directories_by_profile). */
 static error_t *bulk_transition_by_profile(
     state_t *state,
     const char *table,
@@ -2762,8 +2594,8 @@ error_t *state_transition_directories_by_profile(
     state_lifecycle_t new_lifecycle,
     size_t *out_changed
 ) {
-    /* Directory rows do not carry LIFECYCLE_RELEASED (no Git blob identity).
-     * Mirror state_set_directory_state's rejection. */
+    /* Directory rows do not carry LIFECYCLE_RELEASED (no Git blob identity);
+     * this is the sole write boundary that rejects it. */
     if (new_lifecycle == LIFECYCLE_RELEASED) {
         return ERROR(
             ERR_INVALID_ARG,
@@ -2775,22 +2607,6 @@ error_t *state_transition_directories_by_profile(
         state, "tracked_directories", profile,
         from_lifecycles, from_count, new_lifecycle, out_changed
     );
-}
-
-/**
- * Free single directory entry
- */
-void state_free_directory_entry(state_directory_entry_t *entry) {
-    if (!entry) {
-        return;
-    }
-
-    free(entry->filesystem_path);
-    free(entry->storage_path);
-    free(entry->profile);
-    free(entry->owner);
-    free(entry->group);
-    free(entry);
 }
 
 /**

@@ -6,10 +6,12 @@
  *
  *   - Consistency layer: manifest_apply_scope, manifest_sync_diff,
  *     manifest_add_files, manifest_update_files, manifest_remove_files,
- *     manifest_reconcile, manifest_sync_directories. Each operates within
- *     a caller-managed transaction and updates the virtual_manifest +
- *     tracked_directories tables to reflect the post-operation Git
- *     state.
+ *     manifest_reconcile. Each operates within a caller-managed
+ *     transaction and updates the virtual_manifest + tracked_directories
+ *     tables to reflect the post-operation Git state. Every entry point
+ *     ends its state writes with the private scope-transition epilogue
+ *     (directory sweep + re-projection, then reclaim of unwitnessed rows
+ *     that left scope).
  *
  *   - Tree loader: manifest_load_tree_files projects a single Git
  *     tree's files into the public state_files_t carrier. Used by the
@@ -70,6 +72,7 @@ typedef struct {
     /* Loss-side */
     size_t files_reassigned;     /* Files reassigned to a different profile */
     size_t files_orphaned;       /* Files that left scope entirely (→ LIFECYCLE_INACTIVE) */
+    size_t files_reclaimed;      /* Ghost rows that left scope (retired; no cleanup pends) */
 } manifest_scope_stats_t;
 
 /**
@@ -166,7 +169,11 @@ error_t *manifest_persist_profile_head(
  *       LIFECYCLE_ACTIVE  → LIFECYCLE_INACTIVE (staged for removal by apply).
  *       LIFECYCLE_INACTIVE / LIFECYCLE_DELETED / LIFECYCLE_RELEASED: preserved
  *       (downgrading them would break downstream intent signals).
- *   - tracked_directories rebuilt via manifest_sync_directories.
+ *     Exception: out-of-scope rows never witnessed on disk
+ *     (observed_at = 0) are reclaimed — deleted outright, both tables —
+ *     by the scope-transition epilogue. A ghost row carries no
+ *     filesystem obligation, so there is nothing to stage or clean.
+ *   - tracked_directories swept and re-projected from enabled profiles.
  *   - The deployment anchor (deployed_blob_oid, deployed_at, stat_*) is
  *     preserved on every UPDATE — apply_scope is a pure VWD-cache
  *     writer, not a confirmation event.
@@ -177,10 +184,13 @@ error_t *manifest_persist_profile_head(
  *   (files_claimed + lstat-derived files_present / files_missing /
  *   access_errors) as the new-manifest sync processes its entries.
  *   A profile that owned rows no longer in scope receives loss-side
- *   fields (files_reassigned / files_orphaned) during the orphan pass.
- *   A profile can collect both simultaneously. Overlap semantics: if B
- *   overrides A for path X, B gets files_claimed for X and A gets
- *   files_reassigned for X. The sum is the true manifest size.
+ *   fields during the orphan pass: files_reassigned, plus either
+ *   files_orphaned (witnessed row — staged for apply cleanup) or
+ *   files_reclaimed (ghost row — retired by the epilogue, no cleanup
+ *   pends). A profile can collect gain and loss simultaneously.
+ *   Overlap semantics: if B overrides A for path X, B gets files_claimed
+ *   for X and A gets files_reassigned for X. The sum is the true
+ *   manifest size.
  *
  * Error Conditions:
  *   - ERR_INVALID_ARG: stats_filter contains a duplicate profile name,
@@ -621,53 +631,6 @@ error_t *manifest_sync_diff(
     size_t *out_removed,
     size_t *out_fallbacks,
     size_t *out_skipped
-);
-
-/**
- * Sync tracked directories from enabled profiles
- *
- * Rebuilds the tracked_directories table from metadata.
- * Called after profile enable/disable/reorder to maintain directory tracking.
- *
- * Algorithm:
- *   1. Clear all tracked directories (idempotent start)
- *   2. For each enabled profile:
- *      a. Load metadata from Git (or skip if doesn't exist)
- *      b. Extract directories via metadata_get_items_by_kind()
- *      c. Add to state via state_add_directory() with profile attribution
- *   3. All within caller's active transaction
- *
- * Pattern: Rebuild (not incremental)
- *   - Directories have no lifecycle states to preserve
- *   - Clear + repopulate is simple, correct, and fast
- *   - Already idempotent via INSERT OR REPLACE
- *
- * Preconditions:
- *   - state MUST have active transaction (via state_open)
- *   - enabled_profiles MUST be the engine's iteration set (caller built
- *     `mounts` from the same list)
- *
- * Postconditions:
- *   - tracked_directories table reflects enabled_profiles
- *   - Transaction remains open (caller commits)
- *   - Missing metadata handled gracefully (not an error)
- *
- * Performance: O(D) where D = total directories across enabled profiles
- *              (typically < 50 even for large configs)
- *
- * @param repo Git repository (must not be NULL)
- * @param state State with active transaction (must not be NULL)
- * @param enabled_profiles Current enabled profiles (must not be NULL)
- * @param mounts Per-machine mount table covering enabled_profiles
- *              (must not be NULL)
- * @return Error or NULL on success
- */
-error_t *manifest_sync_directories(
-    git_repository *repo,
-    state_t *state,
-    arena_t *arena,
-    const string_array_t *enabled_profiles,
-    const mount_table_t *mounts
 );
 
 /**

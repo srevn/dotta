@@ -141,7 +141,8 @@ static void print_manifest_enable_stats(
  *
  * Reports loss-side attribution for one disabled profile from a single
  * apply_scope call: files_reassigned (picked up by a fallback profile)
- * + files_orphaned (left scope entirely → LIFECYCLE_INACTIVE).
+ * + files_orphaned (left scope entirely → LIFECYCLE_INACTIVE)
+ * + files_reclaimed (ghost rows retired by the epilogue — no cleanup pends).
  */
 static void print_manifest_disable_stats(
     const output_t *out,
@@ -150,7 +151,8 @@ static void print_manifest_disable_stats(
 ) {
     if (!stats) return;
 
-    size_t total = stats->files_reassigned + stats->files_orphaned;
+    size_t total = stats->files_reassigned + stats->files_orphaned
+                 + stats->files_reclaimed;
     if (total == 0) return;
 
     if (output_is_verbose(out)) {
@@ -181,6 +183,15 @@ static void print_manifest_disable_stats(
             );
         }
 
+        if (stats->files_reclaimed > 0) {
+            output_styled(
+                out, OUTPUT_VERBOSE,
+                "    - {cyan}%zu{reset} never-deployed file%s (reclaimed, nothing to remove)\n",
+                stats->files_reclaimed,
+                stats->files_reclaimed == 1 ? "" : "s"
+            );
+        }
+
         output_newline(out, OUTPUT_VERBOSE);
     } else {
         /* Compact summary */
@@ -196,6 +207,13 @@ static void print_manifest_disable_stats(
                 out, OUTPUT_NORMAL, "  Reassigned %zu file%s to lower precedence\n",
                 stats->files_reassigned,
                 stats->files_reassigned == 1 ? "" : "s"
+            );
+        }
+
+        if (stats->files_reclaimed > 0) {
+            output_print(
+                out, OUTPUT_NORMAL, "  Reclaimed %zu never-deployed file%s\n",
+                stats->files_reclaimed, stats->files_reclaimed == 1 ? "" : "s"
             );
         }
     }

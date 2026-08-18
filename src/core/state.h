@@ -50,9 +50,9 @@ typedef enum {
  *
  * Vocabulary asymmetry: tracked_directories' CHECK constraint excludes
  * 'released' — directories cannot lose authority externally because they
- * have no blob-level identity in Git. state_set_directory_state and
- * state_transition_directories_by_profile reject LIFECYCLE_RELEASED at
- * their boundary; the SQL CHECK is defense-in-depth.
+ * have no blob-level identity in Git. state_transition_directories_by_profile
+ * rejects LIFECYCLE_RELEASED at its boundary; the SQL CHECK is
+ * defense-in-depth.
  */
 typedef enum {
     LIFECYCLE_ACTIVE = 0,    /* Normal entry, file is in scope and should be managed */
@@ -152,6 +152,8 @@ static inline stat_cache_t stat_cache_from_stat(const struct stat *st) {
  *   - observed_at is zero iff dotta has never lstat-confirmed the path
  *     on disk in scope (ghost file); any non-zero value is the earliest
  *     observation time and never regresses.
+ *     tracked_directories.observed_at carries the identical witness
+ *     semantic for directories (see state_directory_entry_t).
  *
  * Classifier reads (workspace.c analyze_file_divergence and the
  * encryption-policy classifier):
@@ -271,6 +273,13 @@ typedef struct {
 
 /**
  * State directory entry
+ *
+ * observed_at carries the identical witness semantic as the file anchor's
+ * observed_at (see deployment_anchor_t above): zero means dotta has never
+ * lstat-confirmed the path on disk in scope (ghost directory); any
+ * non-zero value is the earliest observation time and never regresses
+ * (SQL-enforced monotonic in both writers: the state_add_directory UPSERT
+ * and state_witness_directory).
  */
 typedef struct {
     char *filesystem_path;    /* Deployed path (PRIMARY KEY, e.g., /home/user/.config/fish) */
@@ -282,7 +291,7 @@ typedef struct {
 
     /* Lifecycle tracking */
     state_lifecycle_t lifecycle; /* Lifecycle phase; LIFECYCLE_RELEASED is rejected for directories */
-    time_t deployed_at;       /* Lifecycle timestamp (0 = never deployed, >0 = known) */
+    time_t observed_at;       /* First lstat-observation in scope (monotonic once set; 0 = never) */
 } state_directory_entry_t;
 
 /**
@@ -1033,9 +1042,20 @@ error_t *state_get_entries_by_profile(
 );
 
 /**
- * Add directory entry to state
+ * Add or refresh a tracked directory (projection writer)
  *
- * @param state State (must not be NULL)
+ * True UPSERT — the directory mirror of state_add_file. The sole caller
+ * is the manifest layer's projection loop, and projection means in-scope:
+ * the row's state is set to 'active' unconditionally (INSERT and UPDATE
+ * alike), reactivating rows the sweep just downgraded.
+ *
+ * Witness preservation is encoded in SQL: observed_at follows the
+ * monotonic-once-set CASE (an existing non-zero column wins; otherwise
+ * entry->observed_at is written). The projection probe seeds the first
+ * observation on scope entry; repeat syncs are idempotent no-ops on the
+ * column.
+ *
+ * @param state State (must not be NULL, must have active transaction)
  * @param entry Directory entry (must not be NULL)
  * @return Error or NULL on success
  */
@@ -1043,6 +1063,48 @@ error_t *state_add_directory(
     state_t *state,
     const state_directory_entry_t *entry
 );
+
+/**
+ * Record first observation of a tracked directory
+ *
+ * The directory mirror of the anchor-advance witness channel. Monotonicity
+ * lives in the WHERE clause (observed_at = 0), not in C: a row already
+ * witnessed is untouched, and a missing row is a no-op (mirrors
+ * state_update_anchor's not-found-is-OK contract).
+ *
+ * @param state State (must not be NULL, must have active transaction)
+ * @param filesystem_path Directory path (must not be NULL)
+ * @param observed_at Observation timestamp (must be > 0)
+ * @return Error or NULL on success
+ */
+error_t *state_witness_directory(
+    state_t *state,
+    const char *filesystem_path,
+    time_t observed_at
+);
+
+/**
+ * Retire rows that left scope without ever being materialized
+ *
+ * observed_at == 0 records "no filesystem obligation": dotta never
+ * lstat-confirmed the path on disk while the row was in scope, so there
+ * is nothing to delete — orphan reporting and cleanup would both be
+ * describing work that does not exist. Two one-shot DELETEs:
+ *
+ *   DELETE FROM virtual_manifest    WHERE state != 'active' AND observed_at = 0;
+ *   DELETE FROM tracked_directories WHERE state != 'active' AND observed_at = 0;
+ *
+ * Called by the manifest layer's scope-transition epilogue
+ * (manifest_close_scope) after the directory sweep + re-projection, so
+ * rows re-entering scope are re-activated before the reclaim predicate
+ * runs. On empty state (no DB), no-op success. User-facing attribution
+ * does not read counts from here — the orphan pass attributes ghosts
+ * per-profile from the snapshot it already holds (files_reclaimed).
+ *
+ * @param state State (must not be NULL, must have active transaction)
+ * @return Error or NULL on success
+ */
+error_t *state_reclaim_unmaterialized(state_t *state);
 
 /**
  * Get all tracked directories
@@ -1065,27 +1127,6 @@ error_t *state_get_all_directories(
 );
 
 /**
- * Update directory entry
- *
- * Updates all fields except filesystem_path (primary key) and deployed_at.
- * The deployed_at field is preserved to maintain lifecycle tracking.
- *
- * Updated fields: storage_path, profile, mode, owner, group
- * Preserved fields: filesystem_path (WHERE clause), deployed_at (lifecycle)
- *
- * This is used during profile disable to update directory entries to their
- * fallback profiles while preserving the original deployment timestamp.
- *
- * @param state State (must not be NULL)
- * @param entry Entry to update (must not be NULL, filesystem_path must exist)
- * @return Error or NULL on success
- */
-error_t *state_update_directory(
-    state_t *state,
-    const state_directory_entry_t *entry
-);
-
-/**
  * Remove directory entry by path
  *
  * Deletes directory entry from state. Used during orphan cleanup after
@@ -1098,46 +1139,6 @@ error_t *state_update_directory(
 error_t *state_remove_directory(state_t *state, const char *filesystem_path);
 
 /**
- * Get directory entry from state
- *
- * Retrieves single directory entry by filesystem path.
- * Caller owns the returned entry and must free it with state_free_directory_entry().
- *
- * Out-parameter contract: `*out` is set to NULL up front on every code
- * path (success-with-row, ERR_NOT_FOUND, and any other error). Callers
- * may treat *out as definitively NULL on any non-success return without
- * a defensive guard before state_free_directory_entry().
- *
- * @param state State (must not be NULL)
- * @param filesystem_path Directory path to lookup (must not be NULL)
- * @param out Directory entry (must not be NULL, caller must free with state_free_directory_entry)
- * @return Error or NULL on success (ERR_NOT_FOUND if doesn't exist)
- */
-error_t *state_get_directory(
-    const state_t *state,
-    const char *filesystem_path,
-    state_directory_entry_t **out
-);
-
-/**
- * Set directory lifecycle phase
- *
- * Updates the state column for a directory entry. Vocabulary is the file
- * set minus LIFECYCLE_RELEASED — directories cannot lose authority externally
- * (no Git blob identity). LIFECYCLE_RELEASED is rejected with ERR_INVALID_ARG.
- *
- * @param state State handle (must not be NULL, must have active transaction)
- * @param filesystem_path Directory path (must not be NULL)
- * @param new_lifecycle Target lifecycle phase (must not be LIFECYCLE_RELEASED)
- * @return Error or NULL on success
- */
-error_t *state_set_directory_state(
-    state_t *state,
-    const char *filesystem_path,
-    state_lifecycle_t new_lifecycle
-);
-
-/**
  * Mark all ACTIVE directories as inactive
  *
  * Bulk operation for manifest_sync_directories to prepare for rebuild.
@@ -1145,7 +1146,7 @@ error_t *state_set_directory_state(
  * Only LIFECYCLE_ACTIVE rows are downgraded to LIFECYCLE_INACTIVE.
  * LIFECYCLE_DELETED is preserved (it represents downstream intent that must
  * survive a reconciliation sweep). Directory rows do not carry
- * LIFECYCLE_RELEASED — see state_set_directory_state.
+ * LIFECYCLE_RELEASED — see the state_lifecycle_t vocabulary note.
  *
  * @param state State handle (must not be NULL, must have active transaction)
  * @return Error or NULL on success
@@ -1184,7 +1185,8 @@ error_t *state_purge_directories_by_profile(
  *
  * Mirror of state_transition_files_by_profile for the tracked_directories
  * table. new_lifecycle must not be LIFECYCLE_RELEASED — directory rows do
- * not carry that phase. The runtime guard mirrors state_set_directory_state.
+ * not carry that phase (see the state_lifecycle_t vocabulary note); this
+ * boundary rejects it with ERR_INVALID_ARG.
  *
  * @param state State (must not be NULL, must have active transaction)
  * @param profile Profile name to filter on (must not be NULL)
@@ -1202,12 +1204,5 @@ error_t *state_transition_directories_by_profile(
     state_lifecycle_t new_lifecycle,
     size_t *out_changed
 );
-
-/**
- * Free single directory entry
- *
- * @param entry Entry to free (can be NULL)
- */
-void state_free_directory_entry(state_directory_entry_t *entry);
 
 #endif /* DOTTA_STATE_H */

@@ -94,6 +94,18 @@ struct precedence_build_ctx {
     error_t *error;                /* Error propagation (set on failure) */
 };
 
+/* Scope-transition epilogue (defined after the directory sync it wraps).
+ * Every scope-mutating entry point ends its state writes with this call:
+ * directory sweep + re-projection, then reclaim of unwitnessed rows that
+ * left scope. */
+static error_t *manifest_close_scope(
+    git_repository *repo,
+    state_t *state,
+    arena_t *arena,
+    const string_array_t *enabled_profiles,
+    const mount_table_t *mounts
+);
+
 /**
  * Apply per-profile metadata to a Git-built precedence-view row.
  *
@@ -1160,11 +1172,8 @@ static error_t *directory_entry_from_metadata(
      * mutability. The borrow shares the arena lifetime of the strdup'd
      * siblings below.
      *
-     * deployed_at intentionally left zero-initialized by calloc. The
-     * INSERT in state_add_directory omits the column (schema DEFAULT
-     * strftime('%s','now') fires for new rows); the UPDATE in
-     * state_update_directory also omits it (preserving the existing
-     * value on refresh). The field on this struct is never persisted. */
+     * observed_at is left zero by calloc; the sync loop's probe stamps
+     * it before persisting when the path exists on disk. */
     entry->filesystem_path = (char *) fs_path;
     entry->storage_path = arena_strdup(arena, item->key);
     entry->profile = arena_strdup(arena, profile);
@@ -1443,11 +1452,13 @@ static error_t *manifest_repair_stale(
         if (err) goto cleanup;
     }
 
-    /* Phase 5: Sync tracked directories to reflect current Git state.
+    /* Phase 5: Scope epilogue — directory re-sync + ghost reclaim.
      *
-     * External Git changes may have added/removed directories in metadata.
-     * Re-syncing ensures the tracked_directories table is consistent. */
-    err = manifest_sync_directories(repo, state, arena, enabled_profiles, mounts);
+     * External Git changes may have added/removed directories in metadata;
+     * the epilogue re-projects tracked_directories and retires unwitnessed
+     * rows that left scope (a RELEASED ghost never reaches release
+     * theater — there is nothing on disk to release). */
+    err = manifest_close_scope(repo, state, arena, enabled_profiles, mounts);
     if (err) {
         err = error_wrap(err, "Failed to sync directories after stale repair");
         goto cleanup;
@@ -1709,24 +1720,31 @@ error_t *manifest_apply_scope(
             void *p = hashmap_get(stats_map, old->profile);
             if (p) {
                 size_t sidx = (size_t) (uintptr_t) p - 1;
-                out_stats[sidx].files_orphaned++;
+                /* A row never witnessed on disk leaves scope with no
+                 * filesystem obligation: close_scope's reclaim retires it
+                 * (same predicate, SQL-enforced) — attribute it as
+                 * reclaimed, not staged for removal. */
+                if (old->anchor.observed_at == 0) {
+                    out_stats[sidx].files_reclaimed++;
+                } else {
+                    out_stats[sidx].files_orphaned++;
+                }
             }
         }
     }
 
-    /* Step 6: Rebuild tracked_directories from the new scope.
+    /* Step 6: Scope epilogue — directory sweep/re-projection + reclaim.
      *
-     * manifest_sync_directories uses the mark-ACTIVE-as-INACTIVE then
-     * reactivate pattern (see state_mark_all_directories_inactive —
-     * narrowed in a prior commit to preserve LIFECYCLE_DELETED/RELEASED).
      * Directory fallback and orphan semantics fall out of the rebuild:
-     * directories still in any enabled profile's metadata are
-     * reactivated with the new owner; directories that left scope
-     * remain LIFECYCLE_INACTIVE for apply-time cleanup.
+     * directories still in any enabled profile's metadata are reactivated
+     * with the new owner; witnessed directories that left scope remain
+     * LIFECYCLE_INACTIVE for apply-time cleanup; unwitnessed rows (files
+     * and directories alike, including the ghosts flipped INACTIVE in
+     * step 5 above) are reclaimed.
      *
      * Reuses the mount table built above — directories share the same
      * profile→target resolution as files. */
-    err = manifest_sync_directories(repo, state, arena, enabled, mounts);
+    err = manifest_close_scope(repo, state, arena, enabled, mounts);
     if (err) {
         err = error_wrap(err, "Failed to sync tracked directories");
         goto cleanup;
@@ -2014,7 +2032,7 @@ error_t *manifest_remove_files(
     if (err) goto cleanup;
 
     /* 3. Sync tracked directories */
-    err = manifest_sync_directories(repo, state, arena, enabled_profiles, mounts);
+    err = manifest_close_scope(repo, state, arena, enabled_profiles, mounts);
     if (err) {
         goto cleanup;
     }
@@ -2102,7 +2120,7 @@ error_t *manifest_update_files(
     if (item_count == 0) {
         /* No file items to process, but still sync directories.
          * Handles cases where only directory metadata changed. */
-        return manifest_sync_directories(
+        return manifest_close_scope(
             repo, state, arena, enabled_profiles, mounts
         );
     }
@@ -2290,7 +2308,7 @@ error_t *manifest_update_files(
     string_array_free(updated_profiles);
 
     /* 5. Sync tracked directories */
-    err = manifest_sync_directories(repo, state, arena, enabled_profiles, mounts);
+    err = manifest_close_scope(repo, state, arena, enabled_profiles, mounts);
     if (err) {
         goto cleanup;
     }
@@ -2381,7 +2399,7 @@ error_t *manifest_add_files(
         /* No files to add, but still sync directories.
          * Handles directory-only adds where filesystem_paths
          * is empty but metadata.json has tracked directories. */
-        return manifest_sync_directories(
+        return manifest_close_scope(
             repo, state, arena, enabled_profiles, mounts
         );
     }
@@ -2456,7 +2474,7 @@ error_t *manifest_add_files(
     if (err) goto cleanup;
 
     /* 4. Sync tracked directories */
-    err = manifest_sync_directories(repo, state, arena, enabled_profiles, mounts);
+    err = manifest_close_scope(repo, state, arena, enabled_profiles, mounts);
     if (err) {
         goto cleanup;
     }
@@ -2776,7 +2794,7 @@ error_t *manifest_sync_diff(
     }
 
     /* PHASE 5: Sync tracked directories */
-    err = manifest_sync_directories(repo, state, arena, enabled_profiles, mounts);
+    err = manifest_close_scope(repo, state, arena, enabled_profiles, mounts);
     if (err) {
         goto cleanup;
     }
@@ -2797,43 +2815,28 @@ cleanup:
 /**
  * Sync tracked directories from enabled profiles
  *
- * Rebuilds the tracked_directories table from metadata.
- * Called after profile enable/disable/reorder to maintain directory tracking.
- *
- * Algorithm:
- *   1. Clear all tracked directories (idempotent start)
- *   2. For each enabled profile:
- *      a. Load metadata from Git (or skip if doesn't exist)
- *      b. Extract directories via metadata_get_items_by_kind()
- *      c. Add to state via state_add_directory() with profile attribution
- *   3. All within caller's active transaction
- *
- * Pattern: Rebuild (not incremental)
- *   - Directories have no lifecycle states to preserve
- *   - Clear + repopulate is simple, correct, and fast
- *   - Already idempotent via INSERT OR REPLACE
+ * Mark-inactive-then-reactivate sweep over tracked_directories:
+ *   1. Downgrade every LIFECYCLE_ACTIVE row to LIFECYCLE_INACTIVE
+ *      (LIFECYCLE_DELETED preserved — staged deletion intent survives).
+ *   2. For each enabled profile's metadata directory, probe the path
+ *      (scope-entry observation — mirror of manifest_project_row's lstat)
+ *      and UPSERT via state_add_directory: the row is (re)activated under
+ *      its current owner and the witness is seeded if the path exists.
+ *      The UPSERT's SQL CASE preserves any existing non-zero observed_at,
+ *      so repeat syncs are idempotent on the witness.
+ *   3. Rows not reactivated stay INACTIVE: witnessed ones surface as
+ *      orphans for apply-time cleanup; unwitnessed ones (ghosts) are
+ *      retired by manifest_close_scope's reclaim.
  *
  * Preconditions:
  *   - state MUST have active transaction (via state_open)
  *   - enabled_profiles MUST be the engine's iteration set (caller built
  *     `mounts` from the same list)
  *
- * Postconditions:
- *   - tracked_directories table reflects enabled_profiles
- *   - Transaction remains open (caller commits)
- *   - Missing metadata handled gracefully (not an error)
- *
  * Performance: O(D) where D = total directories across enabled profiles
  *              (typically < 50 even for large configs)
- *
- * @param repo Git repository (must not be NULL)
- * @param state State with active transaction (must not be NULL)
- * @param enabled_profiles Current enabled profiles (must not be NULL)
- * @param mounts Per-machine mount table covering enabled_profiles
- *              (must not be NULL)
- * @return Error or NULL on success
  */
-error_t *manifest_sync_directories(
+static error_t *manifest_sync_directories(
     git_repository *repo,
     state_t *state,
     arena_t *arena,
@@ -2850,10 +2853,11 @@ error_t *manifest_sync_directories(
     metadata_t *metadata = NULL;
     const metadata_item_t **directories = NULL;
 
-    /* 1. Mark all directories as inactive (soft delete for orphan detection)
+    /* 1. Mark all ACTIVE directories inactive (soft delete for the sweep)
      *
-     * This preserves directory entries for orphan detection instead of deleting them.
-     * Directories not reactivated during rebuild become orphaned and are cleaned by apply.
+     * Rows not reactivated during rebuild left scope: witnessed ones become
+     * orphans for apply-time cleanup; unwitnessed ones are retired by the
+     * close_scope reclaim that follows this sync.
      */
     err = state_mark_all_directories_inactive(state);
     if (err) {
@@ -2890,15 +2894,9 @@ error_t *manifest_sync_directories(
             metadata, METADATA_ITEM_DIRECTORY, &dir_count
         );
 
-        /* Reactivate or add each directory to state
-         *
-         * ARCHITECTURE: Mark-inactive-then-reactivate pattern.
-         *
-         * For each directory in enabled profile metadata:
-         *   - If exists in state → reactivate (LIFECYCLE_ACTIVE) and update metadata
-         *   - If not in state → add new entry with LIFECYCLE_ACTIVE
-         *
-         * This preserves deployed_at timestamps and enables clean orphan detection.
+        /* Project each directory: one UPSERT (re)activates the row under
+         * its current owner and refreshes metadata; the SQL preserves any
+         * existing witness.
          *
          * directory_entry_from_metadata sets *state_dir = NULL on the
          * custom/-without-binding case (silent skip); any other failure
@@ -2920,48 +2918,20 @@ error_t *manifest_sync_directories(
             }
             if (!state_dir) continue;  /* No binding for custom/ on this host. */
 
-            /* Check if directory already exists in state (may be inactive) */
-            state_directory_entry_t *existing = NULL;
-            error_t *get_err = state_get_directory(state, state_dir->filesystem_path, &existing);
-
-            if (get_err && get_err->code != ERR_NOT_FOUND) {
-                /* Fatal error - failed to query state */
-                if (existing) state_free_directory_entry(existing);
-                err = error_wrap(get_err, "Failed to check directory state");
-                break;
+            /* Scope-entry observation probe — mirror of manifest_project_row's
+             * lstat (manifest_capture_row). Success of any type counts: a
+             * file squatting on the path is still "something was here"; type
+             * divergence is a separate signal. Failure leaves observed_at at
+             * sentinel-zero (ghost until a later witness event). */
+            struct stat probe_st;
+            if (lstat(state_dir->filesystem_path, &probe_st) == 0) {
+                state_dir->observed_at = time(NULL);
             }
 
-            if (get_err && get_err->code == ERR_NOT_FOUND) {
-                /* New directory; defaults to LIFECYCLE_ACTIVE via arena_calloc zero-init. */
-                error_free(get_err);
-                err = state_add_directory(state, state_dir);
-            } else {
-                /* Existing directory - reactivate and always update
-                 *
-                 * CRITICAL: Always call state_update_directory, not conditionally.
-                 *
-                 * Rationale:
-                 * - profile field may have changed (directory moved between profiles)
-                 * - storage_path may have changed (different profile conventions)
-                 * - UPDATE is cheap (single row, indexed by filesystem_path)
-                 * - Ensures state consistency regardless of metadata changes
-                 * - deployed_at is preserved (stmt_update_entry excludes it)
-                 */
-                err = state_set_directory_state(
-                    state, state_dir->filesystem_path, LIFECYCLE_ACTIVE
-                );
-
-                /* Always update profile, storage_path, and metadata (preserves deployed_at) */
-                if (!err) {
-                    err = state_update_directory(state, state_dir);
-                }
-
-                state_free_directory_entry(existing);
-            }
-
+            err = state_add_directory(state, state_dir);
             if (err) {
                 err = error_wrap(
-                    err, "Failed to add/update directory '%s' in state",
+                    err, "Failed to project directory '%s' into state",
                     directories[j]->key
                 );
                 break;
@@ -2986,12 +2956,41 @@ cleanup:
     if (directories) free(directories);
     if (metadata) metadata_free(metadata);
 
-    /* After rebuild, any directories still in LIFECYCLE_INACTIVE are orphaned
-     * (belonged to disabled profiles with no fallback).
-     *
-     * They will be detected by workspace orphan analysis and cleaned by apply.
-     * This completes the mark-inactive-then-reactivate lifecycle.
+    /* After rebuild, any directories still in LIFECYCLE_INACTIVE left scope.
+     * Witnessed rows surface as orphans (workspace analysis → apply
+     * cleanup); unwitnessed rows are retired by manifest_close_scope's
+     * reclaim — there is nothing on disk to clean.
      */
 
     return err;
+}
+
+/**
+ * Scope-transition epilogue
+ *
+ * Every scope-mutating manifest entry point funnels through this before
+ * returning: projection first (rows re-entering scope get re-activated by
+ * the directory UPSERT), then reclaim (rows that left scope without a
+ * recorded witness carry no filesystem obligation — retire them, do not
+ * stage them for cleanup). Runs inside the caller's transaction.
+ *
+ * The reclaim consults the recorded witness, never a live lstat — the
+ * witness is the authority (a live probe here would reintroduce the
+ * inference this design removes). The file-side purge-on-absent in
+ * manifest_update_files / manifest_sync_diff is a complementary decision
+ * (terminal state for a *known* deletion) and is untouched.
+ */
+static error_t *manifest_close_scope(
+    git_repository *repo,
+    state_t *state,
+    arena_t *arena,
+    const string_array_t *enabled_profiles,
+    const mount_table_t *mounts
+) {
+    error_t *err = manifest_sync_directories(
+        repo, state, arena, enabled_profiles, mounts
+    );
+    if (err) return err;
+
+    return state_reclaim_unmaterialized(state);
 }

@@ -5,6 +5,7 @@
 #include "cmds/apply.h"
 
 #include <config.h>
+#include <ctype.h>
 #include <git2.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -1388,7 +1389,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
 
     /* Confirm before deployment if configured (unless --force or --dry-run) */
     if (config->confirm_destructive && !opts->force && !opts->dry_run) {
-        char prompt[512];  /* Larger buffer for enhanced prompt */
+        char prompt[512];
 
         /* Calculate orphan removal count (exclude safety violations)
          *
@@ -1413,48 +1414,58 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
             dir_count = cleanup_preflight->orphaned_directories->count;
         }
 
-        /* Build prompt based on pending actions. Reaching the final arm
-         * means every pending action is state-only reclamation (e.g. an
-         * all-absent orphan set) — non-destructive, no consent needed. */
-        bool needs_confirm = true;
-
+        /* Compose the prompt from the non-zero parts — "Deploy 2 files,
+         * converge 1 tracked directory and remove 3 orphaned files?". No
+         * part means every pending action is state-only reclamation (e.g.
+         * an all-absent orphan set) — non-destructive, no consent needed. */
         size_t file_count = plan->files.pending.count;
         size_t converge_count = plan->directories.pending.count;
 
-        if (file_count > 0 && removal_count > 0) {
+        char parts[4][64];
+        size_t n = 0;
+        if (file_count > 0) {
             snprintf(
-                prompt, sizeof(prompt), "Deploy %zu file%s and remove %zu orphaned file%s?",
-                file_count, file_count == 1 ? "" : "s",
-                removal_count, removal_count == 1 ? "" : "s"
-            );
-        } else if (file_count > 0) {
-            snprintf(
-                prompt, sizeof(prompt), "Deploy %zu file%s to filesystem?",
+                parts[n++], sizeof(parts[0]), "deploy %zu file%s",
                 file_count, file_count == 1 ? "" : "s"
             );
-        } else if (removal_count > 0) {
+        }
+        if (converge_count > 0) {
             snprintf(
-                prompt, sizeof(prompt), "Remove %zu orphaned file%s?",
-                removal_count, removal_count == 1 ? "" : "s"
-            );
-        } else if (dir_count > 0) {
-            snprintf(
-                prompt, sizeof(prompt), "Prune %zu empty director%s?",
-                dir_count, dir_count == 1 ? "y" : "ies"
-            );
-        } else if (converge_count > 0) {
-            snprintf(
-                prompt, sizeof(prompt), "Update %zu tracked director%s?",
+                parts[n++], sizeof(parts[0]), "converge %zu tracked director%s",
                 converge_count, converge_count == 1 ? "y" : "ies"
             );
-        } else {
-            needs_confirm = false;
+        }
+        if (removal_count > 0) {
+            snprintf(
+                parts[n++], sizeof(parts[0]), "remove %zu orphaned file%s",
+                removal_count, removal_count == 1 ? "" : "s"
+            );
+        }
+        if (dir_count > 0) {
+            snprintf(
+                parts[n++], sizeof(parts[0]), "prune %zu empty director%s",
+                dir_count, dir_count == 1 ? "y" : "ies"
+            );
         }
 
-        if (needs_confirm && !output_confirm(out, prompt, false)) {
-            output_info(out, OUTPUT_NORMAL, "Cancelled");
-            err = NULL;  /* Not an error - user cancelled */
-            goto cleanup;
+        if (n > 0) {
+            /* ", " between parts, " and " before the last; four parts of
+             * at most 63 bytes fit the buffer with room to spare */
+            size_t off = 0;
+            for (size_t i = 0; i < n; i++) {
+                const char *sep = (i == 0) ? "" : (i + 1 == n) ? " and " : ", ";
+                off += (size_t) snprintf(
+                    prompt + off, sizeof(prompt) - off, "%s%s", sep, parts[i]
+                );
+            }
+            snprintf(prompt + off, sizeof(prompt) - off, "?");
+            prompt[0] = (char) toupper((unsigned char) prompt[0]);
+
+            if (!output_confirm(out, prompt, false)) {
+                output_info(out, OUTPUT_NORMAL, "Cancelled");
+                err = NULL;  /* Not an error - user cancelled */
+                goto cleanup;
+            }
         }
     }
 

@@ -1538,7 +1538,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     }
 
     /* Record what happened (only if not dry-run): cleanup, anchors,
-     * witnesses, acknowledgements, then commit. */
+     * witnesses. Acknowledgements and the commit follow for both modes. */
     if (!opts->dry_run) {
         /* Prune orphaned files and remove from state (unless --keep-orphans)
          *
@@ -1940,31 +1940,22 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
             }
         }
 
-        /* Acknowledge profile reassignments (clear old_profile in state).
-         * When content also diverged the file was redeployed above; either
-         * way the transition must not persist across runs. */
-        acknowledge_reassignments(state, &reassigned, false, out);
+    }
 
-        /* Commit state transaction (saves both deployment and cleanup state)
-         *
-         * This atomically commits all state changes made during apply:
-         * - Deployment state: deployed_at timestamps for newly deployed files
-         * - Cleanup state: removed orphan entries (if cleanup succeeded)
-         * - Reassignments: cleared old_profile flags for reassigned files
-         *
-         * If cleanup failed, only deployment state is saved (partial success model).
-         * If cleanup succeeded, both deployment and cleanup state are saved (full success).
-         *
-         * This ensures state database stays synchronized with filesystem reality.
-         */
-        err = state_save(repo, state);
-        if (err) {
-            err = error_wrap(err, "Failed to commit state changes");
-            goto cleanup;
-        }
-    } else {
-        /* Preview the bookkeeping the real run would do */
-        acknowledge_reassignments(state, &reassigned, true, out);
+    /* Acknowledge profile reassignments (clear old_profile in state).
+     * When content also diverged the file was redeployed above; either
+     * way the transition must not persist across runs. Dry-run previews. */
+    acknowledge_reassignments(state, &reassigned, opts->dry_run, out);
+
+    /* Commit the state transaction: anchors, witnesses, removed orphan
+     * entries, cleared reassignments (partial success model — a cleanup
+     * failure leaves deployment state to commit). Dry-run included: the
+     * transaction then holds only the load-time reconcile + flush
+     * observations, which status and the nothing-to-do exit persist too. */
+    err = state_save(repo, state);
+    if (err) {
+        err = error_wrap(err, "Failed to commit state changes");
+        goto cleanup;
     }
 
     /* Execute post-apply hook */

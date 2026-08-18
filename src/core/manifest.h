@@ -6,12 +6,13 @@
  *
  *   - Consistency layer: manifest_apply_scope, manifest_sync_diff,
  *     manifest_add_files, manifest_update_files, manifest_remove_files,
- *     manifest_reconcile. Each operates within a caller-managed
- *     transaction and updates the virtual_manifest + tracked_directories
- *     tables to reflect the post-operation Git state. Every entry point
- *     ends its state writes with the private scope-transition epilogue
- *     (directory sweep + re-projection, then reclaim of unwitnessed rows
- *     that left scope).
+ *     manifest_reconcile, manifest_sync_directories. Each operates within
+ *     a caller-managed transaction and updates the virtual_manifest +
+ *     tracked_directories tables to reflect the post-operation Git state.
+ *     Every entry point ends its state writes with the directory rebuild
+ *     (sweep + re-projection); the ones that demote file rows retire their
+ *     own unwitnessed ghosts first. The demoter terminates its own
+ *     demotions — there is no shared epilogue owning another's rows.
  *
  *   - Tree loader: manifest_load_tree_files projects a single Git
  *     tree's files into the public state_files_t carrier. Used by the
@@ -170,9 +171,10 @@ error_t *manifest_persist_profile_head(
  *       LIFECYCLE_INACTIVE / LIFECYCLE_DELETED / LIFECYCLE_RELEASED: preserved
  *       (downgrading them would break downstream intent signals).
  *     Exception: out-of-scope rows never witnessed on disk
- *     (observed_at = 0) are reclaimed — deleted outright, both tables —
- *     by the scope-transition epilogue. A ghost row carries no
- *     filesystem obligation, so there is nothing to stage or clean.
+ *     (observed_at = 0) are reclaimed — deleted outright. A ghost row
+ *     carries no filesystem obligation, so there is nothing to stage or
+ *     clean. File rows are retired by this function's own reclaim,
+ *     directory rows by the rebuild that follows it.
  *   - tracked_directories swept and re-projected from enabled profiles.
  *   - The deployment anchor (deployed_blob_oid, deployed_at, stat_*) is
  *     preserved on every UPDATE — apply_scope is a pure VWD-cache
@@ -186,7 +188,7 @@ error_t *manifest_persist_profile_head(
  *   A profile that owned rows no longer in scope receives loss-side
  *   fields during the orphan pass: files_reassigned, plus either
  *   files_orphaned (witnessed row — staged for apply cleanup) or
- *   files_reclaimed (ghost row — retired by the epilogue, no cleanup
+ *   files_reclaimed (ghost row — retired at scope exit, no cleanup
  *   pends). A profile can collect gain and loss simultaneously.
  *   Overlap semantics: if B overrides A for path X, B gets files_claimed
  *   for X and A gets files_reassigned for X. The sum is the true
@@ -203,7 +205,7 @@ error_t *manifest_persist_profile_head(
  * Performance: O(M + S + D)
  *   M = files in the new view (one precedence-view build, one metadata load)
  *   S = rows in virtual_manifest (one state_get_all_files for orphan pass)
- *   D = directories across enabled profiles (one sync_directories rebuild)
+ *   D = directories across enabled profiles (one directory rebuild)
  *
  * @param repo Git repository (must not be NULL)
  * @param state State handle with active transaction (must not be NULL)
@@ -325,9 +327,11 @@ error_t *manifest_reconcile(
  *
  * Postconditions:
  *   - Files with fallback updated to fallback profile (deployed_at preserved)
- *   - Files without fallback marked LIFECYCLE_DELETED (controlled deletion)
+ *   - Files without fallback marked LIFECYCLE_DELETED (controlled deletion),
+ *     except rows never witnessed on disk (observed_at = 0): those are
+ *     reclaimed outright — a ghost has nothing for apply to remove
  *   - Files not owned by removed_profile unchanged
- *   - Tracked directories synced from all enabled profiles
+ *   - Tracked directories rebuilt from all enabled profiles
  *   - Transaction remains open (caller commits)
  *
  * Error Conditions:
@@ -417,7 +421,10 @@ error_t *manifest_remove_files(
  *     is absent on disk, or marks it LIFECYCLE_DELETED if a race has placed
  *     it back. Anchor left untouched (no disk confirmation for deleted
  *     / fallback paths).
- *   - Tracked directories synced from all enabled profiles
+ *   - Rows left LIFECYCLE_DELETED that were never witnessed on disk
+ *     (observed_at = 0) are reclaimed outright — dotta does not stage the
+ *     removal of a path it never confirmed deploying
+ *   - Tracked directories rebuilt from all enabled profiles
  *   - Transaction remains open (caller commits)
  *
  * Performance: O(M + N) where M = total files in profiles, N = items to sync
@@ -492,7 +499,8 @@ error_t *manifest_update_files(
  *     poisoning the winning profile's anchor with a disk stat that may not
  *     correspond to the winner's blob_oid)
  *   - Filtered files skipped (not an error)
- *   - Tracked directories synced from all enabled profiles
+ *   - Tracked directories rebuilt from all enabled profiles (no file
+ *     reclaim: add never demotes a row)
  *   - Transaction remains open (caller commits via state_save)
  *
  * Performance:
@@ -585,9 +593,12 @@ error_t *manifest_add_files(
  *   - Deleted files without fallbacks terminate on disk reality: the row
  *     is purged if the path is absent on disk, or marked LIFECYCLE_DELETED
  *     if still present (apply removes it via safety PHASE 1 bypass)
+ *   - Rows left LIFECYCLE_DELETED that were never witnessed on disk
+ *     (observed_at = 0) are reclaimed outright — dotta does not stage the
+ *     removal of a path it never confirmed deploying
  *   - Files filtered by .dottaignore are skipped (expected behavior)
  *   - Files won by other profiles are skipped (they'll sync when their changes arrive)
- *   - Tracked directories synced from all enabled profiles
+ *   - Tracked directories rebuilt from all enabled profiles
  *   - Transaction remains open (caller commits)
  *
  * Error Conditions:
@@ -631,6 +642,54 @@ error_t *manifest_sync_diff(
     size_t *out_removed,
     size_t *out_fallbacks,
     size_t *out_skipped
+);
+
+/**
+ * Rebuild tracked directories from enabled profiles
+ *
+ * The directory-side counterpart to file projection: sweeps
+ * tracked_directories, re-projects it from every enabled profile's
+ * metadata, and retires the rows the sweep left behind. Self-contained —
+ * one transaction-scoped operation establishing one postcondition.
+ *
+ * Every consistency-layer entry point ends its state writes with this
+ * call. File rows are outside its scope: each entry point demotes its own
+ * and reclaims its own (state_reclaim_unmaterialized_files), so this call
+ * alone rebuilds directories and touches nothing in virtual_manifest.
+ *
+ * Preconditions:
+ *   - state MUST have active transaction (via state_open)
+ *   - enabled_profiles MUST be the engine's iteration set (caller built
+ *     `mounts` from the same list)
+ *
+ * Postconditions:
+ *   - tracked_directories reflects enabled_profiles: rows still in scope
+ *     are LIFECYCLE_ACTIVE with their witness preserved; witnessed rows
+ *     that left scope are LIFECYCLE_INACTIVE (staged for apply-time
+ *     cleanup); unwitnessed rows that left scope are deleted outright
+ *   - A profile without metadata.json contributes no directories and is
+ *     skipped, not an error
+ *   - Transaction remains open (caller commits)
+ *
+ * Performance: O(D) where D = total directories across enabled profiles
+ *              (typically < 50 even for large configs)
+ *
+ * @param repo Git repository (must not be NULL)
+ * @param state State with active transaction (must not be NULL)
+ * @param arena Arena for the per-row state_directory_entry_t allocations.
+ *              Entries live until the caller destroys the arena (typically
+ *              command end). Must not be NULL.
+ * @param enabled_profiles Current enabled profiles (must not be NULL)
+ * @param mounts Per-machine mount table covering enabled_profiles
+ *               (must not be NULL)
+ * @return Error or NULL on success
+ */
+error_t *manifest_sync_directories(
+    git_repository *repo,
+    state_t *state,
+    arena_t *arena,
+    const string_array_t *enabled_profiles,
+    const mount_table_t *mounts
 );
 
 /**

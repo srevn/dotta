@@ -24,7 +24,7 @@
  *   state_get_all_* directly. Freshness is established by the consistency
  *   layer: manifest_reconcile runs upstream of every workspace_load, and
  *   tracked_directories has exactly three writers — the manifest layer's
- *   private projection (sweep + UPSERT + reclaim), the witness stamp
+ *   directory rebuild (sweep + UPSERT + reclaim), the witness stamp
  *   (state_witness_directory via the flush and apply's post-deploy loop),
  *   and apply's orphan-row removal — so the workspace inherits a current
  *   view by construction.

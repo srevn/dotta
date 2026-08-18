@@ -1084,30 +1084,50 @@ error_t *state_witness_directory(
 );
 
 /**
- * Retire rows that left scope without ever being materialized
+ * Retire file rows that left scope without ever being materialized
  *
  * observed_at == 0 records "no filesystem obligation": dotta never
  * lstat-confirmed the path on disk while the row was in scope, so there
- * is nothing to delete — orphan reporting and cleanup would both be
- * describing work that does not exist. Without this reclaim the row also
- * leaks: every downstream deletion path is driven by a filesystem effect
- * the row does not have, so nothing else would ever retire it. Two
- * one-shot DELETEs:
+ * is nothing to delete and nothing downstream would ever retire it —
+ * every other deletion path is driven by a filesystem effect the row
+ * does not have.
  *
- *   DELETE FROM virtual_manifest    WHERE state != 'active' AND observed_at = 0;
- *   DELETE FROM tracked_directories WHERE state != 'active' AND observed_at = 0;
+ *   DELETE FROM virtual_manifest WHERE state != 'active' AND observed_at = 0;
  *
- * Called by the manifest layer's scope-transition epilogue
- * (manifest_close_scope) after the directory sweep + re-projection, so
- * rows re-entering scope are re-activated before the reclaim predicate
- * runs. On empty state (no DB), no-op success. User-facing attribution
- * does not read counts from here — the orphan pass attributes ghosts
- * per-profile from the snapshot it already holds (files_reclaimed).
+ * Called by each manifest entry point that demotes file rows, after its
+ * own demotion pass and inside the same transaction: the demoter
+ * terminates its own demotions. Purely additive entry points
+ * (manifest_add_files) never call it. On empty state (no DB), no-op
+ * success. Attribution does not read counts from here — the orphan pass
+ * counts ghosts per-profile from the snapshot it already holds
+ * (files_reclaimed). The purge-on-absent in manifest_update_files /
+ * manifest_sync_diff is a different decision (terminal state for a known
+ * deletion) and does not overlap this one.
  *
  * @param state State (must not be NULL, must have active transaction)
  * @return Error or NULL on success
  */
-error_t *state_reclaim_unmaterialized(state_t *state);
+error_t *state_reclaim_unmaterialized_files(state_t *state);
+
+/**
+ * Retire directory rows that left scope without ever being materialized
+ *
+ * Directory mirror of state_reclaim_unmaterialized_files — same predicate,
+ * same "no filesystem obligation" semantics:
+ *
+ *   DELETE FROM tracked_directories WHERE state != 'active' AND observed_at = 0;
+ *
+ * Called only by manifest_sync_directories, as the last step of its
+ * rebuild. The sweep (state_mark_all_directories_inactive) is what demotes
+ * directory rows, so the re-projection must re-activate every row
+ * re-entering scope before this predicate runs — that ordering is the
+ * reason this belongs inside the rebuild rather than at its call sites.
+ * On empty state (no DB), no-op success.
+ *
+ * @param state State (must not be NULL, must have active transaction)
+ * @return Error or NULL on success
+ */
+error_t *state_reclaim_unmaterialized_directories(state_t *state);
 
 /**
  * Get all tracked directories

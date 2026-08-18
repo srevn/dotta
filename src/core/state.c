@@ -2309,35 +2309,52 @@ error_t *state_witness_directory(
     return NULL;
 }
 
-/**
- * Retire rows that left scope without ever being materialized
- *
- * Cold path — one call per scope transition. Local prepare+finalize per
- * table; a prepared-statement roster entry would buy nothing (see
- * state_get_all_directories for the same trade).
- */
-error_t *state_reclaim_unmaterialized(state_t *state) {
+/* Ghost reclaim, one table each. Cold path (one call per scope transition):
+ * a one-shot exec beats a prepared-statement roster entry, and the literal
+ * statement is worth more than de-duplicating one WHERE clause. */
+error_t *state_reclaim_unmaterialized_files(state_t *state) {
     CHECK_NULL(state);
 
     /* Empty state (no DB file) — nothing to reclaim, success. */
     if (!state->db) return NULL;
 
-    static const char *const reclaim_sql[] = {
+    char *errmsg = NULL;
+    int rc = sqlite3_exec(
+        state->db,
         "DELETE FROM virtual_manifest WHERE state != 'active' AND observed_at = 0;",
-        "DELETE FROM tracked_directories WHERE state != 'active' AND observed_at = 0;",
-    };
+        NULL, NULL, &errmsg
+    );
+    if (rc != SQLITE_OK) {
+        error_t *err = ERROR(
+            ERR_STATE_INVALID, "Failed to reclaim unmaterialized file rows: %s",
+            errmsg ? errmsg : sqlite3_errstr(rc)
+        );
+        sqlite3_free(errmsg);
+        return err;
+    }
 
-    for (size_t i = 0; i < sizeof(reclaim_sql) / sizeof(reclaim_sql[0]); i++) {
-        char *errmsg = NULL;
-        int rc = sqlite3_exec(state->db, reclaim_sql[i], NULL, NULL, &errmsg);
-        if (rc != SQLITE_OK) {
-            error_t *err = ERROR(
-                ERR_STATE_INVALID, "Failed to reclaim unmaterialized rows: %s",
-                errmsg ? errmsg : sqlite3_errstr(rc)
-            );
-            sqlite3_free(errmsg);
-            return err;
-        }
+    return NULL;
+}
+
+error_t *state_reclaim_unmaterialized_directories(state_t *state) {
+    CHECK_NULL(state);
+
+    /* Empty state (no DB file) — nothing to reclaim, success. */
+    if (!state->db) return NULL;
+
+    char *errmsg = NULL;
+    int rc = sqlite3_exec(
+        state->db,
+        "DELETE FROM tracked_directories WHERE state != 'active' AND observed_at = 0;",
+        NULL, NULL, &errmsg
+    );
+    if (rc != SQLITE_OK) {
+        error_t *err = ERROR(
+            ERR_STATE_INVALID, "Failed to reclaim unmaterialized directory rows: %s",
+            errmsg ? errmsg : sqlite3_errstr(rc)
+        );
+        sqlite3_free(errmsg);
+        return err;
     }
 
     return NULL;

@@ -94,18 +94,6 @@ struct precedence_build_ctx {
     error_t *error;                /* Error propagation (set on failure) */
 };
 
-/* Scope-transition epilogue (defined after the directory sync it wraps).
- * Every scope-mutating entry point ends its state writes with this call:
- * directory sweep + re-projection, then reclaim of unwitnessed rows that
- * left scope. */
-static error_t *manifest_close_scope(
-    git_repository *repo,
-    state_t *state,
-    arena_t *arena,
-    const string_array_t *enabled_profiles,
-    const mount_table_t *mounts
-);
-
 /**
  * Apply per-profile metadata to a Git-built precedence-view row.
  *
@@ -1452,15 +1440,20 @@ static error_t *manifest_repair_stale(
         if (err) goto cleanup;
     }
 
-    /* Phase 5: Scope epilogue — directory re-sync + ghost reclaim.
-     *
-     * External Git changes may have added/removed directories in metadata;
-     * the epilogue re-projects tracked_directories and retires unwitnessed
-     * rows that left scope (a RELEASED ghost never reaches release
-     * theater — there is nothing on disk to release). */
-    err = manifest_close_scope(repo, state, arena, enabled_profiles, mounts);
+    /* Phase 5: Retire the ghosts this repair just released. A RELEASED row
+     * never witnessed on disk has nothing to release, so reclaiming it here
+     * keeps it out of the release theater downstream. */
+    err = state_reclaim_unmaterialized_files(state);
     if (err) {
-        err = error_wrap(err, "Failed to sync directories after stale repair");
+        err = error_wrap(err, "Failed to reclaim ghost rows after stale repair");
+        goto cleanup;
+    }
+
+    /* Phase 6: Rebuild tracked directories — external Git changes may have
+     * added or removed directory entries in profile metadata. */
+    err = manifest_sync_directories(repo, state, arena, enabled_profiles, mounts);
+    if (err) {
+        err = error_wrap(err, "Failed to rebuild directories after stale repair");
         goto cleanup;
     }
 
@@ -1497,7 +1490,10 @@ cleanup:
  *        - In new manifest: owner-change stats only (row already updated).
  *        - Not in new manifest: LIFECYCLE_ACTIVE → LIFECYCLE_INACTIVE.
  *          LIFECYCLE_INACTIVE / LIFECYCLE_DELETED / LIFECYCLE_RELEASED preserved.
- *   5. Rebuild tracked_directories (mark-ACTIVE-inactive then reactivate).
+ *   5. Reclaim the file rows step 4 demoted that were never witnessed —
+ *      a ghost has no filesystem obligation, so nothing may stage it.
+ *   6. Rebuild tracked_directories (mark-ACTIVE-inactive then reactivate,
+ *      with its own ghost reclaim).
  */
 error_t *manifest_apply_scope(
     git_repository *repo,
@@ -1721,7 +1717,7 @@ error_t *manifest_apply_scope(
             if (p) {
                 size_t sidx = (size_t) (uintptr_t) p - 1;
                 /* A row never witnessed on disk leaves scope with no
-                 * filesystem obligation: close_scope's reclaim retires it
+                 * filesystem obligation: step 6's reclaim retires it
                  * (same predicate, SQL-enforced) — attribute it as
                  * reclaimed, not staged for removal. */
                 if (old->anchor.observed_at == 0) {
@@ -1733,20 +1729,26 @@ error_t *manifest_apply_scope(
         }
     }
 
-    /* Step 6: Scope epilogue — directory sweep/re-projection + reclaim.
-     *
-     * Directory fallback and orphan semantics fall out of the rebuild:
-     * directories still in any enabled profile's metadata are reactivated
-     * with the new owner; witnessed directories that left scope remain
-     * LIFECYCLE_INACTIVE for apply-time cleanup; unwitnessed rows (files
-     * and directories alike, including the ghosts flipped INACTIVE in
-     * step 5 above) are reclaimed.
+    /* Step 6: Retire the ghosts step 5 flipped INACTIVE. Never witnessed
+     * means no filesystem obligation, so there is nothing for apply to
+     * clean — and the attribution above predicted exactly this set, from
+     * the same observed_at test. */
+    err = state_reclaim_unmaterialized_files(state);
+    if (err) {
+        err = error_wrap(err, "Failed to reclaim ghost file rows");
+        goto cleanup;
+    }
+
+    /* Step 7: Rebuild tracked directories. Directory fallback and orphan
+     * semantics fall out of it: directories still in any enabled profile's
+     * metadata are reactivated with the new owner; witnessed directories
+     * that left scope remain LIFECYCLE_INACTIVE for apply-time cleanup.
      *
      * Reuses the mount table built above — directories share the same
      * profile→target resolution as files. */
-    err = manifest_close_scope(repo, state, arena, enabled, mounts);
+    err = manifest_sync_directories(repo, state, arena, enabled, mounts);
     if (err) {
-        err = error_wrap(err, "Failed to sync tracked directories");
+        err = error_wrap(err, "Failed to rebuild tracked directories");
         goto cleanup;
     }
 
@@ -2031,8 +2033,13 @@ error_t *manifest_remove_files(
     err = manifest_persist_profile_head(repo, state, removed_profile);
     if (err) goto cleanup;
 
-    /* 3. Sync tracked directories */
-    err = manifest_close_scope(repo, state, arena, enabled_profiles, mounts);
+    /* 3. Retire rows marked DELETED above that were never witnessed on
+     * disk — a ghost has nothing for apply to remove. */
+    err = state_reclaim_unmaterialized_files(state);
+    if (err) goto cleanup;
+
+    /* 4. Rebuild tracked directories */
+    err = manifest_sync_directories(repo, state, arena, enabled_profiles, mounts);
     if (err) {
         goto cleanup;
     }
@@ -2118,9 +2125,10 @@ error_t *manifest_update_files(
     precedence_view_t *fresh = NULL;
 
     if (item_count == 0) {
-        /* No file items to process, but still sync directories.
-         * Handles cases where only directory metadata changed. */
-        return manifest_close_scope(
+        /* No file items to process, so nothing was demoted and no file
+         * reclaim is due. The directory rebuild still runs: this is the
+         * only-directory-metadata-changed case. */
+        return manifest_sync_directories(
             repo, state, arena, enabled_profiles, mounts
         );
     }
@@ -2307,8 +2315,12 @@ error_t *manifest_update_files(
 
     string_array_free(updated_profiles);
 
-    /* 5. Sync tracked directories */
-    err = manifest_close_scope(repo, state, arena, enabled_profiles, mounts);
+    /* 5. Retire rows marked DELETED above that were never witnessed. */
+    err = state_reclaim_unmaterialized_files(state);
+    if (err) goto cleanup;
+
+    /* 6. Rebuild tracked directories */
+    err = manifest_sync_directories(repo, state, arena, enabled_profiles, mounts);
     if (err) {
         goto cleanup;
     }
@@ -2396,10 +2408,9 @@ error_t *manifest_add_files(
     precedence_view_t *fresh = NULL;
 
     if (filesystem_paths->count == 0) {
-        /* No files to add, but still sync directories.
-         * Handles directory-only adds where filesystem_paths
-         * is empty but metadata.json has tracked directories. */
-        return manifest_close_scope(
+        /* Directory-only add: filesystem_paths is empty but metadata.json
+         * has tracked directories. Nothing demoted, so no file reclaim. */
+        return manifest_sync_directories(
             repo, state, arena, enabled_profiles, mounts
         );
     }
@@ -2473,8 +2484,9 @@ error_t *manifest_add_files(
     err = manifest_persist_profile_head(repo, state, profile);
     if (err) goto cleanup;
 
-    /* 4. Sync tracked directories */
-    err = manifest_close_scope(repo, state, arena, enabled_profiles, mounts);
+    /* 4. Rebuild tracked directories. No file reclaim: add only projects
+     * and captures rows, it never demotes one. */
+    err = manifest_sync_directories(repo, state, arena, enabled_profiles, mounts);
     if (err) {
         goto cleanup;
     }
@@ -2793,8 +2805,12 @@ error_t *manifest_sync_diff(
         goto cleanup;
     }
 
-    /* PHASE 5: Sync tracked directories */
-    err = manifest_close_scope(repo, state, arena, enabled_profiles, mounts);
+    /* PHASE 5: Retire rows marked DELETED above that were never witnessed. */
+    err = state_reclaim_unmaterialized_files(state);
+    if (err) goto cleanup;
+
+    /* PHASE 6: Rebuild tracked directories */
+    err = manifest_sync_directories(repo, state, arena, enabled_profiles, mounts);
     if (err) {
         goto cleanup;
     }
@@ -2813,7 +2829,7 @@ cleanup:
 }
 
 /**
- * Sync tracked directories from enabled profiles
+ * Rebuild tracked directories from enabled profiles
  *
  * Mark-inactive-then-reactivate sweep over tracked_directories:
  *   1. Downgrade every LIFECYCLE_ACTIVE row to LIFECYCLE_INACTIVE
@@ -2824,19 +2840,12 @@ cleanup:
  *      its current owner and the witness is seeded if the path exists.
  *      The UPSERT's SQL CASE preserves any existing non-zero observed_at,
  *      so repeat syncs are idempotent on the witness.
- *   3. Rows not reactivated stay INACTIVE: witnessed ones surface as
- *      orphans for apply-time cleanup; unwitnessed ones (ghosts) are
- *      retired by manifest_close_scope's reclaim.
- *
- * Preconditions:
- *   - state MUST have active transaction (via state_open)
- *   - enabled_profiles MUST be the engine's iteration set (caller built
- *     `mounts` from the same list)
- *
- * Performance: O(D) where D = total directories across enabled profiles
- *              (typically < 50 even for large configs)
+ *   3. Rows not reactivated left scope. Witnessed ones stay INACTIVE and
+ *      surface as orphans for apply-time cleanup; unwitnessed ones are
+ *      deleted outright — step 1 demoted them, so retiring them is this
+ *      rebuild's own cleanup, not a service to the caller.
  */
-static error_t *manifest_sync_directories(
+error_t *manifest_sync_directories(
     git_repository *repo,
     state_t *state,
     arena_t *arena,
@@ -2856,8 +2865,8 @@ static error_t *manifest_sync_directories(
     /* 1. Mark all ACTIVE directories inactive (soft delete for the sweep)
      *
      * Rows not reactivated during rebuild left scope: witnessed ones become
-     * orphans for apply-time cleanup; unwitnessed ones are retired by the
-     * close_scope reclaim that follows this sync.
+     * orphans for apply-time cleanup; unwitnessed ones are retired by
+     * step 3 below.
      */
     err = state_mark_all_directories_inactive(state);
     if (err) {
@@ -2951,41 +2960,11 @@ cleanup:
     if (directories) free(directories);
     if (metadata) metadata_free(metadata);
 
-    /* After rebuild, any directories still in LIFECYCLE_INACTIVE left scope.
-     * Witnessed rows surface as orphans (workspace analysis → apply
-     * cleanup); unwitnessed rows are retired by manifest_close_scope's
-     * reclaim — there is nothing on disk to clean.
-     */
+    /* 3. Retire the ghosts the sweep left behind — INACTIVE and never
+     * witnessed means nothing on disk to clean. Guarded on success: after a
+     * partial rebuild the predicate cannot tell rows the re-projection
+     * never reached from rows that genuinely left scope. */
+    if (!err) err = state_reclaim_unmaterialized_directories(state);
 
     return err;
-}
-
-/**
- * Scope-transition epilogue
- *
- * Every scope-mutating manifest entry point funnels through this before
- * returning: projection first (rows re-entering scope get re-activated by
- * the directory UPSERT), then reclaim (rows that left scope without a
- * recorded witness carry no filesystem obligation — retire them, do not
- * stage them for cleanup). Runs inside the caller's transaction.
- *
- * The reclaim consults the recorded witness, never a live lstat — the
- * witness is the authority (a live probe here would reintroduce the
- * inference this design removes). The file-side purge-on-absent in
- * manifest_update_files / manifest_sync_diff is a complementary decision
- * (terminal state for a *known* deletion) and is untouched.
- */
-static error_t *manifest_close_scope(
-    git_repository *repo,
-    state_t *state,
-    arena_t *arena,
-    const string_array_t *enabled_profiles,
-    const mount_table_t *mounts
-) {
-    error_t *err = manifest_sync_directories(
-        repo, state, arena, enabled_profiles, mounts
-    );
-    if (err) return err;
-
-    return state_reclaim_unmaterialized(state);
 }

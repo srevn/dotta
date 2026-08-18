@@ -7,7 +7,7 @@
  * Trust Model:
  * Files trust the VWD manifest (virtual_manifest table), maintained by manifest layer.
  * Directories trust the tracked_directories state column, maintained by the
- * manifest layer's scope epilogue (sweep + re-projection + ghost reclaim).
+ * manifest layer's directory rebuild (sweep + re-projection + ghost reclaim).
  * Both are patched in-memory for stale profiles (external Git changes).
  */
 

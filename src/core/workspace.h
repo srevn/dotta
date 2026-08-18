@@ -23,8 +23,11 @@
  *   workspace_directories, workspace_lookup_directory) rather than calling
  *   state_get_all_* directly. Freshness is established by the consistency
  *   layer: manifest_reconcile runs upstream of every workspace_load, and
- *   manifest_sync_directories is the sole writer of tracked_directories,
- *   so the workspace inherits a current view by construction.
+ *   tracked_directories has exactly three writers — the manifest layer's
+ *   private projection (sweep + UPSERT + reclaim), the witness stamp
+ *   (state_witness_directory via the flush and apply's post-deploy loop),
+ *   and apply's orphan-row removal — so the workspace inherits a current
+ *   view by construction.
  *
  *   Exceptions:
  *     (a) the consistency layer (manifest_reconcile, manifest_apply_scope,
@@ -55,8 +58,10 @@
  * Items can be:
  * - Files (WORKSPACE_ITEM_FILE): Have content, tracked in profile and state,
  *   deployed to filesystem
- * - Directories (WORKSPACE_ITEM_DIRECTORY): Metadata-only, tracked in profile,
- *   never in deployment state (created implicitly when files are deployed)
+ * - Directories (WORKSPACE_ITEM_DIRECTORY): Metadata-only (mode/ownership,
+ *   no content), tracked in profile metadata and in the tracked_directories
+ *   state table; created and converged by apply via
+ *   deploy_tracked_directories
  * - Use item_kind to distinguish between files and directories.
  *
  * Lifetime notes:
@@ -497,6 +502,11 @@ error_t *workspace_advance_anchor(
  * The deployed_at timestamp is intentionally not advanced here — this
  * flush is a witness advance, not a deployment event. Apply remains the
  * sole writer of anchor.deployed_at.
+ *
+ * Also persists first-observation witnesses for tracked directories whose
+ * path was lstat-observed during directory analysis while the row carried
+ * no witness (state_witness_directory; monotonic in SQL). Same batching,
+ * same transaction, same snapshot-coherence contract.
  *
  * Safe to call on any workspace — returns immediately if no updates pending.
  * Uses the workspace's internal state handle for database writes.

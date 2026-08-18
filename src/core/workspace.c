@@ -6,8 +6,8 @@
  *
  * Trust Model:
  * Files trust the VWD manifest (virtual_manifest table), maintained by manifest layer.
- * Directories trust the tracked_directories state column, maintained by
- * manifest_sync_directories() with mark-inactive-then-reactivate semantics.
+ * Directories trust the tracked_directories state column, maintained by the
+ * manifest layer's scope epilogue (sweep + re-projection + ghost reclaim).
  * Both are patched in-memory for stale profiles (external Git changes).
  */
 
@@ -125,6 +125,14 @@ struct workspace {
     anchor_update_t *anchor_updates;             /* Pending slow-path updates (owned) */
     size_t anchor_update_count;                  /* Number of pending updates */
     size_t anchor_update_capacity;               /* Allocated capacity of updates array */
+
+    /* Directory witnesses accumulated during directory analysis.
+     * Rows borrowed from ws->active_dirs; queued when an lstat observed a
+     * path whose row carries no witness yet. Flushed alongside the anchor
+     * updates. */
+    const state_directory_entry_t **pending_dir_witnesses; /* Owned array of borrowed rows */
+    size_t pending_dir_witness_count;
+    size_t pending_dir_witness_capacity;
 
     /* Status cache */
     workspace_status_t status;                   /* Cached cleanliness assessment */
@@ -410,6 +418,52 @@ static void workspace_record_anchor_update(
         .blob_oid = *blob_oid,
         .stat = stat_cache_from_stat(st),
     };
+}
+
+/**
+ * Queue a first-observation witness for a tracked directory
+ *
+ * Directory sibling of workspace_record_anchor_update: analysis observed
+ * the path on disk but the row carries no witness. The flush persists via
+ * state_witness_directory (monotonic in SQL) and patches the snapshot row.
+ * Allocation failure silently drops the update — a lost witness only
+ * defers the stamp to the next observation event (probe, flush, apply).
+ */
+static void workspace_record_dir_witness(
+    workspace_t *ws,
+    const state_directory_entry_t *row
+) {
+    if (!ws || !row) return;
+
+    if (ws->pending_dir_witness_count == ws->pending_dir_witness_capacity) {
+        size_t new_cap = ws->pending_dir_witness_capacity
+                       ? ws->pending_dir_witness_capacity * 2 : 16;
+
+        const state_directory_entry_t **new_arr = realloc(
+            (void *) ws->pending_dir_witnesses,
+            new_cap * sizeof(*new_arr)
+        );
+        if (!new_arr) return;
+
+        ws->pending_dir_witnesses = new_arr;
+        ws->pending_dir_witness_capacity = new_cap;
+    }
+
+    ws->pending_dir_witnesses[ws->pending_dir_witness_count++] = row;
+}
+
+/**
+ * Witness-gated absence classification — the single decision for every
+ * absent managed path, file or directory.
+ *
+ * observed_at == 0 means dotta has never lstat-confirmed the path on disk
+ * in scope: there is no filesystem obligation, so absence is UNDEPLOYED
+ * (apply's job: create it) — never DELETED (update's job: commit the
+ * deletion and propagate it to every machine).
+ */
+static workspace_state_t classify_absent(time_t observed_at) {
+    return (observed_at > 0) ? WORKSPACE_STATE_DELETED
+                             : WORKSPACE_STATE_UNDEPLOYED;
 }
 
 /**
@@ -740,19 +794,12 @@ static error_t *analyze_file_divergence(
      * longer controls classification.
      */
     if (!on_filesystem) {
-        /* Row claims this path but the filesystem doesn't have it. */
-
-        /* Use anchor.observed_at to distinguish ghost files from deletions
-         * (see classification table above for the full decision matrix). */
-        if (in_state && row->anchor.observed_at > 0) {
-            /* Path has been lstat-observed on disk in scope; current
-             * absence means the user deleted a previously-seen file. */
-            state = WORKSPACE_STATE_DELETED;
-        } else {
-            /* Path has never been observed (ghost file) or the row was
-             * never hydrated with a real blob (in_state = false). */
-            state = WORKSPACE_STATE_UNDEPLOYED;
-        }
+        /* Row claims this path but the filesystem doesn't have it.
+         * classify_absent gates on the witness (see the classification
+         * table above); an un-hydrated row (in_state = false) is treated
+         * as never-observed regardless. */
+        state = in_state ? classify_absent(row->anchor.observed_at)
+                         : WORKSPACE_STATE_UNDEPLOYED;
 
         /* Clear divergence flags - can't detect divergence on missing files */
         divergence = DIVERGENCE_NONE;
@@ -1804,24 +1851,27 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
         struct stat dir_stat;
         if (lstat(filesystem_path, &dir_stat) != 0) {
             if (errno == ENOENT) {
-                /* Directory truly deleted - record divergence */
+                /* Absent path: witness-gated classification. A witnessed
+                 * directory was deleted by the user (update propagates the
+                 * removal); a never-witnessed one is a ghost — apply's job
+                 * is to create it, never to commit a phantom deletion. */
                 err = workspace_add_diverged(
                     ws,
                     filesystem_path,
                     storage_path,
                     profile,
                     NULL,                     /* No old_profile for directories */
-                    WORKSPACE_STATE_DELETED,  /* State: was in profile, removed from filesystem */
-                    DIVERGENCE_NONE,          /* Divergence: none (file is gone) */
+                    classify_absent(row->observed_at),
+                    DIVERGENCE_NONE,          /* Divergence: none (path is absent) */
                     WORKSPACE_ITEM_DIRECTORY,
-                    false,                    /* on_filesystem (deleted) */
+                    false,                    /* on_filesystem (absent) */
                     true,                     /* profile_enabled */
                     false                     /* No profile change */
                 );
 
                 if (err) {
                     return error_wrap(
-                        err, "Failed to record deleted directory '%s'",
+                        err, "Failed to record absent directory '%s'",
                         filesystem_path
                     );
                 }
@@ -1834,6 +1884,17 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
                 filesystem_path, strerror(errno)
             );
             continue;  /* Non-fatal, skip this directory */
+        }
+
+        /* Presence flush accumulator — mirror of the file side's CMP_EQUAL
+         * anchor flush. The lstat above just observed the path in scope
+         * (any type counts, same semantics as the projection probe); if
+         * the row carries no witness yet, queue it for the batched write
+         * in workspace_flush_anchor_updates. Closes the "user created the
+         * path after scope entry" gap with the mechanism files already
+         * use. */
+        if (row->observed_at == 0) {
+            workspace_record_dir_witness(ws, row);
         }
 
         /* Verify it's actually a directory (type may have changed)
@@ -2000,19 +2061,13 @@ static error_t *analyze_encryption_policy_mismatch(
         } else {
             /* No existing divergence row for this file — encryption policy is the only issue.
              * Classify lifecycle state from presence + observation anchor, mirroring
-             * analyze_file_divergence Phase 2: a file on disk is DEPLOYED, a missing file is
-             * DELETED if ever observed (observed_at > 0), else UNDEPLOYED (ghost). */
+             * analyze_file_divergence Phase 2. */
             struct stat enc_stat;
             bool on_filesystem = (lstat(row->filesystem_path, &enc_stat) == 0);
 
-            workspace_state_t item_state;
-            if (on_filesystem) {
-                item_state = WORKSPACE_STATE_DEPLOYED;
-            } else if (row->anchor.observed_at > 0) {
-                item_state = WORKSPACE_STATE_DELETED;
-            } else {
-                item_state = WORKSPACE_STATE_UNDEPLOYED;
-            }
+            workspace_state_t item_state = on_filesystem
+                ? WORKSPACE_STATE_DEPLOYED
+                : classify_absent(row->anchor.observed_at);
 
             err = workspace_add_diverged(
                 ws,
@@ -2805,7 +2860,7 @@ error_t *workspace_advance_anchor(
 error_t *workspace_flush_anchor_updates(workspace_t *ws) {
     CHECK_NULL(ws);
 
-    if (ws->anchor_update_count == 0) {
+    if (ws->anchor_update_count == 0 && ws->pending_dir_witness_count == 0) {
         return NULL;
     }
 
@@ -2844,6 +2899,31 @@ error_t *workspace_flush_anchor_updates(workspace_t *ws) {
         }
     }
 
+    /* Directory witness stamps queued during directory analysis. On
+     * success the snapshot row is patched in place so downstream readers
+     * in this run see DB and memory agreeing (same coherence contract as
+     * workspace_advance_anchor; same const-cast idiom — the workspace
+     * owns the snapshot storage, the const decoration guards external
+     * accessors). */
+    for (size_t i = 0; i < ws->pending_dir_witness_count; i++) {
+        const state_directory_entry_t *row = ws->pending_dir_witnesses[i];
+
+        error_t *err = state_witness_directory(
+            ws->state, row->filesystem_path, now
+        );
+        if (err) {
+            if (needs_transaction) {
+                state_rollback(ws->state);
+            }
+            return error_wrap(
+                err, "Failed to flush directory witness for '%s'",
+                row->filesystem_path
+            );
+        }
+
+        ((state_directory_entry_t *) row)->observed_at = now;
+    }
+
     if (needs_transaction) {
         error_t *err = state_commit(ws->state);
         if (err) {
@@ -2854,6 +2934,7 @@ error_t *workspace_flush_anchor_updates(workspace_t *ws) {
     }
 
     ws->anchor_update_count = 0;
+    ws->pending_dir_witness_count = 0;
 
     return NULL;
 }
@@ -2869,8 +2950,10 @@ void workspace_free(workspace_t *ws) {
     /* Free diverged array (string fields are arena-borrowed, not freed individually) */
     free(ws->diverged);
 
-    /* Free anchor updates (row pointers are borrowed from ws->arena snapshot) */
+    /* Free anchor updates and pending directory witnesses (row pointers are
+     * borrowed from ws->arena snapshot) */
     free(ws->anchor_updates);
+    free((void *) ws->pending_dir_witnesses);
 
     /* Free indices (values are borrowed, so pass NULL for value free function).
      * active_file_index / active_dir_index values are state-row pointers into

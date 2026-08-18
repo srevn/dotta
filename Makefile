@@ -251,7 +251,7 @@ static:
 # Tests
 TESTS_DIR := tests
 TESTS_BIN_DIR := $(TESTS_DIR)/bin
-TESTS_SRC := $(wildcard $(TESTS_DIR)/*_test.c)
+TESTS_SRC := $(wildcard $(TESTS_DIR)/test-*.c)
 TESTS_BIN := $(patsubst $(TESTS_DIR)/%.c,$(TESTS_BIN_DIR)/%,$(TESTS_SRC))
 
 $(TESTS_BIN_DIR):
@@ -263,10 +263,15 @@ $(TESTS_BIN_DIR)/%: $(TESTS_DIR)/%.c $(BASE_OBJ) | $(TESTS_BIN_DIR)
 
 .PHONY: test
 test: $(TESTS_BIN)
-	@for t in $(TESTS_BIN); do \
-	    echo "== $$t =="; \
-	    "./$$t" || exit 1; \
-	done
+	@$(TESTS_DIR)/run.sh --unit $(SUITE)
+
+.PHONY: test-cli
+test-cli: $(BIN_DIR)/dotta
+	@$(TESTS_DIR)/run.sh --cli $(SUITE)
+
+.PHONY: test-all
+test-all: $(TESTS_BIN) $(BIN_DIR)/dotta
+	@$(TESTS_DIR)/run.sh $(SUITE)
 
 # Clean build artifacts
 .PHONY: clean
@@ -461,6 +466,8 @@ help:
 	@echo "  debug                 - Build with debug symbols"
 	@echo "  static                - Build with libgit2 statically linked (portable)"
 	@echo "  test                  - Build and run unit tests"
+	@echo "  test-cli              - Run CLI suites (SUITE=\"ghosts export\" to filter)"
+	@echo "  test-all              - Run unit tests and CLI suites"
 	@echo "  clean                 - Remove build artifacts"
 	@echo "  completions           - Regenerate dotta-completions.fish from current binary"
 	@echo "  install               - Install binary, configs, and hooks to $(PREFIX)"

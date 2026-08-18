@@ -14,7 +14,6 @@
 #include "base/args.h"
 #include "base/array.h"
 #include "base/error.h"
-#include "base/hashmap.h"
 #include "base/output.h"
 #include "base/string.h"
 #include "core/cleanup.h"
@@ -47,7 +46,7 @@ static void print_preflight_results(
             );
         }
         output_newline(out, OUTPUT_NORMAL);
-        output_info(out, OUTPUT_NORMAL, "Use --force to overwrite local changes");
+        output_info(out, OUTPUT_NORMAL, "Use --force to overwrite or replace them");
     }
 
     /* Print blocked paths (a non-directory where a parent must be) */
@@ -62,7 +61,7 @@ static void print_preflight_results(
         output_newline(out, OUTPUT_NORMAL);
         output_info(
             out, OUTPUT_NORMAL,
-            "Bring the ancestor into this apply with --force, or fix it by hand"
+            "Include the ancestor in this apply with --force, or remove it by hand"
         );
     }
 
@@ -179,7 +178,10 @@ static void print_deploy_results(
 
     /* Verbose mode: show individual items per category */
     if (deployed.count > 0) {
-        output_section(out, OUTPUT_VERBOSE, dry_run ? "Would deploy" : "Deployed files");
+        output_section(
+            out, OUTPUT_VERBOSE, dry_run ? "Would deploy files"
+                                         : "Deployed files"
+        );
         for (size_t i = 0; i < deployed.count; i++) {
             output_styled(
                 out, OUTPUT_VERBOSE, "  {green}✓{reset} %s\n",
@@ -190,7 +192,8 @@ static void print_deploy_results(
 
     if (converged.count > 0) {
         output_section(
-            out, OUTPUT_VERBOSE, dry_run ? "Would converge" : "Converged tracked directories"
+            out, OUTPUT_VERBOSE, dry_run ? "Would converge tracked directories"
+                                         : "Converged tracked directories"
         );
         for (size_t i = 0; i < converged.count; i++) {
             output_styled(
@@ -202,7 +205,7 @@ static void print_deploy_results(
 
     /* Skipped files (--skip-existing) */
     if (skipped.count > 0) {
-        output_section(out, OUTPUT_VERBOSE, "Skipped files (--skip-existing)");
+        output_section(out, OUTPUT_VERBOSE, "Skipped files");
         for (size_t i = 0; i < skipped.count; i++) {
             output_styled(
                 out, OUTPUT_VERBOSE, "  {cyan}⊘{reset} %s\n",
@@ -230,8 +233,9 @@ static void print_deploy_results(
     if (!output_is_verbose(out)) {
         if (deployed.count > 0) {
             output_styled(
-                out, OUTPUT_NORMAL, dry_run ? "Would deploy {green}%zu{reset} file%s\n"
-                                            : "Deployed {green}%zu{reset} file%s\n",
+                out, OUTPUT_NORMAL,
+                dry_run ? "Would deploy {green}%zu{reset} file%s\n"
+                        : "Deployed {green}%zu{reset} file%s\n",
                 deployed.count, deployed.count == 1 ? "" : "s"
             );
         }
@@ -247,7 +251,7 @@ static void print_deploy_results(
 
         if (skipped.count > 0) {
             output_styled(
-                out, OUTPUT_NORMAL, "Skipped {cyan}%zu{reset} file%s (--skip-existing)\n",
+                out, OUTPUT_NORMAL, "Skipped {cyan}%zu{reset} file%s\n",
                 skipped.count, skipped.count == 1 ? "" : "s"
             );
         }
@@ -525,7 +529,7 @@ static void print_cleanup_results(
             size_t total_reclaimed = files_reclaimed + dirs_reclaimed;
             output_styled(
                 out, OUTPUT_NORMAL,
-                "Reclaimed {cyan}%zu{reset} stale state entr%s (already absent from filesystem)\n",
+                "Reclaimed {cyan}%zu{reset} stale state entr%s (absent from filesystem)\n",
                 total_reclaimed, total_reclaimed == 1 ? "y" : "ies"
             );
         }
@@ -696,7 +700,9 @@ static void print_cleanup_preflight_results(
  * Examines the plan's pending files and directories (deployed / converged)
  * plus the file and directory orphans being removed, for root/ paths. This
  * ensures we have required privileges BEFORE attempting any filesystem
- * modifications — and, reading the plan, it is exact by construction.
+ * modifications — and, reading the plan, it is exact by construction:
+ * parents deploy creates on the way are prefixes of planned paths, so a
+ * planned path's own label already covers them.
  *
  * @param ctx Command context (must not be NULL)
  * @param plan Deployment plan (must not be NULL)
@@ -875,7 +881,9 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      */
     output_print(out, OUTPUT_VERBOSE, "\nLoading workspace...\n");
 
-    /* Apply needs file divergence + orphan detection for deployment and cleanup. */
+    /* Apply needs file AND directory divergence (deploy_plan_build derives
+     * both kinds from the divergence index — an unanalyzed kind plans as
+     * clean) plus orphan detection for cleanup. */
     workspace_load_t ws_opts = {
         .analyze_files       = true,
         .analyze_orphans     = true,
@@ -923,6 +931,8 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         goto cleanup;
     }
 
+    /* Per-item trace of the work -e held back, both kinds. output_print
+     * gates on the verbosity level, so normal runs pay only the loop cost. */
     {
         state_files_t excluded_files = state_files_view(&plan->files.excluded);
         state_directories_t excluded_dirs = state_directories_view(&plan->directories.excluded);
@@ -943,7 +953,8 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
 
     output_print(
         out, OUTPUT_VERBOSE, "  %zu %s deployment (missing or divergent)\n",
-        plan->files.pending.count, plan->files.pending.count == 1 ? "file needs" : "files need"
+        plan->files.pending.count, plan->files.pending.count == 1 ? "file needs"
+                                                                  : "files need"
     );
     output_print(
         out, OUTPUT_VERBOSE, "  %zu file%s already up-to-date (skipped)\n",
@@ -952,7 +963,8 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     output_print(
         out, OUTPUT_VERBOSE, "  %zu %s convergence\n",
         plan->directories.pending.count,
-        plan->directories.pending.count == 1 ? "tracked directory needs" : "tracked directories need"
+        plan->directories.pending.count == 1 ? "tracked directory needs"
+                                             : "tracked directories need"
     );
     output_print(
         out, OUTPUT_VERBOSE, "  %zu tracked director%s already converged\n",
@@ -966,8 +978,12 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         plan->files.excluded.count == 0 &&
         plan->directories.pending.count == 0 && plan->directories.clean.count == 0 &&
         plan->directories.excluded.count == 0) {
-        output_warning(out, OUTPUT_NORMAL, "No matching files found in enabled profiles");
-        output_hint(out, OUTPUT_NORMAL, "Check if the file path is correct and profile is enabled");
+        output_warning(
+            out, OUTPUT_NORMAL, "No matching files found in enabled profiles"
+        );
+        output_hint(
+            out, OUTPUT_NORMAL, "Check if the file path is correct and profile is enabled"
+        );
     }
 
     /* Apply-level adoption: stamp ownership for in-scope clean files that
@@ -991,11 +1007,11 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * here remains a valid ownership probe; DB and in-memory views are
      * kept coherent by workspace_advance_anchor.
      *
-     * Placement rationale: MUST run before the Nothing-to-deploy fast-path
-     * early-exit below, otherwise the canonical case (clean manifest, no
-     * orphans) never reaches any anchor-writer. Adoption writes land in
-     * the open transaction; both the fast-path state_save and the main-path
-     * state_save commit them.
+     * Placement rationale: MUST run before the nothing-to-do early exit
+     * below, otherwise the canonical case (clean manifest, no orphans)
+     * never reaches any anchor-writer. Adoption writes land in the open
+     * transaction; the early exit's state_save and the main path's both
+     * commit them.
      *
      * Write gated by !dry_run: stamping deployed_at is a write-effect that
      * contradicts dry-run's read-only ownership contract, so the
@@ -1207,10 +1223,11 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
 
     if (deploy_plan_is_empty(plan) && no_orphans) {
         if (reassigned.count > 0) {
+            print_reassignments(out, &reassigned);
             acknowledge_reassignments(state, &reassigned, opts->dry_run, out);
         } else {
             size_t total_excluded = plan->files.excluded.count +
-                                    plan->directories.excluded.count + excluded_orphans.count;
+                plan->directories.excluded.count + excluded_orphans.count;
             if (total_excluded > 0) {
                 output_info(
                     out, OUTPUT_NORMAL, "Nothing to deploy (%zu path%s excluded by --exclude)",
@@ -1223,6 +1240,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
             }
         }
 
+        /* Commit transaction to persist stat cache updates from workspace flush */
         err = state_save(repo, state);
         if (err) {
             err = error_wrap(err, "Failed to commit state changes");
@@ -1236,9 +1254,9 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     /* Check privileges for root/ files AND directories BEFORE deployment begins
      *
      * This ensures we have required privileges upfront, preventing partial
-     * deployments and cryptic mid-operation failures. Checks occur AFTER
-     * the active slice and orphan identification (know all files/dirs) but BEFORE
-     * any filesystem modifications.
+     * deployments and cryptic mid-operation failures. Checks occur AFTER the
+     * plan and the orphan slices (every path the run will touch is known) but
+     * BEFORE any filesystem modification.
      *
      * Skip check if dry-run (read-only operation, no privileges needed).
      *
@@ -1267,10 +1285,10 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      */
     cache = ctx->content_cache;
 
-    /* Run pre-flight checks (using workspace divergence analysis)
+    /* Run pre-flight checks over the plan
      *
-     * Workspace already compared all files during workspace_load(), so preflight
-     * just queries the results via O(1) hashmap lookups.
+     * Divergence verdicts come from workspace_load's analysis (O(1) index
+     * probes); the landing and writability checks are filesystem-level.
      */
     output_print(out, OUTPUT_VERBOSE, "\nRunning pre-flight checks...\n");
 
@@ -1291,7 +1309,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     print_preflight_results(out, preflight);
     print_reassignments(out, &reassigned);
 
-    /* Check for errors (conflicts, permissions) */
+    /* Check for blocking findings (conflicts, blocked paths, permissions) */
     if (preflight->has_errors) {
         err = ERROR(ERR_CONFLICT, "Pre-flight checks failed");
         goto cleanup;
@@ -1389,7 +1407,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
 
     /* Confirm before deployment if configured (unless --force or --dry-run) */
     if (config->confirm_destructive && !opts->force && !opts->dry_run) {
-        char prompt[512];
+        char prompt[512];   /* Larger buffer for enhanced prompt */
 
         /* Calculate orphan removal count (exclude safety violations)
          *
@@ -1408,52 +1426,52 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         }
 
         /* Directory pruning can be the only pending action (no files move) */
-        size_t dir_count = 0;
+        size_t prune_count = 0;
         if (cleanup_preflight && cleanup_preflight->will_prune_directories) {
             /* will_prune_directories implies orphaned_directories is non-NULL */
-            dir_count = cleanup_preflight->orphaned_directories->count;
+            prune_count = cleanup_preflight->orphaned_directories->count;
         }
 
         /* Compose the prompt from the non-zero parts — "Deploy 2 files,
          * converge 1 tracked directory and remove 3 orphaned files?". No
          * part means every pending action is state-only reclamation (e.g.
          * an all-absent orphan set) — non-destructive, no consent needed. */
-        size_t file_count = plan->files.pending.count;
+        size_t deploy_count = plan->files.pending.count;
         size_t converge_count = plan->directories.pending.count;
 
         char parts[4][64];
-        size_t n = 0;
-        if (file_count > 0) {
+        size_t part_count = 0;
+        if (deploy_count > 0) {
             snprintf(
-                parts[n++], sizeof(parts[0]), "deploy %zu file%s",
-                file_count, file_count == 1 ? "" : "s"
+                parts[part_count++], sizeof(parts[0]), "deploy %zu file%s",
+                deploy_count, deploy_count == 1 ? "" : "s"
             );
         }
         if (converge_count > 0) {
             snprintf(
-                parts[n++], sizeof(parts[0]), "converge %zu tracked director%s",
+                parts[part_count++], sizeof(parts[0]), "converge %zu tracked director%s",
                 converge_count, converge_count == 1 ? "y" : "ies"
             );
         }
         if (removal_count > 0) {
             snprintf(
-                parts[n++], sizeof(parts[0]), "remove %zu orphaned file%s",
+                parts[part_count++], sizeof(parts[0]), "remove %zu orphaned file%s",
                 removal_count, removal_count == 1 ? "" : "s"
             );
         }
-        if (dir_count > 0) {
+        if (prune_count > 0) {
             snprintf(
-                parts[n++], sizeof(parts[0]), "prune %zu empty director%s",
-                dir_count, dir_count == 1 ? "y" : "ies"
+                parts[part_count++], sizeof(parts[0]), "prune %zu empty director%s",
+                prune_count, prune_count == 1 ? "y" : "ies"
             );
         }
 
-        if (n > 0) {
+        if (part_count > 0) {
             /* ", " between parts, " and " before the last; four parts of
              * at most 63 bytes fit the buffer with room to spare */
             size_t off = 0;
-            for (size_t i = 0; i < n; i++) {
-                const char *sep = (i == 0) ? "" : (i + 1 == n) ? " and " : ", ";
+            for (size_t i = 0; i < part_count; i++) {
+                const char *sep = (i == 0) ? "" : (i + 1 == part_count) ? " and " : ", ";
                 off += (size_t) snprintf(
                     prompt + off, sizeof(prompt) - off, "%s%s", sep, parts[i]
                 );
@@ -1507,8 +1525,8 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         }
     }
 
-    size_t total_excluded = plan->files.excluded.count + plan->directories.excluded.count +
-                            excluded_orphans.count;
+    size_t total_excluded = plan->files.excluded.count +
+        plan->directories.excluded.count + excluded_orphans.count;
     if (total_excluded > 0) {
         if (output_is_verbose(out)) {
             output_print(
@@ -1541,6 +1559,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
                 );
             }
         } else {
+            /* Simple summary */
             output_styled(
                 out, OUTPUT_NORMAL, "Skipped {cyan}%zu{reset} path%s (--exclude)\n",
                 total_excluded, total_excluded == 1 ? "" : "s"
@@ -1950,7 +1969,6 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
                 }
             }
         }
-
     }
 
     /* Acknowledge profile reassignments (clear old_profile in state).

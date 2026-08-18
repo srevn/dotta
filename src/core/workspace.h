@@ -77,7 +77,7 @@ typedef struct {
     /* Item classification */
     workspace_state_t state;      /* Where the item exists (deployed/undeployed/etc.) */
     divergence_type_t divergence; /* What's wrong with it (bit flags, can combine) */
-    path_kind_t item_kind;        /* FILE or DIRECTORY (explicit type) */
+    path_kind_t item_kind;        /* PATH_KIND_FILE or PATH_KIND_DIRECTORY */
 
     /* State flags */
     bool on_filesystem;         /* Exists on actual filesystem */

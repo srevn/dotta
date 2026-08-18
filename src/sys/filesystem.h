@@ -35,7 +35,9 @@ error_t *fs_read_file(const char *path, buffer_t *out);
 /**
  * Write raw bytes to file (overwrites if exists)
  *
- * Creates parent directories if needed.
+ * Creates parent directories if needed, with default attributes (0755,
+ * the running user) — a caller that owns its ancestors' attributes
+ * (core/deploy) creates them first and never reaches this path.
  * This is a lower-level function for writing data directly from memory
  * without the buffer_t abstraction. Useful for writing directly from
  * git blobs or other external data sources.

@@ -32,39 +32,99 @@
 /**
  * Deploy's work predicate over a workspace verdict
  *
- * State (existence) sets the baseline, divergence (quality) refines it.
- * Kind-agnostic: directories are tagged only MODE / OWNERSHIP / TYPE /
- * UNVERIFIED, so the DEPLOYED arm's mask covers every directory verdict.
- * The planner iterates the active slices, so orphan-state items never
- * reach this; those arms exist for -Wswitch completeness.
+ * Two dimensions, in order: state (where does the path exist — Git, state
+ * database, filesystem?) sets the baseline, divergence (what is wrong with
+ * it?) refines it. A missing path is always work and always carries
+ * DIVERGENCE_NONE — properties of something that is not there cannot be
+ * compared, so the two missing states answer from state alone.
+ *
+ * Kind-agnostic: directory analysis tags only MODE / OWNERSHIP / TYPE /
+ * UNVERIFIED (never content, encryption or stale), so the DEPLOYED arm's
+ * mask already covers every directory verdict — no kind-specific arm.
+ *
+ * The planner iterates the active slices, so the three non-active states
+ * never reach this; their arms name the owner that does handle them and
+ * keep -Wswitch quiet.
+ *
+ * @param item Workspace divergence verdict (NULL = not in the index = clean)
+ * @return true when deploy must act on the path
  */
 static bool deploy_needs_work(const workspace_item_t *item) {
     if (item == NULL) {
-        return false;                        /* not in the divergence index: clean */
+        /* Not in workspace divergence index -> file is clean */
+        return false;
     }
 
+    /* Decision tree: state (existence) determines baseline, then check divergence (quality) */
     switch (item->state) {
-        case WORKSPACE_STATE_UNDEPLOYED:     /* in Git, never on disk */
-        case WORKSPACE_STATE_DELETED:        /* was on disk, removed since */
+        case WORKSPACE_STATE_UNDEPLOYED:
+            /* File exists in Git but has never been deployed to filesystem.
+             * Needs initial deployment.
+             *
+             * Note: divergence is always NONE for missing files (can't compare
+             * properties of non-existent files). */
+            return true;
+
+        case WORKSPACE_STATE_DELETED:
+            /* File exists in Git and was previously deployed (deployed_at > 0),
+             * but has been removed from filesystem. Needs restoration.
+             *
+             * Note: divergence is always NONE for missing files. */
             return true;
 
         case WORKSPACE_STATE_DEPLOYED:
-            /* STALE is informational — the VWD row was re-pointed at the
-             * new blob in memory; only a real property mismatch is work. */
+            /* File exists on filesystem and is tracked in Git.
+             * Needs deployment only if properties diverged (content, mode, ownership, etc.).
+             *
+             * If divergence == NONE: file is clean, matches Git perfectly.
+             * If divergence != NONE: file has property mismatches, needs redeployment.
+             *
+             * DIVERGENCE_STALE is informational (VWD cache was patched in-memory from
+             * fresh Git state). It does NOT indicate a filesystem mismatch — the patched
+             * values are the new expected state. Mask it out to avoid spurious deployment
+             * when the file content already matches the new Git state. */
             return (item->divergence & ~DIVERGENCE_STALE) != DIVERGENCE_NONE;
 
-        case WORKSPACE_STATE_ORPHANED:       /* cleanup's, never deploy's */
-        case WORKSPACE_STATE_UNTRACKED:      /* not managed; the user must add it */
-        case WORKSPACE_STATE_RELEASED:       /* Git dropped it; cleanup retires the row */
+        case WORKSPACE_STATE_ORPHANED:
+            /* Path exists in deployment state but not in any enabled profile.
+             *
+             * Not reachable from the planner: both active slices are
+             * partitioned to enabled profiles, and orphan rows are exactly
+             * the ones that partition rejected.
+             *
+             * Never deployment — cleanup owns orphan removal. */
+            return false;
+
+        case WORKSPACE_STATE_UNTRACKED:
+            /* File exists on filesystem in a tracked directory but not in Git.
+             *
+             * Architectural invariant: Untracked files should NOT appear in the active
+             * slice (which is built from state rows, not filesystem scans). If we
+             * reach here, it's a programming error.
+             *
+             * Defensive: Return false (don't deploy untracked files, user must 'add' them). */
+            return false;
+
+        case WORKSPACE_STATE_RELEASED:
+            /* File removed from Git externally, released from management.
+             * Never needs deployment — cleanup handles state entry removal. */
             return false;
     }
 
+    /* Unreachable once every enum value is handled — defensive against a
+     * value from outside the enum. */
     return false;
 }
 
 /**
  * Route one in-scope row into its partition bucket, or drop it
  * (clean + excluded is neither work nor adoptable).
+ *
+ * @param part Partition for the row's kind (must not be NULL)
+ * @param row Borrowed state row (must not be NULL)
+ * @param work Deploy's work predicate for the row
+ * @param excluded Held back by an -e pattern
+ * @return Error or NULL on success
  */
 static error_t *partition_push(
     deploy_partition_t *part,
@@ -88,9 +148,7 @@ static error_t *partition_push(
  * Build the deployment plan
  */
 error_t *deploy_plan_build(
-    const workspace_t *ws,
-    const scope_t *scope,
-    deploy_plan_t **out
+    const workspace_t *ws, const scope_t *scope, deploy_plan_t **out
 ) {
     CHECK_NULL(ws);
     CHECK_NULL(scope);
@@ -114,11 +172,12 @@ error_t *deploy_plan_build(
         }
 
         err = partition_push(
-            &plan->files, row,
+            &plan->files,
+            row,
             deploy_needs_work(workspace_get_item(ws, row->filesystem_path)),
             scope_is_excluded(scope, row->storage_path, PATH_KIND_FILE)
         );
-        if (err) goto fail;
+        if (err) goto cleanup;
     }
 
     state_directories_t dirs = workspace_directories(ws);
@@ -131,17 +190,18 @@ error_t *deploy_plan_build(
         }
 
         err = partition_push(
-            &plan->directories, row,
+            &plan->directories,
+            row,
             deploy_needs_work(workspace_get_item(ws, row->filesystem_path)),
             scope_is_excluded(scope, row->storage_path, PATH_KIND_DIRECTORY)
         );
-        if (err) goto fail;
+        if (err) goto cleanup;
     }
 
     *out = plan;
     return NULL;
 
-fail:
+cleanup:
     deploy_plan_free(plan);
     return error_wrap(err, "Failed to build deploy plan");
 }
@@ -160,6 +220,7 @@ void deploy_plan_free(deploy_plan_t *plan) {
     ptr_array_deinit(&plan->directories.pending);
     ptr_array_deinit(&plan->directories.clean);
     ptr_array_deinit(&plan->directories.excluded);
+
     free(plan);
 }
 
@@ -168,17 +229,25 @@ void deploy_plan_free(deploy_plan_t *plan) {
  * ══════════════════════════════════════════════════════════════════ */
 
 /**
- * stat the prefix of `scratch` ending at the slash at index k — "/"
- * itself when k == 0 — NUL-terminating it in place for the call and
- * restoring the byte afterwards. errno is stat's.
+ * Byte length of the ancestor ending at the slash at index `slash`. The
+ * root is the one ancestor that IS its slash: index 0 means "/", one byte.
  */
-static int stat_prefix(char *scratch, size_t k, struct stat *st) {
-    size_t cut = k ? k : 1;
-    char saved = scratch[cut];
-    scratch[cut] = '\0';
+static size_t ancestor_len(size_t slash) {
+    return slash ? slash : 1;
+}
+
+/**
+ * stat the ancestor of `scratch` ending at the slash at index `slash`,
+ * NUL-terminating it in place for the call and restoring the byte
+ * afterwards. errno is stat's.
+ */
+static int stat_ancestor(char *scratch, size_t slash, struct stat *st) {
+    size_t len = ancestor_len(slash);
+    char saved = scratch[len];
+    scratch[len] = '\0';
     int rc = stat(scratch, st);
     int saved_errno = errno;
-    scratch[cut] = saved;
+    scratch[len] = saved;
     errno = saved_errno;
     return rc;
 }
@@ -188,20 +257,20 @@ static int stat_prefix(char *scratch, size_t k, struct stat *st) {
  *
  * Follows symlinks — a symlinked configuration directory is a directory
  * for the purpose of writing beneath it. `scratch` is a writable copy of
- * the path, intact on return; *k receives the index of the slash that
- * ends the ancestor (0 for "/"), *st its stat. False only when stat
+ * the path, intact on return; *out_slash receives the index of the slash
+ * that ends the ancestor (0 for "/"), *st its stat. False only when stat
  * fails for a reason other than absence — the write will surface the
  * real errno.
  */
-static bool nearest_ancestor(char *scratch, size_t *k, struct stat *st) {
+static bool nearest_ancestor(char *scratch, size_t *out_slash, struct stat *st) {
     size_t i = strlen(scratch);
     for (;;) {
         do {
             if (i == 0) return false;           /* not absolute — cannot happen */
         } while (scratch[--i] != '/');
 
-        if (stat_prefix(scratch, i, st) == 0) {
-            *k = i;
+        if (stat_ancestor(scratch, i, st) == 0) {
+            *out_slash = i;
             return true;
         }
         if (errno != ENOENT && errno != ENOTDIR) {
@@ -225,11 +294,13 @@ static bool nearest_ancestor(char *scratch, size_t *k, struct stat *st) {
  */
 static bool directory_is_pending(const deploy_plan_t *plan, const char *path) {
     state_directories_t dirs = state_directories_view(&plan->directories.pending);
+
     for (size_t i = 0; i < dirs.count; i++) {
         if (strcmp(dirs.entries[i]->filesystem_path, path) == 0) {
             return true;
         }
     }
+
     return false;
 }
 
@@ -241,11 +312,14 @@ static bool directory_is_pending(const deploy_plan_t *plan, const char *path) {
  * beneath it). An out-of-scope squatter is never touched (Coherent
  * Scope), so the path cannot land: say so now, not at write time. A
  * directory ancestor must be writable.
+ *
+ * @param plan Deployment plan, for the planned-directory test (must not be NULL)
+ * @param path Absent planned path (must not be NULL)
+ * @param result Preflight result to record a finding in (must not be NULL)
+ * @return Error or NULL on success (a finding is not an error)
  */
 static error_t *check_landing(
-    const deploy_plan_t *plan,
-    const char *path,
-    preflight_result_t *result
+    const deploy_plan_t *plan, const char *path, preflight_result_t *result
 ) {
     char *scratch = strdup(path);
     if (!scratch) {
@@ -254,11 +328,12 @@ static error_t *check_landing(
 
     error_t *err = NULL;
     struct stat st;
-    size_t k;
-    if (!nearest_ancestor(scratch, &k, &st)) {
-        goto cleanup;                           /* let the write surface the errno */
+    size_t ancestor_slash;
+    if (!nearest_ancestor(scratch, &ancestor_slash, &st)) {
+        goto cleanup;                             /* let the write surface the errno */
     }
-    scratch[k ? k : 1] = '\0';                  /* the ancestor, on its own */
+
+    scratch[ancestor_len(ancestor_slash)] = '\0'; /* the ancestor, on its own */
 
     if (!S_ISDIR(st.st_mode)) {
         if (!directory_is_pending(plan, scratch)) {
@@ -305,15 +380,20 @@ error_t *deploy_preflight(
 
     preflight_result_t *result = calloc(1, sizeof(preflight_result_t));
     if (!result) {
-        return ERROR(ERR_MEMORY, "Failed to allocate preflight result");
+        return ERROR(
+            ERR_MEMORY, "Failed to allocate preflight result"
+        );
     }
 
     result->conflicts = string_array_new(0);
     result->blocked = string_array_new(0);
     result->permission_errors = string_array_new(0);
+
     if (!result->conflicts || !result->blocked || !result->permission_errors) {
         preflight_result_free(result);
-        return ERROR(ERR_MEMORY, "Failed to allocate result arrays");
+        return ERROR(
+            ERR_MEMORY, "Failed to allocate result arrays"
+        );
     }
 
     error_t *err = NULL;
@@ -323,15 +403,24 @@ error_t *deploy_preflight(
         const char *path = files.entries[i]->filesystem_path;
         const workspace_item_t *item = workspace_get_item(ws, path);
 
-        /* Content or type divergence blocks unless --force. Metadata and
-         * encryption divergence are informational. STALE content is the
-         * old blob dotta itself deployed — safe to overwrite. */
-        if (item && !opts->force &&
-            (item->divergence & (DIVERGENCE_CONTENT | DIVERGENCE_TYPE)) &&
-            !(item->divergence & DIVERGENCE_STALE)) {
-            err = string_array_push(result->conflicts, path);
-            if (err) goto fail;
-            result->has_errors = true;
+        if (item && !opts->force) {
+            /* File has divergence - check if it's a blocking conflict.
+             * Only block on content conflicts (CONTENT, TYPE).
+             * Metadata divergence (mode, ownership) and encryption policy are informational.
+             *
+             * DIVERGENCE_STALE exception: When content diverges because the expected
+             * state changed (stale repair), and the file on disk matches what dotta
+             * deployed (old blob), it's safe to overwrite. DIVERGENCE_STALE is only
+             * set after this verification, so we can trust it here.
+             */
+            if ((item->divergence & (DIVERGENCE_CONTENT | DIVERGENCE_TYPE)) &&
+                !(item->divergence & DIVERGENCE_STALE)) {
+                /* Content or type conflict - block deployment */
+                err = string_array_push(result->conflicts, path);
+                if (err) goto cleanup;
+                result->has_errors = true;
+            }
+            /* Mode/ownership/encryption divergence is not blocking */
         }
 
         /* An existing path (any type; stat follows symlinks, so a broken
@@ -341,12 +430,12 @@ error_t *deploy_preflight(
         if (stat(path, &st) == 0) {
             if (access(path, W_OK) != 0) {
                 err = string_array_push(result->permission_errors, path);
-                if (err) goto fail;
+                if (err) goto cleanup;
                 result->has_errors = true;
             }
         } else {
             err = check_landing(plan, path, result);
-            if (err) goto fail;
+            if (err) goto cleanup;
         }
     }
 
@@ -360,7 +449,7 @@ error_t *deploy_preflight(
          * --force lets deploy_directory replace it. */
         if (item && !opts->force && (item->divergence & DIVERGENCE_TYPE)) {
             err = string_array_push(result->conflicts, path);
-            if (err) goto fail;
+            if (err) goto cleanup;
             result->has_errors = true;
         }
 
@@ -369,14 +458,14 @@ error_t *deploy_preflight(
         struct stat st;
         if (stat(path, &st) != 0) {
             err = check_landing(plan, path, result);
-            if (err) goto fail;
+            if (err) goto cleanup;
         }
     }
 
     *out = result;
     return NULL;
 
-fail:
+cleanup:
     preflight_result_free(result);
     return error_wrap(err, "Failed to record preflight finding");
 }
@@ -409,8 +498,8 @@ fail:
  * their dry-run gate; in dry-run a strict-mode failure prints "Would fail"
  * instead of aborting.
  *
- * @param storage_path Path in profile (e.g., "home/.bashrc", "root/etc/hosts", "custom/etc/nginx.conf")
- * @param filesystem_path Resolved deployment path (e.g., "/home/user/.bashrc") for home detection
+ * @param storage_path Path in profile (e.g., "home/.bashrc", "root/etc/hosts")
+ * @param filesystem_path Resolved deployment path for home detection
  * @param owner Owner username from metadata (can be NULL)
  * @param group Group name from metadata (can be NULL)
  * @param out_uid Resolved UID or -1 for no change (must not be NULL)
@@ -423,13 +512,10 @@ fail:
 static error_t *resolve_deployment_ownership(
     const char *storage_path,
     const char *filesystem_path,
-    const char *owner,
-    const char *group,
-    uid_t *out_uid,
-    gid_t *out_gid,
+    const char *owner, const char *group,
+    uid_t *out_uid, gid_t *out_gid,
     bool strict_ownership,
-    bool dry_run,
-    bool verbose
+    bool dry_run, bool verbose
 ) {
     CHECK_NULL(storage_path);
     CHECK_NULL(out_uid);
@@ -523,20 +609,33 @@ static error_t *resolve_deployment_ownership(
 
 /**
  * A tracked directory row's target metadata: mode (with the missing-mode
- * fallback and its warning) and resolved ownership. Pure decision.
+ * fallback and its warning) and resolved ownership. Pure decision — no
+ * filesystem mutation, so it runs ahead of the dry-run gate.
+ *
+ * @param dir State row (must not be NULL; borrowed, read-only)
+ * @param opts Deployment options (must not be NULL)
+ * @param out_mode Resolved permission mode (must not be NULL)
+ * @param out_uid Resolved UID or -1 for no change (must not be NULL)
+ * @param out_gid Resolved GID or -1 for no change (must not be NULL)
+ * @return Error or NULL on success
  */
 static error_t *resolve_directory_metadata(
     const state_directory_entry_t *dir,
     const deploy_options_t *opts,
     mode_t *out_mode,
-    uid_t *out_uid,
-    gid_t *out_gid
+    uid_t *out_uid, gid_t *out_gid
 ) {
-    /* The manifest layer populates mode at write time; mode==0 indicates
-     * state corruption or a manifest sync failure. Warn and fall back. */
+    /* Validate directory mode from state (before skip/dry-run checks)
+     *
+     * In VWD operations, state should always have mode populated by the
+     * manifest layer at write time. If mode==0, this indicates state
+     * corruption or manifest sync failure. Warn and use safe default
+     * (0755 for directories).
+     */
     mode_t mode = dir->mode;
     if (mode == 0) {
-        mode = 0755;
+        /* Defensive fallback - indicates unexpected state corruption */
+        mode = 0755;    /* Safe default for directories */
 
         fprintf(
             stderr,
@@ -553,13 +652,10 @@ static error_t *resolve_directory_metadata(
     error_t *err = resolve_deployment_ownership(
         dir->storage_path,
         dir->filesystem_path,
-        dir->owner,
-        dir->group,
-        out_uid,
-        out_gid,
+        dir->owner, dir->group,
+        out_uid, out_gid,
         opts->strict_ownership,
-        opts->dry_run,
-        opts->verbose
+        opts->dry_run, opts->verbose
     );
     if (err) {
         return error_wrap(
@@ -574,22 +670,37 @@ static error_t *resolve_directory_metadata(
 /**
  * Materialize one absent ancestor whose own parent exists: a tracked
  * directory (any profile, in scope or not) with its tracked metadata,
- * anything else 0755 owned like the planned path beneath it.
+ * anything else 0755 owned like the planned path beneath it. The 0755 is
+ * exact (fchmod), not umask-masked — dotta reproduces modes, it does not
+ * negotiate them.
+ *
+ * @param ws Workspace, for the tracked-directory lookup (must not be NULL)
+ * @param path Absent ancestor to create (must not be NULL)
+ * @param uid UID of the planned path beneath it (-1 for no change)
+ * @param gid GID of the planned path beneath it (-1 for no change)
+ * @param opts Deployment options (must not be NULL)
+ * @return Error or NULL on success
  */
 static error_t *create_ancestor(
     const workspace_t *ws,
     const char *path,
-    uid_t uid,
-    gid_t gid,
+    uid_t uid, gid_t gid,
     const deploy_options_t *opts
 ) {
     const state_directory_entry_t *dir = workspace_lookup_directory(ws, path);
+
     if (dir) {
         mode_t mode;
         uid_t dir_uid;
         gid_t dir_gid;
-        RETURN_IF_ERROR(resolve_directory_metadata(dir, opts, &mode, &dir_uid, &dir_gid));
-        return fs_create_dir_with_ownership(path, mode, dir_uid, dir_gid);
+
+        RETURN_IF_ERROR(
+            resolve_directory_metadata(dir, opts, &mode, &dir_uid, &dir_gid)
+        );
+
+        return fs_create_dir_with_ownership(
+            path, mode, dir_uid, dir_gid
+        );
     }
 
     return fs_create_dir_with_ownership(path, 0755, uid, gid);
@@ -604,12 +715,18 @@ static error_t *create_ancestor(
  * already replaced any planned squatter above it; a non-directory
  * ancestor met here (a prompt sat in between) is a named error rather
  * than a mkdir errno.
+ *
+ * @param ws Workspace, for tracked-ancestor metadata (must not be NULL)
+ * @param path Planned path whose parents must exist (must not be NULL)
+ * @param uid Resolved UID of the planned path (-1 for no change)
+ * @param gid Resolved GID of the planned path (-1 for no change)
+ * @param opts Deployment options (must not be NULL)
+ * @return Error or NULL on success
  */
 static error_t *ensure_parents(
     const workspace_t *ws,
     const char *path,
-    uid_t uid,
-    gid_t gid,
+    uid_t uid, gid_t gid,
     const deploy_options_t *opts
 ) {
     char *scratch = strdup(path);
@@ -619,12 +736,12 @@ static error_t *ensure_parents(
 
     error_t *err = NULL;
     struct stat st;
-    size_t k;
-    if (!nearest_ancestor(scratch, &k, &st)) {
+    size_t ancestor_slash;
+    if (!nearest_ancestor(scratch, &ancestor_slash, &st)) {
         goto cleanup;                            /* let the write surface the errno */
     }
     if (!S_ISDIR(st.st_mode)) {
-        scratch[k ? k : 1] = '\0';
+        scratch[ancestor_len(ancestor_slash)] = '\0';
         err = ERROR(
             ERR_FS, "Cannot create parents of '%s': '%s' is not a directory",
             path, scratch
@@ -634,12 +751,16 @@ static error_t *ensure_parents(
 
     /* Every slash past the ancestor ends one missing parent; the final
      * component is the planned path itself. */
-    for (char *slash = strchr(scratch + k + 1, '/'); slash; slash = strchr(slash + 1, '/')) {
+    char *tail = scratch + ancestor_slash + 1;
+    for (char *slash = strchr(tail, '/'); slash; slash = strchr(slash + 1, '/')) {
         *slash = '\0';
         err = create_ancestor(ws, scratch, uid, gid, opts);
         *slash = '/';
         if (err) {
-            err = error_wrap(err, "Failed to create parent directory for '%s'", path);
+            err = error_wrap(
+                err, "Failed to create parent directory for '%s'",
+                path
+            );
             goto cleanup;
         }
     }
@@ -683,12 +804,14 @@ static error_t *deploy_file(
     CHECK_NULL(file);
     CHECK_NULL(opts);
 
+    /* Declare all resources at top, initialized to NULL */
     error_t *err = NULL;
     const buffer_t *content_buffer = NULL;  /* Borrowed from cache (const) */
     char *target_str = NULL;
 
-    /* A zero OID means the row was never populated from state — impossible
-     * for a row reaching the deploy path, kept as a sanity check. */
+    /* Validate blob_oid from VWD cache. A zero OID means the row was never
+     * populated from state — should be impossible for entries reaching the
+     * deploy path, but we keep the defensive check. */
     if (git_oid_is_zero(&file->blob_oid)) {
         return ERROR(
             ERR_INTERNAL, "Missing blob_oid for '%s' (state corruption?)",
@@ -696,29 +819,39 @@ static error_t *deploy_file(
         );
     }
 
-    /* Ownership is resolved BEFORE any write so fs_write_file_raw /
-     * lchown apply it atomically — no window with wrong ownership. */
+    /* Resolve ownership for the file based on prefix - RESOLVED BEFORE WRITING
+     *
+     * SECURITY: Ownership resolution happens BEFORE file creation to enable
+     * atomic ownership via fchown() on the file descriptor. This eliminates
+     * the security window where files exist with incorrect ownership.
+     *
+     * VWD Authority: uses file->owner and file->group from the state cache.
+     * - root/ prefix files: owner/group are username/groupname strings from state
+     * - home/ prefix files: owner/group are NULL (current user ownership)
+     *
+     * Unified helper handles:
+     * - home/ files when running as root: Use actual user's UID/GID (sudo handling)
+     * - root/ files with owner/group: Resolve username/groupname -> UID/GID
+     * - All other cases: Return -1 (preserve current user/root ownership)
+     */
     uid_t target_uid, target_gid;
     err = resolve_deployment_ownership(
         file->storage_path,
         file->filesystem_path,
-        file->owner,
-        file->group,
-        &target_uid,
-        &target_gid,
+        file->owner, file->group,
+        &target_uid, &target_gid,
         opts->strict_ownership,
-        opts->dry_run,
-        opts->verbose
+        opts->dry_run, opts->verbose
     );
     if (err) {
         return error_wrap(
-            err, "Failed to resolve ownership for '%s'",
-            file->filesystem_path
+            err, "Failed to resolve ownership for '%s'", file->filesystem_path
         );
     }
 
     /* The one mutation gate */
     if (opts->dry_run) {
+        /* Dry-run mode - just print */
         if (opts->verbose) {
             printf("  Would deploy: %s\n", file->filesystem_path);
         }
@@ -731,24 +864,34 @@ static error_t *deploy_file(
         return err;
     }
 
-    /* Symlinks are never encrypted: read the blob directly, bypassing the
-     * content layer (designed for regular files with potential encryption). */
+    /* Handle symlinks - these are never encrypted, so handle separately */
     if (file->type == STATE_FILE_SYMLINK) {
+        /* For symlinks, we load the blob directly since the content layer
+         * is designed for regular files with potential encryption. */
         size_t target_len = 0;
         err = gitops_read_blob_content(
             repo, &file->blob_oid, (void **) &target_str, &target_len
         );
         if (err) goto cleanup;
 
-        /* fs_clear_path: lstat-based (broken symlinks detected), handles
-         * files, symlinks and directories, idempotent when absent.
-         * Safety: only reached with --force (preflight blocks DIVERGENCE_TYPE) */
+        /* Clear path for symlink deployment (handles files, symlinks, and directories)
+         *
+         * Uses fs_clear_path() instead of fs_remove_file() because:
+         * 1. fs_remove_file() fails with EISDIR if target is a directory
+         * 2. fs_clear_path() uses lstat() so broken symlinks are properly detected
+         * 3. Idempotent - succeeds if path doesn't exist
+         *
+         * Safety: Only reached with --force (preflight blocks DIVERGENCE_TYPE)
+         */
         err = fs_clear_path(file->filesystem_path);
         if (err) {
-            err = error_wrap(err, "Failed to prepare path for symlink deployment");
+            err = error_wrap(
+                err, "Failed to prepare path for symlink deployment"
+            );
             goto cleanup;
         }
 
+        /* Create symlink */
         err = fs_create_symlink(target_str, file->filesystem_path);
         if (err) {
             err = error_wrap(
@@ -775,6 +918,7 @@ static error_t *deploy_file(
             printf("Deployed symlink: %s\n", file->filesystem_path);
         }
 
+        /* Success for symlink - goto cleanup will handle freeing */
         err = NULL;
         goto cleanup;
     }
@@ -787,18 +931,25 @@ static error_t *deploy_file(
         file->profile ? file->profile : "unknown",
         &content_buffer
     );
+
     if (err) {
         err = error_wrap(err, "Failed to get content for '%s'", file->storage_path);
         goto cleanup;
     }
 
+    /* Get content pointer and size from buffer */
     const unsigned char *content = (const unsigned char *) content_buffer->data;
     size_t size = content_buffer->size;
 
-    /* The manifest layer populates mode at write time; mode==0 indicates
-     * state corruption or a manifest sync failure. Fall back by type. */
+    /* Determine permissions from state row
+     *
+     * In VWD operations, the state row should always have mode populated
+     * by the manifest layer at write time. If mode==0, this indicates state
+     * corruption or manifest sync failure. Fall back to a safe default keyed
+     * on file type. */
     mode_t file_mode = file->mode;
     if (file_mode == 0) {
+        /* Defensive fallback - indicates unexpected state corruption */
         file_mode = (file->type == STATE_FILE_EXECUTABLE) ? 0755 : 0644;
 
         fprintf(
@@ -812,33 +963,39 @@ static error_t *deploy_file(
         );
     }
 
-    /* fs_write_file_raw overwrites files via O_TRUNC but cannot replace a
-     * directory (EISDIR): clear one explicitly. lstat so a symlink to a
-     * directory is left to O_CREAT (it is not S_IFDIR).
-     * Safety: only reached with --force (preflight blocks DIVERGENCE_TYPE) */
+    /* Clear directory at target path if present
+     *
+     * fs_write_file_raw() lands the content by rename() of a temp file over
+     * the target. rename() replaces a regular file or a symlink (the link
+     * itself, not what it points to) but not a directory (EISDIR).
+     * Directories must be cleared explicitly before writing.
+     *
+     * Uses lstat() to avoid following symlinks:
+     * - Symlink to directory: lstat returns S_IFLNK -> rename replaces the link
+     * - Actual directory: lstat returns S_IFDIR -> must clear before writing
+     *
+     * Safety: Only reached with --force (preflight blocks DIVERGENCE_TYPE)
+     */
     struct stat target_stat;
     if (lstat(file->filesystem_path, &target_stat) == 0 && S_ISDIR(target_stat.st_mode)) {
         err = fs_remove_dir(file->filesystem_path, true);
         if (err) {
             err = error_wrap(
-                err, "Failed to clear directory at '%s'",
-                file->filesystem_path
+                err, "Failed to clear directory at '%s'", file->filesystem_path
             );
             goto cleanup;
         }
     }
 
-    /* fs_write_file_raw atomically sets ownership and permissions via
-     * fchown()/fchmod() on the descriptor — the ONLY place ownership is
-     * applied; the metadata layer only resolves. */
+    /* Write directly from git blob to filesystem with atomic ownership and permissions
+     * SECURITY: fs_write_file_raw atomically sets BOTH ownership and permissions via
+     * fchown() and fchmod() on the file descriptor, eliminating any security window.
+     * This is the ONLY place where ownership is applied - metadata layer only resolves. */
     err = fs_write_file_raw(
-        file->filesystem_path,
-        content,
-        size,
-        file_mode,
-        target_uid,
-        target_gid
+        file->filesystem_path, content, size, file_mode,
+        target_uid, target_gid
     );
+
     if (err) {
         err = error_wrap(
             err, "Failed to deploy file '%s'",
@@ -847,6 +1004,7 @@ static error_t *deploy_file(
         goto cleanup;
     }
 
+    /* Verbose output */
     if (opts->verbose) {
         bool has_ownership = (file->owner || file->group) && target_uid != (uid_t) -1;
 
@@ -854,22 +1012,20 @@ static error_t *deploy_file(
             printf(
                 "Deployed: %s (mode: %04o, owner: %s:%s)\n",
                 file->filesystem_path, file_mode,
-                file->owner ? file->owner : "?",
-                file->group ? file->group : "?"
+                file->owner ? file->owner : "?", file->group ? file->group : "?"
             );
         } else {
             printf(
-                "Deployed: %s (mode: %04o)\n",
-                file->filesystem_path, file_mode
+                "Deployed: %s (mode: %04o)\n", file->filesystem_path, file_mode
             );
         }
     }
 
+    /* Success */
     err = NULL;
 
 cleanup:
     free(target_str);
-
     return err;
 }
 
@@ -878,10 +1034,10 @@ cleanup:
  * fresh lstat, never from the load-time observation.
  */
 typedef enum {
-    DIR_CREATE,     /* absent */
-    DIR_FIX,        /* a directory is there — ensure mode/ownership */
-    DIR_REPLACE     /* a non-directory squats the path — clear it (--force) */
-} dir_action_t;
+    DIR_ACTION_CREATE,     /* absent */
+    DIR_ACTION_FIX,        /* a directory is there — ensure mode/ownership */
+    DIR_ACTION_REPLACE     /* a non-directory squats the path — clear it (--force) */
+} directory_action_t;
 
 /**
  * Verbose trace for deploy_directory, shared by the dry-run preview and
@@ -898,8 +1054,7 @@ static void print_directory_trace(
         printf(
             "  %s: %s (mode: %04o, owner: %s:%s)%s\n",
             verb, dir->filesystem_path, mode,
-            dir->owner ? dir->owner : "?",
-            dir->group ? dir->group : "?", detail
+            dir->owner ? dir->owner : "?", dir->group ? dir->group : "?", detail
         );
     } else {
         printf(
@@ -921,6 +1076,11 @@ static void print_directory_trace(
  * is idempotent — a planned directory whose reality healed meanwhile is
  * simply confirmed.
  *
+ * VWD Model:
+ * - dir->filesystem_path: already resolved against the mount target
+ * - dir->storage_path: portable path, drives ownership resolution
+ * - dir->mode / owner / group: target metadata (mode 0 = fallback 0755)
+ *
  * @param ws Workspace, for tracked-ancestor metadata (must not be NULL)
  * @param dir State row (must not be NULL; borrowed, read-only)
  * @param opts Deployment options (must not be NULL)
@@ -939,13 +1099,13 @@ static error_t *deploy_directory(
 
     /* Decide how, from disk truth now. lstat: a symlink to a directory is
      * not the directory being tracked. */
-    dir_action_t how;
+    directory_action_t action;
     struct stat st;
     if (lstat(path, &st) == 0) {
         if (S_ISDIR(st.st_mode)) {
-            how = DIR_FIX;
+            action = DIR_ACTION_FIX;
         } else if (opts->force) {
-            how = DIR_REPLACE;
+            action = DIR_ACTION_REPLACE;
         } else {
             return ERROR(
                 ERR_CONFLICT, "'%s' is not a directory (use --force to replace it)",
@@ -956,16 +1116,17 @@ static error_t *deploy_directory(
         /* Absent — or beneath a non-directory, which preflight blocked
          * when unplanned and the directory pass replaces when planned
          * (prefix order); one still there is ensure_parents' named error. */
-        how = DIR_CREATE;
+        action = DIR_ACTION_CREATE;
     } else {
         return ERROR(ERR_FS, "Failed to stat '%s': %s", path, strerror(errno));
     }
 
     /* Divergence detail for the trace — from the fresh stat, FIX only */
     char detail[32] = "";
-    if (how == DIR_FIX && opts->verbose) {
+    if (action == DIR_ACTION_FIX && opts->verbose) {
         bool mode_differs = false;
         bool ownership_differs = false;
+
         error_t *err = check_item_metadata_divergence(
             dir->mode, dir->owner, dir->group, &st, &mode_differs, &ownership_differs
         );
@@ -973,8 +1134,7 @@ static error_t *deploy_directory(
 
         if (mode_differs || ownership_differs) {
             snprintf(
-                detail, sizeof(detail), " [%s%s%s]",
-                mode_differs ? "mode" : "",
+                detail, sizeof(detail), " [%s%s%s]", mode_differs ? "mode" : "",
                 (mode_differs && ownership_differs) ? ", " : "",
                 ownership_differs ? "ownership" : ""
             );
@@ -986,32 +1146,37 @@ static error_t *deploy_directory(
     mode_t mode;
     uid_t target_uid;
     gid_t target_gid;
-    error_t *err = resolve_directory_metadata(dir, opts, &mode, &target_uid, &target_gid);
+    error_t *err = resolve_directory_metadata(
+        dir, opts, &mode, &target_uid, &target_gid
+    );
     if (err) {
         return err;
     }
 
     bool has_ownership = (dir->owner || dir->group) && target_uid != (uid_t) -1;
-    static const char *const verbs[][2] = {
-        [DIR_CREATE]  = { "Would create",  "Created"  },
-        [DIR_FIX]     = { "Would fix",     "Fixed"    },
-        [DIR_REPLACE] = { "Would replace", "Replaced" },
+    static const char *const verbs[][2] = {   /* [action][0] preview, [1] outcome */
+        [DIR_ACTION_CREATE] =  { "Would create",  "Created"  },
+        [DIR_ACTION_FIX] =     { "Would fix",     "Fixed"    },
+        [DIR_ACTION_REPLACE] = { "Would replace", "Replaced" },
     };
+    const char *verb = verbs[action][opts->dry_run ? 0 : 1];
 
     /* The one mutation gate */
     if (opts->dry_run) {
         if (opts->verbose) {
-            print_directory_trace(verbs[how][0], dir, mode, has_ownership, detail);
+            print_directory_trace(verb, dir, mode, has_ownership, detail);
         }
         return NULL;
     }
 
-    if (how == DIR_REPLACE) {
+    if (action == DIR_ACTION_REPLACE) {
+        /* fs_clear_path: lstat-based, removes a file, symlink or directory
+         * uniformly, so whatever squats the path goes before the mkdir */
         err = fs_clear_path(path);
         if (err) {
             return error_wrap(err, "Failed to clear type conflict at '%s'", path);
         }
-    } else if (how == DIR_CREATE) {
+    } else if (action == DIR_ACTION_CREATE) {
         err = ensure_parents(ws, path, target_uid, target_gid, opts);
         if (err) {
             return err;
@@ -1026,7 +1191,7 @@ static error_t *deploy_directory(
     }
 
     if (opts->verbose) {
-        print_directory_trace(verbs[how][1], dir, mode, has_ownership, detail);
+        print_directory_trace(verb, dir, mode, has_ownership, detail);
     }
 
     return NULL;
@@ -1072,6 +1237,7 @@ error_t *deploy_execute(
     for (size_t i = 0; i < dirs.count; i++) {
         const state_directory_entry_t *dir = dirs.entries[i];
 
+        /* Deploy tracked directories (workspace owns the active slice) */
         err = deploy_directory(ws, dir, opts);
         if (err) {
             /* Fail-stop with the partial result; the error names the path */
@@ -1097,6 +1263,10 @@ error_t *deploy_execute(
         );
     }
 
+    /* Every pending row is work by construction (the planner routed it
+     * through deploy_needs_work), so there is no clean-skip here. Clean
+     * in-scope rows with deployed_at == 0 are apply's adoption step, which
+     * stamps the anchor without deploy_file. */
     for (size_t i = 0; i < files.count; i++) {
         const state_file_entry_t *file = files.entries[i];
 
@@ -1110,6 +1280,7 @@ error_t *deploy_execute(
             continue;
         }
 
+        /* Deploy the file */
         err = deploy_file(repo, cache, ws, file, opts);
         if (err) {
             /* Fail-stop with the partial result.
@@ -1123,6 +1294,7 @@ error_t *deploy_execute(
             );
         }
 
+        /* Record success */
         err = ptr_array_push(&result->deployed, file);
         if (err) {
             deploy_result_free(result);
@@ -1130,6 +1302,7 @@ error_t *deploy_execute(
         }
     }
 
+    /* Success - return results */
     *out = result;
     return NULL;
 }

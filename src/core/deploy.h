@@ -40,8 +40,9 @@ typedef struct scope scope_t;
  *   blocked            an absent planned path's nearest existing ancestor
  *                      is not a directory and is not itself planned (a
  *                      planned one is judged by its own conflict entry) —
- *                      bring the ancestor into scope with --force, or fix
- *                      by hand
+ *                      widen the scope so the ancestor is planned and
+ *                      --force can replace it; an untracked squatter is
+ *                      the user's to remove
  *   permission_errors  not writable — privileges
  */
 typedef struct {
@@ -66,23 +67,18 @@ typedef struct {
  * One kind's partition of the in-scope active set
  *
  * Every active row that passes the scope's profile and path dimensions
- * lands in exactly one bucket, or nowhere:
- *
- *   pending   need work — deploy_execute acts on these
- *   clean     in scope, no work (adoption candidates)
- *   excluded  need work, held back by -e
- *
- * A row that is both clean and excluded enters no bucket: it is neither
- * work nor adoptable. Out-of-scope rows are invisible.
+ * lands in exactly one bucket, or nowhere: a row that is both clean and
+ * excluded enters none (neither work nor adoptable). Out-of-scope rows
+ * are invisible.
  *
  * Buckets hold borrowed row pointers into the workspace's arena snapshot
  * (workspace lifetime); the plan owns only the bucket buffers. Project a
  * bucket with state_files_view / state_directories_view.
  */
 typedef struct {
-    ptr_array_t pending;
-    ptr_array_t clean;
-    ptr_array_t excluded;
+    ptr_array_t pending;    /* Need work — deploy_execute acts on these */
+    ptr_array_t clean;      /* In scope, no work — adoption candidates */
+    ptr_array_t excluded;   /* Need work, held back by -e — reported, never touched */
 } deploy_partition_t;
 
 /**

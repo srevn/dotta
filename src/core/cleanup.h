@@ -146,17 +146,22 @@ typedef struct {
 
     /* File path lists (count via arr->count; execution-only, not populated in dry-run)
      *
-     * removed_files guarantees physical removal occurred (or file was already
-     * absent). Callers use this to drive state database cleanup. For dry-run
-     * preview of what would be removed, use cleanup_preflight_check instead.
+     * removed_files guarantees physical removal occurred. reclaimed_files
+     * were already absent from the filesystem — no removal happened or was
+     * needed; only the state row is retired. Callers drive state database
+     * cleanup from both buckets but must report them distinctly (a
+     * decision is not an effect). For dry-run preview of what would be
+     * removed, use cleanup_preflight_check instead.
      */
     string_array_t *removed_files;       /* Successfully removed file paths */
+    string_array_t *reclaimed_files;     /* Already absent — state retired, no filesystem effect */
     string_array_t *skipped_files;       /* Skipped file paths (safety violations) */
     string_array_t *failed_files;        /* Failed file paths (with errors) */
     string_array_t *released_files;      /* Released files (left on disk, state cleaned) */
 
     /* Directory path lists (execution-only, not populated in dry-run) */
     string_array_t *removed_dirs;        /* Successfully removed directory paths */
+    string_array_t *reclaimed_dirs;      /* Already absent — state retired, no filesystem effect */
     string_array_t *skipped_dirs;        /* Skipped directory paths (non-empty/symlink) */
     string_array_t *failed_dirs;         /* Failed directory paths (with errors) */
 } cleanup_result_t;
@@ -180,20 +185,24 @@ typedef struct {
  * - Empty directories to be pruned (verbose mode)
  */
 typedef struct {
-    /* Orphaned file detection (count via orphaned_files->count) */
+    /* Orphaned file detection (count via orphaned_files->count).
+     * Present-on-filesystem orphans only: an already-absent orphan is a
+     * pure state reclaim (no filesystem effect), so it never appears in
+     * removal previews or prompt counts. */
     string_array_t *orphaned_files;     /* File paths (for display) */
 
     /* Safety violations */
     safety_result_t *safety_violations; /* Blocking issues (NULL if none or force=true) */
 
-    /* Orphaned directory pruning preview (count via orphaned_directories->count) */
+    /* Orphaned directory pruning preview (count via orphaned_directories->count;
+     * present-on-filesystem orphans only, same rule as orphaned_files) */
     size_t orphaned_directories_nonempty;     /* Non-empty orphaned dirs (blocking) */
     string_array_t *orphaned_directories;     /* Directory paths (for display) */
 
     /* Summary flags */
     bool has_blocking_violations;       /* True if file safety violations present */
-    bool will_prune_orphans;            /* True if any orphaned files to prune */
-    bool will_prune_directories;        /* True if any orphaned directories to prune */
+    bool will_prune_orphans;            /* True if any present orphaned files to prune */
+    bool will_prune_directories;        /* True if any present orphaned directories to prune */
 } cleanup_preflight_result_t;
 
 /**

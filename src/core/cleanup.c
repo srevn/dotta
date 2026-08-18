@@ -52,17 +52,19 @@ static error_t *create_result(cleanup_result_t **out) {
 
     /* Allocate detailed tracking arrays (for caller display) */
     result->removed_files = string_array_new(0);
+    result->reclaimed_files = string_array_new(0);
     result->skipped_files = string_array_new(0);
     result->failed_files = string_array_new(0);
     result->released_files = string_array_new(0);
     result->removed_dirs = string_array_new(0);
+    result->reclaimed_dirs = string_array_new(0);
     result->skipped_dirs = string_array_new(0);
     result->failed_dirs = string_array_new(0);
 
     /* Check allocations */
-    if (!result->removed_files || !result->skipped_files ||
+    if (!result->removed_files || !result->reclaimed_files || !result->skipped_files ||
         !result->failed_files || !result->released_files || !result->removed_dirs ||
-        !result->skipped_dirs || !result->failed_dirs) {
+        !result->reclaimed_dirs || !result->skipped_dirs || !result->failed_dirs) {
         cleanup_result_free(result);
         return ERROR(ERR_MEMORY, "Failed to allocate cleanup result arrays");
     }
@@ -84,10 +86,12 @@ void cleanup_result_free(cleanup_result_t *result) {
 
     /* Free detailed tracking arrays */
     if (result->removed_files) string_array_free(result->removed_files);
+    if (result->reclaimed_files) string_array_free(result->reclaimed_files);
     if (result->skipped_files) string_array_free(result->skipped_files);
     if (result->failed_files) string_array_free(result->failed_files);
     if (result->released_files) string_array_free(result->released_files);
     if (result->removed_dirs) string_array_free(result->removed_dirs);
+    if (result->reclaimed_dirs) string_array_free(result->reclaimed_dirs);
     if (result->skipped_dirs) string_array_free(result->skipped_dirs);
     if (result->failed_dirs) string_array_free(result->failed_dirs);
 
@@ -305,19 +309,14 @@ static error_t *prune_orphaned_files(
             continue;
         }
 
-        /* Handle already-deleted files (state cleanup needed) */
+        /* Already-absent orphan: no filesystem effect happened or was
+         * needed — track for state retirement only. Reporting it as
+         * "removed" would claim an effect that never occurred. */
         if (!fs_exists(path)) {
-            /* File already deleted from filesystem (manually or by another process).
-             * We didn't remove it, but we still need to track it for state cleanup.
-             *
-             * The apply command uses removed_files to know which state entries to remove.
-             * Without this, orphaned files that are manually deleted accumulate forever
-             * in the state database as "ghost orphans".
-             */
             if (!dry_run) {
-                err = string_array_push(result->removed_files, path);
+                err = string_array_push(result->reclaimed_files, path);
                 if (err) {
-                    err = error_wrap(err, "Failed to track already-removed file");
+                    err = error_wrap(err, "Failed to track reclaimed file");
                     if (violations_map) hashmap_free(violations_map, NULL);
                     return err;
                 }
@@ -495,21 +494,15 @@ static error_t *prune_orphaned_directories(
                 continue;
             }
 
-            /* Check if directory exists */
+            /* Already-absent orphan directory: no filesystem effect — track
+             * for state retirement only (reclaimed, not removed). */
             if (!fs_exists(dir_path)) {
-                /* Directory already removed from filesystem (manually or by another process).
-                 * We didn't remove it, but we still need to track it for state cleanup.
-                 *
-                 * The apply command uses removed_dirs to know which state entries to remove.
-                 * Without this, orphaned directories that are manually deleted accumulate
-                 * forever in the state database as "ghost orphans".
-                 */
                 states[i] = DIR_STATE_NONEXISTENT;
                 if (!dry_run) {
-                    error_t *push_err = string_array_push(result->removed_dirs, dir_path);
+                    error_t *push_err = string_array_push(result->reclaimed_dirs, dir_path);
                     if (push_err) {
                         free(states);
-                        return error_wrap(push_err, "Failed to track already-removed directory");
+                        return error_wrap(push_err, "Failed to track reclaimed directory");
                     }
 
                     /* Parent might now be empty - enable recheck on next iteration.
@@ -650,10 +643,6 @@ error_t *cleanup_preflight_check(
         goto cleanup;
     }
 
-    /* Initialize all fields (calloc zeroed the rest) */
-    result->will_prune_orphans = (file_orphan_count > 0);
-    result->will_prune_directories = (dir_orphan_count > 0);
-
     /* Early exit: no orphaned files or directories */
     if (file_orphan_count == 0 && dir_orphan_count == 0) {
         /* Success - no orphans to check */
@@ -663,7 +652,14 @@ error_t *cleanup_preflight_check(
         goto cleanup;
     }
 
-    /* Convert file orphans to string array for display */
+    /* Convert file orphans to string array for display.
+     *
+     * Only items present on the filesystem enter the display list and
+     * derive the will_prune flag — an already-absent orphan is a pure
+     * state reclaim with no filesystem effect, so counting it in a
+     * "Remove N?" prompt would predict work that does not exist.
+     * on_filesystem was computed by workspace orphan analysis (Rule 6:
+     * established at the boundary, trusted here). */
     if (file_orphan_count > 0) {
         orphaned_files = string_array_new(0);
         if (!orphaned_files) {
@@ -672,12 +668,16 @@ error_t *cleanup_preflight_check(
         }
 
         for (size_t i = 0; i < file_orphan_count; i++) {
+            if (!file_orphans.entries[i]->on_filesystem) continue;
+
             err = string_array_push(orphaned_files, file_orphans.entries[i]->filesystem_path);
             if (err) {
                 err = error_wrap(err, "Failed to add orphaned file to display list");
                 goto cleanup;
             }
         }
+
+        result->will_prune_orphans = (orphaned_files->count > 0);
 
         /* Transfer ownership to result */
         result->orphaned_files = orphaned_files;
@@ -725,7 +725,8 @@ error_t *cleanup_preflight_check(
         }
     }
 
-    /* Preview orphaned directories (check which are non-empty) */
+    /* Preview orphaned directories (present ones only — same rule as the
+     * file list above; absent rows are state reclaims, not prunes). */
     if (dir_orphan_count > 0) {
         /* Allocate directory array for preview */
         orphaned_dirs_display = string_array_new(0);
@@ -736,6 +737,8 @@ error_t *cleanup_preflight_check(
 
         /* Check which orphaned directories are non-empty (read-only preview) */
         for (size_t i = 0; i < dir_orphan_count; i++) {
+            if (!dir_orphans.entries[i]->on_filesystem) continue;
+
             const char *dir_path = dir_orphans.entries[i]->filesystem_path;
 
             /* Add to display list */
@@ -755,6 +758,8 @@ error_t *cleanup_preflight_check(
                 result->orphaned_directories_nonempty++;
             }
         }
+
+        result->will_prune_directories = (orphaned_dirs_display->count > 0);
 
         /* Transfer ownership to result */
         result->orphaned_directories = orphaned_dirs_display;

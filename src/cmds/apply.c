@@ -316,6 +316,16 @@ static void print_cleanup_results(
         }
     }
 
+    if (result->reclaimed_files && result->reclaimed_files->count > 0) {
+        output_section(out, OUTPUT_VERBOSE, "Reclaimed state entries (already absent)");
+        for (size_t i = 0; i < result->reclaimed_files->count; i++) {
+            output_styled(
+                out, OUTPUT_VERBOSE, "  {cyan}[reclaimed]{reset} %s\n",
+                result->reclaimed_files->items[i]
+            );
+        }
+    }
+
     if (result->skipped_files && result->skipped_files->count > 0) {
         output_section(out, OUTPUT_VERBOSE, "Skipped orphaned files");
         for (size_t i = 0; i < result->skipped_files->count; i++) {
@@ -353,6 +363,16 @@ static void print_cleanup_results(
             output_styled(
                 out, OUTPUT_VERBOSE, "  {green}[removed]{reset} %s\n",
                 result->removed_dirs->items[i]
+            );
+        }
+    }
+
+    if (result->reclaimed_dirs && result->reclaimed_dirs->count > 0) {
+        output_section(out, OUTPUT_VERBOSE, "Reclaimed directory entries (already absent)");
+        for (size_t i = 0; i < result->reclaimed_dirs->count; i++) {
+            output_styled(
+                out, OUTPUT_VERBOSE, "  {cyan}[reclaimed]{reset} %s\n",
+                result->reclaimed_dirs->items[i]
             );
         }
     }
@@ -395,6 +415,21 @@ static void print_cleanup_results(
                 out, OUTPUT_NORMAL, "Pruned {yellow}%zu{reset} orphaned director%s\n",
                 result->removed_dirs->count,
                 result->removed_dirs->count == 1 ? "y" : "ies"
+            );
+        }
+
+        /* State-only outcomes: rows retired for paths already absent from
+         * the filesystem. Reported separately from "Pruned" — no removal
+         * happened or was needed. */
+        size_t files_reclaimed = result->reclaimed_files ? result->reclaimed_files->count : 0;
+        size_t dirs_reclaimed = result->reclaimed_dirs ? result->reclaimed_dirs->count : 0;
+
+        if (files_reclaimed + dirs_reclaimed > 0) {
+            size_t total_reclaimed = files_reclaimed + dirs_reclaimed;
+            output_styled(
+                out, OUTPUT_NORMAL,
+                "Reclaimed {cyan}%zu{reset} stale state entr%s (already absent from filesystem)\n",
+                total_reclaimed, total_reclaimed == 1 ? "y" : "ies"
             );
         }
 
@@ -561,15 +596,17 @@ static void print_cleanup_preflight_results(
 /**
  * Check privileges for complete apply operation
  *
- * Examines files being deployed, file orphans (files being removed), AND
- * directory orphans (directories being removed) for root/ paths. This
- * ensures we have required privileges BEFORE attempting any filesystem
- * modifications.
+ * Examines files being deployed, file orphans (files being removed),
+ * directory orphans (directories being removed), AND diverged tracked
+ * directories being converged (created / recreated / metadata-fixed) for
+ * root/ paths. This ensures we have required privileges BEFORE attempting
+ * any filesystem modifications.
  *
  * @param ctx Command context (must not be NULL)
  * @param files Files being deployed (passed by value)
  * @param file_orphans Files being removed (zeroed if --keep-orphans)
  * @param dir_orphans Directories being removed (zeroed if --keep-orphans)
+ * @param dir_work Diverged tracked directories deploy will converge
  * @param opts Apply command options (must not be NULL)
  * @param out Output context for messages (must not be NULL)
  * @return NULL if OK to proceed, error otherwise (or does not return if re-exec with sudo)
@@ -579,6 +616,7 @@ static error_t *ensure_complete_apply_privileges(
     state_files_t files,
     workspace_items_t file_orphans,
     workspace_items_t dir_orphans,
+    workspace_items_t dir_work,
     const cmd_apply_options_t *opts,
     output_t *out
 ) {
@@ -590,9 +628,10 @@ static error_t *ensure_complete_apply_privileges(
         return NULL;  /* Read-only operation, no privileges needed */
     }
 
-    /* Strict upper bound — every entry across the three sources may need
+    /* Strict upper bound — every entry across the four sources may need
      * elevation. Reserve once to keep growth out of the hot loop. */
-    size_t cap = files.count + file_orphans.count + dir_orphans.count;
+    size_t cap = files.count + file_orphans.count + dir_orphans.count
+               + dir_work.count;
     if (cap == 0) return NULL;
 
     string_array_t labels STRING_ARRAY_AUTO = { 0 };
@@ -625,6 +664,15 @@ static error_t *ensure_complete_apply_privileges(
             &labels,
             dir_orphans.entries[i]->storage_path,
             dir_orphans.entries[i]->filesystem_path
+        );
+        if (err) return err;
+    }
+
+    for (size_t i = 0; i < dir_work.count; i++) {
+        err = privilege_collect_label(
+            &labels,
+            dir_work.entries[i]->storage_path,
+            dir_work.entries[i]->filesystem_path
         );
         if (err) return err;
     }
@@ -736,6 +784,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     state_files_t active = { 0 };               /* Workspace's borrowed slice (no free) */
     state_files_t to_deploy = { 0 };            /* Aliases divergent.items below (no free) */
     ptr_array_t divergent = { 0 };              /* Heap-backed pointer array */
+    ptr_array_t dir_work = { 0 };               /* Diverged dir items deploy will act on */
     workspace_t *ws = NULL;
     workspace_items_t file_orphans = { 0 };     /* heap-allocated entries (must free) */
     workspace_items_t dir_orphans = { 0 };      /* heap-allocated entries (must free) */
@@ -1170,7 +1219,30 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         }
         if (all_items[i].profile_changed) acknowledged_count++;
         if (all_items[i].divergence & DIVERGENCE_STALE) stale_count++;
+
+        /* Directory convergence work deploy_tracked_directories will act
+         * on: creation (undeployed), recreation (witnessed deletion), or
+         * metadata/type fix. Gates the early exit and routes deployment —
+         * to_deploy is files-only, so without this term directory-only
+         * divergence would never converge. Path-filtered applies skip
+         * directory-only work, same rule as orphan cleanup above.
+         * Orphan-state dir items gate via no_orphans, not here. */
+        if (all_items[i].item_kind == WORKSPACE_ITEM_DIRECTORY &&
+            !scope_has_paths(scope) &&
+            (all_items[i].state == WORKSPACE_STATE_UNDEPLOYED ||
+             all_items[i].state == WORKSPACE_STATE_DELETED ||
+             (all_items[i].state == WORKSPACE_STATE_DEPLOYED &&
+              (all_items[i].divergence &
+               (DIVERGENCE_MODE | DIVERGENCE_OWNERSHIP | DIVERGENCE_TYPE))))) {
+            err = ptr_array_push(&dir_work, &all_items[i]);
+            if (err) {
+                err = error_wrap(err, "Failed to record directory work item");
+                goto cleanup;
+            }
+        }
     }
+
+    size_t dir_work_count = dir_work.count;
 
     /* Drift signal: external Git changes repaired by workspace_load's
      * reconcile, still visible in the persistent anchor/manifest.blob_oid
@@ -1185,7 +1257,8 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     /* Check if there's anything to do */
     bool no_orphans = opts->keep_orphans || (file_orphans.count == 0 && dir_orphans.count == 0);
 
-    if (to_deploy.count == 0 && acknowledged_count == 0 && no_orphans) {
+    if (to_deploy.count == 0 && acknowledged_count == 0 && no_orphans
+        && dir_work_count == 0) {
         /* Nothing to deploy, acknowledge, or clean */
         size_t total_excluded = excluded_deploy_count + excluded_orphan_count;
         if (total_excluded > 0) {
@@ -1210,10 +1283,11 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
 
     /* Acknowledgement-only fast path: profile reassignments with no filesystem changes
      *
-     * When only profile bookkeeping is pending (no deployment, no orphans),
-     * skip privilege checks, preflight, hooks, and confirmation — none apply
-     * to pure state bookkeeping that doesn't touch the filesystem. */
-    if (to_deploy.count == 0 && no_orphans) {
+     * When only profile bookkeeping is pending (no deployment, no orphans,
+     * no directory convergence), skip privilege checks, preflight, hooks,
+     * and confirmation — none apply to pure state bookkeeping that doesn't
+     * touch the filesystem. */
+    if (to_deploy.count == 0 && no_orphans && dir_work_count == 0) {
         if (!opts->dry_run) {
             size_t cleared = 0;
 
@@ -1276,8 +1350,12 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     if (!opts->dry_run) {
         output_print(out, OUTPUT_VERBOSE, "\nChecking privilege requirements...\n");
 
+        workspace_items_t dir_work_items = {
+            .entries = (const workspace_item_t *const *) dir_work.items,
+            .count   = dir_work.count,
+        };
         err = ensure_complete_apply_privileges(
-            ctx, to_deploy, file_orphans, dir_orphans, opts, out
+            ctx, to_deploy, file_orphans, dir_orphans, dir_work_items, opts, out
         );
         if (err) {
             err = error_wrap(err, "Insufficient privileges for operation");
@@ -1442,7 +1520,11 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
             dir_count = cleanup_preflight->orphaned_directories->count;
         }
 
-        /* Build prompt based on pending actions */
+        /* Build prompt based on pending actions. Reaching the final arm
+         * means every pending action is state-only reclamation (e.g. an
+         * all-absent orphan set) — non-destructive, no consent needed. */
+        bool needs_confirm = true;
+
         if (to_deploy.count > 0 && removal_count > 0) {
             snprintf(
                 prompt, sizeof(prompt), "Deploy %zu file%s and remove %zu orphaned file%s?",
@@ -1464,27 +1546,45 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
                 prompt, sizeof(prompt), "Prune %zu empty director%s?",
                 dir_count, dir_count == 1 ? "y" : "ies"
             );
+        } else if (dir_work_count > 0) {
+            snprintf(
+                prompt, sizeof(prompt), "Update %zu tracked director%s?",
+                dir_work_count, dir_work_count == 1 ? "y" : "ies"
+            );
         } else {
-            snprintf(prompt, sizeof(prompt), "Proceed with cleanup?");
+            needs_confirm = false;
         }
 
-        if (!output_confirm(out, prompt, false)) {
+        if (needs_confirm && !output_confirm(out, prompt, false)) {
             output_info(out, OUTPUT_NORMAL, "Cancelled");
             err = NULL;  /* Not an error - user cancelled */
             goto cleanup;
         }
     }
 
-    /* Execute deployment (only if there are divergent files) */
-    if (to_deploy.count > 0) {
+    /* Execute deployment when file or directory convergence pends.
+     * deploy_execute handles the files-only, dirs-only, and mixed cases —
+     * deploy_tracked_directories runs inside it, so a directory-only run
+     * must route through it too (to_deploy is files-only by construction). */
+    if (to_deploy.count > 0 || dir_work_count > 0) {
         if (opts->dry_run) {
             output_print(
                 out, OUTPUT_VERBOSE, "\nDry-run mode - no files will be modified\n"
             );
-        } else {
+        } else if (to_deploy.count > 0) {
             output_print(
                 out, OUTPUT_VERBOSE, "\nDeploying %zu divergent file%s...\n",
                 to_deploy.count, to_deploy.count == 1 ? "" : "s"
+            );
+        }
+
+        if (to_deploy.count == 0) {
+            /* Directory-only convergence — say so at normal level so the
+             * run isn't mute about the work it is doing. */
+            output_info(
+                out, OUTPUT_NORMAL, "%s %zu tracked director%s",
+                opts->dry_run ? "Would converge" : "Converging",
+                dir_work_count, dir_work_count == 1 ? "y" : "ies"
             );
         }
 
@@ -1699,6 +1799,33 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
                 );
             }
 
+            /* Retire reclaimed file entries (already absent from filesystem
+             * — state-only outcome, same DELETE as above but no removal
+             * happened or was needed) */
+            if (cleanup_res && cleanup_res->reclaimed_files &&
+                cleanup_res->reclaimed_files->count > 0) {
+
+                for (size_t i = 0; i < cleanup_res->reclaimed_files->count; i++) {
+                    const char *path = cleanup_res->reclaimed_files->items[i];
+
+                    err = state_remove_file(state, path);
+                    if (err) {
+                        output_warning(
+                            out, OUTPUT_NORMAL, "Failed to reclaim state entry for %s: %s",
+                            path, error_message(err)
+                        );
+                        error_free(err);
+                        err = NULL;  /* Don't propagate - continue operation */
+                    }
+                }
+
+                output_print(
+                    out, OUTPUT_VERBOSE, "  Reclaimed %zu stale state entr%s\n",
+                    cleanup_res->reclaimed_files->count,
+                    cleanup_res->reclaimed_files->count == 1 ? "y" : "ies"
+                );
+            }
+
             /* Remove released file entries from state
              *
              * Released files: removed from Git externally (git rm, rebase, branch -D).
@@ -1801,6 +1928,32 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
                 );
             }
 
+            /* Retire reclaimed directory entries (already absent — state-only) */
+            if (cleanup_res && cleanup_res->reclaimed_dirs &&
+                cleanup_res->reclaimed_dirs->count > 0) {
+
+                for (size_t i = 0; i < cleanup_res->reclaimed_dirs->count; i++) {
+                    const char *path = cleanup_res->reclaimed_dirs->items[i];
+
+                    err = state_remove_directory(state, path);
+                    if (err) {
+                        output_warning(
+                            out, OUTPUT_NORMAL,
+                            "Failed to reclaim directory state entry for %s: %s",
+                            path, error_message(err)
+                        );
+                        error_free(err);
+                        err = NULL;  /* Don't propagate - continue operation */
+                    }
+                }
+
+                output_print(
+                    out, OUTPUT_VERBOSE, "  Reclaimed %zu stale directory entr%s\n",
+                    cleanup_res->reclaimed_dirs->count,
+                    cleanup_res->reclaimed_dirs->count == 1 ? "y" : "ies"
+                );
+            }
+
             cleanup_result_free(cleanup_res);
         }
 
@@ -1856,6 +2009,42 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
                 out, OUTPUT_VERBOSE, "  Updated %zu anchor%s\n",
                 deployed.count, deployed.count == 1 ? "" : "s"
             );
+        }
+
+        /* Directory witness stamp — sibling of the file anchor loop above.
+         * deploy_tracked_directories just created/confirmed the active
+         * tracked directories; record first observation for rows that have
+         * none (the load-time flush covered directories present at load;
+         * these did not exist then). Presence is the witness; SQL enforces
+         * monotonicity, so this is idempotent and never regresses a stamp.
+         * Non-fatal on failure, mirroring anchor-advance failures. */
+        {
+            state_directories_t adirs = workspace_directories(ws);
+            time_t dir_now = time(NULL);
+
+            for (size_t i = 0; i < adirs.count; i++) {
+                const state_directory_entry_t *d = adirs.entries[i];
+
+                if (d->observed_at > 0) continue;
+
+                struct stat dst;
+                if (lstat(d->filesystem_path, &dst) != 0) continue;
+
+                error_t *werr = state_witness_directory(
+                    state, d->filesystem_path, dir_now
+                );
+                if (werr) {
+                    output_warning(
+                        out, OUTPUT_NORMAL,
+                        "Failed to record directory witness for %s: %s",
+                        d->filesystem_path, error_message(werr)
+                    );
+                    error_free(werr);
+                    continue;
+                }
+
+                ((state_directory_entry_t *) d)->observed_at = dir_now;
+            }
         }
 
         /* Acknowledge profile reassignments (clear old_profile in state)
@@ -1924,8 +2113,10 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
 cleanup:
     if (deploy_res) deploy_result_free(deploy_res);
     /* divergent backs to_deploy.entries; freeing the buffer also drops the
-     * carrier's view. The pointed-to rows live in the workspace arena. */
+     * carrier's view. The pointed-to rows live in the workspace arena.
+     * dir_work's items borrow into the workspace's diverged array. */
     ptr_array_deinit(&divergent);
+    ptr_array_deinit(&dir_work);
     if (cleanup_preflight) cleanup_preflight_result_free(cleanup_preflight);
     if (preflight) preflight_result_free(preflight);
     if (profiles_str) free(profiles_str);

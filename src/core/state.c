@@ -2400,7 +2400,7 @@ error_t *state_remove_directory(state_t *state, const char *filesystem_path) {
  * LIFECYCLE_RELEASED are preserved — they represent downstream intent (controlled
  * deletion via remove command, authority loss from external Git changes) that
  * must survive a scope-reconciliation sweep. Downgrading them would re-engage
- * the safety branch-existence check and can flip a staged delete into a
+ * the workspace's orphan authority check and can flip a staged delete into a
  * RELEASE when the owning branch is gone.
  *
  * @param state State handle (must not be NULL, must have active transaction)

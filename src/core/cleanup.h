@@ -50,7 +50,6 @@
 #ifndef DOTTA_CLEANUP_H
 #define DOTTA_CLEANUP_H
 
-#include <git2.h>
 #include <stdbool.h>
 
 #include "core/safety.h"
@@ -115,32 +114,24 @@ typedef struct {
      * - NULL: No preflight performed (or invalidated), run fresh safety check
      *   - Behavior depends on skip_safety_check flag
      *
-     * This avoids re-running expensive safety checks (Git comparisons,
-     * content decryption) that were already performed in preflight.
+     * This avoids re-running the safety check that preflight already ran.
      *
-     * IMPORTANT - TOCTOU Considerations:
-     * Preflight results become STALE if time passes between preflight and
-     * execution. A file marked "safe" at preflight could be modified by
-     * the user before execution, making deletion dangerous.
+     * TOCTOU — what the NULL arm does NOT buy:
+     * Preflight runs before the confirmation prompt, so arbitrary time can
+     * pass before execution and a file called safe may have been edited in
+     * between. The NULL arm exists to answer that, and it cannot: safety
+     * decides from the workspace items it is handed, which were observed
+     * at load — presence, divergence and Git authority alike. Re-running it
+     * re-maps the same observations to the same verdicts and sees nothing
+     * that happened while the prompt waited. Its one effect today is a
+     * second safety_result_t in the cleanup result, which apply prints
+     * after already printing preflight's.
      *
-     * Callers MUST pass NULL when:
-     * - Interactive confirmation prompts introduce user delay
-     * - Any scenario where files could change between preflight and execute
-     *
-     * When NULL is passed, cleanup_execute() runs fresh safety validation
-     * at the moment of deletion, guaranteeing accurate protection.
-     *
-     * Typical flow (non-interactive):
-     * 1. apply.c runs cleanup_preflight_check() -> produces safety_violations
-     * 2. apply.c passes violations to cleanup_execute() via this field
-     * 3. cleanup_execute() trusts preflight results (no re-verification)
-     * 4. apply.c frees cleanup_preflight_result (owns the data)
-     *
-     * Typical flow (interactive):
-     * 1. apply.c runs cleanup_preflight_check() -> displays to user
-     * 2. User confirmation prompt (arbitrary delay)
-     * 3. apply.c passes NULL to cleanup_execute() (preflight invalidated)
-     * 4. cleanup_execute() runs fresh safety check at deletion time
+     * Both arms therefore act on load-time observations, exactly as
+     * core/deploy does, and neither re-observes across the prompt. A guard
+     * that genuinely closes the window has to look at the filesystem after
+     * consent, for both executors; until one exists this field is a switch
+     * between two identical answers and should be deleted, not trusted.
      *
      * Memory: Borrowed reference. Caller owns and frees safety_result_t.
      */
@@ -276,15 +267,11 @@ typedef struct {
  *
  * The caller (apply command) displays results and blocks on violations.
  *
- * @param repo Repository (must not be NULL)
- * @param state State for safety validation (must not be NULL, read-only)
  * @param opts Cleanup options with PRE-DETECTED orphans (must not be NULL)
  * @param out_result Preflight result (must not be NULL, caller must free)
  * @return Error or NULL on success (check result for details)
  */
 error_t *cleanup_preflight_check(
-    git_repository *repo,
-    const state_t *state,
     const cleanup_options_t *opts,
     cleanup_preflight_result_t **out_result
 );
@@ -337,15 +324,11 @@ error_t *cleanup_preflight_check(
  * - Tracked in the failed buckets and reported
  * - Fatal errors: memory allocation, safety module errors
  *
- * @param repo Repository (must not be NULL)
- * @param state State for safety validation (must not be NULL, read-only)
  * @param opts Cleanup options with PRE-DETECTED orphans (must not be NULL)
  * @param out_result Cleanup result (must not be NULL, caller must free with cleanup_result_free)
  * @return Error or NULL on success (check result for operation details)
  */
 error_t *cleanup_execute(
-    git_repository *repo,
-    const state_t *state,
     const cleanup_options_t *opts,
     cleanup_result_t **out_result
 );

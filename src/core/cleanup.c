@@ -11,7 +11,6 @@
 
 #include "core/cleanup.h"
 
-#include <git2.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -266,20 +265,14 @@ void cleanup_preflight_result_free(cleanup_preflight_result_t *result) {
  *   workspace's pre-computed divergence. No path extraction or redundant
  *   verification needed.
  *
- * @param repo Repository (must not be NULL)
- * @param state State for safety check lookups (must not be NULL)
  * @param result Cleanup result to update (must not be NULL)
  * @param opts Cleanup options (must not be NULL, orphaned_files slice may be empty)
  * @return Error or NULL on success
  */
 static error_t *prune_orphaned_files(
-    git_repository *repo,
-    const state_t *state,
     cleanup_result_t *result,
     const cleanup_options_t *opts
 ) {
-    CHECK_NULL(repo);
-    CHECK_NULL(state);
     CHECK_NULL(result);
     CHECK_NULL(opts);
 
@@ -314,13 +307,13 @@ static error_t *prune_orphaned_files(
              * Non-NULL preflight_violations indicates preflight check was performed.
              * Trust the results even if count == 0 (means all files verified safe).
              *
-             * This avoids re-running expensive safety checks (Git comparisons,
-             * content decryption) that were already performed in preflight.
+             * This avoids re-running the safety check that preflight
+             * already ran.
              *
-             * TOCTOU trust model: This function trusts preflight results completely.
-             * The CALLER is responsible for passing NULL when preflight results may
-             * be stale (e.g., after interactive confirmation prompts where user delay
-             * could allow file modifications). See cleanup.h for full contract.
+             * TOCTOU trust model: the caller passes NULL when preflight
+             * results may be stale (after an interactive prompt). It buys
+             * nothing — Path 2 re-maps the same load-time observations to
+             * the same verdicts — see cleanup.h for why.
              *
              * Memory ownership: opts->preflight_violations is a BORROWED reference.
              * We index it but do NOT store it in result. The caller (apply.c)
@@ -335,13 +328,11 @@ static error_t *prune_orphaned_files(
              * - No preflight was run (preflight_violations == NULL)
              * - Caller wants safety validation (skip_safety_check == false)
              *
-             * Uses safety_check_orphans() which trusts workspace divergence
-             * completely. Non-encrypted files use streaming OID verification
-             * (any size). Encrypted >100MB get CANNOT_VERIFY violation.
+             * safety_check_orphans maps the workspace's verdict for each
+             * item — presence, Git authority, divergence — and reads
+             * nothing itself.
              */
             err = safety_check_orphans(
-                repo,
-                state,
                 orphans,
                 force,
                 &result->safety_violations
@@ -684,13 +675,9 @@ static error_t *predict_prunable_dirs(
  * directories the prune will reach once those files have gone.
  */
 error_t *cleanup_preflight_check(
-    git_repository *repo,
-    const state_t *state,
     const cleanup_options_t *opts,
     cleanup_preflight_result_t **out_result
 ) {
-    CHECK_NULL(repo);
-    CHECK_NULL(state);
     CHECK_NULL(opts);
     CHECK_NULL(out_result);
 
@@ -717,7 +704,7 @@ error_t *cleanup_preflight_check(
      * the answer under force, and routing it the same way keeps
      * safety_violations allocated so no consumer NULL-checks it. */
     err = safety_check_orphans(
-        repo, state, opts->orphaned_files, opts->force, &result->safety_violations
+        opts->orphaned_files, opts->force, &result->safety_violations
     );
     if (err) {
         err = error_wrap(err, "Safety check failed");
@@ -789,13 +776,9 @@ cleanup:
  * checks.
  */
 error_t *cleanup_execute(
-    git_repository *repo,
-    const state_t *state,
     const cleanup_options_t *opts,
     cleanup_result_t **out_result
 ) {
-    CHECK_NULL(repo);
-    CHECK_NULL(state);
     CHECK_NULL(opts);
     CHECK_NULL(out_result);
 
@@ -809,7 +792,7 @@ error_t *cleanup_execute(
     }
 
     /* Step 1: Prune the orphaned files safety clears */
-    err = prune_orphaned_files(repo, state, result, opts);
+    err = prune_orphaned_files(result, opts);
     if (err) {
         cleanup_result_free(result);
         return error_wrap(err, "Failed to prune orphaned files");

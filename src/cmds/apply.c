@@ -1412,7 +1412,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
             .skip_safety_check     = false        /* Run safety check in preflight */
         };
 
-        err = cleanup_preflight_check(repo, state, &cleanup_opts, &cleanup_preflight);
+        err = cleanup_preflight_check(&cleanup_opts, &cleanup_preflight);
         if (err) {
             err = error_wrap(err, "Cleanup preflight checks failed");
             goto cleanup;
@@ -1568,23 +1568,18 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         if (!opts->keep_orphans) {
             /* Execute cleanup: prune the orphaned files and the directories they empty */
             cleanup_result_t *cleanup_res = NULL;
-            /* TOCTOU Safety: Determine if preflight results can be trusted
+            /* Preflight runs BEFORE user confirmation, so when
+             * confirm_destructive is on and --force is not set, arbitrary
+             * time passes while the user decides and an orphan called safe
+             * could be edited in that window.
              *
-             * Preflight runs BEFORE user confirmation. When confirm_destructive is
-             * enabled and --force is not set, arbitrary time passes while user decides.
-             * During this window, a "safe" orphan could be modified by the user.
-             *
-             * Risk scenario:
-             *   1. Preflight: file X marked safe (no uncommitted changes)
-             *   2. User prompt: "Deploy N files and prune M orphaned files? [y/N]"
-             *   3. User edits file X (saves important work to it)
-             *   4. User confirms "y"
-             *   5. cleanup_execute trusts stale preflight -> deletes file X -> DATA LOSS
-             *
-             * Solution: Pass NULL to force fresh safety check when interactive delay
-             * occurred. Non-interactive paths (--force, confirm_destructive=false)
-             * still benefit from preflight optimization.
-             */
+             * Passing NULL here asks cleanup to decide again at deletion
+             * time — which does not help: safety decides from the workspace
+             * items, observed at load, so the second pass returns the first
+             * pass's answers and the edited orphan is deleted either way
+             * (cleanup.h). Kept only until the contract goes; closing the
+             * window needs a post-consent look at the filesystem, for
+             * deploy and cleanup alike. */
             bool interactive_delay = config->confirm_destructive && !opts->force;
             cleanup_options_t cleanup_opts = {
                 .orphaned_files       = file_orphans,
@@ -1616,7 +1611,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
              * - Cleanup state conditionally saved (only successful removals recorded)
              * - Database remains consistent (VWD matches successful filesystem operations)
              */
-            error_t *cleanup_err = cleanup_execute(repo, state, &cleanup_opts, &cleanup_res);
+            error_t *cleanup_err = cleanup_execute(&cleanup_opts, &cleanup_res);
             if (cleanup_err) {
                 /* Cleanup failed - warn but continue to save deployment state
                  *

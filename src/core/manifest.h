@@ -267,7 +267,10 @@ error_t *manifest_apply_scope(
  *
  * Postconditions:
  *   - Drift repaired; manifest entries' VWD cache (blob_oid, type, mode, …)
- *     reflects current Git HEAD for each profile
+ *     reflects current Git HEAD for each ENABLED profile's ACTIVE rows.
+ *     Rows outside that set are not repaired — there is no per-profile
+ *     commit_oid baseline for a disabled profile — so the workspace
+ *     observes their Git authority itself at load
  *   - The deployment anchor is left untouched — reconcile is a VWD-cache
  *     writer, not an anchor writer. Workspace divergence analysis reads
  *     anchor.blob_oid from persistent state to classify staleness; cross-
@@ -577,8 +580,8 @@ error_t *manifest_add_files(
  *     4. If profile-A owns it in state: the terminal row state comes
  *        from disk reality — purge when the path is absent (apply has
  *        no filesystem work), LIFECYCLE_DELETED when it is still present
- *        (apply removes it via safety PHASE 1 bypass, sidestepping the
- *        RELEASED pathway).
+ *        (the workspace asks no authority question for LIFECYCLE_DELETED,
+ *        sidestepping the RELEASED pathway, so apply prunes it).
  *     5. Otherwise: skip (file wasn't ours to begin with)
  *
  * Preconditions:
@@ -592,7 +595,8 @@ error_t *manifest_add_files(
  *   - Deleted files with fallbacks updated to new owner (deployed_at preserved)
  *   - Deleted files without fallbacks terminate on disk reality: the row
  *     is purged if the path is absent on disk, or marked LIFECYCLE_DELETED
- *     if still present (apply removes it via safety PHASE 1 bypass)
+ *     if still present (the workspace asks no authority question for
+ *     LIFECYCLE_DELETED, so apply prunes it)
  *   - Rows left LIFECYCLE_DELETED that were never witnessed on disk
  *     (observed_at = 0) are reclaimed outright — dotta does not stage the
  *     removal of a path it never confirmed deploying

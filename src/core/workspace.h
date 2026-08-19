@@ -135,7 +135,10 @@ typedef enum {
  */
 typedef struct {
     bool analyze_files;        /* File divergence detection */
-    bool analyze_orphans;      /* Orphaned state validation (depends on analyze_files) */
+    /* Orphan analysis — presence, divergence and Git authority of every
+     * out-of-scope or terminal-lifecycle row (depends on analyze_files; one
+     * ref lookup and a lazy tree load per profile with present orphans) */
+    bool analyze_orphans;
     bool analyze_untracked;    /* Directory scanning for new files (EXPENSIVE!) */
     bool analyze_directories;  /* Directory metadata checks */
     bool analyze_encryption;   /* Encryption policy validation */

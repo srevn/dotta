@@ -1788,15 +1788,14 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
                 case WORKSPACE_STATE_UNTRACKED:
                     untracked_count++;
                     break;
-                case WORKSPACE_STATE_RELEASED:
-                    /* Drift: file removed from Git externally. Sync does not
-                     * prune (that's apply's job), but the count is useful as
-                     * an informational nudge toward the next apply. */
-                    drift.released++;
-                    break;
                 case WORKSPACE_STATE_UNDEPLOYED:
                 case WORKSPACE_STATE_ORPHANED:
-                    /* Not sync's concern — handled by apply command */
+                case WORKSPACE_STATE_RELEASED:
+                    /* Not sync's concern — handled by apply command.
+                     * RELEASED is never emitted here anyway: it comes only
+                     * from orphan analysis, which this load switches off.
+                     * The force path counts releases from reconcile's own
+                     * stats instead. */
                     break;
             }
             /* Drift flags are independent of lifecycle state: STALE combines

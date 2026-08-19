@@ -1,32 +1,45 @@
 /**
- * safety.h - Data loss prevention for destructive filesystem operations
+ * safety.h - Data loss prevention for orphan removal
  *
- * This module validates orphaned file removal to prevent data loss.
- * It trusts workspace divergence analysis completely and focuses on edge cases:
- * 1. Branch existence checking (external deletion detection)
- * 2. Lifecycle state verification (controlled vs external deletion)
+ * Answers one question per orphaned item: may `dotta apply` remove this
+ * file, and if not, why not. The answer is a pure function of the
+ * workspace item — this module reads no disk, no Git and no state.
  *
- * Primary Use Case:
- * The `apply` command uses this module to check orphaned files before pruning them.
- * When a profile is disabled, its files become orphaned. Before removing these files,
- * we validate edge cases that workspace cannot detect.
+ * Every fact it needs was observed once, at workspace load:
+ * - on_filesystem  is the file still there?
+ * - state          does Git still back the path? (WORKSPACE_STATE_RELEASED
+ *                  when it does not — set from the lifecycle column by the
+ *                  consistency layer, or observed against Git by the
+ *                  workspace's orphan analysis for the rows that layer
+ *                  does not cover)
+ * - divergence     did the user change it since dotta deployed it?
  *
- * Architecture:
- * - Workspace performs comprehensive divergence analysis (trusted completely)
- * - Non-encrypted files: Streaming OID verification (any size, O(1) memory)
- * - Encrypted ≤100MB: Content comparison
- * - Encrypted >100MB: UNVERIFIED (OOM protection, maps to CANNOT_VERIFY)
- * - Safety trusts workspace divergence and routes to violations
- * - Branch existence is safety's unique responsibility
+ * Verdict table (first match wins):
+ *   not on filesystem              no violation — cleanup reclaims the row
+ *   state RELEASED                 RELEASED     — left on disk, row retires
+ *   DIVERGENCE_CONTENT             MODIFIED
+ *   DIVERGENCE_TYPE                TYPE_CHANGED
+ *   DIVERGENCE_MODE / OWNERSHIP    MODE_CHANGED
+ *   DIVERGENCE_UNVERIFIED          CANNOT_VERIFY
+ *   an unnamed divergence bit      CANNOT_VERIFY (defensive default)
+ *   ENCRYPTION / STALE only        no violation — not user changes
+ *   DIVERGENCE_NONE                no violation — safe to remove
  *
- * Trust Model:
- * - DIVERGENCE_NONE: Safe to remove (workspace verified clean)
- * - DIVERGENCE_CONTENT/TYPE/MODE/OWNERSHIP: Map to violation directly
- * - DIVERGENCE_UNVERIFIED: Map to CANNOT_VERIFY (conservative)
+ * Divergence-side edge cases, and where their bits come from:
+ * - Large non-encrypted files: verified by streaming OID hash (any size)
+ * - Large encrypted files (>100MB): UNVERIFIED (OOM protection)
+ * - Blob corruption, decryption failure, I/O during verification: UNVERIFIED
+ * - Stat failed but the file is present (EACCES): UNVERIFIED
+ * - Git could not be consulted for authority: UNVERIFIED, so the orphan is
+ *   held rather than released or pruned
+ * - ENCRYPTION (policy mismatch) and STALE (VWD cache refreshed) are not
+ *   user modifications: safe to remove
+ * - File deleted between load and this check: no violation — the load-time
+ *   observation still governs here; cleanup sees the absence when it acts
+ *   and reclaims the row
  *
- * Optimizations:
- * - Targeted O(1) state queries (no bulk loading)
- * - Profile existence caching: O(1) ref lookup per profile
+ * force yields an empty result: every present orphan becomes removable,
+ * released files included.
  */
 
 #ifndef DOTTA_SAFETY_H
@@ -35,7 +48,6 @@
 #include <stdbool.h>
 #include <stddef.h>
 
-#include "core/state.h"
 #include "core/workspace.h"
 
 /**
@@ -46,7 +58,6 @@
  */
 typedef struct {
     char *filesystem_path;      /* File path on disk */
-    char *storage_path;         /* Path in profile (e.g., home/.bashrc) */
     char *source_profile;       /* Profile that originally tracked this file */
     char *reason;               /* Machine-readable reason code (see SAFETY_REASON_* below) */
     bool content_modified;      /* True if content differs (not just metadata) */
@@ -57,7 +68,7 @@ typedef struct {
  *
  * Used in safety_violation_t.reason field for programmatic handling and display.
  */
-#define SAFETY_REASON_RELEASED         "released"          /* Profile deleted externally, file released */
+#define SAFETY_REASON_RELEASED         "released"          /* Git no longer backs the file */
 #define SAFETY_REASON_MODIFIED         "modified"          /* Content changed */
 #define SAFETY_REASON_MODE_CHANGED     "mode_changed"      /* Permissions changed */
 #define SAFETY_REASON_TYPE_CHANGED     "type_changed"      /* File<->symlink conversion */
@@ -91,60 +102,22 @@ typedef struct {
 } safety_result_t;
 
 /**
- * Check removal safety for orphaned workspace items
+ * Decide removal safety for orphaned workspace items
  *
- * Validates that orphaned files can be safely removed by checking:
- * 1. Branch existence (external deletion detection)
- * 2. Lifecycle state (controlled vs external deletion)
- * 3. Workspace divergence (trusted completely)
+ * Maps each orphan to a verdict using the table in this header's overview.
+ * Present orphans with nothing against them yield no violation and are the
+ * caller's to prune; everything else is named here, once, with a reason
+ * the caller displays and routes on.
  *
- * Trusts workspace divergence analysis completely:
- * - Non-encrypted: Streaming OID verification handles any file size
- * - Encrypted ≤100MB: Content comparison
- * - Encrypted >100MB: CANNOT_VERIFY violation (OOM protection)
+ * Performance: O(n) in the orphan count. No syscalls, no queries — the
+ * observations were made at workspace load.
  *
- * Algorithm:
- * 1. Skip if file not on filesystem (already deleted)
- * 2. Check lifecycle state, branch existence, and file-in-tree:
- *    - LIFECYCLE_DELETED: skip branch check (confirmed deletion via remove command)
- *    - LIFECYCLE_RELEASED: auto-release (file removed from Git externally)
- *    - LIFECYCLE_INACTIVE/LIFECYCLE_ACTIVE + branch gone: RELEASED violation
- *    - LIFECYCLE_INACTIVE/LIFECYCLE_ACTIVE + branch exists, file not in tree: RELEASED violation
- *    - LIFECYCLE_INACTIVE/LIFECYCLE_ACTIVE + branch exists, tree lookup error: CANNOT_VERIFY violation
- *    - LIFECYCLE_INACTIVE/LIFECYCLE_ACTIVE + branch exists, file in tree: proceed to divergence
- * 3. Route by divergence type (TRUST WORKSPACE):
- *    - DIVERGENCE_NONE: safe to remove (no violation)
- *    - DIVERGENCE_CONTENT: MODIFIED violation
- *    - DIVERGENCE_TYPE: TYPE_CHANGED violation
- *    - DIVERGENCE_MODE/OWNERSHIP: MODE_CHANGED violation
- *    - DIVERGENCE_UNVERIFIED: CANNOT_VERIFY violation
- *
- * Performance:
- * - O(n) where n = orphan count (workspace already verified)
- * - State queries: O(1) per orphan (targeted lookup, no bulk loading)
- * - Profile caching: O(1) ref lookup, each profile checked at most once
- *
- * Edge Cases:
- * - External branch deletion: RELEASED violation (protects user data)
- * - External file removal (branch exists, file gone): RELEASED violation (file-in-tree check)
- * - Tree lookup error (corrupt tree, OOM): CANNOT_VERIFY violation (degrade gracefully)
- * - Stale entry (LIFECYCLE_RELEASED): Auto-release (decision already made by repair/patching)
- * - Staged removal with branch gone (profile disable then branch deleted): RELEASED
- * - Controlled deletion (remove command): Safe to remove (LIFECYCLE_DELETED bypasses branch check)
- * - Large non-encrypted files: Verified (streaming OID, any size)
- * - Large encrypted files (>100MB): CANNOT_VERIFY (OOM protection)
- * - File deleted during check: Safe (no violation)
- *
- * @param repo Git repository (must not be NULL)
- * @param state State database for lifecycle queries (must not be NULL)
- * @param orphans Workspace items marked as orphaned (empty slice valid)
- * @param force If true, skip all checks (emergency override)
+ * @param orphans Workspace items marked as orphaned or released (empty slice valid)
+ * @param force If true, skip all checks (emergency override — empty result)
  * @param out_result Output safety result (must not be NULL, caller must free)
- * @return Error on fatal failure, NULL on success
+ * @return Error on fatal failure (allocation), NULL on success
  */
 error_t *safety_check_orphans(
-    git_repository *repo,
-    const state_t *state,
     workspace_items_t orphans,
     bool force,
     safety_result_t **out_result

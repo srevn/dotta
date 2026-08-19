@@ -9,6 +9,9 @@
  * Directories trust the tracked_directories state column, maintained by the
  * manifest layer's directory rebuild (sweep + re-projection + ghost reclaim).
  * Both are patched in-memory for stale profiles (external Git changes).
+ * That maintenance covers the enabled set's active rows — the only rows with
+ * a per-profile commit_oid baseline — so orphan analysis observes Git
+ * authority for its own rows instead of trusting a cache nothing repairs.
  */
 
 #include "core/workspace.h"
@@ -38,6 +41,7 @@
 #include "infra/compare.h"
 #include "infra/content.h"
 #include "sys/filesystem.h"
+#include "sys/gitops.h"
 #include "sys/source.h"
 #include "utils/privilege.h"
 
@@ -1156,6 +1160,179 @@ static divergence_type_t compute_orphan_divergence(
 }
 
 /**
+ * Per-profile authority cache entry (one analysis pass)
+ *
+ * exists: refs/heads/<profile> resolved at first sight.
+ * tree:   the branch's HEAD tree, loaded lazily on the first in-tree
+ *         question and kept for the rest of the pass; NULL until then and
+ *         forever if !exists. Stored only on success, so "tree == NULL"
+ *         also reads as "not loaded yet — try again" for the next row.
+ */
+typedef struct {
+    bool exists;
+    git_tree *tree;
+} authority_cache_t;
+
+/**
+ * Free an authority cache entry (hashmap value callback)
+ */
+static void authority_cache_free(void *value) {
+    authority_cache_t *entry = value;
+    if (!entry) {
+        return;
+    }
+    git_tree_free(entry->tree);   /* NULL-safe */
+    free(entry);
+}
+
+/**
+ * What the profile that deployed an orphan currently says about it
+ */
+typedef enum {
+    ORPHAN_AUTHORITY_BACKED,      /* Branch exists and its HEAD tree has the path */
+    ORPHAN_AUTHORITY_LOST,        /* Branch gone, or the path is not in its HEAD tree */
+    ORPHAN_AUTHORITY_UNVERIFIED   /* A Git lookup failed — cannot tell, must not guess */
+} orphan_authority_t;
+
+/**
+ * Observe Git authority for an orphaned file
+ *
+ * "Does the profile that deployed this path still claim it?" — its branch
+ * resolves and its HEAD tree has storage_path. It is the one observation
+ * the workspace did not make before: manifest_reconcile keeps the VWD
+ * current for ENABLED profiles' ACTIVE rows only, and enabled_profiles is
+ * where the per-profile commit_oid baseline lives — so a row that left
+ * scope (a disabled profile's rows; an INACTIVE row a re-enable did not
+ * re-project) can lose its Git backing — git branch -D, git rm + commit, a
+ * rebase, a sync fetch that dropped the path — and only a live look at Git
+ * says so. core/safety used to take that look at apply's preflight; status
+ * read the same items and could not see it, so it predicted a prune where
+ * apply then released. Observed here, every reader of orphan items shares
+ * one verdict and safety needs neither repo nor state.
+ *
+ * Answers:
+ *   BACKED      the orphan is dotta's to prune, divergence permitting
+ *   LOST        Git cannot back the file: branch deleted externally
+ *               (content irrecoverable from any profile), or the path
+ *               removed from a branch that still exists (git rm, rebase,
+ *               fetch). The caller emits WORKSPACE_STATE_RELEASED — left
+ *               on disk, row retires.
+ *   UNVERIFIED  transient I/O, a locked packfile, a corrupt ref or tree.
+ *               Authority cannot be determined and must not be guessed:
+ *               LOST would retire the row, BACKED would prune the file.
+ *               The caller marks DIVERGENCE_UNVERIFIED and the orphan is
+ *               held until Git answers.
+ *
+ * Cached per profile across one pass: the ref lookup once per profile
+ * (O(1), no tree load — most profiles answer here), the HEAD tree on the
+ * first in-tree question, git_tree_entry_bypath per row. Only successes
+ * are cached, so a transient failure holds one row rather than a whole
+ * profile. Our own allocation failing is fatal (this file's OOM
+ * convention, as in workspace_add_diverged); a Git failure is an
+ * UNVERIFIED answer, not an error.
+ *
+ * Who is asked — decided by the caller, recorded here because this is
+ * where the scenarios live:
+ *   LIFECYCLE_RELEASED   not asked: reconcile already decided (enabled
+ *                        profile, file left the branch).
+ *   LIFECYCLE_DELETED    not asked: dotta committed this deletion (remove
+ *                        --delete-files, update, sync); the blob is gone
+ *                        from the tree by design, and asking would only
+ *                        confirm that absence and misattribute it as
+ *                        external loss. remove --delete-profile upgrades
+ *                        INACTIVE → DELETED for exactly this reason.
+ *   absent on disk       not asked: a reclaim whatever Git says.
+ *   INACTIVE / ACTIVE    asked — staged removals (profile disable) and the
+ *                        INACTIVE row a re-enable left behind.
+ *
+ * @param repo Repository (must not be NULL)
+ * @param cache profile → authority_cache_t (borrowed keys, owned values)
+ * @param profile Row's profile (NOT NULL in the schema)
+ * @param storage_path Row's storage path (NOT NULL in the schema)
+ * @param out Receives the answer (must not be NULL)
+ * @return ERR_MEMORY if the cache entry cannot be created; NULL otherwise
+ */
+static error_t *compute_orphan_authority(
+    git_repository *repo,
+    hashmap_t *cache,
+    const char *profile,
+    const char *storage_path,
+    orphan_authority_t *out
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(cache);
+    CHECK_NULL(profile);
+    CHECK_NULL(storage_path);
+    CHECK_NULL(out);
+
+    *out = ORPHAN_AUTHORITY_UNVERIFIED;
+
+    authority_cache_t *entry = hashmap_get(cache, profile);
+    if (!entry) {
+        /* First row of this profile: does the branch still exist? A ref
+         * lookup, not a tree load — most profiles answer here. Git errors
+         * are not cached: a transient failure must stay retryable. */
+        bool exists = false;
+        error_t *err = gitops_branch_exists(repo, profile, &exists);
+        if (err) {
+            error_free(err);
+            return NULL;                    /* UNVERIFIED */
+        }
+
+        entry = calloc(1, sizeof(*entry));
+        if (!entry) {
+            return ERROR(ERR_MEMORY, "Failed to allocate authority cache entry");
+        }
+        entry->exists = exists;
+
+        err = hashmap_set(cache, profile, entry);
+        if (err) {
+            authority_cache_free(entry);
+            return error_wrap(err, "Failed to cache authority for '%s'", profile);
+        }
+    }
+
+    if (!entry->exists) {
+        *out = ORPHAN_AUTHORITY_LOST;       /* Branch deleted externally */
+        return NULL;
+    }
+
+    if (!entry->tree) {
+        /* Lazy-load the HEAD tree on the first in-tree question for this
+         * profile; stored only on success, so a failure is retried by the
+         * next row instead of condemning the whole profile. */
+        git_tree *tree = NULL;
+        error_t *err = gitops_load_branch_tree(repo, profile, &tree, NULL);
+        if (err) {
+            error_free(err);
+            return NULL;                    /* UNVERIFIED */
+        }
+        entry->tree = tree;                 /* Ownership transfers to the cache */
+    }
+
+    /* Check if file exists in tree via path traversal
+     *
+     * Distinguish between "file not in tree" (GIT_ENOTFOUND) and actual
+     * errors (GIT_ERROR, OOM). ENOTFOUND is the normal "removed from Git"
+     * case. Actual errors should propagate so the caller can treat them
+     * as CANNOT_VERIFY rather than RELEASED — preserving the state entry
+     * is more conservative than removing it.
+     */
+    git_tree_entry *tree_entry = NULL;
+    int rc = git_tree_entry_bypath(&tree_entry, entry->tree, storage_path);
+
+    if (rc == 0) {
+        git_tree_entry_free(tree_entry);
+        *out = ORPHAN_AUTHORITY_BACKED;
+    } else if (rc == GIT_ENOTFOUND) {
+        *out = ORPHAN_AUTHORITY_LOST;
+    }
+    /* Anything else: *out stays UNVERIFIED */
+
+    return NULL;
+}
+
+/**
  * Analyze partitioned orphan candidates from the active-slice build
  *
  * Each candidate was rejected by workspace_partition_files for
@@ -1164,17 +1341,36 @@ static divergence_type_t compute_orphan_divergence(
  *   - Lifecycle terminal (LIFECYCLE_INACTIVE / LIFECYCLE_DELETED / LIFECYCLE_RELEASED)
  *
  * No manifest probe is needed: the partition itself is the orphan
- * predicate. The RELEASED branch (loss of authority via external Git
- * removal) is detected from state_entry->lifecycle — the lifecycle column
- * is the single source of truth, set by manifest_reconcile.
+ * predicate.
  *
- * Each orphan is tagged with profile_enabled so callers can filter:
- * - status: only show profile_enabled=true (enabled profiles)
- * - apply: use all (cleanup disabled profiles too)
+ * Per orphan, in order: presence (one lstat), Git authority
+ * (compute_orphan_authority — asked for present rows that are neither
+ * reconcile's RELEASED nor dotta's own DELETED), divergence (disk against
+ * the row's VWD cache). The three feed one item: state (ORPHANED or
+ * RELEASED), divergence bits, on_filesystem. RELEASED therefore has two
+ * sources that read identically downstream — the lifecycle column, for the
+ * rows the consistency layer covers, and the load-time observation, for the
+ * rows it does not.
+ *
+ * Each orphan is tagged with profile_enabled — whether its profile is in
+ * the workspace's enabled set. It is a label, not a filter: every reader
+ * sees every orphan, and apply's verbose breakdown ("N from disabled
+ * profiles" / "N from enabled profiles") is its only consumer.
  */
 static error_t *analyze_orphaned_files(workspace_t *ws) {
     CHECK_NULL(ws);
     CHECK_NULL(ws->profile_index);
+
+    if (ws->orphan_file_count == 0) {
+        return NULL;
+    }
+
+    /* profile → authority_cache_t for this pass. Keys borrow the rows'
+     * arena-backed profile strings, which outlive it. */
+    hashmap_t *authority_cache = hashmap_borrow(8);
+    if (!authority_cache) {
+        return ERROR(ERR_MEMORY, "Failed to create authority cache");
+    }
 
     error_t *err = NULL;
 
@@ -1185,119 +1381,119 @@ static error_t *analyze_orphaned_files(workspace_t *ws) {
         const char *storage_path = state_entry->storage_path;
         const char *profile = state_entry->profile;
 
-        bool is_released = (state_entry->lifecycle == LIFECYCLE_RELEASED);
-
         bool profile_enabled = hashmap_has(ws->profile_index, profile);
 
-        if (is_released) {
-            /* RELEASED: File removed from Git externally (loss of authority)
-             *
-             * No divergence computation needed — we're not deleting this file.
-             * It will be left on filesystem and state entry cleaned up.
-             * Check filesystem presence only for display purposes.
-             */
-            bool on_filesystem = (lstat(fs_path, &(struct stat){ 0 }) == 0);
+        /* Single stat capture, reused for type verification, content
+         * comparison, and metadata checks — eliminates redundant lstat
+         * syscalls. One rule for every orphan, whatever its lifecycle.
+         *
+         * stat_valid tracks whether we have usable stat data:
+         * - true: lstat succeeded, orphan_stat contains valid data
+         * - false: lstat failed, orphan_stat is zeroed (unusable)
+         */
+        struct stat orphan_stat;
+        bool on_filesystem;
+        bool stat_valid = false;
 
-            err = workspace_add_diverged(
-                ws,
-                fs_path,
-                storage_path,
-                profile,
-                NULL,
-                WORKSPACE_STATE_RELEASED,
-                DIVERGENCE_NONE,
-                PATH_KIND_FILE,
-                on_filesystem,
-                profile_enabled,
-                false
-            );
+        if (lstat(fs_path, &orphan_stat) != 0) {
+            /* ENOENT: the orphan was already removed by hand — a reclaim.
+             *
+             * Anything else (EACCES, EIO, ELOOP, …): assume the file exists
+             * but is inaccessible. We lack valid stat data, so divergence
+             * cannot be computed and becomes UNVERIFIED below, so:
+             * - Status shows [orphaned, unverified] (user visibility)
+             * - Apply skips removal (can't verify what we can't stat)
+             */
+            on_filesystem = (errno != ENOENT);
+            memset(&orphan_stat, 0, sizeof(orphan_stat));
         } else {
-            /* Standard orphan analysis
-             *
-             * Single stat capture, reused for type verification, content
-             * comparison, and metadata checks — eliminates redundant lstat
-             * syscalls.
-             *
-             * stat_valid tracks whether we have usable stat data:
-             * - true: lstat succeeded, orphan_stat contains valid data
-             * - false: lstat failed, orphan_stat is zeroed (unusable)
-             */
-            struct stat orphan_stat;
-            bool on_filesystem;
-            bool stat_valid = false;
-
-            if (lstat(fs_path, &orphan_stat) != 0) {
-                if (errno == ENOENT) {
-                    /* File doesn't exist - orphan was already removed manually */
-                    on_filesystem = false;
-                } else {
-                    /* Cannot stat file (EACCES, EIO, ELOOP, etc.)
-                     *
-                     * Conservative handling: Assume file exists but is inaccessible.
-                     * We lack valid stat data, so divergence cannot be computed.
-                     * Mark as UNVERIFIED below so:
-                     * - Status shows [orphaned, unverified] (user visibility)
-                     * - Apply skips removal (safety - can't verify what we can't stat)
-                     */
-                    on_filesystem = true;
-                }
-                memset(&orphan_stat, 0, sizeof(orphan_stat));
-            } else {
-                on_filesystem = true;
-                stat_valid = true;
-            }
-
-            /* Compute divergence for orphaned file
-             *
-             * Only compute if file exists AND we have valid stat data.
-             *
-             * Cases:
-             * - File doesn't exist (ENOENT): divergence = NONE (nothing to compare)
-             * - File inaccessible (other error): divergence = UNVERIFIED (unsafe to act)
-             * - File accessible: divergence = computed from content/metadata analysis
-             *
-             * This enables status to predict apply behavior:
-             * - DIVERGENCE_NONE -> Clean orphan, apply will prune
-             * - DIVERGENCE_CONTENT/TYPE -> Modified, apply will skip (safety check)
-             * - DIVERGENCE_MODE/OWNERSHIP -> Metadata changed, apply will skip
-             * - DIVERGENCE_UNVERIFIED -> Cannot verify, apply will skip
-             */
-            divergence_type_t divergence = DIVERGENCE_NONE;
-            if (stat_valid) {
-                divergence = compute_orphan_divergence(
-                    ws,
-                    state_entry,
-                    fs_path,
-                    storage_path,
-                    profile,
-                    &orphan_stat
-                );
-            } else if (on_filesystem) {
-                /* File exists but stat failed - cannot verify divergence safely */
-                divergence = DIVERGENCE_UNVERIFIED;
-            }
-
-            err = workspace_add_diverged(
-                ws,
-                fs_path,
-                storage_path,
-                profile,
-                NULL,                       /* No old_profile for orphans */
-                WORKSPACE_STATE_ORPHANED,   /* State: in deployment state, not in profile */
-                divergence,                 /* Divergence: computed from filesystem comparison */
-                PATH_KIND_FILE,
-                on_filesystem,
-                profile_enabled,
-                false                       /* No profile change for orphans */
-            );
+            on_filesystem = true;
+            stat_valid = true;
         }
 
+        workspace_state_t item_state = WORKSPACE_STATE_ORPHANED;
+        divergence_type_t divergence = DIVERGENCE_NONE;
+
+        if (state_entry->lifecycle == LIFECYCLE_RELEASED) {
+            /* RELEASED by reconcile: the file was removed from Git
+             * externally and the consistency layer recorded it. No
+             * divergence computation needed — we're not deleting this file.
+             * It is left on the filesystem and its state entry retires. */
+            item_state = WORKSPACE_STATE_RELEASED;
+
+        } else if (on_filesystem) {
+            /* LIFECYCLE_DELETED needs no authority question: dotta committed
+             * that deletion itself, so the profile's claim is not in doubt —
+             * asking would find the blob gone by design and misread it as
+             * external loss. Everything else asks Git. */
+            orphan_authority_t authority = ORPHAN_AUTHORITY_BACKED;
+
+            if (state_entry->lifecycle != LIFECYCLE_DELETED) {
+                err = compute_orphan_authority(
+                    ws->repo, authority_cache, profile, storage_path, &authority
+                );
+                if (err) {
+                    break;
+                }
+            }
+
+            if (authority == ORPHAN_AUTHORITY_LOST) {
+                /* Git cannot back the file. Left on disk, row retires — so
+                 * there is nothing a content comparison would decide. */
+                item_state = WORKSPACE_STATE_RELEASED;
+
+            } else {
+                /* Divergence for a prunable orphan: disk against the row's
+                 * VWD cache.
+                 *
+                 * This enables status to predict apply behavior:
+                 * - DIVERGENCE_NONE -> Clean orphan, apply will prune
+                 * - DIVERGENCE_CONTENT/TYPE -> Modified, apply will skip
+                 * - DIVERGENCE_MODE/OWNERSHIP -> Metadata changed, apply will skip
+                 * - DIVERGENCE_UNVERIFIED -> Cannot verify, apply will skip
+                 * - WORKSPACE_STATE_RELEASED -> Git let go, apply releases
+                 */
+                if (stat_valid) {
+                    divergence = compute_orphan_divergence(
+                        ws, state_entry, fs_path, storage_path, profile, &orphan_stat
+                    );
+                } else {
+                    /* Present but unstattable — nothing to compare against */
+                    divergence = DIVERGENCE_UNVERIFIED;
+                }
+
+                if (authority == ORPHAN_AUTHORITY_UNVERIFIED) {
+                    /* Git could not vouch for the path: hold the orphan
+                     * until it can. */
+                    divergence |= DIVERGENCE_UNVERIFIED;
+                }
+            }
+        }
+        /* else absent: ORPHANED with no divergence — a reclaim whatever Git
+         * says, which keeps the planners' "absent ⇒ DIVERGENCE_NONE" rule. */
+
+        err = workspace_add_diverged(
+            ws,
+            fs_path,
+            storage_path,
+            profile,
+            NULL,               /* No old_profile for orphans */
+            item_state,
+            divergence,
+            PATH_KIND_FILE,
+            on_filesystem,
+            profile_enabled,
+            false               /* No profile change for orphans */
+        );
         if (err) {
-            return error_wrap(err, "Failed to add orphaned/released file");
+            err = error_wrap(err, "Failed to add orphaned/released file");
+            break;
         }
     }
 
-    return NULL;
+    hashmap_free(authority_cache, authority_cache_free);
+
+    return err;
 }
 
 /**
@@ -1403,9 +1599,16 @@ static error_t *workspace_partition_directories(workspace_t *ws) {
  * INACTIVE/DELETED. No skip checks here — every input is by construction an
  * orphan.
  *
- * Each orphan is tagged with profile_enabled so callers can filter:
- *   - status: only show profile_enabled=true (enabled profiles)
- *   - apply: use all (cleanup disabled profiles too)
+ * Presence is the whole observation: no authority question is asked for a
+ * directory. Directories have no blob-level identity in Git to lose (the
+ * tracked_directories vocabulary has no RELEASED for exactly that reason —
+ * see state_lifecycle_t), and a directory row is only ever removed empty,
+ * so acting on a stale claim can cost the user nothing.
+ *
+ * Each orphan is tagged with profile_enabled — whether its profile is in
+ * the workspace's enabled set. It is a label, not a filter: every reader
+ * sees every orphan, and apply's verbose breakdown ("N from disabled
+ * profiles" / "N from enabled profiles") is its only consumer.
  */
 static error_t *analyze_orphaned_directories(workspace_t *ws) {
     CHECK_NULL(ws);
@@ -2161,7 +2364,10 @@ static error_t *analyze_encryption_policy_mismatch(
  * is the single cleanup authority.
  *
  * Drift repair is handled upstream by workspace_load's manifest_reconcile
- * call, so state entries read here are current with Git by construction.
+ * call, so active rows read here are current with Git by construction.
+ * Reconcile covers enabled profiles' ACTIVE rows only, which is precisely
+ * the active slice: for the orphan slice, analyze_orphaned_files observes
+ * Git authority itself.
  *
  * Lifetime: every pointer (active rows, orphan rows, both pointer arrays,
  * the snapshot rows themselves) lives in ws->arena. Only ws->active_file_index
@@ -2229,9 +2435,9 @@ static error_t *workspace_partition_files(workspace_t *ws) {
             /* Rejected: surface to orphan analysis.
              *   - Out-of-scope profile: disabled or branch deleted; tagged
              *     via profile_enabled in analyze_orphaned_files.
-             *   - Lifecycle terminal: INACTIVE/DELETED/RELEASED. RELEASED
-             *     (loss of authority) is detected from row->lifecycle
-             *     inside analyze_orphaned_files. */
+             *   - Lifecycle terminal: INACTIVE/DELETED/RELEASED. Loss of
+             *     authority is read from row->lifecycle, or observed
+             *     against Git, inside analyze_orphaned_files. */
             orphan_files[orphan_count++] = row;
             continue;
         }

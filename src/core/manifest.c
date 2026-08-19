@@ -1219,7 +1219,8 @@ static error_t *manifest_detect_stale_profiles(
         git_oid head_oid;
         err = gitops_resolve_branch_head_oid(repo, profile, &head_oid);
         if (err) {
-            /* Branch may have been deleted — skip (safety handles this) */
+            /* Branch may have been deleted — skip (the workspace's orphan
+             * analysis observes it) */
             error_free(err);
             err = NULL;
             continue;
@@ -1411,8 +1412,10 @@ static error_t *manifest_repair_stale(
         } else {
             /* File removed from all enabled profiles — loss of authority.
              *
-             * Mark LIFECYCLE_RELEASED so the orphan→safety→cleanup pipeline releases
-             * it (leaves file on filesystem, removes state entry).
+             * Mark LIFECYCLE_RELEASED so the orphan→cleanup pipeline releases
+             * it (leaves file on filesystem, removes state entry). The
+             * workspace reads that column straight through; for rows this
+             * repair does not cover it observes the same fact against Git.
              *
              * Do NOT remove the state entry here — the full pipeline ensures
              * user visibility and safety checks before any cleanup.
@@ -1983,8 +1986,8 @@ error_t *manifest_remove_files(
              * Entry marked LIFECYCLE_DELETED (controlled deletion via remove command)
              * and remains in state for orphan detection.
              *
-             * LIFECYCLE_DELETED bypasses branch existence checks in safety module,
-             * since user intent is unambiguous (explicit remove command).
+             * LIFECYCLE_DELETED bypasses the workspace's orphan authority
+             * check, since user intent is unambiguous (explicit remove command).
              *
              * The orphan cleanup flow:
              *   1. Entry marked deleted (this function)
@@ -2183,11 +2186,12 @@ error_t *manifest_update_files(
                  * reality:
                  *
                  *   absent  → purge (apply has no filesystem work to do)
-                 *   present → LIFECYCLE_DELETED (apply removes via safety
-                 *             PHASE 1 bypass, sidestepping the PHASE 4
-                 *             tree check that would otherwise misroute
+                 *   present → LIFECYCLE_DELETED (the workspace asks no
+                 *             authority question for LIFECYCLE_DELETED,
+                 *             whose tree check would otherwise misroute
                  *             this internal deletion through the
-                 *             external-loss RELEASED pathway).
+                 *             external-loss RELEASED pathway, so apply
+                 *             prunes it).
                  *
                  * WORKSPACE_STATE_DELETED classifies the path as absent at
                  * workspace-load time, so the purge branch is the normal
@@ -2743,11 +2747,12 @@ error_t *manifest_sync_diff(
                      * reality:
                      *
                      *   absent  → purge (apply has nothing to clean up)
-                     *   present → LIFECYCLE_DELETED (apply removes via safety
-                     *             PHASE 1 bypass, sidestepping the PHASE 4
-                     *             tree check that would otherwise misroute
+                     *   present → LIFECYCLE_DELETED (the workspace asks no
+                     *             authority question for LIFECYCLE_DELETED,
+                     *             whose tree check would otherwise misroute
                      *             this internal deletion through the
-                     *             external-loss RELEASED pathway).
+                     *             external-loss RELEASED pathway, so apply
+                     *             prunes it).
                      *
                      * ERR_NOT_FOUND from state_remove_file means the row
                      * already vanished (e.g. a concurrent reconcile

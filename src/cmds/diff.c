@@ -1279,7 +1279,7 @@ static error_t *diff_workspace(
     /* Step 1: Load workspace with full file analysis */
     workspace_load_t ws_opts = {
         .analyze_files       = true,  /* File content divergence detection */
-        .analyze_orphans     = true,  /* Orphaned state entries */
+        .analyze_orphans     = false, /* Orphaned state entries not needed */
         .analyze_untracked   = false, /* Not needed for diff (expensive) */
         .analyze_directories = false, /* Not needed for diff */
         .analyze_encryption  = false  /* Not needed for diff */

@@ -211,8 +211,9 @@ static void display_workspace_status(
         }
     }
 
-    /* Tracks whether the Issues section contained orphans with divergence */
+    /* Tracks whether the Issues section contained released or diverged orphans */
     bool has_diverged_orphans = false;
+    bool has_released_orphans = false;
 
     /* Show sectioned output for dirty/invalid workspace */
     if (ws_status != WORKSPACE_CLEAN) {
@@ -440,6 +441,9 @@ static void display_workspace_status(
                         if (orphaned[i]->divergence != DIVERGENCE_NONE) {
                             has_diverged_orphans = true;
                         }
+                        if (orphaned[i]->state == WORKSPACE_STATE_RELEASED) {
+                            has_released_orphans = true;
+                        }
                     }
 
                     output_list_render(list);
@@ -481,7 +485,20 @@ static void display_workspace_status(
             );
             output_hintline(
                 out, OUTPUT_NORMAL, "  [orphaned] [unverified] "
-                "- Missing key, skipped by 'dotta apply'"
+                "- Cannot be verified, skipped by 'dotta apply'"
+            );
+        }
+
+        /* Released orphans are not blocked — nothing is asked of the user */
+        if (has_released_orphans) {
+            output_newline(out, OUTPUT_NORMAL);
+            output_hint(
+                out, OUTPUT_NORMAL,
+                "Released orphans are no longer backed by Git."
+            );
+            output_hintline(
+                out, OUTPUT_NORMAL, "  [released]              "
+                "- Left on disk, released by 'dotta apply'"
             );
         }
     }

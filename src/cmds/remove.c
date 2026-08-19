@@ -1533,9 +1533,10 @@ static error_t *delete_profile_branch(
      *
      * After branch deletion, LIFECYCLE_INACTIVE entries left by the earlier
      * manifest_apply_scope() call (or from a prior profile disable) must be
-     * upgraded to LIFECYCLE_DELETED. Without this, the safety module would RELEASE
-     * these files (branch gone + LIFECYCLE_INACTIVE = irrecoverable), when the
-     * user's intent is to delete them.
+     * upgraded to LIFECYCLE_DELETED. Without this, the workspace would
+     * observe the branch gone and RELEASE these files (branch gone +
+     * LIFECYCLE_INACTIVE = irrecoverable), when the user's intent is to
+     * delete them.
      *
      * Without --delete-files: remove state entries entirely (release from management).
      *
@@ -1600,7 +1601,8 @@ static error_t *delete_profile_branch(
             }
         }
     } else {
-        /* Non-fatal: safety module will handle this conservatively */
+        /* Non-fatal: the next workspace load observes the branch gone and
+         * releases these rows conservatively */
         output_warning(
             out, OUTPUT_NORMAL, "Failed to begin transaction for post-deletion update: %s",
             error_message(delete_err)

@@ -150,6 +150,97 @@ static void acknowledge_reassignments(
 }
 
 /**
+ * Report the work the plan withheld, by reason — and answer how much
+ *
+ * -e (files, tracked directories, orphans) and --skip-existing (files)
+ * both mean "in scope, needed work, deliberately not done". This report
+ * needs the two counts split for its two lines, so it is the only place
+ * either is derived; the sum goes back to the caller, whose nothing-to-do
+ * line must not call a workspace clean when its only work was held back.
+ *
+ * Printed once, above the nothing-to-do exit — so a run that does nothing
+ * else still says what it held back — and therefore also above the
+ * confirmation prompt, where a user weighing the rest of the run should
+ * already know what is missing from it. Per-item traces stay at plan time,
+ * beside the decision that produced them.
+ *
+ * @param excluded_orphans Orphans an -e pattern held back (borrowed)
+ * @return Paths withheld, both reasons together
+ */
+static size_t print_withheld(
+    const output_t *out,
+    const deploy_plan_t *plan,
+    workspace_items_t excluded_orphans
+) {
+    /* -e reaches all three kinds, so its summary counts "paths"; the
+     * verbose breakdown names each kind and what it was spared. */
+    size_t excluded_orphan_files = 0;
+    size_t excluded_orphan_dirs = 0;
+    for (size_t i = 0; i < excluded_orphans.count; i++) {
+        if (excluded_orphans.entries[i]->item_kind == PATH_KIND_DIRECTORY) {
+            excluded_orphan_dirs++;
+        } else {
+            excluded_orphan_files++;
+        }
+    }
+
+    size_t excluded = plan->files.excluded.count +
+        plan->directories.excluded.count + excluded_orphans.count;
+
+    if (excluded > 0) {
+        if (output_is_verbose(out)) {
+            output_print(
+                out, OUTPUT_VERBOSE, "Skipped %zu path%s (--exclude):\n",
+                excluded, excluded == 1 ? "" : "s"
+            );
+            if (plan->files.excluded.count > 0) {
+                output_print(
+                    out, OUTPUT_VERBOSE, "  • %zu divergent file%s not deployed\n",
+                    plan->files.excluded.count, plan->files.excluded.count == 1 ? "" : "s"
+                );
+            }
+            if (plan->directories.excluded.count > 0) {
+                output_print(
+                    out, OUTPUT_VERBOSE, "  • %zu tracked director%s not converged\n",
+                    plan->directories.excluded.count,
+                    plan->directories.excluded.count == 1 ? "y" : "ies"
+                );
+            }
+            if (excluded_orphan_files > 0) {
+                output_print(
+                    out, OUTPUT_VERBOSE, "  • %zu orphaned file%s not removed\n",
+                    excluded_orphan_files, excluded_orphan_files == 1 ? "" : "s"
+                );
+            }
+            if (excluded_orphan_dirs > 0) {
+                output_print(
+                    out, OUTPUT_VERBOSE, "  • %zu orphaned director%s not removed\n",
+                    excluded_orphan_dirs, excluded_orphan_dirs == 1 ? "y" : "ies"
+                );
+            }
+        } else {
+            output_styled(
+                out, OUTPUT_NORMAL, "Skipped {cyan}%zu{reset} path%s (--exclude)\n",
+                excluded, excluded == 1 ? "" : "s"
+            );
+        }
+    }
+
+    /* --skip-existing reaches files only (see deploy_partition_t), so one
+     * line says it at every verbosity. */
+    size_t existing = plan->files.skipped_existing.count;
+    if (existing > 0) {
+        output_styled(
+            out, OUTPUT_NORMAL,
+            "Skipped {cyan}%zu{reset} existing file%s (--skip-existing)\n",
+            existing, existing == 1 ? "" : "s"
+        );
+    }
+
+    return excluded + existing;
+}
+
+/**
  * Print deployment results
  *
  * Handles all output for deployment results. The deploy layer only collects
@@ -158,8 +249,10 @@ static void acknowledge_reassignments(
  * Categories (each semantically distinct):
  * - deployed: Files written to disk (green)
  * - converged: Tracked directories created / fixed / replaced (green)
- * - skipped_existing: --skip-existing flag applied (cyan)
  * - failed: Deployment failures (red, always shown)
+ *
+ * Work the run held back is not here: the plan decided it, print_withheld
+ * reports it, and it must be said even on runs that never execute.
  *
  * Adoption (ownership stamping for pre-existing matching files) is an
  * apply-level concern and its summary is printed by cmd_apply directly.
@@ -173,7 +266,6 @@ static void print_deploy_results(
 
     state_files_t deployed = state_files_view(&result->deployed);
     state_directories_t converged = state_directories_view(&result->converged);
-    state_files_t skipped = state_files_view(&result->skipped_existing);
     state_files_t failed = state_files_view(&result->failed);
 
     /* Verbose mode: show individual items per category */
@@ -199,17 +291,6 @@ static void print_deploy_results(
             output_styled(
                 out, OUTPUT_VERBOSE, "  {green}✓{reset} %s\n",
                 converged.entries[i]->filesystem_path
-            );
-        }
-    }
-
-    /* Skipped files (--skip-existing) */
-    if (skipped.count > 0) {
-        output_section(out, OUTPUT_VERBOSE, "Skipped files");
-        for (size_t i = 0; i < skipped.count; i++) {
-            output_styled(
-                out, OUTPUT_VERBOSE, "  {cyan}⊘{reset} %s\n",
-                skipped.entries[i]->filesystem_path
             );
         }
     }
@@ -246,13 +327,6 @@ static void print_deploy_results(
                 dry_run ? "Would converge {green}%zu{reset} tracked director%s\n"
                         : "Converged {green}%zu{reset} tracked director%s\n",
                 converged.count, converged.count == 1 ? "y" : "ies"
-            );
-        }
-
-        if (skipped.count > 0) {
-            output_styled(
-                out, OUTPUT_NORMAL, "Skipped {cyan}%zu{reset} file%s\n",
-                skipped.count, skipped.count == 1 ? "" : "s"
             );
         }
     }
@@ -919,23 +993,26 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     /* PLAN: decide once what deploy will do, from (workspace, scope).
      *
      * Every later consumer — preview, adoption, privileges, preflight, the
-     * prompt, execution and the exclusion summary — reads this one object.
+     * prompt, execution and the withheld report — reads this one object.
      * The workspace already computed fresh divergence for every active row;
      * the planner gates each row on scope and classifies it by deploy's
-     * work predicate into pending / clean / excluded (held-back work). */
+     * work predicate into pending / clean, or into one of the two
+     * held-back buckets (-e, --skip-existing). */
     output_print(out, OUTPUT_VERBOSE, "\nPlanning deployment...\n");
 
-    err = deploy_plan_build(ws, scope, &plan);
+    err = deploy_plan_build(ws, scope, opts->skip_existing, &plan);
     if (err) {
         err = error_wrap(err, "Failed to plan deployment");
         goto cleanup;
     }
 
-    /* Per-item trace of the work -e held back, both kinds. output_print
-     * gates on the verbosity level, so normal runs pay only the loop cost. */
+    /* Per-item trace of the work the planner held back, by reason: -e for
+     * both kinds, --skip-existing for files. output_print gates on the
+     * verbosity level, so normal runs pay only the loop cost. */
     {
         state_files_t excluded_files = state_files_view(&plan->files.excluded);
         state_directories_t excluded_dirs = state_directories_view(&plan->directories.excluded);
+        state_files_t existing_files = state_files_view(&plan->files.skipped_existing);
 
         for (size_t i = 0; i < excluded_files.count; i++) {
             output_print(
@@ -947,6 +1024,12 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
             output_print(
                 out, OUTPUT_VERBOSE, "  Skipping (excluded): %s\n",
                 excluded_dirs.entries[i]->filesystem_path
+            );
+        }
+        for (size_t i = 0; i < existing_files.count; i++) {
+            output_print(
+                out, OUTPUT_VERBOSE, "  Skipping (exists): %s\n",
+                existing_files.entries[i]->filesystem_path
             );
         }
     }
@@ -973,11 +1056,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
 
     /* Warn if a file filter was given but matched no managed path at all
      * (held-back rows count as matched — the filter found them). */
-    if (scope_has_paths(scope) &&
-        plan->files.pending.count == 0 && plan->files.clean.count == 0 &&
-        plan->files.excluded.count == 0 &&
-        plan->directories.pending.count == 0 && plan->directories.clean.count == 0 &&
-        plan->directories.excluded.count == 0) {
+    if (scope_has_paths(scope) && deploy_plan_row_count(plan) == 0) {
         output_warning(
             out, OUTPUT_NORMAL, "No matching files found in enabled profiles"
         );
@@ -1214,6 +1293,11 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         );
     }
 
+    /* Everything the plan held back, said once — above the exit below, so a
+     * run whose only work was withheld still reports it, and above the
+     * prompt, so consent is given with the full picture. */
+    size_t withheld = print_withheld(out, plan, excluded_orphans);
+
     /* Nothing pends on the filesystem: acknowledge bookkeeping (if any) and
      * leave. Privilege checks, preflight, hooks and the prompt are for runs
      * that touch disk — pure state bookkeeping skips them. The save also
@@ -1225,19 +1309,14 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         if (reassigned.count > 0) {
             print_reassignments(out, &reassigned);
             acknowledge_reassignments(state, &reassigned, opts->dry_run, out);
+        } else if (withheld > 0) {
+            /* The report above named what and why; this only has to avoid
+             * claiming the work was never there. */
+            output_info(out, OUTPUT_NORMAL, "Nothing left to deploy");
+        } else if (scope_has_filter(scope) || scope_has_paths(scope)) {
+            output_info(out, OUTPUT_NORMAL, "Nothing to deploy (no pending work in scope)");
         } else {
-            size_t total_excluded = plan->files.excluded.count +
-                plan->directories.excluded.count + excluded_orphans.count;
-            if (total_excluded > 0) {
-                output_info(
-                    out, OUTPUT_NORMAL, "Nothing to deploy (%zu path%s excluded by --exclude)",
-                    total_excluded, total_excluded == 1 ? "" : "s"
-                );
-            } else if (scope_has_filter(scope) || scope_has_paths(scope)) {
-                output_info(out, OUTPUT_NORMAL, "Nothing to deploy (no pending work in scope)");
-            } else {
-                output_info(out, OUTPUT_NORMAL, "Nothing to deploy (workspace is clean)");
-            }
+            output_info(out, OUTPUT_NORMAL, "Nothing to deploy (workspace is clean)");
         }
 
         /* Commit transaction to persist stat cache updates from workspace flush */
@@ -1296,7 +1375,6 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         .force            = opts->force,
         .dry_run          = opts->dry_run,
         .verbose          = opts->verbose,
-        .skip_existing    = opts->skip_existing,
         .strict_ownership = config->strict_mode,
     };
 
@@ -1510,61 +1588,6 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         print_deploy_results(out, deploy_res, opts->dry_run);
     } else {
         output_print(out, OUTPUT_VERBOSE, "\nNo deployment work in scope\n");
-    }
-
-    /* Report exclusion statistics (shown regardless of deployment activity):
-     * work held back by -e, per kind — plan buckets for the active side,
-     * the orphan slice split by kind for the removal side. */
-    size_t excluded_orphan_files = 0;
-    size_t excluded_orphan_dirs = 0;
-    for (size_t i = 0; i < excluded_orphans.count; i++) {
-        if (excluded_orphans.entries[i]->item_kind == PATH_KIND_DIRECTORY) {
-            excluded_orphan_dirs++;
-        } else {
-            excluded_orphan_files++;
-        }
-    }
-
-    size_t total_excluded = plan->files.excluded.count +
-        plan->directories.excluded.count + excluded_orphans.count;
-    if (total_excluded > 0) {
-        if (output_is_verbose(out)) {
-            output_print(
-                out, OUTPUT_VERBOSE, "Skipped %zu path%s (--exclude):\n",
-                total_excluded, total_excluded == 1 ? "" : "s"
-            );
-            if (plan->files.excluded.count > 0) {
-                output_print(
-                    out, OUTPUT_VERBOSE, "  • %zu divergent file%s not deployed\n",
-                    plan->files.excluded.count, plan->files.excluded.count == 1 ? "" : "s"
-                );
-            }
-            if (plan->directories.excluded.count > 0) {
-                output_print(
-                    out, OUTPUT_VERBOSE, "  • %zu tracked director%s not converged\n",
-                    plan->directories.excluded.count,
-                    plan->directories.excluded.count == 1 ? "y" : "ies"
-                );
-            }
-            if (excluded_orphan_files > 0) {
-                output_print(
-                    out, OUTPUT_VERBOSE, "  • %zu orphaned file%s not removed\n",
-                    excluded_orphan_files, excluded_orphan_files == 1 ? "" : "s"
-                );
-            }
-            if (excluded_orphan_dirs > 0) {
-                output_print(
-                    out, OUTPUT_VERBOSE, "  • %zu orphaned director%s not removed\n",
-                    excluded_orphan_dirs, excluded_orphan_dirs == 1 ? "y" : "ies"
-                );
-            }
-        } else {
-            /* Simple summary */
-            output_styled(
-                out, OUTPUT_NORMAL, "Skipped {cyan}%zu{reset} path%s (--exclude)\n",
-                total_excluded, total_excluded == 1 ? "" : "s"
-            );
-        }
     }
 
     /* Record what happened (only if not dry-run): cleanup, anchors,
@@ -2046,7 +2069,7 @@ static const args_opt_t apply_opts[] = {
     ARGS_APPEND(
         "e exclude",        "<pattern>",
         cmd_apply_options_t,exclude_patterns, exclude_count,
-        "Skip matching paths (no deploy, no directory convergence, no removal)"
+        "Skip matching paths (no deploy)"
     ),
     ARGS_FLAG(
         "f force",
@@ -2066,7 +2089,7 @@ static const args_opt_t apply_opts[] = {
     ARGS_FLAG(
         "skip-existing",
         cmd_apply_options_t,skip_existing,
-        "Skip files that already exist"
+        "Skip files whose path is already occupied"
     ),
     ARGS_FLAG(
         "v verbose",

@@ -23,7 +23,7 @@ typedef struct {
     bool dry_run;               /* Don't actually deploy */
     bool keep_orphans;          /* Don't remove orphaned files (opt-out from default cleanup) */
     bool verbose;               /* Print verbose output */
-    bool skip_existing;         /* Skip files that already exist */
+    bool skip_existing;         /* Leave occupied paths alone (plan filter) */
     char **exclude_patterns;    /* Exclude patterns (glob) - read-only */
     size_t exclude_count;       /* Number of exclude patterns */
 } cmd_apply_options_t;
@@ -31,8 +31,14 @@ typedef struct {
 /**
  * Apply profiles to filesystem
  *
- * Orchestrates profile detection/loading, manifest building,
- * pre-flight checks, and deployment.
+ * Converges the filesystem with the enabled profiles in both directions:
+ * deploys the files and tracked directories that diverge, and removes the
+ * ones orphaned by a disabled profile or by a deletion in Git.
+ *
+ * Orchestrates scope resolution, workspace divergence analysis, plan
+ * construction, privilege and pre-flight checks, the apply hooks, and
+ * execution. Builds no manifest of its own — core/manifest maintains that
+ * when profiles or files change, and apply reads it through the workspace.
  *
  * @param ctx Dispatch context (must not be NULL)
  * @param opts Command options (must not be NULL)

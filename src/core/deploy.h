@@ -65,7 +65,6 @@ typedef struct {
     bool force;               /* Overwrite modified files; replace a type conflict */
     bool dry_run;             /* Decide everything, mutate nothing */
     bool verbose;             /* Print per-item traces */
-    bool skip_existing;       /* Skip files that already exist (don't overwrite) */
     bool strict_ownership;    /* Fail if ownership cannot be resolved (strict_mode) */
 } deploy_options_t;
 
@@ -77,6 +76,12 @@ typedef struct {
  * excluded enters none (neither work nor adoptable). Out-of-scope rows
  * are invisible.
  *
+ * Two buckets hold work the run deliberately does not do. They differ by
+ * reason, and the reason is the only thing a consumer needs from them —
+ * so the bucket a row sits in *is* its reason tag, and a row -e names is
+ * reported as excluded even when --skip-existing would also hold it (a
+ * named path is the more explicit intent).
+ *
  * Buckets hold borrowed row pointers into the workspace's arena snapshot
  * (workspace lifetime); the plan owns only the bucket buffers. Project a
  * bucket with state_files_view / state_directories_view.
@@ -85,6 +90,14 @@ typedef struct {
     ptr_array_t pending;    /* Need work — deploy_execute acts on these */
     ptr_array_t clean;      /* In scope, no work — adoption candidates */
     ptr_array_t excluded;   /* Need work, held back by -e — reported, never touched */
+
+    /* Need work, held back by --skip-existing: something already occupies
+     * the path. Files only. A tracked directory row writes no data — it
+     * creates a container and converges its metadata in place — so
+     * withholding one would preserve nothing and would instead strand the
+     * tracked children the flag exists to deploy. Its one destructive act,
+     * replacing a squatter, is force-gated at preflight already. */
+    ptr_array_t skipped_existing;
 } deploy_partition_t;
 
 /**
@@ -103,10 +116,15 @@ typedef struct {
 /**
  * Deployment result
  *
- * Reports outcomes per kind. Each bucket carries borrowed state-row
- * pointers (workspace-arena lifetime, outlives the deploy_result_t);
- * project with state_files_view / state_directories_view. Free with
- * deploy_result_free before workspace_free.
+ * Reports outcomes per kind: every bucket names something that happened.
+ * Work the run deliberately did not do is the plan's to report, never the
+ * result's — the plan decided it, so only the plan can report it before a
+ * run that ends up executing nothing.
+ *
+ * Each bucket carries borrowed state-row pointers (workspace-arena
+ * lifetime, outlives the deploy_result_t); project with
+ * state_files_view / state_directories_view. Free with deploy_result_free
+ * before workspace_free.
  *
  * In dry-run the deployed/converged buckets are still filled — they name
  * what the run *would* do, so the caller reports the preview from the
@@ -115,7 +133,6 @@ typedef struct {
 typedef struct {
     ptr_array_t deployed;          /* Files written (state_file_entry_t *) */
     ptr_array_t converged;         /* Directories created/fixed/replaced (state_directory_entry_t *) */
-    ptr_array_t skipped_existing;  /* Files left alone by --skip-existing (state_file_entry_t *) */
     ptr_array_t failed;            /* Fail-stop: the file whose write failed (at most one) */
 
     char *error_message;           /* Error message if deployment failed */
@@ -128,7 +145,8 @@ typedef struct {
  * each row on scope_accepts_profile ∧ scope_accepts_path(kind), then
  * classifying it by deploy's work predicate (missing, or diverged in
  * content / mode / ownership / type / encryption; STALE alone is not
- * work) and by scope_is_excluded(kind).
+ * work) and by the reasons that hold work back: scope_is_excluded(kind),
+ * then skip_existing.
  *
  * Requires a workspace loaded with file AND directory analysis: the plan
  * is derived from the divergence index, and a kind whose analysis did not
@@ -136,12 +154,20 @@ typedef struct {
  *
  * @param ws Workspace with divergence analysis (must not be NULL)
  * @param scope Operation scope (must not be NULL)
+ * @param skip_existing --skip-existing: a file row whose path is already
+ *        occupied is not work. A plan fact, not an execution one — the
+ *        occupancy comes from the workspace's own lstat, so preflight, the
+ *        privilege scan, the prompt and the executor all see one answer.
+ *        Not overridden by --force: --force also governs orphan safety and
+ *        the confirmation prompt, so the combination is meaningful and the
+ *        narrower flag keeps its promise.
  * @param out Plan (must not be NULL; caller frees with deploy_plan_free)
  * @return Error or NULL on success
  */
 error_t *deploy_plan_build(
     const workspace_t *ws,
     const scope_t *scope,
+    bool skip_existing,
     deploy_plan_t **out
 );
 
@@ -155,6 +181,33 @@ void deploy_plan_free(deploy_plan_t *plan);
  */
 static inline bool deploy_plan_is_empty(const deploy_plan_t *plan) {
     return plan->files.pending.count == 0 && plan->directories.pending.count == 0;
+}
+
+/**
+ * How many rows the plan classified — both kinds, every bucket
+ *
+ * Distinct from deploy_plan_is_empty, which counts only *work*: a plan of
+ * nothing but clean rows is empty there and non-zero here. Apply reads
+ * this to tell a path filter that named nothing dotta manages from one
+ * whose paths are all converged or held back already.
+ *
+ * The bucket set lives here so a consumer never has to enumerate it. A row
+ * that is both clean and excluded lands in no bucket at all (see
+ * deploy_partition_t), so a scope of only such rows counts zero.
+ */
+static inline size_t deploy_plan_row_count(const deploy_plan_t *plan) {
+    const deploy_partition_t *kinds[] = { &plan->files, &plan->directories };
+    size_t total = 0;
+
+    for (size_t i = 0; i < sizeof(kinds) / sizeof(kinds[0]); i++) {
+        const deploy_partition_t *part = kinds[i];
+
+        total += part->pending.count;
+        total += part->clean.count;
+        total += part->excluded.count;
+        total += part->skipped_existing.count;
+    }
+    return total;
 }
 
 /**

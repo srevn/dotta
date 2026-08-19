@@ -140,38 +140,60 @@ static bool deploy_needs_work(const workspace_item_t *item) {
 }
 
 /**
+ * Why the plan is holding a row's work back
+ *
+ * At most one reason per row: a row both reasons claim is reported as
+ * excluded, because -e names a path and --skip-existing is a blanket
+ * policy. Encoding the answer rather than the two conditions keeps the
+ * precedence in one place and leaves "both at once" unrepresentable.
+ */
+typedef enum {
+    HOLD_NONE,       /* nothing holds the row back */
+    HOLD_EXCLUDED,   /* an -e pattern matched the row's storage path */
+    HOLD_EXISTING    /* --skip-existing and something occupies the path */
+} hold_reason_t;
+
+/**
  * Route one in-scope row into its partition bucket, or drop it
- * (clean + excluded is neither work nor adoptable).
+ *
+ * A row with no work is adoptable unless -e named it: --exclude means
+ * "leave this path alone entirely", while --skip-existing only means "do
+ * not overwrite", and adoption overwrites nothing. So HOLD_EXISTING on a
+ * clean row (a STALE-only verdict, say) is not a hold at all.
  *
  * @param part Partition for the row's kind (must not be NULL)
  * @param row Borrowed state row (must not be NULL)
  * @param work Deploy's work predicate for the row
- * @param excluded Held back by an -e pattern
+ * @param hold Why the row's work is held back, if it is
  * @return Error or NULL on success
  */
 static error_t *partition_push(
     deploy_partition_t *part,
     const void *row,
     bool work,
-    bool excluded
+    hold_reason_t hold
 ) {
-    ptr_array_t *bucket;
-
-    if (excluded) {
-        if (!work) return NULL;
-        bucket = &part->excluded;
-    } else {
-        bucket = work ? &part->pending : &part->clean;
+    if (!work) {
+        if (hold == HOLD_EXCLUDED) return NULL;   /* neither work nor adoptable */
+        return ptr_array_push(&part->clean, row);
     }
 
-    return ptr_array_push(bucket, row);
+    switch (hold) {
+        case HOLD_NONE:     return ptr_array_push(&part->pending, row);
+        case HOLD_EXCLUDED: return ptr_array_push(&part->excluded, row);
+        case HOLD_EXISTING: return ptr_array_push(&part->skipped_existing, row);
+    }
+
+    /* Unreachable once every enum value is handled */
+    return ERROR(ERR_INTERNAL, "Unknown hold reason %d", (int) hold);
 }
 
 /**
  * Build the deployment plan
  */
 error_t *deploy_plan_build(
-    const workspace_t *ws, const scope_t *scope, deploy_plan_t **out
+    const workspace_t *ws, const scope_t *scope, bool skip_existing,
+    deploy_plan_t **out
 ) {
     CHECK_NULL(ws);
     CHECK_NULL(scope);
@@ -194,12 +216,21 @@ error_t *deploy_plan_build(
             continue;                        /* out of scope: invisible */
         }
 
-        err = partition_push(
-            &plan->files,
-            row,
-            deploy_needs_work(workspace_get_item(ws, row->filesystem_path)),
-            scope_is_excluded(scope, row->storage_path, PATH_KIND_FILE)
-        );
+        const workspace_item_t *item = workspace_get_item(ws, row->filesystem_path);
+
+        /* Occupancy is the workspace's own lstat, not a fresh probe: a row
+         * with work always has an item (deploy_needs_work(NULL) is false),
+         * and lstat truth counts a broken symlink as occupying the path —
+         * which is what the flag says, and what a stat that follows links
+         * could not tell us. */
+        hold_reason_t hold = HOLD_NONE;
+        if (scope_is_excluded(scope, row->storage_path, PATH_KIND_FILE)) {
+            hold = HOLD_EXCLUDED;
+        } else if (skip_existing && item && item->on_filesystem) {
+            hold = HOLD_EXISTING;
+        }
+
+        err = partition_push(&plan->files, row, deploy_needs_work(item), hold);
         if (err) goto cleanup;
     }
 
@@ -212,11 +243,14 @@ error_t *deploy_plan_build(
             continue;
         }
 
+        /* No HOLD_EXISTING arm: --skip-existing does not reach tracked
+         * directories (see deploy_partition_t). */
         err = partition_push(
             &plan->directories,
             row,
             deploy_needs_work(workspace_get_item(ws, row->filesystem_path)),
             scope_is_excluded(scope, row->storage_path, PATH_KIND_DIRECTORY)
+                ? HOLD_EXCLUDED : HOLD_NONE
         );
         if (err) goto cleanup;
     }
@@ -240,9 +274,11 @@ void deploy_plan_free(deploy_plan_t *plan) {
     ptr_array_deinit(&plan->files.pending);
     ptr_array_deinit(&plan->files.clean);
     ptr_array_deinit(&plan->files.excluded);
+    ptr_array_deinit(&plan->files.skipped_existing);
     ptr_array_deinit(&plan->directories.pending);
     ptr_array_deinit(&plan->directories.clean);
     ptr_array_deinit(&plan->directories.excluded);
+    ptr_array_deinit(&plan->directories.skipped_existing);
 
     free(plan);
 }
@@ -1655,22 +1691,13 @@ error_t *deploy_execute(
         );
     }
 
-    /* Every pending row is work by construction (the planner routed it
-     * through deploy_needs_work), so there is no clean-skip here. Clean
+    /* Every pending row is work the plan chose, by construction: the
+     * planner routed it through deploy_needs_work and past every reason to
+     * hold it back, so this loop applies no filter of its own. Clean
      * in-scope rows with deployed_at == 0 are apply's adoption step, which
      * stamps the anchor without deploy_file. */
     for (size_t i = 0; i < files.count; i++) {
         const state_file_entry_t *file = files.entries[i];
-
-        /* --skip-existing: the user explicitly chose not to overwrite */
-        if (opts->skip_existing && fs_exists(file->filesystem_path) && !opts->force) {
-            err = ptr_array_push(&result->skipped_existing, file);
-            if (err) {
-                deploy_result_free(result);
-                return error_wrap(err, "Failed to record skipped file");
-            }
-            continue;
-        }
 
         /* Deploy the file */
         err = deploy_file(repo, cache, ws, file, opts);
@@ -1730,7 +1757,6 @@ void deploy_result_free(deploy_result_t *result) {
 
     ptr_array_deinit(&result->deployed);
     ptr_array_deinit(&result->converged);
-    ptr_array_deinit(&result->skipped_existing);
     ptr_array_deinit(&result->failed);
     free(result->error_message);
     free(result);

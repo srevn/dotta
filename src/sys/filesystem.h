@@ -42,6 +42,16 @@ error_t *fs_read_file(const char *path, buffer_t *out);
  * without the buffer_t abstraction. Useful for writing directly from
  * git blobs or other external data sources.
  *
+ * One strategy, no fallback: the content is written to a temp file in the
+ * target's own directory and rename(2)d over it. So the permission the
+ * write needs is write+search on the *parent*, never on the path — and an
+ * existing target is replaced whole or not at all, whatever it is (a
+ * regular file, or the symlink itself rather than what it points at). A
+ * caller that must predict whether the write can land asks about the
+ * parent and nothing else; core/deploy's preflight is built on exactly
+ * that. Directories are the one thing rename cannot replace: clear them
+ * first.
+ *
  * SECURITY: This function atomically sets permissions using fchmod() after
  * creating the file and setting ownership, ensuring there is no window where
  * the file has incorrect permissions (critical for sensitive files like SSH keys).

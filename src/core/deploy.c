@@ -26,6 +26,29 @@
 #include "utils/privilege.h"
 
 /* ══════════════════════════════════════════════════════════════════
+ * Rows
+ * ══════════════════════════════════════════════════════════════════ */
+
+/**
+ * The mode create_ancestor gives an untracked missing parent, and the
+ * fallback for a tracked directory row state never gave a mode to. One
+ * constant, three readers.
+ */
+#define DEPLOY_DIR_MODE_DEFAULT 0755
+
+/**
+ * The mode a tracked-directory row means
+ *
+ * A row whose mode is zero is a state-database defect, not a request for
+ * mode 0 — resolve_directory_metadata says so out loud on the executor's
+ * path. This is the value alone, so preflight can predict the same mode
+ * without emitting that warning a second time.
+ */
+static mode_t directory_row_mode(const state_directory_entry_t *dir) {
+    return dir->mode ? dir->mode : DEPLOY_DIR_MODE_DEFAULT;
+}
+
+/* ══════════════════════════════════════════════════════════════════
  * Plan
  * ══════════════════════════════════════════════════════════════════ */
 
@@ -289,70 +312,246 @@ static bool nearest_ancestor(char *scratch, size_t *out_slash, struct stat *st) 
  * ══════════════════════════════════════════════════════════════════ */
 
 /**
- * True when `path` is a planned directory (the directory pass acts on it
- * before any file is written, and preflight already judges it on its own).
+ * The pending directory row at `path`, or NULL
+ *
+ * A pending row is one the directory pass acts on before any file is
+ * written: it creates the path, replaces whatever squats it, or fchmods
+ * what is already there. All three end with the row's own mode on disk,
+ * so a pending row — not the current stat — is what the file pass will
+ * meet.
  */
-static bool directory_is_pending(const deploy_plan_t *plan, const char *path) {
+static const state_directory_entry_t *pending_directory(
+    const deploy_plan_t *plan, const char *path
+) {
     state_directories_t dirs = state_directories_view(&plan->directories.pending);
 
     for (size_t i = 0; i < dirs.count; i++) {
         if (strcmp(dirs.entries[i]->filesystem_path, path) == 0) {
-            return true;
+            return dirs.entries[i];
         }
     }
 
-    return false;
+    return NULL;
 }
 
 /**
- * Where will an absent planned path land? Beneath its nearest existing
- * ancestor: a non-directory there blocks the write — unless it is a
- * planned directory, whose own conflict entry already describes the
- * situation (and which --force replaces before anything is written
- * beneath it). An out-of-scope squatter is never touched (Coherent
- * Scope), so the path cannot land: say so now, not at write time. A
- * directory ancestor must be writable.
+ * Will a directory this run gives `mode` to let the write through?
  *
- * @param plan Deployment plan, for the planned-directory test (must not be NULL)
- * @param path Absent planned path (must not be NULL)
+ * The owner triad is the kernel's own rule here, not an approximation of
+ * it. POSIX consults exactly one class and stops, and the identity that
+ * writes is the identity that will own this directory — creating it makes
+ * us the owner, handing it to anyone else needs root. Group and other bits
+ * are unreachable, so a mode like 0570 refuses its own owner and this says
+ * so.
+ *
+ * Root is exempt: mode bits are advisory to the superuser, and a root run
+ * is exactly how a root/ profile's read-only directories reach disk today.
+ * Refusing them would block a run that works.
+ */
+static bool mode_permits(mode_t mode, bool is_parent) {
+    if (privilege_is_elevated()) {
+        return true;
+    }
+
+    /* The parent receives a new entry, so it must be writable as well as
+     * searchable; everything above it is only walked through. */
+    mode_t need = is_parent ? (S_IWUSR | S_IXUSR) : S_IXUSR;
+    return (mode & need) == need;
+}
+
+/**
+ * One component's answer on the way up from a planned path
+ */
+typedef enum {
+    LANDING_CLIMB,            /* permits; its own ancestors still matter */
+    LANDING_SETTLED,          /* permits, and nothing above it is left to ask */
+    LANDING_UNWRITABLE,       /* a directory this run leaves alone refuses us */
+    LANDING_MODE_BLOCKED,     /* a tracked directory's own mode refuses */
+    LANDING_NOT_A_DIRECTORY,  /* an untracked non-directory squats a parent */
+    LANDING_ABSTAIN           /* unstattable for a reason other than absence */
+} landing_verdict_t;
+
+/**
+ * Judge one component of a planned path against the state this run will
+ * have left it in by the time the write arrives.
+ *
+ * Three producers can decide a component's mode, and each is asked only
+ * where it is the authority:
+ *
+ *   this run converges it   the directory pass runs first, and it both
+ *                           creates and fchmods — so a pending row's mode
+ *                           is the mode the write meets, whether the path
+ *                           is there now or not
+ *   this run creates it     an absent component is ensure_parents' to
+ *                           materialize, by create_ancestor's rule: a
+ *                           tracked row's mode from any profile, in scope
+ *                           or not, otherwise DEPLOY_DIR_MODE_DEFAULT
+ *   this run leaves it      access(2) decides, and unlike a mode test it
+ *                           knows about ownership, groups, ACLs and root.
+ *                           Path resolution has already checked the search
+ *                           bit of every component above it, so that one
+ *                           call settles the rest of the walk
+ *
+ * @param out_mode Receives the predicted mode on LANDING_MODE_BLOCKED
+ */
+static landing_verdict_t judge_component(
+    const workspace_t *ws, const deploy_plan_t *plan,
+    const char *component, bool is_parent, mode_t *out_mode
+) {
+    struct stat st;
+
+    /* stat, not lstat: a symlinked configuration directory is a directory
+     * for the purpose of writing beneath it. */
+    if (stat(component, &st) != 0) {
+        if (errno != ENOENT && errno != ENOTDIR) {
+            return LANDING_ABSTAIN;      /* let the write surface the real errno */
+        }
+
+        /* Absent — ENOTDIR meaning a component above it is a non-directory,
+         * which the walk meets on its own way up. */
+        const state_directory_entry_t *dir = workspace_lookup_directory(ws, component);
+        *out_mode = dir ? directory_row_mode(dir) : DEPLOY_DIR_MODE_DEFAULT;
+
+        return mode_permits(*out_mode, is_parent) ? LANDING_CLIMB : LANDING_MODE_BLOCKED;
+    }
+
+    const state_directory_entry_t *pending = pending_directory(plan, component);
+
+    if (!S_ISDIR(st.st_mode)) {
+        if (!pending) {
+            return LANDING_NOT_A_DIRECTORY;
+        }
+
+        /* The directory pass replaces the squatter with a directory of the
+         * row's own mode. Landing that replacement is the row's question,
+         * asked by its own walk — so this one stops rather than report the
+         * same ancestor twice. */
+        *out_mode = directory_row_mode(pending);
+        return mode_permits(*out_mode, is_parent) ? LANDING_SETTLED : LANDING_MODE_BLOCKED;
+    }
+
+    if (pending) {
+        *out_mode = directory_row_mode(pending);
+        return mode_permits(*out_mode, is_parent) ? LANDING_CLIMB : LANDING_MODE_BLOCKED;
+    }
+
+    return access(component, is_parent ? (W_OK | X_OK) : X_OK) == 0
+             ? LANDING_SETTLED
+             : LANDING_UNWRITABLE;
+}
+
+/**
+ * Record a blocked finding — a planned path that neither --force nor
+ * privileges can land, so the entry carries its own reason. Takes
+ * ownership of `entry`; NULL means the formatting itself failed.
+ */
+static error_t *push_blocked(preflight_result_t *result, char *entry) {
+    if (!entry) {
+        return ERROR(ERR_MEMORY, "Failed to format blocked entry");
+    }
+
+    error_t *err = string_array_push_owned(result->blocked, entry);
+    if (err) {
+        free(entry);
+        return err;
+    }
+
+    result->has_errors = true;
+    return NULL;
+}
+
+/**
+ * Can this planned path's write land?
+ *
+ * One question per planned row, present or absent alike. The split this
+ * replaces asked two, and answered the existing case against the wrong
+ * object: nothing deploy writes needs permission on the path itself.
+ * fs_write_file_raw renames a temp file over it, fs_create_symlink unlinks
+ * and re-links it, deploy_directory mkdirs it — every one of those is an
+ * operation on the *parent*. A read-only file, or a symlink pointing into
+ * a read-only store, is no obstacle at all.
+ *
+ * So the walk goes up, not down. The parent must accept a new entry, every
+ * component above it must be traversable, and each is judged against the
+ * state this run will have left it in rather than the state it is in now
+ * (judge_component). It stops at the first component this run does not
+ * touch, because access(2) there has already answered for everything
+ * above.
+ *
+ * That leaves exactly one shape outside its reach: a tracked directory
+ * that loses its search bit somewhere *above* an untouched existing
+ * directory, where the walk has already stopped. A directory recorded
+ * without owner-execute could not have been walked to add anything beneath
+ * it, so no sequence of dotta commands produces that state.
+ *
+ * @param ws Workspace, for the tracked-ancestor lookup (must not be NULL)
+ * @param plan Deployment plan, for the pending-directory test (must not be NULL)
+ * @param path Planned path (must not be NULL)
  * @param result Preflight result to record a finding in (must not be NULL)
  * @return Error or NULL on success (a finding is not an error)
  */
 static error_t *check_landing(
-    const deploy_plan_t *plan, const char *path, preflight_result_t *result
+    const workspace_t *ws, const deploy_plan_t *plan,
+    const char *path, preflight_result_t *result
 ) {
     char *scratch = strdup(path);
     if (!scratch) {
-        return ERROR(ERR_MEMORY, "Failed to copy path for ancestor check");
+        return ERROR(ERR_MEMORY, "Failed to copy path for landing check");
     }
 
     error_t *err = NULL;
-    struct stat st;
-    size_t ancestor_slash;
-    if (!nearest_ancestor(scratch, &ancestor_slash, &st)) {
-        goto cleanup;                             /* let the write surface the errno */
-    }
+    size_t i = strlen(scratch);
+    bool is_parent = true;
 
-    scratch[ancestor_len(ancestor_slash)] = '\0'; /* the ancestor, on its own */
+    for (;;) {
+        /* Step left to the slash ending the next component up */
+        do {
+            if (i == 0) {
+                goto cleanup;                 /* not absolute — cannot happen */
+            }
+        } while (scratch[--i] != '/');
 
-    if (!S_ISDIR(st.st_mode)) {
-        if (!directory_is_pending(plan, scratch)) {
-            char *entry = str_format("%s (%s is not a directory)", path, scratch);
-            if (!entry) {
-                err = ERROR(ERR_MEMORY, "Failed to format blocked entry");
-                goto cleanup;
-            }
-            err = string_array_push_owned(result->blocked, entry);
-            if (err) {
-                free(entry);
-                goto cleanup;
-            }
-            result->has_errors = true;
+        size_t len = ancestor_len(i);
+        char saved = scratch[len];
+        scratch[len] = '\0';                  /* the component, on its own */
+
+        mode_t mode = 0;
+        char *why = NULL;
+        landing_verdict_t verdict =
+            judge_component(ws, plan, scratch, is_parent, &mode);
+
+        switch (verdict) {
+            case LANDING_NOT_A_DIRECTORY:
+                why = str_format("%s (%s is not a directory)", path, scratch);
+                err = push_blocked(result, why);
+                break;
+
+            case LANDING_MODE_BLOCKED:
+                why = str_format(
+                    "%s (tracked directory %s is mode %04o)", path, scratch, mode
+                );
+                err = push_blocked(result, why);
+                break;
+
+            case LANDING_UNWRITABLE:
+                err = string_array_push(result->permission_errors, path);
+                if (!err) {
+                    result->has_errors = true;
+                }
+                break;
+
+            case LANDING_CLIMB:
+            case LANDING_SETTLED:
+            case LANDING_ABSTAIN:
+                break;
         }
-    } else if (access(scratch, W_OK) != 0) {
-        err = string_array_push(result->permission_errors, path);
-        if (err) goto cleanup;
-        result->has_errors = true;
+
+        scratch[len] = saved;
+
+        if (err || verdict != LANDING_CLIMB) {
+            goto cleanup;
+        }
+        is_parent = false;
     }
 
 cleanup:
@@ -423,20 +622,11 @@ error_t *deploy_preflight(
             /* Mode/ownership/encryption divergence is not blocking */
         }
 
-        /* An existing path (any type; stat follows symlinks, so a broken
-         * link counts as absent) must itself be writable; an absent one
-         * must be able to land. */
-        struct stat st;
-        if (stat(path, &st) == 0) {
-            if (access(path, W_OK) != 0) {
-                err = string_array_push(result->permission_errors, path);
-                if (err) goto cleanup;
-                result->has_errors = true;
-            }
-        } else {
-            err = check_landing(plan, path, result);
-            if (err) goto cleanup;
-        }
+        /* Every file row lands through its parent, whichever arm writes it
+         * and whether or not something is already at the path — so one
+         * question covers both, and it is never about the path itself. */
+        err = check_landing(ws, plan, path, result);
+        if (err) goto cleanup;
     }
 
     state_directories_t dirs = state_directories_view(&plan->directories.pending);
@@ -453,11 +643,14 @@ error_t *deploy_preflight(
             result->has_errors = true;
         }
 
-        /* An existing directory is fixed in place and a squatter is the
-         * conflict above; only an absent one must be able to land. */
+        /* A directory already there is fixed in place: fchmod and fchown
+         * ask for ownership, not for a writable parent. Only a create or a
+         * replace lands a new entry — and lstat decides which, exactly as
+         * deploy_directory does, so a symlink to a directory counts as the
+         * squatter it is rather than as the tracked directory. */
         struct stat st;
-        if (stat(path, &st) != 0) {
-            err = check_landing(plan, path, result);
+        if (lstat(path, &st) != 0 || !S_ISDIR(st.st_mode)) {
+            err = check_landing(ws, plan, path, result);
             if (err) goto cleanup;
         }
     }
@@ -629,14 +822,13 @@ static error_t *resolve_directory_metadata(
      *
      * In VWD operations, state should always have mode populated by the
      * manifest layer at write time. If mode==0, this indicates state
-     * corruption or manifest sync failure. Warn and use safe default
-     * (0755 for directories).
+     * corruption or manifest sync failure. directory_row_mode supplies the
+     * safe default; the warning is this path's alone, so preflight can
+     * predict the same value without printing it twice.
      */
-    mode_t mode = dir->mode;
-    if (mode == 0) {
+    mode_t mode = directory_row_mode(dir);
+    if (dir->mode == 0) {
         /* Defensive fallback - indicates unexpected state corruption */
-        mode = 0755;    /* Safe default for directories */
-
         fprintf(
             stderr,
             "Warning: Missing mode in state for directory '%s', using default %04o\n"
@@ -703,7 +895,7 @@ static error_t *create_ancestor(
         );
     }
 
-    return fs_create_dir_with_ownership(path, 0755, uid, gid);
+    return fs_create_dir_with_ownership(path, DEPLOY_DIR_MODE_DEFAULT, uid, gid);
 }
 
 /**

@@ -49,9 +49,9 @@ static void print_preflight_results(
         output_info(out, OUTPUT_NORMAL, "Use --force to overwrite or replace them");
     }
 
-    /* Print blocked paths (a non-directory where a parent must be) */
+    /* Print blocked paths (an ancestry that refuses the planned path) */
     if (result->blocked && result->blocked->count > 0) {
-        output_section(out, OUTPUT_NORMAL, "Blocked (ancestor is not a directory)");
+        output_section(out, OUTPUT_NORMAL, "Blocked (resolve these by hand)");
         for (size_t i = 0; i < result->blocked->count; i++) {
             output_styled(
                 out, OUTPUT_NORMAL, "  {red}✗{reset} %s\n",
@@ -61,7 +61,7 @@ static void print_preflight_results(
         output_newline(out, OUTPUT_NORMAL);
         output_info(
             out, OUTPUT_NORMAL,
-            "Include the ancestor in this apply with --force, or remove it by hand"
+            "Fix the path by hand, or widen the scope so a tracked ancestor is planned"
         );
     }
 

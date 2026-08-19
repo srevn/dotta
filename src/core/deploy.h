@@ -37,19 +37,22 @@ typedef struct scope scope_t;
  *
  * Three findings, three remedies:
  *   conflicts          modified locally, or wrong type at the path — --force
- *   blocked            an absent planned path's nearest existing ancestor
- *                      is not a directory and is not itself planned (a
- *                      planned one is judged by its own conflict entry) —
- *                      widen the scope so the ancestor is planned and
- *                      --force can replace it; an untracked squatter is
- *                      the user's to remove
- *   permission_errors  not writable — privileges
+ *   blocked            a planned path whose own ancestry refuses it, and
+ *                      neither --force nor privileges change that: an
+ *                      untracked non-directory squats an ancestor (remove
+ *                      it, or widen the scope so a tracked ancestor is
+ *                      planned and --force can replace it), or a tracked
+ *                      directory's recorded mode cannot receive what is
+ *                      planned beneath it (widen the recorded mode). Each
+ *                      entry carries its own reason
+ *   permission_errors  the directory the write lands in refuses us —
+ *                      privileges
  */
 typedef struct {
     bool has_errors;                     /* Are there any blocking errors? */
     string_array_t *conflicts;           /* Paths modified locally / wrong type */
-    string_array_t *blocked;             /* "<file> (<ancestor> is not a directory)" */
-    string_array_t *permission_errors;   /* Paths that are not writable */
+    string_array_t *blocked;             /* "<path> (<reason>)" */
+    string_array_t *permission_errors;   /* Paths whose landing directory refuses us */
 } preflight_result_t;
 
 /**
@@ -157,12 +160,17 @@ static inline bool deploy_plan_is_empty(const deploy_plan_t *plan) {
  * Maps the workspace's divergence verdicts for the planned rows to
  * blocking decisions:
  * - Files: content or type divergence blocks unless --force (STALE-only
- *   content divergence is safe to overwrite and never blocks); an
- *   existing path that is not writable blocks.
+ *   content divergence is safe to overwrite and never blocks).
  * - Directories: type divergence (a non-directory at the tracked path)
  *   blocks unless --force.
- * - Both kinds, when absent: the nearest existing ancestor must be a
- *   directory (or a planned one) and writable.
+ * - Both kinds: the write must be able to land. Every arm of the executor
+ *   writes through the *parent* — a temp file renamed over the target, a
+ *   symlink unlinked and re-made, a mkdir — so the path's own permissions
+ *   are never the question, and a directory being fixed in place asks
+ *   nothing at all. Each component of a planned path is judged against the
+ *   state this run will leave it in: the directory pass runs first, so a
+ *   tracked directory's recorded mode, not its current one, is what the
+ *   file pass meets.
  *
  * Only planned rows are consulted — a directory that will not be touched
  * cannot block.

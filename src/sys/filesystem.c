@@ -283,45 +283,6 @@ static error_t *write_and_close_fd(
     return NULL;
 }
 
-/**
- * Helper: Direct (non-atomic) write to target path
- *
- * Fallback for situations where atomic rename is not possible:
- * - Cross-filesystem writes (rename fails with EXDEV)
- * - Temp file creation fails (read-only parent dir edge cases)
- *
- * Opens target with O_TRUNC, destroying existing content before writing.
- * This has a data-loss window if the process is killed during write, but
- * is unavoidable when atomic rename cannot be used.
- */
-static error_t *write_file_direct(
-    const char *path,
-    const unsigned char *data,
-    size_t size,
-    mode_t mode,
-    uid_t uid,
-    gid_t gid
-) {
-    /* SECURITY: Open with restrictive mode 0600 initially
-     *
-     * Rationale: We must set ownership and permissions BEFORE writing any data
-     * to prevent security windows. Using 0600 ensures that even if the process
-     * is killed after open() but before fchmod(), the file remains protected.
-     *
-     * The umask cannot make this less restrictive (can only clear bits, not set them),
-     * so 0600 is safe regardless of the process umask setting.
-     */
-    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
-    if (fd < 0) {
-        return ERROR(
-            ERR_FS, "Failed to open '%s' for writing: %s",
-            path, strerror(errno)
-        );
-    }
-
-    return write_and_close_fd(fd, path, data, size, mode, uid, gid);
-}
-
 error_t *fs_write_file_raw(
     const char *path,
     const unsigned char *data,
@@ -355,29 +316,35 @@ error_t *fs_write_file_raw(
         }
     }
 
-    /* Build temp file path in same directory as target.
-     * Same directory guarantees same filesystem for atomic rename(). */
+    /* Build temp file path in the target's own directory. Two names in one
+     * directory are necessarily on one filesystem, so the rename below can
+     * never fail with EXDEV — there is no cross-device case to fall back
+     * from, and no second write strategy at all. */
+    const char *dir = parent ? parent : ".";
     char tmp_path[PATH_MAX];
-    int n = snprintf(
-        tmp_path, sizeof(tmp_path), "%s/.dotta-tmp-XXXXXX",
-        parent ? parent : "."
-    );
-    free(parent);
+    int n = snprintf(tmp_path, sizeof(tmp_path), "%s/.dotta-tmp-XXXXXX", dir);
+
+    /* Create temp file with restrictive 0600 mode (mkstemp guarantee).
+     *
+     * A failure here is the directory refusing a new entry, and it is
+     * final: the alternative — opening the target itself with O_TRUNC —
+     * destroys the file before a single byte of the replacement is
+     * written, and does so for every mkstemp errno, ENOSPC included. A
+     * write that cannot be atomic is reported, not attempted. */
+    int fd = -1;
+    error_t *tmp_err = NULL;
 
     if (n < 0 || (size_t) n >= sizeof(tmp_path)) {
-        return ERROR(
-            ERR_FS, "Path too long for atomic write of '%s'",
-            path
+        tmp_err = ERROR(ERR_FS, "Path too long for atomic write of '%s'", path);
+    } else if ((fd = mkstemp(tmp_path)) < 0) {
+        tmp_err = ERROR(
+            ERR_FS, "Failed to create a temporary file in '%s' for '%s': %s",
+            dir, path, strerror(errno)
         );
     }
 
-    /* Create temp file with restrictive 0600 mode (mkstemp guarantee).
-     * If creation fails (e.g., parent dir lacks write permission but
-     * existing target file is writable), fall back to direct write. */
-    int fd = mkstemp(tmp_path);
-    if (fd < 0) {
-        return write_file_direct(path, data, size, mode, uid, gid);
-    }
+    free(parent);  /* `dir` borrowed it; nothing below reads either */
+    if (tmp_err) return tmp_err;
 
     /* Write data to temp file with correct ownership and permissions.
      * SECURITY: All metadata is applied via fd operations before data is
@@ -394,11 +361,6 @@ error_t *fs_write_file_raw(
     if (rename(tmp_path, path) < 0) {
         int saved_errno = errno;
         unlink(tmp_path);
-
-        if (saved_errno == EXDEV) {
-            /* Cross-filesystem: atomic rename impossible, fall back */
-            return write_file_direct(path, data, size, mode, uid, gid);
-        }
 
         return ERROR(
             ERR_FS, "Failed to replace '%s': %s",

@@ -211,9 +211,11 @@ static void display_workspace_status(
         }
     }
 
-    /* Tracks whether the Issues section contained released or diverged orphans */
+    /* Tracks whether the Issues section contained released, absent or
+     * diverged orphans */
     bool has_diverged_orphans = false;
     bool has_released_orphans = false;
+    bool has_absent_orphans = false;
 
     /* Show sectioned output for dirty/invalid workspace */
     if (ws_status != WORKSPACE_CLEAN) {
@@ -441,7 +443,12 @@ static void display_workspace_status(
                         if (orphaned[i]->divergence != DIVERGENCE_NONE) {
                             has_diverged_orphans = true;
                         }
-                        if (orphaned[i]->state == WORKSPACE_STATE_RELEASED) {
+                        if (!orphaned[i]->on_filesystem) {
+                            /* Absent wins over released: nothing is left to
+                             * leave on disk, so the "left on disk" legend
+                             * would describe an act that cannot happen. */
+                            has_absent_orphans = true;
+                        } else if (orphaned[i]->state == WORKSPACE_STATE_RELEASED) {
                             has_released_orphans = true;
                         }
                     }
@@ -486,6 +493,20 @@ static void display_workspace_status(
             output_hintline(
                 out, OUTPUT_NORMAL, "  [orphaned] [unverified] "
                 "- Cannot be verified, skipped by 'dotta apply'"
+            );
+        }
+
+        /* An orphan already gone from disk is not blocked either — apply
+         * retires its row and removes nothing */
+        if (has_absent_orphans) {
+            output_newline(out, OUTPUT_NORMAL);
+            output_hint(
+                out, OUTPUT_NORMAL,
+                "Absent orphans are already gone from the filesystem."
+            );
+            output_hintline(
+                out, OUTPUT_NORMAL, "  [absent]                "
+                "- Already gone, its entry reclaimed by 'dotta apply'"
             );
         }
 

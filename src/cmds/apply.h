@@ -19,7 +19,7 @@ typedef struct {
     size_t profile_count;       /* Number of profiles */
     char **files;               /* Specific files to apply (NULL = all files) */
     size_t file_count;          /* Number of files */
-    bool force;                 /* Overwrite modified files */
+    bool force;                 /* Override deploy's conflicts and cleanup's skip reasons */
     bool dry_run;               /* Don't actually deploy */
     bool keep_orphans;          /* Don't remove orphaned files (opt-out from default cleanup) */
     bool verbose;               /* Print verbose output */

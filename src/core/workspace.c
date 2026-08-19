@@ -29,7 +29,6 @@
 #include <unistd.h>
 
 #include "base/arena.h"
-#include "base/array.h"
 #include "base/error.h"
 #include "base/gitignore.h"
 #include "base/hashmap.h"
@@ -540,7 +539,7 @@ static error_t *analyze_file_divergence(
              * inferred from a failure to look, or update commits a
              * deletion that never happened. UNVERIFIED keeps consumers
              * conservative: apply retries the write and surfaces the real
-             * errno, safety's CANNOT_VERIFY gate blocks removal.
+             * errno, cleanup's UNVERIFIED skip blocks removal.
              *
              * Returns here because every phase below needs a valid stat. */
             return workspace_add_diverged(
@@ -1205,10 +1204,10 @@ typedef enum {
  * scope (a disabled profile's rows; an INACTIVE row a re-enable did not
  * re-project) can lose its Git backing — git branch -D, git rm + commit, a
  * rebase, a sync fetch that dropped the path — and only a live look at Git
- * says so. core/safety used to take that look at apply's preflight; status
- * read the same items and could not see it, so it predicted a prune where
- * apply then released. Observed here, every reader of orphan items shares
- * one verdict and safety needs neither repo nor state.
+ * says so. Apply's cleanup preflight used to take that look; status read
+ * the same items and could not see it, so it predicted a prune where apply
+ * then released. Observed here, every reader of orphan items shares one
+ * verdict, and cleanup's verdict phase reads nothing but the item.
  *
  * Answers:
  *   BACKED      the orphan is dotta's to prune, divergence permitting
@@ -1418,7 +1417,13 @@ static error_t *analyze_orphaned_files(workspace_t *ws) {
             /* RELEASED by reconcile: the file was removed from Git
              * externally and the consistency layer recorded it. No
              * divergence computation needed — we're not deleting this file.
-             * It is left on the filesystem and its state entry retires. */
+             * It is left on the filesystem and its state entry retires.
+             *
+             * Presence is not consulted for the state — a row released
+             * while its file is gone still reads RELEASED here — but
+             * on_filesystem travels with the item and cleanup's verdict
+             * phase checks it first, so an absent released row is a
+             * reclaim there. The two orders agree on the outcome. */
             item_state = WORKSPACE_STATE_RELEASED;
 
         } else if (on_filesystem) {
@@ -1446,7 +1451,8 @@ static error_t *analyze_orphaned_files(workspace_t *ws) {
                 /* Divergence for a prunable orphan: disk against the row's
                  * VWD cache.
                  *
-                 * This enables status to predict apply behavior:
+                 * This enables status to predict apply behavior
+                 * (cleanup_skip_reason maps the same bits to the skip):
                  * - DIVERGENCE_NONE -> Clean orphan, apply will prune
                  * - DIVERGENCE_CONTENT/TYPE -> Modified, apply will skip
                  * - DIVERGENCE_MODE/OWNERSHIP -> Metadata changed, apply will skip
@@ -1463,7 +1469,7 @@ static error_t *analyze_orphaned_files(workspace_t *ws) {
                 }
 
                 if (authority == ORPHAN_AUTHORITY_UNVERIFIED) {
-                    /* Git could not vouch for the path: hold the orphan
+                    /* Git could not vouch for the path: skip the orphan
                      * until it can. */
                     divergence |= DIVERGENCE_UNVERIFIED;
                 }
@@ -2642,102 +2648,6 @@ const workspace_item_t *workspace_get_all_diverged(
 }
 
 /**
- * Extract orphaned files and directories from workspace
- *
- * Single-pass extraction: gathers each requested kind into its own
- * borrowed-pointer array. Caller owns returned buffers; items are borrowed
- * from workspace.
- *
- * Scope filtering: When `scope` is non-NULL, orphans that fail the
- * profile or path dimensions are dropped silently; orphans that match
- * those two but are excluded (-e) are counted via `out_excluded_count`
- * and optionally collected into `out_excluded` for per-item reporting.
- */
-error_t *workspace_extract_orphans(
-    const workspace_t *ws,
-    const scope_t *scope,
-    workspace_items_t *out_files,
-    workspace_items_t *out_dirs,
-    workspace_items_t *out_excluded,
-    size_t *out_excluded_count
-) {
-    CHECK_NULL(ws);
-
-    /* Initialize all outputs to safe defaults — first thing, before any
-     * work that can fail, so an early error path leaves callers with
-     * clean zero values rather than uninitialized garbage. */
-    if (out_files) *out_files = (workspace_items_t){ 0 };
-    if (out_dirs) *out_dirs = (workspace_items_t){ 0 };
-    if (out_excluded) *out_excluded = (workspace_items_t){ 0 };
-    if (out_excluded_count) *out_excluded_count = 0;
-
-    /* Early exit if nothing requested */
-    bool want_files = (out_files != NULL);
-    bool want_dirs = (out_dirs != NULL);
-    bool want_excluded = (out_excluded != NULL);
-    if (!want_files && !want_dirs && !want_excluded) return NULL;
-
-    ptr_array_t files PTR_ARRAY_AUTO = { 0 };
-    ptr_array_t dirs PTR_ARRAY_AUTO = { 0 };
-    ptr_array_t excluded_items PTR_ARRAY_AUTO = { 0 };
-    size_t excluded = 0;
-
-    for (size_t i = 0; i < ws->diverged_count; i++) {
-        const workspace_item_t *item = &ws->diverged[i];
-
-        if (item->state != WORKSPACE_STATE_ORPHANED &&
-            item->state != WORKSPACE_STATE_RELEASED) {
-            continue;
-        }
-
-        if (scope) {
-            /* Profile / path dimensions: silent rejection — the orphan
-             * is outside the user's declared operation scope. */
-            if (!scope_accepts_profile(scope, item->profile) ||
-                !scope_accepts_path(scope, item->storage_path, item->item_kind)) {
-                continue;
-            }
-            /* Exclude dimension: count, and optionally collect for
-             * per-item reporting by the caller. */
-            if (scope_is_excluded(scope, item->storage_path, item->item_kind)) {
-                excluded++;
-                if (want_excluded) {
-                    RETURN_IF_ERROR(ptr_array_push(&excluded_items, item));
-                }
-                continue;
-            }
-        }
-
-        if (item->item_kind == PATH_KIND_FILE) {
-            if (want_files) RETURN_IF_ERROR(ptr_array_push(&files, item));
-        } else {
-            if (want_dirs) RETURN_IF_ERROR(ptr_array_push(&dirs, item));
-        }
-    }
-
-    if (want_files) {
-        out_files->entries = (const workspace_item_t *const *)
-            ptr_array_steal(&files, &out_files->count);
-    }
-    if (want_dirs) {
-        out_dirs->entries = (const workspace_item_t *const *)
-            ptr_array_steal(&dirs, &out_dirs->count);
-    }
-    if (want_excluded) {
-        out_excluded->entries = (const workspace_item_t *const *)
-            ptr_array_steal(&excluded_items, &out_excluded->count);
-
-        if (out_excluded_count) {
-            *out_excluded_count = out_excluded->count;
-        }
-    } else if (out_excluded_count) {
-        *out_excluded_count = excluded;
-    }
-
-    return NULL;
-}
-
-/**
  * Get workspace item by filesystem path
  *
  * O(1) lookup via diverged_index hashmap. Returns NULL if item has no
@@ -2988,9 +2898,22 @@ bool workspace_item_extract_display_info(
             }
 
             /* Determine color and secondary tags based on divergence */
-            if (item->divergence & DIVERGENCE_UNVERIFIED) {
+            if (!item->on_filesystem) {
+                /* Gone from disk already: apply reclaims the row and
+                 * removes nothing. Cyan, the receipt's colour for a
+                 * reclaim — no action on the user's files is coming.
+                 * Checked before the divergence arms because an absent
+                 * orphan carries DIVERGENCE_NONE by construction, so they
+                 * would only report it clean and promise a prune. */
+                if (tag_count < WORKSPACE_ITEM_MAX_DISPLAY_TAGS) {
+                    tags_out[tag_count++] = "absent";
+                }
+                *color_out = OUTPUT_COLOR_CYAN;
+
+            } else if (item->divergence & DIVERGENCE_UNVERIFIED) {
                 /* Cannot verify state - could be large file, missing key, I/O error, etc.
-                 * Conservative: Treat as modified (apply will skip). */
+                 * Conservative: apply skips it (CLEANUP_SKIP_UNVERIFIED,
+                 * ranked first there as it is here — one item, one name). */
                 if (tag_count < WORKSPACE_ITEM_MAX_DISPLAY_TAGS) {
                     tags_out[tag_count++] = "unverified";
                 }
@@ -2998,7 +2921,7 @@ bool workspace_item_extract_display_info(
 
             } else if (item->divergence & (DIVERGENCE_CONTENT | DIVERGENCE_TYPE)) {
                 /* Content or type divergence - blocking issue
-                 * Apply will detect this via safety check and skip removal. */
+                 * Apply skips it (cleanup_skip_reason: MODIFIED / TYPE_CHANGED). */
                 if (tag_count < WORKSPACE_ITEM_MAX_DISPLAY_TAGS) {
                     tags_out[tag_count++] = "modified";
                 }
@@ -3007,7 +2930,7 @@ bool workspace_item_extract_display_info(
             } else if (item->divergence & (DIVERGENCE_MODE | DIVERGENCE_OWNERSHIP)) {
                 /* Metadata divergence only - warning level
                  * File content matches but permissions/ownership changed.
-                 * Apply will skip (safety check considers this a modification). */
+                 * Apply skips it (cleanup_skip_reason: MODE_CHANGED). */
                 if (item->divergence & DIVERGENCE_MODE) {
                     if (tag_count < WORKSPACE_ITEM_MAX_DISPLAY_TAGS) {
                         tags_out[tag_count++] = "mode";
@@ -3046,6 +2969,17 @@ bool workspace_item_extract_display_info(
                 tags_out[tag_count++] = "released";
             }
             *color_out = OUTPUT_COLOR_MAGENTA;
+
+            if (!item->on_filesystem) {
+                /* Nothing is left to leave on disk: apply retires the row
+                 * and reports a reclaim, so the display says so too. The
+                 * ORPHANED arm reads the same flag for the same reason. */
+                if (tag_count < WORKSPACE_ITEM_MAX_DISPLAY_TAGS) {
+                    tags_out[tag_count++] = "absent";
+                }
+                *color_out = OUTPUT_COLOR_CYAN;
+            }
+
             snprintf(metadata_buf, metadata_size, "from %s", item->profile);
             break;
 

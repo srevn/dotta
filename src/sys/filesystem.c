@@ -924,17 +924,20 @@ error_t *fs_remove_empty_dir(const char *path) {
     string_array_t *entries = NULL;
     RETURN_IF_ERROR(fs_list_dir(path, &entries));
 
+    /* Two passes: refuse before touching anything. A directory refused
+     * here keeps every entry it had, metadata included — the caller
+     * reports "not empty", and nothing of the user's has moved. */
     error_t *err = NULL;
-    for (size_t i = 0; i < entries->count && !err; i++) {
-        const char *name = entries->items[i];
-
-        if (!entry_is_removable_metadata(path, name)) {
+    for (size_t i = 0; i < entries->count; i++) {
+        if (!entry_is_removable_metadata(path, entries->items[i])) {
             err = ERROR(ERR_CONFLICT, "Directory '%s' is not empty", path);
             break;
         }
+    }
 
+    for (size_t i = 0; i < entries->count && !err; i++) {
         char *child = NULL;
-        err = fs_path_join(path, name, &child);
+        err = fs_path_join(path, entries->items[i], &child);
         if (!err) {
             err = fs_remove_file(child);
             free(child);

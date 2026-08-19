@@ -65,8 +65,7 @@ typedef enum {
  * Convert state file type to git filemode
  *
  * Maps the internal state file type enum to the corresponding git filemode.
- * This is the canonical conversion used by safety checks and workspace
- * divergence analysis.
+ * This is the canonical conversion used by workspace divergence analysis.
  *
  * Mapping:
  *   STATE_FILE_SYMLINK    -> GIT_FILEMODE_LINK (0120000)

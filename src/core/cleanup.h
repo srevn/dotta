@@ -1,50 +1,55 @@
 /**
- * cleanup.h - Orphaned file and directory pruning
+ * cleanup.h - Orphan pruning: plan / preflight / execute
  *
- * This module handles pruning of orphaned files and directories during profile application.
- * Orphan detection is performed by the workspace module; this module focuses on safe pruning.
+ *   cleanup_plan_build   — decide *which* orphans this run may touch, from
+ *                          (workspace, scope), once
+ *   cleanup_preflight    — decide *what happens* to each of them: the verdicts
+ *   cleanup_execute      — carry the verdicts out and report what happened
  *
- * Responsibilities:
- * 1. Prunes orphaned files (validated by safety module)
- * 2. Prunes orphaned directories (deepest-first, once found empty)
- * 3. Provides preflight analysis (safety violations, prune preview)
- * 4. Reports detailed cleanup results
+ * Same shape as core/deploy. Preview, privilege check, prompt, execution
+ * and apply's record step all read the one plan and the one set of
+ * verdicts; execution re-decides nothing and applies no filter of its own.
  *
- * Design Principles:
- * - Separation: Cleanup is decoupled from orphan detection (workspace responsibility)
- * - Safety: Two authorities - the safety module for files, the emptiness
- *   predicate and its removal mechanism for directories
- * - Performance: Accepts pre-detected orphans from workspace (zero redundancy)
- * - Reporting: Rich result structure for detailed feedback
+ * Why the verdicts are a phase of their own and not part of the plan: the
+ * plan is read before apply's privilege check (the root/ labels come from
+ * it), and the directory verdicts need a look at the disk — stat, opendir
+ * — taken with the identity the run will act under. Plan → privileges →
+ * verdicts is the order the privilege boundary forces.
  *
- * Orphan Sources:
- * - Workspace module detects ALL orphans during workspace_load()
- * - Orphans extracted via inline filtering (state == WORKSPACE_STATE_ORPHANED)
- * - Passed to cleanup module as workspace_item_t** arrays
- * - See workspace.h for orphan detection algorithm details
+ * The verdicts are a function of the workspace's load-time observation —
+ * presence, divergence, Git authority — of the plan, and of --force. A
+ * confirmation prompt may sit between preflight and execute; nothing here
+ * re-observes across it, and nothing pretends to: execute reports what it
+ * finds (a path gone by then, a directory that gained an entry) and
+ * re-decides nothing. The same stance as core/deploy.
  *
  * One producer per fact:
- * - Which present files go: safety_check_orphans' verdicts, partitioned
- *   once by cleanup_preflight_check into prunable_files + violations
- * - What stands at an orphaned directory's path: one type probe, shared by
- *   the preview and the prune so they cannot label it differently
- * - Whether a directory ends up empty: fs_is_directory_empty_except, one
- *   walk with a hole — the preview passes the run's own removals, the
- *   prune passes nothing because by then they have happened — and
- *   fs_remove_empty_dir, which removes exactly what that walk looks past
+ * - what becomes of a present orphaned file: cleanup_preflight, from the
+ *   item — RELEASED ⇒ released (left on disk, row retires — never pruned,
+ *   --force included: dotta removes what it deployed and Git still backs,
+ *   and lets go of what Git lost); cleanup_skip_reason ⇒ skipped unless
+ *   --force; else prunable
+ * - what stands at an orphaned directory's path: one type probe, shared by
+ *   preflight and execute so they cannot label it differently
+ * - whether a directory ends up empty: fs_is_directory_empty_except with
+ *   this run's own removals as the hole (preflight) and fs_remove_empty_dir,
+ *   which removes exactly what that walk looks past and refuses anything
+ *   else before touching it (execute)
  *
- * Directory pruning is one deepest-first pass. Children are decided before
- * parents, so a parent emptied by its children needs no second look and
- * the preview can predict the same outcome the prune arrives at.
+ * Directory pruning is one deepest-first pass, ordered by the plan.
+ * Children are decided before parents, so a parent emptied by its children
+ * needs no second look and the preview predicts the outcome the prune
+ * arrives at.
  *
- * Optimization Strategy:
- * - Zero redundancy: Orphans detected once by workspace, reused here
- * - Trust workspace: Reuses pre-computed divergence (no redundant verification)
+ * Buckets hold borrowed workspace_item_t pointers (workspace lifetime —
+ * ws->diverged does not grow after load); project them with
+ * workspace_items_view. Free plan, verdicts and result BEFORE
+ * workspace_free.
  *
- * Integration Points:
- * - workspace.h: Provides orphan detection and divergence analysis
- * - safety.h: Validates file removal (uncommitted change detection)
- * - filesystem.h: Low-level file/directory operations
+ * Integration:
+ * - workspace.h: orphan detection, Git authority, divergence
+ * - scope.h:     the three filter dimensions
+ * - filesystem.h: the directory probe, the emptiness walk, the removals
  */
 
 #ifndef DOTTA_CLEANUP_H
@@ -52,43 +57,131 @@
 
 #include <stdbool.h>
 
-#include "core/safety.h"
 #include "core/state.h"
 #include "core/workspace.h"
 
+/* ── Plan ─────────────────────────────────────────────────────────── */
+
 /**
- * Cleanup operation options
+ * Cleanup plan — cleanup's reading of the orphan set under the scope
  *
- * Configures cleanup behavior and provides pre-loaded data to avoid duplication.
- * No presentation concerns, pure business logic flags.
+ * Every ORPHANED / RELEASED item that passes the scope's profile and path
+ * dimensions lands in exactly one bucket; out-of-scope items are
+ * invisible. The exclude dimension does not drop an item, it spares it:
+ * `excluded` is reported ("Skipped N paths (--exclude)") and never
+ * touched.
+ *
+ * `directories` is sorted deepest-first here, once, so preflight predicts
+ * and execute prunes in the same order. Free with cleanup_plan_free BEFORE
+ * workspace_free.
  */
 typedef struct {
-    /**
-     * Pre-computed file orphan slice from workspace
-     *
-     * Must be extracted by caller via workspace_extract_orphans(). Treated
-     * as borrowed reference (cleanup does not free).
-     *
-     * Rationale: Workspace already detected orphans during workspace_load().
-     * Eliminates redundant orphan detection in cleanup module. Empty slice
-     * (count == 0) is valid.
-     */
-    workspace_items_t orphaned_files;
+    ptr_array_t files;         /* ORPHANED / RELEASED file items in scope */
+    ptr_array_t directories;   /* ORPHANED directory items in scope, deepest first (prune order) */
+    ptr_array_t excluded;      /* Both kinds, spared by -e — reported, never touched */
+} cleanup_plan_t;
+
+/**
+ * Build the cleanup plan
+ *
+ * Walks the workspace's diverged items once, keeping ORPHANED and RELEASED
+ * ones, gating each on scope_accepts_profile ∧ scope_accepts_path(kind),
+ * then routing by scope_is_excluded(kind) and item_kind.
+ *
+ * @param ws Workspace loaded with orphan analysis (must not be NULL)
+ * @param scope Operation scope (must not be NULL)
+ * @param keep_orphans --keep-orphans: plan nothing. An empty plan is the
+ *        answer every later stage reads — no stage re-encodes the flag.
+ * @param out Plan (must not be NULL; caller frees with cleanup_plan_free)
+ * @return Error or NULL on success
+ */
+error_t *cleanup_plan_build(
+    const workspace_t *ws,
+    const scope_t *scope,
+    bool keep_orphans,
+    cleanup_plan_t **out
+);
+
+/**
+ * Free a plan — bucket buffers only; the items belong to the workspace.
+ * No-op on NULL.
+ */
+void cleanup_plan_free(cleanup_plan_t *plan);
+
+/**
+ * True when the plan carries nothing this run may act on
+ *
+ * Excluded items are not work: they are reported and left alone.
+ */
+static inline bool cleanup_plan_is_empty(const cleanup_plan_t *plan) {
+    return plan->files.count == 0 && plan->directories.count == 0;
+}
+
+/* ── Verdicts ─────────────────────────────────────────────────────── */
+
+/**
+ * Why a present orphaned file is skipped rather than pruned
+ *
+ * Pure in the item's divergence bits. Values are listed in precedence
+ * order — cleanup_skip_reason answers the first that applies. Files only:
+ * a directory is skipped for one reason — something is left in it — and
+ * needs no table.
+ */
+typedef enum {
+    CLEANUP_SKIP_NONE = 0,       /* Not skipped — nothing stands in the way of the prune */
+    CLEANUP_SKIP_UNVERIFIED,     /* The workspace could not settle it — see cleanup_skip_reason */
+    CLEANUP_SKIP_MODIFIED,       /* Content differs from what dotta deployed */
+    CLEANUP_SKIP_TYPE_CHANGED,   /* File ↔ symlink ↔ directory */
+    CLEANUP_SKIP_MODE_CHANGED    /* Mode or ownership differs */
+} cleanup_skip_reason_t;
+
+/**
+ * Map an orphaned file's divergence to the reason it is skipped
+ *
+ * First match wins:
+ *   DIVERGENCE_UNVERIFIED          UNVERIFIED   — a bit the workspace could
+ *                                  not settle outranks the ones it could:
+ *                                  Git could not vouch for the path, the
+ *                                  content compare failed (encrypted file
+ *                                  over 100MB — AEAD needs the whole
+ *                                  ciphertext, so this is OOM protection;
+ *                                  blob corruption; I/O), or the file is
+ *                                  present but unstattable (EACCES, EIO).
+ *                                  status ranks its [unverified] tag the
+ *                                  same way, so one item has one name in
+ *                                  both places.
+ *   DIVERGENCE_CONTENT             MODIFIED
+ *   DIVERGENCE_TYPE                TYPE_CHANGED
+ *   DIVERGENCE_MODE / OWNERSHIP    MODE_CHANGED
+ *   ENCRYPTION / STALE only        NONE — policy mismatch / VWD cache
+ *                                  refreshed are not user changes
+ *   DIVERGENCE_NONE                NONE — safe to prune
+ *   an unnamed divergence bit      UNVERIFIED — blocks until this table
+ *                                  names it (defensive default)
+ *
+ * Non-encrypted files are verified by streaming OID hash (git_odb_hashfile)
+ * at any size, so they should never reach UNVERIFIED from the compare.
+ *
+ * Called twice per skipped file — by the verdict phase to bucket it and by
+ * the preview to name its reason — which is one producer called twice, not
+ * two producers.
+ *
+ * @param item Orphaned file item with the workspace's divergence verdict
+ * @return The first reason that applies, or CLEANUP_SKIP_NONE
+ */
+cleanup_skip_reason_t cleanup_skip_reason(const workspace_item_t *item);
+
+/**
+ * Cleanup options — what the caller knows and the module cannot
+ *
+ * Read by cleanup_preflight only: the verdicts already encode both fields
+ * by the time execute runs.
+ */
+typedef struct {
+    bool force;     /* Prune what would be skipped too; never a released file (see header) */
 
     /**
-     * Pre-computed directory orphan slice from workspace
-     *
-     * Must be extracted by caller via workspace_extract_orphans(). Treated
-     * as borrowed reference (cleanup does not free).
-     *
-     * Rationale: Workspace already detected directory orphans during
-     * workspace_load(). Eliminates redundant orphan detection in cleanup
-     * module. Empty slice (count == 0) is valid.
-     */
-    workspace_items_t orphaned_directories;
-
-    /**
-     * Paths this run's deployment will materialize (preflight only)
+     * Paths this run's deployment will materialize
      *
      * An orphaned directory is prunable only if nothing is left in it, and
      * a run that deploys into one leaves something. Deployment runs before
@@ -97,260 +190,137 @@ typedef struct {
      * without them it would promise a prune the run then refuses.
      *
      * Borrowed slices, typically the deployment plan's pending buckets;
-     * empty is valid and means "nothing is deployed". Read by
-     * cleanup_preflight_check only: cleanup_execute reads the disk that
-     * deployment has already changed.
+     * empty is valid and means "nothing is deployed".
      */
     state_files_t deploying_files;
     state_directories_t deploying_directories;
-
-    /**
-     * Pre-computed safety violations from preflight check
-     *
-     * Semantic contract:
-     * - Non-NULL: Preflight was performed, trust results completely
-     *   - count > 0: Files in violations list will be skipped
-     *   - count == 0: Preflight verified all files safe, none skipped
-     * - NULL: No preflight performed (or invalidated), run fresh safety check
-     *   - Behavior depends on skip_safety_check flag
-     *
-     * This avoids re-running the safety check that preflight already ran.
-     *
-     * TOCTOU — what the NULL arm does NOT buy:
-     * Preflight runs before the confirmation prompt, so arbitrary time can
-     * pass before execution and a file called safe may have been edited in
-     * between. The NULL arm exists to answer that, and it cannot: safety
-     * decides from the workspace items it is handed, which were observed
-     * at load — presence, divergence and Git authority alike. Re-running it
-     * re-maps the same observations to the same verdicts and sees nothing
-     * that happened while the prompt waited. Its one effect today is a
-     * second safety_result_t in the cleanup result, which apply prints
-     * after already printing preflight's.
-     *
-     * Both arms therefore act on load-time observations, exactly as
-     * core/deploy does, and neither re-observes across the prompt. A guard
-     * that genuinely closes the window has to look at the filesystem after
-     * consent, for both executors; until one exists this field is a switch
-     * between two identical answers and should be deleted, not trusted.
-     *
-     * Memory: Borrowed reference. Caller owns and frees safety_result_t.
-     */
-    const safety_result_t *preflight_violations;
-
-    /* Control flags */
-    bool dry_run;                           /* Don't actually remove anything */
-    bool force;                             /* Skip safety checks (dangerous) */
-    bool skip_safety_check;                 /* Skip safety when preflight_violations is NULL */
 } cleanup_options_t;
 
 /**
- * Cleanup operation result
+ * Cleanup verdicts — what cleanup_execute will do, decided once
  *
- * Comprehensive statistics and details about cleanup operation.
- * Enables caller to present detailed feedback to user.
+ * Every planned item lands in exactly one bucket:
+ *   plan->files       = prunable_files ∪ skipped_files ∪ released_files ∪ absent_files
+ *   plan->directories = prunable_dirs  ∪ skipped_dirs  ∪ absent_dirs
+ *
+ * Counts are bucket sizes: nothing downstream re-folds an array to recover
+ * a split this phase already took. The preview and the confirmation prompt
+ * both read these and neither recomputes a verdict of its own, so what the
+ * user consents to is what the run does. A vanished or refused item is
+ * reported by execute as what it found, never re-decided.
+ *
+ * Every bucket is always initialized — an empty answer is a valid answer,
+ * and no consumer needs a NULL guard.
+ *
+ * Directories are predicted against this same run's own effects: a
+ * directory is prunable iff everything in it is OS metadata, a file in
+ * prunable_files, or an orphaned directory beneath it that is itself
+ * prunable — and nothing this run deploys lands inside it. That is what
+ * the prune arrives at by acting, read off the plan here in one
+ * deepest-first pass, so the preview can say "2 will be pruned" about
+ * directories that still hold the files this run prunes: the ordinary
+ * shape of disabling a profile.
+ *
+ * Exact except where the world moves underneath it — a change made while
+ * the confirmation prompt waits, an I/O failure — and the run reports
+ * whatever it could not do. prunable_dirs is in prune order, deepest
+ * first.
  */
 typedef struct {
-    /* Safety violation details (owned)
-     *
-     * Only populated when cleanup_execute runs its own safety check
-     * (opts->preflight_violations was NULL). When preflight violations
-     * are reused, this stays NULL — the caller already has the data.
-     *
-     * For skip tracking, use the skipped_files array (authoritative source).
-     */
-    safety_result_t *safety_violations;
+    /* Files */
+    ptr_array_t prunable_files;    /* Present, no reason to skip it → unlinked */
+    ptr_array_t skipped_files;     /* Present, a skip reason stands → left alone (unless --force) */
+    ptr_array_t released_files;    /* Present, Git no longer backs it → left on disk, row retires */
+    ptr_array_t absent_files;      /* Not on disk at load → row retires, no filesystem effect */
 
-    /* File path lists (count via arr->count; execution-only, not populated in dry-run)
-     *
-     * pruned_files guarantees physical removal occurred. reclaimed_files
-     * were already absent from the filesystem — no removal happened or was
-     * needed; only the state row is retired. Callers drive state database
-     * cleanup from both buckets but must report them distinctly (a
-     * decision is not an effect). For dry-run preview of what would be
-     * pruned, use cleanup_preflight_check instead.
-     */
-    string_array_t *pruned_files;        /* Pruned — gone from the filesystem */
-    string_array_t *reclaimed_files;     /* Already absent — state retired, no filesystem effect */
-    string_array_t *skipped_files;       /* Skipped — a safety violation stands */
-    string_array_t *failed_files;        /* Failed — the removal errored */
-    string_array_t *released_files;      /* Released — left on disk, state retired */
-
-    /* Directory path lists (execution-only, not populated in dry-run) */
-    string_array_t *pruned_dirs;         /* Pruned — gone from the filesystem */
-    string_array_t *reclaimed_dirs;      /* Already absent — state retired, no filesystem effect */
-    string_array_t *skipped_dirs;        /* Skipped — occupied, a symlink, or not a directory */
-    string_array_t *failed_dirs;         /* Failed — the removal errored */
-} cleanup_result_t;
-
-/**
- * Cleanup preflight result — what cleanup_execute will do, decided once
- *
- * Present-on-filesystem orphans, partitioned by verdict. The preview and
- * the confirmation prompt both read these arrays and neither recomputes a
- * verdict of its own, so what the user consents to is what the run does.
- * An already-absent orphan is a pure state reclaim with no filesystem
- * effect and appears in none of them.
- *
- * Every array is always allocated — an empty array is a valid answer, and
- * the summary flags this replaces existed only as NULL guards.
- */
-typedef struct {
-    /* Files — safety's verdict, partitioned once.
-     *   prunable_files ∪ safety_violations = present file orphans
-     * (safety_check_orphans skips orphans that are not on the filesystem,
-     * so no violation names an absent path). The violations carry their
-     * own blocking/released split; read those counts off the safety
-     * result rather than folding the array again. */
-    string_array_t *prunable_files;     /* Will be pruned */
-    safety_result_t *safety_violations; /* Never NULL; empty under force */
-
-    /* Directories — what the prune will reach, predicted against this same
-     * run's own effects. A directory is prunable iff everything in it is
-     * OS metadata, a file in prunable_files, or an orphaned directory
-     * beneath it that is itself prunable — and nothing this run deploys
-     * lands inside it. That is what prune_orphaned_directories arrives at
-     * by acting, read off the plan here in one deepest-first pass, so the
-     * preview can say "2 will be pruned" about directories that still hold
-     * the files this run prunes: the ordinary shape of disabling a
-     * profile.
-     *
-     * Exact except where the world moves underneath it — a change made
-     * while the confirmation prompt waits, or an I/O failure — and the run
-     * reports whatever it could not do. Listed in prune order, deepest
-     * first. */
-    string_array_t *prunable_dirs;      /* Will be pruned */
-    string_array_t *skipped_dirs;       /* Holding something else, or not a directory */
+    /* Directories */
+    ptr_array_t prunable_dirs;     /* Present, empty after the run's removals, nothing deploys in */
+    ptr_array_t skipped_dirs;      /* Present; keeps something the run leaves, or not a directory */
+    ptr_array_t absent_dirs;       /* Not there → row retires */
 } cleanup_preflight_result_t;
 
 /**
- * Run cleanup preflight checks
+ * Decide the verdicts
  *
- * Analyzes what cleanup_execute() will do WITHOUT modifying the filesystem.
- * This enables informed user consent before destructive operations by revealing
- * the full impact of orphan cleanup.
+ * Files from the items alone — one test per item, in the order presence →
+ * authority → skip reason; O(n) in the file count, no syscalls, because those
+ * observations were made at workspace load. Directories from one probe and
+ * one readdir each, against the files above, the directories already
+ * decided beneath them, and opts->deploying_*.
  *
- * Purpose:
- * The apply command uses this to show users BEFORE confirmation:
- * - How many orphaned files will be pruned
- * - Safety violations (uncommitted changes)
- * - Which orphaned directories will be pruned, and which will be skipped
+ * READ-ONLY: modifies neither the filesystem, the state database nor Git.
  *
- * Architecture:
- * Orphans are PRE-DETECTED by workspace module and passed via opts:
- * - opts->orphaned_files: workspace_items_t slice from workspace
- * - opts->orphaned_directories: workspace_items_t slice from workspace
- *
- * This function focuses on safety validation and preview, not detection.
- *
- * Algorithm:
- * 1. Use pre-detected orphans from opts (NO orphan detection here)
- * 2. Run safety checks on orphaned files (force yields an empty verdict)
- * 3. Partition the present file orphans into prunable + violations
- * 4. Walk the orphaned directories deepest-first, deciding each against
- *    the prunes above and the deployments in opts->deploying_*
- *
- * Performance:
- * - Complexity: O(N) where N=orphan count, plus one readdir per present
- *   orphaned directory
- * - Zero redundancy: orphans detected once by workspace
- *
- * Edge Cases:
- * - No orphans: Returns an empty, fully allocated result
- * - Safety violations: Returned in result, blocking (unless force=true)
- * - Empty orphan arrays: Valid, returns an empty result
- *
- * Integration:
- * This function is READ-ONLY and does NOT modify:
- * - Filesystem (no files removed)
- * - State database (no changes)
- * - Git repository (no commits)
- *
- * The caller (apply command) displays results and blocks on violations.
- *
- * @param opts Cleanup options with PRE-DETECTED orphans (must not be NULL)
- * @param out_result Preflight result (must not be NULL, caller must free)
- * @return Error or NULL on success (check result for details)
+ * @param plan Cleanup plan (must not be NULL)
+ * @param opts Cleanup options (must not be NULL)
+ * @param out Verdicts (must not be NULL; caller frees with
+ *        cleanup_preflight_result_free)
+ * @return Error on allocation failure, NULL otherwise
  */
-error_t *cleanup_preflight_check(
+error_t *cleanup_preflight(
+    const cleanup_plan_t *plan,
     const cleanup_options_t *opts,
-    cleanup_preflight_result_t **out_result
+    cleanup_preflight_result_t **out
 );
 
+/** Free verdicts. No-op on NULL. Call before workspace_free. */
+void cleanup_preflight_result_free(cleanup_preflight_result_t *verdicts);
+
+/* ── Outcomes ─────────────────────────────────────────────────────── */
+
 /**
- * Execute cleanup operations
+ * Cleanup result — the run's receipt, by outcome
  *
- * Prunes orphaned files and the directories they emptied, using
- * pre-detected orphans from workspace module. This function:
+ * pruned_* guarantee a filesystem removal happened. reclaimed_* were
+ * absent — at load, or by the time the run looked — so no removal happened
+ * or was needed and only the row retires; callers report the two
+ * distinctly, because a decision is not an effect. skipped_*,
+ * released_files and the absent verdicts are confirmed here by passing
+ * them through, never re-decided: the result is the one object apply's
+ * record step reads, so "what ran → which rows retire" is read in one
+ * place.
  *
- * 1. Uses pre-detected orphans from opts (NO detection here)
- * 2. Validates safety using safety module (unless force=true)
- * 3. Prunes the orphaned files safety cleared
- * 4. Prunes the orphaned directories left empty, deepest first
+ * Every planned item appears in exactly one bucket, so the receipt
+ * accounts for the whole plan:
+ *   plan->files       = pruned_files ∪ reclaimed_files ∪ released_files
+ *                       ∪ skipped_files ∪ failed_files
+ *   plan->directories = pruned_dirs ∪ reclaimed_dirs ∪ skipped_dirs
+ *                       ∪ failed_dirs
  *
- * Architecture:
- * Orphans are PRE-DETECTED by workspace module and passed via opts:
- * - opts->orphaned_files: workspace_items_t slice
- * - opts->orphaned_directories: workspace_items_t slice
+ * Rows that retire: pruned_files, reclaimed_files, released_files,
+ * pruned_dirs, reclaimed_dirs. Rows that stay: skipped_*, failed_*.
+ */
+typedef struct {
+    ptr_array_t pruned_files;      /* Unlinked */
+    ptr_array_t reclaimed_files;   /* Absent at load, or by the time the run looked; row retires */
+    ptr_array_t released_files;    /* Left on disk; row retires */
+    ptr_array_t skipped_files;     /* Skipped at preflight (cleanup_skip_reason); left alone */
+    ptr_array_t failed_files;      /* The removal errored */
+    ptr_array_t pruned_dirs;       /* Removed */
+    ptr_array_t reclaimed_dirs;    /* Absent; row retires */
+    ptr_array_t skipped_dirs;      /* Predicted occupied, not a directory, or refused on removal */
+    ptr_array_t failed_dirs;       /* The removal errored */
+} cleanup_result_t;
+
+/**
+ * Carry the verdicts out
  *
- * This function focuses on pruning, not detection.
+ * Pure filesystem: no repo, no state — the caller retires rows from the
+ * result. Files first (every prunable file), then directories in the
+ * verdicts' prune order. Individual removal failures are non-fatal and
+ * land in failed_*; the only fatal error is an allocation failure, and
+ * then the partial result is returned in *out alongside the error so the
+ * caller records what did happen — as it does for deploy.
  *
- * State Management:
- * This function ONLY modifies the filesystem. It does NOT modify state.
- * The caller (typically apply command) must update state separately to
- * reflect the new filesystem reality.
- *
- * Safety Integration:
- * Before pruning orphaned files, calls safety_check_orphans() to detect
- * uncommitted changes. Files with violations are:
- * - Added to result->skipped_files
- * - Detailed in result->safety_violations
- * - Left on the filesystem
- * - Reported to user with guidance
- *
- * Directory Pruning Algorithm:
- * One deepest-first pass. A child is always decided before its parent, so
- * a parent that the run empties is seen empty when its turn comes and no
- * second look is needed. Emptiness is read from the disk this run has just
- * changed — cleanup_preflight_check predicted the same answer from the
- * plan, and this is where the prediction is confirmed or reported broken.
- *
- * Performance:
- * - Complexity: O(N) where N=orphan count, plus O(N log N) to order the
- *   directories deepest-first
- * - Zero redundancy: orphans detected once by workspace
- *
- * Error Handling:
- * - Individual file/directory removal failures are NON-FATAL
- * - Tracked in the failed buckets and reported
- * - Fatal errors: memory allocation, safety module errors
- *
- * @param opts Cleanup options with PRE-DETECTED orphans (must not be NULL)
- * @param out_result Cleanup result (must not be NULL, caller must free with cleanup_result_free)
- * @return Error or NULL on success (check result for operation details)
+ * @param verdicts Verdicts from cleanup_preflight (must not be NULL)
+ * @param out Result (must not be NULL; caller frees with cleanup_result_free)
+ * @return Error or NULL on success
  */
 error_t *cleanup_execute(
-    const cleanup_options_t *opts,
-    cleanup_result_t **out_result
+    const cleanup_preflight_result_t *verdicts,
+    cleanup_result_t **out
 );
 
-/**
- * Free cleanup result
- *
- * Frees all resources associated with cleanup result, including
- * embedded safety violations.
- *
- * @param result Result to free (can be NULL)
- */
+/** Free a result. No-op on NULL. Call before workspace_free. */
 void cleanup_result_free(cleanup_result_t *result);
-
-/**
- * Free cleanup preflight result
- *
- * Frees all resources associated with cleanup preflight result,
- * including embedded safety violations and string arrays.
- *
- * @param result Result to free (can be NULL)
- */
-void cleanup_preflight_result_free(cleanup_preflight_result_t *result);
 
 #endif /* DOTTA_CLEANUP_H */

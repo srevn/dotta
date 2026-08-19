@@ -88,18 +88,31 @@ typedef struct {
 /**
  * Bound carrier for a borrowed slice of workspace items
  *
- * Structural type — parallels state_files_t. Used at the
- * workspace_extract_orphans boundary so callers receive a typed handle
- * instead of triple-star out-params.
+ * Structural type — parallels state_files_t. Callers receive a typed
+ * handle instead of triple-star out-params.
  *
- * Pass by value. Lifetime is dictated by the producer's documented
- * contract — workspace_extract_orphans returns heap-allocated buffers
- * (caller frees `entries`), other producers may borrow.
+ * Pass by value. Lifetime is the producer's: cleanup's plan / verdict /
+ * result buckets project through workspace_items_view and borrow for the
+ * bucket's life; update's filters hand over heap buffers the caller frees.
  */
 typedef struct {
     const workspace_item_t *const *entries;
     size_t count;
 } workspace_items_t;
+
+/**
+ * Project a ptr_array_t bucket of borrowed items as a typed slice
+ *
+ * Mirrors state_files_view: buckets filled by ptr_array_push(&bucket, item)
+ * hold `void *`, and the cast layers const onto both pointer levels. The
+ * view aliases the bucket's storage and is valid for the bucket's lifetime.
+ */
+static inline workspace_items_t workspace_items_view(const ptr_array_t *bucket) {
+    return (workspace_items_t){
+        .entries = (const workspace_item_t *const *) bucket->items,
+        .count = bucket->count,
+    };
+}
 
 /**
  * Workspace structure (opaque)
@@ -228,61 +241,6 @@ workspace_status_t workspace_get_status(const workspace_t *ws);
 const workspace_item_t *workspace_get_all_diverged(
     const workspace_t *ws,
     size_t *count
-);
-
-/**
- * Extract orphaned files and directories from workspace
- *
- * On-demand extraction that produces separated file and directory slices.
- * Encapsulates orphan filtering logic within the workspace module.
- *
- * Algorithm: Single pass over diverged items, pushing orphans into
- * per-kind ptr_array_t accumulators, then stealing the buffers into
- * the workspace_items_t outputs.
- *
- * Performance: O(N) where N = diverged count (single pass).
- *
- * Memory: Each output's `entries` field is heap-allocated (per
- * ptr_array_steal). Caller frees with `free(out_files->entries)` etc.
- * Items in the slice are borrowed (point into workspace's diverged array).
- *
- * Selective extraction: Pass NULL for any of out_files / out_dirs /
- * out_excluded to skip that extraction.
- *
- * Scope filtering: When `scope` is non-NULL, the full operation-scope
- * triplet (profile filter ∧ path filter ∧ ¬exclude) is applied. Orphans
- * rejected by the profile/path dimensions are dropped silently; orphans
- * rejected by the exclude dimension are counted via `out_excluded_count`
- * and optionally collected into `out_excluded` so the caller can emit a
- * per-item verbose trace and the "N orphaned files not pruned" summary
- * without re-walking the workspace. A NULL scope is treated as match-all.
- *
- * Edge cases:
- * - No orphans: Returns success with all outputs zero-initialized.
- * - analyze_orphans=false during load: Returns success with zeros.
- * - Memory failure: Returns error, no partial allocation.
- * - scope filter with no matches: Returns success with zeros.
- *
- * @param ws Workspace (must not be NULL)
- * @param scope Optional operation scope (NULL = all orphans). When
- *              non-NULL, applies scope_accepts_profile ∧ scope_accepts_path
- *              ∧ ¬scope_is_excluded.
- * @param out_files Output file slice (caller frees entries, NULL to skip)
- * @param out_dirs Output directory slice (caller frees entries, NULL to skip)
- * @param out_excluded Output excluded-orphan slice (caller frees entries,
- *                     NULL to skip collection)
- * @param out_excluded_count Optional: count of orphans preserved because the
- *                           exclude dimension matched (NULL to skip).
- *                           Populated whether or not out_excluded is asked for.
- * @return Error or NULL on success
- */
-error_t *workspace_extract_orphans(
-    const workspace_t *ws,
-    const scope_t *scope,
-    workspace_items_t *out_files,
-    workspace_items_t *out_dirs,
-    workspace_items_t *out_excluded,
-    size_t *out_excluded_count
 );
 
 /**

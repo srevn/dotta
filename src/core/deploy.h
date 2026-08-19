@@ -83,10 +83,10 @@ typedef struct {
  * excluded enters none (neither work nor adoptable). Out-of-scope rows
  * are invisible.
  *
- * Two buckets hold work the run deliberately does not do. They differ by
+ * Two buckets carry work the run deliberately does not do. They differ by
  * reason, and the reason is the only thing a consumer needs from them —
  * so the bucket a row sits in *is* its reason tag, and a row -e names is
- * reported as excluded even when --skip-existing would also hold it (a
+ * reported as excluded even when --skip-existing would also skip it (a
  * named path is the more explicit intent).
  *
  * Buckets hold borrowed row pointers into the workspace's arena snapshot
@@ -96,12 +96,12 @@ typedef struct {
 typedef struct {
     ptr_array_t pending;    /* Need work — deploy_execute acts on these */
     ptr_array_t clean;      /* In scope, no work — adoption candidates */
-    ptr_array_t excluded;   /* Need work, held back by -e — reported, never touched */
+    ptr_array_t excluded;   /* Need work, skipped by -e — reported, never touched */
 
-    /* Need work, held back by --skip-existing: something already occupies
+    /* Need work, skipped by --skip-existing: something already occupies
      * the path. Files only. A tracked directory row writes no data — it
      * creates a container and converges its metadata in place — so
-     * withholding one would preserve nothing and would instead strand the
+     * skipping one would preserve nothing and would instead strand the
      * tracked children the flag exists to deploy. Its one destructive act,
      * replacing a squatter, is force-gated at preflight already. */
     ptr_array_t skipped_existing;
@@ -152,8 +152,8 @@ typedef struct {
  * each row on scope_accepts_profile ∧ scope_accepts_path(kind), then
  * classifying it by deploy's work predicate (missing, or diverged in
  * content / mode / ownership / type / encryption; STALE alone is not
- * work) and by the reasons that hold work back: scope_is_excluded(kind),
- * then skip_existing.
+ * work) and by the reasons a row's work is skipped:
+ * scope_is_excluded(kind), then skip_existing.
  *
  * Requires a workspace loaded with file AND directory analysis: the plan
  * is derived from the divergence index, and a kind whose analysis did not
@@ -165,9 +165,9 @@ typedef struct {
  *        occupied is not work. A plan fact, not an execution one — the
  *        occupancy comes from the workspace's own lstat, so preflight, the
  *        privilege scan, the prompt and the executor all see one answer.
- *        Not overridden by --force: --force also governs orphan safety and
- *        the confirmation prompt, so the combination is meaningful and the
- *        narrower flag keeps its promise.
+ *        Not overridden by --force: --force also overrides cleanup's skip
+ *        reasons and the confirmation prompt, so the combination is
+ *        meaningful and the narrower flag keeps its promise.
  * @param out Plan (must not be NULL; caller frees with deploy_plan_free)
  * @return Error or NULL on success
  */
@@ -196,7 +196,7 @@ static inline bool deploy_plan_is_empty(const deploy_plan_t *plan) {
  * Distinct from deploy_plan_is_empty, which counts only *work*: a plan of
  * nothing but clean rows is empty there and non-zero here. Apply reads
  * this to tell a path filter that named nothing dotta manages from one
- * whose paths are all converged or held back already.
+ * whose paths are all converged or skipped already.
  *
  * The bucket set lives here so a consumer never has to enumerate it. A row
  * that is both clean and excluded lands in no bucket at all (see

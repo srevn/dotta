@@ -124,52 +124,58 @@ static bool deploy_needs_work(const workspace_item_t *item) {
 }
 
 /**
- * Why the plan is holding a row's work back
+ * Why the plan skips a row's work
  *
  * At most one reason per row: a row both reasons claim is reported as
  * excluded, because -e names a path and --skip-existing is a blanket
  * policy. Encoding the answer rather than the two conditions keeps the
  * precedence in one place and leaves "both at once" unrepresentable.
+ *
+ * "Skip" is the word the buckets and the screen use ("Skipped N paths
+ * (--exclude)"), and the word core/cleanup uses for the same shape
+ * (cleanup_skip_reason_t). In this module "hold" means only what
+ * hold_directory does — carry a directory at a working mode until
+ * release_directories lets it go.
  */
 typedef enum {
-    HOLD_NONE,       /* nothing holds the row back */
-    HOLD_EXCLUDED,   /* an -e pattern matched the row's storage path */
-    HOLD_EXISTING    /* --skip-existing and something occupies the path */
-} hold_reason_t;
+    SKIP_NONE,       /* nothing stands in the way of the row's work */
+    SKIP_EXCLUDED,   /* an -e pattern matched the row's storage path */
+    SKIP_EXISTING    /* --skip-existing and something occupies the path */
+} skip_reason_t;
 
 /**
  * Route one in-scope row into its partition bucket, or drop it
  *
  * A row with no work is adoptable unless -e named it: --exclude means
  * "leave this path alone entirely", while --skip-existing only means "do
- * not overwrite", and adoption overwrites nothing. So HOLD_EXISTING on a
- * clean row (a STALE-only verdict, say) is not a hold at all.
+ * not overwrite", and adoption overwrites nothing. So SKIP_EXISTING on a
+ * clean row (a STALE-only verdict, say) is not a skip at all.
  *
  * @param part Partition for the row's kind (must not be NULL)
  * @param row Borrowed state row (must not be NULL)
  * @param work Deploy's work predicate for the row
- * @param hold Why the row's work is held back, if it is
+ * @param skip Why the row's work is skipped, if it is
  * @return Error or NULL on success
  */
 static error_t *partition_push(
     deploy_partition_t *part,
     const void *row,
     bool work,
-    hold_reason_t hold
+    skip_reason_t skip
 ) {
     if (!work) {
-        if (hold == HOLD_EXCLUDED) return NULL;   /* neither work nor adoptable */
+        if (skip == SKIP_EXCLUDED) return NULL;   /* neither work nor adoptable */
         return ptr_array_push(&part->clean, row);
     }
 
-    switch (hold) {
-        case HOLD_NONE:     return ptr_array_push(&part->pending, row);
-        case HOLD_EXCLUDED: return ptr_array_push(&part->excluded, row);
-        case HOLD_EXISTING: return ptr_array_push(&part->skipped_existing, row);
+    switch (skip) {
+        case SKIP_NONE:     return ptr_array_push(&part->pending, row);
+        case SKIP_EXCLUDED: return ptr_array_push(&part->excluded, row);
+        case SKIP_EXISTING: return ptr_array_push(&part->skipped_existing, row);
     }
 
     /* Unreachable once every enum value is handled */
-    return ERROR(ERR_INTERNAL, "Unknown hold reason %d", (int) hold);
+    return ERROR(ERR_INTERNAL, "Unknown skip reason %d", (int) skip);
 }
 
 /**
@@ -207,14 +213,14 @@ error_t *deploy_plan_build(
          * and lstat truth counts a broken symlink as occupying the path —
          * which is what the flag says, and what a stat that follows links
          * could not tell us. */
-        hold_reason_t hold = HOLD_NONE;
+        skip_reason_t skip = SKIP_NONE;
         if (scope_is_excluded(scope, row->storage_path, PATH_KIND_FILE)) {
-            hold = HOLD_EXCLUDED;
+            skip = SKIP_EXCLUDED;
         } else if (skip_existing && item && item->on_filesystem) {
-            hold = HOLD_EXISTING;
+            skip = SKIP_EXISTING;
         }
 
-        err = partition_push(&plan->files, row, deploy_needs_work(item), hold);
+        err = partition_push(&plan->files, row, deploy_needs_work(item), skip);
         if (err) goto cleanup;
     }
 
@@ -227,14 +233,14 @@ error_t *deploy_plan_build(
             continue;
         }
 
-        /* No HOLD_EXISTING arm: --skip-existing does not reach tracked
+        /* No SKIP_EXISTING arm: --skip-existing does not reach tracked
          * directories (see deploy_partition_t). */
         err = partition_push(
             &plan->directories,
             row,
             deploy_needs_work(workspace_get_item(ws, row->filesystem_path)),
             scope_is_excluded(scope, row->storage_path, PATH_KIND_DIRECTORY)
-                ? HOLD_EXCLUDED : HOLD_NONE
+                ? SKIP_EXCLUDED : SKIP_NONE
         );
         if (err) goto cleanup;
     }
@@ -1850,7 +1856,7 @@ error_t *deploy_execute(
 
     /* Every pending row is work the plan chose, by construction: the
      * planner routed it through deploy_needs_work and past every reason to
-     * hold it back, so this loop applies no filter of its own. Clean
+     * skip it, so this loop applies no filter of its own. Clean
      * in-scope rows with deployed_at == 0 are apply's adoption step, which
      * stamps the anchor without deploy_file. */
     for (size_t i = 0; i < files.count; i++) {

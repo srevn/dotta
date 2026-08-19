@@ -308,10 +308,13 @@ bool fs_is_directory_empty(const char *path);
  * entry, and on macOS that is every directory Finder has ever opened.
  *
  * Removes the OS-metadata entries, then the directory. Refuses with
- * ERR_CONFLICT the moment it meets an entry it may not remove, so a file
- * that appeared since an emptiness probe stops the removal instead of
- * going with it — which is what makes this safe to call on a prediction.
- * Absence is success.
+ * ERR_CONFLICT, before removing anything, if any entry is one it may not
+ * remove — so a file that appeared since an emptiness probe stops the
+ * removal instead of going with it, and a refused directory keeps its
+ * metadata too. That is what makes this safe to call on a prediction.
+ *
+ * Absence is success: a caller that must tell "removed" from "was never
+ * there" probes presence first (cleanup's directory probe does).
  *
  * Never recurses. For a directory whose whole subtree is dotta's to
  * delete, that is fs_remove_dir(path, true).

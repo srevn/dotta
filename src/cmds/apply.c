@@ -208,13 +208,13 @@ static size_t print_withheld(
             }
             if (excluded_orphan_files > 0) {
                 output_print(
-                    out, OUTPUT_VERBOSE, "  • %zu orphaned file%s not removed\n",
+                    out, OUTPUT_VERBOSE, "  • %zu orphaned file%s not pruned\n",
                     excluded_orphan_files, excluded_orphan_files == 1 ? "" : "s"
                 );
             }
             if (excluded_orphan_dirs > 0) {
                 output_print(
-                    out, OUTPUT_VERBOSE, "  • %zu orphaned director%s not removed\n",
+                    out, OUTPUT_VERBOSE, "  • %zu orphaned director%s not pruned\n",
                     excluded_orphan_dirs, excluded_orphan_dirs == 1 ? "y" : "ies"
                 );
             }
@@ -468,18 +468,18 @@ static void print_cleanup_results(
     }
 
     /* Display orphaned files */
-    if (result->removed_files && result->removed_files->count > 0) {
+    if (result->pruned_files && result->pruned_files->count > 0) {
         output_section(out, OUTPUT_VERBOSE, "Pruned orphaned files");
-        for (size_t i = 0; i < result->removed_files->count; i++) {
+        for (size_t i = 0; i < result->pruned_files->count; i++) {
             output_styled(
-                out, OUTPUT_VERBOSE, "  {green}[removed]{reset} %s\n",
-                result->removed_files->items[i]
+                out, OUTPUT_VERBOSE, "  {green}[pruned]{reset} %s\n",
+                result->pruned_files->items[i]
             );
         }
     }
 
     if (result->reclaimed_files && result->reclaimed_files->count > 0) {
-        output_section(out, OUTPUT_VERBOSE, "Reclaimed state entries (already absent)");
+        output_section(out, OUTPUT_VERBOSE, "Reclaimed orphaned files (already absent)");
         for (size_t i = 0; i < result->reclaimed_files->count; i++) {
             output_styled(
                 out, OUTPUT_VERBOSE, "  {cyan}[reclaimed]{reset} %s\n",
@@ -509,28 +509,28 @@ static void print_cleanup_results(
     }
 
     if (result->failed_files && result->failed_files->count > 0) {
-        output_section(out, OUTPUT_VERBOSE, "Failed to remove orphaned files");
+        output_section(out, OUTPUT_VERBOSE, "Failed to prune orphaned files");
         for (size_t i = 0; i < result->failed_files->count; i++) {
             output_styled(
-                out, OUTPUT_VERBOSE, "  {red}[fail]{reset} %s\n",
+                out, OUTPUT_VERBOSE, "  {red}[failed]{reset} %s\n",
                 result->failed_files->items[i]
             );
         }
     }
 
     /* Display empty directories */
-    if (result->removed_dirs && result->removed_dirs->count > 0) {
-        output_section(out, OUTPUT_VERBOSE, "Pruned empty tracked directories");
-        for (size_t i = 0; i < result->removed_dirs->count; i++) {
+    if (result->pruned_dirs && result->pruned_dirs->count > 0) {
+        output_section(out, OUTPUT_VERBOSE, "Pruned orphaned directories");
+        for (size_t i = 0; i < result->pruned_dirs->count; i++) {
             output_styled(
-                out, OUTPUT_VERBOSE, "  {green}[removed]{reset} %s\n",
-                result->removed_dirs->items[i]
+                out, OUTPUT_VERBOSE, "  {green}[pruned]{reset} %s\n",
+                result->pruned_dirs->items[i]
             );
         }
     }
 
     if (result->reclaimed_dirs && result->reclaimed_dirs->count > 0) {
-        output_section(out, OUTPUT_VERBOSE, "Reclaimed directory entries (already absent)");
+        output_section(out, OUTPUT_VERBOSE, "Reclaimed orphaned directories (already absent)");
         for (size_t i = 0; i < result->reclaimed_dirs->count; i++) {
             output_styled(
                 out, OUTPUT_VERBOSE, "  {cyan}[reclaimed]{reset} %s\n",
@@ -540,7 +540,7 @@ static void print_cleanup_results(
     }
 
     if (result->skipped_dirs && result->skipped_dirs->count > 0) {
-        output_section(out, OUTPUT_VERBOSE, "Skipped directories (not empty)");
+        output_section(out, OUTPUT_VERBOSE, "Skipped orphaned directories (not empty)");
         for (size_t i = 0; i < result->skipped_dirs->count; i++) {
             output_styled(
                 out, OUTPUT_VERBOSE, "  {yellow}[skipped]{reset} %s\n",
@@ -550,10 +550,10 @@ static void print_cleanup_results(
     }
 
     if (result->failed_dirs && result->failed_dirs->count > 0) {
-        output_section(out, OUTPUT_VERBOSE, "Failed to remove empty directories");
+        output_section(out, OUTPUT_VERBOSE, "Failed to prune orphaned directories");
         for (size_t i = 0; i < result->failed_dirs->count; i++) {
             output_styled(
-                out, OUTPUT_VERBOSE, "  {red}[fail]{reset} %s\n",
+                out, OUTPUT_VERBOSE, "  {red}[failed]{reset} %s\n",
                 result->failed_dirs->items[i]
             );
         }
@@ -564,19 +564,19 @@ static void print_cleanup_results(
      * Arrays may be NULL when cleanup_result allocation partially failed; guard
      * each read. arr->count is the authoritative source. */
     if (!output_is_verbose(out)) {
-        if (result->removed_files && result->removed_files->count > 0) {
+        if (result->pruned_files && result->pruned_files->count > 0) {
             output_styled(
                 out, OUTPUT_NORMAL, "Pruned {yellow}%zu{reset} orphaned file%s\n",
-                result->removed_files->count,
-                result->removed_files->count == 1 ? "" : "s"
+                result->pruned_files->count,
+                result->pruned_files->count == 1 ? "" : "s"
             );
         }
 
-        if (result->removed_dirs && result->removed_dirs->count > 0) {
+        if (result->pruned_dirs && result->pruned_dirs->count > 0) {
             output_styled(
                 out, OUTPUT_NORMAL, "Pruned {yellow}%zu{reset} orphaned director%s\n",
-                result->removed_dirs->count,
-                result->removed_dirs->count == 1 ? "y" : "ies"
+                result->pruned_dirs->count,
+                result->pruned_dirs->count == 1 ? "y" : "ies"
             );
         }
 
@@ -676,7 +676,9 @@ static void print_path_list(
  * Shows what cleanup will do BEFORE user confirmation. Every number here
  * is one cleanup decided; this function reads them and adds nothing of its
  * own, so the preview, the prompt below it and the outcome after it are
- * three sentences about the same work.
+ * three sentences about the same work — in the same words, because a
+ * preview line and its outcome line name one verdict with one verb
+ * ("will be pruned" / "Pruned"), differing only in tense.
  */
 static void print_cleanup_preflight_results(
     const output_t *out,
@@ -688,8 +690,8 @@ static void print_cleanup_preflight_results(
 
     /* Every present orphan lands in exactly one bucket, so these two sums
      * are the present-orphan counts. */
-    size_t present_files = result->removable_files->count + violations->count;
-    size_t present_dirs = result->prunable_dirs->count + result->occupied_dirs->count;
+    size_t present_files = result->prunable_files->count + violations->count;
+    size_t present_dirs = result->prunable_dirs->count + result->skipped_dirs->count;
 
     if (present_files == 0 && present_dirs == 0) {
         output_print(
@@ -701,12 +703,12 @@ static void print_cleanup_preflight_results(
     if (present_files > 0) {
         output_section(out, OUTPUT_NORMAL, "Orphaned files");
 
-        if (result->removable_files->count > 0) {
+        if (result->prunable_files->count > 0) {
             output_styled(
                 out, OUTPUT_NORMAL,
-                "  {yellow}%zu{reset} file%s will be removed (no longer active)\n",
-                result->removable_files->count,
-                result->removable_files->count == 1 ? "" : "s"
+                "  {yellow}%zu{reset} file%s will be pruned (no longer active)\n",
+                result->prunable_files->count,
+                result->prunable_files->count == 1 ? "" : "s"
             );
         }
 
@@ -721,14 +723,14 @@ static void print_cleanup_preflight_results(
         if (violations->blocking > 0) {
             output_styled(
                 out, OUTPUT_NORMAL,
-                "  {yellow}%zu{reset} file%s will be kept (uncommitted changes)\n",
+                "  {yellow}%zu{reset} file%s will be skipped (uncommitted changes)\n",
                 violations->blocking, violations->blocking == 1 ? "" : "s"
             );
         }
 
         /* Only the files the count above promises — the held-back ones are
          * named with their reasons by print_safety_violations. */
-        print_path_list(out, result->removable_files, OUTPUT_COLOR_CYAN, "•");
+        print_path_list(out, result->prunable_files, OUTPUT_COLOR_CYAN, "•");
     }
 
     if (present_dirs > 0) {
@@ -742,16 +744,16 @@ static void print_cleanup_preflight_results(
             );
         }
 
-        if (result->occupied_dirs->count > 0) {
+        if (result->skipped_dirs->count > 0) {
             output_styled(
-                out, OUTPUT_NORMAL, "  {yellow}%zu{reset} director%s kept (not empty)\n",
-                result->occupied_dirs->count,
-                result->occupied_dirs->count == 1 ? "y" : "ies"
+                out, OUTPUT_NORMAL, "  {yellow}%zu{reset} director%s will be skipped (not empty)\n",
+                result->skipped_dirs->count,
+                result->skipped_dirs->count == 1 ? "y" : "ies"
             );
         }
 
         print_path_list(out, result->prunable_dirs, OUTPUT_COLOR_CYAN, "•");
-        print_path_list(out, result->occupied_dirs, OUTPUT_COLOR_YELLOW, "⊘");
+        print_path_list(out, result->skipped_dirs, OUTPUT_COLOR_YELLOW, "⊘");
     }
 
     /* Both violation kinds name their files here, with the reason for each
@@ -1158,7 +1160,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      *
      * Extracted orphans are used for:
      * 1. Privilege checking (filter root/ paths)
-     * 2. Preflight display (show user what will be removed)
+     * 2. Preflight display (show user what the run will do)
      * 3. Actual removal (pass to cleanup_execute)
      *
      * This eliminates redundant orphan detection in cleanup module (performance gain).
@@ -1397,17 +1399,17 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         output_print(out, OUTPUT_VERBOSE, "\nChecking orphaned files...\n");
 
         cleanup_options_t cleanup_opts = {
-            .orphaned_files       = file_orphans,
-            .orphaned_directories = dir_orphans,
+            .orphaned_files        = file_orphans,
+            .orphaned_directories  = dir_orphans,
             /* Deployment runs first, so an orphaned directory that will
              * receive one of these is not prunable — even though nothing
              * of it is on disk yet for the preview to see. */
-            .arriving_files       = state_files_view(&plan->files.pending),
-            .arriving_directories = state_directories_view(&plan->directories.pending),
-            .preflight_violations = NULL,         /* No preflight violations yet */
-            .dry_run              = false,        /* Preflight is always read-only */
-            .force                = opts->force,
-            .skip_safety_check    = false         /* Run safety check in preflight */
+            .deploying_files       = state_files_view(&plan->files.pending),
+            .deploying_directories = state_directories_view(&plan->directories.pending),
+            .preflight_violations  = NULL,        /* No preflight violations yet */
+            .dry_run               = false,       /* Preflight is always read-only */
+            .force                 = opts->force,
+            .skip_safety_check     = false        /* Run safety check in preflight */
         };
 
         err = cleanup_preflight_check(repo, state, &cleanup_opts, &cleanup_preflight);
@@ -1419,9 +1421,9 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         /* Display cleanup preflight results */
         print_cleanup_preflight_results(out, cleanup_preflight);
 
-        /* Blocking violations do not abort: safe orphans are still removed
-         * and unsafe ones kept, which is better than doing nothing. The
-         * preview above already counted the kept files and printed the
+        /* Blocking violations do not abort: safe orphans are still pruned
+         * and unsafe ones skipped, which is better than doing nothing. The
+         * preview above already counted the skipped files and printed the
          * remedies for them, and cleanup_execute builds its skip list from
          * the same violations — so there is nothing to add here. */
     }
@@ -1452,13 +1454,13 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
          * two — so what the user consents to is what runs. NULL only under
          * --keep-orphans, where no orphan work happens at all. Directory
          * pruning can be the only pending action (no files move). */
-        size_t removal_count = cleanup_preflight
-                             ? cleanup_preflight->removable_files->count : 0;
-        size_t prune_count = cleanup_preflight
-                           ? cleanup_preflight->prunable_dirs->count : 0;
+        size_t prune_file_count = cleanup_preflight
+                                ? cleanup_preflight->prunable_files->count : 0;
+        size_t prune_dir_count = cleanup_preflight
+                               ? cleanup_preflight->prunable_dirs->count : 0;
 
         /* Compose the prompt from the non-zero parts — "Deploy 2 files,
-         * converge 1 tracked directory and remove 3 orphaned files?". No
+         * converge 1 tracked directory and prune 3 orphaned files?". No
          * part means every pending action is state-only reclamation (e.g.
          * an all-absent orphan set) — non-destructive, no consent needed. */
         size_t deploy_count = plan->files.pending.count;
@@ -1478,16 +1480,22 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
                 converge_count, converge_count == 1 ? "y" : "ies"
             );
         }
-        if (removal_count > 0) {
+        if (prune_file_count > 0) {
             snprintf(
-                parts[part_count++], sizeof(parts[0]), "remove %zu orphaned file%s",
-                removal_count, removal_count == 1 ? "" : "s"
+                parts[part_count++], sizeof(parts[0]), "prune %zu orphaned file%s",
+                prune_file_count, prune_file_count == 1 ? "" : "s"
             );
         }
-        if (prune_count > 0) {
+        if (prune_dir_count > 0) {
+            /* One verdict, said once: with a file part above, the verb
+             * carries across the conjunction — "prune 2 orphaned files and
+             * 2 orphaned directories" — rather than naming it twice. The
+             * directory part is always last, so nothing follows to strand
+             * the elided verb. */
             snprintf(
-                parts[part_count++], sizeof(parts[0]), "prune %zu empty director%s",
-                prune_count, prune_count == 1 ? "y" : "ies"
+                parts[part_count++], sizeof(parts[0]), "%s%zu orphaned director%s",
+                prune_file_count > 0 ? "" : "prune ",
+                prune_dir_count, prune_dir_count == 1 ? "y" : "ies"
             );
         }
 
@@ -1543,8 +1551,8 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         /* Prune orphaned files and remove from state (unless --keep-orphans)
          *
          * Architecture:
-         * 1. cleanup_execute() removes orphaned files from filesystem
-         * 2. For each successfully removed file, state_remove_file() deletes entry from state
+         * 1. cleanup_execute() prunes orphaned files from the filesystem
+         * 2. For each pruned file, state_remove_file() deletes its entry from state
          * 3. State updates are surgical (DELETE operations), not full rebuilds
          *
          * This separation ensures:
@@ -1553,12 +1561,12 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
          * - Incremental updates: only modified entries updated in state
          *
          * Apply is a synchronization operation - it ensures the filesystem matches
-         * the declared state by both deploying new/updated files AND removing orphaned ones.
+         * the declared state by both deploying new/updated files AND pruning orphaned ones.
          *
          * The --keep-orphans flag allows opting out of automatic cleanup for advanced workflows.
          */
         if (!opts->keep_orphans) {
-            /* Execute cleanup: remove orphaned files and prune empty directories */
+            /* Execute cleanup: prune the orphaned files and the directories they empty */
             cleanup_result_t *cleanup_res = NULL;
             /* TOCTOU Safety: Determine if preflight results can be trusted
              *
@@ -1568,7 +1576,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
              *
              * Risk scenario:
              *   1. Preflight: file X marked safe (no uncommitted changes)
-             *   2. User prompt: "Deploy N files and remove M orphans? [y/N]"
+             *   2. User prompt: "Deploy N files and prune M orphaned files? [y/N]"
              *   3. User edits file X (saves important work to it)
              *   4. User confirms "y"
              *   5. cleanup_execute trusts stale preflight -> deletes file X -> DATA LOSS
@@ -1655,13 +1663,13 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
              * - If cleanup failed completely, this section is safely skipped
              * - Next 'apply' will retry full cleanup with fresh workspace analysis
              */
-            if (cleanup_res && cleanup_res->removed_files &&
-                cleanup_res->removed_files->count > 0) {
+            if (cleanup_res && cleanup_res->pruned_files &&
+                cleanup_res->pruned_files->count > 0) {
 
                 output_print(out, OUTPUT_VERBOSE, "\nRemoving orphaned entries from state...\n");
 
-                for (size_t i = 0; i < cleanup_res->removed_files->count; i++) {
-                    const char *path = cleanup_res->removed_files->items[i];
+                for (size_t i = 0; i < cleanup_res->pruned_files->count; i++) {
+                    const char *path = cleanup_res->pruned_files->items[i];
 
                     /* Delete entry from virtual_manifest table
                      *
@@ -1686,8 +1694,8 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
 
                 output_print(
                     out, OUTPUT_VERBOSE, "  Removed %zu orphaned entr%s from state\n",
-                    cleanup_res->removed_files->count,
-                    cleanup_res->removed_files->count == 1 ? "y" : "ies"
+                    cleanup_res->pruned_files->count,
+                    cleanup_res->pruned_files->count == 1 ? "y" : "ies"
                 );
             }
 
@@ -1782,15 +1790,15 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
              * - If cleanup failed completely, this section is safely skipped
              * - Next 'apply' will retry full cleanup with fresh workspace analysis
              */
-            if (cleanup_res && cleanup_res->removed_dirs &&
-                cleanup_res->removed_dirs->count > 0) {
+            if (cleanup_res && cleanup_res->pruned_dirs &&
+                cleanup_res->pruned_dirs->count > 0) {
 
                 output_print(
                     out, OUTPUT_VERBOSE, "\nRemoving orphaned directory entries from state...\n"
                 );
 
-                for (size_t i = 0; i < cleanup_res->removed_dirs->count; i++) {
-                    const char *path = cleanup_res->removed_dirs->items[i];
+                for (size_t i = 0; i < cleanup_res->pruned_dirs->count; i++) {
+                    const char *path = cleanup_res->pruned_dirs->items[i];
 
                     /* Delete entry from tracked_directories table
                      *
@@ -1815,8 +1823,8 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
 
                 output_print(
                     out, OUTPUT_VERBOSE, "  Removed %zu orphaned directory entr%s from state\n",
-                    cleanup_res->removed_dirs->count,
-                    cleanup_res->removed_dirs->count == 1 ? "y" : "ies"
+                    cleanup_res->pruned_dirs->count,
+                    cleanup_res->pruned_dirs->count == 1 ? "y" : "ies"
                 );
             }
 
@@ -2064,12 +2072,12 @@ const args_command_t spec_apply = {
     .usage       = "%s apply [options] [profile|file]...",
     .description =
         "Converge the filesystem with enabled profiles: deploy new and\n"
-        "updated files, remove files orphaned by disabled profiles, and\n"
+        "updated files, prune files orphaned by disabled profiles, and\n"
         "update the deployment state.\n",
     .notes       =
         "Exclusion Patterns:\n"
         "  Excluded paths are protected from deployment, directory\n"
-        "  convergence and removal. Patterns follow gitignore glob syntax;\n"
+        "  convergence and pruning. Patterns follow gitignore glob syntax;\n"
         "  a trailing slash restricts a pattern to directories. Repeatable.\n",
     .examples    =
         "  %s apply                            # Deploy all enabled profiles\n"

@@ -251,7 +251,7 @@ const workspace_item_t *workspace_get_all_diverged(
  * rejected by the profile/path dimensions are dropped silently; orphans
  * rejected by the exclude dimension are counted via `out_excluded_count`
  * and optionally collected into `out_excluded` so the caller can emit a
- * per-item verbose trace and the "N orphaned files not removed" summary
+ * per-item verbose trace and the "N orphaned files not pruned" summary
  * without re-walking the workspace. A NULL scope is treated as match-all.
  *
  * Edge cases:

@@ -589,7 +589,7 @@ static bool confirm_removal(
     if (opts->delete_files) {
         snprintf(
             prompt, sizeof(prompt), "Remove %zu file%s from profile '%s'?\n"
-            "(Deployed files will be removed on 'dotta apply')",
+            "(Deployed files will be pruned on 'dotta apply')",
             count, count == 1 ? "" : "s", opts->profile
         );
     } else {
@@ -630,7 +630,7 @@ static bool confirm_profile_deletion(
     if (opts->delete_files) {
         output_info(
             out, OUTPUT_NORMAL,
-            "         Deployed files will be removed when you run 'dotta apply'."
+            "         Deployed files will be pruned when you run 'dotta apply'."
         );
     } else {
         output_info(
@@ -1378,7 +1378,7 @@ static error_t *delete_profile_branch(
         if (opts->delete_files) {
             output_info(
                 out, OUTPUT_VERBOSE,
-                "      These will be removed when you run 'dotta apply'."
+                "      These will be pruned when you run 'dotta apply'."
             );
         } else {
             output_info(

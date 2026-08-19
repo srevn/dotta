@@ -1,13 +1,13 @@
 /**
- * cleanup.h - Orphaned file and directory removal
+ * cleanup.h - Orphaned file and directory pruning
  *
- * This module handles removal of orphaned files and directories during profile application.
- * Orphan detection is performed by the workspace module; this module focuses on safe removal.
+ * This module handles pruning of orphaned files and directories during profile application.
+ * Orphan detection is performed by the workspace module; this module focuses on safe pruning.
  *
  * Responsibilities:
- * 1. Removes orphaned files (validated by safety module)
+ * 1. Prunes orphaned files (validated by safety module)
  * 2. Prunes orphaned directories (deepest-first, once found empty)
- * 3. Provides preflight analysis (safety violations, removal preview)
+ * 3. Provides preflight analysis (safety violations, prune preview)
  * 4. Reports detailed cleanup results
  *
  * Design Principles:
@@ -25,7 +25,7 @@
  *
  * One producer per fact:
  * - Which present files go: safety_check_orphans' verdicts, partitioned
- *   once by cleanup_preflight_check into removable_files + violations
+ *   once by cleanup_preflight_check into prunable_files + violations
  * - What stands at an orphaned directory's path: one type probe, shared by
  *   the preview and the prune so they cannot label it differently
  * - Whether a directory ends up empty: fs_is_directory_empty_except, one
@@ -98,12 +98,12 @@ typedef struct {
      * without them it would promise a prune the run then refuses.
      *
      * Borrowed slices, typically the deployment plan's pending buckets;
-     * empty is valid and means "nothing arrives". Read by
+     * empty is valid and means "nothing is deployed". Read by
      * cleanup_preflight_check only: cleanup_execute reads the disk that
      * deployment has already changed.
      */
-    state_files_t arriving_files;
-    state_directories_t arriving_directories;
+    state_files_t deploying_files;
+    state_directories_t deploying_directories;
 
     /**
      * Pre-computed safety violations from preflight check
@@ -171,30 +171,30 @@ typedef struct {
 
     /* File path lists (count via arr->count; execution-only, not populated in dry-run)
      *
-     * removed_files guarantees physical removal occurred. reclaimed_files
+     * pruned_files guarantees physical removal occurred. reclaimed_files
      * were already absent from the filesystem — no removal happened or was
      * needed; only the state row is retired. Callers drive state database
      * cleanup from both buckets but must report them distinctly (a
      * decision is not an effect). For dry-run preview of what would be
-     * removed, use cleanup_preflight_check instead.
+     * pruned, use cleanup_preflight_check instead.
      */
-    string_array_t *removed_files;       /* Successfully removed file paths */
+    string_array_t *pruned_files;        /* Pruned — gone from the filesystem */
     string_array_t *reclaimed_files;     /* Already absent — state retired, no filesystem effect */
-    string_array_t *skipped_files;       /* Skipped file paths (safety violations) */
-    string_array_t *failed_files;        /* Failed file paths (with errors) */
-    string_array_t *released_files;      /* Released files (left on disk, state cleaned) */
+    string_array_t *skipped_files;       /* Skipped — a safety violation stands */
+    string_array_t *failed_files;        /* Failed — the removal errored */
+    string_array_t *released_files;      /* Released — left on disk, state retired */
 
     /* Directory path lists (execution-only, not populated in dry-run) */
-    string_array_t *removed_dirs;        /* Successfully removed directory paths */
+    string_array_t *pruned_dirs;         /* Pruned — gone from the filesystem */
     string_array_t *reclaimed_dirs;      /* Already absent — state retired, no filesystem effect */
-    string_array_t *skipped_dirs;        /* Kept: occupied, a symlink, or not a directory */
-    string_array_t *failed_dirs;         /* Failed directory paths (with errors) */
+    string_array_t *skipped_dirs;        /* Skipped — occupied, a symlink, or not a directory */
+    string_array_t *failed_dirs;         /* Failed — the removal errored */
 } cleanup_result_t;
 
 /**
  * Cleanup preflight result — what cleanup_execute will do, decided once
  *
- * Present-on-filesystem orphans, partitioned by outcome. The preview and
+ * Present-on-filesystem orphans, partitioned by verdict. The preview and
  * the confirmation prompt both read these arrays and neither recomputes a
  * verdict of its own, so what the user consents to is what the run does.
  * An already-absent orphan is a pure state reclaim with no filesystem
@@ -205,30 +205,30 @@ typedef struct {
  */
 typedef struct {
     /* Files — safety's verdict, partitioned once.
-     *   removable_files ∪ safety_violations = present file orphans
+     *   prunable_files ∪ safety_violations = present file orphans
      * (safety_check_orphans skips orphans that are not on the filesystem,
      * so no violation names an absent path). The violations carry their
      * own blocking/released split; read those counts off the safety
      * result rather than folding the array again. */
-    string_array_t *removable_files;    /* Will be unlinked */
+    string_array_t *prunable_files;     /* Will be pruned */
     safety_result_t *safety_violations; /* Never NULL; empty under force */
 
     /* Directories — what the prune will reach, predicted against this same
      * run's own effects. A directory is prunable iff everything in it is
-     * OS metadata, a file in removable_files, or an orphaned directory
+     * OS metadata, a file in prunable_files, or an orphaned directory
      * beneath it that is itself prunable — and nothing this run deploys
      * lands inside it. That is what prune_orphaned_directories arrives at
      * by acting, read off the plan here in one deepest-first pass, so the
      * preview can say "2 will be pruned" about directories that still hold
-     * the files this run removes: the ordinary shape of disabling a
+     * the files this run prunes: the ordinary shape of disabling a
      * profile.
      *
      * Exact except where the world moves underneath it — a change made
      * while the confirmation prompt waits, or an I/O failure — and the run
      * reports whatever it could not do. Listed in prune order, deepest
      * first. */
-    string_array_t *prunable_dirs;
-    string_array_t *occupied_dirs;      /* Holding something else, or not a directory */
+    string_array_t *prunable_dirs;      /* Will be pruned */
+    string_array_t *skipped_dirs;       /* Holding something else, or not a directory */
 } cleanup_preflight_result_t;
 
 /**
@@ -240,9 +240,9 @@ typedef struct {
  *
  * Purpose:
  * The apply command uses this to show users BEFORE confirmation:
- * - How many orphaned files will be removed
+ * - How many orphaned files will be pruned
  * - Safety violations (uncommitted changes)
- * - Which orphaned directories will be pruned, and which will be kept
+ * - Which orphaned directories will be pruned, and which will be skipped
  *
  * Architecture:
  * Orphans are PRE-DETECTED by workspace module and passed via opts:
@@ -254,9 +254,9 @@ typedef struct {
  * Algorithm:
  * 1. Use pre-detected orphans from opts (NO orphan detection here)
  * 2. Run safety checks on orphaned files (force yields an empty verdict)
- * 3. Partition the present file orphans into removable + violations
+ * 3. Partition the present file orphans into prunable + violations
  * 4. Walk the orphaned directories deepest-first, deciding each against
- *    the removals above and the deployments in opts->arriving_*
+ *    the prunes above and the deployments in opts->deploying_*
  *
  * Performance:
  * - Complexity: O(N) where N=orphan count, plus one readdir per present
@@ -292,20 +292,20 @@ error_t *cleanup_preflight_check(
 /**
  * Execute cleanup operations
  *
- * Performs orphaned file removal and empty directory pruning using
+ * Prunes orphaned files and the directories they emptied, using
  * pre-detected orphans from workspace module. This function:
  *
  * 1. Uses pre-detected orphans from opts (NO detection here)
  * 2. Validates safety using safety module (unless force=true)
- * 3. Removes safe orphaned files from filesystem
- * 4. Prunes empty orphaned directories, deepest first
+ * 3. Prunes the orphaned files safety cleared
+ * 4. Prunes the orphaned directories left empty, deepest first
  *
  * Architecture:
  * Orphans are PRE-DETECTED by workspace module and passed via opts:
  * - opts->orphaned_files: workspace_items_t slice
  * - opts->orphaned_directories: workspace_items_t slice
  *
- * This function focuses on removal operations, not detection.
+ * This function focuses on pruning, not detection.
  *
  * State Management:
  * This function ONLY modifies the filesystem. It does NOT modify state.
@@ -313,11 +313,11 @@ error_t *cleanup_preflight_check(
  * reflect the new filesystem reality.
  *
  * Safety Integration:
- * Before removing orphaned files, calls safety_check_orphans() to detect
+ * Before pruning orphaned files, calls safety_check_orphans() to detect
  * uncommitted changes. Files with violations are:
  * - Added to result->skipped_files
  * - Detailed in result->safety_violations
- * - NOT removed from filesystem
+ * - Left on the filesystem
  * - Reported to user with guidance
  *
  * Directory Pruning Algorithm:
@@ -334,7 +334,7 @@ error_t *cleanup_preflight_check(
  *
  * Error Handling:
  * - Individual file/directory removal failures are NON-FATAL
- * - Tracked in failed counters and reported
+ * - Tracked in the failed buckets and reported
  * - Fatal errors: memory allocation, safety module errors
  *
  * @param repo Repository (must not be NULL)

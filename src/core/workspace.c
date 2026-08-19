@@ -1257,7 +1257,7 @@ static error_t *analyze_orphaned_files(workspace_t *ws) {
              * - File accessible: divergence = computed from content/metadata analysis
              *
              * This enables status to predict apply behavior:
-             * - DIVERGENCE_NONE -> Clean orphan, will be removed
+             * - DIVERGENCE_NONE -> Clean orphan, apply will prune
              * - DIVERGENCE_CONTENT/TYPE -> Modified, apply will skip (safety check)
              * - DIVERGENCE_MODE/OWNERSHIP -> Metadata changed, apply will skip
              * - DIVERGENCE_UNVERIFIED -> Cannot verify, apply will skip

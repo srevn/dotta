@@ -176,7 +176,7 @@ static void print_manifest_disable_stats(
         if (stats->files_orphaned > 0) {
             output_styled(
                 out, OUTPUT_VERBOSE,
-                "    - {red}%zu{reset} file%s without fallback (will be removed)\n",
+                "    - {red}%zu{reset} file%s without fallback (will be pruned)\n",
                 stats->files_orphaned,
                 stats->files_orphaned == 1 ? "" : "s"
             );

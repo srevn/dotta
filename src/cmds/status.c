@@ -469,7 +469,7 @@ static void display_workspace_status(
             );
             output_hintline(
                 out, OUTPUT_NORMAL, "  [orphaned]              "
-                "- Clean, will be removed by 'dotta apply'"
+                "- Clean, will be pruned by 'dotta apply'"
             );
             output_hintline(
                 out, OUTPUT_NORMAL, "  [orphaned] [modified]   "

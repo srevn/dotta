@@ -2051,7 +2051,7 @@ static const args_opt_t apply_opts[] = {
     ARGS_FLAG(
         "f force",
         cmd_apply_options_t,force,
-        "Overwrite modified files"
+        "Overwrite modified files and replace type conflicts"
     ),
     ARGS_FLAG(
         "n dry-run",

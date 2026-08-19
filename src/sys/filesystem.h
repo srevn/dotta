@@ -215,6 +215,10 @@ error_t *fs_create_dir_with_ownership(
 /**
  * Remove directory
  *
+ * With `recursive`, this deletes the whole subtree — every path beneath
+ * `path`, tracked or not. Callers that may only remove the directory
+ * itself want fs_remove_empty_dir, which refuses rather than descends.
+ *
  * @param path Directory path (must not be NULL)
  * @param recursive Remove contents recursively if true
  * @return Error or NULL on success
@@ -250,6 +254,11 @@ bool fs_is_directory(const char *path);
  * - "." and ".." entries (standard directory entries)
  * - OS metadata files (.DS_Store, ._*, Thumbs.db, etc.)
  *
+ * Metadata is recognized by name AND by type: only a regular file is OS
+ * metadata. A directory or a symlink wearing one of those names is a user
+ * object, and looking past it would promise a removal fs_remove_empty_dir
+ * cannot deliver.
+ *
  * Returns false if the directory cannot be opened (doesn't exist, not a directory,
  * permission denied, or read error) for safety (don't delete what we can't verify).
  *
@@ -257,6 +266,29 @@ bool fs_is_directory(const char *path);
  * @return true if directory contains no user content, false otherwise
  */
 bool fs_is_directory_empty(const char *path);
+
+/**
+ * Remove a directory that holds nothing but OS metadata
+ *
+ * The mechanical counterpart of fs_is_directory_empty, and deliberately
+ * its neighbour: that predicate calls a directory empty when every entry
+ * is OS metadata, so the removal that honours it must clear exactly those
+ * entries and nothing else. rmdir(2) alone cannot — .DS_Store counts as an
+ * entry, and on macOS that is every directory Finder has ever opened.
+ *
+ * Removes the OS-metadata entries, then the directory. Refuses with
+ * ERR_CONFLICT the moment it meets an entry it may not remove, so a file
+ * that appeared since an emptiness probe stops the removal instead of
+ * going with it — which is what makes this safe to call on a prediction.
+ * Absence is success.
+ *
+ * Never recurses. For a directory whose whole subtree is dotta's to
+ * delete, that is fs_remove_dir(path, true).
+ *
+ * @param path Directory path (must not be NULL)
+ * @return Error or NULL on success
+ */
+error_t *fs_remove_empty_dir(const char *path);
 
 /**
  * List directory contents (excludes . and ..)

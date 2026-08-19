@@ -308,6 +308,136 @@ static bool nearest_ancestor(char *scratch, size_t *out_slash, struct stat *st) 
 }
 
 /* ══════════════════════════════════════════════════════════════════
+ * Occupancy
+ * ══════════════════════════════════════════════════════════════════ */
+
+/**
+ * What occupies a path, from one lstat
+ *
+ * The link itself, never its target: a symlink is a distinct occupant,
+ * not the thing it points to. Deploy unlinks the link and never follows
+ * it, so the target's type and permissions are none of its business.
+ */
+typedef enum {
+    OCCUPANT_NONE,       /* absent, or beneath a non-directory */
+    OCCUPANT_REGULAR,
+    OCCUPANT_SYMLINK,
+    OCCUPANT_DIRECTORY,
+    OCCUPANT_OTHER,      /* fifo, socket, device — never what a row deploys */
+    OCCUPANT_UNKNOWN     /* unstattable for a reason other than absence */
+} occupant_t;
+
+/**
+ * Probe a path's occupant. On OCCUPANT_UNKNOWN, errno is lstat's — read
+ * it before anything else runs.
+ */
+static occupant_t path_occupant(const char *path) {
+    struct stat st;
+
+    if (lstat(path, &st) != 0) {
+        /* ENOTDIR: a component above the path is not a directory, so
+         * nothing can be at the path either. Whether that ancestor is this
+         * run's to replace is check_landing's question, not this one's. */
+        return (errno == ENOENT || errno == ENOTDIR) ? OCCUPANT_NONE : OCCUPANT_UNKNOWN;
+    }
+
+    if (S_ISREG(st.st_mode)) return OCCUPANT_REGULAR;
+    if (S_ISLNK(st.st_mode)) return OCCUPANT_SYMLINK;
+    if (S_ISDIR(st.st_mode)) return OCCUPANT_DIRECTORY;
+
+    return OCCUPANT_OTHER;
+}
+
+/**
+ * What a file row materializes at its path
+ */
+static occupant_t file_row_occupant(const state_file_entry_t *file) {
+    return file->type == STATE_FILE_SYMLINK ? OCCUPANT_SYMLINK : OCCUPANT_REGULAR;
+}
+
+/**
+ * Is something known to be standing at the path?
+ *
+ * OCCUPANT_UNKNOWN deliberately answers no. Deploy judges nothing it
+ * could not see: the mutation goes ahead and surfaces the real errno,
+ * rather than acting on a guess about what it failed to stat.
+ */
+static bool occupant_present(occupant_t occ) {
+    return occ != OCCUPANT_NONE && occ != OCCUPANT_UNKNOWN;
+}
+
+/**
+ * Does what stands at the path disagree with what the row materializes?
+ */
+static bool occupant_conflicts(occupant_t occ, occupant_t want) {
+    return occupant_present(occ) && occ != want;
+}
+
+/**
+ * May deploy remove what occupies a planned path?
+ */
+typedef enum {
+    CLEARANCE_OK,           /* --force is set, and the occupant is one node */
+    CLEARANCE_NEEDS_FORCE,  /* one node, but nothing said to replace it */
+    CLEARANCE_REFUSED       /* a directory holding paths the plan does not name */
+} clearance_t;
+
+/**
+ * Deploy's rule for clearing a planned path
+ *
+ * One rule, three consumers: preflight predicts with it, and both
+ * executors re-decide with it from a fresh lstat at mutation time — a
+ * prompt may have sat between the plan and the syscall, and a load-time
+ * guarantee is no guarantee about a runtime act.
+ *
+ * --force is the first half. Clearing an occupant is the destructive
+ * reading of "overwrite modified files", and preflight already gates a
+ * type divergence on that flag.
+ *
+ * The second half is a limit --force does not lift. What deploy replaces
+ * is the tracked path the user named: one node, whose disappearance is
+ * exactly what the preview and the prompt describe. A directory holding
+ * anything else holds *other* paths — untracked, unnamed, uncounted, and
+ * not restorable from Git — so nothing on the apply command line
+ * authorizes removing them. core/cleanup already refuses a non-empty
+ * orphaned directory under --force (cleanup.c:542); this is the same
+ * posture on deploy's side of the house.
+ *
+ * "Holds something" is fs_is_directory_empty's negation, so a directory
+ * carrying nothing but OS metadata is clearable and fs_remove_empty_dir
+ * removes exactly that much. A directory that cannot be read answers "not
+ * empty" — don't remove what you cannot verify — and its remedy is the
+ * same one.
+ *
+ * @param path Planned path (must not be NULL)
+ * @param occ Its occupant, freshly probed
+ * @param force Whether --force was given
+ */
+static clearance_t path_clearance(const char *path, occupant_t occ, bool force) {
+    if (occ == OCCUPANT_DIRECTORY && !fs_is_directory_empty(path)) {
+        return CLEARANCE_REFUSED;
+    }
+
+    return force ? CLEARANCE_OK : CLEARANCE_NEEDS_FORCE;
+}
+
+/**
+ * Remove the occupant of a planned path so the row's own type can land
+ *
+ * Every arm removes exactly one node: unlink for a file, a symlink or a
+ * device, rmdir for a directory that holds nothing (fs_remove_empty_dir
+ * clears OS metadata and refuses anything else). Deploy owns no recursive
+ * removal at all, which is what lets path_clearance be a prediction
+ * rather than a guard: a directory that fills up between the two stops
+ * the run instead of going with it. Absence is success — a race that
+ * removes the occupant first has done this function's work.
+ */
+static error_t *clear_occupant(const char *path, occupant_t occ) {
+    return (occ == OCCUPANT_DIRECTORY) ? fs_remove_empty_dir(path)
+                                       : fs_remove_file(path);
+}
+
+/* ══════════════════════════════════════════════════════════════════
  * Preflight
  * ══════════════════════════════════════════════════════════════════ */
 
@@ -438,6 +568,39 @@ static landing_verdict_t judge_component(
     return access(component, is_parent ? (W_OK | X_OK) : X_OK) == 0
              ? LANDING_SETTLED
              : LANDING_UNWRITABLE;
+}
+
+/**
+ * Is this row's content not dotta's to overwrite unasked?
+ *
+ * The counterpart of occupant_conflicts, and deliberately the only
+ * question here still answered from the workspace: content is compared
+ * against a blob that is not on disk, so the load-time verdict is the
+ * only authority there is — no fresh lstat can improve on it.
+ *
+ * A TYPE verdict counts, because it means the compare never produced a
+ * content verdict at all: whatever stood at the path was never measured
+ * against the row. DIVERGENCE_STALE is the one exception — it is set only
+ * after confirming that disk still holds the blob dotta itself deployed,
+ * so the overwrite loses nothing. Mode, ownership and encryption
+ * divergence never block.
+ *
+ * @param item Workspace verdict for the row (NULL = not in the index)
+ */
+static bool content_conflicts(const workspace_item_t *item) {
+    return item != NULL &&
+           (item->divergence & (DIVERGENCE_CONTENT | DIVERGENCE_TYPE)) &&
+           !(item->divergence & DIVERGENCE_STALE);
+}
+
+/**
+ * Record a conflict — a planned path --force resolves
+ */
+static error_t *push_conflict(preflight_result_t *result, const char *path) {
+    RETURN_IF_ERROR(string_array_push(result->conflicts, path));
+
+    result->has_errors = true;
+    return NULL;
 }
 
 /**
@@ -599,27 +762,38 @@ error_t *deploy_preflight(
 
     state_files_t files = state_files_view(&plan->files.pending);
     for (size_t i = 0; i < files.count; i++) {
-        const char *path = files.entries[i]->filesystem_path;
+        const state_file_entry_t *row = files.entries[i];
+        const char *path = row->filesystem_path;
         const workspace_item_t *item = workspace_get_item(ws, path);
+        occupant_t occ = path_occupant(path);
 
-        if (item && !opts->force) {
-            /* File has divergence - check if it's a blocking conflict.
-             * Only block on content conflicts (CONTENT, TYPE).
-             * Metadata divergence (mode, ownership) and encryption policy are informational.
-             *
-             * DIVERGENCE_STALE exception: When content diverges because the expected
-             * state changed (stale repair), and the file on disk matches what dotta
-             * deployed (old blob), it's safe to overwrite. DIVERGENCE_STALE is only
-             * set after this verification, so we can trust it here.
-             */
-            if ((item->divergence & (DIVERGENCE_CONTENT | DIVERGENCE_TYPE)) &&
-                !(item->divergence & DIVERGENCE_STALE)) {
-                /* Content or type conflict - block deployment */
-                err = string_array_push(result->conflicts, path);
-                if (err) goto cleanup;
-                result->has_errors = true;
+        if (occupant_conflicts(occ, file_row_occupant(row))) {
+            /* Type: decided from the fresh probe, because lstat is the
+             * authority for it and re-asking costs one syscall — the same
+             * question deploy_file will ask again at mutation time. What
+             * stands at the path also decides the remedy. */
+            switch (path_clearance(path, occ, opts->force)) {
+                case CLEARANCE_OK:
+                    break;
+
+                case CLEARANCE_NEEDS_FORCE:
+                    err = push_conflict(result, path);
+                    if (err) goto cleanup;
+                    break;
+
+                case CLEARANCE_REFUSED:
+                    err = push_blocked(
+                        result,
+                        str_format("%s (a non-empty directory is in the way)", path)
+                    );
+                    if (err) goto cleanup;
+                    break;
             }
-            /* Mode/ownership/encryption divergence is not blocking */
+        } else if (!opts->force && content_conflicts(item)) {
+            /* Content, asked only when the occupant is the row's own type:
+             * a path holding something else has no content to compare. */
+            err = push_conflict(result, path);
+            if (err) goto cleanup;
         }
 
         /* Every file row lands through its parent, whichever arm writes it
@@ -632,24 +806,24 @@ error_t *deploy_preflight(
     state_directories_t dirs = state_directories_view(&plan->directories.pending);
     for (size_t i = 0; i < dirs.count; i++) {
         const char *path = dirs.entries[i]->filesystem_path;
-        const workspace_item_t *item = workspace_get_item(ws, path);
+        occupant_t occ = path_occupant(path);
 
-        /* A planned directory squatted by a non-directory (workspace probes
-         * with lstat, so a symlink to a directory counts) blocks unless
-         * --force lets deploy_directory replace it. */
-        if (item && !opts->force && (item->divergence & DIVERGENCE_TYPE)) {
-            err = string_array_push(result->conflicts, path);
+        /* A planned directory squatted by a non-directory (the link
+         * itself, so a symlink to a directory counts) is replaced under
+         * --force, one node at a time. The squatter can never be a
+         * directory — that is the row converging in place — so
+         * path_clearance cannot refuse here and "use --force" is always
+         * the true remedy. */
+        if (occupant_conflicts(occ, OCCUPANT_DIRECTORY) &&
+            path_clearance(path, occ, opts->force) != CLEARANCE_OK) {
+            err = push_conflict(result, path);
             if (err) goto cleanup;
-            result->has_errors = true;
         }
 
         /* A directory already there is fixed in place: fchmod and fchown
          * ask for ownership, not for a writable parent. Only a create or a
-         * replace lands a new entry — and lstat decides which, exactly as
-         * deploy_directory does, so a symlink to a directory counts as the
-         * squatter it is rather than as the tracked directory. */
-        struct stat st;
-        if (lstat(path, &st) != 0 || !S_ISDIR(st.st_mode)) {
+         * replace lands a new entry. */
+        if (occ != OCCUPANT_DIRECTORY) {
             err = check_landing(ws, plan, path, result);
             if (err) goto cleanup;
         }
@@ -965,10 +1139,11 @@ cleanup:
 /**
  * Deploy a single state row to its target filesystem location.
  *
- * Decide, then gate, then mutate: the blob sanity check and ownership
- * resolution are decisions and run ahead of the dry-run gate (so a
- * dry-run previews strict-mode ownership failures too); every mutation
- * sits behind it, missing parents first.
+ * Decide, then gate, then mutate: the blob sanity check, the verdict on
+ * whatever occupies the path, and ownership resolution are decisions and
+ * run ahead of the dry-run gate (so a dry-run refuses what the real run
+ * refuses, and previews strict-mode ownership failures too); every
+ * mutation sits behind it, missing parents first.
  *
  * VWD Model:
  * - file->mode: Permission mode from state (0 = use safe fallback by type)
@@ -1010,6 +1185,44 @@ static error_t *deploy_file(
             file->filesystem_path
         );
     }
+
+    /* What is at the path decides what may happen to it, and it is asked
+     * here rather than taken from the plan: a prompt may have sat in
+     * between, and preflight's verdict was about the path as it was then.
+     * Type is the whole of what one lstat can settle; the content verdict
+     * stays the workspace's, because the blob it was compared against is
+     * not on disk to re-ask. */
+    occupant_t occ = path_occupant(file->filesystem_path);
+    occupant_t want = file_row_occupant(file);
+
+    if (occupant_conflicts(occ, want)) {
+        switch (path_clearance(file->filesystem_path, occ, opts->force)) {
+            case CLEARANCE_REFUSED:
+                return ERROR(
+                    ERR_CONFLICT, "'%s' is a non-empty directory (remove it by hand)",
+                    file->filesystem_path
+                );
+
+            case CLEARANCE_NEEDS_FORCE:
+                return ERROR(
+                    ERR_CONFLICT, "'%s' is not a %s (use --force to replace it)",
+                    file->filesystem_path,
+                    want == OCCUPANT_SYMLINK ? "symlink" : "regular file"
+                );
+
+            case CLEARANCE_OK:
+                break;
+        }
+    }
+
+    /* Whether the occupant must go before the write, which is mechanism
+     * rather than policy: rename(2) replaces any non-directory in place,
+     * so the regular arm clears only a directory; symlink(2) is
+     * EEXIST-strict, so the symlink arm clears whatever is there —
+     * including an occupant of its own type, which is no conflict and
+     * needs no --force. */
+    bool must_clear = (want == OCCUPANT_SYMLINK) ? occupant_present(occ)
+                                                 : (occ == OCCUPANT_DIRECTORY);
 
     /* Resolve ownership for the file based on prefix - RESOLVED BEFORE WRITING
      *
@@ -1066,21 +1279,12 @@ static error_t *deploy_file(
         );
         if (err) goto cleanup;
 
-        /* Clear path for symlink deployment (handles files, symlinks, and directories)
-         *
-         * Uses fs_clear_path() instead of fs_remove_file() because:
-         * 1. fs_remove_file() fails with EISDIR if target is a directory
-         * 2. fs_clear_path() uses lstat() so broken symlinks are properly detected
-         * 3. Idempotent - succeeds if path doesn't exist
-         *
-         * Safety: Only reached with --force (preflight blocks DIVERGENCE_TYPE)
-         */
-        err = fs_clear_path(file->filesystem_path);
-        if (err) {
-            err = error_wrap(
-                err, "Failed to prepare path for symlink deployment"
-            );
-            goto cleanup;
+        /* symlink(2) refuses an occupied path outright, so the link's own
+         * predecessor goes too — cleared by the decision taken above the
+         * gate, never by a fresh look from down here. */
+        if (must_clear) {
+            err = clear_occupant(file->filesystem_path, occ);
+            if (err) goto cleanup;
         }
 
         /* Create symlink */
@@ -1155,28 +1359,13 @@ static error_t *deploy_file(
         );
     }
 
-    /* Clear directory at target path if present
-     *
-     * fs_write_file_raw() lands the content by rename() of a temp file over
-     * the target. rename() replaces a regular file or a symlink (the link
-     * itself, not what it points to) but not a directory (EISDIR).
-     * Directories must be cleared explicitly before writing.
-     *
-     * Uses lstat() to avoid following symlinks:
-     * - Symlink to directory: lstat returns S_IFLNK -> rename replaces the link
-     * - Actual directory: lstat returns S_IFDIR -> must clear before writing
-     *
-     * Safety: Only reached with --force (preflight blocks DIVERGENCE_TYPE)
-     */
-    struct stat target_stat;
-    if (lstat(file->filesystem_path, &target_stat) == 0 && S_ISDIR(target_stat.st_mode)) {
-        err = fs_remove_dir(file->filesystem_path, true);
-        if (err) {
-            err = error_wrap(
-                err, "Failed to clear directory at '%s'", file->filesystem_path
-            );
-            goto cleanup;
-        }
+    /* fs_write_file_raw lands the content by rename(2) of a temp file over
+     * the target, which replaces a regular file, a symlink (the link
+     * itself, not what it points to) or a device in place — but never a
+     * directory (EISDIR). Only that one case needs clearing first. */
+    if (must_clear) {
+        err = clear_occupant(file->filesystem_path, occ);
+        if (err) goto cleanup;
     }
 
     /* Write directly from git blob to filesystem with atomic ownership and permissions
@@ -1289,33 +1478,47 @@ static error_t *deploy_directory(
 
     const char *path = dir->filesystem_path;
 
-    /* Decide how, from disk truth now. lstat: a symlink to a directory is
-     * not the directory being tracked. */
+    /* Decide how, from disk truth now — the occupant is the link itself,
+     * so a symlink to a directory is not the directory being tracked. */
     directory_action_t action;
-    struct stat st;
-    if (lstat(path, &st) == 0) {
-        if (S_ISDIR(st.st_mode)) {
+    occupant_t occ = path_occupant(path);
+
+    switch (occ) {
+        case OCCUPANT_DIRECTORY:
             action = DIR_ACTION_FIX;
-        } else if (opts->force) {
+            break;
+
+        case OCCUPANT_NONE:
+            /* Absent — or beneath a non-directory, which preflight blocked
+             * when unplanned and the directory pass replaces when planned
+             * (prefix order); one still there is ensure_parents' named error. */
+            action = DIR_ACTION_CREATE;
+            break;
+
+        case OCCUPANT_UNKNOWN:
+            return ERROR(ERR_FS, "Failed to stat '%s': %s", path, strerror(errno));
+
+        default:
+            /* Anything else is a single node in the way. It can never be a
+             * directory (that is FIX above), so path_clearance cannot
+             * refuse and --force is always the true remedy. */
+            if (path_clearance(path, occ, opts->force) != CLEARANCE_OK) {
+                return ERROR(
+                    ERR_CONFLICT, "'%s' is not a directory (use --force to replace it)",
+                    path
+                );
+            }
             action = DIR_ACTION_REPLACE;
-        } else {
-            return ERROR(
-                ERR_CONFLICT, "'%s' is not a directory (use --force to replace it)",
-                path
-            );
-        }
-    } else if (errno == ENOENT || errno == ENOTDIR) {
-        /* Absent — or beneath a non-directory, which preflight blocked
-         * when unplanned and the directory pass replaces when planned
-         * (prefix order); one still there is ensure_parents' named error. */
-        action = DIR_ACTION_CREATE;
-    } else {
-        return ERROR(ERR_FS, "Failed to stat '%s': %s", path, strerror(errno));
+            break;
     }
 
-    /* Divergence detail for the trace — from the fresh stat, FIX only */
+    /* Divergence detail for the trace — FIX only. path_occupant answered
+     * the type question and kept nothing else; mode and ownership are a
+     * different question, asked only when a trace will actually print it.
+     * A stat that loses a race just omits the detail. */
     char detail[32] = "";
-    if (action == DIR_ACTION_FIX && opts->verbose) {
+    struct stat st;
+    if (action == DIR_ACTION_FIX && opts->verbose && stat(path, &st) == 0) {
         bool mode_differs = false;
         bool ownership_differs = false;
 
@@ -1362,12 +1565,9 @@ static error_t *deploy_directory(
     }
 
     if (action == DIR_ACTION_REPLACE) {
-        /* fs_clear_path: lstat-based, removes a file, symlink or directory
-         * uniformly, so whatever squats the path goes before the mkdir */
-        err = fs_clear_path(path);
-        if (err) {
-            return error_wrap(err, "Failed to clear type conflict at '%s'", path);
-        }
+        /* The squatter goes before the mkdir — one node, by the decision
+         * taken above the gate. */
+        RETURN_IF_ERROR(clear_occupant(path, occ));
     } else if (action == DIR_ACTION_CREATE) {
         err = ensure_parents(ws, path, target_uid, target_gid, opts);
         if (err) {

@@ -17,6 +17,7 @@
  * - Permission preservation
  * - Fail-stop on error (not transactional, but clear reporting)
  * - One dry-run gate per executor, ahead of every mutation
+ * - Removals are single-node: what stands at a planned path, never a tree
  */
 
 #ifndef DOTTA_DEPLOY_H
@@ -37,14 +38,16 @@ typedef struct scope scope_t;
  *
  * Three findings, three remedies:
  *   conflicts          modified locally, or wrong type at the path — --force
- *   blocked            a planned path whose own ancestry refuses it, and
- *                      neither --force nor privileges change that: an
- *                      untracked non-directory squats an ancestor (remove
- *                      it, or widen the scope so a tracked ancestor is
- *                      planned and --force can replace it), or a tracked
- *                      directory's recorded mode cannot receive what is
- *                      planned beneath it (widen the recorded mode). Each
- *                      entry carries its own reason
+ *   blocked            a planned path this run cannot land, and neither
+ *                      --force nor privileges change that: an untracked
+ *                      non-directory squats an ancestor (remove it, or
+ *                      widen the scope so a tracked ancestor is planned
+ *                      and --force can replace it), a tracked directory's
+ *                      recorded mode cannot receive what is planned
+ *                      beneath it (widen the recorded mode), or a
+ *                      directory holding untracked paths stands at the
+ *                      planned path itself (remove it). Each entry
+ *                      carries its own reason
  *   permission_errors  the directory the write lands in refuses us —
  *                      privileges
  */
@@ -59,7 +62,7 @@ typedef struct {
  * Deployment options
  */
 typedef struct {
-    bool force;               /* Overwrite modified files; replace type conflicts */
+    bool force;               /* Overwrite modified files; replace a type conflict */
     bool dry_run;             /* Decide everything, mutate nothing */
     bool verbose;             /* Print per-item traces */
     bool skip_existing;       /* Skip files that already exist (don't overwrite) */
@@ -157,13 +160,17 @@ static inline bool deploy_plan_is_empty(const deploy_plan_t *plan) {
 /**
  * Run pre-flight checks over the plan
  *
- * Maps the workspace's divergence verdicts for the planned rows to
- * blocking decisions:
- * - Files: content or type divergence blocks unless --force (STALE-only
- *   content divergence is safe to overwrite and never blocks).
- * - Directories: type divergence (a non-directory at the tracked path)
- *   blocks unless --force.
- * - Both kinds: the write must be able to land. Every arm of the executor
+ * Predicts what each executor will decide, asking each question of the
+ * authority that will answer it again at execution time:
+ * - Type — a fresh lstat of the planned path, both kinds. A non-directory
+ *   where a directory belongs (or the reverse) blocks unless --force; a
+ *   directory holding untracked paths blocks either way, because deploy
+ *   removes single nodes and never a tree.
+ * - Content — the workspace's divergence verdict, the only authority for
+ *   a fact no lstat can settle. Blocks unless --force (STALE-only content
+ *   divergence is safe to overwrite and never blocks); mode, ownership
+ *   and encryption divergence never block.
+ * - Landing — the write must be able to land. Every arm of the executor
  *   writes through the *parent* — a temp file renamed over the target, a
  *   symlink unlinked and re-made, a mkdir — so the path's own permissions
  *   are never the question, and a directory being fixed in place asks
@@ -196,7 +203,10 @@ error_t *deploy_preflight(
  * is written beneath it), then files. Every planned item is acted on;
  * nothing outside the plan is *fixed*. Each executor decides *how* from
  * a fresh look at disk (a prompt may have sat between plan and
- * execution) and mutates nothing in dry-run.
+ * execution) and mutates nothing in dry-run — including the --force
+ * verdict on a type conflict, which is re-taken from that fresh look
+ * rather than inherited from preflight. Whatever a planned path's own
+ * occupant turns out to be, clearing it removes exactly one node.
  *
  * Missing parents are the mechanics of landing a planned path, created
  * top-down as part of its write: a tracked directory (any profile, in

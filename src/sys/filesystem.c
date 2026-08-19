@@ -783,6 +783,38 @@ bool fs_is_directory(const char *path) {
     return S_ISDIR(st.st_mode);
 }
 
+/**
+ * Is this directory entry OS metadata dotta may remove?
+ *
+ * Name and type together, because two functions act on the answer and
+ * they must not disagree: fs_is_directory_empty looks past such an entry,
+ * fs_remove_empty_dir unlinks it. The name rule is
+ * fs_is_os_metadata_file's; the type rule is this one's — metadata is a
+ * regular file, so a directory or a symlink wearing one of those names is
+ * a user object that neither function may pretend away.
+ *
+ * Anything that cannot be stat'd is not metadata: the conservative answer
+ * for both callers.
+ */
+static bool entry_is_removable_metadata(const char *dir, const char *name) {
+    if (!fs_is_os_metadata_file(name)) {
+        return false;
+    }
+
+    char *child = NULL;
+    error_t *err = fs_path_join(dir, name, &child);
+    if (err) {
+        error_free(err);
+        return false;
+    }
+
+    struct stat st;
+    bool removable = (lstat(child, &st) == 0) && S_ISREG(st.st_mode);
+
+    free(child);
+    return removable;
+}
+
 bool fs_is_directory_empty(const char *path) {
     if (!path) {
         return true;  /* NULL path is considered "empty" */
@@ -804,18 +836,30 @@ bool fs_is_directory_empty(const char *path) {
      * metadata (like .DS_Store on macOS) from blocking cleanup operations.
      */
     bool is_empty = true;
-    struct dirent *entry;
-    errno = 0;
 
-    while ((entry = readdir(dir)) != NULL) {
+    for (;;) {
+        /* readdir returns NULL on both EOF and error, and the entry test
+         * below stats — so errno is reset immediately before each call
+         * rather than once for the whole walk. */
+        errno = 0;
+        struct dirent *entry = readdir(dir);
+
+        if (!entry) {
+            if (errno != 0) {
+                is_empty = false;  /* read error - assume not empty for safety */
+            }
+            break;
+        }
+
         /* Skip . and .. entries */
         if (strcmp(entry->d_name, ".") == 0 ||
             strcmp(entry->d_name, "..") == 0) {
             continue;
         }
 
-        /* Skip OS metadata files */
-        if (fs_is_os_metadata_file(entry->d_name)) {
+        /* Skip exactly what fs_remove_empty_dir can clear away, so "empty"
+         * means the same thing to the predicate and to the mechanism. */
+        if (entry_is_removable_metadata(path, entry->d_name)) {
             continue;
         }
 
@@ -824,14 +868,73 @@ bool fs_is_directory_empty(const char *path) {
         break;
     }
 
-    /* Check for readdir() errors (readdir returns NULL on both EOF and error) */
-    if (errno != 0) {
-        /* Read error occurred - assume not empty for safety */
-        is_empty = false;
-    }
-
     closedir(dir);
     return is_empty;
+}
+
+/**
+ * POSIX permits either code for "the directory is not empty"
+ */
+static inline bool errno_means_not_empty(int code) {
+    return code == ENOTEMPTY || code == EEXIST;
+}
+
+error_t *fs_remove_empty_dir(const char *path) {
+    RETURN_IF_ERROR(validate_path(path));
+
+    /* The whole story for a directory that is empty by the kernel's
+     * definition, which is nearly all of them. */
+    if (rmdir(path) == 0 || errno == ENOENT) {
+        return NULL;
+    }
+    if (!errno_means_not_empty(errno)) {
+        return ERROR(
+            ERR_FS, "Failed to remove directory '%s': %s",
+            path, strerror(errno)
+        );
+    }
+
+    /* Not empty by the kernel's definition; it may still be empty by ours.
+     * List first — removing entries from an open DIR* leaves the rest of
+     * the walk unspecified. */
+    string_array_t *entries = NULL;
+    RETURN_IF_ERROR(fs_list_dir(path, &entries));
+
+    error_t *err = NULL;
+    for (size_t i = 0; i < entries->count && !err; i++) {
+        const char *name = entries->items[i];
+
+        if (!entry_is_removable_metadata(path, name)) {
+            err = ERROR(ERR_CONFLICT, "Directory '%s' is not empty", path);
+            break;
+        }
+
+        char *child = NULL;
+        err = fs_path_join(path, name, &child);
+        if (!err) {
+            err = fs_remove_file(child);
+            free(child);
+        }
+    }
+
+    string_array_free(entries);
+    if (err) {
+        return err;
+    }
+
+    /* An entry that appeared while the metadata was being cleared lands
+     * here, and it is the same refusal by another route. */
+    if (rmdir(path) != 0 && errno != ENOENT) {
+        if (errno_means_not_empty(errno)) {
+            return ERROR(ERR_CONFLICT, "Directory '%s' is not empty", path);
+        }
+        return ERROR(
+            ERR_FS, "Failed to remove directory '%s': %s",
+            path, strerror(errno)
+        );
+    }
+
+    return NULL;
 }
 
 error_t *fs_list_dir(const char *path, string_array_t **out) {

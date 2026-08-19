@@ -3,7 +3,7 @@
  *
  * Implements safe removal of orphaned files and directories detected by the
  * workspace module. Provides preflight analysis, safety validation, and
- * iterative directory pruning with detailed result reporting.
+ * deepest-first directory pruning with detailed result reporting.
  *
  * Orphan detection is performed by workspace module (see workspace.c).
  * This module focuses exclusively on safe removal operations.
@@ -23,19 +23,146 @@
 #include "sys/filesystem.h"
 
 /**
- * Directory pruning state
+ * What stands at an orphaned directory's path, right now
  *
- * Tracks the state of each directory during iterative pruning to avoid
- * redundant filesystem checks. This optimization significantly reduces
- * system call overhead for deep directory hierarchies.
+ * The one question the preview and the prune must answer identically, so
+ * one function answers it for both.
+ *
+ * ABSENT is stat truth — a dangling symlink reads absent and its row is
+ * reclaimed, which is what the prune's reclaim arm has always done and
+ * what the workspace's own on_filesystem says for a directory orphan.
+ * Making it lstat-based would change behavior rather than counts, and
+ * belongs with the decision about what to do with a foreign occupant.
+ *
+ * FOREIGN is anything rmdir(2) cannot remove and dotta does not own — a
+ * symlink, a regular file. Both phases keep it, under the label the
+ * outcome already uses.
+ *
+ * Only a real directory earns an emptiness verdict, and that is the one
+ * thing the two phases decide differently on purpose: the preview against
+ * this run's planned effects, the prune against the disk it has changed.
  */
 typedef enum {
-    DIR_STATE_UNKNOWN = 0,    /* Not yet checked this iteration */
-    DIR_STATE_REMOVED,        /* Successfully removed in a previous iteration */
-    DIR_STATE_NOT_EMPTY,      /* Contains files or subdirectories, won't be removed */
-    DIR_STATE_NONEXISTENT,    /* Doesn't exist on filesystem */
-    DIR_STATE_FAILED          /* Removal failed (permissions, I/O error, etc.) */
-} directory_state_t;
+    DIR_PROBE_ABSENT,      /* Nothing there — retire the row, no filesystem effect */
+    DIR_PROBE_FOREIGN,     /* A symlink or a non-directory — kept */
+    DIR_PROBE_DIRECTORY    /* A directory — emptiness decides */
+} dir_probe_t;
+
+static dir_probe_t probe_orphan_directory(const char *path) {
+    if (!fs_exists(path)) {
+        return DIR_PROBE_ABSENT;
+    }
+    if (fs_is_symlink(path) || !fs_is_directory(path)) {
+        return DIR_PROBE_FOREIGN;
+    }
+
+    return DIR_PROBE_DIRECTORY;
+}
+
+/**
+ * Order two orphaned directories deepest first
+ *
+ * Descending path length, then ascending path so the order is total and
+ * the reports are reproducible.
+ */
+static int compare_deepest_first(const void *a, const void *b) {
+    const char *pa = (*(const workspace_item_t *const *) a)->filesystem_path;
+    const char *pb = (*(const workspace_item_t *const *) b)->filesystem_path;
+
+    size_t la = strlen(pa);
+    size_t lb = strlen(pb);
+
+    if (la != lb) {
+        return (la < lb) ? 1 : -1;
+    }
+
+    return strcmp(pa, pb);
+}
+
+/**
+ * Order orphaned directories so every child precedes its parent
+ *
+ * A child's path is its parent's path plus a separator and a name, so it
+ * is strictly longer; descending length therefore places every directory
+ * after its own descendants, and two paths of equal length can never be
+ * parent and child. That order is what lets a single pass decide a
+ * directory whose emptiness depends on its children — no second look, no
+ * iterating to a fixpoint.
+ *
+ * Established here rather than borrowed from the state layer's
+ * ORDER BY filesystem_path: it is this module's correctness that rests on
+ * it, and a producer two layers away is free to change its sort.
+ *
+ * @param dirs Orphaned directory slice (empty yields *out == NULL)
+ * @param out Heap array of borrowed items; caller frees with free()
+ * @return Error on allocation failure
+ */
+static error_t *order_deepest_first(
+    workspace_items_t dirs,
+    const workspace_item_t ***out
+) {
+    CHECK_NULL(out);
+
+    *out = NULL;
+
+    if (dirs.count == 0) {
+        return NULL;
+    }
+
+    const workspace_item_t **ordered = malloc(dirs.count * sizeof(*ordered));
+    if (!ordered) {
+        return ERROR(ERR_MEMORY, "Failed to allocate orphaned directory ordering");
+    }
+
+    memcpy(ordered, dirs.entries, dirs.count * sizeof(*ordered));
+    qsort(ordered, dirs.count, sizeof(*ordered), compare_deepest_first);
+
+    *out = ordered;
+    return NULL;
+}
+
+/**
+ * Index a safety result by filesystem path
+ *
+ * O(1) "does a violation stand against this orphan, and which one?" for
+ * the walks that ask it: the preflight partition and both of the removal
+ * loop's routes to a violation list.
+ *
+ * Borrowed keys and values — the map must not outlive the safety result it
+ * indexes. Yields NULL when there is nothing to index; hashmap_get is
+ * NULL-safe, so callers probe the result without a guard.
+ *
+ * @param violations Safety result to index (may be NULL or empty)
+ * @param out Receives the map, or NULL (must not be NULL)
+ * @return Error on allocation failure
+ */
+static error_t *index_violations(const safety_result_t *violations, hashmap_t **out) {
+    CHECK_NULL(out);
+
+    *out = NULL;
+
+    if (!violations || violations->count == 0) {
+        return NULL;
+    }
+
+    hashmap_t *map = hashmap_borrow(violations->count);
+    if (!map) {
+        return ERROR(ERR_MEMORY, "Failed to create safety violations index");
+    }
+
+    for (size_t i = 0; i < violations->count; i++) {
+        const safety_violation_t *v = &violations->violations[i];
+
+        error_t *err = hashmap_set(map, v->filesystem_path, (void *) v);
+        if (err) {
+            hashmap_free(map, NULL);
+            return error_wrap(err, "Failed to index safety violations");
+        }
+    }
+
+    *out = map;
+    return NULL;
+}
 
 /**
  * Create cleanup result structure
@@ -113,18 +240,12 @@ void cleanup_preflight_result_free(cleanup_preflight_result_t *result) {
         return;
     }
 
-    /* Free string arrays */
-    if (result->orphaned_files) {
-        string_array_free(result->orphaned_files);
-    }
-    if (result->orphaned_directories) {
-        string_array_free(result->orphaned_directories);
-    }
-
-    /* Free embedded safety violations */
-    if (result->safety_violations) {
-        safety_result_free(result->safety_violations);
-    }
+    /* All NULL-safe: a result abandoned part-way through construction is
+     * freed by the same call as a complete one. */
+    string_array_free(result->removable_files);
+    string_array_free(result->prunable_dirs);
+    string_array_free(result->occupied_dirs);
+    safety_result_free(result->safety_violations);
 
     free(result);
 }
@@ -202,27 +323,10 @@ static error_t *prune_orphaned_files(
              * could allow file modifications). See cleanup.h for full contract.
              *
              * Memory ownership: opts->preflight_violations is a BORROWED reference.
-             * We use it to build violations_map but do NOT store it in result.
-             * The caller (apply.c) owns and will free the safety_result_t.
+             * We index it but do NOT store it in result. The caller (apply.c)
+             * owns and will free the safety_result_t.
              */
-            if (opts->preflight_violations->count > 0) {
-                /* Build violations map for files to skip */
-                violations_map = hashmap_borrow(opts->preflight_violations->count);
-                if (!violations_map) {
-                    return ERROR(ERR_MEMORY, "Failed to create violations hashmap");
-                }
-
-                for (size_t i = 0; i < opts->preflight_violations->count; i++) {
-                    const safety_violation_t *v = &opts->preflight_violations->violations[i];
-                    /* Store violation pointer for O(1) reason lookup */
-                    err = hashmap_set(violations_map, v->filesystem_path, (void *) v);
-                    if (err) {
-                        hashmap_free(violations_map, NULL);
-                        return error_wrap(err, "Failed to populate violations map");
-                    }
-                }
-            }
-            /* count == 0: preflight verified all files are safe, no map needed */
+            RETURN_IF_ERROR(index_violations(opts->preflight_violations, &violations_map));
 
         } else if (!opts->skip_safety_check) {
             /* Path 2: No preflight - run safety check now
@@ -248,23 +352,7 @@ static error_t *prune_orphaned_files(
                 return error_wrap(err, "Safety check failed");
             }
 
-            /* Build violations map for O(1) lookup during removal */
-            if (result->safety_violations && result->safety_violations->count > 0) {
-                violations_map = hashmap_borrow(result->safety_violations->count);
-                if (!violations_map) {
-                    return ERROR(ERR_MEMORY, "Failed to create violations hashmap");
-                }
-
-                for (size_t i = 0; i < result->safety_violations->count; i++) {
-                    const safety_violation_t *v = &result->safety_violations->violations[i];
-                    /* Store violation pointer for O(1) reason lookup */
-                    err = hashmap_set(violations_map, v->filesystem_path, (void *) v);
-                    if (err) {
-                        hashmap_free(violations_map, NULL);
-                        return error_wrap(err, "Failed to populate violations map");
-                    }
-                }
-            }
+            RETURN_IF_ERROR(index_violations(result->safety_violations, &violations_map));
         }
         /* Path 3 (implicit): preflight_violations == NULL && skip_safety_check == true
          * No safety check runs, no violations map built.
@@ -276,9 +364,9 @@ static error_t *prune_orphaned_files(
     for (size_t i = 0; i < orphans.count; i++) {
         const char *path = orphans.entries[i]->filesystem_path;
 
-        /* Check for safety violations using O(1) hashmap lookup */
-        const safety_violation_t *violation = violations_map ?
-            hashmap_get(violations_map, path) : NULL;
+        /* Check for safety violations using O(1) hashmap lookup
+         * (a NULL map reads as "no violation" — see index_violations) */
+        const safety_violation_t *violation = hashmap_get(violations_map, path);
 
         if (violation) {
             if (strcmp(violation->reason, SAFETY_REASON_RELEASED) == 0) {
@@ -311,8 +399,15 @@ static error_t *prune_orphaned_files(
 
         /* Already-absent orphan: no filesystem effect happened or was
          * needed — track for state retirement only. Reporting it as
-         * "removed" would claim an effect that never occurred. */
-        if (!fs_exists(path)) {
+         * "removed" would claim an effect that never occurred.
+         *
+         * lstat, matching both the workspace's on_filesystem for a file
+         * orphan and unlink's own view of the path: a symlink row whose
+         * link now dangles is an object dotta deployed and is here to
+         * remove, not an absence to reclaim around. stat would follow the
+         * link, call it gone, retire the row and leave the link behind
+         * with nothing left that knows about it. */
+        if (!fs_lexists(path)) {
             if (!dry_run) {
                 err = string_array_push(result->reclaimed_files, path);
                 if (err) {
@@ -360,83 +455,24 @@ static error_t *prune_orphaned_files(
 }
 
 /**
- * Reset parent directory state to UNKNOWN (for orphan directories)
+ * Prune orphaned directories
  *
- * After removing a directory, locate its parent in the orphan list and
- * downgrade DIR_STATE_NOT_EMPTY → DIR_STATE_UNKNOWN. The parent's earlier
- * NOT_EMPTY verdict was based on a state of the world that just changed
- * (one of its children was removed); the next iteration must re-check.
+ * Runs after the orphaned files have been removed, so the filesystem it
+ * looks at is the one the user will be left with: a directory whose only
+ * contents were orphaned files is empty by now and is seen as such.
  *
- * @param orphan_entries Array of orphaned directory entries (workspace_item_t *)
- * @param dir_count Number of directories
- * @param states Array of directory states (parallel to entries)
- * @param removed_path Path of directory that was just removed
- */
-static void reset_parent_directory_state_orphans(
-    const workspace_item_t *const *orphan_entries,
-    size_t dir_count,
-    directory_state_t *states,
-    const char *removed_path
-) {
-    if (!orphan_entries || !states || !removed_path || dir_count == 0) {
-        return;
-    }
-
-    /* Extract parent path by finding last slash */
-    const char *last_slash = strrchr(removed_path, '/');
-
-    /* Edge case: root directory or no parent */
-    if (!last_slash || last_slash == removed_path) {
-        return;  /* No parent to reset */
-    }
-
-    /* Build parent path (everything before last slash) */
-    size_t parent_len = last_slash - removed_path;
-    char *parent_path = strndup(removed_path, parent_len);
-    if (!parent_path) {
-        return;  /* Memory allocation failed - non-fatal */
-    }
-
-    /* Find parent in orphan entries list */
-    for (size_t i = 0; i < dir_count; i++) {
-        if (strcmp(orphan_entries[i]->filesystem_path, parent_path) == 0) {
-            /* Found parent - reset state if it was marked non-empty */
-            if (states[i] == DIR_STATE_NOT_EMPTY) {
-                states[i] = DIR_STATE_UNKNOWN;
-            }
-            break;
-        }
-    }
-
-    free(parent_path);
-}
-
-/**
- * Prune orphaned directories (with inline safety check)
+ * One deepest-first pass. Every child is decided before its parent, so a
+ * parent that this run empties is seen empty when its turn comes — the
+ * whole reason the old iterate-until-stable loop existed. Emptiness is
+ * read from the disk this run has just changed; cleanup_preflight_check
+ * predicted the same answer from the plan, and this is where the
+ * prediction is confirmed or reported broken.
  *
- * Iteratively removes orphaned directories that are:
- * 1. In orphaned_dirs list (not in enabled profile metadata)
- * 2. Empty (contain no files or subdirectories)
- *
- * Safety Check (INLINE):
- * - If directory is non-empty: SKIP (contains untracked files - data loss risk)
- * - If directory is empty: SAFE (no data loss possible)
- *
- * This mirrors file pruning but with simpler safety logic:
- * - Files: Complex safety (Git comparison, hash checks, decryption)
- * - Directories: Simple safety (filesystem empty check)
- *
- * Algorithm:
- * - Iteration 1: Check all orphaned dirs, remove empty ones, skip non-empty
- * - Iteration 2: Parent dirs might now be empty, check unknowns only
- * - Repeat until no progress made (stable state)
- *
- * State Tracking Optimization:
- * - DIR_STATE_REMOVED: Skip in all future iterations
- * - DIR_STATE_NOT_EMPTY: Skipped (safety violation - contains untracked files)
- * - DIR_STATE_NONEXISTENT: Skip in all future iterations
- * - DIR_STATE_FAILED: Skip in all future iterations
- * - DIR_STATE_UNKNOWN: Check in this iteration
+ * fs_remove_empty_dir is the mechanism and also the guard: it clears the
+ * OS metadata fs_is_directory_empty looked past and nothing else, so an
+ * entry that arrives between the check and the removal stops it rather
+ * than going with it. That refusal is the "not empty" verdict by another
+ * route — ERR_CONFLICT — not a failure.
  *
  * @param orphaned_dirs Pre-computed orphan slice (count == 0 is valid)
  * @param result Cleanup result to update (must not be NULL)
@@ -451,168 +487,203 @@ static error_t *prune_orphaned_directories(
     CHECK_NULL(result);
     CHECK_NULL(opts);
 
-    bool dry_run = opts->dry_run;
-
-    const workspace_item_t *const *orphans = orphaned_dirs.entries;
+    const workspace_item_t **ordered = NULL;
+    RETURN_IF_ERROR(order_deepest_first(orphaned_dirs, &ordered));
 
     /* Early exit: no orphaned directories */
-    if (orphaned_dirs.count == 0) {
+    if (!ordered) {
         return NULL;
     }
 
-    size_t dir_count = orphaned_dirs.count;
+    error_t *err = NULL;
 
-    /* Allocate state tracking array */
-    directory_state_t *states = calloc(dir_count, sizeof(directory_state_t));
-    if (!states) {
-        return ERROR(ERR_MEMORY, "Failed to allocate directory state tracking array");
+    for (size_t i = 0; i < orphaned_dirs.count && !err; i++) {
+        const char *dir_path = ordered[i]->filesystem_path;
+
+        switch (probe_orphan_directory(dir_path)) {
+            case DIR_PROBE_ABSENT:
+                /* No filesystem effect happened or was needed — the row is
+                 * retired, nothing is removed. */
+                if (!opts->dry_run) {
+                    err = string_array_push(result->reclaimed_dirs, dir_path);
+                }
+                continue;
+
+            case DIR_PROBE_FOREIGN:
+                err = string_array_push(result->skipped_dirs, dir_path);
+                continue;
+
+            case DIR_PROBE_DIRECTORY:
+                break;
+        }
+
+        if (!fs_is_directory_empty(dir_path)) {
+            err = string_array_push(result->skipped_dirs, dir_path);
+            continue;
+        }
+
+        /* Dry run: skip removal. Use cleanup_preflight_check for preview. */
+        if (opts->dry_run) {
+            continue;
+        }
+
+        error_t *remove_err = fs_remove_empty_dir(dir_path);
+        if (!remove_err) {
+            err = string_array_push(result->removed_dirs, dir_path);
+            continue;
+        }
+
+        /* Non-fatal either way: record which it was and carry on. */
+        bool gained_content = (error_code(remove_err) == ERR_CONFLICT);
+        error_free(remove_err);
+
+        err = string_array_push(
+            gained_content ? result->skipped_dirs : result->failed_dirs, dir_path
+        );
     }
 
-    /* All states initialized to DIR_STATE_UNKNOWN by calloc */
+    free(ordered);
 
-    bool made_progress = true;
-    size_t iteration = 0;
+    return err ? error_wrap(err, "Failed to record orphaned directory outcome") : NULL;
+}
 
-    /* Iteratively remove empty orphaned directories until stable.
-     * Guard: at most dir_count iterations (each must remove at least one). */
-    while (made_progress && iteration < dir_count) {
-        made_progress = false;
-        iteration++;
+/**
+ * Is this directory entry one the run is about to take away?
+ *
+ * The hole in the preview's emptiness walk. Membership is keyed by
+ * filesystem path, which is why the entry arrives as a full path rather
+ * than a basename.
+ */
+static bool entry_is_departing(const char *child, void *departing) {
+    return hashmap_has((const hashmap_t *) departing, child);
+}
 
-        for (size_t i = 0; i < dir_count; i++) {
-            const char *dir_path = orphans[i]->filesystem_path;
+/**
+ * Is `path` strictly inside `dir`?
+ *
+ * A prefix test with a separator, so "/a/bc" is not inside "/a/b" — and
+ * neither is "/a/b" itself. Both sides are canonical filesystem paths
+ * without a trailing separator.
+ */
+static bool path_is_under(const char *path, const char *dir) {
+    size_t len = strlen(dir);
 
-            /* Optimization: Skip directories with known state */
-            if (states[i] == DIR_STATE_REMOVED ||
-                states[i] == DIR_STATE_NONEXISTENT ||
-                states[i] == DIR_STATE_FAILED) {
-                continue;
-            }
+    /* strncmp == 0 guarantees path has at least len bytes, so reading
+     * path[len] is in bounds — it is either the terminator or a real
+     * character. */
+    return strncmp(path, dir, len) == 0 && path[len] == '/';
+}
 
-            /* Skip non-empty directories (safety violation - already tracked) */
-            if (states[i] == DIR_STATE_NOT_EMPTY) {
-                continue;
-            }
-
-            /* Already-absent orphan directory: no filesystem effect — track
-             * for state retirement only (reclaimed, not removed). */
-            if (!fs_exists(dir_path)) {
-                states[i] = DIR_STATE_NONEXISTENT;
-                if (!dry_run) {
-                    error_t *push_err = string_array_push(result->reclaimed_dirs, dir_path);
-                    if (push_err) {
-                        free(states);
-                        return error_wrap(push_err, "Failed to track reclaimed directory");
-                    }
-
-                    /* Parent might now be empty - enable recheck on next iteration.
-                     * This mirrors REMOVED logic: discovering a child is gone (whether
-                     * we removed it or it was already nonexistent) has the same effect
-                     * on the parent's emptiness.
-                     */
-                    made_progress = true;
-                    reset_parent_directory_state_orphans(orphans, dir_count, states, dir_path);
-                }
-                continue;
-            }
-
-            /* Skip symlinks — rmdir cannot remove them (ENOTDIR).
-             *
-             * A tracked directory replaced with a symlink is user modification.
-             * fs_exists follows symlinks (returns true if target exists), but
-             * rmdir operates on the path itself and fails on symlinks.
-             * Treat as non-removable to avoid confusing error messages.
-             *
-             * Mark state only; the skipped_dirs push is deferred to the
-             * finalization pass below (a symlink can't transition out of
-             * NOT_EMPTY, but the same pattern serves both branches). */
-            if (fs_is_symlink(dir_path)) {
-                states[i] = DIR_STATE_NOT_EMPTY;
-                continue;
-            }
-
-            /* INLINE SAFETY CHECK: Is directory empty?
-             *
-             * Mark state only. The NOT_EMPTY verdict can transition back to
-             * UNKNOWN (and then to REMOVED) after a child gets removed on a
-             * later iteration — reset_parent_directory_state_orphans handles
-             * that. Pushing to skipped_dirs now would produce contradictory
-             * "[skipped] a, [removed] a" output; the finalization pass below
-             * commits only entries whose FINAL state is NOT_EMPTY. */
-            if (!fs_is_directory_empty(dir_path)) {
-                states[i] = DIR_STATE_NOT_EMPTY;
-                continue;  /* Won't re-check until child removed */
-            }
-
-            /* Dry run: skip removal. Use cleanup_preflight_check for preview. */
-            if (dry_run) {
-                /* In dry-run mode, we don't remove but caller can infer what would happen
-                 * from orphaned_directories_found and orphaned_directories_removed counters */
-                continue;
-            }
-
-            /* Remove empty orphaned directory */
-            error_t *remove_err = fs_remove_dir(dir_path, false);
-            if (remove_err) {
-                /* Non-fatal: track failure, populate result array, and continue */
-                states[i] = DIR_STATE_FAILED;
-
-                /* Populate failed_dirs array for caller display */
-                error_t *push_err = string_array_push(result->failed_dirs, dir_path);
-                if (push_err) {
-                    error_free(remove_err);
-                    /* Free resources and return fatal error */
-                    free(states);
-                    return error_wrap(push_err, "Failed to track failed directory");
-                }
-
-                error_free(remove_err);
-            } else {
-                /* Directory removed successfully */
-                states[i] = DIR_STATE_REMOVED;
-                made_progress = true;
-
-                /* Reset parent directory state (might now be empty) */
-                reset_parent_directory_state_orphans(orphans, dir_count, states, dir_path);
-
-                /* Populate removed_dirs array for caller display */
-                error_t *push_err = string_array_push(result->removed_dirs, dir_path);
-                if (push_err) {
-                    /* Free resources and return fatal error */
-                    free(states);
-                    return error_wrap(push_err, "Failed to track removed directory");
-                }
-            }
+/**
+ * Will this run's deployment put something inside this directory?
+ *
+ * Deployment runs before cleanup, so a path the plan is about to
+ * materialize is content that will be there when the prune looks — even
+ * though nothing of it is on disk now, which is exactly why the disk
+ * cannot answer this and the plan must.
+ *
+ * Every directory above an arriving path is occupied by it, not just its
+ * immediate parent: the ones deployment creates on the way count too.
+ */
+static bool arrival_lands_in(const cleanup_options_t *opts, const char *dir) {
+    for (size_t i = 0; i < opts->arriving_files.count; i++) {
+        if (path_is_under(opts->arriving_files.entries[i]->filesystem_path, dir)) {
+            return true;
         }
     }
 
-    /* Finalize skipped_dirs: only entries whose FINAL state is NOT_EMPTY
-     * belong in the skipped list. An entry transiently marked NOT_EMPTY on
-     * an early pass may get reset to UNKNOWN once a child is removed, then
-     * transition to REMOVED on a later pass — pushing eagerly would pair
-     * "[skipped] a" with "[removed] a" in the user-facing output. */
-    for (size_t i = 0; i < dir_count; i++) {
-        if (states[i] == DIR_STATE_NOT_EMPTY) {
-            error_t *push_err = string_array_push(
-                result->skipped_dirs, orphans[i]->filesystem_path
-            );
-            if (push_err) {
-                free(states);
-                return error_wrap(push_err, "Failed to finalize skipped directory");
-            }
+    for (size_t i = 0; i < opts->arriving_directories.count; i++) {
+        if (path_is_under(opts->arriving_directories.entries[i]->filesystem_path, dir)) {
+            return true;
         }
     }
 
-    free(states);
-    return NULL;
+    return false;
+}
+
+/**
+ * Predict which orphaned directories the prune will reach
+ *
+ * A directory is prunable iff everything in it is OS metadata, a file this
+ * run unlinks, or an orphaned directory beneath it that is itself prunable
+ * — and nothing this run deploys lands inside it. That is what the prune
+ * arrives at by acting, read off the plan here in one pass because
+ * order_deepest_first decides every child before its parent.
+ *
+ * `departing` enters holding every removable file and leaves holding every
+ * prunable directory as well, which is what lets a parent see its pruned
+ * children as gone. Borrowed keys, all workspace-owned.
+ *
+ * The arrays fill in walk order, which is prune order: deepest first.
+ *
+ * @param opts Cleanup options (orphaned and arriving slices)
+ * @param departing Set of paths this run removes (must not be NULL)
+ * @param result Preflight result to fill (must not be NULL)
+ * @return Error or NULL on success
+ */
+static error_t *predict_prunable_dirs(
+    const cleanup_options_t *opts,
+    hashmap_t *departing,
+    cleanup_preflight_result_t *result
+) {
+    CHECK_NULL(opts);
+    CHECK_NULL(departing);
+    CHECK_NULL(result);
+
+    workspace_items_t dirs = opts->orphaned_directories;
+
+    const workspace_item_t **ordered = NULL;
+    RETURN_IF_ERROR(order_deepest_first(dirs, &ordered));
+
+    if (!ordered) {
+        return NULL;
+    }
+
+    error_t *err = NULL;
+
+    for (size_t i = 0; i < dirs.count && !err; i++) {
+        const char *path = ordered[i]->filesystem_path;
+
+        switch (probe_orphan_directory(path)) {
+            case DIR_PROBE_ABSENT:
+                /* A pure state reclaim: no filesystem effect to preview. Not a
+                 * departure either — a dangling link reads absent here and
+                 * still occupies its parent, and nothing removes it. */
+                continue;
+
+            case DIR_PROBE_FOREIGN:
+                err = string_array_push(result->occupied_dirs, path);
+                continue;
+
+            case DIR_PROBE_DIRECTORY:
+                break;
+        }
+
+        if (fs_is_directory_empty_except(path, entry_is_departing, departing) &&
+            !arrival_lands_in(opts, path)) {
+            err = string_array_push(result->prunable_dirs, path);
+
+            /* Its parent must see it as gone when its own turn comes. */
+            if (!err) {
+                err = hashmap_set(departing, path, (void *) path);
+            }
+        } else {
+            err = string_array_push(result->occupied_dirs, path);
+        }
+    }
+
+    free(ordered);
+
+    return err ? error_wrap(err, "Failed to preview orphaned directories") : NULL;
 }
 
 /**
  * Run cleanup preflight checks
  *
- * Analyzes what cleanup will do WITHOUT modifying filesystem.
- * Uses pre-computed orphan list from opts->orphaned_files.
- * Enables informed user consent by revealing orphan removal impact.
+ * Analyzes what cleanup will do WITHOUT modifying the filesystem, and
+ * decides every verdict its callers display: which present orphaned files
+ * will be removed, which are held back and why, and which orphaned
+ * directories the prune will reach once those removals have happened.
  */
 error_t *cleanup_preflight_check(
     git_repository *repo,
@@ -625,157 +696,89 @@ error_t *cleanup_preflight_check(
     CHECK_NULL(opts);
     CHECK_NULL(out_result);
 
-    /* Declare all resources at top, initialized to NULL */
     error_t *err = NULL;
-    cleanup_preflight_result_t *result = NULL;
-    string_array_t *orphaned_files = NULL;
-    string_array_t *orphaned_dirs_display = NULL;
+    hashmap_t *violations = NULL;   /* path -> safety_violation_t *, NULL when none */
+    hashmap_t *departing = NULL;    /* every path this run removes, as it is decided */
 
-    workspace_items_t file_orphans = opts->orphaned_files;
-    workspace_items_t dir_orphans = opts->orphaned_directories;
-    size_t file_orphan_count = file_orphans.count;
-    size_t dir_orphan_count = dir_orphans.count;
-
-    /* Allocate result structure */
-    result = calloc(1, sizeof(cleanup_preflight_result_t));
+    cleanup_preflight_result_t *result = calloc(1, sizeof(cleanup_preflight_result_t));
     if (!result) {
-        err = ERROR(ERR_MEMORY, "Failed to allocate cleanup preflight result");
+        return ERROR(ERR_MEMORY, "Failed to allocate cleanup preflight result");
+    }
+
+    /* Always allocated, so an empty answer needs no NULL guard downstream. */
+    result->removable_files = string_array_new(0);
+    result->prunable_dirs = string_array_new(0);
+    result->occupied_dirs = string_array_new(0);
+    if (!result->removable_files || !result->prunable_dirs || !result->occupied_dirs) {
+        err = ERROR(ERR_MEMORY, "Failed to allocate cleanup preflight arrays");
         goto cleanup;
     }
 
-    /* Early exit: no orphaned files or directories */
-    if (file_orphan_count == 0 && dir_orphan_count == 0) {
-        /* Success - no orphans to check */
-        *out_result = result;
-        result = NULL;
-        err = NULL;
+    /* Safety decides each present file orphan; the partition is taken once,
+     * here. force goes through rather than around it: an empty verdict is
+     * the answer under force, and routing it the same way keeps
+     * safety_violations allocated so no consumer NULL-checks it. */
+    err = safety_check_orphans(
+        repo, state, opts->orphaned_files, opts->force, &result->safety_violations
+    );
+    if (err) {
+        err = error_wrap(err, "Safety check failed");
         goto cleanup;
     }
 
-    /* Convert file orphans to string array for display.
-     *
-     * Only items present on the filesystem enter the display list and
-     * derive the will_prune flag — an already-absent orphan is a pure
-     * state reclaim with no filesystem effect, so counting it in a
-     * "Remove N?" prompt would predict work that does not exist.
-     * on_filesystem was computed by workspace orphan analysis (Rule 6:
-     * established at the boundary, trusted here). */
-    if (file_orphan_count > 0) {
-        orphaned_files = string_array_new(0);
-        if (!orphaned_files) {
-            err = ERROR(ERR_MEMORY, "Failed to allocate orphan file list for display");
-            goto cleanup;
+    err = index_violations(result->safety_violations, &violations);
+    if (err) {
+        goto cleanup;
+    }
+
+    /* Everything this run takes away, in one set: the directory prediction
+     * asks it about every entry it meets. */
+    departing = hashmap_borrow(
+        opts->orphaned_files.count + opts->orphaned_directories.count
+    );
+    if (!departing) {
+        err = ERROR(ERR_MEMORY, "Failed to allocate removal set");
+        goto cleanup;
+    }
+
+    /* Present orphans that no violation holds back. An already-absent one
+     * is a pure state reclaim with no filesystem effect, so it belongs to
+     * neither the preview nor the removal set; on_filesystem was
+     * established by workspace orphan analysis and is trusted here. */
+    for (size_t i = 0; i < opts->orphaned_files.count; i++) {
+        const workspace_item_t *orphan = opts->orphaned_files.entries[i];
+
+        if (!orphan->on_filesystem) {
+            continue;
+        }
+        if (hashmap_get(violations, orphan->filesystem_path)) {
+            continue;   /* Safety counted it, as blocking or as released */
         }
 
-        for (size_t i = 0; i < file_orphan_count; i++) {
-            if (!file_orphans.entries[i]->on_filesystem) continue;
-
-            err = string_array_push(orphaned_files, file_orphans.entries[i]->filesystem_path);
-            if (err) {
-                err = error_wrap(err, "Failed to add orphaned file to display list");
-                goto cleanup;
-            }
-        }
-
-        result->will_prune_orphans = (orphaned_files->count > 0);
-
-        /* Transfer ownership to result */
-        result->orphaned_files = orphaned_files;
-        orphaned_files = NULL;  /* Prevent double-free */
-
-        /* Run file safety checks (unless force=true)
-         *
-         * Uses safety_check_orphans() which trusts workspace divergence
-         * completely. Non-encrypted files use streaming OID verification
-         * (any size). Encrypted >100MB get CANNOT_VERIFY violation.
-         */
-        if (!opts->force) {
-            err = safety_check_orphans(
-                repo,
-                state,
-                file_orphans,
-                false,  /* Always false here (guarded by !opts->force above) */
-                &result->safety_violations
+        err = string_array_push(result->removable_files, orphan->filesystem_path);
+        if (!err) {
+            err = hashmap_set(
+                departing, orphan->filesystem_path, (void *) orphan->filesystem_path
             );
-
-            if (err) {
-                err = error_wrap(err, "Safety check failed");
-                goto cleanup;
-            }
-
-            /* Set blocking flag if non-RELEASED violations found
-             *
-             * RELEASED violations are informational, not blocking:
-             * - File is left on filesystem (data safety)
-             * - State entry will be cleaned up
-             * - User is informed but operation proceeds
-             */
-            if (result->safety_violations && result->safety_violations->count > 0) {
-                size_t blocking_count = 0;
-                for (size_t j = 0; j < result->safety_violations->count; j++) {
-                    if (strcmp(
-                        result->safety_violations->violations[j].reason,
-                        SAFETY_REASON_RELEASED
-                        ) != 0) {
-                        blocking_count++;
-                    }
-                }
-                result->has_blocking_violations = (blocking_count > 0);
-            }
         }
-    }
-
-    /* Preview orphaned directories (present ones only — same rule as the
-     * file list above; absent rows are state reclaims, not prunes). */
-    if (dir_orphan_count > 0) {
-        /* Allocate directory array for preview */
-        orphaned_dirs_display = string_array_new(0);
-        if (!orphaned_dirs_display) {
-            err = ERROR(ERR_MEMORY, "Failed to allocate orphan directory list for display");
+        if (err) {
+            err = error_wrap(err, "Failed to record removable orphan");
             goto cleanup;
         }
-
-        /* Check which orphaned directories are non-empty (read-only preview) */
-        for (size_t i = 0; i < dir_orphan_count; i++) {
-            if (!dir_orphans.entries[i]->on_filesystem) continue;
-
-            const char *dir_path = dir_orphans.entries[i]->filesystem_path;
-
-            /* Add to display list */
-            err = string_array_push(orphaned_dirs_display, dir_path);
-            if (err) {
-                err = error_wrap(err, "Failed to add orphaned directory to display list");
-                goto cleanup;
-            }
-
-            /* Check if directory exists and is non-empty (safety concern)
-             *
-             * Note: fs_is_directory_empty returns false for unreadable directories
-             * (permission denied), which is the safe default — we count those as
-             * non-empty to avoid deleting what we can't verify.
-             */
-            if (fs_exists(dir_path) && !fs_is_directory_empty(dir_path)) {
-                result->orphaned_directories_nonempty++;
-            }
-        }
-
-        result->will_prune_directories = (orphaned_dirs_display->count > 0);
-
-        /* Transfer ownership to result */
-        result->orphaned_directories = orphaned_dirs_display;
-        orphaned_dirs_display = NULL;  /* Prevent double-free */
     }
 
-    /* Success - set output and prevent cleanup from freeing result */
+    err = predict_prunable_dirs(opts, departing, result);
+    if (err) {
+        goto cleanup;
+    }
+
     *out_result = result;
     result = NULL;
-    err = NULL;
 
 cleanup:
-    /* Free resources in reverse order of allocation */
-    if (orphaned_dirs_display) string_array_free(orphaned_dirs_display);
-    if (orphaned_files) string_array_free(orphaned_files);
-    if (result) cleanup_preflight_result_free(result);
+    hashmap_free(departing, NULL);
+    hashmap_free(violations, NULL);
+    cleanup_preflight_result_free(result);   /* NULL unless an error path still owns it */
 
     return err;
 }
@@ -813,7 +816,7 @@ error_t *cleanup_execute(
         return error_wrap(err, "Failed to remove orphaned files");
     }
 
-    /* Step 2: Prune orphaned directories (with inline safety check) */
+    /* Step 2: Prune the orphaned directories those removals emptied */
     err = prune_orphaned_directories(opts->orphaned_directories, result, opts);
     if (err) {
         cleanup_result_free(result);

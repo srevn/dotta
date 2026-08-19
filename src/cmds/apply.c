@@ -343,24 +343,11 @@ static void print_safety_violations(
         return;
     }
 
-    /* Separate blocking violations from informational released entries.
-     *
-     * RELEASED violations are non-blocking (files left on filesystem, state cleaned).
-     * All other violations are blocking (files skipped to prevent data loss).
-     * Display them in separate sections with appropriate messaging. */
-    size_t blocking_count = 0;
-    size_t released_count = 0;
-
-    for (size_t i = 0; i < safety_result->count; i++) {
-        if (strcmp(safety_result->violations[i].reason, SAFETY_REASON_RELEASED) == 0) {
-            released_count++;
-        } else {
-            blocking_count++;
-        }
-    }
-
-    /* Display blocking violations (modified, type changed, etc.) */
-    if (blocking_count > 0) {
+    /* Blocking violations (modified, type changed, etc.) and informational
+     * released entries get separate sections with different messaging.
+     * Safety took that split when it assigned each reason; this is display,
+     * so it counts nothing and only routes per item. */
+    if (safety_result->blocking > 0) {
         output_section(out, OUTPUT_NORMAL, "Modified orphaned files detected");
         output_newline(out, OUTPUT_NORMAL);
 
@@ -441,7 +428,7 @@ static void print_safety_violations(
     }
 
     /* Display released files (informational, non-blocking) */
-    if (released_count > 0) {
+    if (safety_result->released > 0) {
         output_section(out, OUTPUT_NORMAL, "Released files");
         output_info(out, OUTPUT_NORMAL, "The following files were removed from Git externally:");
 
@@ -655,10 +642,41 @@ static void print_cleanup_results(
 }
 
 /**
+ * List the paths behind a preview count, capped
+ *
+ * One shape for every preview list, so a long directory list is trimmed
+ * and counted the way a long file list is rather than vanishing whole. The
+ * glyph says which count the path belongs to: a cyan bullet for what the
+ * run acts on, a yellow slash for what it deliberately leaves.
+ */
+static void print_path_list(
+    const output_t *out,
+    const string_array_t *paths,
+    output_color_t color,
+    const char *glyph
+) {
+    const size_t limit = 20;   /* Don't flood the terminal */
+    size_t shown = paths->count < limit ? paths->count : limit;
+
+    for (size_t i = 0; i < shown; i++) {
+        output_colored(out, OUTPUT_VERBOSE, color, "    %s", glyph);
+        output_print(out, OUTPUT_VERBOSE, " %s\n", paths->items[i]);
+    }
+
+    if (paths->count > limit) {
+        output_print(
+            out, OUTPUT_VERBOSE, "    ... and %zu more\n", paths->count - limit
+        );
+    }
+}
+
+/**
  * Print cleanup preflight results
  *
- * Shows what cleanup will do BEFORE user confirmation.
- * This enables informed consent by revealing the full impact of orphan cleanup.
+ * Shows what cleanup will do BEFORE user confirmation. Every number here
+ * is one cleanup decided; this function reads them and adds nothing of its
+ * own, so the preview, the prompt below it and the outcome after it are
+ * three sentences about the same work.
  */
 static void print_cleanup_preflight_results(
     const output_t *out,
@@ -666,104 +684,81 @@ static void print_cleanup_preflight_results(
 ) {
     if (!result) return;
 
-    /* Case 1: No orphans and no directories - nothing to display */
-    if (!result->will_prune_orphans && !result->will_prune_directories) {
+    const safety_result_t *violations = result->safety_violations;
+
+    /* Every present orphan lands in exactly one bucket, so these two sums
+     * are the present-orphan counts. */
+    size_t present_files = result->removable_files->count + violations->count;
+    size_t present_dirs = result->prunable_dirs->count + result->occupied_dirs->count;
+
+    if (present_files == 0 && present_dirs == 0) {
         output_print(
             out, OUTPUT_VERBOSE, "No orphaned files or directories to prune\n"
         );
         return;
     }
 
-    /* Case 2: Orphaned files found - always show summary
-     *
-     * Count released files from safety violations to provide accurate breakdown.
-     * Released files are left on filesystem (not removed), so the "will be removed"
-     * count must exclude them to avoid misleading the user.
-     */
-    /* will_prune_orphans implies orphaned_files is non-NULL (see cleanup_preflight_check) */
-    if (result->will_prune_orphans) {
+    if (present_files > 0) {
         output_section(out, OUTPUT_NORMAL, "Orphaned files");
 
-        /* Count released files from safety violations */
-        size_t released_count = 0;
-        if (result->safety_violations) {
-            for (size_t i = 0; i < result->safety_violations->count; i++) {
-                if (strcmp(
-                    result->safety_violations->violations[i].reason, SAFETY_REASON_RELEASED
-                    ) == 0) {
-                    released_count++;
-                }
-            }
-        }
-
-        size_t removal_count = (result->orphaned_files->count > released_count)
-                             ? result->orphaned_files->count - released_count : 0;
-
-        if (removal_count > 0) {
+        if (result->removable_files->count > 0) {
             output_styled(
                 out, OUTPUT_NORMAL,
                 "  {yellow}%zu{reset} file%s will be removed (no longer active)\n",
-                removal_count, removal_count == 1 ? "" : "s"
+                result->removable_files->count,
+                result->removable_files->count == 1 ? "" : "s"
             );
         }
 
-        if (released_count > 0) {
+        if (violations->released > 0) {
             output_styled(
                 out, OUTPUT_NORMAL,
                 "  {cyan}%zu{reset} file%s will be released from management\n",
-                released_count, released_count == 1 ? "" : "s"
+                violations->released, violations->released == 1 ? "" : "s"
             );
         }
 
-        /* Show individual paths in verbose mode */
-        if (result->orphaned_files->count > 0) {
-            size_t display_limit = 20;  /* Don't flood the terminal */
-            size_t display_count = result->orphaned_files->count < display_limit
-                                 ? result->orphaned_files->count : display_limit;
-
-            for (size_t i = 0; i < display_count; i++) {
-                output_styled(
-                    out, OUTPUT_VERBOSE, "    {cyan}•{reset} %s\n",
-                    result->orphaned_files->items[i]
-                );
-            }
-
-            if (result->orphaned_files->count > display_limit) {
-                size_t remaining = result->orphaned_files->count - display_limit;
-                output_print(
-                    out, OUTPUT_VERBOSE, "    ... and %zu more\n",
-                    remaining
-                );
-            }
+        if (violations->blocking > 0) {
+            output_styled(
+                out, OUTPUT_NORMAL,
+                "  {yellow}%zu{reset} file%s will be kept (uncommitted changes)\n",
+                violations->blocking, violations->blocking == 1 ? "" : "s"
+            );
         }
+
+        /* Only the files the count above promises — the held-back ones are
+         * named with their reasons by print_safety_violations. */
+        print_path_list(out, result->removable_files, OUTPUT_COLOR_CYAN, "•");
     }
 
-    /* Case 3: Safety violations - ALWAYS show (blocking) */
-    if (result->has_blocking_violations) {
-        print_safety_violations(out, result->safety_violations);
-    }
+    if (present_dirs > 0) {
+        output_section(out, OUTPUT_NORMAL, "Orphaned directories");
 
-    /* Case 4: Empty directories - count at normal verbosity;
-     * will_prune_directories implies orphaned_directories is non-NULL */
-    if (result->will_prune_directories) {
-        output_section(out, OUTPUT_NORMAL, "Empty directories");
-
-        output_styled(
-            out, OUTPUT_NORMAL, "  {cyan}%zu{reset} orphaned director%s will be pruned\n",
-            result->orphaned_directories->count,
-            result->orphaned_directories->count == 1 ? "y" : "ies"
-        );
-
-        /* Show directory paths if not too many */
-        if (result->orphaned_directories->count <= 10) {
-            for (size_t i = 0; i < result->orphaned_directories->count; i++) {
-                output_print(
-                    out, OUTPUT_VERBOSE, "    • %s\n",
-                    result->orphaned_directories->items[i]
-                );
-            }
+        if (result->prunable_dirs->count > 0) {
+            output_styled(
+                out, OUTPUT_NORMAL, "  {cyan}%zu{reset} director%s will be pruned\n",
+                result->prunable_dirs->count,
+                result->prunable_dirs->count == 1 ? "y" : "ies"
+            );
         }
+
+        if (result->occupied_dirs->count > 0) {
+            output_styled(
+                out, OUTPUT_NORMAL, "  {yellow}%zu{reset} director%s kept (not empty)\n",
+                result->occupied_dirs->count,
+                result->occupied_dirs->count == 1 ? "y" : "ies"
+            );
+        }
+
+        print_path_list(out, result->prunable_dirs, OUTPUT_COLOR_CYAN, "•");
+        print_path_list(out, result->occupied_dirs, OUTPUT_COLOR_YELLOW, "⊘");
     }
+
+    /* Both violation kinds name their files here, with the reason for each
+     * and the remedies for the blocking ones — which is why the summaries
+     * above only count them. Last, so that guidance is what the user is
+     * looking at when the confirmation prompt arrives. */
+    print_safety_violations(out, violations);
 
     output_newline(out, OUTPUT_NORMAL);
 }
@@ -1404,6 +1399,11 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         cleanup_options_t cleanup_opts = {
             .orphaned_files       = file_orphans,
             .orphaned_directories = dir_orphans,
+            /* Deployment runs first, so an orphaned directory that will
+             * receive one of these is not prunable — even though nothing
+             * of it is on disk yet for the preview to see. */
+            .arriving_files       = state_files_view(&plan->files.pending),
+            .arriving_directories = state_directories_view(&plan->directories.pending),
             .preflight_violations = NULL,         /* No preflight violations yet */
             .dry_run              = false,        /* Preflight is always read-only */
             .force                = opts->force,
@@ -1419,50 +1419,11 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         /* Display cleanup preflight results */
         print_cleanup_preflight_results(out, cleanup_preflight);
 
-        /* Warn about safety violations but allow partial cleanup
-         *
-         * Changed from blocking abort to warning + continue. This enables granular
-         * cleanup where safe files are removed and unsafe files are skipped.
-         *
-         * The cleanup_execute function will use preflight_violations to build a
-         * skip list, ensuring files with uncommitted changes are preserved.
-         *
-         * User benefits:
-         * - Partial cleanup better than no cleanup
-         * - Clear feedback about what was removed vs skipped
-         * - Instructions on how to resolve remaining orphans
-         */
-        if (cleanup_preflight->has_blocking_violations && !opts->force) {
-            output_print(out, OUTPUT_NORMAL, "\n");
-
-            /* Count only blocking violations (exclude RELEASED which are informational) */
-            size_t blocking_violation_count = 0;
-            for (size_t i = 0; i < cleanup_preflight->safety_violations->count; i++) {
-                if (strcmp(
-                    cleanup_preflight->safety_violations->violations[i].reason,
-                    SAFETY_REASON_RELEASED
-                    ) != 0) {
-                    blocking_violation_count++;
-                }
-            }
-
-            output_warning(
-                out, OUTPUT_NORMAL, "%zu orphaned file%s with uncommitted changes.",
-                blocking_violation_count,
-                blocking_violation_count == 1 ? "" : "s"
-            );
-
-            output_print(
-                out, OUTPUT_NORMAL,
-                "These files will be skipped during cleanup to prevent data loss.\n"
-            );
-            output_print(
-                out, OUTPUT_NORMAL,
-                "To remove them: commit/stash changes first, or use --force.\n\n"
-            );
-
-            /* Continue with operation - cleanup_execute will skip unsafe files */
-        }
+        /* Blocking violations do not abort: safe orphans are still removed
+         * and unsafe ones kept, which is better than doing nothing. The
+         * preview above already counted the kept files and printed the
+         * remedies for them, and cleanup_execute builds its skip list from
+         * the same violations — so there is nothing to add here. */
     }
 
     /* Build hook invocation with all active profiles */
@@ -1487,28 +1448,14 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     if (config->confirm_destructive && !opts->force && !opts->dry_run) {
         char prompt[512];   /* Larger buffer for enhanced prompt */
 
-        /* Calculate orphan removal count (exclude safety violations)
-         *
-         * Violation files are either left on filesystem (released) or
-         * skipped by safety (modified, mode_changed, etc.), so they
-         * won't actually be deleted. Exclude them from the count.
-         */
-        size_t removal_count = 0;
-        if (cleanup_preflight && cleanup_preflight->will_prune_orphans) {
-            /* will_prune_orphans implies orphaned_files is non-NULL */
-            size_t preflight_excluded = cleanup_preflight->safety_violations
-                                      ? cleanup_preflight->safety_violations->count : 0;
-
-            removal_count = (cleanup_preflight->orphaned_files->count > preflight_excluded)
-                          ? cleanup_preflight->orphaned_files->count - preflight_excluded : 0;
-        }
-
-        /* Directory pruning can be the only pending action (no files move) */
-        size_t prune_count = 0;
-        if (cleanup_preflight && cleanup_preflight->will_prune_directories) {
-            /* will_prune_directories implies orphaned_directories is non-NULL */
-            prune_count = cleanup_preflight->orphaned_directories->count;
-        }
+        /* Both numbers are cleanup's, and the preview printed exactly these
+         * two — so what the user consents to is what runs. NULL only under
+         * --keep-orphans, where no orphan work happens at all. Directory
+         * pruning can be the only pending action (no files move). */
+        size_t removal_count = cleanup_preflight
+                             ? cleanup_preflight->removable_files->count : 0;
+        size_t prune_count = cleanup_preflight
+                           ? cleanup_preflight->prunable_dirs->count : 0;
 
         /* Compose the prompt from the non-zero parts — "Deploy 2 files,
          * converge 1 tracked directory and remove 3 orphaned files?". No

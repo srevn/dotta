@@ -281,6 +281,16 @@ static error_t *add_violation(
     }
 
     result->count++;
+
+    /* Split the verdict here, where the reason is chosen — every caller
+     * that needs "how many of each" then reads one number instead of
+     * folding the array on the reason again. */
+    if (strcmp(reason, SAFETY_REASON_RELEASED) == 0) {
+        result->released++;
+    } else {
+        result->blocking++;
+    }
+
     return NULL;
 }
 

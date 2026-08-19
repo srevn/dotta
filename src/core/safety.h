@@ -73,6 +73,21 @@ typedef struct {
     safety_violation_t *violations;  /* Array of violations (owns memory) */
     size_t count;                    /* Number of violations */
     size_t capacity;                 /* Allocated capacity (internal use) */
+
+    /* The reason split, counted where the reasons are assigned.
+     *
+     * Every violation is one or the other, so blocking + released ==
+     * count. Both leave the file on disk; they differ in what happens to
+     * the state row. RELEASED means Git no longer backs the file, so the
+     * row retires and dotta lets go of it. Everything else means the file
+     * diverged from what dotta last deployed, so the row stays and the
+     * removal is refused until the user resolves it.
+     *
+     * Callers that need the split read these. Re-folding the array on the
+     * reason makes a second producer of a fact this module already
+     * decided. */
+    size_t blocking;                 /* Removal refused, row kept */
+    size_t released;                 /* Authority lost, row retires */
 } safety_result_t;
 
 /**

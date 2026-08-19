@@ -815,7 +815,7 @@ static bool entry_is_removable_metadata(const char *dir, const char *name) {
     return removable;
 }
 
-bool fs_is_directory_empty(const char *path) {
+bool fs_is_directory_empty_except(const char *path, fs_path_pred_fn gone, void *ctx) {
     if (!path) {
         return true;  /* NULL path is considered "empty" */
     }
@@ -830,7 +830,7 @@ bool fs_is_directory_empty(const char *path) {
         return false;
     }
 
-    /* Check if directory contains only metadata
+    /* Check if directory contains only metadata and vouched-for entries
      *
      * This prevents "zombie" directories that contain only OS-generated
      * metadata (like .DS_Store on macOS) from blocking cleanup operations.
@@ -863,6 +863,26 @@ bool fs_is_directory_empty(const char *path) {
             continue;
         }
 
+        /* Skip what the caller is about to remove. Its full path, because
+         * the caller reasons about paths, not about basenames. */
+        if (gone) {
+            char *child = NULL;
+            error_t *err = fs_path_join(path, entry->d_name, &child);
+            if (err) {
+                /* Cannot name it, so cannot let the caller vouch for it. */
+                error_free(err);
+                is_empty = false;
+                break;
+            }
+
+            bool vouched = gone(child, ctx);
+            free(child);
+
+            if (vouched) {
+                continue;
+            }
+        }
+
         /* Found a real entry - directory is not empty */
         is_empty = false;
         break;
@@ -870,6 +890,10 @@ bool fs_is_directory_empty(const char *path) {
 
     closedir(dir);
     return is_empty;
+}
+
+bool fs_is_directory_empty(const char *path) {
+    return fs_is_directory_empty_except(path, NULL, NULL);
 }
 
 /**

@@ -248,6 +248,35 @@ error_t *fs_clear_path(const char *path);
 bool fs_is_directory(const char *path);
 
 /**
+ * Predicate over a directory entry's full path, with caller context
+ */
+typedef bool (*fs_path_pred_fn)(const char *path, void *ctx);
+
+/**
+ * Check if directory is empty once the entries the caller vouches for are gone
+ *
+ * fs_is_directory_empty with a hole: an entry is looked past when it is OS
+ * metadata — exactly what fs_remove_empty_dir clears — or when `gone`,
+ * handed the entry's full path, answers true. That lets a caller who is
+ * about to remove things beneath a directory ask whether the directory
+ * will then be empty, without mutating anything and without a second walk
+ * of its own. With gone == NULL this is fs_is_directory_empty.
+ *
+ * One walk, so a prediction and the removal that follows it cannot mean
+ * different things by "empty".
+ *
+ * Returns false if the directory cannot be opened or read — don't promise
+ * a removal you cannot verify. An entry whose path cannot be built counts
+ * as present, for the same reason.
+ *
+ * @param path Directory path to check (can be NULL, treated as empty)
+ * @param gone Predicate answering "this caller removes that entry" (may be NULL)
+ * @param ctx Opaque context handed to gone
+ * @return true if the directory holds nothing but metadata and vouched-for entries
+ */
+bool fs_is_directory_empty_except(const char *path, fs_path_pred_fn gone, void *ctx);
+
+/**
  * Check if directory is empty (ignoring OS metadata)
  *
  * A directory is considered empty if it contains only:
@@ -261,6 +290,8 @@ bool fs_is_directory(const char *path);
  *
  * Returns false if the directory cannot be opened (doesn't exist, not a directory,
  * permission denied, or read error) for safety (don't delete what we can't verify).
+ *
+ * The gone == NULL case of fs_is_directory_empty_except.
  *
  * @param path Directory path to check (can be NULL, treated as empty)
  * @return true if directory contains no user content, false otherwise

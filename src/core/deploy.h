@@ -18,6 +18,12 @@
  * - Fail-stop on error (not transactional, but clear reporting)
  * - One dry-run gate per executor, ahead of every mutation
  * - Removals are single-node: what stands at a planned path, never a tree
+ * - Directories are materialized in two phases: held at a working mode
+ *   (recorded mode, owner rwx on) while the run writes beneath them, then
+ *   released to the exact recorded mode, deepest-first — the same way
+ *   cmd_export materializes a profile. A tracked directory therefore
+ *   never refuses a tracked path beneath it, and preflight predicts no
+ *   modes
  */
 
 #ifndef DOTTA_DEPLOY_H
@@ -40,22 +46,23 @@ typedef struct scope scope_t;
  *   conflicts          modified locally, or wrong type at the path — --force
  *   blocked            a planned path this run cannot land, and neither
  *                      --force nor privileges change that: an untracked
- *                      non-directory squats an ancestor (remove it, or
- *                      widen the scope so a tracked ancestor is planned
- *                      and --force can replace it), a tracked directory's
- *                      recorded mode cannot receive what is planned
- *                      beneath it (widen the recorded mode), or a
- *                      directory holding untracked paths stands at the
- *                      planned path itself (remove it). Each entry
+ *                      non-directory — a file, a dangling symlink — squats
+ *                      an ancestor (remove it, or widen the scope so a
+ *                      tracked ancestor is planned and --force can replace
+ *                      it), or a directory holding untracked paths stands
+ *                      at the planned path itself (remove it). Each entry
  *                      carries its own reason
- *   permission_errors  the directory the write lands in refuses us —
- *                      privileges
+ *   permission_errors  a directory that is not dotta's refuses the write —
+ *                      the nearest present ancestor is untracked (or
+ *                      tracked but not ours) and not writable, or the
+ *                      ancestry cannot be reached — privileges, or the
+ *                      directory's owner. Each entry names the directory
  */
 typedef struct {
     bool has_errors;                     /* Are there any blocking errors? */
     string_array_t *conflicts;           /* Paths modified locally / wrong type */
     string_array_t *blocked;             /* "<path> (<reason>)" */
-    string_array_t *permission_errors;   /* Paths whose landing directory refuses us */
+    string_array_t *permission_errors;   /* "<path> (<directory> is not writable)" */
 } preflight_result_t;
 
 /**
@@ -226,11 +233,15 @@ static inline size_t deploy_plan_row_count(const deploy_plan_t *plan) {
  * - Landing — the write must be able to land. Every arm of the executor
  *   writes through the *parent* — a temp file renamed over the target, a
  *   symlink unlinked and re-made, a mkdir — so the path's own permissions
- *   are never the question, and a directory being fixed in place asks
- *   nothing at all. Each component of a planned path is judged against the
- *   state this run will leave it in: the directory pass runs first, so a
- *   tracked directory's recorded mode, not its current one, is what the
- *   file pass meets.
+ *   are never the question, and a directory being converged in place asks
+ *   nothing at all. The question goes to the nearest present ancestor
+ *   alone: everything absent beneath it is created by this run at a
+ *   working mode and cannot refuse. A pending or tracked directory there
+ *   is dotta's to hold and never refuses; any other directory must accept
+ *   a new entry now (access(2)) or it is a permission error; a
+ *   non-directory squatter blocks. The mechanism (ensure_parents) asks
+ *   the same questions of the same ancestor, so this predicts the run
+ *   rather than modelling it.
  *
  * Only planned rows are consulted — a directory that will not be touched
  * cannot block.
@@ -268,8 +279,21 @@ error_t *deploy_preflight(
  * caller's presence witness covers them. The workspace is consulted for
  * that lookup only; the plan alone decides what is acted on.
  *
+ * Directories are materialized in two phases. Every directory the run
+ * creates or converges carries its recorded mode with the owner triad
+ * forced on while the run writes beneath it; a tracked, owned directory
+ * that already stands where a planned path must land and refuses it is
+ * opened the same way. When the run is over — completed or fail-stopped
+ * — each such directory is released to its exact mode, deepest-first:
+ * recorded for the ones the plan materialized, the mode it had for the
+ * ones merely opened. Group and other bits are never widened. This is
+ * the one transient the run leaves during its life and none afterwards;
+ * it is what lets a 0555 directory captured with children be redeployed
+ * with them, and what makes the landing check a question about untracked
+ * directories only.
+ *
  * Fail-stop: on the first error the partial result is returned in *out
- * alongside the wrapped error.
+ * alongside the wrapped error, after the held directories are released.
  *
  * State rows are self-contained (mode, owner, group, blob_oid); the
  * content cache handles encryption transparently. State updates

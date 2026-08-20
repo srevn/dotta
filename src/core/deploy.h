@@ -119,7 +119,11 @@ typedef struct {
  * (the same ordering rule scope.h documents for scope_free).
  *
  * Both slices come out of state ordered by filesystem_path, so a tracked
- * parent precedes its tracked children within directories.pending.
+ * parent precedes its tracked children within directories.pending. Three
+ * consumers lean on that: the planner classifies a directory row after
+ * its ancestors, the execute loop converges a parent before the paths
+ * beneath it, and a replaced directory settles its subtree for the rows
+ * that follow (see deploy_plan_build, deploy_execute).
  */
 typedef struct {
     deploy_partition_t files;         /* state_file_entry_t * */
@@ -132,8 +136,9 @@ typedef struct {
  * Plan buckets by kind, result buckets by outcome verb: every bucket
  * names something that happened, and a directory lands in the one for
  * what the executor found at its path and did about it — decided from
- * its fresh lstat, never from the plan — so the caller can say
- * "replaced" where a squatter went and "fixed" where nothing was
+ * its fresh lstat, or from this receipt's own replaced bucket beneath a
+ * directory the run has replaced, never from the plan — so the caller
+ * can say "replaced" where a squatter went and "fixed" where nothing was
  * created. Work the run deliberately did not do is the plan's to report,
  * never the result's — the plan decided it, so only the plan can report
  * it before a run that ends up executing nothing. A failure is the
@@ -169,6 +174,21 @@ typedef struct {
  * Requires a workspace loaded with file AND directory analysis: the plan
  * is derived from the divergence index, and a kind whose analysis did not
  * run plans as clean.
+ *
+ * One verdict the plan overrules: a path beneath a pending directory row
+ * the workspace found squatted (TYPE — a non-directory at its path) is
+ * planned as absent, whatever the index says of it. Everything the
+ * workspace observed beneath that row it observed through the squatter —
+ * a symlink to a directory answers for the link's target, so a child
+ * there reads clean — and the directory pass replaces the squatter before
+ * anything beneath it is touched. Such a row is work, and not occupied
+ * for --skip-existing's purpose; -e still holds it back. Only a pending
+ * ancestor counts (one held back by -e is not replaced this run), and
+ * only an in-scope descendant is reached: a row scope itself rejects (-p,
+ * a path filter) is not planned on its ancestor's account — Coherent
+ * Scope — and converges on the next apply that covers it. Preflight and
+ * the executors carry the same fact through (deploy_preflight,
+ * deploy_execute).
  *
  * @param ws Workspace with divergence analysis (must not be NULL)
  * @param scope Operation scope (must not be NULL)
@@ -255,7 +275,12 @@ static inline size_t deploy_plan_row_count(const deploy_plan_t *plan) {
  *   rather than modelling it.
  *
  * Only planned rows are consulted — a directory that will not be touched
- * cannot block.
+ * cannot block. And a planned row beneath a squatted pending directory
+ * (deploy_plan_build) is asked nothing: its probes would reach the
+ * squatter's target and answer for the wrong tree, the path is empty once
+ * the directory pass has replaced the squatter, and its landing is the
+ * pending ancestor's — whose own row carries the conflict --force
+ * resolves, and the landing question.
  *
  * @param ws Workspace with pre-loaded divergence analysis (must not be NULL)
  * @param plan Deployment plan (must not be NULL)
@@ -282,6 +307,16 @@ error_t *deploy_preflight(
  * verdict on a type conflict, which is re-taken from that fresh look
  * rather than inherited from preflight. Whatever a planned path's own
  * occupant turns out to be, clearing it removes exactly one node.
+ *
+ * One look the run takes from its own receipt instead: beneath a
+ * directory it has replaced, nothing stands — the replace left an empty
+ * directory and the run creates beneath it only in prefix order — so a
+ * planned path there is created, not fixed or cleared. In the real run
+ * the fresh lstat agrees; in a dry run it would still reach the
+ * squatter's target, and the receipt is what keeps the preview's verbs
+ * the real run's. The receipt, not the plan, because a squatter that
+ * healed into a directory before the run is fixed in place and leaves
+ * its subtree to the fresh look.
  *
  * Missing parents are the mechanics of landing a planned path, created
  * top-down as part of its write: a tracked directory (any profile, in

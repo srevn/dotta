@@ -1222,28 +1222,6 @@ typedef enum {
  *               The caller marks DIVERGENCE_UNVERIFIED and the orphan is
  *               held until Git answers.
  *
- * Cached per profile across one pass: the ref lookup once per profile
- * (O(1), no tree load — most profiles answer here), the HEAD tree on the
- * first in-tree question, git_tree_entry_bypath per row. Only successes
- * are cached, so a transient failure holds one row rather than a whole
- * profile. Our own allocation failing is fatal (this file's OOM
- * convention, as in workspace_add_diverged); a Git failure is an
- * UNVERIFIED answer, not an error.
- *
- * Who is asked — decided by the caller, recorded here because this is
- * where the scenarios live:
- *   LIFECYCLE_RELEASED   not asked: reconcile already decided (enabled
- *                        profile, file left the branch).
- *   LIFECYCLE_DELETED    not asked: dotta committed this deletion (remove
- *                        --delete-files, update, sync); the blob is gone
- *                        from the tree by design, and asking would only
- *                        confirm that absence and misattribute it as
- *                        external loss. remove --delete-profile upgrades
- *                        INACTIVE → DELETED for exactly this reason.
- *   absent on disk       not asked: a reclaim whatever Git says.
- *   INACTIVE / ACTIVE    asked — staged removals (profile disable) and the
- *                        INACTIVE row a re-enable left behind.
- *
  * @param repo Repository (must not be NULL)
  * @param cache profile → authority_cache_t (borrowed keys, owned values)
  * @param profile Row's profile (NOT NULL in the schema)

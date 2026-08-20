@@ -179,6 +179,58 @@ static error_t *partition_push(
 }
 
 /**
+ * Is `path` beneath a pending directory row observed squatted?
+ *
+ * A non-directory at a tracked directory's path is what every probe of
+ * the paths beneath it went through — the workspace's lstat, and so its
+ * verdicts; preflight's occupant and landing probes; a dry run's. With a
+ * symlink to a directory squatting, those probes reach the link's target
+ * and come back with answers about *its* tree: a child reads clean, a
+ * parent reads present. The directory pass replaces the squatter before
+ * anything beneath it is touched (prefix order), so the observations
+ * describe a tree the run itself dismantles: after the replace, nothing
+ * stands at any path beneath it. Such a path is planned and predicted as
+ * absent — work, not occupied, nothing to ask of it — whatever the index
+ * says. A file or dangling-link squatter changes nothing: beneath it
+ * every probe already failed (ENOTDIR), and absent was the verdict anyway.
+ *
+ * Squatted is the workspace's TYPE verdict on the row, and only a
+ * *pending* row counts: one held back by -e is not replaced this run, so
+ * what was observed through it stands. Walks directories.pending, which
+ * is in prefix order, so the planner can ask this of a directory row while
+ * the bucket is still filling and find the row's ancestors already there.
+ * The run-time counterpart is beneath_replaced_directory.
+ *
+ * @param ws Workspace, for the ancestor's verdict (must not be NULL)
+ * @param plan Plan whose pending directories are the candidates (must not be NULL)
+ * @param path Planned path (must not be NULL)
+ */
+static bool beneath_squatted_directory(
+    const workspace_t *ws, const deploy_plan_t *plan, const char *path
+) {
+    state_directories_t dirs = state_directories_view(&plan->directories.pending);
+
+    for (size_t i = 0; i < dirs.count; i++) {
+        const char *dir = dirs.entries[i]->filesystem_path;
+        size_t len = strlen(dir);
+
+        /* Strictly beneath: a prefix and then a separator, the same test
+         * cleanup's deploys_into makes (strncmp == 0 guarantees path has
+         * at least len bytes, so path[len] is in bounds). */
+        if (strncmp(path, dir, len) != 0 || path[len] != '/') {
+            continue;
+        }
+
+        const workspace_item_t *item = workspace_get_item(ws, dir);
+        if (item && (item->divergence & DIVERGENCE_TYPE)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+/**
  * Build the deployment plan
  */
 error_t *deploy_plan_build(
@@ -197,50 +249,62 @@ error_t *deploy_plan_build(
 
     error_t *err = NULL;
 
-    state_files_t files = workspace_files(ws);
-    for (size_t i = 0; i < files.count; i++) {
-        const state_file_entry_t *row = files.entries[i];
-
-        if (!scope_accepts_profile(scope, row->profile) ||
-            !scope_accepts_path(scope, row->storage_path, PATH_KIND_FILE)) {
-            continue;                        /* out of scope: invisible */
-        }
-
-        const workspace_item_t *item = workspace_get_item(ws, row->filesystem_path);
-
-        /* Occupancy is the workspace's own lstat, not a fresh probe: a row
-         * with work always has an item (deploy_needs_work(NULL) is false),
-         * and lstat truth counts a broken symlink as occupying the path —
-         * which is what the flag says, and what a stat that follows links
-         * could not tell us. */
-        skip_reason_t skip = SKIP_NONE;
-        if (scope_is_excluded(scope, row->storage_path, PATH_KIND_FILE)) {
-            skip = SKIP_EXCLUDED;
-        } else if (skip_existing && item && item->on_filesystem) {
-            skip = SKIP_EXISTING;
-        }
-
-        err = partition_push(&plan->files, row, deploy_needs_work(item), skip);
-        if (err) goto cleanup;
-    }
-
+    /* Directories before files: a pending directory row observed squatted
+     * plans every path beneath it as absent (beneath_squatted_directory),
+     * and those paths are of either kind — so the pending directory bucket
+     * must be complete, in prefix order, before a file is classified, and
+     * each directory row must find its own ancestors already classified. */
     state_directories_t dirs = workspace_directories(ws);
     for (size_t i = 0; i < dirs.count; i++) {
         const state_directory_entry_t *row = dirs.entries[i];
 
         if (!scope_accepts_profile(scope, row->profile) ||
             !scope_accepts_path(scope, row->storage_path, PATH_KIND_DIRECTORY)) {
-            continue;
+            continue;                        /* out of scope: invisible */
         }
+
+        bool absent = beneath_squatted_directory(ws, plan, row->filesystem_path);
 
         /* No SKIP_EXISTING arm: --skip-existing does not reach tracked
          * directories (see deploy_partition_t). */
         err = partition_push(
             &plan->directories, row,
-            deploy_needs_work(workspace_get_item(ws, row->filesystem_path)),
+            absent || deploy_needs_work(workspace_get_item(ws, row->filesystem_path)),
             scope_is_excluded(scope, row->storage_path, PATH_KIND_DIRECTORY)
                 ? SKIP_EXCLUDED : SKIP_NONE
         );
+        if (err) goto cleanup;
+    }
+
+    state_files_t files = workspace_files(ws);
+    for (size_t i = 0; i < files.count; i++) {
+        const state_file_entry_t *row = files.entries[i];
+
+        if (!scope_accepts_profile(scope, row->profile) ||
+            !scope_accepts_path(scope, row->storage_path, PATH_KIND_FILE)) {
+            continue;
+        }
+
+        const workspace_item_t *item = workspace_get_item(ws, row->filesystem_path);
+        bool absent = beneath_squatted_directory(ws, plan, row->filesystem_path);
+
+        /* Occupancy is the workspace's own lstat, not a fresh probe: a row
+         * with work always has an item (deploy_needs_work(NULL) is false),
+         * and lstat truth counts a broken symlink as occupying the path —
+         * which is what the flag says, and what a stat that follows links
+         * could not tell us. A path planned as absent is the one exception:
+         * its lstat reached the squatter's target, and nothing will occupy
+         * the path once the squatter goes — so the flag has nothing to
+         * preserve there. -e still holds: a named path is intent, not an
+         * observation. */
+        skip_reason_t skip = SKIP_NONE;
+        if (scope_is_excluded(scope, row->storage_path, PATH_KIND_FILE)) {
+            skip = SKIP_EXCLUDED;
+        } else if (skip_existing && !absent && item && item->on_filesystem) {
+            skip = SKIP_EXISTING;
+        }
+
+        err = partition_push(&plan->files, row, absent || deploy_needs_work(item), skip);
         if (err) goto cleanup;
     }
 
@@ -754,6 +818,16 @@ error_t *deploy_preflight(
     for (size_t i = 0; i < files.count; i++) {
         const state_file_entry_t *row = files.entries[i];
         const char *path = row->filesystem_path;
+
+        /* Planned as absent: every probe of this path would reach the
+         * squatter's target and answer for the wrong tree, and the path
+         * is empty once the directory pass has replaced the squatter —
+         * no type, no content, nothing in the way. Its landing is the
+         * pending ancestor's, whose own row is asked below. */
+        if (beneath_squatted_directory(ws, plan, path)) {
+            continue;
+        }
+
         const workspace_item_t *item = workspace_get_item(ws, path);
         occupant_t occ = path_occupant(path);
 
@@ -796,6 +870,14 @@ error_t *deploy_preflight(
     state_directories_t dirs = state_directories_view(&plan->directories.pending);
     for (size_t i = 0; i < dirs.count; i++) {
         const char *path = dirs.entries[i]->filesystem_path;
+
+        /* Planned as absent (see the file loop): created beneath a
+         * directory this run replaces first, so neither a conflict nor a
+         * landing question is its own. */
+        if (beneath_squatted_directory(ws, plan, path)) {
+            continue;
+        }
+
         occupant_t occ = path_occupant(path);
 
         /* A planned directory squatted by a non-directory (the link
@@ -849,8 +931,43 @@ typedef struct {
     content_cache_t *cache;
     const workspace_t *ws;           /* tracked-ancestor metadata (create_ancestor) */
     const deploy_options_t *opts;
+    deploy_result_t *result;         /* the receipt so far (beneath_replaced_directory) */
     ptr_array_t held;                /* held_directory_t * (owned), in the order taken */
 } deploy_run_t;
+
+/**
+ * Is `path` beneath a directory this run has replaced?
+ *
+ * The run-time counterpart of beneath_squatted_directory: the plan said
+ * which paths were observed through a squatter, the receipt says which
+ * squatters this run actually displaced — and the receipt is the one to
+ * trust here, since a squatter that healed into a directory before the
+ * run was fixed in place, not replaced, and left its subtree standing for
+ * the fresh lstat to judge. A replace leaves an empty directory, and the
+ * run creates beneath it only in prefix order, so when a planned path
+ * beneath one is reached nothing stands there. The real run's fresh lstat
+ * says as much; a dry run's still reaches the squatter's target, so for
+ * it this answer is the lstat it cannot take — and the preview lands in
+ * the bucket the real run will.
+ *
+ * @param run Run context (must not be NULL)
+ * @param path Planned path (must not be NULL)
+ */
+static bool beneath_replaced_directory(const deploy_run_t *run, const char *path) {
+    state_directories_t dirs = state_directories_view(&run->result->replaced);
+
+    for (size_t i = 0; i < dirs.count; i++) {
+        const char *dir = dirs.entries[i]->filesystem_path;
+        size_t len = strlen(dir);
+
+        /* Strictly beneath — see beneath_squatted_directory */
+        if (strncmp(path, dir, len) == 0 && path[len] == '/') {
+            return true;
+        }
+    }
+
+    return false;
+}
 
 /**
  * The mode a directory carries while this run writes beneath it
@@ -1373,8 +1490,12 @@ static error_t *deploy_file(deploy_run_t *run, const state_file_entry_t *file) {
      * between, and preflight's verdict was about the path as it was then.
      * Type is the whole of what one lstat can settle; the content verdict
      * stays the workspace's, because the blob it was compared against is
-     * not on disk to re-ask. */
-    occupant_t occ = path_occupant(file->filesystem_path);
+     * not on disk to re-ask. Beneath a directory this run has replaced,
+     * the run's own receipt settles it instead: nothing stands there, and
+     * an lstat that says otherwise (a dry run's, through the squatter
+     * still in place) is answering for the wrong tree. */
+    occupant_t occ = beneath_replaced_directory(run, file->filesystem_path)
+                   ? OCCUPANT_NONE : path_occupant(file->filesystem_path);
     occupant_t want = file_row_occupant(file);
 
     if (occupant_conflicts(occ, want)) {
@@ -1627,9 +1748,12 @@ static error_t *deploy_directory(
     const char *path = dir->filesystem_path;
 
     /* Decide how, from disk truth now — the occupant is the link itself,
-     * so a symlink to a directory is not the directory being tracked. */
+     * so a symlink to a directory is not the directory being tracked.
+     * Beneath a directory this run has replaced, the receipt answers
+     * instead of the lstat (beneath_replaced_directory). */
     directory_action_t action;
-    occupant_t occ = path_occupant(path);
+    occupant_t occ = beneath_replaced_directory(run, path) ? OCCUPANT_NONE
+                                                           : path_occupant(path);
 
     switch (occ) {
         case OCCUPANT_DIRECTORY:
@@ -1639,7 +1763,9 @@ static error_t *deploy_directory(
         case OCCUPANT_NONE:
             /* Absent — or beneath a non-directory, which preflight blocked
              * when unplanned and the directory pass replaces when planned
-             * (prefix order); one still there is ensure_parents' named error. */
+             * (prefix order); one still there is ensure_parents' named error.
+             * Or beneath a directory this run replaced, which is the same
+             * absence, settled by the receipt. */
             action = DIR_ACTION_CREATE;
             break;
 
@@ -1732,16 +1858,20 @@ error_t *deploy_execute(
     }
 
     deploy_run_t run = {
-        .repo  = repo,
-        .cache = cache,
-        .ws    = ws,
-        .opts  = opts,
-        .held  = { 0 },
+        .repo   = repo,
+        .cache  = cache,
+        .ws     = ws,
+        .opts   = opts,
+        .result = result,
+        .held   = { 0 },
     };
 
     /* Directories first: parents before the files beneath them, and under
      * --force a squatting symlink is gone before anything is written
-     * through it. Prefix order within the bucket = parents before children. */
+     * through it. Prefix order within the bucket = parents before children,
+     * which is also what lets a replace settle everything beneath it: by
+     * the time a planned path under a replaced directory is reached, the
+     * receipt already names the replace (beneath_replaced_directory). */
     state_directories_t dirs = state_directories_view(&plan->directories.pending);
     for (size_t i = 0; i < dirs.count; i++) {
         const state_directory_entry_t *dir = dirs.entries[i];

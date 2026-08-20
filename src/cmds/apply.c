@@ -261,10 +261,13 @@ static size_t print_withheld(
  * The verb is execution truth; the tags are plan truth. A fixed row is
  * tagged [mode] / [ownership] from the workspace's divergence index —
  * why the planner chose it — never from a fresh stat: the run has just
- * converged the directory, so disk would say nothing. Every pending row
- * has an indexed item (deploy_needs_work(NULL) is false); one whose item
- * carries neither bit prints no tag, and the other two buckets never
- * carry one, since the verb already says what the path held.
+ * converged the directory, so disk would say nothing. A pending row the
+ * planner chose on its own verdict has an indexed item
+ * (deploy_needs_work(NULL) is false); one planned as absent beneath a
+ * squatted directory may have none, and is created rather than fixed.
+ * A fixed row whose item carries neither bit, or no item, prints no tag,
+ * and the other two buckets never carry one, since the verb already says
+ * what the path held.
  *
  * Mode and ownership print as recorded on the row, corruption included:
  * a mode-0 row shows (mode: 0000) under the stderr warning that named

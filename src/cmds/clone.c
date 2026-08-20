@@ -266,16 +266,14 @@ static error_t *initialize_state(
         return error_wrap(err, "Failed to initialize state database");
     }
 
-    /* Enable each profile individually and reconcile manifest.
+    /* Enable each profile individually, then project the manifest once.
      *
      * state_enable_profile is the membership primitive — clone calls it
      * once per profile (with target=NULL since custom/-bearing profiles
      * are filtered out by the post-fetch warn-and-skip loop below before
-     * reaching this path). It writes the zero-OID sentinel;
-     * manifest_persist_profile_head replaces it with the real branch HEAD
-     * so enabled_profiles is fully authoritative (name + position +
-     * target + commit_oid) before apply_scope runs. apply_scope then
-     * trusts the table and does not walk branch refs.
+     * reaching this path). It writes the zero-OID sentinel; apply_scope
+     * replaces it with the HEAD it projected each profile from, in the
+     * same transaction.
      *
      * Fresh clone → virtual_manifest is empty → apply_scope INSERTs one
      * row per entry in the precedence-resolved manifest. */
@@ -286,15 +284,6 @@ static error_t *initialize_state(
                 state_free(state);
                 return error_wrap(
                     err, "Failed to enable profile '%s'", profiles->items[i]
-                );
-            }
-
-            err = manifest_persist_profile_head(repo, state, profiles->items[i]);
-            if (err) {
-                state_free(state);
-                return error_wrap(
-                    err, "Failed to record commit_oid for profile '%s'",
-                    profiles->items[i]
                 );
             }
         }
@@ -312,11 +301,12 @@ static error_t *initialize_state(
         }
 
         err = manifest_apply_scope(
-            repo, state, arena, post_mutation_mounts, NULL, NULL
+            repo, state, arena, post_mutation_mounts, LIFECYCLE_INACTIVE,
+            NULL, NULL
         );
         if (err) {
             state_free(state);
-            return error_wrap(err, "Failed to reconcile manifest scope");
+            return error_wrap(err, "Failed to project manifest scope");
         }
     }
 

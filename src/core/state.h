@@ -53,12 +53,28 @@ typedef enum {
  * have no blob-level identity in Git. state_transition_directories_by_profile
  * rejects LIFECYCLE_RELEASED at its boundary; the SQL CHECK is
  * defense-in-depth.
+ *
+ * Writers, by intent:
+ *   LIFECYCLE_INACTIVE and LIFECYCLE_DELETED are written only by a local,
+ *   explicit verb — profile disable/reorder, remove --delete-profile,
+ *   clone and interactive save (INACTIVE, through manifest_apply_scope's
+ *   leftover); remove --delete-files, and update of a file the user
+ *   deleted that raced back (DELETED). Every departure dotta *discovers*
+ *   in Git — an external commit, a pulled removal, a branch that no
+ *   longer resolves — is LIFECYCLE_RELEASED: the deployed copy is left
+ *   alone and the row retires. manifest_apply_scope takes the distinction
+ *   as its `leftover` argument; no engine code reasons about who moved
+ *   Git. One writer is still off this table: manifest_sync_diff marks a
+ *   pulled removal DELETED, and leaves with the sync rewrite that
+ *   projects through the engine instead.
+ *
+ * Column: virtual_manifest.state / tracked_directories.state.
  */
 typedef enum {
     LIFECYCLE_ACTIVE = 0,    /* Normal entry, file is in scope and should be managed */
     LIFECYCLE_INACTIVE,      /* Staged for removal, reversible (profile disable) */
     LIFECYCLE_DELETED,       /* Confirmed deletion, awaiting filesystem cleanup by apply */
-    LIFECYCLE_RELEASED       /* File removed from Git externally, loss of authority (file-only) */
+    LIFECYCLE_RELEASED       /* Departure discovered in Git, loss of authority (file-only) */
 } state_lifecycle_t;
 
 /**
@@ -434,7 +450,7 @@ void state_rollback(state_t *state);
  *
  * Returns true if BEGIN IMMEDIATE has been executed and not yet
  * committed or rolled back. Used by code paths that may run under
- * either acquisition shape (manifest_apply_scope,
+ * either acquisition shape (manifest_reconcile,
  * workspace_flush_updates, ...) to decide whether to start
  * their own scoped transaction or piggyback on the caller's.
  *
@@ -957,9 +973,12 @@ error_t *state_transition_files_by_profile(
  * column. Single-row UPDATE on enabled_profiles.
  *
  * Direct callers:
- * - manifest_persist_profile_head (gitops_resolve_branch_head_oid + this
- *   function; reached by every scope-transition or post-commit path that
- *   needs to refresh a profile's stored HEAD)
+ * - manifest_apply_scope (every scope transition and drift repair: the
+ *   OID of the tree the engine just projected, for every enabled profile
+ *   whose branch resolved)
+ * - manifest_persist_profile_head (manifest.c-private:
+ *   gitops_resolve_branch_head_oid + this function, for the add/update/
+ *   remove entry points that moved one branch by their own commit)
  * - manifest_sync_diff (binds the explicit new_oid passed by sync)
  *
  * @param state State (must not be NULL, must have active transaction)

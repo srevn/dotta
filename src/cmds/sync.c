@@ -1720,18 +1720,6 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
         goto cleanup;
     }
 
-    /* Drift counters — populated by the non-force workspace scan below or,
-     * when workspace_load is skipped, from the explicit reconcile in the
-     * force branch further down. Declared here so the emission site sees
-     * them regardless of mode. Reuses manifest_repair_stats_t so the force
-     * path can write directly into this struct via manifest_reconcile.
-     *
-     * Non-force reads from the persistent anchor vs manifest.blob_oid
-     * comparison in analyze_file_divergence, which survives the
-     * status→sync sequence — reconcile's own stats would silently drop
-     * to {0} on a second invocation against already-repaired state. */
-    manifest_repair_stats_t drift = { 0 };
-
     /* Validate workspace - sync requires clean workspace (no uncommitted changes)
      *
      * Skip entirely when --force is used: the clean check result is unused, and
@@ -1804,16 +1792,9 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
                 case WORKSPACE_STATE_RELEASED:
                     /* Not sync's concern — handled by apply command.
                      * RELEASED is never emitted here anyway: it comes only
-                     * from orphan analysis, which this load switches off.
-                     * The force path counts releases from reconcile's own
-                     * stats instead. */
+                     * from orphan analysis, which this load switches off. */
                     break;
             }
-            /* Drift flags are independent of lifecycle state: STALE combines
-             * with CONTENT on DEPLOYED items, profile_changed can coexist
-             * with any state. Classified here alongside the switch. */
-            if (item->divergence & DIVERGENCE_STALE) drift.updated++;
-            if (item->profile_changed) drift.reassigned++;
         }
 
         size_t uncommitted_count = modified_count + conflict_count + deleted_count +
@@ -2057,49 +2038,23 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
      * commit_oid updated (now matching HEAD) while blob_oid stays at the
      * stale value — ghost entries permanently invisible to staleness detection.
      *
-     * Non-force: workspace_load above already reconciled via its prelude
-     *   call. Drift counters were populated from the persistent anchor vs
-     *   manifest.blob_oid comparison during the same scan. A second
-     *   reconcile here would be a no-op producing stats = {0} — the path
-     *   that silently broke output before this change. Skip it.
+     * Non-force: workspace_load above already reconciled via its prelude.
      *
-     * Force: workspace_load was skipped for performance. This explicit
-     *   reconcile is the only drift signal in this mode; it writes into
-     *   the same drift struct the non-force branch populated, so emission
-     *   is uniform. manifest_reconcile detects sync's already-held
-     *   transaction via state_locked() and writes directly (no nested
-     *   begin/commit). */
+     * Force: no prelude ran, so repair local drift here, before the Git
+     *   phase. manifest_reconcile detects sync's already-held transaction
+     *   via state_locked() and writes directly (no nested begin/commit).
+     *
+     * The repair is not reported here in either mode: its results are
+     * persistent row signals — [stale] and [released] in status, the
+     * released and reassigned blocks in apply — and belong to whichever
+     * command the user runs next, not to the one whose prelude happened
+     * to perform it. */
     if (opts->force) {
-        err = manifest_reconcile(repo, state, ctx->arena, ctx->mounts, &drift);
+        err = manifest_reconcile(repo, state, ctx->arena, ctx->mounts);
         if (err) {
             err = error_wrap(err, "Failed to reconcile manifest before sync");
             goto cleanup;
         }
-    }
-
-    if (drift.updated > 0) {
-        output_info(
-            out, OUTPUT_NORMAL, "Synchronized %zu file%s from external git changes",
-            drift.updated, drift.updated == 1 ? "" : "s"
-        );
-    }
-    if (drift.refreshed > 0) {
-        output_info(
-            out, OUTPUT_NORMAL, "Refreshed tracking for %zu unchanged file%s",
-            drift.refreshed, drift.refreshed == 1 ? "" : "s"
-        );
-    }
-    if (drift.released > 0) {
-        output_info(
-            out, OUTPUT_NORMAL, "Released %zu file%s from management (run 'dotta apply' to prune)",
-            drift.released, drift.released == 1 ? "" : "s"
-        );
-    }
-    if (drift.reassigned > 0) {
-        output_info(
-            out, OUTPUT_NORMAL, "Detected %zu profile reassignment%s from external changes",
-            drift.reassigned, drift.reassigned == 1 ? "" : "s"
-        );
     }
 
     /* Phase 3: Sync with remote (push/pull/divergence handling)

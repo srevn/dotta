@@ -1228,16 +1228,23 @@ typedef enum {
  *
  * "Does the profile that deployed this path still claim it?" — its branch
  * resolves and its HEAD tree has storage_path. It is the one observation
- * the workspace did not make before: manifest_reconcile keeps the VWD
- * current for ENABLED profiles' ACTIVE rows only, and enabled_profiles is
- * where the per-profile commit_oid baseline lives — so a row that left
- * scope (a disabled profile's rows; an INACTIVE row a re-enable did not
- * re-project) can lose its Git backing — git branch -D, git rm + commit, a
- * rebase, a sync fetch that dropped the path — and only a live look at Git
- * says so. Apply's cleanup preflight used to take that look; status read
- * the same items and could not see it, so it predicted a prune where apply
- * then released. Observed here, every reader of orphan items shares one
- * verdict, and cleanup's verdict phase reads nothing but the item.
+ * the workspace did not make before: the projection engine
+ * (manifest_apply_scope, run by reconcile and every scope transition)
+ * covers enabled profiles at HEAD, and a row it deliberately leaves alone
+ * can still lose its Git backing. Three kinds of row reach this probe:
+ *   - a disabled profile's rows — never projected, and its branch can be
+ *     deleted, rebased or git rm'd behind them;
+ *   - rows a scope change demoted for a reason the change did not cause
+ *     — a dead branch, or another enabled profile's external removal
+ *     projected in the same call — the engine gives every departure the
+ *     call's INACTIVE leftover without asking why;
+ *   - a re-enabled profile's INACTIVE rows whose path its HEAD no longer
+ *     has — the engine preserves non-ACTIVE rows outside the view.
+ * Only a live look at Git says which. Apply's cleanup preflight used to
+ * take that look; status read the same items and could not see it, so it
+ * predicted a prune where apply then released. Observed here, every
+ * reader of orphan items shares one verdict, and cleanup's verdict phase
+ * reads nothing but the item.
  *
  * Answers:
  *   BACKED      the orphan is dotta's to prune, divergence permitting
@@ -2379,10 +2386,12 @@ static error_t *analyze_encryption_policy_mismatch(
  * is the single cleanup authority.
  *
  * Drift repair is handled upstream by workspace_load's manifest_reconcile
- * call, so active rows read here are current with Git by construction.
- * Reconcile covers enabled profiles' ACTIVE rows only, which is precisely
- * the active slice: for the orphan slice, analyze_orphaned_files observes
- * Git authority itself.
+ * call, so active rows read here are current with Git by construction:
+ * reconcile projects every enabled profile at HEAD, which is precisely
+ * the active slice. The orphan slice holds the rows that projection does
+ * not touch — a disabled profile's rows, and non-ACTIVE rows whose path
+ * is not in any enabled HEAD — so for them analyze_orphaned_files
+ * observes Git authority itself.
  *
  * Lifetime: every pointer (active rows, orphan rows, both pointer arrays,
  * the snapshot rows themselves) lives in ws->arena. Only ws->active_file_index
@@ -2524,17 +2533,18 @@ error_t *workspace_load(
      *
      * External Git operations (git commit, rebase, rm, etc.) between dotta
      * runs leave the manifest's commit_oid references behind the branch HEAD.
-     * manifest_reconcile detects drift per profile and persists corrections
-     * in state — advances blob_oid for entries whose content changed and
-     * marks externally-removed entries LIFECYCLE_RELEASED. The deployment anchor
-     * is preserved by the UPSERT across this repair, so analyze_file_divergence
-     * can classify staleness from the persistent (anchor, blob_oid) pair
+     * manifest_reconcile detects drift per profile and, on drift, projects
+     * every enabled profile at HEAD: additions are projected, moved blobs
+     * advanced, rows that left are LIFECYCLE_RELEASED, and a path that
+     * returned to Git is reactivated. The deployment anchor is preserved by
+     * the UPSERT across this repair, so analyze_file_divergence can
+     * classify staleness from the persistent (anchor, blob_oid) pair
      * regardless of whether reconcile actually ran on this invocation.
      *
      * Transaction scoping is internal to manifest_reconcile: uses the
      * caller's transaction when locked, opens a scoped BEGIN IMMEDIATE
      * otherwise. Common case (no drift) is O(P) and zero writes. */
-    err = manifest_reconcile(repo, state, arena, mounts, NULL);
+    err = manifest_reconcile(repo, state, arena, mounts);
     if (err) {
         return error_wrap(err, "Failed to reconcile manifest with Git");
     }

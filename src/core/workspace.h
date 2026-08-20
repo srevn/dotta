@@ -31,8 +31,8 @@
  *
  *   Exceptions:
  *     (a) the consistency layer (manifest_reconcile, manifest_apply_scope,
- *         manifest_repair_stale, manifest_sync_*) runs before the workspace
- *         exists and serves a different invariant;
+ *         manifest_sync_*) runs before the workspace exists and serves a
+ *         different invariant;
  *     (b) read-only paths that don't load a workspace at all (cmd_completion).
  */
 
@@ -178,8 +178,9 @@ typedef struct {
  *
  * Profile loading: The workspace borrows the enabled name array from
  * the scope (caller must keep the scope alive until workspace_free).
- * Git tree loading is deferred to the rare stale repair path. In the
- * common (non-stale) case, workspace_load performs zero Git tree
+ * Git tree loading is deferred to the rare drift-repair path (the
+ * prelude's manifest_reconcile projecting every enabled profile). In the
+ * common (no-drift) case, workspace_load performs zero Git tree
  * operations for profile loading.
  *
  * @param repo Git repository (must not be NULL)

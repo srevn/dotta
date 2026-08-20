@@ -695,14 +695,14 @@ cleanup:
  *      filter out already-enabled, missing, and custom-without-target
  *      profiles. Emits per-profile warnings; produces to_enable_validated.
  *   2. Commit scope to state — state_enable_profile per target (writes
- *      target + zero-OID sentinel), then manifest_persist_profile_head
- *      per target to fill in the real branch HEAD. enabled_profiles
- *      is now authoritative.
- *   3. Reconcile once — a single apply_scope call builds the VWD for
- *      the post-enable set, with stats_filter pinned to the newly
- *      enabled profiles so gain-side stats (files_claimed / on-disk /
- *      absent) land in the right slot per profile. Old K·M cost
- *      (rebuilding the manifest per profile) collapses to a single M.
+ *      target + zero-OID sentinel). enabled_profiles membership and
+ *      order are now authoritative.
+ *   3. Project once — a single apply_scope call builds the VWD for the
+ *      post-enable set and records each profile's projected HEAD over
+ *      the sentinel, with stats_filter pinned to the newly enabled
+ *      profiles so gain-side stats (files_claimed / on-disk / absent)
+ *      land in the right slot per profile. Old K·M cost (rebuilding the
+ *      manifest per profile) collapses to a single M.
  *   4. Per-profile feedback — iterate the validated targets to preserve
  *      per-profile output, then state_save.
  */
@@ -980,20 +980,9 @@ static error_t *profile_enable(
                 );
                 goto cleanup;
             }
-
-            /* Replace the zero-OID sentinel state_enable_profile writes
-             * with the real branch HEAD so enabled_profiles is fully
-             * authoritative before apply_scope runs. */
-            err = manifest_persist_profile_head(repo, state, profile);
-            if (err) {
-                err = error_wrap(
-                    err, "Failed to persist HEAD for profile '%s'", profile
-                );
-                goto cleanup;
-            }
         }
 
-        /* Phase 3: Reconcile once */
+        /* Phase 3: Project once */
         stats = calloc(to_enable_validated->count, sizeof(*stats));
         if (!stats) {
             err = ERROR(ERR_MEMORY, "Failed to allocate enable stats");
@@ -1013,10 +1002,11 @@ static error_t *profile_enable(
         }
 
         err = manifest_apply_scope(
-            repo, state, arena, post_enable_mounts, to_enable_validated, stats
+            repo, state, arena, post_enable_mounts, LIFECYCLE_INACTIVE,
+            to_enable_validated, stats
         );
         if (err) {
-            err = error_wrap(err, "Failed to reconcile manifest after enable");
+            err = error_wrap(err, "Failed to project manifest after enable");
             goto cleanup;
         }
 
@@ -1099,7 +1089,7 @@ cleanup:
  *      enabled; emit not-enabled diagnostics up front.
  *   2. Commit scope to state — state_disable_profile per validated
  *      target; enabled_profiles is now authoritative for the target set.
- *   3. Reconcile once — a single apply_scope call rebuilds the VWD
+ *   3. Project once — a single apply_scope call rebuilds the VWD
  *      against the post-disable enabled set and attributes loss-side
  *      stats (files_reassigned / files_orphaned) to each disabled
  *      profile via stats_filter.
@@ -1273,7 +1263,7 @@ static error_t *profile_disable(
             }
         }
 
-        /* Phase 3: Reconcile once */
+        /* Phase 3: Project once */
         stats = calloc(to_disable_validated->count, sizeof(*stats));
         if (!stats) {
             err = ERROR(ERR_MEMORY, "Failed to allocate disable stats");
@@ -1292,10 +1282,11 @@ static error_t *profile_disable(
         }
 
         err = manifest_apply_scope(
-            repo, state, arena, post_disable_mounts, to_disable_validated, stats
+            repo, state, arena, post_disable_mounts, LIFECYCLE_INACTIVE,
+            to_disable_validated, stats
         );
         if (err) {
-            err = error_wrap(err, "Failed to reconcile manifest after disable");
+            err = error_wrap(err, "Failed to project manifest after disable");
             goto cleanup;
         }
 
@@ -1530,11 +1521,7 @@ static error_t *profile_reorder(
         goto cleanup;
     }
 
-    /* Reconcile manifest against the new precedence order.
-     *
-     * state_reorder_profiles preserves target and commit_oid on every
-     * row, so enabled_profiles is already fully authoritative — no
-     * persist_profile_head loop needed for reorder.
+    /* Project the manifest against the new precedence order.
      *
      * Build a fresh mount table from the post-mutation row cache:
      * state_reorder_profiles invalidated ctx->mounts' borrows, and a
@@ -1548,10 +1535,10 @@ static error_t *profile_reorder(
     }
 
     err = manifest_apply_scope(
-        repo, state, arena, post_reorder_mounts, NULL, NULL
+        repo, state, arena, post_reorder_mounts, LIFECYCLE_INACTIVE, NULL, NULL
     );
     if (err) {
-        err = error_wrap(err, "Failed to reconcile manifest with new precedence");
+        err = error_wrap(err, "Failed to project manifest with new precedence");
         goto cleanup;
     }
 

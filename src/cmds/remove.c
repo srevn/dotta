@@ -1477,11 +1477,12 @@ static error_t *delete_profile_branch(
             goto cleanup;
         }
 
-        /* Ordering rule: mutate enabled_profiles first, then reconcile manifest.
+        /* Ordering rule: mutate enabled_profiles first, then project the manifest.
          * state_disable_profile drops the row from enabled_profiles; apply_scope
-         * then rebuilds virtual_manifest against the remaining set (orphans
-         * without a fallback flip to LIFECYCLE_INACTIVE, which the post-deletion
-         * pass below upgrades to LIFECYCLE_DELETED after gitops_delete_branch). */
+         * then rebuilds virtual_manifest against the remaining set. A scope
+         * change, so leftover is LIFECYCLE_INACTIVE: orphans without a fallback
+         * flip to it, and the post-deletion pass below upgrades them to
+         * LIFECYCLE_DELETED after gitops_delete_branch. */
         err = state_disable_profile(state, opts->profile);
         if (err) {
             err = error_wrap(err, "Failed to remove profile from state");
@@ -1500,10 +1501,11 @@ static error_t *delete_profile_branch(
         }
 
         err = manifest_apply_scope(
-            repo, state, arena, post_disable_mounts, NULL, NULL
+            repo, state, arena, post_disable_mounts, LIFECYCLE_INACTIVE,
+            NULL, NULL
         );
         if (err) {
-            err = error_wrap(err, "Failed to reconcile manifest after disable");
+            err = error_wrap(err, "Failed to project manifest after disable");
             goto cleanup;
         }
 

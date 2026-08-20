@@ -535,9 +535,7 @@ static error_t *plan_validate(const plan_t *plan) {
  * when reorder runs), removals next, reorder last over the post-diff
  * set. Each enable/disable invalidates the row cache; reorder reloads
  * it on entry so the precondition holds. */
-static error_t *plan_apply(
-    git_repository *repo, state_t *deploy_state, const plan_t *plan
-) {
+static error_t *plan_apply(state_t *deploy_state, const plan_t *plan) {
     for (size_t i = 0; i < plan->new_order.count; i++) {
         if (!plan->needs_enable[i]) continue;
         const item_t *it = plan->new_order_items[i];
@@ -545,16 +543,6 @@ static error_t *plan_apply(
         error_t *err = state_enable_profile(deploy_state, it->name, it->target);
         if (err) {
             return error_wrap(err, "Failed to enable profile '%s'", it->name);
-        }
-
-        /* Replace the zero-OID sentinel state_enable_profile writes
-         * with the real branch HEAD so enabled_profiles is fully
-         * authoritative before apply_scope runs. */
-        err = manifest_persist_profile_head(repo, deploy_state, it->name);
-        if (err) {
-            return error_wrap(
-                err, "Failed to persist HEAD for profile '%s'", it->name
-            );
         }
     }
 
@@ -575,7 +563,8 @@ static error_t *plan_apply(
 }
 
 /* Phase: rebuild the mount table from the post-mutation binding set
- * and reconcile virtual_manifest + tracked_directories. */
+ * and project virtual_manifest + tracked_directories. A scope change:
+ * rows that left take LIFECYCLE_INACTIVE. */
 static error_t *plan_reconcile(
     git_repository *repo, state_t *deploy_state, arena_t *arena
 ) {
@@ -584,9 +573,11 @@ static error_t *plan_reconcile(
     if (err) {
         return error_wrap(err, "Failed to rebuild mount table after profile diff");
     }
-    err = manifest_apply_scope(repo, deploy_state, arena, mounts, NULL, NULL);
+    err = manifest_apply_scope(
+        repo, deploy_state, arena, mounts, LIFECYCLE_INACTIVE, NULL, NULL
+    );
     if (err) {
-        return error_wrap(err, "Failed to reconcile manifest with new scope");
+        return error_wrap(err, "Failed to project manifest with new scope");
     }
     return NULL;
 }
@@ -618,7 +609,7 @@ static error_t *save_order(
     err = plan_validate(&plan);
     if (err) goto rollback;
 
-    err = plan_apply(repo, deploy_state, &plan);
+    err = plan_apply(deploy_state, &plan);
     if (err) goto rollback;
 
     err = plan_reconcile(repo, deploy_state, arena);

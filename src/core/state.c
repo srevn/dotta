@@ -1186,10 +1186,11 @@ error_t *state_enable_profile(
 
     /* UPSERT: Insert or update on conflict.
      *
-     * commit_oid is zeroblob(20) on fresh INSERT — the manifest layer fills it
-     * via state_set_profile_commit_oid after syncing entries. On UPSERT conflict
-     * (profile already enabled), commit_oid is preserved — it represents the
-     * last-synced HEAD and must not be clobbered by a target update.
+     * commit_oid is zeroblob(20) on fresh INSERT — a sentinel that
+     * manifest_apply_scope replaces, in the same transaction, with the HEAD
+     * it projected the profile from. On UPSERT conflict (profile already
+     * enabled), commit_oid is preserved — it represents the last-projected
+     * HEAD and must not be clobbered by a target update.
      *
      * Position is `COALESCE(MAX(position) + 1, 0)`: on an empty table
      * MAX returns NULL and the COALESCE drops to 0, matching the 0-based
@@ -3267,9 +3268,12 @@ error_t *state_transition_files_by_profile(
  * branch HEAD as the last-synced commit.
  *
  * Direct callers:
- * - manifest_persist_profile_head (gitops_resolve_branch_head_oid + this
- *   function; reached by every scope-transition or post-commit path that
- *   needs to refresh a profile's stored HEAD)
+ * - manifest_apply_scope (every scope transition and drift repair: the
+ *   OID of the tree the engine just projected, for every enabled profile
+ *   whose branch resolved)
+ * - manifest_persist_profile_head (manifest.c-private:
+ *   gitops_resolve_branch_head_oid + this function, for the add/update/
+ *   remove entry points that moved one branch by their own commit)
  * - manifest_sync_diff (binds the explicit new_oid passed by sync)
  *
  * Cache discipline: this mutation patches the row cache *in place* rather

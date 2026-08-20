@@ -59,12 +59,20 @@
  * chunk is left to the arena (released at arena_destroy) and the hashmap's
  * (uintptr_t)(idx + 1) values stay valid because they encode indices, not
  * pointers.
+ *
+ * heads records, per profile passed to precedence_view_build and index-
+ * aligned with that list, the peeled OID whose tree the rows came from —
+ * captured by the same git_reference_peel that produced the tree, so the
+ * view and the OID can never describe two different commits. A zero OID
+ * means the branch did not resolve: nothing was projected for it.
+ * precedence_view_load_tree leaves heads NULL (one tree, no branch).
  */
 typedef struct precedence_view {
     state_file_entry_t *entries;   /* arena-backed, abandon-and-realloc growth */
     size_t count;
     size_t capacity;
     hashmap_t *index;              /* fs_path → idx+1, heap-allocated */
+    git_oid *heads;                /* per build profile, arena-backed; NULL for load_tree */
 } precedence_view_t;
 
 /**
@@ -77,8 +85,8 @@ typedef struct precedence_view {
  * Memory ownership:
  * - view: borrowed, caller retains ownership
  * - mounts: borrowed, must not be NULL — keyed by ctx->profile to resolve
- *          custom/ entries; missing-binding lookups surface as
- *          MOUNT_RESOLVE_UNBOUND and the callback skips silently
+ *          custom/ entries; a missing binding (MOUNT_RESOLVE_UNBOUND) is
+ *          a hard error naming the profile and the repair command
  * - metadata: borrowed (per-profile, reloaded for each profile in the outer
  *             build loop), can be NULL (profile lacks metadata.json)
  * - arena: borrowed, must not be NULL; per-row strings + spine growth
@@ -558,18 +566,24 @@ static error_t *precedence_view_allocate(
  * One Git tree alive per iteration (loaded, walked, freed).
  *
  * `mounts` MUST cover every profile in `profiles` (callers build it from
- * the same list). Custom/ entries belonging to a profile with no target
- * binding are skipped silently by the callback — that branch is the only
- * place "no --target on this machine" is allowed to influence the view,
- * ensuring policy lives in one site instead of being replicated by each
- * engine entry point.
+ * the same list). A custom/ entry whose profile has no target binding is
+ * a hard error from the callback (ERR_STATE_INVALID with a repair hint) —
+ * every enabling command guarantees the binding, so reaching that branch
+ * means corruption, not a machine that lacks a --target.
+ *
+ * A profile whose branch does not exist contributes no rows and leaves
+ * its heads[] slot zero; the caller decides what that means for the rows
+ * it used to own (manifest_apply_scope gives them its leftover lifecycle).
+ * Only the existence question is tolerant: a branch that exists but
+ * cannot be loaded (corrupt object, I/O) still fails the build, as does a
+ * failed lookup — both stay retryable errors, never silent omissions.
  *
  * Memory:
- *   - view struct, spine, and per-row strings: arena-allocated; the
- *     caller's arena reclaims them at arena_destroy.
+ *   - view struct, spine, heads, and per-row strings: arena-allocated;
+ *     the caller's arena reclaims them at arena_destroy.
  *   - index hashmap: heap-allocated; on success the caller takes ownership
- *     and must call precedence_view_release(view) when done. On error,
- *     the hashmap (if allocated) is freed here and *out is NULL.
+ *     and must hashmap_free(view->index) when done. On error, the hashmap
+ *     (if allocated) is freed here and *out is NULL.
  */
 static error_t *precedence_view_build(
     git_repository *repo,
@@ -590,13 +604,37 @@ static error_t *precedence_view_build(
     error_t *err = precedence_view_allocate(arena, 64, 128, &view);
     if (err) return err;
 
+    /* One slot per profile, zero by calloc — the "did not resolve"
+     * sentinel needs no separate write. */
+    view->heads = arena_calloc(arena, profiles->count, sizeof(*view->heads));
+    if (!view->heads) {
+        err = ERROR(ERR_MEMORY, "Failed to allocate precedence view heads");
+        goto cleanup;
+    }
+
     /* Process each profile in order (later profiles override earlier) */
     for (size_t i = 0; i < profiles->count; i++) {
         const char *profile = profiles->items[i];
 
-        /* Load tree for this profile (scoped to iteration) */
+        /* Does the branch exist? Asked separately because the tree loader
+         * maps a missing ref to ERR_GIT like every other failure, and
+         * "gone" must not be confused with "broken": gone is an
+         * observation the caller's leftover policy answers, broken is an
+         * error that must propagate. */
+        bool exists = false;
+        err = gitops_branch_exists(repo, profile, &exists);
+        if (err) {
+            err = error_wrap(
+                err, "Failed to look up branch for profile '%s'", profile
+            );
+            goto cleanup;
+        }
+        if (!exists) continue;
+
+        /* Load tree for this profile (scoped to iteration), capturing the
+         * peeled OID it came from into the profile's heads[] slot. */
         git_tree *tree = NULL;
-        err = gitops_load_branch_tree(repo, profile, &tree, NULL);
+        err = gitops_load_branch_tree(repo, profile, &tree, &view->heads[i]);
         if (err) {
             err = error_wrap(
                 err, "Failed to load tree for profile '%s'", profile
@@ -679,12 +717,12 @@ cleanup:
  * historical diffs against a past commit's tree.
  *
  * `mounts` MUST record a binding for `profile` when the tree contains
- * custom/ entries that should resolve, otherwise those entries are
- * skipped silently. Trees without custom/ entries can pass any mount
- * table handle, including one with no binding for `profile`.
+ * custom/ entries; the callback treats a missing binding as a hard
+ * error. Trees without custom/ entries can pass any mount table handle,
+ * including one with no binding for `profile`.
  *
  * Memory: same contract as precedence_view_build (arena-backed view
- * + heap-backed index).
+ * + heap-backed index). heads stays NULL — a tree is not a branch.
  */
 static error_t *precedence_view_load_tree(
     git_tree *tree,
@@ -789,8 +827,10 @@ cleanup:
  * deployed_at and the stat triple on both INSERT and UPDATE paths.
  *
  * Note: commit_oid is stored per-profile in enabled_profiles, not per-file.
- * Callers are responsible for calling manifest_persist_profile_head() after
- * syncing to refresh the per-profile commit_oid from the branch's HEAD.
+ * manifest_apply_scope writes it from the view's heads once every row is
+ * projected (its step 5b); the verb entry points that project rows
+ * outside the engine (add/update/remove, sync_diff) refresh it themselves
+ * after their own commit.
  *
  * Mutation: view_row is mutable so that this function — the one caller
  * authorised to write the row's anchor.observed_at — can stamp the
@@ -974,8 +1014,8 @@ static error_t *manifest_capture_row(
  *
  * Custom-prefix resolution mirrors precedence_view_load_tree (which mirrors
  * precedence_view_build): mounts MUST record a binding for `profile` when
- * the tree contains custom/ entries that should resolve, otherwise those
- * entries are skipped silently by the build callback.
+ * the tree contains custom/ entries; a missing binding is a hard error
+ * from the build callback.
  *
  * @param tree     Git tree to load (must not be NULL)
  * @param profile  Profile name carried on each row (must not be NULL)
@@ -1048,22 +1088,19 @@ error_t *manifest_load_tree_files(
  * Resolve a profile's current branch HEAD and persist it as the
  * stored commit_oid in enabled_profiles.
  *
- * Composes gitops_resolve_branch_head_oid + state_set_profile_commit_oid.
- * Callers pair this with state_enable_profile (the membership primitive
- * that introduces a profile) to complete the authoritative-scope
- * contract before manifest_apply_scope: state_enable_profile writes the
- * zero-OID sentinel; this function replaces it with the real branch
- * HEAD. apply_scope then trusts the commit_oid column and does not walk
- * refs on its own.
- *
- * state_reorder_profiles preserves the existing commit_oid on every row,
- * so reorder callers do not need this helper.
+ * Composes gitops_resolve_branch_head_oid + state_set_profile_commit_oid
+ * for the verb entry points that project rows outside the engine —
+ * manifest_add_files, manifest_update_files, manifest_remove_files — each
+ * of which moved one branch by its own commit and refreshes that
+ * profile's stored HEAD afterwards. Scope transitions do not come here:
+ * manifest_apply_scope records the OID of the tree it projected, for
+ * every enabled profile, from the view itself (no second ref lookup).
  *
  * Sites that bypass this helper:
- *   - manifest_detect_stale_profiles: read-only HEAD comparison.
+ *   - manifest_detect_drift: read-only HEAD comparison.
  *   - manifest_sync_diff: caller passes the new HEAD explicitly as new_oid.
  */
-error_t *manifest_persist_profile_head(
+static error_t *manifest_persist_profile_head(
     git_repository *repo,
     state_t *state,
     const char *profile
@@ -1179,330 +1216,44 @@ static error_t *directory_entry_from_metadata(
 }
 
 /**
- * Detect which enabled profiles have stale state entries
+ * Project the enabled-profile scope into virtual_manifest
  *
- * Iterates in-scope profiles and compares each profile's stored commit_oid
- * (from enabled_profiles) against its branch's current HEAD. Mismatch means
- * external Git operations occurred since the last dotta operation.
- *
- * O(P) state queries + O(P) ref lookups where P = profile count.
- *
- * Internal helper for manifest_repair_stale. Not part of the public API —
- * callers reach drift repair through manifest_reconcile.
- */
-static error_t *manifest_detect_stale_profiles(
-    git_repository *repo,
-    const state_t *state,
-    const hashmap_t *profile_scope,
-    hashmap_t **out_stale
-) {
-    *out_stale = NULL;
-
-    error_t *err = NULL;
-    hashmap_t *stale_map = NULL;
-
-    /* Iterate profile_scope keys — one check per profile, no dedup needed. */
-    hashmap_iter_t iter;
-    hashmap_iter_init(&iter, profile_scope);
-
-    const char *profile;
-    while (hashmap_iter_next(&iter, &profile, NULL)) {
-        /* Read stored commit_oid for this profile (borrowed from row cache).
-         * NULL = profile not enabled (e.g. race with disable) — skip. */
-        const git_oid *stored_oid = state_peek_profile_commit_oid(state, profile);
-        if (!stored_oid) continue;
-
-        /* Fetch current branch HEAD via lightweight ref-to-OID lookup.
-         *
-         * profile_scope is a membership set (NULL values) — manifest_repair_stale
-         * populates it from the enabled-profile list before calling us. */
-        git_oid head_oid;
-        err = gitops_resolve_branch_head_oid(repo, profile, &head_oid);
-        if (err) {
-            /* Branch may have been deleted — skip (the workspace's orphan
-             * analysis observes it) */
-            error_free(err);
-            err = NULL;
-            continue;
-        }
-
-        if (!git_oid_equal(stored_oid, &head_oid)) {
-            /* Profile is stale — HEAD moved since last dotta operation */
-            if (!stale_map) {
-                stale_map = hashmap_borrow(16);
-                if (!stale_map) {
-                    return ERROR(ERR_MEMORY, "Failed to create stale profile map");
-                }
-            }
-
-            err = hashmap_set(stale_map, profile, (void *) (uintptr_t) 1);
-            if (err) {
-                hashmap_free(stale_map, NULL);
-                return err;
-            }
-        }
-    }
-
-    *out_stale = stale_map;
-    return NULL;
-}
-
-/**
- * Repair stale state entries from external Git changes
- *
- * Persistent repair: detects state entries whose commit_oid no longer
- * matches the profile branch HEAD, then either updates them from fresh Git
- * state or marks them LIFECYCLE_RELEASED for release. The deployment anchor
- * (deployed_blob_oid, deployed_at, stat_*) is preserved by the UPSERT
- * across repair — reconcile advances the VWD cache's blob_oid to track Git
- * while leaving the anchor pinned to dotta's last disk confirmation. The
- * divergence between the two is how workspace Phase 1/3 classifies
- * staleness from persistent state (no hashmap escape needed).
- *
- * Internal algorithm implementation. manifest_reconcile is the public entry
- * point — it owns profile-list fetching, transaction scoping, and empty-
- * scope handling; this helper runs the repair algorithm assuming a ready
- * transaction and validated inputs.
- */
-static error_t *manifest_repair_stale(
-    git_repository *repo,
-    state_t *state,
-    arena_t *arena,
-    const mount_table_t *mounts,
-    const string_array_t *enabled_profiles,
-    manifest_repair_stats_t *out_stats
-) {
-    CHECK_NULL(repo);
-    CHECK_NULL(state);
-    CHECK_NULL(arena);
-    CHECK_NULL(mounts);
-    CHECK_NULL(enabled_profiles);
-    CHECK_NULL(out_stats);
-
-    memset(out_stats, 0, sizeof(*out_stats));
-
-    error_t *err = NULL;
-    size_t all_count = 0;
-    state_file_entry_t *all_entries = NULL;
-    hashmap_t *profile_scope = NULL;
-    hashmap_t *stale_profiles = NULL;
-    precedence_view_t *fresh = NULL;
-
-    /* Phase 1: Detect stale profiles via per-profile commit_oid comparison.
-     *
-     * O(P) state queries + O(P) ref lookups. If no profile is stale, exits
-     * immediately without loading file entries (zero cost common case). */
-    profile_scope = hashmap_borrow(enabled_profiles->count);
-    if (!profile_scope) {
-        err = ERROR(ERR_MEMORY, "Failed to create profile scope map");
-        goto cleanup;
-    }
-    for (size_t i = 0; i < enabled_profiles->count; i++) {
-        err = hashmap_set(profile_scope, enabled_profiles->items[i], NULL);
-        if (err) goto cleanup;
-    }
-
-    err = manifest_detect_stale_profiles(
-        repo, state, profile_scope, &stale_profiles
-    );
-    if (err) {
-        err = error_wrap(err, "Failed to detect stale profiles");
-        goto cleanup;
-    }
-
-    if (!stale_profiles) {
-        goto cleanup;  /* All profiles current — nothing to repair */
-    }
-
-    /* Load all state entries for Phase 3 repair loop. Only loaded when
-     * staleness is detected — common case (no staleness) pays zero cost. */
-    err = state_get_all_files(state, arena, &all_entries, &all_count);
-    if (err) {
-        err = error_wrap(err, "Failed to load state entries for stale repair");
-        goto cleanup;
-    }
-
-    /* Phase 2: Build fresh precedence view from current Git state.
-     * Provides the ground truth for what files should exist. The build
-     * attributes per-profile metadata onto each row, so the repair pass
-     * below propagates the correct metadata for whichever profile won
-     * precedence after Git moved underneath us.
-     *
-     * The caller-supplied mount table covers the same enabled set the
-     * precedence_view_build pass iterates — the directory rebuild at
-     * Phase 4 reuses the handle. */
-    err = precedence_view_build(repo, enabled_profiles, mounts, arena, &fresh);
-    if (err) {
-        err = error_wrap(err, "Failed to build precedence view for stale repair");
-        goto cleanup;
-    }
-
-    /* Phase 3: Process ACTIVE state entries from stale profiles.
-     *
-     * Single pass over pre-loaded entries, filtering by stale_profiles map.
-     * For each entry: compare against fresh precedence view to determine
-     * update (file still in Git) or release (file removed from Git
-     * externally).
-     */
-    for (size_t i = 0; i < all_count; i++) {
-        state_file_entry_t *entry = &all_entries[i];
-
-        /* Only repair ACTIVE entries from stale profiles */
-        if (entry->lifecycle != LIFECYCLE_ACTIVE) {
-            continue;
-        }
-        if (!entry->profile || !hashmap_get(stale_profiles, entry->profile)) {
-            continue;
-        }
-
-        /* Look up in fresh precedence view (O(1) index lookup) */
-        state_file_entry_t *fresh_entry = NULL;
-        if (fresh && fresh->index) {
-            void *idx_ptr = hashmap_get(fresh->index, entry->filesystem_path);
-            if (idx_ptr) {
-                size_t idx = (size_t) (uintptr_t) idx_ptr - 1;
-                fresh_entry = &fresh->entries[idx];
-            }
-        }
-
-        if (fresh_entry) {
-            /* File still in Git (same or different profile via fallback).
-             *
-             * Use manifest_project_row to update with current Git truth.
-             * Preserve deployed_at — the file's lifecycle history is unchanged,
-             * only the expected state cache needs updating.
-             */
-
-            /* Determine if file content actually changed (blob_oid differs).
-             *
-             * A profile HEAD can move without changing this file's blob
-             * (other files in the commit changed). The flag drives the
-             * updated/refreshed stat distinction below so users see real
-             * content changes, not bookkeeping.
-             *
-             * Staleness detection itself no longer consumes this signal —
-             * workspace Phase 1/3 reads the persistent deployment anchor
-             * directly, comparing anchor.blob_oid against the new Git blob.
-             */
-            bool blob_changed = !git_oid_equal(&entry->blob_oid, &fresh_entry->blob_oid);
-
-            /* deployed_at preserved by SQL UPSERT, old_profile auto-captured
-             * by SQL when the owning profile shifts during repair. */
-            bool profile_shifted = strcmp(fresh_entry->profile, entry->profile) != 0;
-
-            err = manifest_project_row(repo, state, fresh_entry);
-            if (err) {
-                err = error_wrap(
-                    err, "Failed to repair stale entry '%s'",
-                    entry->storage_path
-                );
-                goto cleanup;
-            }
-
-            /* Track profile reassignment when owning profile shifts during repair */
-            if (profile_shifted) {
-                out_stats->reassigned++;
-            }
-
-            if (blob_changed) {
-                out_stats->updated++;
-            } else {
-                out_stats->refreshed++;
-            }
-        } else {
-            /* File removed from all enabled profiles — loss of authority.
-             *
-             * Mark LIFECYCLE_RELEASED so the orphan→cleanup pipeline releases
-             * it (leaves file on filesystem, removes state entry). The
-             * workspace reads that column straight through; for rows this
-             * repair does not cover it observes the same fact against Git.
-             *
-             * Do NOT remove the state entry here — the full pipeline ensures
-             * user visibility and safety checks before any cleanup.
-             */
-            err = state_set_file_state(state, entry->filesystem_path, LIFECYCLE_RELEASED);
-            if (err) {
-                err = error_wrap(
-                    err, "Failed to mark '%s' as stale",
-                    entry->storage_path
-                );
-                goto cleanup;
-            }
-
-            out_stats->released++;
-        }
-    }
-
-    /* Phase 4: Update stored commit_oid for each repaired profile. */
-    hashmap_iter_t stale_iter;
-    hashmap_iter_init(&stale_iter, stale_profiles);
-
-    const char *stale_name;
-    while (hashmap_iter_next(&stale_iter, &stale_name, NULL)) {
-        err = manifest_persist_profile_head(repo, state, stale_name);
-        if (err) goto cleanup;
-    }
-
-    /* Phase 5: Retire the ghosts this repair just released. A RELEASED row
-     * never witnessed on disk has nothing to release, so reclaiming it here
-     * keeps it out of the release theater downstream. */
-    err = state_reclaim_unmaterialized_files(state);
-    if (err) {
-        err = error_wrap(err, "Failed to reclaim ghost rows after stale repair");
-        goto cleanup;
-    }
-
-    /* Phase 6: Rebuild tracked directories — external Git changes may have
-     * added or removed directory entries in profile metadata. */
-    err = manifest_sync_directories(repo, state, arena, enabled_profiles, mounts);
-    if (err) {
-        err = error_wrap(err, "Failed to rebuild directories after stale repair");
-        goto cleanup;
-    }
-
-cleanup:
-    /* The view's spine + strings and all_entries are arena-backed; the
-     * caller's arena (typically ctx->arena) reclaims them at command end.
-     * Only the heap-allocated hashmaps need explicit free. */
-    if (stale_profiles) hashmap_free(stale_profiles, NULL);
-    if (profile_scope) hashmap_free(profile_scope, NULL);
-    if (fresh && fresh->index) hashmap_free(fresh->index, NULL);
-
-    return err;
-}
-
-/**
- * Reconcile virtual_manifest to the current enabled-profile scope
- *
- * The enabled set is read from state; the caller is responsible for
- * making enabled_profiles authoritative before the call (see header
- * docstring for the ordering rule).
+ * The one projection engine. The enabled set (membership and order) is
+ * read from state; the caller makes it authoritative before the call and
+ * names, through `leftover`, what a row that falls out of the projection
+ * means (see the header for why that is a parameter and not derived).
+ * Idempotent: applying the same scope twice is a no-op — every UPSERT
+ * rewrites the same value and every HEAD persist the same OID.
  *
  * Algorithm:
- *   1. Build fresh precedence view from state-authoritative scope.
+ *   1. Read the enabled set from state.
+ *   2. Build the fresh precedence view at each branch's HEAD.
  *      precedence_view_build attributes per-profile metadata to each row
  *      during the tree walk; manifest_project_row then writes the row's
  *      already-attributed mode/owner/group/encrypted directly to the DB.
- *   2. Snapshot current virtual_manifest (arena-backed, used by step 3).
- *   3. UPSERT every entry in the new manifest. The SQL UPSERT preserves
- *      the deployment anchor on UPDATE, auto-captures old_profile when
- *      the profile column changes, and unconditionally writes
- *      state=LIFECYCLE_ACTIVE (which reactivates any LIFECYCLE_INACTIVE row
- *      whose path re-entered scope).
- *   4. Orphan pass. For every pre-reconcile row:
- *        - In new manifest: owner-change stats only (row already updated).
- *        - Not in new manifest: LIFECYCLE_ACTIVE → LIFECYCLE_INACTIVE.
- *          LIFECYCLE_INACTIVE / LIFECYCLE_DELETED / LIFECYCLE_RELEASED preserved.
- *   5. Reclaim the file rows step 4 demoted that were never witnessed —
+ *      A branch that does not exist contributes no rows and leaves its
+ *      heads[] slot zero.
+ *   3. Snapshot current virtual_manifest (arena-backed, every lifecycle);
+ *      when stats are requested, index it by filesystem_path.
+ *   4. UPSERT every view row. The SQL UPSERT preserves the deployment
+ *      anchor on UPDATE, auto-captures old_profile when the profile
+ *      column changes, and unconditionally writes state=LIFECYCLE_ACTIVE —
+ *      a path that re-entered the projection is ACTIVE whatever lifecycle
+ *      it carried.
+ *   5. Leftover pass over the snapshot: every ACTIVE row not in the view
+ *      takes `leftover`; a non-ACTIVE row outside the view is preserved.
+ *   5b. Record, for every profile whose branch resolved, the OID the view
+ *      was projected from as enabled_profiles.commit_oid.
+ *   6. Reclaim the file rows step 5 demoted that were never witnessed —
  *      a ghost has no filesystem obligation, so nothing may stage it.
- *   6. Rebuild tracked_directories (mark-ACTIVE-inactive then reactivate,
- *      with its own ghost reclaim).
+ *   7. Rebuild tracked_directories (sweep, re-project, reclaim).
  */
 error_t *manifest_apply_scope(
     git_repository *repo,
     state_t *state,
     arena_t *arena,
     const mount_table_t *mounts,
+    state_lifecycle_t leftover,
     const string_array_t *stats_filter,
     manifest_scope_stats_t *out_stats
 ) {
@@ -1510,6 +1261,19 @@ error_t *manifest_apply_scope(
     CHECK_NULL(state);
     CHECK_NULL(arena);
     CHECK_NULL(mounts);
+
+    /* Two admissible fates for a row that left the projection: the user
+     * took its profile out of scope here (INACTIVE), or Git no longer
+     * has it (RELEASED). ACTIVE would keep a row the engine cannot back;
+     * DELETED would claim an intent no scope transition carries. Both
+     * are caller bugs — fail loudly. */
+    if (leftover != LIFECYCLE_INACTIVE && leftover != LIFECYCLE_RELEASED) {
+        return ERROR(
+            ERR_INVALID_ARG,
+            "manifest_apply_scope: leftover must be LIFECYCLE_INACTIVE or "
+            "LIFECYCLE_RELEASED"
+        );
+    }
 
     /* Parallel-NULL contract: either both stats arguments are NULL
      * (caller doesn't want stats) or both are non-NULL (caller owns a
@@ -1530,35 +1294,35 @@ error_t *manifest_apply_scope(
     state_file_entry_t *old_entries = NULL;
     size_t old_count = 0;
     hashmap_t *stats_map = NULL;
+    hashmap_t *old_index = NULL;
 
     /* Step 1: Read the authoritative scope from state.
      *
      * Precondition: the caller has already updated enabled_profiles
-     * to reflect the target set AND populated commit_oid for any
-     * newly-introduced profiles (via manifest_persist_profile_head).
-     * apply_scope does not walk branch HEADs — it trusts the table. */
+     * membership and order to the target set. commit_oid is not read
+     * here — step 5b writes it from the tree the view was built from. */
     err = state_get_profiles(state, &enabled);
     if (err) {
-        err = error_wrap(err, "Failed to read enabled profiles for scope reconcile");
+        err = error_wrap(err, "Failed to read enabled profiles for scope projection");
         goto cleanup;
     }
 
-    /* Step 2: Build fresh precedence view.
+    /* Step 2: Build fresh precedence view at HEAD.
      *
      * precedence_view_build consults the mount table only for profiles in
      * the passed list — disabled profiles are never considered, so the
-     * ordering rule ("update state first, then reconcile") is enforced
-     * by the oracle's own read scope. */
+     * ordering rule ("update state first, then project") is enforced by
+     * the oracle's own read scope. */
     err = precedence_view_build(repo, enabled, mounts, arena, &new_view);
     if (err) {
-        err = error_wrap(err, "Failed to build precedence view for scope reconcile");
+        err = error_wrap(err, "Failed to build precedence view for scope projection");
         goto cleanup;
     }
 
     /* Step 3: Snapshot the current virtual_manifest rows (all states).
      *
-     * Captured BEFORE step 4's UPSERTs so the orphan pass sees pre-
-     * reconcile state — "was this path previously managed?" is a
+     * Captured BEFORE step 4's UPSERTs so the leftover pass sees pre-
+     * projection state — "was this path previously managed?" is a
      * function of the snapshot, not of the in-flight UPDATE that step
      * 4 may have just committed. Arena-allocated: no explicit free. */
     err = state_get_all_files(state, arena, &old_entries, &old_count);
@@ -1603,9 +1367,28 @@ error_t *manifest_apply_scope(
                 goto cleanup;
             }
         }
+
+        /* Gain-side attribution needs the row each view entry replaces:
+         * "new to the manifest" and "expected state moved" are both
+         * questions about the old row. Keys borrow the snapshot's arena-
+         * backed paths; values point into the snapshot. */
+        old_index = hashmap_borrow(old_count > 0 ? old_count : 16);
+        if (!old_index) {
+            err = ERROR(ERR_MEMORY, "Failed to create manifest snapshot index");
+            goto cleanup;
+        }
+        for (size_t i = 0; i < old_count; i++) {
+            err = hashmap_set(
+                old_index, old_entries[i].filesystem_path, &old_entries[i]
+            );
+            if (err) {
+                err = error_wrap(err, "Failed to index manifest snapshot");
+                goto cleanup;
+            }
+        }
     }
 
-    /* Step 4: Sync every row in the new view.
+    /* Step 4: Project every row in the new view.
      *
      * UPSERT semantics (see state.c::sql_insert):
      *   - New path: INSERT with state=ACTIVE, deployed_at=0, anchor unset.
@@ -1615,13 +1398,17 @@ error_t *manifest_apply_scope(
      *     The CASE on old_profile auto-captures the prior profile when
      *     the profile column changes, and preserves it otherwise.
      *   - state column overwritten with LIFECYCLE_ACTIVE unconditionally,
-     *     which reactivates LIFECYCLE_INACTIVE rows whose path re-entered
-     *     scope (typical on profile re-enable).
+     *     which reactivates any INACTIVE, DELETED or RELEASED row whose
+     *     path re-entered the projection (a profile re-enable, a revert,
+     *     a pulled re-add). The anchor survives the round trip, so the
+     *     workspace reads the returning file as clean or [stale] by
+     *     content, never as a fresh deployment.
      *
      * Gain-side stats are attributed here: files_claimed counts every
      * row the filtered profile owns; lstat drives the user-visible
-     * "already deployed vs needs deployment" fan-out. lstat is NOT a
-     * confirmation event — the anchor remains unadvanced here. */
+     * "already deployed vs needs deployment" fan-out; the snapshot
+     * lookup splits claimed into added / updated / unchanged. lstat is
+     * NOT a confirmation event — the anchor remains unadvanced here. */
     for (size_t i = 0; i < new_view->count; i++) {
         state_file_entry_t *entry = &new_view->entries[i];
 
@@ -1648,37 +1435,55 @@ error_t *manifest_apply_scope(
                     out_stats[idx].files_missing++;
                     out_stats[idx].access_errors++;
                 }
+
+                /* What the UPSERT below does to this path: insert or
+                 * reactivate (added), move the expected state apply acts
+                 * on (updated), or rewrite the same value (neither).
+                 * Owner/group travel with a metadata commit rare enough
+                 * to ride on the workspace's verdict instead. */
+                const state_file_entry_t *old = hashmap_get(
+                    old_index, entry->filesystem_path
+                );
+                if (!old || old->lifecycle != LIFECYCLE_ACTIVE) {
+                    out_stats[idx].files_added++;
+                } else if (!git_oid_equal(&old->blob_oid, &entry->blob_oid) ||
+                    old->type != entry->type ||
+                    old->mode != entry->mode) {
+                    out_stats[idx].files_updated++;
+                }
             }
         }
 
         err = manifest_project_row(repo, state, entry);
         if (err) {
             err = error_wrap(
-                err, "Failed to sync '%s' during scope reconcile",
+                err, "Failed to project '%s' during scope projection",
                 entry->storage_path
             );
             goto cleanup;
         }
     }
 
-    /* Step 5: Orphan pass over the pre-reconcile snapshot.
+    /* Step 5: Leftover pass over the pre-projection snapshot.
      *
-     * A row whose filesystem_path is NOT in the new view's index
-     * left scope entirely. Flip LIFECYCLE_ACTIVE → LIFECYCLE_INACTIVE; leave
-     * LIFECYCLE_INACTIVE (no-op), LIFECYCLE_DELETED (staged for removal via
-     * remove --delete-profile; downgrading would break the post-
-     * deletion upgrade path in remove.c), and LIFECYCLE_RELEASED (external
-     * drift classification; downgrading would clobber it) untouched.
+     * A row whose filesystem_path is NOT in the new view's index left
+     * the projection. An ACTIVE row takes `leftover`. LIFECYCLE_INACTIVE,
+     * LIFECYCLE_DELETED and LIFECYCLE_RELEASED rows are preserved, and
+     * not counted: each records an intent — staged for removal, deletion
+     * ordered, authority lost — that predates this call, and a scope
+     * transition that swept past it neither caused nor changes it.
      *
-     * A row still in the new view was already updated in step 4;
-     * we only harvest loss-side stats here (reassignment between
+     * The row is not removed here. The full pipeline — the workspace's
+     * observation, cleanup's verdict, apply's receipt — ensures user
+     * visibility and safety checks before anything leaves disk or state.
+     *
+     * A row still in the new view was already updated in step 4; we
+     * only harvest loss-side stats here (reassignment between
      * precedence winners). */
     for (size_t i = 0; i < old_count; i++) {
         state_file_entry_t *old = &old_entries[i];
 
-        void *idx_ptr = new_view->index
-            ? hashmap_get(new_view->index, old->filesystem_path)
-            : NULL;
+        void *idx_ptr = hashmap_get(new_view->index, old->filesystem_path);
 
         if (idx_ptr) {
             /* Still covered. If precedence shifted, attribute the loss
@@ -1697,22 +1502,19 @@ error_t *manifest_apply_scope(
             continue;
         }
 
-        /* Not covered — orphan. Only downgrade ACTIVE rows. */
-        if (old->lifecycle == LIFECYCLE_ACTIVE) {
-            error_t *flip_err = state_set_file_state(
-                state, old->filesystem_path, LIFECYCLE_INACTIVE
+        /* Not covered. Only an ACTIVE row is this call's departure. */
+        if (old->lifecycle != LIFECYCLE_ACTIVE) continue;
+
+        err = state_set_file_state(state, old->filesystem_path, leftover);
+        if (err) {
+            /* Fatal — the caller rolls the transaction back. Left ACTIVE,
+             * the row would be analysed against a blob Git may no longer
+             * have instead of retiring. */
+            err = error_wrap(
+                err, "Failed to mark '%s' %s", old->filesystem_path,
+                leftover == LIFECYCLE_RELEASED ? "released" : "inactive"
             );
-            if (flip_err) {
-                /* Non-fatal: orphan detection at workspace-load time
-                 * still catches it (LIFECYCLE_ACTIVE + missing-from-Git
-                 * surfaces a warning, and cleanup proceeds). Mirrors
-                 * the policy in the primitives this one subsumes. */
-                fprintf(
-                    stderr, "warning: failed to mark '%s' inactive: %s\n",
-                    old->filesystem_path, error_message(flip_err)
-                );
-                error_free(flip_err);
-            }
+            goto cleanup;
         }
 
         if (stats_map && old->profile) {
@@ -1732,10 +1534,30 @@ error_t *manifest_apply_scope(
         }
     }
 
-    /* Step 6: Retire the ghosts step 5 flipped INACTIVE. Never witnessed
-     * means no filesystem obligation, so there is nothing for apply to
-     * clean — and the attribution above predicted exactly this set, from
-     * the same observed_at test. */
+    /* Step 5b: Git reference currency. The OID written is the one whose
+     * tree was just projected — captured by the same peel, so the
+     * manifest and commit_oid can never describe two different commits
+     * and no second ref lookup can race. A branch that did not resolve
+     * left its slot zero and its stored commit_oid untouched. */
+    for (size_t i = 0; i < enabled->count; i++) {
+        if (git_oid_is_zero(&new_view->heads[i])) continue;
+
+        err = state_set_profile_commit_oid(
+            state, enabled->items[i], &new_view->heads[i]
+        );
+        if (err) {
+            err = error_wrap(
+                err, "Failed to record commit_oid for profile '%s'",
+                enabled->items[i]
+            );
+            goto cleanup;
+        }
+    }
+
+    /* Step 6: Retire the ghosts step 5 demoted. Never witnessed means
+     * no filesystem obligation, so there is nothing for apply to clean —
+     * and the attribution above predicted exactly this set, from the
+     * same observed_at test. */
     err = state_reclaim_unmaterialized_files(state);
     if (err) {
         err = error_wrap(err, "Failed to reclaim ghost file rows");
@@ -1758,8 +1580,9 @@ error_t *manifest_apply_scope(
 cleanup:
     /* old_entries and the view's spine + strings are arena-backed; the
      * caller's arena (typically ctx->arena) reclaims them at command end.
-     * Only the heap-allocated stats and index hashmaps need explicit free. */
+     * Only the heap-allocated hashmaps need explicit free. */
     if (stats_map) hashmap_free(stats_map, NULL);
+    if (old_index) hashmap_free(old_index, NULL);
     if (new_view && new_view->index) hashmap_free(new_view->index, NULL);
     string_array_free(enabled);
 
@@ -1767,19 +1590,68 @@ cleanup:
 }
 
 /**
- * Reconcile manifest with current Git state (public entry point)
+ * Has any enabled branch moved past the HEAD the manifest was projected from?
  *
- * Self-contained drift repair: fetches enabled profiles, scopes a write
- * transaction when needed, delegates the repair algorithm to
- * manifest_repair_stale, and commits. Callers supply only the repo and
- * state — everything else is derived.
+ * Profile-level drift: enabled_profiles.commit_oid ≠ refs/heads/<profile>.
+ * O(P) row-cache reads + O(P) ref lookups, first mismatch answers — the
+ * gate that keeps manifest_reconcile's common case at zero writes.
+ *
+ * A branch that does not resolve is not drift. The projection skips it
+ * and leaves its commit_oid alone, so counting it would re-run the
+ * engine on every load for as long as the branch stays enabled — a
+ * misconfiguration the scope layer already warns about on every run.
+ * The workspace observes that branch's rows as released at load. A
+ * lookup that fails for any other reason is left for the next load the
+ * same way: no answer is not a reason to project.
+ *
+ * Cannot fail: every lookup it makes is either answered or deferred.
+ *
+ * @param repo Git repository (must not be NULL)
+ * @param state State handle (must not be NULL)
+ * @param profiles Enabled profiles (must not be NULL)
+ * @return true if at least one enabled branch is ahead of its stored HEAD
+ */
+static bool manifest_detect_drift(
+    git_repository *repo,
+    const state_t *state,
+    const string_array_t *profiles
+) {
+    for (size_t i = 0; i < profiles->count; i++) {
+        const char *profile = profiles->items[i];
+
+        /* Borrowed from the row cache. NULL only for a profile that is
+         * not enabled — the list we iterate came from that same cache. */
+        const git_oid *stored = state_peek_profile_commit_oid(state, profile);
+        if (!stored) continue;
+
+        git_oid head;
+        error_t *err = gitops_resolve_branch_head_oid(repo, profile, &head);
+        if (err) {
+            error_free(err);
+            continue;
+        }
+
+        if (!git_oid_equal(stored, &head)) return true;
+    }
+
+    return false;
+}
+
+/**
+ * Reconcile manifest with current Git state (drift check over the engine)
+ *
+ * Self-contained: fetches the enabled set, asks manifest_detect_drift
+ * whether any enabled branch moved, and only then scopes a write
+ * transaction (when the caller holds none) and runs manifest_apply_scope
+ * with leftover = LIFECYCLE_RELEASED — a row that left the projection
+ * here was dropped by Git, not by the user. Callers supply only the
+ * repo, state, arena and mounts; everything else is derived.
  */
 error_t *manifest_reconcile(
     git_repository *repo,
     state_t *state,
     arena_t *arena,
-    const mount_table_t *mounts,
-    manifest_repair_stats_t *out_stats
+    const mount_table_t *mounts
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(state);
@@ -1792,15 +1664,18 @@ error_t *manifest_reconcile(
         return error_wrap(err, "Failed to fetch enabled profiles for reconcile");
     }
 
-    /* Normalize outputs for every early-return path */
-    if (out_stats) memset(out_stats, 0, sizeof(*out_stats));
-
     /* Empty enabled set — no scope to reconcile. Consistent with the
      * "disable last profile, then apply" workflow: nothing to sync. */
     if (!profiles || profiles->count == 0) {
         string_array_free(profiles);
         return NULL;
     }
+
+    /* Common case: every enabled branch is where the manifest left it.
+     * O(P) and no write — the cost profile every workspace load relies on. */
+    bool drifted = manifest_detect_drift(repo, state, profiles);
+    string_array_free(profiles);
+    if (!drifted) return NULL;
 
     /* Scope a write transaction only when the caller doesn't already hold
      * one. Apply runs under dotta_ext_write; sync calls us after its own
@@ -1810,17 +1685,13 @@ error_t *manifest_reconcile(
     if (needs_tx) {
         err = state_begin(state);
         if (err) {
-            string_array_free(profiles);
             return error_wrap(err, "Failed to begin reconcile transaction");
         }
     }
 
-    /* manifest_repair_stale requires a non-NULL out_stats; route to a local
-     * sink when the caller doesn't care so the internal contract stays hidden. */
-    manifest_repair_stats_t local_stats;
-    manifest_repair_stats_t *stats_target = out_stats ? out_stats : &local_stats;
-
-    err = manifest_repair_stale(repo, state, arena, mounts, profiles, stats_target);
+    err = manifest_apply_scope(
+        repo, state, arena, mounts, LIFECYCLE_RELEASED, NULL, NULL
+    );
 
     if (needs_tx) {
         if (err) {
@@ -1833,7 +1704,6 @@ error_t *manifest_reconcile(
         }
     }
 
-    string_array_free(profiles);
     return err;
 }
 

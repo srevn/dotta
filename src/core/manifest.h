@@ -47,17 +47,17 @@
 #include "infra/mount.h"
 
 /**
- * Per-profile statistics from a scope transition
+ * Per-profile statistics from a scope projection
  *
  * Fields are populated conditionally based on the profile's role in the
- * transition. The same profile can gain and lose files simultaneously
+ * projection. The same profile can gain and lose files simultaneously
  * (e.g., enable A while B was reordered above it), so gain-side and
  * loss-side fields are independent.
  *
  *   Gain-side  — the profile claimed file(s) in the new manifest.
  *   Loss-side  — the profile lost file(s) that were in the old manifest.
  *
- * Counters reflect what was observed at reconcile time; they do NOT
+ * Counters reflect what was observed at projection time; they do NOT
  * verify disk matches the profile blob. Verification is workspace
  * divergence analysis (status/diff/apply).
  */
@@ -70,154 +70,158 @@ typedef struct {
     size_t files_missing;        /* lstat returned ENOENT (includes access errors) */
     size_t access_errors;        /* lstat failed non-ENOENT (subset of files_missing) */
 
+    /* Gain-side, subsets of files_claimed (the remainder was unchanged) */
+    size_t files_added;          /* No ACTIVE row before this call (new path, or a row reactivated) */
+    size_t files_updated;        /* ACTIVE row whose expected blob, type or mode moved */
+
     /* Loss-side */
     size_t files_reassigned;     /* Files reassigned to a different profile */
-    size_t files_orphaned;       /* Files that left scope entirely (→ LIFECYCLE_INACTIVE) */
+    size_t files_orphaned;       /* Files that left scope entirely (→ the call's leftover lifecycle) */
     size_t files_reclaimed;      /* Ghost rows that left scope (retired; no cleanup pends) */
 } manifest_scope_stats_t;
 
 /**
- * Statistics from stale-entry drift repair
+ * Project the enabled-profile scope into virtual_manifest
  *
- * Counts row outcomes when the persistent state entries are reconciled
- * against Git after external moves (the SQL virtual_manifest table; not
- * the in-memory precedence view).
- */
-typedef struct {
-    size_t updated;     /* Files with changed blob_oid (content changed in Git) */
-    size_t refreshed;   /* Files with only HEAD refresh (content unchanged) */
-    size_t released;    /* Files set to LIFECYCLE_RELEASED (removed from Git externally) */
-    size_t reassigned;  /* Files whose owning profile shifted during repair */
-} manifest_repair_stats_t;
-
-/**
- * Record a profile's current branch HEAD in enabled_profiles.commit_oid.
+ * The one projection engine: manifest := project(enabled profiles × branch
+ * HEADs, precedence resolved). Every scope transition and every drift
+ * repair is this call. The enabled profile set is read from state (via
+ * state_peek_profiles); the caller is responsible for making
+ * enabled_profiles membership and order authoritative *before* calling
+ * (see ordering rule below). Idempotent: applying the same scope twice is
+ * a no-op (UPSERT preserves every column that a repeat call would rewrite
+ * to the same value; the HEAD persist rewrites the same OID).
  *
- * Composes gitops_resolve_branch_head_oid + state_set_profile_commit_oid.
- * Callers pair this with state_enable_profile (the membership primitive
- * that introduces a profile), which writes a zero-OID sentinel; this
- * call replaces the sentinel with the real HEAD so enabled_profiles is
- * fully authoritative before manifest_apply_scope.
- *
- * Reorder does NOT need this pairing: state_reorder_profiles preserves
- * the existing commit_oid on every row.
- *
- * Preconditions:
- *   - state has an active write transaction.
- *   - profile is currently in enabled_profiles (just written by
- *     state_enable_profile).
- *   - The profile's Git branch exists and resolves to a commit.
- *
- * Postconditions:
- *   - enabled_profiles.commit_oid for profile equals the branch HEAD.
- *   - Transaction remains open.
- *
- * @param repo Git repository (must not be NULL)
- * @param state State handle with active transaction (must not be NULL)
- * @param profile Profile name (must not be NULL)
- * @return Error or NULL on success
- */
-error_t *manifest_persist_profile_head(
-    git_repository *repo,
-    state_t *state,
-    const char *profile
-);
-
-/**
- * Reconcile virtual_manifest to the current enabled-profile scope
- *
- * Single authoritative primitive for every scope transition. The enabled
- * profile set is read from state (via state_peek_profiles); the caller
- * is responsible for making enabled_profiles authoritative *before*
- * calling this function (see ordering rule below). Idempotent: applying
- * the same scope twice is a no-op (UPSERT preserves every column that
- * a repeat call would rewrite to the same value).
+ * `leftover` names the fate of an ACTIVE row whose path fell out of the
+ * projection, and is chosen by the call site because the engine cannot
+ * infer it from its inputs: a path leaves the projection when its
+ * profile leaves the enabled set, when Git no longer has it, and when a
+ * re-target moves a custom/ profile's paths — and only the caller knows
+ * whether it changed the scope (membership, order, bindings) or merely
+ * observed Git.
+ *   LIFECYCLE_INACTIVE  — the user changed the scope here (profile
+ *                         enable/disable/reorder, remove --delete-profile,
+ *                         clone, interactive save). Staged for removal;
+ *                         re-enable reverses it.
+ *   LIFECYCLE_RELEASED  — the departure was discovered in Git (reconcile
+ *                         after an external commit, a pulled removal, a
+ *                         branch that no longer resolves). The deployed
+ *                         copy is left alone and the row retires.
+ * Any other value is ERR_INVALID_ARG.
  *
  * ORDERING RULE (all callers):
- *   1. Update enabled_profiles to reflect the target scope:
- *        enable    → state_enable_profile for each new profile,
- *                    then manifest_persist_profile_head for each to
- *                    fill the commit_oid column.
+ *   1. Update enabled_profiles membership and order to the target scope:
+ *        enable    → state_enable_profile for each new profile.
  *        disable   → state_disable_profile for each removed profile.
- *        reorder   → state_reorder_profiles(new_order) (preserves
- *                    target + commit_oid on every retained row;
- *                    rejects any name not already enabled).
- *        clone     → state_enable_profile loop + manifest_persist_profile_head
- *                    loop (same as enable; clone is enable for an initial
- *                    set, not a separate primitive).
+ *        reorder   → state_reorder_profiles(new_order) (rejects any
+ *                    name not already enabled).
+ *        clone     → state_enable_profile loop (clone is enable for an
+ *                    initial set, not a separate primitive).
  *        interactive save → diff against the persisted set, then apply
  *                    additions/removals via the membership primitives
  *                    before state_reorder_profiles.
+ *      Reconcile and sync change nothing: they call this to project what
+ *      Git did.
  *   2. Call manifest_apply_scope().
- *   3. No further state mutations required — apply_scope handles the
- *      virtual_manifest table and tracked_directories.
+ *   3. No further state mutations required — the engine handles
+ *      virtual_manifest, tracked_directories and
+ *      enabled_profiles.commit_oid.
  *
  * Preconditions:
  *   - state MUST have an active write transaction.
- *   - enabled_profiles is fully authoritative for the target scope:
- *       name, position (precedence), target, commit_oid.
- *   - Git branches are at the commits referenced by
- *     enabled_profiles.commit_oid.
+ *   - enabled_profiles membership and order are the target scope.
+ *     commit_oid is NOT a precondition — this function writes it.
+ *   - mounts covers the enabled set.
  *   - stats_filter and out_stats are either both NULL or both non-NULL.
  *   - When stats_filter is non-NULL, out_stats points to an array of
  *     length stats_filter->count, and stats_filter's entries are
  *     pairwise unique (duplicates return ERR_INVALID_ARG — see below).
  *
  * Postconditions:
- *   - virtual_manifest reflects (enabled_profiles × Git trees) with
- *     correct precedence.
- *   - Rows whose filesystem_path left scope:
- *       LIFECYCLE_ACTIVE  → LIFECYCLE_INACTIVE (staged for removal by apply).
- *       LIFECYCLE_INACTIVE / LIFECYCLE_DELETED / LIFECYCLE_RELEASED: preserved
- *       (downgrading them would break downstream intent signals).
+ *   - virtual_manifest's ACTIVE rows equal the precedence-resolved
+ *     projection of every enabled profile whose branch resolves, at
+ *     that branch's HEAD.
+ *   - A row whose path re-entered the projection is ACTIVE whatever
+ *     lifecycle it carried (the UPSERT writes state unconditionally).
+ *   - An ACTIVE row whose path left the projection is `leftover`.
+ *     LIFECYCLE_INACTIVE / LIFECYCLE_DELETED / LIFECYCLE_RELEASED rows
+ *     that stay outside are preserved — their intent signal predates
+ *     this call — and are not counted.
  *     Exception: out-of-scope rows never witnessed on disk
  *     (observed_at = 0) are reclaimed — deleted outright. A ghost row
  *     carries no filesystem obligation, so there is nothing to stage or
  *     clean. File rows are retired by this function's own reclaim,
  *     directory rows by the rebuild that follows it.
- *   - tracked_directories swept and re-projected from enabled profiles.
+ *   - Git reference currency: for every enabled profile whose branch
+ *     resolved, enabled_profiles.commit_oid equals the OID whose tree
+ *     was projected — captured by the same git_reference_peel that
+ *     produced the tree, so no second lookup and no race.
+ *   - A profile whose branch does not resolve contributes no rows and
+ *     its commit_oid is left untouched. Its ACTIVE rows take `leftover`
+ *     like any other departure: under RELEASED that is the exact answer
+ *     (Git cannot back them); under INACTIVE the workspace's authority
+ *     probe reads them as released at load and cleanup releases. No
+ *     special case — the scope layer already warns about the dead
+ *     branch on every run.
  *   - The deployment anchor (deployed_blob_oid, deployed_at, stat_*) is
- *     preserved on every UPDATE — apply_scope is a pure VWD-cache
- *     writer, not a confirmation event.
+ *     preserved on every UPDATE — the engine is a pure VWD-cache writer,
+ *     not a confirmation event. It advances the VWD cache's blob_oid to
+ *     track Git while leaving the anchor pinned to dotta's last disk
+ *     confirmation; the divergence between the two is how the workspace
+ *     classifies staleness from persistent state. old_profile is
+ *     auto-captured on a profile change; observed_at is monotonic.
+ *   - tracked_directories swept and re-projected from enabled profiles.
  *   - Transaction remains open (caller commits via state_save).
  *
  * Stats attribution (when stats_filter is non-NULL):
  *   A profile in stats_filter ∩ new_enabled receives gain-side fields
  *   (files_claimed + lstat-derived files_present / files_missing /
- *   access_errors) as the new-manifest sync processes its entries.
- *   A profile that owned rows no longer in scope receives loss-side
- *   fields during the orphan pass: files_reassigned, plus either
- *   files_orphaned (witnessed row — staged for apply cleanup) or
+ *   access_errors, and files_added / files_updated from the pre-
+ *   projection snapshot) as the new-manifest projection processes its
+ *   entries. A profile that owned rows no longer in scope receives
+ *   loss-side fields during the leftover pass: files_reassigned, plus
+ *   either files_orphaned (witnessed row — took `leftover`) or
  *   files_reclaimed (ghost row — retired at scope exit, no cleanup
- *   pends). A profile can collect gain and loss simultaneously.
+ *   pends). Only rows this call demoted are counted. A profile can
+ *   collect gain and loss simultaneously.
  *   Overlap semantics: if B overrides A for path X, B gets files_claimed
  *   for X and A gets files_reassigned for X. The sum is the true
  *   manifest size.
  *
  * Error Conditions:
- *   - ERR_INVALID_ARG: stats_filter contains a duplicate profile name,
+ *   - ERR_INVALID_ARG: leftover is neither INACTIVE nor RELEASED,
+ *                      stats_filter contains a duplicate profile name,
  *                      or stats_filter/out_stats violate the pairing rule
- *   - ERR_GIT: Git operation failed (tree walk, branch resolution)
+ *   - ERR_GIT: Git operation failed (tree walk, branch lookup or load)
  *   - ERR_CRYPTO: Encrypted file but key unavailable
- *   - ERR_STATE_INVALID: Database operation failed
+ *   - ERR_STATE_INVALID: Database operation failed, including a failed
+ *                        leftover write (the transaction must roll back;
+ *                        a row left ACTIVE would be analysed against a
+ *                        blob Git may no longer have)
  *   - ERR_MEMORY: Memory allocation failed
  *
- * Performance: O(M + S + D)
- *   M = files in the new view (one precedence-view build, one metadata load)
- *   S = rows in virtual_manifest (one state_get_all_files for orphan pass)
+ * Performance: O(P + M + S + D)
+ *   P = enabled profiles (one ref lookup + one tree load each)
+ *   M = files in the new view (one precedence-view build, one metadata
+ *       load, one witness lstat and one UPSERT per row)
+ *   S = rows in virtual_manifest (one state_get_all_files for the
+ *       leftover pass; indexed when stats are requested)
  *   D = directories across enabled profiles (one directory rebuild)
+ *   Low single-digit milliseconds for a few hundred rows.
  *
  * @param repo Git repository (must not be NULL)
  * @param state State handle with active transaction (must not be NULL)
  * @param arena Scratch arena for the fresh precedence view and the
- *              orphan-pass state snapshot. Allocations live until the
+ *              leftover-pass state snapshot. Allocations live until the
  *              caller destroys the arena (typically command end). Must not
  *              be NULL.
  * @param mounts Per-machine mount table reflecting the post-mutation
- *               binding set the caller is reconciling to. Must not be NULL.
+ *               binding set the caller is projecting to. Must not be NULL.
  *               Binding-mutating callers (profile enable/disable/reorder,
  *               clone, interactive) build a fresh local table after the
  *               state mutation; ctx->mounts is stale at those sites.
+ * @param leftover Fate of ACTIVE rows that left the projection:
+ *                 LIFECYCLE_INACTIVE or LIFECYCLE_RELEASED (see above)
  * @param stats_filter Optional: profiles to attribute stats to (NULL = none)
  * @param out_stats Parallel array (length stats_filter->count); zero-initialized
  *                  and populated during the call (must be non-NULL iff
@@ -229,22 +233,22 @@ error_t *manifest_apply_scope(
     state_t *state,
     arena_t *arena,
     const mount_table_t *mounts,
+    state_lifecycle_t leftover,
     const string_array_t *stats_filter,
     manifest_scope_stats_t *out_stats
 );
 
 /**
- * Reconcile manifest with current Git state (drift repair)
+ * Reconcile manifest with current Git state (drift check over the engine)
  *
- * The single public entry point for drift-based VWD repair. Brings the
- * manifest into sync with Git by detecting profiles whose stored commit_oid
- * no longer matches the branch HEAD and updating affected state entries.
- * Used by workspace_load at load-start and by sync before push.
- *
- * Complements manifest_sync_diff(): reconcile is drift-driven ("don't know
- * what changed, figure it out"), while sync_diff applies a known old→new
- * diff. Both write the manifest; this function is the one callers reach for
- * when they only know "something in Git may have moved."
+ * The public entry point for drift repair: detects whether any enabled
+ * profile's stored commit_oid no longer matches its branch HEAD and, if
+ * so, runs manifest_apply_scope with leftover = LIFECYCLE_RELEASED. Used
+ * by workspace_load at load-start and by sync before push. Callers reach
+ * for this when they only know "something in Git may have moved"; the
+ * engine then projects everything, so an external addition is projected,
+ * an external removal is released, and a path that returned to Git is
+ * reactivated — whatever lifecycle its row carried.
  *
  * Transaction management
  *   This function handles transactions internally by inspecting state_locked():
@@ -266,11 +270,12 @@ error_t *manifest_apply_scope(
  *   - state MUST be opened (read or write; transaction optional)
  *
  * Postconditions:
- *   - Drift repaired; manifest entries' VWD cache (blob_oid, type, mode, …)
- *     reflects current Git HEAD for each ENABLED profile's ACTIVE rows.
- *     Rows outside that set are not repaired — there is no per-profile
- *     commit_oid baseline for a disabled profile — so the workspace
- *     observes their Git authority itself at load
+ *   - If any enabled branch had moved: the manifest is the projection of
+ *     every enabled profile at HEAD (manifest_apply_scope's
+ *     postconditions); rows that left are LIFECYCLE_RELEASED; every
+ *     resolving profile's commit_oid is current. Rows of disabled
+ *     profiles are not projected — the workspace observes their Git
+ *     authority itself at load
  *   - The deployment anchor is left untouched — reconcile is a VWD-cache
  *     writer, not an anchor writer. Workspace divergence analysis reads
  *     anchor.blob_oid from persistent state to classify staleness; cross-
@@ -279,28 +284,27 @@ error_t *manifest_apply_scope(
  *     committed our scoped one)
  *
  * Performance:
- *   Common case (no staleness): O(P) state queries + O(P) ref lookups
- *   Stale case: O(M) fresh precedence-view build, M = total files in Git
+ *   Common case (no drift): O(P) state queries + O(P) ref lookups, zero
+ *   writes. A branch that does not resolve is not drift (see
+ *   manifest_detect_drift in manifest.c)
+ *   Drift case: one manifest_apply_scope
  *
  * @param repo Git repository (must not be NULL)
  * @param state State handle (must not be NULL)
- * @param arena Scratch arena for stale-profile detection and fresh
- *              precedence-view construction during repair. Allocations live
- *              until the caller destroys the arena (typically command end).
+ * @param arena Scratch arena for the projection. Allocations live until
+ *              the caller destroys the arena (typically command end).
  *              Must not be NULL.
  * @param mounts Per-machine mount table covering the current enabled set.
  *               Must not be NULL. Reconcile does not mutate bindings; the
  *               only callers (workspace_load and sync's force branch)
  *               pass ctx->mounts.
- * @param out_stats Optional: repair statistics (NULL = don't care)
  * @return Error or NULL on success
  */
 error_t *manifest_reconcile(
     git_repository *repo,
     state_t *state,
     arena_t *arena,
-    const mount_table_t *mounts,
-    manifest_repair_stats_t *out_stats
+    const mount_table_t *mounts
 );
 
 /**

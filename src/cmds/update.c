@@ -613,8 +613,8 @@ static error_t *update_metadata_for_profile(
                 /* Handle deleted directories (symmetric with the file
                  * branch above). Without this, the stat() below would fail
                  * with ENOENT and the metadata entry would survive,
-                 * letting manifest_sync_directories' overlay pass
-                 * re-activate a directory the user just deleted. */
+                 * letting the engine's directory rebuild re-activate a
+                 * directory the user just deleted. */
                 if (item->state == WORKSPACE_STATE_DELETED) {
                     if (metadata_has_item(metadata, item->storage_path)) {
                         err = metadata_remove_item(metadata, item->storage_path);
@@ -1068,40 +1068,28 @@ static error_t *flatten_items_to_array(
 /**
  * Update manifest after successful update operation
  *
- * NEW IMPLEMENTATION: Uses bulk sync API for optimal O(M+N) performance.
- * Builds fresh manifest from Git once, then batch-processes all files.
- *
- * Called after ALL profile updates succeed. Updates manifest for files
- * that were modified/added/deleted, maintaining the manifest as a
- * Virtual Working Directory.
- *
- * This function implements the VWD integration for the update command.
- * After Git commits succeed, the manifest is synced to reflect the new
- * state. This keeps the three-way consistency: Git ↔ Manifest ↔ Filesystem.
- *
- * Lifecycle Tracking:
- *   - Modified/New files: deployed_at set based on lstat() (already on filesystem)
- *   - Deleted files: handled by bulk function (entries remain for orphan detection or fallback)
+ * Called after ALL profile updates succeed. Keeps the manifest a Virtual
+ * Working Directory: manifest_update_files projects every enabled
+ * profile at its post-commit HEAD, then overlays what only update knows
+ * about the items it committed — a modified or new file was captured
+ * FROM disk (its anchor advances, so the next status takes the fast
+ * path); a deleted file left Git (its row is a fallback's now, or is
+ * purged). Three-way consistency: Git ↔ Manifest ↔ Filesystem.
  *
  * Algorithm:
- *   1. Read enabled profiles from caller's state handle
- *   2. If none enabled: return NULL (skip manifest update gracefully)
- *   3. Begin write transaction on caller's handle
- *   4. Flatten items_by_profile hashmap into single array
- *   5. Call manifest_update_files() ONCE (O(M+N))
- *   6. Commit transaction
- *   7. Set *out_updated = true
+ *   1. Begin write transaction on caller's handle
+ *   2. Flatten items_by_profile into a single slice
+ *   3. Call manifest_update_files() ONCE (one projection + O(N) overlays)
+ *   4. Commit transaction
+ *   5. Set *out_updated = true
  *
  * Preconditions:
  *   - All profile updates already succeeded (Git commits done)
  *   - state is a live handle (non-NULL, DB open) owned by caller
- *   - scope is the command's operation scope (caller guarantees
- *     scope_enabled(scope)->count > 0 via its top-level guard)
  *   - items_by_profile contains profile → ptr_array_t mappings
- *   - ws contains valid workspace
  *
  * Postconditions:
- *   - Manifest entries synced for enabled profiles only
+ *   - Manifest projected for the enabled set; committed items overlaid
  *   - Transaction committed or rolled back atomically; state handle left clean
  *   - out_updated flag reflects whether manifest was updated
  *
@@ -1111,12 +1099,12 @@ static error_t *flatten_items_to_array(
  *     so the caller can continue to post-update hook and cleanup deterministically
  *   - Caller should warn user and suggest repair options
  *
- * Performance: O(M + N) where M = total files in profiles, N = updated files
+ * Performance: one projection + O(N) point lookups, N = updated files
  *
  * @param repo Git repository (must not be NULL)
  * @param state Caller's state handle (must not be NULL, must have open DB)
- * @param scope Operation scope (must not be NULL); scope_enabled drives
- *              precedence resolution for manifest_update_files
+ * @param arena Scratch arena for the projection (must not be NULL)
+ * @param mounts Per-machine mount table (must not be NULL)
  * @param items_by_profile Hashmap: profile → ptr_array_t* (must not be NULL)
  * @param opts Update options for verbose flag (must not be NULL)
  * @param out Output context for verbose logging (can be NULL)
@@ -1128,7 +1116,6 @@ static error_t *update_manifest_after_update(
     state_t *state,
     arena_t *arena,
     const mount_table_t *mounts,
-    const scope_t *scope,
     const hashmap_t *items_by_profile,
     const cmd_update_options_t *opts,
     output_t *out,
@@ -1138,16 +1125,9 @@ static error_t *update_manifest_after_update(
     CHECK_NULL(state);
     CHECK_NULL(arena);
     CHECK_NULL(mounts);
-    CHECK_NULL(scope);
     CHECK_NULL(items_by_profile);
     CHECK_NULL(opts);
     CHECK_NULL(out_updated);
-
-    /* Precedence resolution uses the validated enabled set owned by scope
-     * (profile_resolve_enabled has already filtered missing-branch entries).
-     * cmd_update enforces scope_enabled(scope)->count > 0 at its top-level
-     * guard; no defensive re-check here. */
-    const string_array_t *enabled_profiles = scope_enabled(scope);
 
     error_t *err = NULL;
     workspace_items_t all_items = { 0 };
@@ -1174,7 +1154,7 @@ static error_t *update_manifest_after_update(
         goto commit;
     }
 
-    /* Use bulk sync operation (O(M + N) - optimal!) */
+    /* One projection, then the per-item overlays */
     size_t synced = 0, removed = 0, fallbacks = 0;
     err = manifest_update_files(
         repo,
@@ -1183,7 +1163,6 @@ static error_t *update_manifest_after_update(
         mounts,
         (const workspace_item_t **) all_items.entries,
         all_items.count,
-        enabled_profiles,
         &synced,
         &removed,
         &fallbacks
@@ -1194,7 +1173,7 @@ static error_t *update_manifest_after_update(
         goto cleanup;
     }
 
-    /* manifest_update_files advances the deployment anchor internally for
+    /* manifest_update_files advances the deployment anchor for the
      * synced (modified/new) entries. Deleted items and fallback resolutions
      * correctly receive no anchor advance: there is no disk confirmation
      * for a deleted path, and a fallback's disk stat may not correspond
@@ -2110,18 +2089,19 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
         goto cleanup;
     }
 
-    /* Update manifest if any profiles enabled
+    /* Update manifest
      *
      * This maintains the manifest as a Virtual Working Directory - an expected
-     * state cache between Git and the filesystem. Files get deployed_at set based
-     * on lstat() because UPDATE captures them FROM the filesystem (already at target locations).
+     * state cache between Git and the filesystem. Captured files get their
+     * deployment anchor advanced because UPDATE captures them FROM the
+     * filesystem (already at target locations).
      *
-     * Non-fatal: If manifest update fails, Git commits still succeeded.
-     * User can repair manifest by running 'dotta profile enable <profile>'.
+     * Non-fatal: If manifest update fails, Git commits still succeeded and
+     * the next command's reconcile projects the moved branches.
      */
     bool manifest_updated = false;
     error_t *manifest_err = update_manifest_after_update(
-        repo, state, ctx->arena, ctx->mounts, scope, by_profile, opts, out,
+        repo, state, ctx->arena, ctx->mounts, by_profile, opts, out,
         &manifest_updated
     );
 
@@ -2132,7 +2112,9 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
     }
 
     if (manifest_err) {
-        /* Non-fatal: commits succeeded but manifest update failed */
+        /* Non-fatal: commits succeeded but manifest update failed. The
+         * branches moved past the stored HEADs, so the next command's
+         * reconcile projects them. */
         output_warning(
             out, OUTPUT_NORMAL, "Failed to update manifest: %s",
             error_message(manifest_err)
@@ -2142,7 +2124,7 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
             out, OUTPUT_NORMAL, "Files committed to Git successfully"
         );
         output_hint(
-            out, OUTPUT_NORMAL, "Re-enable profile to repair state"
+            out, OUTPUT_NORMAL, "Run 'dotta status' or 'dotta apply' to resync manifest"
         );
         error_free(manifest_err);
         /* Continue to post-update hook and success output */
@@ -2159,7 +2141,8 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
         updated_profile_count, updated_profile_count == 1 ? "" : "s"
     );
 
-    /* Manifest status feedback */
+    /* Manifest status feedback. The failure case already said what
+     * happened (warning + resync hint above). */
     if (manifest_updated) {
         output_info(
             out, OUTPUT_NORMAL,
@@ -2169,15 +2152,6 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
         output_hint(
             out, OUTPUT_NORMAL,
             "Run 'dotta status' to verify state"
-        );
-    } else {
-        output_info(
-            out, OUTPUT_NORMAL,
-            "No enabled profiles - manifest not updated"
-        );
-        output_hint(
-            out, OUTPUT_NORMAL,
-            "Run 'dotta profile enable <profile>' to activate"
         );
     }
 

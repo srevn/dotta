@@ -5,14 +5,16 @@
  * Virtual Working Directory's persistent cache). Surface is two-fold:
  *
  *   - Consistency layer: manifest_apply_scope, manifest_reconcile,
- *     manifest_add_files, manifest_update_files, manifest_remove_files,
- *     manifest_sync_directories. Each operates within
- *     a caller-managed transaction and updates the virtual_manifest +
- *     tracked_directories tables to reflect the post-operation Git state.
- *     Every entry point ends its state writes with the directory rebuild
- *     (sweep + re-projection); the ones that demote file rows retire their
- *     own unwitnessed ghosts first. The demoter terminates its own
- *     demotions — there is no shared epilogue owning another's rows.
+ *     manifest_add_files, manifest_update_files, manifest_remove_files.
+ *     Each operates within a caller-managed transaction and leaves
+ *     virtual_manifest + tracked_directories reflecting the post-
+ *     operation Git state. One projection engine — manifest_apply_scope
+ *     — is the sole writer of the ACTIVE set and of
+ *     enabled_profiles.commit_oid: it projects, demotes what left,
+ *     reclaims its ghosts and rebuilds directories. manifest_reconcile
+ *     gates it on drift; the three verbs run it and then overlay, on the
+ *     rows they named, the one thing only the verb knows — an anchor
+ *     captured from disk, or the fate the user chose for a deployed copy.
  *
  *   - Tree loader: manifest_load_tree_files projects a single Git
  *     tree's files into the public state_files_t carrier. Used by the
@@ -338,58 +340,56 @@ error_t *manifest_reconcile(
 /**
  * Remove files from manifest (remove command)
  *
- * Called after remove command deletes files from a profile branch.
- * Handles fallback to lower-precedence profiles or marks for removal.
- *
- * Algorithm:
- *   1. Build fresh precedence view from enabled profiles
- *   2. Sync commit_oid in enabled_profiles after entry sync
- *   3. For each removed file:
- *      a. Resolve to filesystem path
- *      b. Lookup current state entry
- *      c. Check if removed profile owns it (precedence check)
- *      d. If yes:
- *         - Check fresh precedence view for fallback
- *         - Fallback exists: Update to fallback profile (deployed_at preserved)
- *         - No fallback: Mark as LIFECYCLE_DELETED (controlled deletion)
- *      e. If no (different profile owns): Skip
+ * Called after the remove command committed the paths' removal from
+ * removed_profile's branch. Runs the projection engine
+ * (manifest_apply_scope, leftover = LIFECYCLE_RELEASED), then overlays
+ * the verb's intent on the rows it named: a path another enabled
+ * profile still provides was reassigned by the engine (counted as a
+ * fallback); a path nothing provides was released by the engine and is
+ * now given the fate the user chose — LIFECYCLE_DELETED when
+ * delete_files (apply prunes a clean copy), otherwise the row is purged
+ * and the deployed copy is left where it is.
  *
  * Preconditions:
- *   - state MUST have active transaction
- *   - Git commit MUST be completed (files removed from branch)
- *   - removed_storage_paths MUST be in storage format (home/.bashrc)
- *   - enabled_profiles MUST be current enabled set
+ *   - state MUST have an active write transaction
+ *   - the Git commit MUST be complete (paths removed from the branch)
+ *   - removed_storage_paths are storage paths (home/.bashrc)
+ *   - removed_profile is enabled (the caller checked)
  *
  * Postconditions:
- *   - Files with fallback updated to fallback profile (deployed_at preserved)
- *   - Files without fallback marked LIFECYCLE_DELETED (controlled deletion),
- *     except rows never witnessed on disk (observed_at = 0): those are
- *     reclaimed outright — a ghost has nothing for apply to remove
- *   - Files not owned by removed_profile unchanged
- *   - Tracked directories rebuilt from all enabled profiles
+ *   - manifest_apply_scope's postconditions (every enabled profile
+ *     projected at HEAD, commit_oid current, directories rebuilt)
+ *   - removed_profile's departed paths are LIFECYCLE_DELETED
+ *     (delete_files) or absent from virtual_manifest (!delete_files);
+ *     a path never witnessed on disk was reclaimed by the engine either
+ *     way — a ghost has nothing for apply to remove
+ *   - Paths another profile owns: reassigned rows keep their anchor;
+ *     rows a higher profile owned all along are unchanged
  *   - Transaction remains open (caller commits)
  *
  * Error Conditions:
- *   - ERR_GIT: Git operation failed
- *   - ERR_STATE: Database operation failed
- *   - ERR_NOMEM: Memory allocation failed
+ *   - ERR_GIT / ERR_STATE_INVALID / ERR_MEMORY from the engine
+ *   - ERR_STATE_INVALID: a row lookup or fate write failed (the caller
+ *     rolls back; the next reconcile projects again, but the fate
+ *     overlay is not replayed — the path then reads as released)
  *
- * Performance: O(M + N) where M = total files in profiles, N = files removed
+ * Performance: one projection + O(N) point lookups, N = paths removed
  *
  * @param repo Git repository (must not be NULL)
  * @param state State handle (with active transaction, must not be NULL)
- * @param arena Scratch arena for the fresh precedence view (used for
- *              fallback detection). Allocations live until the caller
- *              destroys the arena (typically command end). Must not be NULL.
- * @param mounts Per-machine mount table covering enabled_profiles. Must not
- *               be NULL. Remove does not mutate the binding set before
- *               this call, so callers pass ctx->mounts directly.
+ * @param arena Scratch arena for the projection. Allocations live until
+ *              the caller destroys the arena (typically command end).
+ *              Must not be NULL.
+ * @param mounts Per-machine mount table covering the enabled set. Must
+ *               not be NULL. Remove does not mutate the binding set
+ *               before this call, so callers pass ctx->mounts directly.
  * @param removed_profile Profile files were removed from (must not be NULL)
  * @param removed_storage_paths Storage paths of removed files (must not be NULL)
- * @param enabled_profiles All enabled profiles (must not be NULL)
- * @param out_marked Output: filesystem paths just marked LIFECYCLE_DELETED (can be NULL)
- * @param out_removed Output: files without fallback (marked LIFECYCLE_DELETED) (can be NULL)
- * @param out_fallbacks Output: files updated to fallback (can be NULL)
+ * @param delete_files The verb's choice for a deployed copy nothing
+ *                     backs any more: true → LIFECYCLE_DELETED (apply
+ *                     prunes), false → released now (row purged)
+ * @param out_removed Output: paths given that fate (can be NULL)
+ * @param out_fallbacks Output: paths reassigned to another profile (can be NULL)
  * @return Error or NULL on success
  */
 error_t *manifest_remove_files(
@@ -399,8 +399,7 @@ error_t *manifest_remove_files(
     const mount_table_t *mounts,
     const char *removed_profile,
     const string_array_t *removed_storage_paths,
-    const string_array_t *enabled_profiles,
-    string_array_t *out_marked,
+    bool delete_files,
     size_t *out_removed,
     size_t *out_fallbacks
 );
@@ -408,76 +407,59 @@ error_t *manifest_remove_files(
 /**
  * Update files in manifest (update command)
  *
- * High-performance batch operation that builds a fresh precedence view
- * from Git (post-commit state) instead of using the stale workspace cache.
- * Designed for the update command's workflow where many files are synced
- * at once after Git commits.
- *
- * CRITICAL DESIGN DECISION: This function builds a fresh precedence view
- * from Git because the workspace's cached row snapshot is stale after
- * commits. Using the stale cache would cause fallback to expensive
- * single-file operations for newly added files, resulting in O(N×M)
- * complexity instead of O(M+N).
- *
- * Algorithm:
- *   1. Load enabled profiles from Git
- *   2. Build FRESH precedence view (O(M))
- *   3. Use the view's index for O(1) lookups
- *   4. Sync commit_oid in enabled_profiles after entry sync
- *   5. For each item (O(N)):
- *      - If DELETED: check fresh view for fallback
- *        → Fallback exists: update to fallback profile (deployed_at preserved)
- *        → No fallback: decide the terminal row state from disk
- *          reality. The common path — file absent on disk
- *          (WORKSPACE_STATE_DELETED precondition held through the
- *          transaction) — purges the row so apply has no spurious
- *          orphan to clean up. If a racing recreation placed the path
- *          back on disk, the row is marked LIFECYCLE_DELETED instead so
- *          apply's divergence routing can protect the user's edits.
- *      - Else (modified/new): lookup in fresh precedence view
- *        → Found + precedence matches: sync to state (deployed_at = time(NULL))
- *        → Not found: file filtered/excluded (skip gracefully)
- *   6. All operations within caller's transaction
+ * Called after the update command committed every profile's changes.
+ * Runs the projection engine (manifest_apply_scope, leftover =
+ * LIFECYCLE_RELEASED), then overlays the verb's intent on the items it
+ * committed:
+ *   - a modified or new file was captured FROM disk, so its row's
+ *     deployment anchor advances to the just-committed blob with a fresh
+ *     stat — only when this profile won the row (a shadowed path leaves
+ *     the winner's anchor alone);
+ *   - a deleted file (WORKSPACE_STATE_DELETED) left Git by this commit:
+ *     a row the engine reassigned to a lower profile is a fallback for
+ *     apply to deploy; a row the engine released is purged — nothing
+ *     backs it and nothing is on disk. No lstat is taken: a file
+ *     recreated between workspace load and this call is left on disk
+ *     unmanaged, the release outcome, never a prune.
  *
  * Preconditions:
- *   - state MUST have active transaction (via state_open)
- *   - Git commits MUST be completed (branches at final state)
- *   - items MUST be FILE kind only (no directories)
- *   - enabled_profiles MUST be current enabled set
+ *   - state MUST have an active write transaction
+ *   - the Git commits MUST be complete (branches at their final state)
+ *   - items may mix kinds; directory items are skipped (the engine's
+ *     directory rebuild covers them)
  *
  * Postconditions:
- *   - Modified/new files synced with deployed_at = time(NULL) (files captured from filesystem)
- *   - Modified/new files also have their deployment anchor advanced
- *     (blob_oid + fresh disk stat, lifecycle timestamp preserved). Anchor-write
- *     failures are non-fatal — the VWD cache is already committed and the next
- *     status falls through to the slow path, which self-heals the anchor.
- *   - Deleted files: fallback reassigns the row to the fallback profile
- *     (deployed_at preserved); no-fallback purges the row if the path
- *     is absent on disk, or marks it LIFECYCLE_DELETED if a race has placed
- *     it back. Anchor left untouched (no disk confirmation for deleted
- *     / fallback paths).
- *   - Rows left LIFECYCLE_DELETED that were never witnessed on disk
- *     (observed_at = 0) are reclaimed outright — dotta does not stage the
- *     removal of a path it never confirmed deploying
- *   - Tracked directories rebuilt from all enabled profiles
+ *   - manifest_apply_scope's postconditions (every enabled profile
+ *     projected at HEAD, commit_oid current, directories rebuilt)
+ *   - Captured rows carry anchor = (blob_oid, now, fresh stat). An
+ *     anchor-write failure is non-fatal — the VWD cache is already
+ *     projected and the next status self-heals the anchor through the
+ *     slow-path CMP_EQUAL flush
+ *   - Deleted paths without a fallback are absent from virtual_manifest;
+ *     the anchor of a fallback row is preserved (no disk confirmation
+ *     for the fallback blob)
  *   - Transaction remains open (caller commits)
  *
- * Performance: O(M + N) where M = total files in profiles, N = items to sync
+ * Error Conditions:
+ *   - ERR_GIT / ERR_STATE_INVALID / ERR_MEMORY from the engine
+ *   - ERR_STATE_INVALID: a row lookup or purge failed (the caller rolls
+ *     back; the next reconcile projects again)
+ *
+ * Performance: one projection + O(N) point lookups, N = items
  *
  * @param repo Git repository (must not be NULL)
  * @param state State handle (with active transaction, must not be NULL)
- * @param arena Scratch arena for the fresh precedence view. Allocations
- *              live until the caller destroys the arena (typically
- *              command end). Must not be NULL.
- * @param mounts Per-machine mount table covering enabled_profiles. Must not
- *               be NULL. Update doesn't mutate bindings, so callers pass
- *               ctx->mounts directly.
- * @param items Array of workspace items to sync (must not be NULL)
+ * @param arena Scratch arena for the projection. Allocations live until
+ *              the caller destroys the arena (typically command end).
+ *              Must not be NULL.
+ * @param mounts Per-machine mount table covering the enabled set. Must
+ *               not be NULL. Update doesn't mutate bindings, so callers
+ *               pass ctx->mounts directly.
+ * @param items Array of workspace items committed (must not be NULL)
  * @param item_count Number of items
- * @param enabled_profiles All enabled profiles (must not be NULL)
- * @param out_synced Output: count of files synced (must not be NULL)
- * @param out_removed Output: count of no-fallback deletions purged from state (must not be NULL)
- * @param out_fallbacks Output: count of fallback resolutions (must not be NULL)
+ * @param out_synced Output: count of rows anchored (must not be NULL)
+ * @param out_removed Output: count of deletions without a fallback (must not be NULL)
+ * @param out_fallbacks Output: count of deletions reassigned to a lower profile (must not be NULL)
  * @return Error or NULL on success
  */
 error_t *manifest_update_files(
@@ -487,7 +469,6 @@ error_t *manifest_update_files(
     const mount_table_t *mounts,
     const workspace_item_t **items,
     size_t item_count,
-    const string_array_t *enabled_profiles,
     size_t *out_synced,
     size_t *out_removed,
     size_t *out_fallbacks
@@ -496,63 +477,46 @@ error_t *manifest_update_files(
 /**
  * Add files to manifest (add command)
  *
- * Optimized batch operation for adding newly-committed files to manifest.
- * Simpler than manifest_update_files() because:
- * - All files are from the same profile
- * - No deletions (only additions/updates)
- * - Files marked with deployed_at = time(NULL) (captured from filesystem)
- *
- * CRITICAL DESIGN: Like manifest_update_files(), this builds a FRESH
- * precedence view from Git (post-commit state). This ensures all newly-added
- * files are found during precedence checks, maintaining O(M+N) performance.
- *
- * Algorithm:
- *   1. Load enabled profiles from Git (current HEAD, post-commit)
- *   2. Build fresh precedence view (ONCE)
- *   3. Use the view's index for O(1) precedence lookups
- *   4. Sync commit_oid in enabled_profiles after entry sync
- *   5. For each file:
- *      - Convert filesystem_path → storage_path
- *      - Lookup in fresh view
- *      - If precedence matches: sync to state with deployed_at = time(NULL)
- *      - If lower precedence or filtered: skip silently
- *   6. All operations within caller's transaction
+ * Called after the add command committed the files to `profile`. Runs
+ * the projection engine (manifest_apply_scope, leftover =
+ * LIFECYCLE_RELEASED), then overlays the verb's intent on the paths it
+ * committed: they were captured FROM disk, so for each path whose row
+ * this profile won, the deployment anchor advances to the just-committed
+ * blob with a fresh stat and the next status takes the fast path. A path
+ * a higher-precedence profile owns receives nothing — its row is the
+ * winner's, and a stat bound to this profile's blob would poison the
+ * winner's fast path. A path with no row (filtered by .dottaignore)
+ * receives nothing either.
  *
  * Preconditions:
- *   - state MUST have active transaction (via state_open)
- *   - Git commits MUST be completed (branches at final state)
- *   - filesystem_paths MUST be valid, canonical paths
- *   - profile SHOULD be enabled (function gracefully handles if not)
+ *   - state MUST have an active write transaction
+ *   - the Git commit MUST be complete
+ *   - filesystem_paths are canonical filesystem paths
+ *   - `profile` is enabled, and its target binding (if any) is stored:
+ *     the caller enables / re-binds before this call and builds `mounts`
+ *     from the post-mutation row cache
  *
  * Postconditions:
- *   - Files synced to manifest with deployed_at = time(NULL)
- *   - Synced entries also have their deployment anchor advanced
- *     (blob_oid + fresh disk stat, lifecycle timestamp preserved). Anchor-write
- *     failures are non-fatal — the VWD cache is already committed and the next
- *     status falls through to the slow path, which self-heals the anchor.
- *   - Lower-precedence files skipped (no sync, no anchor advance — prevents
- *     poisoning the winning profile's anchor with a disk stat that may not
- *     correspond to the winner's blob_oid)
- *   - Filtered files skipped (not an error)
- *   - Tracked directories rebuilt from all enabled profiles (no file
- *     reclaim: add never demotes a row)
+ *   - manifest_apply_scope's postconditions (every enabled profile
+ *     projected at HEAD, commit_oid current, directories rebuilt)
+ *   - Rows `profile` won for the added paths carry anchor =
+ *     (blob_oid, now, fresh stat). An anchor-write failure is non-fatal
+ *     — the VWD cache is already projected and the next status self-
+ *     heals the anchor through the slow-path CMP_EQUAL flush
  *   - Transaction remains open (caller commits via state_save)
  *
- * Performance:
- *   - O(M + N) where M = total files in all profiles, N = files to add
- *   - Single fresh precedence-view build from Git
- *   - Batch-optimized state operations
+ * Error Conditions:
+ *   - ERR_GIT / ERR_STATE_INVALID / ERR_MEMORY from the engine
+ *   - ERR_STATE_INVALID: a row lookup failed (the caller rolls back; the
+ *     next reconcile projects again)
  *
- * Error Handling:
- *   - Transactional: on error, entire batch fails
- *   - Returns error on first failure (fail-fast)
- *   - Path resolution errors are fatal
+ * Performance: one projection + O(N) point lookups, N = paths added
  *
  * @param repo Git repository (must not be NULL)
  * @param state State handle (with active transaction, must not be NULL)
- * @param arena Scratch arena for the fresh precedence view. Allocations
- *              live until the caller destroys the arena (typically
- *              command end). Must not be NULL.
+ * @param arena Scratch arena for the projection. Allocations live until
+ *              the caller destroys the arena (typically command end).
+ *              Must not be NULL.
  * @param mounts Per-machine mount table reflecting the post-add binding
  *               set. Must not be NULL. Add may implicitly enable a profile
  *               (or store its --target) before this call, so callers build
@@ -560,8 +524,7 @@ error_t *manifest_update_files(
  *               stale on the implicit-enable path.
  * @param profile Profile files were added to (must not be NULL)
  * @param filesystem_paths Array of filesystem paths (must not be NULL)
- * @param enabled_profiles All enabled profiles (must not be NULL)
- * @param out_synced Output: count of files synced (must not be NULL)
+ * @param out_synced Output: count of rows anchored (must not be NULL)
  * @return Error or NULL on success
  */
 error_t *manifest_add_files(
@@ -571,56 +534,7 @@ error_t *manifest_add_files(
     const mount_table_t *mounts,
     const char *profile,
     const string_array_t *filesystem_paths,
-    const string_array_t *enabled_profiles,
     size_t *out_synced
-);
-
-/**
- * Rebuild tracked directories from enabled profiles
- *
- * The directory-side counterpart to file projection: sweeps
- * tracked_directories, re-projects it from every enabled profile's
- * metadata, and retires the rows the sweep left behind. Self-contained —
- * one transaction-scoped operation establishing one postcondition.
- *
- * Every consistency-layer entry point ends its state writes with this
- * call. File rows are outside its scope: each entry point demotes its own
- * and reclaims its own (state_reclaim_unmaterialized_files), so this call
- * alone rebuilds directories and touches nothing in virtual_manifest.
- *
- * Preconditions:
- *   - state MUST have active transaction (via state_open)
- *   - enabled_profiles MUST be the engine's iteration set (caller built
- *     `mounts` from the same list)
- *
- * Postconditions:
- *   - tracked_directories reflects enabled_profiles: rows still in scope
- *     are LIFECYCLE_ACTIVE with their witness preserved; witnessed rows
- *     that left scope are LIFECYCLE_INACTIVE (staged for apply-time
- *     cleanup); unwitnessed rows that left scope are deleted outright
- *   - A profile without metadata.json contributes no directories and is
- *     skipped, not an error
- *   - Transaction remains open (caller commits)
- *
- * Performance: O(D) where D = total directories across enabled profiles
- *              (typically < 50 even for large configs)
- *
- * @param repo Git repository (must not be NULL)
- * @param state State with active transaction (must not be NULL)
- * @param arena Arena for the per-row state_directory_entry_t allocations.
- *              Entries live until the caller destroys the arena (typically
- *              command end). Must not be NULL.
- * @param enabled_profiles Current enabled profiles (must not be NULL)
- * @param mounts Per-machine mount table covering enabled_profiles
- *               (must not be NULL)
- * @return Error or NULL on success
- */
-error_t *manifest_sync_directories(
-    git_repository *repo,
-    state_t *state,
-    arena_t *arena,
-    const string_array_t *enabled_profiles,
-    const mount_table_t *mounts
 );
 
 /**
@@ -640,9 +554,10 @@ error_t *manifest_sync_directories(
  *
  * Custom-prefix resolution is delegated to `mounts`. The handle MUST
  * record a binding for `profile` (with target set) when the tree
- * contains custom/ entries; otherwise those entries are skipped silently
- * during the walk. Trees without custom/ entries can pass any mount
- * table, including one with no binding for `profile`.
+ * contains custom/ entries; a missing binding is a hard error from the
+ * build callback (ERR_STATE_INVALID with a repair hint). Trees without
+ * custom/ entries can pass any mount table, including one with no
+ * binding for `profile`.
  *
  * Memory: every allocation produced by the call (rows, per-row strings,
  * pointer array, internal view struct) lives in the caller's arena.

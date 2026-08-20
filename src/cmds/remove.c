@@ -1052,7 +1052,12 @@ static error_t *remove_files_from_profile(
      * (state_has_profile returns false for NULL/empty state), so
      * state_begin is safe without an additional guard. The handle
      * is reused — no second state_open that would re-prepare
-     * statements and re-query enabled_profiles from scratch. */
+     * statements and re-query enabled_profiles from scratch.
+     *
+     * manifest_remove_files projects the enabled set at its post-removal
+     * HEADs and then gives the paths this command removed the fate the
+     * user chose: --delete-files stages the deployed copies for apply to
+     * prune; the default releases them from management now. */
     size_t manifest_removed_count = 0, manifest_fallback_count = 0;
 
     if (profile_enabled) {
@@ -1069,12 +1074,16 @@ static error_t *remove_files_from_profile(
             );
             error_free(manifest_err);
         } else {
-            /* Get enabled profiles for manifest sync */
-            string_array_t *enabled_profiles = NULL;
-            manifest_err = state_get_profiles(state, &enabled_profiles);
+            manifest_err = manifest_remove_files(
+                repo, state, arena, mounts, opts->profile, removed_paths,
+                opts->delete_files, &manifest_removed_count,
+                &manifest_fallback_count
+            );
+
             if (manifest_err) {
+                /* Non-fatal: Git succeeded, manifest can recover */
                 output_warning(
-                    out, OUTPUT_NORMAL, "Failed to get enabled profiles: %s",
+                    out, OUTPUT_NORMAL, "Manifest update failed: %s",
                     error_message(manifest_err)
                 );
                 output_hint(
@@ -1083,85 +1092,35 @@ static error_t *remove_files_from_profile(
                 error_free(manifest_err);
                 state_rollback(state);
             } else {
-                /* Without --delete-files we release management immediately;
-                 * collect the precise paths manifest_remove_files marks so
-                 * the post-call cleanup acts only on this invocation's set,
-                 * not every LIFECYCLE_DELETED row for the profile (which would
-                 * include rows from prior `remove --delete-files` calls
-                 * still awaiting apply). */
-                string_array_t *marked_paths = NULL;
-                if (!opts->delete_files) {
-                    marked_paths = string_array_new(0);
-                    /* Allocation failure is non-fatal: manifest_remove_files
-                     * still marks rows; we just skip the immediate release
-                     * pass below and leave them for apply. */
-                }
-
-                manifest_err = manifest_remove_files(
-                    repo, state, arena, mounts, opts->profile, removed_paths,
-                    enabled_profiles, marked_paths, &manifest_removed_count,
-                    &manifest_fallback_count
-                );
-
-                if (manifest_err) {
-                    /* Non-fatal: Git succeeded, manifest can recover */
+                /* Commit transaction */
+                error_t *commit_err = state_commit(state);
+                if (commit_err) {
                     output_warning(
-                        out, OUTPUT_NORMAL, "Manifest update failed: %s",
-                        error_message(manifest_err)
+                        out, OUTPUT_NORMAL, "Failed to save manifest updates: %s",
+                        error_message(commit_err)
                     );
                     output_hint(
                         out, OUTPUT_NORMAL, "Run 'dotta status' or 'dotta apply' to resync"
                     );
-                    error_free(manifest_err);
+                    error_free(commit_err);
                     state_rollback(state);
-                } else {
-                    /* manifest_remove_files() marks entries LIFECYCLE_DELETED.
-                     * With --delete-files: leave them for apply to clean up.
-                     * Default: release exactly the paths just marked. */
-                    if (marked_paths) {
-                        for (size_t i = 0; i < marked_paths->count; i++) {
-                            error_t *rm_err = state_remove_file(
-                                state, marked_paths->items[i]
-                            );
-                            /* ERR_NOT_FOUND is benign — the row may have
-                             * been collected already; nothing else to do. */
-                            if (rm_err) error_free(rm_err);
-                        }
-                    }
-
-                    /* Commit transaction */
-                    error_t *commit_err = state_commit(state);
-                    if (commit_err) {
-                        output_warning(
-                            out, OUTPUT_NORMAL, "Failed to save manifest updates: %s",
-                            error_message(commit_err)
+                } else if (manifest_removed_count > 0 || manifest_fallback_count > 0) {
+                    if (opts->delete_files) {
+                        output_info(
+                            out, OUTPUT_VERBOSE,
+                            "Manifest: %zu staged for removal, %zu fallback%s",
+                            manifest_removed_count, manifest_fallback_count,
+                            manifest_fallback_count == 1 ? "" : "s"
                         );
-                        output_hint(
-                            out, OUTPUT_NORMAL, "Run 'dotta status' or 'dotta apply' to resync"
+                    } else {
+                        output_info(
+                            out, OUTPUT_VERBOSE,
+                            "Manifest: %zu released, %zu fallback%s",
+                            manifest_removed_count, manifest_fallback_count,
+                            manifest_fallback_count == 1 ? "" : "s"
                         );
-                        error_free(commit_err);
-                        state_rollback(state);
-                    } else if (manifest_removed_count > 0 || manifest_fallback_count > 0) {
-                        if (opts->delete_files) {
-                            output_info(
-                                out, OUTPUT_VERBOSE,
-                                "Manifest: %zu staged for removal, %zu fallback%s",
-                                manifest_removed_count, manifest_fallback_count,
-                                manifest_fallback_count == 1 ? "" : "s"
-                            );
-                        } else {
-                            output_info(
-                                out, OUTPUT_VERBOSE,
-                                "Manifest: %zu released, %zu fallback%s",
-                                manifest_removed_count, manifest_fallback_count,
-                                manifest_fallback_count == 1 ? "" : "s"
-                            );
-                        }
                     }
                 }
-
-                string_array_free(marked_paths);
-                string_array_free(enabled_profiles);
             }
         }
     } else {

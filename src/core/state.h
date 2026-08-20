@@ -58,13 +58,15 @@ typedef enum {
  *   LIFECYCLE_INACTIVE and LIFECYCLE_DELETED are written only by a local,
  *   explicit verb — profile disable/reorder, remove --delete-profile,
  *   clone and interactive save (INACTIVE, through manifest_apply_scope's
- *   leftover); remove --delete-files, and update of a file the user
- *   deleted that raced back (DELETED). Every departure dotta *discovers*
- *   in Git — an external commit, a pulled removal, a branch that no
- *   longer resolves — is LIFECYCLE_RELEASED: the deployed copy is left
- *   alone and the row retires. manifest_apply_scope takes the distinction
- *   as its `leftover` argument; no engine code reasons about who moved
- *   Git.
+ *   leftover); remove --delete-files (DELETED, through
+ *   manifest_remove_files' fate overlay). Every departure dotta
+ *   *discovers* in Git — an external commit, a pulled removal, a branch
+ *   that no longer resolves — is LIFECYCLE_RELEASED: the deployed copy
+ *   is left alone and the row retires. manifest_apply_scope takes the
+ *   distinction as its `leftover` argument; no engine code reasons about
+ *   who moved Git. A verb that knows better overlays its answer on the
+ *   rows it named after the engine ran (remove's DELETED, or the purge
+ *   of a row released by a removal the user asked for).
  *
  * Column: virtual_manifest.state / tracked_directories.state.
  */
@@ -814,10 +816,10 @@ void state_free_entry(state_file_entry_t *entry);
  *     row's anchor field, so the snapshot receives the canonical post-write
  *     value the SQL produced. Calling state_update_anchor directly while a
  *     workspace is live silently desyncs the snapshot.
- *   - If no workspace is live (manifest layer paths: manifest_add_files,
- *     manifest_update_files, manifest_project_row), this function is the
- *     legitimate direct caller. There is no snapshot to patch, so callers
- *     pass resolved_out=NULL and the next workspace_load reads SQL fresh.
+ *   - If no workspace is live (the anchor overlays of manifest_add_files
+ *     and manifest_update_files), this function is the legitimate direct
+ *     caller. There is no snapshot to patch, so callers pass
+ *     resolved_out=NULL and the next workspace_load reads SQL fresh.
  *
  * Semantics (encoded in the SQL UPDATE — single source of truth):
  *   - anchor->blob_oid must be non-zero. A zero blob_oid is only valid as
@@ -970,13 +972,10 @@ error_t *state_transition_files_by_profile(
  * Writes the profile's current branch HEAD to the per-profile commit_oid
  * column. Single-row UPDATE on enabled_profiles.
  *
- * Direct callers:
- * - manifest_apply_scope (every scope transition and drift repair: the
- *   OID of the tree the engine just projected, for every enabled profile
- *   whose branch resolved)
- * - manifest_persist_profile_head (manifest.c-private:
- *   gitops_resolve_branch_head_oid + this function, for the add/update/
- *   remove entry points that moved one branch by their own commit)
+ * One caller: manifest_apply_scope, which writes the OID of the tree it
+ * just projected for every enabled profile whose branch resolved. Every
+ * command that moves an enabled branch runs the engine afterwards, so
+ * no other writer exists.
  *
  * @param state State (must not be NULL, must have active transaction)
  * @param profile Profile name (must not be NULL)
@@ -1135,15 +1134,14 @@ error_t *state_update_witness(
  *
  *   DELETE FROM virtual_manifest WHERE state != 'active' AND observed_at = 0;
  *
- * Called by each manifest entry point that demotes file rows, after its
- * own demotion pass and inside the same transaction: the demoter
- * terminates its own demotions. Purely additive entry points
- * (manifest_add_files) never call it. On empty state (no DB), no-op
- * success. Attribution does not read counts from here — the orphan pass
- * counts ghosts per-profile from the snapshot it already holds
- * (files_reclaimed). The purge-on-absent in manifest_update_files is a
- * different decision (terminal state for a known deletion) and does not
- * overlap this one.
+ * Called by manifest_apply_scope after its leftover pass, inside the
+ * same transaction: the demoter terminates its own demotions. On empty
+ * state (no DB), no-op success. Attribution does not read counts from
+ * here — the leftover pass counts ghosts per-profile from the snapshot
+ * it already holds (files_reclaimed). The purge in manifest_update_files'
+ * and manifest_remove_files' fate overlays is a different decision
+ * (terminal state for a deletion the user asked for, witnessed or not)
+ * and does not overlap this one.
  *
  * @param state State (must not be NULL, must have active transaction)
  * @return Error or NULL on success

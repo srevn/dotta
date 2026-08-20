@@ -565,27 +565,27 @@ static error_t *create_commit(
  * Called when `dotta add -p <profile>` creates a NEW profile branch for the first
  * time. Combines profile enabling with manifest sync in a single atomic transaction.
  *
- * WHY manifest_add_files (not manifest_apply_scope):
- * - These files were just captured FROM disk; the deployment anchor
- *   (deployed_blob_oid, stat_*, deployed_at) should be stamped from that
- *   capture so the next status hits the fast path.
- * - manifest_apply_scope is a pure VWD-cache writer; it never advances the
- *   anchor, which is correct for scope reconciliation but wrong here — we
- *   want fully deployed rows, not staged-for-deployment rows.
+ * The manifest work is manifest_add_files: the projection engine runs
+ * over the enabled set (now including this profile), and the files this
+ * add captured FROM disk get their deployment anchor stamped from that
+ * capture, so the next status hits the fast path.
  *
  * Algorithm:
- *   1. Open write transaction (creates DB if missing)
- *   2. Read enabled profiles under the transaction snapshot
- *   3. If already enabled: commit (no-op) and return
- *   4. Enable profile in state with deployment target (makes binding available)
- *   5. Sync files to manifest with DEPLOYED status (uses target;
- *      advances deployment anchor for synced entries)
- *   6. Commit transaction atomically
+ *   1. Enable profile in state with deployment target (makes binding available)
+ *   2. Build the mount table from the post-enable row cache
+ *   3. Sync files to manifest (projection + anchor overlay)
+ *   4. Commit transaction atomically
  *
- * CRITICAL ORDER: Step 4 must precede step 5. The target stored in step 4
- * is required by manifest_add_files() in step 5 (which loads the mount table
- * internally) to resolve custom/ storage paths. Transaction atomicity ensures:
- * enable + sync succeed together or fail together (automatic rollback on error).
+ * CRITICAL ORDER: Step 1 must precede step 3. The target stored in step 1
+ * is what lets the mount table built in step 2 resolve custom/ storage
+ * paths for the projection. Transaction atomicity ensures: enable + sync
+ * succeed together or fail together (automatic rollback on error).
+ *
+ * The branch is new, so an enabled_profiles row can pre-exist only as a
+ * leftover of a branch deleted behind it. state_enable_profile is an
+ * UPSERT — the row is re-bound to this add's target and keeps its
+ * position — and the projection then releases whatever rows the old
+ * branch left, since the new HEAD does not have them.
  *
  * @param repo Git repository (must not be NULL)
  * @param profile Profile to auto-enable (must not be NULL, must exist in Git)
@@ -613,7 +613,6 @@ static error_t *auto_enable_and_sync_profile(
     CHECK_NULL(out_updated);
 
     error_t *err = NULL;
-    string_array_t *enabled_profiles = NULL;
     size_t synced_count = 0;
 
     *out_updated = false;
@@ -621,64 +620,34 @@ static error_t *auto_enable_and_sync_profile(
         *out_synced = 0;
     }
 
-    /* STEP 1: Read enabled profiles from the state dispatcher (WRITE) */
-    err = state_get_profiles(state, &enabled_profiles);
-    if (err) {
-        err = error_wrap(err, "Failed to get enabled profiles");
-        goto cleanup;
-    }
-
-    /* STEP 2: Check if already enabled (defensive) */
-    for (size_t i = 0; i < enabled_profiles->count; i++) {
-        if (strcmp(enabled_profiles->items[i], profile) == 0) {
-            /* Already enabled - idempotent success. The dispatcher's
-             * state_free rolls back the untouched transaction. */
-            *out_updated = true;
-            goto cleanup;
-        }
-    }
-
-    /* Append new profile to enabled list for manifest_add_files precedence */
-    err = string_array_push(enabled_profiles, profile);
-    if (err) {
-        err = error_wrap(err, "Failed to add profile to enabled list");
-        goto cleanup;
-    }
-
-    /* STEP 3: Enable profile in state with deployment target (if provided).
+    /* STEP 1: Enable profile in state with deployment target (if provided).
      *
      * CRITICAL ORDER: Must enable BEFORE manifest sync so target
-     * is available in state for path resolution during manifest_add_files().
-     * The deployment target is stored in the enabled_profiles table and loaded
-     * internally by the manifest layer to resolve custom/ storage paths.
+     * is available in state for path resolution during the projection.
+     * The deployment target is stored in the enabled_profiles table and
+     * read by the mount table built below to resolve custom/ storage paths.
      *
      * Transaction Safety: If manifest sync below fails, the dispatcher's
      * state_free automatically rolls back this change. */
     err = state_enable_profile(state, profile, target);
     if (err) {
-        err = error_wrap(err, "Failed to enable profile in state");
-        goto cleanup;
+        return error_wrap(err, "Failed to enable profile in state");
     }
 
-    /* Build a fresh mount table from the post-enable row cache.
+    /* STEP 2: Build a fresh mount table from the post-enable row cache.
      *
-     * STEP 3 mutated enabled_profiles (a new row + target binding), so
+     * STEP 1 mutated enabled_profiles (a new row + target binding), so
      * ctx->mounts (built in run_spec from the pre-mutation snapshot) is
      * stale here. The fresh table is the only handle that classifies
-     * paths under the just-bound target as custom/ for manifest_add_files
+     * paths under the just-bound target as custom/ for the projection
      * below. Allocated into ctx->arena, reclaimed at command end. */
     mount_table_t *post_enable_mounts = NULL;
     err = profile_build_mount_table(state, arena, &post_enable_mounts);
     if (err) {
-        err = error_wrap(err, "Failed to build mount table after enable");
-        goto cleanup;
+        return error_wrap(err, "Failed to build mount table after enable");
     }
 
-    /* STEP 4: Sync files to manifest with DEPLOYED status
-     *
-     * manifest_add_files advances the deployment anchor internally for
-     * synced entries, so the next status can short-circuit on the fast
-     * path without an extra pass here.
+    /* STEP 3: Project and anchor.
      *
      * Precedence: If this profile has lower precedence than existing enabled
      * profiles, some files may be skipped (synced_count < added_files). Those
@@ -691,31 +660,23 @@ static error_t *auto_enable_and_sync_profile(
         post_enable_mounts,
         profile,
         added_files,
-        enabled_profiles,
         &synced_count
     );
     if (err) {
-        err = error_wrap(err, "Failed to sync files to manifest");
-        goto cleanup;
+        return error_wrap(err, "Failed to sync files to manifest");
     }
 
-    /* STEP 5: Commit transaction atomically */
+    /* STEP 4: Commit transaction atomically */
     err = state_save(repo, state);
     if (err) {
-        err = error_wrap(err, "Failed to commit transaction");
-        goto cleanup;
+        return error_wrap(err, "Failed to commit transaction");
     }
 
     /* Success */
     *out_updated = true;
     if (out_synced) *out_synced = synced_count;
 
-cleanup:
-    if (enabled_profiles) {
-        string_array_free(enabled_profiles);
-    }
-
-    return err;
+    return NULL;
 }
 
 /**
@@ -725,29 +686,28 @@ cleanup:
  * if the profile is enabled. This is part of the Virtual Working Directory
  * integration - maintaining the manifest as an expected state cache.
  *
- * OPTIMIZED: Uses bulk manifest sync (manifest_add_files) with O(M+N) complexity.
- * manifest_add_files builds its own fresh manifest from Git (post-commit state),
- * ensuring all newly-added files are found during precedence checks.
+ * The manifest work is manifest_add_files: the projection engine runs
+ * over the enabled set, and the files this add captured FROM disk get
+ * their deployment anchor stamped from that capture.
  *
  * Algorithm:
- *   1. Read enabled profiles under the borrowed write transaction
- *   2. If profile not enabled: return (dispatcher's state_free rolls back)
- *   3. If target provided: update target in state (UPSERT)
- *   4. Call manifest_add_files() (builds fresh manifest internally;
- *      advances deployment anchor for synced entries)
+ *   1. If profile not enabled: return (dispatcher's state_free rolls back)
+ *   2. If target provided: update target in state (UPSERT)
+ *   3. Build the mount table from the (possibly post-mutation) row cache
+ *   4. Call manifest_add_files() (projection + anchor overlay)
  *   5. Commit transaction (state_save)
  *
  * Target Update:
  *   When adding custom/ files to an already-enabled profile, the target
- *   must be stored in state BEFORE manifest_add_files(). This is the same
+ *   must be stored in state BEFORE the projection. This is the same
  *   target-before-sync ordering enforced by auto_enable_and_sync_profile().
  *   Only called when target is non-NULL to avoid clearing an existing
  *   target when adding home/ or root/ files.
  *
  * Lifecycle Tracking:
- *   Files get deployed_at = time(NULL) because ADD captures files FROM the
- *   filesystem. They're already at their target locations, so deployed_at
- *   is set to indicate dotta knows about them.
+ *   Captured rows get deployed_at = time(NULL) because ADD captures files
+ *   FROM the filesystem. They're already at their target locations, so
+ *   deployed_at is set to indicate dotta knows about them.
  *
  * Error Handling:
  *   - Profile not enabled → rollback transaction, return NULL (success, no update)
@@ -755,9 +715,10 @@ cleanup:
  *
  * Non-Fatal Integration:
  *   Caller should treat manifest update failure as non-fatal warning.
- *   Git commit already succeeded; user can repair with `profile enable`.
+ *   Git commit already succeeded; the branch moved past its stored HEAD,
+ *   so the next command's reconcile projects it.
  *
- * Performance: O(M + N) where M = total files in all profiles, N = files added
+ * Performance: one projection + O(N) point lookups, N = files added
  *
  * @param repo Git repository
  * @param profile Profile that files were added to
@@ -785,39 +746,22 @@ static error_t *update_manifest_after_add(
     CHECK_NULL(out_updated);
 
     error_t *err = NULL;
-    string_array_t *enabled_profiles = NULL;
 
     /* Initialize output */
     *out_updated = false;
 
-    /* STEP 1: Read enabled profiles from the state dispatcher (WRITE) */
-    err = state_get_profiles(state, &enabled_profiles);
-    if (err) {
-        err = error_wrap(err, "Failed to get enabled profiles");
-        goto cleanup;
+    /* STEP 1: Only an enabled profile has a manifest footprint. Not
+     * enabled is success with nothing to do; the dispatcher's state_free
+     * rolls back the untouched transaction. */
+    if (!state_has_profile(state, profile)) {
+        return NULL;
     }
 
-    /* STEP 2: Check if this profile is enabled */
-    bool is_enabled = false;
-    for (size_t i = 0; i < enabled_profiles->count; i++) {
-        if (strcmp(enabled_profiles->items[i], profile) == 0) {
-            is_enabled = true;
-            break;
-        }
-    }
-
-    if (!is_enabled) {
-        /* Profile not enabled - skip manifest update (this is success).
-         * The dispatcher's state_free rolls back the untouched
-         * transaction. */
-        goto cleanup;
-    }
-
-    /* STEP 3: Update deployment target in state if adding custom/ files
+    /* STEP 2: Update deployment target in state if adding custom/ files
      *
-     * CRITICAL ORDER: Must store target BEFORE manifest_add_files() so
-     * the mount table (loaded internally) can resolve custom/ storage paths
-     * during manifest building. Same target-before-sync ordering as
+     * CRITICAL ORDER: Must store target BEFORE the projection so the
+     * mount table built below can resolve custom/ storage paths during
+     * the tree walk. Same target-before-sync ordering as
      * auto_enable_and_sync_profile().
      *
      * Only called when target is non-NULL to avoid clearing an
@@ -829,30 +773,27 @@ static error_t *update_manifest_after_add(
     if (target) {
         err = state_enable_profile(state, profile, target);
         if (err) {
-            err = error_wrap(err, "Failed to update deployment target for profile");
-            goto cleanup;
+            return error_wrap(err, "Failed to update deployment target for profile");
         }
     }
 
-    /* Build a fresh mount table from the (possibly post-mutation) row
-     * cache. When `target` is non-NULL, STEP 3's UPSERT may have rebound
-     * the target, invalidating ctx->mounts' classification for paths
-     * under the new binding. Build unconditionally so the call shape
-     * stays uniform — when no UPSERT ran, the fresh table is equivalent
-     * to ctx->mounts (one extra build is the cost of a uniform site). */
+    /* STEP 3: Build a fresh mount table from the (possibly post-mutation)
+     * row cache. When `target` is non-NULL, STEP 2's UPSERT may have
+     * rebound the target, invalidating ctx->mounts' classification for
+     * paths under the new binding. Build unconditionally so the call
+     * shape stays uniform — when no UPSERT ran, the fresh table is
+     * equivalent to ctx->mounts (one extra build is the cost of a
+     * uniform site). */
     mount_table_t *post_mutation_mounts = NULL;
     err = profile_build_mount_table(state, arena, &post_mutation_mounts);
     if (err) {
-        err = error_wrap(err, "Failed to build mount table after add");
-        goto cleanup;
+        return error_wrap(err, "Failed to build mount table after add");
     }
 
-    /* STEP 4: Bulk sync operation (O(M+N))
+    /* STEP 4: Project and anchor.
      *
-     * manifest_add_files advances the deployment anchor internally for
-     * synced entries. Entries skipped by precedence correctly receive
-     * no anchor advance, so the winning profile's anchor stays
-     * untouched. */
+     * Entries skipped by precedence correctly receive no anchor advance,
+     * so the winning profile's anchor stays untouched. */
     size_t synced_count = 0;
     err = manifest_add_files(
         repo,
@@ -861,35 +802,25 @@ static error_t *update_manifest_after_add(
         post_mutation_mounts,
         profile,
         added_files,
-        enabled_profiles,
         &synced_count
     );
-
     if (err) {
-        err = error_wrap(err, "Failed to sync files to manifest");
-        goto cleanup;
+        return error_wrap(err, "Failed to sync files to manifest");
     }
 
-    /* STEP 5: Commit transaction */
+    /* STEP 5: Commit transaction. state is borrowed from the dispatcher:
+     * if state_save succeeds the transaction is committed; otherwise the
+     * dispatcher's state_free rolls it back. */
     err = state_save(repo, state);
     if (err) {
-        err = error_wrap(err, "Failed to save manifest updates");
-        goto cleanup;
+        return error_wrap(err, "Failed to save manifest updates");
     }
 
     /* Success */
     *out_updated = true;
     if (out_synced) *out_synced = synced_count;
 
-cleanup:
-    if (enabled_profiles) {
-        string_array_free(enabled_profiles);
-    }
-    /* state is borrowed from the dispatcher. If state_save above
-     * succeeded the transaction is committed; otherwise the
-     * dispatcher's state_free rolls it back. */
-
-    return err;
+    return NULL;
 }
 
 /**
@@ -1586,8 +1517,10 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      * For NEW profiles: Auto-enable provides intuitive UX (creating via 'add' enables it).
      * For EXISTING profiles: Standard behavior (sync only if already enabled).
      *
-     * Non-fatal: If manifest update fails, Git commit still succeeded.
-     * User can repair manifest by running 'dotta profile enable <profile>'.
+     * Non-fatal: If manifest update fails, Git commit still succeeded. A
+     * new profile that failed to enable is enabled by hand; an enabled
+     * profile's branch moved past its stored HEAD, so the next command's
+     * reconcile projects it.
      */
     bool manifest_updated = false;
     size_t manifest_synced_count = 0;
@@ -1598,10 +1531,10 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
          * UX Decision: Creating a profile via 'add' should enable it automatically.
          * This matches user expectations: "I just added a file, it should be active."
          *
-         * Uses manifest_add_files (not manifest_apply_scope) because the files
-         * were just captured from disk: we want the deployment anchor stamped
-         * from that capture, not left unset for a later status to fill in.
-         * apply_scope is the scope reconciler; add is the disk-capture path.
+         * Both paths go through manifest_add_files: the projection engine
+         * establishes the rows, and add's contribution is the anchor — the
+         * files were just captured from disk, so the anchor is stamped
+         * from that capture rather than left for a later status to fill in.
          */
         error_t *enable_err = auto_enable_and_sync_profile(
             repo, ctx->state, ctx->arena, opts->profile, opts->target,
@@ -1643,8 +1576,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
                 out, OUTPUT_NORMAL, "Files committed to Git successfully"
             );
             output_hint(
-                out, OUTPUT_NORMAL, "Run 'dotta profile enable %s' to sync manifest",
-                opts->profile
+                out, OUTPUT_NORMAL, "Run 'dotta status' or 'dotta apply' to resync manifest"
             );
             error_free(manifest_err);
             manifest_updated = false;

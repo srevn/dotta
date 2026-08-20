@@ -30,9 +30,10 @@
  *   current view by construction.
  *
  *   Exceptions:
- *     (a) the consistency layer (manifest_reconcile, manifest_apply_scope,
- *         manifest_sync_*) runs before the workspace exists and serves a
- *         different invariant;
+ *     (a) the consistency layer (manifest_apply_scope, manifest_reconcile,
+ *         manifest_add_files, manifest_update_files, manifest_remove_files)
+ *         runs before the workspace exists and serves a different
+ *         invariant;
  *     (b) read-only paths that don't load a workspace at all (cmd_completion).
  */
 

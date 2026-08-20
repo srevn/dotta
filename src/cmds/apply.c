@@ -598,8 +598,8 @@ static void print_cleanup_results(
             );
         }
 
-        /* No remedy hints here: the preview's skipped-files block named
-         * these files, their reasons and the three ways out, and it always
+        /* No hint here: the preview's skipped-files block named these
+         * files, their reasons and the --force override, and it always
          * prints — including on the run that reports this line. */
         if (skipped_files.count > 0) {
             output_warning(
@@ -671,7 +671,7 @@ static void print_path_list(
  *
  * The summaries only count the files the run will not prune; the two
  * blocks at the end name them, with different messaging: the skipped ones
- * with their reason and the remedies, where the user has to act, and the
+ * with their reason and the one lever that overrides it, and the
  * released ones, where nothing is asked. Cleanup took that split when it
  * bucketed each file; this is display, so it counts nothing and only
  * routes per item. They come last, so that guidance is what the user is
@@ -770,8 +770,11 @@ static void print_cleanup_preflight_results(
         );
     }
 
-    /* Skipped files: the user has to act, so each is named with its reason
-     * and the three ways out follow. */
+    /* Skipped files: each is named with its reason, then the one line the
+     * deploy-side conflict block also ends with — --force overrides the
+     * hold. The ways to keep a held file are the inverse of the command
+     * that orphaned it (profile enable, add) or a move aside, and every
+     * line names the profile; they are not spelled out. */
     if (skipped.count > 0) {
         output_section(out, OUTPUT_NORMAL, "Modified orphaned files detected");
         output_newline(out, OUTPUT_NORMAL);
@@ -780,15 +783,8 @@ static void print_cleanup_preflight_results(
             out, OUTPUT_NORMAL, "The following files cannot be safely removed:"
         );
 
-        /* First skipped file's profile drives the example commands */
-        const char *example_profile = NULL;
-
         for (size_t i = 0; i < skipped.count; i++) {
             const workspace_item_t *item = skipped.entries[i];
-
-            if (!example_profile && item->profile) {
-                example_profile = item->profile;
-            }
 
             /* How the reason reads on screen. The reason itself is
              * cleanup's (cleanup_skip_reason); this only names it — red
@@ -824,37 +820,14 @@ static void print_cleanup_preflight_results(
 
             output_colored(out, OUTPUT_NORMAL, color, "  %s", glyph);
             output_print(out, OUTPUT_NORMAL, " %s ", item->filesystem_path);
-
-            if (item->profile) {
-                output_colored(out, OUTPUT_NORMAL, color, "(%s from ", label);
-                output_styled(out, OUTPUT_NORMAL, "{cyan}%s{reset}", item->profile);
-                output_colored(out, OUTPUT_NORMAL, color, ")\n");
-            } else {
-                output_colored(out, OUTPUT_NORMAL, color, "(%s)\n", label);
-            }
+            output_colored(out, OUTPUT_NORMAL, color, "(%s from ", label);
+            output_styled(out, OUTPUT_NORMAL, "{cyan}%s{reset}", item->profile);
+            output_colored(out, OUTPUT_NORMAL, color, ")\n");
         }
 
         output_newline(out, OUTPUT_NORMAL);
-        output_info(out, OUTPUT_NORMAL, "Uncommitted changes would be lost.");
+        output_info(out, OUTPUT_NORMAL, "Use --force to prune them anyway (discards changes)");
         output_newline(out, OUTPUT_NORMAL);
-
-        output_hintline(out, OUTPUT_NORMAL, "Options:");
-        output_hintline(out, OUTPUT_NORMAL, "  1. Commit changes to the profile:");
-        if (example_profile) {
-            output_hintline(out, OUTPUT_NORMAL, "     dotta update -p %s <files>", example_profile);
-            output_hintline(out, OUTPUT_NORMAL, "     dotta apply");
-        } else {
-            output_hintline(out, OUTPUT_NORMAL, "     dotta update <files>");
-            output_hintline(out, OUTPUT_NORMAL, "     dotta apply");
-        }
-        output_hintline(out, OUTPUT_NORMAL, "  2. Force removal (discards changes):");
-        output_hintline(out, OUTPUT_NORMAL, "     dotta apply --force <files>");
-        output_hintline(out, OUTPUT_NORMAL, "  3. Keep the profile enabled:");
-        if (example_profile) {
-            output_hintline(out, OUTPUT_NORMAL, "     dotta profile enable %s", example_profile);
-        } else {
-            output_hintline(out, OUTPUT_NORMAL, "     dotta profile enable <profile>");
-        }
     }
 
     /* Released files are informational: nothing is asked of the user, and
@@ -870,10 +843,7 @@ static void print_cleanup_preflight_results(
             const workspace_item_t *item = released.entries[i];
 
             output_styled(out, OUTPUT_NORMAL, "  {cyan}→{reset} %s", item->filesystem_path);
-            if (item->profile) {
-                output_styled(out, OUTPUT_NORMAL, " {dim}(from %s){reset}", item->profile);
-            }
-            output_newline(out, OUTPUT_NORMAL);
+            output_styled(out, OUTPUT_NORMAL, " {dim}(from %s){reset}\n", item->profile);
         }
 
         output_info(

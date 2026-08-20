@@ -300,7 +300,8 @@ error_t *check_item_metadata_divergence(
  * @param ws Workspace context (must not be NULL)
  * @param filesystem_path Target path on filesystem (must not be NULL)
  * @param storage_path Path in profile (can be NULL for directories)
- * @param profile Source profile name (can be NULL for orphans)
+ * @param profile Source profile name — every producer passes one (a state
+ *                row's, NOT NULL in the schema, or a metadata claim's)
  * @param old_profile Previous profile from state (can be NULL, caller must free on error)
  * @param state Where the item exists (deployed/undeployed/etc.)
  * @param divergence What's wrong with it (bit flags, can combine)

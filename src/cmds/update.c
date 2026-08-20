@@ -264,7 +264,8 @@ static bool is_update_candidate(
         case WORKSPACE_STATE_RELEASED:
             /* Not relevant for update command:
              * - UNDEPLOYED: handled by apply command
-             * - ORPHANED: handled by remove command
+             * - ORPHANED: apply's — cleanup prunes it, or holds it when
+             *   it was changed (never update's to commit)
              * - RELEASED: handled by apply command */
             return false;
     }
@@ -284,7 +285,7 @@ static bool is_update_candidate(
  *
  * EXCLUDED ITEMS:
  * - UNDEPLOYED state (not modified, just not deployed yet - handled by apply)
- * - ORPHANED state (handled by remove command)
+ * - ORPHANED state (apply's: cleanup prunes or holds it)
  * - DEPLOYED + NONE divergence (clean, nothing to update)
  * - DEPLOYED + STALE (Git moved since deployment: apply's work when alone,
  *   the user's conflict next to CONTENT — never committed; cmd_update counts

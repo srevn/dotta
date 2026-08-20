@@ -163,7 +163,7 @@ cleanup_skip_reason_t cleanup_skip_reason(const workspace_item_t *item) {
         return CLEANUP_SKIP_UNVERIFIED;
     }
 
-    /* DIVERGENCE_CONTENT: Content differs from Git */
+    /* DIVERGENCE_CONTENT: disk differs from what dotta deployed */
     if (divergence & DIVERGENCE_CONTENT) {
         return CLEANUP_SKIP_MODIFIED;
     }

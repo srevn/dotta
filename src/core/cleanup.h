@@ -173,7 +173,9 @@ typedef enum {
  *                                  status ranks its [unverified] tag the
  *                                  same way, so one item has one name in
  *                                  both places.
- *   DIVERGENCE_CONTENT             MODIFIED
+ *   DIVERGENCE_CONTENT             MODIFIED     — disk differs from what dotta
+ *                                  deployed (the anchor), not from the VWD
+ *                                  blob Git may have moved on to
  *   DIVERGENCE_TYPE                TYPE_CHANGED
  *   DIVERGENCE_MODE / OWNERSHIP    MODE_CHANGED
  *   ENCRYPTION / STALE only        NONE — a policy mismatch is not a user

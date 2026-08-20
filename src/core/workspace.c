@@ -941,10 +941,21 @@ static error_t *analyze_file_divergence(
  * Compute divergence for orphaned file
  *
  * Mirrors analyze_file_divergence() logic but optimized for orphan context.
- * Compares filesystem state against expected state from state database entry.
+ * Compares filesystem state against what dotta last deployed.
+ *
+ * An orphan asks one question — is disk still what dotta put there? — so
+ * prune safety is measured against the deployment anchor, never against
+ * the VWD blob: Git may have moved on after the deployment and before the
+ * path left scope, and that move is not the user's edit. The VWD blob
+ * stands in only for a row dotta witnessed but never deployed (anchor
+ * unset) — then it is the only content this row has ever been measured
+ * against. DIVERGENCE_STALE is therefore never emitted here.
  *
  * Architecture:
- * - Uses VWD cached metadata (blob_oid, encrypted, mode, owner, group)
+ * - Uses the anchor (blob_oid, stat) and VWD cached metadata (type, mode,
+ *   owner, group)
+ * - Anchor stat triple as the fast path, the same proof the active slice
+ *   relies on: a match means the exact node dotta wrote, no hashing
  * - Leverages content cache with transparent encryption handling
  * - Two-phase permission checking (exec bit + full metadata)
  * - Single-stat-per-file (caller provides pre-captured stat)
@@ -975,21 +986,27 @@ static divergence_type_t compute_orphan_divergence(
         return DIVERGENCE_UNVERIFIED;
     }
 
-    /* Step 1: Validate blob_oid (defensive programming)
+    /* Step 1: Choose the reference blob and validate it
      *
-     * state.c's read path already rejects wrong-sized BLOB columns, so by the
-     * time we get here the OID should be well-formed. A zero OID (Git null)
-     * still indicates a bad row — treat it as corruption.
+     * The anchor when dotta has ever confirmed disk against a blob; the
+     * VWD blob otherwise. state.c's read path already rejects wrong-sized
+     * BLOB columns, so by the time we get here the OID should be
+     * well-formed. A zero reference (neither set) still indicates a bad
+     * row — treat it as corruption.
      */
-    if (git_oid_is_zero(&state_entry->blob_oid)) {
+    const deployment_anchor_t *anchor = &state_entry->anchor;
+    const git_oid *reference = !git_oid_is_zero(&anchor->blob_oid) ? &anchor->blob_oid
+                                                                   : &state_entry->blob_oid;
+    if (git_oid_is_zero(reference)) {
         return DIVERGENCE_UNVERIFIED;
     }
-    const git_oid *blob_oid_ptr = &state_entry->blob_oid;
 
     /* Step 2: Extract expected filemode from type field
      *
      * Calculate once, use for both content comparison and mode checking.
-     * Uses shared helper for consistent mapping across modules.
+     * Uses shared helper for consistent mapping across modules. The anchor
+     * records no type, so a type Git changed after the deployment is
+     * still compared on the slow path — held as [type], the safe side.
      */
     git_filemode_t expected_mode = state_type_to_git_filemode(state_entry->type);
 
@@ -1001,37 +1018,53 @@ static divergence_type_t compute_orphan_divergence(
 
     /* Step 3: Content and type comparison.
      *
-     * content_compare_blob_to_disk classifies the blob by magic header and routes;
-     * plaintext takes the fast OID-hash-of-disk path, encrypted decrypts via the
-     * cache and byte-compares. The routing decision lives with the blob, so the
-     * orphan walker cannot route a different blob's state via state_entry->encrypted
-     * by accident. in_stat is forwarded to avoid redundant lstat. */
-    err = content_compare_blob_to_disk(
-        ws->repo,
-        blob_oid_ptr,
-        fs_path,
-        expected_mode,
-        in_stat,
-        storage_path,
-        profile,
-        ws->content_cache,
-        &cmp_result,
-        &fresh_stat
-    );
+     * Anchor fast path first: a live stat matching the triple captured at
+     * the last confirmation is proof that disk still equals anchor.blob_oid
+     * (see analyze_file_divergence for the invariant), so the exact node
+     * dotta wrote is recognised without loading or hashing anything.
+     *
+     * Otherwise content_compare_blob_to_disk classifies the blob by magic
+     * header and routes; plaintext takes the fast OID-hash-of-disk path,
+     * encrypted decrypts via the cache and byte-compares. The routing
+     * decision lives with the blob, so the orphan walker cannot route a
+     * different blob's state via state_entry->encrypted by accident — an
+     * anchor may sit on the other side of an encryption-policy flip from
+     * the VWD blob. in_stat is forwarded to avoid redundant lstat. */
+    if (anchor->stat.mtime != 0
+        && anchor->stat.mtime == (int64_t) in_stat->st_mtime
+        && anchor->stat.size == (int64_t) in_stat->st_size
+        && anchor->stat.ino == (uint64_t) in_stat->st_ino) {
+        /* stat match ⟹ disk == anchor.blob_oid */
+        fresh_stat = *in_stat;
+        cmp_result = CMP_EQUAL;
+    } else {
+        err = content_compare_blob_to_disk(
+            ws->repo,
+            reference,
+            fs_path,
+            expected_mode,
+            in_stat,
+            storage_path,
+            profile,
+            ws->content_cache,
+            &cmp_result,
+            &fresh_stat
+        );
 
-    if (err) {
-        /* Cannot classify, load, decrypt, or compare. Possible causes:
-         * - Encrypted file but no passphrase available (missing key)
-         * - Decryption failed (wrong passphrase, corrupted ciphertext)
-         * - Blob uses an unsupported cipher version (skew)
-         * - I/O error reading blob from git
-         * - Blob missing from repository (corruption)
-         *
-         * Conservative approach: return UNVERIFIED so the user sees
-         * [orphaned, unverified] and can investigate, rather than a
-         * false [orphaned, clean] or noisy [orphaned, modified]. */
-        error_free(err);
-        return DIVERGENCE_UNVERIFIED;
+        if (err) {
+            /* Cannot classify, load, decrypt, or compare. Possible causes:
+             * - Encrypted file but no passphrase available (missing key)
+             * - Decryption failed (wrong passphrase, corrupted ciphertext)
+             * - Blob uses an unsupported cipher version (skew)
+             * - I/O error reading blob from git
+             * - Blob missing from repository (corruption)
+             *
+             * Conservative approach: return UNVERIFIED so the user sees
+             * [orphaned, unverified] and can investigate, rather than a
+             * false [orphaned, clean] or noisy [orphaned, modified]. */
+            error_free(err);
+            return DIVERGENCE_UNVERIFIED;
+        }
     }
 
     /* Step 4: Interpret comparison result
@@ -1047,7 +1080,7 @@ static divergence_type_t compute_orphan_divergence(
             break;
 
         case CMP_DIFFERENT:
-            /* Content differs between Git and filesystem */
+            /* Disk left the blob dotta deployed (or, un-anchored, the VWD blob) */
             divergence |= DIVERGENCE_CONTENT;
             break;
 
@@ -1090,7 +1123,8 @@ static divergence_type_t compute_orphan_divergence(
      * Only check permissions if:
      * 1. File still exists (not deleted during analysis)
      * 2. No type divergence (type mismatch makes mode checking nonsensical)
-     * 3. Verification didn't fail (we have fresh_stat from compare)
+     * 3. Verification didn't fail (we have fresh_stat from the fast path
+     *    or the compare)
      *
      * PHASE A: Git filemode (executable bit)
      *   - Uses expected_mode from Step 2
@@ -1422,8 +1456,9 @@ static error_t *analyze_orphaned_files(workspace_t *ws) {
                 item_state = WORKSPACE_STATE_RELEASED;
 
             } else {
-                /* Divergence for a prunable orphan: disk against the row's
-                 * VWD cache.
+                /* Divergence for a prunable orphan: disk against what dotta
+                 * last deployed (the anchor; the VWD blob only for a row
+                 * dotta never deployed).
                  *
                  * This enables status to predict apply behavior
                  * (cleanup_skip_reason maps the same bits to the skip):

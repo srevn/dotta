@@ -11,6 +11,7 @@
 #include <string.h>
 #include <unistd.h>
 
+#include "base/arena.h"
 #include "base/args.h"
 #include "base/array.h"
 #include "base/error.h"
@@ -21,7 +22,6 @@
 #include "core/state.h"
 #include "core/workspace.h"
 #include "crypto/keymgr.h"
-#include "infra/mount.h"
 #include "infra/salt.h"
 #include "sys/gitops.h"
 #include "sys/resolve.h"
@@ -151,15 +151,13 @@ static bool parse_divergence_strategy(
 
 /**
  * Pull branch with fast-forward only
- * Returns true if branch was updated, and optionally returns old/new OIDs
+ * Returns true if branch was updated
  */
 static error_t *pull_branch_ff(
     git_repository *repo,
     const char *remote_name,
     const char *branch_name,
-    bool *updated,
-    git_oid *old_oid,  /* Can be NULL */
-    git_oid *new_oid   /* Can be NULL */
+    bool *updated
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(remote_name);
@@ -246,14 +244,6 @@ static error_t *pull_branch_ff(
     }
 
     /* git_err == 1 means local IS an ancestor of remote - can fast-forward */
-
-    /* Capture OIDs before updating (if caller wants them) */
-    if (old_oid) {
-        git_oid_cpy(old_oid, local_oid);
-    }
-    if (new_oid) {
-        git_oid_cpy(new_oid, remote_oid);
-    }
 
     /* Perform fast-forward */
     git_reference *updated_ref = NULL;
@@ -455,103 +445,6 @@ static error_t *sync_analyze_phase(
 }
 
 /**
- * Sync manifest after branch update (non-fatal on failure)
- *
- * Calls manifest_sync_diff with NULL metadata_cache (cache is stale after
- * fetch/pull — fresh metadata is loaded from updated git state).
- *
- * On failure: prints warning + recovery hint, returns false.
- * On success: writes stats to output parameters, returns true.
- * Output parameters are optional (can be NULL).
- */
-static bool sync_manifest(
-    git_repository *repo,
-    state_t *state,
-    arena_t *arena,
-    const mount_table_t *mounts,
-    const char *profile,
-    const git_oid *old_oid,
-    const git_oid *new_oid,
-    const string_array_t *enabled_profiles,
-    output_t *out,
-    size_t *out_synced,
-    size_t *out_removed,
-    size_t *out_fallbacks,
-    size_t *out_skipped
-) {
-    size_t synced = 0, removed = 0, fallbacks = 0, skipped = 0;
-    error_t *err = manifest_sync_diff(
-        repo, state, arena, mounts, profile, old_oid, new_oid, enabled_profiles,
-        &synced, &removed, &fallbacks, &skipped
-    );
-
-    if (err) {
-        output_styled(
-            out, OUTPUT_NORMAL,
-            "    {yellow}⚠{reset} Manifest sync failed: %s\n",
-            error_message(err)
-        );
-        output_hint(
-            out, OUTPUT_NORMAL,
-            "    Run 'dotta status' or 'dotta apply' to resync manifest"
-        );
-        error_free(err);
-        return false;
-    }
-
-    if (out_synced) *out_synced = synced;
-    if (out_removed) *out_removed = removed;
-    if (out_fallbacks) *out_fallbacks = fallbacks;
-    if (out_skipped) *out_skipped = skipped;
-
-    return true;
-}
-
-/**
- * Sync manifest and print standard result summary
- *
- * High-level wrapper for non-pull callers (rebase, merge, theirs).
- * Prints manifest stats line and skipped files warning.
- */
-static void sync_manifest_and_report(
-    git_repository *repo,
-    state_t *state,
-    arena_t *arena,
-    const mount_table_t *mounts,
-    const char *profile,
-    const git_oid *old_oid,
-    const git_oid *new_oid,
-    const string_array_t *enabled_profiles,
-    output_t *out
-) {
-    size_t synced = 0, removed = 0, fallbacks = 0, skipped = 0;
-    bool ok = sync_manifest(
-        repo, state, arena, mounts, profile, old_oid, new_oid, enabled_profiles,
-        out, &synced, &removed, &fallbacks, &skipped
-    );
-
-    if (ok && (synced > 0 || removed > 0 || fallbacks > 0)) {
-        output_info(
-            out, OUTPUT_NORMAL, "    Manifest: %zu staged, %zu removed, %zu fallback%s",
-            synced, removed, fallbacks, fallbacks == 1 ? "" : "s"
-        );
-    }
-
-    if (skipped > 0) {
-        output_styled(
-            out, OUTPUT_NORMAL,
-            "    {yellow}⚠{reset} %zu custom file%s skipped (no target configured for '%s')\n",
-            skipped, skipped == 1 ? "" : "s", profile
-        );
-        output_hint(
-            out, OUTPUT_NORMAL,
-            "    Run: dotta profile enable --target <path> %s",
-            profile
-        );
-    }
-}
-
-/**
  * Attempt divergence rollback after resolution failure
  *
  * Returns critical error if rollback itself fails (caller must propagate).
@@ -593,11 +486,7 @@ static void handle_remote_ahead(
     profile_sync_result_t *result,
     output_t *out,
     bool auto_pull,
-    bool no_pull,
-    state_t *state,
-    arena_t *arena,
-    const mount_table_t *mounts,
-    const string_array_t *enabled_profiles
+    bool no_pull
 ) {
     if (!auto_pull) {
         /* Just warn - don't auto-pull */
@@ -630,10 +519,7 @@ static void handle_remote_ahead(
     );
 
     bool pulled = false;
-    git_oid old_oid, new_oid;
-    error_t *err = pull_branch_ff(
-        repo, remote_name, result->profile, &pulled, &old_oid, &new_oid
-    );
+    error_t *err = pull_branch_ff(repo, remote_name, result->profile, &pulled);
     if (err) {
         output_error(
             out, "  %s: pull failed - %s",
@@ -657,43 +543,14 @@ static void handle_remote_ahead(
         return;
     }
 
-    /* Pull succeeded */
+    /* Pull succeeded. What the pull did to the manifest is reported by
+     * cmd_sync's manifest phase, once, after every profile's Git work. */
     result->outcome = SYNC_OUTCOME_PULLED;
-
-    /* Sync manifest — stats needed for success message */
-    size_t synced = 0, removed = 0, fallbacks = 0, skipped = 0;
-    bool manifest_ok = sync_manifest(
-        repo, state, arena, mounts, result->profile, &old_oid, &new_oid,
-        enabled_profiles, out, &synced, &removed, &fallbacks, &skipped
+    output_styled(
+        out, OUTPUT_NORMAL,
+        "  {green}✓{reset} {green}%s{reset}: pulled %zu commit%s\n",
+        result->profile, result->behind, result->behind == 1 ? "" : "s"
     );
-
-    if (!manifest_ok) {
-        output_styled(
-            out, OUTPUT_NORMAL,
-            "  {green}✓{reset} {green}%s{reset}: pulled %zu commit%s (manifest sync failed)\n",
-            result->profile, result->behind, result->behind == 1 ? "" : "s"
-        );
-    } else {
-        output_styled(
-            out, OUTPUT_NORMAL,
-            "  {green}✓{reset} {green}%s{reset}: pulled %zu commit%s "
-            "(%zu staged, %zu removed, %zu fallback%s)\n",
-            result->profile, result->behind, result->behind == 1 ? "" : "s",
-            synced, removed, fallbacks, fallbacks == 1 ? "" : "s"
-        );
-    }
-    if (skipped > 0) {
-        output_styled(
-            out, OUTPUT_NORMAL,
-            "    {yellow}⚠{reset} %zu custom file%s skipped (no target configured for '%s')\n",
-            skipped, skipped == 1 ? "" : "s", result->profile
-        );
-        output_hint(
-            out, OUTPUT_NORMAL,
-            "    Run: dotta profile enable --target <path> %s",
-            result->profile
-        );
-    }
 }
 
 /**
@@ -713,10 +570,6 @@ static error_t *resolve_and_push_divergence(
     resolve_strategy_t strategy,
     const char *strategy_name,
     transfer_context_t *xfer,
-    state_t *state,
-    arena_t *arena,
-    const mount_table_t *mounts,
-    const string_array_t *enabled_profiles,
     bool no_push
 ) {
     const char *cap_name = (strategy == RESOLVE_STRATEGY_REBASE)
@@ -748,8 +601,7 @@ static error_t *resolve_and_push_divergence(
     }
 
     /* Perform in-memory resolution (never modifies HEAD) */
-    git_oid new_oid;
-    err = resolve_execute(&ctx, &new_oid);
+    err = resolve_execute(&ctx, NULL);
     if (err) {
         output_styled(
             out, OUTPUT_NORMAL,
@@ -816,12 +668,6 @@ static error_t *resolve_and_push_divergence(
 
     /* Resolved locally even if push was deferred — next sync sees LOCAL_AHEAD. */
     result->outcome = SYNC_OUTCOME_RESOLVED;
-
-    /* Sync manifest with changes from resolution */
-    sync_manifest_and_report(
-        repo, state, arena, mounts, result->profile, &ctx.saved_oid,
-        &new_oid, enabled_profiles, out
-    );
 
     return NULL;
 }
@@ -891,11 +737,7 @@ static error_t *handle_diverged_theirs(
     const char *remote_name,
     profile_sync_result_t *result,
     output_t *out,
-    bool confirm_destructive,
-    state_t *state,
-    arena_t *arena,
-    const mount_table_t *mounts,
-    const string_array_t *enabled_profiles
+    bool confirm_destructive
 ) {
     output_info(
         out, OUTPUT_NORMAL,
@@ -935,8 +777,7 @@ static error_t *handle_diverged_theirs(
     }
 
     /* Resolve divergence (resets local branch to remote) */
-    git_oid new_oid;
-    err = resolve_execute(&ctx, &new_oid);
+    err = resolve_execute(&ctx, NULL);
     if (err) {
         output_styled(
             out, OUTPUT_NORMAL,
@@ -973,12 +814,6 @@ static error_t *handle_diverged_theirs(
     );
     result->outcome = SYNC_OUTCOME_RESOLVED;
 
-    /* Sync manifest with changes from reset */
-    sync_manifest_and_report(
-        repo, state, arena, mounts, result->profile, &ctx.saved_oid,
-        &new_oid, enabled_profiles, out
-    );
-
     return NULL;
 }
 
@@ -995,10 +830,6 @@ static error_t *handle_diverged(
     sync_strategy_t strategy,
     transfer_context_t *xfer,
     bool confirm_destructive,
-    state_t *state,
-    arena_t *arena,
-    const mount_table_t *mounts,
-    const string_array_t *enabled_profiles,
     bool no_push
 ) {
     output_styled(
@@ -1025,14 +856,14 @@ static error_t *handle_diverged(
         case DIVERGE_REBASE: {
             return resolve_and_push_divergence(
                 repo, remote_name, result, out, RESOLVE_STRATEGY_REBASE,
-                "rebase", xfer, state, arena, mounts, enabled_profiles, no_push
+                "rebase", xfer, no_push
             );
         }
 
         case DIVERGE_MERGE: {
             return resolve_and_push_divergence(
                 repo, remote_name, result, out, RESOLVE_STRATEGY_MERGE,
-                "merge", xfer, state, arena, mounts, enabled_profiles, no_push
+                "merge", xfer, no_push
             );
         }
 
@@ -1045,8 +876,7 @@ static error_t *handle_diverged(
 
         case DIVERGE_THEIRS: {
             return handle_diverged_theirs(
-                repo, remote_name, result, out, confirm_destructive,
-                state, arena, mounts, enabled_profiles
+                repo, remote_name, result, out, confirm_destructive
             );
         }
     }
@@ -1057,9 +887,9 @@ static error_t *handle_diverged(
 /**
  * Phase 3: Sync branches with remote (push/pull/divergence handling)
  *
- * Includes manifest synchronization when branches are updated via
- * pull/rebase/merge/reset operations. This maintains the VWD architecture
- * by keeping the manifest table in sync with git branches.
+ * Git only. Every pull, rebase, merge and reset moves a branch HEAD and
+ * nothing else; the manifest catches up once, for every enabled profile,
+ * in cmd_sync's manifest phase after this loop returns.
  */
 static error_t *sync_push_phase(
     git_repository *repo,
@@ -1072,20 +902,12 @@ static error_t *sync_push_phase(
     bool no_push,
     sync_strategy_t diverged_strategy,
     transfer_context_t *xfer,
-    bool confirm_destructive,
-    state_t *state,                           /* For manifest updates */
-    arena_t *arena,                           /* For manifest scratch */
-    const mount_table_t *mounts,              /* For path classification */
-    const string_array_t *enabled_profiles    /* For precedence resolution */
+    bool confirm_destructive
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(remote_name);
     CHECK_NULL(results);
     CHECK_NULL(out);
-    CHECK_NULL(state);
-    CHECK_NULL(arena);
-    CHECK_NULL(mounts);
-    CHECK_NULL(enabled_profiles);
 
     if (!ephemeral) {
         output_section(out, OUTPUT_NORMAL, "Syncing with remote");
@@ -1127,8 +949,7 @@ static error_t *sync_push_phase(
                         result->profile, result->ahead, result->ahead == 1 ? "" : "s"
                     );
                     error_t *err = handle_diverged_theirs(
-                        repo, remote_name, result, out, confirm_destructive,
-                        state, arena, mounts, enabled_profiles
+                        repo, remote_name, result, out, confirm_destructive
                     );
                     if (err) return err;
                     break;
@@ -1232,8 +1053,7 @@ static error_t *sync_push_phase(
                     break;
                 }
                 handle_remote_ahead(
-                    repo, remote_name, result, out, auto_pull, no_pull,
-                    state, arena, mounts, enabled_profiles
+                    repo, remote_name, result, out, auto_pull, no_pull
                 );
                 break;
             }
@@ -1262,7 +1082,7 @@ static error_t *sync_push_phase(
                 }
                 error_t *err = handle_diverged(
                     repo, remote_name, result, out, diverged_strategy, xfer,
-                    confirm_destructive, state, arena, mounts, enabled_profiles, no_push
+                    confirm_destructive, no_push
                 );
                 if (err) {
                     return err;  /* Critical rollback failure */
@@ -1368,15 +1188,16 @@ static void sync_render_dry_run(
  * Tallies per-row outcomes (single source of truth), disambiguates the
  * DIVERGED umbrella by the captured analyze-phase state into
  * needs_pull / needs_push / diverged buckets, then emits the count lines,
- * the session-level transfer stats, and the "Run apply" hint.
+ * the session-level transfer stats, and — when the manifest phase staged,
+ * released or reassigned anything — the "Run apply" hint.
  *
  * The summary keeps the finer-grained user vocabulary; hook env (Tier 2)
  * will expose the cleaner outcome partition.
  */
 static void sync_render_summary(
     const sync_results_t *results,
-    sync_strategy_t diverged_strategy,
     const transfer_context_t *xfer,
+    bool manifest_changed,
     output_t *out
 ) {
     output_section(out, OUTPUT_NORMAL, "Sync complete");
@@ -1464,9 +1285,11 @@ static void sync_render_summary(
     /* Session-level wire stats (silent if nothing moved) */
     transfer_summarize(xfer, out, OUTPUT_NORMAL);
 
-    /* PULLED always brings remote; RESOLVED brings remote for
-     * rebase/merge/theirs but not 'ours' (which discards remote). */
-    if (pulled > 0 || (resolved > 0 && diverged_strategy != DIVERGE_OURS)) {
+    /* The manifest block is the direct evidence that apply has work; it is
+     * empty exactly when the Git phase touched nothing managed (a pull of
+     * README or .dottaignore, a push, 'ours'), which no guess from the
+     * outcome tallies could tell apart. */
+    if (manifest_changed) {
         output_newline(out, OUTPUT_NORMAL);
         output_hint(
             out, OUTPUT_NORMAL, "Run 'dotta apply' to deploy, or 'dotta status' to review"
@@ -1499,10 +1322,9 @@ static void salt_emit_conflict(output_t *out) {
  * layer is pure policy + rendering.
  *
  * Runs before the fetch phase so the decision's census is never
- * contaminated by pulled remote ciphertext, and before state_begin so the
- * salt round-trips stay outside the write-transaction window. Best-effort:
- * returns NULL on every salt-level outcome (warn-and-continue); a non-NULL
- * return is reserved for programmer misuse surfaced by the decide call.
+ * contaminated by pulled remote ciphertext. Best-effort: returns NULL on
+ * every salt-level outcome (warn-and-continue); a non-NULL return is
+ * reserved for programmer misuse surfaced by the decide call.
  */
 static error_t *salt_reconcile(
     const dotta_ctx_t *ctx,
@@ -1933,7 +1755,7 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
     }
 
     /* Build the hook invocation. Same struct is reused for both pre-sync
-     * (here) and post-sync (after state_commit). profiles_str / remote_env
+     * (here) and post-sync (after the manifest phase). profiles_str / remote_env
      * are heap-allocated and freed at cleanup; sync_extras is a stack
      * literal whose lifetime is cmd_sync's frame — covers both fire sites. */
     profiles_str = string_array_join(scope_active(scope), " ");
@@ -1986,9 +1808,7 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
     }
 
     /* Reconcile the repository salt with the remote. Placed before the
-     * fetch phase so the in-use census cannot see pulled remote ciphertext,
-     * and before state_begin so its network round-trips stay outside the
-     * write-transaction window. */
+     * fetch phase so the in-use census cannot see pulled remote ciphertext. */
     err = salt_reconcile(ctx, remote_name, xfer, opts);
     if (err) {
         goto cleanup;
@@ -2017,47 +1837,11 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
         goto cleanup;
     }
 
-    /* Promote the borrowed READ handle to a write transaction for the
-     * mutation phase. Dry-run exits above, so the lock is only held when
-     * we're actually going to push/pull — shorter lock window than
-     * declaring WRITE on the whole dispatch. */
-    err = state_begin(state);
-    if (err) {
-        err = error_wrap(err, "Failed to open state transaction");
-        goto cleanup;
-    }
-
-    /* Reconcile manifest with current Git state before sync operations.
-     *
-     * If external Git changes moved a branch HEAD since the last dotta
-     * operation, state entries have stale blob_oid values. manifest_sync_diff
-     * (downstream of push) computes a diff between old_oid (local HEAD before
-     * fetch) and new_oid (after merge), then advances the per-profile
-     * commit_oid to match the new HEAD. That masks pre-existing staleness:
-     * files changed between the stale state and the pre-fetch HEAD get their
-     * commit_oid updated (now matching HEAD) while blob_oid stays at the
-     * stale value — ghost entries permanently invisible to staleness detection.
-     *
-     * Non-force: workspace_load above already reconciled via its prelude.
-     *
-     * Force: no prelude ran, so repair local drift here, before the Git
-     *   phase. manifest_reconcile detects sync's already-held transaction
-     *   via state_locked() and writes directly (no nested begin/commit).
-     *
-     * The repair is not reported here in either mode: its results are
-     * persistent row signals — [stale] and [released] in status, the
-     * released and reassigned blocks in apply — and belong to whichever
-     * command the user runs next, not to the one whose prelude happened
-     * to perform it. */
-    if (opts->force) {
-        err = manifest_reconcile(repo, state, ctx->arena, ctx->mounts);
-        if (err) {
-            err = error_wrap(err, "Failed to reconcile manifest before sync");
-            goto cleanup;
-        }
-    }
-
     /* Phase 3: Sync with remote (push/pull/divergence handling)
+     *
+     * Git only — no state is written in this phase, so the write lock is
+     * never held across network IO. The manifest catches up in the phase
+     * that follows.
      *
      * When all profiles are up-to-date and not in verbose mode, the sync
      * section is ephemeral — shown as progress during execution, cleared after.
@@ -2079,18 +1863,9 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
         fflush(out->stream);
     }
 
-    /* sync_push_phase's enabled_profiles parameter drives precedence
-     * resolution in manifest_sync_diff. scope_enabled is exactly the right
-     * set: validated by profile_resolve_enabled (missing branches already
-     * filtered and warned about at scope_build time) and filter-independent
-     * by construction (CLI -p narrows scope_active, never scope_enabled).
-     * Nothing between scope_build and here mutates the enabled_profiles
-     * table (state_reorder_profiles / state_enable_profile / state_disable_profile
-     * are confined to add/remove/profile/clone/interactive). */
     err = sync_push_phase(
         repo, remote_name, results, out, sync_ephemeral, auto_pull, opts->no_pull,
-        no_push, diverged_strategy, xfer, config->confirm_destructive,
-        state, ctx->arena, ctx->mounts, scope_enabled(scope)
+        no_push, diverged_strategy, xfer, config->confirm_destructive
     );
 
     if (sync_ephemeral) {
@@ -2101,30 +1876,102 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
         goto cleanup;
     }
 
-    /* Commit manifest changes */
-    err = state_commit(state);
-    if (err) {
-        err = error_wrap(err, "Failed to save manifest changes");
+    /* Manifest phase — one projection of every enabled profile at its
+     * post-sync HEAD, gated on drift so a sync that moved nothing writes
+     * nothing. Covers every pull and resolution above and — under --force,
+     * where no prelude ran — any local drift too. A non-force run repaired
+     * local drift in workspace_load's prelude already; that repair reports
+     * itself through status ([stale], [released]), not here.
+     *
+     * Attribution is per enabled profile. scope_enabled, never the -p
+     * narrowed scope_active: precedence runs across the whole enabled set,
+     * validated by profile_resolve_enabled (a missing branch was filtered
+     * and warned about at scope_build time) and untouched since — nothing
+     * between scope_build and here mutates enabled_profiles. A path p lost
+     * to q is p's reassignment and q's claim; a path that moved between
+     * two pulled profiles is one reassignment, never a transient release.
+     *
+     * Sync updates the VWD's expected state; it does not deploy. Apply's
+     * divergence analysis does that, which is what the summary's hint
+     * points at.
+     *
+     * Transaction scoping is reconcile's: it opens, commits and on any
+     * failure rolls back its own. A failure here is not sync's failure —
+     * every Git ref already moved and stands; commit_oid still lags, so the
+     * next command's prelude projects again. Warn and carry on. */
+    const string_array_t *enabled = scope_enabled(scope);
+    manifest_scope_stats_t *stats = arena_calloc(
+        ctx->arena, enabled->count, sizeof(*stats)
+    );
+    if (!stats) {
+        err = ERROR(ERR_MEMORY, "Failed to allocate manifest statistics");
         goto cleanup;
     }
 
-    /* Post-sync fires after state_commit succeeds. */
+    bool manifest_changed = false;
+    err = manifest_reconcile(repo, state, ctx->arena, ctx->mounts, enabled, stats);
+    if (err) {
+        output_warning(
+            out, OUTPUT_NORMAL, "Manifest update failed: %s", error_message(err)
+        );
+        output_hint(
+            out, OUTPUT_NORMAL, "Run 'dotta status' or 'dotta apply' to resync manifest"
+        );
+        error_free(err);
+        err = NULL;
+    } else {
+        for (size_t i = 0; i < enabled->count; i++) {
+            const manifest_scope_stats_t *s = &stats[i];
+            size_t staged = s->files_added + s->files_updated;
+
+            /* Ghost reclaims (files_reclaimed) have no filesystem effect
+             * and ask nothing of the user; they are not printed. */
+            if (staged + s->files_orphaned + s->files_reassigned == 0) continue;
+
+            if (!manifest_changed) {
+                output_section(out, OUTPUT_NORMAL, "Manifest");
+                manifest_changed = true;
+            }
+
+            /* One line per profile, non-zero parts only. "released" is
+             * files_orphaned under the RELEASED leftover reconcile uses. */
+            output_print(out, OUTPUT_NORMAL, "  %s:", s->profile);
+            const char *sep = " ";
+            if (staged > 0) {
+                output_print(out, OUTPUT_NORMAL, "%s%zu staged", sep, staged);
+                sep = ", ";
+            }
+            if (s->files_orphaned > 0) {
+                output_print(
+                    out, OUTPUT_NORMAL, "%s%zu released", sep, s->files_orphaned
+                );
+                sep = ", ";
+            }
+            if (s->files_reassigned > 0) {
+                output_print(
+                    out, OUTPUT_NORMAL, "%s%zu reassigned", sep, s->files_reassigned
+                );
+            }
+            output_print(out, OUTPUT_NORMAL, "\n");
+        }
+    }
+
+    /* Post-sync fires once the Git phase and the manifest phase are done;
+     * a manifest failure was warned above and is not a reason to skip it. */
     hook_fire_post(config, out, ctx->repo_path, &hook_inv);
 
     /* Final summary */
-    sync_render_summary(results, diverged_strategy, xfer, out);
+    sync_render_summary(results, xfer, manifest_changed, out);
 
     /* Success - fall through to cleanup */
     err = NULL;
 
 cleanup:
     /* Free resources in reverse order of allocation. state is borrowed
-     * from the dispatcher; workspace borrows scope's enabled array
-     * internally, so free workspace first, then scope. state_rollback
-     * is a no-op if no transaction is active, closing any partially-begun
-     * mutation-phase transaction on error paths. */
-    state_rollback(state);
-
+     * from the dispatcher and sync opens no transaction of its own (the
+     * prelude reconcile, the anchor flush and the manifest phase each
+     * scope theirs); workspace borrows scope's enabled array internally,
+     * so free workspace first, then scope. */
     if (current_branch) free(current_branch);
     if (ws) workspace_free(ws);
     if (xfer) transfer_context_free(xfer);

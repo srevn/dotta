@@ -4,9 +4,9 @@
  * Single authority for every modification of the manifest table (the
  * Virtual Working Directory's persistent cache). Surface is two-fold:
  *
- *   - Consistency layer: manifest_apply_scope, manifest_sync_diff,
+ *   - Consistency layer: manifest_apply_scope, manifest_reconcile,
  *     manifest_add_files, manifest_update_files, manifest_remove_files,
- *     manifest_reconcile, manifest_sync_directories. Each operates within
+ *     manifest_sync_directories. Each operates within
  *     a caller-managed transaction and updates the virtual_manifest +
  *     tracked_directories tables to reflect the post-operation Git state.
  *     Every entry point ends its state writes with the directory rebuild
@@ -120,8 +120,8 @@ typedef struct {
  *        interactive save → diff against the persisted set, then apply
  *                    additions/removals via the membership primitives
  *                    before state_reorder_profiles.
- *      Reconcile and sync change nothing: they call this to project what
- *      Git did.
+ *      Reconcile — and through it sync and revert — changes nothing: it
+ *      calls this to project what Git did.
  *   2. Call manifest_apply_scope().
  *   3. No further state mutations required — the engine handles
  *      virtual_manifest, tracked_directories and
@@ -241,24 +241,35 @@ error_t *manifest_apply_scope(
 /**
  * Reconcile manifest with current Git state (drift check over the engine)
  *
- * The public entry point for drift repair: detects whether any enabled
- * profile's stored commit_oid no longer matches its branch HEAD and, if
- * so, runs manifest_apply_scope with leftover = LIFECYCLE_RELEASED. Used
- * by workspace_load at load-start and by sync before push. Callers reach
- * for this when they only know "something in Git may have moved"; the
- * engine then projects everything, so an external addition is projected,
- * an external removal is released, and a path that returned to Git is
- * reactivated — whatever lifecycle its row carried.
+ * The one entry point for "Git moved; bring the manifest along": detects
+ * whether any enabled profile's stored commit_oid no longer matches its
+ * branch HEAD and, if so, runs manifest_apply_scope with leftover =
+ * LIFECYCLE_RELEASED. Three callers, one question each:
+ *   - workspace_load, at load-start — something may have moved between
+ *     dotta runs (an external commit, rebase, rm);
+ *   - sync, after its Git phase — the pulls and resolutions it just made,
+ *     plus any local drift that --force's skipped prelude left behind;
+ *   - revert, after its commit — the one branch it moved.
+ * The engine then projects everything, so an external addition is
+ * projected, a removal (external or pulled) is released, and a path that
+ * returned to Git is reactivated — whatever lifecycle its row carried.
+ * The drift check is what keeps the call cheap when nothing moved:
+ * a sync that pulled nothing and a load after a clean run cost O(P) ref
+ * lookups and no write.
  *
  * Transaction management
  *   This function handles transactions internally by inspecting state_locked():
- *     - Caller already holds a transaction (apply's dotta_ext_write, sync's
- *       state_begin) → writes commit with the caller's transaction.
- *     - Caller doesn't hold one (workspace loading from status/diff/update) →
- *       opens a scoped BEGIN IMMEDIATE, commits on success, rolls back on
- *       failure.
+ *     - Caller already holds a transaction (apply's dotta_ext_write) →
+ *       writes commit with the caller's transaction.
+ *     - Caller doesn't hold one (workspace loading from status/diff/update,
+ *       sync, revert) → opens a scoped BEGIN IMMEDIATE, commits on
+ *       success, rolls back on failure — including a failed COMMIT, which
+ *       SQLite leaves open until it is rolled back.
  *
- * Callers never need to pre-open a transaction for this function.
+ * Callers never need to pre-open a transaction for this function, and sync
+ * and revert hold none: the projection is the only state write either
+ * makes, so the write lock is held for the projection alone, never across
+ * network IO or a Git commit.
  *
  * Profile scope
  *   Current enabled profiles are fetched internally. Callers that have already
@@ -268,6 +279,9 @@ error_t *manifest_apply_scope(
  *
  * Preconditions:
  *   - state MUST be opened (read or write; transaction optional)
+ *   - stats_filter and out_stats are either both NULL or both non-NULL
+ *     (manifest_apply_scope's pairing rule; when non-NULL, out_stats is an
+ *     array of length stats_filter->count with pairwise-unique names)
  *
  * Postconditions:
  *   - If any enabled branch had moved: the manifest is the projection of
@@ -280,8 +294,14 @@ error_t *manifest_apply_scope(
  *     writer, not an anchor writer. Workspace divergence analysis reads
  *     anchor.blob_oid from persistent state to classify staleness; cross-
  *     process correct by construction
+ *   - out_stats, when requested, is zero-filled with each profile name set
+ *     whether or not a projection ran, and carries the engine's
+ *     attribution when one did. A caller therefore reads the counts
+ *     without asking whether drift was found: all-zero means "nothing for
+ *     apply to do came out of this call". On error the counts describe
+ *     writes the rollback undid — do not read them
  *   - Caller's transaction state is unchanged (kept outer lock, or
- *     committed our scoped one)
+ *     committed/rolled back our scoped one)
  *
  * Performance:
  *   Common case (no drift): O(P) state queries + O(P) ref lookups, zero
@@ -295,16 +315,24 @@ error_t *manifest_apply_scope(
  *              the caller destroys the arena (typically command end).
  *              Must not be NULL.
  * @param mounts Per-machine mount table covering the current enabled set.
- *               Must not be NULL. Reconcile does not mutate bindings; the
- *               only callers (workspace_load and sync's force branch)
- *               pass ctx->mounts.
+ *               Must not be NULL. Reconcile does not mutate bindings; every
+ *               caller passes ctx->mounts.
+ * @param stats_filter Optional: profiles to attribute stats to (NULL = none).
+ *                     Sync passes scope_enabled; the prelude and revert
+ *                     pass NULL (their repair reports itself through
+ *                     status's [stale] / [released] rows).
+ * @param out_stats Parallel array (length stats_filter->count); zero-filled
+ *                  on entry and populated when a projection runs (must be
+ *                  non-NULL iff stats_filter is non-NULL)
  * @return Error or NULL on success
  */
 error_t *manifest_reconcile(
     git_repository *repo,
     state_t *state,
     arena_t *arena,
-    const mount_table_t *mounts
+    const mount_table_t *mounts,
+    const string_array_t *stats_filter,
+    manifest_scope_stats_t *out_stats
 );
 
 /**
@@ -545,111 +573,6 @@ error_t *manifest_add_files(
     const string_array_t *filesystem_paths,
     const string_array_t *enabled_profiles,
     size_t *out_synced
-);
-
-/**
- * Sync manifest from Git diff (sync command)
- *
- * Updates manifest table based on changes between old_oid and new_oid for a
- * single profile. This is the core function for updating the manifest after
- * sync operations (pull, rebase, merge).
- *
- * Called by sync command after:
- *   - Fast-forward pull (REMOTE_AHEAD case)
- *   - Divergence resolution (REBASE/MERGE/THEIRS strategies)
- *
- * Algorithm:
- *   Phase 1: Build Context (O(M))
- *     - Load all enabled profiles
- *     - Build fresh precedence view from current Git state (post-sync)
- *     - Use transferred index for O(1) file lookups
- *     - Build profile→oid map
- *     - Load or use cached metadata
- *
- *   Phase 2: Compute Diff (O(D))
- *     - Lookup old and new trees
- *     - Generate Git diff between them
- *
- *   Phase 3: Process Deltas (O(D))
- *     - For additions/modifications: sync (deployed_at preserved if exists, else 0 for new files)
- *     - For deletions: check for fallbacks. No-fallback terminates on
- *       disk reality: purge if the path is absent, else mark LIFECYCLE_DELETED.
- *     - Handle precedence: only sync if profile won the file
- *
- * Deletion & Fallback Logic:
- *   When a file is deleted from profile-A:
- *     1. Check new precedence manifest (built from post-sync state)
- *     2. If another profile (profile-B) now wins: update to profile-B (fallback)
- *     3. If no other profile has it: check current state
- *     4. If profile-A owns it in state: the terminal row state comes
- *        from disk reality — purge when the path is absent (apply has
- *        no filesystem work), LIFECYCLE_DELETED when it is still present
- *        (the workspace asks no authority question for LIFECYCLE_DELETED,
- *        sidestepping the RELEASED pathway, so apply prunes it).
- *     5. Otherwise: skip (file wasn't ours to begin with)
- *
- * Preconditions:
- *   - state MUST have active transaction (via state_open)
- *   - old_oid and new_oid MUST be valid commits for profile's branch
- *   - profile MUST be in enabled_profiles
- *   - Branch HEAD for profile MUST point to new_oid (post-sync state)
- *
- * Postconditions:
- *   - Added/modified files synced (deployed_at preserved if exists, else 0 for new files)
- *   - Deleted files with fallbacks updated to new owner (deployed_at preserved)
- *   - Deleted files without fallbacks terminate on disk reality: the row
- *     is purged if the path is absent on disk, or marked LIFECYCLE_DELETED
- *     if still present (the workspace asks no authority question for
- *     LIFECYCLE_DELETED, so apply prunes it)
- *   - Rows left LIFECYCLE_DELETED that were never witnessed on disk
- *     (observed_at = 0) are reclaimed outright — dotta does not stage the
- *     removal of a path it never confirmed deploying
- *   - Files filtered by .dottaignore are skipped (expected behavior)
- *   - Files won by other profiles are skipped (they'll sync when their changes arrive)
- *   - Tracked directories rebuilt from all enabled profiles
- *   - Transaction remains open (caller commits)
- *
- * Error Conditions:
- *   - ERR_GIT: Git tree lookup or diff failed
- *   - ERR_CRYPTO: Encrypted file but key unavailable
- *   - ERR_STATE: Database operation failed
- *   - ERR_NOMEM: Memory allocation failed
- *
- * Performance: O(M + D) where M = total files in all profiles, D = changed files
- *
- * Convergence Semantics:
- *   Sync updates VWD expected state (blob_oid, metadata) but doesn't deploy to filesystem.
- *   User must run 'dotta apply' which uses runtime divergence analysis to deploy changes.
- *
- * @param repo Repository (must not be NULL)
- * @param state State with active transaction (must not be NULL)
- * @param arena Scratch arena for the fresh precedence view. Allocations
- *              live until the caller destroys the arena (typically command end)
- * @param mounts Per-machine mount table covering enabled_profiles. Must not
- *               be NULL. Sync does not mutate bindings; callers pass ctx->mounts.
- * @param profile Profile being synced (must not be NULL)
- * @param old_oid Old commit before sync (must not be NULL)
- * @param new_oid New commit after sync (must not be NULL)
- * @param enabled_profiles All enabled profiles for precedence (must not be NULL)
- * @param out_synced Output: number of files synced (can be NULL)
- * @param out_removed Output: number of files removed (can be NULL)
- * @param out_fallbacks Output: number of fallback resolutions (can be NULL)
- * @param out_skipped Output: number of custom/ files skipped due to missing prefix (can be NULL)
- * @return Error or NULL on success
- */
-error_t *manifest_sync_diff(
-    git_repository *repo,
-    state_t *state,
-    arena_t *arena,
-    const mount_table_t *mounts,
-    const char *profile,
-    const git_oid *old_oid,
-    const git_oid *new_oid,
-    const string_array_t *enabled_profiles,
-    size_t *out_synced,
-    size_t *out_removed,
-    size_t *out_fallbacks,
-    size_t *out_skipped
 );
 
 /**

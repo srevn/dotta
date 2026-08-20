@@ -503,7 +503,7 @@ static void print_cleanup_results(
     }
 
     if (released_files.count > 0) {
-        output_section(out, OUTPUT_VERBOSE, "Released files (removed from Git externally)");
+        output_section(out, OUTPUT_VERBOSE, "Released files (no longer in Git)");
         for (size_t i = 0; i < released_files.count; i++) {
             output_styled(
                 out, OUTPUT_VERBOSE, "  {cyan}[released]{reset} %s\n",
@@ -861,7 +861,10 @@ static void print_cleanup_preflight_results(
      * --force does not change their fate (see cleanup.h). */
     if (released.count > 0) {
         output_section(out, OUTPUT_NORMAL, "Released files");
-        output_info(out, OUTPUT_NORMAL, "The following files were removed from Git externally:");
+        output_info(
+            out, OUTPUT_NORMAL,
+            "The following files are no longer in their profile's Git branch:"
+        );
 
         for (size_t i = 0; i < released.count; i++) {
             const workspace_item_t *item = released.entries[i];

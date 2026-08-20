@@ -3274,7 +3274,6 @@ error_t *state_transition_files_by_profile(
  * - manifest_persist_profile_head (manifest.c-private:
  *   gitops_resolve_branch_head_oid + this function, for the add/update/
  *   remove entry points that moved one branch by their own commit)
- * - manifest_sync_diff (binds the explicit new_oid passed by sync)
  *
  * Cache discipline: this mutation patches the row cache *in place* rather
  * than invalidating it. Only the commit_oid field of the matching row

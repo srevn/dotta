@@ -1429,9 +1429,10 @@ static error_t *analyze_orphaned_files(workspace_t *ws) {
         divergence_type_t divergence = DIVERGENCE_NONE;
 
         if (state_entry->lifecycle == LIFECYCLE_RELEASED) {
-            /* RELEASED by reconcile: the file was removed from Git
-             * externally and the consistency layer recorded it. No
-             * divergence computation needed — we're not deleting this file.
+            /* RELEASED by the engine: the path left its profile in Git — an
+             * external commit, a pulled removal, a vanished branch — and the
+             * consistency layer recorded it. No divergence computation
+             * needed — we're not deleting this file.
              * It is left on the filesystem and its state entry retires.
              *
              * Presence is not consulted for the state — a row released
@@ -2544,7 +2545,7 @@ error_t *workspace_load(
      * Transaction scoping is internal to manifest_reconcile: uses the
      * caller's transaction when locked, opens a scoped BEGIN IMMEDIATE
      * otherwise. Common case (no drift) is O(P) and zero writes. */
-    err = manifest_reconcile(repo, state, arena, mounts);
+    err = manifest_reconcile(repo, state, arena, mounts, NULL, NULL);
     if (err) {
         return error_wrap(err, "Failed to reconcile manifest with Git");
     }
@@ -2982,7 +2983,7 @@ bool workspace_item_extract_display_info(
             break;
 
         case WORKSPACE_STATE_RELEASED:
-            /* File removed from Git externally — released from management.
+            /* The path left its profile in Git — released from management.
              * File left on filesystem, state entry will be cleaned up. */
             if (tag_count < WORKSPACE_ITEM_MAX_DISPLAY_TAGS) {
                 tags_out[tag_count++] = "released";
@@ -3171,6 +3172,10 @@ error_t *workspace_flush_updates(workspace_t *ws) {
     if (needs_transaction) {
         error_t *err = state_commit(ws->state);
         if (err) {
+            /* A failed COMMIT leaves the transaction open; release it so
+             * the next scoped writer (sync's post-phase reconcile runs
+             * right after this flush) does not inherit it. */
+            state_rollback(ws->state);
             return error_wrap(
                 err, "Failed to commit anchor flush transaction"
             );

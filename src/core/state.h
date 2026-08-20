@@ -64,9 +64,7 @@ typedef enum {
  *   longer resolves — is LIFECYCLE_RELEASED: the deployed copy is left
  *   alone and the row retires. manifest_apply_scope takes the distinction
  *   as its `leftover` argument; no engine code reasons about who moved
- *   Git. One writer is still off this table: manifest_sync_diff marks a
- *   pulled removal DELETED, and leaves with the sync rewrite that
- *   projects through the engine instead.
+ *   Git.
  *
  * Column: virtual_manifest.state / tracked_directories.state.
  */
@@ -979,7 +977,6 @@ error_t *state_transition_files_by_profile(
  * - manifest_persist_profile_head (manifest.c-private:
  *   gitops_resolve_branch_head_oid + this function, for the add/update/
  *   remove entry points that moved one branch by their own commit)
- * - manifest_sync_diff (binds the explicit new_oid passed by sync)
  *
  * @param state State (must not be NULL, must have active transaction)
  * @param profile Profile name (must not be NULL)
@@ -1144,9 +1141,9 @@ error_t *state_update_witness(
  * (manifest_add_files) never call it. On empty state (no DB), no-op
  * success. Attribution does not read counts from here — the orphan pass
  * counts ghosts per-profile from the snapshot it already holds
- * (files_reclaimed). The purge-on-absent in manifest_update_files /
- * manifest_sync_diff is a different decision (terminal state for a known
- * deletion) and does not overlap this one.
+ * (files_reclaimed). The purge-on-absent in manifest_update_files is a
+ * different decision (terminal state for a known deletion) and does not
+ * overlap this one.
  *
  * @param state State (must not be NULL, must have active transaction)
  * @return Error or NULL on success

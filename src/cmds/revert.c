@@ -1012,7 +1012,7 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
 
     output_print(out, OUTPUT_VERBOSE, "\nReverting file...\n");
 
-    /* Perform revert (current_oid is the pre-revert HEAD for manifest sync) */
+    /* Perform revert */
     err = revert_file_in_branch(
         repo,
         config,
@@ -1027,18 +1027,16 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
         goto cleanup;
     }
 
-    /* Step 9: Update manifest if profile is enabled */
-    output_print(out, OUTPUT_VERBOSE, "Updating manifest...\n");
-
-    /* Initialize manifest sync counters */
-    size_t synced = 0, removed = 0, fallbacks = 0;
-
-    /* Check if profile is enabled. The state handle is borrowed from the
-     * dispatcher (READ); the manifest sync below upgrades it to a write
-     * transaction via state_begin rather than closing and reopening the db. */
-    bool profile_enabled = state_has_profile(state, profile);
-
-    if (!profile_enabled) {
+    /* Step 9: Project the manifest if the profile is enabled.
+     *
+     * The revert moved the branch HEAD, so manifest_reconcile finds the
+     * drift and projects every enabled profile at HEAD — the reverted
+     * blob advances the row's expected state, a restored path reactivates
+     * its row, and the deployment anchor stays where apply last confirmed
+     * it, so the workspace reads the result as [stale] until apply
+     * deploys it. The state handle is borrowed from the dispatcher (READ);
+     * reconcile scopes its own write transaction around the projection. */
+    if (!state_has_profile(state, profile)) {
         /* Profile not enabled - manifest update not needed */
         output_success(
             out, OUTPUT_NORMAL, "Reverted %s in profile '%s'",
@@ -1051,125 +1049,25 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
         goto cleanup;
     }
 
-    /* Get new HEAD OID (after revert) */
-    git_oid new_head_oid;
-    git_commit *new_head_commit = NULL;
-    err = gitops_resolve_commit_in_branch(
-        repo, profile, "HEAD", &new_head_oid, &new_head_commit
-    );
+    output_print(out, OUTPUT_VERBOSE, "Updating manifest...\n");
+
+    err = manifest_reconcile(repo, state, ctx->arena, ctx->mounts, NULL, NULL);
     if (err) {
-        /* Non-fatal: Git succeeded, manifest can recover */
+        /* Non-fatal: the revert commit stands; commit_oid still lags, so
+         * the next command's prelude projects again. */
         output_warning(
-            out, OUTPUT_NORMAL, "Failed to get new HEAD for manifest update: %s",
-            error_message(err)
+            out, OUTPUT_NORMAL, "Manifest update failed: %s", error_message(err)
         );
         output_hint(
             out, OUTPUT_NORMAL, "Run 'dotta status' or 'dotta apply' to resync manifest"
         );
         error_free(err);
         err = NULL;
-        goto success;
-    }
-    if (new_head_commit) {
-        git_commit_free(new_head_commit);
-        new_head_commit = NULL;
     }
 
-    /* Upgrade existing handle to a write transaction. profile_enabled==true
-     * proved state has a live DB (state_has_profile returns false for NULL
-     * state), so state_begin is safe without an additional guard. */
-    err = state_begin(state);
-    if (err) {
-        /* Non-fatal */
-        output_warning(
-            out, OUTPUT_NORMAL, "Failed to open transaction for manifest update: %s",
-            error_message(err)
-        );
-        output_hint(
-            out, OUTPUT_NORMAL, "Run 'dotta status' or 'dotta apply' to resync manifest"
-        );
-        error_free(err);
-        err = NULL;
-        goto success;
-    }
-
-    /* Get enabled profiles for manifest sync */
-    string_array_t *enabled_profiles = NULL;
-    err = state_get_profiles(state, &enabled_profiles);
-    if (err) {
-        output_warning(
-            out, OUTPUT_NORMAL, "Failed to get enabled profiles: %s",
-            error_message(err)
-        );
-        state_rollback(state);
-        error_free(err);
-        err = NULL;
-        goto success;
-    }
-
-    /* Sync manifest via diff */
-    error_t *manifest_err = manifest_sync_diff(
-        repo,
-        state,
-        ctx->arena,
-        ctx->mounts,
-        profile,
-        &current_oid,       /* Before revert (captured at step 3) */
-        &new_head_oid,      /* After revert */
-        enabled_profiles,
-        &synced,
-        &removed,
-        &fallbacks,
-        NULL                /* out_skipped - not applicable for revert */
-    );
-
-    if (manifest_err) {
-        /* Non-fatal: Git succeeded, manifest can recover */
-        output_warning(
-            out, OUTPUT_NORMAL, "Manifest sync failed: %s",
-            error_message(manifest_err)
-        );
-        output_hint(
-            out, OUTPUT_NORMAL, "Run 'dotta status' or 'dotta apply' to resync manifest"
-        );
-        error_free(manifest_err);
-        state_rollback(state);
-        string_array_free(enabled_profiles);
-        goto success;
-    }
-
-    /* Commit transaction */
-    err = state_commit(state);
-    string_array_free(enabled_profiles);
-
-    if (err) {
-        /* Non-fatal */
-        output_warning(
-            out, OUTPUT_NORMAL, "Failed to save manifest updates: %s",
-            error_message(err)
-        );
-        output_hint(
-            out, OUTPUT_NORMAL, "Run 'dotta status' or 'dotta apply' to resync manifest"
-        );
-        error_free(err);
-        err = NULL;
-        state_rollback(state);
-        goto success;
-    }
-
-success:
-    /* Display success message */
     output_success(
         out, OUTPUT_NORMAL, "Reverted %s in profile '%s'", resolved_path, profile
     );
-
-    /* Show manifest sync results if available */
-    if (synced > 0 || removed > 0 || fallbacks > 0) {
-        output_info(
-            out, OUTPUT_NORMAL, "Manifest: %zu staged, %zu removed, %zu fallback%s",
-            synced, removed, fallbacks, fallbacks == 1 ? "" : "s"
-        );
-    }
 
     /* Guide user to deploy changes */
     output_info(

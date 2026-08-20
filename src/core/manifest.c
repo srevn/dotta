@@ -829,8 +829,8 @@ cleanup:
  * Note: commit_oid is stored per-profile in enabled_profiles, not per-file.
  * manifest_apply_scope writes it from the view's heads once every row is
  * projected (its step 5b); the verb entry points that project rows
- * outside the engine (add/update/remove, sync_diff) refresh it themselves
- * after their own commit.
+ * outside the engine (add/update/remove) refresh it themselves after
+ * their own commit.
  *
  * Mutation: view_row is mutable so that this function — the one caller
  * authorised to write the row's anchor.observed_at — can stamp the
@@ -1095,10 +1095,8 @@ error_t *manifest_load_tree_files(
  * profile's stored HEAD afterwards. Scope transitions do not come here:
  * manifest_apply_scope records the OID of the tree it projected, for
  * every enabled profile, from the view itself (no second ref lookup).
- *
- * Sites that bypass this helper:
- *   - manifest_detect_drift: read-only HEAD comparison.
- *   - manifest_sync_diff: caller passes the new HEAD explicitly as new_oid.
+ * manifest_detect_drift resolves the same HEADs read-only and writes
+ * nothing, so it does not come here either.
  */
 static error_t *manifest_persist_profile_head(
     git_repository *repo,
@@ -1644,19 +1642,43 @@ static bool manifest_detect_drift(
  * whether any enabled branch moved, and only then scopes a write
  * transaction (when the caller holds none) and runs manifest_apply_scope
  * with leftover = LIFECYCLE_RELEASED — a row that left the projection
- * here was dropped by Git, not by the user. Callers supply only the
- * repo, state, arena and mounts; everything else is derived.
+ * here was dropped by Git, not by the user. Callers supply the repo,
+ * state, arena and mounts, and optionally the engine's stats pair;
+ * everything else is derived.
  */
 error_t *manifest_reconcile(
     git_repository *repo,
     state_t *state,
     arena_t *arena,
-    const mount_table_t *mounts
+    const mount_table_t *mounts,
+    const string_array_t *stats_filter,
+    manifest_scope_stats_t *out_stats
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(state);
     CHECK_NULL(arena);
     CHECK_NULL(mounts);
+
+    /* The engine's pairing rule, checked here too because this function
+     * writes the array itself before the engine is reached. */
+    if ((stats_filter == NULL) != (out_stats == NULL)) {
+        return ERROR(
+            ERR_INVALID_ARG,
+            "manifest_reconcile: stats_filter and out_stats must both be "
+            "NULL or both non-NULL"
+        );
+    }
+
+    /* Establish the stats postcondition up front so every early return
+     * below — empty enabled set, no drift — leaves the array in the same
+     * shape the engine produces: zero counts under each profile's name.
+     * The engine re-establishes the same on its own entry. */
+    if (stats_filter) {
+        for (size_t i = 0; i < stats_filter->count; i++) {
+            memset(&out_stats[i], 0, sizeof(out_stats[i]));
+            out_stats[i].profile = stats_filter->items[i];
+        }
+    }
 
     string_array_t *profiles = NULL;
     error_t *err = state_get_profiles(state, &profiles);
@@ -1672,15 +1694,15 @@ error_t *manifest_reconcile(
     }
 
     /* Common case: every enabled branch is where the manifest left it.
-     * O(P) and no write — the cost profile every workspace load relies on. */
+     * O(P) and no write — the cost profile every workspace load relies on,
+     * and what keeps a sync that pulled nothing free of manifest work. */
     bool drifted = manifest_detect_drift(repo, state, profiles);
     string_array_free(profiles);
     if (!drifted) return NULL;
 
     /* Scope a write transaction only when the caller doesn't already hold
-     * one. Apply runs under dotta_ext_write; sync calls us after its own
-     * state_begin. Workspace (from status/diff/update) holds no transaction
-     * and needs the scoped one. */
+     * one. Apply runs under dotta_ext_write. Workspace (from status/diff/
+     * update), sync and revert hold no transaction and need the scoped one. */
     bool needs_tx = !state_locked(state);
     if (needs_tx) {
         err = state_begin(state);
@@ -1690,17 +1712,22 @@ error_t *manifest_reconcile(
     }
 
     err = manifest_apply_scope(
-        repo, state, arena, mounts, LIFECYCLE_RELEASED, NULL, NULL
+        repo, state, arena, mounts, LIFECYCLE_RELEASED, stats_filter, out_stats
     );
 
     if (needs_tx) {
+        if (!err) {
+            err = state_commit(state);
+            if (err) {
+                err = error_wrap(err, "Failed to commit reconcile transaction");
+            }
+        }
+        /* A failed COMMIT leaves the transaction open (state_commit keeps
+         * in_transaction set), so the rollback below covers both the
+         * engine's failure and the commit's: a scoped transaction never
+         * outlives this call for the next state_locked() check to inherit. */
         if (err) {
             state_rollback(state);
-        } else {
-            error_t *commit_err = state_commit(state);
-            if (commit_err) {
-                err = error_wrap(commit_err, "Failed to commit reconcile transaction");
-            }
         }
     }
 
@@ -2369,335 +2396,6 @@ cleanup:
     /* The view's spine + strings are arena-backed; the caller's arena
      * (typically ctx->arena) reclaims them at command end. Only the
      * heap-allocated index hashmap needs explicit free. */
-    if (fresh && fresh->index) hashmap_free(fresh->index, NULL);
-
-    return err;
-}
-
-/**
- * Sync manifest from Git diff (bulk operation)
- *
- * Updates manifest table based on changes between old_oid and new_oid for a
- * single profile. Uses O(M+D) bulk pattern.
- *
- * This is the core function for updating the manifest after sync operations
- * (pull, rebase, merge). It efficiently processes an entire Git diff by:
- *   1. Building the fresh precedence view from Git ONCE (O(M))
- *   2. Using the view's index for O(1) lookups
- *   3. Processing each delta with fast lookups (O(D))
- *
- * Algorithm:
- *   Phase 1: Build Context
- *     - Load all enabled profiles
- *     - Build fresh precedence view from current Git state (post-sync);
- *       precedence_view_build attributes per-profile metadata to each row
- *       during the tree walk
- *     - The view's index serves O(1) file lookups in the delta loop
- *
- *   Phase 2: Compute Diff
- *     - Lookup old and new trees
- *     - Generate Git diff between them
- *
- *   Phase 3: Process Deltas
- *     - For additions/modifications: sync (deployed_at preserved if exists, else set based on lstat())
- *     - For deletions: check for fallbacks, entries remain for orphan detection if none
- *     - Handle precedence: only sync if profile won the file
- *
- * Transaction: Caller must open transaction (state_open) and commit
- *              (state_save) after calling. This function works within an active
- *              transaction.
- *
- * Convergence: Sync updates VWD expected state (commit_oid, blob_oid) but doesn't
- * Semantics    deploy to filesystem. User must run 'dotta apply' which uses runtime
- *              divergence analysis to deploy changes.
- */
-error_t *manifest_sync_diff(
-    git_repository *repo,
-    state_t *state,
-    arena_t *arena,
-    const mount_table_t *mounts,
-    const char *profile,
-    const git_oid *old_oid,
-    const git_oid *new_oid,
-    const string_array_t *enabled_profiles,
-    size_t *out_synced,
-    size_t *out_removed,
-    size_t *out_fallbacks,
-    size_t *out_skipped
-) {
-    CHECK_NULL(repo);
-    CHECK_NULL(state);
-    CHECK_NULL(arena);
-    CHECK_NULL(mounts);
-    CHECK_NULL(profile);
-    CHECK_NULL(old_oid);
-    CHECK_NULL(new_oid);
-    CHECK_NULL(enabled_profiles);
-
-    error_t *err = NULL;
-
-    /* Resources to clean up */
-    precedence_view_t *fresh = NULL;
-    git_tree *old_tree = NULL;
-    git_tree *new_tree = NULL;
-    git_diff *diff = NULL;
-
-    size_t synced = 0, removed = 0, fallbacks = 0, skipped = 0;
-
-    /* PHASE 1: BUILD CONTEXT (O(M)) */
-    /* 1.1. Build fresh precedence view from Git (post-sync state).
-     *
-     * The precedence builder attributes per-profile metadata to each
-     * row, so the delta loop below feeds manifest_project_row rows
-     * that already carry the correct mode/owner/group/encrypted for
-     * their source profile — fallbacks pick up the right metadata for
-     * the *fallback* profile, not the deleting one. */
-    err = precedence_view_build(repo, enabled_profiles, mounts, arena, &fresh);
-    if (err) {
-        err = error_wrap(err, "Failed to build fresh precedence view");
-        goto cleanup;
-    }
-
-    /* PHASE 2: COMPUTE DIFF (O(D)) */
-    /* 2.1. Extract trees from old and new commits for diff */
-    err = gitops_get_tree_from_commit(repo, old_oid, &old_tree);
-    if (err) {
-        err = error_wrap(err, "Failed to get tree from old commit");
-        goto cleanup;
-    }
-
-    err = gitops_get_tree_from_commit(repo, new_oid, &new_tree);
-    if (err) {
-        err = error_wrap(err, "Failed to get tree from new commit");
-        goto cleanup;
-    }
-
-    /* 2.2. Compute diff between old and new trees */
-    err = gitops_diff_trees(repo, old_tree, new_tree, NULL, &diff);
-    if (err) {
-        err = error_wrap(err, "Failed to diff trees");
-        goto cleanup;
-    }
-
-    size_t num_deltas = git_diff_num_deltas(diff);
-
-    /* PHASE 3: PROCESS DELTAS (O(D)) */
-    for (size_t i = 0; i < num_deltas; i++) {
-        const git_diff_delta *delta = git_diff_get_delta(diff, i);
-        if (!delta) {
-            continue;
-        }
-
-        /* Determine storage path based on delta type */
-        const char *storage_path = delta->new_file.path;
-        if (delta->status == GIT_DELTA_DELETED) {
-            storage_path = delta->old_file.path;
-        }
-
-        /* Resolve filesystem path against the mount table. Two distinct
-         * outcomes route differently:
-         *
-         *   MOUNT_RESOLVE_UNBOUND — custom/ entry but `profile` has
-         *                   no target binding. Counted as skipped so
-         *                   the caller can surface "deferred until
-         *                   --target is set" in the user-visible report.
-         *   err != NULL   — malformed storage path (ERR_INTERNAL from
-         *                   mount_decode_label) or allocation failure.
-         *                   Skip silently — the Git commit already
-         *                   advanced the branch, the next reconcile
-         *                   will revisit. */
-        mount_resolve_outcome_t outcome;
-        const char *filesystem_path = NULL;
-        err = mount_resolve(
-            mounts, profile, storage_path, arena, &outcome, &filesystem_path
-        );
-        if (err) {
-            error_free(err);
-            err = NULL;
-            continue;
-        }
-        if (outcome == MOUNT_RESOLVE_UNBOUND) {
-            skipped++;
-            continue;
-        }
-
-        /* Handle based on delta type */
-        if (delta->status == GIT_DELTA_ADDED || delta->status == GIT_DELTA_MODIFIED) {
-            /* ADDITION / MODIFICATION */
-
-            /* Lookup in fresh view (O(1)) */
-            void *idx_ptr = hashmap_get(fresh->index, filesystem_path);
-            state_file_entry_t *entry = NULL;
-            if (idx_ptr) {
-                size_t idx = (size_t) (uintptr_t) idx_ptr - 1;
-                entry = &fresh->entries[idx];
-            }
-
-            if (!entry) {
-                /* File not in fresh view (filtered by .dottaignore or other rules)
-                 * This is expected behavior - skip gracefully */
-                continue;
-            }
-
-            /* Check precedence: does the synced profile win?
-             *
-             * This is critical: if a different profile won precedence for this file,
-             * we should NOT update the manifest entry. The winning profile will handle
-             * it when its changes are synced. */
-            if (entry->profile && strcmp(entry->profile, profile) != 0) {
-                /* Different profile won precedence - skip this file */
-                continue;
-            }
-
-            /* Sync entry to state. deployed_at is preserved by SQL UPSERT on
-             * UPDATE; 0 is used for INSERT (new file, never deployed). old_profile
-             * auto-captured by SQL when the owning profile changes. */
-            err = manifest_project_row(repo, state, entry);
-            if (err) {
-                err = error_wrap(
-                    err, "Failed to sync '%s' to manifest", filesystem_path
-                );
-                goto cleanup;
-            }
-
-            synced++;
-
-        } else if (delta->status == GIT_DELTA_DELETED) {
-            /* DELETION */
-
-            /* Check if file exists in the fresh view from OTHER profiles
-             * (fallback check)
-             *
-             * When a file is deleted from one profile, it might still exist in another
-             * lower-precedence profile. If so, that profile now "wins" and we should
-             * update the manifest to point to it. */
-            void *idx_ptr = hashmap_get(fresh->index, filesystem_path);
-            state_file_entry_t *entry = NULL;
-            if (idx_ptr) {
-                size_t idx = (size_t) (uintptr_t) idx_ptr - 1;
-                entry = &fresh->entries[idx];
-            }
-
-            if (entry && entry->profile && strcmp(entry->profile, profile) != 0) {
-                /* Fallback found — update manifest to the new profile owner.
-                 * deployed_at preserved by SQL UPSERT, old_profile auto-captured
-                 * by SQL when the owning profile changes. */
-                err = manifest_project_row(repo, state, entry);
-                if (err) {
-                    err = error_wrap(
-                        err, "Failed to sync fallback for '%s'", filesystem_path
-                    );
-                    goto cleanup;
-                }
-
-                /* Track profile reassignment for user visibility */
-                fallbacks++;
-
-            } else {
-                /* No fallback exists - check if we own this file in current state */
-
-                state_file_entry_t *state_entry = NULL;
-                err = state_get_file(state, filesystem_path, &state_entry);
-
-                if (err) {
-                    if (err->code == ERR_NOT_FOUND) {
-                        /* File not in state (never deployed) - nothing to do */
-                        error_free(err);
-                        err = NULL;
-                        continue;
-                    }
-                    /* Fatal state error - propagate */
-                    goto cleanup;
-                }
-
-                /* Check if this profile owns this file */
-                if (strcmp(state_entry->profile, profile) == 0) {
-                    /* We own the path and no enabled profile provides a
-                     * fallback. Decide the terminal row state from disk
-                     * reality:
-                     *
-                     *   absent  → purge (apply has nothing to clean up)
-                     *   present → LIFECYCLE_DELETED (the workspace asks no
-                     *             authority question for LIFECYCLE_DELETED,
-                     *             whose tree check would otherwise misroute
-                     *             this internal deletion through the
-                     *             external-loss RELEASED pathway, so apply
-                     *             prunes it).
-                     *
-                     * ERR_NOT_FOUND from state_remove_file means the row
-                     * already vanished (e.g. a concurrent reconcile
-                     * released it). The desired end state is reached —
-                     * swallow.
-                     *
-                     * All other failures are non-fatal: the Git commit is
-                     * already applied to the local branch, and
-                     * manifest_reconcile will re-examine the row on the
-                     * next status. */
-                    struct stat st;
-                    if (lstat(filesystem_path, &st) != 0 && errno == ENOENT) {
-                        err = state_remove_file(state, filesystem_path);
-                        if (err && error_code(err) == ERR_NOT_FOUND) {
-                            error_free(err);
-                            err = NULL;
-                        }
-                    } else {
-                        err = state_set_file_state(
-                            state, filesystem_path, LIFECYCLE_DELETED
-                        );
-                    }
-                    if (err) {
-                        /* Non-fatal: log warning but continue */
-                        fprintf(
-                            stderr, "warning: failed to finalize deletion of '%s': %s\n",
-                            filesystem_path, error_message(err)
-                        );
-                        error_free(err);
-                        err = NULL;  /* Clear error, continue operation */
-                    }
-
-                    removed++;
-                }
-
-                state_free_entry(state_entry);
-            }
-        }
-    }
-
-    /* Set output counters */
-    if (out_synced) *out_synced = synced;
-    if (out_removed) *out_removed = removed;
-    if (out_fallbacks) *out_fallbacks = fallbacks;
-    if (out_skipped) *out_skipped = skipped;
-
-    /* PHASE 4: Update per-profile commit_oid in enabled_profiles to match the new HEAD.
-     * Use new_oid directly — it's the explicit sync target passed by the caller,
-     * and matches the branch HEAD that gitops_resolve_branch_head_oid would resolve. */
-    err = state_set_profile_commit_oid(state, profile, new_oid);
-    if (err) {
-        err = error_wrap(
-            err, "Failed to sync commit_oid for profile '%s'", profile
-        );
-        goto cleanup;
-    }
-
-    /* PHASE 5: Retire rows marked DELETED above that were never witnessed. */
-    err = state_reclaim_unmaterialized_files(state);
-    if (err) goto cleanup;
-
-    /* PHASE 6: Rebuild tracked directories */
-    err = manifest_sync_directories(repo, state, arena, enabled_profiles, mounts);
-    if (err) {
-        goto cleanup;
-    }
-
-cleanup:
-    /* Free resources in reverse order of acquisition. The view's spine +
-     * strings are arena-backed; the caller's arena (typically ctx->arena)
-     * reclaims them at command end. Only the heap-allocated index hashmap
-     * needs explicit free. */
-    if (diff) git_diff_free(diff);
-    if (new_tree) git_tree_free(new_tree);
-    if (old_tree) git_tree_free(old_tree);
     if (fresh && fresh->index) hashmap_free(fresh->index, NULL);
 
     return err;

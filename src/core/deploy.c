@@ -111,7 +111,8 @@ static bool deploy_needs_work(const workspace_item_t *item) {
             return false;
 
         case WORKSPACE_STATE_RELEASED:
-            /* File removed from Git externally, released from management.
+            /* The path left its profile in Git (an external commit, a pulled
+             * removal, a vanished branch) and was released from management.
              * Never needs deployment — cleanup handles state entry removal. */
             return false;
     }

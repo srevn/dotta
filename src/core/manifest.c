@@ -52,7 +52,7 @@
  * need lookup).
  *
  * Rows are state_file_entry_t — the same shape consumed by the persistence
- * layer, so manifest_project_row can pass a row through to state_add_file
+ * layer, so the engine passes a row straight through to state_add_file
  * with no field translation.
  *
  * Spine growth uses arena_calloc + memcpy (abandon-and-realloc): the old
@@ -783,109 +783,6 @@ cleanup:
 }
 
 /**
- * Sync a precedence-view row through to the manifest table
- *
- * SCOPE ("Pure VWD-cache writer, plus observation stamp on INSERT"):
- *   This function is authoritative for the VWD-cache columns (storage_path,
- *   profile, blob_oid, type, mode, owner, group, encrypted, state). It NEVER
- *   advances the deployment anchor (deployed_blob_oid, deployed_at, stat_*).
- *   Callers needing to advance the anchor must follow with
- *   state_update_anchor(), which is its sole legitimate writer.
- *
- *   It does stamp anchor.observed_at in-place on the row when the target
- *   path exists on disk (see step 1 of the body). The UPSERT's monotonic
- *   CASE preserves any existing non-zero observed_at on UPDATE, so repeat
- *   calls are idempotent on that column.
- *
- *   Reassignment tracking is automatic: the UPSERT's old_profile CASE
- *   captures the prior profile into old_profile when the profile column
- *   changes, and preserves the existing value otherwise. Clearing is a
- *   separate concern, handled by state_clear_old_profile() once the
- *   user has been shown the reassignment.
- *
- * Single-source-of-truth contract: the row IS the source. mode, owner,
- * group, and encrypted are read directly from view_row — precedence_view_build
- * has already attributed each row to its source profile and applied that
- * profile's metadata.json claim during the tree walk. No metadata side-
- * channel is consulted here, which is what keeps storage_path collisions
- * across profiles with distinct target values from cross-contaminating
- * the row (each row's metadata-owned fields belong to exactly one profile).
- *
- * The `encrypted` field specifically is a metadata-projected cache: the
- * upstream cache is `metadata.json:encrypted`, populated byte-derived at
- * the write boundary (cmds/add.c, cmds/update.c via
- * content_store_file_to_worktree's out_kind). Reconcile projects it through
- * precedence_view_apply_metadata without re-classifying the blob — runtime trusts
- * the cache; write-time establishes the invariant. See
- * docs/encryption-spec.md → "Cache hierarchy and write-time invariant".
- *
- * The anchor columns (deployed_blob_oid, deployed_at, stat_*) are left
- * untouched — the UPSERT preserves them on UPDATE, and on INSERT they
- * start at zero. Lifecycle stamping is state_update_anchor's job: the
- * capture-from-disk verbs (manifest_add_files, manifest_update_files)
- * follow the engine with a state_update_anchor(..., now) on the rows
- * they won, which stamps deployed_at and the stat triple.
- *
- * Note: commit_oid is stored per-profile in enabled_profiles, not per-file.
- * manifest_apply_scope writes it from the view's heads once every row is
- * projected (its step 5b); nothing projects rows outside the engine.
- *
- * Mutation: view_row is mutable so that this function — the one caller
- * authorised to write the row's anchor.observed_at — can stamp the
- * observation directly. No other field is mutated; downstream consumers
- * of view_row see the stamp as part of the row's post-call value.
- *
- * @param repo Git repository
- * @param state State handle (with active transaction)
- * @param view_row Precedence-view row (mutable: anchor.observed_at is stamped
- *                 in place); MUST have blob_oid, profile, and metadata-owned
- *                 fields populated (guaranteed for rows from precedence_view_build)
- * @return Error or NULL on success
- */
-static error_t *manifest_project_row(
-    git_repository *repo,
-    state_t *state,
-    state_file_entry_t *view_row
-) {
-    CHECK_NULL(repo);
-    CHECK_NULL(state);
-    CHECK_NULL(view_row);
-    CHECK_NULL(view_row->profile);
-
-    /* Probe the filesystem so we can stamp the observation signal on
-     * INSERT. observed_at answers "has dotta ever lstat-confirmed this
-     * path on disk in scope?" — the classifier uses it to distinguish
-     * a ghost file (never seen, classifies UNDEPLOYED) from a file the
-     * user has removed (seen, classifies DELETED). The UPSERT's CASE
-     * preserves existing non-zero observed_at on UPDATE, so this lstat
-     * only matters on INSERT; repeat reconciles are idempotent.
-     *
-     * Gate is strict: only a successful lstat counts as an observation.
-     * ENOENT and every other lstat failure leave observed_at = 0, which
-     * keeps ghost files out of DELETED classification.
-     *
-     * Stamp is in-place: the view's row is read-only after construction
-     * except for this monotonic field, and no consumer between build and
-     * free reads anchor.observed_at — they read state-DB values via the
-     * workspace classifier, which queries the row that this UPSERT just
-     * wrote. */
-    struct stat probe_st;
-    if (lstat(view_row->filesystem_path, &probe_st) == 0) {
-        view_row->anchor.observed_at = time(NULL);
-    }
-
-    error_t *err = state_add_file(state, view_row);
-    if (err) {
-        err = error_wrap(
-            err, "Failed to sync manifest entry for %s",
-            view_row->storage_path
-        );
-    }
-
-    return err;
-}
-
-/**
  * Load a single Git tree's files into the public state_files_t carrier.
  *
  * The historical-diff path consumes a tree-built file slice that mirrors
@@ -1201,7 +1098,7 @@ static error_t *manifest_sync_directories(
                 break;
             }
 
-            /* Scope-entry observation probe — mirror of manifest_project_row's
+            /* Scope-entry observation probe — mirror of the engine's per-row
              * lstat. Success of any type counts: a file squatting on the
              * path is still "something was here"; type divergence is a
              * separate signal. Failure leaves observed_at at sentinel-zero
@@ -1249,30 +1146,85 @@ cleanup:
 }
 
 /**
+ * Would projecting `row` over `old` change nothing?
+ *
+ * True when the UPSERT state_add_file issues for `row` would rewrite
+ * every column it writes to its current value: `old` is ACTIVE (the
+ * state column is written ACTIVE), every VWD-cache column —
+ * storage_path, profile, blob_oid, type, mode, owner, group, encrypted —
+ * equals the view's, and a witness is on record (observed_at is
+ * monotonic once set, so no probe could move it). The columns the UPSERT
+ * does not take from the row need no comparison: old_profile's CASE
+ * preserves it when the profile is unchanged, and the deployment anchor
+ * is preserved on every UPDATE. The engine leaves such a row alone — no
+ * probe, no write.
+ *
+ * Exact by construction: a row that differs in any written column, is
+ * not ACTIVE, or has never been witnessed (the probe may flip it this
+ * time) is not settled.
+ *
+ * @param old Snapshot row at the same filesystem_path, or NULL
+ * @param row View row about to be projected
+ * @return true iff the projection can skip the row
+ */
+static bool manifest_row_settled(
+    const state_file_entry_t *old,
+    const state_file_entry_t *row
+) {
+    if (!old || old->lifecycle != LIFECYCLE_ACTIVE || old->anchor.observed_at == 0) {
+        return false;
+    }
+    if (!git_oid_equal(&old->blob_oid, &row->blob_oid) ||
+        old->type != row->type ||
+        old->mode != row->mode ||
+        old->encrypted != row->encrypted ||
+        strcmp(old->storage_path, row->storage_path) != 0 ||
+        strcmp(old->profile, row->profile) != 0) {
+        return false;
+    }
+
+    /* owner and group are optional: equal when both are unset, or both
+     * set to the same name. */
+    if ((old->owner == NULL) != (row->owner == NULL) ||
+        (old->owner && strcmp(old->owner, row->owner) != 0)) {
+        return false;
+    }
+    if ((old->group == NULL) != (row->group == NULL) ||
+        (old->group && strcmp(old->group, row->group) != 0)) {
+        return false;
+    }
+
+    return true;
+}
+
+/**
  * Project the enabled-profile scope into virtual_manifest
  *
  * The one projection engine. The enabled set (membership and order) is
  * read from state; the caller makes it authoritative before the call and
  * names, through `leftover`, what a row that falls out of the projection
  * means (see the header for why that is a parameter and not derived).
- * Idempotent: applying the same scope twice is a no-op — every UPSERT
- * rewrites the same value and every HEAD persist the same OID.
+ * Idempotent: applying the same scope twice is a no-op — every row is
+ * settled the second time and every HEAD persist writes the same OID.
  *
  * Algorithm:
  *   1. Read the enabled set from state.
  *   2. Build the fresh precedence view at each branch's HEAD.
  *      precedence_view_build attributes per-profile metadata to each row
- *      during the tree walk; manifest_project_row then writes the row's
- *      already-attributed mode/owner/group/encrypted directly to the DB.
- *      A branch that does not exist contributes no rows and leaves its
- *      heads[] slot zero.
- *   3. Snapshot current virtual_manifest (arena-backed, every lifecycle);
- *      when stats are requested, index it by filesystem_path.
- *   4. UPSERT every view row. The SQL UPSERT preserves the deployment
- *      anchor on UPDATE, auto-captures old_profile when the profile
- *      column changes, and unconditionally writes state=LIFECYCLE_ACTIVE —
- *      a path that re-entered the projection is ACTIVE whatever lifecycle
- *      it carried.
+ *      during the tree walk; step 4 writes the row's already-attributed
+ *      mode/owner/group/encrypted directly to the DB. A branch that does
+ *      not exist contributes no rows and leaves its heads[] slot zero.
+ *   3. Snapshot current virtual_manifest (arena-backed, every lifecycle)
+ *      and index it by filesystem_path.
+ *   4. UPSERT every view row whose snapshot row would change — a settled
+ *      row (ACTIVE, witnessed, every VWD column already at the view's
+ *      value) is skipped without a probe unless stats are requested for
+ *      its profile. One lstat per probed row stamps the witness and
+ *      feeds the attributed present/missing fan-out. The SQL UPSERT
+ *      preserves the deployment anchor on UPDATE, auto-captures
+ *      old_profile when the profile column changes, and unconditionally
+ *      writes state=LIFECYCLE_ACTIVE — a path that re-entered the
+ *      projection is ACTIVE whatever lifecycle it carried.
  *   5. Leftover pass over the snapshot: every ACTIVE row not in the view
  *      takes `leftover`; a non-ACTIVE row outside the view is preserved.
  *   5b. Record, for every profile whose branch resolved, the OID the view
@@ -1352,16 +1304,35 @@ error_t *manifest_apply_scope(
         goto cleanup;
     }
 
-    /* Step 3: Snapshot the current virtual_manifest rows (all states).
+    /* Step 3: Snapshot the current virtual_manifest rows (all states) and
+     * index them by filesystem_path.
      *
-     * Captured BEFORE step 4's UPSERTs so the leftover pass sees pre-
-     * projection state — "was this path previously managed?" is a
-     * function of the snapshot, not of the in-flight UPDATE that step
-     * 4 may have just committed. Arena-allocated: no explicit free. */
+     * Captured BEFORE step 4's UPSERTs so both passes see pre-projection
+     * state. Step 4 asks, per view row, what the UPSERT would change —
+     * "already ACTIVE at these values?" decides whether the row is
+     * written at all, and the attribution splits claimed into added /
+     * updated / unchanged. Step 5 asks which rows left. Arena-allocated:
+     * no explicit free. The index borrows the snapshot's arena-backed
+     * paths as keys; values point into the snapshot. */
     err = state_get_all_files(state, arena, &old_entries, &old_count);
     if (err) {
         err = error_wrap(err, "Failed to snapshot current manifest");
         goto cleanup;
+    }
+
+    old_index = hashmap_borrow(old_count > 0 ? old_count : 16);
+    if (!old_index) {
+        err = ERROR(ERR_MEMORY, "Failed to create manifest snapshot index");
+        goto cleanup;
+    }
+    for (size_t i = 0; i < old_count; i++) {
+        err = hashmap_set(
+            old_index, old_entries[i].filesystem_path, &old_entries[i]
+        );
+        if (err) {
+            err = error_wrap(err, "Failed to index manifest snapshot");
+            goto cleanup;
+        }
     }
 
     /* Stats attribution index. Maps profile name → (array index + 1).
@@ -1400,36 +1371,36 @@ error_t *manifest_apply_scope(
                 goto cleanup;
             }
         }
-
-        /* Gain-side attribution needs the row each view entry replaces:
-         * "new to the manifest" and "expected state moved" are both
-         * questions about the old row. Keys borrow the snapshot's arena-
-         * backed paths; values point into the snapshot. */
-        old_index = hashmap_borrow(old_count > 0 ? old_count : 16);
-        if (!old_index) {
-            err = ERROR(ERR_MEMORY, "Failed to create manifest snapshot index");
-            goto cleanup;
-        }
-        for (size_t i = 0; i < old_count; i++) {
-            err = hashmap_set(
-                old_index, old_entries[i].filesystem_path, &old_entries[i]
-            );
-            if (err) {
-                err = error_wrap(err, "Failed to index manifest snapshot");
-                goto cleanup;
-            }
-        }
     }
 
     /* Step 4: Project every row in the new view.
      *
+     * The row IS the source. precedence_view_build attributed each row
+     * to its winning profile and applied that profile's metadata.json
+     * claim (mode, owner, group, encrypted) during the tree walk, so no
+     * metadata side channel is consulted here — which is what keeps
+     * storage_path collisions across profiles with distinct targets
+     * from cross-contaminating a row. The `encrypted` column in
+     * particular is a metadata-projected cache: its upstream is
+     * metadata.json:encrypted, classified byte-derived at the write
+     * boundary (cmds/add.c, cmds/update.c via
+     * content_store_file_to_worktree's out_kind), and the engine
+     * projects it without re-classifying the blob — runtime trusts the
+     * cache, write-time establishes the invariant (docs/encryption-spec.md
+     * → "Cache hierarchy and write-time invariant").
+     *
      * UPSERT semantics (see state.c::sql_insert):
      *   - New path: INSERT with state=ACTIVE, deployed_at=0, anchor unset.
-     *   - Existing path: UPDATE VWD-cache columns (storage_path, profile,
-     *     blob_oid, type, mode, owner, group, encrypted, state), preserve
-     *     the deployment anchor (deployed_blob_oid, deployed_at, stat_*).
-     *     The CASE on old_profile auto-captures the prior profile when
-     *     the profile column changes, and preserves it otherwise.
+     *   - Existing path: UPDATE the VWD-cache columns (storage_path,
+     *     profile, blob_oid, type, mode, owner, group, encrypted, state);
+     *     preserve the deployment anchor (deployed_blob_oid, deployed_at,
+     *     stat_*) — the engine is a pure VWD-cache writer, never a
+     *     confirmation event; state_update_anchor is the anchor's sole
+     *     writer, and the capture-from-disk verbs follow the engine with
+     *     it on the rows they won. The CASE on old_profile auto-captures
+     *     the prior profile when the profile column changes, and
+     *     preserves it otherwise; clearing is state_clear_old_profile's,
+     *     once the user has been shown the reassignment.
      *   - state column overwritten with LIFECYCLE_ACTIVE unconditionally,
      *     which reactivates any INACTIVE, DELETED or RELEASED row whose
      *     path re-entered the projection (a profile re-enable, a revert,
@@ -1437,57 +1408,86 @@ error_t *manifest_apply_scope(
      *     workspace reads the returning file as clean or [stale] by
      *     content, never as a fresh deployment.
      *
-     * Gain-side stats are attributed here: files_claimed counts every
-     * row the filtered profile owns; lstat drives the user-visible
-     * "already deployed vs needs deployment" fan-out; the snapshot
-     * lookup splits claimed into added / updated / unchanged. lstat is
-     * NOT a confirmation event — the anchor remains unadvanced here. */
+     * A settled row (manifest_row_settled) is left alone — no probe, no
+     * write — so the writes are the rows that moved, not the view. An
+     * attributed row is still probed when settled: the caller asked how
+     * many of its rows are on disk, and that is the probe's other job.
+     *
+     * One probe per row, and only for rows that need it. It stamps the
+     * observation signal in place before the UPSERT: observed_at answers
+     * "has dotta ever lstat-confirmed this path on disk in scope?", and
+     * the classifier reads it to tell a ghost (never seen, classifies
+     * UNDEPLOYED) from a file the user removed (seen, classifies
+     * DELETED). The UPSERT's CASE keeps any earlier non-zero value, so
+     * repeat projections are idempotent on the column; only a successful
+     * lstat counts — ENOENT and every other failure leave observed_at at
+     * 0, which keeps ghosts out of DELETED classification. The same
+     * probe drives the attributed fan-out (files_present / files_missing
+     * / access_errors — the user-visible "already on disk vs needs
+     * deployment"), and it is NOT a confirmation event: the anchor stays
+     * where it was. The snapshot lookup splits files_claimed into
+     * added / updated / unchanged. */
+    time_t now = time(NULL);
+
     for (size_t i = 0; i < new_view->count; i++) {
         state_file_entry_t *entry = &new_view->entries[i];
+        const state_file_entry_t *old = hashmap_get(
+            old_index, entry->filesystem_path
+        );
+        bool settled = manifest_row_settled(old, entry);
 
+        manifest_scope_stats_t *slot = NULL;
         if (stats_map) {
             void *p = hashmap_get(stats_map, entry->profile);
-            if (p) {
-                size_t idx = (size_t) (uintptr_t) p - 1;
-                out_stats[idx].files_claimed++;
+            if (p) slot = &out_stats[(size_t) (uintptr_t) p - 1];
+        }
 
-                struct stat st;
-                if (lstat(entry->filesystem_path, &st) == 0) {
-                    /* File present on disk; match vs profile blob is
-                     * unverified — workspace divergence analysis
-                     * (status/diff/apply) decides. */
-                    out_stats[idx].files_present++;
-                } else if (errno == ENOENT) {
-                    out_stats[idx].files_missing++;
-                } else {
-                    /* Inaccessible (permission denied, I/O error, …).
-                     * Degrade gracefully: the row is still managed,
-                     * and the user sees the access error count. Count
-                     * as absent so files_claimed stays the sum of the
-                     * on-disk and absent fan-outs. */
-                    out_stats[idx].files_missing++;
-                    out_stats[idx].access_errors++;
-                }
+        if (slot) {
+            slot->files_claimed++;
 
-                /* What the UPSERT below does to this path: insert or
-                 * reactivate (added), move the expected state apply acts
-                 * on (updated), or rewrite the same value (neither).
-                 * Owner/group travel with a metadata commit rare enough
-                 * to ride on the workspace's verdict instead. */
-                const state_file_entry_t *old = hashmap_get(
-                    old_index, entry->filesystem_path
-                );
-                if (!old || old->lifecycle != LIFECYCLE_ACTIVE) {
-                    out_stats[idx].files_added++;
-                } else if (!git_oid_equal(&old->blob_oid, &entry->blob_oid) ||
-                    old->type != entry->type ||
-                    old->mode != entry->mode) {
-                    out_stats[idx].files_updated++;
-                }
+            /* What the UPSERT does to this path: insert or reactivate
+             * (added), move the expected state apply acts on (updated),
+             * or rewrite the same value (neither). Owner/group travel
+             * with a metadata commit rare enough to ride on the
+             * workspace's verdict instead. */
+            if (!old || old->lifecycle != LIFECYCLE_ACTIVE) {
+                slot->files_added++;
+            } else if (!git_oid_equal(&old->blob_oid, &entry->blob_oid) ||
+                old->type != entry->type ||
+                old->mode != entry->mode) {
+                slot->files_updated++;
             }
         }
 
-        err = manifest_project_row(repo, state, entry);
+        /* Nothing to write and nothing to count: the row is not probed. */
+        if (settled && !slot) continue;
+
+        struct stat st;
+        bool present = (lstat(entry->filesystem_path, &st) == 0);
+
+        if (slot) {
+            if (present) {
+                /* On disk; whether it matches the profile blob is
+                 * unverified — workspace divergence analysis
+                 * (status/diff/apply) decides. */
+                slot->files_present++;
+            } else {
+                /* Absent, or inaccessible (permission denied, I/O
+                 * error, …). Degrade gracefully: the row is still
+                 * managed, and the user sees the access error count.
+                 * Counted as missing so files_claimed stays the sum
+                 * of the on-disk and absent fan-outs. */
+                slot->files_missing++;
+                if (errno != ENOENT) slot->access_errors++;
+            }
+        }
+
+        /* Counted, and already at the view's values: nothing to write. */
+        if (settled) continue;
+
+        if (present) entry->anchor.observed_at = now;
+
+        err = state_add_file(state, entry);
         if (err) {
             err = error_wrap(
                 err, "Failed to project '%s' during scope projection",

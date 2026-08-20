@@ -512,7 +512,7 @@ static error_t *prepare_statements(state_t *state) {
      *
      * observed_at has the monotonic-once-set semantic: the CASE preserves
      * any existing non-zero value, otherwise accepts the new value. This
-     * lets manifest_project_row's lstat-gated stamp seed the first
+     * lets the projection engine's lstat-gated stamp seed the first
      * observation on INSERT, while every subsequent UPSERT (UPDATE path)
      * is a no-op on the column even if the caller passes a different
      * timestamp. The classifier reads this column to distinguish ghost
@@ -2397,12 +2397,11 @@ error_t *state_remove_directory(state_t *state, const char *filesystem_path) {
  *
  * Bulk operation for the manifest layer's directory sweep.
  *
- * Only LIFECYCLE_ACTIVE rows are downgraded to LIFECYCLE_INACTIVE. LIFECYCLE_DELETED and
- * LIFECYCLE_RELEASED are preserved — they represent downstream intent (controlled
- * deletion via remove command, authority loss from external Git changes) that
- * must survive a scope-reconciliation sweep. Downgrading them would re-engage
- * the workspace's orphan authority check and can flip a staged delete into a
- * RELEASE when the owning branch is gone.
+ * Only LIFECYCLE_ACTIVE rows are downgraded to LIFECYCLE_INACTIVE.
+ * LIFECYCLE_DELETED is preserved: it records a deletion dotta itself
+ * ordered (remove --delete-files), intent that must survive a sweep the
+ * rebuild runs on every projection. Directory rows carry no
+ * LIFECYCLE_RELEASED — see the state_lifecycle_t vocabulary note.
  *
  * @param state State handle (must not be NULL, must have active transaction)
  * @return Error or NULL on success

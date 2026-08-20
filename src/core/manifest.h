@@ -145,6 +145,11 @@ typedef struct {
  *     that branch's HEAD.
  *   - A row whose path re-entered the projection is ACTIVE whatever
  *     lifecycle it carried (the UPSERT writes state unconditionally).
+ *   - A settled row — ACTIVE, witnessed, every VWD-cache column already
+ *     at the view's value — is not written: the UPSERT would rewrite
+ *     identical values and preserve everything else, so the writes of
+ *     a projection are the rows that moved, not the view. The
+ *     postconditions below hold either way.
  *   - An ACTIVE row whose path left the projection is `leftover`.
  *     LIFECYCLE_INACTIVE / LIFECYCLE_DELETED / LIFECYCLE_RELEASED rows
  *     that stay outside are preserved — their intent signal predates
@@ -205,11 +210,13 @@ typedef struct {
  * Performance: O(P + M + S + D)
  *   P = enabled profiles (one ref lookup + one tree load each)
  *   M = files in the new view (one precedence-view build, one metadata
- *       load, one witness lstat and one UPSERT per row)
- *   S = rows in virtual_manifest (one state_get_all_files for the
- *       leftover pass; indexed when stats are requested)
+ *       load, one snapshot lookup per row; one witness lstat and one
+ *       UPSERT per row that is written or attributed)
+ *   S = rows in virtual_manifest (one state_get_all_files, indexed by
+ *       filesystem_path, for the settled test and the leftover pass)
  *   D = directories across enabled profiles (one directory rebuild)
- *   Low single-digit milliseconds for a few hundred rows.
+ *   Low single-digit milliseconds for a few hundred rows; a projection
+ *   that finds one row moved writes one row.
  *
  * @param repo Git repository (must not be NULL)
  * @param state State handle with active transaction (must not be NULL)

@@ -9,10 +9,13 @@
  * Directories trust the tracked_directories state column, maintained by the
  * manifest layer's directory rebuild (sweep + re-projection + ghost reclaim).
  * Both are repaired in state by the load-time reconcile when an enabled
- * profile's branch has moved (external Git changes).
- * That maintenance covers the enabled set's active rows — the only rows with
- * a per-profile commit_oid baseline — so orphan analysis observes Git
- * authority for its own rows instead of trusting a cache nothing repairs.
+ * profile's branch has moved — an external commit, a pull, a revert: the
+ * projection engine projects every enabled profile at HEAD.
+ * That maintenance covers the enabled set — the only profiles with a
+ * commit_oid baseline — so orphan analysis observes Git authority for the
+ * rows the engine leaves alone (a disabled profile's, a dead branch's, a
+ * re-enabled profile's INACTIVE leftovers) instead of trusting a cache
+ * nothing repairs.
  */
 
 #include "core/workspace.h"
@@ -874,7 +877,7 @@ static error_t *analyze_file_divergence(
      * Use anchor.observed_at to distinguish lifecycle states for missing
      * files. observed_at is stamped the first time dotta lstat-confirms
      * the path on disk in scope. Writers:
-     *   - manifest_project_row INSERT path (scope-entry observation).
+     *   - the projection engine's INSERT path (scope-entry observation).
      *   - state_update_anchor (every observation/ownership advance — apply
      *     deploy, adoption, add, update, CMP_EQUAL flush).
      * All writes go through the SQL CASE that preserves the first
@@ -1360,12 +1363,13 @@ static error_t *compute_orphan_authority(
  *
  * Per orphan, in order: presence (one lstat), Git authority
  * (compute_orphan_authority — asked for present rows that are neither
- * reconcile's RELEASED nor dotta's own DELETED), divergence (disk against
- * the row's VWD cache). The three feed one item: state (ORPHANED or
- * RELEASED), divergence bits, on_filesystem. RELEASED therefore has two
- * sources that read identically downstream — the lifecycle column, for the
- * rows the consistency layer covers, and the load-time observation, for the
- * rows it does not.
+ * the engine's RELEASED nor dotta's own DELETED), divergence (disk
+ * against what dotta last deployed — the anchor, or the VWD blob for a
+ * row it never deployed; compute_orphan_divergence). The three feed one
+ * item: state (ORPHANED or RELEASED), divergence bits, on_filesystem.
+ * RELEASED therefore has two sources that read identically downstream —
+ * the lifecycle column, for the rows the consistency layer covers, and
+ * the load-time observation, for the rows it does not.
  *
  * Each orphan is tagged with profile_enabled — whether its profile is in
  * the workspace's enabled set. It is a label, not a filter: every reader

@@ -71,6 +71,14 @@
  * `excluded` is reported ("Skipped N paths (--exclude)") and never
  * touched.
  *
+ * The path dimension reaches an orphan the way it reaches an active row:
+ * `apply <file>` plans the orphan at that path, `apply <dir>` the orphans
+ * beneath it, so one orphan can be retired without a whole-scope run.
+ * Scope decides reach, never verdict — an orphan named by path is still
+ * skipped when modified and still released when Git lost it — and it
+ * reaches exactly what it names: a parent directory the filter does not
+ * cover stays, and the next run that covers it prunes it.
+ *
  * `directories` is sorted deepest-first here, once, so preflight predicts
  * and execute prunes in the same order. Free with cleanup_plan_free BEFORE
  * workspace_free.
@@ -115,6 +123,21 @@ void cleanup_plan_free(cleanup_plan_t *plan);
  */
 static inline bool cleanup_plan_is_empty(const cleanup_plan_t *plan) {
     return plan->files.count == 0 && plan->directories.count == 0;
+}
+
+/**
+ * How many items the plan classified — both kinds, every bucket
+ *
+ * Distinct from cleanup_plan_is_empty, which counts only *work*: a plan
+ * of nothing but spared items is empty there and non-zero here. Apply
+ * reads this beside deploy_plan_row_count to tell a path filter that
+ * named nothing dotta manages from one whose paths are all held back —
+ * an orphan the filter found is a match, whatever its verdict.
+ *
+ * The bucket set lives here so a consumer never has to enumerate it.
+ */
+static inline size_t cleanup_plan_item_count(const cleanup_plan_t *plan) {
+    return plan->files.count + plan->directories.count + plan->excluded.count;
 }
 
 /* ── Verdicts ─────────────────────────────────────────────────────── */

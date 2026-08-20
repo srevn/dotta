@@ -690,8 +690,8 @@ static void print_cleanup_preflight_results(
 
     size_t absent = verdicts->absent_files.count + verdicts->absent_dirs.count;
 
-    /* An empty plan — no orphans, --keep-orphans, a path filter — has
-     * nothing to say, and says nothing. */
+    /* An empty plan — no orphans in scope, --keep-orphans — has nothing
+     * to say, and says nothing. */
     if (present_files + present_dirs + absent == 0) {
         return;
     }
@@ -845,7 +845,7 @@ static void print_cleanup_preflight_results(
             output_hintline(out, OUTPUT_NORMAL, "     dotta apply");
         }
         output_hintline(out, OUTPUT_NORMAL, "  2. Force removal (discards changes):");
-        output_hintline(out, OUTPUT_NORMAL, "         dotta apply --force");
+        output_hintline(out, OUTPUT_NORMAL, "     dotta apply --force <files>");
         output_hintline(out, OUTPUT_NORMAL, "  3. Keep the profile enabled:");
         if (example_profile) {
             output_hintline(out, OUTPUT_NORMAL, "     dotta profile enable %s", example_profile);
@@ -1178,52 +1178,39 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         deploy_plan->directories.clean.count == 1 ? "y" : "ies"
     );
 
-    /* Warn if a file filter was given but matched no managed path at all
-     * (held-back rows count as matched — the filter found them). */
-    if (scope_has_paths(scope) && deploy_plan_row_count(deploy_plan) == 0) {
-        output_warning(
-            out, OUTPUT_NORMAL, "No matching files found in enabled profiles"
-        );
-        output_hint(
-            out, OUTPUT_NORMAL, "Check if the file path is correct and profile is enabled"
-        );
-    }
-
     /* PLAN: decide once which orphans cleanup may touch, from (workspace,
      * scope).
      *
      * Coherent Scope — the same operation-scope triplet the deployment
      * planner applies: orphans outside the profile / path dimensions are
      * invisible; orphans an -e pattern names are held back and reported.
-     * Two modes reach the planner today:
+     * The filter shapes that reach the planner:
      *
      *   full sync (no filter)   every orphan converges — a disabled
      *                           profile's files, and files deleted from
      *                           Git under a profile that is still enabled
      *   profile scoped (-p)     only that profile's orphans; the rest wait
      *                           for an unfiltered apply
-     *
-     * A path filter suppresses cleanup entirely. That is a policy —
-     * a targeted run stays targeted — and not a necessity: the planner
-     * matches an orphan against the path dimension like any other row.
+     *   path scoped             only the orphans the filter names — the
+     *                           orphan at a file path, the orphans beneath
+     *                           a directory path — so one orphan can be
+     *                           retired without a whole-scope run. The
+     *                           filter changes reach, never verdicts: a
+     *                           modified orphan named by path is still
+     *                           skipped, a released one still let go.
      *
      * --keep-orphans plans nothing. The empty plan is what every later
      * stage reads, so no stage re-encodes the flag. */
     output_print(out, OUTPUT_VERBOSE, "\nPlanning cleanup...\n");
 
-    bool keep_orphans = opts->keep_orphans || scope_has_paths(scope);
-
-    err = cleanup_plan_build(ws, scope, keep_orphans, &cleanup_plan);
+    err = cleanup_plan_build(ws, scope, opts->keep_orphans, &cleanup_plan);
     if (err) {
         err = error_wrap(err, "Failed to plan cleanup");
         goto cleanup;
     }
 
-    if (keep_orphans) {
-        output_print(
-            out, OUTPUT_VERBOSE, "  Orphans kept (%s)\n",
-            opts->keep_orphans ? "--keep-orphans" : "file filter active"
-        );
+    if (opts->keep_orphans) {
+        output_print(out, OUTPUT_VERBOSE, "  Orphans kept (--keep-orphans)\n");
     }
 
     /* Mirror the deployment-loop trace: for each orphan held back by
@@ -1288,6 +1275,20 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
                 enabled_count
             );
         }
+    }
+
+    /* Warn if a file filter was given but matched no managed path at all
+     * (held-back rows count as matched — the filter found them). Asked
+     * after both planners: a path can name an orphan as well as an active
+     * row, and finding either is a match. */
+    if (scope_has_paths(scope) && deploy_plan_row_count(deploy_plan) == 0 &&
+        cleanup_plan_item_count(cleanup_plan) == 0) {
+        output_warning(
+            out, OUTPUT_NORMAL, "No matching files found in enabled profiles"
+        );
+        output_hint(
+            out, OUTPUT_NORMAL, "Check if the file path is correct and profile is enabled"
+        );
     }
 
     /* Apply-level adoption: stamp ownership for in-scope clean files that
@@ -1497,8 +1498,8 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     deploy_findings = NULL;
 
     /* Decide cleanup's verdicts from the plan. An empty plan
-     * (--keep-orphans, a path filter, no orphans) yields empty verdicts
-     * and a silent preview — no gate needed anywhere. */
+     * (--keep-orphans, no orphans in scope) yields empty verdicts and a
+     * silent preview — no gate needed anywhere. */
     cleanup_options_t cleanup_opts = {
         .force                 = opts->force,
         .deploying_files       = state_files_view(&deploy_plan->files.pending),
@@ -1931,6 +1932,13 @@ const args_command_t spec_apply = {
         "updated files, prune files orphaned by disabled profiles, and\n"
         "update the deployment state.\n",
     .notes       =
+        "Path Arguments:\n"
+        "  A path narrows the run to what lies at or beneath it, in both\n"
+        "  directions: tracked files there are deployed and orphaned ones\n"
+        "  pruned, so 'apply ~/.zshrc' retires one orphan on its own.\n"
+        "  --keep-orphans leaves the orphans. Filesystem (~/.bashrc) and\n"
+        "  storage (home/.bashrc) forms are both accepted.\n"
+        "\n"
         "Exclusion Patterns:\n"
         "  Excluded paths are protected from deployment, directory\n"
         "  convergence and pruning. Patterns follow gitignore glob syntax;\n"

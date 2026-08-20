@@ -15,6 +15,7 @@
 #include "base/error.h"
 #include "base/output.h"
 #include "base/timeutil.h"
+#include "core/cleanup.h"
 #include "core/profiles.h"
 #include "core/scope.h"
 #include "core/state.h"
@@ -211,23 +212,16 @@ static void display_workspace_status(
         }
     }
 
-    /* Tracks whether the Uncommitted section held a conflict, and whether
-     * the Issues section contained released, absent or diverged orphans */
-    bool has_version_conflicts = false;
-    bool has_diverged_orphans = false;
-    bool has_released_orphans = false;
-    bool has_absent_orphans = false;
-
     /* Show sectioned output for dirty/invalid workspace */
     if (ws_status != WORKSPACE_CLEAN) {
         /* When filter active and filtered profile is clean, skip detailed sections */
         if ((!scope_has_filter(scope) || filtered_diverged > 0) && all_count > 0) {
 
-            /* Single allocation for all category pointers (5 categories × all_count slots)
-             * Memory layout: [uncommitted][undeployed][new_files][orphaned][reassigned]
+            /* Single allocation for all category pointers (6 categories × all_count slots)
+             * Memory layout: [conflicts][uncommitted][undeployed][new_files][orphaned][reassigned]
              * This provides cache-friendly contiguous memory with single malloc/free. */
             const workspace_item_t **categorized =
-                malloc(all_count * 5 * sizeof(workspace_item_t *));
+                malloc(all_count * 6 * sizeof(workspace_item_t *));
             if (!categorized) {
                 output_error(
                     out, "Failed to allocate memory for status display (%zu items)",
@@ -237,12 +231,14 @@ static void display_workspace_status(
             }
 
             /* Category arrays (pointer arithmetic into single allocation) */
-            const workspace_item_t **uncommitted = categorized;
-            const workspace_item_t **undeployed = categorized + all_count;
-            const workspace_item_t **new_files = categorized + all_count * 2;
-            const workspace_item_t **orphaned = categorized + all_count * 3;
-            const workspace_item_t **reassigned = categorized + all_count * 4;
+            const workspace_item_t **conflicts = categorized;
+            const workspace_item_t **uncommitted = categorized + all_count;
+            const workspace_item_t **undeployed = categorized + all_count * 2;
+            const workspace_item_t **new_files = categorized + all_count * 3;
+            const workspace_item_t **orphaned = categorized + all_count * 4;
+            const workspace_item_t **reassigned = categorized + all_count * 5;
 
+            size_t conflict_count = 0;
             size_t uncommitted_count = 0;
             size_t undeployed_count = 0;
             size_t new_count = 0;
@@ -268,15 +264,15 @@ static void display_workspace_status(
                              * same bucket as a file never deployed; the
                              * [stale] tag says which */
                             undeployed[undeployed_count++] = item;
+                        } else if (item->divergence & DIVERGENCE_STALE) {
+                            /* Both sides moved: update skips it and apply
+                             * refuses it without --force, so it belongs to
+                             * neither verb's section — its own header
+                             * names the way out */
+                            conflicts[conflict_count++] = item;
                         } else if (item->divergence != DIVERGENCE_NONE) {
-                            /* Real divergence → uncommitted changes. STALE
-                             * beside it means both sides moved: update will
-                             * skip the item, so the section's hint gets a
-                             * correction below. */
+                            /* Real divergence → uncommitted changes */
                             uncommitted[uncommitted_count++] = item;
-                            if (item->divergence & DIVERGENCE_STALE) {
-                                has_version_conflicts = true;
-                            }
                         } else if (item->profile_changed) {
                             /* Pure profile reassignment (no filesystem divergence) */
                             reassigned[reassigned_count++] = item;
@@ -303,7 +299,39 @@ static void display_workspace_status(
                 }
             }
 
-            /* Section 1: Uncommitted Changes */
+            /* Section 1: Conflicts — the one bucket no default verb
+             * resolves, so it leads and its header carries the remedy */
+            if (conflict_count > 0) {
+                output_list_t *list = output_list_create(
+                    out, "Conflicts",
+                    "changed in Git and on disk; \"dotta diff\" to compare, "
+                    "\"dotta apply --force\" to keep Git's"
+                );
+
+                if (list) {
+                    for (size_t i = 0; i < conflict_count; i++) {
+                        const char *tags[WORKSPACE_ITEM_MAX_DISPLAY_TAGS];
+                        size_t tag_count;
+                        output_color_t color;
+                        char metadata[256];
+
+                        if (workspace_item_extract_display_info(
+                            conflicts[i], tags, &tag_count,
+                            &color, metadata, sizeof(metadata)
+                            )) {
+                            output_list_add(
+                                list, tags, tag_count, color,
+                                conflicts[i]->filesystem_path, metadata
+                            );
+                        }
+                    }
+
+                    output_list_render(list);
+                    output_list_free(list);
+                }
+            }
+
+            /* Section 2: Uncommitted Changes */
             if (uncommitted_count > 0) {
                 output_list_t *list = output_list_create(
                     out, "Uncommitted changes",
@@ -333,7 +361,7 @@ static void display_workspace_status(
                 }
             }
 
-            /* Section 2: Profile Reassignments */
+            /* Section 3: Profile Reassignments */
             if (reassigned_count > 0) {
                 output_list_t *list = output_list_create(
                     out, "Profile reassignments",
@@ -363,7 +391,7 @@ static void display_workspace_status(
                 }
             }
 
-            /* Section 3: Undeployed Files */
+            /* Section 4: Undeployed Files */
             if (undeployed_count > 0) {
                 output_list_t *list = output_list_create(
                     out, "Undeployed files",
@@ -393,7 +421,7 @@ static void display_workspace_status(
                 }
             }
 
-            /* Section 4: New Files */
+            /* Section 5: New Files */
             if (new_count > 0) {
                 output_list_t *list = output_list_create(
                     out, "New files",
@@ -423,7 +451,7 @@ static void display_workspace_status(
                 }
             }
 
-            /* Section 5: Issues (orphaned) */
+            /* Section 6: Issues (orphaned) */
             if (orphaned_count > 0) {
                 output_list_t *list = output_list_create(
                     out, "Issues",
@@ -431,43 +459,96 @@ static void display_workspace_status(
                 );
 
                 if (list) {
-                    /* Render orphans and track whether any are diverged.
-                     * Clean orphans (DIVERGENCE_NONE) are straightforward; they'll
-                     * be removed. Diverged orphans (modified, mode, unverified) are
-                     * confusing cases where apply won't remove the file.
-                     */
+                    /* The header promises a removal; a clean orphan gets one
+                     * and needs no more words. Every other hint is keyed
+                     * below by the exact tags its line shows, once per
+                     * distinct tag string, so the key reads back against
+                     * the list it follows. The hint is cleanup's — absent,
+                     * then released, then the skip reason, the plan's own
+                     * order — this only names it. */
+                    struct { char tags[64]; const char *hint; } legend[16];
+                    size_t legend_count = 0;
+                    size_t legend_width = 0;
+
                     for (size_t i = 0; i < orphaned_count; i++) {
                         const char *tags[WORKSPACE_ITEM_MAX_DISPLAY_TAGS];
                         size_t tag_count;
                         output_color_t color;
                         char metadata[256];
 
-                        if (workspace_item_extract_display_info(
+                        if (!workspace_item_extract_display_info(
                             orphaned[i], tags, &tag_count,
                             &color, metadata, sizeof(metadata)
                             )) {
-                            output_list_add(
-                                list, tags, tag_count, color,
-                                orphaned[i]->filesystem_path, metadata
+                            continue;
+                        }
+                        output_list_add(
+                            list, tags, tag_count, color,
+                            orphaned[i]->filesystem_path, metadata
+                        );
+
+                        const char *hint = NULL;
+                        if (!orphaned[i]->on_filesystem) {
+                            hint = "already gone from disk; apply reclaims its entry";
+                        } else if (orphaned[i]->state == WORKSPACE_STATE_RELEASED) {
+                            hint = "no longer in Git; apply releases its entry, the file stays";
+                        } else {
+                            switch (cleanup_skip_reason(orphaned[i])) {
+                                case CLEANUP_SKIP_UNVERIFIED:
+                                    hint = "cannot be verified; "
+                                        "apply skips it, --force prunes it";
+                                    break;
+                                case CLEANUP_SKIP_MODIFIED:
+                                case CLEANUP_SKIP_TYPE_CHANGED:
+                                    hint = "changed since deployment; "
+                                        "apply skips it, --force prunes it";
+                                    break;
+                                case CLEANUP_SKIP_MODE_CHANGED:
+                                    hint = "permissions changed; "
+                                        "apply skips it, --force prunes it";
+                                    break;
+                                case CLEANUP_SKIP_NONE:
+                                    break;
+                            }
+                        }
+                        if (!hint) continue;
+
+                        /* Same bracketing and spacing the list gives the
+                         * item line, so the column below matches the one above */
+                        char key[64] = "";
+                        for (size_t t = 0; t < tag_count; t++) {
+                            size_t used = strlen(key);
+                            snprintf(
+                                key + used, sizeof(key) - used, "%s[%s]",
+                                t > 0 ? " " : "", tags[t]
                             );
                         }
 
-                        /* Track if this orphan has divergence (not clean) */
-                        if (orphaned[i]->divergence != DIVERGENCE_NONE) {
-                            has_diverged_orphans = true;
+                        size_t slot = 0;
+                        while (slot < legend_count && strcmp(legend[slot].tags, key) != 0) {
+                            slot++;
                         }
-                        if (!orphaned[i]->on_filesystem) {
-                            /* Absent wins over released: nothing is left to
-                             * leave on disk, so the "left on disk" legend
-                             * would describe an act that cannot happen. */
-                            has_absent_orphans = true;
-                        } else if (orphaned[i]->state == WORKSPACE_STATE_RELEASED) {
-                            has_released_orphans = true;
+                        if (slot == legend_count && legend_count < 16) {
+                            size_t len = strlen(key);
+                            memcpy(legend[legend_count].tags, key, len + 1);
+                            legend[legend_count].hint = hint;
+                            legend_count++;
+                            if (len > legend_width) legend_width = len;
                         }
                     }
 
                     output_list_render(list);
                     output_list_free(list);
+
+                    if (legend_count > 0) {
+                        output_newline(out, OUTPUT_NORMAL);
+                        for (size_t i = 0; i < legend_count; i++) {
+                            output_hintline(
+                                out, OUTPUT_NORMAL, "  %-*s - %s",
+                                (int) legend_width, legend[i].tags, legend[i].hint
+                            );
+                        }
+                    }
                 }
             }
 
@@ -480,74 +561,6 @@ static void display_workspace_status(
             output_styled(
                 out, OUTPUT_NORMAL, "  {dim}(%zu item%s hidden){reset}\n",
                 hidden_count, hidden_count == 1 ? "" : "s"
-            );
-        }
-
-        /* A conflict is the one Uncommitted item update will not commit —
-         * the section's own hint ("use dotta update") needs this correction */
-        if (has_version_conflicts) {
-            output_newline(out, OUTPUT_NORMAL);
-            output_hint(
-                out, OUTPUT_NORMAL,
-                "Conflicts changed in Git and on disk; 'dotta update' skips them."
-            );
-            output_hintline(
-                out, OUTPUT_NORMAL, "  [modified] [stale]      "
-                "- 'dotta diff' shows Git's version against disk, "
-                "'dotta apply --force' keeps Git's"
-            );
-        }
-
-        /* Section-level hint: show detailed guidance only for
-         * diverged orphans. Placed outside the Issues section */
-        if (has_diverged_orphans) {
-            output_newline(out, OUTPUT_NORMAL);
-            output_hint(
-                out, OUTPUT_NORMAL,
-                "Diverged orphans blocking safe removal."
-            );
-            output_hintline(
-                out, OUTPUT_NORMAL, "  [orphaned]              "
-                "- Clean, will be pruned by 'dotta apply'"
-            );
-            output_hintline(
-                out, OUTPUT_NORMAL, "  [orphaned] [modified]   "
-                "- Has uncommitted changes, skipped by 'dotta apply'"
-            );
-            output_hintline(
-                out, OUTPUT_NORMAL, "  [orphaned] [mode]       "
-                "- Permissions changed, skipped by 'dotta apply'"
-            );
-            output_hintline(
-                out, OUTPUT_NORMAL, "  [orphaned] [unverified] "
-                "- Cannot be verified, skipped by 'dotta apply'"
-            );
-        }
-
-        /* An orphan already gone from disk is not blocked either — apply
-         * retires its row and removes nothing */
-        if (has_absent_orphans) {
-            output_newline(out, OUTPUT_NORMAL);
-            output_hint(
-                out, OUTPUT_NORMAL,
-                "Absent orphans are already gone from the filesystem."
-            );
-            output_hintline(
-                out, OUTPUT_NORMAL, "  [absent]                "
-                "- Already gone, its entry reclaimed by 'dotta apply'"
-            );
-        }
-
-        /* Released orphans are not blocked — nothing is asked of the user */
-        if (has_released_orphans) {
-            output_newline(out, OUTPUT_NORMAL);
-            output_hint(
-                out, OUTPUT_NORMAL,
-                "Released orphans are no longer backed by git."
-            );
-            output_hintline(
-                out, OUTPUT_NORMAL, "  [released]              "
-                "- Left on disk, released by 'dotta apply'"
             );
         }
     }

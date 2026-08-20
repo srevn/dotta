@@ -94,13 +94,13 @@ typedef enum {
  */
 typedef enum {
     DIVERGENCE_NONE       = 0,       /* No divergence detected */
-    DIVERGENCE_CONTENT    = 1 << 0,  /* Content differs from profile */
+    DIVERGENCE_CONTENT    = 1 << 0,  /* Disk content is not the blob it was measured */
     DIVERGENCE_MODE       = 1 << 1,  /* Permissions/mode changed */
     DIVERGENCE_OWNERSHIP  = 1 << 2,  /* Owner/group changed (requires root) */
     DIVERGENCE_ENCRYPTION = 1 << 3,  /* File violates encryption policy */
     DIVERGENCE_TYPE       = 1 << 4,  /* Type changed (file/symlink/dir) */
     DIVERGENCE_UNVERIFIED = 1 << 5,  /* Cannot verify (missing key, error, large file) */
-    DIVERGENCE_STALE      = 1 << 6   /* VWD cache stale (external Git changes detected) */
+    DIVERGENCE_STALE      = 1 << 6   /* Git advanced past the blob dotta last deployed */
 } divergence_type_t;
 
 /**

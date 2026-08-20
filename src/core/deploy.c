@@ -47,7 +47,7 @@
  *
  * Kind-agnostic: directory analysis tags only MODE / OWNERSHIP / TYPE /
  * UNVERIFIED (never content, encryption or stale), so the DEPLOYED arm's
- * mask already covers every directory verdict — no kind-specific arm.
+ * test already covers every directory verdict — no kind-specific arm.
  *
  * The planner iterates the active slices, so the three non-active states
  * never reach this; their arms name the owner that does handle them and
@@ -86,11 +86,9 @@ static bool deploy_needs_work(const workspace_item_t *item) {
              * If divergence == NONE: file is clean, matches Git perfectly.
              * If divergence != NONE: file has property mismatches, needs redeployment.
              *
-             * DIVERGENCE_STALE is informational (VWD cache was patched in-memory from
-             * fresh Git state). It does NOT indicate a filesystem mismatch — the patched
-             * values are the new expected state. Mask it out to avoid spurious deployment
-             * when the file content already matches the new Git state. */
-            return (item->divergence & ~DIVERGENCE_STALE) != DIVERGENCE_NONE;
+             * DIVERGENCE_STALE is a deploy reason like any other: Git moved
+             * past the blob dotta deployed and disk did not follow. */
+            return item->divergence != DIVERGENCE_NONE;
 
         case WORKSPACE_STATE_ORPHANED:
             /* Path exists in deployment state but not in any enabled profile.
@@ -149,7 +147,8 @@ typedef enum {
  * A row with no work is adoptable unless -e named it: --exclude means
  * "leave this path alone entirely", while --skip-existing only means "do
  * not overwrite", and adoption overwrites nothing. So SKIP_EXISTING on a
- * clean row (a STALE-only verdict, say) is not a skip at all.
+ * clean row (one the index holds only for a profile reassignment, say)
+ * is not a skip at all.
  *
  * @param part Partition for the row's kind (must not be NULL)
  * @param row Borrowed state row (must not be NULL)
@@ -621,17 +620,15 @@ static bool directory_is_pending(const deploy_plan_t *plan, const char *path) {
  *
  * A TYPE verdict counts, because it means the compare never produced a
  * content verdict at all: whatever stood at the path was never measured
- * against the row. DIVERGENCE_STALE is the one exception — it is set only
- * after confirming that disk still holds the blob dotta itself deployed,
- * so the overwrite loses nothing. Mode, ownership and encryption
- * divergence never block.
+ * against the row. DIVERGENCE_STALE without CONTENT never conflicts: the
+ * bytes on disk are the ones dotta itself deployed, so the overwrite
+ * loses nothing. Mode, ownership and encryption divergence never block.
  *
  * @param item Workspace verdict for the row (NULL = not in the index)
  */
 static bool content_conflicts(const workspace_item_t *item) {
     return item != NULL &&
-           (item->divergence & (DIVERGENCE_CONTENT | DIVERGENCE_TYPE)) &&
-           !(item->divergence & DIVERGENCE_STALE);
+           (item->divergence & (DIVERGENCE_CONTENT | DIVERGENCE_TYPE));
 }
 
 /**

@@ -1364,8 +1364,8 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         );
     }
 
-    /* Collect pending profile reassignments and count external-drift
-     * repairs within operation scope.
+    /* Collect pending profile reassignments and count stale files within
+     * operation scope.
      *
      * Profile reassignment (old_profile set in state) is state bookkeeping,
      * not deployment: content may be identical, so the row never enters
@@ -1373,10 +1373,10 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * reporting the transition. Collected before the early exit so a
      * reassignment-only workspace does not loop DIRTY forever.
      *
-     * DIVERGENCE_STALE is tagged inside analyze_file_divergence from the
-     * persistent anchor.blob_oid vs row.blob_oid comparison — a
-     * cross-invocation signal that survives status→apply sequences and
-     * reports correctly even when reconcile had nothing new to repair.
+     * DIVERGENCE_STALE is the workspace's verdict that Git moved past the
+     * blob dotta last deployed (anchor.blob_oid ≠ row.blob_oid) — a
+     * persistent signal that survives status→apply sequences and counts
+     * the same however the branch moved.
      *
      * Coherent Scope: the same triplet the planner applies. */
     size_t stale_count = 0;
@@ -1399,12 +1399,13 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         }
     }
 
-    /* Drift signal: external Git changes repaired by workspace_load's
-     * reconcile, still visible in the persistent anchor/manifest.blob_oid
-     * comparison. Released files are covered by the orphan-prune summary below. */
+    /* How many in-scope files Git has moved since dotta deployed them.
+     * [stale] alone the plan deploys like any other divergence; beside
+     * [modified] it is a conflict preflight reports. Released files are
+     * covered by the orphan-prune summary below. */
     if (stale_count > 0) {
         output_info(
-            out, OUTPUT_NORMAL, "Synchronized %zu file%s from external Git changes",
+            out, OUTPUT_NORMAL, "Found %zu stale file%s (changed in Git since deployment)",
             stale_count, stale_count == 1 ? "" : "s"
         );
     }

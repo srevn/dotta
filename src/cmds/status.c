@@ -89,7 +89,7 @@ static void display_enabled_profiles(
  * Display workspace status
  *
  * Shows the consistency between profile state, deployment state, and filesystem.
- * Organized into actionable sections (Git-like structure).
+ * Organized into actionable sections (git-like structure).
  *
  * When a profile filter is active, the status line is scoped to the filtered
  * profile(s), showing file counts and per-profile divergence instead of global
@@ -211,8 +211,9 @@ static void display_workspace_status(
         }
     }
 
-    /* Tracks whether the Issues section contained released, absent or
-     * diverged orphans */
+    /* Tracks whether the Uncommitted section held a conflict, and whether
+     * the Issues section contained released, absent or diverged orphans */
+    bool has_version_conflicts = false;
     bool has_diverged_orphans = false;
     bool has_released_orphans = false;
     bool has_absent_orphans = false;
@@ -261,9 +262,21 @@ static void display_workspace_status(
 
                 switch (item->state) {
                     case WORKSPACE_STATE_DEPLOYED:
-                        if (item->divergence != DIVERGENCE_NONE) {
-                            /* Real divergence → uncommitted changes */
+                        if ((item->divergence & DIVERGENCE_STALE) &&
+                            !(item->divergence & DIVERGENCE_CONTENT)) {
+                            /* Git moved, disk did not → apply's work, the
+                             * same bucket as a file never deployed; the
+                             * [stale] tag says which */
+                            undeployed[undeployed_count++] = item;
+                        } else if (item->divergence != DIVERGENCE_NONE) {
+                            /* Real divergence → uncommitted changes. STALE
+                             * beside it means both sides moved: update will
+                             * skip the item, so the section's hint gets a
+                             * correction below. */
                             uncommitted[uncommitted_count++] = item;
+                            if (item->divergence & DIVERGENCE_STALE) {
+                                has_version_conflicts = true;
+                            }
                         } else if (item->profile_changed) {
                             /* Pure profile reassignment (no filesystem divergence) */
                             reassigned[reassigned_count++] = item;
@@ -470,6 +483,21 @@ static void display_workspace_status(
             );
         }
 
+        /* A conflict is the one Uncommitted item update will not commit —
+         * the section's own hint ("use dotta update") needs this correction */
+        if (has_version_conflicts) {
+            output_newline(out, OUTPUT_NORMAL);
+            output_hint(
+                out, OUTPUT_NORMAL,
+                "Conflicts changed in Git and on disk; 'dotta update' skips them."
+            );
+            output_hintline(
+                out, OUTPUT_NORMAL, "  [modified] [stale]      "
+                "- 'dotta diff' shows Git's version against disk, "
+                "'dotta apply --force' keeps Git's"
+            );
+        }
+
         /* Section-level hint: show detailed guidance only for
          * diverged orphans. Placed outside the Issues section */
         if (has_diverged_orphans) {
@@ -515,7 +543,7 @@ static void display_workspace_status(
             output_newline(out, OUTPUT_NORMAL);
             output_hint(
                 out, OUTPUT_NORMAL,
-                "Released orphans are no longer backed by Git."
+                "Released orphans are no longer backed by git."
             );
             output_hintline(
                 out, OUTPUT_NORMAL, "  [released]              "

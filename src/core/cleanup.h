@@ -176,8 +176,11 @@ typedef enum {
  *   DIVERGENCE_CONTENT             MODIFIED
  *   DIVERGENCE_TYPE                TYPE_CHANGED
  *   DIVERGENCE_MODE / OWNERSHIP    MODE_CHANGED
- *   ENCRYPTION / STALE only        NONE — policy mismatch / VWD cache
- *                                  refreshed are not user changes
+ *   ENCRYPTION / STALE only        NONE — a policy mismatch is not a user
+ *                                  change; STALE is never emitted for an
+ *                                  orphan (the orphan compare asks one
+ *                                  question, of disk alone) and is listed
+ *                                  so it cannot block
  *   DIVERGENCE_NONE                NONE — safe to prune
  *   an unnamed divergence bit      UNVERIFIED — blocks until this table
  *                                  names it (defensive default)

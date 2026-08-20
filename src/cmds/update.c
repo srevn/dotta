@@ -239,13 +239,15 @@ static bool is_update_candidate(
         case WORKSPACE_STATE_DEPLOYED:
             /* Deployed files/dirs with divergence - check what kind.
              *
-             * Mask DIVERGENCE_STALE: stale-only files have no local changes
-             * (content matches current Git state after in-memory patching). */
-            if ((item->divergence & ~DIVERGENCE_STALE) != DIVERGENCE_NONE) {
-                return !opts->only_new;
+             * Any STALE item is skipped: Git moved past the blob dotta
+             * deployed, and update stores bytes — the bytes on disk are
+             * old whether or not a mode bit also differs. [stale] alone is
+             * apply's to resolve; [modified] [stale] is the user's. */
+            if (item->divergence & DIVERGENCE_STALE) {
+                return false;
             }
-            /* DEPLOYED + NONE/STALE-only = clean, exclude */
-            return false;
+            /* DEPLOYED + NONE = clean, exclude */
+            return item->divergence != DIVERGENCE_NONE && !opts->only_new;
 
         case WORKSPACE_STATE_DELETED:
             /* File removed from filesystem - include unless --only-new */
@@ -276,7 +278,7 @@ static bool is_update_candidate(
  * Returns items that should be updated based on command options, workspace state, and divergence.
  *
  * INCLUDED ITEMS (STATE + DIVERGENCE):
- * - DEPLOYED + any divergence (content/mode/ownership/encryption/type changed)
+ * - DEPLOYED + any divergence but STALE (content/mode/ownership/encryption/type changed)
  * - DELETED state (removed from filesystem)
  * - UNTRACKED state (new files, if flags OR config->auto_detect_new_files)
  *
@@ -284,6 +286,9 @@ static bool is_update_candidate(
  * - UNDEPLOYED state (not modified, just not deployed yet - handled by apply)
  * - ORPHANED state (handled by remove command)
  * - DEPLOYED + NONE divergence (clean, nothing to update)
+ * - DEPLOYED + STALE (Git moved since deployment: apply's work when alone,
+ *   the user's conflict next to CONTENT — never committed; cmd_update counts
+ *   these and says so)
  *
  * CLI FILTERS APPLIED:
  * - opts->files: Only specific files (if provided)
@@ -1483,9 +1488,10 @@ static error_t *update_display_summary(
                     continue;
                 }
 
-                /* Check if file is deployed and has (non-stale) divergence */
+                /* Check if file is deployed and has divergence (filtered
+                 * items never carry STALE) */
                 bool is_modified = (item->state == WORKSPACE_STATE_DEPLOYED &&
-                    (item->divergence & ~DIVERGENCE_STALE) != DIVERGENCE_NONE);
+                    item->divergence != DIVERGENCE_NONE);
 
                 if (!is_modified) {
                     continue;
@@ -1928,6 +1934,46 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
     if (err) {
         err = error_wrap(err, "Failed to filter items for update");
         goto cleanup;
+    }
+
+    /* What the filter left out on purpose, said once — above the exit
+     * below, so a workspace whose only divergence is stale explains
+     * itself, and above the prompt. Same scope triplet as the filter.
+     * [stale] alone is apply's to resolve; [modified] [stale] is a
+     * conflict no dotta verb resolves toward disk, so its line must not
+     * send the user to a plain apply that preflight will refuse. */
+    size_t all_count = 0;
+    const workspace_item_t *all = workspace_get_all_diverged(ws, &all_count);
+    size_t stale_skipped = 0; size_t conflict_skipped = 0;
+
+    for (size_t i = 0; i < all_count; i++) {
+        const workspace_item_t *item = &all[i];
+
+        if (item->state != WORKSPACE_STATE_DEPLOYED || !(item->divergence & DIVERGENCE_STALE) ||
+            !scope_accepts_entry(scope, item->profile, item->storage_path, item->item_kind)) {
+            continue;
+        }
+        if (item->divergence & DIVERGENCE_CONTENT) {
+            conflict_skipped++;
+        } else {
+            stale_skipped++;
+        }
+    }
+
+    if (stale_skipped > 0) {
+        output_info(
+            out, OUTPUT_NORMAL,
+            "%zu file%s skipped: changed in Git since deployment — run 'dotta apply' first",
+            stale_skipped, stale_skipped == 1 ? "" : "s"
+        );
+    }
+    if (conflict_skipped > 0) {
+        output_info(
+            out, OUTPUT_NORMAL,
+            "%zu file%s skipped: changed in Git and on disk — 'dotta diff' shows "
+            "Git's version against disk, 'dotta apply --force' keeps Git's",
+            conflict_skipped, conflict_skipped == 1 ? "" : "s"
+        );
     }
 
     /* Check if we have anything to update */

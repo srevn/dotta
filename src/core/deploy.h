@@ -167,8 +167,8 @@ typedef struct {
  * Walks the workspace's active file and directory slices once, gating
  * each row on scope_accepts_profile ∧ scope_accepts_path(kind), then
  * classifying it by deploy's work predicate (missing, or diverged in
- * content / mode / ownership / type / encryption; STALE alone is not
- * work) and by the reasons a row's work is skipped:
+ * content / mode / ownership / type / encryption / stale) and by the
+ * reasons a row's work is skipped:
  * scope_is_excluded(kind), then skip_existing.
  *
  * Requires a workspace loaded with file AND directory analysis: the plan
@@ -258,9 +258,10 @@ static inline size_t deploy_plan_row_count(const deploy_plan_t *plan) {
  *   directory holding untracked paths blocks either way, because deploy
  *   removes single nodes and never a tree.
  * - Content — the workspace's divergence verdict, the only authority for
- *   a fact no lstat can settle. Blocks unless --force (STALE-only content
- *   divergence is safe to overwrite and never blocks); mode, ownership
- *   and encryption divergence never block.
+ *   a fact no lstat can settle. Blocks unless --force (STALE without
+ *   CONTENT never blocks: disk still holds the blob dotta deployed, so
+ *   the overwrite loses nothing); mode, ownership and encryption
+ *   divergence never block.
  * - Landing — the write must be able to land. Every arm of the executor
  *   writes through the *parent* — a temp file renamed over the target, a
  *   symlink unlinked and re-made, a mkdir — so the path's own permissions

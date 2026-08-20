@@ -8,7 +8,8 @@
  * Files trust the VWD manifest (virtual_manifest table), maintained by manifest layer.
  * Directories trust the tracked_directories state column, maintained by the
  * manifest layer's directory rebuild (sweep + re-projection + ghost reclaim).
- * Both are patched in-memory for stale profiles (external Git changes).
+ * Both are repaired in state by the load-time reconcile when an enabled
+ * profile's branch has moved (external Git changes).
  * That maintenance covers the enabled set's active rows — the only rows with
  * a per-profile commit_oid baseline — so orphan analysis observes Git
  * authority for its own rows instead of trusting a cache nothing repairs.
@@ -489,6 +490,13 @@ static workspace_state_t classify_absent(time_t observed_at) {
  * row to perform divergence detection without database queries. All
  * expected state (blob_oid, type, anchor, etc.) is already in the row.
  *
+ * Content is judged three-way, with the deployment anchor as base (see
+ * Phase 1): DIVERGENCE_STALE says Git moved past the blob dotta last
+ * deployed, DIVERGENCE_CONTENT says disk left it. Each is a verdict in
+ * its own right — STALE without CONTENT is apply-side work that
+ * overwrites nothing of the user's; CONTENT without STALE is a local
+ * edit Git has not raced; both together is a conflict.
+ *
  * The row pointer is non-const because a slow-path CMP_EQUAL outcome enqueues
  * an anchor advance against this exact row (workspace_record_anchor_update);
  * the function does not mutate the row directly, but the deferred mutation
@@ -579,6 +587,29 @@ static error_t *analyze_file_divergence(
      * - Transparent encryption handling via content cache
      * - Stat propagation (single stat used for all checks)
      * - TOCTOU-aware (handles files deleted during analysis)
+     *
+     * The content verdict is a three-way comparison with the deployment
+     * anchor as base:
+     *
+     *   theirs = row->blob_oid          what Git expects now
+     *   base   = row->anchor.blob_oid   what dotta last confirmed on disk
+     *   ours   = disk
+     *
+     *   git_moved   := base set  && base ≠ theirs   Git advanced since dotta
+     *                                               last deployed this path
+     *   user_edited := base unset || ours ≠ base    disk left the blob dotta
+     *                                               put there
+     *
+     * When ours ≠ theirs: CONTENT iff user_edited, STALE iff git_moved.
+     * STALE without CONTENT means "overwrite loses nothing"; CONTENT
+     * without STALE means "Git has not moved since this was deployed";
+     * both means both sides moved. Without a base there is no second
+     * question — any difference from theirs is the user's.
+     *
+     * Source of truth for the base: the persistent deployment anchor
+     * (row->anchor, the virtual_manifest.deployed_blob_oid column).
+     * Cross-process correct by construction — every invocation sees the
+     * same answer.
      */
     if (on_filesystem && in_state) {
         /* VWD cache blob_oid is already a 20-byte binary OID — no parse step.
@@ -597,7 +628,17 @@ static error_t *analyze_file_divergence(
         struct stat file_stat;
         memset(&file_stat, 0, sizeof(file_stat));
         compare_result_t cmp_result;
+
         error_t *err = NULL;
+
+        /* The first question of the three-way frame is answered from the
+         * row alone; the second (disk_at_anchor — ours == base) is answered
+         * by whichever path below settles it, and only when it can change
+         * the verdict. */
+        const deployment_anchor_t *anchor = &row->anchor;
+        bool git_moved = !git_oid_is_zero(&anchor->blob_oid) &&
+            !git_oid_equal(&anchor->blob_oid, blob_oid_ptr);
+        bool disk_at_anchor = false;
 
         /* ANCHOR FAST PATH (safety-grade)
          *
@@ -612,37 +653,21 @@ static error_t *analyze_file_divergence(
          * The anchor is advanced only by state_update_anchor() after dotta
          * has verified disk content. The UPSERT never clobbers it. So a
          * stat match is a cryptographically-grade proof that disk still
-         * equals anchor.blob_oid — no re-hash needed.
-         *
-         * Cross-check anchor.blob_oid against the Git-expected blob_oid
-         * (row->blob_oid) to classify:
-         *   - equal   → CMP_EQUAL.  disk == anchor == expected (clean).
-         *   - differ  → CMP_DIFFERENT + DIVERGENCE_STALE.
-         *                disk == anchor ≠ expected (external Git drift;
-         *                file is still at the last-deployed blob).
-         *
-         * This is the key Stage-A win: STALE is tagged directly from the
-         * fast path, without loading blobs or hashing. The slow-path
-         * straggler case (touch(1) / editor rename-write invalidated the
-         * stat triple) is still handled by Phase 3. */
-        const deployment_anchor_t *anchor = &row->anchor;
+         * equals anchor.blob_oid — no re-hash needed, and the second
+         * question is answered for free: ours == base. Whether that is
+         * CMP_EQUAL (base == theirs: clean) or CMP_DIFFERENT (Git moved:
+         * STALE alone) is then read straight from git_moved, without
+         * loading blobs or hashing. */
         if (anchor->stat.mtime != 0
             && anchor->stat.mtime == (int64_t) initial_stat.st_mtime
             && anchor->stat.size == (int64_t) initial_stat.st_size
             && anchor->stat.ino == (uint64_t) initial_stat.st_ino) {
             /* stat match ⟹ disk == anchor.blob_oid */
             file_stat = initial_stat;
-            if (git_oid_equal(&anchor->blob_oid, blob_oid_ptr)) {
-                cmp_result = CMP_EQUAL;
-            } else {
-                /* disk == anchor ≠ expected — file is still at the blob
-                 * dotta last deployed; Git has since advanced expected.
-                 * Tag STALE here; Phase 3 is a no-op for this file. */
-                cmp_result = CMP_DIFFERENT;
-                divergence |= DIVERGENCE_STALE;
-            }
+            disk_at_anchor = true;
+            cmp_result = git_moved ? CMP_DIFFERENT : CMP_EQUAL;
         } else {
-            /* SLOW PATH: Full content comparison
+            /* SLOW PATH: Full content comparison, ours vs theirs
              *
              * Strategy selection based on encryption status:
              * - Non-encrypted: Hash filesystem file and compare OID directly
@@ -650,7 +675,7 @@ static error_t *analyze_file_divergence(
              *
              * Both paths receive initial_stat to avoid redundant lstat syscalls.
              *
-             * Asymmetry with the Phase 3 anchor-staleness site below: that site routes
+             * Asymmetry with the second question below: that one routes
              * through content_compare_blob_to_disk (byte-classify internally) because
              * anchor.blob_oid can differ from row->blob_oid and there is no
              * anchor-side cache to trust. Here we route on row->encrypted
@@ -699,6 +724,49 @@ static error_t *analyze_file_divergence(
             if (cmp_result == CMP_EQUAL) {
                 workspace_record_anchor_update(ws, row, blob_oid_ptr, &file_stat);
             }
+
+            /* Second question — ours vs base — asked only when it can change
+             * the verdict: Git moved, and the stat triple did not vouch for
+             * disk (touch(1), an editor's rename-write, a fresh checkout)
+             * although disk content may still be the blob dotta last
+             * deployed.
+             *
+             * Route the anchor comparison by the anchor blob's own bytes.
+             *
+             * The latent bug class this avoids: routing on row->encrypted
+             * silently miscategorised the staleness check across encryption-policy
+             * transitions. Both directions failed:
+             *   - encrypted anchor / plaintext current → compare_oid_to_disk
+             *     hashed plaintext disk against an encrypted-blob OID, never
+             *     equal, STALE never set.
+             *   - plaintext anchor / encrypted current → content_cache called
+             *     with expected_encrypted=true on a plaintext blob, the old
+             *     cross-check raised ERR_STATE_INVALID, swallowed below.
+             *
+             * content_compare_blob_to_disk classifies by bytes, so the routing
+             * decision lives with the blob whose comparison we are doing. A
+             * routing-on-stale-flag bug is structurally impossible.
+             *
+             * A failed or inconclusive compare leaves disk_at_anchor false:
+             * the edit is taken as real (CONTENT), the conservative answer —
+             * STALE still holds, because git_moved is a fact about two OIDs. */
+            if (cmp_result == CMP_DIFFERENT && git_moved) {
+                compare_result_t at_anchor = CMP_UNVERIFIED;
+                error_t *verify_err = content_compare_blob_to_disk(
+                    ws->repo,
+                    &anchor->blob_oid,
+                    fs_path,
+                    expected_mode,
+                    &initial_stat,
+                    storage_path,
+                    profile,
+                    ws->content_cache,
+                    &at_anchor,
+                    NULL
+                );
+                if (verify_err) error_free(verify_err);
+                disk_at_anchor = (at_anchor == CMP_EQUAL);
+            }
         }
 
         /* Set divergence flags based on comparison result */
@@ -709,8 +777,9 @@ static error_t *analyze_file_divergence(
                 break;
 
             case CMP_DIFFERENT:
-                /* Content differs - accumulate CONTENT flag */
-                divergence |= DIVERGENCE_CONTENT;
+                /* ours ≠ theirs — name which side moved; both can have */
+                if (!disk_at_anchor) divergence |= DIVERGENCE_CONTENT;
+                if (git_moved) divergence |= DIVERGENCE_STALE;
                 break;
 
             case CMP_TYPE_DIFF:
@@ -842,80 +911,7 @@ static error_t *analyze_file_divergence(
         /* Keep accumulated divergence flags from Phase 1 */
     }
 
-    /* PHASE 3: Staleness flag (slow-path straggler)
-     *
-     * The fast path in Phase 1 already tagged DIVERGENCE_STALE for the common
-     * case where the anchor's stat triple is still valid (disk untouched since
-     * dotta last confirmed it). This phase handles the slow-path straggler:
-     * the stat triple was invalidated (touch(1), editor rename-write, fresh
-     * checkout) but disk content may still match the blob dotta last deployed.
-     *
-     * Source of truth: the persistent deployment anchor (row->anchor),
-     * populated from the virtual_manifest.deployed_blob_oid column. Cross-process
-     * correct by construction — every invocation sees the same answer.
-     *
-     * Activation conditions (all must hold):
-     *   1. File exists on disk.
-     *   2. Content diverges from the current expected blob (else no staleness question).
-     *   3. STALE not already tagged by the fast path.
-     *   4. Anchor blob is set (dotta has a deployed reference to compare against).
-     *   5. Anchor blob ≠ current expected blob (Git has advanced past the anchor).
-     *
-     * When all conditions hold, hash-compare disk against anchor.blob_oid to
-     * confirm "disk is still at the last-deployed blob." On match, tag STALE
-     * so the preflight gate allows overwrite. On mismatch, leave flags
-     * unchanged — the existing DIVERGENCE_CONTENT causes preflight to block.
-     *
-     * DIVERGENCE_STALE can combine with other flags:
-     *   [stale]              — expected state changed, content matches new state
-     *   [stale, modified]    — expected state changed, file has old deployed content
-     */
-    if (on_filesystem && (divergence & DIVERGENCE_CONTENT) && !(divergence & DIVERGENCE_STALE)
-        && !git_oid_is_zero(&row->anchor.blob_oid)
-        && !git_oid_equal(&row->anchor.blob_oid, &row->blob_oid)) {
-
-        git_filemode_t expected_mode = state_type_to_git_filemode(row->type);
-        compare_result_t verify_result = CMP_UNVERIFIED;
-
-        struct stat verify_stat;
-        error_t *verify_err = NULL;
-
-        /* Route the anchor comparison by the anchor blob's own bytes.
-         *
-         * The latent bug class this avoids: routing on row->encrypted
-         * silently miscategorised the staleness check across encryption-policy
-         * transitions. Both directions failed:
-         *   - encrypted anchor / plaintext current → compare_oid_to_disk
-         *     hashed plaintext disk against an encrypted-blob OID, never
-         *     equal, STALE never set.
-         *   - plaintext anchor / encrypted current → content_cache called
-         *     with expected_encrypted=true on a plaintext blob, the old
-         *     cross-check raised ERR_STATE_INVALID, swallowed below.
-         *
-         * content_compare_blob_to_disk classifies by bytes, so the routing
-         * decision lives with the blob whose comparison we are doing. A
-         * routing-on-stale-flag bug is structurally impossible. */
-        verify_err = content_compare_blob_to_disk(
-            ws->repo,
-            &row->anchor.blob_oid,
-            fs_path,
-            expected_mode,
-            &initial_stat,
-            storage_path,
-            profile,
-            ws->content_cache,
-            &verify_result,
-            &verify_stat
-        );
-
-        if (!verify_err && verify_result == CMP_EQUAL) {
-            /* File matches old deployed content — stale repair is safe */
-            divergence |= DIVERGENCE_STALE;
-        }
-        if (verify_err) error_free(verify_err);
-    }
-
-    /* PHASE 4: Profile reassignment detection
+    /* PHASE 3: Profile reassignment detection
      *
      * Read old_profile from the row to detect reassignments. The manifest
      * layer sets it when a file's owning profile changes (e.g., removed
@@ -2765,7 +2761,7 @@ bool workspace_item_extract_display_info(
             /* Primary tag based on most severe divergence
              *
              * Priority order (by severity):
-             *   TYPE > CONTENT > MODE/OWNERSHIP/ENCRYPTION
+             *   TYPE > CONTENT > STALE > MODE/OWNERSHIP/ENCRYPTION
              */
             if (item->divergence & DIVERGENCE_TYPE) {
                 if (tag_count < WORKSPACE_ITEM_MAX_DISPLAY_TAGS) {
@@ -2777,6 +2773,19 @@ bool workspace_item_extract_display_info(
                     tags_out[tag_count++] = "modified";
                 }
                 /* Keep default YELLOW color */
+            }
+
+            if (item->divergence & DIVERGENCE_STALE) {
+                /* Git moved past the deployed blob. Alone it is apply-side
+                 * work — the same CYAN as [undeployed], nothing of the
+                 * user's is overwritten; next to [modified] it names a
+                 * conflict and the primary tag's colour stands. */
+                if (tag_count == 0) {
+                    *color_out = OUTPUT_COLOR_CYAN;
+                }
+                if (tag_count < WORKSPACE_ITEM_MAX_DISPLAY_TAGS) {
+                    tags_out[tag_count++] = "stale";
+                }
             }
 
             /* Secondary tags for other divergence
@@ -2822,19 +2831,6 @@ bool workspace_item_extract_display_info(
                     tags_out[tag_count++] = "unverified";
                 }
                 /* Upgrade color to MAGENTA (special visual treatment for unverifiable state) */
-                if (*color_out == OUTPUT_COLOR_YELLOW) {
-                    *color_out = OUTPUT_COLOR_MAGENTA;
-                }
-            }
-
-            if (item->divergence & DIVERGENCE_STALE) {
-                /* VWD cache was stale due to external Git changes.
-                 * Entry has been patched in-memory with current Git state.
-                 * This is informational — the patched values are authoritative. */
-                if (tag_count < WORKSPACE_ITEM_MAX_DISPLAY_TAGS) {
-                    tags_out[tag_count++] = "stale";
-                }
-                /* Upgrade color to MAGENTA to highlight external changes */
                 if (*color_out == OUTPUT_COLOR_YELLOW) {
                     *color_out = OUTPUT_COLOR_MAGENTA;
                 }

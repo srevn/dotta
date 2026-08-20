@@ -458,7 +458,7 @@ static error_t *sync_analyze_phase(
  * Sync manifest after branch update (non-fatal on failure)
  *
  * Calls manifest_sync_diff with NULL metadata_cache (cache is stale after
- * fetch/pull — fresh metadata is loaded from updated Git state).
+ * fetch/pull — fresh metadata is loaded from updated git state).
  *
  * On failure: prints warning + recovery hint, returns false.
  * On success: writes stats to output parameters, returns true.
@@ -1059,7 +1059,7 @@ static error_t *handle_diverged(
  *
  * Includes manifest synchronization when branches are updated via
  * pull/rebase/merge/reset operations. This maintains the VWD architecture
- * by keeping the manifest table in sync with Git branches.
+ * by keeping the manifest table in sync with git branches.
  */
 static error_t *sync_push_phase(
     git_repository *repo,
@@ -1767,7 +1767,8 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
         size_t all_diverged_count = 0;
         const workspace_item_t *all_diverged = workspace_get_all_diverged(ws, &all_diverged_count);
 
-        size_t modified_count = 0;    /* DEPLOYED with CONTENT divergence */
+        size_t modified_count = 0;    /* DEPLOYED with CONTENT divergence, git unmoved */
+        size_t conflict_count = 0;    /* DEPLOYED with CONTENT and STALE — both sides moved */
         size_t deleted_count = 0;     /* DELETED state */
         size_t mode_diff_count = 0;   /* DEPLOYED with MODE divergence */
         size_t type_diff_count = 0;   /* DEPLOYED with TYPE divergence */
@@ -1778,6 +1779,16 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
 
             switch (item->state) {
                 case WORKSPACE_STATE_DEPLOYED:
+                    if (item->divergence & DIVERGENCE_STALE) {
+                        /* Git moved past the deployed blob. Alone — with or
+                         * without a mode bit — that is apply's work, not an
+                         * uncommitted change. Beside CONTENT both sides
+                         * moved: the edit is real, but update will not
+                         * commit it, so it is counted apart and the hints
+                         * below must not send it to update. */
+                        if (item->divergence & DIVERGENCE_CONTENT) conflict_count++;
+                        break;
+                    }
                     if (item->divergence & DIVERGENCE_CONTENT) modified_count++;
                     if (item->divergence & DIVERGENCE_MODE) mode_diff_count++;
                     if (item->divergence & DIVERGENCE_TYPE) type_diff_count++;
@@ -1805,8 +1816,8 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
             if (item->profile_changed) drift.reassigned++;
         }
 
-        size_t uncommitted_count =
-            modified_count + deleted_count + mode_diff_count + type_diff_count + untracked_count;
+        size_t uncommitted_count = modified_count + conflict_count + deleted_count +
+            mode_diff_count + type_diff_count + untracked_count;
 
         if (uncommitted_count > 0) {
             if (config->strict_mode) {
@@ -1819,6 +1830,12 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
                     output_info(
                         out, OUTPUT_NORMAL, "  %zu modified file%s",
                         modified_count, modified_count == 1 ? "" : "s"
+                    );
+                }
+                if (conflict_count > 0) {
+                    output_info(
+                        out, OUTPUT_NORMAL, "  %zu file%s changed in Git and disk",
+                        conflict_count, conflict_count == 1 ? "" : "s"
                     );
                 }
                 if (deleted_count > 0) {
@@ -1850,6 +1867,12 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
                 output_info(out, OUTPUT_NORMAL, "Sync requires a clean workspace.");
                 output_newline(out, OUTPUT_NORMAL);
                 output_hintline(out, OUTPUT_NORMAL, "Next steps:");
+                if (conflict_count > 0) {
+                    output_hintline(
+                        out, OUTPUT_NORMAL,
+                        "  Conflicts:      dotta diff or dotta apply --force"
+                    );
+                }
                 output_hintline(out, OUTPUT_NORMAL, "  Commit changes: dotta update");
                 output_hintline(out, OUTPUT_NORMAL, "  Synchronize:    dotta sync");
                 output_hintline(out, OUTPUT_NORMAL, "  Or bypass with: dotta sync --force");
@@ -1864,10 +1887,11 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
 
             /* Non-strict mode: Warn and require user confirmation
              *
-             * The risk: syncing before committing local changes can hide remote conflicts.
-             * If remote has changes to the same files, pulling those changes updates the
-             * manifest. Then 'update' commits local changes ON TOP of remote's version,
-             * silently overwriting remote changes without merge/conflict detection.
+             * The risk: syncing before committing local changes can turn them
+             * into conflicts. If the pull moves a file the user edited, the
+             * edit becomes [modified] [stale] — update will not commit over
+             * git's newer content, and no dotta verb commits ours over theirs;
+             * the user resolves it by hand.
              *
              * Safe workflow: update → sync → resolve any divergence explicitly
              */
@@ -1879,6 +1903,9 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
             /* Show breakdown in verbose mode */
             if (modified_count > 0) {
                 output_info(out, OUTPUT_VERBOSE, "  %zu modified", modified_count);
+            }
+            if (conflict_count > 0) {
+                output_info(out, OUTPUT_VERBOSE, "  %zu changed in Git and disk", conflict_count);
             }
             if (deleted_count > 0) {
                 output_info(out, OUTPUT_VERBOSE, "  %zu deleted", deleted_count);
@@ -1893,7 +1920,7 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
                 output_info(out, OUTPUT_VERBOSE, "  %zu untracked", untracked_count);
             }
 
-            output_info(out, OUTPUT_NORMAL, "Syncing before 'update' may hide remote conflicts.");
+            output_info(out, OUTPUT_NORMAL, "Syncing before 'update' may lead to conflicts.");
             output_newline(out, OUTPUT_NORMAL);
 
             /* Confirmation with safe defaults:
@@ -1902,7 +1929,18 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
              */
             if (!output_confirm_or_default(out, "Continue anyway?", false, false)) {
                 output_info(out, OUTPUT_NORMAL, "Sync cancelled");
-                output_hint(out, OUTPUT_NORMAL, "Run 'dotta update' first to commit local changes");
+                if (conflict_count > 0) {
+                    output_hint(
+                        out, OUTPUT_NORMAL,
+                        "Resolve conflicts first: 'dotta diff' shows Git's version against "
+                        "disk, 'dotta apply --force' keeps Git's; run 'dotta update' for the rest"
+                    );
+                } else {
+                    output_hint(
+                        out, OUTPUT_NORMAL,
+                        "Run 'dotta update' first to commit local changes"
+                    );
+                }
                 err = NULL;  /* User cancelled - clean exit, not an error */
                 goto cleanup;
             }
@@ -2041,7 +2079,7 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
 
     if (drift.updated > 0) {
         output_info(
-            out, OUTPUT_NORMAL, "Synchronized %zu file%s from external Git changes",
+            out, OUTPUT_NORMAL, "Synchronized %zu file%s from external git changes",
             drift.updated, drift.updated == 1 ? "" : "s"
         );
     }

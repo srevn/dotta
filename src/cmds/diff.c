@@ -50,20 +50,23 @@ static bool should_show_item_for_direction(
     if (direction == DIFF_UPSTREAM) {
         /* Upstream: What would apply do? */
         /* Show: undeployed, deleted (apply would restore), content/mode differs,
+         * stale (Git moved past the deployed blob; apply would deploy),
          * or profile reassignment (apply acknowledges reassignment) */
         return (item->state == WORKSPACE_STATE_UNDEPLOYED) ||
                (item->state == WORKSPACE_STATE_DELETED) ||
                (item->state == WORKSPACE_STATE_DEPLOYED &&
-               ((item->divergence & (DIVERGENCE_CONTENT | DIVERGENCE_MODE |
-               DIVERGENCE_OWNERSHIP)) ||
+               ((item->divergence & (DIVERGENCE_CONTENT | DIVERGENCE_STALE |
+               DIVERGENCE_MODE | DIVERGENCE_OWNERSHIP)) ||
                item->profile_changed));
     }
 
     if (direction == DIFF_DOWNSTREAM) {
         /* Downstream: What would update do? */
-        /* Show: deleted, content/mode differs (filesystem → Git) */
+        /* Show: deleted, content/mode differs (filesystem → Git). Never a
+         * STALE item — update skips every one of them. */
         return (item->state == WORKSPACE_STATE_DELETED) ||
                (item->state == WORKSPACE_STATE_DEPLOYED &&
+               !(item->divergence & DIVERGENCE_STALE) &&
                (item->divergence & (DIVERGENCE_CONTENT | DIVERGENCE_MODE |
                DIVERGENCE_OWNERSHIP)));
     }
@@ -106,6 +109,14 @@ static const char *get_status_message_from_item(
         return direction == DIFF_UPSTREAM
                 ? "type would change on apply"
                 : "type changed locally";
+    }
+
+    /* Git moved past the deployed blob. Only reachable via UPSTREAM
+     * (DOWNSTREAM filters every STALE item out). */
+    if (item->divergence & DIVERGENCE_STALE) {
+        return (item->divergence & DIVERGENCE_CONTENT)
+                ? "changed in Git and on disk (apply --force keeps Git's)"
+                : "updated in Git (would be deployed by apply)";
     }
 
     if (item->divergence & DIVERGENCE_CONTENT) {
@@ -201,9 +212,10 @@ static error_t *show_file_diff_from_workspace(
         return NULL;
     }
 
-    /* For mode-only changes (content matches), no content diff */
+    /* For mode-only changes (content matches), no content diff. A STALE
+     * item's content does differ — disk holds the blob Git moved past. */
     if ((item->divergence & (DIVERGENCE_MODE | DIVERGENCE_OWNERSHIP)) &&
-        !(item->divergence & DIVERGENCE_CONTENT)) {
+        !(item->divergence & (DIVERGENCE_CONTENT | DIVERGENCE_STALE))) {
         return NULL;
     }
 

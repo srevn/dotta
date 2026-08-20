@@ -374,12 +374,15 @@ const state_directory_entry_t *workspace_lookup_directory(
  *
  * Tag Priority (for DEPLOYED state with divergence):
  *   1. "type" (RED) - File type changed (symlink ↔ regular), most severe
- *   2. "modified" (YELLOW) - Content divergence from profile
- *   3. Secondary: "mode", "ownership", "unencrypted" - Metadata divergence
+ *   2. "modified" (YELLOW) - Disk content moved away from what dotta deployed
+ *   3. "stale" (CYAN when alone: apply-side work, like "undeployed") - Git
+ *      moved past the deployed blob; next to "modified" it names a conflict
+ *      and the primary tag's colour stands
+ *   4. Secondary: "mode", "ownership", "unencrypted" - Metadata divergence
  *
  * The function handles special cases:
  *   - TYPE divergence suppresses MODE tag (type change makes mode irrelevant)
- *   - ENCRYPTION divergence upgrades color to MAGENTA if not already RED
+ *   - ENCRYPTION divergence upgrades color to MAGENTA if still the default
  *
  * Metadata Format:
  *   - "from {profile}" - Standard source profile

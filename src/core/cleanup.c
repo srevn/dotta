@@ -180,7 +180,8 @@ cleanup_skip_reason_t cleanup_skip_reason(const workspace_item_t *item) {
 
     /* All priority flags handled above. Remaining flags:
      * - ENCRYPTION: Policy mismatch (not user modification) — safe
-     * - STALE: VWD cache outdated (Git changed) — irrelevant for removal
+     * - STALE: never emitted for an orphan (compute_orphan_divergence asks
+     *   one question, of disk alone) — listed so it cannot block
      * Unknown flags: block removal until explicitly handled above. */
     static const divergence_type_t known_flags = DIVERGENCE_CONTENT |
         DIVERGENCE_TYPE | DIVERGENCE_MODE | DIVERGENCE_OWNERSHIP |

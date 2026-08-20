@@ -16,7 +16,9 @@
  * - Explicit conflict detection
  * - Permission preservation
  * - Fail-stop on error (not transactional, but clear reporting)
- * - One dry-run gate per executor, ahead of every mutation
+ * - One dry-run gate per executor, ahead of every mutation and behind
+ *   every decision: nothing a run concludes consults dry_run, so a dry
+ *   run resolves, warns and refuses exactly as the real run does
  * - Removals are single-node: what stands at a planned path, never a tree
  * - Directories are materialized in two phases: held at a working mode
  *   (recorded mode, owner rwx on) while the run writes beneath them, then

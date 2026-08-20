@@ -969,9 +969,9 @@ static error_t *release_directories(deploy_run_t *run) {
  * - ERR_NOT_FOUND (user/group missing): Fatal error, abort deployment
  * - ERR_PERMISSION (not root): Warning only (can't chown anyway)
  *
- * Pure decision — no filesystem mutation — so executors call it ahead of
- * their dry-run gate; in dry-run a strict-mode failure prints "Would fail"
- * instead of aborting.
+ * Pure decision — no filesystem mutation, and nothing here reads the run's
+ * dry-run flag — so executors call it ahead of their gate and a dry run
+ * reaches the verdict the real run reaches, the strict-mode abort included.
  *
  * @param storage_path Path in profile (e.g., "home/.bashrc", "root/etc/hosts")
  * @param filesystem_path Resolved deployment path for home detection
@@ -980,7 +980,6 @@ static error_t *release_directories(deploy_run_t *run) {
  * @param out_uid Resolved UID or -1 for no change (must not be NULL)
  * @param out_gid Resolved GID or -1 for no change (must not be NULL)
  * @param strict_ownership Fail deployment if ownership cannot be resolved
- * @param dry_run Dry-run mode (show "would fail" instead of failing)
  * @param verbose Enable verbose warning messages
  * @return Error on fatal failures, NULL on success (non-fatal errors logged and suppressed)
  */
@@ -989,8 +988,7 @@ static error_t *resolve_deployment_ownership(
     const char *filesystem_path,
     const char *owner, const char *group,
     uid_t *out_uid, gid_t *out_gid,
-    bool strict_ownership,
-    bool dry_run, bool verbose
+    bool strict_ownership, bool verbose
 ) {
     CHECK_NULL(storage_path);
     CHECK_NULL(out_uid);
@@ -1044,7 +1042,7 @@ static error_t *resolve_deployment_ownership(
              *   - Always warning (user already warned about privileges)
              */
             bool is_resolution_failure = (err->code == ERR_NOT_FOUND);
-            bool should_fail = is_resolution_failure && strict_ownership && !dry_run;
+            bool should_fail = is_resolution_failure && strict_ownership;
 
             if (should_fail) {
                 /* Fatal: Return error to abort deployment */
@@ -1056,13 +1054,7 @@ static error_t *resolve_deployment_ownership(
             }
 
             /* Non-fatal: Log appropriate message and continue */
-            if (dry_run && is_resolution_failure && strict_ownership) {
-                /* Dry-run with strict mode: Show what would fail */
-                fprintf(
-                    stderr, "Would fail: %s - %s (strict_mode enabled)\n",
-                    storage_path, error_message(err)
-                );
-            } else if (verbose || err->code != ERR_PERMISSION) {
+            if (verbose || err->code != ERR_PERMISSION) {
                 /* Standard warning (suppress ERR_PERMISSION unless verbose) */
                 fprintf(
                     stderr, "Warning: Could not resolve ownership for %s: %s\n",
@@ -1129,7 +1121,7 @@ static error_t *resolve_directory_metadata(
         dir->owner, dir->group,
         out_uid, out_gid,
         opts->strict_ownership,
-        opts->dry_run, opts->verbose
+        opts->verbose
     );
     if (err) {
         return error_wrap(
@@ -1336,13 +1328,16 @@ cleanup:
  * Deploy a single state row to its target filesystem location.
  *
  * Decide, then gate, then mutate: the blob sanity check, the verdict on
- * whatever occupies the path, and ownership resolution are decisions and
- * run ahead of the dry-run gate (so a dry-run refuses what the real run
- * refuses, and previews strict-mode ownership failures too); every
- * mutation sits behind it, missing parents first.
+ * whatever occupies the path, and the row's target metadata are decisions
+ * and run ahead of the dry-run gate, so a dry run refuses what the real
+ * run refuses and warns what it warns; every mutation sits behind it,
+ * missing parents first. Mode resolves before ownership — the order
+ * deploy_directory resolves them in — so a corrupt row is named even
+ * when a strict-mode ownership failure ends the run there.
  *
  * VWD Model:
- * - file->mode: Permission mode from state (0 = use safe fallback by type)
+ * - file->mode: Permission mode from state — 0 on a symlink row (links
+ *   carry none), state corruption on any other, which falls back by type
  * - file->owner/group: Ownership strings for root/ prefix files (NULL for home/)
  * - file->encrypted: handled transparently by the content cache
  *
@@ -1410,6 +1405,34 @@ static error_t *deploy_file(deploy_run_t *run, const state_file_entry_t *file) {
     bool must_clear = (want == OCCUPANT_SYMLINK) ? occupant_present(occ)
                                                  : (occ == OCCUPANT_DIRECTORY);
 
+    /* Determine permissions from state row
+     *
+     * In VWD operations, the state row should always have mode populated
+     * by the manifest layer at write time. If mode==0, this indicates state
+     * corruption or manifest sync failure. Fall back to a safe default keyed
+     * on file type.
+     *
+     * A symlink row is the one honest zero: the manifest records mode 0 for
+     * GIT_FILEMODE_LINK and metadata keeps it there, symlink(2) takes no
+     * mode and the symlink arm never reads this. Its zero is the recorded
+     * value, not a hole — so the corruption question is asked only of the
+     * kinds that carry a mode. */
+    mode_t file_mode = file->mode;
+    if (file->type != STATE_FILE_SYMLINK && file_mode == 0) {
+        /* Defensive fallback - indicates unexpected state corruption */
+        file_mode = (file->type == STATE_FILE_EXECUTABLE) ? 0755 : 0644;
+
+        fprintf(
+            stderr,
+            "Warning: Missing mode in state for '%s', using default %04o\n"
+            "         This may indicate state database corruption. Consider running:\n"
+            "         dotta profile disable %s && dotta profile enable %s\n",
+            file->filesystem_path, file_mode,
+            file->profile ? file->profile : "<profile>",
+            file->profile ? file->profile : "<profile>"
+        );
+    }
+
     /* Resolve ownership for the file based on prefix - RESOLVED BEFORE WRITING
      *
      * SECURITY: Ownership resolution happens BEFORE file creation to enable
@@ -1432,7 +1455,7 @@ static error_t *deploy_file(deploy_run_t *run, const state_file_entry_t *file) {
         file->owner, file->group,
         &target_uid, &target_gid,
         opts->strict_ownership,
-        opts->dry_run, opts->verbose
+        opts->verbose
     );
     if (err) {
         return error_wrap(
@@ -1522,28 +1545,6 @@ static error_t *deploy_file(deploy_run_t *run, const state_file_entry_t *file) {
     /* Get content pointer and size from buffer */
     const unsigned char *content = (const unsigned char *) content_buffer->data;
     size_t size = content_buffer->size;
-
-    /* Determine permissions from state row
-     *
-     * In VWD operations, the state row should always have mode populated
-     * by the manifest layer at write time. If mode==0, this indicates state
-     * corruption or manifest sync failure. Fall back to a safe default keyed
-     * on file type. */
-    mode_t file_mode = file->mode;
-    if (file_mode == 0) {
-        /* Defensive fallback - indicates unexpected state corruption */
-        file_mode = (file->type == STATE_FILE_EXECUTABLE) ? 0755 : 0644;
-
-        fprintf(
-            stderr,
-            "Warning: Missing mode in state for '%s', using default %04o\n"
-            "         This may indicate state database corruption. Consider running:\n"
-            "         dotta profile disable %s && dotta profile enable %s\n",
-            file->filesystem_path, file_mode,
-            file->profile ? file->profile : "<profile>",
-            file->profile ? file->profile : "<profile>"
-        );
-    }
 
     /* fs_write_file_raw lands the content by rename(2) of a temp file over
      * the target, which replaces a regular file, a symlink (the link

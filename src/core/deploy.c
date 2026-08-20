@@ -189,7 +189,7 @@ error_t *deploy_plan_build(
     CHECK_NULL(scope);
     CHECK_NULL(out);
 
-    /* calloc zeroes the six ptr_array_t buckets — that IS their empty state */
+    /* calloc zeroes the eight ptr_array_t buckets — that IS their empty state */
     deploy_plan_t *plan = calloc(1, sizeof(*plan));
     if (!plan) {
         return ERROR(ERR_MEMORY, "Failed to allocate deploy plan");
@@ -236,8 +236,7 @@ error_t *deploy_plan_build(
         /* No SKIP_EXISTING arm: --skip-existing does not reach tracked
          * directories (see deploy_partition_t). */
         err = partition_push(
-            &plan->directories,
-            row,
+            &plan->directories, row,
             deploy_needs_work(workspace_get_item(ws, row->filesystem_path)),
             scope_is_excluded(scope, row->storage_path, PATH_KIND_DIRECTORY)
                 ? SKIP_EXCLUDED : SKIP_NONE
@@ -574,7 +573,7 @@ static bool content_conflicts(const workspace_item_t *item) {
 /**
  * Record a conflict — a planned path --force resolves
  */
-static error_t *push_conflict(preflight_result_t *result, const char *path) {
+static error_t *push_conflict(deploy_preflight_result_t *result, const char *path) {
     RETURN_IF_ERROR(string_array_push(result->conflicts, path));
 
     result->has_errors = true;
@@ -586,7 +585,7 @@ static error_t *push_conflict(preflight_result_t *result, const char *path) {
  * privileges can land, so the entry carries its own reason. Takes
  * ownership of `entry`; NULL means the formatting itself failed.
  */
-static error_t *push_blocked(preflight_result_t *result, char *entry) {
+static error_t *push_blocked(deploy_preflight_result_t *result, char *entry) {
     if (!entry) {
         return ERROR(ERR_MEMORY, "Failed to format blocked entry");
     }
@@ -607,7 +606,7 @@ static error_t *push_blocked(preflight_result_t *result, char *entry) {
  * directory, because that is the thing to fix. Takes ownership of
  * `entry`; NULL means the formatting itself failed.
  */
-static error_t *push_permission_error(preflight_result_t *result, char *entry) {
+static error_t *push_permission_error(deploy_preflight_result_t *result, char *entry) {
     if (!entry) {
         return ERROR(ERR_MEMORY, "Failed to format permission entry");
     }
@@ -668,7 +667,7 @@ static error_t *push_permission_error(preflight_result_t *result, char *entry) {
  */
 static error_t *check_landing(
     const workspace_t *ws, const deploy_plan_t *plan,
-    const char *path, preflight_result_t *result
+    const char *path, deploy_preflight_result_t *result
 ) {
     char *scratch = strdup(path);
     if (!scratch) {
@@ -687,7 +686,7 @@ static error_t *check_landing(
                 result, str_format("%s (ancestry cannot be reached)", path)
             );
         }
-        goto cleanup;                     /* anything else: the write reports it */
+        goto cleanup;  /* anything else: the write reports it */
     }
 
     scratch[ancestor_len(slash)] = '\0';  /* the ancestor, on its own */
@@ -728,18 +727,16 @@ error_t *deploy_preflight(
     const workspace_t *ws,
     const deploy_plan_t *plan,
     const deploy_options_t *opts,
-    preflight_result_t **out
+    deploy_preflight_result_t **out
 ) {
     CHECK_NULL(ws);
     CHECK_NULL(plan);
     CHECK_NULL(opts);
     CHECK_NULL(out);
 
-    preflight_result_t *result = calloc(1, sizeof(preflight_result_t));
+    deploy_preflight_result_t *result = calloc(1, sizeof(deploy_preflight_result_t));
     if (!result) {
-        return ERROR(
-            ERR_MEMORY, "Failed to allocate preflight result"
-        );
+        return ERROR(ERR_MEMORY, "Failed to allocate preflight result");
     }
 
     result->conflicts = string_array_new(0);
@@ -747,10 +744,8 @@ error_t *deploy_preflight(
     result->permission_errors = string_array_new(0);
 
     if (!result->conflicts || !result->blocked || !result->permission_errors) {
-        preflight_result_free(result);
-        return ERROR(
-            ERR_MEMORY, "Failed to allocate result arrays"
-        );
+        deploy_preflight_result_free(result);
+        return ERROR(ERR_MEMORY, "Failed to allocate result arrays");
     }
 
     error_t *err = NULL;
@@ -828,7 +823,7 @@ error_t *deploy_preflight(
     return NULL;
 
 cleanup:
-    preflight_result_free(result);
+    deploy_preflight_result_free(result);
     return error_wrap(err, "Failed to record preflight finding");
 }
 
@@ -967,11 +962,13 @@ static error_t *release_directories(deploy_run_t *run) {
  *
  * Strict ownership mode (strict_ownership=true):
  * - ERR_NOT_FOUND (user/group missing): Fatal error, abort deployment
- * - ERR_PERMISSION (not root): Warning only (can't chown anyway)
+ * - ERR_PERMISSION (not root): Silent (can't chown anyway; see below)
  *
  * Pure decision — no filesystem mutation, and nothing here reads the run's
  * dry-run flag — so executors call it ahead of their gate and a dry run
  * reaches the verdict the real run reaches, the strict-mode abort included.
+ * Nothing here reads a verbosity flag either: a warning is an anomaly
+ * report and its visibility is not the caller's output policy to set.
  *
  * @param storage_path Path in profile (e.g., "home/.bashrc", "root/etc/hosts")
  * @param filesystem_path Resolved deployment path for home detection
@@ -980,7 +977,6 @@ static error_t *release_directories(deploy_run_t *run) {
  * @param out_uid Resolved UID or -1 for no change (must not be NULL)
  * @param out_gid Resolved GID or -1 for no change (must not be NULL)
  * @param strict_ownership Fail deployment if ownership cannot be resolved
- * @param verbose Enable verbose warning messages
  * @return Error on fatal failures, NULL on success (non-fatal errors logged and suppressed)
  */
 static error_t *resolve_deployment_ownership(
@@ -988,7 +984,7 @@ static error_t *resolve_deployment_ownership(
     const char *filesystem_path,
     const char *owner, const char *group,
     uid_t *out_uid, gid_t *out_gid,
-    bool strict_ownership, bool verbose
+    bool strict_ownership
 ) {
     CHECK_NULL(storage_path);
     CHECK_NULL(out_uid);
@@ -1039,7 +1035,10 @@ static error_t *resolve_deployment_ownership(
              *   - strict_ownership=false: Warning, continue with default ownership
              *
              * ERR_PERMISSION: Not running as root (can't chown anyway)
-             *   - Always warning (user already warned about privileges)
+             *   - Silent. Not an anomaly but the expected shape of an
+             *     unelevated run, and reachable only in a dry one: a real
+             *     run's privilege phase has re-exec'd under sudo or failed
+             *     hard before any row gets here.
              */
             bool is_resolution_failure = (err->code == ERR_NOT_FOUND);
             bool should_fail = is_resolution_failure && strict_ownership;
@@ -1054,8 +1053,7 @@ static error_t *resolve_deployment_ownership(
             }
 
             /* Non-fatal: Log appropriate message and continue */
-            if (verbose || err->code != ERR_PERMISSION) {
-                /* Standard warning (suppress ERR_PERMISSION unless verbose) */
+            if (err->code != ERR_PERMISSION) {
                 fprintf(
                     stderr, "Warning: Could not resolve ownership for %s: %s\n",
                     storage_path, error_message(err)
@@ -1120,8 +1118,7 @@ static error_t *resolve_directory_metadata(
         dir->filesystem_path,
         dir->owner, dir->group,
         out_uid, out_gid,
-        opts->strict_ownership,
-        opts->verbose
+        opts->strict_ownership
     );
     if (err) {
         return error_wrap(
@@ -1225,7 +1222,10 @@ static error_t *create_ancestor(
  * @return Error or NULL on success
  */
 static error_t *open_landing_directory(
-    deploy_run_t *run, const char *ancestor, occupant_t occ, const struct stat *st
+    deploy_run_t *run,
+    const char *ancestor,
+    occupant_t occ,
+    const struct stat *st
 ) {
     if (occ != OCCUPANT_DIRECTORY || access(ancestor, W_OK | X_OK) == 0) {
         return NULL;
@@ -1233,7 +1233,7 @@ static error_t *open_landing_directory(
 
     const state_directory_entry_t *dir = holdable_directory(run->ws, ancestor, st);
     if (!dir) {
-        return NULL;                            /* not ours: the write meets the refusal */
+        return NULL;  /* not ours: the write meets the refusal */
     }
 
     mode_t current = st->st_mode & 0777;
@@ -1242,7 +1242,8 @@ static error_t *open_landing_directory(
     );
     if (err) {
         return error_wrap(
-            err, "Failed to open tracked directory '%s' for the run", ancestor
+            err, "Failed to open tracked directory '%s' for the run",
+            ancestor
         );
     }
 
@@ -1454,21 +1455,17 @@ static error_t *deploy_file(deploy_run_t *run, const state_file_entry_t *file) {
         file->filesystem_path,
         file->owner, file->group,
         &target_uid, &target_gid,
-        opts->strict_ownership,
-        opts->verbose
+        opts->strict_ownership
     );
     if (err) {
         return error_wrap(
-            err, "Failed to resolve ownership for '%s'", file->filesystem_path
+            err, "Failed to resolve ownership for '%s'",
+            file->filesystem_path
         );
     }
 
     /* The one mutation gate */
     if (opts->dry_run) {
-        /* Dry-run mode - just print */
-        if (opts->verbose) {
-            printf("  Would deploy: %s\n", file->filesystem_path);
-        }
         return NULL;
     }
 
@@ -1519,10 +1516,6 @@ static error_t *deploy_file(deploy_run_t *run, const state_file_entry_t *file) {
             }
         }
 
-        if (opts->verbose) {
-            printf("Deployed symlink: %s\n", file->filesystem_path);
-        }
-
         /* Success for symlink - goto cleanup will handle freeing */
         err = NULL;
         goto cleanup;
@@ -1538,7 +1531,10 @@ static error_t *deploy_file(deploy_run_t *run, const state_file_entry_t *file) {
     );
 
     if (err) {
-        err = error_wrap(err, "Failed to get content for '%s'", file->storage_path);
+        err = error_wrap(
+            err, "Failed to get content for '%s'",
+            file->storage_path
+        );
         goto cleanup;
     }
 
@@ -1560,8 +1556,7 @@ static error_t *deploy_file(deploy_run_t *run, const state_file_entry_t *file) {
      * fchown() and fchmod() on the file descriptor, eliminating any security window.
      * This is the ONLY place where ownership is applied - metadata layer only resolves. */
     err = fs_write_file_raw(
-        file->filesystem_path, content, size, file_mode,
-        target_uid, target_gid
+        file->filesystem_path, content, size, file_mode, target_uid, target_gid
     );
 
     if (err) {
@@ -1570,23 +1565,6 @@ static error_t *deploy_file(deploy_run_t *run, const state_file_entry_t *file) {
             file->filesystem_path
         );
         goto cleanup;
-    }
-
-    /* Verbose output */
-    if (opts->verbose) {
-        bool has_ownership = (file->owner || file->group) && target_uid != (uid_t) -1;
-
-        if (has_ownership) {
-            printf(
-                "Deployed: %s (mode: %04o, owner: %s:%s)\n",
-                file->filesystem_path, file_mode,
-                file->owner ? file->owner : "?", file->group ? file->group : "?"
-            );
-        } else {
-            printf(
-                "Deployed: %s (mode: %04o)\n", file->filesystem_path, file_mode
-            );
-        }
     }
 
     /* Success */
@@ -1599,7 +1577,9 @@ cleanup:
 
 /**
  * How deploy_directory will materialize a planned row — decided from a
- * fresh lstat, never from the load-time observation.
+ * fresh lstat, never from the load-time observation — and the bucket the
+ * row lands in afterwards: deploy_result_t keeps one per action, so the
+ * receipt's verb is this decision and nothing re-derived from disk.
  */
 typedef enum {
     DIR_ACTION_CREATE,     /* absent */
@@ -1608,41 +1588,15 @@ typedef enum {
 } directory_action_t;
 
 /**
- * Verbose trace for deploy_directory, shared by the dry-run preview and
- * the real run — the verb is the only difference.
- */
-static void print_directory_trace(
-    const char *verb,
-    const state_directory_entry_t *dir,
-    mode_t mode,
-    bool has_ownership,
-    const char *detail
-) {
-    if (has_ownership) {
-        printf(
-            "  %s: %s (mode: %04o, owner: %s:%s)%s\n",
-            verb, dir->filesystem_path, mode,
-            dir->owner ? dir->owner : "?", dir->group ? dir->group : "?", detail
-        );
-    } else {
-        printf(
-            "  %s: %s (mode: %04o)%s\n",
-            verb, dir->filesystem_path, mode, detail
-        );
-    }
-}
-
-/**
  * Materialize one planned tracked directory to its expected state.
  *
  * The plan settled *that* the row is acted on; this decides *how* from a
  * fresh lstat — reality between plan and execution (a prompt sat in
  * between) is not the plan's to know. Same decide → gate → mutate order
- * as deploy_file: the type check, the divergence detail and metadata
- * resolution are decisions; the dry-run gate follows; then the clear
- * (REPLACE) or the missing parents (CREATE), and the create/fix, which
- * is idempotent — a planned directory whose reality healed meanwhile is
- * simply confirmed.
+ * as deploy_file: the type check and metadata resolution are decisions;
+ * the dry-run gate follows; then the clear (REPLACE) or the missing
+ * parents (CREATE), and the create/fix, which is idempotent — a planned
+ * directory whose reality healed meanwhile is simply confirmed.
  *
  * The directory lands at its working mode and is released to its exact
  * recorded mode once the run is over (working_mode, release_directories),
@@ -1656,11 +1610,18 @@ static void print_directory_trace(
  *
  * @param run Run context (must not be NULL)
  * @param dir State row (must not be NULL; borrowed, read-only)
+ * @param out_action What the row's path called for (must not be NULL;
+ *        set once decided, ahead of the gate, so a dry run reports it too)
  * @return Error or NULL on success
  */
-static error_t *deploy_directory(deploy_run_t *run, const state_directory_entry_t *dir) {
+static error_t *deploy_directory(
+    deploy_run_t *run,
+    const state_directory_entry_t *dir,
+    directory_action_t *out_action
+) {
     CHECK_NULL(run);
     CHECK_NULL(dir);
+    CHECK_NULL(out_action);
 
     const deploy_options_t *opts = run->opts;
     const char *path = dir->filesystem_path;
@@ -1698,36 +1659,14 @@ static error_t *deploy_directory(deploy_run_t *run, const state_directory_entry_
             action = DIR_ACTION_REPLACE;
             break;
     }
-
-    /* Divergence detail for the trace — FIX only. path_occupant answered
-     * the type question and kept nothing else; mode and ownership are a
-     * different question, asked only when a trace will actually print it.
-     * A stat that loses a race just omits the detail. */
-    char detail[32] = "";
-    struct stat st;
-    if (action == DIR_ACTION_FIX && opts->verbose && stat(path, &st) == 0) {
-        bool mode_differs = false;
-        bool ownership_differs = false;
-
-        error_t *err = check_item_metadata_divergence(
-            dir->mode, dir->owner, dir->group, &st, &mode_differs, &ownership_differs
-        );
-        if (err) return err;
-
-        if (mode_differs || ownership_differs) {
-            snprintf(
-                detail, sizeof(detail), " [%s%s%s]", mode_differs ? "mode" : "",
-                (mode_differs && ownership_differs) ? ", " : "",
-                ownership_differs ? "ownership" : ""
-            );
-        }
-    }
+    *out_action = action;
 
     /* Metadata is resolved BEFORE creation so fs_create_dir_with_ownership
      * applies it atomically via fchown()/fchmod() on the descriptor. */
     mode_t mode;
     uid_t target_uid;
     gid_t target_gid;
+
     error_t *err = resolve_directory_metadata(
         dir, opts, &mode, &target_uid, &target_gid
     );
@@ -1735,19 +1674,8 @@ static error_t *deploy_directory(deploy_run_t *run, const state_directory_entry_
         return err;
     }
 
-    bool has_ownership = (dir->owner || dir->group) && target_uid != (uid_t) -1;
-    static const char *const verbs[][2] = {   /* [action][0] preview, [1] outcome */
-        [DIR_ACTION_CREATE] =  { "Would create",  "Created"  },
-        [DIR_ACTION_FIX] =     { "Would fix",     "Fixed"    },
-        [DIR_ACTION_REPLACE] = { "Would replace", "Replaced" },
-    };
-    const char *verb = verbs[action][opts->dry_run ? 0 : 1];
-
     /* The one mutation gate */
     if (opts->dry_run) {
-        if (opts->verbose) {
-            print_directory_trace(verb, dir, mode, has_ownership, detail);
-        }
         return NULL;
     }
 
@@ -1767,10 +1695,6 @@ static error_t *deploy_directory(deploy_run_t *run, const state_directory_entry_
     err = materialize_tracked_directory(run, dir, mode, target_uid, target_gid);
     if (err) {
         return error_wrap(err, "Failed to create tracked directory: %s", path);
-    }
-
-    if (opts->verbose) {
-        print_directory_trace(verb, dir, mode, has_ownership, detail);
     }
 
     return NULL;
@@ -1819,18 +1743,12 @@ error_t *deploy_execute(
      * --force a squatting symlink is gone before anything is written
      * through it. Prefix order within the bucket = parents before children. */
     state_directories_t dirs = state_directories_view(&plan->directories.pending);
-    if (opts->verbose && dirs.count > 0) {
-        printf(
-            "Processing %zu tracked director%s...\n",
-            dirs.count, dirs.count == 1 ? "y" : "ies"
-        );
-    }
-
     for (size_t i = 0; i < dirs.count; i++) {
         const state_directory_entry_t *dir = dirs.entries[i];
+        directory_action_t action;
 
         /* Deploy tracked directories (workspace owns the active slice) */
-        err = deploy_directory(&run, dir);
+        err = deploy_directory(&run, dir, &action);
         if (err) {
             /* Fail-stop with the partial result; the error names the path */
             err = error_wrap(
@@ -1840,7 +1758,20 @@ error_t *deploy_execute(
             goto done;
         }
 
-        err = ptr_array_push(&result->converged, dir);
+        /* Record success in the bucket for what the executor found there */
+        switch (action) {
+            case DIR_ACTION_CREATE:
+                err = ptr_array_push(&result->created, dir);
+                break;
+
+            case DIR_ACTION_FIX:
+                err = ptr_array_push(&result->fixed, dir);
+                break;
+
+            case DIR_ACTION_REPLACE:
+                err = ptr_array_push(&result->replaced, dir);
+                break;
+        }
         if (err) {
             err = error_wrap(err, "Failed to record converged directory");
             goto done;
@@ -1848,12 +1779,6 @@ error_t *deploy_execute(
     }
 
     state_files_t files = state_files_view(&plan->files.pending);
-    if (opts->verbose && files.count > 0) {
-        printf(
-            "Processing %zu file%s for deployment...\n",
-            files.count, files.count == 1 ? "" : "s"
-        );
-    }
 
     /* Every pending row is work the plan chose, by construction: the
      * planner routed it through deploy_needs_work and past every reason to
@@ -1866,10 +1791,7 @@ error_t *deploy_execute(
         /* Deploy the file */
         err = deploy_file(&run, file);
         if (err) {
-            /* Fail-stop with the partial result.
-             * ptr_array_push failure is non-fatal here (already error-pathing). */
-            ptr_array_push(&result->failed, file);
-            result->error_message = strdup(error_message(err));
+            /* Fail-stop with the partial result; the error names the path */
             err = error_wrap(
                 err, "Deployment failed at '%s'",
                 file->filesystem_path
@@ -1913,7 +1835,7 @@ done:
 /**
  * Free preflight result
  */
-void preflight_result_free(preflight_result_t *result) {
+void deploy_preflight_result_free(deploy_preflight_result_t *result) {
     if (!result) {
         return;
     }
@@ -1936,8 +1858,8 @@ void deploy_result_free(deploy_result_t *result) {
     }
 
     ptr_array_deinit(&result->deployed);
-    ptr_array_deinit(&result->converged);
-    ptr_array_deinit(&result->failed);
-    free(result->error_message);
+    ptr_array_deinit(&result->created);
+    ptr_array_deinit(&result->fixed);
+    ptr_array_deinit(&result->replaced);
     free(result);
 }

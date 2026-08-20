@@ -26,6 +26,11 @@
  *   cmd_export materializes a profile. A tracked directory therefore
  *   never refuses a tracked path beneath it, and preflight predicts no
  *   modes
+ * - Silent: outcomes travel in the result, by verb, and failures in the
+ *   error chain; the only prose this module emits is a stderr warning
+ *   about an anomaly it met (a corrupt row, an identity it could not
+ *   resolve), never about an outcome. Verbosity and tense are the
+ *   caller's — the same convention as every other core module
  */
 
 #ifndef DOTTA_DEPLOY_H
@@ -65,7 +70,7 @@ typedef struct {
     string_array_t *conflicts;           /* Paths modified locally / wrong type */
     string_array_t *blocked;             /* "<path> (<reason>)" */
     string_array_t *permission_errors;   /* "<path> (<directory> is not writable)" */
-} preflight_result_t;
+} deploy_preflight_result_t;
 
 /**
  * Deployment options
@@ -73,7 +78,6 @@ typedef struct {
 typedef struct {
     bool force;               /* Overwrite modified files; replace a type conflict */
     bool dry_run;             /* Decide everything, mutate nothing */
-    bool verbose;             /* Print per-item traces */
     bool strict_ownership;    /* Fail if ownership cannot be resolved (strict_mode) */
 } deploy_options_t;
 
@@ -123,28 +127,33 @@ typedef struct {
 } deploy_plan_t;
 
 /**
- * Deployment result
+ * Deployment result — the run's receipt, by outcome
  *
- * Reports outcomes per kind: every bucket names something that happened.
- * Work the run deliberately did not do is the plan's to report, never the
- * result's — the plan decided it, so only the plan can report it before a
- * run that ends up executing nothing.
+ * Plan buckets by kind, result buckets by outcome verb: every bucket
+ * names something that happened, and a directory lands in the one for
+ * what the executor found at its path and did about it — decided from
+ * its fresh lstat, never from the plan — so the caller can say
+ * "replaced" where a squatter went and "fixed" where nothing was
+ * created. Work the run deliberately did not do is the plan's to report,
+ * never the result's — the plan decided it, so only the plan can report
+ * it before a run that ends up executing nothing. A failure is the
+ * returned error's to name: fail-stop wraps it with the path, and the
+ * partial receipt travels in *out beside it.
  *
  * Each bucket carries borrowed state-row pointers (workspace-arena
  * lifetime, outlives the deploy_result_t); project with
  * state_files_view / state_directories_view. Free with deploy_result_free
  * before workspace_free.
  *
- * In dry-run the deployed/converged buckets are still filled — they name
- * what the run *would* do, so the caller reports the preview from the
- * same object as the real run.
+ * In dry-run the same buckets are filled — they name what the run
+ * *would* do, so the caller reports the preview from the same object as
+ * the real run, differing only in tense.
  */
 typedef struct {
-    ptr_array_t deployed;          /* Files written (state_file_entry_t *) */
-    ptr_array_t converged;         /* Directories created/fixed/replaced (state_directory_entry_t *) */
-    ptr_array_t failed;            /* Fail-stop: the file whose write failed (at most one) */
-
-    char *error_message;           /* Error message if deployment failed */
+    ptr_array_t deployed;          /* Files written or linked (state_file_entry_t *) */
+    ptr_array_t created;           /* Directories made where nothing stood (state_directory_entry_t *) */
+    ptr_array_t fixed;             /* Directories converged in place — mode, ownership */
+    ptr_array_t replaced;          /* Directories that displaced a single-node squatter (--force) */
 } deploy_result_t;
 
 /**
@@ -258,7 +267,7 @@ error_t *deploy_preflight(
     const workspace_t *ws,
     const deploy_plan_t *plan,
     const deploy_options_t *opts,
-    preflight_result_t **out
+    deploy_preflight_result_t **out
 );
 
 /**
@@ -277,7 +286,7 @@ error_t *deploy_preflight(
  * Missing parents are the mechanics of landing a planned path, created
  * top-down as part of its write: a tracked directory (any profile, in
  * scope or not) with its tracked mode and ownership, anything else 0755
- * owned like the planned path. Silent, never counted as converged — the
+ * owned like the planned path. Silent, never in the receipt — the
  * caller's presence witness covers them. The workspace is consulted for
  * that lookup only; the plan alone decides what is acted on.
  *
@@ -323,7 +332,7 @@ error_t *deploy_execute(
  *
  * @param result Results to free (can be NULL)
  */
-void preflight_result_free(preflight_result_t *result);
+void deploy_preflight_result_free(deploy_preflight_result_t *result);
 
 /**
  * Free deployment results

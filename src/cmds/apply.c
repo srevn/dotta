@@ -25,11 +25,11 @@
 #include "utils/privilege.h"
 
 /**
- * Print pre-flight results
+ * Print deploy pre-flight results
  */
-static void print_preflight_results(
+static void print_deploy_preflight_results(
     const output_t *out,
-    const preflight_result_t *result
+    const deploy_preflight_result_t *result
 ) {
     if (!result) return;
 
@@ -246,69 +246,160 @@ static size_t print_withheld(
  * Print deployment results
  *
  * Handles all output for deployment results. The deploy layer only collects
- * results; this function handles all presentation.
+ * results; this function handles all presentation — the run's receipt,
+ * per-item sections at verbose and summary counts at normal. Every number
+ * is a bucket size: deploy bucketed the plan by outcome and this reads
+ * that partition, adding nothing of its own.
  *
  * Categories (each semantically distinct):
  * - deployed: Files written to disk (green)
- * - converged: Tracked directories created / fixed / replaced (green)
- * - failed: Deployment failures (red, always shown)
+ * - created / fixed / replaced: Tracked directories, by what the executor
+ *   found at the path — one line each, so the squatter --force displaced
+ *   is named at every verbosity (green; the replaced count yellow, as
+ *   cleanup colours a removal)
+ *
+ * The verb is execution truth; the tags are plan truth. A fixed row is
+ * tagged [mode] / [ownership] from the workspace's divergence index —
+ * why the planner chose it — never from a fresh stat: the run has just
+ * converged the directory, so disk would say nothing. Every pending row
+ * has an indexed item (deploy_needs_work(NULL) is false); one whose item
+ * carries neither bit prints no tag, and the other two buckets never
+ * carry one, since the verb already says what the path held.
+ *
+ * Mode and ownership print as recorded on the row, corruption included:
+ * a mode-0 row shows (mode: 0000) under the stderr warning that named
+ * the substitution. The receipt reports the row, the warning reports the
+ * repair. A symlink row records no mode by design and says so instead.
  *
  * Work the run held back is not here: the plan decided it, print_withheld
- * reports it, and it must be said even on runs that never execute.
+ * reports it, and it must be said even on runs that never execute. Nor
+ * is a failure: fail-stop returns the error naming the path, and
+ * cmd_apply prints the partial receipt ahead of it.
  *
  * Adoption (ownership stamping for pre-existing matching files) is an
  * apply-level concern and its summary is printed by cmd_apply directly.
  */
 static void print_deploy_results(
     const output_t *out,
+    const workspace_t *ws,
     const deploy_result_t *result,
     bool dry_run
 ) {
     if (!result) return;
 
     state_files_t deployed = state_files_view(&result->deployed);
-    state_directories_t converged = state_directories_view(&result->converged);
-    state_files_t failed = state_files_view(&result->failed);
+    state_directories_t created = state_directories_view(&result->created);
+    state_directories_t fixed = state_directories_view(&result->fixed);
+    state_directories_t replaced = state_directories_view(&result->replaced);
 
-    /* Verbose mode: show individual items per category */
+    /* Verbose mode: show individual items per outcome */
     if (deployed.count > 0) {
         output_section(
             out, OUTPUT_VERBOSE, dry_run ? "Would deploy files"
                                          : "Deployed files"
         );
         for (size_t i = 0; i < deployed.count; i++) {
+            const state_file_entry_t *file = deployed.entries[i];
+
+            if (file->type == STATE_FILE_SYMLINK) {
+                output_styled(
+                    out, OUTPUT_VERBOSE, "  {green}✓{reset} %s (symlink)\n",
+                    file->filesystem_path
+                );
+                continue;
+            }
+
             output_styled(
-                out, OUTPUT_VERBOSE, "  {green}✓{reset} %s\n",
-                deployed.entries[i]->filesystem_path
+                out, OUTPUT_VERBOSE, "  {green}✓{reset} %s (mode: %04o",
+                file->filesystem_path, file->mode
             );
+            if (file->owner || file->group) {
+                output_print(
+                    out, OUTPUT_VERBOSE, ", owner: %s:%s",
+                    file->owner ? file->owner : "?", file->group ? file->group : "?"
+                );
+            }
+            output_print(out, OUTPUT_VERBOSE, ")\n");
         }
     }
 
-    if (converged.count > 0) {
+    if (created.count > 0) {
         output_section(
-            out, OUTPUT_VERBOSE, dry_run ? "Would converge tracked directories"
-                                         : "Converged tracked directories"
+            out, OUTPUT_VERBOSE, dry_run ? "Would create tracked directories"
+                                         : "Created tracked directories"
         );
-        for (size_t i = 0; i < converged.count; i++) {
+        for (size_t i = 0; i < created.count; i++) {
+            const state_directory_entry_t *dir = created.entries[i];
+
             output_styled(
-                out, OUTPUT_VERBOSE, "  {green}✓{reset} %s\n",
-                converged.entries[i]->filesystem_path
+                out, OUTPUT_VERBOSE, "  {green}✓{reset} %s (mode: %04o",
+                dir->filesystem_path, dir->mode
             );
+            if (dir->owner || dir->group) {
+                output_print(
+                    out, OUTPUT_VERBOSE, ", owner: %s:%s",
+                    dir->owner ? dir->owner : "?", dir->group ? dir->group : "?"
+                );
+            }
+            output_print(out, OUTPUT_VERBOSE, ")\n");
         }
     }
 
-    /* Failed files (always shown, regardless of verbose) */
-    if (failed.count > 0) {
-        output_section(out, OUTPUT_NORMAL, "Failed to deploy");
-        for (size_t i = 0; i < failed.count; i++) {
+    if (fixed.count > 0) {
+        output_section(
+            out, OUTPUT_VERBOSE, dry_run ? "Would fix tracked directories"
+                                         : "Fixed tracked directories"
+        );
+        for (size_t i = 0; i < fixed.count; i++) {
+            const state_directory_entry_t *dir = fixed.entries[i];
+
             output_styled(
-                out, OUTPUT_NORMAL, "  {red}✗{reset} %s\n",
-                failed.entries[i]->filesystem_path
+                out, OUTPUT_VERBOSE, "  {green}✓{reset} %s (mode: %04o",
+                dir->filesystem_path, dir->mode
             );
+            if (dir->owner || dir->group) {
+                output_print(
+                    out, OUTPUT_VERBOSE, ", owner: %s:%s",
+                    dir->owner ? dir->owner : "?", dir->group ? dir->group : "?"
+                );
+            }
+            output_print(out, OUTPUT_VERBOSE, ")");
+
+            /* What was fixed: the divergence the planner saw */
+            const workspace_item_t *item = workspace_get_item(ws, dir->filesystem_path);
+            bool mode_differs = item && (item->divergence & DIVERGENCE_MODE);
+            bool ownership_differs = item && (item->divergence & DIVERGENCE_OWNERSHIP);
+
+            if (mode_differs || ownership_differs) {
+                output_print(
+                    out, OUTPUT_VERBOSE, " [%s%s%s]", mode_differs ? "mode" : "",
+                    (mode_differs && ownership_differs) ? ", " : "",
+                    ownership_differs ? "ownership" : ""
+                );
+            }
+            output_print(out, OUTPUT_VERBOSE, "\n");
         }
-        if (result->error_message) {
-            output_newline(out, OUTPUT_NORMAL);
-            output_error(out, "%s", result->error_message);
+    }
+
+    if (replaced.count > 0) {
+        output_section(
+            out, OUTPUT_VERBOSE, dry_run ? "Would replace tracked directories"
+                                         : "Replaced tracked directories"
+        );
+        for (size_t i = 0; i < replaced.count; i++) {
+            const state_directory_entry_t *dir = replaced.entries[i];
+
+            output_styled(
+                out, OUTPUT_VERBOSE, "  {green}✓{reset} %s (mode: %04o",
+                dir->filesystem_path, dir->mode
+            );
+            if (dir->owner || dir->group) {
+                output_print(
+                    out, OUTPUT_VERBOSE, ", owner: %s:%s",
+                    dir->owner ? dir->owner : "?", dir->group ? dir->group : "?"
+                );
+            }
+            output_print(out, OUTPUT_VERBOSE, ")\n");
         }
     }
 
@@ -323,12 +414,30 @@ static void print_deploy_results(
             );
         }
 
-        if (converged.count > 0) {
+        if (created.count > 0) {
             output_styled(
                 out, OUTPUT_NORMAL,
-                dry_run ? "Would converge {green}%zu{reset} tracked director%s\n"
-                        : "Converged {green}%zu{reset} tracked director%s\n",
-                converged.count, converged.count == 1 ? "y" : "ies"
+                dry_run ? "Would create {green}%zu{reset} tracked director%s\n"
+                        : "Created {green}%zu{reset} tracked director%s\n",
+                created.count, created.count == 1 ? "y" : "ies"
+            );
+        }
+
+        if (fixed.count > 0) {
+            output_styled(
+                out, OUTPUT_NORMAL,
+                dry_run ? "Would fix {green}%zu{reset} tracked director%s\n"
+                        : "Fixed {green}%zu{reset} tracked director%s\n",
+                fixed.count, fixed.count == 1 ? "y" : "ies"
+            );
+        }
+
+        if (replaced.count > 0) {
+            output_styled(
+                out, OUTPUT_NORMAL,
+                dry_run ? "Would replace {yellow}%zu{reset} tracked director%s\n"
+                        : "Replaced {yellow}%zu{reset} tracked director%s\n",
+                replaced.count, replaced.count == 1 ? "y" : "ies"
             );
         }
     }
@@ -892,7 +1001,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     deploy_plan_t *deploy_plan = NULL;          /* Rows borrow from ws; free before ws */
     cleanup_plan_t *cleanup_plan = NULL;        /* Items borrow from ws; free before ws */
     ptr_array_t reassigned = { 0 };             /* In-scope items with profile_changed (borrowed) */
-    preflight_result_t *deploy_findings = NULL;
+    deploy_preflight_result_t *deploy_findings = NULL;
     cleanup_preflight_result_t *cleanup_verdicts = NULL;
     char *profiles_str = NULL;
     deploy_result_t *deploy_res = NULL;
@@ -1365,7 +1474,6 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     deploy_options_t deploy_opts = {
         .force            = opts->force,
         .dry_run          = opts->dry_run,
-        .verbose          = opts->verbose,
         .strict_ownership = config->strict_mode,
     };
 
@@ -1375,7 +1483,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         goto cleanup;
     }
 
-    print_preflight_results(out, deploy_findings);
+    print_deploy_preflight_results(out, deploy_findings);
     print_reassignments(out, &reassigned);
 
     /* Check for blocking findings (conflicts, blocked paths, permissions) */
@@ -1385,7 +1493,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     }
 
     /* Preflight checks passed - free the results as we don't need them anymore */
-    preflight_result_free(deploy_findings);
+    deploy_preflight_result_free(deploy_findings);
     deploy_findings = NULL;
 
     /* Decide cleanup's verdicts from the plan. An empty plan
@@ -1520,13 +1628,13 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         );
         if (err) {
             if (deploy_res) {
-                print_deploy_results(out, deploy_res, opts->dry_run);
+                print_deploy_results(out, ws, deploy_res, opts->dry_run);
             }
             err = error_wrap(err, "Deployment failed");
             goto cleanup;
         }
 
-        print_deploy_results(out, deploy_res, opts->dry_run);
+        print_deploy_results(out, ws, deploy_res, opts->dry_run);
     } else {
         output_print(out, OUTPUT_VERBOSE, "\nNo deployment work in scope\n");
     }
@@ -1732,7 +1840,7 @@ cleanup:
     ptr_array_deinit(&reassigned);
     if (cleanup_verdicts) cleanup_preflight_result_free(cleanup_verdicts);
     if (cleanup_plan) cleanup_plan_free(cleanup_plan);
-    if (deploy_findings) preflight_result_free(deploy_findings);
+    if (deploy_findings) deploy_preflight_result_free(deploy_findings);
     if (profiles_str) free(profiles_str);
     if (ws) workspace_free(ws);
     if (scope) scope_free(scope);

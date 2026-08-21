@@ -531,6 +531,7 @@ error_t *credential_helper_fill(
             *eq = '\0';
             const char *key = p;
             const char *value = eq + 1;
+
             if (strcmp(key, "username") == 0 && !user_buf) {
                 user_buf = strdup(value);
                 if (!user_buf) {

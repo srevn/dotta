@@ -1707,7 +1707,7 @@ static error_t *profile_validate(
             out, OUTPUT_NORMAL, "Found %zu orphaned file entr%s in state",
             orphaned_files, orphaned_files == 1 ? "y" : "ies"
         );
-        output_hint(out, OUTPUT_NORMAL, "  Run 'dotta apply' to clean up");
+        output_hint(out, OUTPUT_NORMAL, "Run 'dotta apply' to clean up");
     }
 
 cleanup:

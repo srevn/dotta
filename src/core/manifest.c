@@ -1453,8 +1453,7 @@ error_t *manifest_apply_scope(
             if (!old || old->lifecycle != LIFECYCLE_ACTIVE) {
                 slot->files_added++;
             } else if (!git_oid_equal(&old->blob_oid, &entry->blob_oid) ||
-                old->type != entry->type ||
-                old->mode != entry->mode) {
+                old->type != entry->type || old->mode != entry->mode) {
                 slot->files_updated++;
             }
         }

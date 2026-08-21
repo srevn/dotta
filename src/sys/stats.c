@@ -518,8 +518,8 @@ static error_t *walk_commits(
 
             for (size_t i = 0; i < num_deltas; i++) {
                 const git_diff_delta *delta = git_diff_get_delta(diff, i);
-                const char *path = delta->new_file.path ?
-                    delta->new_file.path : delta->old_file.path;
+                const char *path = delta->new_file.path ? delta->new_file.path
+                                                        : delta->old_file.path;
 
                 if (path && strcmp(path, ctx->target_path) == 0) {
                     found = true;

@@ -1626,14 +1626,9 @@ static error_t *update_display_summary(
 
     /* Display encryption policy violations section */
     if (encryption_count > 0) {
-        output_warning(
-            out, OUTPUT_NORMAL, "The following files match auto-encrypt "
-            "patterns but are stored as plaintext:"
-        );
-
         output_list_t *list = output_list_create(
             out, "Encryption policy violations",
-            NULL
+            "match auto-encrypt patterns but are stored as plaintext"
         );
 
         if (list) {
@@ -1669,12 +1664,12 @@ static error_t *update_display_summary(
 
         output_newline(out, OUTPUT_NORMAL);
         output_info(
-            out, OUTPUT_NORMAL, "These files will be re-encrypted according to "
-            "your auto_encrypt_patterns config."
+            out, OUTPUT_NORMAL, "These files will be encrypted on the next commit, "
+            "per auto_encrypt in your config's [encryption] section."
         );
         output_info(
-            out, OUTPUT_NORMAL, "To keep a file as plaintext, use: "
-            "dotta update --no-encrypt <file>"
+            out, OUTPUT_NORMAL, "To keep a file as plaintext, "
+            "narrow the pattern that matches it."
         );
     }
 

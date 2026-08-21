@@ -455,11 +455,11 @@ static void display_workspace_status(
             if (orphaned_count > 0) {
                 output_list_t *list = output_list_create(
                     out, "Issues",
-                    "run \"dotta apply\" to remove orphaned files"
+                    "run \"dotta apply\" to prune orphaned files"
                 );
 
                 if (list) {
-                    /* The header promises a removal; a clean orphan gets one
+                    /* The header promises a prune; a clean orphan gets one
                      * and needs no more words. Every other hint is keyed
                      * below by the exact tags its line shows, once per
                      * distinct tag string, so the key reads back against

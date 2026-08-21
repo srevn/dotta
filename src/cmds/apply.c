@@ -777,8 +777,6 @@ static void print_cleanup_preflight_results(
      * line names the profile; they are not spelled out. */
     if (skipped.count > 0) {
         output_section(out, OUTPUT_NORMAL, "Modified orphaned files detected");
-        output_newline(out, OUTPUT_NORMAL);
-
         output_warning(
             out, OUTPUT_NORMAL, "The following files cannot be safely removed:"
         );
@@ -827,7 +825,6 @@ static void print_cleanup_preflight_results(
 
         output_newline(out, OUTPUT_NORMAL);
         output_info(out, OUTPUT_NORMAL, "Use --force to prune them anyway (discards changes)");
-        output_newline(out, OUTPUT_NORMAL);
     }
 
     /* Released files are informational: nothing is asked of the user, and
@@ -836,7 +833,8 @@ static void print_cleanup_preflight_results(
         output_section(out, OUTPUT_NORMAL, "Released files");
         output_info(
             out, OUTPUT_NORMAL,
-            "The following files are no longer in their profile's Git branch:"
+            "The following files are no longer in their profile's Git branch, "
+            "and will be left on the filesystem:"
         );
 
         for (size_t i = 0; i < released.count; i++) {
@@ -845,11 +843,6 @@ static void print_cleanup_preflight_results(
             output_styled(out, OUTPUT_NORMAL, "  {cyan}→{reset} %s", item->filesystem_path);
             output_styled(out, OUTPUT_NORMAL, " {dim}(from %s){reset}\n", item->profile);
         }
-
-        output_info(
-            out, OUTPUT_NORMAL,
-            "These files will be left on the filesystem and released from management."
-        );
     }
 
     output_newline(out, OUTPUT_NORMAL);

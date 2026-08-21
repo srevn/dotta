@@ -668,8 +668,8 @@ error_t *config_load(const char *config_path, config_t **out) {
             /* Bounds-check using KDF_ARGON2_*_MIN/MAX (defense-in-depth
              * against the same constants kdf_validate_params re-checks at
              * the crypto boundary; see crypto/kdf.h's bounds rationale). */
-            if (mib.u.int64 < KDF_ARGON2_MEMORY_MIB_MIN
-                || mib.u.int64 > KDF_ARGON2_MEMORY_MIB_MAX) {
+            if (mib.u.int64 < KDF_ARGON2_MEMORY_MIB_MIN ||
+                mib.u.int64 > KDF_ARGON2_MEMORY_MIB_MAX) {
                 err = ERROR(
                     ERR_INVALID_ARG,
                     "Invalid [encryption] memory: %lld MiB (must be %u..%u)",
@@ -679,8 +679,8 @@ error_t *config_load(const char *config_path, config_t **out) {
                 );
                 goto cleanup;
             }
-            if (passes.u.int64 < KDF_ARGON2_PASSES_MIN
-                || passes.u.int64 > KDF_ARGON2_PASSES_MAX) {
+            if (passes.u.int64 < KDF_ARGON2_PASSES_MIN ||
+                passes.u.int64 > KDF_ARGON2_PASSES_MAX) {
                 err = ERROR(
                     ERR_INVALID_ARG,
                     "Invalid [encryption] passes: %lld (must be %u..%u)",

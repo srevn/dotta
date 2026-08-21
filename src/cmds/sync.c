@@ -1188,8 +1188,9 @@ static void sync_render_dry_run(
  * Tallies per-row outcomes (single source of truth), disambiguates the
  * DIVERGED umbrella by the captured analyze-phase state into
  * needs_pull / needs_push / diverged buckets, then emits the count lines,
- * the session-level transfer stats, and — when the manifest block staged,
- * released or reassigned anything — the "Run apply" hint.
+ * the session-level transfer stats, and — when apply has work, whether
+ * the manifest block just staged, released or reassigned it or the
+ * record already disagreed with the view — the "Run apply" hint.
  *
  * The summary keeps the finer-grained user vocabulary; hook env (Tier 2)
  * will expose the cleaner outcome partition.
@@ -1198,6 +1199,7 @@ static void sync_render_summary(
     const sync_results_t *results,
     const transfer_context_t *xfer,
     bool manifest_changed,
+    bool apply_pending,
     output_t *out
 ) {
     output_section(out, OUTPUT_NORMAL, "Sync complete");
@@ -1285,11 +1287,16 @@ static void sync_render_summary(
     /* Session-level wire stats (silent if nothing moved) */
     transfer_summarize(xfer, out, OUTPUT_NORMAL);
 
-    /* The manifest block is the direct evidence that apply has work; it is
-     * empty exactly when the Git phase touched nothing managed (a pull of
+    /* The hint states a fact about the record, not about this sync. The
+     * manifest block is the direct evidence of new work — it is empty
+     * exactly when the Git phase touched nothing managed (a pull of
      * README or .dottaignore, a push, 'ours'), which no guess from the
-     * outcome tallies could tell apart. */
-    if (manifest_changed) {
+     * outcome tallies could tell apart — and apply_pending is the work
+     * that was already there: an earlier sync reviewed with status
+     * instead of apply, a scope change, local drift. The block is a
+     * delta and prints once; the hint prints for as long as the work
+     * stands. */
+    if (manifest_changed || apply_pending) {
         output_newline(out, OUTPUT_NORMAL);
         output_hint(
             out, OUTPUT_NORMAL, "Run 'dotta apply' to deploy, or 'dotta status' to review"
@@ -1918,7 +1925,8 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
      * path under a profile with no target, a tree that will not load):
      * warn with it and carry on. */
     const string_array_t *enabled = scope_enabled(scope);
-    bool manifest_changed = false;
+    bool manifest_changed = false;    /* The block printed: the Git phase moved something managed */
+    bool apply_pending = false;       /* The record disagrees with the view, whenever that began */
 
     err = manifest_build(repo, enabled, ctx->mounts, ctx->arena, &after);
     if (err) {
@@ -1985,6 +1993,46 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
             }
             output_print(out, OUTPUT_NORMAL, "\n");
         }
+
+        /* The hint's standing half: what the record already disagreed
+         * with the view about, whichever sync or scope change left it
+         * there. Read off the view the Git phase produced and the two
+         * facts anchor_t's doc states, no disk and no second workspace
+         * load: a record whose path the view lacks is an orphan apply
+         * prunes, releases or reclaims; a record whose confirmed kind and
+         * content are not the row's is stale, or was never confirmed; an
+         * owned file record under another profile is a reassignment apply
+         * has not acknowledged (a directory's record keeps whoever made
+         * it — reassignment is a file's fact, derived in the file analyzer
+         * and acknowledged over files.clean); and a row with no record is
+         * undeployed, or was never observed. Mode, owner and group are
+         * claims the record copies, not facts it confirms, and say nothing
+         * here: a pulled metadata change is the block's to report, once.
+         *
+         * The record's paths are unique and so are the view's, so the
+         * records that found a row count the rows that have one. */
+        size_t recorded = 0;
+        for (size_t i = 0; i < anchor_count; i++) {
+            const anchor_t *anchor = &anchors[i];
+            const manifest_row_t *row = manifest_lookup(after, anchor->filesystem_path);
+
+            if (!row) {
+                apply_pending = true;
+                continue;
+            }
+            recorded++;
+
+            if (anchor->type != row->type ||
+                !git_oid_equal(&anchor->blob_oid, &row->blob_oid)) {
+                apply_pending = true;
+            } else if (row->type != PATH_TYPE_DIRECTORY && anchor->deployed_at > 0 &&
+                strcmp(anchor->profile, row->profile) != 0) {
+                apply_pending = true;
+            }
+        }
+        if (recorded < manifest_rows(after).count) {
+            apply_pending = true;
+        }
     }
 
     /* Post-sync fires once the Git phase and the manifest block are done;
@@ -1992,7 +2040,7 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
     hook_fire_post(config, out, ctx->repo_path, &hook_inv);
 
     /* Final summary */
-    sync_render_summary(results, xfer, manifest_changed, out);
+    sync_render_summary(results, xfer, manifest_changed, apply_pending, out);
 
     /* Success - fall through to cleanup */
     err = NULL;

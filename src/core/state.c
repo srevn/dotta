@@ -27,7 +27,7 @@
 #include "sys/filesystem.h"
 
 /* Schema version - must match database */
-#define STATE_SCHEMA_VERSION "13"
+#define STATE_SCHEMA_VERSION "14"
 
 /* Database file name */
 #define STATE_DB_NAME "dotta.db"
@@ -64,20 +64,23 @@ struct state {
     bool profile_entries_loaded;
 
     /* Prepared statements (initialized once, reused) */
-    sqlite3_stmt *stmt_insert_file;         /* INSERT OR REPLACE virtual_manifest */
-    sqlite3_stmt *stmt_update_anchor;       /* UPDATE virtual_manifest SET deployment anchor */
+    sqlite3_stmt *stmt_insert_file;         /* UPSERT virtual_manifest (projection writer) */
     sqlite3_stmt *stmt_remove_file;         /* DELETE FROM virtual_manifest */
     sqlite3_stmt *stmt_file_exists;         /* SELECT 1 FROM virtual_manifest */
     sqlite3_stmt *stmt_get_file;            /* SELECT * FROM virtual_manifest */
     sqlite3_stmt *stmt_get_file_by_storage; /* SELECT * WHERE storage_path = ? */
-    sqlite3_stmt *stmt_get_by_profile;      /* SELECT * WHERE profile = ? */
     sqlite3_stmt *stmt_insert_profile;      /* INSERT INTO enabled_profiles */
 
     /* Directory prepared statements */
     sqlite3_stmt *stmt_insert_directory;        /* UPSERT tracked_directories (projection writer) */
-    sqlite3_stmt *stmt_update_witness;          /* Directory witness: UPDATE observed_at WHERE observed_at = 0 */
     sqlite3_stmt *stmt_remove_directory;        /* DELETE FROM tracked_directories */
     sqlite3_stmt *stmt_mark_all_directories_inactive; /* UPDATE tracked_directories SET state = 'inactive' */
+
+    /* Anchor prepared statements (the record's four verbs) */
+    sqlite3_stmt *stmt_observe;             /* INSERT OR IGNORE anchors (presence only) */
+    sqlite3_stmt *stmt_anchor;              /* UPSERT anchors … RETURNING observed_at, deployed_at */
+    sqlite3_stmt *stmt_retire_anchor;       /* DELETE FROM anchors */
+    sqlite3_stmt *stmt_order_prune;         /* UPDATE anchors SET prune_ordered = 1 */
 };
 
 /**
@@ -148,12 +151,38 @@ static state_lifecycle_t lifecycle_from_sql_text(const char *s) {
 }
 
 /**
+ * Path type ↔ SQL text — the same boundary for the type column, shared by
+ * virtual_manifest (files only) and anchors (both kinds). Both tables'
+ * CHECK constraints reject unknown text on write; the read-side fallback
+ * to PATH_TYPE_FILE is the same graceful degradation as above.
+ */
+static const char *path_type_to_sql_text(path_type_t type) {
+    switch (type) {
+        case PATH_TYPE_SYMLINK:    return "symlink";
+        case PATH_TYPE_EXECUTABLE: return "executable";
+        case PATH_TYPE_DIRECTORY:  return "directory";
+        case PATH_TYPE_FILE:
+        default:                   return "file";
+    }
+}
+
+static path_type_t path_type_from_sql_text(const char *s) {
+    if (!s)                           return PATH_TYPE_FILE;
+    if (strcmp(s, "symlink") == 0)    return PATH_TYPE_SYMLINK;
+    if (strcmp(s, "executable") == 0) return PATH_TYPE_EXECUTABLE;
+    if (strcmp(s, "directory") == 0)  return PATH_TYPE_DIRECTORY;
+    return PATH_TYPE_FILE;
+}
+
+/**
  * Initialize database schema
  *
  * Creates tables if they don't exist:
  * - schema_meta: Schema versioning
  * - enabled_profiles: User's profile management (with indexes)
+ * - anchors: The record dotta keeps of every managed path (with index)
  * - virtual_manifest: Deployed file manifest (with indexes)
+ * - tracked_directories: Tracked directories from metadata (with index)
  *
  * @param db Database connection (must not be NULL)
  * @return Error or NULL on success
@@ -189,6 +218,45 @@ static error_t *initialize_schema(sqlite3 *db) {
         "CREATE INDEX IF NOT EXISTS idx_enabled_name "
         "ON enabled_profiles(name);"
 
+        /* The record: what dotta last reconciled each managed path against,
+         * and what it confirmed there. A row exists iff dotta has observed
+         * the path on disk while it was managed. One path, one kind, one
+         * record — the PRIMARY KEY; the kind is `type`. No foreign key in
+         * either direction: nothing is a parent, nothing cascades.
+         *
+         * Held by the schema:
+         *   - observed_at > 0 always (observed ⇔ row exists; no zero sentinel)
+         *   - a directory has no content confirmation (blob_oid IS NULL)
+         *   - ownership implies confirmation for a file (deployed_at > 0 ⇒
+         *     blob_oid set); a row with a blob and deployed_at = 0 is a
+         *     confirmation, not a deployment
+         *   - a stored blob is a real OID (20 bytes, never zeroblob) */
+        "CREATE TABLE IF NOT EXISTS anchors ("
+        "    filesystem_path TEXT PRIMARY KEY,"
+        "    storage_path TEXT NOT NULL,"
+        "    profile TEXT NOT NULL,"
+        "    type TEXT NOT NULL CHECK(type IN ('file', 'symlink', 'executable', 'directory')),"
+        "    mode INTEGER,"
+        "    owner TEXT,"
+        "    \"group\" TEXT,"
+        "    "
+        "    blob_oid BLOB CHECK(blob_oid IS NULL"
+        "                        OR (length(blob_oid) = 20 AND blob_oid != zeroblob(20))),"
+        "    stat_mtime INTEGER NOT NULL DEFAULT 0,"
+        "    stat_size  INTEGER NOT NULL DEFAULT 0,"
+        "    stat_ino   INTEGER NOT NULL DEFAULT 0,"
+        "    "
+        "    observed_at INTEGER NOT NULL CHECK(observed_at > 0),"
+        "    deployed_at INTEGER NOT NULL DEFAULT 0,"
+        "    prune_ordered INTEGER NOT NULL DEFAULT 0 CHECK(prune_ordered IN (0, 1)),"
+        "    "
+        "    CHECK (type != 'directory' OR blob_oid IS NULL),"
+        "    CHECK (deployed_at = 0 OR type = 'directory' OR blob_oid IS NOT NULL)"
+        ") STRICT;"
+
+        "CREATE INDEX IF NOT EXISTS idx_anchors_profile "
+        "ON anchors(profile);"
+
         /* Virtual manifest table (scope definition) */
         "CREATE TABLE IF NOT EXISTS virtual_manifest ("
         "    filesystem_path TEXT PRIMARY KEY,"
@@ -205,16 +273,7 @@ static error_t *initialize_schema(sqlite3 *db) {
         "    encrypted INTEGER NOT NULL DEFAULT 0,"
         "    "
         "    state TEXT NOT NULL DEFAULT 'active'"
-        "      CHECK(state IN ('active', 'inactive', 'deleted', 'released')),"
-        "    "
-        "    deployed_blob_oid BLOB NOT NULL DEFAULT (zeroblob(20)),"
-        "    deployed_at INTEGER NOT NULL DEFAULT 0,"
-        "    "
-        "    stat_mtime INTEGER NOT NULL DEFAULT 0,"
-        "    stat_size  INTEGER NOT NULL DEFAULT 0,"
-        "    stat_ino   INTEGER NOT NULL DEFAULT 0,"
-        "    "
-        "    observed_at INTEGER NOT NULL DEFAULT 0"
+        "      CHECK(state IN ('active', 'inactive', 'deleted', 'released'))"
         ") STRICT;"
 
         /* Indexes for common queries (hot paths) */
@@ -233,8 +292,7 @@ static error_t *initialize_schema(sqlite3 *db) {
         "    owner TEXT,"
         "    \"group\" TEXT,"
         "    state TEXT NOT NULL DEFAULT 'active'"
-        "      CHECK(state IN ('active', 'inactive', 'deleted')),"
-        "    observed_at INTEGER NOT NULL DEFAULT 0"
+        "      CHECK(state IN ('active', 'inactive', 'deleted'))"
         ") STRICT;"
 
         "CREATE INDEX IF NOT EXISTS idx_tracked_directories_profile "
@@ -463,10 +521,52 @@ static error_t *open_db(const char *db_path, bool create_if_missing, sqlite3 **o
 }
 
 /**
+ * Finalize all prepared statements
+ *
+ * Called from state_free() before closing database, and by
+ * prepare_statements on any failure: every slot is NULL until its
+ * statement is prepared, so finalizing the roster is safe at any point.
+ *
+ * @param state State (can be NULL)
+ */
+static void finalize_statements(state_t *state) {
+    if (!state) return;
+
+    sqlite3_stmt **roster[] = {
+        /* Manifest statements */
+        &state->stmt_insert_file,
+        &state->stmt_file_exists,
+        &state->stmt_get_file,
+        &state->stmt_get_file_by_storage,
+        &state->stmt_remove_file,
+        /* Profile statements */
+        &state->stmt_insert_profile,
+        /* Directory statements */
+        &state->stmt_insert_directory,
+        &state->stmt_remove_directory,
+        &state->stmt_mark_all_directories_inactive,
+        /* Anchor statements */
+        &state->stmt_observe,
+        &state->stmt_anchor,
+        &state->stmt_retire_anchor,
+        &state->stmt_order_prune,
+    };
+
+    for (size_t i = 0; i < sizeof(roster) / sizeof(roster[0]); i++) {
+        if (*roster[i]) {
+            sqlite3_finalize(*roster[i]);
+            *roster[i] = NULL;
+        }
+    }
+}
+
+/**
  * Prepare all statements for state operations
  *
  * Called once per database connection. Statements are reused for all
- * operations, providing 100x speedup for bulk operations.
+ * operations, providing 100x speedup for bulk operations. On any failure
+ * the statements already prepared are finalized before returning, so a
+ * handle never carries a half-prepared roster.
  *
  * @param state State (must not be NULL, db must be open)
  * @return Error or NULL on success
@@ -477,59 +577,39 @@ static error_t *prepare_statements(state_t *state) {
 
     int rc;
 
-    /* Insert/update file (used by manifest sync operations - hot path)
+    /* Project a file row (the projection engine's per-row write — hot path)
      *
      * Column order mirrors the virtual_manifest layout:
-     *   identity (1-4) | VWD cache (5-11) | deployment anchor (12-17)
+     *   identity (1-3) | VWD cache (4-9) | state
      *
      * UPDATE-path field preservation (ON CONFLICT clause):
      *
      * VWD cache (storage_path, profile, blob_oid, type, mode, owner, group,
-     * encrypted, state): always replaced from excluded — manifest operations
-     * are the authoritative writer of this domain.
+     * encrypted): always replaced from excluded — the engine is the
+     * authoritative writer of this domain.
      *
-     * old_profile: Three-branch CASE:
-     *   1. Explicit non-NULL from caller — takes precedence (direct override)
-     *   2. Profile changing, caller passes NULL — auto-captures current profile
-     *      from the existing row (eliminates read-before-write for reassignment)
-     *   3. Profile unchanged, caller passes NULL — preserves existing old_profile
-     * Clearing is done separately via state_clear_old_profile().
+     * state: 'active' on both arms. The sole caller is the projection
+     * loop, and projection means in-scope — a path that re-entered the
+     * projection is ACTIVE whatever lifecycle it carried.
      *
-     * Deployment anchor preservation (deployed_blob_oid, deployed_at, stat_*):
-     * on UPDATE the existing values are kept; this UPSERT is the sole entry
-     * point for non-anchor writers (reconcile/sync/add/rebuild) and they MUST
-     * NOT clobber the anchor. state_update_anchor is the only legitimate
-     * advancer of those columns.
+     * old_profile: NULL on INSERT (no reassignment yet). On UPDATE, a
+     * two-branch CASE: the profile is changing → auto-capture the current
+     * profile from the existing row (eliminates read-before-write for
+     * reassignment); unchanged → preserve. Clearing is done separately via
+     * state_clear_old_profile().
      *
-     * The preserve-on-zero-sentinel on deployed_blob_oid lets an INSERT that
-     * establishes a never-confirmed row (zero-anchor) coexist with later
-     * UPDATEs: a non-zero excluded.deployed_blob_oid would be a bug (writers
-     * already go through state_update_anchor), so the CASE defensively
-     * preserves. deployed_at and stat_* are unconditionally preserved on
-     * UPDATE — anchor.deployed_at set on INSERT is the initial lifecycle
-     * value (e.g., a post-deploy capture that reached this path via a
-     * capture-from-disk helper).
-     *
-     * observed_at has the monotonic-once-set semantic: the CASE preserves
-     * any existing non-zero value, otherwise accepts the new value. This
-     * lets the projection engine's lstat-gated stamp seed the first
-     * observation on INSERT, while every subsequent UPSERT (UPDATE path)
-     * is a no-op on the column even if the caller passes a different
-     * timestamp. The classifier reads this column to distinguish ghost
-     * files (observed_at = 0 → UNDEPLOYED) from deleted-after-observation
-     * files (observed_at > 0 → DELETED). */
+     * Nothing else about the path is touched: the record (content
+     * confirmation, ownership, observation) lives in anchors, keyed
+     * apart, and this statement never names it. */
     const char *sql_insert =
         "INSERT INTO virtual_manifest "
-        "(filesystem_path, storage_path, profile, old_profile, "
-        " blob_oid, type, mode, owner, \"group\", encrypted, state, "
-        " deployed_blob_oid, deployed_at, stat_mtime, stat_size, stat_ino, observed_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+        "(filesystem_path, storage_path, profile, "
+        " blob_oid, type, mode, owner, \"group\", encrypted, state) "
+        "VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'active') "
         "ON CONFLICT(filesystem_path) DO UPDATE SET "
         "  storage_path = excluded.storage_path, "
         "  profile      = excluded.profile, "
         "  old_profile  = CASE "
-        "                   WHEN excluded.old_profile IS NOT NULL "
-        "                        THEN excluded.old_profile "
         "                   WHEN excluded.profile != virtual_manifest.profile "
         "                        THEN virtual_manifest.profile "
         "                   ELSE virtual_manifest.old_profile "
@@ -540,71 +620,12 @@ static error_t *prepare_statements(state_t *state) {
         "  owner        = excluded.owner, "
         "  \"group\"    = excluded.\"group\", "
         "  encrypted    = excluded.encrypted, "
-        "  state        = excluded.state, "
-        "  deployed_blob_oid = CASE "
-        "                        WHEN excluded.deployed_blob_oid = zeroblob(20) "
-        "                          THEN virtual_manifest.deployed_blob_oid "
-        "                        ELSE excluded.deployed_blob_oid "
-        "                      END, "
-        "  deployed_at  = virtual_manifest.deployed_at, "
-        "  stat_mtime   = virtual_manifest.stat_mtime, "
-        "  stat_size    = virtual_manifest.stat_size, "
-        "  stat_ino     = virtual_manifest.stat_ino, "
-        "  observed_at  = CASE "
-        "                   WHEN virtual_manifest.observed_at != 0 "
-        "                     THEN virtual_manifest.observed_at "
-        "                   ELSE excluded.observed_at "
-        "                 END;";
+        "  state        = 'active';";
 
     rc = sqlite3_prepare_v2(state->db, sql_insert, -1, &state->stmt_insert_file, NULL);
     if (rc != SQLITE_OK) {
+        finalize_statements(state);
         return sqlite_error(state->db, "Failed to prepare insert statement");
-    }
-
-    /* Advance deployment anchor (sole writer of the anchor columns)
-     *
-     * Bind order (numbered placeholders):
-     *   ?1 deployed_blob_oid
-     *   ?2 deployed_at — reused in both CASE branches so the sentinel test
-     *                    and the replacement value cannot drift apart
-     *   ?3 stat_mtime
-     *   ?4 stat_size
-     *   ?5 stat_ino
-     *   ?6 observed_at — monotonic: preserved if existing value non-zero,
-     *                    written otherwise (set-if-unset). Zero from caller
-     *                    also preserves (safe no-op).
-     *   ?7 filesystem_path
-     *
-     * The CASE on deployed_at preserves the existing timestamp when the
-     * caller passes 0 (first-observation / workspace-flush case) and writes
-     * a new timestamp otherwise (apply post-deploy / adoption case). The
-     * CASE on observed_at keys off the row's current value, not the bound
-     * one, so the first non-zero caller wins regardless of order.
-     *
-     * RETURNING projects the post-write column values so callers that mirror
-     * an in-memory snapshot (workspace_advance_anchor — the sole workspace-
-     * scope writer, used by apply's adoption + post-deploy and the slow-path
-     * flush) can assign the canonical anchor without re-deriving the CASE
-     * rules in C. Zero matched rows yields zero RETURNING rows — the
-     * not-found-is-OK contract is preserved for manifest-layer direct
-     * callers (resolved_out NULL). */
-    const char *sql_update_anchor =
-        "UPDATE virtual_manifest SET "
-        "  deployed_blob_oid = ?1, "
-        "  deployed_at       = CASE WHEN ?2 = 0 THEN deployed_at ELSE ?2 END, "
-        "  stat_mtime        = ?3, "
-        "  stat_size         = ?4, "
-        "  stat_ino          = ?5, "
-        "  observed_at       = CASE WHEN observed_at != 0 THEN observed_at ELSE ?6 END "
-        "WHERE filesystem_path = ?7 "
-        "RETURNING deployed_blob_oid, deployed_at, stat_mtime, stat_size, stat_ino, observed_at;";
-
-    rc = sqlite3_prepare_v2(
-        state->db, sql_update_anchor, -1, &state->stmt_update_anchor, NULL
-    );
-    if (rc != SQLITE_OK) {
-        sqlite3_finalize(state->stmt_insert_file);
-        return sqlite_error(state->db, "Failed to prepare update anchor statement");
     }
 
     /* File exists check (used in status - hot path) */
@@ -613,59 +634,34 @@ static error_t *prepare_statements(state_t *state) {
 
     rc = sqlite3_prepare_v2(state->db, sql_exists, -1, &state->stmt_file_exists, NULL);
     if (rc != SQLITE_OK) {
-        sqlite3_finalize(state->stmt_insert_file);
-        sqlite3_finalize(state->stmt_update_anchor);
+        finalize_statements(state);
         return sqlite_error(state->db, "Failed to prepare exists statement");
     }
 
-    /* Get file (used in workspace analysis) */
+    /* Get file (used by the verb overlays and remove's conflict analysis) */
     const char *sql_get =
         "SELECT storage_path, profile, old_profile, "
-        "blob_oid, type, mode, owner, \"group\", encrypted, state, "
-        "deployed_blob_oid, deployed_at, stat_mtime, stat_size, stat_ino, observed_at "
+        "blob_oid, type, mode, owner, \"group\", encrypted, state "
         "FROM virtual_manifest WHERE filesystem_path = ?;";
 
     rc = sqlite3_prepare_v2(state->db, sql_get, -1, &state->stmt_get_file, NULL);
     if (rc != SQLITE_OK) {
-        sqlite3_finalize(state->stmt_insert_file);
-        sqlite3_finalize(state->stmt_update_anchor);
-        sqlite3_finalize(state->stmt_file_exists);
+        finalize_statements(state);
         return sqlite_error(state->db, "Failed to prepare get statement");
     }
 
     /* Get file by storage path (used by profile discovery) */
     const char *sql_get_by_storage =
         "SELECT filesystem_path, profile, old_profile, "
-        "blob_oid, type, mode, owner, \"group\", encrypted, state, "
-        "deployed_blob_oid, deployed_at, stat_mtime, stat_size, stat_ino, observed_at "
+        "blob_oid, type, mode, owner, \"group\", encrypted, state "
         "FROM virtual_manifest WHERE storage_path = ? AND state = 'active' LIMIT 1;";
 
     rc = sqlite3_prepare_v2(
         state->db, sql_get_by_storage, -1, &state->stmt_get_file_by_storage, NULL
     );
     if (rc != SQLITE_OK) {
-        sqlite3_finalize(state->stmt_insert_file);
-        sqlite3_finalize(state->stmt_update_anchor);
-        sqlite3_finalize(state->stmt_file_exists);
-        sqlite3_finalize(state->stmt_get_file);
+        finalize_statements(state);
         return sqlite_error(state->db, "Failed to prepare get by storage statement");
-    }
-
-    /* Get entries by profile (used by profile disable) */
-    const char *sql_by_profile =
-        "SELECT filesystem_path, storage_path, profile, old_profile, "
-        "blob_oid, type, mode, owner, \"group\", encrypted, state, "
-        "deployed_blob_oid, deployed_at, stat_mtime, stat_size, stat_ino, observed_at "
-        "FROM virtual_manifest WHERE profile = ?;";
-
-    rc = sqlite3_prepare_v2(state->db, sql_by_profile, -1, &state->stmt_get_by_profile, NULL);
-    if (rc != SQLITE_OK) {
-        sqlite3_finalize(state->stmt_insert_file);
-        sqlite3_finalize(state->stmt_update_anchor);
-        sqlite3_finalize(state->stmt_file_exists);
-        sqlite3_finalize(state->stmt_get_file);
-        sqlite3_finalize(state->stmt_get_file_by_storage);
-        return sqlite_error(state->db, "Failed to prepare get by profile statement");
     }
 
     /* Remove file (used in revert and cleanup) */
@@ -674,12 +670,7 @@ static error_t *prepare_statements(state_t *state) {
 
     rc = sqlite3_prepare_v2(state->db, sql_remove, -1, &state->stmt_remove_file, NULL);
     if (rc != SQLITE_OK) {
-        sqlite3_finalize(state->stmt_insert_file);
-        sqlite3_finalize(state->stmt_update_anchor);
-        sqlite3_finalize(state->stmt_file_exists);
-        sqlite3_finalize(state->stmt_get_file);
-        sqlite3_finalize(state->stmt_get_file_by_storage);
-        sqlite3_finalize(state->stmt_get_by_profile);
+        finalize_statements(state);
         return sqlite_error(state->db, "Failed to prepare remove statement");
     }
 
@@ -690,13 +681,7 @@ static error_t *prepare_statements(state_t *state) {
 
     rc = sqlite3_prepare_v2(state->db, sql_profile, -1, &state->stmt_insert_profile, NULL);
     if (rc != SQLITE_OK) {
-        sqlite3_finalize(state->stmt_insert_file);
-        sqlite3_finalize(state->stmt_update_anchor);
-        sqlite3_finalize(state->stmt_file_exists);
-        sqlite3_finalize(state->stmt_get_file);
-        sqlite3_finalize(state->stmt_get_file_by_storage);
-        sqlite3_finalize(state->stmt_get_by_profile);
-        sqlite3_finalize(state->stmt_remove_file);
+        finalize_statements(state);
         return sqlite_error(state->db, "Failed to prepare profile statement");
     }
 
@@ -705,66 +690,25 @@ static error_t *prepare_statements(state_t *state) {
      * The directory mirror of sql_insert. state = 'active' is hardcoded on
      * both arms: the sole caller is the projection loop, and projection
      * means in-scope — the sweep's INACTIVE downgrade is undone here for
-     * rows still covered by an enabled profile's metadata.
-     *
-     * observed_at has the monotonic-once-set semantic (same CASE shape as
-     * sql_insert): an existing non-zero witness wins; otherwise the bound
-     * value (the projection probe's lstat-gated stamp, 0 when the path is
-     * absent) is written. First non-zero writer wins, enforced in SQL. */
+     * rows still covered by an enabled profile's metadata. */
     const char *sql_insert_dir =
         "INSERT INTO tracked_directories "
-        "(filesystem_path, storage_path, profile, mode, owner, \"group\", state, observed_at) "
-        "VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'active', ?7) "
+        "(filesystem_path, storage_path, profile, mode, owner, \"group\", state) "
+        "VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'active') "
         "ON CONFLICT(filesystem_path) DO UPDATE SET "
         "  storage_path = excluded.storage_path, "
         "  profile      = excluded.profile, "
         "  mode         = excluded.mode, "
         "  owner        = excluded.owner, "
         "  \"group\"    = excluded.\"group\", "
-        "  state        = 'active', "
-        "  observed_at  = CASE "
-        "                   WHEN tracked_directories.observed_at != 0 "
-        "                     THEN tracked_directories.observed_at "
-        "                   ELSE excluded.observed_at "
-        "                 END;";
+        "  state        = 'active';";
 
     rc = sqlite3_prepare_v2(
         state->db, sql_insert_dir, -1, &state->stmt_insert_directory, NULL
     );
     if (rc != SQLITE_OK) {
-        sqlite3_finalize(state->stmt_insert_file);
-        sqlite3_finalize(state->stmt_update_anchor);
-        sqlite3_finalize(state->stmt_file_exists);
-        sqlite3_finalize(state->stmt_get_file);
-        sqlite3_finalize(state->stmt_get_file_by_storage);
-        sqlite3_finalize(state->stmt_get_by_profile);
-        sqlite3_finalize(state->stmt_remove_file);
-        sqlite3_finalize(state->stmt_insert_profile);
+        finalize_statements(state);
         return sqlite_error(state->db, "Failed to prepare insert directory statement");
-    }
-
-    /* Directory witness advance (per-row in workspace flush + apply's
-     * post-deploy loop). Monotonicity lives in the WHERE clause: a row
-     * already witnessed matches nothing, a missing row matches nothing —
-     * both are silent no-ops by design. */
-    const char *sql_update_witness =
-        "UPDATE tracked_directories SET observed_at = ?2 "
-        "WHERE filesystem_path = ?1 AND observed_at = 0;";
-
-    rc = sqlite3_prepare_v2(
-        state->db, sql_update_witness, -1, &state->stmt_update_witness, NULL
-    );
-    if (rc != SQLITE_OK) {
-        sqlite3_finalize(state->stmt_insert_file);
-        sqlite3_finalize(state->stmt_update_anchor);
-        sqlite3_finalize(state->stmt_file_exists);
-        sqlite3_finalize(state->stmt_get_file);
-        sqlite3_finalize(state->stmt_get_file_by_storage);
-        sqlite3_finalize(state->stmt_get_by_profile);
-        sqlite3_finalize(state->stmt_remove_file);
-        sqlite3_finalize(state->stmt_insert_profile);
-        sqlite3_finalize(state->stmt_insert_directory);
-        return sqlite_error(state->db, "Failed to prepare directory witness statement");
     }
 
     /* Remove tracked directory (per-removed-dir loop in apply cleanup) */
@@ -775,16 +719,7 @@ static error_t *prepare_statements(state_t *state) {
         state->db, sql_remove_dir, -1, &state->stmt_remove_directory, NULL
     );
     if (rc != SQLITE_OK) {
-        sqlite3_finalize(state->stmt_insert_file);
-        sqlite3_finalize(state->stmt_update_anchor);
-        sqlite3_finalize(state->stmt_file_exists);
-        sqlite3_finalize(state->stmt_get_file);
-        sqlite3_finalize(state->stmt_get_file_by_storage);
-        sqlite3_finalize(state->stmt_get_by_profile);
-        sqlite3_finalize(state->stmt_remove_file);
-        sqlite3_finalize(state->stmt_insert_profile);
-        sqlite3_finalize(state->stmt_insert_directory);
-        sqlite3_finalize(state->stmt_update_witness);
+        finalize_statements(state);
         return sqlite_error(state->db, "Failed to prepare remove directory statement");
     }
 
@@ -797,95 +732,108 @@ static error_t *prepare_statements(state_t *state) {
         &state->stmt_mark_all_directories_inactive, NULL
     );
     if (rc != SQLITE_OK) {
-        sqlite3_finalize(state->stmt_insert_file);
-        sqlite3_finalize(state->stmt_update_anchor);
-        sqlite3_finalize(state->stmt_file_exists);
-        sqlite3_finalize(state->stmt_get_file);
-        sqlite3_finalize(state->stmt_get_file_by_storage);
-        sqlite3_finalize(state->stmt_get_by_profile);
-        sqlite3_finalize(state->stmt_remove_file);
-        sqlite3_finalize(state->stmt_insert_profile);
-        sqlite3_finalize(state->stmt_insert_directory);
-        sqlite3_finalize(state->stmt_update_witness);
-        sqlite3_finalize(state->stmt_remove_directory);
+        finalize_statements(state);
         return sqlite_error(state->db, "Failed to prepare mark directories inactive statement");
     }
 
+    /* Observe: presence only, idempotent. Creates the record with the row's
+     * identity and metadata and observed_at = now; no blob, no stat. Never
+     * touches an existing row — OR IGNORE is what makes the first observer
+     * win without a CASE.
+     *
+     * Bind order (numbered placeholders):
+     *   ?1 filesystem_path  ?2 storage_path  ?3 profile  ?4 type
+     *   ?5 mode  ?6 owner  ?7 group  ?8 observed_at */
+    const char *sql_observe =
+        "INSERT OR IGNORE INTO anchors "
+        "(filesystem_path, storage_path, profile, type, mode, owner, \"group\", observed_at) "
+        "VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8);";
+
+    rc = sqlite3_prepare_v2(state->db, sql_observe, -1, &state->stmt_observe, NULL);
+    if (rc != SQLITE_OK) {
+        finalize_statements(state);
+        return sqlite_error(state->db, "Failed to prepare observe statement");
+    }
+
+    /* Anchor: the recorded row, the confirmation, the ownership event —
+     * the sole writer of every record column but observed_at's existing
+     * value.
+     *
+     * Bind order (numbered placeholders):
+     *   ?1 filesystem_path  ?2 storage_path  ?3 profile  ?4 type
+     *   ?5 mode  ?6 owner  ?7 group
+     *   ?8 blob_oid — NULL for a directory
+     *   ?9 stat_mtime  ?10 stat_size  ?11 stat_ino
+     *   ?12 observed_at — the INSERT arm's alone; the UPDATE arm does not
+     *                     name the column, so an existing stamp is never
+     *                     rewritten and the first writer wins
+     *   ?13 deployed_at — reused on both sides of its CASE so the
+     *                     sentinel test and the replacement value cannot
+     *                     drift apart: 0 keeps the existing timestamp
+     *                     (a confirmation), anything else is written (an
+     *                     ownership event)
+     *
+     * prune_ordered resets to 0 on the UPDATE arm: the path is back under
+     * a live row, and any order predating that is void.
+     *
+     * RETURNING projects the two columns the statement decided rather than
+     * took — observed_at (INSERT arm: now; UPDATE arm: the existing stamp)
+     * and deployed_at (after the CASE) — so a caller mirroring an
+     * in-memory snapshot (workspace_anchor) can assign the canonical
+     * record without re-deriving either rule in C. Every other column is
+     * what the caller bound. */
+    const char *sql_anchor =
+        "INSERT INTO anchors "
+        "(filesystem_path, storage_path, profile, type, mode, owner, \"group\", "
+        " blob_oid, stat_mtime, stat_size, stat_ino, observed_at, deployed_at) "
+        "VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13) "
+        "ON CONFLICT(filesystem_path) DO UPDATE SET "
+        "  storage_path  = excluded.storage_path, "
+        "  profile       = excluded.profile, "
+        "  type          = excluded.type, "
+        "  mode          = excluded.mode, "
+        "  owner         = excluded.owner, "
+        "  \"group\"     = excluded.\"group\", "
+        "  blob_oid      = excluded.blob_oid, "
+        "  stat_mtime    = excluded.stat_mtime, "
+        "  stat_size     = excluded.stat_size, "
+        "  stat_ino      = excluded.stat_ino, "
+        "  deployed_at   = CASE WHEN excluded.deployed_at = 0 THEN anchors.deployed_at "
+        "                       ELSE excluded.deployed_at END, "
+        "  prune_ordered = 0 "
+        "RETURNING observed_at, deployed_at;";
+
+    rc = sqlite3_prepare_v2(state->db, sql_anchor, -1, &state->stmt_anchor, NULL);
+    if (rc != SQLITE_OK) {
+        finalize_statements(state);
+        return sqlite_error(state->db, "Failed to prepare anchor statement");
+    }
+
+    /* Retire: the record goes. Nothing cascades — there is no parent. */
+    const char *sql_retire_anchor =
+        "DELETE FROM anchors WHERE filesystem_path = ?1;";
+
+    rc = sqlite3_prepare_v2(
+        state->db, sql_retire_anchor, -1, &state->stmt_retire_anchor, NULL
+    );
+    if (rc != SQLITE_OK) {
+        finalize_statements(state);
+        return sqlite_error(state->db, "Failed to prepare retire anchor statement");
+    }
+
+    /* Order prune: the one persisted intent (remove --delete-files) */
+    const char *sql_order_prune =
+        "UPDATE anchors SET prune_ordered = 1 WHERE filesystem_path = ?1;";
+
+    rc = sqlite3_prepare_v2(
+        state->db, sql_order_prune, -1, &state->stmt_order_prune, NULL
+    );
+    if (rc != SQLITE_OK) {
+        finalize_statements(state);
+        return sqlite_error(state->db, "Failed to prepare order prune statement");
+    }
+
     return NULL;
-}
-
-/**
- * Finalize all prepared statements
- *
- * Called from state_free() before closing database.
- *
- * @param state State (can be NULL)
- */
-static void finalize_statements(state_t *state) {
-    if (!state) return;
-
-    /* Manifest statements */
-    if (state->stmt_insert_file) {
-        sqlite3_finalize(state->stmt_insert_file);
-        state->stmt_insert_file = NULL;
-    }
-
-    if (state->stmt_update_anchor) {
-        sqlite3_finalize(state->stmt_update_anchor);
-        state->stmt_update_anchor = NULL;
-    }
-
-    if (state->stmt_file_exists) {
-        sqlite3_finalize(state->stmt_file_exists);
-        state->stmt_file_exists = NULL;
-    }
-
-    if (state->stmt_get_file) {
-        sqlite3_finalize(state->stmt_get_file);
-        state->stmt_get_file = NULL;
-    }
-
-    if (state->stmt_get_file_by_storage) {
-        sqlite3_finalize(state->stmt_get_file_by_storage);
-        state->stmt_get_file_by_storage = NULL;
-    }
-
-    if (state->stmt_get_by_profile) {
-        sqlite3_finalize(state->stmt_get_by_profile);
-        state->stmt_get_by_profile = NULL;
-    }
-
-    if (state->stmt_remove_file) {
-        sqlite3_finalize(state->stmt_remove_file);
-        state->stmt_remove_file = NULL;
-    }
-
-    /* Profile statements */
-    if (state->stmt_insert_profile) {
-        sqlite3_finalize(state->stmt_insert_profile);
-        state->stmt_insert_profile = NULL;
-    }
-
-    /* Directory statements */
-    if (state->stmt_insert_directory) {
-        sqlite3_finalize(state->stmt_insert_directory);
-        state->stmt_insert_directory = NULL;
-    }
-
-    if (state->stmt_update_witness) {
-        sqlite3_finalize(state->stmt_update_witness);
-        state->stmt_update_witness = NULL;
-    }
-
-    if (state->stmt_remove_directory) {
-        sqlite3_finalize(state->stmt_remove_directory);
-        state->stmt_remove_directory = NULL;
-    }
-
-    if (state->stmt_mark_all_directories_inactive) {
-        sqlite3_finalize(state->stmt_mark_all_directories_inactive);
-        state->stmt_mark_all_directories_inactive = NULL;
-    }
 }
 
 /**
@@ -1388,18 +1336,18 @@ error_t *state_reorder_profiles(
 }
 
 /**
- * Add file entry to state
+ * Project a file row into virtual_manifest
  *
- * HOT PATH: Called 1000+ times in apply loop.
+ * HOT PATH: called once per row the projection engine writes.
  * Uses prepared statement for 100x speedup.
  *
  * @param state State (must not be NULL)
- * @param entry File entry to add (must not be NULL)
+ * @param row File row to project (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *state_add_file(state_t *state, const state_file_entry_t *entry) {
+error_t *state_add_file(state_t *state, const manifest_row_t *row) {
     CHECK_NULL(state);
-    CHECK_NULL(entry);
+    CHECK_NULL(row);
     CHECK_NULL(state->db);
     CHECK_NULL(state->stmt_insert_file);
 
@@ -1409,77 +1357,47 @@ error_t *state_add_file(state_t *state, const state_file_entry_t *entry) {
 
     /* Bind parameters */
     /* 1-3. filesystem_path, storage_path, profile */
-    sqlite3_bind_text(state->stmt_insert_file, 1, entry->filesystem_path, -1, SQLITE_TRANSIENT);
-    sqlite3_bind_text(state->stmt_insert_file, 2, entry->storage_path, -1, SQLITE_TRANSIENT);
-    sqlite3_bind_text(state->stmt_insert_file, 3, entry->profile, -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(state->stmt_insert_file, 1, row->filesystem_path, -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(state->stmt_insert_file, 2, row->storage_path, -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(state->stmt_insert_file, 3, row->profile, -1, SQLITE_TRANSIENT);
 
-    /* 4. old_profile */
-    if (entry->old_profile) {
-        sqlite3_bind_text(state->stmt_insert_file, 4, entry->old_profile, -1, SQLITE_TRANSIENT);
-    } else {
-        sqlite3_bind_null(state->stmt_insert_file, 4);
-    }
-
-    /* 5. blob_oid — bound as 20-byte BLOB. Using entry->blob_oid.id (the backing
-     * byte array) rather than &entry->blob_oid keeps the intent explicit: we
+    /* 4. blob_oid — bound as 20-byte BLOB. Using row->blob_oid.id (the backing
+     * byte array) rather than &row->blob_oid keeps the intent explicit: we
      * are writing the raw hash bytes, not a struct snapshot whose layout happens
      * to start with them. SQLITE_TRANSIENT lets SQLite copy before we modify. */
     sqlite3_bind_blob(
-        state->stmt_insert_file, 5, entry->blob_oid.id, GIT_OID_RAWSZ, SQLITE_TRANSIENT
+        state->stmt_insert_file, 4, row->blob_oid.id, GIT_OID_RAWSZ, SQLITE_TRANSIENT
     );
 
-    /* 6. type */
-    const char *type_str = entry->type == STATE_FILE_REGULAR ? "file"
-                         : entry->type == STATE_FILE_SYMLINK ? "symlink" : "executable";
-    sqlite3_bind_text(state->stmt_insert_file, 6, type_str, -1, SQLITE_STATIC);
+    /* 5. type */
+    sqlite3_bind_text(
+        state->stmt_insert_file, 5, path_type_to_sql_text(row->type), -1, SQLITE_STATIC
+    );
 
-    /* 7. mode */
-    if (entry->mode > 0) {
-        sqlite3_bind_int(state->stmt_insert_file, 7, entry->mode);
+    /* 6. mode */
+    if (row->mode > 0) {
+        sqlite3_bind_int(state->stmt_insert_file, 6, row->mode);
+    } else {
+        sqlite3_bind_null(state->stmt_insert_file, 6);
+    }
+
+    /* 7. owner */
+    if (row->owner) {
+        sqlite3_bind_text(state->stmt_insert_file, 7, row->owner, -1, SQLITE_TRANSIENT);
     } else {
         sqlite3_bind_null(state->stmt_insert_file, 7);
     }
 
-    /* 8. owner */
-    if (entry->owner) {
-        sqlite3_bind_text(state->stmt_insert_file, 8, entry->owner, -1, SQLITE_TRANSIENT);
+    /* 8. group */
+    if (row->group) {
+        sqlite3_bind_text(state->stmt_insert_file, 8, row->group, -1, SQLITE_TRANSIENT);
     } else {
         sqlite3_bind_null(state->stmt_insert_file, 8);
     }
 
-    /* 9. group */
-    if (entry->group) {
-        sqlite3_bind_text(state->stmt_insert_file, 9, entry->group, -1, SQLITE_TRANSIENT);
-    } else {
-        sqlite3_bind_null(state->stmt_insert_file, 9);
-    }
-
-    /* 10. encrypted */
-    sqlite3_bind_int(state->stmt_insert_file, 10, entry->encrypted ? 1 : 0);
-
-    /* 11. state */
-    sqlite3_bind_text(
-        state->stmt_insert_file, 11, lifecycle_to_sql_text(entry->lifecycle), -1, SQLITE_STATIC
-    );
-
-    /* 12. deployed_blob_oid — 20 bytes. Zero sentinel is legitimate (never
-     * confirmed); the UPSERT's preserve-on-zero CASE keeps any prior anchor. */
-    sqlite3_bind_blob(
-        state->stmt_insert_file, 12, entry->anchor.blob_oid.id, GIT_OID_RAWSZ, SQLITE_TRANSIENT
-    );
-
-    /* 13. deployed_at (anchor) */
-    sqlite3_bind_int64(state->stmt_insert_file, 13, (sqlite3_int64) entry->anchor.deployed_at);
-
-    /* 14-16. stat cache (anchor fast-path triple, bound to deployed_blob_oid) */
-    sqlite3_bind_int64(state->stmt_insert_file, 14, entry->anchor.stat.mtime);
-    sqlite3_bind_int64(state->stmt_insert_file, 15, entry->anchor.stat.size);
-    sqlite3_bind_int64(state->stmt_insert_file, 16, (sqlite3_int64) entry->anchor.stat.ino);
-
-    /* 17. observed_at (anchor — first-observation timestamp, monotonic once set).
-     * The UPSERT's CASE preserves any existing non-zero value on UPDATE, so
-     * only INSERT paths (first row) actually consume the bound value. */
-    sqlite3_bind_int64(state->stmt_insert_file, 17, (sqlite3_int64) entry->anchor.observed_at);
+    /* 9. encrypted. state is not bound: 'active' is hardcoded in the SQL
+     * (projection means in-scope), and old_profile is the CASE's. */
+    sqlite3_bind_int(state->stmt_insert_file, 9, row->encrypted ? 1 : 0);
 
     /* Execute (don't finalize - statement is reused) */
     int rc = sqlite3_step(state->stmt_insert_file);
@@ -1568,7 +1486,7 @@ bool state_file_exists(const state_t *state, const char *filesystem_path) {
 error_t *state_get_file(
     const state_t *state,
     const char *filesystem_path,
-    state_file_entry_t **out
+    state_entry_t **out
 ) {
     CHECK_NULL(state);
     CHECK_NULL(filesystem_path);
@@ -1597,9 +1515,7 @@ error_t *state_get_file(
 
     /* Extract columns. Layout matches sql_get:
      *   0-2:  storage_path, profile, old_profile   (identity; filesystem_path is WHERE)
-     *   3-9:  blob_oid, type, mode, owner, group, encrypted, state  (VWD cache)
-     *   10-15: deployed_blob_oid, deployed_at, stat_mtime, stat_size, stat_ino,
-     *          observed_at */
+     *   3-9:  blob_oid, type, mode, owner, group, encrypted, state  (VWD cache) */
     const char *storage_path = (const char *) sqlite3_column_text(stmt, 0);
     const char *profile = (const char *) sqlite3_column_text(stmt, 1);
     const char *old_profile = (const char *) sqlite3_column_text(stmt, 2);
@@ -1624,17 +1540,6 @@ error_t *state_get_file(
         (const char *) sqlite3_column_text(stmt, 9)
     );
 
-    /* Deployment anchor (column 10: deployed_blob_oid BLOB NOT NULL, always 20 bytes) */
-    deployment_anchor_t anchor = { 0 };
-    memcpy(anchor.blob_oid.id, sqlite3_column_blob(stmt, 10), GIT_OID_RAWSZ);
-    anchor.deployed_at = (time_t) sqlite3_column_int64(stmt, 11);
-    anchor.stat = (stat_cache_t){
-        .mtime = sqlite3_column_int64(stmt, 12),
-        .size = sqlite3_column_int64(stmt, 13),
-        .ino = (uint64_t) sqlite3_column_int64(stmt, 14),
-    };
-    anchor.observed_at = (time_t) sqlite3_column_int64(stmt, 15);
-
     /* Validate required string columns */
     if (!storage_path || !profile || !type_str) {
         return ERROR(
@@ -1643,24 +1548,15 @@ error_t *state_get_file(
         );
     }
 
-    /* Parse file type */
-    state_file_type_t type = STATE_FILE_REGULAR;
-    if (strcmp(type_str, "symlink") == 0) {
-        type = STATE_FILE_SYMLINK;
-    } else if (strcmp(type_str, "executable") == 0) {
-        type = STATE_FILE_EXECUTABLE;
-    }
-
     /* Create entry (caller owns) */
-    state_file_entry_t *entry = NULL;
+    state_entry_t *entry = NULL;
     error_t *err = state_create_entry(
-        storage_path, filesystem_path, profile, old_profile, type, &blob_oid,
+        storage_path, filesystem_path, profile, old_profile,
+        path_type_from_sql_text(type_str), &blob_oid,
         mode, owner, group, encrypted != 0, lifecycle, &entry
     );
 
     if (err) return err;
-
-    entry->anchor = anchor;
 
     *out = entry;
     return NULL;
@@ -1669,7 +1565,7 @@ error_t *state_get_file(
 error_t *state_get_file_by_storage(
     const state_t *state,
     const char *storage_path,
-    state_file_entry_t **out
+    state_entry_t **out
 ) {
     CHECK_NULL(state);
     CHECK_NULL(storage_path);
@@ -1698,9 +1594,7 @@ error_t *state_get_file_by_storage(
     /* Extract columns. Layout matches sql_get_by_storage (same shape as
      * state_get_file but column 0 is filesystem_path, not storage_path):
      *   0-2:  filesystem_path, profile, old_profile  (identity; storage_path is WHERE)
-     *   3-9:  blob_oid, type, mode, owner, group, encrypted, state
-     *   10-15: deployed_blob_oid, deployed_at, stat_mtime, stat_size, stat_ino,
-     *          observed_at */
+     *   3-9:  blob_oid, type, mode, owner, group, encrypted, state */
     const char *filesystem_path = (const char *) sqlite3_column_text(stmt, 0);
     const char *profile = (const char *) sqlite3_column_text(stmt, 1);
     const char *old_profile = (const char *) sqlite3_column_text(stmt, 2);
@@ -1724,17 +1618,6 @@ error_t *state_get_file_by_storage(
         (const char *) sqlite3_column_text(stmt, 9)
     );
 
-    /* Deployment anchor */
-    deployment_anchor_t anchor = { 0 };
-    memcpy(anchor.blob_oid.id, sqlite3_column_blob(stmt, 10), GIT_OID_RAWSZ);
-    anchor.deployed_at = (time_t) sqlite3_column_int64(stmt, 11);
-    anchor.stat = (stat_cache_t){
-        .mtime = sqlite3_column_int64(stmt, 12),
-        .size = sqlite3_column_int64(stmt, 13),
-        .ino = (uint64_t) sqlite3_column_int64(stmt, 14),
-    };
-    anchor.observed_at = (time_t) sqlite3_column_int64(stmt, 15);
-
     if (!filesystem_path || !profile || !type_str) {
         return ERROR(
             ERR_STATE_INVALID,
@@ -1742,22 +1625,14 @@ error_t *state_get_file_by_storage(
         );
     }
 
-    state_file_type_t type = STATE_FILE_REGULAR;
-    if (strcmp(type_str, "symlink") == 0) {
-        type = STATE_FILE_SYMLINK;
-    } else if (strcmp(type_str, "executable") == 0) {
-        type = STATE_FILE_EXECUTABLE;
-    }
-
-    state_file_entry_t *entry = NULL;
+    state_entry_t *entry = NULL;
     error_t *err = state_create_entry(
-        storage_path, filesystem_path, profile, old_profile, type, &blob_oid,
+        storage_path, filesystem_path, profile, old_profile,
+        path_type_from_sql_text(type_str), &blob_oid,
         mode, owner, group, encrypted != 0, lifecycle, &entry
     );
 
     if (err) return err;
-
-    entry->anchor = anchor;
 
     *out = entry;
     return NULL;
@@ -1922,7 +1797,7 @@ error_t *state_count_encrypted_files(
 error_t *state_get_all_files(
     const state_t *state,
     arena_t *arena,
-    state_file_entry_t **out,
+    state_entry_t **out,
     size_t *count
 ) {
     CHECK_NULL(state);
@@ -1959,8 +1834,7 @@ error_t *state_get_all_files(
     }
 
     /* Allocate array */
-    state_file_entry_t *entries =
-        arena_calloc(arena, file_count, sizeof(state_file_entry_t));
+    state_entry_t *entries = arena_calloc(arena, file_count, sizeof(state_entry_t));
     if (!entries) {
         return ERROR(ERR_MEMORY, "Failed to allocate file array");
     }
@@ -1969,11 +1843,10 @@ error_t *state_get_all_files(
     #define DUP(s)      arena_strdup(arena, (s))
     #define DUP_OPT(s)  ((s) ? DUP(s) : NULL)
 
-    /* Query all files (17 columns: 4 identity + 7 VWD cache + 6 anchor) */
+    /* Query all files (11 columns: 4 identity + 7 VWD cache) */
     const char *sql_files =
         "SELECT filesystem_path, storage_path, profile, old_profile, "
-        "blob_oid, type, mode, owner, \"group\", encrypted, state, "
-        "deployed_blob_oid, deployed_at, stat_mtime, stat_size, stat_ino, observed_at "
+        "blob_oid, type, mode, owner, \"group\", encrypted, state "
         "FROM virtual_manifest ORDER BY filesystem_path;";
 
     sqlite3_stmt *stmt = NULL;
@@ -1986,16 +1859,16 @@ error_t *state_get_all_files(
     while ((rc = sqlite3_step(stmt)) == SQLITE_ROW && i < file_count) {
         /* Column layout matches sql_files:
          *   0-3:  identity (filesystem_path, storage_path, profile, old_profile)
-         *   4-10: VWD cache (blob_oid, type, mode, owner, group, encrypted, state)
-         *   11-16: anchor (deployed_blob_oid, deployed_at, stat_mtime, stat_size,
-         *          stat_ino, observed_at) */
+         *   4-10: VWD cache (blob_oid, type, mode, owner, group, encrypted, state) */
+        manifest_row_t *row = &entries[i].row;
+
         const char *fs_path = (const char *) sqlite3_column_text(stmt, 0);
         const char *storage_path = (const char *) sqlite3_column_text(stmt, 1);
         const char *profile = (const char *) sqlite3_column_text(stmt, 2);
         const char *old_profile = (const char *) sqlite3_column_text(stmt, 3);
 
-        /* Read binary blob_oid directly into the entry (no intermediate allocation). */
-        memcpy(entries[i].blob_oid.id, sqlite3_column_blob(stmt, 4), GIT_OID_RAWSZ);
+        /* Read binary blob_oid directly into the row (no intermediate allocation). */
+        memcpy(row->blob_oid.id, sqlite3_column_blob(stmt, 4), GIT_OID_RAWSZ);
 
         const char *type_str = (const char *) sqlite3_column_text(stmt, 5);
 
@@ -2010,16 +1883,6 @@ error_t *state_get_all_files(
         int encrypted = sqlite3_column_int(stmt, 9);
         const char *state_str = (const char *) sqlite3_column_text(stmt, 10);
 
-        /* Deployment anchor */
-        memcpy(entries[i].anchor.blob_oid.id, sqlite3_column_blob(stmt, 11), GIT_OID_RAWSZ);
-        entries[i].anchor.deployed_at = (time_t) sqlite3_column_int64(stmt, 12);
-        entries[i].anchor.stat = (stat_cache_t){
-            .mtime = sqlite3_column_int64(stmt, 13),
-            .size = sqlite3_column_int64(stmt, 14),
-            .ino = (uint64_t) sqlite3_column_int64(stmt, 15),
-        };
-        entries[i].anchor.observed_at = (time_t) sqlite3_column_int64(stmt, 16);
-
         /* Validate non-nullable string columns (OIDs already validated above) */
         if (!fs_path || !storage_path || !profile || !type_str) {
             sqlite3_finalize(stmt);
@@ -2027,29 +1890,21 @@ error_t *state_get_all_files(
         }
 
         /* Copy strings into arena */
-        entries[i].filesystem_path = DUP(fs_path);
-        entries[i].storage_path = DUP(storage_path);
-        entries[i].profile = DUP(profile);
-        entries[i].old_profile = DUP_OPT(old_profile);
-        entries[i].mode = mode;
-        entries[i].owner = DUP_OPT(owner);
-        entries[i].group = DUP_OPT(group);
+        row->filesystem_path = DUP(fs_path);
+        row->storage_path = DUP(storage_path);
+        row->profile = DUP(profile);
+        row->mode = mode;
+        row->owner = DUP_OPT(owner);
+        row->group = DUP_OPT(group);
+        row->type = path_type_from_sql_text(type_str);
+        row->encrypted = (encrypted != 0);
 
-        /* Parse type */
-        if (strcmp(type_str, "symlink") == 0) {
-            entries[i].type = STATE_FILE_SYMLINK;
-        } else if (strcmp(type_str, "executable") == 0) {
-            entries[i].type = STATE_FILE_EXECUTABLE;
-        } else {
-            entries[i].type = STATE_FILE_REGULAR;
-        }
-
-        /* Set other fields */
-        entries[i].encrypted = (encrypted != 0);
+        /* The two cached answers beside the row */
         entries[i].lifecycle = lifecycle_from_sql_text(state_str);
+        entries[i].old_profile = DUP_OPT(old_profile);
 
         /* Check allocation success */
-        if (!entries[i].filesystem_path || !entries[i].storage_path || !entries[i].profile) {
+        if (!row->filesystem_path || !row->storage_path || !row->profile) {
             sqlite3_finalize(stmt);
             return ERROR(ERR_MEMORY, "Failed to copy entry strings");
         }
@@ -2075,19 +1930,19 @@ error_t *state_get_all_files(
 /**
  * Add or refresh a tracked directory (projection writer)
  *
- * UPSERT: activates the row and preserves the witness — see the SQL
- * comment on sql_insert_dir and the header contract for semantics.
+ * UPSERT: activates the row — see the SQL comment on sql_insert_dir and
+ * the header contract for semantics.
  *
  * @param state State (must not be NULL)
- * @param entry Directory entry (must not be NULL)
+ * @param row Directory row (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *state_add_directory(state_t *state, const state_directory_entry_t *entry) {
+error_t *state_add_directory(state_t *state, const manifest_row_t *row) {
     CHECK_NULL(state);
-    CHECK_NULL(entry);
-    CHECK_NULL(entry->filesystem_path);
-    CHECK_NULL(entry->storage_path);
-    CHECK_NULL(entry->profile);
+    CHECK_NULL(row);
+    CHECK_NULL(row->filesystem_path);
+    CHECK_NULL(row->storage_path);
+    CHECK_NULL(row->profile);
     CHECK_NULL(state->db);
     CHECK_NULL(state->stmt_insert_directory);
 
@@ -2095,38 +1950,32 @@ error_t *state_add_directory(state_t *state, const state_directory_entry_t *entr
     sqlite3_reset(stmt);
     sqlite3_clear_bindings(stmt);
 
-    /* Bind parameters */
-    sqlite3_bind_text(stmt, 1, entry->filesystem_path, -1, SQLITE_STATIC);
-    sqlite3_bind_text(stmt, 2, entry->storage_path, -1, SQLITE_STATIC);
-    sqlite3_bind_text(stmt, 3, entry->profile, -1, SQLITE_STATIC);
+    /* Bind parameters. state is not bound: 'active' is hardcoded in the
+     * SQL (projection means in-scope). */
+    sqlite3_bind_text(stmt, 1, row->filesystem_path, -1, SQLITE_STATIC);
+    sqlite3_bind_text(stmt, 2, row->storage_path, -1, SQLITE_STATIC);
+    sqlite3_bind_text(stmt, 3, row->profile, -1, SQLITE_STATIC);
 
     /* Mode (optional) */
-    if (entry->mode > 0) {
-        sqlite3_bind_int(stmt, 4, entry->mode);
+    if (row->mode > 0) {
+        sqlite3_bind_int(stmt, 4, row->mode);
     } else {
         sqlite3_bind_null(stmt, 4);
     }
 
     /* Owner (optional) */
-    if (entry->owner) {
-        sqlite3_bind_text(stmt, 5, entry->owner, -1, SQLITE_STATIC);
+    if (row->owner) {
+        sqlite3_bind_text(stmt, 5, row->owner, -1, SQLITE_STATIC);
     } else {
         sqlite3_bind_null(stmt, 5);
     }
 
     /* Group (optional) */
-    if (entry->group) {
-        sqlite3_bind_text(stmt, 6, entry->group, -1, SQLITE_STATIC);
+    if (row->group) {
+        sqlite3_bind_text(stmt, 6, row->group, -1, SQLITE_STATIC);
     } else {
         sqlite3_bind_null(stmt, 6);
     }
-
-    /* observed_at — the projection probe's lstat-gated stamp (0 when the
-     * path was absent at sync time). The UPSERT's CASE preserves any
-     * existing non-zero witness, so this bind only ever seeds the first
-     * observation. state is not bound: 'active' is hardcoded in the SQL
-     * (projection means in-scope). */
-    sqlite3_bind_int64(stmt, 7, (sqlite3_int64) entry->observed_at);
 
     /* Execute */
     int rc = sqlite3_step(stmt);
@@ -2154,7 +2003,7 @@ error_t *state_add_directory(state_t *state, const state_directory_entry_t *entr
 error_t *state_get_all_directories(
     const state_t *state,
     arena_t *arena,
-    state_directory_entry_t **out,
+    state_entry_t **out,
     size_t *count
 ) {
     CHECK_NULL(state);
@@ -2191,8 +2040,7 @@ error_t *state_get_all_directories(
     }
 
     /* Allocate array */
-    state_directory_entry_t *entries =
-        arena_calloc(arena, dir_count, sizeof(state_directory_entry_t));
+    state_entry_t *entries = arena_calloc(arena, dir_count, sizeof(state_entry_t));
     if (!entries) {
         return ERROR(ERR_MEMORY, "Failed to allocate directories array");
     }
@@ -2205,7 +2053,7 @@ error_t *state_get_all_directories(
      * per workspace_load. Caching the statement on the handle would buy nothing
      * — see state_get_all_files for the same pattern. */
     const char *sql_dirs =
-        "SELECT filesystem_path, storage_path, profile, mode, owner, \"group\", state, observed_at "
+        "SELECT filesystem_path, storage_path, profile, mode, owner, \"group\", state "
         "FROM tracked_directories ORDER BY filesystem_path;";
 
     sqlite3_stmt *stmt = NULL;
@@ -2216,6 +2064,8 @@ error_t *state_get_all_directories(
 
     size_t i = 0;
     while ((rc = sqlite3_step(stmt)) == SQLITE_ROW && i < dir_count) {
+        manifest_row_t *row = &entries[i].row;
+
         const char *fs_path = (const char *) sqlite3_column_text(stmt, 0);
         const char *storage = (const char *) sqlite3_column_text(stmt, 1);
         const char *profile = (const char *) sqlite3_column_text(stmt, 2);
@@ -2229,7 +2079,6 @@ error_t *state_get_all_directories(
         const char *owner = (const char *) sqlite3_column_text(stmt, 4);
         const char *group = (const char *) sqlite3_column_text(stmt, 5);
         const char *state_str = (const char *) sqlite3_column_text(stmt, 6);
-        sqlite3_int64 observed_at = sqlite3_column_int64(stmt, 7);
 
         /* Validate non-nullable columns */
         if (!fs_path || !storage || !profile) {
@@ -2237,18 +2086,19 @@ error_t *state_get_all_directories(
             return ERROR(ERR_STATE_INVALID, "NULL value in required column at row %zu", i);
         }
 
-        /* Copy strings into arena */
-        entries[i].filesystem_path = DUP(fs_path);
-        entries[i].storage_path = DUP(storage);
-        entries[i].profile = DUP(profile);
-        entries[i].mode = mode;
-        entries[i].owner = DUP_OPT(owner);
-        entries[i].group = DUP_OPT(group);
+        /* Copy strings into arena. A directory row has no blob (zero by
+         * calloc), no encryption flag, no old_profile. */
+        row->filesystem_path = DUP(fs_path);
+        row->storage_path = DUP(storage);
+        row->profile = DUP(profile);
+        row->type = PATH_TYPE_DIRECTORY;
+        row->mode = mode;
+        row->owner = DUP_OPT(owner);
+        row->group = DUP_OPT(group);
         entries[i].lifecycle = lifecycle_from_sql_text(state_str);
-        entries[i].observed_at = (time_t) observed_at;
 
         /* Check allocation success */
-        if (!entries[i].filesystem_path || !entries[i].storage_path || !entries[i].profile) {
+        if (!row->filesystem_path || !row->storage_path || !row->profile) {
             sqlite3_finalize(stmt);
             return ERROR(ERR_MEMORY, "Failed to copy directory entry strings");
         }
@@ -2274,45 +2124,11 @@ error_t *state_get_all_directories(
     return NULL;
 }
 
-/**
- * Advance a tracked directory's witness
- *
- * Directory mirror of state_update_anchor. The WHERE clause
- * (observed_at = 0) is the monotonicity guard: a row already witnessed
- * matches nothing, a missing row matches nothing — both are silent
- * no-ops (same not-found-is-OK contract).
- */
-error_t *state_update_witness(
-    state_t *state,
-    const char *filesystem_path,
-    time_t observed_at
-) {
-    CHECK_NULL(state);
-    CHECK_NULL(filesystem_path);
-    CHECK_NULL(state->db);
-    CHECK_NULL(state->stmt_update_witness);
-
-    if (observed_at <= 0) {
-        return ERROR(ERR_INVALID_ARG, "Directory witness timestamp must be > 0");
-    }
-
-    sqlite3_stmt *stmt = state->stmt_update_witness;
-    sqlite3_reset(stmt);
-    sqlite3_clear_bindings(stmt);
-    sqlite3_bind_text(stmt, 1, filesystem_path, -1, SQLITE_TRANSIENT);
-    sqlite3_bind_int64(stmt, 2, (sqlite3_int64) observed_at);
-
-    int rc = sqlite3_step(stmt);
-    if (rc != SQLITE_DONE) {
-        return sqlite_error(state->db, "Failed to record directory witness");
-    }
-
-    return NULL;
-}
-
 /* Ghost reclaim, one table each. Cold path (one call per scope transition):
  * a one-shot exec beats a prepared-statement roster entry, and the literal
- * statement is worth more than de-duplicating one WHERE clause. */
+ * statement is worth more than de-duplicating one WHERE clause. "Never
+ * observed" is the absence of a record: the subquery is the same fact the
+ * engine's attribution reads from its anchors snapshot. */
 error_t *state_reclaim_unmaterialized_files(state_t *state) {
     CHECK_NULL(state);
 
@@ -2322,7 +2138,8 @@ error_t *state_reclaim_unmaterialized_files(state_t *state) {
     char *errmsg = NULL;
     int rc = sqlite3_exec(
         state->db,
-        "DELETE FROM virtual_manifest WHERE state != 'active' AND observed_at = 0;",
+        "DELETE FROM virtual_manifest WHERE state != 'active' "
+        "AND filesystem_path NOT IN (SELECT filesystem_path FROM anchors);",
         NULL, NULL, &errmsg
     );
     if (rc != SQLITE_OK) {
@@ -2346,7 +2163,8 @@ error_t *state_reclaim_unmaterialized_directories(state_t *state) {
     char *errmsg = NULL;
     int rc = sqlite3_exec(
         state->db,
-        "DELETE FROM tracked_directories WHERE state != 'active' AND observed_at = 0;",
+        "DELETE FROM tracked_directories WHERE state != 'active' "
+        "AND filesystem_path NOT IN (SELECT filesystem_path FROM anchors);",
         NULL, NULL, &errmsg
     );
     if (rc != SQLITE_OK) {
@@ -2448,6 +2266,12 @@ static int build_in_placeholders(char *buf, size_t bufsz, size_t n) {
  * idx_tracked_directories_profile). The table parameter is a code-controlled
  * constant — never user input — so SQL injection is not a concern.
  *
+ * The records of the rows about to go retire with them, by the same
+ * predicate as a subquery, ahead of the row delete: a purge is a release
+ * ("the deployed copy is left where it is") and a released path keeps no
+ * record. Without it the anchors of a deleted profile's released files
+ * would outlive every row that could name them.
+ *
  * Returns rows-affected via *out_purged when provided. Empty DB and unknown
  * profile both yield zero rows-affected with no error. Empty lifecycle-set
  * is a caller bug (ERR_INVALID_ARG). */
@@ -2483,8 +2307,21 @@ static error_t *bulk_purge_by_profile(
         );
     }
 
-    char sql[256];
+    /* Two statements, one WHERE: the records first (a subquery over the
+     * rows the second statement deletes), then the rows. */
+    char sql_retire[320];
     int n = snprintf(
+        sql_retire, sizeof(sql_retire),
+        "DELETE FROM anchors WHERE filesystem_path IN "
+        "(SELECT filesystem_path FROM %s WHERE profile = ? AND state IN (%s));",
+        table, placeholders
+    );
+    if (n < 0 || (size_t) n >= sizeof(sql_retire)) {
+        return ERROR(ERR_INTERNAL, "SQL buffer overflow building bulk purge");
+    }
+
+    char sql[256];
+    n = snprintf(
         sql, sizeof(sql), "DELETE FROM %s WHERE profile = ? AND state IN (%s);",
         table, placeholders
     );
@@ -2492,27 +2329,33 @@ static error_t *bulk_purge_by_profile(
         return ERROR(ERR_INTERNAL, "SQL buffer overflow building bulk purge");
     }
 
-    sqlite3_stmt *stmt = NULL;
-    int rc = sqlite3_prepare_v2(state->db, sql, -1, &stmt, NULL);
-    if (rc != SQLITE_OK) {
-        return sqlite_error(state->db, "Failed to prepare bulk purge");
+    const char *statements[] = { sql_retire, sql };
+    int changes = 0;
+
+    for (size_t k = 0; k < 2; k++) {
+        sqlite3_stmt *stmt = NULL;
+        int rc = sqlite3_prepare_v2(state->db, statements[k], -1, &stmt, NULL);
+        if (rc != SQLITE_OK) {
+            return sqlite_error(state->db, "Failed to prepare bulk purge");
+        }
+
+        sqlite3_bind_text(stmt, 1, profile, -1, SQLITE_TRANSIENT);
+        for (size_t i = 0; i < lifecycle_count; i++) {
+            sqlite3_bind_text(
+                stmt, (int) (i + 2), lifecycle_to_sql_text(lifecycles[i]), -1, SQLITE_STATIC
+            );
+        }
+
+        rc = sqlite3_step(stmt);
+        changes = sqlite3_changes(state->db);
+        sqlite3_finalize(stmt);
+
+        if (rc != SQLITE_DONE) {
+            return sqlite_error(state->db, "Failed to execute bulk purge");
+        }
     }
 
-    sqlite3_bind_text(stmt, 1, profile, -1, SQLITE_TRANSIENT);
-    for (size_t i = 0; i < lifecycle_count; i++) {
-        sqlite3_bind_text(
-            stmt, (int) (i + 2), lifecycle_to_sql_text(lifecycles[i]), -1, SQLITE_STATIC
-        );
-    }
-
-    rc = sqlite3_step(stmt);
-    int changes = sqlite3_changes(state->db);
-    sqlite3_finalize(stmt);
-
-    if (rc != SQLITE_DONE) {
-        return sqlite_error(state->db, "Failed to execute bulk purge");
-    }
-
+    /* The count reported is the rows', from the second statement. */
     if (out_purged) *out_purged = (size_t) changes;
 
     return NULL;
@@ -2962,11 +2805,9 @@ void state_free(state_t *state) {
 /**
  * Create file entry
  *
- * Helper function to allocate and initialize a file entry.
- *
- * Populates identity and VWD-cache fields only. entry->anchor is
- * zero-initialized by calloc; hydration callers populate it afterward
- * from row data (anchor is never a caller-supplied field).
+ * Helper function to allocate and initialize a file entry: the row from
+ * the identity and VWD-cache arguments, the lifecycle and old_profile
+ * beside it.
  *
  * @param storage_path Storage path (must not be NULL)
  * @param filesystem_path Filesystem path (must not be NULL)
@@ -2987,14 +2828,14 @@ error_t *state_create_entry(
     const char *filesystem_path,
     const char *profile,
     const char *old_profile,
-    state_file_type_t type,
+    path_type_t type,
     const git_oid *blob_oid,
     mode_t mode,
     const char *owner,
     const char *group,
     bool encrypted,
     state_lifecycle_t lifecycle,
-    state_file_entry_t **out
+    state_entry_t **out
 ) {
     CHECK_NULL(storage_path);
     CHECK_NULL(filesystem_path);
@@ -3002,33 +2843,34 @@ error_t *state_create_entry(
     CHECK_NULL(blob_oid);
     CHECK_NULL(out);
 
-    state_file_entry_t *entry = calloc(1, sizeof(state_file_entry_t));
+    state_entry_t *entry = calloc(1, sizeof(state_entry_t));
     if (!entry) {
         return ERROR(ERR_MEMORY, "Failed to allocate entry");
     }
 
+    manifest_row_t *row = &entry->row;
+
     /* Copy required string fields */
-    entry->storage_path = strdup(storage_path);
-    entry->filesystem_path = strdup(filesystem_path);
-    entry->profile = strdup(profile);
+    row->storage_path = strdup(storage_path);
+    row->filesystem_path = strdup(filesystem_path);
+    row->profile = strdup(profile);
 
     /* Copy binary blob OID (20 bytes, no allocation) */
-    git_oid_cpy(&entry->blob_oid, blob_oid);
+    git_oid_cpy(&row->blob_oid, blob_oid);
 
     /* Copy optional string fields */
     entry->old_profile = old_profile ? strdup(old_profile) : NULL;
-    entry->owner = owner ? strdup(owner) : NULL;
-    entry->group = group ? strdup(group) : NULL;
+    row->owner = owner ? strdup(owner) : NULL;
+    row->group = group ? strdup(group) : NULL;
 
     /* Set non-string fields */
-    entry->mode = mode;
-    entry->type = type;
-    entry->encrypted = encrypted;
+    row->mode = mode;
+    row->type = type;
+    row->encrypted = encrypted;
     entry->lifecycle = lifecycle;
-    entry->anchor = DEPLOYMENT_ANCHOR_UNSET;
 
     /* Validate required allocations */
-    if (!entry->storage_path || !entry->filesystem_path || !entry->profile) {
+    if (!row->storage_path || !row->filesystem_path || !row->profile) {
         state_free_entry(entry);
         return ERROR(ERR_MEMORY, "Failed to copy entry fields");
     }
@@ -3038,98 +2880,382 @@ error_t *state_create_entry(
 }
 
 /**
- * Advance a manifest entry's deployment anchor
+ * Get every anchor, in filesystem_path order
  *
- * The sole writer of the deployment columns (deployed_blob_oid, deployed_at,
- * observed_at, stat_*). Call after confirming disk content matches
- * anchor->blob_oid.
- *
- * See state.h for the full contract. In brief:
- *   - anchor->blob_oid must be non-zero.
- *   - anchor->deployed_at == 0 preserves the existing timestamp
- *     (add/update/workspace-flush case).
- *   - anchor->deployed_at != 0 writes the new value
- *     (apply post-deploy / adoption case).
- *   - anchor->observed_at follows the monotonic-once-set rule: written
- *     only if the row's current value is zero. A zero passed here is a
- *     safe no-op; a non-zero existing value always wins.
- *   - anchor->stat is always written.
- *   - Not-found is not an error.
- *
- * The SQL UPDATE encodes those rules via CASE expressions and RETURNING
- * projects the post-write column values. Callers that mirror an in-memory
- * snapshot pass a non-NULL resolved_out and assign it directly into the
- * snapshot row — the SQL is the single specification, no C-side mirror of
- * the rules exists. resolved_out is left untouched if the WHERE clause
- * matches no row (precedence-filtered, disabled profile).
+ * Count, allocate, one full-table SELECT — the same local prepare+finalize
+ * shape as state_get_all_files, for the same reason: a single-pass scan
+ * run once per workspace_load gains nothing from a cached statement.
  */
-error_t *state_update_anchor(
-    state_t *state,
-    const char *filesystem_path,
-    const deployment_anchor_t *anchor,
-    deployment_anchor_t *resolved_out
+error_t *state_get_all_anchors(
+    const state_t *state,
+    arena_t *arena,
+    anchor_t **out,
+    size_t *count
 ) {
     CHECK_NULL(state);
-    CHECK_NULL(filesystem_path);
-    CHECK_NULL(anchor);
-    CHECK_NULL(state->db);
-    CHECK_NULL(state->stmt_update_anchor);
+    CHECK_NULL(arena);
+    CHECK_NULL(out);
+    CHECK_NULL(count);
 
-    /* A zero blob_oid here would misclassify the entry as "never confirmed"
-     * and strand it in the stale path. Reject rather than silently poison. */
-    if (git_oid_is_zero(&anchor->blob_oid)) {
+    *out = NULL;
+    *count = 0;
+
+    /* Empty state (no DB file) — return empty results */
+    if (!state->db) return NULL;
+
+    /* Count first (arena allocation wants the size up front) */
+    const char *sql_count = "SELECT COUNT(*) FROM anchors;";
+    sqlite3_stmt *stmt_count = NULL;
+
+    int rc = sqlite3_prepare_v2(state->db, sql_count, -1, &stmt_count, NULL);
+    if (rc != SQLITE_OK) {
+        return sqlite_error(state->db, "Failed to prepare anchor count query");
+    }
+
+    rc = sqlite3_step(stmt_count);
+    if (rc != SQLITE_ROW) {
+        sqlite3_finalize(stmt_count);
+        return sqlite_error(state->db, "Failed to count anchors");
+    }
+
+    size_t anchor_count = (size_t) sqlite3_column_int64(stmt_count, 0);
+    sqlite3_finalize(stmt_count);
+
+    if (anchor_count == 0) {
+        return NULL;  /* Success, no anchors */
+    }
+
+    /* Allocate array */
+    anchor_t *anchors = arena_calloc(arena, anchor_count, sizeof(anchor_t));
+    if (!anchors) {
+        return ERROR(ERR_MEMORY, "Failed to allocate anchors array");
+    }
+
+    /* Helper macros: route allocations through arena */
+    #define DUP(s)      arena_strdup(arena, (s))
+    #define DUP_OPT(s)  ((s) ? DUP(s) : NULL)
+
+    /* The one read (14 columns: 3 identity + 4 metadata + 7 record) */
+    const char *sql_anchors =
+        "SELECT filesystem_path, storage_path, profile, type, mode, owner, \"group\", "
+        "blob_oid, stat_mtime, stat_size, stat_ino, observed_at, deployed_at, prune_ordered "
+        "FROM anchors ORDER BY filesystem_path;";
+
+    sqlite3_stmt *stmt = NULL;
+    rc = sqlite3_prepare_v2(state->db, sql_anchors, -1, &stmt, NULL);
+    if (rc != SQLITE_OK) {
+        return sqlite_error(state->db, "Failed to prepare anchors query");
+    }
+
+    size_t i = 0;
+    while ((rc = sqlite3_step(stmt)) == SQLITE_ROW && i < anchor_count) {
+        /* Column layout matches sql_anchors:
+         *   0-2:  identity (filesystem_path, storage_path, profile)
+         *   3-6:  what dotta set (type, mode, owner, group)
+         *   7-13: what dotta confirmed (blob_oid, stat_mtime, stat_size,
+         *         stat_ino, observed_at, deployed_at, prune_ordered) */
+        anchor_t *anchor = &anchors[i];
+
+        const char *fs_path = (const char *) sqlite3_column_text(stmt, 0);
+        const char *storage_path = (const char *) sqlite3_column_text(stmt, 1);
+        const char *profile = (const char *) sqlite3_column_text(stmt, 2);
+        const char *type_str = (const char *) sqlite3_column_text(stmt, 3);
+
+        /* Read mode as integer (0 if NULL) */
+        mode_t mode = 0;
+        if (sqlite3_column_type(stmt, 4) != SQLITE_NULL) {
+            mode = (mode_t) sqlite3_column_int(stmt, 4);
+        }
+
+        const char *owner = (const char *) sqlite3_column_text(stmt, 5);
+        const char *group = (const char *) sqlite3_column_text(stmt, 6);
+
+        /* A NULL blob (a directory, or observed only) hydrates to the zero
+         * OID calloc left; a stored blob is 20 bytes by CHECK. */
+        if (sqlite3_column_type(stmt, 7) != SQLITE_NULL) {
+            memcpy(anchor->blob_oid.id, sqlite3_column_blob(stmt, 7), GIT_OID_RAWSZ);
+        }
+
+        /* Validate non-nullable string columns */
+        if (!fs_path || !storage_path || !profile || !type_str) {
+            sqlite3_finalize(stmt);
+            return ERROR(ERR_STATE_INVALID, "NULL value in required column at anchor %zu", i);
+        }
+
+        /* Copy strings into arena */
+        anchor->filesystem_path = DUP(fs_path);
+        anchor->storage_path = DUP(storage_path);
+        anchor->profile = DUP(profile);
+        anchor->type = path_type_from_sql_text(type_str);
+        anchor->mode = mode;
+        anchor->owner = DUP_OPT(owner);
+        anchor->group = DUP_OPT(group);
+        anchor->stat = (stat_cache_t){
+            .mtime = sqlite3_column_int64(stmt, 8),
+            .size = sqlite3_column_int64(stmt, 9),
+            .ino = (uint64_t) sqlite3_column_int64(stmt, 10),
+        };
+        anchor->observed_at = (time_t) sqlite3_column_int64(stmt, 11);
+        anchor->deployed_at = (time_t) sqlite3_column_int64(stmt, 12);
+        anchor->prune_ordered = (sqlite3_column_int(stmt, 13) != 0);
+
+        /* Check allocation success */
+        if (!anchor->filesystem_path || !anchor->storage_path || !anchor->profile) {
+            sqlite3_finalize(stmt);
+            return ERROR(ERR_MEMORY, "Failed to copy anchor strings");
+        }
+
+        i++;
+    }
+
+    sqlite3_finalize(stmt);
+
+    if (rc != SQLITE_DONE) {
+        return sqlite_error(state->db, "Failed to query anchors");
+    }
+
+    #undef DUP
+    #undef DUP_OPT
+
+    *out = anchors;
+    *count = i;
+
+    return NULL;
+}
+
+/**
+ * Bind a row's identity and metadata as placeholders ?1-?7
+ *
+ * The shared prefix of sql_observe and sql_anchor: filesystem_path,
+ * storage_path, profile, type, mode, owner, group — the columns a record
+ * takes from the row it is written from. Both statements lay their
+ * placeholders out to start this way so one bind sequence serves both.
+ */
+static void bind_row(sqlite3_stmt *stmt, const manifest_row_t *row) {
+    /* 1-3. filesystem_path, storage_path, profile */
+    sqlite3_bind_text(stmt, 1, row->filesystem_path, -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 2, row->storage_path, -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 3, row->profile, -1, SQLITE_TRANSIENT);
+
+    /* 4. type */
+    sqlite3_bind_text(stmt, 4, path_type_to_sql_text(row->type), -1, SQLITE_STATIC);
+
+    /* 5. mode (optional) */
+    if (row->mode > 0) {
+        sqlite3_bind_int(stmt, 5, row->mode);
+    } else {
+        sqlite3_bind_null(stmt, 5);
+    }
+
+    /* 6. owner (optional) */
+    if (row->owner) {
+        sqlite3_bind_text(stmt, 6, row->owner, -1, SQLITE_TRANSIENT);
+    } else {
+        sqlite3_bind_null(stmt, 6);
+    }
+
+    /* 7. group (optional) */
+    if (row->group) {
+        sqlite3_bind_text(stmt, 7, row->group, -1, SQLITE_TRANSIENT);
+    } else {
+        sqlite3_bind_null(stmt, 7);
+    }
+}
+
+/**
+ * Observe a managed path: record its first sighting on disk
+ *
+ * INSERT OR IGNORE — see the SQL comment on sql_observe and the header
+ * contract. Binds the row's identity and metadata plus the stamp; the
+ * blob and stat columns take their NULL / zero defaults, and an existing
+ * row is left exactly as it was.
+ */
+error_t *state_observe(state_t *state, const manifest_row_t *row, time_t now) {
+    CHECK_NULL(state);
+    CHECK_NULL(row);
+    CHECK_NULL(state->db);
+    CHECK_NULL(state->stmt_observe);
+
+    if (now <= 0) {
+        return ERROR(ERR_INVALID_ARG, "Observation timestamp must be > 0");
+    }
+
+    sqlite3_stmt *stmt = state->stmt_observe;
+    sqlite3_reset(stmt);
+    sqlite3_clear_bindings(stmt);
+
+    bind_row(stmt, row);
+
+    /* 8. observed_at */
+    sqlite3_bind_int64(stmt, 8, (sqlite3_int64) now);
+
+    int rc = sqlite3_step(stmt);
+    if (rc != SQLITE_DONE) {
+        return sqlite_error(state->db, "Failed to record observation");
+    }
+
+    return NULL;
+}
+
+/**
+ * Anchor a managed path: record the row dotta reconciled it against
+ *
+ * The sole writer of the record's content, metadata and ownership
+ * columns. See state.h for the full contract. In brief:
+ *   - row->blob_oid must be non-zero for a file row; a DIRECTORY row
+ *     binds NULL.
+ *   - own = true writes deployed_at = now; own = false keeps the
+ *     existing timestamp (0 on a fresh row).
+ *   - observed_at is the INSERT arm's alone.
+ *   - stat is always written (zeros when NULL).
+ *   - prune_ordered resets to 0.
+ *
+ * The SQL UPSERT encodes those rules and RETURNING projects the two
+ * columns it decided. Callers that mirror an in-memory snapshot pass a
+ * non-NULL resolved_out and assign it directly — the SQL is the single
+ * specification, no C-side mirror of the rules exists.
+ */
+error_t *state_anchor(
+    state_t *state,
+    const manifest_row_t *row,
+    const stat_cache_t *stat,
+    time_t now,
+    bool own,
+    anchor_t *resolved_out
+) {
+    CHECK_NULL(state);
+    CHECK_NULL(row);
+    CHECK_NULL(state->db);
+    CHECK_NULL(state->stmt_anchor);
+
+    if (now <= 0) {
+        return ERROR(ERR_INVALID_ARG, "Anchor timestamp must be > 0");
+    }
+
+    bool directory = (row->type == PATH_TYPE_DIRECTORY);
+
+    /* A zero blob_oid on a file row would record "never confirmed" for a
+     * path this call claims to have confirmed, and strand it in the stale
+     * path. Reject rather than silently poison — and name the bug, where
+     * the schema's CHECK would only refuse the zeroblob. */
+    if (!directory && git_oid_is_zero(&row->blob_oid)) {
         return ERROR(
             ERR_STATE_INVALID,
-            "state_update_anchor called with zero blob_oid for '%s'",
-            filesystem_path
+            "state_anchor called with zero blob_oid for '%s'",
+            row->filesystem_path
         );
     }
 
-    sqlite3_stmt *stmt = state->stmt_update_anchor;
+    sqlite3_stmt *stmt = state->stmt_anchor;
 
     /* Reset and bind */
     sqlite3_reset(stmt);
     sqlite3_clear_bindings(stmt);
 
-    /* Bind order mirrors sql_update_anchor. ?2 (deployed_at) is used twice;
-     * ?6 (observed_at) feeds the CASE's ELSE branch and is preserved by the
-     * row's current column value whenever that column is already non-zero. */
-    sqlite3_bind_blob(stmt, 1, anchor->blob_oid.id, GIT_OID_RAWSZ, SQLITE_TRANSIENT);
-    sqlite3_bind_int64(stmt, 2, (sqlite3_int64) anchor->deployed_at);
-    sqlite3_bind_int64(stmt, 3, anchor->stat.mtime);
-    sqlite3_bind_int64(stmt, 4, anchor->stat.size);
-    sqlite3_bind_int64(stmt, 5, (sqlite3_int64) anchor->stat.ino);
-    sqlite3_bind_int64(stmt, 6, (sqlite3_int64) anchor->observed_at);
-    sqlite3_bind_text(stmt, 7, filesystem_path, -1, SQLITE_TRANSIENT);
+    bind_row(stmt, row);
 
-    /* RETURNING yields one row when the WHERE matched, zero rows otherwise.
-     * filesystem_path is a PRIMARY KEY, so at most one row matches and a
-     * single follow-up step drains to SQLITE_DONE. */
+    /* 8. blob_oid — 20 bytes for a file, NULL for a directory (no content
+     * confirmation; the schema forbids a blob on a directory row). */
+    if (directory) {
+        sqlite3_bind_null(stmt, 8);
+    } else {
+        sqlite3_bind_blob(stmt, 8, row->blob_oid.id, GIT_OID_RAWSZ, SQLITE_TRANSIENT);
+    }
+
+    /* 9-11. stat triple (fast-path proof, bound to blob_oid; zeros when the
+     * caller had none — the next read takes the slow path). */
+    stat_cache_t triple = stat ? *stat : STAT_CACHE_UNSET;
+    sqlite3_bind_int64(stmt, 9, triple.mtime);
+    sqlite3_bind_int64(stmt, 10, triple.size);
+    sqlite3_bind_int64(stmt, 11, (sqlite3_int64) triple.ino);
+
+    /* 12. observed_at — consumed by the INSERT arm only.
+     * 13. deployed_at — 0 keeps the existing stamp (a confirmation),
+     *     now writes it (an ownership event). */
+    sqlite3_bind_int64(stmt, 12, (sqlite3_int64) now);
+    sqlite3_bind_int64(stmt, 13, (sqlite3_int64) (own ? now : 0));
+
+    /* RETURNING yields exactly one row — an UPSERT always writes one — and
+     * a single follow-up step drains to SQLITE_DONE. */
     int rc = sqlite3_step(stmt);
 
     if (rc == SQLITE_ROW) {
         if (resolved_out) {
-            /* Column layout matches RETURNING list: deployed_blob_oid (BLOB
-             * NOT NULL, always 20 bytes), deployed_at, stat_mtime, stat_size,
-             * stat_ino, observed_at. */
-            memcpy(resolved_out->blob_oid.id, sqlite3_column_blob(stmt, 0), GIT_OID_RAWSZ);
-            resolved_out->deployed_at = (time_t) sqlite3_column_int64(stmt, 1);
-            resolved_out->stat = (stat_cache_t){
-                .mtime = sqlite3_column_int64(stmt, 2),
-                .size = sqlite3_column_int64(stmt, 3),
-                .ino = (uint64_t) sqlite3_column_int64(stmt, 4),
+            /* Every field the caller supplied, borrowed, plus the two
+             * columns the SQL decided. Column layout matches the RETURNING
+             * list: observed_at, deployed_at. */
+            *resolved_out = (anchor_t){
+                .filesystem_path = row->filesystem_path,
+                .storage_path = row->storage_path,
+                .profile = row->profile,
+                .type = row->type,
+                .mode = row->mode,
+                .owner = row->owner,
+                .group = row->group,
+                .blob_oid = row->blob_oid,
+                .stat = triple,
+                .observed_at = (time_t) sqlite3_column_int64(stmt, 0),
+                .deployed_at = (time_t) sqlite3_column_int64(stmt, 1),
+                .prune_ordered = false,
             };
-            resolved_out->observed_at = (time_t) sqlite3_column_int64(stmt, 5);
         }
         rc = sqlite3_step(stmt);
     }
 
     if (rc != SQLITE_DONE) {
-        return sqlite_error(state->db, "Failed to update deployment anchor");
+        return sqlite_error(state->db, "Failed to anchor path");
     }
 
-    /* Not-found is OK — entry may not exist (disabled profile, filtered by
-     * precedence). resolved_out is left untouched in that case. */
+    return NULL;
+}
+
+/**
+ * Retire a managed path's record
+ *
+ * DELETE by filesystem_path; a missing row is success (see the header
+ * contract).
+ */
+error_t *state_retire_anchor(state_t *state, const char *filesystem_path) {
+    CHECK_NULL(state);
+    CHECK_NULL(filesystem_path);
+    CHECK_NULL(state->db);
+    CHECK_NULL(state->stmt_retire_anchor);
+
+    sqlite3_stmt *stmt = state->stmt_retire_anchor;
+    sqlite3_reset(stmt);
+    sqlite3_clear_bindings(stmt);
+    sqlite3_bind_text(stmt, 1, filesystem_path, -1, SQLITE_TRANSIENT);
+
+    int rc = sqlite3_step(stmt);
+    if (rc != SQLITE_DONE) {
+        return sqlite_error(state->db, "Failed to retire anchor");
+    }
+
+    return NULL;
+}
+
+/**
+ * Order a managed path's deployed copy pruned
+ *
+ * UPDATE by filesystem_path; a missing row is success (see the header
+ * contract).
+ */
+error_t *state_order_prune(state_t *state, const char *filesystem_path) {
+    CHECK_NULL(state);
+    CHECK_NULL(filesystem_path);
+    CHECK_NULL(state->db);
+    CHECK_NULL(state->stmt_order_prune);
+
+    sqlite3_stmt *stmt = state->stmt_order_prune;
+    sqlite3_reset(stmt);
+    sqlite3_clear_bindings(stmt);
+    sqlite3_bind_text(stmt, 1, filesystem_path, -1, SQLITE_TRANSIENT);
+
+    int rc = sqlite3_step(stmt);
+    if (rc != SQLITE_DONE) {
+        return sqlite_error(state->db, "Failed to order prune");
+    }
+
     return NULL;
 }
 
@@ -3336,218 +3462,20 @@ error_t *state_set_profile_commit_oid(
 }
 
 /**
- * Get entries by profile
- *
- * Returns all manifest entries from the specified profile. Allocations
- * use the caller's arena; lifetime ends when the arena is destroyed.
- *
- * Used by profile disable to determine impact of disabling a profile.
- *
- * @param state State (must not be NULL)
- * @param profile Profile name to filter by (must not be NULL)
- * @param arena Arena for allocations (must not be NULL)
- * @param out Output array (must not be NULL, lifetime tied to arena)
- * @param count Output count (must not be NULL)
- * @return Error or NULL on success (empty array if no matches)
- */
-error_t *state_get_entries_by_profile(
-    const state_t *state,
-    const char *profile,
-    arena_t *arena,
-    state_file_entry_t **out,
-    size_t *count
-) {
-    CHECK_NULL(state);
-    CHECK_NULL(profile);
-    CHECK_NULL(arena);
-    CHECK_NULL(out);
-    CHECK_NULL(count);
-
-    *out = NULL;
-    *count = 0;
-
-    /* Empty state (no DB file) — return empty results */
-    if (!state->db) return NULL;
-
-    CHECK_NULL(state->stmt_get_by_profile);
-
-    /* First, count entries */
-    char count_sql[512];
-    snprintf(
-        count_sql, sizeof(count_sql),
-        "SELECT COUNT(*) FROM virtual_manifest WHERE profile = ?;"
-    );
-
-    sqlite3_stmt *stmt_count = NULL;
-    int rc = sqlite3_prepare_v2(state->db, count_sql, -1, &stmt_count, NULL);
-    if (rc != SQLITE_OK) {
-        return sqlite_error(state->db, "Failed to prepare count query");
-    }
-
-    sqlite3_bind_text(stmt_count, 1, profile, -1, SQLITE_TRANSIENT);
-
-    rc = sqlite3_step(stmt_count);
-    if (rc != SQLITE_ROW) {
-        sqlite3_finalize(stmt_count);
-        return sqlite_error(state->db, "Failed to count entries");
-    }
-
-    size_t entry_count = (size_t) sqlite3_column_int64(stmt_count, 0);
-    sqlite3_finalize(stmt_count);
-
-    if (entry_count == 0) {
-        return NULL;  /* Success, no entries */
-    }
-
-    /* Allocate array */
-    state_file_entry_t *entries =
-        arena_calloc(arena, entry_count, sizeof(state_file_entry_t));
-    if (!entries) {
-        return ERROR(ERR_MEMORY, "Failed to allocate entries array");
-    }
-
-    /* Helper macros: route allocations through arena */
-    #define DUP(s)      arena_strdup(arena, (s))
-    #define DUP_OPT(s)  ((s) ? DUP(s) : NULL)
-
-    /* Reset and bind profile */
-    sqlite3_stmt *stmt = state->stmt_get_by_profile;
-    sqlite3_reset(stmt);
-    sqlite3_clear_bindings(stmt);
-    sqlite3_bind_text(stmt, 1, profile, -1, SQLITE_TRANSIENT);
-
-    /* Fetch all entries. Column layout matches sql_by_profile:
-     *   0-3:  identity, 4-10: VWD cache, 11-16: deployment anchor (same as sql_files). */
-    size_t i = 0;
-    while ((rc = sqlite3_step(stmt)) == SQLITE_ROW && i < entry_count) {
-        const char *fs_path = (const char *) sqlite3_column_text(stmt, 0);
-        const char *storage_path = (const char *) sqlite3_column_text(stmt, 1);
-        const char *profile = (const char *) sqlite3_column_text(stmt, 2);
-        const char *old_profile = (const char *) sqlite3_column_text(stmt, 3);
-
-        /* Read binary blob_oid directly into the entry (no intermediate allocation). */
-        memcpy(entries[i].blob_oid.id, sqlite3_column_blob(stmt, 4), GIT_OID_RAWSZ);
-
-        const char *type_str = (const char *) sqlite3_column_text(stmt, 5);
-
-        /* Read mode as integer (0 if NULL) */
-        mode_t mode = 0;
-        if (sqlite3_column_type(stmt, 6) != SQLITE_NULL) {
-            mode = (mode_t) sqlite3_column_int(stmt, 6);
-        }
-
-        const char *owner = (const char *) sqlite3_column_text(stmt, 7);
-        const char *group = (const char *) sqlite3_column_text(stmt, 8);
-        int encrypted = sqlite3_column_int(stmt, 9);
-        const char *state_str = (const char *) sqlite3_column_text(stmt, 10);
-
-        /* Deployment anchor */
-        memcpy(entries[i].anchor.blob_oid.id, sqlite3_column_blob(stmt, 11), GIT_OID_RAWSZ);
-        entries[i].anchor.deployed_at = (time_t) sqlite3_column_int64(stmt, 12);
-        entries[i].anchor.stat = (stat_cache_t){
-            .mtime = sqlite3_column_int64(stmt, 13),
-            .size = sqlite3_column_int64(stmt, 14),
-            .ino = (uint64_t) sqlite3_column_int64(stmt, 15),
-        };
-        entries[i].anchor.observed_at = (time_t) sqlite3_column_int64(stmt, 16);
-
-        if (!fs_path || !storage_path || !profile || !type_str) {
-            sqlite3_reset(stmt);
-            return ERROR(ERR_STATE_INVALID, "NULL value in required column at row %zu", i);
-        }
-
-        entries[i].filesystem_path = DUP(fs_path);
-        entries[i].storage_path = DUP(storage_path);
-        entries[i].profile = DUP(profile);
-        entries[i].old_profile = DUP_OPT(old_profile);
-        entries[i].mode = mode;
-        entries[i].owner = DUP_OPT(owner);
-        entries[i].group = DUP_OPT(group);
-
-        if (strcmp(type_str, "symlink") == 0) {
-            entries[i].type = STATE_FILE_SYMLINK;
-        } else if (strcmp(type_str, "executable") == 0) {
-            entries[i].type = STATE_FILE_EXECUTABLE;
-        } else {
-            entries[i].type = STATE_FILE_REGULAR;
-        }
-
-        entries[i].encrypted = (encrypted != 0);
-        entries[i].lifecycle = lifecycle_from_sql_text(state_str);
-
-        if (!entries[i].filesystem_path || !entries[i].storage_path || !entries[i].profile) {
-            sqlite3_reset(stmt);
-            return ERROR(ERR_MEMORY, "Failed to copy entry strings");
-        }
-
-        i++;
-    }
-
-    sqlite3_reset(stmt);
-
-    if (rc != SQLITE_DONE) {
-        return sqlite_error(state->db, "Failed to fetch entries");
-    }
-
-    #undef DUP
-    #undef DUP_OPT
-
-    *out = entries;
-    *count = i;
-
-    return NULL;
-}
-
-/**
- * Get last deployed timestamp for a profile
- *
- * Queries the maximum deployed_at timestamp for files from the specified profile.
- *
- * @param state State (must not be NULL)
- * @param profile Profile name (must not be NULL)
- * @return Timestamp (0 if profile has no deployed files)
- */
-time_t state_get_profile_timestamp(const state_t *state, const char *profile) {
-    if (!state || !profile || !state->db) {
-        return 0;
-    }
-
-    const char *sql = "SELECT MAX(deployed_at) FROM virtual_manifest WHERE profile = ?;";
-    sqlite3_stmt *stmt = NULL;
-
-    int rc = sqlite3_prepare_v2(state->db, sql, -1, &stmt, NULL);
-    if (rc != SQLITE_OK) {
-        return 0;
-    }
-
-    sqlite3_bind_text(stmt, 1, profile, -1, SQLITE_TRANSIENT);
-
-    time_t timestamp = 0;
-    rc = sqlite3_step(stmt);
-    if (rc == SQLITE_ROW) {
-        timestamp = (time_t) sqlite3_column_int64(stmt, 0);
-    }
-
-    sqlite3_finalize(stmt);
-
-    return timestamp;
-}
-
-/**
  * Free file entry
  *
  * @param entry Entry to free (can be NULL)
  */
-void state_free_entry(state_file_entry_t *entry) {
+void state_free_entry(state_entry_t *entry) {
     if (!entry) {
         return;
     }
 
-    free(entry->storage_path);
-    free(entry->filesystem_path);
-    free(entry->profile);
+    free(entry->row.storage_path);
+    free(entry->row.filesystem_path);
+    free(entry->row.profile);
+    free(entry->row.owner);
+    free(entry->row.group);
     free(entry->old_profile);
-    free(entry->owner);
-    free(entry->group);
     free(entry);
 }

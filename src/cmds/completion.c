@@ -139,35 +139,32 @@ static void complete_files(
 ) {
     if (!state) return;
 
-    state_file_entry_t *entries = NULL;
+    state_entry_t *entries = NULL;
     size_t count = 0;
-    error_t *err = NULL;
 
-    if (profile) {
-        err = state_get_entries_by_profile(
-            state, profile, arena, &entries, &count
-        );
-    } else {
-        err = state_get_all_files(
-            state, arena, &entries, &count
-        );
-    }
-
+    error_t *err = state_get_all_files(state, arena, &entries, &count);
     if (err) {
         error_free(err);
         return;
     }
 
     for (size_t i = 0; i < count; i++) {
+        const manifest_row_t *row = &entries[i].row;
+
+        /* Profile filter, applied here rather than in SQL: one snapshot
+         * read, one loop. */
+        if (profile && strcmp(row->profile, profile) != 0) {
+            continue;
+        }
         /* Skip entries staged for removal */
         if (entries[i].lifecycle == LIFECYCLE_DELETED ||
             entries[i].lifecycle == LIFECYCLE_RELEASED) {
             continue;
         }
-        const char *path = storage_paths ? entries[i].storage_path
-                                         : entries[i].filesystem_path;
+        const char *path = storage_paths ? row->storage_path
+                                         : row->filesystem_path;
         if (path) {
-            printf("%s\t%s\n", path, entries[i].profile);
+            printf("%s\t%s\n", path, row->profile);
         }
     }
 }

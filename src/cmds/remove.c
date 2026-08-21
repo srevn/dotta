@@ -364,13 +364,13 @@ static bool deployed_from_other_profile(
         return false;
     }
 
-    state_file_entry_t *state_entry = NULL;
+    state_entry_t *state_entry = NULL;
     error_t *err = state_get_file(state, filesystem_path, &state_entry);
 
     bool is_other = false;
     if (!err && state_entry &&
         state_entry->lifecycle == LIFECYCLE_ACTIVE &&
-        strcmp(state_entry->profile, current_profile) != 0) {
+        strcmp(state_entry->row.profile, current_profile) != 0) {
         is_other = true;
     }
 

@@ -290,10 +290,10 @@ static void print_deploy_results(
 ) {
     if (!result) return;
 
-    state_files_t deployed = state_files_view(&result->deployed);
-    state_directories_t created = state_directories_view(&result->created);
-    state_directories_t fixed = state_directories_view(&result->fixed);
-    state_directories_t replaced = state_directories_view(&result->replaced);
+    manifest_rows_t deployed = manifest_rows_view(&result->deployed);
+    manifest_rows_t created = manifest_rows_view(&result->created);
+    manifest_rows_t fixed = manifest_rows_view(&result->fixed);
+    manifest_rows_t replaced = manifest_rows_view(&result->replaced);
 
     /* Verbose mode: show individual items per outcome */
     if (deployed.count > 0) {
@@ -302,9 +302,9 @@ static void print_deploy_results(
                                          : "Deployed files"
         );
         for (size_t i = 0; i < deployed.count; i++) {
-            const state_file_entry_t *file = deployed.entries[i];
+            const manifest_row_t *file = deployed.entries[i];
 
-            if (file->type == STATE_FILE_SYMLINK) {
+            if (file->type == PATH_TYPE_SYMLINK) {
                 output_styled(
                     out, OUTPUT_VERBOSE, "  {green}✓{reset} %s (symlink)\n",
                     file->filesystem_path
@@ -332,7 +332,7 @@ static void print_deploy_results(
                                          : "Created tracked directories"
         );
         for (size_t i = 0; i < created.count; i++) {
-            const state_directory_entry_t *dir = created.entries[i];
+            const manifest_row_t *dir = created.entries[i];
 
             output_styled(
                 out, OUTPUT_VERBOSE, "  {green}✓{reset} %s (mode: %04o",
@@ -354,7 +354,7 @@ static void print_deploy_results(
                                          : "Fixed tracked directories"
         );
         for (size_t i = 0; i < fixed.count; i++) {
-            const state_directory_entry_t *dir = fixed.entries[i];
+            const manifest_row_t *dir = fixed.entries[i];
 
             output_styled(
                 out, OUTPUT_VERBOSE, "  {green}✓{reset} %s (mode: %04o",
@@ -390,7 +390,7 @@ static void print_deploy_results(
                                          : "Replaced tracked directories"
         );
         for (size_t i = 0; i < replaced.count; i++) {
-            const state_directory_entry_t *dir = replaced.entries[i];
+            const manifest_row_t *dir = replaced.entries[i];
 
             output_styled(
                 out, OUTPUT_VERBOSE, "  {green}✓{reset} %s (mode: %04o",
@@ -883,8 +883,8 @@ static error_t *ensure_complete_apply_privileges(
         return NULL;  /* Read-only operation, no privileges needed */
     }
 
-    state_files_t files = state_files_view(&deploy_plan->files.pending);
-    state_directories_t dirs = state_directories_view(&deploy_plan->directories.pending);
+    manifest_rows_t files = manifest_rows_view(&deploy_plan->files.pending);
+    manifest_rows_t dirs = manifest_rows_view(&deploy_plan->directories.pending);
 
     workspace_items_t file_orphans = workspace_items_view(&cleanup_plan->files);
     workspace_items_t dir_orphans = workspace_items_view(&cleanup_plan->directories);
@@ -1060,9 +1060,10 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     }
 
     /* Persist deployment-anchor advances for files verified clean via the
-     * slow path. Within apply's transaction — committed atomically with
-     * deployment changes. Routed through workspace_advance_anchor, so each
-     * persisted update also patches the workspace's snapshot row in place —
+     * slow path, and observations of paths seen with no record. Within
+     * apply's transaction — committed atomically with deployment changes.
+     * Routed through workspace_anchor / workspace_observe, so each
+     * persisted update also lands in the workspace's anchors snapshot —
      * downstream readers in this run see DB and memory agreeing. */
     err = workspace_flush_updates(ws);
     if (err) {
@@ -1095,13 +1096,13 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * both kinds, --skip-existing for files. output_print gates on the
      * verbosity level, so normal runs pay only the loop cost. */
     {
-        state_files_t excluded_files = state_files_view(
+        manifest_rows_t excluded_files = manifest_rows_view(
             &deploy_plan->files.excluded
         );
-        state_directories_t excluded_dirs = state_directories_view(
+        manifest_rows_t excluded_dirs = manifest_rows_view(
             &deploy_plan->directories.excluded
         );
-        state_files_t existing_files = state_files_view(
+        manifest_rows_t existing_files = manifest_rows_view(
             &deploy_plan->files.skipped_existing
         );
 
@@ -1263,23 +1264,24 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     /* Apply-level adoption: stamp ownership for in-scope clean files that
      * dotta has never claimed.
      *
-     * A clean in-scope entry with anchor.deployed_at == 0 represents a file
-     * the user declared scope over (via profile enable or add/update) AND
-     * that analyze_file_divergence just classified as clean — i.e.,
-     * workspace_get_item returns NULL because neither the Phase 1 fast-path
-     * nor the Phase 3 slow-path produced a divergence verdict. Apply is the
-     * ownership moment: running it is how the user claims the in-scope set.
-     * Stamping here collapses the "enable → apply on a pre-existing matching
-     * file" flow to a coherent (blob, now, stat), so a later `rm file` is
-     * classified as [deleted] and `update` commits the deletion.
+     * A clean in-scope row whose record has deployed_at == 0 — or no
+     * record at all — represents a file the user declared scope over (via
+     * profile enable or add/update) AND that analyze_file_divergence just
+     * classified as clean — i.e., workspace_get_item returns NULL because
+     * neither the Phase 1 fast-path nor the Phase 3 slow-path produced a
+     * divergence verdict. Apply is the ownership moment: running it is how
+     * the user claims the in-scope set. Stamping here collapses the
+     * "enable → apply on a pre-existing matching file" flow to a coherent
+     * (blob, now, stat), so a later `rm file` is classified as [deleted]
+     * and `update` commits the deletion.
      *
      * Independence from the earlier flush: workspace_flush_updates
      * above persists slow-path anchors for the *next* run's fast path.
      * It is not what proves this run's match — that proof comes from
      * analyze_file_divergence leaving the entry out of ws->diverged. The
-     * flush preserves deployed_at by contract, so entry->anchor.deployed_at
+     * flush keeps deployed_at by contract, so the record's deployed_at
      * here remains a valid ownership probe; DB and in-memory views are
-     * kept coherent by workspace_advance_anchor.
+     * kept coherent by workspace_anchor.
      *
      * Placement rationale: MUST run before the nothing-to-do early exit
      * below, otherwise the canonical case (clean manifest, no orphans)
@@ -1289,27 +1291,26 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      *
      * Write gated by !dry_run: stamping deployed_at is a write-effect that
      * contradicts dry-run's read-only ownership contract, so the
-     * state_update_anchor call is skipped. Classification runs regardless,
+     * workspace_anchor call is skipped. Classification runs regardless,
      * so --dry-run previews "Would adopt N file(s)".
      *
      * deploy_plan->files.clean IS "in scope ∧ no work" — no gates re-derived here. */
     size_t adopted_count = 0;
     time_t adopt_now = time(NULL);
-    state_files_t adoptable = state_files_view(&deploy_plan->files.clean);
+    manifest_rows_t adoptable = manifest_rows_view(&deploy_plan->files.clean);
 
     for (size_t i = 0; i < adoptable.count; i++) {
-        const state_file_entry_t *file = adoptable.entries[i];
+        const manifest_row_t *file = adoptable.entries[i];
 
-        if (file->anchor.deployed_at > 0) continue;
+        const anchor_t *anchor = workspace_anchor_of(ws, file->filesystem_path);
+        if (anchor && anchor->deployed_at > 0) continue;
 
         if (!opts->dry_run) {
-            deployment_anchor_t anchor = capture_anchor_from_disk(
-                file->filesystem_path, &file->blob_oid, adopt_now
-            );
-            error_t *adopt_err = workspace_advance_anchor(ws, file, &anchor);
+            stat_cache_t stat = stat_cache_from_path(file->filesystem_path);
+            error_t *adopt_err = workspace_anchor(ws, file, &stat, adopt_now, true);
             if (adopt_err) {
                 /* Non-fatal: file is correct on disk; next status's slow-path
-                 * CMP_EQUAL re-seeds the witness, and the row will be
+                 * CMP_EQUAL re-seeds the record, and the row will be
                  * re-adopted on the next apply. */
                 output_warning(
                     out, OUTPUT_NORMAL, "Failed to record adoption anchor for %s: %s",
@@ -1472,8 +1473,8 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * silent preview — no gate needed anywhere. */
     cleanup_options_t cleanup_opts = {
         .force                 = opts->force,
-        .deploying_files       = state_files_view(&deploy_plan->files.pending),
-        .deploying_directories = state_directories_view(&deploy_plan->directories.pending),
+        .deploying_files       = manifest_rows_view(&deploy_plan->files.pending),
+        .deploying_directories = manifest_rows_view(&deploy_plan->directories.pending),
     };
 
     err = cleanup_preflight(cleanup_plan, &cleanup_opts, &cleanup_verdicts);
@@ -1611,7 +1612,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     }
 
     /* Record what happened (only if not dry-run): cleanup, anchors,
-     * witnesses. Acknowledgements and the commit follow for both modes. */
+     * observations. Acknowledgements and the commit follow for both modes. */
     if (!opts->dry_run) {
         /* Prune the orphans the verdicts cleared and retire their rows.
          *
@@ -1641,13 +1642,15 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         if (cleanup_res) {
             print_cleanup_results(out, cleanup_res);
 
-            /* The rows behind a gone or let-go path retire; a skipped or
-             * failed one stays. Which outcomes retire is cleanup's rule,
-             * read off its result (cleanup.h); the act is apply's. Every
-             * bucket is one kind and the kind travels on the item, so it
-             * picks the table. Non-fatal per row: the filesystem effect,
-             * if any, already happened, and a row that fails to retire is
-             * reported and observed again by the next apply. */
+            /* The rows behind a gone or let-go path retire — the expected
+             * row and the record side by side; a skipped or failed one
+             * stays. Which outcomes retire is cleanup's rule, read off its
+             * result (cleanup.h); the act is apply's. Every bucket is one
+             * kind and the kind travels on the item, so it picks the
+             * expected table; the record is one table for both. Non-fatal
+             * per row: the filesystem effect, if any, already happened,
+             * and a row that fails to retire is reported and observed
+             * again by the next apply. */
             const ptr_array_t *retiring[] = {
                 &cleanup_res->pruned_files,
                 &cleanup_res->reclaimed_files,
@@ -1666,6 +1669,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
                     err = (item->item_kind == PATH_KIND_DIRECTORY)
                         ? state_remove_directory(state, item->filesystem_path)
                         : state_remove_file(state, item->filesystem_path);
+                    if (!err) err = state_retire_anchor(state, item->filesystem_path);
                     if (err) {
                         output_warning(
                             out, OUTPUT_NORMAL, "Failed to retire state entry for %s: %s",
@@ -1689,12 +1693,13 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
             cleanup_result_free(cleanup_res);
         }
 
-        /* Advance the deployment anchor for successfully deployed files
+        /* Record what the run did, path by path
          *
-         * CRITICAL: This records disk-confirmation for each deployed file — the
-         * blob dotta just wrote, the lifecycle timestamp, and the stat triple
-         * used by the fast path on subsequent runs. The anchor is the
-         * authoritative "dotta confirmed disk == this blob" record.
+         * CRITICAL: This writes the record for each path deploy touched —
+         * for a file, the blob dotta just wrote, the ownership timestamp,
+         * and the stat triple used by the fast path on subsequent runs.
+         * The record is the authoritative "dotta confirmed disk == this
+         * blob" / "dotta made this" account.
          *
          * IMPORTANT: This operation runs REGARDLESS of cleanup success/failure.
          * - Deployment succeeded (files are physically on filesystem)
@@ -1703,27 +1708,47 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
          * - This prevents state desynchronization (deployed files marked as undeployed)
          *
          * Non-critical operation: deployment already succeeded physically, so
-         * anchor advance failures are non-fatal warnings (preserve consistency).
+         * record-write failures are non-fatal warnings (preserve consistency).
+         *
+         * The receipt's buckets split by what dotta did, and the record
+         * follows the split:
+         *   deployed            files written or linked — an owned anchor
+         *                       with a fresh stat
+         *   created ∪ replaced  directories dotta made (where nothing stood,
+         *                       or in a squatter's place) — an owned anchor;
+         *                       a directory has no blob and no stat
+         *   fixed               directories converged in place — dotta did
+         *                       not make them: an observation, which leaves
+         *                       an existing record exactly as it is
+         * and then every active directory still without a record and
+         * present on disk — create_ancestor's parents, and directories
+         * present since before this run that the load-time flush did not
+         * reach — is observed too. Presence is the fact, so that last
+         * pass walks the active slice rather than the receipt; observation
+         * is idempotent, so it never regresses a record.
          */
-        state_files_t deployed = deploy_res ? state_files_view(&deploy_res->deployed)
-                                            : (state_files_t){ 0 };
-        if (deployed.count > 0) {
-            time_t now = time(NULL);
+        time_t now = time(NULL);
 
-            output_print(out, OUTPUT_VERBOSE, "\nUpdating deployment anchors...\n");
+        if (deploy_res) {
+            manifest_rows_t deployed = manifest_rows_view(&deploy_res->deployed);
+            manifest_rows_t created = manifest_rows_view(&deploy_res->created);
+            manifest_rows_t replaced = manifest_rows_view(&deploy_res->replaced);
+            manifest_rows_t fixed = manifest_rows_view(&deploy_res->fixed);
+
+            if (deployed.count > 0) {
+                output_print(out, OUTPUT_VERBOSE, "\nUpdating deployment anchors...\n");
+            }
 
             for (size_t i = 0; i < deployed.count; i++) {
-                const state_file_entry_t *file = deployed.entries[i];
+                const manifest_row_t *file = deployed.entries[i];
 
                 /* Snapshot disk state (mtime/size/ino) for the fast path.
                  * The file was just written and fsynced by deploy_file(); lstat()
                  * is a cheap inode-cache read. If lstat fails, the anchor is still
                  * advanced with a zero stat (slow-path fallback on next run). */
-                deployment_anchor_t anchor = capture_anchor_from_disk(
-                    file->filesystem_path, &file->blob_oid, now
-                );
+                stat_cache_t stat = stat_cache_from_path(file->filesystem_path);
 
-                err = workspace_advance_anchor(ws, file, &anchor);
+                err = workspace_anchor(ws, file, &stat, now, true);
                 if (err) {
                     /* Non-fatal warning - deployment succeeded, just anchor update failed.
                      * The file is already on the filesystem with correct content.
@@ -1737,45 +1762,71 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
                 }
             }
 
-            output_print(
-                out, OUTPUT_VERBOSE, "  Updated %zu anchor%s\n",
-                deployed.count, deployed.count == 1 ? "" : "s"
-            );
+            if (deployed.count > 0) {
+                output_print(
+                    out, OUTPUT_VERBOSE, "  Updated %zu anchor%s\n",
+                    deployed.count, deployed.count == 1 ? "" : "s"
+                );
+            }
+
+            const manifest_rows_t made[] = { created, replaced };
+            for (size_t b = 0; b < sizeof(made) / sizeof(made[0]); b++) {
+                for (size_t i = 0; i < made[b].count; i++) {
+                    const manifest_row_t *dir = made[b].entries[i];
+
+                    err = workspace_anchor(ws, dir, NULL, now, true);
+                    if (err) {
+                        output_warning(
+                            out, OUTPUT_NORMAL, "Failed to update anchor for %s: %s",
+                            dir->filesystem_path, error_message(err)
+                        );
+                        error_free(err);
+                        err = NULL;
+                    }
+                }
+            }
+
+            for (size_t i = 0; i < fixed.count; i++) {
+                const manifest_row_t *dir = fixed.entries[i];
+
+                err = workspace_observe(ws, dir, now);
+                if (err) {
+                    output_warning(
+                        out, OUTPUT_NORMAL, "Failed to record observation for %s: %s",
+                        dir->filesystem_path, error_message(err)
+                    );
+                    error_free(err);
+                    err = NULL;
+                }
+            }
         }
 
-        /* Advance the witness for directories this apply materialized
-         *
-         * Sibling of the file anchor loop above. deploy_execute just
-         * created/confirmed the planned directories (and, as parents of
-         * written files, possibly others); the load-time flush only
-         * covered directories present at load. Presence is the witness,
-         * so this walks the active slice rather than the result; SQL
-         * enforces monotonicity, so it is idempotent and never regresses
-         * a stamp. Non-fatal on failure, mirroring anchor-advance failures. */
+        /* The last pass of the record: every active directory still
+         * without a record, present on disk. Walks the active slice, not
+         * the receipt (see above). */
         {
-            state_directories_t dirs = workspace_directories(ws);
-            time_t dir_now = time(NULL);
+            manifest_rows_t dirs = workspace_directories(ws);
 
             for (size_t i = 0; i < dirs.count; i++) {
-                const state_directory_entry_t *dir = dirs.entries[i];
+                const manifest_row_t *dir = dirs.entries[i];
 
-                if (dir->observed_at > 0) continue;
+                if (workspace_anchor_of(ws, dir->filesystem_path)) continue;
 
                 /* lstat semantics, matching the analyzer's probe: a path of
                  * any type counts as observed (a squatting file is still
                  * "something was here"; type divergence is a separate
                  * signal). fs_exists would follow a final symlink and
-                 * witness a path that is not the one being tracked. */
+                 * observe a path that is not the one being tracked. */
                 if (!fs_lexists(dir->filesystem_path)) continue;
 
-                error_t *werr = workspace_advance_witness(ws, dir, dir_now);
-                if (werr) {
+                err = workspace_observe(ws, dir, now);
+                if (err) {
                     output_warning(
-                        out, OUTPUT_NORMAL,
-                        "Failed to advance witness for %s: %s",
-                        dir->filesystem_path, error_message(werr)
+                        out, OUTPUT_NORMAL, "Failed to record observation for %s: %s",
+                        dir->filesystem_path, error_message(err)
                     );
-                    error_free(werr);
+                    error_free(err);
+                    err = NULL;
                 }
             }
         }
@@ -1786,7 +1837,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * way the transition must not persist across runs. Dry-run previews. */
     acknowledge_reassignments(state, &reassigned, opts->dry_run, out);
 
-    /* Commit the state transaction: anchors, witnesses, removed orphan
+    /* Commit the state transaction: anchors, observations, removed orphan
      * entries, cleared reassignments (partial success model — a cleanup
      * failure leaves deployment state to commit). Dry-run included: the
      * transaction then holds only the load-time reconcile + flush

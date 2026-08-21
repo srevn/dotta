@@ -117,4 +117,30 @@ typedef enum {
     PATH_KIND_DIRECTORY   /* Tracked directory — metadata only (mode/ownership) */
 } path_kind_t;
 
+/**
+ * Path type — what stands at a managed path
+ *
+ * The one type axis for a manifest row and for the record dotta keeps of
+ * it (core/row.h, core/state.h). The first three are the Git filemodes a
+ * blob can carry; the fourth is a metadata-only container dotta creates
+ * and converges, claimed through a profile's metadata.json rather than its
+ * tree. Kind is coarse and derived from it (path_type_kind); it is never
+ * stored beside the type.
+ */
+typedef enum {
+    PATH_TYPE_FILE,        /* Regular blob, 0644 default */
+    PATH_TYPE_SYMLINK,     /* Link blob; carries no settable mode */
+    PATH_TYPE_EXECUTABLE,  /* Regular blob, 0755 default */
+    PATH_TYPE_DIRECTORY    /* Metadata-only: a container dotta creates and converges */
+} path_type_t;
+
+/**
+ * Derive a path's kind from its type
+ *
+ * A directory is the one metadata-only type; every blob type is a file.
+ */
+static inline path_kind_t path_type_kind(path_type_t type) {
+    return type == PATH_TYPE_DIRECTORY ? PATH_KIND_DIRECTORY : PATH_KIND_FILE;
+}
+
 #endif /* DOTTA_TYPES_H */

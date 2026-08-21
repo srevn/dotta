@@ -208,7 +208,7 @@ static error_t *partition_push(
 static bool beneath_squatted_directory(
     const workspace_t *ws, const deploy_plan_t *plan, const char *path
 ) {
-    state_directories_t dirs = state_directories_view(&plan->directories.pending);
+    manifest_rows_t dirs = manifest_rows_view(&plan->directories.pending);
 
     for (size_t i = 0; i < dirs.count; i++) {
         const char *dir = dirs.entries[i]->filesystem_path;
@@ -254,9 +254,9 @@ error_t *deploy_plan_build(
      * and those paths are of either kind — so the pending directory bucket
      * must be complete, in prefix order, before a file is classified, and
      * each directory row must find its own ancestors already classified. */
-    state_directories_t dirs = workspace_directories(ws);
+    manifest_rows_t dirs = workspace_directories(ws);
     for (size_t i = 0; i < dirs.count; i++) {
-        const state_directory_entry_t *row = dirs.entries[i];
+        const manifest_row_t *row = dirs.entries[i];
 
         if (!scope_accepts_profile(scope, row->profile) ||
             !scope_accepts_path(scope, row->storage_path, PATH_KIND_DIRECTORY)) {
@@ -276,9 +276,9 @@ error_t *deploy_plan_build(
         if (err) goto cleanup;
     }
 
-    state_files_t files = workspace_files(ws);
+    manifest_rows_t files = workspace_files(ws);
     for (size_t i = 0; i < files.count; i++) {
-        const state_file_entry_t *row = files.entries[i];
+        const manifest_row_t *row = files.entries[i];
 
         if (!scope_accepts_profile(scope, row->profile) ||
             !scope_accepts_path(scope, row->storage_path, PATH_KIND_FILE)) {
@@ -387,8 +387,8 @@ static occupant_t path_occupant(const char *path) {
 /**
  * What a file row materializes at its path
  */
-static occupant_t file_row_occupant(const state_file_entry_t *file) {
-    return file->type == STATE_FILE_SYMLINK ? OCCUPANT_SYMLINK : OCCUPANT_REGULAR;
+static occupant_t file_row_occupant(const manifest_row_t *file) {
+    return file->type == PATH_TYPE_SYMLINK ? OCCUPANT_SYMLINK : OCCUPANT_REGULAR;
 }
 
 /**
@@ -575,12 +575,13 @@ static bool nearest_ancestor(
  *
  * @param st lstat of the directory (must not be NULL)
  */
-static const state_directory_entry_t *holdable_directory(
+static const manifest_row_t *holdable_directory(
     const workspace_t *ws, const char *path, const struct stat *st
 ) {
-    const state_directory_entry_t *dir = workspace_lookup_directory(ws, path);
+    const manifest_row_t *dir = workspace_lookup(ws, path);
 
-    if (dir && (st->st_uid == geteuid() || privilege_is_elevated())) {
+    if (dir && dir->type == PATH_TYPE_DIRECTORY
+        && (st->st_uid == geteuid() || privilege_is_elevated())) {
         return dir;
     }
     return NULL;
@@ -600,7 +601,7 @@ static const state_directory_entry_t *holdable_directory(
  * refused on its account.
  */
 static bool directory_is_pending(const deploy_plan_t *plan, const char *path) {
-    state_directories_t dirs = state_directories_view(&plan->directories.pending);
+    manifest_rows_t dirs = manifest_rows_view(&plan->directories.pending);
 
     for (size_t i = 0; i < dirs.count; i++) {
         if (strcmp(dirs.entries[i]->filesystem_path, path) == 0) {
@@ -812,9 +813,9 @@ error_t *deploy_preflight(
 
     error_t *err = NULL;
 
-    state_files_t files = state_files_view(&plan->files.pending);
+    manifest_rows_t files = manifest_rows_view(&plan->files.pending);
     for (size_t i = 0; i < files.count; i++) {
-        const state_file_entry_t *row = files.entries[i];
+        const manifest_row_t *row = files.entries[i];
         const char *path = row->filesystem_path;
 
         /* Planned as absent: every probe of this path would reach the
@@ -865,7 +866,7 @@ error_t *deploy_preflight(
         if (err) goto cleanup;
     }
 
-    state_directories_t dirs = state_directories_view(&plan->directories.pending);
+    manifest_rows_t dirs = manifest_rows_view(&plan->directories.pending);
     for (size_t i = 0; i < dirs.count; i++) {
         const char *path = dirs.entries[i]->filesystem_path;
 
@@ -952,7 +953,7 @@ typedef struct {
  * @param path Planned path (must not be NULL)
  */
 static bool beneath_replaced_directory(const deploy_run_t *run, const char *path) {
-    state_directories_t dirs = state_directories_view(&run->result->replaced);
+    manifest_rows_t dirs = manifest_rows_view(&run->result->replaced);
 
     for (size_t i = 0; i < dirs.count; i++) {
         const char *dir = dirs.entries[i]->filesystem_path;
@@ -1200,7 +1201,7 @@ static error_t *resolve_deployment_ownership(
  * @return Error or NULL on success
  */
 static error_t *resolve_directory_metadata(
-    const state_directory_entry_t *dir,
+    const manifest_row_t *dir,
     const deploy_options_t *opts,
     mode_t *out_mode,
     uid_t *out_uid, gid_t *out_gid
@@ -1262,7 +1263,7 @@ static error_t *resolve_directory_metadata(
  */
 static error_t *materialize_tracked_directory(
     deploy_run_t *run,
-    const state_directory_entry_t *dir,
+    const manifest_row_t *dir,
     mode_t mode, uid_t uid, gid_t gid
 ) {
     error_t *err = fs_create_dir_with_ownership(
@@ -1294,9 +1295,9 @@ static error_t *create_ancestor(
     const char *path,
     uid_t uid, gid_t gid
 ) {
-    const state_directory_entry_t *dir = workspace_lookup_directory(run->ws, path);
+    const manifest_row_t *dir = workspace_lookup(run->ws, path);
 
-    if (dir) {
+    if (dir && dir->type == PATH_TYPE_DIRECTORY) {
         mode_t mode;
         uid_t dir_uid;
         gid_t dir_gid;
@@ -1346,7 +1347,7 @@ static error_t *open_landing_directory(
         return NULL;
     }
 
-    const state_directory_entry_t *dir = holdable_directory(run->ws, ancestor, st);
+    const manifest_row_t *dir = holdable_directory(run->ws, ancestor, st);
     if (!dir) {
         return NULL;  /* not ours: the write meets the refusal */
     }
@@ -1462,7 +1463,7 @@ cleanup:
  *             workspace's arena snapshot, read-only for deploy).
  * @return Error or NULL on success
  */
-static error_t *deploy_file(deploy_run_t *run, const state_file_entry_t *file) {
+static error_t *deploy_file(deploy_run_t *run, const manifest_row_t *file) {
     CHECK_NULL(run);
     CHECK_NULL(file);
 
@@ -1538,9 +1539,9 @@ static error_t *deploy_file(deploy_run_t *run, const state_file_entry_t *file) {
      * value, not a hole — so the corruption question is asked only of the
      * kinds that carry a mode. */
     mode_t file_mode = file->mode;
-    if (file->type != STATE_FILE_SYMLINK && file_mode == 0) {
+    if (file->type != PATH_TYPE_SYMLINK && file_mode == 0) {
         /* Defensive fallback - indicates unexpected state corruption */
-        file_mode = (file->type == STATE_FILE_EXECUTABLE) ? 0755 : 0644;
+        file_mode = (file->type == PATH_TYPE_EXECUTABLE) ? 0755 : 0644;
 
         fprintf(
             stderr,
@@ -1595,7 +1596,7 @@ static error_t *deploy_file(deploy_run_t *run, const state_file_entry_t *file) {
     }
 
     /* Handle symlinks - these are never encrypted, so handle separately */
-    if (file->type == STATE_FILE_SYMLINK) {
+    if (file->type == PATH_TYPE_SYMLINK) {
         /* For symlinks, we load the blob directly since the content layer
          * is designed for regular files with potential encryption. */
         size_t target_len = 0;
@@ -1735,7 +1736,7 @@ typedef enum {
  */
 static error_t *deploy_directory(
     deploy_run_t *run,
-    const state_directory_entry_t *dir,
+    const manifest_row_t *dir,
     directory_action_t *out_action
 ) {
     CHECK_NULL(run);
@@ -1870,9 +1871,9 @@ error_t *deploy_execute(
      * which is also what lets a replace settle everything beneath it: by
      * the time a planned path under a replaced directory is reached, the
      * receipt already names the replace (beneath_replaced_directory). */
-    state_directories_t dirs = state_directories_view(&plan->directories.pending);
+    manifest_rows_t dirs = manifest_rows_view(&plan->directories.pending);
     for (size_t i = 0; i < dirs.count; i++) {
-        const state_directory_entry_t *dir = dirs.entries[i];
+        const manifest_row_t *dir = dirs.entries[i];
         directory_action_t action;
 
         /* Deploy tracked directories (workspace owns the active slice) */
@@ -1906,7 +1907,7 @@ error_t *deploy_execute(
         }
     }
 
-    state_files_t files = state_files_view(&plan->files.pending);
+    manifest_rows_t files = manifest_rows_view(&plan->files.pending);
 
     /* Every pending row is work the plan chose, by construction: the
      * planner routed it through deploy_needs_work and past every reason to
@@ -1914,7 +1915,7 @@ error_t *deploy_execute(
      * in-scope rows with deployed_at == 0 are apply's adoption step, which
      * stamps the anchor without deploy_file. */
     for (size_t i = 0; i < files.count; i++) {
-        const state_file_entry_t *file = files.entries[i];
+        const manifest_row_t *file = files.entries[i];
 
         /* Deploy the file */
         err = deploy_file(&run, file);

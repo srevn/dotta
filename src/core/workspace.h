@@ -19,15 +19,20 @@
  *   The workspace is the authority for state-derived data within its
  *   lifetime. state_t exposes per-row CRUD and per-table snapshot loaders;
  *   downstream consumers (deploy, command-internal analyses) read snapshots
- *   through workspace accessors (workspace_files, workspace_lookup_file,
- *   workspace_directories, workspace_lookup_directory) rather than calling
- *   state_get_all_* directly. Freshness is established by the consistency
- *   layer: manifest_reconcile runs upstream of every workspace_load, and
- *   tracked_directories has exactly three writers — the manifest layer's
- *   directory rebuild (sweep + UPSERT + reclaim), the witness advance
- *   (workspace_advance_witness, from the flush and apply's post-deploy
- *   loop), and apply's orphan-row removal — so the workspace inherits a
- *   current view by construction.
+ *   through workspace accessors (workspace_files, workspace_directories,
+ *   workspace_lookup, workspace_anchor_of) rather than calling
+ *   state_get_all_* directly. Freshness of the expected side is
+ *   established by the consistency layer: manifest_reconcile runs upstream
+ *   of every workspace_load, and the two expected tables have exactly two
+ *   writers — the projection engine (every scope transition and drift
+ *   repair; sweep + UPSERT + reclaim for directories) and apply's
+ *   orphan-row removal — so the workspace inherits a current view by
+ *   construction. The record (anchors) has two writers while a workspace
+ *   is live, workspace_observe and workspace_anchor, each of which
+ *   patches the snapshot it persists through; retirements
+ *   (state_retire_anchor, from apply's record step and the verbs) go to
+ *   the database directly — no later reader in the run consults a
+ *   retired path.
  *
  *   Exceptions:
  *     (a) the consistency layer (manifest_apply_scope, manifest_reconcile,
@@ -65,9 +70,9 @@
  * - Use item_kind to distinguish between files and directories.
  *
  * Lifetime notes:
- * - filesystem_path, storage_path: borrowed from arena-backed manifest/state entries
+ * - filesystem_path, storage_path: borrowed from arena-backed manifest rows
  * - profile: arena_strdup'd (arena-owned, freed via arena_destroy)
- * - old_profile: borrowed from arena-backed manifest entry (can be NULL)
+ * - old_profile: borrowed from arena-backed state entry (can be NULL)
  */
 typedef struct {
     char *filesystem_path;      /* Target path on filesystem (arena-borrowed) */
@@ -89,7 +94,7 @@ typedef struct {
 /**
  * Bound carrier for a borrowed slice of workspace items
  *
- * Structural type — parallels state_files_t. Callers receive a typed
+ * Structural type — parallels manifest_rows_t. Callers receive a typed
  * handle instead of triple-star out-params.
  *
  * Pass by value. Lifetime is the producer's: cleanup's plan / verdict /
@@ -104,7 +109,7 @@ typedef struct {
 /**
  * Project a ptr_array_t bucket of borrowed items as a typed slice
  *
- * Mirrors state_files_view: buckets filled by ptr_array_push(&bucket, item)
+ * Mirrors manifest_rows_view: buckets filled by ptr_array_push(&bucket, item)
  * hold `void *`, and the cast layers const onto both pointer levels. The
  * view aliases the bucket's storage and is valid for the bucket's lifetime.
  */
@@ -272,7 +277,7 @@ const workspace_item_t *workspace_get_item(
  * permissions (mode) and ownership (user/group). Checks both independently.
  *
  * Data-centric approach: Accepts values directly instead of structs, enabling use with
- * both state rows (state_file_entry_t) and metadata (metadata_item_t) without conversion.
+ * both manifest rows (manifest_row_t) and metadata (metadata_item_t) without conversion.
  *
  * Stat propagation: Caller must provide pre-captured stat to avoid redundant
  * syscalls. This function performs zero filesystem operations.
@@ -295,74 +300,75 @@ error_t *check_item_metadata_divergence(
 );
 
 /**
- * Get the active in-scope state file slice
+ * Get the active in-scope file slice
  *
- * Returns a borrowed view over the state rows that the workspace
+ * Returns a borrowed view over the file rows that the workspace
  * partitioned as in-scope and active (i.e., profile is in the enabled
- * set and lifecycle state is ACTIVE). Pure value return — no allocation,
- * no error path.
+ * set and lifecycle state is ACTIVE), in filesystem_path order. Pure
+ * value return — no allocation, no error path.
  *
- * The pointers reference rows in the arena snapshot returned by
- * state_get_all_files at workspace_load time; the arena outlives the
- * workspace so the slice is valid for the workspace's lifetime.
+ * The pointers reference rows in the arena snapshot read at
+ * workspace_load time; the arena outlives the workspace so the slice is
+ * valid for the workspace's lifetime.
  *
  * Iterate via:
- *   state_files_t files = workspace_files(ws);
+ *   manifest_rows_t files = workspace_files(ws);
  *   for (size_t i = 0; i < files.count; i++) {
- *       const state_file_entry_t *file = files.entries[i];
+ *       const manifest_row_t *file = files.entries[i];
  *       ...
  *   }
  *
  * @param ws Workspace (NULL returns an empty slice)
- * @return Borrowed slice over the active rows
+ * @return Borrowed slice over the active file rows
  */
-state_files_t workspace_files(const workspace_t *ws);
+manifest_rows_t workspace_files(const workspace_t *ws);
+
+/**
+ * Get the active in-scope directory slice
+ *
+ * Mirror of workspace_files(ws) for tracked directories: a borrowed view
+ * over the directory rows the workspace partitioned as in-scope and
+ * active (profile in enabled set, lifecycle ACTIVE), in filesystem_path
+ * order. Pure value return — no allocation, no error path. Same lifetime
+ * as workspace_files.
+ *
+ * @param ws Workspace (NULL returns an empty slice)
+ * @return Borrowed slice over the active directory rows
+ */
+manifest_rows_t workspace_directories(const workspace_t *ws);
 
 /**
  * Look up an active row by filesystem path
  *
- * O(1) random access over the active slice. Returns NULL if the path is
- * not in scope or its row is in a terminal lifecycle state — the
- * single chokepoint for "is this path managed and active?" probes.
+ * O(1) random access over both active slices — a path is one managed
+ * thing, whatever its kind; callers that want one kind test row->type.
+ * Returns NULL if the path is not in scope or its row is in a terminal
+ * lifecycle state — the single chokepoint for "is this path managed and
+ * active?" probes.
  *
  * @param ws Workspace (NULL returns NULL)
  * @param filesystem_path Path to look up (NULL returns NULL)
  * @return Borrowed row pointer, or NULL if not active
  */
-const state_file_entry_t *workspace_lookup_file(
+const manifest_row_t *workspace_lookup(
     const workspace_t *ws,
     const char *filesystem_path
 );
 
 /**
- * Get the active in-scope state directory slice
+ * Look up the record dotta keeps of a path
  *
- * Mirror of workspace_files(ws) for tracked_directories. Returns a borrowed
- * view over the directory rows the workspace partitioned as in-scope and
- * active (profile in enabled set, lifecycle ACTIVE). Pure value return — no
- * allocation, no error path.
- *
- * The pointers reference rows in the arena snapshot returned by
- * state_get_all_directories at workspace_load time; the arena outlives the
- * workspace so the slice is valid for the workspace's lifetime.
- *
- * @param ws Workspace (NULL returns an empty slice)
- * @return Borrowed slice over the active directory rows
- */
-state_directories_t workspace_directories(const workspace_t *ws);
-
-/**
- * Look up an active directory row by filesystem path
- *
- * Mirror of workspace_lookup_file. O(1) probe over the active directory
- * slice; returns NULL if the path is not tracked or its row is in a terminal
- * lifecycle state.
+ * O(1) probe over the anchors snapshot, active and orphan paths alike.
+ * Returns NULL when dotta has never observed the path on disk while it
+ * was managed. Within a run the answer follows the writers: a record
+ * workspace_observe or workspace_anchor created or patched reads back
+ * here with its post-write value.
  *
  * @param ws Workspace (NULL returns NULL)
  * @param filesystem_path Path to look up (NULL returns NULL)
- * @return Borrowed row pointer, or NULL if not active
+ * @return Borrowed record pointer, or NULL if the path has none
  */
-const state_directory_entry_t *workspace_lookup_directory(
+const anchor_t *workspace_anchor_of(
     const workspace_t *ws,
     const char *filesystem_path
 );
@@ -413,92 +419,99 @@ bool workspace_item_extract_display_info(
 );
 
 /**
- * Advance the deployment anchor with in-memory consistency
+ * Observe a managed path with in-memory consistency
  *
- * Workspace-scope side of the routing invariant defined on
- * state_update_anchor (see state.h): persists via state_update_anchor and
- * assigns the canonical post-write anchor (returned by SQL RETURNING)
- * directly into the caller's row. The SQL UPDATE is the single specification
- * of preserve-on-zero / monotonic-once-set rules; this function holds none
- * of that logic.
+ * Workspace-scope side of state_observe (see state.h): records the
+ * path's first sighting on disk — presence only, no blob, no stat — and
+ * creates the matching record in the workspace's anchors snapshot so
+ * every later reader in the run (workspace_anchor_of, the adoption
+ * loop's ownership test) sees it. A path that already has a record,
+ * in the snapshot or created earlier in this run, is left exactly as it
+ * is and no statement runs: observation is idempotent on both sides.
  *
- * Single entry point for every workspace-scope anchor writer:
- *   - apply's adoption loop (ownership advance on first claim)
- *   - apply's post-deploy loop (ownership advance after write)
- *   - workspace_flush_updates (observation advance from slow-path)
+ * Single entry point for every workspace-scope observation:
+ *   - workspace_flush_updates (rows found on disk with no record during
+ *     analysis, either kind)
+ *   - apply's post-deploy loop (directories apply fixed rather than
+ *     made, and active directories present on disk without a record)
  *
- * Directories take the same route through workspace_advance_witness.
- *
- * The row pointer is borrowed from the workspace's active partition (where
- * the workspace owns the storage as mutable; see workspace_files(),
- * workspace_lookup_file(), and ws->active_files in workspace.c). The const
- * decoration is a public-API guard against mutation by non-anchor callers;
- * this function casts internally to assign anchor in place.
+ * The row pointer is borrowed from the workspace's active partition; the
+ * record created here borrows its strings from that row for the
+ * workspace's lifetime.
  *
  * @param ws Workspace (must not be NULL, state must be open)
- * @param row Active row whose anchor should advance (must not be NULL,
+ * @param row Active row whose path was seen on disk (must not be NULL,
  *            borrowed from workspace's active partition)
- * @param anchor New anchor (must not be NULL; blob_oid must be non-zero)
- * @return Error from state_update_anchor, or NULL on success
+ * @param now Observation timestamp (must be > 0)
+ * @return Error from state_observe, or NULL on success
  */
-error_t *workspace_advance_anchor(
+error_t *workspace_observe(
     workspace_t *ws,
-    const state_file_entry_t *row,
-    const deployment_anchor_t *anchor
+    const manifest_row_t *row,
+    time_t now
 );
 
 /**
- * Advance a tracked directory's witness with in-memory consistency
+ * Anchor a managed path with in-memory consistency
  *
- * Directory sibling of workspace_advance_anchor, and the same routing
- * invariant applies: while a workspace is live, witness advances MUST go
- * through this function rather than calling state_update_witness directly,
- * or the workspace's snapshot silently desyncs from the database.
+ * Workspace-scope side of the routing invariant defined on state_anchor
+ * (see state.h): persists via state_anchor and assigns the canonical
+ * post-write record (the inputs plus the two columns SQL RETURNING
+ * decided) into the workspace's anchors snapshot — patching the path's
+ * record in place, or creating it when the path had none at load. The
+ * SQL UPSERT is the single specification of the deployed_at keep /
+ * observed_at INSERT-arm rules; this function holds none of that logic.
  *
- * A directory's confirmed-disk record is the witness alone (observed_at),
- * where a file carries a four-signal deployment_anchor_t — hence the
- * timestamp parameter in place of an anchor struct.
+ * Single entry point for every workspace-scope anchor writer:
+ *   - apply's adoption loop (ownership event on first claim)
+ *   - apply's post-deploy loop (ownership event after a write, file or
+ *     directory)
+ *   - workspace_flush_updates (confirmation from the slow path)
  *
- * Single entry point for every workspace-scope witness writer:
- *   - workspace_flush_updates (paths observed during analysis)
- *   - apply's post-deploy loop (directories apply just created)
- *
- * Monotonicity is SQL's (the UPDATE matches only observed_at = 0), so
- * repeat calls never regress a stamp. The row pointer is borrowed from the
- * workspace's active directory partition, where the workspace owns the
- * storage as mutable; the const decoration is a public-API guard and this
- * function casts internally to assign observed_at in place.
+ * The row pointer is borrowed from the workspace's active partition; the
+ * record borrows its strings from that row for the workspace's lifetime.
  *
  * @param ws Workspace (must not be NULL, state must be open)
- * @param row Active row whose witness should advance (must not be NULL,
- *            borrowed from workspace's active directory partition)
- * @param observed_at Observation timestamp (must be > 0)
- * @return Error from state_update_witness, or NULL on success
+ * @param row Active row the path is anchored to (must not be NULL,
+ *            borrowed from workspace's active partition; non-zero blob
+ *            for a file row)
+ * @param stat Stat triple captured after the confirmation (may be NULL:
+ *             a directory, or lstat failed after the write)
+ * @param now Timestamp of the write (must be > 0)
+ * @param own true for an ownership event (deployed_at = now), false for
+ *            a confirmation (deployed_at kept)
+ * @return Error from state_anchor, or NULL on success
  */
-error_t *workspace_advance_witness(
+error_t *workspace_anchor(
     workspace_t *ws,
-    const state_directory_entry_t *row,
-    time_t observed_at
+    const manifest_row_t *row,
+    const stat_cache_t *stat,
+    time_t now,
+    bool own
 );
 
 /**
  * Flush the updates accumulated during workspace_load to the state database
  *
- * Both tables' observation channels drain here, in one transaction:
+ * Both observation channels drain here, in one transaction, anchor
+ * updates first:
  *
  *   Anchor updates — files verified CMP_EQUAL via the slow path (content
- *   hash comparison) accumulate (blob_oid, stat) pairs. Persisting them
- *   lets subsequent runs short-circuit via the fast-path stat AND — if Git
- *   advances blob_oid in the meantime — classify the file as stale
- *   directly from the fast path instead of re-hashing.
+ *   hash comparison) accumulate the stat they were verified with.
+ *   Persisting it beside the row's blob lets subsequent runs short-circuit
+ *   via the fast-path stat AND — if Git advances blob_oid in the meantime
+ *   — classify the file as stale directly from the fast path instead of
+ *   re-hashing.
  *
- *   Witness updates — tracked directories whose path was lstat-observed
- *   during directory analysis while the row carried no witness.
+ *   Observations — rows of either kind whose path was lstat-observed
+ *   during analysis while it had no record.
  *
- * Each routes through its snapshot-write API (workspace_advance_anchor,
- * workspace_advance_witness), so every persisted update also lands in its
- * row — DB and memory stay consistent for downstream readers in the same
- * run.
+ * Each routes through its snapshot-write API (workspace_anchor,
+ * workspace_observe), so every persisted update also lands in the anchors
+ * snapshot — DB and memory stay consistent for downstream readers in the
+ * same run. A path with no record that the slow path confirmed is in both
+ * lists; the confirmation runs first and creates the record, and the
+ * observation then finds it and writes nothing — one statement per path.
  *
  * Self-healing: the first status/apply after profile enable verifies all
  * files via the slow path and seeds the anchor. The second call hits the
@@ -506,8 +519,8 @@ error_t *workspace_advance_witness(
  * modified profiles.
  *
  * The deployed_at timestamp is intentionally not advanced here — this
- * flush confirms observations, not deployments. Apply remains the sole
- * writer of anchor.deployed_at.
+ * flush confirms observations, not deployments. Apply and the capturing
+ * verbs remain the writers of anchor.deployed_at.
  *
  * Safe to call on any workspace — returns immediately if no updates pending.
  * Uses the workspace's internal state handle for database writes.

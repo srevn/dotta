@@ -9,6 +9,8 @@
  * Schema:
  *   - schema_meta: Schema versioning
  *   - enabled_profiles: User's profile management
+ *   - anchors: The record — what dotta last reconciled each managed path
+ *     against, and what it confirmed there (both kinds, one row per path)
  *   - virtual_manifest: Deployed file manifest
  *   - tracked_directories: Tracked directories from metadata
  *
@@ -17,7 +19,9 @@
  * - WAL mode (concurrent access, atomic commits)
  * - Prepared statements (100x faster for bulk operations)
  * - Persistent indexes (O(1) lookups without rebuilding)
- * - Separate tables enforce authority model at storage level
+ * - Separate tables enforce authority model at storage level: the record
+ *   (anchors) is dotta's own and never derivable; the expected side is
+ *   Git's and keyed apart from it
  */
 
 #ifndef DOTTA_STATE_H
@@ -28,14 +32,7 @@
 #include <time.h>
 #include <types.h>
 
-/**
- * File type in state
- */
-typedef enum {
-    STATE_FILE_REGULAR,
-    STATE_FILE_SYMLINK,
-    STATE_FILE_EXECUTABLE
-} state_file_type_t;
+#include "core/row.h"
 
 /**
  * Lifecycle phase of a manifest row
@@ -78,38 +75,13 @@ typedef enum {
 } state_lifecycle_t;
 
 /**
- * Convert state file type to git filemode
+ * Stat cache — fast-path field of an anchor
  *
- * Maps the internal state file type enum to the corresponding git filemode.
- * This is the canonical conversion used by workspace divergence analysis.
- *
- * Mapping:
- *   STATE_FILE_SYMLINK    -> GIT_FILEMODE_LINK (0120000)
- *   STATE_FILE_EXECUTABLE -> GIT_FILEMODE_BLOB_EXECUTABLE (0100755)
- *   STATE_FILE_REGULAR    -> GIT_FILEMODE_BLOB (0100644)
- *
- * @param type State file type
- * @return Corresponding git filemode
- */
-static inline git_filemode_t state_type_to_git_filemode(state_file_type_t type) {
-    switch (type) {
-        case STATE_FILE_SYMLINK:
-            return GIT_FILEMODE_LINK;
-        case STATE_FILE_EXECUTABLE:
-            return GIT_FILEMODE_BLOB_EXECUTABLE;
-        default:
-            return GIT_FILEMODE_BLOB;
-    }
-}
-
-/**
- * Stat cache — fast-path field of a deployment anchor
- *
- * Field of a deployment_anchor_t: the (mtime, size, ino) triple
- * captured at the moment dotta confirmed disk content equals
- * anchor.blob_oid. If a later live stat matches all three fields, disk
- * is still equal to anchor.blob_oid without re-hashing — the same
- * approach Git uses with its index.
+ * Field of an anchor_t: the (mtime, size, ino) triple captured at the
+ * moment dotta confirmed disk content equals anchor.blob_oid. If a later
+ * live stat matches all three fields, disk is still equal to
+ * anchor.blob_oid without re-hashing — the same approach Git uses with
+ * its index.
  *
  * Sentinel: All-zero state means unset — forces the slow path (safe default).
  * mtime == 0 acts as validity gate: a file with genuine mtime=0 (epoch)
@@ -140,213 +112,111 @@ static inline stat_cache_t stat_cache_from_stat(const struct stat *st) {
 }
 
 /**
- * Deployment anchor — three orthogonal signals about a managed path
+ * Capture a stat triple from disk
+ *
+ * lstat() + stat_cache_from_stat(). Callers invoke this only after they
+ * have verified the file on disk matches the blob they are about to
+ * anchor — this feeds an anchor write, not a probe.
+ *
+ * If lstat fails (rare: file removed in the small window between content
+ * confirmation and anchor recording), the triple is left zeroed. The
+ * anchor still advances to the blob; the fast path just can't
+ * short-circuit on next read and will fall through to the slow path.
+ */
+static inline stat_cache_t stat_cache_from_path(const char *filesystem_path) {
+    struct stat st;
+    if (lstat(filesystem_path, &st) != 0) {
+        return STAT_CACHE_UNSET;
+    }
+    return stat_cache_from_stat(&st);
+}
+
+/**
+ * Anchor — the record dotta keeps of a managed path (anchors row)
+ *
+ * The row dotta last reconciled this path against — what it deployed, or,
+ * when deployed_at is 0, what it was looking at when it first observed
+ * the path — and what it confirmed there. One row per filesystem path,
+ * both kinds. A row exists iff dotta has observed the path on disk while
+ * it was managed: there is no "never observed" row, and observed_at is
+ * never zero.
  *
  * Three signals, three write rules:
  *   - blob_oid + stat : content-verified pair. Advanced only after
  *     disk-matches-blob verification (slow-path CMP_EQUAL, apply deploy,
- *     adoption, add, update). Zero blob_oid is rejected by
- *     state_update_anchor; preserve-on-zero-sentinel on UPSERT.
+ *     adoption, add, update). Zero blob_oid is no content confirmation —
+ *     a directory, whose whole confirmed-disk record is that it was
+ *     observed (a directory has no content confirmation, schema-enforced),
+ *     or a file observed but never confirmed.
  *   - deployed_at     : active-ownership timestamp. Advances to now on
- *     apply deploy, apply adoption, add, update. Preserve-on-zero
- *     semantic in both SQL paths (UPSERT and sql_update_anchor).
- *   - observed_at     : first-observation timestamp. Set to now when
- *     lstat first confirms the path exists on disk in scope (the
- *     projection engine's per-row probe, apply deploy/adopt, add,
- *     update, CMP_EQUAL flush). Monotonic once set: SQL CASE preserves
- *     any existing non-zero value on every write, so the first non-zero
- *     caller wins.
+ *     apply deploy, apply adoption, add, update (state_anchor with
+ *     own = true); kept by every confirmation (own = false). 0 = dotta
+ *     never put this here.
+ *   - observed_at     : first-observation timestamp. Written once, by
+ *     whichever write creates the row (state_observe, or state_anchor's
+ *     INSERT arm), and never again: the first caller wins because no
+ *     later write names the column.
  *
  * Invariants:
  *   - blob_oid is non-zero iff dotta has at some point confirmed disk
  *     content matched that blob. Zero means "never confirmed."
  *   - stat matching live stat is fast-path proof that disk still
  *     equals blob_oid.
- *   - blob_oid ≠ virtual_manifest.blob_oid iff the Git-expected value
+ *   - blob_oid ≠ the manifest row's blob_oid iff the Git-expected value
  *     has advanced past the last disk confirmation — i.e., stale.
- *   - observed_at is zero iff dotta has never lstat-confirmed the path
- *     on disk in scope (ghost file); any non-zero value is the earliest
- *     observation time and never regresses. This is the anchor's witness
- *     field; a directory's entire confirmed-disk record is that same
- *     witness (see state_directory_entry_t).
+ *   - deployed_at > 0 on a file implies a non-zero blob_oid: the write
+ *     that owned it confirmed it (schema-enforced). A row with a blob
+ *     and deployed_at = 0 is a confirmation, not a deployment.
  *
- * Classifier reads (workspace.c analyze_file_divergence and the
- * encryption-policy classifier):
- *   - missing + observed_at > 0  → WORKSPACE_STATE_DELETED
- *   - missing + observed_at == 0 → WORKSPACE_STATE_UNDEPLOYED
+ * The identity and metadata fields (storage_path, profile, type, mode,
+ * owner, group) are those of the row the record was written from — who
+ * deployed what, under which claim. They are what an orphan (a record
+ * whose path no active row names) is measured against, and
+ * profile ≠ the active row's profile is a reassignment apply has not
+ * acknowledged.
  *
- * The anchor is written only by state_update_anchor() — the sole writer
- * of deployed_blob_oid, deployed_at, observed_at, and stat_*. Manifest-
- * layer writes (the projection engine's UPSERT via state_add_file) go
- * through the UPSERT: preserve-on-zero-sentinel on deployed_blob_oid,
- * unconditional preserve on deployed_at + stat_*, preserve-if-set on
- * observed_at (so an INSERT carrying a non-zero observed_at seeds the
- * first observation and later UPDATEs cannot overwrite it with zero).
+ * prune_ordered is the one persisted intent: remove --delete-files
+ * ordered the deployed copy pruned at the next apply. Meaningful only
+ * for an orphan; cleared by state_anchor, which every route back under
+ * an active row takes.
  */
 typedef struct {
-    git_oid blob_oid;         /* Content-confirmed blob (zero = never confirmed) */
-    time_t deployed_at;       /* Last active-ownership event (advances; 0 = never) */
-    time_t observed_at;       /* First lstat-observation in scope (monotonic once set; 0 = never) */
-    stat_cache_t stat;        /* Fast-path stat triple, bound to blob_oid */
-} deployment_anchor_t;
+    /* Identity — the row's, at the last write */
+    char *filesystem_path;    /* Deployed path (PRIMARY KEY) */
+    char *storage_path;       /* Path in profile (home/.bashrc) */
+    char *profile;            /* Profile whose row dotta reconciled the path against */
 
-#define DEPLOYMENT_ANCHOR_UNSET ((deployment_anchor_t){0})
+    /* What dotta set there */
+    path_type_t type;         /* FILE, SYMLINK, EXECUTABLE or DIRECTORY */
+    mode_t mode;              /* Recorded mode claim (0 = none) */
+    char *owner;              /* Recorded owner (can be NULL) */
+    char *group;              /* Recorded group (can be NULL) */
 
-/**
- * Build a deployment anchor by snapshotting disk stat
- *
- * Convenience wrapper around lstat() + stat_cache_from_stat(). Callers should
- * invoke this only after they have verified the file on disk matches
- * blob_oid — this is an anchor advance, not a probe.
- *
- * If lstat fails (rare: file removed in the small window between content
- * confirmation and anchor recording), the stat triple is left zeroed. The
- * blob_oid and deployed_at fields are still populated so the row's anchor
- * advances correctly; the fast path just can't short-circuit on next read
- * and will fall through to the slow path.
- */
-static inline deployment_anchor_t capture_anchor_from_disk(
-    const char *filesystem_path,
-    const git_oid *blob_oid,
-    time_t deployed_at
-) {
-    deployment_anchor_t anchor = {
-        .blob_oid    = *blob_oid,
-        .deployed_at = deployed_at,
-        .observed_at = deployed_at,   /* capture-from-disk implies observation */
-        .stat        = STAT_CACHE_UNSET,
-    };
-
-    struct stat st;
-    if (lstat(filesystem_path, &st) == 0) {
-        anchor.stat = stat_cache_from_stat(&st);
-    }
-    return anchor;
-}
+    /* What dotta confirmed */
+    git_oid blob_oid;         /* Content-confirmed blob (zero = never confirmed: a directory, or observed only) */
+    stat_cache_t stat;        /* Fast-path stat triple, bound to blob_oid (all-zero = unusable) */
+    time_t observed_at;       /* First sighting on disk in scope (> 0 always: a row exists iff observed) */
+    time_t deployed_at;       /* Last active-ownership event (advances; 0 = never owned) */
+    bool prune_ordered;       /* remove --delete-files: prune the deployed copy at next apply */
+} anchor_t;
 
 /**
- * State file entry (virtual_manifest row)
+ * State entry — a virtual_manifest or tracked_directories row
  *
- * Carries two distinct domains that share a primary key (filesystem_path)
- * and 1:1 cardinality:
- *
- *   VWD cache         — git-derived expected state maintained by the
- *                       manifest layer (reconcile/sync/rebuild). Fields:
- *                       blob_oid, type, mode, owner, group, encrypted, state.
- *   Deployment anchor — dotta's record of "disk was confirmed to equal
- *                       this blob, at this time, with this stat." Advanced
- *                       only by state_update_anchor() after a disk-matches-
- *                       blob confirmation (deploy, adoption, workspace flush
- *                       on CMP_EQUAL, post-commit capture).
- *
- * The two domains differ on anchor.blob_oid vs blob_oid iff Git-expected has
- * advanced past the last disk confirmation — i.e., the row is stale.
- *
- * SCOPE-BASED ARCHITECTURE:
- * - manifest existence = file should be managed
- * - state (lifecycle string) tracks active/inactive/deleted/released
- * - anchor.observed_at gates the classifier (missing + observed_at > 0 → DELETED)
- * - anchor.deployed_at drives the adoption-loop gate and the
- *   state_get_profile_timestamp display ("(deployed X ago)")
+ * TRANSITIONAL — dies with the two tables. The expected side as the
+ * database still stores it: a manifest row plus the two columns that
+ * cache an answer the view would give — the lifecycle phase, and the
+ * profile the row was reassigned from. A tracked_directories row
+ * hydrates with type = PATH_TYPE_DIRECTORY and old_profile = NULL (the
+ * table has no such column). Consumers that outlive the tables read
+ * `&entry->row`; only the workspace's partition, the engine and the
+ * verb overlays read the other two.
  */
 typedef struct {
-    /* Identity */
-    char *storage_path;         /* Path in profile (home/.bashrc) */
-    char *filesystem_path;      /* Deployed path (/home/user/.bashrc) */
-    char *profile;              /* Source profile name */
-    char *old_profile;          /* Previous profile if reassigned, NULL otherwise */
-
-    /* VWD cache (git-derived, reconcile-maintained) */
-    state_file_type_t type;     /* File type (REGULAR, SYMLINK, EXECUTABLE) */
-    git_oid blob_oid;           /* Blob the composed profile layer expects on disk */
-    mode_t mode;                /* Permission mode (e.g., 0644), 0 if no metadata tracked */
-    char *owner;                /* Owner username (root/ files only, can be NULL) */
-    char *group;                /* Group name (root/ files only, can be NULL) */
-    bool encrypted;             /* Encryption flag */
+    manifest_row_t row;          /* Expected state (Git-derived, engine-maintained) */
     state_lifecycle_t lifecycle; /* Lifecycle phase (default LIFECYCLE_ACTIVE on zero-init) */
-
-    /* Deployment anchor (dotta-authored, advances only via state_update_anchor) */
-    deployment_anchor_t anchor;
-} state_file_entry_t;
-
-/**
- * Bound carrier for a borrowed slice of state file entries
- *
- * Structural type — parallels libgit2's git_strarray and base/array's
- * string_array_t. The producer's signature dictates lifetime via the
- * arena (or other allocator) that backs the rows.
- *
- * Lifetime examples:
- *   workspace_files(ws)             → backed by ws->arena (workspace lifetime).
- *   apply's local divergent buffer  → backed by a ptr_array_t on the heap;
- *                                     valid for the caller's stack scope.
- */
-typedef struct {
-    const state_file_entry_t *const *entries;
-    size_t count;
-} state_files_t;
-
-/**
- * State directory entry
- *
- * observed_at is the directory's witness — the whole of its confirmed-disk
- * record, where a file carries a four-signal deployment_anchor_t. The
- * semantic is identical to that anchor's observed_at field: zero means
- * dotta has never lstat-confirmed the path on disk in scope (ghost
- * directory); any non-zero value is the earliest observation time and
- * never regresses (SQL-enforced monotonic in both writers: the
- * state_add_directory UPSERT and state_update_witness).
- */
-typedef struct {
-    char *filesystem_path;    /* Deployed path (PRIMARY KEY, e.g., /home/user/.config/fish) */
-    char *storage_path;       /* Portable path (e.g., home/.config/fish) */
-    char *profile;            /* Source profile */
-    mode_t mode;              /* Permissions */
-    char *owner;              /* Owner (optional, root/ prefix only) */
-    char *group;              /* Group (optional, root/ prefix only) */
-
-    /* Lifecycle tracking */
-    state_lifecycle_t lifecycle; /* Lifecycle phase; LIFECYCLE_RELEASED is rejected for directories */
-    time_t observed_at;       /* First lstat-observation in scope (monotonic once set; 0 = never) */
-} state_directory_entry_t;
-
-/**
- * Bound carrier for a borrowed slice of state directory entries
- *
- * Mirrors state_files_t. Producer's signature dictates lifetime via the
- * arena (or other allocator) backing the rows.
- *
- * Lifetime example:
- *   workspace_directories(ws) → backed by ws->arena (workspace lifetime).
- */
-typedef struct {
-    const state_directory_entry_t *const *entries;
-    size_t count;
-} state_directories_t;
-
-/**
- * Project a ptr_array_t bucket of borrowed state rows as a typed slice
- *
- * Buckets filled by ptr_array_push(&bucket, row) hold `void *`; the cast
- * layers const onto both pointer levels (T ** → const T *const *, the same
- * rule workspace_files relies on). The view aliases the bucket's storage
- * and is valid for the bucket's lifetime — deploy plans and results, and
- * any other producer that accumulates rows, project through these two so
- * every consumer reads one carrier shape.
- */
-static inline state_files_t state_files_view(const ptr_array_t *bucket) {
-    return (state_files_t){
-        .entries = (const state_file_entry_t *const *) bucket->items,
-        .count = bucket->count,
-    };
-}
-
-static inline state_directories_t state_directories_view(const ptr_array_t *bucket) {
-    return (state_directories_t){
-        .entries = (const state_directory_entry_t *const *) bucket->items,
-        .count = bucket->count,
-    };
-}
+    char *old_profile;           /* Previous profile if reassigned, NULL otherwise (files only) */
+} state_entry_t;
 
 /**
  * Enabled profile entry
@@ -470,19 +340,27 @@ bool state_locked(const state_t *state);
 void state_free(state_t *state);
 
 /**
- * Add file entry to state
+ * Project a file row into virtual_manifest (projection writer)
  *
- * Uses prepared statement for performance (critical for bulk operations).
- * Can be called 1000+ times in a loop during apply.
+ * True UPSERT, the sole caller being the projection engine: the row is
+ * written ACTIVE on both arms (projection means in-scope), its
+ * old_profile is captured by SQL when the winning profile changes, and
+ * nothing else about the path is touched — the record lives in its own
+ * table. Uses a prepared statement for performance (critical for bulk
+ * operations; called once per row that moved).
  *
- * @param state State (must not be NULL)
- * @param entry File entry to add (must not be NULL, copied into database)
+ * @param state State (must not be NULL, must have active transaction)
+ * @param row File row to project (must not be NULL; type != DIRECTORY)
  * @return Error or NULL on success
  */
-error_t *state_add_file(state_t *state, const state_file_entry_t *entry);
+error_t *state_add_file(state_t *state, const manifest_row_t *row);
 
 /**
  * Remove file entry from state
+ *
+ * Retires the expected row only. The record, if any, is retired
+ * separately by state_retire_anchor — the two tables are keyed apart
+ * and nothing cascades.
  *
  * @param state State (must not be NULL)
  * @param filesystem_path File path to remove (must not be NULL)
@@ -516,7 +394,7 @@ bool state_file_exists(const state_t *state, const char *filesystem_path);
 error_t *state_get_file(
     const state_t *state,
     const char *filesystem_path,
-    state_file_entry_t **out
+    state_entry_t **out
 );
 
 /**
@@ -539,7 +417,7 @@ error_t *state_get_file(
 error_t *state_get_file_by_storage(
     const state_t *state,
     const char *storage_path,
-    state_file_entry_t **out
+    state_entry_t **out
 );
 
 /**
@@ -558,7 +436,7 @@ error_t *state_get_file_by_storage(
 error_t *state_get_all_files(
     const state_t *state,
     arena_t *arena,
-    state_file_entry_t **out,
+    state_entry_t **out,
     size_t *count
 );
 
@@ -746,22 +624,10 @@ error_t *state_get_profiles(const state_t *state, string_array_t **out);
 bool state_has_profile(const state_t *state, const char *profile);
 
 /**
- * Get last deployed timestamp for a profile
- *
- * Returns the most recent deployment timestamp for files from the specified profile.
- *
- * @param state State (must not be NULL)
- * @param profile Profile name (must not be NULL)
- * @return Timestamp (0 if profile has no deployed files)
- */
-time_t state_get_profile_timestamp(const state_t *state, const char *profile);
-
-/**
  * Helper: Create file entry
  *
- * Allocates a state_file_entry_t and populates its identity and VWD-cache
- * fields from the arguments. The deployment anchor is zero-initialized;
- * hydration callers populate entry->anchor afterward from their row data.
+ * Allocates a state_entry_t and populates its row and lifecycle fields
+ * from the arguments.
  *
  * The blob_oid parameter is named explicitly (not `git_oid`) because C treats
  * a prior parameter name as in scope for subsequent parameters.
@@ -785,14 +651,14 @@ error_t *state_create_entry(
     const char *filesystem_path,
     const char *profile,
     const char *old_profile,
-    state_file_type_t type,
+    path_type_t type,
     const git_oid *blob_oid,
     mode_t mode,
     const char *owner,
     const char *group,
     bool encrypted,
     state_lifecycle_t lifecycle,
-    state_file_entry_t **out
+    state_entry_t **out
 );
 
 /**
@@ -800,66 +666,150 @@ error_t *state_create_entry(
  *
  * @param entry Entry to free (can be NULL)
  */
-void state_free_entry(state_file_entry_t *entry);
+void state_free_entry(state_entry_t *entry);
 
 /**
- * Advance a manifest entry's deployment anchor
+ * Get every anchor, in filesystem_path order
  *
- * The sole writer of the deployment columns (deployed_blob_oid, deployed_at,
- * observed_at, stat_*). Call after confirming disk content matches
- * anchor->blob_oid.
+ * The one read of the anchors table. Allocates the array and every
+ * string field from the caller's arena; lifetime is tied to the arena.
+ * A NULL blob column hydrates to a zero OID, a NULL mode to 0. The
+ * workspace loads it once per run and indexes it by path; the
+ * projection engine reads it to tell a departed row with a record from
+ * one without.
+ *
+ * On empty state (no DB), returns *out = NULL, *count = 0 with no error.
+ *
+ * @param state State (must not be NULL)
+ * @param arena Arena for allocations (must not be NULL)
+ * @param out Output array (must not be NULL)
+ * @param count Output count (must not be NULL)
+ * @return Error or NULL on success
+ */
+error_t *state_get_all_anchors(
+    const state_t *state,
+    arena_t *arena,
+    anchor_t **out,
+    size_t *count
+);
+
+/**
+ * Observe a managed path: record its first sighting on disk
+ *
+ * Presence only, idempotent. INSERT OR IGNORE creates the record with the
+ * row's identity and metadata, no blob, no stat, observed_at = now, and
+ * never touches an existing row. The workspace calls it (through
+ * workspace_observe) for an active row it found on disk with no record;
+ * apply calls it for a directory it fixed rather than made. The record's
+ * existence is what the absence classifier reads (workspace.c
+ * classify_absent): a path once observed that is now missing was
+ * deleted, not never deployed.
+ *
+ * @param state State (must not be NULL, must have open database)
+ * @param row Row the path was observed under (must not be NULL)
+ * @param now Observation timestamp (must be > 0)
+ * @return Error or NULL on success
+ */
+error_t *state_observe(state_t *state, const manifest_row_t *row, time_t now);
+
+/**
+ * Anchor a managed path: record the row dotta reconciled it against
+ *
+ * The sole writer of the record's content, metadata and ownership
+ * columns. Call after confirming disk content matches row->blob_oid
+ * (or, for a DIRECTORY row, after creating or confirming the directory).
+ * One statement, an UPSERT on anchors: the INSERT arm creates the row
+ * with observed_at = now; the UPDATE arm rewrites everything the row and
+ * the confirmation supply and leaves observed_at alone.
  *
  * ROUTING INVARIANT — this is load-bearing:
- *   - If a workspace is live for this transaction, anchor advances MUST
- *     route through workspace_advance_anchor (workspace.h). That wrapper
- *     calls this function with resolved_out pointing at the caller-supplied
- *     row's anchor field, so the snapshot receives the canonical post-write
- *     value the SQL produced. Calling state_update_anchor directly while a
- *     workspace is live silently desyncs the snapshot.
+ *   - If a workspace is live for this transaction, anchor writes MUST
+ *     route through workspace_anchor (workspace.h). That wrapper calls
+ *     this function with resolved_out pointing at a record it then
+ *     patches into its snapshot — or creates there, when the path had no
+ *     record at load — so every later reader in the run sees the
+ *     canonical post-write value the SQL produced. Calling state_anchor
+ *     directly while a workspace is live silently desyncs the snapshot.
  *   - If no workspace is live (the anchor overlays of manifest_add_files
  *     and manifest_update_files), this function is the legitimate direct
  *     caller. There is no snapshot to patch, so callers pass
  *     resolved_out=NULL and the next workspace_load reads SQL fresh.
  *
- * Semantics (encoded in the SQL UPDATE — single source of truth):
- *   - anchor->blob_oid must be non-zero. A zero blob_oid is only valid as
- *     the "never confirmed" initial row state written by the UPSERT on
- *     first INSERT; it is never a legal advance target.
- *   - anchor->deployed_at == 0 → preserve the existing timestamp
- *     (add/update/workspace-flush case — first observation advances
- *     the anchor witness without claiming a new deployment event).
- *   - anchor->deployed_at != 0 → write the new value
- *     (apply post-deploy/adoption case — stamps the deployment event).
- *   - anchor->observed_at is written only if the row's existing value is
- *     zero (monotonic-once-set). A non-zero existing column wins; a zero
- *     passed here also preserves (safe no-op).
- *   - anchor->stat is always written.
+ * Semantics (encoded in the SQL — single source of truth):
+ *   - row->blob_oid must be non-zero for a file row: a zero blob would
+ *     record "never confirmed" for a path this call claims to have
+ *     confirmed. Rejected here, before the schema's CHECK would reject
+ *     it. A DIRECTORY row binds NULL — a directory has no content
+ *     confirmation.
+ *   - own = true  → deployed_at = now: an ownership event (apply deploy,
+ *     adoption, add, update).
+ *   - own = false → deployed_at is kept: a confirmation (the slow-path
+ *     CMP_EQUAL flush). On the INSERT arm it is 0 — a row with a blob
+ *     and deployed_at = 0 is a confirmation, not a deployment.
+ *   - observed_at is the INSERT arm's alone: now for a new row, untouched
+ *     for an existing one.
+ *   - stat may be NULL (a directory, or lstat failed after the write):
+ *     the triple is written as zeros and the next read takes the slow
+ *     path.
+ *   - prune_ordered resets to 0: the path is back under a live row.
  *
  * resolved_out semantics:
- *   - If non-NULL and the WHERE matched a row, populated with the post-write
- *     anchor (the values RETURNING projected after the SQL CASE rules ran).
- *     Snapshot mirrors should assign this directly into the row's anchor —
- *     no C-side rule logic is needed because the DB already applied them.
- *   - If non-NULL and the WHERE matched no row, left untouched.
+ *   - If non-NULL, populated with the post-write record: every field the
+ *     caller supplied — the row's identity and metadata (borrowed: the
+ *     string pointers are the row's, not copies), the blob, the stat —
+ *     plus the two columns the SQL decided, observed_at and deployed_at,
+ *     read back through RETURNING. Snapshot mirrors assign it directly;
+ *     no C-side rule logic is needed because the DB already applied the
+ *     rules.
  *   - May be NULL when the caller does not maintain an in-memory snapshot.
  *
- * Not-found is not an error: the entry may not exist if the profile is
- * disabled or the file was filtered by precedence. Callers do not need
- * to check existence before calling.
- *
  * @param state State (must not be NULL, must have open database)
- * @param filesystem_path File path to update (must not be NULL)
- * @param anchor Deployment anchor to write (must not be NULL, blob_oid non-zero)
- * @param resolved_out Optional out-param for the post-write canonical anchor
+ * @param row Row the path is anchored to (must not be NULL; non-zero
+ *            blob for a file row)
+ * @param stat Stat triple captured after the confirmation (may be NULL)
+ * @param now Timestamp of the write (must be > 0)
+ * @param own true for an ownership event, false for a confirmation
+ * @param resolved_out Optional out-param for the post-write record
  *                     (may be NULL; see semantics above)
  * @return Error or NULL on success
  */
-error_t *state_update_anchor(
+error_t *state_anchor(
     state_t *state,
-    const char *filesystem_path,
-    const deployment_anchor_t *anchor,
-    deployment_anchor_t *resolved_out
+    const manifest_row_t *row,
+    const stat_cache_t *stat,
+    time_t now,
+    bool own,
+    anchor_t *resolved_out
 );
+
+/**
+ * Retire a managed path's record
+ *
+ * DELETE by filesystem_path. A missing row is success: the callers name
+ * paths that may have no record — never seen here, nothing to retire.
+ * Called by apply's record step for every pruned, reclaimed or released
+ * orphan, by update's purge of a deleted path, and by remove's release.
+ *
+ * @param state State (must not be NULL, must have active transaction)
+ * @param filesystem_path Path whose record retires (must not be NULL)
+ * @return Error or NULL on success (not found is OK)
+ */
+error_t *state_retire_anchor(state_t *state, const char *filesystem_path);
+
+/**
+ * Order a managed path's deployed copy pruned
+ *
+ * Sets prune_ordered on the record: remove --delete-files chose the fate
+ * of a deployed copy nothing backs any more, and apply is to prune it —
+ * a clean copy; cleanup's skip reasons still protect a modified one. A
+ * missing row is success: nothing was ever observed at the path, so
+ * there is nothing to prune.
+ *
+ * @param state State (must not be NULL, must have active transaction)
+ * @param filesystem_path Path whose deployed copy is to be pruned (must not be NULL)
+ * @return Error or NULL on success (not found is OK)
+ */
+error_t *state_order_prune(state_t *state, const char *filesystem_path);
 
 /**
  * Clear old_profile for a manifest entry
@@ -1057,91 +1007,40 @@ const git_oid *state_peek_profile_commit_oid(
 );
 
 /**
- * Get entries by profile
- *
- * Returns all manifest entries from the specified profile. Allocations
- * (entries array + string fields) use the caller's arena; lifetime ends
- * when the arena is destroyed.
- *
- * Used by profile disable to determine impact of disabling a profile.
- *
- * @param state State (must not be NULL)
- * @param profile Profile name to filter by (must not be NULL)
- * @param arena Arena for allocations (must not be NULL)
- * @param out Output array (must not be NULL)
- * @param count Output count (must not be NULL)
- * @return Error or NULL on success (empty array if no matches)
- */
-error_t *state_get_entries_by_profile(
-    const state_t *state,
-    const char *profile,
-    arena_t *arena,
-    state_file_entry_t **out,
-    size_t *count
-);
-
-/**
  * Add or refresh a tracked directory (projection writer)
  *
  * True UPSERT — the directory mirror of state_add_file. The sole caller
  * is the manifest layer's projection loop, and projection means in-scope:
  * the row's state is set to 'active' unconditionally (INSERT and UPDATE
- * alike), reactivating rows the sweep just downgraded.
- *
- * Witness preservation is encoded in SQL: observed_at follows the
- * monotonic-once-set CASE (an existing non-zero column wins; otherwise
- * entry->observed_at is written). The projection probe seeds the first
- * observation on scope entry; repeat syncs are idempotent no-ops on the
- * column.
+ * alike), reactivating rows the sweep just downgraded. Nothing else about
+ * the path is touched — the record lives in its own table.
  *
  * @param state State (must not be NULL, must have active transaction)
- * @param entry Directory entry (must not be NULL)
+ * @param row Directory row to project (must not be NULL; type == DIRECTORY)
  * @return Error or NULL on success
  */
-error_t *state_add_directory(
-    state_t *state,
-    const state_directory_entry_t *entry
-);
-
-/**
- * Advance a tracked directory's witness
- *
- * Directory mirror of state_update_anchor: a directory's confirmed-disk
- * record is the witness alone (observed_at), so this writes one column
- * where the anchor writes four. Monotonicity lives in the WHERE clause
- * (observed_at = 0), not in C: a row already witnessed is untouched, and
- * a missing row is a no-op (same not-found-is-OK contract).
- *
- * @param state State (must not be NULL, must have active transaction)
- * @param filesystem_path Directory path (must not be NULL)
- * @param observed_at Observation timestamp (must be > 0)
- * @return Error or NULL on success
- */
-error_t *state_update_witness(
-    state_t *state,
-    const char *filesystem_path,
-    time_t observed_at
-);
+error_t *state_add_directory(state_t *state, const manifest_row_t *row);
 
 /**
  * Retire file rows that left scope without ever being materialized
  *
- * observed_at == 0 records "no filesystem obligation": dotta never
- * lstat-confirmed the path on disk while the row was in scope, so there
- * is nothing to delete and nothing downstream would ever retire it —
- * every other deletion path is driven by a filesystem effect the row
- * does not have.
+ * No record means "no filesystem obligation": dotta never observed the
+ * path on disk while the row was in scope, so there is nothing to delete
+ * and nothing downstream would ever retire it — every other deletion
+ * path is driven by a filesystem effect the row does not have.
  *
- *   DELETE FROM virtual_manifest WHERE state != 'active' AND observed_at = 0;
+ *   DELETE FROM virtual_manifest
+ *    WHERE state != 'active'
+ *      AND filesystem_path NOT IN (SELECT filesystem_path FROM anchors);
  *
  * Called by manifest_apply_scope after its leftover pass, inside the
  * same transaction: the demoter terminates its own demotions. On empty
  * state (no DB), no-op success. Attribution does not read counts from
- * here — the leftover pass counts ghosts per-profile from the snapshot
- * it already holds (files_reclaimed). The purge in manifest_update_files'
- * and manifest_remove_files' fate overlays is a different decision
- * (terminal state for a deletion the user asked for, witnessed or not)
- * and does not overlap this one.
+ * here — the leftover pass counts ghosts per-profile from the anchors
+ * snapshot it already holds (files_reclaimed). The purge in
+ * manifest_update_files' and manifest_remove_files' fate overlays is a
+ * different decision (terminal state for a deletion the user asked for,
+ * observed or not) and does not overlap this one.
  *
  * @param state State (must not be NULL, must have active transaction)
  * @return Error or NULL on success
@@ -1154,7 +1053,9 @@ error_t *state_reclaim_unmaterialized_files(state_t *state);
  * Directory mirror of state_reclaim_unmaterialized_files — same predicate,
  * same "no filesystem obligation" semantics:
  *
- *   DELETE FROM tracked_directories WHERE state != 'active' AND observed_at = 0;
+ *   DELETE FROM tracked_directories
+ *    WHERE state != 'active'
+ *      AND filesystem_path NOT IN (SELECT filesystem_path FROM anchors);
  *
  * Called only by manifest_sync_directories, as the last step of its
  * rebuild. The sweep (state_mark_all_directories_inactive) is what demotes
@@ -1173,7 +1074,8 @@ error_t *state_reclaim_unmaterialized_directories(state_t *state);
  *
  * Allocates the entries array and every string field from the caller's
  * arena. Lifetime is tied to the arena: caller controls cleanup by
- * destroying the arena.
+ * destroying the arena. Every entry hydrates with type =
+ * PATH_TYPE_DIRECTORY and old_profile = NULL.
  *
  * @param state State (must not be NULL)
  * @param arena Arena for allocations (must not be NULL)
@@ -1184,7 +1086,7 @@ error_t *state_reclaim_unmaterialized_directories(state_t *state);
 error_t *state_get_all_directories(
     const state_t *state,
     arena_t *arena,
-    state_directory_entry_t **out,
+    state_entry_t **out,
     size_t *count
 );
 
@@ -1192,7 +1094,9 @@ error_t *state_get_all_directories(
  * Remove directory entry by path
  *
  * Deletes directory entry from state. Used during orphan cleanup after
- * the directory has been removed from the filesystem.
+ * the directory has been removed from the filesystem. Retires the
+ * expected row only; the record is retired separately by
+ * state_retire_anchor.
  *
  * @param state State (must not be NULL)
  * @param filesystem_path Filesystem path (PRIMARY KEY, must not be NULL)

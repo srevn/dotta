@@ -39,9 +39,11 @@
 #include <git2.h>
 #include <types.h>
 
-/* Forward declarations. Plan and result buckets hold state rows
- * (state_file_entry_t / state_directory_entry_t, core/state.h) — consumers
- * project them with state_files_view / state_directories_view. */
+#include "core/row.h"
+
+/* Forward declarations. Plan and result buckets hold manifest rows
+ * (manifest_row_t, core/row.h) — consumers project them with
+ * manifest_rows_view. */
 typedef struct content_cache content_cache_t;
 typedef struct workspace workspace_t;
 typedef struct scope scope_t;
@@ -97,7 +99,7 @@ typedef struct {
  *
  * Buckets hold borrowed row pointers into the workspace's arena snapshot
  * (workspace lifetime); the plan owns only the bucket buffers. Project a
- * bucket with state_files_view / state_directories_view.
+ * bucket with manifest_rows_view.
  */
 typedef struct {
     ptr_array_t pending;    /* Need work — deploy_execute acts on these */
@@ -126,8 +128,8 @@ typedef struct {
  * that follow (see deploy_plan_build, deploy_execute).
  */
 typedef struct {
-    deploy_partition_t files;         /* state_file_entry_t * */
-    deploy_partition_t directories;   /* state_directory_entry_t * */
+    deploy_partition_t files;         /* manifest_row_t * (blob types) */
+    deploy_partition_t directories;   /* manifest_row_t * (PATH_TYPE_DIRECTORY) */
 } deploy_plan_t;
 
 /**
@@ -145,18 +147,17 @@ typedef struct {
  * returned error's to name: fail-stop wraps it with the path, and the
  * partial receipt travels in *out beside it.
  *
- * Each bucket carries borrowed state-row pointers (workspace-arena
- * lifetime, outlives the deploy_result_t); project with
- * state_files_view / state_directories_view. Free with deploy_result_free
- * before workspace_free.
+ * Each bucket carries borrowed row pointers (workspace-arena lifetime,
+ * outlives the deploy_result_t); project with manifest_rows_view. Free
+ * with deploy_result_free before workspace_free.
  *
  * In dry-run the same buckets are filled — they name what the run
  * *would* do, so the caller reports the preview from the same object as
  * the real run, differing only in tense.
  */
 typedef struct {
-    ptr_array_t deployed;          /* Files written or linked (state_file_entry_t *) */
-    ptr_array_t created;           /* Directories made where nothing stood (state_directory_entry_t *) */
+    ptr_array_t deployed;          /* Files written or linked (manifest_row_t *) */
+    ptr_array_t created;           /* Directories made where nothing stood (manifest_row_t *) */
     ptr_array_t fixed;             /* Directories converged in place — mode, ownership */
     ptr_array_t replaced;          /* Directories that displaced a single-node squatter (--force) */
 } deploy_result_t;

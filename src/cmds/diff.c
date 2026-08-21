@@ -157,7 +157,7 @@ static const char *get_status_message_from_item(
  */
 static error_t *show_file_diff_from_workspace(
     const workspace_item_t *item,
-    const state_file_entry_t *file,
+    const manifest_row_t *file,
     content_cache_t *cache,
     git_repository *repo,
     diff_direction_t direction,
@@ -237,7 +237,7 @@ static error_t *show_file_diff_from_workspace(
     }
 
     /* Generate diff */
-    git_filemode_t mode = state_type_to_git_filemode(file->type);
+    git_filemode_t mode = path_type_to_git_filemode(file->type);
     compare_direction_t cmp_dir = (direction == DIFF_UPSTREAM)
                                 ? CMP_DIR_UPSTREAM : CMP_DIR_DOWNSTREAM;
 
@@ -333,10 +333,11 @@ static error_t *present_diffs_for_direction(
             continue;
         }
 
-        /* Resolve to active state row via workspace's active index (O(1)).
-         * Untracked or orphaned items have no active row — skip them. */
-        const state_file_entry_t *file =
-            workspace_lookup_file(ws, item->filesystem_path);
+        /* Resolve to the active row via the workspace's active index (O(1)).
+         * Untracked or orphaned items have no active row — skip them. The
+         * item is a file item (Filter 1), so the row is a file row. */
+        const manifest_row_t *file =
+            workspace_lookup(ws, item->filesystem_path);
         if (!file) {
             continue;
         }
@@ -610,7 +611,7 @@ static int print_diff_line_cb(
  * Compare a tree-built file slice against the current filesystem
  *
  * Generic comparison function for commit-to-workspace diffs. Takes a
- * state_files_t slice projected from a historical tree (via
+ * manifest_rows_t slice projected from a historical tree (via
  * manifest_load_tree_files) and compares each file against the current
  * filesystem state.
  *
@@ -627,7 +628,7 @@ static int print_diff_line_cb(
  */
 static error_t *compare_tree_files_to_filesystem(
     git_repository *repo,
-    state_files_t files,
+    manifest_rows_t files,
     const char *profile,
     const pathspec_t *file_filter,
     const cmd_diff_options_t *opts,
@@ -648,7 +649,7 @@ static error_t *compare_tree_files_to_filesystem(
 
     /* Iterate through all files in the historical slice */
     for (size_t i = 0; i < files.count; i++) {
-        const state_file_entry_t *entry = files.entries[i];
+        const manifest_row_t *entry = files.entries[i];
         const char *fs_path = entry->filesystem_path;
         const char *storage_path = entry->storage_path;
 
@@ -657,7 +658,7 @@ static error_t *compare_tree_files_to_filesystem(
             continue;
         }
 
-        git_filemode_t mode = state_type_to_git_filemode(entry->type);
+        git_filemode_t mode = path_type_to_git_filemode(entry->type);
 
         /* Name-only output */
         if (opts->name_only) {
@@ -818,7 +819,7 @@ cleanup:
  * (commit-to-workspace) feeds a tree-built slice via
  * manifest_load_tree_files; the workspace-diff path feeds the
  * workspace's active slice via workspace_files. Both flow through the
- * same state_files_t carrier.
+ * same manifest_rows_t carrier.
  *
  * @param file_filter File filter to validate (NULL = no validation, returns 0)
  * @param files File slice to check against (passed by value)
@@ -827,7 +828,7 @@ cleanup:
  */
 static size_t validate_filter_paths(
     const pathspec_t *file_filter,
-    state_files_t files,
+    manifest_rows_t files,
     output_t *out
 ) {
     if (!file_filter) return 0;
@@ -937,7 +938,7 @@ static error_t *diff_commit_to_workspace(
     char *profile = NULL;
     git_tree *tree = NULL;
     metadata_t *metadata = NULL;
-    state_files_t tree_files = { 0 };
+    manifest_rows_t tree_files = { 0 };
 
     /* Step 1: Resolve commit to find which profile contains it */
     err = resolve_commit_in_profiles(
@@ -985,7 +986,7 @@ static error_t *diff_commit_to_workspace(
         if (err) goto cleanup;
     }
 
-    /* Step 5: Project the historical tree into a state_files_t slice.
+    /* Step 5: Project the historical tree into a manifest_rows_t slice.
      *
      * Rows, per-row strings, and the pointer array are allocated into
      * the borrowed command arena; they outlive both this call and the
@@ -1318,7 +1319,7 @@ static error_t *diff_workspace(
     const workspace_item_t *diverged = workspace_get_all_diverged(ws, &diverged_count);
 
     /* Step 3: Borrow the active state slice for filter validation */
-    state_files_t active = workspace_files(ws);
+    manifest_rows_t active = workspace_files(ws);
 
     /* Step 4: Validate file filter paths against the active slice */
     const pathspec_t *file_filter = scope_paths(scope);

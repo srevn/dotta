@@ -30,14 +30,16 @@
  *
  * @param out Output context (must not be NULL)
  * @param profiles Enabled profile names (must not be NULL)
- * @param files Active state slice for verbose per-profile counts
- * @param state State handle for last-deployed timestamp lookup
+ * @param files Active file slice: the per-profile last-deployed timestamp
+ *              and the verbose per-profile count are both folded from it
+ * @param ws Workspace the slice came from, for each row's record (NULL
+ *           when no workspace was loaded; the slice is empty then too)
  */
 static void display_enabled_profiles(
     output_t *out,
     const string_array_t *profiles,
-    state_files_t files,
-    const state_t *state
+    manifest_rows_t files,
+    const workspace_t *ws
 ) {
     if (!out || !profiles) return;
 
@@ -50,32 +52,39 @@ static void display_enabled_profiles(
         /* Format profile name */
         output_styled(out, OUTPUT_NORMAL, "  {cyan}%s{reset}", profile);
 
-        /* Show per-profile last deployed timestamp */
-        if (state) {
-            time_t profile_deploy_time = state_get_profile_timestamp(state, profile);
-            if (profile_deploy_time > 0) {
-                char relative_buf[64];
-                format_relative_time(
-                    profile_deploy_time, relative_buf, sizeof(relative_buf)
-                );
+        /* One walk of the active slice per profile: the latest ownership
+         * event among the rows the profile owns now — the honest set for
+         * an enabled-profiles header — and the verbose file count. */
+        time_t profile_deploy_time = 0;
+        size_t profile_file_count = 0;
+        for (size_t j = 0; j < files.count; j++) {
+            const manifest_row_t *file = files.entries[j];
+            if (strcmp(file->profile, profile) != 0) continue;
 
-                /* Display dimmed timestamp */
-                output_styled(
-                    out, OUTPUT_NORMAL, "  {dim}(deployed %s){reset}",
-                    relative_buf
-                );
+            profile_file_count++;
+
+            const anchor_t *anchor = workspace_anchor_of(ws, file->filesystem_path);
+            if (anchor && anchor->deployed_at > profile_deploy_time) {
+                profile_deploy_time = anchor->deployed_at;
             }
+        }
+
+        /* Show per-profile last deployed timestamp */
+        if (profile_deploy_time > 0) {
+            char relative_buf[64];
+            format_relative_time(
+                profile_deploy_time, relative_buf, sizeof(relative_buf)
+            );
+
+            /* Display dimmed timestamp */
+            output_styled(
+                out, OUTPUT_NORMAL, "  {dim}(deployed %s){reset}",
+                relative_buf
+            );
         }
 
         /* In verbose mode, show file count for this profile */
         if (output_is_verbose(out)) {
-            size_t profile_file_count = 0;
-            for (size_t j = 0; j < files.count; j++) {
-                const state_file_entry_t *file = files.entries[j];
-                if (file->profile && strcmp(file->profile, profile) == 0) {
-                    profile_file_count++;
-                }
-            }
             output_print(
                 out, OUTPUT_NORMAL, "\n    %zu file%s",
                 profile_file_count, profile_file_count == 1 ? "" : "s"
@@ -105,7 +114,7 @@ static void display_enabled_profiles(
 static void display_workspace_status(
     workspace_t *ws,
     const scope_t *scope,
-    state_files_t files,
+    manifest_rows_t files,
     output_t *out
 ) {
     if (!ws || !out) return;
@@ -882,7 +891,7 @@ error_t *cmd_status(const dotta_ctx_t *ctx, const cmd_status_options_t *opts) {
     error_t *err = NULL;
     workspace_t *ws = NULL;
     state_t *state = ctx->state;  /* Borrowed from dispatcher; do not free */
-    state_files_t active = { 0 }; /* Borrowed slice when workspace is loaded */
+    manifest_rows_t active = { 0 }; /* Borrowed slice when workspace is loaded */
     scope_t *scope = NULL;
 
     /* CLI flags override config */
@@ -997,7 +1006,7 @@ error_t *cmd_status(const dotta_ctx_t *ctx, const cmd_status_options_t *opts) {
     }
 
     /* Display enabled profiles and last deployment info */
-    display_enabled_profiles(out, scope_active(scope), active, state);
+    display_enabled_profiles(out, scope_active(scope), active, ws);
 
     /* Display workspace status (with profile filtering for Coherent Scope)
      *

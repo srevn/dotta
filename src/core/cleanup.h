@@ -220,8 +220,8 @@ typedef struct {
      * Borrowed slices, typically the deployment plan's pending buckets;
      * empty is valid and means "nothing is deployed".
      */
-    state_files_t deploying_files;
-    state_directories_t deploying_directories;
+    manifest_rows_t deploying_files;
+    manifest_rows_t deploying_directories;
 } cleanup_options_t;
 
 /**

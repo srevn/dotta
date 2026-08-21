@@ -907,7 +907,7 @@ error_t *profile_discover_file(
     if (enabled_only) {
         /* Manifest fast path: O(1) via state DB index.
          * Returns the single owning profile (precedence already resolved). */
-        state_file_entry_t *entry = NULL;
+        state_entry_t *entry = NULL;
         err = state_get_file_by_storage(state, storage_path, &entry);
 
         if (err) {
@@ -927,7 +927,7 @@ error_t *profile_discover_file(
             return ERROR(ERR_MEMORY, "Failed to allocate profile array");
         }
 
-        err = string_array_push(profiles, entry->profile);
+        err = string_array_push(profiles, entry->row.profile);
         state_free_entry(entry);
 
         if (err) {

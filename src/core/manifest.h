@@ -17,14 +17,17 @@
  *     captured from disk, or the fate the user chose for a deployed copy.
  *
  *   - Tree loader: manifest_load_tree_files projects a single Git
- *     tree's files into the public state_files_t carrier. Used by the
+ *     tree's files into the public manifest_rows_t carrier. Used by the
  *     historical-diff path (cmd_diff). Mirrors workspace_files and
- *     state_files_view — one carrier shape, three producers.
+ *     manifest_rows_view — one carrier shape, three producers.
  *
  * The precedence builder that powers every consistency-layer entry is
  * private to manifest.c (see precedence_view_t). It produces
- * state_file_entry_t rows directly, removing the type bridge that used
- * to live between the build step and the persistence step.
+ * manifest_row_t rows directly (core/row.h), the one row shape every
+ * consumer reads, so there is no bridge between the build step and the
+ * persistence step. The engine writes the expected side only; the record
+ * (anchors, core/state.h) is written by the verbs that touch disk, after
+ * the engine ran, on the rows they won.
  *
  * Core Principles:
  *   - Single Authority: Only this module modifies the manifest table
@@ -68,9 +71,6 @@ typedef struct {
 
     /* Gain-side */
     size_t files_claimed;        /* Files this profile wins precedence for */
-    size_t files_present;        /* lstat observed a file at the deploy path */
-    size_t files_missing;        /* lstat returned ENOENT (includes access errors) */
-    size_t access_errors;        /* lstat failed non-ENOENT (subset of files_missing) */
 
     /* Gain-side, subsets of files_claimed (the remainder was unchanged) */
     size_t files_added;          /* No ACTIVE row before this call (new path, or a row reactivated) */
@@ -145,20 +145,20 @@ typedef struct {
  *     that branch's HEAD.
  *   - A row whose path re-entered the projection is ACTIVE whatever
  *     lifecycle it carried (the UPSERT writes state unconditionally).
- *   - A settled row — ACTIVE, witnessed, every VWD-cache column already
- *     at the view's value — is not written: the UPSERT would rewrite
- *     identical values and preserve everything else, so the writes of
- *     a projection are the rows that moved, not the view. The
+ *   - A settled row — ACTIVE, every VWD-cache column already at the
+ *     view's value — is not written: the UPSERT would rewrite identical
+ *     values and preserve everything else, so the writes of a
+ *     projection are the rows that moved, not the view. The
  *     postconditions below hold either way.
  *   - An ACTIVE row whose path left the projection is `leftover`.
  *     LIFECYCLE_INACTIVE / LIFECYCLE_DELETED / LIFECYCLE_RELEASED rows
  *     that stay outside are preserved — their intent signal predates
  *     this call — and are not counted.
- *     Exception: out-of-scope rows never witnessed on disk
- *     (observed_at = 0) are reclaimed — deleted outright. A ghost row
- *     carries no filesystem obligation, so there is nothing to stage or
- *     clean. File rows are retired by this function's own reclaim,
- *     directory rows by the rebuild that follows it.
+ *     Exception: out-of-scope rows never observed on disk (no record in
+ *     anchors) are reclaimed — deleted outright. A ghost row carries no
+ *     filesystem obligation, so there is nothing to stage or clean. File
+ *     rows are retired by this function's own reclaim, directory rows by
+ *     the rebuild that follows it.
  *   - Git reference currency: for every enabled profile whose branch
  *     resolved, enabled_profiles.commit_oid equals the OID whose tree
  *     was projected — captured by the same git_reference_peel that
@@ -170,25 +170,23 @@ typedef struct {
  *     probe reads them as released at load and cleanup releases. No
  *     special case — the scope layer already warns about the dead
  *     branch on every run.
- *   - The deployment anchor (deployed_blob_oid, deployed_at, stat_*) is
- *     preserved on every UPDATE — the engine is a pure VWD-cache writer,
- *     not a confirmation event. It advances the VWD cache's blob_oid to
- *     track Git while leaving the anchor pinned to dotta's last disk
- *     confirmation; the divergence between the two is how the workspace
- *     classifies staleness from persistent state. old_profile is
- *     auto-captured on a profile change; observed_at is monotonic.
+ *   - The record (anchors) is untouched — the engine is a pure VWD-cache
+ *     writer, not a confirmation event, and never names that table. It
+ *     advances the VWD cache's blob_oid to track Git while the record
+ *     stays pinned to dotta's last disk confirmation; the divergence
+ *     between the two is how the workspace classifies staleness from
+ *     persistent state. old_profile is auto-captured on a profile change.
  *   - tracked_directories swept and re-projected from enabled profiles.
  *   - Transaction remains open (caller commits via state_save).
  *
  * Stats attribution (when stats_filter is non-NULL):
  *   A profile in stats_filter ∩ new_enabled receives gain-side fields
- *   (files_claimed + lstat-derived files_present / files_missing /
- *   access_errors, and files_added / files_updated from the pre-
+ *   (files_claimed, and files_added / files_updated from the pre-
  *   projection snapshot) as the new-manifest projection processes its
  *   entries. A profile that owned rows no longer in scope receives
  *   loss-side fields during the leftover pass: files_reassigned, plus
- *   either files_orphaned (witnessed row — took `leftover`) or
- *   files_reclaimed (ghost row — retired at scope exit, no cleanup
+ *   either files_orphaned (a record exists — the row took `leftover`)
+ *   or files_reclaimed (no record — retired at scope exit, no cleanup
  *   pends). Only rows this call demoted are counted. A profile can
  *   collect gain and loss simultaneously.
  *   Overlap semantics: if B overrides A for path X, B gets files_claimed
@@ -207,13 +205,14 @@ typedef struct {
  *                        blob Git may no longer have)
  *   - ERR_MEMORY: Memory allocation failed
  *
- * Performance: O(P + M + S + D)
+ * Performance: O(P + M + S + R + D)
  *   P = enabled profiles (one ref lookup + one tree load each)
  *   M = files in the new view (one precedence-view build, one metadata
- *       load, one snapshot lookup per row; one witness lstat and one
- *       UPSERT per row that is written or attributed)
+ *       load, one snapshot lookup per row; one UPSERT per row that moved)
  *   S = rows in virtual_manifest (one state_get_all_files, indexed by
  *       filesystem_path, for the settled test and the leftover pass)
+ *   R = rows in anchors (one state_get_all_anchors, indexed by
+ *       filesystem_path, for the leftover pass's attribution)
  *   D = directories across enabled profiles (one directory rebuild)
  *   Low single-digit milliseconds for a few hundred rows; a projection
  *   that finds one row moved writes one row.
@@ -367,10 +366,11 @@ error_t *manifest_reconcile(
  *   - manifest_apply_scope's postconditions (every enabled profile
  *     projected at HEAD, commit_oid current, directories rebuilt)
  *   - removed_profile's departed paths are LIFECYCLE_DELETED
- *     (delete_files) or absent from virtual_manifest (!delete_files);
- *     a path never witnessed on disk was reclaimed by the engine either
- *     way — a ghost has nothing for apply to remove
- *   - Paths another profile owns: reassigned rows keep their anchor;
+ *     (delete_files) or absent from virtual_manifest and anchors
+ *     (!delete_files — a release keeps no record); a path never observed
+ *     on disk was reclaimed by the engine either way — a ghost has
+ *     nothing for apply to remove
+ *   - Paths another profile owns: reassigned rows keep their record;
  *     rows a higher profile owned all along are unchanged
  *   - Transaction remains open (caller commits)
  *
@@ -418,16 +418,16 @@ error_t *manifest_remove_files(
  * Runs the projection engine (manifest_apply_scope, leftover =
  * LIFECYCLE_RELEASED), then overlays the verb's intent on the items it
  * committed:
- *   - a modified or new file was captured FROM disk, so its row's
- *     deployment anchor advances to the just-committed blob with a fresh
- *     stat — only when this profile won the row (a shadowed path leaves
- *     the winner's anchor alone);
+ *   - a modified or new file was captured FROM disk, so its record is
+ *     anchored to the just-committed blob with a fresh stat — only when
+ *     this profile won the row (a shadowed path leaves the winner's
+ *     record alone);
  *   - a deleted file (WORKSPACE_STATE_DELETED) left Git by this commit:
  *     a row the engine reassigned to a lower profile is a fallback for
- *     apply to deploy; a row the engine released is purged — nothing
- *     backs it and nothing is on disk. No lstat is taken: a file
- *     recreated between workspace load and this call is left on disk
- *     unmanaged, the release outcome, never a prune.
+ *     apply to deploy; a row the engine released is purged, record and
+ *     all — nothing backs it and nothing is on disk. No lstat is taken:
+ *     a file recreated between workspace load and this call is left on
+ *     disk unmanaged, the release outcome, never a prune.
  *
  * Preconditions:
  *   - state MUST have an active write transaction
@@ -438,13 +438,13 @@ error_t *manifest_remove_files(
  * Postconditions:
  *   - manifest_apply_scope's postconditions (every enabled profile
  *     projected at HEAD, commit_oid current, directories rebuilt)
- *   - Captured rows carry anchor = (blob_oid, now, fresh stat). An
+ *   - Captured rows are anchored to (blob_oid, now, fresh stat). An
  *     anchor-write failure is non-fatal — the VWD cache is already
- *     projected and the next status self-heals the anchor through the
+ *     projected and the next status self-heals the record through the
  *     slow-path CMP_EQUAL flush
- *   - Deleted paths without a fallback are absent from virtual_manifest;
- *     the anchor of a fallback row is preserved (no disk confirmation
- *     for the fallback blob)
+ *   - Deleted paths without a fallback are absent from virtual_manifest
+ *     and anchors; the record of a fallback row is preserved (no disk
+ *     confirmation for the fallback blob)
  *   - Transaction remains open (caller commits)
  *
  * Error Conditions:
@@ -488,9 +488,9 @@ error_t *manifest_update_files(
  * the projection engine (manifest_apply_scope, leftover =
  * LIFECYCLE_RELEASED), then overlays the verb's intent on the paths it
  * committed: they were captured FROM disk, so for each path whose row
- * this profile won, the deployment anchor advances to the just-committed
- * blob with a fresh stat and the next status takes the fast path. A path
- * a higher-precedence profile owns receives nothing — its row is the
+ * this profile won, the record is anchored to the just-committed blob
+ * with a fresh stat and the next status takes the fast path. A path a
+ * higher-precedence profile owns receives nothing — its row is the
  * winner's, and a stat bound to this profile's blob would poison the
  * winner's fast path. A path with no row (filtered by .dottaignore)
  * receives nothing either.
@@ -506,10 +506,10 @@ error_t *manifest_update_files(
  * Postconditions:
  *   - manifest_apply_scope's postconditions (every enabled profile
  *     projected at HEAD, commit_oid current, directories rebuilt)
- *   - Rows `profile` won for the added paths carry anchor =
+ *   - Rows `profile` won for the added paths are anchored to
  *     (blob_oid, now, fresh stat). An anchor-write failure is non-fatal
  *     — the VWD cache is already projected and the next status self-
- *     heals the anchor through the slow-path CMP_EQUAL flush
+ *     heals the record through the slow-path CMP_EQUAL flush
  *   - Transaction remains open (caller commits via state_save)
  *
  * Error Conditions:
@@ -545,13 +545,13 @@ error_t *manifest_add_files(
 );
 
 /**
- * Project a single Git tree's files into the public state_files_t carrier
+ * Project a single Git tree's files into the public manifest_rows_t carrier
  *
  * Used by the historical-diff path (cmd_diff): given a tree, profile,
- * mount table, and optional per-tree metadata, produces a state_file_entry_t
+ * mount table, and optional per-tree metadata, produces a manifest_row_t
  * row for every blob the tree exposes (sans repository metadata files —
  * .dottaignore, .bootstrap, .git/, .dotta/). Mirrors workspace_files and
- * state_files_view: one carrier shape, three producers.
+ * manifest_rows_view: one carrier shape, three producers.
  *
  * Metadata, when supplied, is applied row-by-row in lockstep with the
  * tree walk — mode, owner, group, and encrypted are filled from the
@@ -576,8 +576,8 @@ error_t *manifest_add_files(
  * @param metadata Optional per-tree metadata applied to rows (can be NULL)
  * @param arena Arena backing every allocation produced by the call
  *              (must not be NULL)
- * @param out State files slice (must not be NULL; entries borrowed from
- *            `arena`, lifetime tied to it)
+ * @param out Rows slice (must not be NULL; entries borrowed from `arena`,
+ *            lifetime tied to it)
  * @return Error or NULL on success
  */
 error_t *manifest_load_tree_files(
@@ -586,7 +586,7 @@ error_t *manifest_load_tree_files(
     const mount_table_t *mounts,
     const metadata_t *metadata,
     arena_t *arena,
-    state_files_t *out
+    manifest_rows_t *out
 );
 
 #endif /* DOTTA_MANIFEST_H */

@@ -57,10 +57,11 @@ static error_t *count_profile_files(
  * Print manifest enable statistics
  *
  * Reports gain-side attribution for one enabled profile from a single
- * apply_scope call: files_claimed (rows the profile won precedence for)
- * partitioned by lstat observation into files_present and files_missing.
- * access_errors is a subset of files_missing: paths where lstat failed
- * for a non-ENOENT reason.
+ * apply_scope call: files_claimed (rows the profile won precedence for),
+ * of which files_added + files_updated are staged — new to the manifest,
+ * or moved past what it expected — and the rest were already at the
+ * view's values. The engine reads no disk; what is deployed and what is
+ * not is status's to say.
  */
 static void print_manifest_enable_stats(
     const output_t *out,
@@ -68,6 +69,8 @@ static void print_manifest_enable_stats(
     const manifest_scope_stats_t *stats
 ) {
     if (!stats || stats->files_claimed == 0) return;
+
+    size_t staged = stats->files_added + stats->files_updated;
 
     if (output_is_verbose(out)) {
         /* Detailed breakdown */
@@ -81,56 +84,21 @@ static void print_manifest_enable_stats(
             stats->files_claimed
         );
 
-        if (stats->files_present > 0) {
+        if (staged > 0) {
             output_styled(
                 out, OUTPUT_VERBOSE,
-                "    - {green}%zu{reset} already deployed\n",
-                stats->files_present
-            );
-        }
-
-        if (stats->files_missing > 0) {
-            output_styled(
-                out, OUTPUT_VERBOSE,
-                "    - {yellow}%zu{reset} need deployment\n",
-                stats->files_missing
-            );
-        }
-
-        if (stats->access_errors > 0) {
-            output_newline(out, OUTPUT_VERBOSE);
-            output_warning(
-                out, OUTPUT_VERBOSE, "Could not access %zu file%s during profile enable",
-                stats->access_errors, stats->access_errors == 1 ? "" : "s"
-            );
-            output_hint(
-                out, OUTPUT_VERBOSE, "Run 'dotta status' for deployment details"
+                "    - {yellow}%zu{reset} staged for deployment\n",
+                staged
             );
         }
 
         output_newline(out, OUTPUT_VERBOSE);
     } else {
         /* Compact summary */
-        if (stats->files_missing > 0) {
+        if (staged > 0) {
             output_print(
-                out, OUTPUT_NORMAL, "  Staged %zu file%s for deployment\n",
-                stats->files_missing, stats->files_missing == 1 ? "" : "s"
-            );
-        }
-        if (stats->files_present > 0) {
-            output_print(
-                out, OUTPUT_NORMAL, "  Found %zu file%s already deployed\n",
-                stats->files_present, stats->files_present == 1 ? "" : "s"
-            );
-        }
-
-        if (stats->access_errors > 0) {
-            output_warning(
-                out, OUTPUT_NORMAL, "Could not access %zu file%s during profile enable",
-                stats->access_errors, stats->access_errors == 1 ? "" : "s"
-            );
-            output_hint(
-                out, OUTPUT_NORMAL, "Run 'dotta status' for deployment details"
+                out, OUTPUT_NORMAL, "  Staged %zu entr%s for deployment\n",
+                staged, staged == 1 ? "y" : "ies"
             );
         }
     }
@@ -700,7 +668,7 @@ cleanup:
  *   3. Project once — a single apply_scope call builds the VWD for the
  *      post-enable set and records each profile's projected HEAD over
  *      the sentinel, with stats_filter pinned to the newly enabled
- *      profiles so gain-side stats (files_claimed / on-disk / absent)
+ *      profiles so gain-side stats (files_claimed / added / updated)
  *      land in the right slot per profile. Old K·M cost (rebuilding the
  *      manifest per profile) collapses to a single M.
  *   4. Per-profile feedback — iterate the validated targets to preserve

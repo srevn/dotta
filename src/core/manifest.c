@@ -4,16 +4,16 @@
  * Owns the consistency layer for every modification of the virtual_manifest
  * table and the tree-loader primitive (manifest_load_tree_files) that
  * powers the historical-diff path. Both surfaces share a single internal
- * builder — precedence_view_build — that produces state_file_entry_t rows
- * directly. There is no longer a public file_entry_t/manifest_t bridge:
+ * builder — precedence_view_build — that produces manifest_row_t rows
+ * directly. There is no public file_entry_t/manifest_t bridge:
  * persistence and consumers see one row shape end-to-end.
  *
  * Key patterns:
  *   - Precedence Oracle: precedence_view_build (multi-profile) and
  *     precedence_view_load_tree (single-tree) emit a precedence_view_t whose
- *     rows are state_file_entry_t. Consistency-layer entry points consume
+ *     rows are manifest_row_t. Consistency-layer entry points consume
  *     the view directly; manifest_load_tree_files publishes its rows
- *     behind a state_files_t carrier.
+ *     behind a manifest_rows_t carrier.
  *   - Transaction Management: Caller manages transactions, we operate within them
  *   - Blob OID Extraction: Reads pre-populated blob_oid from each row for
  *     O(1) content identity
@@ -25,10 +25,8 @@
 
 #include "core/manifest.h"
 
-#include <errno.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/stat.h>
 #include <time.h>
 
 #include "base/arena.h"
@@ -51,7 +49,7 @@
  * via state_files_t (the public consumer iterates linearly and doesn't
  * need lookup).
  *
- * Rows are state_file_entry_t — the same shape consumed by the persistence
+ * Rows are manifest_row_t — the same shape consumed by the persistence
  * layer, so the engine passes a row straight through to state_add_file
  * with no field translation.
  *
@@ -68,7 +66,7 @@
  * precedence_view_load_tree leaves heads NULL (one tree, no branch).
  */
 typedef struct precedence_view {
-    state_file_entry_t *entries;   /* arena-backed, abandon-and-realloc growth */
+    manifest_row_t *entries;       /* arena-backed, abandon-and-realloc growth */
     size_t count;
     size_t capacity;
     hashmap_t *index;              /* fs_path → idx+1, heap-allocated */
@@ -129,7 +127,7 @@ struct precedence_build_ctx {
  * @return Error or NULL on success
  */
 static error_t *precedence_view_apply_metadata(
-    state_file_entry_t *entry,
+    manifest_row_t *entry,
     const metadata_t *metadata,
     arena_t *arena
 ) {
@@ -198,7 +196,7 @@ static error_t *precedence_view_apply_metadata(
  *
  * Performance optimization: Instead of collecting paths in pass 1 then
  * re-traversing via git_tree_entry_bypath() in pass 2 (O(N×D)), this
- * callback writes state_file_entry_t rows directly in O(N) time.
+ * callback writes manifest_row_t rows directly in O(N) time.
  *
  * Extracts identity fields (blob_oid, type, mode) from the borrowed tree
  * entry at the callback boundary — no git_tree_entry_dup needed, no opaque
@@ -327,26 +325,18 @@ static int precedence_view_build_callback(
             return -1;
         }
 
-        state_file_entry_t *override = &ctx->view->entries[existing_idx];
+        manifest_row_t *override = &ctx->view->entries[existing_idx];
 
-        /* Reset every metadata-owned and lifecycle field before the new
-         * profile's metadata applies. The lower-precedence profile may have
-         * left non-NULL owner/group/encrypted on the slot; carrying those
+        /* Reset every metadata-owned field before the new profile's
+         * metadata applies. The lower-precedence profile may have left
+         * non-NULL owner/group/encrypted on the slot; carrying those
          * through would leak its attribution into the higher-precedence
          * row. The old string pointers (storage_path, filesystem_path,
          * owner, group) are arena-borrowed and abandoned to the caller's
-         * arena when overwritten below.
-         *
-         * lifecycle, old_profile, and anchor are mirrored from the new-entry
-         * branch to keep the override path self-contained — any tree-built
-         * row carries LIFECYCLE_ACTIVE, no reassignment marker, and a zero
-         * deployment anchor regardless of construction order. */
+         * arena when overwritten below. */
         override->owner = NULL;
         override->group = NULL;
         override->encrypted = false;
-        override->lifecycle = LIFECYCLE_ACTIVE;
-        override->old_profile = NULL;
-        override->anchor = DEPLOYMENT_ANCHOR_UNSET;
 
         /* Update with new values from higher-precedence profile.
          * filesystem_path is arena-borrowed via mount_resolve; the cast
@@ -363,15 +353,15 @@ static int precedence_view_build_callback(
         git_oid_cpy(&override->blob_oid, git_tree_entry_id(entry));
         switch (git_tree_entry_filemode(entry)) {
             case GIT_FILEMODE_BLOB_EXECUTABLE:
-                override->type = STATE_FILE_EXECUTABLE;
+                override->type = PATH_TYPE_EXECUTABLE;
                 override->mode = 0755;
                 break;
             case GIT_FILEMODE_LINK:
-                override->type = STATE_FILE_SYMLINK;
+                override->type = PATH_TYPE_SYMLINK;
                 override->mode = 0;
                 break;
             default:
-                override->type = STATE_FILE_REGULAR;
+                override->type = PATH_TYPE_FILE;
                 override->mode = 0644;
                 break;
         }
@@ -411,7 +401,7 @@ static int precedence_view_build_callback(
             }
             size_t new_capacity = ctx->view->capacity * 2;
 
-            state_file_entry_t *new_entries = arena_calloc(
+            manifest_row_t *new_entries = arena_calloc(
                 ctx->arena, new_capacity, sizeof(*new_entries)
             );
             if (!new_entries) {
@@ -442,34 +432,28 @@ static int precedence_view_build_callback(
          * case a future allocator change drops the calloc semantic; this
          * also gives readers a single self-contained sentence about what
          * the slot's pre-write state is. */
-        state_file_entry_t *new_entry = &ctx->view->entries[ctx->view->count];
+        manifest_row_t *new_entry = &ctx->view->entries[ctx->view->count];
         memset(new_entry, 0, sizeof(*new_entry));
         new_entry->storage_path = dup_storage_path;
         /* filesystem_path is arena-borrowed via mount_resolve; cast
          * discards the const qualifier from mount_resolve's output type. */
         new_entry->filesystem_path = (char *) filesystem_path;
         new_entry->profile = (char *) ctx->profile;
-        /* Tree-built rows always carry LIFECYCLE_ACTIVE. The enum's zero
-         * default already covers this via memset above; the explicit
-         * assignment documents intent and survives any future allocator
-         * change that drops the calloc semantic. */
-        new_entry->lifecycle = LIFECYCLE_ACTIVE;
-        /* old_profile, anchor stay zero from memset. */
 
         /* Extract identity from borrowed tree entry (blob_oid, type, mode) */
         git_oid_cpy(&new_entry->blob_oid, git_tree_entry_id(entry));
         switch (git_tree_entry_filemode(entry)) {
             case GIT_FILEMODE_BLOB_EXECUTABLE:
-                new_entry->type = STATE_FILE_EXECUTABLE;
+                new_entry->type = PATH_TYPE_EXECUTABLE;
                 new_entry->mode = 0755;
                 break;
             case GIT_FILEMODE_LINK:
-                new_entry->type = STATE_FILE_SYMLINK;
+                new_entry->type = PATH_TYPE_SYMLINK;
                 new_entry->mode = 0;
                 break;
             default:
                 /* Should never happen (we filtered to blobs above) */
-                new_entry->type = STATE_FILE_REGULAR;
+                new_entry->type = PATH_TYPE_FILE;
                 new_entry->mode = 0644;
                 break;
         }
@@ -669,7 +653,7 @@ static error_t *precedence_view_build(
          * The callback extracts identity fields (blob_oid, type, mode) from
          * borrowed tree entries, converts paths via mount_resolve, handles
          * precedence override, applies per-profile metadata to
-         * mode/owner/group/encrypted, and populates state_file_entry_t
+         * mode/owner/group/encrypted, and populates manifest_row_t
          * rows directly — all in O(N) time.
          *
          * profile borrows from the caller's profiles array — must outlive
@@ -783,12 +767,12 @@ cleanup:
 }
 
 /**
- * Load a single Git tree's files into the public state_files_t carrier.
+ * Load a single Git tree's files into the public manifest_rows_t carrier.
  *
  * The historical-diff path consumes a tree-built file slice that mirrors
  * the workspace's active slice (workspace_files) and apply's deploy result
- * (state_files_view). One carrier shape, three producers — a consumer
- * written against state_files_t composes with all of them.
+ * (manifest_rows_view). One carrier shape, three producers — a consumer
+ * written against manifest_rows_t composes with all of them.
  *
  * Implementation: delegates to precedence_view_load_tree to build a precedence
  * view, then publishes the view's rows behind a fresh pointer array. The
@@ -816,7 +800,7 @@ cleanup:
  * @param metadata Optional per-tree metadata applied to rows (can be NULL)
  * @param arena    Arena backing every allocation produced by the call
  *                 (must not be NULL)
- * @param out      Output state_files_t (must not be NULL; entries are
+ * @param out      Output manifest_rows_t (must not be NULL; entries are
  *                 borrowed from `arena`, lifetime tied to it)
  * @return Error or NULL on success
  */
@@ -826,7 +810,7 @@ error_t *manifest_load_tree_files(
     const mount_table_t *mounts,
     const metadata_t *metadata,
     arena_t *arena,
-    state_files_t *out
+    manifest_rows_t *out
 ) {
     CHECK_NULL(tree);
     CHECK_NULL(profile);
@@ -834,7 +818,7 @@ error_t *manifest_load_tree_files(
     CHECK_NULL(arena);
     CHECK_NULL(out);
 
-    *out = (state_files_t){ 0 };
+    *out = (manifest_rows_t){ 0 };
 
     precedence_view_t *view = NULL;
     error_t *err = precedence_view_load_tree(
@@ -858,11 +842,11 @@ error_t *manifest_load_tree_files(
     /* Publish the view's rows behind a borrowed pointer array. The spine
      * is arena-backed (not heap), so each &view->entries[i] address stays
      * valid for the arena's lifetime. */
-    const state_file_entry_t **ptrs = arena_calloc(
+    const manifest_row_t **ptrs = arena_calloc(
         arena, view->count, sizeof(*ptrs)
     );
     if (!ptrs) {
-        return ERROR(ERR_MEMORY, "Failed to allocate state_files_t spine");
+        return ERROR(ERR_MEMORY, "Failed to allocate manifest_rows_t spine");
     }
     for (size_t i = 0; i < view->count; i++) {
         ptrs[i] = &view->entries[i];
@@ -871,14 +855,14 @@ error_t *manifest_load_tree_files(
     /* The cast adds const at the outer pointer level (T ** → T *const *) —
      * legal per the C standard's qualifier-conversion rule, no diagnostic
      * required. Mirrors workspace_files's identical bridge cast. */
-    out->entries = (const state_file_entry_t *const *) ptrs;
+    out->entries = (const manifest_row_t *const *) ptrs;
     out->count = view->count;
 
     return NULL;
 }
 
 /**
- * Project a DIRECTORY metadata item to a state directory entry.
+ * Project a DIRECTORY metadata item to a directory row.
  *
  * Resolves filesystem_path via the mount table. UNBOUND is treated as a
  * hard error: under the tightened state_reorder_profiles contract plus
@@ -897,7 +881,7 @@ error_t *manifest_load_tree_files(
  * @param profile Source profile name (must not be NULL)
  * @param mounts  Per-machine mount table (must not be NULL)
  * @param arena   Arena for allocations (must not be NULL)
- * @param out     State directory entry (must not be NULL, lifetime tied to arena)
+ * @param out     Directory row (must not be NULL, lifetime tied to arena)
  * @return Error or NULL on success
  */
 static error_t *directory_entry_from_metadata(
@@ -905,7 +889,7 @@ static error_t *directory_entry_from_metadata(
     const char *profile,
     const mount_table_t *mounts,
     arena_t *arena,
-    state_directory_entry_t **out
+    manifest_row_t **out
 ) {
     CHECK_NULL(item);
     CHECK_NULL(profile);
@@ -941,21 +925,20 @@ static error_t *directory_entry_from_metadata(
         );
     }
 
-    state_directory_entry_t *entry = arena_calloc(arena, 1, sizeof(*entry));
+    manifest_row_t *entry = arena_calloc(arena, 1, sizeof(*entry));
     if (!entry) {
-        return ERROR(ERR_MEMORY, "Failed to allocate state directory entry");
+        return ERROR(ERR_MEMORY, "Failed to allocate directory row");
     }
 
     /* filesystem_path is arena-borrowed via mount_resolve; the cast
      * accommodates the struct field's `char *` typing without implying
      * mutability. The borrow shares the arena lifetime of the strdup'd
-     * siblings below.
-     *
-     * observed_at is left zero by calloc; the sync loop's probe stamps
-     * it before persisting when the path exists on disk. */
+     * siblings below. blob_oid stays zero and encrypted false: a
+     * directory row is claimed from metadata alone. */
     entry->filesystem_path = (char *) fs_path;
     entry->storage_path = arena_strdup(arena, item->key);
     entry->profile = arena_strdup(arena, profile);
+    entry->type = PATH_TYPE_DIRECTORY;
     entry->mode = item->mode;
     entry->owner = item->owner ? arena_strdup(arena, item->owner) : NULL;
     entry->group = item->group ? arena_strdup(arena, item->group) : NULL;
@@ -983,16 +966,15 @@ static error_t *directory_entry_from_metadata(
  * Mark-inactive-then-reactivate sweep:
  *   1. Downgrade every LIFECYCLE_ACTIVE row to LIFECYCLE_INACTIVE
  *      (LIFECYCLE_DELETED preserved — staged deletion intent survives).
- *   2. For each enabled profile's metadata directory, probe the path
- *      (scope-entry observation — mirror of the engine's per-row lstat)
- *      and UPSERT via state_add_directory: the row is (re)activated under
- *      its current owner and the witness is seeded if the path exists.
- *      The UPSERT's SQL CASE preserves any existing non-zero observed_at,
- *      so repeat syncs are idempotent on the witness.
- *   3. Rows not reactivated left scope. Witnessed ones stay INACTIVE and
- *      surface as orphans for apply-time cleanup; unwitnessed ones are
- *      deleted outright — step 1 demoted them, so retiring them is this
- *      rebuild's own cleanup, not a service to the caller.
+ *   2. For each enabled profile's metadata directory, UPSERT via
+ *      state_add_directory: the row is (re)activated under its current
+ *      owner. No probe — observation is the workspace's, recorded in
+ *      anchors when it sees the path.
+ *   3. Rows not reactivated left scope. Observed ones (a record exists)
+ *      stay INACTIVE and surface as orphans for apply-time cleanup;
+ *      never-observed ones are deleted outright — step 1 demoted them,
+ *      so retiring them is this rebuild's own cleanup, not a service to
+ *      the caller.
  *
  * Preconditions:
  *   - state MUST have an active write transaction
@@ -1001,9 +983,9 @@ static error_t *directory_entry_from_metadata(
  *
  * Postconditions:
  *   - tracked_directories reflects enabled_profiles: rows still in scope
- *     are LIFECYCLE_ACTIVE with their witness preserved; witnessed rows
- *     that left scope are LIFECYCLE_INACTIVE (staged for apply-time
- *     cleanup); unwitnessed rows that left scope are deleted outright
+ *     are LIFECYCLE_ACTIVE; observed rows that left scope are
+ *     LIFECYCLE_INACTIVE (staged for apply-time cleanup); never-observed
+ *     rows that left scope are deleted outright
  *   - A profile without metadata.json contributes no directories and is
  *     skipped, not an error
  *   - Transaction remains open
@@ -1013,9 +995,9 @@ static error_t *directory_entry_from_metadata(
  *
  * @param repo Git repository (must not be NULL)
  * @param state State with active transaction (must not be NULL)
- * @param arena Arena for the per-row state_directory_entry_t allocations.
- *              Entries live until the caller destroys the arena (typically
- *              command end). Must not be NULL.
+ * @param arena Arena for the per-row directory row allocations. Rows live
+ *              until the caller destroys the arena (typically command
+ *              end). Must not be NULL.
  * @param enabled_profiles Current enabled profiles (must not be NULL)
  * @param mounts Per-machine mount table covering enabled_profiles
  *               (must not be NULL)
@@ -1040,8 +1022,8 @@ static error_t *manifest_sync_directories(
 
     /* 1. Mark all ACTIVE directories inactive (soft delete for the sweep)
      *
-     * Rows not reactivated during rebuild left scope: witnessed ones become
-     * orphans for apply-time cleanup; unwitnessed ones are retired by
+     * Rows not reactivated during rebuild left scope: observed ones become
+     * orphans for apply-time cleanup; never-observed ones are retired by
      * step 3 below.
      */
     err = state_mark_all_directories_inactive(state);
@@ -1080,11 +1062,11 @@ static error_t *manifest_sync_directories(
         );
 
         /* Project each directory: one UPSERT (re)activates the row under
-         * its current owner and refreshes metadata; the SQL preserves any
-         * existing witness. directory_entry_from_metadata treats a missing
-         * custom/ binding as a hard error, so success implies a row. */
+         * its current owner and refreshes metadata.
+         * directory_entry_from_metadata treats a missing custom/ binding as
+         * a hard error, so success implies a row. */
         for (size_t j = 0; j < dir_count; j++) {
-            state_directory_entry_t *state_dir = NULL;
+            manifest_row_t *state_dir = NULL;
 
             err = directory_entry_from_metadata(
                 directories[j], profile, mounts, arena, &state_dir
@@ -1092,20 +1074,10 @@ static error_t *manifest_sync_directories(
 
             if (err) {
                 err = error_wrap(
-                    err, "Failed to create state directory entry for '%s'",
+                    err, "Failed to create directory row for '%s'",
                     directories[j]->key
                 );
                 break;
-            }
-
-            /* Scope-entry observation probe — mirror of the engine's per-row
-             * lstat. Success of any type counts: a file squatting on the
-             * path is still "something was here"; type divergence is a
-             * separate signal. Failure leaves observed_at at sentinel-zero
-             * (ghost until a later witness event). */
-            struct stat probe_st;
-            if (lstat(state_dir->filesystem_path, &probe_st) == 0) {
-                state_dir->observed_at = time(NULL);
             }
 
             err = state_add_directory(state, state_dir);
@@ -1130,14 +1102,14 @@ static error_t *manifest_sync_directories(
 cleanup:
     /* Per-iteration resources are NULL on normal exit (freed in loop above).
      * Non-NULL only if outer loop exited before per-iteration cleanup (e.g.,
-     * metadata_load_from_branch error before inner loop). state_directory
-     * entries built into the borrowed arena live until the caller destroys
-     * it (typically command end). */
+     * metadata_load_from_branch error before inner loop). Directory rows
+     * built into the borrowed arena live until the caller destroys it
+     * (typically command end). */
     if (directories) free(directories);
     if (metadata) metadata_free(metadata);
 
     /* 3. Retire the ghosts the sweep left behind — INACTIVE and never
-     * witnessed means nothing on disk to clean. Guarded on success: after a
+     * observed means nothing on disk to clean. Guarded on success: after a
      * partial rebuild the predicate cannot tell rows the re-projection
      * never reached from rows that genuinely left scope. */
     if (!err) err = state_reclaim_unmaterialized_directories(state);
@@ -1150,47 +1122,43 @@ cleanup:
  *
  * True when the UPSERT state_add_file issues for `row` would rewrite
  * every column it writes to its current value: `old` is ACTIVE (the
- * state column is written ACTIVE), every VWD-cache column —
+ * state column is written ACTIVE) and every VWD-cache column —
  * storage_path, profile, blob_oid, type, mode, owner, group, encrypted —
- * equals the view's, and a witness is on record (observed_at is
- * monotonic once set, so no probe could move it). The columns the UPSERT
- * does not take from the row need no comparison: old_profile's CASE
- * preserves it when the profile is unchanged, and the deployment anchor
- * is preserved on every UPDATE. The engine leaves such a row alone — no
- * probe, no write.
+ * equals the view's. The one column the UPSERT does not take from the
+ * row needs no comparison: old_profile's CASE preserves it when the
+ * profile is unchanged. The engine leaves such a row alone — no write.
  *
- * Exact by construction: a row that differs in any written column, is
- * not ACTIVE, or has never been witnessed (the probe may flip it this
- * time) is not settled.
+ * Exact by construction: a row that differs in any written column, or
+ * is not ACTIVE, is not settled.
  *
- * @param old Snapshot row at the same filesystem_path, or NULL
+ * @param old Snapshot entry at the same filesystem_path, or NULL
  * @param row View row about to be projected
  * @return true iff the projection can skip the row
  */
 static bool manifest_row_settled(
-    const state_file_entry_t *old,
-    const state_file_entry_t *row
+    const state_entry_t *old,
+    const manifest_row_t *row
 ) {
-    if (!old || old->lifecycle != LIFECYCLE_ACTIVE || old->anchor.observed_at == 0) {
+    if (!old || old->lifecycle != LIFECYCLE_ACTIVE) {
         return false;
     }
-    if (!git_oid_equal(&old->blob_oid, &row->blob_oid) ||
-        old->type != row->type ||
-        old->mode != row->mode ||
-        old->encrypted != row->encrypted ||
-        strcmp(old->storage_path, row->storage_path) != 0 ||
-        strcmp(old->profile, row->profile) != 0) {
+    if (!git_oid_equal(&old->row.blob_oid, &row->blob_oid) ||
+        old->row.type != row->type ||
+        old->row.mode != row->mode ||
+        old->row.encrypted != row->encrypted ||
+        strcmp(old->row.storage_path, row->storage_path) != 0 ||
+        strcmp(old->row.profile, row->profile) != 0) {
         return false;
     }
 
     /* owner and group are optional: equal when both are unset, or both
      * set to the same name. */
-    if ((old->owner == NULL) != (row->owner == NULL) ||
-        (old->owner && strcmp(old->owner, row->owner) != 0)) {
+    if ((old->row.owner == NULL) != (row->owner == NULL) ||
+        (old->row.owner && strcmp(old->row.owner, row->owner) != 0)) {
         return false;
     }
-    if ((old->group == NULL) != (row->group == NULL) ||
-        (old->group && strcmp(old->group, row->group) != 0)) {
+    if ((old->row.group == NULL) != (row->group == NULL) ||
+        (old->row.group && strcmp(old->row.group, row->group) != 0)) {
         return false;
     }
 
@@ -1215,21 +1183,20 @@ static bool manifest_row_settled(
  *      mode/owner/group/encrypted directly to the DB. A branch that does
  *      not exist contributes no rows and leaves its heads[] slot zero.
  *   3. Snapshot current virtual_manifest (arena-backed, every lifecycle)
- *      and index it by filesystem_path.
+ *      and index it by filesystem_path; snapshot anchors and index the
+ *      paths that have a record.
  *   4. UPSERT every view row whose snapshot row would change — a settled
- *      row (ACTIVE, witnessed, every VWD column already at the view's
- *      value) is skipped without a probe unless stats are requested for
- *      its profile. One lstat per probed row stamps the witness and
- *      feeds the attributed present/missing fan-out. The SQL UPSERT
- *      preserves the deployment anchor on UPDATE, auto-captures
- *      old_profile when the profile column changes, and unconditionally
- *      writes state=LIFECYCLE_ACTIVE — a path that re-entered the
- *      projection is ACTIVE whatever lifecycle it carried.
+ *      row (ACTIVE, every VWD column already at the view's value) is
+ *      skipped. The SQL UPSERT auto-captures old_profile when the profile
+ *      column changes and unconditionally writes state=LIFECYCLE_ACTIVE
+ *      — a path that re-entered the projection is ACTIVE whatever
+ *      lifecycle it carried. The record is not named: the engine never
+ *      observes disk.
  *   5. Leftover pass over the snapshot: every ACTIVE row not in the view
  *      takes `leftover`; a non-ACTIVE row outside the view is preserved.
  *   5b. Record, for every profile whose branch resolved, the OID the view
  *      was projected from as enabled_profiles.commit_oid.
- *   6. Reclaim the file rows step 5 demoted that were never witnessed —
+ *   6. Reclaim the file rows step 5 demoted that were never observed —
  *      a ghost has no filesystem obligation, so nothing may stage it.
  *   7. Rebuild tracked_directories (sweep, re-project, reclaim).
  */
@@ -1276,10 +1243,13 @@ error_t *manifest_apply_scope(
     error_t *err = NULL;
     string_array_t *enabled = NULL;
     precedence_view_t *new_view = NULL;
-    state_file_entry_t *old_entries = NULL;
+    state_entry_t *old_entries = NULL;
     size_t old_count = 0;
+    anchor_t *anchors = NULL;
+    size_t anchor_count = 0;
     hashmap_t *stats_map = NULL;
     hashmap_t *old_index = NULL;
+    hashmap_t *anchor_index = NULL;
 
     /* Step 1: Read the authoritative scope from state.
      *
@@ -1327,10 +1297,34 @@ error_t *manifest_apply_scope(
     }
     for (size_t i = 0; i < old_count; i++) {
         err = hashmap_set(
-            old_index, old_entries[i].filesystem_path, &old_entries[i]
+            old_index, old_entries[i].row.filesystem_path, &old_entries[i]
         );
         if (err) {
             err = error_wrap(err, "Failed to index manifest snapshot");
+            goto cleanup;
+        }
+    }
+
+    /* The record, indexed by path, for step 5's attribution: a departed
+     * row with a record is staged for cleanup (files_orphaned), one
+     * without is reclaimed by step 6 (files_reclaimed) — the same fact
+     * the reclaim's subquery tests. Keys borrow the snapshot's arena-
+     * backed paths. */
+    err = state_get_all_anchors(state, arena, &anchors, &anchor_count);
+    if (err) {
+        err = error_wrap(err, "Failed to snapshot anchors");
+        goto cleanup;
+    }
+
+    anchor_index = hashmap_borrow(anchor_count > 0 ? anchor_count : 16);
+    if (!anchor_index) {
+        err = ERROR(ERR_MEMORY, "Failed to create anchors snapshot index");
+        goto cleanup;
+    }
+    for (size_t i = 0; i < anchor_count; i++) {
+        err = hashmap_set(anchor_index, anchors[i].filesystem_path, &anchors[i]);
+        if (err) {
+            err = error_wrap(err, "Failed to index anchors snapshot");
             goto cleanup;
         }
     }
@@ -1390,48 +1384,31 @@ error_t *manifest_apply_scope(
      * → "Cache hierarchy and write-time invariant").
      *
      * UPSERT semantics (see state.c::sql_insert):
-     *   - New path: INSERT with state=ACTIVE, deployed_at=0, anchor unset.
+     *   - New path: INSERT with state=ACTIVE.
      *   - Existing path: UPDATE the VWD-cache columns (storage_path,
-     *     profile, blob_oid, type, mode, owner, group, encrypted, state);
-     *     preserve the deployment anchor (deployed_blob_oid, deployed_at,
-     *     stat_*) — the engine is a pure VWD-cache writer, never a
-     *     confirmation event; state_update_anchor is the anchor's sole
-     *     writer, and the capture-from-disk verbs follow the engine with
-     *     it on the rows they won. The CASE on old_profile auto-captures
-     *     the prior profile when the profile column changes, and
-     *     preserves it otherwise; clearing is state_clear_old_profile's,
-     *     once the user has been shown the reassignment.
+     *     profile, blob_oid, type, mode, owner, group, encrypted, state).
+     *     The CASE on old_profile auto-captures the prior profile when
+     *     the profile column changes, and preserves it otherwise;
+     *     clearing is state_clear_old_profile's, once the user has been
+     *     shown the reassignment.
      *   - state column overwritten with LIFECYCLE_ACTIVE unconditionally,
      *     which reactivates any INACTIVE, DELETED or RELEASED row whose
      *     path re-entered the projection (a profile re-enable, a revert,
-     *     a pulled re-add). The anchor survives the round trip, so the
-     *     workspace reads the returning file as clean or [stale] by
-     *     content, never as a fresh deployment.
+     *     a pulled re-add).
+     *   - The record is not named. The engine is a pure VWD-cache writer,
+     *     never a confirmation event: state_anchor is the record's sole
+     *     writer, and the capture-from-disk verbs follow the engine with
+     *     it on the rows they won. A record therefore survives every
+     *     round trip through the lifecycle, so the workspace reads a
+     *     returning file as clean or [stale] by content, never as a
+     *     fresh deployment.
      *
-     * A settled row (manifest_row_settled) is left alone — no probe, no
-     * write — so the writes are the rows that moved, not the view. An
-     * attributed row is still probed when settled: the caller asked how
-     * many of its rows are on disk, and that is the probe's other job.
-     *
-     * One probe per row, and only for rows that need it. It stamps the
-     * observation signal in place before the UPSERT: observed_at answers
-     * "has dotta ever lstat-confirmed this path on disk in scope?", and
-     * the classifier reads it to tell a ghost (never seen, classifies
-     * UNDEPLOYED) from a file the user removed (seen, classifies
-     * DELETED). The UPSERT's CASE keeps any earlier non-zero value, so
-     * repeat projections are idempotent on the column; only a successful
-     * lstat counts — ENOENT and every other failure leave observed_at at
-     * 0, which keeps ghosts out of DELETED classification. The same
-     * probe drives the attributed fan-out (files_present / files_missing
-     * / access_errors — the user-visible "already on disk vs needs
-     * deployment"), and it is NOT a confirmation event: the anchor stays
-     * where it was. The snapshot lookup splits files_claimed into
-     * added / updated / unchanged. */
-    time_t now = time(NULL);
-
+     * A settled row (manifest_row_settled) is left alone — no write — so
+     * the writes are the rows that moved, not the view. The snapshot
+     * lookup splits files_claimed into added / updated / unchanged. */
     for (size_t i = 0; i < new_view->count; i++) {
-        state_file_entry_t *entry = &new_view->entries[i];
-        const state_file_entry_t *old = hashmap_get(
+        const manifest_row_t *entry = &new_view->entries[i];
+        const state_entry_t *old = hashmap_get(
             old_index, entry->filesystem_path
         );
         bool settled = manifest_row_settled(old, entry);
@@ -1452,39 +1429,14 @@ error_t *manifest_apply_scope(
              * workspace's verdict instead. */
             if (!old || old->lifecycle != LIFECYCLE_ACTIVE) {
                 slot->files_added++;
-            } else if (!git_oid_equal(&old->blob_oid, &entry->blob_oid) ||
-                old->type != entry->type || old->mode != entry->mode) {
+            } else if (!git_oid_equal(&old->row.blob_oid, &entry->blob_oid) ||
+                old->row.type != entry->type || old->row.mode != entry->mode) {
                 slot->files_updated++;
-            }
-        }
-
-        /* Nothing to write and nothing to count: the row is not probed. */
-        if (settled && !slot) continue;
-
-        struct stat st;
-        bool present = (lstat(entry->filesystem_path, &st) == 0);
-
-        if (slot) {
-            if (present) {
-                /* On disk; whether it matches the profile blob is
-                 * unverified — workspace divergence analysis
-                 * (status/diff/apply) decides. */
-                slot->files_present++;
-            } else {
-                /* Absent, or inaccessible (permission denied, I/O
-                 * error, …). Degrade gracefully: the row is still
-                 * managed, and the user sees the access error count.
-                 * Counted as missing so files_claimed stays the sum
-                 * of the on-disk and absent fan-outs. */
-                slot->files_missing++;
-                if (errno != ENOENT) slot->access_errors++;
             }
         }
 
         /* Counted, and already at the view's values: nothing to write. */
         if (settled) continue;
-
-        if (present) entry->anchor.observed_at = now;
 
         err = state_add_file(state, entry);
         if (err) {
@@ -1513,18 +1465,19 @@ error_t *manifest_apply_scope(
      * only harvest loss-side stats here (reassignment between
      * precedence winners). */
     for (size_t i = 0; i < old_count; i++) {
-        state_file_entry_t *old = &old_entries[i];
+        const state_entry_t *old = &old_entries[i];
+        const char *old_path = old->row.filesystem_path;
 
-        void *idx_ptr = hashmap_get(new_view->index, old->filesystem_path);
+        void *idx_ptr = hashmap_get(new_view->index, old_path);
 
         if (idx_ptr) {
             /* Still covered. If precedence shifted, attribute the loss
              * to the prior owner (for user-facing "A → B" messaging). */
-            if (stats_map && old->profile) {
+            if (stats_map && old->row.profile) {
                 size_t idx = (size_t) (uintptr_t) idx_ptr - 1;
-                state_file_entry_t *new_entry = &new_view->entries[idx];
-                if (strcmp(old->profile, new_entry->profile) != 0) {
-                    void *p = hashmap_get(stats_map, old->profile);
+                const manifest_row_t *new_entry = &new_view->entries[idx];
+                if (strcmp(old->row.profile, new_entry->profile) != 0) {
+                    void *p = hashmap_get(stats_map, old->row.profile);
                     if (p) {
                         size_t sidx = (size_t) (uintptr_t) p - 1;
                         out_stats[sidx].files_reassigned++;
@@ -1537,27 +1490,27 @@ error_t *manifest_apply_scope(
         /* Not covered. Only an ACTIVE row is this call's departure. */
         if (old->lifecycle != LIFECYCLE_ACTIVE) continue;
 
-        err = state_set_file_state(state, old->filesystem_path, leftover);
+        err = state_set_file_state(state, old_path, leftover);
         if (err) {
             /* Fatal — the caller rolls the transaction back. Left ACTIVE,
              * the row would be analysed against a blob Git may no longer
              * have instead of retiring. */
             err = error_wrap(
-                err, "Failed to mark '%s' %s", old->filesystem_path,
+                err, "Failed to mark '%s' %s", old_path,
                 leftover == LIFECYCLE_RELEASED ? "released" : "inactive"
             );
             goto cleanup;
         }
 
-        if (stats_map && old->profile) {
-            void *p = hashmap_get(stats_map, old->profile);
+        if (stats_map && old->row.profile) {
+            void *p = hashmap_get(stats_map, old->row.profile);
             if (p) {
                 size_t sidx = (size_t) (uintptr_t) p - 1;
-                /* A row never witnessed on disk leaves scope with no
+                /* A row never observed on disk leaves scope with no
                  * filesystem obligation: step 6's reclaim retires it
                  * (same predicate, SQL-enforced) — attribute it as
                  * reclaimed, not staged for removal. */
-                if (old->anchor.observed_at == 0) {
+                if (!hashmap_has(anchor_index, old_path)) {
                     out_stats[sidx].files_reclaimed++;
                 } else {
                     out_stats[sidx].files_orphaned++;
@@ -1586,10 +1539,10 @@ error_t *manifest_apply_scope(
         }
     }
 
-    /* Step 6: Retire the ghosts step 5 demoted. Never witnessed means
+    /* Step 6: Retire the ghosts step 5 demoted. Never observed means
      * no filesystem obligation, so there is nothing for apply to clean —
      * and the attribution above predicted exactly this set, from the
-     * same observed_at test. */
+     * same record-presence test. */
     err = state_reclaim_unmaterialized_files(state);
     if (err) {
         err = error_wrap(err, "Failed to reclaim ghost file rows");
@@ -1598,7 +1551,7 @@ error_t *manifest_apply_scope(
 
     /* Step 7: Rebuild tracked directories. Directory fallback and orphan
      * semantics fall out of it: directories still in any enabled profile's
-     * metadata are reactivated with the new owner; witnessed directories
+     * metadata are reactivated with the new owner; observed directories
      * that left scope remain LIFECYCLE_INACTIVE for apply-time cleanup.
      *
      * Reuses the mount table built above — directories share the same
@@ -1610,11 +1563,12 @@ error_t *manifest_apply_scope(
     }
 
 cleanup:
-    /* old_entries and the view's spine + strings are arena-backed; the
-     * caller's arena (typically ctx->arena) reclaims them at command end.
-     * Only the heap-allocated hashmaps need explicit free. */
+    /* old_entries, anchors and the view's spine + strings are arena-
+     * backed; the caller's arena (typically ctx->arena) reclaims them at
+     * command end. Only the heap-allocated hashmaps need explicit free. */
     if (stats_map) hashmap_free(stats_map, NULL);
     if (old_index) hashmap_free(old_index, NULL);
+    if (anchor_index) hashmap_free(anchor_index, NULL);
     if (new_view && new_view->index) hashmap_free(new_view->index, NULL);
     string_array_free(enabled);
 
@@ -1864,8 +1818,8 @@ error_t *manifest_remove_files(
         /* The post-projection row. Absent means the path was never in
          * the manifest (profile disabled, path filtered) or a ghost the
          * engine just reclaimed — nothing for apply to do either way. */
-        state_file_entry_t *row = NULL;
-        err = state_get_file(state, filesystem_path, &row);
+        state_entry_t *entry = NULL;
+        err = state_get_file(state, filesystem_path, &entry);
         if (err) {
             if (error_code(err) != ERR_NOT_FOUND) {
                 return error_wrap(err, "Failed to read manifest row for %s", storage_path);
@@ -1875,23 +1829,29 @@ error_t *manifest_remove_files(
             continue;
         }
 
-        if (row->lifecycle == LIFECYCLE_ACTIVE) {
+        if (entry->lifecycle == LIFECYCLE_ACTIVE) {
             /* Another profile holds the path. old_profile == removed_profile
              * iff the engine's UPSERT just captured the reassignment away
              * from us; otherwise a higher profile owned it all along and
              * the deployment is untouched. */
-            if (row->old_profile && strcmp(row->old_profile, removed_profile) == 0) {
+            if (entry->old_profile && strcmp(entry->old_profile, removed_profile) == 0) {
                 if (out_fallbacks) (*out_fallbacks)++;
             }
-        } else if (row->lifecycle == LIFECYCLE_RELEASED &&
-            strcmp(row->profile, removed_profile) == 0) {
+        } else if (entry->lifecycle == LIFECYCLE_RELEASED &&
+            strcmp(entry->row.profile, removed_profile) == 0) {
             /* Ours, and nothing backs it now. The row is not left for the
-             * pipeline to discover: the verb knows the user's answer. */
-            err = delete_files
-                ? state_set_file_state(state, filesystem_path, LIFECYCLE_DELETED)
-                : state_remove_file(state, filesystem_path);
+             * pipeline to discover: the verb knows the user's answer. A
+             * release retires the record with the row — the deployed
+             * copy stays, unmanaged; a staged removal keeps it, since
+             * apply measures the prune against it. */
+            if (delete_files) {
+                err = state_set_file_state(state, filesystem_path, LIFECYCLE_DELETED);
+            } else {
+                err = state_remove_file(state, filesystem_path);
+                if (!err) err = state_retire_anchor(state, filesystem_path);
+            }
             if (err) {
-                state_free_entry(row);
+                state_free_entry(entry);
                 return error_wrap(
                     err, "Failed to %s '%s'",
                     delete_files ? "stage removal of" : "release", filesystem_path
@@ -1900,7 +1860,7 @@ error_t *manifest_remove_files(
             if (out_removed) (*out_removed)++;
         }
 
-        state_free_entry(row);
+        state_free_entry(entry);
     }
 
     return NULL;
@@ -1916,18 +1876,18 @@ error_t *manifest_remove_files(
  * LIFECYCLE_RELEASED. Two things only update knows follow, per item:
  *
  *   anchor — a modified or new file was captured FROM disk a moment ago,
- *            so disk is the just-committed blob: the deployment anchor
- *            advances to that blob with a fresh stat, and the next status
- *            takes the fast path. Only the winning profile's row is
- *            anchored; a stat bound to a lower-precedence blob would
- *            poison the winner's fast path.
- *   fate   — a deleted file (WORKSPACE_STATE_DELETED: dotta had witnessed
+ *            so disk is the just-committed blob: the record is anchored
+ *            to that blob with a fresh stat, and the next status takes
+ *            the fast path. Only the winning profile's row is anchored;
+ *            a stat bound to a lower-precedence blob would poison the
+ *            winner's fast path.
+ *   fate   — a deleted file (WORKSPACE_STATE_DELETED: dotta had observed
  *            it and the user removed it) left Git by this commit. A row
  *            the engine reassigned is a fallback for apply to deploy; a
- *            row it released is purged — nothing backs it and nothing is
- *            on disk. No lstat: a file recreated between workspace load
- *            and this call is left on disk unmanaged, which is the
- *            release outcome, never a prune.
+ *            row it released is purged, record and all — nothing backs
+ *            it and nothing is on disk. No lstat: a file recreated
+ *            between workspace load and this call is left on disk
+ *            unmanaged, which is the release outcome, never a prune.
  *
  * Algorithm:
  *   1. manifest_apply_scope(leftover = LIFECYCLE_RELEASED)
@@ -1943,11 +1903,12 @@ error_t *manifest_remove_files(
  *   - the Git commits MUST be complete (branches at their final state)
  *
  * Postconditions (beyond manifest_apply_scope's):
- *   - Captured rows: anchor = (blob_oid, now, fresh stat); an anchor-write
- *     failure is non-fatal — the VWD cache is already projected and the
- *     next status self-heals the anchor through the slow-path CMP_EQUAL
- *     flush
+ *   - Captured rows: anchored to (blob_oid, now, fresh stat); an anchor-
+ *     write failure is non-fatal — the VWD cache is already projected
+ *     and the next status self-heals the record through the slow-path
+ *     CMP_EQUAL flush
  *   - Deleted paths without a fallback are gone from virtual_manifest
+ *     and anchors
  *   - Transaction remains open (caller commits)
  *
  * Error Conditions:
@@ -1998,8 +1959,8 @@ error_t *manifest_update_files(
         /* Directories have no manifest row; the engine rebuilt theirs. */
         if (item->item_kind != PATH_KIND_FILE) continue;
 
-        state_file_entry_t *row = NULL;
-        err = state_get_file(state, item->filesystem_path, &row);
+        state_entry_t *entry = NULL;
+        err = state_get_file(state, item->filesystem_path, &entry);
         if (err) {
             if (error_code(err) != ERR_NOT_FOUND) {
                 return error_wrap(
@@ -2011,18 +1972,21 @@ error_t *manifest_update_files(
         }
 
         if (item->state == WORKSPACE_STATE_DELETED) {
-            if (row && row->lifecycle == LIFECYCLE_ACTIVE) {
+            if (entry && entry->lifecycle == LIFECYCLE_ACTIVE) {
                 /* A lower profile still provides the path: the engine
                  * reassigned the row (old_profile = this profile) and apply
                  * deploys the fallback. A row still under this profile is
                  * not ours to count — the commit did not remove it. */
-                if (strcmp(row->profile, item->profile) != 0) (*out_fallbacks)++;
+                if (strcmp(entry->row.profile, item->profile) != 0) (*out_fallbacks)++;
             } else {
-                if (row && row->lifecycle == LIFECYCLE_RELEASED &&
-                    strcmp(row->profile, item->profile) == 0) {
+                if (entry && entry->lifecycle == LIFECYCLE_RELEASED &&
+                    strcmp(entry->row.profile, item->profile) == 0) {
+                    /* Row and record together: nothing backs the path
+                     * and nothing is on disk. */
                     err = state_remove_file(state, item->filesystem_path);
+                    if (!err) err = state_retire_anchor(state, item->filesystem_path);
                     if (err) {
-                        state_free_entry(row);
+                        state_free_entry(entry);
                         return error_wrap(
                             err, "Failed to purge '%s' after its deletion",
                             item->filesystem_path
@@ -2031,23 +1995,21 @@ error_t *manifest_update_files(
                 }
                 (*out_removed)++;
             }
-        } else if (row && row->lifecycle == LIFECYCLE_ACTIVE &&
-            strcmp(row->profile, item->profile) == 0) {
-            /* CAPTURE: disk is the just-committed blob — advance the anchor
-             * from a fresh probe. Not-found and write failures are both
-             * non-fatal here (see the postconditions). */
-            deployment_anchor_t anchor = capture_anchor_from_disk(
-                item->filesystem_path, &row->blob_oid, now
-            );
-            error_t *anchor_err = state_update_anchor(
-                state, item->filesystem_path, &anchor, NULL
+        } else if (entry && entry->lifecycle == LIFECYCLE_ACTIVE &&
+            strcmp(entry->row.profile, item->profile) == 0) {
+            /* CAPTURE: disk is the just-committed blob — anchor the record
+             * to it from a fresh probe, as an ownership event. Write
+             * failures are non-fatal here (see the postconditions). */
+            stat_cache_t stat = stat_cache_from_path(item->filesystem_path);
+            error_t *anchor_err = state_anchor(
+                state, &entry->row, &stat, now, true, NULL
             );
             if (anchor_err) error_free(anchor_err);
 
             (*out_synced)++;
         }
 
-        if (row) state_free_entry(row);
+        if (entry) state_free_entry(entry);
     }
 
     return NULL;
@@ -2061,8 +2023,8 @@ error_t *manifest_update_files(
  * this add committed has a row under whichever enabled profile wins it.
  * What only add knows: those files were captured FROM disk a moment
  * ago, so for each path whose row this profile won, disk is the
- * just-committed blob and the deployment anchor advances to it with a
- * fresh stat. The next status takes the fast path. A path a higher-
+ * just-committed blob and the record is anchored to it with a fresh
+ * stat. The next status takes the fast path. A path a higher-
  * precedence profile owns receives nothing — its row is the winner's,
  * and a stat bound to this profile's blob would poison the winner's
  * fast path. A path with no row (filtered by .dottaignore, or the
@@ -2081,10 +2043,10 @@ error_t *manifest_update_files(
  *     profile never reaches the manifest layer)
  *
  * Postconditions (beyond manifest_apply_scope's):
- *   - Rows `profile` won for the added paths carry anchor =
+ *   - Rows `profile` won for the added paths are anchored to
  *     (blob_oid, now, fresh stat); an anchor-write failure is non-fatal
  *     — the VWD cache is already projected and the next status self-
- *     heals the anchor through the slow-path CMP_EQUAL flush
+ *     heals the record through the slow-path CMP_EQUAL flush
  *   - Transaction remains open (caller commits via state_save)
  *
  * Error Conditions:
@@ -2127,8 +2089,8 @@ error_t *manifest_add_files(
     for (size_t i = 0; i < filesystem_paths->count; i++) {
         const char *filesystem_path = filesystem_paths->items[i];
 
-        state_file_entry_t *row = NULL;
-        err = state_get_file(state, filesystem_path, &row);
+        state_entry_t *entry = NULL;
+        err = state_get_file(state, filesystem_path, &entry);
         if (err) {
             if (error_code(err) != ERR_NOT_FOUND) {
                 return error_wrap(
@@ -2140,22 +2102,20 @@ error_t *manifest_add_files(
             continue;
         }
 
-        if (row->lifecycle == LIFECYCLE_ACTIVE && strcmp(row->profile, profile) == 0) {
-            /* CAPTURE: disk is the just-committed blob — advance the anchor
-             * from a fresh probe. Write failures are non-fatal (see the
-             * postconditions). */
-            deployment_anchor_t anchor = capture_anchor_from_disk(
-                filesystem_path, &row->blob_oid, now
-            );
-            error_t *anchor_err = state_update_anchor(
-                state, filesystem_path, &anchor, NULL
+        if (entry->lifecycle == LIFECYCLE_ACTIVE && strcmp(entry->row.profile, profile) == 0) {
+            /* CAPTURE: disk is the just-committed blob — anchor the record
+             * to it from a fresh probe, as an ownership event. Write
+             * failures are non-fatal (see the postconditions). */
+            stat_cache_t stat = stat_cache_from_path(filesystem_path);
+            error_t *anchor_err = state_anchor(
+                state, &entry->row, &stat, now, true, NULL
             );
             if (anchor_err) error_free(anchor_err);
 
             (*out_synced)++;
         }
 
-        state_free_entry(row);
+        state_free_entry(entry);
     }
 
     return NULL;

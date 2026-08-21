@@ -13,10 +13,12 @@
 #include <sys/stat.h>
 #include <time.h>
 
+#include "base/arena.h"
 #include "base/args.h"
 #include "base/array.h"
 #include "base/error.h"
 #include "base/gitignore.h"
+#include "base/hashmap.h"
 #include "base/output.h"
 #include "base/string.h"
 #include "core/ignore.h"
@@ -223,6 +225,11 @@ static error_t *collect_tree(
  * @param config Configuration (for encryption policy; can be NULL)
  * @param metadata Metadata collection (captured entry will be added here)
  * @param out Output context
+ * @param out_stat The capture's stat triple — taken from the same lstat
+ *                 as the bytes stored, so the record can bind the
+ *                 committed blob to it (must not be NULL; unset when a
+ *                 symlink could not be stat'd: the next read takes the
+ *                 slow path)
  * @return Error or NULL on success
  */
 static error_t *add_file_to_worktree(
@@ -233,13 +240,17 @@ static error_t *add_file_to_worktree(
     keymgr *keymgr,
     const config_t *config,
     metadata_t *metadata,
-    output_t *out
+    output_t *out,
+    stat_cache_t *out_stat
 ) {
     CHECK_NULL(wt);
     CHECK_NULL(filesystem_path);
     CHECK_NULL(storage_path);
     CHECK_NULL(opts);
     CHECK_NULL(metadata);
+    CHECK_NULL(out_stat);
+
+    *out_stat = STAT_CACHE_UNSET;
 
     error_t *err = NULL;
     metadata_item_t *item = NULL;  /* Will be created from captured metadata */
@@ -347,6 +358,7 @@ static error_t *add_file_to_worktree(
                     filesystem_path
                 );
             }
+            *out_stat = stat_cache_from_stat(&link_stat);
         }
 
         output_info(
@@ -408,6 +420,7 @@ static error_t *add_file_to_worktree(
                 filesystem_path
             );
         }
+        *out_stat = stat_cache_from_stat(&file_stat);
 
         /* Stamp metadata.encrypted from byte truth, NOT from policy.
          * This is the write-time invariant: bytes-on-disk and the
@@ -561,192 +574,56 @@ static error_t *create_commit(
 }
 
 /**
- * Auto-enable newly created profile and record the files it captured
+ * Write the record after a successful add operation
  *
- * Called when `dotta add -p <profile>` creates a NEW profile branch for the first
- * time. Combines profile enabling with the record write in a single atomic transaction.
- *
- * The record work: the files this add captured FROM disk get their
- * record anchored to the just-committed blob from that capture, so the
- * next status hits the fast path, and the directories it tracked are
- * anchored by the same rule — captured, so dotta's. The view is
- * computed, so nothing projects; one build over the enabled set (now
- * including this profile) says which rows this profile won.
+ * Called after Git commit succeeds, for a new profile and an existing one
+ * alike. Anchors the files this add captured: they were captured FROM
+ * disk, so their record is anchored to the just-committed blob with the
+ * stat the capture took, and the next status hits the fast path; the
+ * directories it tracked are anchored by the same rule — captured, so
+ * dotta's. The view is computed, so nothing projects; one build over the
+ * enabled set says which rows this profile won.
  *
  * Algorithm:
- *   1. Enable profile in state with deployment target (makes binding available)
- *   2. Build the mount table from the post-enable row cache
+ *   1. Scope. A new profile is enabled here with its deployment target —
+ *      creating a profile via add enables it, in the same transaction as
+ *      the record. An existing profile has rows in the view only if it
+ *      is already enabled: not enabled is success with nothing to do;
+ *      when a target was given it is re-bound (UPSERT)
+ *   2. Build the mount table from the post-mutation row cache
  *   3. Build the view and anchor the rows this profile won
- *   4. Commit transaction atomically
+ *   4. Commit transaction (state_save)
  *
  * CRITICAL ORDER: Step 1 must precede step 3. The target stored in step 1
  * is what lets the mount table built in step 2 resolve custom/ storage
  * paths for the view. Transaction atomicity ensures: enable + record
  * succeed together or fail together (automatic rollback on error).
  *
- * The branch is new, so an enabled_profiles row can pre-exist only as a
- * leftover of a branch deleted behind it. state_enable_profile is an
- * UPSERT — the row is re-bound to this add's target and keeps its
- * position — and whatever records the old branch left are orphans the
- * next load reads, since the new HEAD does not have them.
+ * A new branch's enabled_profiles row can pre-exist only as a leftover
+ * of a branch deleted behind it. state_enable_profile is an UPSERT — the
+ * row is re-bound to this add's target and keeps its position — and
+ * whatever records the old branch left are orphans the next load reads,
+ * since the new HEAD does not have them.
  *
- * @param repo Git repository (must not be NULL)
- * @param profile Profile to auto-enable (must not be NULL, must exist in Git)
- * @param target Deployment target for custom/ files (can be NULL)
- * @param added_files Filesystem paths that were added (must not be NULL)
- * @param added_dirs Filesystem paths of the directories the walker
- *                   passed through (must not be NULL; a classification
- *                   root among them has no row and is skipped)
- * @param out_updated Output flag: true if successful (must not be NULL)
- * @param out_synced Output: count of files synced (can be NULL)
- * @return Error or NULL on success (non-fatal - caller treats as warning)
- */
-static error_t *auto_enable_and_sync_profile(
-    git_repository *repo,
-    state_t *state,
-    arena_t *arena,
-    const char *profile,
-    const char *target,
-    const string_array_t *added_files,
-    const string_array_t *added_dirs,
-    bool *out_updated,
-    size_t *out_synced
-) {
-    CHECK_NULL(repo);
-    CHECK_NULL(state);
-    CHECK_NULL(arena);
-    CHECK_NULL(profile);
-    CHECK_NULL(added_files);
-    CHECK_NULL(added_dirs);
-    CHECK_NULL(out_updated);
-
-    error_t *err = NULL;
-    size_t synced_count = 0;
-
-    *out_updated = false;
-    if (out_synced) {
-        *out_synced = 0;
-    }
-
-    /* STEP 1: Enable profile in state with deployment target (if provided).
-     *
-     * CRITICAL ORDER: Must enable BEFORE the view is built so target
-     * is available in state for path resolution during the tree walk.
-     * The deployment target is stored in the enabled_profiles table and
-     * read by the mount table built below to resolve custom/ storage paths.
-     *
-     * Transaction Safety: If the record write below fails, the dispatcher's
-     * state_free automatically rolls back this change. */
-    err = state_enable_profile(state, profile, target);
-    if (err) {
-        return error_wrap(err, "Failed to enable profile in state");
-    }
-
-    /* STEP 2: Build a fresh mount table from the post-enable row cache.
-     *
-     * STEP 1 mutated enabled_profiles (a new row + target binding), so
-     * ctx->mounts (built in run_spec from the pre-mutation snapshot) is
-     * stale here. The fresh table is the only handle that classifies
-     * paths under the just-bound target as custom/ for the view built
-     * below. Allocated into ctx->arena, reclaimed at command end. */
-    mount_table_t *post_enable_mounts = NULL;
-    err = profile_build_mount_table(state, arena, &post_enable_mounts);
-    if (err) {
-        return error_wrap(err, "Failed to build mount table after enable");
-    }
-
-    /* STEP 3: Build the view and anchor the rows this profile won.
-     *
-     * Anchor only the rows this profile won: if this profile has lower
-     * precedence than existing enabled profiles, some files are another
-     * profile's rows (synced_count < added_files). Those correctly receive
-     * no anchor — the row is the winner's and so is its record, and any
-     * disk stat captured at this site would misattribute to the winner's
-     * blob_oid. Write failures are non-fatal: disk is the just-committed
-     * blob, and the next status's slow path confirms it. */
-    string_array_t *enabled = NULL;
-    err = state_get_profiles(state, &enabled);
-    if (err) {
-        return error_wrap(err, "Failed to get enabled profiles");
-    }
-
-    manifest_t *manifest = NULL;
-    err = manifest_build(repo, enabled, post_enable_mounts, arena, &manifest);
-    string_array_free(enabled);
-    if (err) {
-        return error_wrap(err, "Failed to build manifest");
-    }
-
-    time_t now = time(NULL);
-    for (size_t i = 0; i < added_files->count; i++) {
-        const manifest_row_t *row = manifest_lookup(manifest, added_files->items[i]);
-        if (!row || strcmp(row->profile, profile) != 0) continue;
-
-        stat_cache_t stat = stat_cache_from_path(row->filesystem_path);
-        error_t *anchor_err = state_anchor(state, row, &stat, now, NULL);
-        if (anchor_err) {
-            error_free(anchor_err);
-            continue;
-        }
-        synced_count++;
-    }
-
-    /* The directories this add tracked, by the same rule: captured from
-     * disk, so dotta's to prune on scope exit — the ownership the gate
-     * asks for, which nothing later grants a directory that was already
-     * there (apply observes those; it anchors only the ones it makes).
-     * Cleanup's emptiness rule guards their contents. No stat triple: a
-     * directory has no content confirmation, as apply records them. */
-    for (size_t i = 0; i < added_dirs->count; i++) {
-        const manifest_row_t *row = manifest_lookup(manifest, added_dirs->items[i]);
-        if (!row || strcmp(row->profile, profile) != 0) continue;
-
-        error_t *anchor_err = state_anchor(state, row, NULL, now, NULL);
-        if (anchor_err) error_free(anchor_err);
-    }
-    manifest_free(manifest);
-
-    /* STEP 4: Commit transaction atomically */
-    err = state_save(repo, state);
-    if (err) {
-        return error_wrap(err, "Failed to commit transaction");
-    }
-
-    /* Success */
-    *out_updated = true;
-    if (out_synced) *out_synced = synced_count;
-
-    return NULL;
-}
-
-/**
- * Write the record after a successful add operation
- *
- * Called after Git commit succeeds. Anchors the added files if the
- * profile is enabled: the files were captured FROM disk, so their record
- * is anchored to the just-committed blob from that capture; the
- * directories it tracked are anchored by the same rule. The view is
- * computed, so nothing projects; one build over the enabled set says
- * which rows this profile won.
- *
- * Algorithm:
- *   1. If profile not enabled: return (dispatcher's state_free rolls back)
- *   2. If target provided: update target in state (UPSERT)
- *   3. Build the mount table from the (possibly post-mutation) row cache
- *   4. Build the view and anchor the rows this profile won
- *   5. Commit transaction (state_save)
- *
- * Target Update:
+ * Target Update (existing profile):
  *   When adding custom/ files to an already-enabled profile, the target
- *   must be stored in state BEFORE the view is built. This is the same
- *   target-before-build ordering enforced by auto_enable_and_sync_profile().
- *   Only called when target is non-NULL to avoid clearing an existing
- *   target when adding home/ or root/ files.
+ *   must be stored in state BEFORE the view is built — the same
+ *   target-before-build ordering as the new profile's enable. Only done
+ *   when target is non-NULL to avoid clearing an existing target when
+ *   adding home/ or root/ files. cmd_add's pre-flight has already
+ *   refused the case where target differs from any existing binding, so
+ *   reaching the UPSERT means either no prior binding or an idempotent
+ *   re-bind to the same value.
  *
  * Ownership:
  *   Captured rows get deployed_at = time(NULL) because ADD captures files
  *   and directories FROM the filesystem. They're already at their target
- *   locations, so deployed_at is set to indicate dotta put them there.
+ *   locations, so deployed_at is set to indicate dotta put them there. A
+ *   captured file whose record another profile's deployment had written
+ *   is taken over — the write rewrites the record under this profile —
+ *   and counted for the receipt: nothing later says so (apply
+ *   acknowledges a reassignment the scope made, not one the user's own
+ *   add made).
  *
  * Error Handling:
  *   - Profile not enabled → rollback transaction, return NULL (success, no update)
@@ -755,20 +632,26 @@ static error_t *auto_enable_and_sync_profile(
  * Non-Fatal Integration:
  *   Caller should treat a record write failure as non-fatal warning.
  *   Git commit already succeeded; the next status reads the committed
- *   blob from Git and confirms the file on its slow path.
+ *   blob from Git and confirms the file on its slow path. A new profile
+ *   that failed to enable is enabled by hand.
  *
  * Performance: one view build + O(N) point lookups, N = files added
  *
- * @param repo Git repository
- * @param profile Profile that files were added to
+ * @param repo Git repository (must not be NULL)
+ * @param profile Profile that files were added to (must not be NULL)
  * @param target Deployment target for custom/ files (can be NULL)
- * @param added_files Filesystem paths that were added
+ * @param profile_was_new This add created the profile's branch: enable it here
+ * @param added_files Filesystem paths that were added (must not be NULL)
+ * @param added_stats The capture's stat triple per added file, aligned
+ *                    with added_files (must not be NULL)
  * @param added_dirs Filesystem paths of the directories the walker
- *                   passed through (a classification root among them
- *                   has no row and is skipped)
+ *                   passed through (must not be NULL; a classification
+ *                   root among them has no row and is skipped)
  * @param out_updated Output flag: true if the record was written (must not be NULL)
  * @param out_synced Output: count of files anchored (can be NULL)
- * @return Error or NULL on success
+ * @param out_taken_over Output: count of those taken over from another
+ *                       profile's deployment (can be NULL)
+ * @return Error or NULL on success (non-fatal - caller treats as warning)
  */
 static error_t *update_manifest_after_add(
     git_repository *repo,
@@ -776,16 +659,20 @@ static error_t *update_manifest_after_add(
     arena_t *arena,
     const char *profile,
     const char *target,
+    bool profile_was_new,
     const string_array_t *added_files,
+    const stat_cache_t *added_stats,
     const string_array_t *added_dirs,
     bool *out_updated,
-    size_t *out_synced
+    size_t *out_synced,
+    size_t *out_taken_over
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(state);
     CHECK_NULL(arena);
     CHECK_NULL(profile);
     CHECK_NULL(added_files);
+    CHECK_NULL(added_stats);
     CHECK_NULL(added_dirs);
     CHECK_NULL(out_updated);
 
@@ -793,51 +680,62 @@ static error_t *update_manifest_after_add(
 
     /* Initialize output */
     *out_updated = false;
+    if (out_synced) *out_synced = 0;
+    if (out_taken_over) *out_taken_over = 0;
 
-    /* STEP 1: Only an enabled profile has rows in the view. Not enabled
-     * is success with nothing to do; the dispatcher's state_free rolls
-     * back the untouched transaction. */
-    if (!state_has_profile(state, profile)) {
-        return NULL;
-    }
-
-    /* STEP 2: Update deployment target in state if adding custom/ files
+    /* STEP 1: Scope.
      *
-     * CRITICAL ORDER: Must store target BEFORE the view is built so the
-     * mount table built below can resolve custom/ storage paths during
-     * the tree walk. Same target-before-build ordering as
-     * auto_enable_and_sync_profile().
+     * CRITICAL ORDER: Must enable (or re-bind) BEFORE the view is built
+     * so target is available in state for path resolution during the
+     * tree walk. The deployment target is stored in the enabled_profiles
+     * table and read by the mount table built below to resolve custom/
+     * storage paths.
      *
-     * Only called when target is non-NULL to avoid clearing an
-     * existing target when adding home/ or root/ files.
-     * state_enable_profile() uses UPSERT — cmd_add's pre-flight has
-     * already refused the case where target differs from any existing
-     * binding, so reaching here means either no prior binding or an
-     * idempotent re-bind to the same value. */
-    if (target) {
+     * Transaction Safety: If the record write below fails, the dispatcher's
+     * state_free automatically rolls back this change. */
+    if (profile_was_new) {
         err = state_enable_profile(state, profile, target);
         if (err) {
-            return error_wrap(err, "Failed to update deployment target for profile");
+            return error_wrap(err, "Failed to enable profile in state");
+        }
+    } else {
+        /* Only an enabled profile has rows in the view. Not enabled is
+         * success with nothing to do; the dispatcher's state_free rolls
+         * back the untouched transaction. */
+        if (!state_has_profile(state, profile)) {
+            return NULL;
+        }
+        if (target) {
+            err = state_enable_profile(state, profile, target);
+            if (err) {
+                return error_wrap(err, "Failed to update deployment target for profile");
+            }
         }
     }
 
-    /* STEP 3: Build a fresh mount table from the (possibly post-mutation)
-     * row cache. When `target` is non-NULL, STEP 2's UPSERT may have
-     * rebound the target, invalidating ctx->mounts' classification for
-     * paths under the new binding. Build unconditionally so the call
-     * shape stays uniform — when no UPSERT ran, the fresh table is
+    /* STEP 2: Build a fresh mount table from the post-mutation row cache.
+     *
+     * STEP 1 may have mutated enabled_profiles (a new row, or a target
+     * re-bound), so ctx->mounts (built in run_spec from the pre-mutation
+     * snapshot) can be stale here: the fresh table is the only handle
+     * that classifies paths under the just-bound target as custom/ for
+     * the view built below. Built unconditionally so the call shape
+     * stays uniform — when nothing was written, the fresh table is
      * equivalent to ctx->mounts (one extra build is the cost of a
-     * uniform site). */
+     * uniform site). Allocated into ctx->arena, reclaimed at command end. */
     mount_table_t *post_mutation_mounts = NULL;
     err = profile_build_mount_table(state, arena, &post_mutation_mounts);
     if (err) {
         return error_wrap(err, "Failed to build mount table after add");
     }
 
-    /* STEP 4: Build the view and anchor the rows this profile won.
+    /* STEP 3: Build the view and anchor the rows this profile won.
      *
-     * Anchor only the rows this profile won: a path a higher profile
-     * owns is its row and its record, and receives nothing here. Write
+     * Anchor only the rows this profile won: if this profile has lower
+     * precedence than existing enabled profiles, some files are another
+     * profile's rows (synced_count < added_files). Those correctly receive
+     * no anchor — the row is the winner's and so is its record, and the
+     * capture's stat would misattribute to the winner's blob_oid. Write
      * failures are non-fatal: disk is the just-committed blob, and the
      * next status's slow path confirms it. */
     string_array_t *enabled = NULL;
@@ -853,19 +751,48 @@ static error_t *update_manifest_after_add(
         return error_wrap(err, "Failed to build manifest");
     }
 
+    /* The record as it stands, indexed by path, so a takeover is known
+     * before the write that rewrites it. */
+    anchor_t *anchors = NULL;
+    size_t anchor_count = 0;
+    err = state_get_all_anchors(state, arena, &anchors, &anchor_count);
+    if (err) {
+        manifest_free(manifest);
+        return error_wrap(err, "Failed to read anchors");
+    }
+
+    hashmap_t *anchor_index = hashmap_borrow(anchor_count > 0 ? anchor_count : 16);
+    if (!anchor_index) {
+        manifest_free(manifest);
+        return ERROR(ERR_MEMORY, "Failed to create anchors index");
+    }
+    for (size_t i = 0; i < anchor_count; i++) {
+        err = hashmap_set(anchor_index, anchors[i].filesystem_path, &anchors[i]);
+        if (err) {
+            hashmap_free(anchor_index, NULL);
+            manifest_free(manifest);
+            return error_wrap(err, "Failed to index anchors");
+        }
+    }
+
     time_t now = time(NULL);
     size_t synced_count = 0;
+    size_t taken_over = 0;
     for (size_t i = 0; i < added_files->count; i++) {
         const manifest_row_t *row = manifest_lookup(manifest, added_files->items[i]);
         if (!row || strcmp(row->profile, profile) != 0) continue;
 
-        stat_cache_t stat = stat_cache_from_path(row->filesystem_path);
-        error_t *anchor_err = state_anchor(state, row, &stat, now, NULL);
+        error_t *anchor_err = state_anchor(state, row, &added_stats[i], now, NULL);
         if (anchor_err) {
             error_free(anchor_err);
             continue;
         }
         synced_count++;
+
+        const anchor_t *was = hashmap_get(anchor_index, row->filesystem_path);
+        if (was && was->deployed_at > 0 && strcmp(was->profile, profile) != 0) {
+            taken_over++;
+        }
     }
 
     /* The directories this add tracked, by the same rule: captured from
@@ -881,9 +808,10 @@ static error_t *update_manifest_after_add(
         error_t *anchor_err = state_anchor(state, row, NULL, now, NULL);
         if (anchor_err) error_free(anchor_err);
     }
+    hashmap_free(anchor_index, NULL);
     manifest_free(manifest);
 
-    /* STEP 5: Commit transaction. state is borrowed from the dispatcher:
+    /* STEP 4: Commit transaction. state is borrowed from the dispatcher:
      * if state_save succeeds the transaction is committed; otherwise the
      * dispatcher's state_free rolls it back. */
     err = state_save(repo, state);
@@ -894,6 +822,7 @@ static error_t *update_manifest_after_add(
     /* Success */
     *out_updated = true;
     if (out_synced) *out_synced = synced_count;
+    if (out_taken_over) *out_taken_over = taken_over;
 
     return NULL;
 }
@@ -920,6 +849,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     worktree_handle_t *wt = NULL;
     string_array_t *all_files = NULL;
     string_array_t *all_directories = NULL;
+    stat_cache_t *added_stats = NULL;    /* The capture's stat triple per file in all_files (arena) */
     size_t added_count = 0;
     bool profile_was_new = false;
     metadata_t *metadata = NULL;
@@ -1420,7 +1350,16 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     /* Single-pass: add files and capture metadata inline.
      * Files come from the walker output — already absolute and existing,
      * never equal to a mount root. ROOT outcome is impossible by
-     * construction; surface as ERR_INTERNAL if the invariant ever drifts. */
+     * construction; surface as ERR_INTERNAL if the invariant ever drifts.
+     * Each capture's stat triple is kept, aligned with all_files, for the
+     * record: it is the stat of the bytes committed, which a later lstat
+     * could not promise. */
+    added_stats = arena_calloc(ctx->arena, all_files->count, sizeof(*added_stats));
+    if (!added_stats) {
+        err = ERROR(ERR_MEMORY, "Failed to allocate capture stats");
+        goto cleanup;
+    }
+
     for (size_t i = 0; i < all_files->count; i++) {
         const char *file_path = all_files->items[i];
 
@@ -1453,7 +1392,8 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
          * ARCHITECTURE: add_file_to_worktree handles both operations atomically,
          * sharing stat() data between content and metadata layers to eliminate TOCTOU */
         err = add_file_to_worktree(
-            wt, file_path, storage_path, opts, ctx->keymgr, config, metadata, out
+            wt, file_path, storage_path, opts, ctx->keymgr, config, metadata, out,
+            &added_stats[i]
         );
         if (err) {
             err = error_wrap(err, "Failed to add file '%s'", file_path);
@@ -1592,7 +1532,14 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      * update.
      *
      * For NEW profiles: Auto-enable provides intuitive UX (creating via 'add' enables it).
+     * UX Decision: Creating a profile via 'add' should enable it automatically.
+     * This matches user expectations: "I just added a file, it should be active."
      * For EXISTING profiles: Standard behavior (anchor only if already enabled).
+     *
+     * Both end in the same loop: one view build says which rows this
+     * profile won, and add's contribution is the anchor — the files were
+     * just captured from disk, so the anchor is stamped from that capture
+     * rather than left for a later status to fill in.
      *
      * Non-fatal: If the record write fails, Git commit still succeeded. A
      * new profile that failed to enable is enabled by hand; the next
@@ -1600,49 +1547,25 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      */
     bool manifest_updated = false;
     size_t manifest_synced_count = 0;
+    size_t manifest_taken_over = 0;
 
-    if (profile_was_new) {
-        /* AUTO-ENABLE NEW PROFILE
-         *
-         * UX Decision: Creating a profile via 'add' should enable it automatically.
-         * This matches user expectations: "I just added a file, it should be active."
-         *
-         * Both paths end in the same loop: one view build says which rows
-         * this profile won, and add's contribution is the anchor — the
-         * files were just captured from disk, so the anchor is stamped
-         * from that capture rather than left for a later status to fill in.
-         */
-        error_t *enable_err = auto_enable_and_sync_profile(
-            repo, ctx->state, ctx->arena, opts->profile, opts->target,
-            all_files, all_directories, &manifest_updated, &manifest_synced_count
-        );
-
-        if (enable_err) {
+    error_t *manifest_err = update_manifest_after_add(
+        repo, ctx->state, ctx->arena, opts->profile, opts->target, profile_was_new,
+        all_files, added_stats, all_directories,
+        &manifest_updated, &manifest_synced_count, &manifest_taken_over
+    );
+    if (manifest_err) {
+        if (profile_was_new) {
             /* Non-fatal: Git commit succeeded, user can manually enable later */
             output_warning(
                 out, OUTPUT_NORMAL, "Failed to auto-enable profile: %s",
-                error_message(enable_err)
+                error_message(manifest_err)
             );
             output_hint(
                 out, OUTPUT_NORMAL, "Run 'dotta profile enable %s' to enable manually",
                 opts->profile
             );
-            error_free(enable_err);
-            manifest_updated = false;
-            manifest_synced_count = 0;
-        }
-    } else {
-        /* EXISTING PROFILE - Standard record write
-         *
-         * Checks if profile is enabled and anchors if so.
-         * If not enabled, writes nothing (user must explicitly enable).
-         */
-        error_t *manifest_err = update_manifest_after_add(
-            repo, ctx->state, ctx->arena, opts->profile, opts->target,
-            all_files, all_directories, &manifest_updated, &manifest_synced_count
-        );
-
-        if (manifest_err) {
+        } else {
             /* Non-fatal: Git commit succeeded */
             output_warning(
                 out, OUTPUT_NORMAL, "Failed to update the record: %s",
@@ -1651,10 +1574,11 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
             output_info(
                 out, OUTPUT_NORMAL, "Files committed to Git successfully"
             );
-            error_free(manifest_err);
-            manifest_updated = false;
-            manifest_synced_count = 0;
         }
+        error_free(manifest_err);
+        manifest_updated = false;
+        manifest_synced_count = 0;
+        manifest_taken_over = 0;
     }
 
     /* Cleanup worktree before post-processing */
@@ -1701,54 +1625,39 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         /* Manifest status feedback */
         if (manifest_updated) {
             if (added_count > 0) {
-                /* Files were added */
-                if (profile_was_new) {
-                    /* New profile - show sync results with precedence awareness */
-                    if (manifest_synced_count == added_count) {
-                        output_info(
-                            out, OUTPUT_NORMAL,
-                            "Manifest updated (%zu file%s marked as deployed)",
-                            manifest_synced_count, manifest_synced_count == 1 ? "" : "s"
-                        );
-                    } else {
-                        output_info(
-                            out, OUTPUT_NORMAL,
-                            "Manifest updated (%zu/%zu file%s marked as deployed)",
-                            manifest_synced_count, added_count, added_count == 1 ? "" : "s"
-                        );
-
-                        if (manifest_synced_count < added_count) {
-                            size_t skipped = added_count - manifest_synced_count;
-                            output_info(
-                                out, OUTPUT_NORMAL,
-                                "Note: %zu file%s overridden by higher-precedence profiles",
-                                skipped, skipped == 1 ? "" : "s"
-                            );
-                        }
-                    }
+                /* Files were added - show sync results with precedence
+                 * awareness: the rows a higher profile owns got no
+                 * anchor; the ones another profile's deployment had
+                 * written were taken over. */
+                if (manifest_synced_count == added_count) {
+                    output_info(
+                        out, OUTPUT_NORMAL,
+                        "Manifest updated (%zu file%s marked as deployed)",
+                        manifest_synced_count, manifest_synced_count == 1 ? "" : "s"
+                    );
                 } else {
+                    output_info(
+                        out, OUTPUT_NORMAL,
+                        "Manifest updated (%zu/%zu file%s marked as deployed)",
+                        manifest_synced_count, added_count, added_count == 1 ? "" : "s"
+                    );
+
+                    size_t skipped = added_count - manifest_synced_count;
+                    output_info(
+                        out, OUTPUT_NORMAL,
+                        "Note: %zu file%s overridden by higher-precedence profiles",
+                        skipped, skipped == 1 ? "" : "s"
+                    );
+                }
+                if (manifest_taken_over > 0) {
+                    output_info(
+                        out, OUTPUT_NORMAL,
+                        "Note: %zu file%s taken over from other profiles",
+                        manifest_taken_over, manifest_taken_over == 1 ? "" : "s"
+                    );
+                }
+                if (!profile_was_new) {
                     /* Existing enabled profile */
-                    if (manifest_synced_count == added_count) {
-                        output_info(
-                            out, OUTPUT_NORMAL,
-                            "Manifest updated (%zu file%s marked as deployed)",
-                            manifest_synced_count, manifest_synced_count == 1 ? "" : "s"
-                        );
-                    } else {
-                        output_info(
-                            out, OUTPUT_NORMAL,
-                            "Manifest updated (%zu/%zu file%s marked as deployed)",
-                            manifest_synced_count, added_count, added_count == 1 ? "" : "s"
-                        );
-                        if (manifest_synced_count < added_count) {
-                            size_t skipped = added_count - manifest_synced_count;
-                            output_info(
-                                out, OUTPUT_NORMAL,
-                                "Note: %zu file%s overridden by higher-precedence profiles",
-                                skipped, skipped == 1 ? "" : "s"
-                            );
-                        }
-                    }
                     output_hint(
                         out, OUTPUT_NORMAL,
                         "Files captured from filesystem (already deployed)"

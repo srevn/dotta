@@ -225,6 +225,60 @@ typedef struct {
 } file_copy_result_t;
 
 /**
+ * One path an update commit captured from disk
+ *
+ * A file's triple is the one the copy step took from the bytes it
+ * committed (content_store_file_to_worktree's single lstat), so the
+ * record binds the blob to the stat that matched it — not to a later
+ * lstat that could see an edit made since. A directory's is unset: a
+ * directory has no content confirmation, and its record carries none.
+ */
+typedef struct {
+    const workspace_item_t *item;   /* The captured item (borrowed, workspace lifetime) */
+    stat_cache_t stat;              /* The copy's triple; STAT_CACHE_UNSET for a directory */
+} update_capture_t;
+
+/**
+ * What one profile's update commit did, path by path
+ *
+ * Filled by the steps that do the work — the copy step for files, the
+ * metadata step for directories and for the directory entries it prunes
+ * as redundant — and read back by the commit message and by the record
+ * loop (update_manifest_after_update), so both follow the commit and
+ * nothing else: an item a step skipped (a file missing from disk, a
+ * directory that changed type) lands in no list, is not named, and gets
+ * no record write.
+ *
+ * Items are borrowed (workspace lifetime); the pruned keys are storage
+ * paths the metadata step copies out, resolved through the mount table
+ * by the record loop — the same route remove's record loop takes.
+ *
+ * Memory: the caller zero-fills the struct; update_profile allocates
+ * `captured` (sized to its item count, an upper bound); release with
+ * update_commits_free.
+ */
+typedef struct {
+    const char *profile;            /* Borrowed from the item group */
+    update_capture_t *captured;     /* Files copied and directory claims captured */
+    size_t captured_count;
+    ptr_array_t deleted;            /* Items whose deletion the commit recorded (const workspace_item_t *) */
+    string_array_t pruned;          /* Directory entries dropped as redundant (storage paths) */
+} update_commit_t;
+
+/**
+ * Release an array of commits — the bookkeeping, never the items.
+ */
+static void update_commits_free(update_commit_t *commits, size_t count) {
+    if (!commits) return;
+    for (size_t i = 0; i < count; i++) {
+        free(commits[i].captured);
+        ptr_array_deinit(&commits[i].deleted);
+        string_array_deinit(&commits[i].pruned);
+    }
+    free(commits);
+}
+
+/**
  * Check if a workspace item's state/divergence qualifies for update
  *
  * Pure predicate — no side effects, no filtering by path/profile/exclusion.
@@ -245,6 +299,17 @@ static bool is_update_candidate(
              * old whether or not a mode bit also differs. [stale] alone is
              * apply's to resolve; [modified] [stale] is the user's. */
             if (item->divergence & DIVERGENCE_STALE) {
+                return false;
+            }
+            /* A tracked directory whose path is now a file or a symlink is
+             * never captured through the type change (the metadata step
+             * refuses it: a symlink would stat as its target and launder the
+             * target's attributes into metadata). Resolution is explicit —
+             * apply --force replaces it, remove untracks it — so it is not a
+             * candidate, and the preview does not promise an update the
+             * executor would refuse. A file's type change (file ↔ symlink)
+             * is captured as the new kind and stays a candidate. */
+            if (item->item_kind == PATH_KIND_DIRECTORY && (item->divergence & DIVERGENCE_TYPE)) {
                 return false;
             }
             /* DEPLOYED + NONE = clean, exclude */
@@ -291,6 +356,9 @@ static bool is_update_candidate(
  * - DEPLOYED + STALE (Git moved since deployment: apply's work when alone,
  *   the user's conflict next to CONTENT — never committed; cmd_update counts
  *   these and says so)
+ * - DEPLOYED + TYPE on a directory (a file or symlink where a tracked
+ *   directory should be: apply --force's or remove's to resolve; counted
+ *   and said the same way)
  *
  * CLI FILTERS APPLIED:
  * - opts->files: Only specific files (if provided)
@@ -450,6 +518,8 @@ static error_t *group_items_by_profile(
  * @param items Array of workspace items to update (must not be NULL)
  * @param item_count Number of items
  * @param copy_results Per-item copy results indexed by item position (can be NULL)
+ * @param commit The commit's bookkeeping: receives the directory claims
+ *               captured and the entries pruned (must not be NULL)
  * @param opts Update options (must not be NULL)
  * @param out Output context (can be NULL)
  * @return Error or NULL on success
@@ -460,12 +530,14 @@ static error_t *update_metadata_for_profile(
     const workspace_item_t **items,
     size_t item_count,
     const file_copy_result_t *copy_results,
+    update_commit_t *commit,
     const cmd_update_options_t *opts,
     output_t *out
 ) {
     CHECK_NULL(wt);
     CHECK_NULL(index);
     CHECK_NULL(items);
+    CHECK_NULL(commit);
     CHECK_NULL(opts);
 
     /* Early exit if nothing to update */
@@ -697,6 +769,10 @@ static error_t *update_metadata_for_profile(
                 }
 
                 updated_dir_count++;
+                commit->captured[commit->captured_count++] = (update_capture_t){
+                    .item = item,
+                    .stat = STAT_CACHE_UNSET
+                };
 
                 if (owner || group) {
                     output_info(
@@ -735,18 +811,19 @@ static error_t *update_metadata_for_profile(
      * items, which omit unelevated symlinks. Only entries that carry
      * no actionable information are pruned — custom-attribute entries
      * survive as potential empty-dir intent. Without this, the view
-     * would keep claiming the orphaned entry indefinitely. */
-    size_t pruned_dirs = 0;
-    err = metadata_prune_directories(metadata, index, &pruned_dirs);
+     * would keep claiming the orphaned entry indefinitely. The keys go
+     * on the commit's bookkeeping: the entry leaves the view by this
+     * commit, so its record is this verb's to retire. */
+    err = metadata_prune_directories(metadata, index, &commit->pruned);
     if (err) {
         metadata_free(metadata);
         return error_wrap(err, "Failed to prune redundant directories");
     }
 
-    if (pruned_dirs > 0) {
+    if (commit->pruned.count > 0) {
         output_info(
             out, OUTPUT_VERBOSE, "  Pruned %zu redundant directory entr%s",
-            pruned_dirs, pruned_dirs == 1 ? "y" : "ies"
+            commit->pruned.count, commit->pruned.count == 1 ? "y" : "ies"
         );
     }
 
@@ -788,6 +865,8 @@ static error_t *update_metadata_for_profile(
  * @param opts Update options (must not be NULL)
  * @param out Output context (must not be NULL)
  * @param config Configuration (can be NULL)
+ * @param commit The commit's bookkeeping, zero-filled by the caller;
+ *               filled here and by the metadata step (must not be NULL)
  * @param out_processed Output: number of items committed (must not be NULL)
  * @return Error or NULL on success
  */
@@ -800,6 +879,7 @@ static error_t *update_profile(
     output_t *out,
     const config_t *config,
     keymgr *ctx_keymgr,
+    update_commit_t *commit,
     size_t *out_processed
 ) {
     CHECK_NULL(wt);
@@ -807,9 +887,11 @@ static error_t *update_profile(
     CHECK_NULL(items);
     CHECK_NULL(opts);
     CHECK_NULL(out);
+    CHECK_NULL(commit);
     CHECK_NULL(out_processed);
 
     *out_processed = 0;
+    commit->profile = profile;
 
     if (item_count == 0) {
         return NULL;
@@ -857,6 +939,14 @@ static error_t *update_profile(
         goto cleanup;
     }
 
+    /* The capture list can hold every item; the steps below fill it
+     * with the ones that landed. */
+    commit->captured = calloc(item_count, sizeof(update_capture_t));
+    if (!commit->captured) {
+        err = ERROR(ERR_MEMORY, "Failed to allocate capture list");
+        goto cleanup;
+    }
+
     /* Get worktree index for staging */
     err = worktree_get_index(wt, &index);
     if (err) {
@@ -880,6 +970,10 @@ static error_t *update_profile(
                     int git_err = git_index_remove_bypath(index, item->storage_path);
                     if (git_err < 0) {
                         err = error_from_git(git_err);
+                        goto cleanup;
+                    }
+                    err = ptr_array_push(&commit->deleted, item);
+                    if (err) {
                         goto cleanup;
                     }
                     continue;
@@ -936,6 +1030,10 @@ static error_t *update_profile(
                 }
 
                 copy_results[i].copied = true;
+                commit->captured[commit->captured_count++] = (update_capture_t){
+                    .item = item,
+                    .stat = stat_cache_from_stat(&copy_results[i].stat)
+                };
 
                 /* Stage file */
                 int git_err = git_index_add_bypath(index, item->storage_path);
@@ -957,7 +1055,7 @@ static error_t *update_profile(
 
     /* Update metadata for both files and directories */
     err = update_metadata_for_profile(
-        wt, index, items, item_count, copy_results, opts, out
+        wt, index, items, item_count, copy_results, commit, opts, out
     );
     if (err) {
         err = error_wrap(err, "Failed to update metadata");
@@ -966,34 +1064,29 @@ static error_t *update_profile(
 
     /* Note: metadata function already wrote the index */
 
-    /* Build array of storage paths for commit message */
-    storage_paths = malloc(item_count * sizeof(char *));
+    /* Skip commit if nothing was processed. The pruned entries are the
+     * metadata step's housekeeping and ride along with what did land. */
+    size_t path_count = commit->captured_count + commit->deleted.count;
+    if (path_count == 0) {
+        goto cleanup;
+    }
+
+    /* Build array of storage paths for commit message: what the commit
+     * captured and what it let go — the bookkeeping, so an item a step
+     * skipped is not named. */
+    storage_paths = malloc(path_count * sizeof(char *));
     if (!storage_paths) {
         err = ERROR(ERR_MEMORY, "Failed to allocate storage paths array");
         goto cleanup;
     }
 
-    size_t path_count = 0;
-    for (size_t i = 0; i < item_count; i++) {
-        const workspace_item_t *item = items[i];
-
-        if (item->item_kind == PATH_KIND_FILE) {
-            /* Include deleted files (staged for removal) */
-            if (item->state == WORKSPACE_STATE_DELETED) {
-                storage_paths[path_count++] = item->storage_path;
-            } else if (copy_results && copy_results[i].copied) {
-                /* Include files that were copied to worktree */
-                storage_paths[path_count++] = item->storage_path;
-            }
-            /* Skip files not processed (e.g., encryption-divergence on missing) */
-        } else if (item->item_kind == PATH_KIND_DIRECTORY) {
-            storage_paths[path_count++] = item->storage_path;
-        }
+    size_t named = 0;
+    for (size_t i = 0; i < commit->captured_count; i++) {
+        storage_paths[named++] = commit->captured[i].item->storage_path;
     }
-
-    /* Skip commit if nothing was processed */
-    if (path_count == 0) {
-        goto cleanup;
+    for (size_t i = 0; i < commit->deleted.count; i++) {
+        const workspace_item_t *item = commit->deleted.items[i];
+        storage_paths[named++] = item->storage_path;
     }
 
     /* Build commit message context */
@@ -1033,48 +1126,17 @@ cleanup:
 }
 
 /**
- * Flatten items_by_profile hashmap into single slice
- *
- * Converts hashmap<profile → ptr_array_t*> into a flat workspace_items_t.
- * Items are borrowed references (valid while hashmap lives); entries field
- * is heap-allocated, caller frees with free((void *) out_items->entries).
- */
-static error_t *flatten_items_to_array(
-    const hashmap_t *items_by_profile,
-    workspace_items_t *out_items
-) {
-    CHECK_NULL(items_by_profile);
-    CHECK_NULL(out_items);
-
-    *out_items = (workspace_items_t){ 0 };
-
-    ptr_array_t flat PTR_ARRAY_AUTO = { 0 };
-    hashmap_iter_t iter;
-    hashmap_iter_init(&iter, items_by_profile);
-    void *value;
-
-    while (hashmap_iter_next(&iter, NULL, &value)) {
-        ptr_array_t *arr = value;
-        for (size_t i = 0; i < arr->count; i++) {
-            RETURN_IF_ERROR(ptr_array_push(&flat, arr->items[i]));
-        }
-    }
-
-    out_items->entries = (const workspace_item_t *const *)
-        ptr_array_steal(&flat, &out_items->count);
-
-    return NULL;
-}
-
-/**
  * Write the record after a successful update operation
  *
  * Called after ALL profile updates succeed. The view is computed, so
  * nothing projects; what update writes is the one thing only it knows
- * about the items it committed. A modified or new file was captured FROM
- * disk, so for the row its profile won in the post-commit view the record
- * advances to the just-committed blob with a fresh stat (the next status
- * takes the fast path). A deleted path left Git by this commit: with no
+ * about the paths it committed — read off each commit's own bookkeeping
+ * (update_commit_t), so a path a step skipped gets no record write. A
+ * modified or new file was captured FROM disk, so for the row its profile
+ * won in the post-commit view the record advances to the just-committed
+ * blob with the stat the copy took (the next status takes the fast path).
+ * A path the commit let go — a deleted item, or a directory entry the
+ * metadata step pruned as redundant — left Git by this commit: with no
  * row left at the path its record retires (nothing backs it now); with a
  * lower profile's row at the path it is a fallback — the record stays and
  * reads [reassigned] until apply deploys it. The rule "anchor only the
@@ -1087,18 +1149,17 @@ static error_t *flatten_items_to_array(
  *
  * Algorithm:
  *   1. Begin write transaction on caller's handle
- *   2. Flatten items_by_profile into a single slice
- *   3. Build the post-commit view once; one lookup per item
- *   4. Commit transaction
- *   5. Set *out_updated = true
+ *   2. Build the post-commit view once; one lookup per committed path
+ *   3. Commit transaction
+ *   4. Set *out_updated = true
  *
  * Preconditions:
  *   - All profile updates already succeeded (Git commits done)
  *   - state is a live handle (non-NULL, DB open) owned by caller
- *   - items_by_profile contains profile → ptr_array_t mappings
+ *   - commits is what update_execute_for_all_profiles returned
  *
  * Postconditions:
- *   - The record written for the committed items as above
+ *   - The record written for the committed paths as above
  *   - Transaction committed or rolled back atomically; state handle left clean
  *   - out_updated flag reflects whether the record was written
  *
@@ -1108,14 +1169,14 @@ static error_t *flatten_items_to_array(
  *     so the caller can continue to post-update hook and cleanup deterministically
  *   - Caller should warn user
  *
- * Performance: one view build + O(N) point lookups, N = updated items
+ * Performance: one view build + O(N) point lookups, N = committed paths
  *
  * @param repo Git repository (must not be NULL)
  * @param state Caller's state handle (must not be NULL, must have open DB)
  * @param arena Arena for the view (must not be NULL)
  * @param mounts Per-machine mount table (must not be NULL)
- * @param items_by_profile Hashmap: profile → ptr_array_t* (must not be NULL)
- * @param opts Update options for verbose flag (must not be NULL)
+ * @param commits One commit's bookkeeping per profile (may be NULL when count is 0)
+ * @param commit_count Number of commits
  * @param out Output context for verbose logging (can be NULL)
  * @param out_updated Output flag: true if the record was written (must not be NULL)
  * @return Error or NULL on success
@@ -1125,8 +1186,8 @@ static error_t *update_manifest_after_update(
     state_t *state,
     arena_t *arena,
     const mount_table_t *mounts,
-    const hashmap_t *items_by_profile,
-    const cmd_update_options_t *opts,
+    const update_commit_t *commits,
+    size_t commit_count,
     output_t *out,
     bool *out_updated
 ) {
@@ -1134,12 +1195,9 @@ static error_t *update_manifest_after_update(
     CHECK_NULL(state);
     CHECK_NULL(arena);
     CHECK_NULL(mounts);
-    CHECK_NULL(items_by_profile);
-    CHECK_NULL(opts);
     CHECK_NULL(out_updated);
 
     error_t *err = NULL;
-    workspace_items_t all_items = { 0 };
     string_array_t *enabled = NULL;
     manifest_t *manifest = NULL;
     bool in_transaction = false;
@@ -1154,14 +1212,8 @@ static error_t *update_manifest_after_update(
     }
     in_transaction = true;
 
-    /* Flatten items_by_profile into single slice */
-    err = flatten_items_to_array(items_by_profile, &all_items);
-    if (err) {
-        goto cleanup;
-    }
-
-    if (all_items.count == 0) {
-        /* No items to sync - commit the no-op transaction */
+    if (commit_count == 0) {
+        /* No commits to sync - commit the no-op transaction */
         goto commit;
     }
 
@@ -1177,39 +1229,67 @@ static error_t *update_manifest_after_update(
         goto cleanup;
     }
 
-    /* One lookup per item, both kinds; the three arms of the header doc.
-     * A deleted path and a fallback receive no anchor: there is no disk
-     * confirmation for a deleted path, and a fallback's disk content is
-     * what this profile's blob was, not the fallback blob. */
+    /* One lookup per committed path, both kinds; the arms of the header
+     * doc. A path let go and a fallback receive no anchor: there is no
+     * disk confirmation for a deleted path, and a fallback's disk content
+     * is what this profile's blob was, not the fallback blob. */
     time_t now = time(NULL);
     size_t synced = 0, removed = 0, fallbacks = 0;
 
-    for (size_t i = 0; i < all_items.count; i++) {
-        const workspace_item_t *item = all_items.entries[i];
-        const manifest_row_t *row = manifest_lookup(manifest, item->filesystem_path);
+    for (size_t c = 0; c < commit_count; c++) {
+        const update_commit_t *commit = &commits[c];
 
-        if (item->state == WORKSPACE_STATE_DELETED) {
+        for (size_t i = 0; i < commit->captured_count; i++) {
+            const update_capture_t *capture = &commit->captured[i];
+            const manifest_row_t *row = manifest_lookup(
+                manifest, capture->item->filesystem_path
+            );
+            if (!row || strcmp(row->profile, commit->profile) != 0) continue;
+
+            err = state_anchor(
+                state, row,
+                row->type == PATH_TYPE_DIRECTORY ? NULL : &capture->stat,
+                now, NULL
+            );
+            if (err) goto cleanup;
+            synced++;
+        }
+
+        /* What the commit let go: the deleted items by their own path,
+         * the pruned entries by the path this profile deploys them at
+         * (UNBOUND names nothing on this machine: nothing to release). */
+        for (size_t i = 0; i < commit->deleted.count; i++) {
+            const workspace_item_t *item = commit->deleted.items[i];
+            const manifest_row_t *row = manifest_lookup(manifest, item->filesystem_path);
+
             if (!row) {
                 err = state_retire_anchor(state, item->filesystem_path);
                 if (err) goto cleanup;
                 removed++;
-            } else if (strcmp(row->profile, item->profile) != 0) {
+            } else if (strcmp(row->profile, commit->profile) != 0) {
                 fallbacks++;
             }
             /* else: still this profile's row — the commit did not remove
              * it; not ours to count. */
-            continue;
         }
 
-        if (row && strcmp(row->profile, item->profile) == 0) {
-            if (item->item_kind == PATH_KIND_DIRECTORY) {
-                err = state_anchor(state, row, NULL, now, NULL);
-            } else {
-                stat_cache_t stat = stat_cache_from_path(row->filesystem_path);
-                err = state_anchor(state, row, &stat, now, NULL);
-            }
+        for (size_t i = 0; i < commit->pruned.count; i++) {
+            mount_resolve_outcome_t outcome;
+            const char *fs_path = NULL;
+            err = mount_resolve(
+                mounts, commit->profile, commit->pruned.items[i], arena, &outcome, &fs_path
+            );
             if (err) goto cleanup;
-            synced++;
+            if (outcome == MOUNT_RESOLVE_UNBOUND) continue;
+
+            const manifest_row_t *row = manifest_lookup(manifest, fs_path);
+            if (!row) {
+                err = state_retire_anchor(state, fs_path);
+                if (err) goto cleanup;
+                removed++;
+            } else if (strcmp(row->profile, commit->profile) != 0) {
+                fallbacks++;
+            }
         }
     }
 
@@ -1240,7 +1320,6 @@ cleanup:
     }
     manifest_free(manifest);
     if (enabled) string_array_free(enabled);
-    free((void *) all_items.entries);  /* Free array, not items (borrowed) */
 
     return err;
 }
@@ -1260,7 +1339,9 @@ cleanup:
  * @param out Output context (must not be NULL)
  * @param config Configuration (can be NULL)
  * @param total_updated Output: total items updated across all profiles (must not be NULL)
- * @param out_by_profile Output: hashmap of items grouped by profile (must not be NULL, freed by caller)
+ * @param out_commits Output: one commit's bookkeeping per profile group
+ *                    (must not be NULL; caller frees with update_commits_free)
+ * @param out_commit_count Output: number of entries in out_commits (must not be NULL)
  * @return Error or NULL on success
  */
 static error_t *update_execute_for_all_profiles(
@@ -1272,17 +1353,20 @@ static error_t *update_execute_for_all_profiles(
     const config_t *config,
     keymgr *ctx_keymgr,
     size_t *total_updated,
-    hashmap_t **out_by_profile
+    update_commit_t **out_commits,
+    size_t *out_commit_count
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(update_items);
     CHECK_NULL(opts);
     CHECK_NULL(out);
     CHECK_NULL(total_updated);
-    CHECK_NULL(out_by_profile);
+    CHECK_NULL(out_commits);
+    CHECK_NULL(out_commit_count);
 
     *total_updated = 0;
-    *out_by_profile = NULL;
+    *out_commits = NULL;
+    *out_commit_count = 0;
 
     if (update_count == 0) {
         return NULL;
@@ -1291,6 +1375,8 @@ static error_t *update_execute_for_all_profiles(
     /* Initialize all resources to NULL for goto cleanup */
     worktree_handle_t *wt = NULL;
     hashmap_t *by_profile = NULL;
+    update_commit_t *commits = NULL;
+    size_t commit_count = 0;
     error_t *err = NULL;
 
     /* Create shared temporary worktree for all profile updates */
@@ -1303,6 +1389,13 @@ static error_t *update_execute_for_all_profiles(
     err = group_items_by_profile(update_items, update_count, &by_profile);
     if (err) {
         err = error_wrap(err, "Failed to group items by profile");
+        goto cleanup;
+    }
+
+    /* One commit's bookkeeping per group, zero-filled for update_profile */
+    commits = calloc(hashmap_size(by_profile), sizeof(update_commit_t));
+    if (!commits) {
+        err = ERROR(ERR_MEMORY, "Failed to allocate commit bookkeeping");
         goto cleanup;
     }
 
@@ -1341,8 +1434,9 @@ static error_t *update_execute_for_all_profiles(
         size_t processed = 0;
         err = update_profile(
             wt, profile, (const workspace_item_t **) array->items, array->count,
-            opts, out, config, ctx_keymgr, &processed
+            opts, out, config, ctx_keymgr, &commits[commit_count], &processed
         );
+        commit_count++;
 
         if (err) {
             err = error_wrap(
@@ -1363,16 +1457,14 @@ static error_t *update_execute_for_all_profiles(
     }
 
 cleanup:
-    /* Pass by_profile to caller (for manifest sync), or free on error */
-    if (by_profile) {
-        if (err) {
-            /* Error path: free resources */
-            hashmap_free(by_profile, ptr_array_free_cb);
-        } else {
-            /* Success path: pass to caller */
-            *out_by_profile = by_profile;
-        }
+    /* Pass the commits to the caller (for the record), or free on error */
+    if (err) {
+        update_commits_free(commits, commit_count);
+    } else {
+        *out_commits = commits;
+        *out_commit_count = commit_count;
     }
+    if (by_profile) hashmap_free(by_profile, ptr_array_free_cb);
     if (wt) worktree_cleanup(&wt);
 
     return err;
@@ -1844,7 +1936,7 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
 
     /* Build operation scope
      *
-     *   scope_enabled — persistent VWD scope (passed to workspace_load).
+     *   scope_enabled — the persistent enabled set (passed to workspace_load).
      *   scope_active  — update operation face (hook context string).
      *   scope_paths / scope_is_excluded — per-item gates in filter_items_for_update
      */
@@ -1951,25 +2043,40 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
      * itself, and above the prompt. Same scope triplet as the filter.
      * [stale] alone is apply's to resolve; [modified] [stale] is a
      * conflict no dotta verb resolves toward disk, so its line must not
-     * send the user to a plain apply that preflight will refuse. */
+     * send the user to a plain apply that preflight will refuse. A
+     * directory with [type] is not captured through the change
+     * (is_update_candidate); its line names the two verbs that resolve it. */
     size_t all_count = 0;
     const workspace_item_t *all = workspace_get_all_diverged(ws, &all_count);
-    size_t stale_skipped = 0; size_t conflict_skipped = 0;
+    size_t stale_skipped = 0; size_t conflict_skipped = 0; size_t retyped_skipped = 0;
 
     for (size_t i = 0; i < all_count; i++) {
         const workspace_item_t *item = &all[i];
 
-        if (item->state != WORKSPACE_STATE_DEPLOYED || !(item->divergence & DIVERGENCE_STALE) ||
+        if (item->state != WORKSPACE_STATE_DEPLOYED ||
             !scope_accepts_entry(scope, item->profile, item->storage_path, item->item_kind)) {
             continue;
         }
-        if (item->divergence & DIVERGENCE_CONTENT) {
+        if (item->item_kind == PATH_KIND_DIRECTORY && (item->divergence & DIVERGENCE_TYPE)) {
+            retyped_skipped++;
+        } else if (!(item->divergence & DIVERGENCE_STALE)) {
+            continue;
+        } else if (item->divergence & DIVERGENCE_CONTENT) {
             conflict_skipped++;
         } else {
             stale_skipped++;
         }
     }
 
+    if (retyped_skipped > 0) {
+        output_info(
+            out, OUTPUT_NORMAL,
+            "%zu director%s skipped: tracked as directory but type changed on disk — "
+            "'dotta apply --force' replaces %s, 'dotta remove' untracks %s",
+            retyped_skipped, retyped_skipped == 1 ? "y" : "ies",
+            retyped_skipped == 1 ? "it" : "them", retyped_skipped == 1 ? "it" : "them"
+        );
+    }
     if (stale_skipped > 0) {
         output_info(
             out, OUTPUT_NORMAL,
@@ -2103,20 +2210,14 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
 
     /* Execute profile updates. Filtered to operation scope. ctx->keymgr
      * is borrowed by update_profile inside per-profile iteration. */
-    hashmap_t *by_profile = NULL;
+    update_commit_t *commits = NULL;
+    size_t updated_profile_count = 0;
     err = update_execute_for_all_profiles(
         repo, (const workspace_item_t **) update_items.entries,
         update_items.count, opts, out, config, ctx->keymgr,
-        &total_updated, &by_profile
+        &total_updated, &commits, &updated_profile_count
     );
-
-    /* Capture count before by_profile is freed */
-    size_t updated_profile_count = by_profile ? hashmap_size(by_profile) : 0;
-
     if (err) {
-        if (by_profile) {
-            hashmap_free(by_profile, ptr_array_free_cb);
-        }
         goto cleanup;
     }
 
@@ -2131,15 +2232,12 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
      */
     bool manifest_updated = false;
     error_t *manifest_err = update_manifest_after_update(
-        repo, state, ctx->arena, ctx->mounts, by_profile, opts, out,
+        repo, state, ctx->arena, ctx->mounts, commits, updated_profile_count, out,
         &manifest_updated
     );
 
-    /* Free by_profile hashmap after manifest sync */
-    if (by_profile) {
-        hashmap_free(by_profile, ptr_array_free_cb);
-        by_profile = NULL;
-    }
+    /* The bookkeeping has served the record */
+    update_commits_free(commits, updated_profile_count);
 
     if (manifest_err) {
         /* Non-fatal: commits succeeded but the record write failed. The

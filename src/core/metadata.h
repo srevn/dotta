@@ -350,18 +350,20 @@ error_t *metadata_remove_item(
  * commit (additions staged, deletions removed) and before
  * metadata_save_to_worktree, so the prune sees the commit's exact
  * tracked set and lands in the same commit as the triggering removals.
- * *out_pruned_count == 0 indicates nothing was pruned (caller may use
- * this to skip a no-op rewrite).
+ * The keys pruned are appended to `pruned`, in item order: the entry
+ * leaves the view by the verb's own commit, so the verb retires its
+ * record the way it does a path it removed. Nothing appended means
+ * nothing was pruned (caller may use this to skip a no-op rewrite).
  *
  * @param metadata Metadata collection (must not be NULL; mutated in place)
  * @param index Post-edit worktree index (must not be NULL)
- * @param out_pruned_count Output: number of entries pruned (must not be NULL)
+ * @param pruned Receives the keys pruned, appended (must not be NULL)
  * @return Error or NULL on success
  */
 error_t *metadata_prune_directories(
     metadata_t *metadata,
     git_index *index,
-    size_t *out_pruned_count
+    string_array_t *pruned
 );
 
 /**

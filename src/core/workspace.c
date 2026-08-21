@@ -558,12 +558,14 @@ static error_t *analyze_file_divergence(
     bool on_filesystem;
 
     if (lstat(fs_path, &initial_stat) != 0) {
-        if (errno != ENOENT) {
-            /* Inaccessible, not absent (EACCES, ELOOP, ENOTDIR, EIO).
-             * Same policy as the orphan path below: assume the path is
-             * there and record the uncertainty, rather than failing the
-             * load and taking every other managed path down with one
-             * unreadable one.
+        if (errno != ENOENT && errno != ENOTDIR) {
+            /* Inaccessible, not absent (EACCES, ELOOP, EIO). ENOTDIR is
+             * absence: a component above the path is not a directory, so
+             * nothing can be at the path either — deploy's lstat_occupant
+             * reads it the same way. Same policy as the orphan path
+             * below: assume the path is there and record the
+             * uncertainty, rather than failing the load and taking every
+             * other managed path down with one unreadable one.
              *
              * DEPLOYED is the load-bearing half — absence must never be
              * inferred from a failure to look, or update commits a
@@ -1525,6 +1527,8 @@ static error_t *analyze_orphans(workspace_t *ws) {
 
         if (lstat(fs_path, &orphan_stat) != 0) {
             /* ENOENT: the orphan was already removed by hand — a reclaim.
+             * ENOTDIR: a component above it is not a directory, so the
+             * path cannot be there either — the same reclaim.
              *
              * Anything else (EACCES, EIO, ELOOP, …): assume the path exists
              * but is inaccessible. We lack valid stat data, so a file's
@@ -1532,7 +1536,7 @@ static error_t *analyze_orphans(workspace_t *ws) {
              * - Status shows [orphaned, unverified] (user visibility)
              * - Apply skips removal (can't verify what we can't stat)
              */
-            on_filesystem = (errno != ENOENT);
+            on_filesystem = (errno != ENOENT && errno != ENOTDIR);
             memset(&orphan_stat, 0, sizeof(orphan_stat));
         } else {
             on_filesystem = true;
@@ -2069,12 +2073,14 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
          *
          * Use lstat() for both existence and type checking:
          * - ENOENT: Directory truly deleted
+         * - ENOTDIR: A component above it is not a directory — nothing
+         *   can be at the path either; as absent as ENOENT
          * - Other errno: Inaccessible — state undeterminable, not absent
          * - Success + !S_ISDIR: Type changed (file, symlink - including broken ones)
          * - Success + S_ISDIR: Actual directory, check metadata  */
         struct stat dir_stat;
         if (lstat(filesystem_path, &dir_stat) != 0) {
-            if (errno == ENOENT) {
+            if (errno == ENOENT || errno == ENOTDIR) {
                 /* Absent path: record-gated classification. An observed
                  * directory was deleted by the user (update propagates the
                  * removal); a never-observed one is a ghost — apply's job

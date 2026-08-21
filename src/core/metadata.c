@@ -662,13 +662,11 @@ error_t *metadata_remove_item(
 error_t *metadata_prune_directories(
     metadata_t *metadata,
     git_index *index,
-    size_t *out_pruned_count
+    string_array_t *pruned
 ) {
     CHECK_NULL(metadata);
     CHECK_NULL(index);
-    CHECK_NULL(out_pruned_count);
-
-    *out_pruned_count = 0;
+    CHECK_NULL(pruned);
 
     size_t dir_count = 0;
     const metadata_item_t **directories = metadata_get_items_by_kind(
@@ -679,12 +677,10 @@ error_t *metadata_prune_directories(
         return NULL;
     }
 
+    /* The keys this call appends start here; the removal pass below
+     * walks only them. */
     error_t *err = NULL;
-    string_array_t *prune_keys = string_array_new(0);
-    if (!prune_keys) {
-        err = ERROR(ERR_MEMORY, "Failed to allocate prune set");
-        goto cleanup;
-    }
+    const size_t first = pruned->count;
 
     const size_t entry_count = git_index_entrycount(index);
 
@@ -716,7 +712,7 @@ error_t *metadata_prune_directories(
         }
 
         if (!anchored) {
-            err = string_array_push(prune_keys, dir_key);
+            err = string_array_push(pruned, dir_key);
             if (err) {
                 err = error_wrap(err, "Failed to record redundant directory");
                 goto cleanup;
@@ -724,21 +720,18 @@ error_t *metadata_prune_directories(
         }
     }
 
-    for (size_t i = 0; i < prune_keys->count; i++) {
-        err = metadata_remove_item(metadata, prune_keys->items[i]);
+    for (size_t i = first; i < pruned->count; i++) {
+        err = metadata_remove_item(metadata, pruned->items[i]);
         if (err) {
             err = error_wrap(
                 err, "Failed to prune redundant directory '%s'",
-                prune_keys->items[i]
+                pruned->items[i]
             );
             goto cleanup;
         }
     }
 
-    *out_pruned_count = prune_keys->count;
-
 cleanup:
-    string_array_free(prune_keys);
     free(directories);
 
     return err;

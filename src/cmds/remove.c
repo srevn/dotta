@@ -662,14 +662,19 @@ static error_t *create_removal_commit(
  *
  * Loads existing metadata from worktree, removes entries for deleted files,
  * and saves the updated metadata back. The metadata.json file is then staged.
+ * The directory entries pruned as redundant on the way are appended to
+ * `pruned` (storage paths): they leave the view by this commit too, and
+ * the record loop after it retires them beside the removed files.
  */
 static error_t *cleanup_metadata(
     worktree_handle_t *wt,
     const string_array_t *removed_paths,
+    string_array_t *pruned,
     output_t *out
 ) {
     CHECK_NULL(wt);
     CHECK_NULL(removed_paths);
+    CHECK_NULL(pruned);
 
     const char *worktree_path = worktree_get_path(wt);
     if (!worktree_path) {
@@ -736,19 +741,18 @@ static error_t *cleanup_metadata(
         return error_wrap(err, "Failed to get worktree index");
     }
 
-    size_t pruned_dirs = 0;
-    err = metadata_prune_directories(metadata, index, &pruned_dirs);
+    err = metadata_prune_directories(metadata, index, pruned);
     git_index_free(index);
     if (err) {
         metadata_free(metadata);
         return error_wrap(err, "Failed to prune redundant directories");
     }
 
-    if (pruned_dirs > 0) {
-        removed_count += pruned_dirs;
+    if (pruned->count > 0) {
+        removed_count += pruned->count;
         output_info(
-            out, OUTPUT_VERBOSE, "Removed %zu orphaned directory metadata entr%s",
-            pruned_dirs, pruned_dirs == 1 ? "y" : "ies"
+            out, OUTPUT_VERBOSE, "Pruned %zu redundant directory entr%s",
+            pruned->count, pruned->count == 1 ? "y" : "ies"
         );
     }
 
@@ -774,8 +778,8 @@ static error_t *cleanup_metadata(
 
     if (removed_count > 0) {
         output_info(
-            out, OUTPUT_VERBOSE, "Cleaned up metadata for %zu file(s)",
-            removed_count
+            out, OUTPUT_VERBOSE, "Cleaned up %zu metadata entr%s",
+            removed_count, removed_count == 1 ? "y" : "ies"
         );
     }
 
@@ -809,6 +813,7 @@ static error_t *remove_files_from_profile(
     size_t multi_profile_count = 0;
     worktree_handle_t *wt = NULL;
     string_array_t *removed_paths = NULL;
+    string_array_t pruned_dirs = { 0 };    /* Directory entries the metadata step pruned (storage paths) */
     string_array_t *enabled = NULL;
     manifest_t *before = NULL;
     manifest_t *after = NULL;
@@ -1011,7 +1016,7 @@ static error_t *remove_files_from_profile(
     }
 
     /* Clean up metadata for actually-removed files only */
-    err = cleanup_metadata(wt, removed_paths, out);
+    err = cleanup_metadata(wt, removed_paths, &pruned_dirs, out);
     if (err) {
         err = error_wrap(err, "Failed to clean up metadata");
         goto cleanup;
@@ -1053,7 +1058,10 @@ static error_t *remove_files_from_profile(
      * gets the fate the user chose, if dotta has a record of it at all
      * (never seen here: nothing to release or prune): --delete-files
      * orders the deployed copy pruned at the next apply; the default
-     * retires the record — released from management now.
+     * retires the record — released from management now. The directory
+     * entries the metadata step pruned as redundant left the view by the
+     * same commit and take the same route: an owned directory is pruned
+     * under cleanup's emptiness rule, or released.
      *
      * Non-fatal throughout: Git succeeded and stands. A record this block
      * fails to write is an orphan the next apply reads, asks Git about,
@@ -1090,33 +1098,36 @@ static error_t *remove_files_from_profile(
                 );
             }
 
-            for (size_t i = 0; !manifest_err && i < removed_paths->count; i++) {
-                const char *storage_path = removed_paths->items[i];
+            const string_array_t *let_go[] = { removed_paths, &pruned_dirs };
+            for (size_t b = 0; !manifest_err && b < sizeof(let_go) / sizeof(let_go[0]); b++) {
+                for (size_t i = 0; !manifest_err && i < let_go[b]->count; i++) {
+                    const char *storage_path = let_go[b]->items[i];
 
-                /* The path as this profile deploys it. UNBOUND (custom/
-                 * under a profile with no target here) names nothing on
-                 * this machine: nothing to release. */
-                mount_resolve_outcome_t outcome;
-                const char *fs_path = NULL;
-                manifest_err = mount_resolve(
-                    mounts, opts->profile, storage_path, arena, &outcome, &fs_path
-                );
-                if (manifest_err || outcome == MOUNT_RESOLVE_UNBOUND) continue;
+                    /* The path as this profile deploys it. UNBOUND (custom/
+                     * under a profile with no target here) names nothing on
+                     * this machine: nothing to release. */
+                    mount_resolve_outcome_t outcome;
+                    const char *fs_path = NULL;
+                    manifest_err = mount_resolve(
+                        mounts, opts->profile, storage_path, arena, &outcome, &fs_path
+                    );
+                    if (manifest_err || outcome == MOUNT_RESOLVE_UNBOUND) continue;
 
-                const manifest_row_t *was = manifest_lookup(before, fs_path);
-                if (!was || strcmp(was->profile, opts->profile) != 0) continue;
+                    const manifest_row_t *was = manifest_lookup(before, fs_path);
+                    if (!was || strcmp(was->profile, opts->profile) != 0) continue;
 
-                if (manifest_lookup(after, fs_path)) {
-                    manifest_fallback_count++;
-                    continue;
+                    if (manifest_lookup(after, fs_path)) {
+                        manifest_fallback_count++;
+                        continue;
+                    }
+
+                    if (!hashmap_has(anchor_index, fs_path)) continue;
+
+                    manifest_err = opts->delete_files
+                        ? state_order_prune(state, fs_path)
+                        : state_retire_anchor(state, fs_path);
+                    if (!manifest_err) manifest_removed_count++;
                 }
-
-                if (!hashmap_has(anchor_index, fs_path)) continue;
-
-                manifest_err = opts->delete_files
-                    ? state_order_prune(state, fs_path)
-                    : state_retire_anchor(state, fs_path);
-                if (!manifest_err) manifest_removed_count++;
             }
 
             if (manifest_err) {
@@ -1190,6 +1201,7 @@ cleanup:
     manifest_free(after);
     manifest_free(before);
     if (enabled) string_array_free(enabled);
+    string_array_deinit(&pruned_dirs);
     if (removed_paths) string_array_free(removed_paths);
     if (wt) worktree_cleanup(&wt);
     if (other_profiles) free_multi_profile_tracking(

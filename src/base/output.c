@@ -538,6 +538,8 @@ void output_colored(
 void output_error(const output_t *ctx, const char *fmt, ...) {
     if (!ctx || !fmt) return;
 
+    fflush(ctx->stream);
+
     styled_fputs(
         ctx->stderr_color_enabled, stderr,
         "{bold;red}Error:{reset} "
@@ -561,16 +563,16 @@ void output_warning(
     if (ctx->verbosity < min_level) return;
 
     styled_fputs(
-        ctx->stderr_color_enabled, stderr,
+        ctx->color_enabled, ctx->stream,
         "{bold;yellow}Warning:{reset} "
     );
 
     va_list args;
     va_start(args, fmt);
-    styled_vfprintf(ctx->stderr_color_enabled, stderr, fmt, args);
+    styled_vfprintf(ctx->color_enabled, ctx->stream, fmt, args);
     va_end(args);
 
-    fputc('\n', stderr);
+    fputc('\n', ctx->stream);
 }
 
 void output_success(
@@ -803,6 +805,10 @@ bool output_confirm(
 ) {
     if (!ctx || !message) return false;
 
+    /* Finish the report's line: the preview this asks about is the line
+     * above, and the question must not land inside it. */
+    fflush(ctx->stream);
+
     FILE *prompt = stderr;
     const char *suffix = default_value ? " [Y/n] " : " [y/N] ";
 
@@ -824,6 +830,8 @@ bool output_confirm_or_default(
     if (!ctx || !message) return false;
 
     if (!isatty(STDIN_FILENO)) {
+        fflush(ctx->stream);
+
         if (non_interactive_default) {
             styled_fputs(
                 ctx->stderr_color_enabled, stderr,
@@ -860,6 +868,9 @@ bool output_confirm_destructive(
     if (!ctx || !message) return false;
     if (force_flag) return true;
     if (!confirm_destructive) return true;
+
+    /* Finish the report's line before crossing to stderr */
+    fflush(ctx->stream);
 
     if (!isatty(STDIN_FILENO)) {
         styled_fputs(

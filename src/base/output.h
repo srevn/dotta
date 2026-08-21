@@ -53,7 +53,7 @@ typedef struct output {
     output_verbosity_t verbosity;
     output_color_mode_t color_mode;
     bool color_enabled;         /* Computed from color_mode for stream */
-    bool stderr_color_enabled;  /* Computed from color_mode for stderr */
+    bool stderr_color_enabled;  /* Computed from color_mode for stderr (errors, prompts) */
     bool has_content;           /* Section/list rendered — drives automatic spacing */
 } output_t;
 
@@ -190,12 +190,18 @@ void output_colored(
 
 /**
  * Print error message
+ *
+ * The terminal failure: stderr, no verbosity gate, and the report is
+ * flushed first so it lands after the partial run it ends.
  */
 void output_error(const output_t *ctx, const char *fmt, ...)
 __attribute__((format(printf, 2, 3)));
 
 /**
  * Print warning message
+ *
+ * A line of the report, prefixed "Warning: " — same destination and same
+ * color decision as the section, list or hint it belongs with.
  */
 void output_warning(
     const output_t *ctx,

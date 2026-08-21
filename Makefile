@@ -367,14 +367,14 @@ FORMAT_FIND := src include \( -name "*.c" -o -name "*.h" \)
 .PHONY: format
 format:
 	@echo "Formatting code..."
-	@find $(FORMAT_FIND) | xargs -I{} uncrustify -c $(UNCRUSTIFY_CFG) -l C --no-backup {}
+	@find $(FORMAT_FIND) -print0 | xargs -0 uncrustify -c $(UNCRUSTIFY_CFG) -l C --no-backup -q
 
 # Check formatting without modifying files
 .PHONY: format-check
 format-check:
-	@find $(FORMAT_FIND) | xargs -I{} uncrustify -c $(UNCRUSTIFY_CFG) -l C --check {} 2>&1 | grep FAIL; \
-	if [ $$? -eq 0 ]; then echo "Formatting issues found. Run 'make format' to fix."; exit 1; \
-	else echo "All files formatted correctly."; fi
+	@find $(FORMAT_FIND) -print0 | xargs -0 uncrustify -c $(UNCRUSTIFY_CFG) -l C --check -q \
+	  || { echo "Formatting issues found. Run 'make format' to fix."; exit 1; }
+	@echo "All files formatted correctly."
 
 # Static analysis with clang-tidy (requires compile_commands.json)
 TIDY ?= clang-tidy

@@ -34,7 +34,9 @@
 #include <time.h>
 #include <types.h>
 
-#include "core/row.h"
+/* The record is written from a row of the view (core/manifest.h); the
+ * writers take it by pointer, so the row is named here and defined there. */
+typedef struct manifest_row manifest_row_t;
 
 /**
  * Stat cache — fast-path field of an anchor

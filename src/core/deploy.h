@@ -39,10 +39,10 @@
 #include <git2.h>
 #include <types.h>
 
-#include "core/row.h"
+#include "core/manifest.h"
 
 /* Forward declarations. Plan and result buckets hold manifest rows
- * (manifest_row_t, core/row.h) — consumers project them with
+ * (manifest_row_t, core/manifest.h) — consumers project them with
  * manifest_rows_view. */
 typedef struct content_cache content_cache_t;
 typedef struct workspace workspace_t;

@@ -24,6 +24,7 @@
 #include "base/arena.h"
 #include "base/array.h"
 #include "base/error.h"
+#include "core/manifest.h"
 #include "sys/filesystem.h"
 
 /* Schema version - must match database */

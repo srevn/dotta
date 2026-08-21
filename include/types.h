@@ -121,7 +121,7 @@ typedef enum {
  * Path type — what stands at a managed path
  *
  * The one type axis for a manifest row and for the record dotta keeps of
- * it (core/row.h, core/state.h). The first three are the Git filemodes a
+ * it (core/manifest.h, core/state.h). The first three are the Git filemodes a
  * blob can carry; the fourth is a metadata-only container dotta creates
  * and converges, claimed through a profile's metadata.json rather than its
  * tree. Kind is coarse and derived from it (path_type_kind); it is never

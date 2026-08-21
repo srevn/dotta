@@ -1,5 +1,5 @@
 /**
- * state.c - SQLite-based deployment state tracking implementation
+ * state.c - The enabled profiles and the record (SQLite) — implementation
  *
  * Uses SQLite for performance and scalability.
  *
@@ -216,21 +216,7 @@ static error_t *initialize_schema(sqlite3 *db) {
         ") STRICT;"
 
         "CREATE INDEX IF NOT EXISTS idx_anchors_profile "
-        "ON anchors(profile);"
-
-        /* Debugging windows: the storage is one table because the
-         * invariant "one path, one kind" wants one key; the window is per
-         * kind because that is how it is read. Never read by dotta. */
-        "CREATE VIEW IF NOT EXISTS file_anchors AS "
-        "  SELECT filesystem_path, storage_path, profile, type, mode, owner, \"group\", "
-        "         hex(blob_oid) AS blob_oid, stat_mtime, stat_size, stat_ino, "
-        "         observed_at, deployed_at, prune_ordered "
-        "  FROM anchors WHERE type != 'directory';"
-
-        "CREATE VIEW IF NOT EXISTS directory_anchors AS "
-        "  SELECT filesystem_path, storage_path, profile, mode, owner, \"group\", "
-        "         observed_at, deployed_at, prune_ordered "
-        "  FROM anchors WHERE type = 'directory';";
+        "ON anchors(profile);";
 
     /* Execute schema SQL */
     rc = sqlite3_exec(db, schema_sql, NULL, NULL, &errmsg);
@@ -503,11 +489,11 @@ static error_t *prepare_statements(state_t *state) {
     int rc;
 
     /* Insert profile (used in state_reorder_profiles) */
-    const char *sql_profile =
+    const char *sql_insert_profile =
         "INSERT INTO enabled_profiles (position, name, enabled_at, target) "
         "VALUES (?, ?, ?, ?);";
 
-    rc = sqlite3_prepare_v2(state->db, sql_profile, -1, &state->stmt_insert_profile, NULL);
+    rc = sqlite3_prepare_v2(state->db, sql_insert_profile, -1, &state->stmt_insert_profile, NULL);
     if (rc != SQLITE_OK) {
         finalize_statements(state);
         return sqlite_error(state->db, "Failed to prepare profile statement");

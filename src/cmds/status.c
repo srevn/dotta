@@ -63,7 +63,7 @@ static void display_enabled_profiles(
 
             profile_file_count++;
 
-            const anchor_t *anchor = workspace_anchor_of(ws, file->filesystem_path);
+            const anchor_t *anchor = workspace_get_anchor(ws, file->filesystem_path);
             if (anchor && anchor->deployed_at > profile_deploy_time) {
                 profile_deploy_time = anchor->deployed_at;
             }
@@ -177,7 +177,7 @@ static void display_manifest(
 /**
  * Display workspace status
  *
- * Shows the consistency between profile state, deployment state, and filesystem.
+ * Shows the consistency between the view, the record and the filesystem.
  * Organized into actionable sections (git-like structure).
  *
  * When a profile filter is active, the status line is scoped to the filtered

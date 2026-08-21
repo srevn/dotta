@@ -109,12 +109,11 @@ static void print_manifest_enable_stats(
  *
  * Reports loss-side attribution for one disabled profile from the diff of
  * the view before the disable against the view after it: reassigned
- * (picked up by a fallback profile) + departed_owned (left the view with
+ * (picked up by a fallback profile) + orphans.owned (left the view with
  * a record dotta owns — apply prunes the deployed copy) +
- * departed_observed (left the view with a record dotta never owned —
- * apply releases it, the copy stays). A departure with no record
- * (departed_unseen) is not reported: nothing was ever seen at the path,
- * so nothing pends for apply.
+ * orphans.observed (left the view with a record dotta never owned —
+ * apply releases it, the copy stays). A departure with no record is not
+ * counted: nothing was ever seen at the path, so nothing pends for apply.
  */
 static void print_manifest_disable_stats(
     const output_t *out,
@@ -123,7 +122,7 @@ static void print_manifest_disable_stats(
 ) {
     if (!stats) return;
 
-    size_t total = stats->reassigned + stats->departed_owned + stats->departed_observed;
+    size_t total = stats->reassigned + stats->orphans.owned + stats->orphans.observed;
     if (total == 0) return;
 
     if (output_is_verbose(out)) {
@@ -145,31 +144,31 @@ static void print_manifest_disable_stats(
             );
         }
 
-        if (stats->departed_owned > 0) {
+        if (stats->orphans.owned > 0) {
             output_styled(
                 out, OUTPUT_VERBOSE,
                 "    - {red}%zu{reset} file%s without fallback (will be pruned)\n",
-                stats->departed_owned,
-                stats->departed_owned == 1 ? "" : "s"
+                stats->orphans.owned,
+                stats->orphans.owned == 1 ? "" : "s"
             );
         }
 
-        if (stats->departed_observed > 0) {
+        if (stats->orphans.observed > 0) {
             output_styled(
                 out, OUTPUT_VERBOSE,
                 "    - {cyan}%zu{reset} file%s never deployed here (left alone)\n",
-                stats->departed_observed,
-                stats->departed_observed == 1 ? "" : "s"
+                stats->orphans.observed,
+                stats->orphans.observed == 1 ? "" : "s"
             );
         }
 
         output_newline(out, OUTPUT_VERBOSE);
     } else {
         /* Compact summary */
-        if (stats->departed_owned > 0) {
+        if (stats->orphans.owned > 0) {
             output_print(
                 out, OUTPUT_NORMAL, "  Staged %zu file%s for removal\n",
-                stats->departed_owned, stats->departed_owned == 1 ? "" : "s"
+                stats->orphans.owned, stats->orphans.owned == 1 ? "" : "s"
             );
         }
 
@@ -1103,7 +1102,7 @@ cleanup:
  *   4. The view after — a fresh mount table and manifest_build over the
  *      post-disable set; manifest_diff attributes the transition to the
  *      disabled profiles, so loss-side stats (reassigned /
- *      departed_owned / departed_observed) land in the right slot.
+ *      orphans.owned / orphans.observed) land in the right slot.
  *   5. Per-profile feedback — iterate the validated targets to preserve
  *      the existing per-profile UX.
  */

@@ -40,8 +40,11 @@
 #include <types.h>
 
 #include "core/metadata.h"
-#include "core/state.h"
 #include "infra/mount.h"
+
+/* manifest_diff reads the record (core/state.h) by pointer; the anchor is
+ * named here and defined there, as state.h names the row. */
+typedef struct anchor anchor_t;
 
 /**
  * Manifest row — what should stand at a managed path, and from whom
@@ -75,7 +78,7 @@ typedef struct manifest_row {
     /* What stands there */
     path_type_t type;           /* FILE, SYMLINK, EXECUTABLE or DIRECTORY */
     git_oid blob_oid;           /* Blob the composed profile layer expects on disk (zero for DIRECTORY) */
-    mode_t mode;                /* Permission mode (e.g., 0644), 0 if no metadata claim */
+    mode_t mode;                /* Permission mode: the filemode's default (0644 / 0755, 0 for a link) or the metadata claim */
     char *owner;                /* Owner username (root/ paths only, can be NULL) */
     char *group;                /* Group name (root/ paths only, can be NULL) */
     bool encrypted;             /* Encryption flag (false for DIRECTORY) */
@@ -336,9 +339,10 @@ typedef struct {
 
     /* Loss-side */
     size_t reassigned;           /* Paths `before` had under this profile that `after` gives another */
-    size_t departed_owned;       /* Paths `before` had under this profile, gone from `after`, with a record dotta owns (deployed_at > 0) */
-    size_t departed_observed;    /* … with a record dotta never owned */
-    size_t departed_unseen;      /* … with no record: nothing for apply to do */
+    struct {
+        size_t owned;            /* … with a record dotta owns (deployed_at > 0): apply prunes the copy, or releases it if Git let go */
+        size_t observed;         /* … with a record dotta never owned: apply releases it, the copy stays */
+    } orphans;                   /* Paths `before` had under this profile that `after` lacks, with a record at them */
 } manifest_diff_stats_t;
 
 /**
@@ -347,8 +351,10 @@ typedef struct {
  * The delta the scope-changing verbs (profile enable / disable) and sync
  * print their receipts from: what each profile in `profiles` claims in
  * `after` that it did not in `before`, what it lost to another profile,
- * and what left the view under it — split by the record, because only a
- * path dotta has observed has anything for apply to do at its departure.
+ * and what left the view under it — counted only where a record stands,
+ * because only a path dotta has observed has anything for apply to do at
+ * its departure; a departure with no record asks nothing of apply and
+ * is not counted.
  *
  * Attribution (for a profile P in `profiles`):
  *   - every row of `after` under P: claimed; added if `before` has no row
@@ -357,8 +363,12 @@ typedef struct {
  *     the workspace's verdict instead)
  *   - every row of `before` under P whose path `after` gives another
  *     profile: reassigned
- *   - every row of `before` under P whose path `after` lacks: departed —
- *     owned, observed or unseen by the record at that path
+ *   - every row of `before` under P whose path `after` lacks, with a
+ *     record at the path: an orphan — owned or merely observed, which
+ *     is the split the ownership gate reads. What apply then does with
+ *     an owned one depends on why the path left: a scope change (profile
+ *     disable) leaves Git backing it and apply prunes the copy; a Git
+ *     removal (sync) does not, and apply releases it
  *   Overlap semantics: if B overrides A for path X, B gets claimed for X
  *   and A gets reassigned for X. The sum is the true size of `after`.
  *

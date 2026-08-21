@@ -1,21 +1,15 @@
 /**
- * workspace.h - Workspace abstraction for state consistency management
+ * workspace.h - The join of the view, the record and the filesystem
  *
- * The workspace provides a unified view of three parallel states:
+ * The workspace pairs three things per managed path:
  * 1. The view (core/manifest.h, built from Git at load): what *should*
  *    stand at each managed path, from which profile
  * 2. The record (.git/dotta.db, core/state.h): what dotta *did* there —
  *    deployed, confirmed, observed
- * 3. Filesystem State (actual files): Physical reality - what files *actually* exist
+ * 3. The filesystem: what *actually* stands there
  *
- * Detects and categorizes divergence between states to prevent data loss and provide
- * clear visibility into workspace consistency.
- *
- * Design principles:
- * - Holistic state analysis
- * - Divergence detection and categorization
- * - Validation gates for destructive operations
- * - Foundation for future features (auto-apply, conflict resolution)
+ * Detects and categorizes the divergence between them to prevent data loss
+ * and provide clear visibility into workspace consistency.
  *
  * Snapshot ownership:
  *   The workspace is the authority for the join within its lifetime: the
@@ -24,7 +18,7 @@
  *   state_get_all_anchors). Downstream consumers (deploy, cleanup,
  *   command-internal analyses) read both through workspace accessors
  *   (workspace_files, workspace_directories, workspace_lookup,
- *   workspace_anchor_of, workspace_manifest) rather than building a view
+ *   workspace_get_anchor, workspace_manifest) rather than building a view
  *   or calling state_get_all_anchors themselves. The view has no writer:
  *   it is current by construction and nothing invalidates it. The record
  *   has two writers while a workspace is live, workspace_observe and
@@ -124,7 +118,7 @@ static inline workspace_items_t workspace_items_view(const ptr_array_t *bucket) 
 /**
  * Workspace structure (opaque)
  *
- * Contains all three states and divergence analysis results.
+ * Holds the view, the record and the divergence analysis over both.
  */
 typedef struct workspace workspace_t;
 
@@ -168,10 +162,11 @@ typedef struct {
 /**
  * Load workspace from repository
  *
- * Loads all three states and performs divergence analysis:
- * - Profile state: Files in profile branches
- * - Deployment state: Files tracked in .git/dotta.db
- * - Filesystem state: Actual files on disk
+ * Builds the view, loads the record and performs divergence analysis
+ * against the filesystem:
+ * - The view: every enabled profile's tree and metadata at HEAD
+ * - The record: the anchors in .git/dotta.db
+ * - The filesystem: actual files on disk
  *
  * Additionally scans tracked directories for untracked files (new files
  * that appeared in directories previously added via 'dotta add').
@@ -381,7 +376,7 @@ const manifest_t *workspace_manifest(const workspace_t *ws);
  * @param filesystem_path Path to look up (NULL returns NULL)
  * @return Borrowed record pointer, or NULL if the path has none
  */
-const anchor_t *workspace_anchor_of(
+const anchor_t *workspace_get_anchor(
     const workspace_t *ws,
     const char *filesystem_path
 );
@@ -437,7 +432,7 @@ bool workspace_item_extract_display_info(
  * Workspace-scope side of state_observe (see state.h): records the
  * path's first sighting on disk — presence only, no blob, no stat — and
  * creates the matching record in the workspace's anchors snapshot so
- * every later reader in the run (workspace_anchor_of, the adoption
+ * every later reader in the run (workspace_get_anchor, the adoption
  * loop's ownership test) sees it. A path that already has a record,
  * in the snapshot or created earlier in this run, is left exactly as it
  * is and no statement runs: observation is idempotent on both sides.

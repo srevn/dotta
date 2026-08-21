@@ -1962,11 +1962,11 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
             const manifest_diff_stats_t *s = &stats[i];
             size_t staged = s->added + s->updated;
 
-            /* A departure with a record is a release apply carries out
-             * (the record retires, the copy stays); one with no record has
-             * no filesystem effect and asks nothing of the user, so it is
-             * not printed. */
-            size_t released = s->departed_owned + s->departed_observed;
+            /* A departure here is a Git-side removal, so every orphan it
+             * leaves is one apply releases (the record retires, the copy
+             * stays); a departure with no record has no filesystem effect
+             * and asks nothing of the user, so it is not counted. */
+            size_t released = s->orphans.owned + s->orphans.observed;
 
             if (staged + released + s->reassigned == 0) continue;
 

@@ -432,7 +432,7 @@ Verification is constant-time via `crypto_verify32`. Domain-separated under `CRY
 4. Deploy:
    - Copy plaintext to target path.
    - Restore mode (and ownership for root/ files) from metadata.
-   - Update deployment state.
+   - Update the record.
 ```
 
 ## Auto-encryption policy

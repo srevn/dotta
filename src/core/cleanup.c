@@ -463,7 +463,7 @@ static error_t *prune_orphaned_files(
         const char *path = item->filesystem_path;
 
         /* Gone before we got here: no filesystem effect happened or was
-         * needed — the row retires. Reporting it as "pruned" would claim
+         * needed — the record retires. Reporting it as "pruned" would claim
          * an effect that never occurred.
          *
          * lstat, matching both the workspace's on_filesystem for a file
@@ -546,8 +546,8 @@ static error_t *prune_orphaned_directories(
 
         switch (probe_orphan_directory(path)) {
             case DIR_PROBE_ABSENT:
-                /* No filesystem effect happened or was needed — the row is
-                 * retired, nothing is removed. */
+                /* No filesystem effect happened or was needed — the record
+                 * retires, nothing is removed. */
                 RETURN_IF_ERROR(ptr_array_push(&result->reclaimed_dirs, item));
                 continue;
 

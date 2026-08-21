@@ -69,16 +69,16 @@ typedef struct {
  * Workspace state - where an item exists
  *
  * Represents the location/deployment status of a file or directory across
- * the three states: profile (Git), deployment (state.db), and filesystem.
+ * the view (Git), the record (.git/dotta.db) and the filesystem.
  *
  * This enum captures WHERE an item exists, separate from WHAT is wrong with it
- * (see divergence_flags_t). States are mutually exclusive.
+ * (see divergence_type_t). States are mutually exclusive.
  */
 typedef enum {
     WORKSPACE_STATE_DEPLOYED,      /* In profile + deployed + on filesystem */
     WORKSPACE_STATE_UNDEPLOYED,    /* In profile, not deployed yet */
     WORKSPACE_STATE_DELETED,       /* Was deployed, removed from filesystem */
-    WORKSPACE_STATE_ORPHANED,      /* In deployment state, not in profile */
+    WORKSPACE_STATE_ORPHANED,      /* A record whose path the view lacks */
     WORKSPACE_STATE_UNTRACKED,     /* On filesystem in tracked directory, not in manifest */
     WORKSPACE_STATE_RELEASED       /* File removed from Git externally, released from management */
 } workspace_state_t;

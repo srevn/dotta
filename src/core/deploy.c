@@ -91,7 +91,7 @@ static bool deploy_needs_work(const workspace_item_t *item) {
             return item->divergence != DIVERGENCE_NONE;
 
         case WORKSPACE_STATE_ORPHANED:
-            /* Path exists in deployment state but not in any enabled profile.
+            /* A record whose path the view lacks.
              *
              * Not reachable from the planner: both active slices are
              * partitioned to enabled profiles, and orphan rows are exactly
@@ -437,7 +437,8 @@ typedef enum {
  * anything else holds *other* paths — untracked, unnamed, uncounted, and
  * not restorable from Git — so nothing on the apply command line
  * authorizes removing them. core/cleanup already refuses a non-empty
- * orphaned directory under --force (cleanup.c:542); this is the same
+ * orphaned directory under --force (cleanup_preflight's directory
+ * verdicts); this is the same
  * posture on deploy's side of the house.
  *
  * "Holds something" is fs_is_directory_empty's negation, so a directory
@@ -1663,7 +1664,7 @@ static error_t *deploy_file(deploy_run_t *run, const manifest_row_t *file) {
         if (err) goto cleanup;
     }
 
-    /* Write directly from git blob to filesystem with atomic ownership and permissions
+    /* Write directly from git blob to filesystem with atomic ownership and permissions.
      * SECURITY: fs_write_file_raw atomically sets BOTH ownership and permissions via
      * fchown() and fchmod() on the file descriptor, eliminating any security window.
      * This is the ONLY place where ownership is applied - metadata layer only resolves. */

@@ -58,7 +58,6 @@
 
 #include <stdbool.h>
 
-#include "core/state.h"
 #include "core/workspace.h"
 
 /* ── Plan ─────────────────────────────────────────────────────────── */
@@ -259,14 +258,14 @@ typedef struct {
     /* Files */
     ptr_array_t prunable_files;    /* Present, no reason to skip it → unlinked */
     ptr_array_t skipped_files;     /* Present, a skip reason stands → left alone (unless --force) */
-    ptr_array_t released_files;    /* Present, Git no longer backs it → left on disk, row retires */
-    ptr_array_t absent_files;      /* Not on disk at load → row retires, no filesystem effect */
+    ptr_array_t released_files;    /* Present, Git no longer backs it → left on disk, record retires */
+    ptr_array_t absent_files;      /* Not on disk at load → record retires, no filesystem effect */
 
     /* Directories */
     ptr_array_t prunable_dirs;     /* Present, empty after the run's removals, nothing deploys in */
     ptr_array_t skipped_dirs;      /* Present; keeps something the run leaves, or not a directory */
-    ptr_array_t released_dirs;     /* Git no longer backs it, or dotta never made it → left alone, row retires */
-    ptr_array_t absent_dirs;       /* Not there → row retires */
+    ptr_array_t released_dirs;     /* Git no longer backs it, or dotta never made it → left alone, record retires */
+    ptr_array_t absent_dirs;       /* Not there → record retires */
 } cleanup_preflight_result_t;
 
 /**
@@ -303,11 +302,11 @@ void cleanup_preflight_result_free(cleanup_preflight_result_t *verdicts);
  *
  * pruned_* guarantee a filesystem removal happened. reclaimed_* were
  * absent — at load, or by the time the run looked — so no removal happened
- * or was needed and only the row retires; callers report the two
+ * or was needed and only the record retires; callers report the two
  * distinctly, because a decision is not an effect. skipped_*, released_*
  * and the absent verdicts are confirmed here by passing them through,
  * never re-decided: the result is the one object apply's record step
- * reads, so "what ran → which rows retire" is read in one place.
+ * reads, so "what ran → which records retire" is read in one place.
  *
  * Every planned item appears in exactly one bucket, so the receipt
  * accounts for the whole plan:
@@ -316,19 +315,19 @@ void cleanup_preflight_result_free(cleanup_preflight_result_t *verdicts);
  *   plan->directories = pruned_dirs ∪ reclaimed_dirs ∪ released_dirs
  *                       ∪ skipped_dirs ∪ failed_dirs
  *
- * Rows that retire: pruned_files, reclaimed_files, released_files,
- * pruned_dirs, reclaimed_dirs, released_dirs. Rows that stay: skipped_*,
- * failed_*.
+ * Records that retire: pruned_files, reclaimed_files, released_files,
+ * pruned_dirs, reclaimed_dirs, released_dirs. Records that stay:
+ * skipped_*, failed_*.
  */
 typedef struct {
     ptr_array_t pruned_files;      /* Unlinked */
-    ptr_array_t reclaimed_files;   /* Absent at load, or by the time the run looked; row retires */
-    ptr_array_t released_files;    /* Left on disk; row retires */
+    ptr_array_t reclaimed_files;   /* Absent at load, or by the time the run looked; record retires */
+    ptr_array_t released_files;    /* Left on disk; record retires */
     ptr_array_t skipped_files;     /* Skipped at preflight (cleanup_skip_reason); left alone */
     ptr_array_t failed_files;      /* The removal errored */
     ptr_array_t pruned_dirs;       /* Removed */
-    ptr_array_t reclaimed_dirs;    /* Absent; row retires */
-    ptr_array_t released_dirs;     /* Left alone; row retires */
+    ptr_array_t reclaimed_dirs;    /* Absent; record retires */
+    ptr_array_t released_dirs;     /* Left alone; record retires */
     ptr_array_t skipped_dirs;      /* Predicted occupied, not a directory, or refused on removal */
     ptr_array_t failed_dirs;       /* The removal errored */
 } cleanup_result_t;

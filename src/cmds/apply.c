@@ -1303,7 +1303,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     for (size_t i = 0; i < adoptable.count; i++) {
         const manifest_row_t *file = adoptable.entries[i];
 
-        const anchor_t *anchor = workspace_anchor_of(ws, file->filesystem_path);
+        const anchor_t *anchor = workspace_get_anchor(ws, file->filesystem_path);
         bool adopt = !anchor || anchor->deployed_at == 0;
         bool acknowledge = !adopt && strcmp(anchor->profile, file->profile) != 0;
         if (!adopt && !acknowledge) continue;
@@ -1832,7 +1832,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
             for (size_t i = 0; i < dirs.count; i++) {
                 const manifest_row_t *dir = dirs.entries[i];
 
-                if (workspace_anchor_of(ws, dir->filesystem_path)) continue;
+                if (workspace_get_anchor(ws, dir->filesystem_path)) continue;
 
                 /* lstat semantics, matching the analyzer's probe: a path of
                  * any type counts as observed (a squatting file is still
@@ -1872,8 +1872,8 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     }
 
     /* Commit the state transaction: anchors, observations, retired
-     * records (partial success model — a cleanup failure leaves
-     * deployment state to commit). Dry-run included: the transaction then
+     * records (partial success model — a cleanup failure leaves the
+     * record's writes to commit). Dry-run included: the transaction then
      * holds only the load-time flush's observations and confirmations,
      * which status and the nothing-to-do exit persist too. */
     err = state_save(repo, state);

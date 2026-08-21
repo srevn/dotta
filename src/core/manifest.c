@@ -30,11 +30,11 @@
 #include <string.h>
 
 #include "base/arena.h"
-#include "base/array.h"
 #include "base/error.h"
 #include "base/hashmap.h"
 #include "base/string.h"
 #include "core/metadata.h"
+#include "core/state.h"
 #include "infra/mount.h"
 #include "sys/gitops.h"
 
@@ -54,8 +54,8 @@
  */
 struct manifest {
     manifest_row_t **rows;         /* arena-backed pointer spine, abandon-and-realloc growth */
-    size_t count;
-    size_t capacity;
+    size_t count;                  /* Rows in the spine */
+    size_t capacity;               /* Spine slots allocated */
     hashmap_t *index;              /* fs_path → manifest_row_t *, heap-allocated */
 };
 
@@ -186,7 +186,7 @@ static error_t *manifest_apply_metadata(
  *
  * The one precedence primitive. A path already in the view is being
  * claimed by a later — higher — profile (or by the same profile's
- * directory pass, which yields before calling; see claim_tree): the
+ * directory pass, which yields before calling; see manifest_claim_tree): the
  * existing row is zeroed so nothing of the loser survives — not its
  * owner/group/encrypted, not its kind — and keeps only the indexed key.
  * A new path gets a fresh arena row, indexed then appended, so a failed
@@ -284,7 +284,7 @@ static error_t *manifest_claim(
  * @param payload Pointer to claim_ctx
  * @return 0 to continue walk, -1 to stop on error
  */
-static int claim_blob(
+static int manifest_claim_blob(
     const char *root,
     const git_tree_entry *entry,
     void *payload
@@ -438,7 +438,7 @@ static int claim_blob(
  * Claim one profile's contribution: the tree's blobs, then its directories
  *
  * The per-profile step both builders run. The tree walk claims every
- * blob (claim_blob); then every DIRECTORY item of the profile's metadata
+ * blob (manifest_claim_blob); then every DIRECTORY item of the profile's metadata
  * claims its path — resolved against the mount table, the same way files
  * are — unless this profile already holds the path with a blob: a path is
  * a tree or a blob, so a DIRECTORY item at a blob's storage_path is stale
@@ -454,7 +454,7 @@ static int claim_blob(
  * claimed are left as they are — the build fails whole and the caller
  * releases the index.
  */
-static error_t *claim_tree(
+static error_t *manifest_claim_tree(
     manifest_t *manifest,
     git_tree *tree,
     const char *profile,
@@ -480,7 +480,7 @@ static error_t *claim_tree(
         .error    = NULL
     };
 
-    error_t *err = gitops_tree_walk(tree, claim_blob, &ctx);
+    error_t *err = gitops_tree_walk(tree, manifest_claim_blob, &ctx);
     if (err || ctx.error) {
         err = ctx.error ? ctx.error : err;
         return error_wrap(
@@ -673,7 +673,7 @@ error_t *manifest_build(
             profile_metadata = NULL;
         }
 
-        err = claim_tree(manifest, tree, profile, mounts, profile_metadata, arena);
+        err = manifest_claim_tree(manifest, tree, profile, mounts, profile_metadata, arena);
         git_tree_free(tree);
         metadata_free(profile_metadata);
 
@@ -724,7 +724,7 @@ error_t *manifest_build_tree(
 
     /* mounts and metadata borrow from function parameters — both outlive
      * the tree walk. */
-    err = claim_tree(manifest, tree, owned_profile, mounts, metadata, arena);
+    err = manifest_claim_tree(manifest, tree, owned_profile, mounts, metadata, arena);
     if (err) {
         err = error_wrap(err, "Failed to build manifest from tree");
         goto cleanup;
@@ -853,10 +853,11 @@ error_t *manifest_diff(
         }
     }
 
-    /* The record, indexed by path, for the departure split: a departed
-     * row with a record dotta owns is staged for cleanup, one with a
-     * record dotta never owned is let go, one without has nothing for
-     * apply to do. Keys borrow the records' arena-backed paths. */
+    /* The record, indexed by path, for the orphan split: a departed row
+     * with a record dotta owns leaves an orphan apply prunes (or releases,
+     * if Git let go), one with a record dotta never owned leaves one the
+     * ownership gate releases, one without leaves nothing for apply to
+     * do. Keys borrow the records' arena-backed paths. */
     anchor_index = hashmap_borrow(anchor_count > 0 ? anchor_count : 16);
     if (!anchor_index) {
         err = ERROR(ERR_MEMORY, "Failed to create anchors index");
@@ -894,8 +895,8 @@ error_t *manifest_diff(
 
     /* Loss side: every row of `before`, attributed to its former owner.
      * A path still in `after` under another profile is a reassignment
-     * (for user-facing "A → B" messaging); a path `after` lacks departed,
-     * and the record at the path says what that means for apply. */
+     * (for user-facing "A → B" messaging); a path `after` lacks is an
+     * orphan if a record stands at it, and ownership says which kind. */
     rows = manifest_rows(before);
     for (size_t i = 0; i < rows.count; i++) {
         const manifest_row_t *old = rows.entries[i];
@@ -911,12 +912,11 @@ error_t *manifest_diff(
         }
 
         const anchor_t *anchor = hashmap_get(anchor_index, old->filesystem_path);
-        if (!anchor) {
-            slot->departed_unseen++;
-        } else if (anchor->deployed_at > 0) {
-            slot->departed_owned++;
+        if (!anchor) continue;
+        if (anchor->deployed_at > 0) {
+            slot->orphans.owned++;
         } else {
-            slot->departed_observed++;
+            slot->orphans.observed++;
         }
     }
 

@@ -1,7 +1,7 @@
 /**
  * workspace.c - Workspace abstraction implementation
  *
- * Manages three-state consistency: Profile (git), Deployment (state.db), Filesystem (disk).
+ * The join of the view (Git), the record (.git/dotta.db) and the filesystem.
  * Detects and categorizes divergence to prevent data loss and enable safe operations.
  *
  * The expected side is computed, never stored: every load builds the
@@ -76,7 +76,7 @@ typedef struct {
 /**
  * Workspace structure
  *
- * Contains indexed views of all three states plus divergence analysis.
+ * Holds the view, the record and the divergence analysis over both.
  * Uses hashmaps for O(1) lookups during analysis.
  */
 struct workspace {
@@ -116,7 +116,7 @@ struct workspace {
     size_t orphan_count;                         /* Number of orphans */
 
     /* State and profile scope */
-    state_t *state;                              /* Deployment state (borrowed from caller) */
+    state_t *state;                              /* The record's handle (borrowed from caller) */
     const string_array_t *profiles;              /* Borrowed; valid for workspace lifetime */
     hashmap_t *profile_index;                    /* Maps profile -> NULL (membership set, O(1) lookup) */
 
@@ -538,7 +538,7 @@ static error_t *analyze_file_divergence(
     /* The record dotta keeps of this path, if any. NULL means dotta has
      * never observed the path on disk in scope: no base for the content
      * question, no fast path, and absence reads UNDEPLOYED. */
-    const anchor_t *anchor = workspace_anchor_of(ws, fs_path);
+    const anchor_t *anchor = workspace_get_anchor(ws, fs_path);
 
     /* Reassignment, derived (see the doc above): an owned record under a
      * profile other than the row's. old_profile borrows the record's
@@ -927,13 +927,13 @@ static error_t *analyze_file_divergence(
      *
      * Record semantics:
      * - none -> dotta has never lstat-confirmed this path on disk in scope
-     *           (ghost file: profile enabled but the file was never there).
+     *           (profile enabled but the file was never there).
      * - some -> dotta has seen this file on disk in scope at least once
      *           (during any status, or after a content-verification
      *           event).
      *
      * Classification:
-     * 1. File missing + no record -> UNDEPLOYED (ghost, no-op)
+     * 1. File missing + no record -> UNDEPLOYED (never there, no-op)
      * 2. File missing + record    -> DELETED (user removed it)
      * 3. File present             -> DEPLOYED (may diverge)
      *
@@ -2067,7 +2067,7 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
 
         /* The record dotta keeps of this path, if any — the same pairing
          * the file analyzer makes. */
-        const anchor_t *anchor = workspace_anchor_of(ws, filesystem_path);
+        const anchor_t *anchor = workspace_get_anchor(ws, filesystem_path);
 
         /* Stat directory to get current metadata
          *
@@ -2083,8 +2083,8 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
             if (errno == ENOENT || errno == ENOTDIR) {
                 /* Absent path: record-gated classification. An observed
                  * directory was deleted by the user (update propagates the
-                 * removal); a never-observed one is a ghost — apply's job
-                 * is to create it, never to commit a phantom deletion. */
+                 * removal); a never-observed one was never there — apply's
+                 * job is to create it, never to commit a phantom deletion. */
                 err = workspace_add_diverged(
                     ws,
                     filesystem_path,
@@ -2314,7 +2314,7 @@ static error_t *analyze_encryption_policy_mismatch(
 
             workspace_state_t item_state = on_filesystem
                 ? WORKSPACE_STATE_DEPLOYED
-                : classify_absent(workspace_anchor_of(ws, row->filesystem_path));
+                : classify_absent(workspace_get_anchor(ws, row->filesystem_path));
 
             err = workspace_add_diverged(
                 ws,
@@ -2363,7 +2363,7 @@ static int compare_rows_by_path(const void *a, const void *b) {
  * ws->active_dirs (+ counts) and each slice is sorted by filesystem_path.
  * Then the anchors snapshot (state_get_all_anchors) is indexed by path as
  * ws->anchor_index — the analyses pair each row with its record through
- * workspace_anchor_of, and the two writers patch the index's values — and
+ * workspace_get_anchor, and the two writers patch the index's values — and
  * every record whose path the view lacks is collected into ws->orphans,
  * in the snapshot's path order.
  *
@@ -2532,7 +2532,7 @@ error_t *workspace_load(
      * aside. The partition populates workspace fields directly; consumers
      * read via workspace_files() / workspace_directories() /
      * workspace_lookup() and pair rows with their records through
-     * workspace_anchor_of(). The view is computed from Git here, so it is
+     * workspace_get_anchor(). The view is computed from Git here, so it is
      * current by construction — nothing upstream repairs anything. */
     err = workspace_partition(ws, mounts);
     if (err) {
@@ -2699,7 +2699,7 @@ const manifest_t *workspace_manifest(const workspace_t *ws) {
  * mutable record pointer (workspace_observe and workspace_anchor patch in
  * place); external callers receive a const view.
  */
-const anchor_t *workspace_anchor_of(
+const anchor_t *workspace_get_anchor(
     const workspace_t *ws,
     const char *filesystem_path
 ) {
@@ -2959,7 +2959,7 @@ bool workspace_item_extract_display_info(
 
         case WORKSPACE_STATE_RELEASED:
             /* The path left its profile in Git — released from management.
-             * File left on filesystem, state entry will be cleaned up. */
+             * File left on filesystem, the record retires. */
             if (tag_count < WORKSPACE_ITEM_MAX_DISPLAY_TAGS) {
                 tags_out[tag_count++] = "released";
             }
@@ -3062,7 +3062,7 @@ error_t *workspace_observe(
  * specification of the observed_at INSERT-arm rule; this function holds
  * none of that logic.
  *
- * The map's value is the mutable record pointer; workspace_anchor_of
+ * The map's value is the mutable record pointer; workspace_get_anchor
  * narrows it to const for every reader.
  */
 error_t *workspace_anchor(

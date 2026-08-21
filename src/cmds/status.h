@@ -40,7 +40,7 @@ typedef struct {
 /**
  * Show status of managed files
  *
- * Compares current filesystem state with profiles and deployment state.
+ * Compares the filesystem with the view and the record.
  * Reports:
  * - Files that would be deployed
  * - Files that have been modified locally

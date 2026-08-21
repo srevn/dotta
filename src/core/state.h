@@ -1,5 +1,5 @@
 /**
- * state.h - SQLite-based deployment state tracking
+ * state.h - The enabled profiles and the record (SQLite)
  *
  * Persists the two things dotta cannot recompute: which profiles the user
  * enabled here (and in what order, with what targets), and the record of
@@ -151,7 +151,7 @@ static inline stat_cache_t stat_cache_from_path(const char *filesystem_path) {
  * and the divergence it is measured against keeps it from pruning the
  * edit.
  */
-typedef struct {
+typedef struct anchor {
     /* Identity — the row's, at the last write */
     char *filesystem_path;    /* Deployed path (PRIMARY KEY) */
     char *storage_path;       /* Path in profile (home/.bashrc) */

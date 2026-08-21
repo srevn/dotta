@@ -981,7 +981,7 @@ error_t *cmd_status(const dotta_ctx_t *ctx, const cmd_status_options_t *opts) {
 
     /* Build operation scope
      *
-     *   scope_enabled — persistent VWD scope (passed to workspace_load for
+     *   scope_enabled — the persistent enabled set (passed to workspace_load for
      *                   accurate orphan detection).
      *   scope_active  — display face (enabled profile list, remote status).
      *

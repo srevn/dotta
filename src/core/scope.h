@@ -1,9 +1,9 @@
 /**
- * scope.h - Operation scope for VWD-touching commands
+ * scope.h - Operation scope for view-touching commands
  *
- * A single typed abstraction for "what subset of the Virtual Working
- * Directory does this invocation touch?". Bundles the three filter
- * dimensions every VWD-touching command carries:
+ * A single typed abstraction for "what subset of the view — every
+ * enabled profile at HEAD, precedence resolved — does this invocation
+ * touch?". Bundles the three filter dimensions every such command carries:
  *
  *   1. Profile filter     — CLI -p <names> (optional)
  *   2. Path filter        — CLI positional file arguments (optional)
@@ -16,7 +16,7 @@
  * Vocabulary
  * ----------
  *   enabled — persistent enabled profile names, always non-NULL, may be
- *             empty. Workspace scope (VWD invariant): workspace_load
+ *             empty. Workspace scope (the view is built from all of it): workspace_load
  *             reads this via scope_enabled internally; callers pass the
  *             whole scope_t to workspace_load.
  *   active  — display/hook face of the scope. Equal to the CLI filter
@@ -57,7 +57,7 @@
  * translate "no enabled profiles" into an error. Callers apply their own
  * policy:
  *
- *   apply   — empty is a valid convergence target (zero VWD, orphan
+ *   apply   — empty is a valid convergence target (an empty view, orphan
  *             cleanup runs). No special handling needed.
  *   status  — empty is a valid degraded mode (everything is an orphan).
  *             No special handling needed.
@@ -160,10 +160,10 @@ void scope_free(scope_t *s);
 /* -------------------------------------------------------------------- */
 
 /**
- * Persistent enabled set — VWD scope.
+ * Persistent enabled set — the view's scope.
  *
  * Pass this (and ONLY this) to workspace_load. Never the filter.
- * Always non-NULL; the array may be empty (empty VWD is a valid state).
+ * Always non-NULL; the array may be empty (an empty view is a valid state).
  *
  * The returned pointer is borrowed from scope_t and valid until
  * scope_free.

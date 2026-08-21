@@ -2,8 +2,10 @@
  * workspace.h - Workspace abstraction for state consistency management
  *
  * The workspace provides a unified view of three parallel states:
- * 1. Profile State (Git branches): Authoritative source - what files *should* be tracked
- * 2. Deployment State (.git/dotta.db): Tracking layer - what files *have been* deployed
+ * 1. The view (core/manifest.h, built from Git at load): what *should*
+ *    stand at each managed path, from which profile
+ * 2. The record (.git/dotta.db, core/state.h): what dotta *did* there —
+ *    deployed, confirmed, observed
  * 3. Filesystem State (actual files): Physical reality - what files *actually* exist
  *
  * Detects and categorizes divergence between states to prevent data loss and provide

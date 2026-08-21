@@ -897,7 +897,7 @@ static size_t validate_filter_paths(
  * When multiple profiles are enabled, this function compares only the
  * profile that contains the specified commit (first match in precedence order)
  *
- * Type-enforced VWD invariant: historical commit search walks the persistent
+ * Type-enforced invariant: historical commit search walks the persistent
  * enabled set via scope_enabled — the CLI filter must not hide commits
  * belonging to other enabled profiles. The path filter is derived from
  * scope_paths (raw CLI positional args, never narrowed).
@@ -1120,7 +1120,7 @@ static error_t *build_diff_pathspec(
 /**
  * Diff two commits
  *
- * Type-enforced VWD invariant: historical commit search walks the persistent
+ * Type-enforced invariant: historical commit search walks the persistent
  * enabled set via scope_enabled — hiding commits behind the CLI filter would
  * make legitimately-referenceable commits unreachable. The path filter is
  * derived from scope_paths (raw CLI positional args, never narrowed).
@@ -1435,7 +1435,7 @@ error_t *cmd_diff(const dotta_ctx_t *ctx, const cmd_diff_options_t *opts) {
 
     /* Build operation scope
      *
-     *   scope_enabled — persistent VWD scope (workspace_load, historical-
+     *   scope_enabled — the persistent enabled set (workspace_load, historical-
      *                   mode branch resolution search).
      *   scope_active  — diff display face.
      *   scope_paths   — CLI positional file filter (threaded into

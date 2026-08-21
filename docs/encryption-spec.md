@@ -295,14 +295,11 @@ WRITE TIME (in cmds/add.c, cmds/update.c):
     ▼ content_classify_bytes(written_bytes)
   metadata.json:encrypted
     │
-    ▼ apply_metadata_to_entry (during manifest_build)
-  state.virtual_manifest.encrypted
-    │
-    ▼ workspace_build_manifest_from_state
-  manifest_entry->encrypted
+    ▼ manifest_apply_metadata (during manifest_build, at every load)
+  manifest_row_t->encrypted
 ```
 
-**Invariant** (debug-build asserted): after `content_store_file_to_worktree` writes any blob dotta produces, `content_classify_bytes(written_bytes) == CONTENT_ENCRYPTED iff should_encrypt`. Caller then stamps `metadata.encrypted = (kind != CONTENT_PLAINTEXT)`. The state column and manifest entry project from that source.
+**Invariant** (debug-build asserted): after `content_store_file_to_worktree` writes any blob dotta produces, `content_classify_bytes(written_bytes) == CONTENT_ENCRYPTED iff should_encrypt`. Caller then stamps `metadata.encrypted = (kind != CONTENT_PLAINTEXT)`. The view row projects from that source on every build; nothing stores the flag outside Git.
 
 After the invariant holds, the read path consults the cache without re-sniffing. Drift is a write-path bug, not a runtime drift class — the assert in `content_store_file_to_worktree` is the tripwire. The single edge case it catches is the magic-collision: a plaintext file whose first 6 bytes happen to be `"DOTTA" || CIPHER_VERSION`. In release builds that file would silently classify as encrypted on next read; the debug assert surfaces the collision before the file is committed.
 

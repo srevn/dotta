@@ -61,30 +61,34 @@ Each profile also maintains a `.dotta/metadata.json` file that tracks file permi
 
 The main worktree always points to `dotta-worktree`, an empty branch. This prevents Git status pollution. All profile operations use temporary worktrees internally.
 
-## Virtual Working Directory
+## The view and the record
 
-Dotta uses a **Virtual Working Directory** (VWD) to track deployment state. The VWD is a manifest stored in `.git/dotta.db` that represents the composed, layered state of all enabled profiles.
+Dotta stores only what it cannot recompute. What *should* stand at each path, and from which profile, is a pure function of Git, the enabled profiles and the machine's mount table — **the view** — and is computed from Git every time a command runs. What dotta *did* at a path — **the record** — is dotta's own and is the only per-path state it keeps, in `.git/dotta.db`.
 
 The architecture mirrors Git's three-tree model:
 
 ```
-Git Branches (Source of Truth)
-     ↓
-Manifest (Virtual Working Directory)
+Git Branches (Source of Truth)  ×  enabled profiles  ×  mount table
+     ↓  computed at every run, never stored
+The View (one row per managed path, precedence resolved)
+     ↓  joined with
+The Record (what dotta deployed, confirmed or observed at each path)
      ↓
 Workspace (Runtime Analysis)
      ↓
 Filesystem (Live System)
 ```
 
-**Manifest** -- the single source of truth for which files are managed. It caches expected state from Git (OIDs, content hashes, file type, mode, ownership, encryption flag) with precedence already resolved. It is updated eagerly: any change to profiles or files updates the manifest immediately, not lazily at apply time.
+**The view** -- the single source of truth for which paths are managed and what is expected there (content, file type, mode, ownership, encryption flag), with precedence already resolved: later enabled profiles win, one row per path. It is never stale, because nothing caches it — every command builds it from the current branches.
 
-**Workspace** -- runtime divergence analysis that compares the manifest's expected state against the actual filesystem. This comparison happens at execution time, so decisions are never stale.
+**The record** -- for each managed path, the content dotta last confirmed on disk, whether dotta put it there (the *ownership* timestamp), and when it first saw it. A path dotta deployed or captured is *owned*; one that was merely found on disk is *observed*. On scope exit an owned copy is pruned and an observed one is left alone.
 
-**Apply** -- iterates manifest entries, checks workspace divergence for each file, and deploys only files that have actually changed (content, mode, ownership, encryption). After deployment, lifecycle timestamps are updated.
+**Workspace** -- runtime divergence analysis that compares the view against the actual filesystem, with the record as the reference for what dotta last confirmed. This comparison happens at execution time, so decisions are never stale.
+
+**Apply** -- iterates the view's rows, checks workspace divergence for each, deploys only what actually changed (content, mode, ownership, encryption), prunes or releases orphans according to the record, and then writes the record for what it did.
 
 This design gives:
-- **Fast status checks** -- O(1) per-file divergence lookups via hashmap
-- **No stale decisions** -- always converges to current filesystem reality
-- **Explicit scope** -- the manifest shows exactly which files are managed
-- **Efficient deploys** -- pre-cached expected state eliminates redundant Git tree walks
+- **Fast status checks** -- O(1) per-file divergence lookups via hashmap, and a stat fast path that skips content comparison for files whose record still matches
+- **No stale decisions** -- always converges to current Git and current filesystem reality
+- **Explicit scope** -- `dotta status --full` shows exactly which paths are managed and by which profile
+- **One writer per fact** -- the view has none; the record is written only by the command that deployed, captured or observed the path

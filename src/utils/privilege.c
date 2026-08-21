@@ -372,7 +372,7 @@ static error_t *reexec_with_sudo(int argc, char **argv) {
  * state where a caller could forget the predicate.
  *
  * The label that goes into the array is always the storage_path —
- * stable, user-recognizable, already what every VWD-driven caller
+ * stable, user-recognizable, already what every view-driven caller
  * wants displayed.
  */
 error_t *privilege_collect_label(

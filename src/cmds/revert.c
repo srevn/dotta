@@ -205,7 +205,7 @@ static error_t *discover_file(
 
     /* Search across all local branches for the file */
     string_array_t *matches = NULL;
-    err = profile_discover_file(repo, state, storage_path, false, &matches);
+    err = profile_discover_file(repo, storage_path, &matches);
 
     if (err) {
         if (error_code(err) == ERR_NOT_FOUND) {
@@ -1027,17 +1027,12 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
         goto cleanup;
     }
 
-    /* Step 9: Project the manifest if the profile is enabled.
-     *
-     * The revert moved the branch HEAD, so manifest_reconcile finds the
-     * drift and projects every enabled profile at HEAD — the reverted
-     * blob advances the row's expected state, a restored path reactivates
-     * its row, and the deployment anchor stays where apply last confirmed
-     * it, so the workspace reads the result as [stale] until apply
-     * deploys it. The state handle is borrowed from the dispatcher (READ);
-     * reconcile scopes its own write transaction around the projection. */
+    /* Step 9: Report. Nothing to write: the revert moved the branch HEAD,
+     * and the next load's view carries the reverted blob — the record
+     * stays where apply last confirmed it, so the workspace reads the
+     * result as [stale] until apply deploys it. A disabled profile's
+     * revert reaches no view at all. */
     if (!state_has_profile(state, profile)) {
-        /* Profile not enabled - manifest update not needed */
         output_success(
             out, OUTPUT_NORMAL, "Reverted %s in profile '%s'",
             resolved_path, profile
@@ -1047,22 +1042,6 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
             profile
         );
         goto cleanup;
-    }
-
-    output_print(out, OUTPUT_VERBOSE, "Updating manifest...\n");
-
-    err = manifest_reconcile(repo, state, ctx->arena, ctx->mounts, NULL, NULL);
-    if (err) {
-        /* Non-fatal: the revert commit stands; commit_oid still lags, so
-         * the next command's prelude projects again. */
-        output_warning(
-            out, OUTPUT_NORMAL, "Manifest update failed: %s", error_message(err)
-        );
-        output_hint(
-            out, OUTPUT_NORMAL, "Run 'dotta status' or 'dotta apply' to resync manifest"
-        );
-        error_free(err);
-        err = NULL;
     }
 
     output_success(

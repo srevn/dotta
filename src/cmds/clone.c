@@ -266,17 +266,19 @@ static error_t *initialize_state(
         return error_wrap(err, "Failed to initialize state database");
     }
 
-    /* Enable each profile individually, then project the manifest once.
+    /* Enable each profile individually, then build the view over the
+     * new set once.
      *
      * state_enable_profile is the membership primitive — clone calls it
      * once per profile (with target=NULL since custom/-bearing profiles
      * are filtered out by the post-fetch warn-and-skip loop below before
-     * reaching this path). It writes the zero-OID sentinel; apply_scope
-     * replaces it with the HEAD it projected each profile from, in the
-     * same transaction.
+     * reaching this path).
      *
-     * Fresh clone → virtual_manifest is empty → apply_scope INSERTs one
-     * row per entry in the precedence-resolved manifest. */
+     * The view is computed, never stored: the build writes nothing and
+     * its result is discarded. It is the tripwire that keeps clone from
+     * landing an enabled set the next load cannot build — a branch that
+     * exists but will not load fails here, before state_save, and the
+     * repository is left with nothing enabled. */
     if (profiles->count > 0) {
         for (size_t i = 0; i < profiles->count; i++) {
             err = state_enable_profile(state, profiles->items[i], NULL);
@@ -292,7 +294,7 @@ static error_t *initialize_state(
          * Clone's run_spec sees state_mode == NONE (the DB doesn't
          * exist yet), so ctx->mounts is NULL even after this point. The
          * mount table built here covers the freshly-bootstrapped
-         * binding set for manifest_apply_scope's tree walk. */
+         * binding set for the tree walk. */
         mount_table_t *post_mutation_mounts = NULL;
         err = profile_build_mount_table(state, arena, &post_mutation_mounts);
         if (err) {
@@ -300,14 +302,13 @@ static error_t *initialize_state(
             return error_wrap(err, "Failed to build mount table");
         }
 
-        err = manifest_apply_scope(
-            repo, state, arena, post_mutation_mounts, LIFECYCLE_INACTIVE,
-            NULL, NULL
-        );
+        manifest_t *view = NULL;
+        err = manifest_build(repo, profiles, post_mutation_mounts, arena, &view);
         if (err) {
             state_free(state);
-            return error_wrap(err, "Failed to project manifest scope");
+            return error_wrap(err, "Failed to build manifest");
         }
+        manifest_free(view);
     }
 
     /* Commit transaction */

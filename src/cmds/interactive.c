@@ -513,8 +513,8 @@ static error_t *plan_classify(
 /* Phase: validate user-supplied targets at the boundary, mirroring the
  * check `cmd profile enable` runs. NULL targets are legitimate for
  * non-custom rows; for custom rows the prompt is the source-of-truth
- * gate, and manifest_apply_scope's UNBOUND tripwire fires downstream
- * if a bug ever breaches that gate. No second guard here. */
+ * gate, and manifest_build's UNBOUND tripwire fires downstream
+ * (plan_check) if a bug ever breaches that gate. No second guard here. */
 static error_t *plan_validate(const plan_t *plan) {
     for (size_t i = 0; i < plan->new_order.count; i++) {
         if (!plan->needs_enable[i]) continue;
@@ -563,22 +563,25 @@ static error_t *plan_apply(state_t *deploy_state, const plan_t *plan) {
 }
 
 /* Phase: rebuild the mount table from the post-mutation binding set
- * and project virtual_manifest + tracked_directories. A scope change:
- * rows that left take LIFECYCLE_INACTIVE. */
-static error_t *plan_reconcile(
-    git_repository *repo, state_t *deploy_state, arena_t *arena
+ * and build the view over the post-diff set. The view is computed,
+ * never stored — the build writes nothing and its result is discarded.
+ * It is the tripwire that keeps the save from landing an enabled set
+ * the next load cannot build: a custom/ row that breached the target
+ * gate (UNBOUND), a branch that exists but will not load. */
+static error_t *plan_check(
+    git_repository *repo, state_t *deploy_state, arena_t *arena, const plan_t *plan
 ) {
     mount_table_t *mounts = NULL;
     error_t *err = profile_build_mount_table(deploy_state, arena, &mounts);
     if (err) {
         return error_wrap(err, "Failed to rebuild mount table after profile diff");
     }
-    err = manifest_apply_scope(
-        repo, deploy_state, arena, mounts, LIFECYCLE_INACTIVE, NULL, NULL
-    );
+    manifest_t *view = NULL;
+    err = manifest_build(repo, &plan->new_order, mounts, arena, &view);
     if (err) {
-        return error_wrap(err, "Failed to project manifest with new scope");
+        return error_wrap(err, "Failed to build manifest with new scope");
     }
+    manifest_free(view);
     return NULL;
 }
 
@@ -612,7 +615,7 @@ static error_t *save_order(
     err = plan_apply(deploy_state, &plan);
     if (err) goto rollback;
 
-    err = plan_reconcile(repo, deploy_state, arena);
+    err = plan_check(repo, deploy_state, arena, &plan);
     if (err) goto rollback;
 
     err = state_commit(deploy_state);

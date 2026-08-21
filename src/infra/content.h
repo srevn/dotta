@@ -56,7 +56,7 @@ typedef struct metadata metadata_t;
  * Determined by inspecting the blob's magic header. The cipher's MAC
  * binds the magic header into authentication, so blob bytes are the
  * authoritative source of truth for encryption state. Any external
- * record (metadata.json, state DB column) is by definition a cache
+ * record (metadata.json, the view row's flag) is by definition a cache
  * that derives from byte sniffing.
  *
  * Three-way discrimination matches the cipher format's contract:
@@ -69,10 +69,6 @@ typedef struct metadata metadata_t;
  *                                  build's. Either an older format or
  *                                  an attacker-planted forgery (the
  *                                  SIV would fail under either key).
- *
- * Numeric values match state.virtual_manifest.encrypted (0 = plaintext,
- * 1 = encrypted), so a future schema widening to this enum is a
- * column-domain extension, not a value remap. Do not renumber.
  */
 typedef enum {
     CONTENT_PLAINTEXT           = 0,

@@ -15,6 +15,7 @@
 #include "base/args.h"
 #include "base/array.h"
 #include "base/error.h"
+#include "core/manifest.h"
 #include "core/state.h"
 #include "infra/mount.h"
 #include "sys/gitops.h"
@@ -124,49 +125,63 @@ static void complete_remotes(git_repository *repo) {
 }
 
 /**
- * Output managed files from state database
+ * Output managed files: the view over the enabled set
  *
+ * Rows come in the view's order; the shell sorts its candidates.
+ *
+ * @param repo Repository (must not be NULL when state is)
  * @param state Borrowed state handle; NULL when running outside a repo
+ * @param mounts Per-machine mount table over the enabled set (non-NULL
+ *               iff state is — the runtime invariant)
  * @param arena Borrowed scratch arena (caller's command arena)
  * @param profile Optional profile filter (NULL for all files)
  * @param storage_paths If true, output storage_path; if false, filesystem_path
  */
 static void complete_files(
+    git_repository *repo,
     state_t *state,
+    const mount_table_t *mounts,
     arena_t *arena,
     const char *profile,
     bool storage_paths
 ) {
     if (!state) return;
 
-    state_entry_t *entries = NULL;
-    size_t count = 0;
-
-    error_t *err = state_get_all_files(state, arena, &entries, &count);
+    string_array_t *enabled = NULL;
+    error_t *err = state_get_profiles(state, &enabled);
     if (err) {
         error_free(err);
         return;
     }
 
-    for (size_t i = 0; i < count; i++) {
-        const manifest_row_t *row = &entries[i].row;
+    manifest_t *manifest = NULL;
+    err = manifest_build(repo, enabled, mounts, arena, &manifest);
+    string_array_free(enabled);
+    if (err) {
+        error_free(err);
+        return;
+    }
 
-        /* Profile filter, applied here rather than in SQL: one snapshot
-         * read, one loop. */
-        if (profile && strcmp(row->profile, profile) != 0) {
+    manifest_rows_t rows = manifest_rows(manifest);
+    for (size_t i = 0; i < rows.count; i++) {
+        const manifest_row_t *row = rows.entries[i];
+
+        /* Files only: a directory row is a metadata claim, not a path
+         * the file-taking verbs complete to */
+        if (row->type == PATH_TYPE_DIRECTORY) {
             continue;
         }
-        /* Skip entries staged for removal */
-        if (entries[i].lifecycle == LIFECYCLE_DELETED ||
-            entries[i].lifecycle == LIFECYCLE_RELEASED) {
+        /* Profile filter, applied here rather than at the build: one
+         * view, one loop. */
+        if (profile && strcmp(row->profile, profile) != 0) {
             continue;
         }
         const char *path = storage_paths ? row->storage_path
                                          : row->filesystem_path;
-        if (path) {
-            printf("%s\t%s\n", path, row->profile);
-        }
+        printf("%s\t%s\n", path, row->profile);
     }
+
+    manifest_free(manifest);
 }
 
 /* Tree-walk state for complete_refspec_files. */
@@ -406,7 +421,10 @@ error_t *cmd_completion(const dotta_ctx_t *ctx, const cmd_completion_options_t *
             if (opts->refspec) {
                 complete_refspec_files(repo, opts->profile, COMPLETE_REFSPEC_FILES_MAX);
             } else {
-                complete_files(state, ctx->arena, opts->profile, opts->storage_paths);
+                complete_files(
+                    repo, state, ctx->mounts, ctx->arena, opts->profile,
+                    opts->storage_paths
+                );
             }
             break;
 

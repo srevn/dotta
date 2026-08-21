@@ -786,7 +786,8 @@ bool metadata_has_item(
  *
  * This function is used by historical operations (diff, show, revert) to
  * extract the encrypted flag from metadata loaded from Git commits.
- * VWD operations use entry->encrypted directly from the state database.
+ * Workspace-backed operations read the view row's encrypted flag, which
+ * manifest_build projects from this metadata.
  *
  * @param metadata Metadata collection (can be NULL)
  * @param storage_path Storage path to lookup (can be NULL)

@@ -4,24 +4,19 @@
  * Manages three-state consistency: Profile (git), Deployment (state.db), Filesystem (disk).
  * Detects and categorizes divergence to prevent data loss and enable safe operations.
  *
- * Trust Model:
- * Files trust the VWD manifest (virtual_manifest table), maintained by manifest layer.
- * Directories trust the tracked_directories state column, maintained by the
- * manifest layer's directory rebuild (sweep + re-projection + ghost reclaim).
- * Both are repaired in state by the load-time reconcile when an enabled
- * profile's branch has moved — an external commit, a pull, a revert: the
- * projection engine projects every enabled profile at HEAD.
- * That maintenance covers the enabled set — the only profiles with a
- * commit_oid baseline — so orphan analysis observes Git authority for the
- * rows the engine leaves alone (a disabled profile's, a dead branch's, a
- * re-enabled profile's INACTIVE leftovers) instead of trusting a cache
- * nothing repairs.
+ * The expected side is computed, never stored: every load builds the
+ * manifest (core/manifest.h) from the enabled profiles at HEAD — both
+ * kinds, one row per path, precedence resolved — so an external commit, a
+ * pull, a revert or a scope change is simply in the next view. Nothing
+ * repairs a cache because there is none.
  * The record dotta keeps of each path (the anchors table: what it
  * deployed or observed there, when, with what stat) is loaded beside the
- * expected rows and paired with them by path. It is dotta's own and
- * nothing repairs it either: the analyses read it as the base of every
- * three-way question, and the two writers here (workspace_observe,
- * workspace_anchor) advance it only after a live look at disk.
+ * view and paired with it by path. It is dotta's own and nothing repairs
+ * it either: the analyses read it as the base of every three-way
+ * question, and the two writers here (workspace_observe,
+ * workspace_anchor) advance it only after a live look at disk. A record
+ * whose path the view lacks is an orphan, and the orphan analysis asks
+ * Git — the only authority that knows — why it is one.
  */
 
 #include "core/workspace.h"
@@ -45,6 +40,7 @@
 #include "base/string.h"
 #include "core/ignore.h"
 #include "core/manifest.h"
+#include "core/metadata.h"
 #include "core/policy.h"
 #include "core/scope.h"
 #include "infra/compare.h"
@@ -55,7 +51,7 @@
 #include "utils/privilege.h"
 
 /**
- * Pending anchor update (internal type)
+ * Pending confirmation (internal type)
  *
  * Accumulated during analyze_file_divergence() when the slow path confirms
  * CMP_EQUAL — disk is row->blob_oid. The verified stat should be persisted
@@ -64,18 +60,18 @@
  * the file as stale from the fast path instead of re-hashing.
  *
  * The blob is the row's: a confirmation binds the stat to the blob the
- * row expected when disk was found equal to it, and workspace_anchor
- * reads it from the row it is handed — a stat triple without a blob is
+ * row expected when disk was found equal to it, and state_confirm reads
+ * it from the row it is handed — a stat triple without a blob is
  * meaningless, and the row is the one the stat was verified against.
  *
  * The row pointer is borrowed from ws->active_files (workspace lifetime).
- * Carrying the row directly lets the flush call workspace_anchor with the
- * row itself — no second hashmap probe to recover the snapshot handle.
+ * Carrying the row directly lets the flush call state_confirm with the
+ * row itself and patch the record by the row's path.
  */
 typedef struct {
-    const manifest_row_t *row;       /* Active row this update targets (borrowed) */
+    const manifest_row_t *row;       /* Active row this confirmation targets (borrowed) */
     stat_cache_t stat;               /* Captured stat triple (fast-path proof) */
-} anchor_update_t;
+} confirmation_t;
 
 /**
  * Workspace structure
@@ -87,33 +83,22 @@ struct workspace {
     git_repository *repo;                        /* Borrowed reference */
     arena_t *arena;                              /* Borrowed; backs every workspace-lifetime string */
 
-    /* Active in-scope slices, both kinds, each in filesystem_path order.
-     *
-     * Pointer arrays into the arena snapshots read at load time (the two
-     * expected tables, each ORDER BY filesystem_path). Rows are read-only
-     * for the whole run — the record a writer patches lives in the anchors
-     * snapshot below, never in a row. Storage is stable — no realloc
-     * during workspace lifetime — so active_index can store row pointers
-     * directly (no idx+1 encoding). One index for both kinds: a path is
-     * one managed thing, and every lookup tests row->type for the kind
-     * it wants. */
+    /* The view: every enabled profile at HEAD, built by the partition and
+     * owned here (the rows are the arena's; manifest_free releases the
+     * index). Rows are read-only for the whole run — the record a writer
+     * patches lives in the anchors snapshot below, never in a row. The
+     * view's own index answers workspace_lookup: a path is one managed
+     * thing, and every lookup tests row->type for the kind it wants. */
+    manifest_t *manifest;                        /* Owned; freed in workspace_free */
+
+    /* Active slices, both kinds, each in filesystem_path order — the
+     * view's rows split by kind and sorted, so deploy's parent-before-
+     * child walk and the untracked scan's ancestor suppression see
+     * prefix order. Pointer arrays into the view (arena-allocated). */
     const manifest_row_t **active_files;         /* Active file rows (arena-allocated array) */
     size_t active_file_count;                    /* Number of active file rows */
     const manifest_row_t **active_dirs;          /* Active directory rows (arena-allocated array) */
     size_t active_dir_count;                     /* Number of active directory rows */
-    hashmap_t *active_index;                     /* fs_path → const manifest_row_t * (heap-allocated) */
-
-    /* TRANSITIONAL — die with state_entry_t. The file analyzer reads
-     * old_profile and the orphan analyzers read lifecycle, the two columns
-     * only the expected row carries. active_file_entries is index-aligned
-     * with active_files: entry i wraps row i. The orphan slices (out-of-
-     * scope or terminal lifecycle) borrow into the same arena snapshots
-     * as the active ones. */
-    const state_entry_t **active_file_entries;   /* Arena-allocated array */
-    const state_entry_t **orphan_files;          /* Arena-allocated array */
-    size_t orphan_file_count;                    /* Number of orphan files */
-    const state_entry_t **orphan_dirs;           /* Arena-allocated array */
-    size_t orphan_dir_count;                     /* Number of orphan directories */
 
     /* The record: every anchor, snapshot at load in filesystem_path order
      * and indexed by path. Values are mutable — workspace_observe and
@@ -123,6 +108,12 @@ struct workspace {
     anchor_t *anchors;                           /* Arena snapshot from state_get_all_anchors */
     size_t anchor_count;                         /* Number of anchors in the snapshot */
     hashmap_t *anchor_index;                     /* fs_path → anchor_t * (heap-allocated) */
+
+    /* Orphans: the records whose path the view lacks, in the snapshot's
+     * path order. Read-only — no row names an orphan's path, so no writer
+     * ever reaches one; the orphan analysis asks Git why each is here. */
+    const anchor_t **orphans;                    /* Arena-allocated array into the snapshot */
+    size_t orphan_count;                         /* Number of orphans */
 
     /* State and profile scope */
     state_t *state;                              /* Deployment state (borrowed from caller) */
@@ -144,15 +135,15 @@ struct workspace {
     size_t diverged_capacity;                    /* Allocated capacity of diverged array */
     hashmap_t *diverged_index;                   /* Maps filesystem_path -> array index+1 (as void*) */
 
-    /* Anchor updates accumulated during divergence analysis */
-    anchor_update_t *anchor_updates;             /* Pending slow-path updates (owned) */
-    size_t anchor_update_count;                  /* Number of pending updates */
-    size_t anchor_update_capacity;               /* Allocated capacity of updates array */
+    /* Confirmations accumulated during divergence analysis */
+    confirmation_t *confirmations;               /* Pending slow-path confirmations (owned) */
+    size_t confirmation_count;                   /* Number of pending confirmations */
+    size_t confirmation_capacity;                /* Allocated capacity of confirmations array */
 
     /* Observations accumulated during analysis.
      *
      * Rows of either kind found on disk with no record. An observation
-     * needs only the row — the timestamp is the flush's; an anchor update
+     * needs only the row — the timestamp is the flush's; a confirmation
      * also carries the stat it confirmed, hence the richer element type
      * above. */
     const manifest_row_t **observations;         /* Rows borrowed from the active slices (array owned) */
@@ -227,7 +218,7 @@ static error_t *workspace_create_empty(
  *
  * Data-centric approach: Accepts values directly instead of structs, enabling use with
  * both manifest rows (manifest_row_t) and metadata (metadata_item_t) without conversion.
- * This eliminates Git loads for files (uses cached VWD fields) while preserving metadata
+ * This eliminates Git loads for files (uses the row's fields) while preserving metadata
  * functionality for directories.
  *
  * @param expected_mode Expected permission mode (0 = skip mode check, no metadata tracked)
@@ -311,25 +302,32 @@ error_t *check_item_metadata_divergence(
  *
  * Adds a file or directory with divergence to the workspace tracking list.
  *
+ * Every string is borrowed for the workspace's lifetime: a row's (the
+ * view, arena), a record's (the anchors snapshot, arena), the untracked
+ * scan's arena copies, or — the profile of an untracked item — the
+ * enabled set's, which the scope keeps alive past workspace_free by
+ * contract. Nothing is copied here.
+ *
  * @param ws Workspace context (must not be NULL)
  * @param filesystem_path Target path on filesystem (must not be NULL)
  * @param storage_path Path in profile (can be NULL for directories)
- * @param profile Source profile name — every producer passes one (a state
- *                row's, NOT NULL in the schema, or a metadata claim's)
- * @param old_profile Previous profile from state (can be NULL, caller must free on error)
+ * @param profile Source profile name — every producer passes one (a
+ *                row's, a record's, or the enabled set's)
+ * @param old_profile The record's profile when it differs from the row's
+ *                    (can be NULL)
  * @param state Where the item exists (deployed/undeployed/etc.)
  * @param divergence What's wrong with it (bit flags, can combine)
  * @param item_kind FILE or DIRECTORY (explicit type)
  * @param on_filesystem Exists on actual filesystem
  * @param profile_enabled Is source profile in enabled list?
- * @param profile_changed Has owning profile changed vs state?
+ * @param profile_changed Has owning profile changed vs the record?
  */
 static error_t *workspace_add_diverged(
     workspace_t *ws,
     const char *filesystem_path,
     const char *storage_path,
     const char *profile,
-    char *old_profile,
+    const char *old_profile,
     workspace_state_t state,
     divergence_type_t divergence,
     path_kind_t item_kind,
@@ -339,6 +337,7 @@ static error_t *workspace_add_diverged(
 ) {
     CHECK_NULL(ws);
     CHECK_NULL(filesystem_path);
+    CHECK_NULL(profile);
 
     /* Grow array if needed */
     if (ws->diverged_count >= ws->diverged_capacity) {
@@ -358,11 +357,13 @@ static error_t *workspace_add_diverged(
     workspace_item_t *entry = &ws->diverged[ws->diverged_count];
     memset(entry, 0, sizeof(workspace_item_t));
 
-    /* Borrow filesystem_path and storage_path directly — callers must
-     * ensure these are arena-backed or arena_strdup'd before passing. */
+    /* Borrow every string — callers pass workspace-lifetime pointers (see
+     * the doc above); the casts discard the const the producers' read-
+     * only views carry. */
     entry->filesystem_path = (char *) filesystem_path;
     entry->storage_path = (char *) storage_path;
-    entry->profile = arena_strdup(ws->arena, profile);
+    entry->profile = (char *) profile;
+    entry->old_profile = (char *) old_profile;
 
     entry->state = state;
     entry->divergence = divergence;
@@ -370,11 +371,6 @@ static error_t *workspace_add_diverged(
     entry->on_filesystem = on_filesystem;
     entry->profile_enabled = profile_enabled;
     entry->profile_changed = profile_changed;
-    entry->old_profile = old_profile;  /* Ownership transfers on success (can be NULL) */
-
-    if (profile && !entry->profile) {
-        return ERROR(ERR_MEMORY, "Failed to allocate diverged entry");
-    }
 
     /* Store array index in hashmap for O(1) lookup */
     error_t *err = hashmap_set(
@@ -392,22 +388,24 @@ static error_t *workspace_add_diverged(
 }
 
 /**
- * Record an anchor advance for later flushing
+ * Record a confirmation for later flushing
  *
  * Called from analyze_file_divergence() when the slow path confirms CMP_EQUAL.
  * Accumulates the row and the stat it was verified with so
- * workspace_flush_updates() can persist them via workspace_anchor(). The
+ * workspace_flush_updates() can persist them via state_confirm(). The
  * blob the stat binds to is the row's — disk was found equal to it.
  *
  * OOM asymmetry — returns void on realloc failure. Every other path in
  * workspace analysis propagates ERR_MEMORY; this one deliberately does not.
- * The anchor advance is a pure performance optimization — it converts the
- * NEXT slow-path CMP_EQUAL into a fast-path short-circuit — not a correctness
- * invariant of the current analysis (which is already complete by the time
- * this is called). Dropping the record on realloc failure:
+ * The confirmation is a performance optimization — it converts the NEXT
+ * slow-path CMP_EQUAL into a fast-path short-circuit — and, for a record
+ * carrying a prune order, the write that voids the order; neither is a
+ * correctness invariant of the current analysis (which is already complete
+ * by the time this is called). Dropping the record on realloc failure:
  *   - Preserves the caller's already-correct divergence result.
  *   - Self-heals on the next status: the slow-path CMP_EQUAL re-confirms
- *     and re-records the anchor (assuming memory pressure has cleared).
+ *     and re-records the confirmation, and a fast-path hit on an ordered
+ *     record queues it again (assuming memory pressure has cleared).
  *   - Never produces an incorrect classification — worst case is one extra
  *     slow-path verification per dropped record.
  * Failing here to surface OOM would abort a workspace load that had already
@@ -415,29 +413,29 @@ static error_t *workspace_add_diverged(
  * worse UX for zero correctness gain.
  *
  * @param ws Workspace (must not be NULL)
- * @param row Active row whose anchor should advance (borrowed; workspace lifetime)
+ * @param row Active row disk was found equal to (borrowed; workspace lifetime)
  * @param st Verified filesystem stat
  */
-static void workspace_record_anchor_update(
+static void workspace_record_confirmation(
     workspace_t *ws,
     const manifest_row_t *row,
     const struct stat *st
 ) {
-    if (ws->anchor_update_count >= ws->anchor_update_capacity) {
-        size_t new_cap = ws->anchor_update_capacity
-                       ? ws->anchor_update_capacity * 2 : 16;
+    if (ws->confirmation_count >= ws->confirmation_capacity) {
+        size_t new_cap = ws->confirmation_capacity
+                       ? ws->confirmation_capacity * 2 : 16;
 
-        anchor_update_t *new_arr = realloc(
-            ws->anchor_updates,
-            new_cap * sizeof(anchor_update_t)
+        confirmation_t *new_arr = realloc(
+            ws->confirmations,
+            new_cap * sizeof(confirmation_t)
         );
         if (!new_arr) return;
 
-        ws->anchor_updates = new_arr;
-        ws->anchor_update_capacity = new_cap;
+        ws->confirmations = new_arr;
+        ws->confirmation_capacity = new_cap;
     }
 
-    ws->anchor_updates[ws->anchor_update_count++] = (anchor_update_t){
+    ws->confirmations[ws->confirmation_count++] = (confirmation_t){
         .row = row,
         .stat = stat_cache_from_stat(st),
     };
@@ -446,12 +444,12 @@ static void workspace_record_anchor_update(
 /**
  * Record an observation for later flushing
  *
- * Sibling of workspace_record_anchor_update for the path with no record:
+ * Sibling of workspace_record_confirmation for the path with no record:
  * analysis found it on disk, either kind, and dotta has never observed it
  * in scope. Only the row is accumulated — the observation timestamp is
  * the flush's.
  *
- * Same OOM asymmetry as the anchor recorder, for the same reason: a
+ * Same OOM asymmetry as the confirmation recorder, for the same reason: a
  * dropped observation costs no correctness, only a deferral to the next
  * observation event (next flush, apply's post-deploy pass), each of which
  * re-derives it from a live lstat.
@@ -499,13 +497,11 @@ static workspace_state_t classify_absent(const anchor_t *anchor) {
 }
 
 /**
- * Analyze divergence for a single active row using VWD cache
+ * Analyze divergence for a single active row
  *
- * Uses the VWD (Virtual Working Directory) cache embedded in the state
- * row to perform divergence detection without database queries. All
- * expected state (blob_oid, type, mode, etc.) is already in the row; the
- * record dotta keeps of the path is paired with it from the anchors
- * snapshot.
+ * All expected state (blob_oid, type, mode, etc.) is in the view row —
+ * no database queries, no Git; the record dotta keeps of the path is
+ * paired with it from the anchors snapshot.
  *
  * Content is judged three-way, with the deployment anchor as base (see
  * Phase 1): DIVERGENCE_STALE says Git moved past the blob dotta last
@@ -514,22 +510,27 @@ static workspace_state_t classify_absent(const anchor_t *anchor) {
  * overwrites nothing of the user's; CONTENT without STALE is a local
  * edit Git has not raced; both together is a conflict.
  *
- * TRANSITIONAL signature: takes the state entry for its old_profile,
- * the one column the expected row still carries that the view will
- * not; everything else is read from entry->row.
+ * Reassignment is the same pairing read on the profile axis: the record
+ * says who deployed the disk content, the row says who owns the path
+ * now, and the two differing is a state — "disk holds what A deployed;
+ * B owns the path now" — that apply acknowledges by rewriting the record
+ * (the adoption loop for a clean row, the deployment itself for a stale
+ * one). Only an owned record qualifies: an observed or confirmed record
+ * that dotta never deployed names the row the path was first seen
+ * under, not a deployer, and apply adopts such a path rather than
+ * acknowledging it.
  *
  * @param ws Workspace (must not be NULL)
- * @param entry Active state entry with VWD cache (must not be NULL)
+ * @param row Active view row (must not be NULL)
  * @return Error or NULL on success
  */
 static error_t *analyze_file_divergence(
     workspace_t *ws,
-    const state_entry_t *entry
+    const manifest_row_t *row
 ) {
     CHECK_NULL(ws);
-    CHECK_NULL(entry);
+    CHECK_NULL(row);
 
-    const manifest_row_t *row = &entry->row;
     const char *fs_path = row->filesystem_path;
     const char *storage_path = row->storage_path;
     const char *profile = row->profile;
@@ -538,6 +539,13 @@ static error_t *analyze_file_divergence(
      * never observed the path on disk in scope: no base for the content
      * question, no fast path, and absence reads UNDEPLOYED. */
     const anchor_t *anchor = workspace_anchor_of(ws, fs_path);
+
+    /* Reassignment, derived (see the doc above): an owned record under a
+     * profile other than the row's. old_profile borrows the record's
+     * string for the item (workspace lifetime). */
+    bool profile_changed = anchor && anchor->deployed_at > 0 &&
+        strcmp(anchor->profile, profile) != 0;
+    const char *old_profile = profile_changed ? anchor->profile : NULL;
 
     /* Single stat capture for the entire analysis
      *
@@ -565,12 +573,12 @@ static error_t *analyze_file_divergence(
              *
              * Returns here because every phase below needs a valid stat. */
             return workspace_add_diverged(
-                ws, fs_path, storage_path, profile, entry->old_profile,
+                ws, fs_path, storage_path, profile, old_profile,
                 WORKSPACE_STATE_DEPLOYED, DIVERGENCE_UNVERIFIED,
                 PATH_KIND_FILE,
                 true,                        /* on_filesystem (assumed present) */
                 true,                        /* profile_enabled */
-                entry->old_profile != NULL   /* profile_changed */
+                profile_changed
             );
         }
 
@@ -599,8 +607,8 @@ static error_t *analyze_file_divergence(
      * Buffer-based comparison for accurate divergence detection.
      *
      * Architecture:
-     * - Use blob_oid from VWD cache for content loading
-     * - Extract expected mode from VWD cache type field
+     * - Use the row's blob_oid for content loading
+     * - Extract expected mode from the row's type field
      * - Compare directly to filesystem file (compare_buffer_to_disk)
      * - Capture stat for permission checking (zero extra syscalls)
      *
@@ -635,10 +643,10 @@ static error_t *analyze_file_divergence(
      * construction — every invocation sees the same answer.
      */
     if (on_filesystem) {
-        /* VWD cache blob_oid is already a 20-byte binary OID — no parse step. */
+        /* The row's blob_oid is already a 20-byte binary OID — no parse step. */
         const git_oid *blob_oid_ptr = &row->blob_oid;
 
-        /* Extract expected filemode from VWD cache type field
+        /* Extract expected filemode from the row's type field
          *
          * Extracted before comparison strategy selection because both paths
          * need this value. Uses shared helper for consistent mapping.
@@ -687,6 +695,19 @@ static error_t *analyze_file_divergence(
             file_stat = initial_stat;
             disk_at_anchor = true;
             cmp_result = git_moved ? CMP_DIFFERENT : CMP_EQUAL;
+
+            /* A standing prune order (remove --delete-files) is void once
+             * the path is back under a live row and clean — the removal it
+             * answered was reverted. The slow path's CMP_EQUAL clears it
+             * through state_confirm; a fast-path hit is the same
+             * confirmation (disk is the row's blob, the stat vouched for
+             * it) and must take the same write, or the order outlives the
+             * removal and prunes the copy at the next scope exit instead
+             * of the probe releasing it. Queued only when there is an
+             * order to void: the fast path stays write-free otherwise. */
+            if (cmp_result == CMP_EQUAL && anchor->prune_ordered) {
+                workspace_record_confirmation(ws, row, &file_stat);
+            }
         } else {
             /* SLOW PATH: Full content comparison, ours vs theirs
              *
@@ -739,11 +760,11 @@ static error_t *analyze_file_divergence(
                 return error_wrap(err, "Failed to verify '%s'", fs_path);
             }
 
-            /* Slow path confirmed disk == expected blob — seed the anchor
+            /* Slow path confirmed disk == expected blob — confirm the record
              * with the row's blob and the current stat so the next run can
              * short-circuit via the fast path above. */
             if (cmp_result == CMP_EQUAL) {
-                workspace_record_anchor_update(ws, row, &file_stat);
+                workspace_record_confirmation(ws, row, &file_stat);
             }
 
             /* Second question — ours vs base — asked only when it can change
@@ -835,7 +856,7 @@ static error_t *analyze_file_divergence(
          * Guards against file deletion (CMP_MISSING) and type mismatches.
          *
          * PHASE A: Git filemode (executable bit)
-         *   - Check using VWD cache type field (converted to expected_mode)
+         *   - Check using the row's type field (converted to expected_mode)
          *   - Skip symlinks (exec bit doesn't apply)
          *   - Catches: file is 0755 in git but 0644 on disk (or vice versa)
          *
@@ -858,7 +879,7 @@ static error_t *analyze_file_divergence(
                 }
             }
 
-            /* PHASE B: Check full metadata using VWD cache
+            /* PHASE B: Check full metadata using the row
              *
              * Mode sentinel: row->mode == 0 means "no metadata tracked";
              * the check will be skipped by check_item_metadata_divergence().
@@ -867,9 +888,9 @@ static error_t *analyze_file_divergence(
             bool ownership_differs = false;
 
             error_t *check_err = check_item_metadata_divergence(
-                row->mode,     /* From VWD cache (mode_t, 0 = no metadata) */
-                row->owner,    /* From VWD cache (can be NULL) */
-                row->group,    /* From VWD cache (can be NULL) */
+                row->mode,     /* From the row (mode_t, 0 = no metadata) */
+                row->owner,    /* From the row (can be NULL) */
+                row->group,    /* From the row (can be NULL) */
                 &file_stat,
                 &mode_differs,
                 &ownership_differs
@@ -882,7 +903,7 @@ static error_t *analyze_file_divergence(
             /* Accumulate metadata divergence flags
              *
              * Examples of detected divergence:
-             * - Phase A passed (both non-exec), but file is 0600 in VWD, 0644 on disk
+             * - Phase A passed (both non-exec), but file is 0600 in the row, 0644 on disk
              * - Phase A detected exec bit diff, also detects group/other bits differ */
             if (mode_differs) divergence |= DIVERGENCE_MODE;
             if (ownership_differs) divergence |= DIVERGENCE_OWNERSHIP;
@@ -891,7 +912,7 @@ static error_t *analyze_file_divergence(
 
     /* PHASE 2: Reality-based classification
      *
-     * Use the record's existence to distinguish lifecycle states for
+     * Use the record's existence to distinguish the workspace states of
      * missing files. A record is created the first time dotta
      * lstat-confirms the path on disk in scope. Writers:
      *   - state_observe (the flush, for a path analysis found present with
@@ -932,21 +953,8 @@ static error_t *analyze_file_divergence(
         /* Keep accumulated divergence flags from Phase 1 */
     }
 
-    /* PHASE 3: Profile reassignment detection
-     *
-     * Read old_profile from the entry to detect reassignments. The manifest
-     * layer sets it when a file's owning profile changes (e.g., removed
-     * from high-precedence profile, fell back to lower). It is persisted
-     * in the database and remains set until acknowledged by successful
-     * deployment. The pointer is arena-backed (same lifetime as workspace).
-     */
-    bool profile_changed = (entry->old_profile != NULL);
-    char *old_profile = profile_changed ? entry->old_profile : NULL;
-
-    /* Maintain invariant: profile_changed implies old_profile is non-NULL */
-    if (profile_changed && !old_profile) profile_changed = false;
-
-    /* Add to workspace if there's any state change or divergence */
+    /* Add to workspace if there's any state change, divergence, or a
+     * reassignment (derived at the top, beside the record pairing). */
     if (state != WORKSPACE_STATE_DEPLOYED || divergence != DIVERGENCE_NONE || profile_changed) {
         error_t *err = workspace_add_diverged(
             ws, fs_path, storage_path, profile, old_profile, state,
@@ -966,15 +974,20 @@ static error_t *analyze_file_divergence(
  *
  * An orphan asks one question — is disk still what dotta put there? — so
  * prune safety is measured against the deployment anchor, never against
- * the VWD blob: Git may have moved on after the deployment and before the
- * path left scope, and that move is not the user's edit. The VWD blob
- * stands in only for a row dotta never confirmed (no record, or one
- * with no blob) — then it is the only content this row has ever been
- * measured against. DIVERGENCE_STALE is therefore never emitted here.
+ * a view blob: Git may have moved on after the deployment and before the
+ * path left scope, and that move is not the user's edit. The record is
+ * the honest reference on every axis — its blob and stat for content,
+ * its type, mode, owner and group for metadata: what dotta set there,
+ * not what the row later came to claim. DIVERGENCE_STALE is therefore
+ * never emitted here.
+ *
+ * Precondition: the record carries a confirmed blob. The caller
+ * (analyze_orphans) measures only a record dotta owns or one the user
+ * ordered pruned against a confirmed blob; a record with nothing to
+ * measure against is released, not measured.
  *
  * Architecture:
- * - Uses the record (blob_oid, stat) and VWD cached metadata (type, mode,
- *   owner, group)
+ * - Uses the record alone (blob_oid, stat, type, mode, owner, group)
  * - Anchor stat triple as the fast path, the same proof the active slice
  *   relies on: a match means the exact node dotta wrote, no hashing
  * - Leverages content cache with transparent encryption handling
@@ -987,50 +1000,40 @@ static error_t *analyze_file_divergence(
  * - Stat propagation (zero redundant lstat syscalls)
  *
  * @param ws Workspace (provides content_cache, repo)
- * @param row Orphan row with expected state (VWD cache; must not be NULL)
- * @param anchor The record dotta keeps of the path (NULL if none)
+ * @param anchor The record dotta keeps of the path (must not be NULL;
+ *               non-zero blob_oid)
  * @param in_stat Pre-captured stat from caller (must not be NULL)
  * @return Divergence flags or DIVERGENCE_UNVERIFIED on error
  */
 static divergence_type_t compute_orphan_divergence(
     workspace_t *ws,
-    const manifest_row_t *row,
     const anchor_t *anchor,
     const struct stat *in_stat
 ) {
     /* Defensive NULL checks */
-    if (!ws || !row || !in_stat) {
+    if (!ws || !anchor || !in_stat) {
         return DIVERGENCE_UNVERIFIED;
     }
 
-    const char *fs_path = row->filesystem_path;
-    const char *storage_path = row->storage_path;
-    const char *profile = row->profile;
+    const char *fs_path = anchor->filesystem_path;
+    const char *storage_path = anchor->storage_path;
+    const char *profile = anchor->profile;
 
-    /* Step 1: Choose the reference blob and validate it
+    /* Step 1: The reference blob
      *
-     * The record's blob when dotta has ever confirmed disk against one;
-     * the VWD blob otherwise (no record, or one observed but never
-     * confirmed). state.c's read path already rejects wrong-sized BLOB
-     * columns, so by the time we get here the OID should be well-formed.
-     * A zero reference (neither set) still indicates a bad row — treat it
-     * as corruption.
+     * The record's — the blob dotta last confirmed disk against. state.c's
+     * read path already rejects wrong-sized BLOB columns, and the caller
+     * guarantees a non-zero one, so by the time we get here the OID is
+     * well-formed.
      */
-    bool anchored = anchor && !git_oid_is_zero(&anchor->blob_oid);
-    const git_oid *reference = anchored ? &anchor->blob_oid : &row->blob_oid;
-    if (git_oid_is_zero(reference)) {
-        return DIVERGENCE_UNVERIFIED;
-    }
+    const git_oid *reference = &anchor->blob_oid;
 
-    /* Step 2: Extract expected filemode from type field
+    /* Step 2: Extract expected filemode from the record's type field
      *
      * Calculate once, use for both content comparison and mode checking.
-     * Uses shared helper for consistent mapping across modules. The
-     * metadata reference is still the row's, not the record's, so a type
-     * Git changed after the deployment is still compared on the slow path
-     * — held as [type], the safe side.
+     * Uses shared helper for consistent mapping across modules.
      */
-    git_filemode_t expected_mode = path_type_to_git_filemode(row->type);
+    git_filemode_t expected_mode = path_type_to_git_filemode(anchor->type);
 
     /* Stat for permission checking (receives copy from in_stat via comparison functions) */
     struct stat fresh_stat;
@@ -1049,11 +1052,11 @@ static divergence_type_t compute_orphan_divergence(
      * header and routes; plaintext takes the fast OID-hash-of-disk path,
      * encrypted decrypts via the cache and byte-compares. The routing
      * decision lives with the blob, so the orphan walker cannot route a
-     * different blob's state via row->encrypted by accident — an anchor
-     * may sit on the other side of an encryption-policy flip from the
-     * VWD blob. in_stat is forwarded to avoid redundant lstat. */
-    if (anchored
-        && anchor->stat.mtime != 0
+     * different blob's state by a cached flag by accident — the record
+     * carries no encrypted flag, and the blob dotta deployed may sit on
+     * the other side of an encryption-policy flip from what Git holds
+     * now. in_stat is forwarded to avoid redundant lstat. */
+    if (anchor->stat.mtime != 0
         && anchor->stat.mtime == (int64_t) in_stat->st_mtime
         && anchor->stat.size == (int64_t) in_stat->st_size
         && anchor->stat.ino == (uint64_t) in_stat->st_ino) {
@@ -1103,7 +1106,7 @@ static divergence_type_t compute_orphan_divergence(
             break;
 
         case CMP_DIFFERENT:
-            /* Disk left the blob dotta deployed (or, un-anchored, the VWD blob) */
+            /* Disk left the blob dotta deployed */
             divergence |= DIVERGENCE_CONTENT;
             break;
 
@@ -1157,7 +1160,7 @@ static divergence_type_t compute_orphan_divergence(
      * PHASE B: Full metadata (all permission bits + ownership)
      *   - Uses check_item_metadata_divergence() helper
      *   - Reuses fresh_stat from Step 3 (zero extra syscalls)
-     *   - Skipped if row->mode == 0 (no metadata tracked)
+     *   - Skipped if anchor->mode == 0 (no metadata claim recorded)
      *   - Separately tracks MODE and OWNERSHIP divergence
      */
     if (file_exists && !(divergence & DIVERGENCE_TYPE)) {
@@ -1174,8 +1177,8 @@ static divergence_type_t compute_orphan_divergence(
 
         /* PHASE B: Check full metadata using helper function
          *
-         * Mode sentinel: row->mode == 0 means "no metadata tracked",
-         * check will be skipped by check_item_metadata_divergence().
+         * Mode sentinel: anchor->mode == 0 means "no metadata claim
+         * recorded", check will be skipped by check_item_metadata_divergence().
          *
          * Uses fresh_stat populated by comparison function (same data as in_stat,
          * copied via out_stat parameter for consistent access pattern).
@@ -1184,9 +1187,9 @@ static divergence_type_t compute_orphan_divergence(
         bool ownership_differs = false;
 
         error_t *check_err = check_item_metadata_divergence(
-            row->mode,            /* From VWD cache (mode_t, 0 = no metadata) */
-            row->owner,           /* From VWD cache (can be NULL) */
-            row->group,           /* From VWD cache (can be NULL) */
+            anchor->mode,         /* From the record (mode_t, 0 = no claim) */
+            anchor->owner,        /* From the record (can be NULL) */
+            anchor->group,        /* From the record (can be NULL) */
             &fresh_stat,          /* Reuse stat from compare (CRITICAL: not initial_stat!) */
             &mode_differs,
             &ownership_differs
@@ -1214,15 +1217,23 @@ static divergence_type_t compute_orphan_divergence(
 /**
  * Per-profile authority cache entry (one analysis pass)
  *
- * exists: refs/heads/<profile> resolved at first sight.
- * tree:   the branch's HEAD tree, loaded lazily on the first in-tree
- *         question and kept for the rest of the pass; NULL until then and
- *         forever if !exists. Stored only on success, so "tree == NULL"
- *         also reads as "not loaded yet — try again" for the next row.
+ * exists:   refs/heads/<profile> resolved at first sight.
+ * tree:     the branch's HEAD tree, loaded lazily on the first in-tree
+ *           question and kept for the rest of the pass; NULL until then
+ *           and forever if !exists. Stored only on success, so "tree ==
+ *           NULL" also reads as "not loaded yet — try again" for the
+ *           next row.
+ * metadata: the tree's metadata.json, loaded lazily on the first
+ *           directory question (a directory is backed by a DIRECTORY
+ *           item, not by a tree entry) and kept likewise. A tree without
+ *           metadata.json stores an empty collection — a profile without
+ *           metadata backs no directory, and the lookup says so — so the
+ *           same rule holds: NULL is "not loaded yet", never "absent".
  */
 typedef struct {
     bool exists;
     git_tree *tree;
+    metadata_t *metadata;
 } authority_cache_t;
 
 /**
@@ -1233,7 +1244,8 @@ static void authority_cache_free(void *value) {
     if (!entry) {
         return;
     }
-    git_tree_free(entry->tree);   /* NULL-safe */
+    metadata_free(entry->metadata);   /* NULL-safe */
+    git_tree_free(entry->tree);       /* NULL-safe */
     free(entry);
 }
 
@@ -1247,45 +1259,47 @@ typedef enum {
 } orphan_authority_t;
 
 /**
- * Observe Git authority for an orphaned file
+ * Observe Git authority for an orphan
  *
  * "Does the profile that deployed this path still claim it?" — its branch
- * resolves and its HEAD tree has storage_path. It is the one observation
- * the workspace did not make before: the projection engine
- * (manifest_apply_scope, run by reconcile and every scope transition)
- * covers enabled profiles at HEAD, and a row it deliberately leaves alone
- * can still lose its Git backing. Three kinds of row reach this probe:
- *   - a disabled profile's rows — never projected, and its branch can be
- *     deleted, rebased or git rm'd behind them;
- *   - rows a scope change demoted for a reason the change did not cause
- *     — a dead branch, or another enabled profile's external removal
- *     projected in the same call — the engine gives every departure the
- *     call's INACTIVE leftover without asking why;
- *   - a re-enabled profile's INACTIVE rows whose path its HEAD no longer
- *     has — the engine preserves non-ACTIVE rows outside the view.
- * Only a live look at Git says which. Apply's cleanup preflight used to
- * take that look; status read the same items and could not see it, so it
- * predicted a prune where apply then released. Observed here, every
- * reader of orphan items shares one verdict, and cleanup's verdict phase
- * reads nothing but the item.
+ * resolves and its HEAD claims storage_path: a tree entry for a file, a
+ * DIRECTORY item of its metadata.json for a directory. One kind of row
+ * reaches this probe — a record whose path the view lacks — and three
+ * reasons it may be there are what the probe tells apart:
+ *   - the profile is disabled: its branch still claims the path, and the
+ *     deployed copy is dotta's to prune;
+ *   - the profile moved: it is enabled, but its --target changed between
+ *     a disable and an enable, so Git still backs the storage path at a
+ *     new location and the old one is dotta's to prune;
+ *   - Git let go: the branch was deleted, rebased or git rm'd behind the
+ *     record, an enabled branch is dead, or a pulled removal arrived —
+ *     the deployed copy is left alone.
+ * The enabled set cannot tell the second from the third; only a live
+ * look at Git can. Apply's cleanup preflight used to take that look;
+ * status read the same items and could not see it, so it predicted a
+ * prune where apply then released. Observed here, every reader of orphan
+ * items shares one verdict, and cleanup's verdict phase reads nothing
+ * but the item.
  *
  * Answers:
  *   BACKED      the orphan is dotta's to prune, divergence permitting
- *   LOST        Git cannot back the file: branch deleted externally
+ *   LOST        Git cannot back the path: branch deleted externally
  *               (content irrecoverable from any profile), or the path
  *               removed from a branch that still exists (git rm, rebase,
- *               fetch). The caller emits WORKSPACE_STATE_RELEASED — left
- *               on disk, row retires.
- *   UNVERIFIED  transient I/O, a locked packfile, a corrupt ref or tree.
- *               Authority cannot be determined and must not be guessed:
- *               LOST would retire the row, BACKED would prune the file.
- *               The caller marks DIVERGENCE_UNVERIFIED and the orphan is
- *               held until Git answers.
+ *               fetch; a directory item dropped from metadata). The
+ *               caller emits WORKSPACE_STATE_RELEASED — left on disk,
+ *               record retires.
+ *   UNVERIFIED  transient I/O, a locked packfile, a corrupt ref, tree or
+ *               metadata. Authority cannot be determined and must not be
+ *               guessed: LOST would retire the record, BACKED would prune
+ *               the file. The caller marks a file DIVERGENCE_UNVERIFIED
+ *               and the orphan is held until Git answers.
  *
  * @param repo Repository (must not be NULL)
  * @param cache profile → authority_cache_t (borrowed keys, owned values)
- * @param profile Row's profile (NOT NULL in the schema)
- * @param storage_path Row's storage path (NOT NULL in the schema)
+ * @param profile Record's profile (NOT NULL in the schema)
+ * @param storage_path Record's storage path (NOT NULL in the schema)
+ * @param kind What the record says stood there — decides which claim is asked for
  * @param out Receives the answer (must not be NULL)
  * @return ERR_MEMORY if the cache entry cannot be created; NULL otherwise
  */
@@ -1294,6 +1308,7 @@ static error_t *compute_orphan_authority(
     hashmap_t *cache,
     const char *profile,
     const char *storage_path,
+    path_kind_t kind,
     orphan_authority_t *out
 ) {
     CHECK_NULL(repo);
@@ -1347,13 +1362,56 @@ static error_t *compute_orphan_authority(
         entry->tree = tree;                 /* Ownership transfers to the cache */
     }
 
+    if (kind == PATH_KIND_DIRECTORY) {
+        /* A directory is claimed by metadata, not by the tree. Lazy-load
+         * the tree's metadata.json on the first directory question for
+         * this profile, under the same stored-only-on-success rule as the
+         * tree; a tree without one stores an empty collection, because
+         * "no metadata" is a settled answer (no directory is backed), not
+         * a failure to look. */
+        if (!entry->metadata) {
+            metadata_t *metadata = NULL;
+            error_t *err = metadata_load_from_tree(repo, entry->tree, profile, &metadata);
+            if (err) {
+                if (err->code != ERR_NOT_FOUND) {
+                    error_free(err);
+                    return NULL;                /* UNVERIFIED */
+                }
+                error_free(err);
+                err = metadata_create_empty(&metadata);
+                if (err) {
+                    error_free(err);
+                    return NULL;                /* UNVERIFIED */
+                }
+            }
+            entry->metadata = metadata;         /* Ownership transfers to the cache */
+        }
+
+        /* Backed iff metadata still claims the path as a directory. An
+         * item of another kind at the key is a path Git turned into a
+         * blob: the directory dotta made is no longer claimed as one. */
+        const metadata_item_t *item = NULL;
+        error_t *err = metadata_get_item(entry->metadata, storage_path, &item);
+        if (!err) {
+            *out = (item->kind == METADATA_ITEM_DIRECTORY)
+                ? ORPHAN_AUTHORITY_BACKED : ORPHAN_AUTHORITY_LOST;
+        } else if (err->code == ERR_NOT_FOUND) {
+            error_free(err);
+            *out = ORPHAN_AUTHORITY_LOST;
+        } else {
+            error_free(err);                    /* *out stays UNVERIFIED */
+        }
+
+        return NULL;
+    }
+
     /* Check if file exists in tree via path traversal
      *
      * Distinguish between "file not in tree" (GIT_ENOTFOUND) and actual
      * errors (GIT_ERROR, OOM). ENOTFOUND is the normal "removed from Git"
      * case. Actual errors should propagate so the caller can treat them
-     * as CANNOT_VERIFY rather than RELEASED — preserving the state entry
-     * is more conservative than removing it.
+     * as CANNOT_VERIFY rather than RELEASED — preserving the record is
+     * more conservative than removing it.
      */
     git_tree_entry *tree_entry = NULL;
     int rc = git_tree_entry_bypath(&tree_entry, entry->tree, storage_path);
@@ -1370,40 +1428,71 @@ static error_t *compute_orphan_authority(
 }
 
 /**
- * Analyze partitioned orphan candidates from the active-slice build
+ * Analyze the orphans — the records whose path the view lacks
  *
- * Each candidate was rejected by workspace_partition for exactly one of
- * two reasons:
- *   - Profile out of workspace scope (disabled or branch deleted)
- *   - Lifecycle terminal (LIFECYCLE_INACTIVE / LIFECYCLE_DELETED / LIFECYCLE_RELEASED)
+ * Each was set aside by workspace_partition because no active row names
+ * its path: the partition itself is the orphan predicate, and nothing
+ * about why a record is here is stored anywhere. Both kinds walk one
+ * loop; the record's type says which questions apply.
  *
- * No manifest probe is needed: the partition itself is the orphan
- * predicate.
+ * Per orphan, in order — presence, the prune order, the ownership gate,
+ * then Git authority:
+ *   - presence (one lstat, either kind — a dangling link is present):
+ *     an absent orphan is a reclaim whatever Git says, which keeps the
+ *     planners' "absent ⇒ DIVERGENCE_NONE" rule;
+ *   - the prune order (remove --delete-files): the user chose the fate
+ *     of the deployed copy, and Git is not asked. Honoured only with a
+ *     reference to measure the copy against — a directory (cleanup's
+ *     emptiness rule decides) or a file with a confirmed blob. A
+ *     prune-ordered file dotta never matched against anything falls
+ *     through to the gate: nothing could tell a clean copy from an
+ *     edited one, and the user learns at status and apply that the copy
+ *     stays, instead of a skip every run;
+ *   - the ownership gate: a record dotta never owned — observed, or
+ *     confirmed but never deployed — names a path the user put there
+ *     before it was managed. Released: the copy is left alone, the
+ *     record retires, and no tree is asked about it;
+ *   - Git authority (compute_orphan_authority) for an owned record: a
+ *     departure dotta discovers in Git — the branch deleted, rebased or
+ *     git rm'd, a pulled removal, a dead enabled branch — is LOST, and
+ *     the deployed copy is left alone (RELEASED); BACKED (a disabled
+ *     profile, a moved target) is dotta's to prune, divergence
+ *     permitting; UNVERIFIED holds a file until Git answers and is not
+ *     surfaced on a directory — an empty directory Git cannot vouch for
+ *     is still an empty directory, and the legend's "apply skips it"
+ *     would be a lie for it.
+ * Divergence for a prunable file is disk against what dotta last
+ * deployed — the record (compute_orphan_divergence); a directory's
+ * verdict is cleanup's emptiness rule, so its divergence stays NONE.
  *
- * Per orphan, in order: presence (one lstat), Git authority
- * (compute_orphan_authority — asked for present rows that are neither
- * the engine's RELEASED nor dotta's own DELETED), divergence (disk
- * against what dotta last deployed — the record, or the VWD blob for a
- * row it never deployed; compute_orphan_divergence). The three feed one
- * item: state (ORPHANED or RELEASED), divergence bits, on_filesystem.
- * RELEASED therefore has two sources that read identically downstream —
- * the lifecycle column, for the rows the consistency layer covers, and
- * the load-time observation, for the rows it does not.
+ * This enables status to predict apply behavior (cleanup_skip_reason
+ * maps the same bits to the skip):
+ * - DIVERGENCE_NONE -> Clean orphan, apply will prune
+ * - DIVERGENCE_CONTENT/TYPE -> Modified, apply will skip
+ * - DIVERGENCE_MODE/OWNERSHIP -> Metadata changed, apply will skip
+ * - DIVERGENCE_UNVERIFIED -> Cannot verify, apply will skip
+ * - WORKSPACE_STATE_RELEASED -> Git let go, or dotta never deployed it;
+ *   apply releases
+ *
+ * Presence comes first, so an absent record never reaches a RELEASED
+ * arm: whatever Git would have said, it reads [orphaned] [absent] and
+ * apply reclaims it. on_filesystem still travels with the item for
+ * cleanup's verdict phase, which reads the same flag.
  *
  * Each orphan is tagged with profile_enabled — whether its profile is in
  * the workspace's enabled set. It is a label, not a filter: every reader
  * sees every orphan, and apply's verbose breakdown ("N from disabled
  * profiles" / "N from enabled profiles") is its only consumer.
  */
-static error_t *analyze_orphaned_files(workspace_t *ws) {
+static error_t *analyze_orphans(workspace_t *ws) {
     CHECK_NULL(ws);
     CHECK_NULL(ws->profile_index);
 
-    if (ws->orphan_file_count == 0) {
+    if (ws->orphan_count == 0) {
         return NULL;
     }
 
-    /* profile → authority_cache_t for this pass. Keys borrow the rows'
+    /* profile → authority_cache_t for this pass. Keys borrow the records'
      * arena-backed profile strings, which outlive it. */
     hashmap_t *authority_cache = hashmap_borrow(8);
     if (!authority_cache) {
@@ -1412,19 +1501,19 @@ static error_t *analyze_orphaned_files(workspace_t *ws) {
 
     error_t *err = NULL;
 
-    for (size_t i = 0; i < ws->orphan_file_count; i++) {
-        const state_entry_t *state_entry = ws->orphan_files[i];
-        const manifest_row_t *row = &state_entry->row;
+    for (size_t i = 0; i < ws->orphan_count; i++) {
+        const anchor_t *anchor = ws->orphans[i];
 
-        const char *fs_path = row->filesystem_path;
-        const char *storage_path = row->storage_path;
-        const char *profile = row->profile;
+        const char *fs_path = anchor->filesystem_path;
+        const char *storage_path = anchor->storage_path;
+        const char *profile = anchor->profile;
+        path_kind_t kind = path_type_kind(anchor->type);
 
         bool profile_enabled = hashmap_has(ws->profile_index, profile);
 
         /* Single stat capture, reused for type verification, content
          * comparison, and metadata checks — eliminates redundant lstat
-         * syscalls. One rule for every orphan, whatever its lifecycle.
+         * syscalls. One rule for every orphan, whatever its kind.
          *
          * stat_valid tracks whether we have usable stat data:
          * - true: lstat succeeded, orphan_stat contains valid data
@@ -1437,9 +1526,9 @@ static error_t *analyze_orphaned_files(workspace_t *ws) {
         if (lstat(fs_path, &orphan_stat) != 0) {
             /* ENOENT: the orphan was already removed by hand — a reclaim.
              *
-             * Anything else (EACCES, EIO, ELOOP, …): assume the file exists
-             * but is inaccessible. We lack valid stat data, so divergence
-             * cannot be computed and becomes UNVERIFIED below, so:
+             * Anything else (EACCES, EIO, ELOOP, …): assume the path exists
+             * but is inaccessible. We lack valid stat data, so a file's
+             * divergence cannot be computed and becomes UNVERIFIED below, so:
              * - Status shows [orphaned, unverified] (user visibility)
              * - Apply skips removal (can't verify what we can't stat)
              */
@@ -1453,62 +1542,54 @@ static error_t *analyze_orphaned_files(workspace_t *ws) {
         workspace_state_t item_state = WORKSPACE_STATE_ORPHANED;
         divergence_type_t divergence = DIVERGENCE_NONE;
 
-        if (state_entry->lifecycle == LIFECYCLE_RELEASED) {
-            /* RELEASED by the engine: the path left its profile in Git — an
-             * external commit, a pulled removal, a vanished branch — and the
-             * consistency layer recorded it. No divergence computation
-             * needed — we're not deleting this file.
-             * It is left on the filesystem and its state entry retires.
-             *
-             * Presence is not consulted for the state — a row released
-             * while its file is gone still reads RELEASED here — but
-             * on_filesystem travels with the item and cleanup's verdict
-             * phase checks it first, so an absent released row is a
-             * reclaim there. The two orders agree on the outcome. */
+        /* Whether the copy can be measured at all: a directory against
+         * cleanup's emptiness rule, a file against a confirmed blob. */
+        bool measurable = (kind == PATH_KIND_DIRECTORY) ||
+            !git_oid_is_zero(&anchor->blob_oid);
+
+        if (!on_filesystem) {
+            /* Absent: ORPHANED with no divergence — a reclaim whatever Git
+             * says. */
+
+        } else if (anchor->prune_ordered && measurable) {
+            /* The user ordered the deployed copy pruned (remove
+             * --delete-files); Git is not asked. Divergence still protects
+             * an edited copy — cleanup's skip reasons read the same bits. */
+            if (kind == PATH_KIND_FILE) {
+                divergence = stat_valid
+                    ? compute_orphan_divergence(ws, anchor, &orphan_stat)
+                    : DIVERGENCE_UNVERIFIED;
+            }
+
+        } else if (anchor->deployed_at == 0) {
+            /* The ownership gate: dotta never put this here. Released —
+             * the copy is left alone and the record retires. A prune-
+             * ordered file with no confirmed blob lands here too: there
+             * is nothing to measure the order against. */
             item_state = WORKSPACE_STATE_RELEASED;
 
-        } else if (on_filesystem) {
-            /* LIFECYCLE_DELETED needs no authority question: dotta committed
-             * that deletion itself, so the profile's claim is not in doubt —
-             * asking would find the blob gone by design and misread it as
-             * external loss. Everything else asks Git. */
-            orphan_authority_t authority = ORPHAN_AUTHORITY_BACKED;
-
-            if (state_entry->lifecycle != LIFECYCLE_DELETED) {
-                err = compute_orphan_authority(
-                    ws->repo, authority_cache, profile, storage_path, &authority
-                );
-                if (err) {
-                    break;
-                }
+        } else {
+            /* Owned: ask the profile that deployed it whether it still
+             * claims the path. */
+            orphan_authority_t authority = ORPHAN_AUTHORITY_UNVERIFIED;
+            err = compute_orphan_authority(
+                ws->repo, authority_cache, profile, storage_path, kind, &authority
+            );
+            if (err) {
+                break;
             }
 
             if (authority == ORPHAN_AUTHORITY_LOST) {
-                /* Git cannot back the file. Left on disk, row retires — so
-                 * there is nothing a content comparison would decide. */
+                /* Git cannot back the path. Left on disk, record retires —
+                 * so there is nothing a content comparison would decide. */
                 item_state = WORKSPACE_STATE_RELEASED;
 
-            } else {
+            } else if (kind == PATH_KIND_FILE) {
                 /* Divergence for a prunable orphan: disk against what dotta
-                 * last deployed (the record; the VWD blob only for a row
-                 * dotta never deployed).
-                 *
-                 * This enables status to predict apply behavior
-                 * (cleanup_skip_reason maps the same bits to the skip):
-                 * - DIVERGENCE_NONE -> Clean orphan, apply will prune
-                 * - DIVERGENCE_CONTENT/TYPE -> Modified, apply will skip
-                 * - DIVERGENCE_MODE/OWNERSHIP -> Metadata changed, apply will skip
-                 * - DIVERGENCE_UNVERIFIED -> Cannot verify, apply will skip
-                 * - WORKSPACE_STATE_RELEASED -> Git let go, apply releases
-                 */
-                if (stat_valid) {
-                    divergence = compute_orphan_divergence(
-                        ws, row, workspace_anchor_of(ws, fs_path), &orphan_stat
-                    );
-                } else {
-                    /* Present but unstattable — nothing to compare against */
-                    divergence = DIVERGENCE_UNVERIFIED;
-                }
+                 * last deployed. */
+                divergence = stat_valid
+                    ? compute_orphan_divergence(ws, anchor, &orphan_stat)
+                    : DIVERGENCE_UNVERIFIED;
 
                 if (authority == ORPHAN_AUTHORITY_UNVERIFIED) {
                     /* Git could not vouch for the path: skip the orphan
@@ -1516,9 +1597,9 @@ static error_t *analyze_orphaned_files(workspace_t *ws) {
                     divergence |= DIVERGENCE_UNVERIFIED;
                 }
             }
+            /* else a directory: cleanup's emptiness rule decides, and an
+             * unanswered probe is not surfaced (see the doc above). */
         }
-        /* else absent: ORPHANED with no divergence — a reclaim whatever Git
-         * says, which keeps the planners' "absent ⇒ DIVERGENCE_NONE" rule. */
 
         err = workspace_add_diverged(
             ws,
@@ -1528,13 +1609,13 @@ static error_t *analyze_orphaned_files(workspace_t *ws) {
             NULL,               /* No old_profile for orphans */
             item_state,
             divergence,
-            PATH_KIND_FILE,
+            kind,
             on_filesystem,
             profile_enabled,
             false               /* No profile change for orphans */
         );
         if (err) {
-            err = error_wrap(err, "Failed to add orphaned/released file");
+            err = error_wrap(err, "Failed to add orphaned/released path");
             break;
         }
     }
@@ -1545,70 +1626,19 @@ static error_t *analyze_orphaned_files(workspace_t *ws) {
 }
 
 /**
- * Analyze partitioned orphan directories
- *
- * Each entry in ws->orphan_dirs was rejected from active scope by
- * workspace_partition: profile out of scope, or state INACTIVE/DELETED.
- * No skip checks here — every input is by construction an orphan.
- *
- * Presence is the whole observation: no authority question is asked for a
- * directory. Directories have no blob-level identity in Git to lose (the
- * tracked_directories vocabulary has no RELEASED for exactly that reason —
- * see state_lifecycle_t), and a directory row is only ever removed empty,
- * so acting on a stale claim can cost the user nothing.
- *
- * Each orphan is tagged with profile_enabled — whether its profile is in
- * the workspace's enabled set. It is a label, not a filter: every reader
- * sees every orphan, and apply's verbose breakdown ("N from disabled
- * profiles" / "N from enabled profiles") is its only consumer.
- */
-static error_t *analyze_orphaned_directories(workspace_t *ws) {
-    CHECK_NULL(ws);
-    CHECK_NULL(ws->profile_index);
-
-    for (size_t i = 0; i < ws->orphan_dir_count; i++) {
-        const manifest_row_t *row = &ws->orphan_dirs[i]->row;
-
-        bool profile_enabled = hashmap_has(ws->profile_index, row->profile);
-        bool on_filesystem = fs_exists(row->filesystem_path);
-
-        error_t *err = workspace_add_diverged(
-            ws,
-            row->filesystem_path,       /* Already arena-allocated */
-            row->storage_path,          /* Already arena-allocated */
-            row->profile,
-            NULL,                       /* No old_profile for orphans */
-            WORKSPACE_STATE_ORPHANED,   /* State: in state, not in profile */
-            DIVERGENCE_NONE,            /* Divergence: none */
-            PATH_KIND_DIRECTORY,
-            on_filesystem,
-            profile_enabled,
-            false                       /* No profile change for orphans */
-        );
-        if (err) {
-            return error_wrap(err, "Failed to add orphaned directory");
-        }
-    }
-
-    return NULL;
-}
-
-/**
- * Analyze divergence for every active row using VWD cache
+ * Analyze divergence for every active file row
  *
  * Walks the active file slice and compares each row against filesystem
- * reality. Iterates the transitional entry array (index-aligned with
- * ws->active_files) because the analyzer still reads old_profile.
+ * reality.
  *
- * Performance: O(N) where N = active row count. The row's VWD cache
- * (blob_oid, type, mode, etc.) and the indexed record eliminate N+1
- * database queries.
+ * Performance: O(N) where N = active row count. The row (blob_oid, type,
+ * mode, etc.) and the indexed record eliminate N+1 database queries.
  */
 static error_t *analyze_files_divergence(workspace_t *ws) {
     CHECK_NULL(ws);
 
     for (size_t i = 0; i < ws->active_file_count; i++) {
-        error_t *err = analyze_file_divergence(ws, ws->active_file_entries[i]);
+        error_t *err = analyze_file_divergence(ws, ws->active_files[i]);
         if (err) {
             return err;
         }
@@ -1619,24 +1649,32 @@ static error_t *analyze_files_divergence(workspace_t *ws) {
 
 /**
  * Compute workspace status
+ *
+ * INVALID is reserved for what the analysis could not establish: an item
+ * carrying DIVERGENCE_UNVERIFIED (an unreadable path, a comparison that
+ * could not run, a Git probe that did not answer) is one apply cannot
+ * resolve — it skips the item and the user must look. Everything else
+ * that is not clean is DIRTY: apply deploys, adopts, prunes, reclaims or
+ * releases it. An orphan is pending work, not an invalid workspace.
  */
 static workspace_status_t compute_workspace_status(const workspace_t *ws) {
     if (!ws) {
         return WORKSPACE_INVALID;
     }
 
-    bool has_orphaned = false;
+    bool has_unverified = false;
     bool has_warnings = false;
 
     for (size_t i = 0; i < ws->diverged_count; i++) {
         const workspace_item_t *item = &ws->diverged[i];
 
+        if (item->divergence & DIVERGENCE_UNVERIFIED) {
+            has_unverified = true;
+        }
+
         switch (item->state) {
             case WORKSPACE_STATE_ORPHANED:
             case WORKSPACE_STATE_RELEASED:
-                has_orphaned = true;
-                break;
-
             case WORKSPACE_STATE_UNDEPLOYED:
             case WORKSPACE_STATE_DELETED:
             case WORKSPACE_STATE_UNTRACKED:
@@ -1651,7 +1689,7 @@ static workspace_status_t compute_workspace_status(const workspace_t *ws) {
         }
     }
 
-    if (has_orphaned) {
+    if (has_unverified) {
         return WORKSPACE_INVALID;
     } else if (has_warnings) {
         return WORKSPACE_DIRTY;
@@ -1761,17 +1799,17 @@ static error_t *scan_directory_for_untracked(
             /* Check if this file is already tracked.
              *
              * Two checks needed:
-             * 1. Active index: the path is managed by an active enabled
-             *    profile — as a file, or as a tracked directory a file now
-             *    sits in place of (the directory analysis reports that as
-             *    [type]; it is not a new file)
+             * 1. The view: the path is managed by an enabled profile — as
+             *    a file, or as a tracked directory a file now sits in
+             *    place of (the directory analysis reports that as [type];
+             *    it is not a new file)
              * 2. Diverged index: file already classified (e.g., as released
-             *    or orphaned by prior analysis phases). Released files are
-             *    excluded from the active slice but already have diverged
-             *    entries — adding them as untracked would create duplicates.
+             *    or orphaned by prior analysis phases). Orphans are not in
+             *    the view but already have diverged entries — adding them
+             *    as untracked would create duplicates.
              */
             bool already_tracked =
-                (hashmap_get(ws->active_index, full_path) != NULL) ||
+                (manifest_lookup(ws->manifest, full_path) != NULL) ||
                 (hashmap_get(ws->diverged_index, full_path) != NULL);
 
             if (!already_tracked) {
@@ -1932,21 +1970,12 @@ static error_t *analyze_untracked_files(
              * profile slice. */
             if (strcmp(row->profile, profile) != 0) continue;
 
-            /* Skip directories already classified as orphaned by prior
-             * analysis (in-memory stale detection path: state still
-             * ACTIVE, but analyze_orphaned_directories has flagged the
-             * row against current Git). Scanning such directories would
-             * report [new] files that are actually [released]. */
-            if (hashmap_get(ws->diverged_index, row->filesystem_path) != NULL) {
-                continue;
-            }
-
-            /* State directory entries contain:
-             * - filesystem_path: Already resolved with target (VWD principle)
+            /* Directory rows carry:
+             * - filesystem_path: Already resolved with target (mount table)
              * - storage_path: Portable path for storage
              */
 
-            /* Use filesystem path directly from state (already resolved) */
+            /* Use filesystem path directly from the row (already resolved) */
             const char *filesystem_path = row->filesystem_path;
 
             /* Check if directory still exists */
@@ -2006,12 +2035,12 @@ static error_t *analyze_untracked_files(
  * - DIVERGENCE_OWNERSHIP: Directory owner/group changed (requires root)
  * - DIVERGENCE_UNVERIFIED: Directory could not be stat'd (inaccessible)
  *
- * ARCHITECTURE: Uses state (VWD) instead of metadata (Git) for directory
- * resolution. State contains filesystem_path already resolved with target,
+ * ARCHITECTURE: Reads the view's directory rows, not metadata (Git)
+ * directly. A row carries filesystem_path already resolved with target,
  * enabling correct divergence detection for custom/ prefix directories.
  *
  * Consumes ws->active_dirs from workspace_partition — every input is by
- * construction profile_in_scope AND lifecycle ACTIVE. No skip checks.
+ * construction a directory row of the view. No skip checks.
  */
 static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
     CHECK_NULL(ws);
@@ -2021,8 +2050,8 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
     for (size_t i = 0; i < ws->active_dir_count; i++) {
         const manifest_row_t *row = ws->active_dirs[i];
 
-        /* State directory entries contain:
-         * - filesystem_path: Already resolved with target (VWD principle)
+        /* Directory rows carry:
+         * - filesystem_path: Already resolved with target (mount table)
          * - storage_path: Portable path
          * - profile: Source profile
          * - mode, owner, group: Expected metadata
@@ -2206,9 +2235,9 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
  * Trusts the cache. After the write-time invariant established in
  * cmds/add.c and cmds/update.c, row->encrypted is byte-truth
  * (metadata.json:encrypted is stamped from content_classify_bytes at
- * the write boundary, then projected to the state DB column, then to
- * the in-memory state row). The audit reads the cached bool and
- * defers to encryption_policy_violation. Zero blob inflations.
+ * the write boundary, then projected onto the view row at build). The
+ * audit reads the cached bool and defers to encryption_policy_violation.
+ * Zero blob inflations.
  *
  * Per-blob byte-classification was the previous implementation's
  * regression: O(N) inflations per workspace_load against libgit2's
@@ -2272,8 +2301,8 @@ static error_t *analyze_encryption_policy_mismatch(
             existing->divergence |= DIVERGENCE_ENCRYPTION;
         } else {
             /* No existing divergence row for this file — encryption policy is the only issue.
-             * Classify lifecycle state from presence + the record, mirroring
-             * analyze_file_divergence Phase 2. */
+             * Classify the workspace state from presence + the record,
+             * mirroring analyze_file_divergence Phase 2. */
             struct stat enc_stat;
             bool on_filesystem = (lstat(row->filesystem_path, &enc_stat) == 0);
 
@@ -2305,194 +2334,114 @@ static error_t *analyze_encryption_policy_mismatch(
 }
 
 /**
- * Partition the expected rows into active and orphan slices, and snapshot
- * the record
+ * Order two rows by filesystem path (qsort callback)
  *
- * Loads the two expected-table snapshots (state_get_all_files,
- * state_get_all_directories) and walks each once to produce both
- * workspace partitions:
- *   - ws->active_files / ws->active_dirs (+ counts) and ws->active_index:
- *     in-scope ACTIVE rows (profile in enabled set, lifecycle ACTIVE), as
- *     manifest rows.
- *   - ws->orphan_files / ws->orphan_dirs (+ counts): rejected rows
- *     (out-of-scope profile or terminal lifecycle: INACTIVE/DELETED/
- *     RELEASED), as state entries — analyze_orphaned_files reads their
- *     lifecycle.
- * Then loads the anchors snapshot (state_get_all_anchors) and indexes it
- * by path as ws->anchor_index: the analyses pair each row with its record
- * through workspace_anchor_of, and the two writers patch the index's
- * values.
- *
- * The partition is the single source of truth for "is this row in scope?".
- * The orphan analyzers consume the orphan slices; analyses over the
- * active set walk the active slices. No defensive cleanup on error:
- * workspace_free is the single cleanup authority.
- *
- * Drift repair is handled upstream by workspace_load's manifest_reconcile
- * call, so active rows read here are current with Git by construction:
- * reconcile projects every enabled profile at HEAD, which is precisely
- * the active slice. The orphan slice holds the rows that projection does
- * not touch — a disabled profile's rows, and non-ACTIVE rows whose path
- * is not in any enabled HEAD — so for them analyze_orphaned_files
- * observes Git authority itself. tracked_directories never carries
- * LIFECYCLE_RELEASED (file-only lifecycle); the one predicate
- * (lifecycle != LIFECYCLE_ACTIVE) serves both tables without a RELEASED
- * branch.
- *
- * One index for both kinds, files inserted first: while the two expected
- * tables are separate a path can still appear in both, and the directory
- * row then wins the lookup. Both rows are still analysed — the analyses
- * walk the slices, not the index.
- *
- * Lifetime: every pointer (active rows, orphan rows, the pointer arrays,
- * the snapshot rows, the anchors) lives in ws->arena. Only the two
- * indexes are heap-allocated (hashmap_borrow), freed in workspace_free.
- *
- * Performance: O(M + D + A) — one pass over each snapshot, no probes.
+ * strcmp order is SQLite's BINARY order, which the slices carried when
+ * they were read from a table: a parent sorts before every path beneath
+ * it, which deploy's parent-before-child walk and the untracked scan's
+ * ancestor suppression both rely on.
  */
-static error_t *workspace_partition(workspace_t *ws) {
+static int compare_rows_by_path(const void *a, const void *b) {
+    const manifest_row_t *const *ra = a;
+    const manifest_row_t *const *rb = b;
+    return strcmp((*ra)->filesystem_path, (*rb)->filesystem_path);
+}
+
+/**
+ * Build the view, slice it by kind, snapshot the record, and set the
+ * orphans aside
+ *
+ * The join at the centre of every load. manifest_build computes the
+ * expected side — every enabled profile at HEAD, both kinds, one row per
+ * path — into ws->manifest; the rows are split into ws->active_files /
+ * ws->active_dirs (+ counts) and each slice is sorted by filesystem_path.
+ * Then the anchors snapshot (state_get_all_anchors) is indexed by path as
+ * ws->anchor_index — the analyses pair each row with its record through
+ * workspace_anchor_of, and the two writers patch the index's values — and
+ * every record whose path the view lacks is collected into ws->orphans,
+ * in the snapshot's path order.
+ *
+ * The partition is the single source of truth for "is this row in
+ * scope?": a path is managed iff the view has a row for it, and a record
+ * is an orphan iff it does not. The orphan analysis consumes ws->orphans;
+ * analyses over the active set walk the active slices. No defensive
+ * cleanup on error: workspace_free is the single cleanup authority.
+ *
+ * Lifetime: every pointer (the view's rows, the slices, the snapshot, the
+ * orphans array) lives in ws->arena. Only the two indexes (the view's and
+ * the anchors') are heap-allocated, freed in workspace_free through
+ * manifest_free and hashmap_free.
+ *
+ * Performance: O(M log M + A) — one tree walk per enabled profile
+ * (manifest_build), two sorts, one pass over the record; no probes.
+ */
+static error_t *workspace_partition(workspace_t *ws, const mount_table_t *mounts) {
     CHECK_NULL(ws);
     CHECK_NULL(ws->state);
     CHECK_NULL(ws->arena);
-    CHECK_NULL(ws->profile_index);
+    CHECK_NULL(ws->profiles);
+    CHECK_NULL(mounts);
 
-    state_entry_t *file_snapshot = NULL;
-    size_t file_snap_count = 0;
-    state_entry_t *dir_snapshot = NULL;
-    size_t dir_snap_count = 0;
-
-    /* Read every expected row into the workspace arena. The snapshots
-     * outlive this function; every active and orphan pointer below
-     * references rows inside them. */
-    error_t *err = state_get_all_files(
-        ws->state, ws->arena, &file_snapshot, &file_snap_count
+    /* The expected side, computed. mounts covers the enabled set (the
+     * caller built it from the same list). */
+    error_t *err = manifest_build(
+        ws->repo, ws->profiles, mounts, ws->arena, &ws->manifest
     );
     if (err) {
-        return error_wrap(err, "Failed to read manifest from state");
+        return error_wrap(err, "Failed to build manifest");
     }
 
-    err = state_get_all_directories(
-        ws->state, ws->arena, &dir_snapshot, &dir_snap_count
-    );
-    if (err) {
-        return error_wrap(err, "Failed to read tracked directories from state");
+    /* Slice by kind. Counted first so each slice is exact; the view's
+     * row order is unspecified, so each slice is sorted into prefix order
+     * afterwards. */
+    manifest_rows_t rows = manifest_rows(ws->manifest);
+    size_t file_count = 0;
+    size_t dir_count = 0;
+    for (size_t i = 0; i < rows.count; i++) {
+        if (rows.entries[i]->type == PATH_TYPE_DIRECTORY) dir_count++;
+        else file_count++;
     }
 
-    /* Active index always exists, even when empty. Sized to both snapshots
-     * (worst case = every row is active). hashmap_borrow keeps fs_path
-     * keys by reference — they live in the arena alongside the rows. */
-    size_t snap_total = file_snap_count + dir_snap_count;
-    ws->active_index = hashmap_borrow(snap_total > 0 ? snap_total : 64);
-    if (!ws->active_index) {
-        return ERROR(ERR_MEMORY, "Failed to create active index");
+    if (file_count > 0) {
+        ws->active_files = arena_calloc(ws->arena, file_count, sizeof(*ws->active_files));
+        if (!ws->active_files) {
+            return ERROR(ERR_MEMORY, "Failed to allocate file slice");
+        }
+    }
+    if (dir_count > 0) {
+        ws->active_dirs = arena_calloc(ws->arena, dir_count, sizeof(*ws->active_dirs));
+        if (!ws->active_dirs) {
+            return ERROR(ERR_MEMORY, "Failed to allocate directory slice");
+        }
     }
 
-    if (file_snap_count > 0) {
-        /* Allocate worst-case arrays (both partitions share the snapshot —
-         * the row buffer never gets duplicated). */
-        const manifest_row_t **active_files = arena_calloc(
-            ws->arena, file_snap_count, sizeof(*active_files)
-        );
-        const state_entry_t **active_file_entries = arena_calloc(
-            ws->arena, file_snap_count, sizeof(*active_file_entries)
-        );
-        const state_entry_t **orphan_files = arena_calloc(
-            ws->arena, file_snap_count, sizeof(*orphan_files)
-        );
-        if (!active_files || !active_file_entries || !orphan_files) {
-            return ERROR(ERR_MEMORY, "Failed to allocate file partition");
+    for (size_t i = 0; i < rows.count; i++) {
+        const manifest_row_t *row = rows.entries[i];
+        if (row->type == PATH_TYPE_DIRECTORY) {
+            ws->active_dirs[ws->active_dir_count++] = row;
+        } else {
+            ws->active_files[ws->active_file_count++] = row;
         }
-
-        size_t active_count = 0;
-        size_t orphan_count = 0;
-
-        /* Partition state rows: in-scope active → ws->active_files, others → orphans */
-        for (size_t i = 0; i < file_snap_count; i++) {
-            const state_entry_t *entry = &file_snapshot[i];
-            const manifest_row_t *row = &entry->row;
-
-            bool profile_in_scope = hashmap_has(ws->profile_index, row->profile);
-
-            /* Lifecycle terminal phases are rejected from the active slice
-             * and surfaced to orphan detection. */
-            bool lifecycle_terminal = (entry->lifecycle != LIFECYCLE_ACTIVE);
-
-            if (!profile_in_scope || lifecycle_terminal) {
-                /* Rejected: surface to orphan analysis.
-                 *   - Out-of-scope profile: disabled or branch deleted;
-                 *     tagged via profile_enabled in analyze_orphaned_files.
-                 *   - Lifecycle terminal: INACTIVE/DELETED/RELEASED. Loss
-                 *     of authority is read from entry->lifecycle, or
-                 *     observed against Git, inside analyze_orphaned_files. */
-                orphan_files[orphan_count++] = entry;
-                continue;
-            }
-
-            active_file_entries[active_count] = entry;
-            active_files[active_count++] = row;
-
-            /* Index by row pointer directly: the snapshot is allocated at
-             * load time and never grows, so pointers into it are stable
-             * for the workspace lifetime — no idx+1 encoding needed. */
-            err = hashmap_set(ws->active_index, row->filesystem_path, (void *) row);
-            if (err) {
-                return error_wrap(err, "Failed to populate active index");
-            }
-        }
-
-        /* Commit the file partition. */
-        ws->active_files = active_files;
-        ws->active_file_entries = active_file_entries;
-        ws->active_file_count = active_count;
-        ws->orphan_files = (orphan_count > 0) ? orphan_files : NULL;
-        ws->orphan_file_count = orphan_count;
     }
 
-    if (dir_snap_count > 0) {
-        const manifest_row_t **active_dirs = arena_calloc(
-            ws->arena, dir_snap_count, sizeof(*active_dirs)
+    if (ws->active_file_count > 0) {
+        qsort(
+            ws->active_files, ws->active_file_count, sizeof(*ws->active_files),
+            compare_rows_by_path
         );
-        const state_entry_t **orphan_dirs = arena_calloc(
-            ws->arena, dir_snap_count, sizeof(*orphan_dirs)
+    }
+    if (ws->active_dir_count > 0) {
+        qsort(
+            ws->active_dirs, ws->active_dir_count, sizeof(*ws->active_dirs),
+            compare_rows_by_path
         );
-        if (!active_dirs || !orphan_dirs) {
-            return ERROR(ERR_MEMORY, "Failed to allocate directory partition");
-        }
-
-        size_t active_count = 0;
-        size_t orphan_count = 0;
-
-        /* Partition state rows: in-scope active → ws->active_dirs, others → orphans */
-        for (size_t i = 0; i < dir_snap_count; i++) {
-            const state_entry_t *entry = &dir_snapshot[i];
-            const manifest_row_t *row = &entry->row;
-
-            bool profile_in_scope = hashmap_has(ws->profile_index, row->profile);
-            bool lifecycle_terminal = (entry->lifecycle != LIFECYCLE_ACTIVE);
-
-            if (!profile_in_scope || lifecycle_terminal) {
-                orphan_dirs[orphan_count++] = entry;
-                continue;
-            }
-
-            active_dirs[active_count++] = row;
-
-            err = hashmap_set(ws->active_index, row->filesystem_path, (void *) row);
-            if (err) {
-                return error_wrap(err, "Failed to populate active index");
-            }
-        }
-
-        /* Commit the directory partition. */
-        ws->active_dirs = active_dirs;
-        ws->active_dir_count = active_count;
-        ws->orphan_dirs = (orphan_count > 0) ? orphan_dirs : NULL;
-        ws->orphan_dir_count = orphan_count;
     }
 
     /* The record. Indexed by path so each row above finds its anchor in
      * O(1); the values are the snapshot's own records, which the writers
-     * patch in place. Keys borrow the snapshot's arena-backed paths. */
+     * patch in place. Keys borrow the snapshot's arena-backed paths. A
+     * record no row pairs with is an orphan; the snapshot is in path
+     * order, so the orphans come out in path order for free. */
     err = state_get_all_anchors(
         ws->state, ws->arena, &ws->anchors, &ws->anchor_count
     );
@@ -2505,12 +2454,23 @@ static error_t *workspace_partition(workspace_t *ws) {
         return ERROR(ERR_MEMORY, "Failed to create anchor index");
     }
 
+    if (ws->anchor_count > 0) {
+        ws->orphans = arena_calloc(ws->arena, ws->anchor_count, sizeof(*ws->orphans));
+        if (!ws->orphans) {
+            return ERROR(ERR_MEMORY, "Failed to allocate orphans");
+        }
+    }
+
     for (size_t i = 0; i < ws->anchor_count; i++) {
         anchor_t *anchor = &ws->anchors[i];
 
         err = hashmap_set(ws->anchor_index, anchor->filesystem_path, anchor);
         if (err) {
             return error_wrap(err, "Failed to populate anchor index");
+        }
+
+        if (!manifest_lookup(ws->manifest, anchor->filesystem_path)) {
+            ws->orphans[ws->orphan_count++] = anchor;
         }
     }
 
@@ -2540,45 +2500,14 @@ error_t *workspace_load(
     CHECK_NULL(arena);
     CHECK_NULL(out);
 
-    /* Workspace scope is the persistent VWD enabled set — never the CLI
+    /* Workspace scope is the persistent enabled set — never the CLI
      * filter. The scope accessor type-enforces this invariant (see
      * scope.h's "Vocabulary" section). The pointer is borrowed from scope,
      * which must outlive the returned workspace. */
     const string_array_t *profiles = scope_enabled(scope);
 
-    /* Copy provided options */
-    workspace_load_t resolved_opts = *options;
-
-    /* Handle analysis dependencies.
-     * Orphan analysis requires file analysis (can't detect orphans without
-     * knowing what files exist in profiles). Auto-enable file analysis if
-     * orphans are requested to prevent invalid state. */
-    if (resolved_opts.analyze_orphans && !resolved_opts.analyze_files) {
-        resolved_opts.analyze_files = true;
-    }
-
     workspace_t *ws = NULL;
     error_t *err = NULL;
-
-    /* Reconcile VWD with Git before loading.
-     *
-     * External Git operations (git commit, rebase, rm, etc.) between dotta
-     * runs leave the manifest's commit_oid references behind the branch HEAD.
-     * manifest_reconcile detects drift per profile and, on drift, projects
-     * every enabled profile at HEAD: additions are projected, moved blobs
-     * advanced, rows that left are LIFECYCLE_RELEASED, and a path that
-     * returned to Git is reactivated. The deployment anchor is preserved by
-     * the UPSERT across this repair, so analyze_file_divergence can
-     * classify staleness from the persistent (anchor, blob_oid) pair
-     * regardless of whether reconcile actually ran on this invocation.
-     *
-     * Transaction scoping is internal to manifest_reconcile: uses the
-     * caller's transaction when locked, opens a scoped BEGIN IMMEDIATE
-     * otherwise. Common case (no drift) is O(P) and zero writes. */
-    err = manifest_reconcile(repo, state, arena, mounts, NULL, NULL);
-    if (err) {
-        return error_wrap(err, "Failed to reconcile manifest with Git");
-    }
 
     err = workspace_create_empty(repo, profiles, &ws);
     if (err) {
@@ -2593,24 +2522,23 @@ error_t *workspace_load(
     ws->content_cache = content_cache;
     ws->arena = arena;
 
-    /* Partition the file and directory snapshots into active + orphan
-     * slices and snapshot the record. The partition populates workspace
-     * fields directly; consumers read via workspace_files() /
-     * workspace_directories() / workspace_lookup() and pair rows with
-     * their records through workspace_anchor_of(). Drift was repaired
-     * upstream by manifest_reconcile, so the snapshots reflect current
-     * Git truth by construction. */
-    err = workspace_partition(ws);
+    /* Build the view, slice it, snapshot the record and set the orphans
+     * aside. The partition populates workspace fields directly; consumers
+     * read via workspace_files() / workspace_directories() /
+     * workspace_lookup() and pair rows with their records through
+     * workspace_anchor_of(). The view is computed from Git here, so it is
+     * current by construction — nothing upstream repairs anything. */
+    err = workspace_partition(ws, mounts);
     if (err) {
         workspace_free(ws);
-        return error_wrap(err, "Failed to partition state snapshots");
+        return error_wrap(err, "Failed to partition workspace");
     }
 
-    /* Execute analyses based on resolved_opts flags. Each analysis is
+    /* Execute analyses based on the options. Each analysis is
      * independently controllable for optimal performance. */
 
     /* Analyze file divergence (most common requirement) */
-    if (resolved_opts.analyze_files) {
+    if (options->analyze_files) {
         err = analyze_files_divergence(ws);
         if (err) {
             workspace_free(ws);
@@ -2618,23 +2546,17 @@ error_t *workspace_load(
         }
     }
 
-    /* Analyze orphaned state entries (files + directories) */
-    if (resolved_opts.analyze_orphans) {
-        err = analyze_orphaned_files(ws);
+    /* Analyze the orphans (records of either kind the view lacks) */
+    if (options->analyze_orphans) {
+        err = analyze_orphans(ws);
         if (err) {
             workspace_free(ws);
-            return error_wrap(err, "Failed to analyze orphaned files");
-        }
-
-        err = analyze_orphaned_directories(ws);
-        if (err) {
-            workspace_free(ws);
-            return error_wrap(err, "Failed to analyze orphaned directories");
+            return error_wrap(err, "Failed to analyze orphans");
         }
     }
 
     /* Analyze tracked directories for untracked files */
-    if (resolved_opts.analyze_untracked) {
+    if (options->analyze_untracked) {
         err = analyze_untracked_files(ws, config);
         if (err) {
             workspace_free(ws);
@@ -2643,7 +2565,7 @@ error_t *workspace_load(
     }
 
     /* Analyze directory metadata divergence */
-    if (resolved_opts.analyze_directories) {
+    if (options->analyze_directories) {
         err = analyze_directory_metadata_divergence(ws);
         if (err) {
             workspace_free(ws);
@@ -2652,7 +2574,7 @@ error_t *workspace_load(
     }
 
     /* Analyze encryption policy mismatches */
-    if (resolved_opts.analyze_encryption) {
+    if (options->analyze_encryption) {
         err = analyze_encryption_policy_mismatch(ws, config);
         if (err) {
             workspace_free(ws);
@@ -2746,14 +2668,22 @@ manifest_rows_t workspace_directories(const workspace_t *ws) {
 /**
  * Look up an active row by filesystem path
  *
- * O(1) hashmap probe over both active slices.
+ * O(1) probe over the view's own index — the active set is the view.
  */
 const manifest_row_t *workspace_lookup(
     const workspace_t *ws,
     const char *filesystem_path
 ) {
-    if (!ws || !filesystem_path) return NULL;
-    return hashmap_get(ws->active_index, filesystem_path);
+    if (!ws) return NULL;
+    return manifest_lookup(ws->manifest, filesystem_path);
+}
+
+/**
+ * The view the workspace was loaded against
+ */
+const manifest_t *workspace_manifest(const workspace_t *ws) {
+    if (!ws) return NULL;
+    return ws->manifest;
 }
 
 /**
@@ -2821,7 +2751,25 @@ bool workspace_item_extract_display_info(
                 tags_out[tag_count++] = "deleted";
             }
             *color_out = OUTPUT_COLOR_RED;
-            snprintf(metadata_buf, metadata_size, "from %s", item->profile);
+
+            /* A pending reassignment shows on a deleted path too: the
+             * record still names the profile that deployed the copy, and
+             * apply's redeploy from the new owner is what acknowledges it
+             * — the same pair the DEPLOYED arm prints. */
+            if (item->profile_changed) {
+                if (tag_count < WORKSPACE_ITEM_MAX_DISPLAY_TAGS) {
+                    tags_out[tag_count++] = "reassigned";
+                }
+            }
+
+            if (item->profile_changed && item->old_profile) {
+                snprintf(
+                    metadata_buf, metadata_size, "%s → %s",
+                    item->old_profile, item->profile
+                );
+            } else {
+                snprintf(metadata_buf, metadata_size, "from %s", item->profile);
+            }
             break;
 
         case WORKSPACE_STATE_DEPLOYED: {
@@ -3100,13 +3048,13 @@ error_t *workspace_observe(
 /**
  * Anchor a managed path with in-memory consistency
  *
- * Single workspace-scope writer for anchor advances: persists via
+ * Single workspace-scope writer for ownership events: persists via
  * state_anchor and assigns the canonical post-write record (the inputs
- * plus the two columns SQL RETURNING decided) into the snapshot — in
+ * plus the one column SQL RETURNING decided) into the snapshot — in
  * place when the path has a record, into a fresh arena record that is
  * then indexed when it has none. The SQL UPSERT is the single
- * specification of the deployed_at keep / observed_at INSERT-arm rules;
- * this function holds none of that logic.
+ * specification of the observed_at INSERT-arm rule; this function holds
+ * none of that logic.
  *
  * The map's value is the mutable record pointer; workspace_anchor_of
  * narrows it to const for every reader.
@@ -3115,14 +3063,13 @@ error_t *workspace_anchor(
     workspace_t *ws,
     const manifest_row_t *row,
     const stat_cache_t *stat,
-    time_t now,
-    bool own
+    time_t now
 ) {
     CHECK_NULL(ws);
     CHECK_NULL(row);
 
     anchor_t resolved;
-    error_t *err = state_anchor(ws->state, row, stat, now, own, &resolved);
+    error_t *err = state_anchor(ws->state, row, stat, now, &resolved);
     if (err) return err;
 
     anchor_t *existing = hashmap_get(ws->anchor_index, row->filesystem_path);
@@ -3146,25 +3093,31 @@ error_t *workspace_anchor(
 }
 
 /**
- * Flush accumulated anchor updates and observations to the state database
+ * Flush accumulated observations and confirmations to the state database
  *
- * Anchor half, first: advances the record for entries that hit CMP_EQUAL
- * on the slow path during analyze_file_divergence. The update carries the
- * fast-path stat triple and the row whose blob it confirms — persisting
- * them lets the next run short-circuit (fast path) or tag STALE directly
- * (fast path with Git-advanced blob_oid). own is false so state_anchor
- * keeps the row's existing deployed_at — this flush confirms an
- * observation but does not create a new deployment lifecycle event
- * (apply owns that).
+ * Observation half, first: records the first sighting of paths analysis
+ * found on disk with no record, either kind. Routes through
+ * workspace_observe, so the snapshot gains the same record the INSERT
+ * creates.
  *
- * Observation half, second: records the first sighting of paths analysis
- * found on disk with no record, either kind. A path in both halves was
- * confirmed a moment ago and has its record by now, so workspace_observe
- * finds it and writes nothing — one statement per path.
+ * Confirmation half, second: for entries that hit CMP_EQUAL on the slow
+ * path during analyze_file_divergence, state_confirm rewrites what the
+ * comparison established — the kind, the blob and the fast-path stat
+ * triple — and nothing of the claim the record carries: profile,
+ * storage path, mode, owner, group stay whatever the last ownership
+ * event wrote, so a confirmation against another profile's row keeps
+ * reading as the reassignment it is (the fast path, which writes
+ * nothing, would otherwise disagree with the slow path). Persisting the
+ * pair lets the next run short-circuit (fast path) or tag STALE directly
+ * (fast path with Git-advanced blob_oid). The in-memory record is
+ * patched on exactly the columns the UPDATE names — inline, because the
+ * flush is the one confirmer and state_confirm takes no mirror.
  *
- * Both route through their snapshot-write API — the accumulators already
- * carry the row pointers recorded at analyze time, which is exactly what
- * those wrappers expect. One such API per write; no parallel inline path.
+ * The order is load-bearing: a path in both halves had no record at
+ * analysis, and a confirmation is an UPDATE that creates nothing — one
+ * cannot confirm what one has not seen — so the observation's INSERT
+ * must land first. Observed first, the confirmation then finds its row
+ * on both sides.
  *
  * Begins its own transaction only when state isn't already in one
  * (status/diff/sync). Apply always passes state already-in-transaction.
@@ -3172,7 +3125,7 @@ error_t *workspace_anchor(
 error_t *workspace_flush_updates(workspace_t *ws) {
     CHECK_NULL(ws);
 
-    if (ws->anchor_update_count == 0 && ws->observation_count == 0) {
+    if (ws->observation_count == 0 && ws->confirmation_count == 0) {
         return NULL;
     }
 
@@ -3185,31 +3138,12 @@ error_t *workspace_flush_updates(workspace_t *ws) {
         error_t *err = state_begin(ws->state);
         if (err) {
             return error_wrap(
-                err, "Failed to begin anchor flush transaction"
+                err, "Failed to begin flush transaction"
             );
         }
     }
 
     time_t now = time(NULL);
-    for (size_t i = 0; i < ws->anchor_update_count; i++) {
-        const anchor_update_t *update = &ws->anchor_updates[i];
-
-        error_t *err = workspace_anchor(ws, update->row, &update->stat, now, false);
-        if (err) {
-            if (needs_transaction) {
-                state_rollback(ws->state);
-            }
-            return error_wrap(
-                err, "Failed to flush anchor for '%s'",
-                update->row->filesystem_path
-            );
-        }
-    }
-
-    /* Observations queued during analysis. Routes through
-     * workspace_observe for the same reason the loop above routes through
-     * workspace_anchor: one snapshot-write API per write, no parallel
-     * inline path. */
     for (size_t i = 0; i < ws->observation_count; i++) {
         const manifest_row_t *row = ws->observations[i];
 
@@ -3224,21 +3158,47 @@ error_t *workspace_flush_updates(workspace_t *ws) {
         }
     }
 
+    for (size_t i = 0; i < ws->confirmation_count; i++) {
+        const confirmation_t *c = &ws->confirmations[i];
+
+        error_t *err = state_confirm(ws->state, c->row, &c->stat);
+        if (err) {
+            if (needs_transaction) {
+                state_rollback(ws->state);
+            }
+            return error_wrap(
+                err, "Failed to flush confirmation for '%s'",
+                c->row->filesystem_path
+            );
+        }
+
+        /* Mirror the UPDATE on the record — present by now, unless the
+         * observation that would have created it was dropped under memory
+         * pressure (workspace_record_observation); then the UPDATE matched
+         * no row either, and both sides agree there is none. */
+        anchor_t *anchor = hashmap_get(ws->anchor_index, c->row->filesystem_path);
+        if (anchor) {
+            anchor->type = c->row->type;
+            anchor->blob_oid = c->row->blob_oid;
+            anchor->stat = c->stat;
+            anchor->prune_ordered = false;
+        }
+    }
+
     if (needs_transaction) {
         error_t *err = state_commit(ws->state);
         if (err) {
             /* A failed COMMIT leaves the transaction open; release it so
-             * the next scoped writer (sync's post-phase reconcile runs
-             * right after this flush) does not inherit it. */
+             * the next scoped writer does not inherit it. */
             state_rollback(ws->state);
             return error_wrap(
-                err, "Failed to commit anchor flush transaction"
+                err, "Failed to commit flush transaction"
             );
         }
     }
 
-    ws->anchor_update_count = 0;
     ws->observation_count = 0;
+    ws->confirmation_count = 0;
 
     return NULL;
 }
@@ -3254,22 +3214,23 @@ void workspace_free(workspace_t *ws) {
     /* Free diverged array (string fields are arena-borrowed, not freed individually) */
     free(ws->diverged);
 
-    /* Free the anchor update and observation arrays (row pointers are
-     * borrowed from the ws->arena snapshots) */
-    free(ws->anchor_updates);
+    /* Free the observation and confirmation arrays (row pointers are
+     * borrowed from the view) */
     free(ws->observations);
+    free(ws->confirmations);
 
     /* Free indices (values are borrowed, so pass NULL for value free function).
-     * active_index values are row pointers into ws->arena, anchor_index
-     * values are records in ws->arena — also borrowed. */
+     * anchor_index values are records in ws->arena — also borrowed. */
     hashmap_free(ws->profile_index, NULL);
     hashmap_free(ws->diverged_index, NULL);
-    hashmap_free(ws->active_index, NULL);
     hashmap_free(ws->anchor_index, NULL);
 
-    /* The slices, the snapshots and the anchors are arena-allocated; the
-     * caller's arena releases them when destroyed. ws->arena is borrowed
-     * — never destroyed here. */
+    /* The view: its index is the heap's, its rows the arena's. */
+    manifest_free(ws->manifest);
+
+    /* The slices, the snapshot and the orphans array are arena-allocated;
+     * the caller's arena releases them when destroyed. ws->arena is
+     * borrowed — never destroyed here. */
 
     free(ws);
 }

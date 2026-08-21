@@ -26,6 +26,7 @@ typedef struct {
     bool no_fetch;              /* Skip fetch before remote status check */
     bool all_profiles;          /* Show all profiles, not just enabled ones */
     bool no_sudo;               /* Skip privilege elevation (ownership checks disabled) */
+    bool full;                  /* List the whole manifest: every active row with its state */
 
     /* Intent flags (written by ARGS_FLAG; derived outputs below). */
     int want_local;             /* 1 if --local was seen */

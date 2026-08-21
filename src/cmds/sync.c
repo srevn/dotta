@@ -543,8 +543,8 @@ static void handle_remote_ahead(
         return;
     }
 
-    /* Pull succeeded. What the pull did to the manifest is reported by
-     * cmd_sync's manifest phase, once, after every profile's Git work. */
+    /* Pull succeeded. What the pull did to the view is reported by
+     * cmd_sync's manifest block, once, after every profile's Git work. */
     result->outcome = SYNC_OUTCOME_PULLED;
     output_styled(
         out, OUTPUT_NORMAL,
@@ -888,8 +888,8 @@ static error_t *handle_diverged(
  * Phase 3: Sync branches with remote (push/pull/divergence handling)
  *
  * Git only. Every pull, rebase, merge and reset moves a branch HEAD and
- * nothing else; the manifest catches up once, for every enabled profile,
- * in cmd_sync's manifest phase after this loop returns.
+ * nothing else; what that did to the view is read off once, for every
+ * enabled profile, in cmd_sync's manifest block after this loop returns.
  */
 static error_t *sync_push_phase(
     git_repository *repo,
@@ -1188,7 +1188,7 @@ static void sync_render_dry_run(
  * Tallies per-row outcomes (single source of truth), disambiguates the
  * DIVERGED umbrella by the captured analyze-phase state into
  * needs_pull / needs_push / diverged buckets, then emits the count lines,
- * the session-level transfer stats, and — when the manifest phase staged,
+ * the session-level transfer stats, and — when the manifest block staged,
  * released or reassigned anything — the "Run apply" hint.
  *
  * The summary keeps the finer-grained user vocabulary; hook env (Tier 2)
@@ -1469,6 +1469,9 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
     /* Declare all resources, initialized to NULL. */
     error_t *err = NULL;
     workspace_t *ws = NULL;
+    const manifest_t *before = NULL;    /* The view ahead of the Git phase: the workspace's, or built under --force */
+    manifest_t *before_forced = NULL;   /* Owned when --force built it (no workspace to borrow from) */
+    manifest_t *after = NULL;           /* The view after the Git phase (owned) */
     scope_t *scope = NULL;
     sync_results_t *results = NULL;
     const char *remote_name = NULL;
@@ -1504,7 +1507,7 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
 
     /* Build operation scope
      *
-     *   scope_enabled — persistent VWD scope (passed to workspace_load).
+     *   scope_enabled — the persistent enabled set (passed to workspace_load).
      *   scope_active  — sync operation face (fetch / analyze / pull targets).
      */
     scope_inputs_t scope_inputs = {
@@ -1546,8 +1549,21 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
      *
      * Skip entirely when --force is used: the clean check result is unused, and
      * workspace_load can be expensive (filesystem analysis, directory scanning).
+     * Either way the view ahead of the Git phase is kept as `before`: the
+     * workspace's own, or — under --force, where no workspace is loaded —
+     * one built here, no disk involved. The block after the Git phase
+     * diffs it against the view the pulls produced.
      */
-    if (!opts->force) {
+    if (opts->force) {
+        err = manifest_build(
+            repo, scope_enabled(scope), ctx->mounts, ctx->arena, &before_forced
+        );
+        if (err) {
+            err = error_wrap(err, "Failed to build manifest");
+            goto cleanup;
+        }
+        before = before_forced;
+    } else {
         workspace_load_t ws_opts = {
             .analyze_files       = true,   /* Validate file state for uncommitted changes */
             .analyze_orphans     = false,  /* Orphans are apply's concern, not sync's */
@@ -1564,7 +1580,9 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
             goto cleanup;
         }
 
-        /* Persist deployment-anchor advances from slow-path CMP_EQUAL checks
+        before = workspace_manifest(ws);
+
+        /* Persist the observations and slow-path CMP_EQUAL confirmations
          * (self-healing optimization). Seeds the fast path for subsequent
          * status/apply calls. Non-fatal on failure — sync's workspace
          * validation still works correctly. */
@@ -1755,7 +1773,7 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
     }
 
     /* Build the hook invocation. Same struct is reused for both pre-sync
-     * (here) and post-sync (after the manifest phase). profiles_str / remote_env
+     * (here) and post-sync (after the manifest block). profiles_str / remote_env
      * are heap-allocated and freed at cleanup; sync_extras is a stack
      * literal whose lifetime is cmd_sync's frame — covers both fire sites. */
     profiles_str = string_array_join(scope_active(scope), " ");
@@ -1840,8 +1858,9 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
     /* Phase 3: Sync with remote (push/pull/divergence handling)
      *
      * Git only — no state is written in this phase, so the write lock is
-     * never held across network IO. The manifest catches up in the phase
-     * that follows.
+     * never held across network IO. Nothing catches up afterwards either:
+     * the view is computed, and the block that follows only reports what
+     * the phase did to it.
      *
      * When all profiles are up-to-date and not in verbose mode, the sync
      * section is ephemeral — shown as progress during execution, cleared after.
@@ -1876,12 +1895,12 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
         goto cleanup;
     }
 
-    /* Manifest phase — one projection of every enabled profile at its
-     * post-sync HEAD, gated on drift so a sync that moved nothing writes
-     * nothing. Covers every pull and resolution above and — under --force,
-     * where no prelude ran — any local drift too. A non-force run repaired
-     * local drift in workspace_load's prelude already; that repair reports
-     * itself through status ([stale], [released]), not here.
+    /* Manifest block — the view after the Git phase, diffed against the
+     * view before it. A true delta in both modes: a local external commit
+     * that predates the sync is in `before` and `after` alike and is
+     * reported by its results (status's [stale], [released]), not here;
+     * what the block names is what the pulls and resolutions above did to
+     * the view. Sync writes no state.
      *
      * Attribution is per enabled profile. scope_enabled, never the -p
      * narrowed scope_active: precedence runs across the whole enabled set,
@@ -1891,73 +1910,85 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
      * to q is p's reassignment and q's claim; a path that moved between
      * two pulled profiles is one reassignment, never a transient release.
      *
-     * Sync updates the VWD's expected state; it does not deploy. Apply's
-     * divergence analysis does that, which is what the summary's hint
-     * points at.
+     * Sync does not deploy. Apply's divergence analysis does that, which
+     * is what the summary's hint points at.
      *
-     * Transaction scoping is reconcile's: it opens, commits and on any
-     * failure rolls back its own. A failure here is not sync's failure —
-     * every Git ref already moved and stands; commit_oid still lags, so the
-     * next command's prelude projects again. Warn and carry on. */
+     * A failed build is not sync's failure — every Git ref already moved
+     * and stands — and its message carries the repair (a pulled custom/
+     * path under a profile with no target, a tree that will not load):
+     * warn with it and carry on. */
     const string_array_t *enabled = scope_enabled(scope);
-    manifest_scope_stats_t *stats = arena_calloc(
-        ctx->arena, enabled->count, sizeof(*stats)
-    );
-    if (!stats) {
-        err = ERROR(ERR_MEMORY, "Failed to allocate manifest statistics");
-        goto cleanup;
-    }
-
     bool manifest_changed = false;
-    err = manifest_reconcile(repo, state, ctx->arena, ctx->mounts, enabled, stats);
+
+    err = manifest_build(repo, enabled, ctx->mounts, ctx->arena, &after);
     if (err) {
         output_warning(
-            out, OUTPUT_NORMAL, "Manifest update failed: %s", error_message(err)
-        );
-        output_hint(
-            out, OUTPUT_NORMAL, "Run 'dotta status' or 'dotta apply' to resync manifest"
+            out, OUTPUT_NORMAL, "Manifest build failed: %s", error_message(err)
         );
         error_free(err);
         err = NULL;
     } else {
-        for (size_t i = 0; i < enabled->count; i++) {
-            const manifest_scope_stats_t *s = &stats[i];
-            size_t staged = s->files_added + s->files_updated;
+        anchor_t *anchors = NULL;
+        size_t anchor_count = 0;
+        err = state_get_all_anchors(state, ctx->arena, &anchors, &anchor_count);
+        if (err) {
+            err = error_wrap(err, "Failed to read anchors");
+            goto cleanup;
+        }
 
-            /* Ghost reclaims (files_reclaimed) have no filesystem effect
-             * and ask nothing of the user; they are not printed. */
-            if (staged + s->files_orphaned + s->files_reassigned == 0) continue;
+        manifest_diff_stats_t *stats = arena_calloc(
+            ctx->arena, enabled->count, sizeof(*stats)
+        );
+        if (!stats) {
+            err = ERROR(ERR_MEMORY, "Failed to allocate manifest statistics");
+            goto cleanup;
+        }
+
+        err = manifest_diff(before, after, anchors, anchor_count, enabled, stats);
+        if (err) {
+            err = error_wrap(err, "Failed to diff manifest across sync");
+            goto cleanup;
+        }
+
+        for (size_t i = 0; i < enabled->count; i++) {
+            const manifest_diff_stats_t *s = &stats[i];
+            size_t staged = s->added + s->updated;
+
+            /* A departure with a record is a release apply carries out
+             * (the record retires, the copy stays); one with no record has
+             * no filesystem effect and asks nothing of the user, so it is
+             * not printed. */
+            size_t released = s->departed_owned + s->departed_observed;
+
+            if (staged + released + s->reassigned == 0) continue;
 
             if (!manifest_changed) {
                 output_section(out, OUTPUT_NORMAL, "Manifest");
                 manifest_changed = true;
             }
 
-            /* One line per profile, non-zero parts only. "released" is
-             * files_orphaned under the RELEASED leftover reconcile uses. */
+            /* One line per profile, non-zero parts only. */
             output_print(out, OUTPUT_NORMAL, "  %s:", s->profile);
             const char *sep = " ";
             if (staged > 0) {
                 output_print(out, OUTPUT_NORMAL, "%s%zu staged", sep, staged);
                 sep = ", ";
             }
-            if (s->files_orphaned > 0) {
-                output_print(
-                    out, OUTPUT_NORMAL, "%s%zu released", sep, s->files_orphaned
-                );
+            if (released > 0) {
+                output_print(out, OUTPUT_NORMAL, "%s%zu released", sep, released);
                 sep = ", ";
             }
-            if (s->files_reassigned > 0) {
+            if (s->reassigned > 0) {
                 output_print(
-                    out, OUTPUT_NORMAL, "%s%zu reassigned", sep, s->files_reassigned
+                    out, OUTPUT_NORMAL, "%s%zu reassigned", sep, s->reassigned
                 );
             }
             output_print(out, OUTPUT_NORMAL, "\n");
         }
     }
 
-    /* Post-sync fires once the Git phase and the manifest phase are done;
-     * a manifest failure was warned above and is not a reason to skip it. */
+    /* Post-sync fires once the Git phase and the manifest block are done;
+     * a failed build was warned above and is not a reason to skip it. */
     hook_fire_post(config, out, ctx->repo_path, &hook_inv);
 
     /* Final summary */
@@ -1969,10 +2000,12 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
 cleanup:
     /* Free resources in reverse order of allocation. state is borrowed
      * from the dispatcher and sync opens no transaction of its own (the
-     * prelude reconcile, the anchor flush and the manifest phase each
-     * scope theirs); workspace borrows scope's enabled array internally,
-     * so free workspace first, then scope. */
+     * flush scopes its own; nothing else writes); workspace borrows
+     * scope's enabled array internally, so free workspace first, then
+     * scope. `before` is the workspace's view unless --force built it. */
     if (current_branch) free(current_branch);
+    manifest_free(after);
+    manifest_free(before_forced);
     if (ws) workspace_free(ws);
     if (xfer) transfer_context_free(xfer);
     if (results) sync_results_free(results);

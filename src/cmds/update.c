@@ -13,6 +13,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <time.h>
 
 #include "base/arena.h"
 #include "base/args.h"
@@ -614,8 +615,8 @@ static error_t *update_metadata_for_profile(
                 /* Handle deleted directories (symmetric with the file
                  * branch above). Without this, the stat() below would fail
                  * with ENOENT and the metadata entry would survive,
-                 * letting the engine's directory rebuild re-activate a
-                 * directory the user just deleted. */
+                 * letting the view keep claiming a directory the user
+                 * just deleted. */
                 if (item->state == WORKSPACE_STATE_DELETED) {
                     if (metadata_has_item(metadata, item->storage_path)) {
                         err = metadata_remove_item(metadata, item->storage_path);
@@ -733,9 +734,8 @@ static error_t *update_metadata_for_profile(
      * removed, updates staged by the caller) — never against metadata
      * items, which omit unelevated symlinks. Only entries that carry
      * no actionable information are pruned — custom-attribute entries
-     * survive as potential empty-dir intent. Without this, manifest_
-     * sync_directories' overlay pass would re-activate the orphaned
-     * entry indefinitely. */
+     * survive as potential empty-dir intent. Without this, the view
+     * would keep claiming the orphaned entry indefinitely. */
     size_t pruned_dirs = 0;
     err = metadata_prune_directories(metadata, index, &pruned_dirs);
     if (err) {
@@ -1067,20 +1067,28 @@ static error_t *flatten_items_to_array(
 }
 
 /**
- * Update manifest after successful update operation
+ * Write the record after a successful update operation
  *
- * Called after ALL profile updates succeed. Keeps the manifest a Virtual
- * Working Directory: manifest_update_files projects every enabled
- * profile at its post-commit HEAD, then overlays what only update knows
- * about the items it committed — a modified or new file was captured
- * FROM disk (its anchor advances, so the next status takes the fast
- * path); a deleted file left Git (its row is a fallback's now, or is
- * purged). Three-way consistency: Git ↔ Manifest ↔ Filesystem.
+ * Called after ALL profile updates succeed. The view is computed, so
+ * nothing projects; what update writes is the one thing only it knows
+ * about the items it committed. A modified or new file was captured FROM
+ * disk, so for the row its profile won in the post-commit view the record
+ * advances to the just-committed blob with a fresh stat (the next status
+ * takes the fast path). A deleted path left Git by this commit: with no
+ * row left at the path its record retires (nothing backs it now); with a
+ * lower profile's row at the path it is a fallback — the record stays and
+ * reads [reassigned] until apply deploys it. The rule "anchor only the
+ * rows this profile won" is the same one add applies: a higher profile's
+ * row is its own, and its record is its own. Both kinds: a directory's
+ * claim (mode, ownership) is captured from disk exactly as add captures
+ * it, so the capture owns the directory the same way — the ownership the
+ * orphan gate asks for on scope exit — with no stat triple, a directory
+ * having no content to confirm.
  *
  * Algorithm:
  *   1. Begin write transaction on caller's handle
  *   2. Flatten items_by_profile into a single slice
- *   3. Call manifest_update_files() ONCE (one projection + O(N) overlays)
+ *   3. Build the post-commit view once; one lookup per item
  *   4. Commit transaction
  *   5. Set *out_updated = true
  *
@@ -1090,26 +1098,26 @@ static error_t *flatten_items_to_array(
  *   - items_by_profile contains profile → ptr_array_t mappings
  *
  * Postconditions:
- *   - Manifest projected for the enabled set; committed items overlaid
+ *   - The record written for the committed items as above
  *   - Transaction committed or rolled back atomically; state handle left clean
- *   - out_updated flag reflects whether manifest was updated
+ *   - out_updated flag reflects whether the record was written
  *
  * Error Handling:
- *   - Non-fatal: Git commits succeeded, manifest is a cache
+ *   - Non-fatal: Git commits succeeded and stand
  *   - On any error after begin_transaction, explicit rollback keeps state clean
  *     so the caller can continue to post-update hook and cleanup deterministically
- *   - Caller should warn user and suggest repair options
+ *   - Caller should warn user
  *
- * Performance: one projection + O(N) point lookups, N = updated files
+ * Performance: one view build + O(N) point lookups, N = updated items
  *
  * @param repo Git repository (must not be NULL)
  * @param state Caller's state handle (must not be NULL, must have open DB)
- * @param arena Scratch arena for the projection (must not be NULL)
+ * @param arena Arena for the view (must not be NULL)
  * @param mounts Per-machine mount table (must not be NULL)
  * @param items_by_profile Hashmap: profile → ptr_array_t* (must not be NULL)
  * @param opts Update options for verbose flag (must not be NULL)
  * @param out Output context for verbose logging (can be NULL)
- * @param out_updated Output flag: true if manifest was updated (must not be NULL)
+ * @param out_updated Output flag: true if the record was written (must not be NULL)
  * @return Error or NULL on success
  */
 static error_t *update_manifest_after_update(
@@ -1132,6 +1140,8 @@ static error_t *update_manifest_after_update(
 
     error_t *err = NULL;
     workspace_items_t all_items = { 0 };
+    string_array_t *enabled = NULL;
+    manifest_t *manifest = NULL;
     bool in_transaction = false;
 
     /* Initialize output */
@@ -1140,7 +1150,7 @@ static error_t *update_manifest_after_update(
     /* Begin write transaction on caller's handle */
     err = state_begin(state);
     if (err) {
-        return error_wrap(err, "Failed to begin manifest update transaction");
+        return error_wrap(err, "Failed to begin record update transaction");
     }
     in_transaction = true;
 
@@ -1155,30 +1165,53 @@ static error_t *update_manifest_after_update(
         goto commit;
     }
 
-    /* One projection, then the per-item overlays */
-    size_t synced = 0, removed = 0, fallbacks = 0;
-    err = manifest_update_files(
-        repo,
-        state,
-        arena,
-        mounts,
-        (const workspace_item_t **) all_items.entries,
-        all_items.count,
-        &synced,
-        &removed,
-        &fallbacks
-    );
-
+    /* The post-commit view, once */
+    err = state_get_profiles(state, &enabled);
     if (err) {
-        err = error_wrap(err, "Failed to sync manifest in bulk");
+        err = error_wrap(err, "Failed to get enabled profiles");
+        goto cleanup;
+    }
+    err = manifest_build(repo, enabled, mounts, arena, &manifest);
+    if (err) {
+        err = error_wrap(err, "Failed to build manifest");
         goto cleanup;
     }
 
-    /* manifest_update_files advances the deployment anchor for the
-     * synced (modified/new) entries. Deleted items and fallback resolutions
-     * correctly receive no anchor advance: there is no disk confirmation
-     * for a deleted path, and a fallback's disk stat may not correspond
-     * to the fallback blob_oid. */
+    /* One lookup per item, both kinds; the three arms of the header doc.
+     * A deleted path and a fallback receive no anchor: there is no disk
+     * confirmation for a deleted path, and a fallback's disk content is
+     * what this profile's blob was, not the fallback blob. */
+    time_t now = time(NULL);
+    size_t synced = 0, removed = 0, fallbacks = 0;
+
+    for (size_t i = 0; i < all_items.count; i++) {
+        const workspace_item_t *item = all_items.entries[i];
+        const manifest_row_t *row = manifest_lookup(manifest, item->filesystem_path);
+
+        if (item->state == WORKSPACE_STATE_DELETED) {
+            if (!row) {
+                err = state_retire_anchor(state, item->filesystem_path);
+                if (err) goto cleanup;
+                removed++;
+            } else if (strcmp(row->profile, item->profile) != 0) {
+                fallbacks++;
+            }
+            /* else: still this profile's row — the commit did not remove
+             * it; not ours to count. */
+            continue;
+        }
+
+        if (row && strcmp(row->profile, item->profile) == 0) {
+            if (item->item_kind == PATH_KIND_DIRECTORY) {
+                err = state_anchor(state, row, NULL, now, NULL);
+            } else {
+                stat_cache_t stat = stat_cache_from_path(row->filesystem_path);
+                err = state_anchor(state, row, &stat, now, NULL);
+            }
+            if (err) goto cleanup;
+            synced++;
+        }
+    }
 
     /* Verbose summary (emit before commit so failure diagnostics still have it) */
     if (synced > 0 || removed > 0 || fallbacks > 0) {
@@ -1192,7 +1225,7 @@ static error_t *update_manifest_after_update(
 commit:
     err = state_commit(state);
     if (err) {
-        err = error_wrap(err, "Failed to save manifest updates");
+        err = error_wrap(err, "Failed to save record updates");
         goto cleanup;
     }
     in_transaction = false;
@@ -1205,6 +1238,8 @@ cleanup:
     if (in_transaction) {
         state_rollback(state);
     }
+    manifest_free(manifest);
+    if (enabled) string_array_free(enabled);
     free((void *) all_items.entries);  /* Free array, not items (borrowed) */
 
     return err;
@@ -1858,17 +1893,17 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
      * and commits them to Git profiles. Analysis configuration:
      *
      * - analyze_files: Detects content and metadata changes in tracked files
-     * - analyze_orphans: Disabled - update doesn't process orphaned state entries
+     * - analyze_orphans: Disabled - update doesn't process orphaned records
      * - analyze_untracked: Discovers new files in tracked directories (when enabled)
      * - analyze_directories: Detects directory metadata changes for update
      * - analyze_encryption: Validates encryption policy for files being updated
      *
-     * Orphan detection is unnecessary because update operates on manifest entries
-     * (files from enabled profiles) and new files. Orphaned files (in state but not
+     * Orphan detection is unnecessary because update operates on view rows
+     * (files from enabled profiles) and new files. Orphans (recorded but not
      * in any enabled profile) are out of scope for update operations.
      *
      * State is borrowed from the dispatcher (ctx->state). Read-only analysis.
-     * The transaction for manifest updates opens later in update_manifest_after_update().
+     * The transaction for the record write opens later in update_manifest_after_update().
      */
     workspace_load_t ws_opts = {
         .analyze_files       = true,                    /* Detect content and metadata changes */
@@ -2085,15 +2120,14 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
         goto cleanup;
     }
 
-    /* Update manifest
+    /* Write the record
      *
-     * This maintains the manifest as a Virtual Working Directory - an expected
-     * state cache between Git and the filesystem. Captured files get their
-     * deployment anchor advanced because UPDATE captures them FROM the
-     * filesystem (already at target locations).
+     * Captured files get their record advanced because UPDATE captures
+     * them FROM the filesystem (already at target locations); the view
+     * itself is computed at every load and needs no update.
      *
-     * Non-fatal: If manifest update fails, Git commits still succeeded and
-     * the next command's reconcile projects the moved branches.
+     * Non-fatal: if the record write fails, Git commits still succeeded;
+     * the next status re-confirms the captured files on its slow path.
      */
     bool manifest_updated = false;
     error_t *manifest_err = update_manifest_after_update(
@@ -2108,19 +2142,16 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
     }
 
     if (manifest_err) {
-        /* Non-fatal: commits succeeded but manifest update failed. The
-         * branches moved past the stored HEADs, so the next command's
-         * reconcile projects them. */
+        /* Non-fatal: commits succeeded but the record write failed. The
+         * next load reads the committed blobs from Git and re-confirms
+         * the captured files against disk. */
         output_warning(
-            out, OUTPUT_NORMAL, "Failed to update manifest: %s",
+            out, OUTPUT_NORMAL, "Failed to update the record: %s",
             error_message(manifest_err)
         );
 
         output_info(
             out, OUTPUT_NORMAL, "Files committed to Git successfully"
-        );
-        output_hint(
-            out, OUTPUT_NORMAL, "Run 'dotta status' or 'dotta apply' to resync manifest"
         );
         error_free(manifest_err);
         /* Continue to post-update hook and success output */
@@ -2137,8 +2168,8 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
         updated_profile_count, updated_profile_count == 1 ? "" : "s"
     );
 
-    /* Manifest status feedback. The failure case already said what
-     * happened (warning + resync hint above). */
+    /* Record feedback. The failure case already said what happened
+     * (warning above). */
     if (manifest_updated) {
         output_info(
             out, OUTPUT_NORMAL,

@@ -24,11 +24,12 @@
  * re-decides nothing. The same stance as core/deploy.
  *
  * One producer per fact:
- * - what becomes of a present orphaned file: cleanup_preflight, from the
- *   item — RELEASED ⇒ released (left on disk, row retires — never pruned,
- *   --force included: dotta removes what it deployed and Git still backs,
- *   and lets go of what Git lost); cleanup_skip_reason ⇒ skipped unless
- *   --force; else prunable
+ * - what becomes of a present orphan, either kind: cleanup_preflight, from
+ *   the item — RELEASED ⇒ released (left on disk, record retires — never
+ *   pruned, --force included: dotta removes what it deployed and Git still
+ *   backs, and lets go of what Git lost or of what it never deployed); a
+ *   file with a cleanup_skip_reason ⇒ skipped unless --force; else
+ *   prunable, a directory's emptiness permitting
  * - what stands at an orphaned directory's path: one type probe, shared by
  *   preflight and execute so they cannot label it differently
  * - whether a directory ends up empty: fs_is_directory_empty_except with
@@ -85,7 +86,7 @@
  */
 typedef struct {
     ptr_array_t files;         /* ORPHANED / RELEASED file items in scope */
-    ptr_array_t directories;   /* ORPHANED directory items in scope, deepest first (prune order) */
+    ptr_array_t directories;   /* ORPHANED / RELEASED directory items in scope, deepest first (prune order) */
     ptr_array_t excluded;      /* Both kinds, spared by -e — reported, never touched */
 } cleanup_plan_t;
 
@@ -174,7 +175,7 @@ typedef enum {
  *                                  same way, so one item has one name in
  *                                  both places.
  *   DIVERGENCE_CONTENT             MODIFIED     — disk differs from what dotta
- *                                  deployed (the anchor), not from the VWD
+ *                                  deployed (the record), not from the
  *                                  blob Git may have moved on to
  *   DIVERGENCE_TYPE                TYPE_CHANGED
  *   DIVERGENCE_MODE / OWNERSHIP    MODE_CHANGED
@@ -229,7 +230,7 @@ typedef struct {
  *
  * Every planned item lands in exactly one bucket:
  *   plan->files       = prunable_files ∪ skipped_files ∪ released_files ∪ absent_files
- *   plan->directories = prunable_dirs  ∪ skipped_dirs  ∪ absent_dirs
+ *   plan->directories = prunable_dirs  ∪ skipped_dirs  ∪ released_dirs  ∪ absent_dirs
  *
  * Counts are bucket sizes: nothing downstream re-folds an array to recover
  * a split this phase already took. The preview and the confirmation prompt
@@ -264,6 +265,7 @@ typedef struct {
     /* Directories */
     ptr_array_t prunable_dirs;     /* Present, empty after the run's removals, nothing deploys in */
     ptr_array_t skipped_dirs;      /* Present; keeps something the run leaves, or not a directory */
+    ptr_array_t released_dirs;     /* Git no longer backs it, or dotta never made it → left alone, row retires */
     ptr_array_t absent_dirs;       /* Not there → row retires */
 } cleanup_preflight_result_t;
 
@@ -272,7 +274,8 @@ typedef struct {
  *
  * Files from the items alone — one test per item, in the order presence →
  * authority → skip reason; O(n) in the file count, no syscalls, because those
- * observations were made at workspace load. Directories from one probe and
+ * observations were made at workspace load. Directories: authority from the
+ * item (a released directory is left alone, unprobed), then one probe and
  * one readdir each, against the files above, the directories already
  * decided beneath them, and opts->deploying_*.
  *
@@ -301,21 +304,21 @@ void cleanup_preflight_result_free(cleanup_preflight_result_t *verdicts);
  * pruned_* guarantee a filesystem removal happened. reclaimed_* were
  * absent — at load, or by the time the run looked — so no removal happened
  * or was needed and only the row retires; callers report the two
- * distinctly, because a decision is not an effect. skipped_*,
- * released_files and the absent verdicts are confirmed here by passing
- * them through, never re-decided: the result is the one object apply's
- * record step reads, so "what ran → which rows retire" is read in one
- * place.
+ * distinctly, because a decision is not an effect. skipped_*, released_*
+ * and the absent verdicts are confirmed here by passing them through,
+ * never re-decided: the result is the one object apply's record step
+ * reads, so "what ran → which rows retire" is read in one place.
  *
  * Every planned item appears in exactly one bucket, so the receipt
  * accounts for the whole plan:
  *   plan->files       = pruned_files ∪ reclaimed_files ∪ released_files
  *                       ∪ skipped_files ∪ failed_files
- *   plan->directories = pruned_dirs ∪ reclaimed_dirs ∪ skipped_dirs
- *                       ∪ failed_dirs
+ *   plan->directories = pruned_dirs ∪ reclaimed_dirs ∪ released_dirs
+ *                       ∪ skipped_dirs ∪ failed_dirs
  *
  * Rows that retire: pruned_files, reclaimed_files, released_files,
- * pruned_dirs, reclaimed_dirs. Rows that stay: skipped_*, failed_*.
+ * pruned_dirs, reclaimed_dirs, released_dirs. Rows that stay: skipped_*,
+ * failed_*.
  */
 typedef struct {
     ptr_array_t pruned_files;      /* Unlinked */
@@ -325,6 +328,7 @@ typedef struct {
     ptr_array_t failed_files;      /* The removal errored */
     ptr_array_t pruned_dirs;       /* Removed */
     ptr_array_t reclaimed_dirs;    /* Absent; row retires */
+    ptr_array_t released_dirs;     /* Left alone; row retires */
     ptr_array_t skipped_dirs;      /* Predicted occupied, not a directory, or refused on removal */
     ptr_array_t failed_dirs;       /* The removal errored */
 } cleanup_result_t;

@@ -262,33 +262,25 @@ error_t *profile_build_file_index(
 );
 
 /**
- * Discover which profile(s) own a file
+ * Discover which profile(s) contain a file, across every local branch
  *
- * Two-tier resolution:
- * 1. enabled_only=true: Manifest fast path, O(1) via state DB index.
- *    Returns the single owning profile (precedence already resolved).
- *
- * 2. enabled_only=false: Branch scan, O(M×P) via profile_build_file_index().
- *    Returns ALL profiles containing the file across all local branches.
+ * Branch scan, O(M×D) where D = path depth: each branch's HEAD tree is
+ * asked for the one path. Returns ALL profiles containing the file,
+ * enabled or not — revert's question. A caller that wants the owning
+ * profile among the enabled set asks the view instead
+ * (manifest_lookup_storage on a manifest_build over the enabled
+ * profiles — list, show).
  *
  * The storage_path must already be resolved (use path_input_resolve() first).
  *
  * @param repo Repository (must not be NULL)
- * @param state State handle (must not be NULL; borrowed, not freed).
- *              Required on both paths for signature consistency, but
- *              read only on the enabled_only=true (manifest) path; the
- *              branch-scan path does not touch state.
  * @param storage_path Storage path (e.g., "home/.bashrc")
- * @param enabled_only If true, only search manifest (enabled profiles).
- *                     If false, search all local branches.
  * @param out_profiles Matching profile names (caller frees with string_array_free)
  * @return Error (ERR_NOT_FOUND if no match) or NULL on success
  */
 error_t *profile_discover_file(
     git_repository *repo,
-    const state_t *state,
     const char *storage_path,
-    bool enabled_only,
     string_array_t **out_profiles
 );
 

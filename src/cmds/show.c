@@ -19,8 +19,10 @@
 #include "base/refspec.h"
 #include "base/string.h"
 #include "base/timeutil.h"
+#include "core/manifest.h"
 #include "core/metadata.h"
 #include "core/profiles.h"
+#include "core/state.h"
 #include "infra/content.h"
 #include "infra/mount.h"
 #include "infra/path.h"
@@ -581,7 +583,7 @@ error_t *cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
 
     error_t *err = NULL;
     string_array_t *profiles = NULL;
-    string_array_t *matches = NULL;
+    manifest_t *manifest = NULL;
     const char *converted = NULL;
     const char *found_profile = NULL;
 
@@ -698,20 +700,29 @@ error_t *cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
         goto cleanup;
     }
 
-    /* Discover owning profile via manifest (O(1) indexed lookup) */
-    err = profile_discover_file(repo, state, search_path, true, &matches);
+    /* Discover owning profile via the view: the enabled set at HEAD with
+     * precedence resolved, so the storage path names at most one row */
+    err = state_get_profiles(state, &profiles);
     if (err) {
-        if (error_code(err) == ERR_NOT_FOUND) {
-            error_free(err);
-            err = ERROR(
-                ERR_NOT_FOUND, "File '%s' not found in enabled profiles",
-                opts->file_path
-            );
-        }
+        err = error_wrap(err, "Failed to get enabled profiles");
+        goto cleanup;
+    }
+    err = manifest_build(repo, profiles, mounts, ctx->arena, &manifest);
+    if (err) {
+        err = error_wrap(err, "Failed to build manifest");
         goto cleanup;
     }
 
-    found_profile = matches->items[0];
+    const manifest_row_t *row = manifest_lookup_storage(manifest, search_path);
+    if (!row) {
+        err = ERROR(
+            ERR_NOT_FOUND, "File '%s' not found in enabled profiles",
+            opts->file_path
+        );
+        goto cleanup;
+    }
+
+    found_profile = row->profile;
 
     /* Show the file */
     if (!opts->raw) {
@@ -729,8 +740,8 @@ error_t *cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
     );
 
 cleanup:
+    manifest_free(manifest);
     string_array_free(profiles);
-    if (matches) string_array_free(matches);
 
     return err;
 }

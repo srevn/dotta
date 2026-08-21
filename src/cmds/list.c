@@ -11,7 +11,6 @@
 
 #include <git2.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 #include <time.h>
 
@@ -21,6 +20,7 @@
 #include "base/output.h"
 #include "base/string.h"
 #include "base/timeutil.h"
+#include "core/manifest.h"
 #include "core/metadata.h"
 #include "core/profiles.h"
 #include "core/state.h"
@@ -560,7 +560,6 @@ static error_t *list_file_history(
     CHECK_NULL(out);
 
     bool verbose = output_is_verbose(out);
-    char *discovered_profile = NULL;
 
     /* Resolve input path to storage format (handles absolute, tilde, relative,
      * and storage paths). File need not exist on disk. */
@@ -574,26 +573,32 @@ static error_t *list_file_history(
     const char *profile = opts->profile;
 
     if (!profile) {
-        string_array_t *matches = NULL;
-        err = profile_discover_file(repo, state, storage_path, true, &matches);
+        /* The view over the enabled set: precedence resolved, so the storage
+         * path names one row and that row's profile is the owner. The row
+         * is the arena's; only the index is released here. */
+        string_array_t *enabled = NULL;
+        err = state_get_profiles(state, &enabled);
         if (err) {
-            if (error_code(err) == ERR_NOT_FOUND) {
-                error_free(err);
-                err = ERROR(
-                    ERR_NOT_FOUND, "File '%s' not found in enabled profiles\n"
-                    "Hint: Use 'dotta list -p <profile> %s' to specify a profile",
-                    storage_path, opts->file_path
-                );
-            }
-            return err;
+            return error_wrap(err, "Failed to get enabled profiles");
         }
 
-        discovered_profile = strdup(matches->items[0]);
-        string_array_free(matches);
-        if (!discovered_profile) {
-            return ERROR(ERR_MEMORY, "Failed to allocate profile name");
+        manifest_t *manifest = NULL;
+        err = manifest_build(repo, enabled, mounts, arena, &manifest);
+        string_array_free(enabled);
+        if (err) {
+            return error_wrap(err, "Failed to build manifest");
         }
-        profile = discovered_profile;
+
+        const manifest_row_t *row = manifest_lookup_storage(manifest, storage_path);
+        manifest_free(manifest);
+        if (!row) {
+            return ERROR(
+                ERR_NOT_FOUND, "File '%s' not found in enabled profiles\n"
+                "Hint: Use 'dotta list -p <profile> %s' to specify a profile",
+                storage_path, opts->file_path
+            );
+        }
+        profile = row->profile;
     }
 
     /* Verify profile exists and check if file is in current tree (fast pre-check).
@@ -602,9 +607,7 @@ static error_t *list_file_history(
     git_tree *tree = NULL;
     err = gitops_load_branch_tree(repo, profile, &tree, NULL);
     if (err) {
-        error_t *wrapped = error_wrap(err, "Profile '%s' not found", profile);
-        free(discovered_profile);
-        return wrapped;
+        return error_wrap(err, "Profile '%s' not found", profile);
     }
 
     git_tree_entry *check = NULL;
@@ -619,12 +622,10 @@ static error_t *list_file_history(
     file_history_t *history = NULL;
     err = stats_get_file_history(repo, profile, storage_path, &history);
     if (err) {
-        error_t *wrapped = error_wrap(
+        return error_wrap(
             err, "Failed to get history for '%s' in profile '%s'",
             storage_path, profile
         );
-        free(discovered_profile);
-        return wrapped;
     }
 
     /* Print header */
@@ -696,7 +697,6 @@ static error_t *list_file_history(
 
     /* Cleanup */
     stats_free_file_history(history);
-    free(discovered_profile);
 
     return NULL;
 }

@@ -10,11 +10,14 @@
 #include <string.h>
 
 #include "base/args.h"
+#include "base/array.h"
 #include "base/buffer.h"
 #include "base/error.h"
 #include "base/output.h"
+#include "core/manifest.h"
 #include "core/state.h"
 #include "crypto/keymgr.h"
+#include "infra/mount.h"
 #include "sys/passphrase.h"
 
 /**
@@ -198,7 +201,10 @@ static error_t *cmd_key_clear(
  */
 static error_t *cmd_key_status(
     keymgr *keymgr,
-    state_t *state,
+    git_repository *repo,
+    const state_t *state,
+    const mount_table_t *mounts,
+    arena_t *arena,
     const config_t *config,
     output_t *out
 ) {
@@ -340,11 +346,17 @@ static error_t *cmd_key_status(
         );
     }
 
-    /* Count and display encrypted files */
+    /* Count and display encrypted files: the view over the enabled set,
+     * whose rows carry the metadata-projected flag */
     output_section(out, OUTPUT_NORMAL, "Encrypted Files");
 
-    size_t encrypted_count = 0;
-    error_t *err = state_count_encrypted_files(state, &encrypted_count);
+    string_array_t *enabled = NULL;
+    manifest_t *manifest = NULL;
+    error_t *err = state_get_profiles(state, &enabled);
+    if (!err) {
+        err = manifest_build(repo, enabled, mounts, arena, &manifest);
+        string_array_free(enabled);
+    }
     if (err) {
         /* Non-fatal error - concise at normal, detail at verbose */
         output_print(
@@ -356,6 +368,13 @@ static error_t *cmd_key_status(
         );
         error_free(err);
     } else {
+        size_t encrypted_count = 0;
+        manifest_rows_t rows = manifest_rows(manifest);
+        for (size_t i = 0; i < rows.count; i++) {
+            if (rows.entries[i]->encrypted) encrypted_count++;
+        }
+        manifest_free(manifest);
+
         output_print(
             out, OUTPUT_NORMAL, "  Encrypted files in current profiles: %zu\n",
             encrypted_count
@@ -402,7 +421,10 @@ error_t *cmd_key(const dotta_ctx_t *ctx, const cmd_key_options_t *opts) {
             break;
 
         case KEY_ACTION_STATUS:
-            err = cmd_key_status(ctx->keymgr, ctx->state, config, out);
+            err = cmd_key_status(
+                ctx->keymgr, ctx->repo, ctx->state, ctx->mounts, ctx->arena,
+                config, out
+            );
             break;
 
         default:

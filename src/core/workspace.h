@@ -16,30 +16,26 @@
  * - Foundation for future features (auto-apply, conflict resolution)
  *
  * Snapshot ownership:
- *   The workspace is the authority for state-derived data within its
- *   lifetime. state_t exposes per-row CRUD and per-table snapshot loaders;
- *   downstream consumers (deploy, command-internal analyses) read snapshots
- *   through workspace accessors (workspace_files, workspace_directories,
- *   workspace_lookup, workspace_anchor_of) rather than calling
- *   state_get_all_* directly. Freshness of the expected side is
- *   established by the consistency layer: manifest_reconcile runs upstream
- *   of every workspace_load, and the two expected tables have exactly two
- *   writers — the projection engine (every scope transition and drift
- *   repair; sweep + UPSERT + reclaim for directories) and apply's
- *   orphan-row removal — so the workspace inherits a current view by
- *   construction. The record (anchors) has two writers while a workspace
- *   is live, workspace_observe and workspace_anchor, each of which
- *   patches the snapshot it persists through; retirements
- *   (state_retire_anchor, from apply's record step and the verbs) go to
- *   the database directly — no later reader in the run consults a
- *   retired path.
+ *   The workspace is the authority for the join within its lifetime: the
+ *   view (core/manifest.h — every enabled profile at HEAD, computed at
+ *   load, owned by the workspace) and the record (the anchors snapshot,
+ *   state_get_all_anchors). Downstream consumers (deploy, cleanup,
+ *   command-internal analyses) read both through workspace accessors
+ *   (workspace_files, workspace_directories, workspace_lookup,
+ *   workspace_anchor_of, workspace_manifest) rather than building a view
+ *   or calling state_get_all_anchors themselves. The view has no writer:
+ *   it is current by construction and nothing invalidates it. The record
+ *   has two writers while a workspace is live, workspace_observe and
+ *   workspace_anchor, each of which patches the snapshot it persists
+ *   through (the flush's confirmations patch inline, in this file);
+ *   retirements (state_retire_anchor, from apply's record step and the
+ *   verbs) go to the database directly — no later reader in the run
+ *   consults a retired path.
  *
- *   Exceptions:
- *     (a) the consistency layer (manifest_apply_scope, manifest_reconcile,
- *         manifest_add_files, manifest_update_files, manifest_remove_files)
- *         runs before the workspace exists and serves a different
- *         invariant;
- *     (b) read-only paths that don't load a workspace at all (cmd_completion).
+ *   Exception: paths that load no workspace (the verbs — add, update,
+ *   remove — profile enable / disable, sync's --force arm, completion)
+ *   build their own view with manifest_build and write the record
+ *   through state.h directly; no snapshot exists for them to desync.
  */
 
 #ifndef DOTTA_WORKSPACE_H
@@ -49,6 +45,7 @@
 #include <types.h>
 
 #include "base/output.h"
+#include "core/manifest.h"
 #include "core/state.h"
 #include "infra/content.h"
 #include "infra/mount.h"
@@ -62,23 +59,25 @@
  * Represents a single item (file or directory) with divergence between states.
  *
  * Items can be:
- * - Files (PATH_KIND_FILE): Have content, tracked in profile and state,
+ * - Files (PATH_KIND_FILE): Have content, claimed by a profile's tree,
  *   deployed to filesystem
  * - Directories (PATH_KIND_DIRECTORY): Metadata-only (mode/ownership,
- *   no content), tracked in profile metadata and in the tracked_directories
- *   state table; planned and converged by core/deploy on apply's behalf
+ *   no content), claimed by a profile's metadata.json; planned and
+ *   converged by core/deploy on apply's behalf
  * - Use item_kind to distinguish between files and directories.
  *
- * Lifetime notes:
- * - filesystem_path, storage_path: borrowed from arena-backed manifest rows
- * - profile: arena_strdup'd (arena-owned, freed via arena_destroy)
- * - old_profile: borrowed from arena-backed state entry (can be NULL)
+ * Lifetime notes — every string is borrowed for the workspace's lifetime:
+ * - filesystem_path, storage_path: a view row's or a record's (arena), or
+ *   the untracked scan's arena copies
+ * - profile: a view row's or a record's (arena), or — an untracked
+ *   item's — the enabled set's (the scope outlives the workspace)
+ * - old_profile: the record's profile (arena; can be NULL)
  */
 typedef struct {
-    char *filesystem_path;      /* Target path on filesystem (arena-borrowed) */
-    char *storage_path;         /* Path in profile, e.g., home/.bashrc (arena-borrowed) */
-    char *profile;              /* Winning profile name (arena-owned) */
-    char *old_profile;          /* Previous profile from state, NULL if unchanged (arena-borrowed) */
+    char *filesystem_path;      /* Target path on filesystem (borrowed) */
+    char *storage_path;         /* Path in profile, e.g., home/.bashrc (borrowed) */
+    char *profile;              /* Winning profile name (borrowed) */
+    char *old_profile;          /* Profile that deployed the disk content when it differs from profile, else NULL (borrowed) */
 
     /* Item classification */
     workspace_state_t state;      /* Where the item exists (deployed/undeployed/etc.) */
@@ -88,7 +87,7 @@ typedef struct {
     /* State flags */
     bool on_filesystem;         /* Exists on actual filesystem */
     bool profile_enabled;       /* Is source profile in workspace's enabled list? */
-    bool profile_changed;       /* Profile differs from state (reassigned) */
+    bool profile_changed;       /* Profile differs from the record's (reassigned) */
 } workspace_item_t;
 
 /**
@@ -145,18 +144,19 @@ typedef enum {
  * Workspace load options
  *
  * Controls which analyses workspace_load() performs. All flags default to
- * false when zero-initialized. Build custom options by setting specific flags.
- *
- * Analysis dependencies are automatically resolved:
- * - analyze_orphans requires analyze_files (auto-enabled if needed)
+ * false when zero-initialized. Build custom options by setting specific
+ * flags. The analyses are independent: the partition that every load
+ * runs is what decides which rows are active and which records are
+ * orphans, and each analysis walks its own slice.
  *
  * Lifetime: Options are read-only during workspace_load(), safe to stack-allocate.
  */
 typedef struct {
     bool analyze_files;        /* File divergence detection */
-    /* Orphan analysis — presence, divergence and Git authority of every
-     * out-of-scope or terminal-lifecycle row (depends on analyze_files; one
-     * ref lookup and a lazy tree load per profile with present orphans) */
+    /* Orphan analysis — presence, ownership, divergence and Git authority
+     * of every record whose path the view lacks, either kind (one ref
+     * lookup and a lazy tree or metadata load per profile with present,
+     * owned orphans) */
     bool analyze_orphans;
     bool analyze_untracked;    /* Directory scanning for new files (EXPENSIVE!) */
     bool analyze_directories;  /* Directory metadata checks */
@@ -175,19 +175,18 @@ typedef struct {
  * that appeared in directories previously added via 'dotta add').
  *
  * The workspace is scoped to the caller's operation scope — specifically,
- * `scope_enabled(scope)`, the persistent VWD profile set. State entries
- * and tracked directories from profiles NOT in the enabled set are
- * ignored. This enforces the VWD invariant that workspace loading uses
+ * `scope_enabled(scope)`, the persistent enabled profile set: the view is
+ * built from exactly those profiles, and a record under any other profile
+ * is an orphan. This enforces the invariant that workspace loading uses
  * the persistent enabled set rather than any CLI filter (operations like
  * `dotta status -p global` still load the full workspace and apply the
  * filter at display time via scope_accepts_profile).
  *
  * Profile loading: The workspace borrows the enabled name array from
  * the scope (caller must keep the scope alive until workspace_free).
- * Git tree loading is deferred to the rare drift-repair path (the
- * prelude's manifest_reconcile projecting every enabled profile). In the
- * common (no-drift) case, workspace_load performs zero Git tree
- * operations for profile loading.
+ * The view is computed from Git at every load — one tree walk per
+ * enabled profile (manifest_build) — and owned by the workspace;
+ * workspace_manifest lends it out.
  *
  * @param repo Git repository (must not be NULL)
  * @param state State handle (must not be NULL, borrowed from caller;
@@ -199,15 +198,15 @@ typedef struct {
  *              borrowed — lifetime must extend past workspace_free.
  *              Obtain from `ctx->content_cache` under crypto_mode == KEY_CACHE)
  * @param mounts Per-machine mount table covering scope_enabled(scope).
- *               Must not be NULL. Threaded through to manifest_reconcile
- *               in the load prelude. Callers pass `ctx->mounts` — read-
- *               only commands hold no binding-mutation between dispatch
- *               and workspace_load, so ctx->mounts is current.
+ *               Must not be NULL. Threaded through to manifest_build.
+ *               Callers pass `ctx->mounts` — read-only commands hold no
+ *               binding-mutation between dispatch and workspace_load, so
+ *               ctx->mounts is current.
  * @param options Analysis options (must not be NULL)
  * @param arena Borrowed allocator backing every workspace-lifetime
- *              string (manifest entries, diverged items, partition
- *              pointer arrays). Must outlive workspace_free; in practice
- *              `ctx->arena` (must not be NULL).
+ *              string (the view's rows, the record, diverged items,
+ *              partition pointer arrays). Must outlive workspace_free; in
+ *              practice `ctx->arena` (must not be NULL).
  * @param out Workspace (must not be NULL, caller must free with workspace_free)
  * @return Error or NULL on success
  */
@@ -228,8 +227,10 @@ error_t *workspace_load(
  *
  * Returns overall cleanliness assessment:
  * - WORKSPACE_CLEAN: No divergence detected
- * - WORKSPACE_DIRTY: Has warnings (undeployed, modified, deleted items)
- * - WORKSPACE_INVALID: Has errors (orphaned state entries)
+ * - WORKSPACE_DIRTY: Has work for apply (undeployed, modified, deleted,
+ *   stale, reassigned, orphaned, released, untracked items)
+ * - WORKSPACE_INVALID: Has an item the analysis could not verify
+ *   (DIVERGENCE_UNVERIFIED) — apply skips it; the user must look
  *
  * @param ws Workspace (must not be NULL)
  * @return Status enum
@@ -300,14 +301,14 @@ error_t *check_item_metadata_divergence(
 );
 
 /**
- * Get the active in-scope file slice
+ * Get the active file slice
  *
- * Returns a borrowed view over the file rows that the workspace
- * partitioned as in-scope and active (i.e., profile is in the enabled
- * set and lifecycle state is ACTIVE), in filesystem_path order. Pure
- * value return — no allocation, no error path.
+ * Returns a borrowed view over the view's file rows — every path an
+ * enabled profile claims as a file, the winning profile's claim applied
+ * — in filesystem_path order. Pure value return — no allocation, no
+ * error path.
  *
- * The pointers reference rows in the arena snapshot read at
+ * The pointers reference the view's rows, built into the arena at
  * workspace_load time; the arena outlives the workspace so the slice is
  * valid for the workspace's lifetime.
  *
@@ -324,13 +325,12 @@ error_t *check_item_metadata_divergence(
 manifest_rows_t workspace_files(const workspace_t *ws);
 
 /**
- * Get the active in-scope directory slice
+ * Get the active directory slice
  *
  * Mirror of workspace_files(ws) for tracked directories: a borrowed view
- * over the directory rows the workspace partitioned as in-scope and
- * active (profile in enabled set, lifecycle ACTIVE), in filesystem_path
- * order. Pure value return — no allocation, no error path. Same lifetime
- * as workspace_files.
+ * over the view's directory rows, in filesystem_path order. Pure value
+ * return — no allocation, no error path. Same lifetime as
+ * workspace_files.
  *
  * @param ws Workspace (NULL returns an empty slice)
  * @return Borrowed slice over the active directory rows
@@ -340,20 +340,31 @@ manifest_rows_t workspace_directories(const workspace_t *ws);
 /**
  * Look up an active row by filesystem path
  *
- * O(1) random access over both active slices — a path is one managed
- * thing, whatever its kind; callers that want one kind test row->type.
- * Returns NULL if the path is not in scope or its row is in a terminal
- * lifecycle state — the single chokepoint for "is this path managed and
- * active?" probes.
+ * O(1) random access over the view — a path is one managed thing,
+ * whatever its kind; callers that want one kind test row->type. Returns
+ * NULL if no enabled profile claims the path — the single chokepoint for
+ * "is this path managed?" probes.
  *
  * @param ws Workspace (NULL returns NULL)
  * @param filesystem_path Path to look up (NULL returns NULL)
- * @return Borrowed row pointer, or NULL if not active
+ * @return Borrowed row pointer, or NULL if not managed
  */
 const manifest_row_t *workspace_lookup(
     const workspace_t *ws,
     const char *filesystem_path
 );
+
+/**
+ * The view the workspace was loaded against
+ *
+ * Borrowed; valid for the workspace's lifetime. For the reader that
+ * needs the whole view rather than a slice or a lookup — sync's
+ * pre-Git-phase `before`, diffed against the view it builds afterwards.
+ *
+ * @param ws Workspace (NULL returns NULL)
+ * @return Borrowed view
+ */
+const manifest_t *workspace_manifest(const workspace_t *ws);
 
 /**
  * Look up the record dotta keeps of a path
@@ -456,17 +467,21 @@ error_t *workspace_observe(
  *
  * Workspace-scope side of the routing invariant defined on state_anchor
  * (see state.h): persists via state_anchor and assigns the canonical
- * post-write record (the inputs plus the two columns SQL RETURNING
+ * post-write record (the inputs plus the one column SQL RETURNING
  * decided) into the workspace's anchors snapshot — patching the path's
  * record in place, or creating it when the path had none at load. The
- * SQL UPSERT is the single specification of the deployed_at keep /
- * observed_at INSERT-arm rules; this function holds none of that logic.
+ * SQL UPSERT is the single specification of the observed_at INSERT-arm
+ * rule; this function holds none of that logic.
  *
- * Single entry point for every workspace-scope anchor writer:
- *   - apply's adoption loop (ownership event on first claim)
+ * Single entry point for every workspace-scope ownership event:
+ *   - apply's adoption loop (ownership event on first claim, and the
+ *     acknowledgement of a clean reassignment — the record's profile
+ *     becomes the row's)
  *   - apply's post-deploy loop (ownership event after a write, file or
  *     directory)
- *   - workspace_flush_updates (confirmation from the slow path)
+ * Confirmations are not ownership events and do not come through here:
+ * the flush persists them with state_confirm and patches the record's
+ * confirmed columns itself.
  *
  * The row pointer is borrowed from the workspace's active partition; the
  * record borrows its strings from that row for the workspace's lifetime.
@@ -478,43 +493,42 @@ error_t *workspace_observe(
  * @param stat Stat triple captured after the confirmation (may be NULL:
  *             a directory, or lstat failed after the write)
  * @param now Timestamp of the write (must be > 0)
- * @param own true for an ownership event (deployed_at = now), false for
- *            a confirmation (deployed_at kept)
  * @return Error from state_anchor, or NULL on success
  */
 error_t *workspace_anchor(
     workspace_t *ws,
     const manifest_row_t *row,
     const stat_cache_t *stat,
-    time_t now,
-    bool own
+    time_t now
 );
 
 /**
  * Flush the updates accumulated during workspace_load to the state database
  *
- * Both observation channels drain here, in one transaction, anchor
- * updates first:
- *
- *   Anchor updates — files verified CMP_EQUAL via the slow path (content
- *   hash comparison) accumulate the stat they were verified with.
- *   Persisting it beside the row's blob lets subsequent runs short-circuit
- *   via the fast-path stat AND — if Git advances blob_oid in the meantime
- *   — classify the file as stale directly from the fast path instead of
- *   re-hashing.
+ * Both channels drain here, in one transaction, observations first:
  *
  *   Observations — rows of either kind whose path was lstat-observed
- *   during analysis while it had no record.
+ *   during analysis while it had no record. Through workspace_observe,
+ *   so the snapshot gains the record the INSERT creates.
  *
- * Each routes through its snapshot-write API (workspace_anchor,
- * workspace_observe), so every persisted update also lands in the anchors
- * snapshot — DB and memory stay consistent for downstream readers in the
- * same run. A path with no record that the slow path confirmed is in both
- * lists; the confirmation runs first and creates the record, and the
- * observation then finds it and writes nothing — one statement per path.
+ *   Confirmations — files verified CMP_EQUAL via the slow path (content
+ *   hash comparison) accumulate the stat they were verified with.
+ *   Persisting it beside the row's blob (state_confirm) lets subsequent
+ *   runs short-circuit via the fast-path stat AND — if Git advances
+ *   blob_oid in the meantime — classify the file as stale directly from
+ *   the fast path instead of re-hashing. A confirmation rewrites only
+ *   what it confirmed (type, blob, stat); the record's claim — profile,
+ *   storage path, mode, owner, group — is an ownership event's to change,
+ *   so a clean reassignment keeps reading as one until apply acknowledges
+ *   it. The snapshot's record is patched on the same columns.
+ *
+ * The order is load-bearing: a confirmation is an UPDATE that creates
+ * nothing, so a path that had no record at analysis (it is in both
+ * lists) must take the observation's INSERT first. DB and memory stay
+ * consistent for downstream readers in the same run.
  *
  * Self-healing: the first status/apply after profile enable verifies all
- * files via the slow path and seeds the anchor. The second call hits the
+ * files via the slow path and seeds the record. The second call hits the
  * fast path for unchanged files and tags STALE directly for externally-
  * modified profiles.
  *

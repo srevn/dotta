@@ -6,7 +6,7 @@
  *
  * Design principles:
  * - Silent failures: Never print errors, output nothing on failure
- * - Fast queries: Use state DB for O(1)/O(n) fast lookups
+ * - Cheap queries: one state read or one view build, never a workspace load
  * - Simple output: Newline-separated for fish consumption
  *
  * Usage:

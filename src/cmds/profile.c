@@ -56,21 +56,21 @@ static error_t *count_profile_files(
 /**
  * Print manifest enable statistics
  *
- * Reports gain-side attribution for one enabled profile from a single
- * apply_scope call: files_claimed (rows the profile won precedence for),
- * of which files_added + files_updated are staged — new to the manifest,
- * or moved past what it expected — and the rest were already at the
- * view's values. The engine reads no disk; what is deployed and what is
- * not is status's to say.
+ * Reports gain-side attribution for one enabled profile from the diff of
+ * the view before the enable against the view after it: claimed (rows
+ * the profile won precedence for, both kinds), of which added + updated
+ * are staged — new to the view, or moved past what it held — and the
+ * rest were already at the view's values. The diff reads no disk; what
+ * is deployed and what is not is status's to say.
  */
 static void print_manifest_enable_stats(
     const output_t *out,
     const char *profile,
-    const manifest_scope_stats_t *stats
+    const manifest_diff_stats_t *stats
 ) {
-    if (!stats || stats->files_claimed == 0) return;
+    if (!stats || stats->claimed == 0) return;
 
-    size_t staged = stats->files_added + stats->files_updated;
+    size_t staged = stats->added + stats->updated;
 
     if (output_is_verbose(out)) {
         /* Detailed breakdown */
@@ -80,8 +80,8 @@ static void print_manifest_enable_stats(
             profile
         );
         output_print(
-            out, OUTPUT_VERBOSE, "  Total files: %zu\n",
-            stats->files_claimed
+            out, OUTPUT_VERBOSE, "  Total entries: %zu\n",
+            stats->claimed
         );
 
         if (staged > 0) {
@@ -107,19 +107,23 @@ static void print_manifest_enable_stats(
 /**
  * Print manifest disable statistics
  *
- * Reports loss-side attribution for one disabled profile from a single
- * apply_scope call: files_reassigned (picked up by a fallback profile)
- * + files_orphaned (left scope entirely → LIFECYCLE_INACTIVE)
- * + files_reclaimed (ghost rows retired at scope exit — no cleanup pends).
+ * Reports loss-side attribution for one disabled profile from the diff of
+ * the view before the disable against the view after it: reassigned
+ * (picked up by a fallback profile) + departed_owned (left the view with
+ * a record dotta owns — apply prunes the deployed copy) +
+ * departed_observed (left the view with a record dotta never owned —
+ * apply releases it, the copy stays). A departure with no record
+ * (departed_unseen) is not reported: nothing was ever seen at the path,
+ * so nothing pends for apply.
  */
 static void print_manifest_disable_stats(
     const output_t *out,
     const char *profile,
-    const manifest_scope_stats_t *stats
+    const manifest_diff_stats_t *stats
 ) {
     if (!stats) return;
 
-    size_t total = stats->files_reassigned + stats->files_orphaned + stats->files_reclaimed;
+    size_t total = stats->reassigned + stats->departed_owned + stats->departed_observed;
     if (total == 0) return;
 
     if (output_is_verbose(out)) {
@@ -129,58 +133,51 @@ static void print_manifest_disable_stats(
 
         output_print(
             out, OUTPUT_VERBOSE,
-            "  Total files affected: %zu\n", total
+            "  Total entries affected: %zu\n", total
         );
 
-        if (stats->files_reassigned > 0) {
+        if (stats->reassigned > 0) {
             output_styled(
                 out, OUTPUT_VERBOSE,
                 "    - {green}%zu{reset} file%s with fallback (will reassign)\n",
-                stats->files_reassigned,
-                stats->files_reassigned == 1 ? "" : "s"
+                stats->reassigned,
+                stats->reassigned == 1 ? "" : "s"
             );
         }
 
-        if (stats->files_orphaned > 0) {
+        if (stats->departed_owned > 0) {
             output_styled(
                 out, OUTPUT_VERBOSE,
                 "    - {red}%zu{reset} file%s without fallback (will be pruned)\n",
-                stats->files_orphaned,
-                stats->files_orphaned == 1 ? "" : "s"
+                stats->departed_owned,
+                stats->departed_owned == 1 ? "" : "s"
             );
         }
 
-        if (stats->files_reclaimed > 0) {
+        if (stats->departed_observed > 0) {
             output_styled(
                 out, OUTPUT_VERBOSE,
-                "    - {cyan}%zu{reset} never-deployed file%s (reclaimed, nothing to remove)\n",
-                stats->files_reclaimed,
-                stats->files_reclaimed == 1 ? "" : "s"
+                "    - {cyan}%zu{reset} file%s never deployed here (left alone)\n",
+                stats->departed_observed,
+                stats->departed_observed == 1 ? "" : "s"
             );
         }
 
         output_newline(out, OUTPUT_VERBOSE);
     } else {
         /* Compact summary */
-        if (stats->files_orphaned > 0) {
+        if (stats->departed_owned > 0) {
             output_print(
                 out, OUTPUT_NORMAL, "  Staged %zu file%s for removal\n",
-                stats->files_orphaned, stats->files_orphaned == 1 ? "" : "s"
+                stats->departed_owned, stats->departed_owned == 1 ? "" : "s"
             );
         }
 
-        if (stats->files_reassigned > 0) {
+        if (stats->reassigned > 0) {
             output_print(
                 out, OUTPUT_NORMAL, "  Reassigned %zu file%s to lower precedence\n",
-                stats->files_reassigned,
-                stats->files_reassigned == 1 ? "" : "s"
-            );
-        }
-
-        if (stats->files_reclaimed > 0) {
-            output_print(
-                out, OUTPUT_NORMAL, "  Reclaimed %zu never-deployed file%s\n",
-                stats->files_reclaimed, stats->files_reclaimed == 1 ? "" : "s"
+                stats->reassigned,
+                stats->reassigned == 1 ? "" : "s"
             );
         }
     }
@@ -658,43 +655,49 @@ cleanup:
 /**
  * Profile enable subcommand
  *
- * Four-phase flow (see manifest_apply_scope's ORDERING RULE):
+ * Five-phase flow:
  *   1. Gather & validate — resolve --all/args to a request set, then
  *      filter out already-enabled, missing, and custom-without-target
  *      profiles. Emits per-profile warnings; produces to_enable_validated.
- *   2. Commit scope to state — state_enable_profile per target (writes
- *      target + zero-OID sentinel). enabled_profiles membership and
- *      order are now authoritative.
- *   3. Project once — a single apply_scope call builds the VWD for the
- *      post-enable set and records each profile's projected HEAD over
- *      the sentinel, with stats_filter pinned to the newly enabled
- *      profiles so gain-side stats (files_claimed / added / updated)
- *      land in the right slot per profile. Old K·M cost (rebuilding the
- *      manifest per profile) collapses to a single M.
- *   4. Per-profile feedback — iterate the validated targets to preserve
+ *   2. The view before — manifest_build over the enabled set as it
+ *      stands, under the mount table dispatch built from it. Taken ahead
+ *      of the mutation, which invalidates that table's borrows.
+ *   3. Commit scope to state — state_enable_profile per target.
+ *      enabled_profiles membership and order are now authoritative.
+ *      Nothing else is written: the view is computed, never stored.
+ *   4. The view after — a fresh mount table and manifest_build over the
+ *      post-enable set; manifest_diff attributes the transition to the
+ *      newly enabled profiles, so gain-side stats (claimed / added /
+ *      updated) land in the right slot per profile.
+ *   5. Per-profile feedback — iterate the validated targets to preserve
  *      per-profile output, then state_save.
  */
 static error_t *profile_enable(
     git_repository *repo,
     state_t *state,
     arena_t *arena,
+    const mount_table_t *mounts,
     const cmd_profile_options_t *opts,
     output_t *out
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(state);
     CHECK_NULL(arena);
+    CHECK_NULL(mounts);
     CHECK_NULL(opts);
     CHECK_NULL(out);
 
     /* Resource tracking for cleanup */
     string_array_t *enabled = NULL;
+    string_array_t *enabled_after = NULL;
     string_array_t *all_branches = NULL;
     string_array_t *to_enable = NULL;
     string_array_t *to_enable_validated = NULL;
     hashmap_t *enabled_set = NULL;
     hashmap_t *seen_set = NULL;
-    manifest_scope_stats_t *stats = NULL;
+    manifest_t *before = NULL;
+    manifest_t *after = NULL;
+    manifest_diff_stats_t *stats = NULL;
     error_t *err = NULL;
 
     /* Phase 1 observations — tallied during the validation loop. */
@@ -932,12 +935,22 @@ static error_t *profile_enable(
         goto cleanup;
     }
 
-    /* Phases 2–4 share the "we have work to do" precondition. Wrapping
+    /* Phases 2–5 share the "we have work to do" precondition. Wrapping
      * them together makes the "nothing validated → exit without touching
      * state" path explicit; the transaction opened by state_open then
      * rolls back via state_free on the no-op exit. */
     if (to_enable_validated->count > 0) {
-        /* Phase 2: Commit scope to state */
+        /* Phase 2: The view before. `enabled` and `mounts` are the
+         * pre-mutation set and its table; the view borrows neither once
+         * built, so the mutation below cannot pull anything from under
+         * it. */
+        err = manifest_build(repo, enabled, mounts, arena, &before);
+        if (err) {
+            err = error_wrap(err, "Failed to build manifest before enable");
+            goto cleanup;
+        }
+
+        /* Phase 3: Commit scope to state */
         for (size_t i = 0; i < to_enable_validated->count; i++) {
             const char *profile = to_enable_validated->items[i];
 
@@ -950,18 +963,13 @@ static error_t *profile_enable(
             }
         }
 
-        /* Phase 3: Project once */
-        stats = calloc(to_enable_validated->count, sizeof(*stats));
-        if (!stats) {
-            err = ERROR(ERR_MEMORY, "Failed to allocate enable stats");
-            goto cleanup;
-        }
-
-        /* Build a fresh mount table from the post-mutation row cache.
+        /* Phase 4: The view after, and the diff.
+         *
+         * Build a fresh mount table from the post-mutation row cache.
          * The state_enable_profile loop above invalidated ctx->mounts'
          * borrows; the new bindings (including any --target supplied
          * for new entries) need to be reflected in classification for
-         * apply_scope's tree walk. */
+         * the tree walk. */
         mount_table_t *post_enable_mounts = NULL;
         err = profile_build_mount_table(state, arena, &post_enable_mounts);
         if (err) {
@@ -969,16 +977,41 @@ static error_t *profile_enable(
             goto cleanup;
         }
 
-        err = manifest_apply_scope(
-            repo, state, arena, post_enable_mounts, LIFECYCLE_INACTIVE,
-            to_enable_validated, stats
-        );
+        err = state_get_profiles(state, &enabled_after);
         if (err) {
-            err = error_wrap(err, "Failed to project manifest after enable");
+            err = error_wrap(err, "Failed to get enabled profiles after enable");
             goto cleanup;
         }
 
-        /* Phase 4: Per-profile feedback */
+        err = manifest_build(repo, enabled_after, post_enable_mounts, arena, &after);
+        if (err) {
+            err = error_wrap(err, "Failed to build manifest after enable");
+            goto cleanup;
+        }
+
+        anchor_t *anchors = NULL;
+        size_t anchor_count = 0;
+        err = state_get_all_anchors(state, arena, &anchors, &anchor_count);
+        if (err) {
+            err = error_wrap(err, "Failed to read anchors");
+            goto cleanup;
+        }
+
+        stats = calloc(to_enable_validated->count, sizeof(*stats));
+        if (!stats) {
+            err = ERROR(ERR_MEMORY, "Failed to allocate enable stats");
+            goto cleanup;
+        }
+
+        err = manifest_diff(
+            before, after, anchors, anchor_count, to_enable_validated, stats
+        );
+        if (err) {
+            err = error_wrap(err, "Failed to diff manifest across enable");
+            goto cleanup;
+        }
+
+        /* Phase 5: Per-profile feedback */
         for (size_t i = 0; i < to_enable_validated->count; i++) {
             output_styled(
                 out, OUTPUT_NORMAL, "  {green}✓{reset} Enabled %s\n",
@@ -1010,7 +1043,7 @@ static error_t *profile_enable(
             to_enable_validated->count == 1 ? "" : "s"
         );
         output_info(
-            out, OUTPUT_NORMAL, "Files staged for deployment in manifest"
+            out, OUTPUT_NORMAL, "Run 'dotta apply' to deploy files"
         );
     }
     if (already_enabled > 0) {
@@ -1039,11 +1072,14 @@ cleanup:
      * borrow keys from (enabled, to_enable) to respect the borrow lifetime;
      * seen_set borrows keys from to_enable, enabled_set from enabled. */
     free(stats);
+    manifest_free(after);
+    manifest_free(before);
     if (seen_set) hashmap_free(seen_set, NULL);
     if (enabled_set) hashmap_free(enabled_set, NULL);
     string_array_free(to_enable_validated);
     string_array_free(to_enable);
     string_array_free(all_branches);
+    string_array_free(enabled_after);
     string_array_free(enabled);
 
     return err;
@@ -1052,37 +1088,49 @@ cleanup:
 /**
  * Profile disable subcommand
  *
- * Four-phase flow (see manifest_apply_scope's ORDERING RULE):
+ * Five-phase flow, the mirror of profile_enable's:
  *   1. Gather & validate — filter requested profiles to those actually
  *      enabled; emit not-enabled diagnostics up front.
- *   2. Commit scope to state — state_disable_profile per validated
+ *   2. The view before — manifest_build over the enabled set as it
+ *      stands, under the mount table dispatch built from it. It feeds
+ *      the receipt only: a set that will not build is warned about and
+ *      the disable lands without one.
+ *   3. Commit scope to state — state_disable_profile per validated
  *      target; enabled_profiles is now authoritative for the target set.
- *   3. Project once — a single apply_scope call rebuilds the VWD
- *      against the post-disable enabled set and attributes loss-side
- *      stats (files_reassigned / files_orphaned) to each disabled
- *      profile via stats_filter.
- *   4. Per-profile feedback — iterate the validated targets to preserve
+ *      Nothing else is written: what the next apply prunes or releases
+ *      is derivable — the disabled profile's records are no longer in
+ *      the view, and the orphan analysis asks Git about each.
+ *   4. The view after — a fresh mount table and manifest_build over the
+ *      post-disable set; manifest_diff attributes the transition to the
+ *      disabled profiles, so loss-side stats (reassigned /
+ *      departed_owned / departed_observed) land in the right slot.
+ *   5. Per-profile feedback — iterate the validated targets to preserve
  *      the existing per-profile UX.
  */
 static error_t *profile_disable(
     git_repository *repo,
     state_t *state,
     arena_t *arena,
+    const mount_table_t *mounts,
     const cmd_profile_options_t *opts,
     output_t *out
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(state);
     CHECK_NULL(arena);
+    CHECK_NULL(mounts);
     CHECK_NULL(opts);
     CHECK_NULL(out);
 
     /* Resource tracking for cleanup */
     string_array_t *enabled = NULL;
+    string_array_t *enabled_after = NULL;
     string_array_t *to_disable_validated = NULL;
     hashmap_t *enabled_set = NULL;
     hashmap_t *seen_set = NULL;
-    manifest_scope_stats_t *stats = NULL;
+    manifest_t *before = NULL;
+    manifest_t *after = NULL;
+    manifest_diff_stats_t *stats = NULL;
     error_t *err = NULL;
 
     /* Phase 1 observation — tallied during explicit-args validation. */
@@ -1214,12 +1262,30 @@ static error_t *profile_disable(
         goto cleanup;
     }
 
-    /* Phases 2–4 share the "we have work to do" precondition. Wrapping
+    /* Phases 2–5 share the "we have work to do" precondition. Wrapping
      * them together makes the "nothing validated → exit without touching
      * state" path explicit; the transaction opened by state_open then
      * rolls back via state_free on the no-op exit. */
     if (to_disable_validated->count > 0) {
-        /* Phase 2: Commit scope to state */
+        /* Phase 2: The view before (see profile_enable).
+         *
+         * Unlike enable's, this build gates nothing: the disable is a
+         * membership write that needs no view, and it must land whatever
+         * the enabled set looks like — it is the way out of a set the
+         * loads cannot build (a profile whose metadata.json will not
+         * parse, a branch that will not load), and that set is exactly
+         * the one this build fails on. The message names the profile;
+         * warn with it and disable without the receipt. */
+        err = manifest_build(repo, enabled, mounts, arena, &before);
+        if (err) {
+            output_warning(
+                out, OUTPUT_NORMAL, "Manifest build failed: %s", error_message(err)
+            );
+            error_free(err);
+            err = NULL;
+        }
+
+        /* Phase 3: Commit scope to state */
         for (size_t i = 0; i < to_disable_validated->count; i++) {
             err = state_disable_profile(state, to_disable_validated->items[i]);
             if (err) {
@@ -1231,41 +1297,67 @@ static error_t *profile_disable(
             }
         }
 
-        /* Phase 3: Project once */
-        stats = calloc(to_disable_validated->count, sizeof(*stats));
-        if (!stats) {
-            err = ERROR(ERR_MEMORY, "Failed to allocate disable stats");
-            goto cleanup;
-        }
-
-        /* Build a fresh mount table from the post-mutation row cache.
+        /* Phase 4: The view after, and the diff — skipped with `before`,
+         * whose warning already covers it. Once `before` has built, this
+         * build cannot fail on Git's account: the post-disable set is a
+         * subset of the same profiles at the same HEADs.
+         *
+         * Build a fresh mount table from the post-mutation row cache.
          * The state_disable_profile loop above invalidated ctx->mounts'
          * borrows; the disabled profiles' bindings must drop out of
-         * classification for apply_scope's tree walk. */
-        mount_table_t *post_disable_mounts = NULL;
-        err = profile_build_mount_table(state, arena, &post_disable_mounts);
-        if (err) {
-            err = error_wrap(err, "Failed to build mount table after disable");
-            goto cleanup;
+         * classification for the tree walk. */
+        if (before) {
+            mount_table_t *post_disable_mounts = NULL;
+            err = profile_build_mount_table(state, arena, &post_disable_mounts);
+            if (err) {
+                err = error_wrap(err, "Failed to build mount table after disable");
+                goto cleanup;
+            }
+
+            err = state_get_profiles(state, &enabled_after);
+            if (err) {
+                err = error_wrap(err, "Failed to get enabled profiles after disable");
+                goto cleanup;
+            }
+
+            err = manifest_build(repo, enabled_after, post_disable_mounts, arena, &after);
+            if (err) {
+                err = error_wrap(err, "Failed to build manifest after disable");
+                goto cleanup;
+            }
+
+            anchor_t *anchors = NULL;
+            size_t anchor_count = 0;
+            err = state_get_all_anchors(state, arena, &anchors, &anchor_count);
+            if (err) {
+                err = error_wrap(err, "Failed to read anchors");
+                goto cleanup;
+            }
+
+            stats = calloc(to_disable_validated->count, sizeof(*stats));
+            if (!stats) {
+                err = ERROR(ERR_MEMORY, "Failed to allocate disable stats");
+                goto cleanup;
+            }
+
+            err = manifest_diff(
+                before, after, anchors, anchor_count, to_disable_validated, stats
+            );
+            if (err) {
+                err = error_wrap(err, "Failed to diff manifest across disable");
+                goto cleanup;
+            }
         }
 
-        err = manifest_apply_scope(
-            repo, state, arena, post_disable_mounts, LIFECYCLE_INACTIVE,
-            to_disable_validated, stats
-        );
-        if (err) {
-            err = error_wrap(err, "Failed to project manifest after disable");
-            goto cleanup;
-        }
-
-        /* Phase 4: Per-profile feedback */
+        /* Phase 5: Per-profile feedback (no stats when the receipt was
+         * skipped) */
         for (size_t i = 0; i < to_disable_validated->count; i++) {
             output_styled(
                 out, OUTPUT_NORMAL, "  {green}✓{reset} Disabled %s\n",
                 to_disable_validated->items[i]
             );
             print_manifest_disable_stats(
-                out, to_disable_validated->items[i], &stats[i]
+                out, to_disable_validated->items[i], stats ? &stats[i] : NULL
             );
         }
 
@@ -1295,7 +1387,7 @@ static error_t *profile_disable(
             to_disable_validated->count == 1 ? "" : "s"
         );
         output_info(
-            out, OUTPUT_NORMAL, "Files updated in manifest (fallback or marked for removal)"
+            out, OUTPUT_NORMAL, "Run 'dotta apply' to remove deployed files"
         );
     }
 
@@ -1311,9 +1403,12 @@ cleanup:
      * items they borrow — seen_set borrows from opts->profiles (caller-
      * owned, outlives us) and enabled_set from enabled (owned here). */
     free(stats);
+    manifest_free(after);
+    manifest_free(before);
     if (seen_set) hashmap_free(seen_set, NULL);
     if (enabled_set) hashmap_free(enabled_set, NULL);
     string_array_free(to_disable_validated);
+    string_array_free(enabled_after);
     string_array_free(enabled);
 
     return err;
@@ -1489,26 +1584,9 @@ static error_t *profile_reorder(
         goto cleanup;
     }
 
-    /* Project the manifest against the new precedence order.
-     *
-     * Build a fresh mount table from the post-mutation row cache:
-     * state_reorder_profiles invalidated ctx->mounts' borrows, and a
-     * reorder may have shifted which profile a custom-target binding
-     * belongs to (precedence drives custom/ ownership). */
-    mount_table_t *post_reorder_mounts = NULL;
-    err = profile_build_mount_table(state, arena, &post_reorder_mounts);
-    if (err) {
-        err = error_wrap(err, "Failed to build mount table after reorder");
-        goto cleanup;
-    }
-
-    err = manifest_apply_scope(
-        repo, state, arena, post_reorder_mounts, LIFECYCLE_INACTIVE, NULL, NULL
-    );
-    if (err) {
-        err = error_wrap(err, "Failed to project manifest with new precedence");
-        goto cleanup;
-    }
+    /* Nothing else to write: the view is computed from the enabled set
+     * at every load, so the new precedence is simply what the next
+     * status, diff or apply reads. */
 
     /* Save state (releases lock automatically) */
     err = state_save(repo, state);
@@ -1525,7 +1603,7 @@ static error_t *profile_reorder(
             opts->profile_count, opts->profile_count == 1 ? "" : "s"
         );
         output_info(
-            out, OUTPUT_NORMAL, "Manifest updated to reflect new precedence"
+            out, OUTPUT_NORMAL, "New precedence takes effect on the next run"
         );
         output_hint(
             out, OUTPUT_NORMAL, "Run 'dotta status' to review changes"
@@ -1560,6 +1638,8 @@ static error_t *profile_validate(
     /* Resource tracking for cleanup */
     string_array_t *enabled = NULL;
     string_array_t *missing = NULL;
+    string_array_t *deleted = NULL;
+    hashmap_t *probed = NULL;
     error_t *err = NULL;
 
     /* State for reporting (not cleaned up) */
@@ -1643,39 +1723,67 @@ static error_t *profile_validate(
         }
     }
 
-    /* Check 2: State file entries reference valid profiles
+    /* Check 2: The record references valid profiles
      *
-     * Dedupe by profile before probing Git: F per-row probes (where F is the
-     * total manifest entry count) collapses to P probes (where P is the
-     * distinct-profile count, typically <10). For each missing profile we
-     * then ask SQL once for its row count rather than incrementing during
-     * the row scan. */
-    string_array_t *file_profiles = NULL;
-    err = state_get_distinct_file_profiles(state, &file_profiles);
+     * One read of the anchors table, walked once; each distinct profile
+     * is asked of Git once (`probed` remembers the answer), so R records
+     * cost P probes, where P is the distinct-profile count, typically
+     * < 10. `deleted` keeps the missing profiles in first-seen order so
+     * the report is reproducible. Nothing here is fixable in place: a
+     * record whose profile is gone is an orphan the next apply reads,
+     * asks Git about, finds LOST, and releases. */
+    anchor_t *anchors = NULL;
+    size_t anchor_count = 0;
+    err = state_get_all_anchors(state, arena, &anchors, &anchor_count);
     if (err) goto cleanup;
 
-    for (size_t i = 0; i < file_profiles->count; i++) {
-        const char *profile = file_profiles->items[i];
-        if (profile_exists(repo, profile)) continue;
-
-        size_t n = 0;
-        err = state_count_files_by_profile(state, profile, &n);
-        if (err) {
-            string_array_free(file_profiles);
-            goto cleanup;
-        }
-        orphaned_files += n;
-        has_issues = true;
-        has_orphaned_files = true;
+    deleted = string_array_new(0);
+    probed = hashmap_borrow(16);   /* profile → (void *) 1 exists, (void *) 2 deleted */
+    if (!deleted || !probed) {
+        err = ERROR(ERR_MEMORY, "Failed to allocate probe set");
+        goto cleanup;
     }
-    string_array_free(file_profiles);
+
+    for (size_t i = 0; i < anchor_count; i++) {
+        const char *profile = anchors[i].profile;
+
+        void *known = hashmap_get(probed, profile);
+        if (!known) {
+            known = profile_exists(repo, profile) ? (void *) 1 : (void *) 2;
+            err = hashmap_set(probed, profile, known);
+            if (!err && known == (void *) 2) err = string_array_push(deleted, profile);
+            if (err) {
+                err = error_wrap(err, "Failed to record probe for '%s'", profile);
+                goto cleanup;
+            }
+        }
+
+        if (known == (void *) 2) {
+            orphaned_files++;
+            has_issues = true;
+            has_orphaned_files = true;
+        }
+    }
 
     if (orphaned_files > 0) {
         output_warning(
-            out, OUTPUT_NORMAL, "Found %zu orphaned file entr%s in state",
-            orphaned_files, orphaned_files == 1 ? "y" : "ies"
+            out, OUTPUT_NORMAL, "Found %zu entr%s from deleted profile%s in state:",
+            orphaned_files, orphaned_files == 1 ? "y" : "ies",
+            deleted->count == 1 ? "" : "s"
         );
-        output_hint(out, OUTPUT_NORMAL, "Run 'dotta apply' to clean up");
+
+        for (size_t i = 0; i < deleted->count; i++) {
+            size_t n = 0;
+            for (size_t j = 0; j < anchor_count; j++) {
+                if (strcmp(anchors[j].profile, deleted->items[i]) == 0) n++;
+            }
+            output_print(
+                out, OUTPUT_NORMAL, "  • %zu entr%s from %s\n",
+                n, n == 1 ? "y" : "ies", deleted->items[i]
+            );
+        }
+
+        output_hint(out, OUTPUT_NORMAL, "Run 'dotta apply' to release them");
     }
 
 cleanup:
@@ -1683,6 +1791,8 @@ cleanup:
      * is active, so it's safe to call unconditionally on the borrowed handle */
     state_rollback(state);
 
+    if (probed) hashmap_free(probed, NULL);
+    string_array_free(deleted);
     string_array_free(missing);
     string_array_free(enabled);
 
@@ -1705,7 +1815,8 @@ cleanup:
                     out, OUTPUT_NORMAL, "Fixed enabled profile list"
                 );
                 output_info(
-                    out, OUTPUT_NORMAL, "Orphaned files require 'dotta apply' to clean up"
+                    out, OUTPUT_NORMAL,
+                    "Entries from deleted profiles require 'dotta apply' to release"
                 );
             } else if (!fixed_enabled_profiles && has_orphaned_files) {
                 output_warning(
@@ -1761,11 +1872,11 @@ error_t *cmd_profile(const dotta_ctx_t *ctx, const cmd_profile_options_t *opts) 
             break;
 
         case PROFILE_ENABLE:
-            result = profile_enable(repo, state, ctx->arena, opts, out);
+            result = profile_enable(repo, state, ctx->arena, ctx->mounts, opts, out);
             break;
 
         case PROFILE_DISABLE:
-            result = profile_disable(repo, state, ctx->arena, opts, out);
+            result = profile_disable(repo, state, ctx->arena, ctx->mounts, opts, out);
             break;
 
         case PROFILE_REORDER:

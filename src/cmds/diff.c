@@ -12,6 +12,7 @@
 #include <string.h>
 #include <time.h>
 
+#include "base/arena.h"
 #include "base/args.h"
 #include "base/error.h"
 #include "base/hashmap.h"
@@ -147,7 +148,7 @@ static const char *get_status_message_from_item(
  * from workspace analysis. Doesn't re-analyze - just formats and displays.
  *
  * @param item Workspace item with divergence info (must not be NULL)
- * @param entry Manifest entry with VWD cache fields (must not be NULL)
+ * @param file The path's view row — blob, storage path, profile (must not be NULL)
  * @param cache Content cache (must not be NULL)
  * @param repo Repository (must not be NULL)
  * @param direction Diff direction
@@ -224,7 +225,7 @@ static error_t *show_file_diff_from_workspace(
         return NULL;
     }
 
-    /* Get content from cache via VWD-cached blob_oid (borrowed reference - don't free) */
+    /* Get content from cache via the row's blob_oid (borrowed reference - don't free) */
     const buffer_t *content = NULL;
     error_t *err = content_cache_get_from_blob_oid(
         cache, &file->blob_oid, file->storage_path, file->profile, &content
@@ -611,9 +612,9 @@ static int print_diff_line_cb(
  * Compare a tree-built file slice against the current filesystem
  *
  * Generic comparison function for commit-to-workspace diffs. Takes a
- * manifest_rows_t slice projected from a historical tree (via
- * manifest_load_tree_files) and compares each file against the current
- * filesystem state.
+ * manifest_rows_t slice of a historical tree's file rows (the view
+ * manifest_build_tree computes, directories set aside) and compares each
+ * file against the current filesystem state.
  *
  * @param repo Repository (must not be NULL)
  * @param files Tree-built file slice (passed by value; rows borrowed from
@@ -816,10 +817,10 @@ cleanup:
  * gives each glob independent attribution.
  *
  * One implementation serves both diff paths — the historical-diff path
- * (commit-to-workspace) feeds a tree-built slice via
- * manifest_load_tree_files; the workspace-diff path feeds the
- * workspace's active slice via workspace_files. Both flow through the
- * same manifest_rows_t carrier.
+ * (commit-to-workspace) feeds the file rows of a tree-built view
+ * (manifest_build_tree); the workspace-diff path feeds the workspace's
+ * active slice via workspace_files. Both flow through the same
+ * manifest_rows_t carrier.
  *
  * @param file_filter File filter to validate (NULL = no validation, returns 0)
  * @param files File slice to check against (passed by value)
@@ -938,6 +939,7 @@ static error_t *diff_commit_to_workspace(
     char *profile = NULL;
     git_tree *tree = NULL;
     metadata_t *metadata = NULL;
+    manifest_t *historical = NULL;
     manifest_rows_t tree_files = { 0 };
 
     /* Step 1: Resolve commit to find which profile contains it */
@@ -986,18 +988,36 @@ static error_t *diff_commit_to_workspace(
         if (err) goto cleanup;
     }
 
-    /* Step 5: Project the historical tree into a manifest_rows_t slice.
+    /* Step 5: Build the historical tree's view and take its file rows.
      *
      * Rows, per-row strings, and the pointer array are allocated into
      * the borrowed command arena; they outlive both this call and the
      * subsequent compare_tree_files_to_filesystem call, then live until
-     * command end. No targeted free required. */
-    err = manifest_load_tree_files(
-        tree, profile, mounts, metadata, arena, &tree_files
+     * command end. Only the view's index is released, at cleanup. A
+     * DIRECTORY row (a claim of the tree's own metadata.json) has no
+     * content to diff; the consumers take a file slice, so the kind is
+     * settled here, once. */
+    err = manifest_build_tree(
+        tree, profile, mounts, metadata, arena, &historical
     );
     if (err) {
-        err = error_wrap(err, "Failed to load tree files from commit");
+        err = error_wrap(err, "Failed to build manifest from commit");
         goto cleanup;
+    }
+
+    manifest_rows_t rows = manifest_rows(historical);
+    if (rows.count > 0) {
+        const manifest_row_t **files = arena_calloc(arena, rows.count, sizeof(*files));
+        if (!files) {
+            err = ERROR(ERR_MEMORY, "Failed to allocate file slice");
+            goto cleanup;
+        }
+        size_t file_count = 0;
+        for (size_t i = 0; i < rows.count; i++) {
+            if (rows.entries[i]->type == PATH_TYPE_DIRECTORY) continue;
+            files[file_count++] = rows.entries[i];
+        }
+        tree_files = (manifest_rows_t){ .entries = files, .count = file_count };
     }
 
     /* Step 6: Compare historical slice against current filesystem */
@@ -1027,7 +1047,8 @@ static error_t *diff_commit_to_workspace(
 cleanup:
     /* tree_files is arena-backed (borrowed from `arena`); the caller owns
      * the arena's lifetime and reclaims every row, string, and the pointer
-     * array at command end. No targeted free here. */
+     * array at command end. Only the view's index is freed here. */
+    manifest_free(historical);
     metadata_free(metadata);
     git_tree_free(tree);
     git_commit_free(commit);

@@ -96,6 +96,85 @@ static void display_enabled_profiles(
 }
 
 /**
+ * Display the manifest — every active row, with its state
+ *
+ * The window onto the view (--full): one line per managed path, both
+ * kinds merged in path order, tagged as the diverged item at the path
+ * says or [clean] when there is none, with the owning profile ("from P",
+ * or "P → Q" for a pending reassignment). The one listing that shows
+ * the whole view rather than what diverged from it; printed whatever
+ * the workspace's cleanliness. Orphans are records, not rows — they
+ * stay in the Issues section. Scoped by the CLI filter like every other
+ * section.
+ *
+ * @param ws Workspace (must not be NULL, borrowed from caller)
+ * @param scope Operation scope (must not be NULL; its filter dimension drives display)
+ * @param out Output context (must not be NULL)
+ */
+static void display_manifest(
+    const workspace_t *ws,
+    const scope_t *scope,
+    output_t *out
+) {
+    if (!ws || !out) return;
+
+    output_list_t *list = output_list_create(
+        out, "Manifest", "every managed path; [clean] where nothing diverged"
+    );
+    if (!list) return;
+
+    /* Both slices are in filesystem_path order and share no path (one
+     * row per path, one kind), so a two-finger merge walks the view as
+     * one path-ordered sequence. */
+    manifest_rows_t files = workspace_files(ws);
+    manifest_rows_t dirs = workspace_directories(ws);
+    size_t f = 0;
+    size_t d = 0;
+    while (f < files.count || d < dirs.count) {
+        const manifest_row_t *row;
+        if (d == dirs.count) {
+            row = files.entries[f++];
+        } else if (f == files.count) {
+            row = dirs.entries[d++];
+        } else {
+            const char *file_path = files.entries[f]->filesystem_path;
+            const char *dir_path = dirs.entries[d]->filesystem_path;
+            row = strcmp(file_path, dir_path) < 0 ? files.entries[f++]
+                                                  : dirs.entries[d++];
+        }
+
+        if (!scope_accepts_profile(scope, row->profile)) continue;
+
+        const char *tags[WORKSPACE_ITEM_MAX_DISPLAY_TAGS];
+        size_t tag_count;
+        output_color_t color;
+        char metadata[256];
+
+        /* Only diverged paths have an item; a row without one is clean */
+        const workspace_item_t *item = workspace_get_item(ws, row->filesystem_path);
+        if (item) {
+            if (!workspace_item_extract_display_info(
+                item, tags, &tag_count, &color, metadata, sizeof(metadata)
+                )) {
+                continue;
+            }
+        } else {
+            tags[0] = "clean";
+            tag_count = 1;
+            color = OUTPUT_COLOR_GREEN;
+            snprintf(metadata, sizeof(metadata), "from %s", row->profile);
+        }
+
+        output_list_add(
+            list, tags, tag_count, color, row->filesystem_path, metadata
+        );
+    }
+
+    output_list_render(list);
+    output_list_free(list);
+}
+
+/**
  * Display workspace status
  *
  * Shows the consistency between profile state, deployment state, and filesystem.
@@ -215,7 +294,7 @@ static void display_workspace_status(
             case WORKSPACE_INVALID:
                 output_colored(
                     out, OUTPUT_NORMAL, OUTPUT_COLOR_RED,
-                    "  Invalid - workspace has orphaned state entries\n"
+                    "  Invalid - workspace has paths dotta could not verify\n"
                 );
                 break;
         }
@@ -500,7 +579,8 @@ static void display_workspace_status(
                         if (!orphaned[i]->on_filesystem) {
                             hint = "already gone from disk; apply reclaims its entry";
                         } else if (orphaned[i]->state == WORKSPACE_STATE_RELEASED) {
-                            hint = "no longer in Git; apply releases its entry, the file stays";
+                            hint = "no longer in Git, or dotta never deployed it; "
+                                "apply releases its entry, the file stays";
                         } else {
                             switch (cleanup_skip_reason(orphaned[i])) {
                                 case CLEANUP_SKIP_UNVERIFIED:
@@ -1008,6 +1088,12 @@ error_t *cmd_status(const dotta_ctx_t *ctx, const cmd_status_options_t *opts) {
     /* Display enabled profiles and last deployment info */
     display_enabled_profiles(out, scope_active(scope), active, ws);
 
+    /* The whole view, on request — before the verdict and the sections
+     * that name only what diverged from it */
+    if (opts->show_local && opts->full) {
+        display_manifest(ws, scope, out);
+    }
+
     /* Display workspace status (with profile filtering for Coherent Scope)
      *
      * The workspace was loaded with the persistent enabled set
@@ -1104,6 +1190,11 @@ static const args_opt_t status_opts[] = {
         "Skip sudo; disables ownership checks"
     ),
     ARGS_FLAG(
+        "full",
+        cmd_status_options_t,full,
+        "List every managed path with its state"
+    ),
+    ARGS_FLAG(
         "v verbose",
         cmd_status_options_t,verbose,
         "Verbose output"
@@ -1141,7 +1232,8 @@ const args_command_t spec_status = {
         "  %s status --remote                # Remote only\n"
         "  %s status --no-fetch              # Skip fetch (cached refs)\n"
         "  %s status -p work -p home         # Named profiles only\n"
-        "  %s status --all                   # Include non-enabled profiles\n",
+        "  %s status --all                   # Include non-enabled profiles\n"
+        "  %s status --full                  # Every managed path, clean ones too\n",
     .epilogue    =
         "See also:\n"
         "  %s apply           # Deploy the pending filesystem changes\n"

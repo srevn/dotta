@@ -324,7 +324,7 @@ error_t *deploy_preflight(
  * top-down as part of its write: a tracked directory (any profile, in
  * scope or not) with its tracked mode and ownership, anything else 0755
  * owned like the planned path. Silent, never in the receipt — the
- * caller's presence witness covers them. The workspace is consulted for
+ * caller's last observation pass covers them. The workspace is consulted for
  * that lookup only; the plan alone decides what is acted on.
  *
  * Directories are materialized in two phases. Every directory the run
@@ -343,9 +343,9 @@ error_t *deploy_preflight(
  * Fail-stop: on the first error the partial result is returned in *out
  * alongside the wrapped error, after the held directories are released.
  *
- * State rows are self-contained (mode, owner, group, blob_oid); the
- * content cache handles encryption transparently. State updates
- * (anchors, witnesses) are the caller's, after deployment succeeds.
+ * View rows are self-contained (mode, owner, group, blob_oid); the
+ * content cache handles encryption transparently. The record (anchors,
+ * observations) is the caller's to write, after deployment succeeds.
  *
  * @param repo Repository (must not be NULL)
  * @param ws Workspace the plan was built from (must not be NULL)

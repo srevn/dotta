@@ -104,7 +104,7 @@ static bool deploy_needs_work(const workspace_item_t *item) {
             /* File exists on filesystem in a tracked directory but not in Git.
              *
              * Architectural invariant: Untracked files should NOT appear in the active
-             * slice (which is built from state rows, not filesystem scans). If we
+             * slice (which is built from view rows, not filesystem scans). If we
              * reach here, it's a programming error.
              *
              * Defensive: Return false (don't deploy untracked files, user must 'add' them). */
@@ -112,8 +112,9 @@ static bool deploy_needs_work(const workspace_item_t *item) {
 
         case WORKSPACE_STATE_RELEASED:
             /* The path left its profile in Git (an external commit, a pulled
-             * removal, a vanished branch) and was released from management.
-             * Never needs deployment — cleanup handles state entry removal. */
+             * removal, a vanished branch), or dotta never deployed it, and
+             * it was released from management. Never needs deployment —
+             * cleanup reports it and apply's record step retires its record. */
             return false;
     }
 
@@ -152,7 +153,7 @@ typedef enum {
  * is not a skip at all.
  *
  * @param part Partition for the row's kind (must not be NULL)
- * @param row Borrowed state row (must not be NULL)
+ * @param row Borrowed view row (must not be NULL)
  * @param work Deploy's work predicate for the row
  * @param skip Why the row's work is skipped, if it is
  * @return Error or NULL on success
@@ -1193,7 +1194,7 @@ static error_t *resolve_deployment_ownership(
  * fallback and its warning) and resolved ownership. Pure decision — no
  * filesystem mutation, so it runs ahead of the dry-run gate.
  *
- * @param dir State row (must not be NULL; borrowed, read-only)
+ * @param dir View row (must not be NULL; borrowed, read-only)
  * @param opts Deployment options (must not be NULL)
  * @param out_mode Resolved permission mode (must not be NULL)
  * @param out_uid Resolved UID or -1 for no change (must not be NULL)
@@ -1206,25 +1207,25 @@ static error_t *resolve_directory_metadata(
     mode_t *out_mode,
     uid_t *out_uid, gid_t *out_gid
 ) {
-    /* Validate directory mode from state (before skip/dry-run checks)
+    /* Resolve the directory mode from the row (before skip/dry-run checks)
      *
-     * In VWD operations, state should always have mode populated by the
-     * manifest layer at write time. If mode==0, this indicates state
-     * corruption or manifest sync failure. Warn and use the safe default.
+     * A directory row's mode is its metadata item's, and 0 is the one
+     * value the item can carry that is no claim at all: a "0000" in the
+     * profile's metadata.json. The workspace reads that zero as "no claim"
+     * (check_item_metadata_divergence skips the mode check), so the deploy
+     * side reads it the same way — the safe default — and says so, because
+     * the recorded value is the user's and they may want to know it is not
+     * being honoured.
      */
     mode_t mode = dir->mode;
     if (mode == 0) {
-        /* Defensive fallback - indicates unexpected state corruption */
         mode = DEPLOY_DIR_MODE_DEFAULT;
 
         fprintf(
             stderr,
-            "Warning: Missing mode in state for directory '%s', using default %04o\n"
-            "         This may indicate state database corruption. Consider running:\n"
-            "         dotta profile disable %s && dotta profile enable %s\n",
-            dir->filesystem_path, mode,
-            dir->profile ? dir->profile : "<profile>",
-            dir->profile ? dir->profile : "<profile>"
+            "Warning: Mode 0000 recorded for directory '%s' in profile '%s' "
+            "(.dotta/metadata.json), using default %04o\n",
+            dir->filesystem_path, dir->profile, mode
         );
     }
     *out_mode = mode;
@@ -1442,7 +1443,7 @@ cleanup:
 }
 
 /**
- * Deploy a single state row to its target filesystem location.
+ * Deploy a single view row to its target filesystem location.
  *
  * Decide, then gate, then mutate: the blob sanity check, the verdict on
  * whatever occupies the path, and the row's target metadata are decisions
@@ -1452,15 +1453,17 @@ cleanup:
  * deploy_directory resolves them in — so a corrupt row is named even
  * when a strict-mode ownership failure ends the run there.
  *
- * VWD Model:
- * - file->mode: Permission mode from state — 0 on a symlink row (links
- *   carry none), state corruption on any other, which falls back by type
+ * The row:
+ * - file->mode: Permission mode — 0 on a symlink row (links carry none),
+ *   a "0000" metadata claim on any other, which falls back by type
  * - file->owner/group: Ownership strings for root/ prefix files (NULL for home/)
  * - file->encrypted: handled transparently by the content cache
+ * - file->blob_oid: the tree entry's, by construction — a blob row never
+ *   carries a zero OID
  *
  * @param run Run context (must not be NULL)
- * @param file State row to deploy (must not be NULL; borrowed from the
- *             workspace's arena snapshot, read-only for deploy).
+ * @param file View row to deploy (must not be NULL; borrowed from the
+ *             workspace's view, read-only for deploy).
  * @return Error or NULL on success
  */
 static error_t *deploy_file(deploy_run_t *run, const manifest_row_t *file) {
@@ -1473,16 +1476,6 @@ static error_t *deploy_file(deploy_run_t *run, const manifest_row_t *file) {
     error_t *err = NULL;
     const buffer_t *content_buffer = NULL;  /* Borrowed from cache (const) */
     char *target_str = NULL;
-
-    /* Validate blob_oid from VWD cache. A zero OID means the row was never
-     * populated from state — should be impossible for entries reaching the
-     * deploy path, but we keep the defensive check. */
-    if (git_oid_is_zero(&file->blob_oid)) {
-        return ERROR(
-            ERR_INTERNAL, "Missing blob_oid for '%s' (state corruption?)",
-            file->filesystem_path
-        );
-    }
 
     /* What is at the path decides what may happen to it, and it is asked
      * here rather than taken from the plan: a prompt may have sat in
@@ -1526,31 +1519,30 @@ static error_t *deploy_file(deploy_run_t *run, const manifest_row_t *file) {
     bool must_clear = (want == OCCUPANT_SYMLINK) ? occupant_present(occ)
                                                  : (occ == OCCUPANT_DIRECTORY);
 
-    /* Determine permissions from state row
+    /* Determine permissions from the row
      *
-     * In VWD operations, the state row should always have mode populated
-     * by the manifest layer at write time. If mode==0, this indicates state
-     * corruption or manifest sync failure. Fall back to a safe default keyed
-     * on file type.
+     * A blob row's mode is the filemode default (0644 / 0755) unless the
+     * profile's metadata claims otherwise, and 0 is the one claim that is
+     * no claim at all: a "0000" in metadata.json. The workspace reads that
+     * zero as "no claim" (check_item_metadata_divergence skips the mode
+     * check), so the deploy side reads it the same way — the default keyed
+     * on file type — and says so, because the recorded value is the user's
+     * and they may want to know it is not being honoured.
      *
-     * A symlink row is the one honest zero: the manifest records mode 0 for
+     * A symlink row is the one honest zero: the view carries mode 0 for
      * GIT_FILEMODE_LINK and metadata keeps it there, symlink(2) takes no
      * mode and the symlink arm never reads this. Its zero is the recorded
-     * value, not a hole — so the corruption question is asked only of the
-     * kinds that carry a mode. */
+     * value, not a hole — so the question is asked only of the kinds that
+     * carry a mode. */
     mode_t file_mode = file->mode;
     if (file->type != PATH_TYPE_SYMLINK && file_mode == 0) {
-        /* Defensive fallback - indicates unexpected state corruption */
         file_mode = (file->type == PATH_TYPE_EXECUTABLE) ? 0755 : 0644;
 
         fprintf(
             stderr,
-            "Warning: Missing mode in state for '%s', using default %04o\n"
-            "         This may indicate state database corruption. Consider running:\n"
-            "         dotta profile disable %s && dotta profile enable %s\n",
-            file->filesystem_path, file_mode,
-            file->profile ? file->profile : "<profile>",
-            file->profile ? file->profile : "<profile>"
+            "Warning: Mode 0000 recorded for '%s' in profile '%s' "
+            "(.dotta/metadata.json), using default %04o\n",
+            file->filesystem_path, file->profile, file_mode
         );
     }
 
@@ -1560,8 +1552,8 @@ static error_t *deploy_file(deploy_run_t *run, const manifest_row_t *file) {
      * atomic ownership via fchown() on the file descriptor. This eliminates
      * the security window where files exist with incorrect ownership.
      *
-     * VWD Authority: uses file->owner and file->group from the state cache.
-     * - root/ prefix files: owner/group are username/groupname strings from state
+     * The row is the authority: file->owner and file->group.
+     * - root/ prefix files: owner/group are username/groupname strings from metadata
      * - home/ prefix files: owner/group are NULL (current user ownership)
      *
      * Unified helper handles:
@@ -1723,13 +1715,13 @@ typedef enum {
  * so a recorded mode without owner-write never refuses the tracked
  * children written after it.
  *
- * VWD Model:
+ * The row:
  * - dir->filesystem_path: already resolved against the mount target
  * - dir->storage_path: portable path, drives ownership resolution
  * - dir->mode / owner / group: target metadata (mode 0 = fallback 0755)
  *
  * @param run Run context (must not be NULL)
- * @param dir State row (must not be NULL; borrowed, read-only)
+ * @param dir View row (must not be NULL; borrowed, read-only)
  * @param out_action What the row's path called for (must not be NULL;
  *        set once decided, ahead of the gate, so a dry run reports it too)
  * @return Error or NULL on success

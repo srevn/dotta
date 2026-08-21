@@ -9,6 +9,7 @@
 #include <git2.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "base/args.h"
 #include "base/array.h"
@@ -79,7 +80,8 @@ static void print_deploy_preflight_results(
  *
  * `reassigned` holds the in-scope diverged items whose owning profile
  * changed (workspace_item_t *, borrowed) — the exact set the run will
- * acknowledge, content-clean reassignments included.
+ * acknowledge: a content-clean one by the adoption loop's re-stamp, a
+ * stale one by its deployment.
  */
 static void print_reassignments(const output_t *out, const ptr_array_t *reassigned) {
     if (reassigned->count == 0) return;
@@ -96,54 +98,6 @@ static void print_reassignments(const output_t *out, const ptr_array_t *reassign
         out, OUTPUT_NORMAL,
         "  These files will now be managed by a different profile."
     );
-}
-
-/**
- * Acknowledge profile reassignments — clear old_profile in state
- *
- * Reassignment is state bookkeeping, not deployment: content may be
- * identical, so the row never enters the plan, but the flag must be
- * cleared or the workspace keeps reporting the transition. Failures are
- * per-item warnings (the next apply retries). Dry-run prints the count.
- */
-static void acknowledge_reassignments(
-    state_t *state,
-    const ptr_array_t *reassigned,
-    bool dry_run,
-    output_t *out
-) {
-    if (reassigned->count == 0) return;
-
-    if (dry_run) {
-        output_info(
-            out, OUTPUT_NORMAL, "Would acknowledge %zu profile reassignment%s",
-            reassigned->count, reassigned->count == 1 ? "" : "s"
-        );
-        return;
-    }
-
-    size_t cleared = 0;
-    for (size_t i = 0; i < reassigned->count; i++) {
-        const workspace_item_t *item = reassigned->items[i];
-
-        error_t *err = state_clear_old_profile(state, item->filesystem_path);
-        if (err) {
-            output_warning(
-                out, OUTPUT_NORMAL, "Failed to clear profile reassignment flag for %s: %s",
-                item->filesystem_path, error_message(err)
-            );
-            error_free(err);
-            continue;
-        }
-        cleared++;
-    }
-
-    if (cleared > 0) {
-        output_styled(
-            out, OUTPUT_NORMAL, "Acknowledged {cyan}%zu{reset} profile reassignment%s\n",
-            cleared, cleared == 1 ? "" : "s"
-        );
-    }
 }
 
 /**
@@ -466,6 +420,7 @@ static void print_cleanup_results(
     workspace_items_t failed_files = workspace_items_view(&result->failed_files);
     workspace_items_t pruned_dirs = workspace_items_view(&result->pruned_dirs);
     workspace_items_t reclaimed_dirs = workspace_items_view(&result->reclaimed_dirs);
+    workspace_items_t released_dirs = workspace_items_view(&result->released_dirs);
     workspace_items_t skipped_dirs = workspace_items_view(&result->skipped_dirs);
     workspace_items_t failed_dirs = workspace_items_view(&result->failed_dirs);
 
@@ -503,7 +458,7 @@ static void print_cleanup_results(
     }
 
     if (released_files.count > 0) {
-        output_section(out, OUTPUT_VERBOSE, "Released files (no longer in Git)");
+        output_section(out, OUTPUT_VERBOSE, "Released files (left on disk)");
         for (size_t i = 0; i < released_files.count; i++) {
             output_styled(
                 out, OUTPUT_VERBOSE, "  {cyan}[released]{reset} %s\n",
@@ -552,6 +507,16 @@ static void print_cleanup_results(
         }
     }
 
+    if (released_dirs.count > 0) {
+        output_section(out, OUTPUT_VERBOSE, "Released directories (left on disk)");
+        for (size_t i = 0; i < released_dirs.count; i++) {
+            output_styled(
+                out, OUTPUT_VERBOSE, "  {cyan}[released]{reset} %s\n",
+                released_dirs.entries[i]->filesystem_path
+            );
+        }
+    }
+
     if (failed_dirs.count > 0) {
         output_section(out, OUTPUT_VERBOSE, "Failed to prune orphaned directories");
         for (size_t i = 0; i < failed_dirs.count; i++) {
@@ -595,6 +560,13 @@ static void print_cleanup_results(
             output_styled(
                 out, OUTPUT_NORMAL, "Released {cyan}%zu{reset} file%s from management\n",
                 released_files.count, released_files.count == 1 ? "" : "s"
+            );
+        }
+
+        if (released_dirs.count > 0) {
+            output_styled(
+                out, OUTPUT_NORMAL, "Released {cyan}%zu{reset} director%s from management\n",
+                released_dirs.count, released_dirs.count == 1 ? "y" : "ies"
             );
         }
 
@@ -689,7 +661,8 @@ static void print_cleanup_preflight_results(
     /* Every planned item lands in exactly one bucket, so these are the
      * present-orphan counts and the state-only count. */
     size_t present_files = verdicts->prunable_files.count + skipped.count + released.count;
-    size_t present_dirs = verdicts->prunable_dirs.count + verdicts->skipped_dirs.count;
+    size_t present_dirs = verdicts->prunable_dirs.count + verdicts->skipped_dirs.count +
+        verdicts->released_dirs.count;
 
     size_t absent = verdicts->absent_files.count + verdicts->absent_dirs.count;
 
@@ -745,6 +718,15 @@ static void print_cleanup_preflight_results(
             );
         }
 
+        if (verdicts->released_dirs.count > 0) {
+            output_styled(
+                out, OUTPUT_NORMAL,
+                "  {cyan}%zu{reset} director%s will be released from management\n",
+                verdicts->released_dirs.count,
+                verdicts->released_dirs.count == 1 ? "y" : "ies"
+            );
+        }
+
         if (verdicts->skipped_dirs.count > 0) {
             output_styled(
                 out, OUTPUT_NORMAL, "  {yellow}%zu{reset} director%s will be skipped (not empty)\n",
@@ -753,7 +735,12 @@ static void print_cleanup_preflight_results(
             );
         }
 
+        /* Released directories are named here, inline, with the other two
+         * fates: nothing is asked of the user about them (the arrow says
+         * "left alone"), and a directory left behind is not the event a
+         * file left behind is, so no block of its own. */
         print_path_list(out, &verdicts->prunable_dirs, OUTPUT_COLOR_CYAN, "•");
+        print_path_list(out, &verdicts->released_dirs, OUTPUT_COLOR_CYAN, "→");
         print_path_list(out, &verdicts->skipped_dirs, OUTPUT_COLOR_YELLOW, "⊘");
     }
 
@@ -833,8 +820,9 @@ static void print_cleanup_preflight_results(
         output_section(out, OUTPUT_NORMAL, "Released files");
         output_info(
             out, OUTPUT_NORMAL,
-            "The following files are no longer in their profile's Git branch, "
-            "and will be left on the filesystem:"
+            "The following files are no longer backed by their profile's Git "
+            "branch, or were never deployed by dotta, and will be left on the "
+            "filesystem:"
         );
 
         for (size_t i = 0; i < released.count; i++) {
@@ -982,9 +970,9 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
 
     /* Build operation scope
      *
-     *   scope_enabled — persistent VWD scope (passed to workspace_load).
-     *                   Empty is a valid convergence target: all state
-     *                   entries become orphans and apply cleans them up.
+     *   scope_enabled — the persistent enabled set (passed to workspace_load).
+     *                   Empty is a valid convergence target: every record
+     *                   becomes an orphan and apply cleans them up.
      *                   Enables the "disable last profile, then apply"
      *                   workflow.
      *   scope_active  — operation face (hook context).
@@ -1029,7 +1017,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         );
     }
 
-    /* Load workspace (partitions active state rows and runs divergence analysis)
+    /* Load workspace (partitions the view's rows and runs divergence analysis)
      *
      * After workspace_load returns, workspace_files(ws) yields the in-scope
      * active slice; we use that view throughout the command instead of
@@ -1261,8 +1249,13 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         );
     }
 
-    /* Apply-level adoption: stamp ownership for in-scope clean files that
-     * dotta has never claimed.
+    /* One moment for everything this run records — the adoption loop
+     * below and the post-deploy record after the plan — so a run's
+     * ownership events carry one timestamp. */
+    time_t now = time(NULL);
+
+    /* Apply-level adoption and acknowledgement: the ownership events for
+     * in-scope clean files.
      *
      * A clean in-scope row whose record has deployed_at == 0 — or no
      * record at all — represents a file the user declared scope over (via
@@ -1275,17 +1268,25 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * (blob, now, stat), so a later `rm file` is classified as [deleted]
      * and `update` commits the deletion.
      *
+     * A clean row whose record dotta owns under another profile is a
+     * reassignment: disk holds what A deployed, B owns the path now, and
+     * the content is the same. It sits in files.clean by construction
+     * (nothing to deploy), so this loop is the one place its record is
+     * re-stamped under B — the acknowledgement. Same write, same stat, one
+     * more counter; a stale reassignment is acknowledged by its deployment
+     * and counted after the record step below.
+     *
      * Independence from the earlier flush: workspace_flush_updates
-     * above persists slow-path anchors for the *next* run's fast path.
-     * It is not what proves this run's match — that proof comes from
-     * analyze_file_divergence leaving the entry out of ws->diverged. The
-     * flush keeps deployed_at by contract, so the record's deployed_at
-     * here remains a valid ownership probe; DB and in-memory views are
-     * kept coherent by workspace_anchor.
+     * above persists slow-path confirmations for the *next* run's fast
+     * path. It is not what proves this run's match — that proof comes from
+     * analyze_file_divergence leaving the entry out of ws->diverged. A
+     * confirmation rewrites neither deployed_at nor the record's profile,
+     * so both remain valid probes here; DB and in-memory views are kept
+     * coherent by workspace_anchor.
      *
      * Placement rationale: MUST run before the nothing-to-do early exit
      * below, otherwise the canonical case (clean manifest, no orphans)
-     * never reaches any anchor-writer. Adoption writes land in the open
+     * never reaches any anchor-writer. The writes land in the open
      * transaction; the early exit's state_save and the main path's both
      * commit them.
      *
@@ -1296,31 +1297,35 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      *
      * deploy_plan->files.clean IS "in scope ∧ no work" — no gates re-derived here. */
     size_t adopted_count = 0;
-    time_t adopt_now = time(NULL);
+    size_t acknowledged_count = 0;
     manifest_rows_t adoptable = manifest_rows_view(&deploy_plan->files.clean);
 
     for (size_t i = 0; i < adoptable.count; i++) {
         const manifest_row_t *file = adoptable.entries[i];
 
         const anchor_t *anchor = workspace_anchor_of(ws, file->filesystem_path);
-        if (anchor && anchor->deployed_at > 0) continue;
+        bool adopt = !anchor || anchor->deployed_at == 0;
+        bool acknowledge = !adopt && strcmp(anchor->profile, file->profile) != 0;
+        if (!adopt && !acknowledge) continue;
 
         if (!opts->dry_run) {
             stat_cache_t stat = stat_cache_from_path(file->filesystem_path);
-            error_t *adopt_err = workspace_anchor(ws, file, &stat, adopt_now, true);
-            if (adopt_err) {
+            error_t *anchor_err = workspace_anchor(ws, file, &stat, now);
+            if (anchor_err) {
                 /* Non-fatal: file is correct on disk; next status's slow-path
-                 * CMP_EQUAL re-seeds the record, and the row will be
-                 * re-adopted on the next apply. */
+                 * CMP_EQUAL re-confirms the record, and the row will be
+                 * re-adopted (or the reassignment re-acknowledged) on the
+                 * next apply. */
                 output_warning(
-                    out, OUTPUT_NORMAL, "Failed to record adoption anchor for %s: %s",
-                    file->filesystem_path, error_message(adopt_err)
+                    out, OUTPUT_NORMAL, "Failed to anchor %s: %s",
+                    file->filesystem_path, error_message(anchor_err)
                 );
-                error_free(adopt_err);
+                error_free(anchor_err);
                 continue;  /* Failed writes don't count — preview still accurate */
             }
         }
-        adopted_count++;
+        if (adopt) adopted_count++;
+        else acknowledged_count++;
     }
     if (adopted_count > 0) {
         output_styled(
@@ -1334,11 +1339,12 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     /* Collect pending profile reassignments and count stale files within
      * operation scope.
      *
-     * Profile reassignment (old_profile set in state) is state bookkeeping,
-     * not deployment: content may be identical, so the row never enters
-     * the plan — but the flag must be cleared or the workspace keeps
-     * reporting the transition. Collected before the early exit so a
-     * reassignment-only workspace does not loop DIRTY forever.
+     * A reassignment is the workspace's reading of the record against the
+     * row — the record dotta owns names one profile, the row another. The
+     * preview names the files; the loop above has acknowledged the clean
+     * ones and the deployment acknowledges the stale ones, and the receipt
+     * counts both. Collected before the early exit so a reassignment-only
+     * workspace is reported and acknowledged there too.
      *
      * DIVERGENCE_STALE is the workspace's verdict that Git moved past the
      * blob dotta last deployed (anchor.blob_oid ≠ row.blob_oid) — a
@@ -1382,15 +1388,26 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * prompt, so consent is given with the full picture. */
     size_t withheld = print_withheld(out, deploy_plan, cleanup_plan);
 
-    /* Nothing pends on the filesystem: acknowledge bookkeeping (if any) and
+    /* Nothing pends on the filesystem: report the bookkeeping (if any) and
      * leave. Privilege checks, preflight, hooks and the prompt are for runs
      * that touch disk — pure state bookkeeping skips them. The save also
-     * persists the reconcile + flush observations, dry-run included, as
-     * status does. */
+     * persists the flush's observations and confirmations, dry-run
+     * included, as status does. */
     if (deploy_plan_is_empty(deploy_plan) && cleanup_plan_is_empty(cleanup_plan)) {
         if (reassigned.count > 0) {
             print_reassignments(out, &reassigned);
-            acknowledge_reassignments(state, &reassigned, opts->dry_run, out);
+            if (opts->dry_run) {
+                output_info(
+                    out, OUTPUT_NORMAL, "Would acknowledge %zu profile reassignment%s",
+                    reassigned.count, reassigned.count == 1 ? "" : "s"
+                );
+            } else if (acknowledged_count > 0) {
+                output_styled(
+                    out, OUTPUT_NORMAL,
+                    "Acknowledged {cyan}%zu{reset} profile reassignment%s\n",
+                    acknowledged_count, acknowledged_count == 1 ? "" : "s"
+                );
+            }
         } else if (withheld > 0) {
             /* The report above named what and why; this only has to avoid
              * claiming the work was never there. */
@@ -1401,7 +1418,8 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
             output_info(out, OUTPUT_NORMAL, "Nothing to deploy (workspace is clean)");
         }
 
-        /* Commit transaction to persist stat cache updates from workspace flush */
+        /* Commit the transaction: the flush's observations and confirmations,
+         * the adoptions and acknowledgements above. */
         err = state_save(repo, state);
         if (err) {
             err = error_wrap(err, "Failed to commit state changes");
@@ -1614,15 +1632,15 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     /* Record what happened (only if not dry-run): cleanup, anchors,
      * observations. Acknowledgements and the commit follow for both modes. */
     if (!opts->dry_run) {
-        /* Prune the orphans the verdicts cleared and retire their rows.
+        /* Prune the orphans the verdicts cleared and retire their records.
          *
          * cleanup_execute changes the filesystem only; apply, as the
-         * transaction owner, retires the rows behind what went and what
-         * was let go. The flow for an orphan: profile disabled → row
-         * INACTIVE (manifest_apply_scope for a file, manifest_sync_directories
-         * for a directory) → workspace observes the orphan → the verdict →
-         * this block → row retired, completing the cycle. Without it,
-         * orphaned entries accumulate forever in the state tables.
+         * transaction owner, retires the records behind what went and what
+         * was let go. The flow for an orphan: the path leaves the view
+         * (profile disabled, branch moved, target changed) → the workspace
+         * reads its record as an orphan and asks Git why → the verdict →
+         * this block → record retired, completing the cycle. Without it,
+         * orphaned records accumulate forever in the anchors table.
          *
          * Non-fatal: deployment already succeeded and its state must be
          * saved regardless, or the database would show deployed files as
@@ -1642,21 +1660,21 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         if (cleanup_res) {
             print_cleanup_results(out, cleanup_res);
 
-            /* The rows behind a gone or let-go path retire — the expected
-             * row and the record side by side; a skipped or failed one
-             * stays. Which outcomes retire is cleanup's rule, read off its
-             * result (cleanup.h); the act is apply's. Every bucket is one
-             * kind and the kind travels on the item, so it picks the
-             * expected table; the record is one table for both. Non-fatal
-             * per row: the filesystem effect, if any, already happened,
-             * and a row that fails to retire is reported and observed
-             * again by the next apply. */
+            /* The record behind a gone or let-go path retires; a skipped
+             * or failed one stays. Which outcomes retire is cleanup's rule,
+             * read off its result (cleanup.h); the act is apply's. The
+             * record is one table for both kinds, so every bucket takes
+             * the same statement. Non-fatal per row: the filesystem
+             * effect, if any, already happened, and a record that fails to
+             * retire is reported and read as an orphan again by the next
+             * apply. */
             const ptr_array_t *retiring[] = {
                 &cleanup_res->pruned_files,
                 &cleanup_res->reclaimed_files,
                 &cleanup_res->released_files,
                 &cleanup_res->pruned_dirs,
                 &cleanup_res->reclaimed_dirs,
+                &cleanup_res->released_dirs,
             };
             size_t retired = 0;
 
@@ -1666,10 +1684,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
                 for (size_t i = 0; i < items.count; i++) {
                     const workspace_item_t *item = items.entries[i];
 
-                    err = (item->item_kind == PATH_KIND_DIRECTORY)
-                        ? state_remove_directory(state, item->filesystem_path)
-                        : state_remove_file(state, item->filesystem_path);
-                    if (!err) err = state_retire_anchor(state, item->filesystem_path);
+                    err = state_retire_anchor(state, item->filesystem_path);
                     if (err) {
                         output_warning(
                             out, OUTPUT_NORMAL, "Failed to retire state entry for %s: %s",
@@ -1726,9 +1741,12 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
          * reach — is observed too. Presence is the fact, so that last
          * pass walks the active slice rather than the receipt; observation
          * is idempotent, so it never regresses a record.
+         *
+         * A deployed file whose item read [reassigned] had its record
+         * rewritten under the row's profile by the write just made — the
+         * deployment is the acknowledgement — and is counted with the
+         * clean ones the adoption loop re-stamped.
          */
-        time_t now = time(NULL);
-
         if (deploy_res) {
             manifest_rows_t deployed = manifest_rows_view(&deploy_res->deployed);
             manifest_rows_t created = manifest_rows_view(&deploy_res->created);
@@ -1748,7 +1766,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
                  * advanced with a zero stat (slow-path fallback on next run). */
                 stat_cache_t stat = stat_cache_from_path(file->filesystem_path);
 
-                err = workspace_anchor(ws, file, &stat, now, true);
+                err = workspace_anchor(ws, file, &stat, now);
                 if (err) {
                     /* Non-fatal warning - deployment succeeded, just anchor update failed.
                      * The file is already on the filesystem with correct content.
@@ -1759,7 +1777,11 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
                     );
                     error_free(err);
                     err = NULL;  /* Don't propagate - continue operation */
+                    continue;
                 }
+
+                const workspace_item_t *item = workspace_get_item(ws, file->filesystem_path);
+                if (item && item->profile_changed) acknowledged_count++;
             }
 
             if (deployed.count > 0) {
@@ -1774,7 +1796,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
                 for (size_t i = 0; i < made[b].count; i++) {
                     const manifest_row_t *dir = made[b].entries[i];
 
-                    err = workspace_anchor(ws, dir, NULL, now, true);
+                    err = workspace_anchor(ws, dir, NULL, now);
                     if (err) {
                         output_warning(
                             out, OUTPUT_NORMAL, "Failed to update anchor for %s: %s",
@@ -1832,16 +1854,28 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         }
     }
 
-    /* Acknowledge profile reassignments (clear old_profile in state).
-     * When content also diverged the file was redeployed above; either
-     * way the transition must not persist across runs. Dry-run previews. */
-    acknowledge_reassignments(state, &reassigned, opts->dry_run, out);
+    /* The reassignments this run acknowledged: the clean ones the
+     * adoption loop re-stamped and the stale ones the deployment rewrote.
+     * Dry-run previews the in-scope set the preview named. */
+    if (opts->dry_run) {
+        if (reassigned.count > 0) {
+            output_info(
+                out, OUTPUT_NORMAL, "Would acknowledge %zu profile reassignment%s",
+                reassigned.count, reassigned.count == 1 ? "" : "s"
+            );
+        }
+    } else if (acknowledged_count > 0) {
+        output_styled(
+            out, OUTPUT_NORMAL, "Acknowledged {cyan}%zu{reset} profile reassignment%s\n",
+            acknowledged_count, acknowledged_count == 1 ? "" : "s"
+        );
+    }
 
-    /* Commit the state transaction: anchors, observations, removed orphan
-     * entries, cleared reassignments (partial success model — a cleanup
-     * failure leaves deployment state to commit). Dry-run included: the
-     * transaction then holds only the load-time reconcile + flush
-     * observations, which status and the nothing-to-do exit persist too. */
+    /* Commit the state transaction: anchors, observations, retired
+     * records (partial success model — a cleanup failure leaves
+     * deployment state to commit). Dry-run included: the transaction then
+     * holds only the load-time flush's observations and confirmations,
+     * which status and the nothing-to-do exit persist too. */
     err = state_save(repo, state);
     if (err) {
         err = error_wrap(err, "Failed to commit state changes");

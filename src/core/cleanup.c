@@ -80,9 +80,8 @@ error_t *cleanup_plan_build(
     for (size_t i = 0; i < count; i++) {
         const workspace_item_t *item = &items[i];
 
-        /* RELEASED is a file-side verdict — a tracked directory row carries
-         * no blob for Git to lose — but the kind decides the bucket either
-         * way, so nothing here depends on that. */
+        /* Both kinds reach both states: the kind decides the bucket, the
+         * state is a verdict's input. */
         if (item->state != WORKSPACE_STATE_ORPHANED &&
             item->state != WORKSPACE_STATE_RELEASED) {
             continue;
@@ -290,7 +289,7 @@ error_t *cleanup_preflight(
     CHECK_NULL(opts);
     CHECK_NULL(out);
 
-    /* calloc zeroes the seven buckets — an empty answer needs no NULL
+    /* calloc zeroes the eight buckets — an empty answer needs no NULL
      * guard downstream */
     cleanup_preflight_result_t *verdicts = calloc(1, sizeof(*verdicts));
     if (!verdicts) {
@@ -325,12 +324,13 @@ error_t *cleanup_preflight(
 
         } else if (item->state == WORKSPACE_STATE_RELEASED) {
             /* Git no longer backs the file — the branch was deleted, the
-             * path was removed from it, or the consistency layer already
-             * recorded the loss in the lifecycle column; the workspace
-             * observed it either way. The file stays on disk to protect
-             * the user's data, and the row retires because dotta cannot
-             * manage what Git cannot restore: it is released from dotta's
-             * management, not pruned.
+             * path was removed from it — or dotta never deployed it (the
+             * workspace's ownership gate); the workspace observed it
+             * either way. The file stays on disk to protect the user's
+             * data, and the record retires because dotta cannot manage
+             * what Git cannot restore, and does not remove what it did not
+             * put there: it is released from dotta's management, not
+             * pruned.
              *
              * Decided before --force is consulted: --force prunes what
              * would be skipped, never what is released. */
@@ -365,6 +365,17 @@ error_t *cleanup_preflight(
     for (size_t i = 0; i < dirs.count; i++) {
         const workspace_item_t *item = dirs.entries[i];
         const char *path = item->filesystem_path;
+
+        if (item->state == WORKSPACE_STATE_RELEASED) {
+            /* The same verdict as a released file, for the same reasons:
+             * Git no longer claims the directory, or dotta never made it.
+             * Left alone — unprobed, because nothing about its contents
+             * changes the answer — and the record retires. It is not in
+             * the prune set, so a parent above it stays occupied by it. */
+            err = ptr_array_push(&verdicts->released_dirs, item);
+            if (err) goto cleanup;
+            continue;
+        }
 
         switch (probe_orphan_directory(path)) {
             case DIR_PROBE_ABSENT:
@@ -417,6 +428,7 @@ void cleanup_preflight_result_free(cleanup_preflight_result_t *verdicts) {
     ptr_array_deinit(&verdicts->absent_files);
     ptr_array_deinit(&verdicts->prunable_dirs);
     ptr_array_deinit(&verdicts->skipped_dirs);
+    ptr_array_deinit(&verdicts->released_dirs);
     ptr_array_deinit(&verdicts->absent_dirs);
 
     free(verdicts);
@@ -568,6 +580,11 @@ static error_t *prune_orphaned_directories(
             ptr_array_push(&result->reclaimed_dirs, verdicts->absent_dirs.items[i])
         );
     }
+    for (size_t i = 0; i < verdicts->released_dirs.count; i++) {
+        RETURN_IF_ERROR(
+            ptr_array_push(&result->released_dirs, verdicts->released_dirs.items[i])
+        );
+    }
     for (size_t i = 0; i < verdicts->skipped_dirs.count; i++) {
         RETURN_IF_ERROR(
             ptr_array_push(&result->skipped_dirs, verdicts->skipped_dirs.items[i])
@@ -587,7 +604,7 @@ error_t *cleanup_execute(
     CHECK_NULL(verdicts);
     CHECK_NULL(out);
 
-    /* calloc zeroes the nine buckets. Handed to the caller at once so a
+    /* calloc zeroes the ten buckets. Handed to the caller at once so a
      * fatal error mid-run still leaves the partial receipt in its hands. */
     cleanup_result_t *result = calloc(1, sizeof(*result));
     if (!result) {
@@ -622,6 +639,7 @@ void cleanup_result_free(cleanup_result_t *result) {
     ptr_array_deinit(&result->failed_files);
     ptr_array_deinit(&result->pruned_dirs);
     ptr_array_deinit(&result->reclaimed_dirs);
+    ptr_array_deinit(&result->released_dirs);
     ptr_array_deinit(&result->skipped_dirs);
     ptr_array_deinit(&result->failed_dirs);
 

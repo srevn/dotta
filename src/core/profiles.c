@@ -891,57 +891,19 @@ cleanup:
 
 error_t *profile_discover_file(
     git_repository *repo,
-    const state_t *state,
     const char *storage_path,
-    bool enabled_only,
     string_array_t **out_profiles
 ) {
     CHECK_NULL(repo);
-    CHECK_NULL(state);
     CHECK_NULL(storage_path);
     CHECK_NULL(out_profiles);
 
     error_t *err = NULL;
     *out_profiles = NULL;
 
-    if (enabled_only) {
-        /* Manifest fast path: O(1) via state DB index.
-         * Returns the single owning profile (precedence already resolved). */
-        state_entry_t *entry = NULL;
-        err = state_get_file_by_storage(state, storage_path, &entry);
-
-        if (err) {
-            if (error_code(err) == ERR_NOT_FOUND) {
-                error_free(err);
-                return ERROR(
-                    ERR_NOT_FOUND, "File '%s' not found in enabled profiles",
-                    storage_path
-                );
-            }
-            return err;
-        }
-
-        string_array_t *profiles = string_array_new(0);
-        if (!profiles) {
-            state_free_entry(entry);
-            return ERROR(ERR_MEMORY, "Failed to allocate profile array");
-        }
-
-        err = string_array_push(profiles, entry->row.profile);
-        state_free_entry(entry);
-
-        if (err) {
-            string_array_free(profiles);
-            return err;
-        }
-
-        *out_profiles = profiles;
-
-        return NULL;
-    }
-
     /* Targeted branch scan: O(M×D) where D = path depth in tree.
-     * Checks each branch for the specific file instead of building the */
+     * Checks each branch for the specific file instead of building the
+     * full file index (profile_build_file_index walks every tree, O(M×P)). */
     string_array_t *all_branches = NULL;
     err = gitops_list_branches(repo, &all_branches);
     if (err) {

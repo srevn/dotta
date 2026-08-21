@@ -347,44 +347,13 @@ static error_t *remove_file_from_worktree(
 }
 
 /**
- * Check if a file is currently deployed from a different profile
- *
- * Helper to determine if removing a file from one profile will affect the filesystem.
- */
-static bool deployed_from_other_profile(
-    state_t *state,
-    const char *filesystem_path,
-    const char *current_profile
-) {
-    if (!state || !filesystem_path || !current_profile) {
-        return false;
-    }
-
-    if (!state_file_exists(state, filesystem_path)) {
-        return false;
-    }
-
-    state_entry_t *state_entry = NULL;
-    error_t *err = state_get_file(state, filesystem_path, &state_entry);
-
-    bool is_other = false;
-    if (!err && state_entry &&
-        state_entry->lifecycle == LIFECYCLE_ACTIVE &&
-        strcmp(state_entry->row.profile, current_profile) != 0) {
-        is_other = true;
-    }
-
-    error_free(err);
-    state_free_entry(state_entry);
-    return is_other;
-}
-
-/**
  * Analyze multi-profile conflicts for files to be removed
  *
  * Checks each file against all other profiles and determines:
  * - Which other profiles contain the file
- * - Whether the file is deployed from another profile
+ * - Whether the file is owned by another profile in the view — the
+ *   enabled set's precedence gives the path to a profile other than the
+ *   one the user is removing from, so the removal changes nothing on disk
  *
  * Performance: O(M×P + N) where M=profiles, P=avg files/profile, N=files checked
  * Uses centralized profile_build_file_index() for optimal performance.
@@ -396,7 +365,7 @@ static error_t *analyze_multi_profile_conflicts(
     const string_array_t *storage_paths,
     const string_array_t *filesystem_paths,
     const char *current_profile,
-    state_t *state,
+    const manifest_t *view,
     string_array_t ***other_profiles_out,
     size_t *multi_profile_count_out,
     bool *has_deployed_from_other_out
@@ -447,12 +416,14 @@ static error_t *analyze_multi_profile_conflicts(
                 }
                 multi_profile_count++;
 
-                /* Check if deployed from another profile.
+                /* Check if another profile owns the path in the view.
                  * Only valid with actual filesystem paths (absolute), not
                  * storage path fallbacks (relative, e.g., "home/.bashrc"). */
-                if (filesystem_path[0] == '/' &&
-                    deployed_from_other_profile(state, filesystem_path, current_profile)) {
-                    has_deployed_from_other = true;
+                if (filesystem_path[0] == '/') {
+                    const manifest_row_t *row = manifest_lookup(view, filesystem_path);
+                    if (row && strcmp(row->profile, current_profile) != 0) {
+                        has_deployed_from_other = true;
+                    }
                 }
             }
         }
@@ -838,6 +809,10 @@ static error_t *remove_files_from_profile(
     size_t multi_profile_count = 0;
     worktree_handle_t *wt = NULL;
     string_array_t *removed_paths = NULL;
+    string_array_t *enabled = NULL;
+    manifest_t *before = NULL;
+    manifest_t *after = NULL;
+    hashmap_t *anchor_index = NULL;
     bool profile_enabled = false;
 
     /* CLI flags override config */
@@ -856,6 +831,22 @@ static error_t *remove_files_from_profile(
         goto cleanup;
     }
 
+    /* The view before the commit. Who owns a path a moment before this
+     * command removes it is a fact neither the post-commit view nor the
+     * record can state — a path never seen here has no record, and a
+     * record can be a higher profile's — so it is read here, once, and
+     * serves both the conflict analysis and the record update below. */
+    err = state_get_profiles(state, &enabled);
+    if (err) {
+        err = error_wrap(err, "Failed to get enabled profiles");
+        goto cleanup;
+    }
+    err = manifest_build(repo, enabled, mounts, arena, &before);
+    if (err) {
+        err = error_wrap(err, "Failed to build manifest");
+        goto cleanup;
+    }
+
     /* Analyze multi-profile conflicts (critical safety check) */
     bool has_deployed_from_other = false;
     err = analyze_multi_profile_conflicts(
@@ -863,7 +854,7 @@ static error_t *remove_files_from_profile(
         storage_paths,
         filesystem_paths,
         opts->profile,
-        state,
+        before,
         &other_profiles,
         &multi_profile_count,
         &has_deployed_from_other
@@ -873,7 +864,7 @@ static error_t *remove_files_from_profile(
         goto cleanup;
     }
 
-    /* Capture profile-enabled status. The manifest-update phase below
+    /* Capture profile-enabled status. The record-update phase below
      * promotes the borrowed read handle to a write transaction via
      * state_begin; no reopen needed. */
     profile_enabled = state_has_profile(state, opts->profile);
@@ -1046,7 +1037,7 @@ static error_t *remove_files_from_profile(
      * deletion of files still needed by higher-priority profiles).
      */
 
-    /* Update manifest if profile is enabled.
+    /* Write the record if the profile is enabled.
      *
      * profile_enabled==true implies state was successfully loaded with a live DB
      * (state_has_profile returns false for NULL/empty state), so
@@ -1054,40 +1045,84 @@ static error_t *remove_files_from_profile(
      * is reused — no second state_open that would re-prepare
      * statements and re-query enabled_profiles from scratch.
      *
-     * manifest_remove_files projects the enabled set at its post-removal
-     * HEADs and then gives the paths this command removed the fate the
-     * user chose: --delete-files stages the deployed copies for apply to
-     * prune; the default releases them from management now. */
+     * Which paths this commit let go is read off the two views: `before`
+     * says which were this profile's a moment ago; `after` (the enabled
+     * set at its post-commit HEADs) says which a lower profile provides
+     * now — a fallback, whose record stays and reads [reassigned] until
+     * apply deploys it. A path that was ours and that nothing provides now
+     * gets the fate the user chose, if dotta has a record of it at all
+     * (never seen here: nothing to release or prune): --delete-files
+     * orders the deployed copy pruned at the next apply; the default
+     * retires the record — released from management now.
+     *
+     * Non-fatal throughout: Git succeeded and stands. A record this block
+     * fails to write is an orphan the next apply reads, asks Git about,
+     * finds let go, and releases — the default outcome, minus the prune
+     * order under --delete-files. */
     size_t manifest_removed_count = 0, manifest_fallback_count = 0;
 
     if (profile_enabled) {
-        /* Open transaction for manifest update */
+        /* Open transaction for the record update */
         error_t *manifest_err = state_begin(state);
         if (manifest_err) {
-            /* Non-fatal */
             output_warning(
-                out, OUTPUT_NORMAL, "Failed to open transaction for manifest update: %s",
+                out, OUTPUT_NORMAL, "Failed to open transaction for record update: %s",
                 error_message(manifest_err)
-            );
-            output_hint(
-                out, OUTPUT_NORMAL, "Run 'dotta status' or 'dotta apply' to resync manifest"
             );
             error_free(manifest_err);
         } else {
-            manifest_err = manifest_remove_files(
-                repo, state, arena, mounts, opts->profile, removed_paths,
-                opts->delete_files, &manifest_removed_count,
-                &manifest_fallback_count
-            );
+            anchor_t *anchors = NULL;
+            size_t anchor_count = 0;
+
+            manifest_err = manifest_build(repo, enabled, mounts, arena, &after);
+            if (!manifest_err) {
+                manifest_err = state_get_all_anchors(state, arena, &anchors, &anchor_count);
+            }
+            if (!manifest_err) {
+                anchor_index = hashmap_borrow(anchor_count > 0 ? anchor_count : 16);
+                if (!anchor_index) {
+                    manifest_err = ERROR(ERR_MEMORY, "Failed to create anchors index");
+                }
+            }
+            for (size_t i = 0; !manifest_err && i < anchor_count; i++) {
+                manifest_err = hashmap_set(
+                    anchor_index, anchors[i].filesystem_path, &anchors[i]
+                );
+            }
+
+            for (size_t i = 0; !manifest_err && i < removed_paths->count; i++) {
+                const char *storage_path = removed_paths->items[i];
+
+                /* The path as this profile deploys it. UNBOUND (custom/
+                 * under a profile with no target here) names nothing on
+                 * this machine: nothing to release. */
+                mount_resolve_outcome_t outcome;
+                const char *fs_path = NULL;
+                manifest_err = mount_resolve(
+                    mounts, opts->profile, storage_path, arena, &outcome, &fs_path
+                );
+                if (manifest_err || outcome == MOUNT_RESOLVE_UNBOUND) continue;
+
+                const manifest_row_t *was = manifest_lookup(before, fs_path);
+                if (!was || strcmp(was->profile, opts->profile) != 0) continue;
+
+                if (manifest_lookup(after, fs_path)) {
+                    manifest_fallback_count++;
+                    continue;
+                }
+
+                if (!hashmap_has(anchor_index, fs_path)) continue;
+
+                manifest_err = opts->delete_files
+                    ? state_order_prune(state, fs_path)
+                    : state_retire_anchor(state, fs_path);
+                if (!manifest_err) manifest_removed_count++;
+            }
 
             if (manifest_err) {
-                /* Non-fatal: Git succeeded, manifest can recover */
                 output_warning(
-                    out, OUTPUT_NORMAL, "Manifest update failed: %s",
+                    out, OUTPUT_NORMAL, "Record update failed: %s",
                     error_message(manifest_err)
-                );
-                output_hint(
-                    out, OUTPUT_NORMAL, "Run 'dotta status' or 'dotta apply' to resync"
                 );
                 error_free(manifest_err);
                 state_rollback(state);
@@ -1096,11 +1131,8 @@ static error_t *remove_files_from_profile(
                 error_t *commit_err = state_commit(state);
                 if (commit_err) {
                     output_warning(
-                        out, OUTPUT_NORMAL, "Failed to save manifest updates: %s",
+                        out, OUTPUT_NORMAL, "Failed to save record updates: %s",
                         error_message(commit_err)
-                    );
-                    output_hint(
-                        out, OUTPUT_NORMAL, "Run 'dotta status' or 'dotta apply' to resync"
                     );
                     error_free(commit_err);
                     state_rollback(state);
@@ -1152,8 +1184,12 @@ cleanup:
     /* Free all resources in reverse order of allocation. state is borrowed
      * from the dispatcher — do not free it. state_rollback is a no-op if
      * no transaction is active (state.c:2898-2906), so it safely closes
-     * any partially-begun manifest-update transaction on error paths. */
+     * any partially-begun record-update transaction on error paths. */
     state_rollback(state);
+    if (anchor_index) hashmap_free(anchor_index, NULL);
+    manifest_free(after);
+    manifest_free(before);
+    if (enabled) string_array_free(enabled);
     if (removed_paths) string_array_free(removed_paths);
     if (wt) worktree_cleanup(&wt);
     if (other_profiles) free_multi_profile_tracking(
@@ -1315,23 +1351,34 @@ static error_t *delete_profile_branch(
     bool profile_was_enabled = state_has_profile(state, opts->profile);
     size_t deployed_count = 0;
 
-    /* Count deployed files for informational display. Failure is non-fatal:
-     * the count is purely cosmetic, so swallow any error and display 0. */
-    error_t *count_err = state_count_files_by_profile(
-        state, opts->profile, &deployed_count
-    );
-    if (count_err) {
-        error_free(count_err);
-        deployed_count = 0;
+    /* Count the records dotta owns under the profile for informational
+     * display. Failure is non-fatal: the count is purely cosmetic, so
+     * swallow any error and display 0. Read outside the transaction the
+     * record update below takes; that update reads the record again,
+     * inside it. */
+    {
+        anchor_t *anchors = NULL;
+        size_t anchor_count = 0;
+        error_t *count_err = state_get_all_anchors(state, arena, &anchors, &anchor_count);
+        if (count_err) {
+            error_free(count_err);
+        } else {
+            for (size_t i = 0; i < anchor_count; i++) {
+                if (anchors[i].deployed_at > 0 &&
+                    strcmp(anchors[i].profile, opts->profile) == 0) {
+                    deployed_count++;
+                }
+            }
+        }
     }
 
-    /* Inform about deployed files (informational, not a warning) */
+    /* Inform about deployed paths (informational, not a warning) */
     if (deployed_count > 0) {
         output_newline(out, OUTPUT_VERBOSE);
 
         output_info(
-            out, OUTPUT_VERBOSE, "Note: Profile '%s' has %zu deployed file%s",
-            opts->profile, deployed_count, deployed_count == 1 ? "" : "s"
+            out, OUTPUT_VERBOSE, "Note: Profile '%s' has %zu deployed entr%s",
+            opts->profile, deployed_count, deployed_count == 1 ? "y" : "ies"
         );
 
         if (opts->delete_files) {
@@ -1413,74 +1460,7 @@ static error_t *delete_profile_branch(
      * This ensures proper global context when determining file removal.
      */
 
-    /* Update manifest if profile is enabled (BEFORE deleting branch).
-     *
-     * apply_scope never reads the profile being removed (it builds from
-     * the post-disable enabled set), so branch existence is not strictly
-     * required — but we preserve the pre-delete ordering so the
-     * reconcile sees a consistent world and the post-deletion upgrade
-     * loop finds the INACTIVE rows this pass stages. */
-    if (profile_was_enabled) {
-        output_print(
-            out, OUTPUT_VERBOSE, "Disabling profile in manifest before deletion...\n"
-        );
-
-        /* Promote the borrowed read handle to a write transaction.
-         * state_rollback in cleanup (idempotent) closes it on any error
-         * path that bails via goto cleanup. */
-        err = state_begin(state);
-        if (err) {
-            err = error_wrap(
-                err, "Failed to open transaction for profile disable"
-            );
-            goto cleanup;
-        }
-
-        /* Ordering rule: mutate enabled_profiles first, then project the manifest.
-         * state_disable_profile drops the row from enabled_profiles; apply_scope
-         * then rebuilds virtual_manifest against the remaining set. A scope
-         * change, so leftover is LIFECYCLE_INACTIVE: orphans without a fallback
-         * flip to it, and the post-deletion pass below upgrades them to
-         * LIFECYCLE_DELETED after gitops_delete_branch. */
-        err = state_disable_profile(state, opts->profile);
-        if (err) {
-            err = error_wrap(err, "Failed to remove profile from state");
-            goto cleanup;
-        }
-
-        /* Build a fresh mount table from the post-disable row cache:
-         * the borrowed `mounts` parameter still references the disabled
-         * profile, which would let custom/ paths under its target keep
-         * classifying after it has left scope. */
-        mount_table_t *post_disable_mounts = NULL;
-        err = profile_build_mount_table(state, arena, &post_disable_mounts);
-        if (err) {
-            err = error_wrap(err, "Failed to build mount table after disable");
-            goto cleanup;
-        }
-
-        err = manifest_apply_scope(
-            repo, state, arena, post_disable_mounts, LIFECYCLE_INACTIVE,
-            NULL, NULL
-        );
-        if (err) {
-            err = error_wrap(err, "Failed to project manifest after disable");
-            goto cleanup;
-        }
-
-        /* Commit transaction */
-        err = state_commit(state);
-        if (err) {
-            err = error_wrap(err, "Failed to save manifest updates");
-            goto cleanup;
-        }
-
-        output_styled(
-            out, OUTPUT_VERBOSE, "{green}✓{reset} Cleaned up manifest entries\n"
-        );
-    }
-
-    /* Delete local branch (NOW safe - manifest already cleaned up) */
+    /* Delete local branch */
     err = gitops_delete_branch(repo, opts->profile);
     if (err) {
         err = error_wrap(err, "Failed to delete profile '%s'", opts->profile);
@@ -1489,53 +1469,65 @@ static error_t *delete_profile_branch(
 
     performed = true;
 
-    /* Post-deletion: upgrade LIFECYCLE_INACTIVE entries to LIFECYCLE_DELETED
-     * (or release immediately without --delete-files)
+    /* Post-deletion: the enabled set and the record, in one transaction.
      *
-     * After branch deletion, LIFECYCLE_INACTIVE entries left by the earlier
-     * manifest_apply_scope() call (or from a prior profile disable) must be
-     * upgraded to LIFECYCLE_DELETED. Without this, the workspace would
-     * observe the branch gone and RELEASE these files (branch gone +
-     * LIFECYCLE_INACTIVE = irrecoverable), when the user's intent is to
-     * delete them.
+     * The order of the branch deletion and this block does not matter:
+     * the view is computed, and prune_ordered is the one fact the
+     * workspace reads for these records — written once, here, after the
+     * branch is gone. The profile leaves the enabled set (if it was in
+     * it), and every record under it is decided against the view that
+     * remains: a path the view still has is a fallback — its record is
+     * kept and reads [reassigned] P → Q until apply deploys Q's; a path
+     * the view lacks gets the fate the user chose — --delete-files orders
+     * the deployed copy pruned at the next apply, the default retires the
+     * record (released from management now). One rule whether P was
+     * enabled or not, and whether P's tree still claimed the path or had
+     * let it go: the user is deleting P and P's files.
      *
-     * Without --delete-files: remove state entries entirely (release from management).
-     *
-     * This is a SEPARATE transaction from the earlier scope reconciliation —
-     * the branch must be deleted first.
-     */
+     * Non-fatal: the branch is gone and stands. A record this block fails
+     * to write is an orphan the next apply reads, asks Git about, finds
+     * the branch gone, and releases. */
     error_t *delete_err = state_begin(state);
     if (!delete_err) {
-        /* Sweep set: every row left for this profile after manifest_apply_scope
-         * is either INACTIVE (just-orphaned by reconcile) or DELETED (carried
-         * over from a prior dotta remove). Fallback-having entries already
-         * moved to other profiles in step 1, so by-profile scope is precise. */
-        static const state_lifecycle_t sweep_lifecycles[] = {
-            LIFECYCLE_INACTIVE, LIFECYCLE_DELETED
-        };
-        const size_t sweep_count = sizeof(sweep_lifecycles) / sizeof(sweep_lifecycles[0]);
-        size_t files_changed = 0, dirs_changed = 0;
+        string_array_t *enabled_after = NULL;
+        mount_table_t *post_delete_mounts = NULL;
+        manifest_t *after = NULL;
+        anchor_t *anchors = NULL;
+        size_t anchor_count = 0;
+        size_t removed = 0, fallbacks = 0;
 
-        if (opts->delete_files) {
-            delete_err = state_transition_files_by_profile(
-                state, opts->profile, sweep_lifecycles, sweep_count,
-                LIFECYCLE_DELETED, &files_changed
-            );
-            if (!delete_err) {
-                delete_err = state_transition_directories_by_profile(
-                    state, opts->profile, sweep_lifecycles, sweep_count,
-                    LIFECYCLE_DELETED, &dirs_changed
-                );
+        if (profile_was_enabled) {
+            delete_err = state_disable_profile(state, opts->profile);
+        }
+
+        /* Build a fresh mount table from the post-disable row cache: the
+         * borrowed `mounts` parameter still references the deleted
+         * profile, which would let custom/ paths under its target keep
+         * classifying after it has left scope. */
+        if (!delete_err) {
+            delete_err = profile_build_mount_table(state, arena, &post_delete_mounts);
+        }
+        if (!delete_err) delete_err = state_get_profiles(state, &enabled_after);
+        if (!delete_err) {
+            delete_err = manifest_build(repo, enabled_after, post_delete_mounts, arena, &after);
+        }
+        if (!delete_err) {
+            delete_err = state_get_all_anchors(state, arena, &anchors, &anchor_count);
+        }
+
+        for (size_t i = 0; !delete_err && i < anchor_count; i++) {
+            const anchor_t *anchor = &anchors[i];
+            if (strcmp(anchor->profile, opts->profile) != 0) continue;
+
+            if (manifest_lookup(after, anchor->filesystem_path)) {
+                fallbacks++;
+                continue;
             }
-        } else {
-            delete_err = state_purge_files_by_profile(
-                state, opts->profile, sweep_lifecycles, sweep_count, &files_changed
-            );
-            if (!delete_err) {
-                delete_err = state_purge_directories_by_profile(
-                    state, opts->profile, sweep_lifecycles, sweep_count, &dirs_changed
-                );
-            }
+
+            delete_err = opts->delete_files
+                ? state_order_prune(state, anchor->filesystem_path)
+                : state_retire_anchor(state, anchor->filesystem_path);
+            if (!delete_err) removed++;
         }
 
         /* Commit transaction */
@@ -1548,22 +1540,27 @@ static error_t *delete_profile_branch(
             );
             error_free(delete_err);
             state_rollback(state);
-        } else if (files_changed > 0) {
+        } else if (removed > 0 || fallbacks > 0) {
             if (opts->delete_files) {
                 output_info(
-                    out, OUTPUT_VERBOSE, "%zu file%s staged for removal",
-                    files_changed, files_changed == 1 ? "" : "s"
+                    out, OUTPUT_VERBOSE, "%zu entr%s staged for removal, %zu fallback%s",
+                    removed, removed == 1 ? "y" : "ies",
+                    fallbacks, fallbacks == 1 ? "" : "s"
                 );
             } else {
                 output_info(
-                    out, OUTPUT_VERBOSE, "%zu file%s released from management",
-                    files_changed, files_changed == 1 ? "" : "s"
+                    out, OUTPUT_VERBOSE, "%zu entr%s released from management, %zu fallback%s",
+                    removed, removed == 1 ? "y" : "ies",
+                    fallbacks, fallbacks == 1 ? "" : "s"
                 );
             }
         }
+
+        manifest_free(after);
+        if (enabled_after) string_array_free(enabled_after);
     } else {
         /* Non-fatal: the next workspace load observes the branch gone and
-         * releases these rows conservatively */
+         * releases these records conservatively */
         output_warning(
             out, OUTPUT_NORMAL, "Failed to begin transaction for post-deletion update: %s",
             error_message(delete_err)
@@ -1625,9 +1622,9 @@ static error_t *delete_profile_branch(
     }
 
     /*
-     * Architectural note: State entries were upgraded to LIFECYCLE_DELETED (or
-     * released without --delete-files) in the post-deletion block above.
-     * Final filesystem cleanup for LIFECYCLE_DELETED entries happens on `apply`.
+     * Architectural note: the profile's records were prune-ordered (with
+     * --delete-files) or retired in the post-deletion block above. The
+     * prune itself happens on `apply`.
      */
 
     /* Execute post-remove hook */
@@ -1655,7 +1652,7 @@ cleanup:
     /* Free all resources in reverse order of allocation. state is borrowed
      * from the dispatcher — do not free it. state_rollback is a no-op if
      * no transaction is active; this safely closes any partially-begun
-     * manifest-update or post-deletion transaction on an error path. */
+     * record-update or post-deletion transaction on an error path. */
     state_rollback(state);
 
     if (hook_fs_paths) string_array_free(hook_fs_paths);

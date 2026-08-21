@@ -331,13 +331,13 @@ error_t *metadata_remove_item(
  * symlink is anchored by the index and survives.
  *
  * Such an entry has no role in any downstream pipeline: file deploy
- * already mkdirs ancestors at the same default mode, manifest_sync_
- * directories would only register it as a default-mode scan anchor for
- * an emptied subtree, and divergence detection has nothing to compare
- * against. Typically it's walker residue from a path the user no
- * longer tracks (e.g., `dotta add ~/dir/` followed by `dotta remove`
- * of every file underneath). Without this prune, manifest_sync_
- * directories would re-activate the entry indefinitely.
+ * already mkdirs ancestors at the same default mode, the view would
+ * only claim it as a default-mode scan anchor for an emptied subtree,
+ * and divergence detection has nothing to compare against. Typically
+ * it's walker residue from a path the user no longer tracks (e.g.,
+ * `dotta add ~/dir/` followed by `dotta remove` of every file
+ * underneath). Without this prune, the view would keep claiming the
+ * entry indefinitely.
  *
  * Custom-attribute entries (mode != default, or non-NULL owner/group)
  * are preserved even when unanchored: they may represent legitimate
@@ -394,7 +394,9 @@ bool metadata_has_item(
  *   bool encrypted = metadata_get_file_encrypted(metadata, storage_path);
  *   err = content_get_from_blob_oid(..., encrypted, ...);
  *
- * Note: VWD operations use entry->encrypted directly from state database.
+ * Note: the view carries the flag on its rows (manifest_row_t.encrypted,
+ * projected from this metadata at build); workspace-backed operations
+ * read it there.
  *
  * @param metadata Metadata collection (can be NULL)
  * @param storage_path Storage path to lookup (can be NULL)

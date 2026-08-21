@@ -254,6 +254,9 @@ TESTS_BIN_DIR := $(TESTS_DIR)/bin
 TESTS_SRC := $(wildcard $(TESTS_DIR)/test-*.c)
 TESTS_BIN := $(patsubst $(TESTS_DIR)/%.c,$(TESTS_BIN_DIR)/%,$(TESTS_SRC))
 
+# Suites are independent; run this many at a time (JOBS=1 keeps start order)
+JOBS ?= 4
+
 $(TESTS_BIN_DIR):
 	@mkdir -p $@
 
@@ -263,15 +266,15 @@ $(TESTS_BIN_DIR)/%: $(TESTS_DIR)/%.c $(BASE_OBJ) | $(TESTS_BIN_DIR)
 
 .PHONY: test
 test: $(TESTS_BIN)
-	@$(TESTS_DIR)/run.sh --unit $(SUITE)
+	@$(TESTS_DIR)/run.sh --unit -j$(JOBS) $(SUITE)
 
 .PHONY: test-cli
 test-cli: $(BIN_DIR)/dotta
-	@$(TESTS_DIR)/run.sh --cli $(SUITE)
+	@$(TESTS_DIR)/run.sh --cli -j$(JOBS) $(SUITE)
 
 .PHONY: test-all
 test-all: $(TESTS_BIN) $(BIN_DIR)/dotta
-	@$(TESTS_DIR)/run.sh $(SUITE)
+	@$(TESTS_DIR)/run.sh -j$(JOBS) $(SUITE)
 
 # Clean build artifacts
 .PHONY: clean
@@ -466,7 +469,7 @@ help:
 	@echo "  debug                 - Build with debug symbols"
 	@echo "  static                - Build with libgit2 statically linked (portable)"
 	@echo "  test                  - Build and run unit tests"
-	@echo "  test-cli              - Run CLI suites (SUITE=\"ghosts export\" to filter)"
+	@echo "  test-cli              - Run CLI suites (SUITE=\"ghosts export\" to filter, JOBS=1 for start order)"
 	@echo "  test-all              - Run unit tests and CLI suites"
 	@echo "  clean                 - Remove build artifacts"
 	@echo "  completions           - Regenerate dotta-completions.fish from current binary"

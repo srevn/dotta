@@ -1276,11 +1276,13 @@ cleanup:
  * Performance: O(P) metadata loads + O(F) file analysis (where P=profiles, F=files)
  *
  * @param repo Repository (must not be NULL)
- * @param profiles Profile list (must not be NULL)
- * @param filter_profiles Profile filter for CLI (can be NULL for no filter)
- * @param file_filter File filter (can be NULL)
+ * @param state State handle (must not be NULL; borrowed)
+ * @param scope Operation scope — profile and path filters (must not be NULL)
  * @param config Configuration (can be NULL)
+ * @param cache Shared blob-content cache (must not be NULL)
+ * @param manifest The view over the enabled set (must not be NULL; ctx->manifest)
  * @param opts Command options (must not be NULL)
+ * @param arena Command arena (must not be NULL)
  * @param out Output context (must not be NULL)
  * @return Error or NULL on success
  */
@@ -1290,7 +1292,7 @@ static error_t *diff_workspace(
     const scope_t *scope,
     const config_t *config,
     content_cache_t *cache,
-    const mount_table_t *mounts,
+    const manifest_t *manifest,
     const cmd_diff_options_t *opts,
     arena_t *arena,
     output_t *out
@@ -1298,7 +1300,7 @@ static error_t *diff_workspace(
     CHECK_NULL(repo);
     CHECK_NULL(scope);
     CHECK_NULL(cache);
-    CHECK_NULL(mounts);
+    CHECK_NULL(manifest);
     CHECK_NULL(opts);
     CHECK_NULL(arena);
     CHECK_NULL(out);
@@ -1316,7 +1318,7 @@ static error_t *diff_workspace(
     };
 
     err = workspace_load(
-        repo, state, scope, config, cache, mounts, &ws_opts, arena, &ws
+        repo, state, scope, config, cache, manifest, &ws_opts, arena, &ws
     );
     if (err) {
         return error_wrap(err, "Failed to load workspace");
@@ -1476,7 +1478,7 @@ error_t *cmd_diff(const dotta_ctx_t *ctx, const cmd_diff_options_t *opts) {
         case DIFF_WORKSPACE:
             /* Workspace diff — full scope (profile + path dimensions) */
             err = diff_workspace(
-                repo, state, scope, config, ctx->content_cache, ctx->mounts,
+                repo, state, scope, config, ctx->content_cache, ctx->manifest,
                 opts, ctx->arena, out
             );
             goto cleanup;
@@ -1636,6 +1638,6 @@ const args_command_t spec_diff = {
     .opts        = diff_opts,
     .classify    = diff_classify,
     .post_parse  = diff_post_parse,
-    .payload     = &dotta_ext_read_crypto,
+    .payload     = &dotta_ext_read_crypto_manifest,
     .dispatch    = diff_dispatch,
 };

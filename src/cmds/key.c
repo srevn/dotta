@@ -10,7 +10,6 @@
 #include <string.h>
 
 #include "base/args.h"
-#include "base/array.h"
 #include "base/buffer.h"
 #include "base/error.h"
 #include "base/output.h"
@@ -346,13 +345,8 @@ static error_t *cmd_key_status(
      * rows carry the metadata-projected flag */
     output_section(out, OUTPUT_NORMAL, "Encrypted Files");
 
-    string_array_t *enabled = NULL;
     manifest_t *manifest = NULL;
-    error_t *err = state_get_profiles(state, &enabled);
-    if (!err) {
-        err = manifest_build(repo, enabled, mounts, arena, &manifest);
-        string_array_free(enabled);
-    }
+    error_t *err = manifest_build(repo, state, mounts, arena, &manifest);
     if (err) {
         /* Non-fatal error - concise at normal, detail at verbose */
         output_print(

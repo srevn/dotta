@@ -39,6 +39,7 @@
 #include "cmds/status.h"
 #include "cmds/sync.h"
 #include "cmds/update.h"
+#include "core/manifest.h"
 #include "core/profiles.h"
 #include "core/state.h"
 #include "crypto/keymgr.h"
@@ -78,11 +79,12 @@ static const args_command_t *const dotta_commands[] = {
 };
 
 /* Per-combination dispatch payloads — one const per (repo_mode, state_mode,
- * crypto_mode) tuple actually used by the registry. Each
+ * crypto_mode, manifest_mode) tuple actually used by the registry. Each
  * command's spec sets `.payload = &dotta_ext_X` for its needed tuple;
  * the dispatcher reads it back in `run_spec` to decide how to acquire the
- * repository, state, and crypto handles before calling the handler. Only the
- * combinations used in the registry are defined; new tuples earn new constants. */
+ * repository, state, crypto handles and the view before calling the handler.
+ * Only the combinations used in the registry are defined; new tuples earn new
+ * constants. */
 const dotta_spec_ext_t dotta_ext_none = {
     .repo_mode  = DOTTA_REPO_NONE,
     .state_mode = DOTTA_STATE_NONE,
@@ -116,6 +118,28 @@ const dotta_spec_ext_t dotta_ext_write_crypto = {
     .repo_mode   = DOTTA_REPO_REQUIRED,
     .state_mode  = DOTTA_STATE_WRITE,
     .crypto_mode = DOTTA_CRYPTO_REQUIRED,
+};
+const dotta_spec_ext_t dotta_ext_read_manifest = {
+    .repo_mode     = DOTTA_REPO_REQUIRED,
+    .state_mode    = DOTTA_STATE_READ,
+    .manifest_mode = DOTTA_MANIFEST_REQUIRED,
+};
+const dotta_spec_ext_t dotta_ext_write_manifest = {
+    .repo_mode     = DOTTA_REPO_REQUIRED,
+    .state_mode    = DOTTA_STATE_WRITE,
+    .manifest_mode = DOTTA_MANIFEST_REQUIRED,
+};
+const dotta_spec_ext_t dotta_ext_read_crypto_manifest = {
+    .repo_mode     = DOTTA_REPO_REQUIRED,
+    .state_mode    = DOTTA_STATE_READ,
+    .crypto_mode   = DOTTA_CRYPTO_REQUIRED,
+    .manifest_mode = DOTTA_MANIFEST_REQUIRED,
+};
+const dotta_spec_ext_t dotta_ext_write_crypto_manifest = {
+    .repo_mode     = DOTTA_REPO_REQUIRED,
+    .state_mode    = DOTTA_STATE_WRITE,
+    .crypto_mode   = DOTTA_CRYPTO_REQUIRED,
+    .manifest_mode = DOTTA_MANIFEST_REQUIRED,
 };
 
 /**
@@ -273,6 +297,45 @@ static int open_mounts_for_state(
 }
 
 /**
+ * Build the view according to the command's declared mode.
+ *
+ * Returns 0 on success, 1 on unrecoverable error (error is printed). On success,
+ * `*manifest_out` is set per mode:
+ *
+ *   DOTTA_MANIFEST_NONE      → NULL
+ *   DOTTA_MANIFEST_REQUIRED  → manifest_build over the enabled set, under `mounts`
+ *
+ * Parallel in shape to `open_state_for_mode`. No view is built when `state ==
+ * NULL` (there is no enabled set to build it over): a NONE / OPTIONAL_SILENT
+ * repo mode that produced no state silently skips the mode, per the runtime
+ * invariant `manifest != NULL iff manifest_mode == REQUIRED AND state != NULL`.
+ *
+ * The builder's error is printed as it is: it names the profile and, for a
+ * custom/ path under a profile with no target, the repair. The rows land in the
+ * command arena; the index is released in `run_spec`'s LIFO teardown.
+ */
+static int open_manifest_for_mode(
+    dotta_manifest_mode_t mode,
+    git_repository *repo,
+    const state_t *state,
+    const mount_table_t *mounts,
+    arena_t *arena,
+    manifest_t **manifest_out
+) {
+    *manifest_out = NULL;
+
+    if (mode == DOTTA_MANIFEST_NONE || state == NULL) return 0;
+
+    error_t *err = manifest_build(repo, state, mounts, arena, manifest_out);
+    if (err != NULL) {
+        error_print(err, stderr);
+        error_free(err);
+        return 1;
+    }
+    return 0;
+}
+
+/**
  * Acquire crypto handles according to the command's declared mode.
  *
  * Returns 0 on success, 1 on unrecoverable error (error is printed). On success,
@@ -424,6 +487,8 @@ static int run_spec(
     dotta_repo_mode_t repo_mode = ext != NULL ? ext->repo_mode : DOTTA_REPO_NONE;
     dotta_state_mode_t state_mode = ext != NULL ? ext->state_mode : DOTTA_STATE_NONE;
     dotta_crypto_mode_t crypto_mode = ext != NULL ? ext->crypto_mode : DOTTA_CRYPTO_NONE;
+    dotta_manifest_mode_t manifest_mode =
+        ext != NULL ? ext->manifest_mode : DOTTA_MANIFEST_NONE;
 
     git_repository *repo = NULL;
     char *repo_path = NULL;
@@ -431,6 +496,7 @@ static int run_spec(
     keymgr *keymgr = NULL;
     content_cache_t *cache = NULL;
     const mount_table_t *mounts = NULL;
+    manifest_t *manifest = NULL;
 
     if (open_repo_for_mode(repo_mode, config, &repo, &repo_path) != 0) {
         arena_destroy(arena);
@@ -458,6 +524,15 @@ static int run_spec(
         arena_destroy(arena);
         return 1;
     }
+    if (open_manifest_for_mode(manifest_mode, repo, state, mounts, arena, &manifest) != 0) {
+        content_cache_free(cache);
+        keymgr_free(keymgr);
+        state_free(state);
+        if (repo != NULL) git_repository_free(repo);
+        free(repo_path);
+        arena_destroy(arena);
+        return 1;
+    }
 
     int exit_override = 0;
     dotta_ctx_t ctx = {
@@ -467,6 +542,7 @@ static int run_spec(
         .keymgr        = keymgr,
         .content_cache = cache,
         .mounts        = mounts,
+        .manifest      = manifest,
         .arena         = arena,
         .config        = config,
         .out           = out,
@@ -477,10 +553,12 @@ static int run_spec(
 
     error_t *err = resolved->dispatch(&ctx, opts);
 
-    /* LIFO teardown. content_cache first (holds a borrowed keymgr pointer but
-     * does not dereference it at teardown), then keymgr, then state (state_free
-     * auto-rolls-back any uncommitted transaction per state.h's contract). All
-     * *_free primitives are NULL-safe. */
+    /* LIFO teardown. The view's index first (its rows are the arena's), then
+     * content_cache (holds a borrowed keymgr pointer but does not dereference
+     * it at teardown), then keymgr, then state (state_free auto-rolls-back any
+     * uncommitted transaction per state.h's contract). All *_free primitives
+     * are NULL-safe. */
+    manifest_free(manifest);
     content_cache_free(cache);
     keymgr_free(keymgr);
     state_free(state);

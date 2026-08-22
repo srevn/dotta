@@ -82,13 +82,14 @@ struct workspace {
     git_repository *repo;                        /* Borrowed reference */
     arena_t *arena;                              /* Borrowed; backs every workspace-lifetime string */
 
-    /* The view: every enabled profile at HEAD, built by the partition and owned
-     * here (the rows are the arena's; manifest_free releases the index). Rows
-     * are read-only for the whole run — the record a writer patches lives in
-     * the anchors snapshot below, never in a row. The view's own index answers
+    /* The view: every enabled profile at HEAD, built by the dispatcher at the
+     * start of the command and borrowed here (ctx->manifest — its rows are the
+     * command arena's, its index the dispatcher's to release). Rows are
+     * read-only for the whole run — the record a writer patches lives in the
+     * anchors snapshot below, never in a row. The view's own index answers
      * workspace_lookup: a path is one managed thing, and every lookup tests
      * row->type for the kind it wants. */
-    manifest_t *manifest;                        /* Owned; freed in workspace_free */
+    const manifest_t *manifest;                  /* Borrowed — NOT freed in workspace_free */
 
     /* Active slices, both kinds, each in filesystem_path order — the view's rows
      * split by kind and sorted, so deploy's parent-before-child walk and the
@@ -662,7 +663,7 @@ static error_t *analyze_file_divergence(
          * answered by whichever path below settles it, and only when it can change
          * the verdict. */
         bool git_moved = anchor && !git_oid_is_zero(&anchor->blob_oid) &&
-                         !git_oid_equal(&anchor->blob_oid, blob_oid_ptr);
+            !git_oid_equal(&anchor->blob_oid, blob_oid_ptr);
         bool disk_at_anchor = false;
 
         /* ANCHOR FAST PATH (safety-grade)
@@ -2334,16 +2335,16 @@ static int compare_rows_by_path(const void *a, const void *b) {
 }
 
 /**
- * Build the view, slice it by kind, snapshot the record, and set the orphans aside
+ * Slice the view by kind, snapshot the record, and set the orphans aside
  *
- * The join at the centre of every load. manifest_build computes the expected
- * side — every enabled profile at HEAD, both kinds, one row per path — into
- * ws->manifest; the rows are split into ws->active_files / ws->active_dirs (+
- * counts) and each slice is sorted by filesystem_path. Then the anchors snapshot
- * (state_get_all_anchors) is indexed by path as ws->anchor_index — the analyses
- * pair each row with its record through workspace_get_anchor, and the two writers
- * patch the index's values — and every record whose path the view lacks is
- * collected into ws->orphans, in the snapshot's path order.
+ * The join at the centre of every load. The expected side — every enabled
+ * profile at HEAD, both kinds, one row per path — is ws->manifest, the
+ * dispatcher's view; its rows are split into ws->active_files / ws->active_dirs
+ * (+ counts) and each slice is sorted by filesystem_path. Then the anchors
+ * snapshot (state_get_all_anchors) is indexed by path as ws->anchor_index — the
+ * analyses pair each row with its record through workspace_get_anchor, and the
+ * two writers patch the index's values — and every record whose path the view
+ * lacks is collected into ws->orphans, in the snapshot's path order.
  *
  * The partition is the single source of truth for "is this row in scope?": a
  * path is managed iff the view has a row for it, and a record is an orphan iff
@@ -2351,29 +2352,21 @@ static int compare_rows_by_path(const void *a, const void *b) {
  * set walk the active slices. No defensive cleanup on error: workspace_free is
  * the single cleanup authority.
  *
- * Lifetime: every pointer (the view's rows, the slices, the snapshot, the orphans
- * array) lives in ws->arena. Only the two indexes (the view's and the anchors')
- * are heap-allocated, freed in workspace_free through manifest_free and
- * hashmap_free.
+ * Lifetime: every pointer (the slices, the snapshot, the orphans array) lives
+ * in ws->arena, beside the view's rows. The anchors index is heap-allocated,
+ * freed in workspace_free through hashmap_free; the view's index is the
+ * dispatcher's.
  *
- * Performance: O(M log M + A) — one tree walk per enabled profile (manifest_build),
- * two sorts, one pass over the record; no probes.
+ * Performance: O(M log M + A) — two sorts and one pass over the record; no Git,
+ * no probes.
  */
-static error_t *workspace_partition(workspace_t *ws, const mount_table_t *mounts) {
+static error_t *workspace_partition(workspace_t *ws) {
     CHECK_NULL(ws);
     CHECK_NULL(ws->state);
     CHECK_NULL(ws->arena);
-    CHECK_NULL(ws->profiles);
-    CHECK_NULL(mounts);
+    CHECK_NULL(ws->manifest);
 
-    /* The expected side, computed. mounts covers the enabled set (the caller
-     * built it from the same list). */
-    error_t *err = manifest_build(
-        ws->repo, ws->profiles, mounts, ws->arena, &ws->manifest
-    );
-    if (err) {
-        return error_wrap(err, "Failed to build manifest");
-    }
+    error_t *err = NULL;
 
     /* Slice by kind. Counted first so each slice is exact; the view's row order
      * is unspecified, so each slice is sorted into prefix order afterwards. */
@@ -2469,7 +2462,7 @@ error_t *workspace_load(
     const scope_t *scope,
     const config_t *config,
     content_cache_t *content_cache,
-    const mount_table_t *mounts,
+    const manifest_t *manifest,
     const workspace_load_t *options,
     arena_t *arena,
     workspace_t **out
@@ -2478,7 +2471,7 @@ error_t *workspace_load(
     CHECK_NULL(state);
     CHECK_NULL(scope);
     CHECK_NULL(content_cache);
-    CHECK_NULL(mounts);
+    CHECK_NULL(manifest);
     CHECK_NULL(options);
     CHECK_NULL(arena);
     CHECK_NULL(out);
@@ -2499,19 +2492,21 @@ error_t *workspace_load(
 
     /* Borrow caller-owned resources. Lifetime guarantees: state comes from
      * ctx->state (command-scoped); content_cache comes from ctx->content_cache
-     * (command-scoped, wraps ctx->keymgr); arena is ctx->arena (command-scoped).
-     * All three must outlive workspace_free. */
+     * (command-scoped, wraps ctx->keymgr); manifest is ctx->manifest (the view
+     * the dispatcher built over the enabled set, command-scoped); arena is
+     * ctx->arena (command-scoped). All four must outlive workspace_free. */
     ws->state = state;
     ws->content_cache = content_cache;
+    ws->manifest = manifest;
     ws->arena = arena;
 
-    /* Build the view, slice it, snapshot the record and set the orphans aside.
-     * The partition populates workspace fields directly; consumers read via
+    /* Slice the view, snapshot the record and set the orphans aside. The
+     * partition populates workspace fields directly; consumers read via
      * workspace_files() / workspace_directories() / workspace_lookup() and pair
-     * rows with their records through workspace_get_anchor(). The view is computed
-     * from Git here, so it is current by construction — nothing upstream repairs
-     * anything. */
-    err = workspace_partition(ws, mounts);
+     * rows with their records through workspace_get_anchor(). The view was
+     * computed from Git at dispatch, so it is current by construction — nothing
+     * upstream repairs anything. */
+    err = workspace_partition(ws);
     if (err) {
         workspace_free(ws);
         return error_wrap(err, "Failed to partition workspace");
@@ -2659,14 +2654,6 @@ const manifest_row_t *workspace_lookup(
 ) {
     if (!ws) return NULL;
     return manifest_lookup(ws->manifest, filesystem_path);
-}
-
-/**
- * The view the workspace was loaded against
- */
-const manifest_t *workspace_manifest(const workspace_t *ws) {
-    if (!ws) return NULL;
-    return ws->manifest;
 }
 
 /**
@@ -3206,12 +3193,9 @@ void workspace_free(workspace_t *ws) {
     hashmap_free(ws->diverged_index, NULL);
     hashmap_free(ws->anchor_index, NULL);
 
-    /* The view: its index is the heap's, its rows the arena's. */
-    manifest_free(ws->manifest);
-
-    /* The slices, the snapshot and the orphans array are arena-allocated; the
-     * caller's arena releases them when destroyed. ws->arena is borrowed — never
-     * destroyed here. */
+    /* The view is borrowed (the dispatcher's); the slices, the snapshot and the
+     * orphans array are arena-allocated and the caller's arena releases them
+     * when destroyed. ws->arena is borrowed — never destroyed here. */
 
     free(ws);
 }

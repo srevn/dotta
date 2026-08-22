@@ -1010,7 +1010,7 @@ error_t *cmd_status(const dotta_ctx_t *ctx, const cmd_status_options_t *opts) {
             .analyze_encryption  = true
         };
         err = workspace_load(
-            repo, state, scope, config, ctx->content_cache, ctx->mounts,
+            repo, state, scope, config, ctx->content_cache, ctx->manifest,
             &ws_opts, ctx->arena, &ws
         );
         if (err) {
@@ -1239,6 +1239,6 @@ const args_command_t spec_status = {
     .opts_size   = sizeof(cmd_status_options_t),
     .opts        = status_opts,
     .post_parse  = status_post_parse,
-    .payload     = &dotta_ext_read_crypto,
+    .payload     = &dotta_ext_read_crypto_manifest,
     .dispatch    = status_dispatch,
 };

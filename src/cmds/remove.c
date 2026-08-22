@@ -788,12 +788,19 @@ static error_t *cleanup_metadata(
 
 /**
  * Remove files from profile
+ *
+ * `before` is the view ahead of the commit (the dispatcher's): who owns a path
+ * a moment before this command removes it is a fact neither the post-commit
+ * view nor the record can state — a path never seen here has no record, and
+ * a record can be a higher profile's — so it serves both the conflict analysis
+ * and the record update.
  */
 static error_t *remove_files_from_profile(
     git_repository *repo,
     state_t *state,
     arena_t *arena,
     const mount_table_t *mounts,
+    const manifest_t *before,
     const config_t *config,
     output_t *out,
     const char *repo_path,
@@ -803,6 +810,7 @@ static error_t *remove_files_from_profile(
     CHECK_NULL(state);
     CHECK_NULL(arena);
     CHECK_NULL(mounts);
+    CHECK_NULL(before);
     CHECK_NULL(opts);
 
     /* Initialize all resources to NULL for safe cleanup */
@@ -814,8 +822,6 @@ static error_t *remove_files_from_profile(
     worktree_handle_t *wt = NULL;
     string_array_t *removed_paths = NULL;
     string_array_t pruned_dirs = { 0 };    /* Directory entries the metadata step pruned (storage paths) */
-    string_array_t *enabled = NULL;
-    manifest_t *before = NULL;
     manifest_t *after = NULL;
     hashmap_t *anchor_index = NULL;
     bool profile_enabled = false;
@@ -833,22 +839,6 @@ static error_t *remove_files_from_profile(
         &filesystem_paths, opts, out, mounts, arena
     );
     if (err) {
-        goto cleanup;
-    }
-
-    /* The view before the commit. Who owns a path a moment before this command
-     * removes it is a fact neither the post-commit view nor the record can state
-     * — a path never seen here has no record, and a record can be a higher
-     * profile's — so it is read here, once, and serves both the conflict analysis
-     * and the record update below. */
-    err = state_get_profiles(state, &enabled);
-    if (err) {
-        err = error_wrap(err, "Failed to get enabled profiles");
-        goto cleanup;
-    }
-    err = manifest_build(repo, enabled, mounts, arena, &before);
-    if (err) {
-        err = error_wrap(err, "Failed to build manifest");
         goto cleanup;
     }
 
@@ -1081,7 +1071,7 @@ static error_t *remove_files_from_profile(
             anchor_t *anchors = NULL;
             size_t anchor_count = 0;
 
-            manifest_err = manifest_build(repo, enabled, mounts, arena, &after);
+            manifest_err = manifest_build(repo, state, mounts, arena, &after);
             if (!manifest_err) {
                 manifest_err = state_get_all_anchors(state, arena, &anchors, &anchor_count);
             }
@@ -1198,8 +1188,6 @@ cleanup:
     state_rollback(state);
     if (anchor_index) hashmap_free(anchor_index, NULL);
     manifest_free(after);
-    manifest_free(before);
-    if (enabled) string_array_free(enabled);
     string_array_deinit(&pruned_dirs);
     if (removed_paths) string_array_free(removed_paths);
     if (wt) worktree_cleanup(&wt);
@@ -1497,7 +1485,6 @@ static error_t *delete_profile_branch(
      * gone, and releases. */
     error_t *delete_err = state_begin(state);
     if (!delete_err) {
-        string_array_t *enabled_after = NULL;
         mount_table_t *post_delete_mounts = NULL;
         manifest_t *after = NULL;
         anchor_t *anchors = NULL;
@@ -1515,9 +1502,8 @@ static error_t *delete_profile_branch(
         if (!delete_err) {
             delete_err = profile_build_mount_table(state, arena, &post_delete_mounts);
         }
-        if (!delete_err) delete_err = state_get_profiles(state, &enabled_after);
         if (!delete_err) {
-            delete_err = manifest_build(repo, enabled_after, post_delete_mounts, arena, &after);
+            delete_err = manifest_build(repo, state, post_delete_mounts, arena, &after);
         }
         if (!delete_err) {
             delete_err = state_get_all_anchors(state, arena, &anchors, &anchor_count);
@@ -1565,7 +1551,6 @@ static error_t *delete_profile_branch(
         }
 
         manifest_free(after);
-        if (enabled_after) string_array_free(enabled_after);
     } else {
         /* Non-fatal: the next workspace load observes the branch gone and releases
          * these records conservatively */
@@ -1698,7 +1683,7 @@ error_t *cmd_remove(const dotta_ctx_t *ctx, const cmd_remove_options_t *opts) {
     }
 
     return remove_files_from_profile(
-        repo, state, ctx->arena, ctx->mounts, config, out,
+        repo, state, ctx->arena, ctx->mounts, ctx->manifest, config, out,
         ctx->repo_path, opts
     );
 }
@@ -1845,6 +1830,6 @@ const args_command_t spec_remove = {
     .opts_size   = sizeof(cmd_remove_options_t),
     .opts        = remove_opts,
     .post_parse  = remove_post_parse,
-    .payload     = &dotta_ext_read,
+    .payload     = &dotta_ext_read_manifest,
     .dispatch    = remove_dispatch,
 };

@@ -573,18 +573,9 @@ static error_t *list_file_history(
         /* The view over the enabled set: precedence resolved, so the storage
          * path names one row and that row's profile is the owner. The row is
          * the arena's; only the index is released here. */
-        string_array_t *enabled = NULL;
-        err = state_get_profiles(state, &enabled);
-        if (err) {
-            return error_wrap(err, "Failed to get enabled profiles");
-        }
-
         manifest_t *manifest = NULL;
-        err = manifest_build(repo, enabled, mounts, arena, &manifest);
-        string_array_free(enabled);
-        if (err) {
-            return error_wrap(err, "Failed to build manifest");
-        }
+        err = manifest_build(repo, state, mounts, arena, &manifest);
+        if (err) return err;
 
         const manifest_row_t *row = manifest_lookup_storage(manifest, storage_path);
         manifest_free(manifest);

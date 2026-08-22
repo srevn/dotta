@@ -1474,9 +1474,8 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
     /* Declare all resources, initialized to NULL. */
     error_t *err = NULL;
     workspace_t *ws = NULL;
-    const manifest_t *before = NULL;    /* The view ahead of the Git phase: the workspace's, or built under --force */
-    manifest_t *before_forced = NULL;   /* Owned when --force built it (no workspace to borrow from) */
-    manifest_t *after = NULL;           /* The view after the Git phase (owned) */
+    const manifest_t *before = ctx->manifest;  /* The view ahead of the Git phase: the dispatcher's */
+    manifest_t *after = NULL;                  /* The view after the Git phase (owned) */
     scope_t *scope = NULL;
     sync_results_t *results = NULL;
     const char *remote_name = NULL;
@@ -1554,21 +1553,12 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
      *
      * Skip entirely when --force is used: the clean check result is unused, and
      * workspace_load can be expensive (filesystem analysis, directory scanning).
-     * Either way the view ahead of the Git phase is kept as `before`: the
-     * workspace's own, or — under --force, where no workspace is loaded — one
-     * built here, no disk involved. The block after the Git phase diffs it against
+     * Either way the view ahead of the Git phase is `before` — the dispatcher's,
+     * which the workspace joins in the non-forced arm and which --force reads
+     * as it is, no disk involved. The block after the Git phase diffs it against
      * the view the pulls produced.
      */
-    if (opts->force) {
-        err = manifest_build(
-            repo, scope_enabled(scope), ctx->mounts, ctx->arena, &before_forced
-        );
-        if (err) {
-            err = error_wrap(err, "Failed to build manifest");
-            goto cleanup;
-        }
-        before = before_forced;
-    } else {
+    if (!opts->force) {
         workspace_load_t ws_opts = {
             .analyze_files       = true,   /* Validate file state for uncommitted changes */
             .analyze_orphans     = false,  /* Orphans are apply's concern, not sync's */
@@ -1577,15 +1567,13 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
             .analyze_encryption  = false   /* Encryption is apply's concern */
         };
         err = workspace_load(
-            repo, state, scope, config, ctx->content_cache, ctx->mounts,
+            repo, state, scope, config, ctx->content_cache, ctx->manifest,
             &ws_opts, ctx->arena, &ws
         );
         if (err) {
             err = error_wrap(err, "Failed to load workspace");
             goto cleanup;
         }
-
-        before = workspace_manifest(ws);
 
         /* Persist the observations and slow-path CMP_EQUAL confirmations
          * (self-healing optimization). Seeds the fast path for subsequent
@@ -1905,13 +1893,13 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
      * what the block names is what the pulls and resolutions above did to the
      * view. Sync writes no state.
      *
-     * Attribution is per enabled profile. scope_enabled, never the -p narrowed
-     * scope_active: precedence runs across the whole enabled set, validated by
-     * profile_resolve_enabled (a missing branch was filtered and warned about
-     * at scope_build time) and untouched since — nothing between scope_build
-     * and here mutates enabled_profiles. A path p lost to q is p's reassignment
-     * and q's claim; a path that moved between two pulled profiles is one
-     * reassignment, never a transient release.
+     * Attribution is per enabled profile — scope_enabled, never the -p narrowed
+     * scope_active: precedence runs across the whole enabled set, which is what
+     * both views are built over (the state's rows, untouched since dispatch —
+     * nothing in sync mutates enabled_profiles; a missing branch contributes
+     * nothing to either and was warned about at scope_build time). A path p
+     * lost to q is p's reassignment and q's claim; a path that moved between
+     * two pulled profiles is one reassignment, never a transient release.
      *
      * Sync does not deploy. Apply's divergence analysis does that, which is what
      * the summary's hint points at.
@@ -1924,7 +1912,7 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
     bool manifest_changed = false;    /* The block printed: the Git phase moved something managed */
     bool apply_pending = false;       /* The record disagrees with the view, whenever that began */
 
-    err = manifest_build(repo, enabled, ctx->mounts, ctx->arena, &after);
+    err = manifest_build(repo, state, ctx->mounts, ctx->arena, &after);
     if (err) {
         output_warning(
             out, OUTPUT_NORMAL, "Manifest build failed: %s", error_message(err)
@@ -2044,11 +2032,10 @@ cleanup:
     /* Free resources in reverse order of allocation. state is borrowed from the
      * dispatcher and sync opens no transaction of its own (the flush scopes its
      * own; nothing else writes); workspace borrows scope's enabled array
-     * internally, so free workspace first, then scope. `before` is the workspace's
-     * view unless --force built it. */
+     * internally, so free workspace first, then scope. `before` is the
+     * dispatcher's view — not freed here. */
     if (current_branch) free(current_branch);
     manifest_free(after);
-    manifest_free(before_forced);
     if (ws) workspace_free(ws);
     if (xfer) transfer_context_free(xfer);
     if (results) sync_results_free(results);
@@ -2141,6 +2128,6 @@ const args_command_t spec_sync = {
         "  %s status --remote # Inspect remote state before syncing\n",
     .opts_size   = sizeof(cmd_sync_options_t),
     .opts        = sync_opts,
-    .payload     = &dotta_ext_read_crypto,
+    .payload     = &dotta_ext_read_crypto_manifest,
     .dispatch    = sync_dispatch,
 };

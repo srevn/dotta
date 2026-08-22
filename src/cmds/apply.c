@@ -1036,7 +1036,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         .analyze_encryption  = false             /* Not needed for deployment */
     };
     err = workspace_load(
-        repo, state, scope, config, ctx->content_cache, ctx->mounts,
+        repo, state, scope, config, ctx->content_cache, ctx->manifest,
         &ws_opts, ctx->arena, &ws
     );
     if (err) {
@@ -2005,6 +2005,6 @@ const args_command_t spec_apply = {
     .opts_size   = sizeof(cmd_apply_options_t),
     .opts        = apply_opts,
     .classify    = apply_classify,
-    .payload     = &dotta_ext_write_crypto,
+    .payload     = &dotta_ext_write_crypto_manifest,
     .dispatch    = apply_dispatch,
 };

@@ -16,9 +16,11 @@
  * Vocabulary
  * ----------
  *   enabled — persistent enabled profile names, always non-NULL, may be empty.
- *             Workspace scope (the view is built from all of it): workspace_load
- *             reads this via scope_enabled internally; callers pass the whole
- *             scope_t to workspace_load.
+ *             Workspace scope — the same set the dispatcher built the view
+ *             over (ctx->manifest), validated against the branches: workspace_load
+ *             reads this via scope_enabled internally for its profile
+ *             membership set and the untracked scan's precedence order; callers
+ *             pass the whole scope_t to workspace_load.
  *   active  — display/hook face of the scope. Equal to the CLI filter
  *             names when one was given, else equal to enabled. "What the user
  *             asked for, not the underlying world."
@@ -30,8 +32,9 @@
  *
  * The CRITICAL invariant previously expressed as prose comments in apply.c /
  * sync.c ("use enabled, not active, for workspace_load") is now type-enforced:
- * workspace_load takes `const scope_t *` and reads the enabled set internally.
- * Callers cannot pass the wrong array by mistake.
+ * workspace_load takes `const scope_t *` and reads the enabled set internally,
+ * and the view it joins is built over the state's rows, never over a list a
+ * caller hands in. Callers cannot pass the wrong array by mistake.
  *
  * Lifetime and ownership
  * ----------------------
@@ -156,8 +159,9 @@ void scope_free(scope_t *s);
 /**
  * Persistent enabled set — the view's scope.
  *
- * Pass this (and ONLY this) to workspace_load. Never the filter. Always non-NULL;
- * the array may be empty (an empty view is a valid state).
+ * The set the workspace's profile membership is read from (workspace_load takes
+ * the scope and reads this internally). Never the filter. Always non-NULL; the
+ * array may be empty (an empty view is a valid state).
  *
  * The returned pointer is borrowed from scope_t and valid until scope_free.
  */

@@ -579,33 +579,43 @@ static error_t *manifest_allocate(
 }
 
 /**
- * Build the manifest from profile names
+ * Build the manifest over the enabled set
  */
 error_t *manifest_build(
     git_repository *repo,
-    const string_array_t *profiles,
+    const state_t *state,
     const mount_table_t *mounts,
     arena_t *arena,
     manifest_t **out
 ) {
     CHECK_NULL(repo);
-    CHECK_NULL(profiles);
+    CHECK_NULL(state);
     CHECK_NULL(mounts);
     CHECK_NULL(arena);
     CHECK_NULL(out);
 
     *out = NULL;
 
+    /* The enabled set, in position order. Borrowed from the row cache for the
+     * loop only: every name a row keeps is duplicated below, so the view never
+     * depends on the cache's lifetime. */
+    const state_profile_entry_t *profiles = NULL;
+    size_t profile_count = 0;
+    error_t *err = state_peek_profiles(state, &profiles, &profile_count);
+    if (err) {
+        return error_wrap(err, "Failed to read enabled profiles");
+    }
+
     manifest_t *manifest = NULL;
-    error_t *err = manifest_allocate(arena, 64, 128, &manifest);
+    err = manifest_allocate(arena, 64, 128, &manifest);
     if (err) return err;
 
     /* Process each profile in order (later profiles override earlier) */
-    for (size_t i = 0; i < profiles->count; i++) {
+    for (size_t i = 0; i < profile_count; i++) {
         /* Arena-allocate the profile name. Rows borrow this pointer; the caller's
          * arena outlives the view (it backs every per-row string the walk writes),
-         * so the view never depends on the caller's profile list. */
-        const char *profile = arena_strdup(arena, profiles->items[i]);
+         * so the view never depends on the state's row cache. */
+        const char *profile = arena_strdup(arena, profiles[i].name);
         if (!profile) {
             err = ERROR(ERR_MEMORY, "Failed to duplicate profile name");
             goto cleanup;

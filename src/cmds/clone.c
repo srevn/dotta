@@ -301,10 +301,10 @@ static error_t *initialize_state(
         }
 
         manifest_t *view = NULL;
-        err = manifest_build(repo, profiles, post_mutation_mounts, arena, &view);
+        err = manifest_build(repo, state, post_mutation_mounts, arena, &view);
         if (err) {
             state_free(state);
-            return error_wrap(err, "Failed to build manifest");
+            return err;
         }
         manifest_free(view);
     }

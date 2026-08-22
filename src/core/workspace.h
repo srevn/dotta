@@ -13,24 +13,24 @@
  *
  * Snapshot ownership:
  *   The workspace is the authority for the join within its lifetime: the view
- *   (core/manifest.h — every enabled profile at HEAD, computed at load, owned
- *   by the workspace) and the record (the anchors snapshot, state_get_all_anchors).
- *   Downstream consumers (deploy, cleanup, command-internal analyses) read both
- *   through workspace accessors (workspace_files, workspace_directories,
- *   workspace_lookup, workspace_get_anchor, workspace_manifest) rather than
- *   building a view or calling state_get_all_anchors themselves. The view has
- *   no writer: it is current by construction and nothing invalidates it. The
- *   record has two writers while a workspace is live, workspace_observe and
- *   workspace_anchor, each of which patches the snapshot it persists
- *   through (the flush's confirmations patch inline, in this file);
- *   retirements (state_retire_anchor, from apply's record step and the verbs)
- *   go to the database directly — no later reader in the run consults a retired
- *   path.
+ *   (core/manifest.h — every enabled profile at HEAD, built by the dispatcher
+ *   at the start of the command and borrowed here, `ctx->manifest`) and the
+ *   record (the anchors snapshot, state_get_all_anchors). Downstream consumers
+ *   (deploy, cleanup, command-internal analyses) read both through workspace
+ *   accessors (workspace_files, workspace_directories, workspace_lookup,
+ *   workspace_get_anchor) rather than building a view or calling
+ *   state_get_all_anchors themselves. The view has no writer: it is current by
+ *   construction and nothing invalidates it. The record has two writers while
+ *   a workspace is live, workspace_observe and workspace_anchor, each of which
+ *   patches the snapshot it persists through (the flush's confirmations patch
+ *   inline, in this file); retirements (state_retire_anchor, from apply's
+ *   record step and the verbs) go to the database directly — no later reader
+ *   in the run consults a retired path.
  *
  *   Exception: paths that load no workspace (the verbs — add, update, remove —
- *   profile enable / disable, sync's --force arm, completion) build their own
- *   view with manifest_build and write the record through state.h directly; no
- *   snapshot exists for them to desync.
+ *   profile enable / disable, sync's --force arm, completion) read the
+ *   dispatcher's view or build their own with manifest_build, and write the
+ *   record through state.h directly; no snapshot exists for them to desync.
  */
 
 #ifndef DOTTA_WORKSPACE_H
@@ -43,7 +43,6 @@
 #include "core/manifest.h"
 #include "core/state.h"
 #include "infra/content.h"
-#include "infra/mount.h"
 
 /* Maximum number of display tags that can be extracted from a workspace item */
 #define WORKSPACE_ITEM_MAX_DISPLAY_TAGS 5
@@ -160,7 +159,7 @@ typedef struct {
 /**
  * Load workspace from repository
  *
- * Builds the view, loads the record and performs divergence analysis against
+ * Slices the view, loads the record and performs divergence analysis against
  * the filesystem:
  * - The view: every enabled profile's tree and metadata at HEAD
  * - The record: the anchors in .git/dotta.db
@@ -169,19 +168,19 @@ typedef struct {
  * Additionally scans tracked directories for untracked files (new files that
  * appeared in directories previously added via 'dotta add').
  *
- * The workspace is scoped to the caller's operation scope — specifically,
- * `scope_enabled(scope)`, the persistent enabled profile set: the view is built
- * from exactly those profiles, and a record under any other profile is an orphan.
- * This enforces the invariant that workspace loading uses the persistent enabled
- * set rather than any CLI filter (operations like `dotta status -p global` still
- * load the full workspace and apply the filter at display time via
- * scope_accepts_profile).
+ * The workspace is scoped to the persistent enabled profile set — the view is
+ * built over exactly those profiles, and a record under any other profile is
+ * an orphan. This enforces the invariant that workspace loading uses the
+ * persistent enabled set rather than any CLI filter (operations like `dotta
+ * status -p global` still load the full workspace and apply the filter at
+ * display time via scope_accepts_profile).
  *
  * Profile loading: The workspace borrows the enabled name array from the scope
- * (caller must keep the scope alive until workspace_free). The view is computed
- * from Git at every load — one tree walk per
- * enabled profile (manifest_build) — and owned by the workspace;
- * workspace_manifest lends it out.
+ * (`scope_enabled(scope)`; caller must keep the scope alive until
+ * workspace_free) for its profile membership set and the untracked scan's
+ * precedence order. The view itself is the dispatcher's, built over the same
+ * enabled set at the start of the command and borrowed here — one tree walk
+ * per enabled profile, once per command.
  *
  * @param repo Git repository (must not be NULL)
  * @param state State handle (must not be NULL, borrowed from caller;
@@ -192,10 +191,11 @@ typedef struct {
  * @param content_cache Shared blob-content cache (must not be NULL;
  *              borrowed — lifetime must extend past workspace_free. Obtain from
  *              `ctx->content_cache` under crypto_mode == KEY_CACHE)
- * @param mounts Per-machine mount table covering scope_enabled(scope). Must not
- *               be NULL. Threaded through to manifest_build. Callers pass
- *               `ctx->mounts` — read-only commands hold no binding-mutation between
- *               dispatch and workspace_load, so ctx->mounts is current.
+ * @param manifest The view over the enabled set (must not be NULL; borrowed —
+ *                 lifetime must extend past workspace_free. `ctx->manifest`,
+ *                 which the command's spec declares with manifest_mode ==
+ *                 REQUIRED; no command mutates Git or the enabled set between
+ *                 dispatch and workspace_load, so it is current)
  * @param options Analysis options (must not be NULL)
  * @param arena Borrowed allocator backing every workspace-lifetime string (the
  *              view's rows, the record, diverged items, partition pointer arrays).
@@ -210,7 +210,7 @@ error_t *workspace_load(
     const scope_t *scope,
     const struct config *config,
     content_cache_t *content_cache,
-    const mount_table_t *mounts,
+    const manifest_t *manifest,
     const workspace_load_t *options,
     arena_t *arena,
     workspace_t **out
@@ -347,18 +347,6 @@ const manifest_row_t *workspace_lookup(
     const workspace_t *ws,
     const char *filesystem_path
 );
-
-/**
- * The view the workspace was loaded against
- *
- * Borrowed; valid for the workspace's lifetime. For the reader that needs the
- * whole view rather than a slice or a lookup — sync's pre-Git-phase `before`,
- * diffed against the view it builds afterwards.
- *
- * @param ws Workspace (NULL returns NULL)
- * @return Borrowed view
- */
-const manifest_t *workspace_manifest(const workspace_t *ws);
 
 /**
  * Look up the record dotta keeps of a path

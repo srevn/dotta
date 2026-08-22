@@ -1205,7 +1205,6 @@ static error_t *update_manifest_after_update(
     CHECK_NULL(out_updated);
 
     error_t *err = NULL;
-    string_array_t *enabled = NULL;
     manifest_t *manifest = NULL;
     bool in_transaction = false;
 
@@ -1225,16 +1224,8 @@ static error_t *update_manifest_after_update(
     }
 
     /* The post-commit view, once */
-    err = state_get_profiles(state, &enabled);
-    if (err) {
-        err = error_wrap(err, "Failed to get enabled profiles");
-        goto cleanup;
-    }
-    err = manifest_build(repo, enabled, mounts, arena, &manifest);
-    if (err) {
-        err = error_wrap(err, "Failed to build manifest");
-        goto cleanup;
-    }
+    err = manifest_build(repo, state, mounts, arena, &manifest);
+    if (err) goto cleanup;
 
     /* One lookup per committed path, both kinds; the arms of the header doc. A
      * path let go and a fallback receive no anchor: there is no disk confirmation
@@ -1326,7 +1317,6 @@ cleanup:
         state_rollback(state);
     }
     manifest_free(manifest);
-    if (enabled) string_array_free(enabled);
 
     return err;
 }
@@ -2017,7 +2007,7 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
         .analyze_encryption  = true                     /* Encryption policy validation */
     };
     err = workspace_load(
-        repo, state, scope, config, ctx->content_cache, ctx->mounts,
+        repo, state, scope, config, ctx->content_cache, ctx->manifest,
         &ws_opts, ctx->arena, &ws
     );
     if (err) {
@@ -2447,6 +2437,6 @@ const args_command_t spec_update = {
     .opts_size   = sizeof(cmd_update_options_t),
     .opts        = update_opts,
     .post_parse  = update_post_parse,
-    .payload     = &dotta_ext_read_crypto,
+    .payload     = &dotta_ext_read_crypto_manifest,
     .dispatch    = update_dispatch,
 };

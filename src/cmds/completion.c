@@ -147,16 +147,8 @@ static void complete_files(
 ) {
     if (!state) return;
 
-    string_array_t *enabled = NULL;
-    error_t *err = state_get_profiles(state, &enabled);
-    if (err) {
-        error_free(err);
-        return;
-    }
-
     manifest_t *manifest = NULL;
-    err = manifest_build(repo, enabled, mounts, arena, &manifest);
-    string_array_free(enabled);
+    error_t *err = manifest_build(repo, state, mounts, arena, &manifest);
     if (err) {
         error_free(err);
         return;

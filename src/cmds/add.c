@@ -726,18 +726,9 @@ static error_t *update_manifest_after_add(
      * is the winner's and so is its record, and the capture's stat would
      * misattribute to the winner's blob_oid. Write failures are non-fatal: disk
      * is the just-committed blob, and the next status's slow path confirms it. */
-    string_array_t *enabled = NULL;
-    err = state_get_profiles(state, &enabled);
-    if (err) {
-        return error_wrap(err, "Failed to get enabled profiles");
-    }
-
     manifest_t *manifest = NULL;
-    err = manifest_build(repo, enabled, post_mutation_mounts, arena, &manifest);
-    string_array_free(enabled);
-    if (err) {
-        return error_wrap(err, "Failed to build manifest");
-    }
+    err = manifest_build(repo, state, post_mutation_mounts, arena, &manifest);
+    if (err) return err;
 
     /* The record as it stands, indexed by path, so a takeover is known before
      * the write that rewrites it. */

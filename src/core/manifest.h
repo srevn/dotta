@@ -4,15 +4,18 @@
  * The manifest is the precedence-resolved view of every enabled profile at HEAD:
  * one row per managed filesystem path, both kinds, the winning profile's claim
  * already applied (manifest_row_t, below). It is computed from Git at every load
- * and never stored — Git × enabled set × mount table → rows is a pure function,
- * and nothing here touches the state database. Surface is two-fold:
+ * and never stored — Git × enabled set × mount table → rows is a pure function;
+ * the enabled set is read from the state handle's row cache (core/state.h),
+ * and nothing here writes. Surface is two-fold:
  *
  *   - Builders: manifest_build walks every enabled profile in precedence order
  *     (later profiles override earlier); manifest_build_tree walks one Git tree
  *     — the historical-diff path (cmd_diff) — and is the same per-profile step
  *     applied once. Both produce manifest_row_t rows directly, the one row shape
  *     every consumer reads, so there is no bridge between the build step and
- *     its readers.
+ *     its readers. The dispatcher builds the view once per command for the
+ *     commands that declare it (ctx->manifest, include/runtime.h); a command
+ *     that moves Git or the enabled set builds the post-mutation view itself.
  *
  *   - Readers: manifest_rows (both kinds, unordered), manifest_lookup (by
  *     filesystem path, O(1)) and manifest_lookup_storage (by storage path, linear);
@@ -40,8 +43,10 @@
 #include "core/metadata.h"
 #include "infra/mount.h"
 
-/* manifest_diff reads the record (core/state.h) by pointer; the anchor is named
- * here and defined there, as state.h names the row. */
+/* manifest_build reads the enabled set from the state handle and manifest_diff
+ * reads the record (core/state.h) by pointer; both are named here and defined
+ * there, as state.h names the row. */
+typedef struct state state_t;
 typedef struct anchor anchor_t;
 
 /**
@@ -148,22 +153,29 @@ static inline git_filemode_t path_type_to_git_filemode(path_type_t type) {
  *
  * Rows and their strings live in the arena the builder was given; the path index
  * is heap-allocated and released by manifest_free. A view borrows nothing else
- * — not the caller's profile list, not the mount table — so it outlives both,
- * for the arena's lifetime.
+ * — not the state's row cache, not the mount table — so it outlives both, for
+ * the arena's lifetime.
  */
 typedef struct manifest manifest_t;
 
 /**
- * Build the manifest from profile names
+ * Build the manifest over the enabled set
+ *
+ * The enabled profiles, in precedence order, are read from the state handle's
+ * row cache (state_peek_profiles) — the one source every caller would otherwise
+ * copy them out of. A state with no database (state_load on a repository never
+ * touched by `dotta init`) has no rows and yields an empty view.
  *
  * Performance: O(N) where N is total files across all profiles. One Git tree
  * alive per iteration (loaded, walked, freed).
  *
- * `mounts` MUST cover every profile in `profiles` (callers build it from the
- * same list). A custom/ entry whose profile has no target binding is a hard error
- * from the callback (ERR_STATE_INVALID with a repair hint) — every enabling command
- * guarantees the binding, so reaching that branch means corruption, not a machine
- * that lacks a --target.
+ * `mounts` MUST have been built from the rows `state` holds now
+ * (profile_build_mount_table on the same handle, with no enabled_profiles
+ * mutation in between): a table built before a re-target resolves custom/
+ * paths under the old target, silently. A custom/ entry whose profile has no
+ * target binding is a hard error from the callback (ERR_STATE_INVALID with a
+ * repair hint) — every enabling command guarantees the binding, so reaching
+ * that branch means corruption, not a machine that lacks a --target.
  *
  * A profile whose branch does not exist contributes no rows; the scope layer
  * already warns about the dead branch on every run, and the workspace reads that
@@ -185,15 +197,18 @@ typedef struct manifest manifest_t;
  * Memory:
  *   - rows, per-row strings and the profile names (duplicated once per profile):
  *     arena-allocated; the caller's arena reclaims them at arena_destroy. The
- *     view borrows nothing from `profiles`.
+ *     view borrows nothing from the row cache, so it stands across the
+ *     enabled_profiles mutations that invalidate the cache — a `before` built
+ *     ahead of a profile enable reads the same after it.
  *   - index hashmap: heap-allocated; on success the caller releases it with
  *     manifest_free. On error, the hashmap (if allocated) is freed here and *out
  *     is NULL.
  *
  * @param repo Git repository (must not be NULL)
- * @param profiles Enabled profiles in precedence order (must not be NULL;
- *                 may be empty — an empty view)
- * @param mounts Per-machine mount table covering `profiles` (must not be NULL)
+ * @param state State handle the enabled set is read from (must not be NULL;
+ *              borrowed, only the row cache is consulted)
+ * @param mounts Per-machine mount table built from the same rows (must not be
+ *               NULL)
  * @param arena Arena backing every allocation produced by the call (must not be
  *              NULL)
  * @param out Manifest (must not be NULL; caller frees with manifest_free)
@@ -201,7 +216,7 @@ typedef struct manifest manifest_t;
  */
 error_t *manifest_build(
     git_repository *repo,
-    const string_array_t *profiles,
+    const state_t *state,
     const mount_table_t *mounts,
     arena_t *arena,
     manifest_t **out

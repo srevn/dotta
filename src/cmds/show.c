@@ -702,16 +702,8 @@ error_t *cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
 
     /* Discover owning profile via the view: the enabled set at HEAD with precedence
      * resolved, so the storage path names at most one row */
-    err = state_get_profiles(state, &profiles);
-    if (err) {
-        err = error_wrap(err, "Failed to get enabled profiles");
-        goto cleanup;
-    }
-    err = manifest_build(repo, profiles, mounts, ctx->arena, &manifest);
-    if (err) {
-        err = error_wrap(err, "Failed to build manifest");
-        goto cleanup;
-    }
+    err = manifest_build(repo, state, mounts, ctx->arena, &manifest);
+    if (err) goto cleanup;
 
     const manifest_row_t *row = manifest_lookup_storage(manifest, search_path);
     if (!row) {

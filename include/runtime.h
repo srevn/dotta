@@ -11,15 +11,18 @@
  *   - `dotta_repo_mode_t`   — repo-open contract honored by the dispatcher;
  *   - `dotta_state_mode_t`  — state-open contract honored by the dispatcher;
  *   - `dotta_crypto_mode_t` — crypto-resources contract (keymgr when REQUIRED);
+ *   - `dotta_manifest_mode_t` — view contract (the manifest when REQUIRED);
  *   - `dotta_spec_ext_t`    — payload referenced by `args_command_t::payload`,
  *                             letting each command declare its dispatch
  *                             preconditions in a typed way without the base/args
  *                             engine learning the enums;
  *   - `dotta_ctx_t`         — bundle handed to each command's dispatch
- *                             handler (repo, state, keymgr, cache, config, ...);
- *   - `dotta_ext_*`         — one per (repo_mode, state_mode, crypto_mode)
- *                             combination actually used; commands point `payload`
- *                             at the constant matching their need;
+ *                             handler (repo, state, keymgr, cache, mounts,
+ *                             manifest, config, ...);
+ *   - `dotta_ext_*`         — one per (repo_mode, state_mode, crypto_mode,
+ *                             manifest_mode) combination actually used; commands
+ *                             point `payload` at the constant matching their
+ *                             need;
  *   - `dotta_registry()`    — typed accessor for the root registry,
  *                             consumed by `cmds/completion.c` when exporting
  *                             the fish completion script.
@@ -52,6 +55,10 @@ typedef struct mount_table mount_table_t;
  * call their functions include those headers. */
 typedef struct keymgr keymgr;
 typedef struct content_cache content_cache_t;
+
+/* The view. Full API in `src/core/manifest.h`; consumers that read rows include
+ * that header. Same C11 §6.7p3 typedef-redeclaration rationale as state_t. */
+typedef struct manifest manifest_t;
 
 /* Spec-engine command descriptor. Forward-declared (rather than pulling
  * `base/args.h`) so that every TU that transitively includes `runtime.h` does
@@ -135,6 +142,45 @@ typedef enum dotta_crypto_mode {
 } dotta_crypto_mode_t;
 
 /**
+ * View contract honored by the dispatcher.
+ *
+ * Each command declares whether it operates on the view — every enabled profile
+ * at HEAD, precedence resolved, one row per managed path (`core/manifest.h`).
+ * Main.c reads the mode in `run_spec` *after* building the mount table and
+ * builds the view over the state's enabled set with `manifest_build`; the handle
+ * is borrowed by the handler and released by the dispatcher. If `state_mode`
+ * produced no handle, the mode is silently skipped and `ctx->manifest` stays
+ * NULL — the same rule state follows for a missing repo.
+ *
+ * Who declares REQUIRED
+ * ---------------------
+ * The commands whose subject is the view: the workspace commands (status, diff,
+ * apply, sync, update — `workspace_load` borrows the view rather than building
+ * one), `remove` (who owned a path a moment before the commit is read off the
+ * view before it) and `profile enable` (its receipt is the diff between the view
+ * before and the view after). A build that fails ends dispatch with the builder's
+ * message — a tree that will not load, a custom/ path under a profile with no
+ * target — on every path of the command, including the ones that would not have
+ * read the view; the enabled set is broken as a whole, and `profile disable` is
+ * the way out.
+ *
+ * Who does not
+ * ------------
+ * A command for which the view is incidental (one lookup or one count on one of
+ * its paths — `show`, `list`, `key status`, `completion`) or that must run on a
+ * set the build refuses (`profile disable`) builds its own with `manifest_build`
+ * where it needs it, with the failure handling that path wants. A command that
+ * moves Git or the enabled set (add, update, remove, sync, profile enable /
+ * disable, clone, interactive) builds the post-mutation view itself: `ctx->
+ * manifest` is the view at dispatch and is never rebuilt — see "Members not
+ * welcome" #1 below, the rule `mounts` follows.
+ */
+typedef enum dotta_manifest_mode {
+    DOTTA_MANIFEST_NONE,     /* No view built */
+    DOTTA_MANIFEST_REQUIRED  /* manifest_build over the enabled set; error if it fails */
+} dotta_manifest_mode_t;
+
+/**
  * Per-command extension payload referenced by `args_command_t::payload`.
  *
  * Carries the declarative dispatch preconditions each command has. Additional
@@ -146,6 +192,7 @@ typedef struct dotta_spec_ext {
     dotta_repo_mode_t repo_mode;
     dotta_state_mode_t state_mode;
     dotta_crypto_mode_t crypto_mode;
+    dotta_manifest_mode_t manifest_mode;
 } dotta_spec_ext_t;
 
 /**
@@ -184,6 +231,14 @@ typedef struct dotta_spec_ext {
  *     set (profile enable/disable, clone, interactive, add-with-implicit-enable)
  *     build a *local* fresh mount table for any post-mutation manifest call —
  *     `ctx->mounts` is never reassigned (see "Members not welcome" #1 below).
+ *   - `manifest != NULL`  iff  `manifest_mode == REQUIRED AND state != NULL`.
+ *     The view over the enabled set as it stands at dispatch — `manifest_build`
+ *     over `state` under `mounts`, its rows in the command arena, its index
+ *     released by the dispatcher after the handler returns. Like `mounts`, it
+ *     is never reassigned: a command that moves Git (a commit, a pull) or the
+ *     enabled set builds the post-mutation view locally and frees it itself,
+ *     and `ctx->manifest` stays the view before — which is exactly what the
+ *     receipts diff against (`manifest_diff(ctx->manifest, after, …)`).
  *   - `arena != NULL` always. The command arena is created before dispatch and
  *     destroyed after the handler returns; `run_spec` is the sole owner. Handlers
  *     and every layer beneath borrow the pointer — never call
@@ -250,6 +305,7 @@ typedef struct dotta_ctx {
     keymgr *keymgr;                     /* NULL unless crypto_mode acquires + encryption enabled */
     content_cache_t *content_cache;     /* NULL unless crypto_mode == REQUIRED */
     const mount_table_t *mounts;        /* NULL iff state == NULL; full-enabled topology */
+    const manifest_t *manifest;         /* NULL unless manifest_mode acquires; the view at dispatch */
     arena_t *arena;                     /* Borrowed; command-scoped, owned by run_spec */
     const config_t *config;
     output_t *out;
@@ -259,15 +315,19 @@ typedef struct dotta_ctx {
 } dotta_ctx_t;
 
 /* Per-combination payloads. Each command's spec sets `.payload = &dotta_ext_X`
- * for its needed (repo_mode, state_mode, crypto_mode) */
-extern const dotta_spec_ext_t dotta_ext_none;          /* NONE,            NONE,  NONE     */
-extern const dotta_spec_ext_t dotta_ext_path_only;     /* PATH_ONLY,       NONE,  NONE     */
-extern const dotta_spec_ext_t dotta_ext_repo_only;     /* REQUIRED,        NONE,  NONE     */
-extern const dotta_spec_ext_t dotta_ext_read;          /* REQUIRED,        READ,  NONE     */
-extern const dotta_spec_ext_t dotta_ext_write;         /* REQUIRED,        WRITE, NONE     */
-extern const dotta_spec_ext_t dotta_ext_read_silent;   /* OPTIONAL_SILENT, READ,  NONE     */
-extern const dotta_spec_ext_t dotta_ext_read_crypto;   /* REQUIRED,        READ,  REQUIRED */
-extern const dotta_spec_ext_t dotta_ext_write_crypto;  /* REQUIRED,        WRITE, REQUIRED */
+ * for its needed (repo_mode, state_mode, crypto_mode, manifest_mode) */
+extern const dotta_spec_ext_t dotta_ext_none;                   /* NONE,            NONE,  NONE,     NONE     */
+extern const dotta_spec_ext_t dotta_ext_path_only;              /* PATH_ONLY,       NONE,  NONE,     NONE     */
+extern const dotta_spec_ext_t dotta_ext_repo_only;              /* REQUIRED,        NONE,  NONE,     NONE     */
+extern const dotta_spec_ext_t dotta_ext_read;                   /* REQUIRED,        READ,  NONE,     NONE     */
+extern const dotta_spec_ext_t dotta_ext_write;                  /* REQUIRED,        WRITE, NONE,     NONE     */
+extern const dotta_spec_ext_t dotta_ext_read_silent;            /* OPTIONAL_SILENT, READ,  NONE,     NONE     */
+extern const dotta_spec_ext_t dotta_ext_read_crypto;            /* REQUIRED,        READ,  REQUIRED, NONE     */
+extern const dotta_spec_ext_t dotta_ext_write_crypto;           /* REQUIRED,        WRITE, REQUIRED, NONE     */
+extern const dotta_spec_ext_t dotta_ext_read_manifest;          /* REQUIRED,        READ,  NONE,     REQUIRED */
+extern const dotta_spec_ext_t dotta_ext_write_manifest;         /* REQUIRED,        WRITE, NONE,     REQUIRED */
+extern const dotta_spec_ext_t dotta_ext_read_crypto_manifest;   /* REQUIRED,        READ,  REQUIRED, REQUIRED */
+extern const dotta_spec_ext_t dotta_ext_write_crypto_manifest;  /* REQUIRED,        WRITE, REQUIRED, REQUIRED */
 
 /**
  * Accessor for the root command registry.

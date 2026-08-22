@@ -654,47 +654,46 @@ cleanup:
 /**
  * Profile enable subcommand
  *
- * Five-phase flow:
+ * Four-phase flow over the view before — the dispatcher's, built over the
+ * enabled set as it stands at dispatch (the spec declares it; a set that will
+ * not build ends dispatch with the builder's message, and the enable never
+ * runs):
  *   1. Gather & validate — resolve --all/args to a request set, then filter out
  *      already-enabled, missing, and custom-without-target profiles. Emits
  *      per-profile warnings; produces to_enable_validated.
- *   2. The view before — manifest_build over the enabled set as it stands, under
- *      the mount table dispatch built from it. Taken ahead of the mutation, which
- *      invalidates that table's borrows.
- *   3. Commit scope to state — state_enable_profile per target. enabled_profiles
+ *   2. Commit scope to state — state_enable_profile per target. enabled_profiles
  *      membership and order are now authoritative. Nothing else is written: the
- *      view is computed, never stored.
- *   4. The view after — a fresh mount table and manifest_build over the post-enable
+ *      view is computed, never stored. `before` borrows nothing from the row
+ *      cache the mutation invalidates.
+ *   3. The view after — a fresh mount table and manifest_build over the post-enable
  *      set; manifest_diff attributes the transition to the newly enabled profiles,
  *      so gain-side stats (claimed / added / updated) land in the right slot
  *      per profile.
- *   5. Per-profile feedback — iterate the validated targets to preserve per-profile
+ *   4. Per-profile feedback — iterate the validated targets to preserve per-profile
  *      output, then state_save.
  */
 static error_t *profile_enable(
     git_repository *repo,
     state_t *state,
     arena_t *arena,
-    const mount_table_t *mounts,
+    const manifest_t *before,
     const cmd_profile_options_t *opts,
     output_t *out
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(state);
     CHECK_NULL(arena);
-    CHECK_NULL(mounts);
+    CHECK_NULL(before);
     CHECK_NULL(opts);
     CHECK_NULL(out);
 
     /* Resource tracking for cleanup */
     string_array_t *enabled = NULL;
-    string_array_t *enabled_after = NULL;
     string_array_t *all_branches = NULL;
     string_array_t *to_enable = NULL;
     string_array_t *to_enable_validated = NULL;
     hashmap_t *enabled_set = NULL;
     hashmap_t *seen_set = NULL;
-    manifest_t *before = NULL;
     manifest_t *after = NULL;
     manifest_diff_stats_t *stats = NULL;
     error_t *err = NULL;
@@ -933,21 +932,12 @@ static error_t *profile_enable(
         goto cleanup;
     }
 
-    /* Phases 2–5 share the "we have work to do" precondition. Wrapping them
+    /* Phases 2–4 share the "we have work to do" precondition. Wrapping them
      * together makes the "nothing validated → exit without touching state" path
      * explicit; the transaction opened by state_open then rolls back via state_free
      * on the no-op exit. */
     if (to_enable_validated->count > 0) {
-        /* Phase 2: The view before. `enabled` and `mounts` are the pre-mutation
-         * set and its table; the view borrows neither once built, so the mutation
-         * below cannot pull anything from under it. */
-        err = manifest_build(repo, enabled, mounts, arena, &before);
-        if (err) {
-            err = error_wrap(err, "Failed to build manifest before enable");
-            goto cleanup;
-        }
-
-        /* Phase 3: Commit scope to state */
+        /* Phase 2: Commit scope to state */
         for (size_t i = 0; i < to_enable_validated->count; i++) {
             const char *profile = to_enable_validated->items[i];
 
@@ -960,7 +950,7 @@ static error_t *profile_enable(
             }
         }
 
-        /* Phase 4: The view after, and the diff.
+        /* Phase 3: The view after, and the diff.
          *
          * Build a fresh mount table from the post-mutation row cache. The
          * state_enable_profile loop above invalidated ctx->mounts' borrows; the
@@ -973,13 +963,7 @@ static error_t *profile_enable(
             goto cleanup;
         }
 
-        err = state_get_profiles(state, &enabled_after);
-        if (err) {
-            err = error_wrap(err, "Failed to get enabled profiles after enable");
-            goto cleanup;
-        }
-
-        err = manifest_build(repo, enabled_after, post_enable_mounts, arena, &after);
+        err = manifest_build(repo, state, post_enable_mounts, arena, &after);
         if (err) {
             err = error_wrap(err, "Failed to build manifest after enable");
             goto cleanup;
@@ -1007,7 +991,7 @@ static error_t *profile_enable(
             goto cleanup;
         }
 
-        /* Phase 5: Per-profile feedback */
+        /* Phase 4: Per-profile feedback */
         for (size_t i = 0; i < to_enable_validated->count; i++) {
             output_styled(
                 out, OUTPUT_NORMAL, "  {green}✓{reset} Enabled %s\n",
@@ -1026,7 +1010,7 @@ static error_t *profile_enable(
     }
 
     /* Live summary — only runs on non-dry-run, non-error completion. Any Phase
-     * 2-4 failure sets err and jumps to cleanup, skipping the summary; dry-run
+     * 2-3 failure sets err and jumps to cleanup, skipping the summary; dry-run
      * owns its own messaging above. */
     if (!output_is_verbose(out)) {
         output_newline(out, OUTPUT_NORMAL);
@@ -1069,13 +1053,11 @@ cleanup:
      * seen_set borrows keys from to_enable, enabled_set from enabled. */
     free(stats);
     manifest_free(after);
-    manifest_free(before);
     if (seen_set) hashmap_free(seen_set, NULL);
     if (enabled_set) hashmap_free(enabled_set, NULL);
     string_array_free(to_enable_validated);
     string_array_free(to_enable);
     string_array_free(all_branches);
-    string_array_free(enabled_after);
     string_array_free(enabled);
 
     return err;
@@ -1119,7 +1101,6 @@ static error_t *profile_disable(
 
     /* Resource tracking for cleanup */
     string_array_t *enabled = NULL;
-    string_array_t *enabled_after = NULL;
     string_array_t *to_disable_validated = NULL;
     hashmap_t *enabled_set = NULL;
     hashmap_t *seen_set = NULL;
@@ -1270,7 +1251,7 @@ static error_t *profile_disable(
          * whose metadata.json will not parse, a branch that will not load), and
          * that set is exactly the one this build fails on. The message names
          * the profile; warn with it and disable without the receipt. */
-        err = manifest_build(repo, enabled, mounts, arena, &before);
+        err = manifest_build(repo, state, mounts, arena, &before);
         if (err) {
             output_warning(
                 out, OUTPUT_NORMAL, "Manifest build failed: %s", error_message(err)
@@ -1308,13 +1289,7 @@ static error_t *profile_disable(
                 goto cleanup;
             }
 
-            err = state_get_profiles(state, &enabled_after);
-            if (err) {
-                err = error_wrap(err, "Failed to get enabled profiles after disable");
-                goto cleanup;
-            }
-
-            err = manifest_build(repo, enabled_after, post_disable_mounts, arena, &after);
+            err = manifest_build(repo, state, post_disable_mounts, arena, &after);
             if (err) {
                 err = error_wrap(err, "Failed to build manifest after disable");
                 goto cleanup;
@@ -1401,7 +1376,6 @@ cleanup:
     if (seen_set) hashmap_free(seen_set, NULL);
     if (enabled_set) hashmap_free(enabled_set, NULL);
     string_array_free(to_disable_validated);
-    string_array_free(enabled_after);
     string_array_free(enabled);
 
     return err;
@@ -1864,7 +1838,7 @@ error_t *cmd_profile(const dotta_ctx_t *ctx, const cmd_profile_options_t *opts) 
             break;
 
         case PROFILE_ENABLE:
-            result = profile_enable(repo, state, ctx->arena, ctx->mounts, opts, out);
+            result = profile_enable(repo, state, ctx->arena, ctx->manifest, opts, out);
             break;
 
         case PROFILE_DISABLE:
@@ -2018,7 +1992,7 @@ static const args_command_t spec_profile_enable = {
     .opts_size     = sizeof(cmd_profile_options_t),
     .opts          = profile_enable_opts,
     .init_defaults = profile_enable_defaults,
-    .payload       = &dotta_ext_write,
+    .payload       = &dotta_ext_write_manifest,
     .dispatch      = profile_dispatch,
 };
 

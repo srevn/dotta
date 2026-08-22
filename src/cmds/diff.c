@@ -1568,7 +1568,7 @@ static error_t *diff_post_parse(
  * commit, in any order, as diff_classify routes them — the view and the
  * histories narrowed to the profiles named so far — or a filesystem path.
  */
-static unsigned diff_complete(
+static args_want_t diff_complete(
     const void *ctx_v, const void *opts_v, const args_completion_t *at, FILE *out
 ) {
     const dotta_ctx_t *ctx = ctx_v;
@@ -1576,7 +1576,7 @@ static unsigned diff_complete(
 
     if (ARGS_VALUE_IS(at, cmd_diff_options_t, profiles)) {
         completion_profiles(ctx, out, COMPLETION_ENABLED);
-        return 0;
+        return ARGS_WANT_NONE;
     }
 
     completion_profiles(ctx, out, COMPLETION_ENABLED);

@@ -1228,7 +1228,7 @@ static error_t *export_post_parse(
  * then the commit. An `@` in the token being typed completes its commit
  * part from the profile's history; -o takes a path.
  */
-static unsigned export_complete(
+static args_want_t export_complete(
     const void *ctx_v, const void *opts_v, const args_completion_t *at, FILE *out
 ) {
     const dotta_ctx_t *ctx = ctx_v;
@@ -1238,17 +1238,17 @@ static unsigned export_complete(
         return ARGS_WANT_FILES;
     }
     if (completion_commits_at(ctx, out, at->current, NULL)) {
-        return 0;
+        return ARGS_WANT_NONE;
     }
 
     if (o->positional_count == 0) {
         completion_profiles(ctx, out, COMPLETION_LOCAL);
         completion_refspecs(ctx, out, NULL);
-        return 0;
+        return ARGS_WANT_NONE;
     }
     if (strchr(o->positional_args[0], ':') != NULL) {
         /* Colon-packed: the destination follows, nothing after it. */
-        return o->positional_count == 1 ? ARGS_WANT_FILES : 0;
+        return o->positional_count == 1 ? ARGS_WANT_FILES : ARGS_WANT_NONE;
     }
 
     const char *profile = completion_profile_of(ctx, o->positional_args[0]);
@@ -1258,7 +1258,7 @@ static unsigned export_complete(
     } else if (o->positional_count == 2) {
         completion_history(ctx, out, profile);
     }
-    return 0;
+    return ARGS_WANT_NONE;
 }
 
 static error_t *export_dispatch(const void *ctx_v, void *opts_v) {

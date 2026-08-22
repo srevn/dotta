@@ -626,7 +626,7 @@ static error_t *remote_post_parse(
  * — then a remote for the subcommands that act on one; a URL or a new name
  * is typed.
  */
-static unsigned remote_complete(
+static args_want_t remote_complete(
     const void *ctx_v, const void *opts_v, const args_completion_t *at, FILE *out
 ) {
     (void) at;
@@ -641,7 +641,7 @@ static unsigned remote_complete(
         fputs("rename\tRename remote\n", out);
         fputs("show\tShow remote\n", out);
         completion_remotes(ctx, out);
-        return 0;
+        return ARGS_WANT_NONE;
     }
     if (o->positional_count == 1) {
         const char *sub = o->positional_args[0];
@@ -651,7 +651,7 @@ static unsigned remote_complete(
             completion_remotes(ctx, out);
         }
     }
-    return 0;
+    return ARGS_WANT_NONE;
 }
 
 static error_t *remote_dispatch(const void *ctx_v, void *opts_v) {

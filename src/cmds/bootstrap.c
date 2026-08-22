@@ -531,7 +531,7 @@ cleanup:
  * What can stand at the cursor: a local profile, by -p or bare — any
  * profile's script, enabled or not.
  */
-static unsigned bootstrap_complete(
+static args_want_t bootstrap_complete(
     const void *ctx_v, const void *opts_v, const args_completion_t *at, FILE *out
 ) {
     (void) opts_v;
@@ -539,7 +539,7 @@ static unsigned bootstrap_complete(
     const dotta_ctx_t *ctx = ctx_v;
 
     completion_profiles(ctx, out, COMPLETION_LOCAL);
-    return 0;
+    return ARGS_WANT_NONE;
 }
 
 static error_t *bootstrap_dispatch(const void *ctx_v, void *opts_v) {

@@ -811,7 +811,7 @@ static error_t *list_post_parse(
  * file of its branch, shadowed ones included. A path in the first slot was
  * the file: nothing follows it.
  */
-static unsigned list_complete(
+static args_want_t list_complete(
     const void *ctx_v, const void *opts_v, const args_completion_t *at, FILE *out
 ) {
     const dotta_ctx_t *ctx = ctx_v;
@@ -819,14 +819,14 @@ static unsigned list_complete(
 
     if (ARGS_VALUE_IS(at, cmd_list_options_t, profile)) {
         completion_profiles(ctx, out, COMPLETION_LOCAL);
-        return 0;
+        return ARGS_WANT_NONE;
     }
 
     if (o->profile != NULL) {
         if (o->positional_count == 0) {
             completion_refspecs(ctx, out, o->profile);
         }
-        return 0;
+        return ARGS_WANT_NONE;
     }
     if (o->positional_count == 0) {
         completion_profiles(ctx, out, COMPLETION_LOCAL);
@@ -835,7 +835,7 @@ static unsigned list_complete(
         !str_looks_like_file_path(o->positional_args[0])) {
         completion_refspecs(ctx, out, o->positional_args[0]);
     }
-    return 0;
+    return ARGS_WANT_NONE;
 }
 
 static error_t *list_dispatch(const void *ctx_v, void *opts_v) {

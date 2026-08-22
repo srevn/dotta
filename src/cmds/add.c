@@ -1718,7 +1718,7 @@ static error_t *add_post_parse(
  * took it — then filesystem paths, listed under --target when one re-roots
  * them. A new profile's name is typed, not offered.
  */
-static unsigned add_complete(
+static args_want_t add_complete(
     const void *ctx_v, const void *opts_v, const args_completion_t *at, FILE *out
 ) {
     const dotta_ctx_t *ctx = ctx_v;
@@ -1726,21 +1726,21 @@ static unsigned add_complete(
 
     if (ARGS_VALUE_IS(at, cmd_add_options_t, profile)) {
         completion_profiles(ctx, out, COMPLETION_LOCAL);
-        return 0;
+        return ARGS_WANT_NONE;
     }
     if (ARGS_VALUE_IS(at, cmd_add_options_t, target)) {
         return ARGS_WANT_DIRS;
     }
     if (at->value_of != NULL) {
-        return 0;   /* -m, -e: free text */
+        return ARGS_WANT_NONE;   /* -m, -e: free text */
     }
 
     if (o->profile == NULL && o->positional_count == 0) {
         completion_profiles(ctx, out, COMPLETION_LOCAL);
-        return 0;
+        return ARGS_WANT_NONE;
     }
     return completion_paths_under(out, o->target, at->current)
-        ? 0 : ARGS_WANT_FILES;
+        ? ARGS_WANT_NONE : ARGS_WANT_FILES;
 }
 
 static error_t *add_dispatch(const void *ctx_v, void *opts_v) {

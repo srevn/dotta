@@ -922,15 +922,15 @@ static error_t *clone_post_parse(
  * given. A `-p` value names a profile on a remote not yet cloned — nothing
  * to offer.
  */
-static unsigned clone_complete(
+static args_want_t clone_complete(
     const void *ctx, const void *opts_v, const args_completion_t *at, FILE *out
 ) {
     (void) ctx;
     (void) out;
     const cmd_clone_options_t *o = opts_v;
 
-    if (at->value_of != NULL) return 0;
-    return o->positional_count == 1 ? ARGS_WANT_DIRS : 0;
+    if (at->value_of != NULL) return ARGS_WANT_NONE;
+    return o->positional_count == 1 ? ARGS_WANT_DIRS : ARGS_WANT_NONE;
 }
 
 static error_t *clone_dispatch(const void *ctx_v, void *opts_v) {

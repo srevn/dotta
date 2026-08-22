@@ -1146,7 +1146,7 @@ static error_t *ignore_post_parse(
  * What can stand at the cursor: a local profile, by -p or as the one
  * positional; for --test, a filesystem path. Patterns are typed.
  */
-static unsigned ignore_complete(
+static args_want_t ignore_complete(
     const void *ctx_v, const void *opts_v, const args_completion_t *at, FILE *out
 ) {
     const dotta_ctx_t *ctx = ctx_v;
@@ -1154,19 +1154,19 @@ static unsigned ignore_complete(
 
     if (ARGS_VALUE_IS(at, cmd_ignore_options_t, profile)) {
         completion_profiles(ctx, out, COMPLETION_LOCAL);
-        return 0;
+        return ARGS_WANT_NONE;
     }
     if (ARGS_VALUE_IS(at, cmd_ignore_options_t, test_path)) {
         return ARGS_WANT_FILES;
     }
     if (at->value_of != NULL) {
-        return 0;   /* --add, --remove: a pattern */
+        return ARGS_WANT_NONE;   /* --add, --remove: a pattern */
     }
 
     if (o->profile == NULL && o->positional_count == 0) {
         completion_profiles(ctx, out, COMPLETION_LOCAL);
     }
-    return 0;
+    return ARGS_WANT_NONE;
 }
 
 static error_t *ignore_dispatch(const void *ctx_v, void *opts_v) {

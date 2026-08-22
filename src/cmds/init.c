@@ -250,7 +250,7 @@ cleanup:
  * What can stand at the cursor: the repository location, a directory, until
  * one is given.
  */
-static unsigned init_complete(
+static args_want_t init_complete(
     const void *ctx, const void *opts_v, const args_completion_t *at, FILE *out
 ) {
     (void) ctx;
@@ -258,7 +258,7 @@ static unsigned init_complete(
     (void) out;
     const cmd_init_options_t *o = opts_v;
 
-    return o->repo_path == NULL ? ARGS_WANT_DIRS : 0;
+    return o->repo_path == NULL ? ARGS_WANT_DIRS : ARGS_WANT_NONE;
 }
 
 static error_t *init_dispatch(const void *ctx_v, void *opts_v) {

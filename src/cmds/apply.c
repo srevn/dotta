@@ -1919,7 +1919,7 @@ static args_class_t apply_classify(const char *tok) {
  * profiles named so far win, by -p or bare, which is the filter the run will
  * apply — or a filesystem path.
  */
-static unsigned apply_complete(
+static args_want_t apply_complete(
     const void *ctx_v, const void *opts_v, const args_completion_t *at, FILE *out
 ) {
     const dotta_ctx_t *ctx = ctx_v;
@@ -1927,10 +1927,10 @@ static unsigned apply_complete(
 
     if (ARGS_VALUE_IS(at, cmd_apply_options_t, profiles)) {
         completion_profiles(ctx, out, COMPLETION_ENABLED);
-        return 0;
+        return ARGS_WANT_NONE;
     }
     if (at->value_of != NULL) {
-        return 0;   /* -e: a pattern */
+        return ARGS_WANT_NONE;   /* -e: a pattern */
     }
 
     completion_profiles(ctx, out, COMPLETION_ENABLED);

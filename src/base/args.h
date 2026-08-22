@@ -224,20 +224,27 @@ typedef struct args_completion {
                                   * `=` of an inline `--name=text`; "" when nothing */
 } args_completion_t;
 
-/* What the hook may ask the shell to add beside its candidates. */
-#define ARGS_WANT_FILES  (1u << 0)   /* Native path completion of `current` */
-#define ARGS_WANT_DIRS   (1u << 1)   /* Native directory completion of `current` */
+/**
+ * What the hook may ask the shell to add beside its candidates: its own
+ * completion of `current` as a path — every path, or directories only. One
+ * thing at most; a path completion includes the directories.
+ */
+typedef enum args_want {
+    ARGS_WANT_NONE,    /* Nothing beyond the candidates printed */
+    ARGS_WANT_FILES,   /* Native path completion of `current` */
+    ARGS_WANT_DIRS     /* Native directory completion of `current` */
+} args_want_t;
 
 /**
  * Completion hook: what can stand at the cursor.
  *
  * Prints candidates to `out`, one per line as `token` or `token<TAB>description`
  * — the sources are the application's, the engine never reads them — and
- * returns the ARGS_WANT_* bits for what the shell should add. `ctx` is the
- * same opaque payload `dispatch` receives. A command without a hook offers
- * nothing beyond its flags and subcommands, which the exported rules carry.
+ * returns what the shell should add. `ctx` is the same opaque payload
+ * `dispatch` receives. A command without a hook offers nothing beyond its
+ * flags and subcommands, which the exported rules carry.
  */
-typedef unsigned (*args_complete)(
+typedef args_want_t (*args_complete)(
     const void *ctx, const void *opts,
     const args_completion_t *at, FILE *out
 );
@@ -490,7 +497,10 @@ args_outcome_t args_parse(
  *   <TAB>files<TAB>current              the shell completes paths natively;
  *   <TAB>dirs<TAB>current               the shell completes directories.
  *
- * A token is never empty, so a line beginning with a tab is a request.
+ * A token is never empty, so a line beginning with a tab is a request — and
+ * there is at most one, printed after the hook has returned: the last line.
+ * The wrapper reads it there and passes every line before it through
+ * untouched, so a large answer costs the shell nothing per line.
  *
  * @param commands NULL-terminated root registry.
  * @param argc     Count of `argv`.
@@ -574,7 +584,8 @@ void args_render_errors(
  *     `__<prog>_using_subcommand`), reading the line as the engine does;
  *   - the wrapper `__<prog>_candidates`, which runs `<prog> <candidates>` with
  *     the line's tokens and reads the candidates protocol back
- *     (`args_complete_candidates`), handing a path request to the shell's own
+ *     (`args_complete_candidates`): the candidates pass through, a path
+ *     request — the last line, when there is one — goes to the shell's own
  *     path completion;
  *   - one positional rule, under any command, that asks the wrapper;
  *   - top-level built-ins (`-h`, `-v`),

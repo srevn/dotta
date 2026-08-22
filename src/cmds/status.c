@@ -1153,7 +1153,7 @@ static error_t *status_post_parse(
 /**
  * What can stand at the cursor: an enabled profile, by -p or bare.
  */
-static unsigned status_complete(
+static args_want_t status_complete(
     const void *ctx_v, const void *opts_v, const args_completion_t *at, FILE *out
 ) {
     (void) opts_v;
@@ -1161,7 +1161,7 @@ static unsigned status_complete(
     const dotta_ctx_t *ctx = ctx_v;
 
     completion_profiles(ctx, out, COMPLETION_ENABLED);
-    return 0;
+    return ARGS_WANT_NONE;
 }
 
 static error_t *status_dispatch(const void *ctx_v, void *opts_v) {

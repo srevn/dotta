@@ -1746,7 +1746,7 @@ static error_t *remove_post_parse(
  * disabled ones included; nothing after --delete-profile, which takes no
  * path.
  */
-static unsigned remove_complete(
+static args_want_t remove_complete(
     const void *ctx_v, const void *opts_v, const args_completion_t *at, FILE *out
 ) {
     const dotta_ctx_t *ctx = ctx_v;
@@ -1754,23 +1754,23 @@ static unsigned remove_complete(
 
     if (ARGS_VALUE_IS(at, cmd_remove_options_t, profile)) {
         completion_profiles(ctx, out, COMPLETION_LOCAL);
-        return 0;
+        return ARGS_WANT_NONE;
     }
     if (at->value_of != NULL) {
-        return 0;   /* -m: free text */
+        return ARGS_WANT_NONE;   /* -m: free text */
     }
 
     if (o->profile == NULL && o->positional_count == 0) {
         completion_profiles(ctx, out, COMPLETION_LOCAL);
-        return 0;
+        return ARGS_WANT_NONE;
     }
     if (o->delete_profile) {
-        return 0;
+        return ARGS_WANT_NONE;
     }
     completion_refspecs(
         ctx, out, o->profile ? o->profile : o->positional_args[0]
     );
-    return 0;
+    return ARGS_WANT_NONE;
 }
 
 static error_t *remove_dispatch(const void *ctx_v, void *opts_v) {

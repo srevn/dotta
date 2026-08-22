@@ -2360,7 +2360,7 @@ static error_t *update_post_parse(
  * not taken it; at every position a file of the view — narrowed to what the
  * profiles named so far win — or a filesystem path.
  */
-static unsigned update_complete(
+static args_want_t update_complete(
     const void *ctx_v, const void *opts_v, const args_completion_t *at, FILE *out
 ) {
     const dotta_ctx_t *ctx = ctx_v;
@@ -2368,10 +2368,10 @@ static unsigned update_complete(
 
     if (ARGS_VALUE_IS(at, cmd_update_options_t, profiles)) {
         completion_profiles(ctx, out, COMPLETION_ENABLED);
-        return 0;
+        return ARGS_WANT_NONE;
     }
     if (at->value_of != NULL) {
-        return 0;   /* -m, -e: free text */
+        return ARGS_WANT_NONE;   /* -m, -e: free text */
     }
 
     char *const *winners = o->profiles;

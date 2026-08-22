@@ -2062,7 +2062,7 @@ cleanup:
  * What can stand at the cursor: an enabled profile, by -p or bare; for
  * --diverged, a strategy.
  */
-static unsigned sync_complete(
+static args_want_t sync_complete(
     const void *ctx_v, const void *opts_v, const args_completion_t *at, FILE *out
 ) {
     (void) opts_v;
@@ -2075,11 +2075,11 @@ static unsigned sync_complete(
                 sync_strategies[i].name, sync_strategies[i].summary
             );
         }
-        return 0;
+        return ARGS_WANT_NONE;
     }
 
     completion_profiles(ctx, out, COMPLETION_ENABLED);
-    return 0;
+    return ARGS_WANT_NONE;
 }
 
 static error_t *sync_dispatch(const void *ctx_v, void *opts_v) {

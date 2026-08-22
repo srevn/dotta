@@ -472,7 +472,7 @@ static error_t *key_post_parse(
 /**
  * What can stand at the cursor: the action, as key_post_parse reads it.
  */
-static unsigned key_complete(
+static args_want_t key_complete(
     const void *ctx, const void *opts_v, const args_completion_t *at, FILE *out
 ) {
     (void) ctx;
@@ -484,7 +484,7 @@ static unsigned key_complete(
         fputs("clear\tClear cached passphrase\n", out);
         fputs("status\tShow key status\n", out);
     }
-    return 0;
+    return ARGS_WANT_NONE;
 }
 
 static error_t *key_dispatch(const void *ctx_v, void *opts_v) {

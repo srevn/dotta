@@ -835,7 +835,7 @@ static error_t *show_post_parse(
  * that profile's history. After two: the commit. An `@` in the token being
  * typed completes its commit part from the refspec's history.
  */
-static unsigned show_complete(
+static args_want_t show_complete(
     const void *ctx_v, const void *opts_v, const args_completion_t *at, FILE *out
 ) {
     const dotta_ctx_t *ctx = ctx_v;
@@ -843,10 +843,10 @@ static unsigned show_complete(
 
     if (ARGS_VALUE_IS(at, cmd_show_options_t, profile)) {
         completion_profiles(ctx, out, COMPLETION_LOCAL);
-        return 0;
+        return ARGS_WANT_NONE;
     }
     if (completion_commits_at(ctx, out, at->current, o->profile)) {
-        return 0;
+        return ARGS_WANT_NONE;
     }
 
     const char *pinned = o->profile;
@@ -865,7 +865,7 @@ static unsigned show_complete(
     } else if (o->positional_count == 2) {
         completion_history(ctx, out, pinned);
     }
-    return 0;
+    return ARGS_WANT_NONE;
 }
 
 static error_t *show_dispatch(const void *ctx_v, void *opts_v) {

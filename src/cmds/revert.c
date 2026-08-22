@@ -1154,7 +1154,7 @@ static error_t *revert_post_parse(
  * the next token; after two, the commit. An `@` in the token being typed
  * completes its commit part from the refspec's history.
  */
-static unsigned revert_complete(
+static args_want_t revert_complete(
     const void *ctx_v, const void *opts_v, const args_completion_t *at, FILE *out
 ) {
     const dotta_ctx_t *ctx = ctx_v;
@@ -1162,13 +1162,13 @@ static unsigned revert_complete(
 
     if (ARGS_VALUE_IS(at, cmd_revert_options_t, profile)) {
         completion_profiles(ctx, out, COMPLETION_LOCAL);
-        return 0;
+        return ARGS_WANT_NONE;
     }
     if (at->value_of != NULL) {
-        return 0;   /* -m: free text */
+        return ARGS_WANT_NONE;   /* -m: free text */
     }
     if (completion_commits_at(ctx, out, at->current, o->profile)) {
-        return 0;
+        return ARGS_WANT_NONE;
     }
 
     const char *pinned = o->profile;
@@ -1186,7 +1186,7 @@ static unsigned revert_complete(
     } else if (o->positional_count == 2) {
         completion_history(ctx, out, pinned);
     }
-    return 0;
+    return ARGS_WANT_NONE;
 }
 
 static error_t *revert_dispatch(const void *ctx_v, void *opts_v) {

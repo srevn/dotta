@@ -1915,13 +1915,13 @@ static void profile_fetch_defaults(void *o) {
 
 /* What can stand at the cursor: a profile to download — a remote-tracking
  * branch not yet local, or a local one to refresh. */
-static unsigned profile_fetch_complete(
+static args_want_t profile_fetch_complete(
     const void *ctx_v, const void *opts_v, const args_completion_t *at, FILE *out
 ) {
     (void) opts_v;
     (void) at;
     completion_profiles(ctx_v, out, COMPLETION_ALL);
-    return 0;
+    return ARGS_WANT_NONE;
 }
 
 static const args_opt_t profile_fetch_opts[] = {
@@ -1961,7 +1961,7 @@ static void profile_enable_defaults(void *o) {
 
 /* What can stand at the cursor: a local profile, marked when already
  * enabled; for --target, a directory. */
-static unsigned profile_enable_complete(
+static args_want_t profile_enable_complete(
     const void *ctx_v, const void *opts_v, const args_completion_t *at, FILE *out
 ) {
     (void) opts_v;
@@ -1969,7 +1969,7 @@ static unsigned profile_enable_complete(
         return ARGS_WANT_DIRS;
     }
     completion_profiles(ctx_v, out, COMPLETION_LOCAL);
-    return 0;
+    return ARGS_WANT_NONE;
 }
 
 static const args_opt_t profile_enable_opts[] = {
@@ -2030,13 +2030,13 @@ static void profile_disable_defaults(void *o) {
 }
 
 /* What can stand at the cursor: an enabled profile. */
-static unsigned profile_disable_complete(
+static args_want_t profile_disable_complete(
     const void *ctx_v, const void *opts_v, const args_completion_t *at, FILE *out
 ) {
     (void) opts_v;
     (void) at;
     completion_profiles(ctx_v, out, COMPLETION_ENABLED);
-    return 0;
+    return ARGS_WANT_NONE;
 }
 
 static const args_opt_t profile_disable_opts[] = {
@@ -2087,13 +2087,13 @@ static void profile_reorder_defaults(void *o) {
 
 /* What can stand at the cursor: an enabled profile, every one in the new
  * order. */
-static unsigned profile_reorder_complete(
+static args_want_t profile_reorder_complete(
     const void *ctx_v, const void *opts_v, const args_completion_t *at, FILE *out
 ) {
     (void) opts_v;
     (void) at;
     completion_profiles(ctx_v, out, COMPLETION_ENABLED);
-    return 0;
+    return ARGS_WANT_NONE;
 }
 
 static const args_opt_t profile_reorder_opts[] = {

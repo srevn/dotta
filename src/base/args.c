@@ -931,12 +931,16 @@ void args_complete_candidates(
         }
     }
 
-    unsigned want = leaf->complete(ctx, opts, &at, out);
-    if (want & ARGS_WANT_FILES) {
-        fprintf(out, "\tfiles\t%s\n", at.current);
-    }
-    if (want & ARGS_WANT_DIRS) {
-        fprintf(out, "\tdirs\t%s\n", at.current);
+    /* The request follows the candidates: the last line, at most one. */
+    switch (leaf->complete(ctx, opts, &at, out)) {
+        case ARGS_WANT_NONE:
+            break;
+        case ARGS_WANT_FILES:
+            fprintf(out, "\tfiles\t%s\n", at.current);
+            break;
+        case ARGS_WANT_DIRS:
+            fprintf(out, "\tdirs\t%s\n", at.current);
+            break;
     }
 }
 
@@ -1569,28 +1573,35 @@ static const char fish_helpers[] =
     "end\n"
     "\n";
 
+/**
+ * The wrapper reads the candidates protocol (`args_complete_candidates`) by
+ * its one positional fact: a request, when there is one, is the last line.
+ * That line alone is inspected; the candidates before it are printed back
+ * as they came, so the shell's work does not grow with their number. The
+ * guard on the final printf keeps an empty answer empty — fish's printf
+ * prints its format once with no arguments.
+ */
 static const char fish_candidates_head[] =
     "function __%s_candidates\n"
     "    # Ask the binary what can stand at the cursor: the complete tokens after\n"
-    "    # `%s`, and the token being typed. A line beginning with a tab asks for\n"
-    "    # the shell's own path completion.\n"
+    "    # `%s`, and the token being typed. One candidate per line; a last line\n"
+    "    # beginning with a tab asks for the shell's own path completion.\n"
     "    set -l current (commandline -ct)\n"
-    "    for line in (";
+    "    set -l out (";
 
 static const char fish_candidates_tail[] =
     " --current=\"$current\" -- (commandline -opc)[2..] 2>/dev/null)\n"
-    "        set -l fields (string split \\t -- $line)\n"
-    "        if test -z \"$fields[1]\"\n"
-    "            switch $fields[2]\n"
-    "                case files\n"
-    "                    __fish_complete_path $fields[3]\n"
-    "                case dirs\n"
-    "                    __fish_complete_directories $fields[3]\n"
-    "            end\n"
-    "        else\n"
-    "            printf '%%s\\n' $line\n"
+    "    if string match -q -- \\t'*' \"$out[-1]\"\n"
+    "        set -l request (string split \\t -- $out[-1])\n"
+    "        set -e out[-1]\n"
+    "        switch $request[2]\n"
+    "            case files\n"
+    "                __fish_complete_path $request[3]\n"
+    "            case dirs\n"
+    "                __fish_complete_directories $request[3]\n"
     "        end\n"
     "    end\n"
+    "    set -q out[1]; and printf '%%s\\n' $out\n"
     "end\n"
     "\n";
 

@@ -205,12 +205,10 @@ cleanup:
  * root sentinel) to mount_table_build. Single chokepoint for "what does the mount
  * table look like for this command?".
  *
- * Both name and target are borrowed from the state row cache; their lifetime
- * ties to the next enabled_profiles shape mutation, which by dispatcher
- * construction is the next state_enable_profile / state_disable_profile /
- * state_reorder_profiles call (always paired with a fresh local rebuild at
- * binding-mutation sites). State outlives the arena, so the borrows are sound
- * for the arena's lifetime.
+ * Name and target are read from the state row cache for the call only — the
+ * table copies every string it keeps — so the handle is a value: the topology
+ * the rows described at the instant it was built, readable for the arena's
+ * lifetime whatever enabled_profiles mutation follows.
  *
  * Lenient on state-read failure: a cold clone or transient DB issue means there
  * are no per-profile mounts to materialize, but HOME and the universal root

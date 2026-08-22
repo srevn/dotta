@@ -133,11 +133,10 @@ error_t *profile_resolve_enabled(
  * never on the topology view.
  *
  * Lifetime contract:
- *   - The returned handle is allocated entirely from `arena`.
- *   - Profile names and target strings are borrowed directly from the state row
- *     cache. The borrow stays valid as long as no enabled_profiles shape mutation
- *     runs (state_enable_profile, state_disable_profile, state_reorder_profiles,
- *     state_rollback, state_free).
+ *   - The returned handle is allocated entirely from `arena`, every string
+ *     included: the row cache is read for the call only, so the table stands
+ *     across the enabled_profiles mutations that invalidate the cache — it is
+ *     the topology at the instant it was built.
  *
  * Failure modes:
  *   - State-read failure (cold clone, transient DB issue) is absorbed: the function

@@ -281,7 +281,8 @@ error_t *mount_validate_target(const char *target) {
  * - profile: NULL for static mounts (HOME, ROOT). For CUSTOM mounts, the owning
  *           profile name; participates in profile-keyed backward resolution.
  *
- * Borrowed pointers — every string outlives the table because the arena holds them.
+ * Every string is the arena's — copied at build — so the table borrows nothing
+ * and stands for the arena's lifetime.
  */
 typedef struct {
     const char *target_raw;
@@ -454,11 +455,22 @@ error_t *mount_table_build(
         err = resolve_path_pair(arena, raw, &target_raw, &target_canonical);
         if (err) return err;
 
+        /* The name is copied like the target: the table keeps nothing of the
+         * caller's past the call, so it stands for the arena's lifetime
+         * whatever happens to the rows it was built from. */
+        const char *profile = NULL;
+        if (mounts[i].profile) {
+            profile = arena_strdup(arena, mounts[i].profile);
+            if (!profile) {
+                return ERROR(ERR_MEMORY, "Failed to copy profile name into arena");
+            }
+        }
+
         entries[n++] = (mount_entry_t){
             .target_raw = target_raw,
             .target_canonical = target_canonical,
             .kind = MOUNT_CUSTOM,
-            .profile = mounts[i].profile,
+            .profile = profile,
         };
     }
     entries[n++] = (mount_entry_t){

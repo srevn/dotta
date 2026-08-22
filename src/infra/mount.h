@@ -17,8 +17,9 @@
  * Mount table
  * -----------
  * Per-machine topology that maps storage labels to filesystem paths and back.
- * Built once per command at the boundary where the binding source is in scope
- * (CLI options, state row cache), then consulted many times.
+ * Built at the boundary where the binding source is in scope (CLI options,
+ * state row cache), then consulted many times; a value — the topology at the
+ * instant it was built — for the arena's lifetime.
  *
  * Two views over the same data:
  *   - Forward (filesystem -> storage): mount_classify picks the
@@ -137,17 +138,16 @@ const char *mount_strip_label(const char *storage_path);
 
 /**
  * Opaque mount-table handle. Built by `mount_table_build`; lifetime tracks the
- * arena passed at build time. There is no destructor — arena_destroy reclaims
- * everything.
+ * arena passed at build time, and nothing else — every string is the arena's.
+ * There is no destructor — arena_destroy reclaims everything.
  */
 typedef struct mount_table mount_table_t;
 
 /**
  * A single mount: profile <-> deployment-target pairing.
  *
- * POD value type passed by callers to `mount_table_build`. Both fields are borrowed
- * pointers; their lifetimes are the caller's responsibility and must outlive
- * the arena passed to `mount_table_build`.
+ * POD value type passed by callers to `mount_table_build`. Both fields are
+ * borrowed for the call only — the table copies what it keeps.
  *
  * - profile: Profile name (NULL for callers that have only target strings, no
  *   profile names — e.g. one-shot internal scratch use).
@@ -182,8 +182,9 @@ typedef struct {
  * entries were dead.)
  *
  * Lifetime:
- *   - Output is allocated entirely from `arena`.
- *   - Borrowed string fields in `mounts` must outlive `arena`.
+ *   - Output is allocated entirely from `arena`, every string included: the
+ *     table borrows nothing from `mounts`, so it is a value for the arena's
+ *     lifetime — readable after the rows it was built from have moved.
  *   - $HOME is captured into the arena at build time, immune to later setenv
  *     mutations.
  *

@@ -224,14 +224,13 @@ typedef struct dotta_spec_ext {
  *     decrypt. No caller-side gate is required.
  *   - `mounts != NULL`  iff  `state != NULL`. The mount table is a
  *     derived view of state's `enabled_profiles` row cache plus the process-global
- *     `$HOME`. Built once in `run_spec` after state acquisition, immutable for
- *     the lifetime of dispatch. Borrowed into the command arena; reclaimed by
- *     `arena_destroy`. The mount table arena-borrows row-cache strings via state
- *     — the existing LIFO teardown (state_free before arena_destroy) keeps the
- *     borrow chain valid through dispatch return. Commands that mutate the binding
- *     set (profile enable/disable, clone, interactive, add-with-implicit-enable)
- *     build a *local* fresh mount table for any post-mutation manifest call —
- *     `ctx->mounts` is never reassigned (see "Members not welcome" #1 below).
+ *     `$HOME`. Built once in `run_spec` after state acquisition, into the command
+ *     arena, and a value from then on: it borrows nothing from the row cache, so
+ *     after a command mutates the binding set (profile enable/disable, clone,
+ *     interactive, add-with-implicit-enable) it still reads as the topology at
+ *     dispatch — the one before. Such a command builds a *local* fresh table for
+ *     any post-mutation manifest call; `ctx->mounts` is never reassigned (see
+ *     "Members not welcome" #1 below).
  *   - `manifest != NULL`  iff  `manifest_mode == REQUIRED AND state != NULL`.
  *     The view over the enabled set as it stands at dispatch — `manifest_build`
  *     over `state` under `mounts`, its rows in the command arena, its index

@@ -575,7 +575,7 @@ static error_t *list_file_history(
          * path names one row and that row's profile is the owner. The row is
          * the arena's; only the index is released here. */
         manifest_t *manifest = NULL;
-        err = manifest_build(repo, state, mounts, arena, &manifest);
+        err = manifest_build(repo, state, arena, &manifest);
         if (err) return err;
 
         const manifest_row_t *row = manifest_lookup_storage(manifest, storage_path);

@@ -4,9 +4,10 @@
  * The manifest is the precedence-resolved view of every enabled profile at HEAD:
  * one row per managed filesystem path, both kinds, the winning profile's claim
  * already applied (manifest_row_t, below). It is computed from Git at every load
- * and never stored — Git × enabled set × mount table → rows is a pure function;
- * the enabled set is read from the state handle's row cache (core/state.h),
- * and nothing here writes. Surface is two-fold:
+ * and never stored — Git × the state's rows × this machine's $HOME → rows is a
+ * pure function; the enabled set and each profile's target are read from the
+ * state handle's row cache (core/state.h), the mount table is derived from them
+ * inside the build, and nothing here writes. Surface is two-fold:
  *
  *   - Builders: manifest_build walks every enabled profile in precedence order
  *     (later profiles override earlier); manifest_build_tree walks one Git tree
@@ -23,8 +24,8 @@
  *     scope-changing verbs and sync print their receipts from.
  *
  * Core Principles:
- *   - Pure: the view is a function of Git, the enabled set and the mount table
- *     — the same inputs give the same rows on every machine
+ *   - Pure: the view is a function of Git, the state's rows and $HOME — the
+ *     same inputs give the same rows on every machine
  *   - Computed, never stored: every load builds it; nothing invalidates it because
  *     nothing is held past its lifetime
  *   - Precedence-aware: one row per path, the winner's kind
@@ -153,8 +154,8 @@ static inline git_filemode_t path_type_to_git_filemode(path_type_t type) {
  *
  * Rows and their strings live in the arena the builder was given; the path index
  * is heap-allocated and released by manifest_free. A view borrows nothing else
- * — not the state's row cache, not the mount table — so it outlives both, for
- * the arena's lifetime.
+ * — not the state's row cache it was read from — so it stands across the
+ * mutations that invalidate the cache, for the arena's lifetime.
  */
 typedef struct manifest manifest_t;
 
@@ -169,13 +170,12 @@ typedef struct manifest manifest_t;
  * Performance: O(N) where N is total files across all profiles. One Git tree
  * alive per iteration (loaded, walked, freed).
  *
- * `mounts` MUST have been built from the rows `state` holds now
- * (profile_build_mount_table on the same handle, with no enabled_profiles
- * mutation in between): a table built before a re-target resolves custom/
- * paths under the old target, silently. A custom/ entry whose profile has no
- * target binding is a hard error from the callback (ERR_STATE_INVALID with a
- * repair hint) — every enabling command guarantees the binding, so reaching
- * that branch means corruption, not a machine that lacks a --target.
+ * The mount table custom/ paths resolve under is built here, from the same
+ * rows (profile_build_mount_table): a re-target is in the next build because
+ * the next build reads the rows. A custom/ entry whose profile has no target
+ * binding is a hard error from the callback (ERR_STATE_INVALID with a repair
+ * hint) — every enabling command guarantees the binding, so reaching that
+ * branch means corruption, not a machine that lacks a --target.
  *
  * A profile whose branch does not exist contributes no rows; the scope layer
  * already warns about the dead branch on every run, and the workspace reads that
@@ -195,20 +195,19 @@ typedef struct manifest manifest_t;
  * own pointer arrays (the workspace does). The oracle is a set.
  *
  * Memory:
- *   - rows, per-row strings and the profile names (duplicated once per profile):
- *     arena-allocated; the caller's arena reclaims them at arena_destroy. The
- *     view borrows nothing from the row cache, so it stands across the
- *     enabled_profiles mutations that invalidate the cache — a `before` built
- *     ahead of a profile enable reads the same after it.
+ *   - rows, per-row strings, the profile names (duplicated once per profile)
+ *     and the mount table: arena-allocated; the caller's arena reclaims them
+ *     at arena_destroy. The view borrows nothing from the row cache, so it
+ *     stands across the enabled_profiles mutations that invalidate the cache —
+ *     a `before` built ahead of a profile enable reads the same after it, and
+ *     the view after is the builder called again.
  *   - index hashmap: heap-allocated; on success the caller releases it with
  *     manifest_free. On error, the hashmap (if allocated) is freed here and *out
  *     is NULL.
  *
  * @param repo Git repository (must not be NULL)
- * @param state State handle the enabled set is read from (must not be NULL;
- *              borrowed, only the row cache is consulted)
- * @param mounts Per-machine mount table built from the same rows (must not be
- *               NULL)
+ * @param state State handle the enabled set and targets are read from (must
+ *              not be NULL; borrowed, only the row cache is consulted)
  * @param arena Arena backing every allocation produced by the call (must not be
  *              NULL)
  * @param out Manifest (must not be NULL; caller frees with manifest_free)
@@ -217,7 +216,6 @@ typedef struct manifest manifest_t;
 error_t *manifest_build(
     git_repository *repo,
     const state_t *state,
-    const mount_table_t *mounts,
     arena_t *arena,
     manifest_t **out
 );
@@ -225,8 +223,10 @@ error_t *manifest_build(
 /**
  * Build the manifest from a single Git tree
  *
- * Used by the historical-diff path (cmd_diff): given a tree, profile, mount table,
- * and optional per-tree metadata, produces a manifest_row_t row for every blob
+ * Used by the historical-diff path (cmd_diff): given a tree, profile, mount table
+ * — explicit here, since there is no state to derive one from and a past tree
+ * is deliberately resolved under today's topology — and optional per-tree
+ * metadata, produces a manifest_row_t row for every blob
  * the tree exposes (sans repository metadata files — .dottaignore, .bootstrap,
  * .git/, .dotta/) and, when metadata is supplied, for every DIRECTORY item it
  * claims — the same per-profile step manifest_build runs, applied once. Readers

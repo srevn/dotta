@@ -666,10 +666,9 @@ cleanup:
  *      membership and order are now authoritative. Nothing else is written: the
  *      view is computed, never stored. `before` borrows nothing from the row
  *      cache the mutation invalidates.
- *   3. The view after — a fresh mount table and manifest_build over the post-enable
- *      set; manifest_diff attributes the transition to the newly enabled profiles,
- *      so gain-side stats (claimed / added / updated) land in the right slot
- *      per profile.
+ *   3. The view after — manifest_build over the post-enable set; manifest_diff
+ *      attributes the transition to the newly enabled profiles, so gain-side
+ *      stats (claimed / added / updated) land in the right slot per profile.
  *   4. Per-profile feedback — iterate the validated targets to preserve per-profile
  *      output, then state_save.
  */
@@ -951,20 +950,10 @@ static error_t *profile_enable(
             }
         }
 
-        /* Phase 3: The view after, and the diff.
-         *
-         * Build a fresh mount table from the post-mutation row cache. The
-         * state_enable_profile loop above invalidated ctx->mounts' borrows; the
-         * new bindings (including any --target supplied for new entries) need
-         * to be reflected in classification for the tree walk. */
-        mount_table_t *post_enable_mounts = NULL;
-        err = profile_build_mount_table(state, arena, &post_enable_mounts);
-        if (err) {
-            err = error_wrap(err, "Failed to build mount table after enable");
-            goto cleanup;
-        }
-
-        err = manifest_build(repo, state, post_enable_mounts, arena, &after);
+        /* Phase 3: The view after, and the diff. The builder reads the rows
+         * as the loop above left them, any --target supplied for the new
+         * entries included. */
+        err = manifest_build(repo, state, arena, &after);
         if (err) {
             err = error_wrap(err, "Failed to build manifest after enable");
             goto cleanup;
@@ -1070,18 +1059,17 @@ cleanup:
  * Five-phase flow, the mirror of profile_enable's:
  *   1. Gather & validate — filter requested profiles to those actually enabled;
  *      emit not-enabled diagnostics up front.
- *   2. The view before — manifest_build over the enabled set as it stands, under
- *      the mount table dispatch built from it. It feeds the receipt only: a set
- *      that will not build is warned about and the disable lands without one.
+ *   2. The view before — manifest_build over the enabled set as it stands. It
+ *      feeds the receipt only: a set that will not build is warned about and
+ *      the disable lands without one.
  *   3. Commit scope to state — state_disable_profile per validated target;
  *      enabled_profiles is now authoritative for the target set. Nothing else
  *      is written: what the next apply prunes or releases is derivable — the
  *      disabled profile's records are no longer in the view, and the orphan
  *      analysis asks Git about each.
- *   4. The view after — a fresh mount table and manifest_build over the
- *      post-disable set; manifest_diff attributes the transition to the disabled
- *      profiles, so loss-side stats (reassigned / orphans.owned / orphans.observed)
- *      land in the right slot.
+ *   4. The view after — manifest_build over the post-disable set; manifest_diff
+ *      attributes the transition to the disabled profiles, so loss-side stats
+ *      (reassigned / orphans.owned / orphans.observed) land in the right slot.
  *   5. Per-profile feedback — iterate the validated targets to preserve the
  *      existing per-profile UX.
  */
@@ -1089,14 +1077,12 @@ static error_t *profile_disable(
     git_repository *repo,
     state_t *state,
     arena_t *arena,
-    const mount_table_t *mounts,
     const cmd_profile_options_t *opts,
     output_t *out
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(state);
     CHECK_NULL(arena);
-    CHECK_NULL(mounts);
     CHECK_NULL(opts);
     CHECK_NULL(out);
 
@@ -1252,7 +1238,7 @@ static error_t *profile_disable(
          * whose metadata.json will not parse, a branch that will not load), and
          * that set is exactly the one this build fails on. The message names
          * the profile; warn with it and disable without the receipt. */
-        err = manifest_build(repo, state, mounts, arena, &before);
+        err = manifest_build(repo, state, arena, &before);
         if (err) {
             output_warning(
                 out, OUTPUT_NORMAL, "Manifest build failed: %s", error_message(err)
@@ -1276,21 +1262,9 @@ static error_t *profile_disable(
         /* Phase 4: The view after, and the diff — skipped with `before`, whose
          * warning already covers it. Once `before` has built, this build cannot
          * fail on Git's account: the post-disable set is a subset of the same
-         * profiles at the same HEADs.
-         *
-         * Build a fresh mount table from the post-mutation row cache. The
-         * state_disable_profile loop above invalidated ctx->mounts' borrows;
-         * the disabled profiles' bindings must drop out of classification for
-         * the tree walk. */
+         * profiles at the same HEADs. */
         if (before) {
-            mount_table_t *post_disable_mounts = NULL;
-            err = profile_build_mount_table(state, arena, &post_disable_mounts);
-            if (err) {
-                err = error_wrap(err, "Failed to build mount table after disable");
-                goto cleanup;
-            }
-
-            err = manifest_build(repo, state, post_disable_mounts, arena, &after);
+            err = manifest_build(repo, state, arena, &after);
             if (err) {
                 err = error_wrap(err, "Failed to build manifest after disable");
                 goto cleanup;
@@ -1843,7 +1817,7 @@ error_t *cmd_profile(const dotta_ctx_t *ctx, const cmd_profile_options_t *opts) 
             break;
 
         case PROFILE_DISABLE:
-            result = profile_disable(repo, state, ctx->arena, ctx->mounts, opts, out);
+            result = profile_disable(repo, state, ctx->arena, opts, out);
             break;
 
         case PROFILE_REORDER:

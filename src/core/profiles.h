@@ -139,9 +139,8 @@ error_t *profile_resolve_enabled(
  *     the topology at the instant it was built.
  *
  * Failure modes:
- *   - State-read failure (cold clone, transient DB issue) is absorbed: the function
- *     falls back to a bare table (HOME + root sentinel only). Callers do not
- *     need to handle this case.
+ *   - A state with no database has no rows and yields the bare table (HOME +
+ *     root sentinel); a row read that fails on an opened database propagates.
  *   - Arena allocation failure surfaces as ERR_MEMORY.
  *
  * @param state State handle (must not be NULL; borrowed, not freed)

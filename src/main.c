@@ -272,11 +272,10 @@ static int open_state_for_mode(
  *   state == NULL  → NULL (init/clone/version/completion path)
  *   state != NULL  → full-enabled topology (HOME + root sentinel + bindings)
  *
- * Binding-mutating commands (profile enable/disable, clone, interactive,
- * add-with-implicit-enable) build a *local* fresh table post-mutation rather
- * than refreshing this handle — the immutable-ctx contract (see runtime.h "Members
- * not welcome") rules out an in-place rebuild here. Per-site visibility of "the
- * bindings just changed" is the design intent, not centralized auto-invalidation.
+ * The table classifies the command's input; it is a value (the topology at
+ * dispatch) and is never refreshed — the immutable-ctx contract (see runtime.h
+ * "Members not welcome"). The view derives its own from the rows it reads, so
+ * a binding-mutating command has nothing to rebuild here.
  */
 static int open_mounts_for_state(
     state_t *state,
@@ -305,7 +304,7 @@ static int open_mounts_for_state(
  * `*manifest_out` is set per mode:
  *
  *   DOTTA_MANIFEST_NONE      → NULL
- *   DOTTA_MANIFEST_REQUIRED  → manifest_build over the enabled set, under `mounts`
+ *   DOTTA_MANIFEST_REQUIRED  → manifest_build over the enabled set
  *
  * Parallel in shape to `open_state_for_mode`. No view is built when `state ==
  * NULL` (there is no enabled set to build it over): a NONE / OPTIONAL_SILENT
@@ -320,7 +319,6 @@ static int open_manifest_for_mode(
     dotta_manifest_mode_t mode,
     git_repository *repo,
     const state_t *state,
-    const mount_table_t *mounts,
     arena_t *arena,
     manifest_t **manifest_out
 ) {
@@ -328,7 +326,7 @@ static int open_manifest_for_mode(
 
     if (mode == DOTTA_MANIFEST_NONE || state == NULL) return 0;
 
-    error_t *err = manifest_build(repo, state, mounts, arena, manifest_out);
+    error_t *err = manifest_build(repo, state, arena, manifest_out);
     if (err != NULL) {
         error_print(err, stderr);
         error_free(err);
@@ -526,7 +524,7 @@ static int run_spec(
         arena_destroy(arena);
         return 1;
     }
-    if (open_manifest_for_mode(manifest_mode, repo, state, mounts, arena, &manifest) != 0) {
+    if (open_manifest_for_mode(manifest_mode, repo, state, arena, &manifest) != 0) {
         content_cache_free(cache);
         keymgr_free(keymgr);
         state_free(state);

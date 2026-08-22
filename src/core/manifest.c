@@ -32,6 +32,7 @@
 #include "base/hashmap.h"
 #include "base/string.h"
 #include "core/metadata.h"
+#include "core/profiles.h"
 #include "core/state.h"
 #include "infra/mount.h"
 #include "sys/gitops.h"
@@ -584,13 +585,11 @@ static error_t *manifest_allocate(
 error_t *manifest_build(
     git_repository *repo,
     const state_t *state,
-    const mount_table_t *mounts,
     arena_t *arena,
     manifest_t **out
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(state);
-    CHECK_NULL(mounts);
     CHECK_NULL(arena);
     CHECK_NULL(out);
 
@@ -604,6 +603,15 @@ error_t *manifest_build(
     error_t *err = state_peek_profiles(state, &profiles, &profile_count);
     if (err) {
         return error_wrap(err, "Failed to read enabled profiles");
+    }
+
+    /* The topology the same rows describe — each profile's target, and this
+     * machine's $HOME — built here, from the rows of this instant, so a custom/
+     * path always resolves under the target the row it came from carries. */
+    mount_table_t *mounts = NULL;
+    err = profile_build_mount_table(state, arena, &mounts);
+    if (err) {
+        return error_wrap(err, "Failed to build mount table");
     }
 
     manifest_t *manifest = NULL;

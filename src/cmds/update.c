@@ -1225,7 +1225,7 @@ static error_t *update_manifest_after_update(
     }
 
     /* The post-commit view, once */
-    err = manifest_build(repo, state, mounts, arena, &manifest);
+    err = manifest_build(repo, state, arena, &manifest);
     if (err) goto cleanup;
 
     /* One lookup per committed path, both kinds; the arms of the header doc. A

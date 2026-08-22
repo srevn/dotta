@@ -24,7 +24,6 @@
 #include "core/manifest.h"
 #include "core/profiles.h"
 #include "core/state.h"
-#include "infra/mount.h"
 #include "infra/salt.h"
 #include "sys/bootstrap.h"
 #include "sys/filesystem.h"
@@ -289,19 +288,8 @@ static error_t *initialize_state(
             }
         }
 
-        /* Build a fresh mount table from the post-mutation row cache. Clone's
-         * run_spec sees state_mode == NONE (the DB doesn't exist yet), so
-         * ctx->mounts is NULL even after this point. The mount table built here
-         * covers the freshly-bootstrapped binding set for the tree walk. */
-        mount_table_t *post_mutation_mounts = NULL;
-        err = profile_build_mount_table(state, arena, &post_mutation_mounts);
-        if (err) {
-            state_free(state);
-            return error_wrap(err, "Failed to build mount table");
-        }
-
         manifest_t *view = NULL;
-        err = manifest_build(repo, state, post_mutation_mounts, arena, &view);
+        err = manifest_build(repo, state, arena, &view);
         if (err) {
             state_free(state);
             return err;

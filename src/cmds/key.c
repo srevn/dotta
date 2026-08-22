@@ -15,7 +15,6 @@
 #include "core/manifest.h"
 #include "core/state.h"
 #include "crypto/keymgr.h"
-#include "infra/mount.h"
 #include "sys/passphrase.h"
 
 /**
@@ -198,7 +197,6 @@ static error_t *cmd_key_status(
     keymgr *keymgr,
     git_repository *repo,
     const state_t *state,
-    const mount_table_t *mounts,
     arena_t *arena,
     const config_t *config,
     output_t *out
@@ -345,7 +343,7 @@ static error_t *cmd_key_status(
     output_section(out, OUTPUT_NORMAL, "Encrypted Files");
 
     manifest_t *manifest = NULL;
-    error_t *err = manifest_build(repo, state, mounts, arena, &manifest);
+    error_t *err = manifest_build(repo, state, arena, &manifest);
     if (err) {
         /* Non-fatal error - concise at normal, detail at verbose */
         output_print(
@@ -411,8 +409,7 @@ error_t *cmd_key(const dotta_ctx_t *ctx, const cmd_key_options_t *opts) {
 
         case KEY_ACTION_STATUS:
             err = cmd_key_status(
-                ctx->keymgr, ctx->repo, ctx->state, ctx->mounts, ctx->arena,
-                config, out
+                ctx->keymgr, ctx->repo, ctx->state, ctx->arena, config, out
             );
             break;
 

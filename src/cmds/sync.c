@@ -1920,7 +1920,7 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
     bool manifest_changed = false;    /* The block printed: the Git phase moved something managed */
     bool apply_pending = false;       /* The record disagrees with the view, whenever that began */
 
-    err = manifest_build(repo, state, ctx->mounts, ctx->arena, &after);
+    err = manifest_build(repo, state, ctx->arena, &after);
     if (err) {
         output_warning(
             out, OUTPUT_NORMAL, "Manifest build failed: %s", error_message(err)

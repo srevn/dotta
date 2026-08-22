@@ -704,22 +704,10 @@ static error_t *update_manifest_after_add(
         }
     }
 
-    /* STEP 2: Build a fresh mount table from the post-mutation row cache.
+    /* STEP 2: Build the view and anchor the rows this profile won.
      *
-     * STEP 1 may have mutated enabled_profiles (a new row, or a target re-bound),
-     * so ctx->mounts (built in run_spec from the pre-mutation snapshot) can be
-     * stale here: the fresh table is the only handle that classifies paths under
-     * the just-bound target as custom/ for the view built below. Built
-     * unconditionally so the call shape stays uniform — when nothing was written,
-     * the fresh table is equivalent to ctx->mounts (one extra build is the cost
-     * of a uniform site). Allocated into ctx->arena, reclaimed at command end. */
-    mount_table_t *post_mutation_mounts = NULL;
-    err = profile_build_mount_table(state, arena, &post_mutation_mounts);
-    if (err) {
-        return error_wrap(err, "Failed to build mount table after add");
-    }
-
-    /* STEP 3: Build the view and anchor the rows this profile won.
+     * The builder reads the rows as STEP 1 left them — a new row, or a target
+     * re-bound — so a path under the just-bound target is a custom/ row here.
      *
      * Anchor only the rows this profile won: if this profile has lower precedence
      * than existing enabled profiles, some files are another profile's rows
@@ -728,7 +716,7 @@ static error_t *update_manifest_after_add(
      * misattribute to the winner's blob_oid. Write failures are non-fatal: disk
      * is the just-committed blob, and the next status's slow path confirms it. */
     manifest_t *manifest = NULL;
-    err = manifest_build(repo, state, post_mutation_mounts, arena, &manifest);
+    err = manifest_build(repo, state, arena, &manifest);
     if (err) return err;
 
     /* The record as it stands, indexed by path, so a takeover is known before
@@ -791,7 +779,7 @@ static error_t *update_manifest_after_add(
     hashmap_free(anchor_index, NULL);
     manifest_free(manifest);
 
-    /* STEP 4: Commit transaction. state is borrowed from the dispatcher: if
+    /* STEP 3: Commit transaction. state is borrowed from the dispatcher: if
      * state_save succeeds the transaction is committed; otherwise the dispatcher's
      * state_free rolls it back. */
     err = state_save(state);

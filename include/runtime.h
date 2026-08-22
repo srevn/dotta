@@ -172,9 +172,9 @@ typedef enum dotta_crypto_mode {
  * set the build refuses (`profile disable`) builds its own with `manifest_build`
  * where it needs it, with the failure handling that path wants. A command that
  * moves Git or the enabled set (add, update, remove, sync, profile enable /
- * disable, clone, interactive) builds the post-mutation view itself: `ctx->
- * manifest` is the view at dispatch and is never rebuilt — see "Members not
- * welcome" #1 below, the rule `mounts` follows.
+ * disable, clone, interactive) builds the post-mutation view itself — the
+ * builder called again over the rows as they now stand: `ctx->manifest` is the
+ * view at dispatch and is never rebuilt — see "Members not welcome" #1 below.
  */
 typedef enum dotta_manifest_mode {
     DOTTA_MANIFEST_NONE,     /* No view built */
@@ -228,16 +228,16 @@ typedef struct dotta_spec_ext {
  *     arena, and a value from then on: it borrows nothing from the row cache, so
  *     after a command mutates the binding set (profile enable/disable, clone,
  *     interactive, add-with-implicit-enable) it still reads as the topology at
- *     dispatch — the one before. Such a command builds a *local* fresh table for
- *     any post-mutation manifest call; `ctx->mounts` is never reassigned (see
- *     "Members not welcome" #1 below).
+ *     dispatch — the one before; `ctx->mounts` is never reassigned (see
+ *     "Members not welcome" #1 below). It classifies the command's input; the
+ *     view derives its own table from the rows it reads.
  *   - `manifest != NULL`  iff  `manifest_mode == REQUIRED AND state != NULL`.
  *     The view over the enabled set as it stands at dispatch — `manifest_build`
- *     over `state` under `mounts`, its rows in the command arena, its index
- *     released by the dispatcher after the handler returns. Like `mounts`, it
- *     is never reassigned: a command that moves Git (a commit, a pull) or the
- *     enabled set builds the post-mutation view locally and frees it itself,
- *     and `ctx->manifest` stays the view before — which is exactly what the
+ *     over `state`, its rows in the command arena, its index released by the
+ *     dispatcher after the handler returns. Like `mounts`, it is never
+ *     reassigned: a command that moves Git (a commit, a pull) or the enabled
+ *     set builds the post-mutation view locally and frees it itself, and
+ *     `ctx->manifest` stays the view before — which is exactly what the
  *     receipts diff against (`manifest_diff(ctx->manifest, after, …)`).
  *   - `arena != NULL` always. The command arena is created before dispatch and
  *     destroyed after the handler returns; `run_spec` is the sole owner. Handlers

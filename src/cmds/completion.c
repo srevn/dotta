@@ -134,9 +134,7 @@ void completion_files(
     if (repo == NULL) return;
 
     manifest_t *manifest = NULL;
-    error_t *err = manifest_build(
-        repo, ctx->state, ctx->mounts, ctx->arena, &manifest
-    );
+    error_t *err = manifest_build(repo, ctx->state, ctx->arena, &manifest);
     if (err) {
         error_free(err);
         return;

@@ -1072,7 +1072,7 @@ static error_t *remove_files_from_profile(
             anchor_t *anchors = NULL;
             size_t anchor_count = 0;
 
-            manifest_err = manifest_build(repo, state, mounts, arena, &after);
+            manifest_err = manifest_build(repo, state, arena, &after);
             if (!manifest_err) {
                 manifest_err = state_get_all_anchors(state, arena, &anchors, &anchor_count);
             }
@@ -1486,7 +1486,6 @@ static error_t *delete_profile_branch(
      * gone, and releases. */
     error_t *delete_err = state_begin(state);
     if (!delete_err) {
-        mount_table_t *post_delete_mounts = NULL;
         manifest_t *after = NULL;
         anchor_t *anchors = NULL;
         size_t anchor_count = 0;
@@ -1496,15 +1495,9 @@ static error_t *delete_profile_branch(
             delete_err = state_disable_profile(state, opts->profile);
         }
 
-        /* Build a fresh mount table from the post-disable row cache: the borrowed
-         * `mounts` parameter still references the deleted profile, which would
-         * let custom/ paths under its target keep classifying after it has left
-         * scope. */
+        /* The view that remains — the builder over the post-disable rows. */
         if (!delete_err) {
-            delete_err = profile_build_mount_table(state, arena, &post_delete_mounts);
-        }
-        if (!delete_err) {
-            delete_err = manifest_build(repo, state, post_delete_mounts, arena, &after);
+            delete_err = manifest_build(repo, state, arena, &after);
         }
         if (!delete_err) {
             delete_err = state_get_all_anchors(state, arena, &anchors, &anchor_count);

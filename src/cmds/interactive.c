@@ -559,22 +559,17 @@ static error_t *plan_apply(state_t *deploy_state, const plan_t *plan) {
     return NULL;
 }
 
-/* Phase: rebuild the mount table from the post-mutation binding set and build
- * the view over it — the enabled set as the state now holds it, which is what
- * the next load will read. The view is computed, never stored — the build writes
- * nothing and its result is discarded. It is the tripwire that keeps the save
- * from landing an enabled set the next load cannot build: a custom/ row that
- * breached the target gate (UNBOUND), a branch that exists but will not load. */
+/* Phase: build the view over the post-mutation binding set — the enabled set
+ * as the state now holds it, which is what the next load will read. The view
+ * is computed, never stored — the build writes nothing and its result is
+ * discarded. It is the tripwire that keeps the save from landing an enabled
+ * set the next load cannot build: a custom/ row that breached the target gate
+ * (UNBOUND), a branch that exists but will not load. */
 static error_t *plan_check(
     git_repository *repo, state_t *deploy_state, arena_t *arena
 ) {
-    mount_table_t *mounts = NULL;
-    error_t *err = profile_build_mount_table(deploy_state, arena, &mounts);
-    if (err) {
-        return error_wrap(err, "Failed to rebuild mount table after profile diff");
-    }
     manifest_t *view = NULL;
-    err = manifest_build(repo, deploy_state, mounts, arena, &view);
+    error_t *err = manifest_build(repo, deploy_state, arena, &view);
     if (err) {
         return error_wrap(err, "Failed to build manifest with new scope");
     }

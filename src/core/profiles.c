@@ -210,12 +210,10 @@ cleanup:
  * the rows described at the instant it was built, readable for the arena's
  * lifetime whatever enabled_profiles mutation follows.
  *
- * Lenient on state-read failure: a cold clone or transient DB issue means there
- * are no per-profile mounts to materialize, but HOME and the universal root
- * sentinel are still useful for input classification. Falling back to a bare
- * table here makes the call sites (run_spec, binding-mutation rebuilders)
- * unconditional — they no longer carry boilerplate to recover from this exact
- * failure.
+ * A state with no database has no rows and yields the bare table (HOME and the
+ * root sentinel). A row read that fails on an opened database is an error and
+ * propagates: a bare table in its place would classify every input as home/
+ * or root/ and resolve no custom/ path, silently.
  */
 error_t *profile_build_mount_table(
     const state_t *state,
@@ -232,8 +230,7 @@ error_t *profile_build_mount_table(
     size_t count = 0;
     error_t *err = state_peek_profiles(state, &entries, &count);
     if (err) {
-        error_free(err);
-        return mount_table_build(arena, NULL, 0, out);
+        return error_wrap(err, "Failed to read enabled profiles");
     }
 
     mount_t *mounts = NULL;

@@ -1542,6 +1542,13 @@ static void emit_command(
  * reads it — the command is the second token, a bare word or a root alias;
  * in a tree, a flag at the subcommand slot routes to the default
  * subcommand, so the subcommand is the third token exactly when it is one.
+ *
+ * The positional guard mirrors `classify_token` for the token being typed:
+ * fish runs the positional rule's generator for a flag name too, and the
+ * binary would answer it with nothing (`args_complete_candidates`) after a
+ * full start. The mirror errs toward asking — a `--` standing as a flag's
+ * value reads as the end of options here, not in the engine — so it can
+ * only spare a call, never a candidate.
  */
 static const char fish_helpers[] =
     "function __%s_needs_command\n"
@@ -1570,6 +1577,16 @@ static const char fish_helpers[] =
     "    set -l tokens (commandline -opc)\n"
     "    test (count $tokens) -ge 3; and test \"$tokens[2]\" = \"$argv[1]\"; "
     "and contains -- $tokens[3] $argv[2..]\n"
+    "end\n"
+    "\n"
+    "function __%s_positional\n"
+    "    # True when the token being typed can be a positional, as the engine\n"
+    "    # reads it: anything once `--` has ended the options; else not a flag\n"
+    "    # name (`-x`, `--name`, `--`), which the rules answer -- `-` alone and\n"
+    "    # `-<digit>` are positionals. Spares the binary a call it would answer\n"
+    "    # with nothing.\n"
+    "    contains -- -- (commandline -opc)[3..]; and return 0\n"
+    "    not string match -qr -- '^-[^0-9]' (commandline -ct)\n"
     "end\n"
     "\n";
 
@@ -1624,11 +1641,13 @@ void args_export_completion_fish(
     /* Disable fish's default file completion for `<prog>`: the rules below
      * name every candidate, and the binary asks for path completion where a
      * path can stand. Once a command is typed, every positional is the
-     * binary's to answer. */
+     * binary's to answer; a flag name being typed is the flag rows'. */
     fprintf(out, "complete -c %s -f\n", prog);
     fprintf(
-        out, "complete -c %s -n \"not __%s_needs_command\" -xa \"(__%s_candidates)\"\n\n",
-        prog, prog, prog
+        out,
+        "complete -c %s -n \"not __%s_needs_command; and __%s_positional\" "
+        "-xa \"(__%s_candidates)\"\n\n",
+        prog, prog, prog, prog
     );
 
     /* Top-level flags. `-h` / `-v` are universal conventions so they stay hardcoded

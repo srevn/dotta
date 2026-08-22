@@ -581,13 +581,15 @@ void args_render_errors(
  *
  *   - the condition helpers the rules are guarded by (`__<prog>_needs_command`,
  *     `__<prog>_using_command`, `__<prog>_needs_subcommand`,
- *     `__<prog>_using_subcommand`), reading the line as the engine does;
+ *     `__<prog>_using_subcommand`, `__<prog>_positional`), reading the line
+ *     as the engine does;
  *   - the wrapper `__<prog>_candidates`, which runs `<prog> <candidates>` with
  *     the line's tokens and reads the candidates protocol back
  *     (`args_complete_candidates`): the candidates pass through, a path
  *     request — the last line, when there is one — goes to the shell's own
  *     path completion;
- *   - one positional rule, under any command, that asks the wrapper;
+ *   - one positional rule, under any command, that asks the wrapper — unless
+ *     the token being typed is a flag name, which the flag rows answer;
  *   - top-level built-ins (`-h`, `-v`),
  *   - one root-alias entry per command with `root_aliases` set,
  *   - one command row per non-hidden command,

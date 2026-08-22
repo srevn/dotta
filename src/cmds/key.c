@@ -469,6 +469,24 @@ static error_t *key_post_parse(
     return NULL;
 }
 
+/**
+ * What can stand at the cursor: the action, as key_post_parse reads it.
+ */
+static unsigned key_complete(
+    const void *ctx, const void *opts_v, const args_completion_t *at, FILE *out
+) {
+    (void) ctx;
+    (void) at;
+    const cmd_key_options_t *o = opts_v;
+
+    if (o->positional_count == 0) {
+        fputs("set\tSet encryption passphrase\n", out);
+        fputs("clear\tClear cached passphrase\n", out);
+        fputs("status\tShow key status\n", out);
+    }
+    return 0;
+}
+
 static error_t *key_dispatch(const void *ctx_v, void *opts_v) {
     const dotta_ctx_t *ctx = ctx_v;
     return cmd_key(ctx, (const cmd_key_options_t *) opts_v);
@@ -515,6 +533,7 @@ const args_command_t spec_key = {
     .opts_size   = sizeof(cmd_key_options_t),
     .opts        = key_opts,
     .post_parse  = key_post_parse,
+    .complete    = key_complete,
     .payload     = &dotta_ext_read_crypto,
     .dispatch    = key_dispatch,
 };

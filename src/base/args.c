@@ -12,8 +12,11 @@
  *   3) error collector helpers,
  *   4) typed-int parser,
  *   5) per-kind "apply" routines that write into the options struct,
- *   6) args_parse entry point,
- *   7) rendering (root usage, single-command help, error batch).
+ *   6) the token consumer (tree resolution + option loop) and the
+ *      args_parse entry point that settles what it consumed,
+ *   7) completion: the candidates driver, a partial consume and the hook,
+ *   8) rendering (root usage, single-command help, error batch),
+ *   9) the fish completion exporter.
  */
 
 #include "base/args.h"
@@ -33,10 +36,22 @@
  * Cursor + token classification
  * ══════════════════════════════════════════════════════════════════ */
 
+/**
+ * The token stream: argv with a read position, plus the state the stream
+ * carries across tokens — whether `--` has been consumed, after which every
+ * token is positional.
+ *
+ * A partial stream is a command line cut at the cursor, read for completion:
+ * a value flag that runs out of tokens is not an error there but the value
+ * being typed, reported through `pending`.
+ */
 typedef struct args_cursor {
     int argc;
     char **argv;
     int index;
+    bool end_of_opts;
+    bool partial;
+    const args_opt_t *pending;   /* Partial: the value flag the stream ended on */
 } args_cursor_t;
 
 static bool cur_more(const args_cursor_t *c) {
@@ -306,10 +321,25 @@ static char **ensure_array(
  * ══════════════════════════════════════════════════════════════════ */
 
 /**
+ * True if this opt kind consumes the next token (or an inline `=value`).
+ */
+static bool opt_takes_value(const args_opt_t *o) {
+    switch (o->kind) {
+        case ARGS_KIND_STRING:
+        case ARGS_KIND_APPEND:
+        case ARGS_KIND_INT:
+            return true;
+        default:
+            return false;
+    }
+}
+
+/**
  * Apply a value-taking opt (STRING / APPEND / INT).
  *
  * `inline_value` is non-NULL iff the user wrote `--name=value`; else the value
- * is consumed from the cursor's next token.
+ * is consumed from the cursor's next token. A partial stream that ends on the
+ * flag has its value at the cursor: reported, not an error.
  */
 static void apply_value_opt(
     const args_opt_t *opt, const char *inline_value, args_cursor_t *cur,
@@ -318,6 +348,10 @@ static void apply_value_opt(
     char *v = (char *) inline_value;
     if (v == NULL) {
         if (!cur_more(cur)) {
+            if (cur->partial) {
+                cur->pending = opt;
+                return;
+            }
             record_error(
                 errors, arena, tok_idx, opt, "option '%s' requires a value",
                 cur->argv[tok_idx]
@@ -424,13 +458,8 @@ static void apply_long_opt(
 }
 
 static void apply_short_opt(
-    const args_command_t *cmd,
-    char *tok,
-    args_cursor_t *cur,
-    void *opts,
-    arena_t *arena,
-    args_errors_t *errors,
-    int tok_idx
+    const args_command_t *cmd, char *tok, args_cursor_t *cur,
+    void *opts, arena_t *arena, args_errors_t *errors, int tok_idx
 ) {
     /* v1 rejects bundling (`-fv` != `-f -v`); each short opt must be exactly
      * `-X`. The bundling enhancement can be added later without breaking any
@@ -474,13 +503,8 @@ static void apply_short_opt(
 }
 
 static void apply_positional(
-    const args_command_t *cmd,
-    char *tok,
-    void *opts,
-    arena_t *arena,
-    args_errors_t *errors,
-    int tok_idx,
-    int argc
+    const args_command_t *cmd, char *tok, void *opts, arena_t *arena,
+    args_errors_t *errors, int tok_idx, int argc
 ) {
     /* Classify the token. cls=0 when the command has no classifier, matching
      * rows declared via ARGS_POSITIONAL_ANY (zero-init on class_accept). Commands
@@ -550,10 +574,8 @@ static void apply_positional(
  * during parse (it's a cap, not a floor).
  */
 static void check_positional_counts(
-    const args_command_t *cmd,
-    void *opts,
-    args_errors_t *errors,
-    arena_t *arena
+    const args_command_t *cmd, void *opts,
+    args_errors_t *errors, arena_t *arena
 ) {
     if (cmd->opts == NULL) return;
 
@@ -642,29 +664,32 @@ args_root_outcome_t args_resolve_root(
  * Entry point
  * ══════════════════════════════════════════════════════════════════ */
 
-args_outcome_t args_parse(
-    const args_command_t *command, int argc, char **argv, int start_idx,
-    arena_t *arena, void *opts_out, args_errors_t *errors_out,
-    const args_command_t **resolved_out
+/**
+ * Resolve the subcommand tree and consume the token stream into the buckets.
+ *
+ * The first half of a parse, shared by `args_parse` — which then settles: the
+ * error gate, the positional counts, `post_parse` — and by the completion
+ * driver, which reads the cursor instead. Seeds defaults at every tree level,
+ * recurses into the matched subcommand, and walks the option loop of the
+ * leaf; `*leaf_out` is the command whose buckets were filled.
+ *
+ * @return ARGS_OK when the stream was consumed — the loop's errors, if any,
+ *         are in `errors`; ARGS_HELP_REQUESTED on `-h`/`--help`; ARGS_FAILED
+ *         when the tree could not be resolved and there is no leaf to fill.
+ */
+static args_outcome_t consume_tokens(
+    const args_command_t *command, args_cursor_t *cur, arena_t *arena,
+    void *opts, args_errors_t *errors, const args_command_t **leaf_out
 ) {
-    /* Reset the error collector in-place so callers can stack-declare it without
-     * pre-zeroing. */
-    if (errors_out != NULL) {
-        errors_out->count = 0;
-        errors_out->overflowed = false;
-    }
-
-    /* Surface the current command as the resolved leaf. Recursive calls into a
-     * subcommand will overwrite this with the deeper command, so after the
-     * top-level call returns, *resolved_out points to the leaf actually reached
-     * (whichever subcommand owned the parse). */
-    if (resolved_out != NULL) {
-        *resolved_out = command;
-    }
+    /* Surface the current command as the leaf. Recursive calls into a
+     * subcommand overwrite this with the deeper command, so after the
+     * top-level call returns, *leaf_out points to the command that owned the
+     * loop (whichever subcommand was reached). */
+    *leaf_out = command;
 
     /* Seed caller-provided non-zero defaults. */
     if (command->init_defaults != NULL) {
-        command->init_defaults(opts_out);
+        command->init_defaults(opts);
     }
 
     /* --- Subcommand tree path ---------------------------------------
@@ -683,7 +708,7 @@ args_outcome_t args_parse(
                 o->kind != ARGS_KIND_END; o++) {
                 if (o->kind == ARGS_KIND_GROUP) continue;
                 record_error(
-                    errors_out, arena, -1, o,
+                    errors, arena, -1, o,
                     "internal: command '%s' has subcommands; "
                     "opts[] must be empty (move flags to each subcommand)",
                     command->name ? command->name : "?"
@@ -692,22 +717,27 @@ args_outcome_t args_parse(
             }
         }
 
-        if (start_idx >= argc) {
+        if (!cur_more(cur)) {
+            /* A partial stream that ends here stands at the subcommand slot:
+             * the parent is the leaf, nothing consumed. */
+            if (cur->partial) {
+                return ARGS_OK;
+            }
             if (command->default_subcommand != NULL) {
-                return args_parse(
-                    command->default_subcommand, argc, argv,
-                    start_idx, arena, opts_out, errors_out, resolved_out
+                return consume_tokens(
+                    command->default_subcommand, cur, arena,
+                    opts, errors, leaf_out
                 );
             }
             record_error(
-                errors_out, arena, -1, NULL,
+                errors, arena, -1, NULL,
                 "command '%s' requires a subcommand",
                 command->name ? command->name : "?"
             );
             return ARGS_FAILED;
         }
 
-        const char *first = argv[start_idx];
+        const char *first = cur->argv[cur->index];
 
         if (strcmp(first, "-h") == 0 || strcmp(first, "--help") == 0) {
             return ARGS_HELP_REQUESTED;
@@ -715,13 +745,13 @@ args_outcome_t args_parse(
 
         if (first[0] == '-') {
             if (command->default_subcommand != NULL) {
-                return args_parse(
-                    command->default_subcommand, argc, argv,
-                    start_idx, arena, opts_out, errors_out, resolved_out
+                return consume_tokens(
+                    command->default_subcommand, cur, arena,
+                    opts, errors, leaf_out
                 );
             }
             record_error(
-                errors_out, arena, start_idx, NULL,
+                errors, arena, cur->index, NULL,
                 "command '%s' requires a subcommand (got '%s')",
                 command->name ? command->name : "?", first
             );
@@ -733,14 +763,14 @@ args_outcome_t args_parse(
             first
         );
         if (sub != NULL) {
-            return args_parse(
-                sub->command, argc, argv, start_idx + 1,
-                arena, opts_out, errors_out, resolved_out
+            cur->index++;
+            return consume_tokens(
+                sub->command, cur, arena, opts, errors, leaf_out
             );
         }
 
         record_error(
-            errors_out, arena, start_idx, NULL,
+            errors, arena, cur->index, NULL,
             "unknown subcommand '%s' of '%s'",
             first, command->name ? command->name : "?"
         );
@@ -762,58 +792,68 @@ args_outcome_t args_parse(
      * path. Processing further tokens would only record errors that help_seen
      * suppresses anyway — wasted work and misleading if a post_parse hook were
      * still invoked. */
-    args_cursor_t cur = { .argc = argc, .argv = argv, .index = start_idx };
-    bool end_of_opts = false;
+    while (cur_more(cur)) {
+        int tok_idx = cur->index;
+        char *t = cur_take(cur);
 
-    while (cur_more(&cur)) {
-        int tok_idx = cur.index;
-        char *t = cur_take(&cur);
-
-        switch (classify_token(t, end_of_opts)) {
+        switch (classify_token(t, cur->end_of_opts)) {
             case TOK_END_OF_OPTS:
-                end_of_opts = true;
+                cur->end_of_opts = true;
                 break;
             case TOK_HELP:
                 return ARGS_HELP_REQUESTED;
             case TOK_LONG_OPT:
                 apply_long_opt(
-                    command, t, &cur, opts_out, arena,
-                    errors_out, tok_idx
+                    command, t, cur, opts, arena, errors, tok_idx
                 );
                 break;
             case TOK_SHORT_OPT:
                 apply_short_opt(
-                    command, t, &cur, opts_out, arena,
-                    errors_out, tok_idx
+                    command, t, cur, opts, arena, errors, tok_idx
                 );
                 break;
             case TOK_POSITIONAL:
                 apply_positional(
-                    command, t, opts_out, arena,
-                    errors_out, tok_idx, argc
+                    command, t, opts, arena, errors, tok_idx, cur->argc
                 );
                 break;
         }
     }
 
-    if (errors_out != NULL && errors_out->count > 0) return ARGS_FAILED;
+    return ARGS_OK;
+}
 
-    check_positional_counts(command, opts_out, errors_out, arena);
-    if (errors_out != NULL && errors_out->count > 0) return ARGS_FAILED;
-
-    /* Hook: interpret positional buckets, parse refspecs, etc. */
-    if (command->post_parse != NULL) {
-        error_t *err = command->post_parse(opts_out, arena, command);
-        if (err != NULL) {
-            record_error_from_err(errors_out, arena, -1, NULL, err);
-            error_free(err);
-            return ARGS_FAILED;
-        }
+args_outcome_t args_parse(
+    const args_command_t *command, int argc, char **argv, int start_idx,
+    arena_t *arena, void *opts_out, args_errors_t *errors_out,
+    const args_command_t **resolved_out
+) {
+    /* Reset the error collector in-place so callers can stack-declare it without
+     * pre-zeroing. */
+    if (errors_out != NULL) {
+        errors_out->count = 0;
+        errors_out->overflowed = false;
     }
 
-    /* Hook: cross-field invariants. */
-    if (command->validate != NULL) {
-        error_t *err = command->validate(opts_out, command);
+    args_cursor_t cur = { .argc = argc, .argv = argv, .index = start_idx };
+    const args_command_t *leaf = command;
+    args_outcome_t outcome = consume_tokens(
+        command, &cur, arena, opts_out, errors_out, &leaf
+    );
+    if (resolved_out != NULL) {
+        *resolved_out = leaf;
+    }
+    if (outcome != ARGS_OK) return outcome;
+
+    if (errors_out != NULL && errors_out->count > 0) return ARGS_FAILED;
+
+    check_positional_counts(leaf, opts_out, errors_out, arena);
+    if (errors_out != NULL && errors_out->count > 0) return ARGS_FAILED;
+
+    /* Hook: interpret positional buckets, parse refspecs, reject what the rows
+     * cannot express. */
+    if (leaf->post_parse != NULL) {
+        error_t *err = leaf->post_parse(opts_out, arena, leaf);
         if (err != NULL) {
             record_error_from_err(errors_out, arena, -1, NULL, err);
             error_free(err);
@@ -822,6 +862,82 @@ args_outcome_t args_parse(
     }
 
     return ARGS_OK;
+}
+
+/* ══════════════════════════════════════════════════════════════════
+ * Completion — the candidates at the cursor
+ * ══════════════════════════════════════════════════════════════════ */
+
+void args_complete_candidates(
+    const args_command_t *const *commands, int argc, char **argv,
+    const char *current, arena_t *arena, const void *ctx, FILE *out
+) {
+    /* The root slot, a built-in flag, an unknown word: the exported command
+     * rows answer, or nothing does. */
+    const args_command_t *command = NULL;
+    if (args_resolve_root(commands, argc, argv, &command) != ARGS_ROOT_COMMAND) {
+        return;
+    }
+
+    void *opts = NULL;
+    if (command->opts_size > 0) {
+        opts = arena_calloc(arena, 1, command->opts_size);
+        if (opts == NULL) return;
+    }
+
+    /* Consume the line as the parser would, to where it stops. A line the
+     * command would reject still has a next token: the loop's errors are
+     * collected here and ignored. */
+    args_errors_t errors = { 0 };
+    args_cursor_t cur = {
+        .argc = argc, .argv = argv, .index = 2, .partial = true
+    };
+    const args_command_t *leaf = command;
+    if (consume_tokens(command, &cur, arena, opts, &errors, &leaf) != ARGS_OK) {
+        return;   /* `-h` on the line, or a tree that did not resolve */
+    }
+    if (leaf->subcommands != NULL) {
+        return;   /* The subcommand slot: the exported sub rows answer */
+    }
+    if (leaf->passthrough || leaf->complete == NULL) {
+        return;
+    }
+
+    /* Where the cursor stands: the value of the flag the stream ended on;
+     * else by the shape of what is being typed — a positional, the value of
+     * an inline `--name=text`, or a flag name (the exported flag rows
+     * answer, as they do for `--` and `-h`). */
+    args_completion_t at = { .current = current };
+    if (cur.pending != NULL) {
+        at.value_of = cur.pending;
+    } else {
+        switch (classify_token(current, cur.end_of_opts)) {
+            case TOK_POSITIONAL:
+                break;
+            case TOK_LONG_OPT: {
+                const char *name = current + 2;
+                const char *eq = strchr(name, '=');
+                if (eq == NULL) return;
+                const args_opt_t *opt = find_long(
+                    leaf->opts, name, (size_t) (eq - name)
+                );
+                if (opt == NULL || !opt_takes_value(opt)) return;
+                at.value_of = opt;
+                at.current = eq + 1;
+                break;
+            }
+            default:
+                return;
+        }
+    }
+
+    unsigned want = leaf->complete(ctx, opts, &at, out);
+    if (want & ARGS_WANT_FILES) {
+        fprintf(out, "\tfiles\t%s\n", at.current);
+    }
+    if (want & ARGS_WANT_DIRS) {
+        fprintf(out, "\tdirs\t%s\n", at.current);
+    }
 }
 
 /* ══════════════════════════════════════════════════════════════════
@@ -1184,21 +1300,6 @@ void args_render_help(
  * ══════════════════════════════════════════════════════════════════ */
 
 /**
- * True if this opt kind takes a value (and hence should appear in the
- * `__<prog>_value_flags` list so fish's positional counter can skip it).
- */
-static bool opt_takes_value(const args_opt_t *o) {
-    switch (o->kind) {
-        case ARGS_KIND_STRING:
-        case ARGS_KIND_APPEND:
-        case ARGS_KIND_INT:
-            return true;
-        default:
-            return false;
-    }
-}
-
-/**
  * Write `s` into `out` with fish double-quoted-string escaping. Fish treats `"`,
  * `$`, and `\` as special inside double quotes, and a raw `\n` (newline) would
  * break a `complete -c <prog> ... -d "..."` line mid-description. Defensive —
@@ -1224,19 +1325,42 @@ static void fputs_fish_escaped(FILE *out, const char *s) {
 }
 
 /**
- * Emit a `complete -c <prog> ...` line for one opt row. `condition_fish` is the
- * fish `-n` guard expression (e.g., `__<prog>_using_command init`).
+ * The `-n` guard a rule is emitted under: `__<prog>_<helper> <command> [<sub>]`.
+ * Printed from its parts at every rule rather than formatted into a buffer
+ * once per context — `using_command <cmd>` for a command's own rows,
+ * `needs_subcommand <cmd>` for a tree's subcommand slot (the names, and the
+ * default sub's flags), `using_subcommand <cmd> <aliases>` for one subcommand's
+ * rows, its alias list verbatim so every spelling of the sub matches.
+ */
+typedef struct fish_guard {
+    const char *helper;
+    const char *command;
+    const char *sub;       /* The subcommand's alias list; NULL otherwise */
+} fish_guard_t;
+
+static void emit_guard(FILE *out, const char *prog, const fish_guard_t *guard) {
+    fprintf(out, " -n \"__%s_%s %s", prog, guard->helper, guard->command);
+    if (guard->sub != NULL) {
+        fprintf(out, " %s", guard->sub);
+    }
+    fputc('"', out);
+}
+
+/**
+ * Emit a `complete -c <prog> ...` line for one opt row under `guard`.
  *
  * Every short-form token in the opt's `flags` becomes a `-s X`; every long-form
  * token becomes a `-l XXX`. Fish renders the aliases as a single completion entry
  * (that's the whole reason we can list them all on one `complete` line).
- * Value-taking kinds add `-r` so fish knows the flag needs a parameter and defers
- * other suggestions until it's supplied.
+ * Value-taking kinds ask the binary for the value (`-xa`): fish then knows the
+ * flag needs a parameter, consults only that rule at its value position —
+ * inline `--name=text` included — and defers other suggestions until it's
+ * supplied.
  */
 static void emit_complete_line(
     FILE *out,
     const char *prog,
-    const char *condition_fish,
+    const fish_guard_t *guard,
     const args_opt_t *opt
 ) {
     if (opt->hidden) return;
@@ -1245,7 +1369,8 @@ static void emit_complete_line(
         opt->kind == ARGS_KIND_POSITIONAL_ARG ||
         opt->kind == ARGS_KIND_POSITIONAL_RAW) return;
 
-    fprintf(out, "complete -c %s -n \"%s\"", prog, condition_fish);
+    fprintf(out, "complete -c %s", prog);
+    emit_guard(out, prog, guard);
 
     /* Walk space-separated names in `flags`, emitting -s or -l. */
     for (const char *p = opt->flags ? opt->flags : ""; *p;) {
@@ -1264,7 +1389,7 @@ static void emit_complete_line(
     }
 
     if (opt_takes_value(opt)) {
-        fputs(" -r", out);
+        fprintf(out, " -xa \"(__%s_candidates)\"", prog);
     }
 
     if (opt->help != NULL && opt->help[0] != '\0') {
@@ -1312,11 +1437,11 @@ static void emit_root_alias_complete(
 
 /**
  * Emit a `complete -c <prog> ... -a NAME -d "SUMMARY"` line for a subcommand
- * entry. NAME is the first alias (canonical form).
+ * entry under `guard`. NAME is the first alias (canonical form).
  */
 static void emit_sub_row(
     FILE *out, const char *prog,
-    const char *condition_fish, const args_subcommand_t *sub
+    const fish_guard_t *guard, const args_subcommand_t *sub
 ) {
     if (sub->hidden) return;
 
@@ -1329,154 +1454,22 @@ static void emit_sub_row(
     const char *summary =
         (sub->command && sub->command->summary) ? sub->command->summary : "";
 
-    fprintf(
-        out, "complete -c %s -n \"%s\" -a %.*s -d \"",
-        prog, condition_fish, (int) len, p
-    );
+    fprintf(out, "complete -c %s", prog);
+    emit_guard(out, prog, guard);
+    fprintf(out, " -a %.*s -d \"", (int) len, p);
     fputs_fish_escaped(out, summary);
     fputs("\"\n", out);
 }
 
-/* Value-flag deduplication. A command and its subcommands may declare the same
- * value-bearing flag more than once (a tree's subs each carry `--target`, say);
- * the per-command `__<prog>_value_flags_<cmd>` list names each token once.
- */
-typedef struct value_flag_set {
-    const char **tokens;   /* Each entry is a fish argv token (`-p`,    */
-    size_t count;          /* `--profile`, ...). Borrowed from args_opt */
-    size_t cap;            /* `flags` strings — stable for the process. */
-} value_flag_set_t;
-
-static bool value_flag_set_has(
-    const value_flag_set_t *set, const char *token, size_t len
-) {
-    for (size_t i = 0; i < set->count; i++) {
-        const char *t = set->tokens[i];
-        if (strlen(t) == len && memcmp(t, token, len) == 0) return true;
-    }
-    return false;
-}
-
-static void value_flag_set_add(
-    value_flag_set_t *set, const char *token, arena_t *arena
-) {
-    if (set->count == set->cap) {
-        size_t ncap = set->cap ? set->cap * 2 : 16;
-        const char **nptr = arena_calloc(arena, ncap, sizeof(*set->tokens));
-        if (nptr == NULL) return;
-        if (set->count > 0) {
-            memcpy(nptr, set->tokens, set->count * sizeof(*set->tokens));
-        }
-        set->tokens = nptr;
-        set->cap = ncap;
-    }
-    set->tokens[set->count++] = token;
-}
-
 /**
- * Scan every value-taking flag-token in `opts` and add the formatted argv form
- * (`-X` or `--XXX`) to `set`. Duplicates (same token already seen) are skipped
- * so a flag declared on N subcommands of one tree appears once.
- *
- * The tokens themselves are written out in `args_export_completion_fish` after
- * the command's scan; this function never writes to `out`.
- */
-static void collect_value_flags(
-    const args_opt_t *opts, value_flag_set_t *set, arena_t *arena
-) {
-    if (opts == NULL) return;
-    for (const args_opt_t *o = opts; o->kind != ARGS_KIND_END; o++) {
-        if (o->hidden) continue;
-        if (!opt_takes_value(o)) continue;
-
-        for (const char *p = o->flags ? o->flags : ""; *p;) {
-            while (*p == ' ') p++;
-            if (*p == '\0') break;
-            const char *s = p;
-            while (*p && *p != ' ') p++;
-            size_t len = (size_t) (p - s);
-            if (len == 0) continue;
-
-            /* Format as fish argv token: single-char → `-X`, multi → `--XXX`. */
-            size_t tok_len = (len == 1) ? 2 : (len + 2);
-            char *tok = arena_alloc(arena, tok_len + 1);
-            if (tok == NULL) continue;
-            if (len == 1) {
-                tok[0] = '-';
-                tok[1] = s[0];
-                tok[2] = '\0';
-            } else {
-                tok[0] = '-';
-                tok[1] = '-';
-                memcpy(tok + 2, s, len);
-                tok[tok_len] = '\0';
-            }
-
-            if (!value_flag_set_has(set, tok, tok_len)) {
-                value_flag_set_add(set, tok, arena);
-            }
-        }
-    }
-}
-
-/**
- * True if `opts` holds at least one opt that would produce a `complete` line.
- * Mirrors the early-returns in emit_complete_line(): GROUP is help-only, POSITIONAL
- * kinds don't surface in fish completion, and hidden opts are skipped everywhere.
- */
-static bool has_visible_completable_opt(const args_opt_t *opts) {
-    if (opts == NULL) return false;
-    for (const args_opt_t *o = opts; o->kind != ARGS_KIND_END; o++) {
-        if (o->hidden) continue;
-        if (o->kind == ARGS_KIND_GROUP ||
-            o->kind == ARGS_KIND_POSITIONAL ||
-            o->kind == ARGS_KIND_POSITIONAL_ARG ||
-            o->kind == ARGS_KIND_POSITIONAL_RAW) continue;
-        return true;
-    }
-    return false;
-}
-
-/**
- * True if emit_command() would produce at least one `complete` line for `cmd`.
- * Used by the per-command section loop to suppress orphan `# NAME` headers for
- * commands that exist only as dispatch shells (bareword + root-alias flag with
- * no flags/subs/passthrough, e.g.
- * `spec_interactive`). The gates below mirror emit_command() exactly;
- * any change there must be reflected here or headers will drift.
- */
-static bool command_has_completions(const args_command_t *cmd) {
-    if (cmd == NULL || cmd->hidden) return false;
-    if (cmd->passthrough) return true;
-    if (has_visible_completable_opt(cmd->opts)) return true;
-    if (cmd->subcommands != NULL) {
-        for (const args_subcommand_t *s = cmd->subcommands;
-            s->name != NULL; s++) {
-            if (!s->hidden) return true;
-        }
-        /* A hidden subcommand list can still contribute opts via default_subcommand
-         * — emit_command() emits those at the pre-sub position regardless of
-         * sibling visibility. */
-        if (cmd->default_subcommand != NULL &&
-            has_visible_completable_opt(cmd->default_subcommand->opts)) {
-            return true;
-        }
-    }
-    return false;
-}
-
-/**
- * Walk a command and its subcommand tree, emitting completion lines. `parent_fish`
- * is the fish `-n` condition fragment identifying the caller's context; for root
- * commands it's `__<prog>_using_command NAME`.
+ * Walk a top-level command and its subcommand tree, emitting its rules.
  */
 static void emit_command(
     FILE *out,
     const char *prog,
-    const args_command_t *cmd,
-    const char *parent_fish
+    const args_command_t *cmd
 ) {
-    if (cmd == NULL || cmd->hidden) return;
+    const fish_guard_t own = { "using_command", cmd->name, NULL };
 
     /* Passthrough commands hand the tail of argv to an external tool (e.g. `<prog>
      * git <git-args...>` forwards everything after `git` to a spawned git process).
@@ -1484,10 +1477,11 @@ static void emit_command(
      * there are no flags or subs to emit on our side, since the spec is
      * intentionally empty. */
     if (cmd->passthrough) {
+        fprintf(out, "complete -c %s", prog);
+        emit_guard(out, prog, &own);
         fprintf(
-            out,
-            "complete -c %s -n \"%s\" -xa \"(__fish_complete_subcommand --command %s)\"\n",
-            prog, parent_fish, cmd->name
+            out, " -xa \"(__fish_complete_subcommand --command %s)\"\n",
+            cmd->name
         );
         return;
     }
@@ -1495,37 +1489,30 @@ static void emit_command(
     /* Flag rows. */
     if (cmd->opts != NULL) {
         for (const args_opt_t *o = cmd->opts; o->kind != ARGS_KIND_END; o++) {
-            emit_complete_line(out, prog, parent_fish, o);
+            emit_complete_line(out, prog, &own, o);
         }
     }
 
     /* Subcommand rows and their own options. */
     if (cmd->subcommands != NULL) {
-        /* One-liner pointing users at each sub. The guard must require both the
-         * parent context AND the absence of a sub selection so names only show
-         * as completions before the sub is chosen. */
-        char needs_sub[256];
-        snprintf(
-            needs_sub, sizeof(needs_sub),
-            "%s; and __%s_needs_subcommand %s",
-            parent_fish, prog, cmd->name
-        );
+        /* One-liner pointing users at each sub, offered only while the
+         * subcommand slot is still open. */
+        const fish_guard_t slot = { "needs_subcommand", cmd->name, NULL };
 
         for (const args_subcommand_t *s = cmd->subcommands;
             s->name != NULL; s++) {
-            emit_sub_row(out, prog, needs_sub, s);
+            emit_sub_row(out, prog, &slot, s);
         }
 
         /* Parse accepts `<prog> <cmd> --flag` as a shorthand for `<prog> <cmd>
          * <default-sub> --flag` when a default_subcommand is set. Mirror that
-         * in completion: at the pre-sub position (parent ctx AND no sub chosen
-         * yet), offer the default sub's flags so tab-complete matches the parser's
-         * behavior. */
+         * in completion: at the open slot, offer the default sub's flags so
+         * tab-complete matches the parser's behavior. */
         if (cmd->default_subcommand != NULL &&
             cmd->default_subcommand->opts != NULL) {
             for (const args_opt_t *o = cmd->default_subcommand->opts;
                 o->kind != ARGS_KIND_END; o++) {
-                emit_complete_line(out, prog, needs_sub, o);
+                emit_complete_line(out, prog, &slot, o);
             }
         }
 
@@ -1534,83 +1521,104 @@ static void emit_command(
             s->name != NULL; s++) {
             if (s->hidden || s->command == NULL) continue;
 
-            /* Canonical sub token (first in alias list). */
-            const char *p = s->name;
-            while (*p == ' ') p++;
-            const char *q = p;
-            while (*q && *q != ' ') q++;
-
-            char sub_cond[256];
-            snprintf(
-                sub_cond, sizeof(sub_cond),
-                "__%s_using_subcommand %s %.*s",
-                prog, cmd->name, (int) (q - p), p
-            );
-
+            const fish_guard_t under = { "using_subcommand", cmd->name, s->name };
             if (s->command->opts != NULL) {
                 for (const args_opt_t *o = s->command->opts;
                     o->kind != ARGS_KIND_END; o++) {
-                    emit_complete_line(out, prog, sub_cond, o);
+                    emit_complete_line(out, prog, &under, o);
                 }
             }
         }
     }
 }
 
+/**
+ * The condition helpers the rules are guarded by, and the wrapper that asks
+ * the binary. `%s` is the program name; the line is read the way the engine
+ * reads it — the command is the second token, a bare word or a root alias;
+ * in a tree, a flag at the subcommand slot routes to the default
+ * subcommand, so the subcommand is the third token exactly when it is one.
+ */
+static const char fish_helpers[] =
+    "function __%s_needs_command\n"
+    "    # True while no command has been typed (only `%s` so far).\n"
+    "    test (count (commandline -opc)) -eq 1\n"
+    "end\n"
+    "\n"
+    "function __%s_using_command\n"
+    "    # True when the command -- the second token -- is one of $argv.\n"
+    "    set -l tokens (commandline -opc)\n"
+    "    test (count $tokens) -ge 2; and contains -- $tokens[2] $argv\n"
+    "end\n"
+    "\n"
+    "function __%s_needs_subcommand\n"
+    "    # True while command $argv[1]'s subcommand slot is open: nothing after\n"
+    "    # the command yet, or a flag, which the parser hands to the default\n"
+    "    # subcommand.\n"
+    "    set -l tokens (commandline -opc)\n"
+    "    test (count $tokens) -ge 2; and test \"$tokens[2]\" = \"$argv[1]\"; or return 1\n"
+    "    test (count $tokens) -eq 2; or string match -q -- '-*' $tokens[3]\n"
+    "end\n"
+    "\n"
+    "function __%s_using_subcommand\n"
+    "    # True when the command is $argv[1] and its subcommand -- the third\n"
+    "    # token -- is spelled as one of $argv[2..].\n"
+    "    set -l tokens (commandline -opc)\n"
+    "    test (count $tokens) -ge 3; and test \"$tokens[2]\" = \"$argv[1]\"; "
+    "and contains -- $tokens[3] $argv[2..]\n"
+    "end\n"
+    "\n";
+
+static const char fish_candidates_head[] =
+    "function __%s_candidates\n"
+    "    # Ask the binary what can stand at the cursor: the complete tokens after\n"
+    "    # `%s`, and the token being typed. A line beginning with a tab asks for\n"
+    "    # the shell's own path completion.\n"
+    "    set -l current (commandline -ct)\n"
+    "    for line in (";
+
+static const char fish_candidates_tail[] =
+    " --current=\"$current\" -- (commandline -opc)[2..] 2>/dev/null)\n"
+    "        set -l fields (string split \\t -- $line)\n"
+    "        if test -z \"$fields[1]\"\n"
+    "            switch $fields[2]\n"
+    "                case files\n"
+    "                    __fish_complete_path $fields[3]\n"
+    "                case dirs\n"
+    "                    __fish_complete_directories $fields[3]\n"
+    "            end\n"
+    "        else\n"
+    "            printf '%%s\\n' $line\n"
+    "        end\n"
+    "    end\n"
+    "end\n"
+    "\n";
+
 void args_export_completion_fish(
     FILE *out,
-    arena_t *arena,
     const args_command_t *const *commands,
-    const char *prog
+    const char *prog,
+    const char *candidates
 ) {
-    fprintf(out, "# Auto-generated by `%s __complete spec fish`.\n", prog);
-    fprintf(out, "# Dynamic completion helpers live in %s.fish.\n\n", prog);
+    fprintf(
+        out, "# Fish completions for %s, generated from its command registry. "
+        "Do not edit.\n\n", prog
+    );
 
-    /* Disable fish's default file completion for `<prog>` — our commands use
-     * explicit rules (or helper-provided value completions) and letting the shell
-     * fall back to filenames creates noisy TAB expansions for commands that accept
-     * profile names, not paths. */
-    fprintf(out, "complete -c %s -f\n\n", prog);
+    render_with_prog(out, fish_helpers, prog);
+    render_with_prog(out, fish_candidates_head, prog);
+    fprintf(out, "%s %s", prog, candidates);
+    render_with_prog(out, fish_candidates_tail, prog);
 
-    /* Value-taking flags, one list per command: the positional scan in
-     * <prog>.fish reads `__<prog>_value_flags_<cmd>` to know which of that
-     * command's tokens are "flag + value" pairs. Per command, not a union
-     * across the registry — the same letter is a value flag on one command
-     * and a bare flag on another (`-e` is `--exclude <pattern>` on add and
-     * `--edit` on bootstrap), and a union would swallow the token after the
-     * bare one. A tree's list spans its subcommands (and its default sub),
-     * since the scan keys on the top-level command token. Commands with no
-     * value flag get no line; the scan reads an unset list as empty.
-     *
-     * Token storage and each dedup set live in the borrowed arena; tokens are
-     * emitted via fprintf as each command is scanned — the arena outlives
-     * this call. */
-    fputs("# Value-taking flags, per command\n", out);
-    for (size_t i = 0; commands[i] != NULL; i++) {
-        const args_command_t *c = commands[i];
-        if (c->hidden) continue;
-
-        value_flag_set_t vset = { 0 };
-        collect_value_flags(c->opts, &vset, arena);
-        if (c->subcommands != NULL) {
-            for (const args_subcommand_t *s = c->subcommands;
-                s->name != NULL; s++) {
-                if (s->hidden || s->command == NULL) continue;
-                collect_value_flags(s->command->opts, &vset, arena);
-            }
-            if (c->default_subcommand != NULL) {
-                collect_value_flags(c->default_subcommand->opts, &vset, arena);
-            }
-        }
-        if (vset.count == 0) continue;
-
-        fprintf(out, "set -g __%s_value_flags_%s", prog, c->name);
-        for (size_t j = 0; j < vset.count; j++) {
-            fprintf(out, " %s", vset.tokens[j]);
-        }
-        fputc('\n', out);
-    }
-    fputc('\n', out);
+    /* Disable fish's default file completion for `<prog>`: the rules below
+     * name every candidate, and the binary asks for path completion where a
+     * path can stand. Once a command is typed, every positional is the
+     * binary's to answer. */
+    fprintf(out, "complete -c %s -f\n", prog);
+    fprintf(
+        out, "complete -c %s -n \"not __%s_needs_command\" -xa \"(__%s_candidates)\"\n\n",
+        prog, prog, prog
+    );
 
     /* Top-level flags. `-h` / `-v` are universal conventions so they stay hardcoded
      * here; command-declared root aliases are projected from the registry so
@@ -1644,19 +1652,33 @@ void args_export_completion_fish(
     }
     fputc('\n', out);
 
-    /* Per-command options. Skip commands with no body to emit — purely dispatch
-     * shells (e.g. `spec_interactive`, reachable only via bareword or root-alias
-     * flag) otherwise leave an orphan `# NAME` header with nothing underneath. */
+    /* Per-command rules, each block under a `# NAME` header. The block is
+     * rendered first so a command with nothing to say — a dispatch shell
+     * reachable by bareword or root alias alone, like `interactive` — leaves
+     * no orphan header. Without a memstream (out of memory) the block goes
+     * straight through, header and all: a cosmetic degradation. */
     for (size_t i = 0; commands[i] != NULL; i++) {
         const args_command_t *c = commands[i];
-        if (!command_has_completions(c)) continue;
+        if (c->hidden) continue;
 
-        char cond[128];
-        snprintf(cond, sizeof(cond), "__%s_using_command %s", prog, c->name);
+        char *block = NULL;
+        size_t block_len = 0;
+        FILE *mem = open_memstream(&block, &block_len);
+        if (mem == NULL) {
+            fprintf(out, "# %s\n", c->name);
+            emit_command(out, prog, c);
+            fputc('\n', out);
+            continue;
+        }
 
-        fprintf(out, "# %s\n", c->name);
-        emit_command(out, prog, c, cond);
-        fputc('\n', out);
+        emit_command(mem, prog, c);
+        fclose(mem);
+        if (block_len > 0) {
+            fprintf(out, "# %s\n", c->name);
+            fwrite(block, 1, block_len, out);
+            fputc('\n', out);
+        }
+        free(block);
     }
 }
 

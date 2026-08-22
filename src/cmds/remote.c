@@ -13,6 +13,7 @@
 #include "base/args.h"
 #include "base/error.h"
 #include "base/output.h"
+#include "cmds/completion.h"
 
 /**
  * Validate remote name
@@ -619,6 +620,40 @@ static error_t *remote_post_parse(
     );
 }
 
+/**
+ * What can stand at the cursor, by the router remote_post_parse reads: the
+ * subcommand first — or a remote's name, the bareword shorthand for `show`
+ * — then a remote for the subcommands that act on one; a URL or a new name
+ * is typed.
+ */
+static unsigned remote_complete(
+    const void *ctx_v, const void *opts_v, const args_completion_t *at, FILE *out
+) {
+    (void) at;
+    const dotta_ctx_t *ctx = ctx_v;
+    const cmd_remote_options_t *o = opts_v;
+
+    if (o->positional_count == 0) {
+        fputs("list\tList remotes\n", out);
+        fputs("add\tAdd remote\n", out);
+        fputs("remove\tRemove remote\n", out);
+        fputs("set-url\tSet remote URL\n", out);
+        fputs("rename\tRename remote\n", out);
+        fputs("show\tShow remote\n", out);
+        completion_remotes(ctx, out);
+        return 0;
+    }
+    if (o->positional_count == 1) {
+        const char *sub = o->positional_args[0];
+        if (strcmp(sub, "remove") == 0 || strcmp(sub, "rm") == 0 ||
+            strcmp(sub, "set-url") == 0 || strcmp(sub, "rename") == 0 ||
+            strcmp(sub, "show") == 0) {
+            completion_remotes(ctx, out);
+        }
+    }
+    return 0;
+}
+
 static error_t *remote_dispatch(const void *ctx_v, void *opts_v) {
     const dotta_ctx_t *ctx = ctx_v;
     return cmd_remote(ctx, (const cmd_remote_options_t *) opts_v);
@@ -659,6 +694,7 @@ const args_command_t spec_remote = {
     .opts_size   = sizeof(cmd_remote_options_t),
     .opts        = remote_opts,
     .post_parse  = remote_post_parse,
+    .complete    = remote_complete,
     .payload     = &dotta_ext_repo_only,
     .dispatch    = remote_dispatch,
 };

@@ -246,6 +246,21 @@ cleanup:
  * Spec-engine integration
  * ══════════════════════════════════════════════════════════════════ */
 
+/**
+ * What can stand at the cursor: the repository location, a directory, until
+ * one is given.
+ */
+static unsigned init_complete(
+    const void *ctx, const void *opts_v, const args_completion_t *at, FILE *out
+) {
+    (void) ctx;
+    (void) at;
+    (void) out;
+    const cmd_init_options_t *o = opts_v;
+
+    return o->repo_path == NULL ? ARGS_WANT_DIRS : 0;
+}
+
 static error_t *init_dispatch(const void *ctx_v, void *opts_v) {
     const dotta_ctx_t *ctx = ctx_v;
     return cmd_init(ctx, (const cmd_init_options_t *) opts_v);
@@ -284,6 +299,7 @@ const args_command_t spec_init = {
         "  %s apply                   # Deploy enabled profiles\n",
     .opts_size   = sizeof(cmd_init_options_t),
     .opts        = init_opts,
+    .complete    = init_complete,
     .payload     = &dotta_ext_none,
     .dispatch    = init_dispatch,
 };

@@ -41,6 +41,7 @@
 #include "base/output.h"
 #include "base/refspec.h"
 #include "base/string.h"
+#include "cmds/completion.h"
 #include "core/metadata.h"
 #include "infra/content.h"
 #include "infra/mount.h"
@@ -1099,7 +1100,8 @@ cleanup:
  *   <profile> <path> <commit>          three positionals
  *
  * Allocation model mirrors show: refspec strings live in `arena`, pure positionals
- * borrow argv.
+ * borrow argv. The destination is settled last: every shape must have named
+ * one, and '-' can only stream a single file.
  */
 static error_t *export_post_parse(
     void *opts_v, arena_t *arena, const args_command_t *cmd
@@ -1140,16 +1142,13 @@ static error_t *export_post_parse(
             /* <profile> — whole profile at HEAD */
             o->profile = first;
         }
-        return NULL;
-    }
-
-    /* Colon-packed refspec first: ':' is never legal in a branch name, so the
-     * token is self-contained and the next positional is the destination (cp-style;
-     * '-o' stays valid as the explicit form). Only the colon form earns this —
-     * every other shape would need a heuristic on the destination token to
-     * distinguish it from a path or commit, and heuristics on user paths are
-     * how silent misroutes happen. */
-    if (strchr(args[0], ':') != NULL) {
+    } else if (strchr(args[0], ':') != NULL) {
+        /* Colon-packed refspec first: ':' is never legal in a branch name, so
+         * the token is self-contained and the next positional is the
+         * destination (cp-style; '-o' stays valid as the explicit form). Only
+         * the colon form earns this — every other shape would need a heuristic
+         * on the destination token to distinguish it from a path or commit,
+         * and heuristics on user paths are how silent misroutes happen. */
         refspec_t rs = { 0 };
         error_t *err = parse_refspec(arena, args[0], &rs);
         if (err != NULL) {
@@ -1180,43 +1179,30 @@ static error_t *export_post_parse(
             );
         }
         o->output = args[1];
-        return NULL;
-    }
+    } else if (o->positional_count == 2) {
+        o->profile = args[0];
 
-    o->profile = args[0];
-
-    if (o->positional_count == 2) {
         /* A bare ref selects a whole-profile historical export; anything
          * path-shaped goes through refspec parsing. */
         if (str_looks_like_git_ref(args[1]) && !strchr(args[1], '/') &&
             !strchr(args[1], '.')) {
             o->commit = args[1];
-            return NULL;
+        } else {
+            refspec_t rs = { 0 };
+            error_t *err = parse_refspec(arena, args[1], &rs);
+            if (err != NULL) {
+                return error_wrap(err, "Failed to parse file specification");
+            }
+            if (rs.profile != NULL) o->profile = rs.profile;
+            o->file_path = rs.file;
+            o->commit = rs.commit;
         }
-
-        refspec_t rs = { 0 };
-        error_t *err = parse_refspec(arena, args[1], &rs);
-        if (err != NULL) {
-            return error_wrap(err, "Failed to parse file specification");
-        }
-        if (rs.profile != NULL) o->profile = rs.profile;
-        o->file_path = rs.file;
-        o->commit = rs.commit;
-        return NULL;
+    } else {
+        /* count == 3 (engine-enforced max): <profile> <path> <commit> */
+        o->profile = args[0];
+        o->file_path = args[1];
+        o->commit = args[2];
     }
-
-    /* count == 3 (engine-enforced max): <profile> <path> <commit> */
-    o->file_path = args[1];
-    o->commit = args[2];
-    return NULL;
-}
-
-/**
- * Cross-field invariants the parser cannot express.
- */
-static error_t *export_validate(void *opts_v, const args_command_t *cmd) {
-    (void) cmd;
-    const cmd_export_options_t *o = opts_v;
 
     if (o->output == NULL || o->output[0] == '\0') {
         return ERROR(
@@ -1233,6 +1219,46 @@ static error_t *export_validate(void *opts_v, const args_command_t *cmd) {
         );
     }
     return NULL;
+}
+
+/**
+ * What can stand at the cursor, by the shapes export_post_parse reads: a
+ * local profile or a refspec first. After `profile:path` the destination, a
+ * filesystem path; after a bare profile a file of its branch or a commit;
+ * then the commit. An `@` in the token being typed completes its commit
+ * part from the profile's history; -o takes a path.
+ */
+static unsigned export_complete(
+    const void *ctx_v, const void *opts_v, const args_completion_t *at, FILE *out
+) {
+    const dotta_ctx_t *ctx = ctx_v;
+    const cmd_export_options_t *o = opts_v;
+
+    if (ARGS_VALUE_IS(at, cmd_export_options_t, output)) {
+        return ARGS_WANT_FILES;
+    }
+    if (completion_commits_at(ctx, out, at->current, NULL)) {
+        return 0;
+    }
+
+    if (o->positional_count == 0) {
+        completion_profiles(ctx, out, COMPLETION_LOCAL);
+        completion_refspecs(ctx, out, NULL);
+        return 0;
+    }
+    if (strchr(o->positional_args[0], ':') != NULL) {
+        /* Colon-packed: the destination follows, nothing after it. */
+        return o->positional_count == 1 ? ARGS_WANT_FILES : 0;
+    }
+
+    const char *profile = completion_profile_of(ctx, o->positional_args[0]);
+    if (o->positional_count == 1) {
+        completion_refspecs(ctx, out, profile);
+        completion_history(ctx, out, profile);
+    } else if (o->positional_count == 2) {
+        completion_history(ctx, out, profile);
+    }
+    return 0;
 }
 
 static error_t *export_dispatch(const void *ctx_v, void *opts_v) {
@@ -1314,7 +1340,7 @@ const args_command_t spec_export = {
     .opts_size   = sizeof(cmd_export_options_t),
     .opts        = export_opts,
     .post_parse  = export_post_parse,
-    .validate    = export_validate,
+    .complete    = export_complete,
     .payload     = &dotta_ext_read_crypto,
     .dispatch    = export_dispatch,
 };

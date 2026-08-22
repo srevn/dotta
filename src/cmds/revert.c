@@ -19,6 +19,7 @@
 #include "base/output.h"
 #include "base/refspec.h"
 #include "base/string.h"
+#include "cmds/completion.h"
 #include "core/manifest.h"
 #include "core/metadata.h"
 #include "core/profiles.h"
@@ -1145,6 +1146,49 @@ static error_t *revert_post_parse(
     return NULL;
 }
 
+/**
+ * What can stand at the cursor, by the shapes revert_post_parse reads — as
+ * show, without the bare-commit form: first a file of any branch as
+ * `profile:path`, bare once -p pins one; after one positional the files of
+ * the profile it pins or that profile's history, the grammar deciding by
+ * the next token; after two, the commit. An `@` in the token being typed
+ * completes its commit part from the refspec's history.
+ */
+static unsigned revert_complete(
+    const void *ctx_v, const void *opts_v, const args_completion_t *at, FILE *out
+) {
+    const dotta_ctx_t *ctx = ctx_v;
+    const cmd_revert_options_t *o = opts_v;
+
+    if (ARGS_VALUE_IS(at, cmd_revert_options_t, profile)) {
+        completion_profiles(ctx, out, COMPLETION_LOCAL);
+        return 0;
+    }
+    if (at->value_of != NULL) {
+        return 0;   /* -m: free text */
+    }
+    if (completion_commits_at(ctx, out, at->current, o->profile)) {
+        return 0;
+    }
+
+    const char *pinned = o->profile;
+    if (pinned == NULL && o->positional_count >= 1) {
+        pinned = completion_profile_of(ctx, o->positional_args[0]);
+    }
+
+    if (o->positional_count == 0) {
+        completion_refspecs(ctx, out, pinned);
+    } else if (o->positional_count == 1) {
+        if (o->profile == NULL) {
+            completion_refspecs(ctx, out, pinned);
+        }
+        completion_history(ctx, out, pinned);
+    } else if (o->positional_count == 2) {
+        completion_history(ctx, out, pinned);
+    }
+    return 0;
+}
+
 static error_t *revert_dispatch(const void *ctx_v, void *opts_v) {
     const dotta_ctx_t *ctx = ctx_v;
     return cmd_revert(ctx, (const cmd_revert_options_t *) opts_v);
@@ -1217,6 +1261,7 @@ const args_command_t spec_revert = {
     .opts_size   = sizeof(cmd_revert_options_t),
     .opts        = revert_opts,
     .post_parse  = revert_post_parse,
+    .complete    = revert_complete,
     .payload     = &dotta_ext_read_crypto,
     .dispatch    = revert_dispatch,
 };

@@ -313,25 +313,24 @@ uninstall:
 	@echo "  Removed: $(BINDIR)/dotta"
 	@rm -rf $(DATADIR)
 	@echo "  Removed: $(DATADIR)"
-	@rm -f $(FISHDIR)/dotta.fish \
-	       $(FISHDIR)/dotta-completions.fish
-	@echo "  Removed: $(FISHDIR)/dotta*.fish"
+	@rm -f $(FISHDIR)/dotta.fish
+	@echo "  Removed: $(FISHDIR)/dotta.fish"
 	@echo ""
 	@echo "Note: User configurations in ~/.config/dotta were not removed"
 	@echo "To remove user configs: rm -rf ~/.config/dotta"
 
-# Fish completion paths
-COMPLETIONS_ENTRY := $(ETC_DIR)/completions/dotta.fish
-COMPLETIONS_GEN := $(BUILD_DIR)/completions/dotta-completions.fish
+# Fish completions: the whole script is generated from the binary's command
+# registry (flag and subcommand rules, condition helpers, the wrapper that
+# asks `dotta __complete candidates` at runtime). Nothing is hand-maintained.
+COMPLETIONS_GEN := $(BUILD_DIR)/completions/dotta.fish
 
-# Generate the fish schema from the current binary
 $(COMPLETIONS_GEN): $(TARGET) | $(BUILD_DIR)/completions
 	@echo "Generating shell completions..."
 	@echo ""
 	@$(TARGET) __complete spec fish > $@.tmp
 	@mv $@.tmp $@
 
-# Convenience alias for the generated schema
+# Convenience alias for the generated script
 .PHONY: completions
 completions: $(COMPLETIONS_GEN)
 
@@ -341,10 +340,8 @@ install-completions: $(COMPLETIONS_GEN)
 	@echo "Installing shell completions..."
 	@if [ -d "$(FISHDIR)" ] || [ ! -e "$(FISHDIR)" ]; then \
 		install -d "$(FISHDIR)" && \
-		install -m 644 $(COMPLETIONS_ENTRY) "$(FISHDIR)/dotta.fish" && \
-		install -m 644 $(COMPLETIONS_GEN)   "$(FISHDIR)/dotta-completions.fish" && \
-		echo "  Installed: $(FISHDIR)/dotta.fish" && \
-		echo "  Installed: $(FISHDIR)/dotta-completions.fish"; \
+		install -m 644 $(COMPLETIONS_GEN) "$(FISHDIR)/dotta.fish" && \
+		echo "  Installed: $(FISHDIR)/dotta.fish"; \
 	else \
 		echo "  Skipped fish completions ($(FISHDIR) exists but is not a directory)"; \
 	fi
@@ -353,10 +350,8 @@ install-completions: $(COMPLETIONS_GEN)
 .PHONY: uninstall-completions
 uninstall-completions:
 	@echo "Removing shell completions..."
-	@rm -f "$(FISHDIR)/dotta.fish" \
-	       "$(FISHDIR)/dotta-completions.fish"
+	@rm -f "$(FISHDIR)/dotta.fish"
 	@echo "  Removed: $(FISHDIR)/dotta.fish"
-	@echo "  Removed: $(FISHDIR)/dotta-completions.fish"
 
 # Install all (binary + completions)
 .PHONY: install-all
@@ -472,7 +467,7 @@ help:
 	@echo "  test-cli              - Run CLI suites (SUITE=\"ghosts export\" to filter, JOBS=1 for start order)"
 	@echo "  test-all              - Run unit tests and CLI suites"
 	@echo "  clean                 - Remove build artifacts"
-	@echo "  completions           - Regenerate dotta-completions.fish from current binary"
+	@echo "  completions           - Generate the fish completion script from the binary"
 	@echo "  install               - Install binary, configs, and hooks to $(PREFIX)"
 	@echo "  install-completions   - Install fish shell completions"
 	@echo "  install-all           - Install binary, configs, hooks, and completions"

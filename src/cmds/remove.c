@@ -18,6 +18,7 @@
 #include "base/hashmap.h"
 #include "base/output.h"
 #include "base/string.h"
+#include "cmds/completion.h"
 #include "core/manifest.h"
 #include "core/metadata.h"
 #include "core/profiles.h"
@@ -1738,6 +1739,40 @@ static error_t *remove_post_parse(
     return NULL;
 }
 
+/**
+ * What can stand at the cursor, read off the buckets remove_post_parse
+ * routes: a local profile in the profile slot — the first positional, unless
+ * -p took it — then the files of that profile's branch, shadowed and
+ * disabled ones included; nothing after --delete-profile, which takes no
+ * path.
+ */
+static unsigned remove_complete(
+    const void *ctx_v, const void *opts_v, const args_completion_t *at, FILE *out
+) {
+    const dotta_ctx_t *ctx = ctx_v;
+    const cmd_remove_options_t *o = opts_v;
+
+    if (ARGS_VALUE_IS(at, cmd_remove_options_t, profile)) {
+        completion_profiles(ctx, out, COMPLETION_LOCAL);
+        return 0;
+    }
+    if (at->value_of != NULL) {
+        return 0;   /* -m: free text */
+    }
+
+    if (o->profile == NULL && o->positional_count == 0) {
+        completion_profiles(ctx, out, COMPLETION_LOCAL);
+        return 0;
+    }
+    if (o->delete_profile) {
+        return 0;
+    }
+    completion_refspecs(
+        ctx, out, o->profile ? o->profile : o->positional_args[0]
+    );
+    return 0;
+}
+
 static error_t *remove_dispatch(const void *ctx_v, void *opts_v) {
     const dotta_ctx_t *ctx = ctx_v;
     return cmd_remove(ctx, (const cmd_remove_options_t *) opts_v);
@@ -1830,6 +1865,7 @@ const args_command_t spec_remove = {
     .opts_size   = sizeof(cmd_remove_options_t),
     .opts        = remove_opts,
     .post_parse  = remove_post_parse,
+    .complete    = remove_complete,
     .payload     = &dotta_ext_read_manifest,
     .dispatch    = remove_dispatch,
 };

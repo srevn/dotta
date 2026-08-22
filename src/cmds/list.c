@@ -20,6 +20,7 @@
 #include "base/output.h"
 #include "base/string.h"
 #include "base/timeutil.h"
+#include "cmds/completion.h"
 #include "core/manifest.h"
 #include "core/metadata.h"
 #include "core/profiles.h"
@@ -803,6 +804,40 @@ static error_t *list_post_parse(
     return ERROR(ERR_INTERNAL, "list: too many positionals");
 }
 
+/**
+ * What can stand at the cursor, by the rule list_post_parse routes with:
+ * under -p, a file of that profile's branch as the one positional; without,
+ * a local profile or a file of the view first, then — under a profile — a
+ * file of its branch, shadowed ones included. A path in the first slot was
+ * the file: nothing follows it.
+ */
+static unsigned list_complete(
+    const void *ctx_v, const void *opts_v, const args_completion_t *at, FILE *out
+) {
+    const dotta_ctx_t *ctx = ctx_v;
+    const cmd_list_options_t *o = opts_v;
+
+    if (ARGS_VALUE_IS(at, cmd_list_options_t, profile)) {
+        completion_profiles(ctx, out, COMPLETION_LOCAL);
+        return 0;
+    }
+
+    if (o->profile != NULL) {
+        if (o->positional_count == 0) {
+            completion_refspecs(ctx, out, o->profile);
+        }
+        return 0;
+    }
+    if (o->positional_count == 0) {
+        completion_profiles(ctx, out, COMPLETION_LOCAL);
+        completion_files(ctx, out, NULL, 0);
+    } else if (o->positional_count == 1 &&
+        !str_looks_like_file_path(o->positional_args[0])) {
+        completion_refspecs(ctx, out, o->positional_args[0]);
+    }
+    return 0;
+}
+
 static error_t *list_dispatch(const void *ctx_v, void *opts_v) {
     const dotta_ctx_t *ctx = ctx_v;
     return cmd_list(ctx, (const cmd_list_options_t *) opts_v);
@@ -874,6 +909,7 @@ const args_command_t spec_list = {
     .opts_size   = sizeof(cmd_list_options_t),
     .opts        = list_opts,
     .post_parse  = list_post_parse,
+    .complete    = list_complete,
     .payload     = &dotta_ext_read,
     .dispatch    = list_dispatch,
 };

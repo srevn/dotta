@@ -58,8 +58,9 @@
  *
  *   - args_resolve_root / args_render_root_usage — direct calls from main,
  *     resolving argv[1] and rendering top-level help;
- *   - the fish completion exporter in cmds/completion.c — reaches the array through
- *     dotta_registry() so the cmds layer never names the registry symbol.
+ *   - cmds/completion.c — the fish completion exporter and the candidates
+ *     driver reach the array through dotta_registry() so the cmds layer never
+ *     names the registry symbol.
  *
  * Ordered for root-help readability: setup → file ops → deploy/undo → inspect →
  * remote → profile/remote mgmt → config → passthrough → special. Every projection

@@ -24,8 +24,9 @@
  *                             point `payload` at the constant matching their
  *                             need;
  *   - `dotta_registry()`    — typed accessor for the root registry,
- *                             consumed by `cmds/completion.c` when exporting
- *                             the fish completion script.
+ *                             consumed by `cmds/completion.c` to export the
+ *                             fish completion script and to answer the
+ *                             shell's candidates at runtime.
  */
 
 #ifndef DOTTA_RUNTIME_H
@@ -333,10 +334,10 @@ extern const dotta_spec_ext_t dotta_ext_write_crypto_manifest;  /* REQUIRED,    
  * Accessor for the root command registry.
  *
  * Returns the NULL-terminated `args_command_t *const []` defined as `static`
- * data in main.c. The pointer is borrowed; never freed by the caller. Only consumer
- * today is `cmds/completion.c`, which projects the registry into the
- * fish-completion dialect when the build emits
- * `etc/completions/dotta-completions.fish`.
+ * data in main.c. The pointer is borrowed; never freed by the caller. Only
+ * consumer today is `cmds/completion.c`: it projects the registry into the
+ * fish-completion script (`make completions`) and resolves the shell's command
+ * line against it when asked for candidates.
  *
  * The accessor exists so the cmds/ layer can read the registry without
  * compile-depending on the registry symbol itself — the storage stays file-local

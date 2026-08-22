@@ -18,6 +18,7 @@
 #include "base/gitignore.h"
 #include "base/output.h"
 #include "base/string.h"
+#include "cmds/completion.h"
 #include "core/ignore.h"
 #include "core/profiles.h"
 #include "sys/editor.h"
@@ -1141,6 +1142,33 @@ static error_t *ignore_post_parse(
     return NULL;
 }
 
+/**
+ * What can stand at the cursor: a local profile, by -p or as the one
+ * positional; for --test, a filesystem path. Patterns are typed.
+ */
+static unsigned ignore_complete(
+    const void *ctx_v, const void *opts_v, const args_completion_t *at, FILE *out
+) {
+    const dotta_ctx_t *ctx = ctx_v;
+    const cmd_ignore_options_t *o = opts_v;
+
+    if (ARGS_VALUE_IS(at, cmd_ignore_options_t, profile)) {
+        completion_profiles(ctx, out, COMPLETION_LOCAL);
+        return 0;
+    }
+    if (ARGS_VALUE_IS(at, cmd_ignore_options_t, test_path)) {
+        return ARGS_WANT_FILES;
+    }
+    if (at->value_of != NULL) {
+        return 0;   /* --add, --remove: a pattern */
+    }
+
+    if (o->profile == NULL && o->positional_count == 0) {
+        completion_profiles(ctx, out, COMPLETION_LOCAL);
+    }
+    return 0;
+}
+
 static error_t *ignore_dispatch(const void *ctx_v, void *opts_v) {
     const dotta_ctx_t *ctx = ctx_v;
     return cmd_ignore(ctx, (const cmd_ignore_options_t *) opts_v);
@@ -1222,6 +1250,7 @@ const args_command_t spec_ignore = {
     .opts_size   = sizeof(cmd_ignore_options_t),
     .opts        = ignore_opts,
     .post_parse  = ignore_post_parse,
+    .complete    = ignore_complete,
     .payload     = &dotta_ext_read,
     .dispatch    = ignore_dispatch,
 };

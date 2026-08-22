@@ -19,6 +19,7 @@
 #include "base/refspec.h"
 #include "base/string.h"
 #include "base/timeutil.h"
+#include "cmds/completion.h"
 #include "core/manifest.h"
 #include "core/metadata.h"
 #include "core/profiles.h"
@@ -825,6 +826,48 @@ static error_t *show_post_parse(
     return ERROR(ERR_INTERNAL, "show: too many positionals");
 }
 
+/**
+ * What can stand at the cursor, by the shapes show_post_parse reads. First:
+ * a file of any branch as `profile:path` — bare once -p pins one — or a
+ * commit. After one positional, the grammar decides by the next token
+ * whether it was a profile (`<profile> <file>`) or a file (`<file>
+ * <commit>`), so both are offered — the files of the profile it pins, and
+ * that profile's history. After two: the commit. An `@` in the token being
+ * typed completes its commit part from the refspec's history.
+ */
+static unsigned show_complete(
+    const void *ctx_v, const void *opts_v, const args_completion_t *at, FILE *out
+) {
+    const dotta_ctx_t *ctx = ctx_v;
+    const cmd_show_options_t *o = opts_v;
+
+    if (ARGS_VALUE_IS(at, cmd_show_options_t, profile)) {
+        completion_profiles(ctx, out, COMPLETION_LOCAL);
+        return 0;
+    }
+    if (completion_commits_at(ctx, out, at->current, o->profile)) {
+        return 0;
+    }
+
+    const char *pinned = o->profile;
+    if (pinned == NULL && o->positional_count >= 1) {
+        pinned = completion_profile_of(ctx, o->positional_args[0]);
+    }
+
+    if (o->positional_count == 0) {
+        completion_refspecs(ctx, out, pinned);
+        completion_history(ctx, out, pinned);
+    } else if (o->positional_count == 1) {
+        if (o->profile == NULL) {
+            completion_refspecs(ctx, out, pinned);
+        }
+        completion_history(ctx, out, pinned);
+    } else if (o->positional_count == 2) {
+        completion_history(ctx, out, pinned);
+    }
+    return 0;
+}
+
 static error_t *show_dispatch(const void *ctx_v, void *opts_v) {
     const dotta_ctx_t *ctx = ctx_v;
     return cmd_show(ctx, (const cmd_show_options_t *) opts_v);
@@ -890,6 +933,7 @@ const args_command_t spec_show = {
     .opts_size   = sizeof(cmd_show_options_t),
     .opts        = show_opts,
     .post_parse  = show_post_parse,
+    .complete    = show_complete,
     .payload     = &dotta_ext_read_crypto,
     .dispatch    = show_dispatch,
 };

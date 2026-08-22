@@ -17,6 +17,7 @@
 #include "base/error.h"
 #include "base/hashmap.h"
 #include "base/output.h"
+#include "cmds/completion.h"
 #include "core/manifest.h"
 #include "core/profiles.h"
 #include "core/state.h"
@@ -1912,6 +1913,17 @@ static void profile_fetch_defaults(void *o) {
     ((cmd_profile_options_t *) o)->subcommand = PROFILE_FETCH;
 }
 
+/* What can stand at the cursor: a profile to download — a remote-tracking
+ * branch not yet local, or a local one to refresh. */
+static unsigned profile_fetch_complete(
+    const void *ctx_v, const void *opts_v, const args_completion_t *at, FILE *out
+) {
+    (void) opts_v;
+    (void) at;
+    completion_profiles(ctx_v, out, COMPLETION_ALL);
+    return 0;
+}
+
 static const args_opt_t profile_fetch_opts[] = {
     ARGS_GROUP("Options:"),
     ARGS_FLAG(
@@ -1936,6 +1948,7 @@ static const args_command_t spec_profile_fetch = {
     .opts_size     = sizeof(cmd_profile_options_t),
     .opts          = profile_fetch_opts,
     .init_defaults = profile_fetch_defaults,
+    .complete      = profile_fetch_complete,
     .payload       = &dotta_ext_repo_only,
     .dispatch      = profile_dispatch,
 };
@@ -1944,6 +1957,19 @@ static const args_command_t spec_profile_fetch = {
 
 static void profile_enable_defaults(void *o) {
     ((cmd_profile_options_t *) o)->subcommand = PROFILE_ENABLE;
+}
+
+/* What can stand at the cursor: a local profile, marked when already
+ * enabled; for --target, a directory. */
+static unsigned profile_enable_complete(
+    const void *ctx_v, const void *opts_v, const args_completion_t *at, FILE *out
+) {
+    (void) opts_v;
+    if (ARGS_VALUE_IS(at, cmd_profile_options_t, target)) {
+        return ARGS_WANT_DIRS;
+    }
+    completion_profiles(ctx_v, out, COMPLETION_LOCAL);
+    return 0;
 }
 
 static const args_opt_t profile_enable_opts[] = {
@@ -1992,6 +2018,7 @@ static const args_command_t spec_profile_enable = {
     .opts_size     = sizeof(cmd_profile_options_t),
     .opts          = profile_enable_opts,
     .init_defaults = profile_enable_defaults,
+    .complete      = profile_enable_complete,
     .payload       = &dotta_ext_write_manifest,
     .dispatch      = profile_dispatch,
 };
@@ -2000,6 +2027,16 @@ static const args_command_t spec_profile_enable = {
 
 static void profile_disable_defaults(void *o) {
     ((cmd_profile_options_t *) o)->subcommand = PROFILE_DISABLE;
+}
+
+/* What can stand at the cursor: an enabled profile. */
+static unsigned profile_disable_complete(
+    const void *ctx_v, const void *opts_v, const args_completion_t *at, FILE *out
+) {
+    (void) opts_v;
+    (void) at;
+    completion_profiles(ctx_v, out, COMPLETION_ENABLED);
+    return 0;
 }
 
 static const args_opt_t profile_disable_opts[] = {
@@ -2037,6 +2074,7 @@ static const args_command_t spec_profile_disable = {
     .opts_size     = sizeof(cmd_profile_options_t),
     .opts          = profile_disable_opts,
     .init_defaults = profile_disable_defaults,
+    .complete      = profile_disable_complete,
     .payload       = &dotta_ext_write,
     .dispatch      = profile_dispatch,
 };
@@ -2045,6 +2083,17 @@ static const args_command_t spec_profile_disable = {
 
 static void profile_reorder_defaults(void *o) {
     ((cmd_profile_options_t *) o)->subcommand = PROFILE_REORDER;
+}
+
+/* What can stand at the cursor: an enabled profile, every one in the new
+ * order. */
+static unsigned profile_reorder_complete(
+    const void *ctx_v, const void *opts_v, const args_completion_t *at, FILE *out
+) {
+    (void) opts_v;
+    (void) at;
+    completion_profiles(ctx_v, out, COMPLETION_ENABLED);
+    return 0;
 }
 
 static const args_opt_t profile_reorder_opts[] = {
@@ -2075,6 +2124,7 @@ static const args_command_t spec_profile_reorder = {
     .opts_size     = sizeof(cmd_profile_options_t),
     .opts          = profile_reorder_opts,
     .init_defaults = profile_reorder_defaults,
+    .complete      = profile_reorder_complete,
     .payload       = &dotta_ext_write,
     .dispatch      = profile_dispatch,
 };

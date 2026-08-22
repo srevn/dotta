@@ -891,6 +891,9 @@ cleanup:
  * local path. Ordering matters (URL must precede path), so the engine's classifier
  * (position-agnostic by design) isn't expressive enough; a raw bucket plus this
  * post_parse hook keeps the logic local and linear.
+ *
+ * Mutual exclusion: `--all` and `-p/--profile` cannot both constrain the fetch
+ * set. Everything else has already been validated by the engine's per-row rules.
  */
 static error_t *clone_post_parse(
     void *opts_v, arena_t *arena, const args_command_t *cmd
@@ -904,19 +907,7 @@ static error_t *clone_post_parse(
     if (o->positional_count >= 2) {
         o->path = o->positional_args[1];
     }
-    return NULL;
-}
 
-/**
- * Mutual-exclusion check: `--all` and `-p/--profile(s)` cannot both constrain
- * the fetch set. Everything else has already been validated by the engine's per-row
- * rules.
- */
-static error_t *clone_validate(
-    void *opts_v, const args_command_t *cmd
-) {
-    (void) cmd;
-    const cmd_clone_options_t *o = opts_v;
     if (o->fetch_all && o->profile_count > 0) {
         return ERROR(
             ERR_INVALID_ARG,
@@ -926,6 +917,22 @@ static error_t *clone_validate(
     return NULL;
 }
 
+/**
+ * What can stand at the cursor: the local path, a directory, once the URL is
+ * given. A `-p` value names a profile on a remote not yet cloned — nothing
+ * to offer.
+ */
+static unsigned clone_complete(
+    const void *ctx, const void *opts_v, const args_completion_t *at, FILE *out
+) {
+    (void) ctx;
+    (void) out;
+    const cmd_clone_options_t *o = opts_v;
+
+    if (at->value_of != NULL) return 0;
+    return o->positional_count == 1 ? ARGS_WANT_DIRS : 0;
+}
+
 static error_t *clone_dispatch(const void *ctx_v, void *opts_v) {
     const dotta_ctx_t *ctx = ctx_v;
     return cmd_clone(ctx, (const cmd_clone_options_t *) opts_v);
@@ -933,11 +940,7 @@ static error_t *clone_dispatch(const void *ctx_v, void *opts_v) {
 
 static const args_opt_t clone_opts[] = {
     ARGS_GROUP("Options:"),
-    /* Three aliases — `-p`, `--profile`, `--profiles` — preserving the flag names
-     * the legacy parser accepted. Arity differs: ARGS_APPEND binds one value
-     * per occurrence, whereas the legacy parser consumed every bare token until
-     * the next flag. Users must write `-p a -p b` (not `-p a b`). Peer-list order
-     * is the help display order: "-p, --profile, --profiles". */
+    /* ARGS_APPEND binds one value per occurrence: `-p a -p b`, never `-p a b`. */
     ARGS_APPEND(
         "p profile",          "<name>",
         cmd_clone_options_t,  profiles,        profile_count,
@@ -1008,7 +1011,7 @@ const args_command_t spec_clone = {
     .opts_size   = sizeof(cmd_clone_options_t),
     .opts        = clone_opts,
     .post_parse  = clone_post_parse,
-    .validate    = clone_validate,
+    .complete    = clone_complete,
     .payload     = &dotta_ext_none,
     .dispatch    = clone_dispatch,
 };

@@ -16,6 +16,7 @@
 #include "base/error.h"
 #include "base/output.h"
 #include "base/string.h"
+#include "cmds/completion.h"
 #include "core/cleanup.h"
 #include "core/deploy.h"
 #include "core/scope.h"
@@ -1912,6 +1913,31 @@ static args_class_t apply_classify(const char *tok) {
                                          : APPLY_CLASS_PROFILE;
 }
 
+/**
+ * What can stand at the cursor: an enabled profile or a file of the view, in
+ * any order, as apply_classify routes them — the view narrowed to what the
+ * profiles named so far win, by -p or bare, which is the filter the run will
+ * apply — or a filesystem path.
+ */
+static unsigned apply_complete(
+    const void *ctx_v, const void *opts_v, const args_completion_t *at, FILE *out
+) {
+    const dotta_ctx_t *ctx = ctx_v;
+    const cmd_apply_options_t *o = opts_v;
+
+    if (ARGS_VALUE_IS(at, cmd_apply_options_t, profiles)) {
+        completion_profiles(ctx, out, COMPLETION_ENABLED);
+        return 0;
+    }
+    if (at->value_of != NULL) {
+        return 0;   /* -e: a pattern */
+    }
+
+    completion_profiles(ctx, out, COMPLETION_ENABLED);
+    completion_files(ctx, out, o->profiles, o->profile_count);
+    return ARGS_WANT_FILES;
+}
+
 static error_t *apply_dispatch(const void *ctx_v, void *opts_v) {
     const dotta_ctx_t *ctx = ctx_v;
     return cmd_apply(ctx, (const cmd_apply_options_t *) opts_v);
@@ -2005,6 +2031,7 @@ const args_command_t spec_apply = {
     .opts_size   = sizeof(cmd_apply_options_t),
     .opts        = apply_opts,
     .classify    = apply_classify,
+    .complete    = apply_complete,
     .payload     = &dotta_ext_write_crypto_manifest,
     .dispatch    = apply_dispatch,
 };

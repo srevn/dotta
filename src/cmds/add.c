@@ -21,6 +21,7 @@
 #include "base/hashmap.h"
 #include "base/output.h"
 #include "base/string.h"
+#include "cmds/completion.h"
 #include "core/ignore.h"
 #include "core/manifest.h"
 #include "core/metadata.h"
@@ -1678,8 +1679,8 @@ cleanup:
  *   1. -p/--profile was given: every positional is a file path.
  *   2. -p not given: first positional is the profile, rest are files.
  *
- * All validation lives here (not in a separate `validate` hook) so the error
- * message can reference the effective invariant rather than a raw count.
+ * The count check lives here, after the routing, so the error message can
+ * reference the effective invariant rather than a raw count.
  */
 static error_t *add_post_parse(
     void *opts_v, arena_t *arena, const args_command_t *cmd
@@ -1709,6 +1710,37 @@ static error_t *add_post_parse(
         );
     }
     return NULL;
+}
+
+/**
+ * What can stand at the cursor, read off the buckets add_post_parse routes:
+ * a local profile in the profile slot — the first positional, unless -p
+ * took it — then filesystem paths, listed under --target when one re-roots
+ * them. A new profile's name is typed, not offered.
+ */
+static unsigned add_complete(
+    const void *ctx_v, const void *opts_v, const args_completion_t *at, FILE *out
+) {
+    const dotta_ctx_t *ctx = ctx_v;
+    const cmd_add_options_t *o = opts_v;
+
+    if (ARGS_VALUE_IS(at, cmd_add_options_t, profile)) {
+        completion_profiles(ctx, out, COMPLETION_LOCAL);
+        return 0;
+    }
+    if (ARGS_VALUE_IS(at, cmd_add_options_t, target)) {
+        return ARGS_WANT_DIRS;
+    }
+    if (at->value_of != NULL) {
+        return 0;   /* -m, -e: free text */
+    }
+
+    if (o->profile == NULL && o->positional_count == 0) {
+        completion_profiles(ctx, out, COMPLETION_LOCAL);
+        return 0;
+    }
+    return completion_paths_under(out, o->target, at->current)
+        ? 0 : ARGS_WANT_FILES;
 }
 
 static error_t *add_dispatch(const void *ctx_v, void *opts_v) {
@@ -1800,6 +1832,7 @@ const args_command_t spec_add = {
     .opts_size   = sizeof(cmd_add_options_t),
     .opts        = add_opts,
     .post_parse  = add_post_parse,
+    .complete    = add_complete,
     .payload     = &dotta_ext_write_crypto,
     .dispatch    = add_dispatch,
 };

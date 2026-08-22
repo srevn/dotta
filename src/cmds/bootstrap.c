@@ -17,6 +17,7 @@
 #include "base/error.h"
 #include "base/output.h"
 #include "base/string.h"
+#include "cmds/completion.h"
 #include "core/profiles.h"
 #include "sys/bootstrap.h"
 #include "sys/editor.h"
@@ -526,6 +527,21 @@ cleanup:
  * Spec-engine integration
  * ══════════════════════════════════════════════════════════════════ */
 
+/**
+ * What can stand at the cursor: a local profile, by -p or bare — any
+ * profile's script, enabled or not.
+ */
+static unsigned bootstrap_complete(
+    const void *ctx_v, const void *opts_v, const args_completion_t *at, FILE *out
+) {
+    (void) opts_v;
+    (void) at;
+    const dotta_ctx_t *ctx = ctx_v;
+
+    completion_profiles(ctx, out, COMPLETION_LOCAL);
+    return 0;
+}
+
 static error_t *bootstrap_dispatch(const void *ctx_v, void *opts_v) {
     const dotta_ctx_t *ctx = ctx_v;
     return cmd_bootstrap(ctx, (const cmd_bootstrap_options_t *) opts_v);
@@ -612,6 +628,7 @@ const args_command_t spec_bootstrap = {
         "  %s apply                          # Deploy files after bootstrap\n",
     .opts_size   = sizeof(cmd_bootstrap_options_t),
     .opts        = bootstrap_opts,
+    .complete    = bootstrap_complete,
     .payload     = &dotta_ext_read,
     .dispatch    = bootstrap_dispatch,
 };

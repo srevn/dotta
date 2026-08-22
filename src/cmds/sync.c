@@ -17,6 +17,7 @@
 #include "base/error.h"
 #include "base/output.h"
 #include "base/string.h"
+#include "cmds/completion.h"
 #include "core/manifest.h"
 #include "core/scope.h"
 #include "core/state.h"
@@ -110,6 +111,24 @@ static void mark_result_failed(
 }
 
 /**
+ * The divergence strategies by the word `--diverged` and the config take —
+ * the one spelling the parser, the receipts and completion share.
+ */
+static const struct {
+    const char *name;
+    sync_strategy_t strategy;
+    const char *summary;
+} sync_strategies[] = {
+    { "warn",   DIVERGE_WARN,   "Report the divergence, resolve by hand" },
+    { "rebase", DIVERGE_REBASE, "Rebase local commits onto the remote"   },
+    { "merge",  DIVERGE_MERGE,  "Merge the remote into the local branch" },
+    { "ours",   DIVERGE_OURS,   "Keep local, force-push over the remote" },
+    { "theirs", DIVERGE_THEIRS, "Keep remote, reset the local branch"    },
+};
+
+#define SYNC_STRATEGY_COUNT (sizeof(sync_strategies) / sizeof(*sync_strategies))
+
+/**
  * Parse divergence strategy from string
  *
  * @param str Strategy string (NULL defaults to DIVERGE_WARN)
@@ -125,27 +144,12 @@ static bool parse_divergence_strategy(
         return true;
     }
 
-    if (strcmp(str, "warn") == 0) {
-        *out_strategy = DIVERGE_WARN;
-        return true;
+    for (size_t i = 0; i < SYNC_STRATEGY_COUNT; i++) {
+        if (strcmp(str, sync_strategies[i].name) == 0) {
+            *out_strategy = sync_strategies[i].strategy;
+            return true;
+        }
     }
-    if (strcmp(str, "rebase") == 0) {
-        *out_strategy = DIVERGE_REBASE;
-        return true;
-    }
-    if (strcmp(str, "merge") == 0) {
-        *out_strategy = DIVERGE_MERGE;
-        return true;
-    }
-    if (strcmp(str, "ours") == 0) {
-        *out_strategy = DIVERGE_OURS;
-        return true;
-    }
-    if (strcmp(str, "theirs") == 0) {
-        *out_strategy = DIVERGE_THEIRS;
-        return true;
-    }
-
     return false;
 }
 
@@ -1068,8 +1072,12 @@ static error_t *sync_push_phase(
                         "(%zu local, %zu remote commits)\n",
                         result->profile, result->ahead, result->behind
                     );
-                    const char *name = diverged_strategy == DIVERGE_REBASE ? "rebase" :
-                        diverged_strategy == DIVERGE_MERGE ? "merge" : "theirs";
+                    const char *name = "?";
+                    for (size_t s = 0; s < SYNC_STRATEGY_COUNT; s++) {
+                        if (sync_strategies[s].strategy == diverged_strategy) {
+                            name = sync_strategies[s].name;
+                        }
+                    }
 
                     output_hint(
                         out, OUTPUT_NORMAL,
@@ -2050,6 +2058,30 @@ cleanup:
  * Spec-engine integration
  * ══════════════════════════════════════════════════════════════════ */
 
+/**
+ * What can stand at the cursor: an enabled profile, by -p or bare; for
+ * --diverged, a strategy.
+ */
+static unsigned sync_complete(
+    const void *ctx_v, const void *opts_v, const args_completion_t *at, FILE *out
+) {
+    (void) opts_v;
+    const dotta_ctx_t *ctx = ctx_v;
+
+    if (ARGS_VALUE_IS(at, cmd_sync_options_t, diverged)) {
+        for (size_t i = 0; i < SYNC_STRATEGY_COUNT; i++) {
+            fprintf(
+                out, "%s\t%s\n",
+                sync_strategies[i].name, sync_strategies[i].summary
+            );
+        }
+        return 0;
+    }
+
+    completion_profiles(ctx, out, COMPLETION_ENABLED);
+    return 0;
+}
+
 static error_t *sync_dispatch(const void *ctx_v, void *opts_v) {
     const dotta_ctx_t *ctx = ctx_v;
     return cmd_sync(ctx, (const cmd_sync_options_t *) opts_v);
@@ -2128,6 +2160,7 @@ const args_command_t spec_sync = {
         "  %s status --remote # Inspect remote state before syncing\n",
     .opts_size   = sizeof(cmd_sync_options_t),
     .opts        = sync_opts,
+    .complete    = sync_complete,
     .payload     = &dotta_ext_read_crypto_manifest,
     .dispatch    = sync_dispatch,
 };

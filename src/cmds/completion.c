@@ -1,14 +1,17 @@
 /**
- * completion.c - Shell completion helper
+ * completion.c - Shell completion: the candidates and their sources
  *
- * Hidden subcommand providing completion data for shell scripts. All functions
- * follow the silent failure model - errors result in no output rather than error
- * messages to stderr.
- *
- * Each mode reads one authority: the enabled set (state), the view (every
+ * `dotta __complete candidates` answers the shell's question — what can stand
+ * at the cursor of a command line — through the spec engine: the line is
+ * consumed as the parser would consume it, and the command's `complete` hook
+ * prints what its grammar admits at that position. The sources the hooks draw
+ * on live here, one authority each: the enabled set (state), the view (every
  * enabled profile at HEAD, precedence resolved), or Git (a branch's tree or
- * history). The shell composes them per command; nothing here guesses which
- * one a command wants.
+ * history). The hooks compose them per command; nothing here guesses which one
+ * a command wants.
+ *
+ * Silent-failure model throughout: errors result in no output rather than
+ * messages to stderr, and outside a repository every source prints nothing.
  */
 
 #include "cmds/completion.h"
@@ -17,142 +20,123 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "base/arena.h"
 #include "base/args.h"
 #include "base/array.h"
 #include "base/error.h"
+#include "base/refspec.h"
+#include "base/string.h"
 #include "core/manifest.h"
 #include "core/profiles.h"
 #include "core/state.h"
 #include "infra/mount.h"
+#include "sys/filesystem.h"
 #include "sys/gitops.h"
 #include "sys/upstream.h"
 
-/* Constants */
+/* Emission limits */
 #define COMPLETE_COMMIT_SHORT_OID_LEN 8
-#define COMPLETE_COMMIT_DEFAULT_LIMIT 20
-#define COMPLETE_COMMIT_MAX_LIMIT 100
+#define COMPLETE_COMMIT_LIMIT 20
 #define COMPLETE_COMMIT_SUMMARY_MAX 60
 #define COMPLETE_REFSPEC_FILES_MAX 2000
 
 /**
- * Output profile names
- *
- * Three sets, selected by flag: with neither, the enabled set in precedence
- * order; `local` every local branch, the enabled ones marked; `remote` the
- * remote-tracking branches no local branch has been created from yet (what
- * `profile fetch` would download). The two flags compose; the sets are
- * disjoint by construction. Branch order is the ref iteration's; the shell
- * sorts its candidates.
- *
- * @param repo Repository (borrowed)
- * @param state Borrowed state handle
- * @param arena Borrowed scratch arena (the remote name is arena-owned)
- * @param local Include every local branch
- * @param remote Include remote-tracking branches without a local counterpart
+ * Profile names, by the set the slot admits
  */
-static void complete_profiles(
-    git_repository *repo,
-    const state_t *state,
-    arena_t *arena,
-    bool local,
-    bool remote
+void completion_profiles(
+    const dotta_ctx_t *ctx, FILE *out, completion_profiles_t set
 ) {
-    if (!local && !remote) {
+    git_repository *repo = ctx->repo;
+    if (repo == NULL) return;
+
+    if (set == COMPLETION_ENABLED) {
         const state_profile_entry_t *rows = NULL;
         size_t count = 0;
-        error_t *err = state_peek_profiles(state, &rows, &count);
+        error_t *err = state_peek_profiles(ctx->state, &rows, &count);
         if (err) {
             error_free(err);
             return;
         }
         for (size_t i = 0; i < count; i++) {
-            printf("%s\tEnabled profile\n", rows[i].name);
+            fprintf(out, "%s\tEnabled profile\n", rows[i].name);
         }
         return;
     }
 
-    if (local) {
-        string_array_t *branches = NULL;
-        error_t *err = profile_list_all_local(repo, &branches);
-        if (err) {
-            error_free(err);
-        } else {
-            for (size_t i = 0; i < branches->count; i++) {
-                const char *branch = branches->items[i];
-                printf(
-                    "%s\t%s\n", branch,
-                    state_has_profile(state, branch) ? "Enabled profile"
-                                                     : "Available profile"
-                );
-            }
-            string_array_free(branches);
-        }
-    }
-
-    if (remote) {
-        const char *remote_name = NULL;
-        if (gitops_resolve_default_remote(repo, arena, &remote_name, NULL) != NULL) {
-            return;  /* no remote configured: nothing to download */
-        }
-        string_array_t *branches = NULL;
-        if (upstream_discover_branches(repo, remote_name, &branches) != NULL) {
-            return;
-        }
+    string_array_t *branches = NULL;
+    error_t *err = profile_list_all_local(repo, &branches);
+    if (err) {
+        error_free(err);
+    } else {
         for (size_t i = 0; i < branches->count; i++) {
-            printf("%s\tRemote profile\n", branches->items[i]);
+            const char *branch = branches->items[i];
+            fprintf(
+                out, "%s\t%s\n", branch,
+                state_has_profile(ctx->state, branch) ? "Enabled profile"
+                                                      : "Available profile"
+            );
         }
+
         string_array_free(branches);
     }
-}
 
-/**
- * Output configured git remotes
- */
-static void complete_remotes(git_repository *repo) {
-    git_strarray remotes = { 0 };
-    int git_err = git_remote_list(&remotes, repo);
-    if (git_err == 0) {
-        for (size_t i = 0; i < remotes.count; i++) {
-            const char *name = remotes.strings[i];
-            char *url = NULL;
-            error_t *url_err = gitops_get_remote_url(repo, name, &url);
-            printf(
-                "%s\t%s\n",
-                name, url ? url : "Remote"
-            );
-            free(url);
-            error_free(url_err);
+    if (set == COMPLETION_ALL) {
+        const char *remote_name = NULL;
+        err = gitops_resolve_default_remote(repo, ctx->arena, &remote_name, NULL);
+        if (err) {
+            error_free(err);  /* no remote configured: nothing to download */
+            return;
         }
-        git_strarray_dispose(&remotes);
+        string_array_t *remote_branches = NULL;
+        err = upstream_discover_branches(repo, remote_name, &remote_branches);
+        if (err) {
+            error_free(err);
+            return;
+        }
+        for (size_t i = 0; i < remote_branches->count; i++) {
+            fprintf(out, "%s\tRemote profile\n", remote_branches->items[i]);
+        }
+
+        string_array_free(remote_branches);
     }
 }
 
 /**
- * Output managed files: the view over the enabled set
- *
- * One row per managed path, the winning profile beside it. A profile filter
- * keeps the rows those profiles win — exactly the rows a workspace verb with
- * that filter acts on; a path a filtered profile holds but does not win is not
- * offered because the verb would skip it. Rows come in the view's order; the
- * shell sorts its candidates.
- *
- * @param repo Repository (borrowed)
- * @param state Borrowed state handle
- * @param mounts Per-machine mount table over the enabled set
- * @param arena Borrowed scratch arena (caller's command arena)
- * @param profiles Optional winner filter (NULL/0 for every row)
- * @param profile_count Number of names in the filter
+ * Configured git remotes, the URL as description
  */
-static void complete_files(
-    git_repository *repo,
-    const state_t *state,
-    const mount_table_t *mounts,
-    arena_t *arena,
-    char *const *profiles,
-    size_t profile_count
+void completion_remotes(const dotta_ctx_t *ctx, FILE *out) {
+    git_repository *repo = ctx->repo;
+    if (repo == NULL) return;
+
+    git_strarray remotes = { 0 };
+    if (git_remote_list(&remotes, repo) != 0) return;
+
+    for (size_t i = 0; i < remotes.count; i++) {
+        const char *name = remotes.strings[i];
+        char *url = NULL;
+        error_t *url_err = gitops_get_remote_url(repo, name, &url);
+        fprintf(out, "%s\t%s\n", name, url ? url : "Remote");
+        free(url);
+        error_free(url_err);
+    }
+
+    git_strarray_dispose(&remotes);
+}
+
+/**
+ * The view's files, narrowed to the winners named
+ */
+void completion_files(
+    const dotta_ctx_t *ctx, FILE *out,
+    char *const *winners, size_t winner_count
 ) {
+    git_repository *repo = ctx->repo;
+    if (repo == NULL) return;
+
     manifest_t *manifest = NULL;
-    error_t *err = manifest_build(repo, state, mounts, arena, &manifest);
+    error_t *err = manifest_build(
+        repo, ctx->state, ctx->mounts, ctx->arena, &manifest
+    );
     if (err) {
         error_free(err);
         return;
@@ -162,30 +146,29 @@ static void complete_files(
     for (size_t i = 0; i < rows.count; i++) {
         const manifest_row_t *row = rows.entries[i];
 
-        /* Files only: a directory row is a metadata claim, not a path the
-         * file-taking verbs complete to */
         if (row->type == PATH_TYPE_DIRECTORY) {
             continue;
         }
         /* Winner filter, applied here rather than at the build: one view, one
          * loop. */
-        if (profile_count > 0) {
+        if (winner_count > 0) {
             bool wanted = false;
-            for (size_t j = 0; j < profile_count && !wanted; j++) {
-                wanted = strcmp(row->profile, profiles[j]) == 0;
+            for (size_t j = 0; j < winner_count && !wanted; j++) {
+                wanted = strcmp(row->profile, winners[j]) == 0;
             }
             if (!wanted) continue;
         }
-        printf("%s\t%s\n", row->storage_path, row->profile);
+        fprintf(out, "%s\t%s\n", row->storage_path, row->profile);
     }
 
     manifest_free(manifest);
 }
 
-/* Tree-walk state for complete_refspecs. */
+/* Tree-walk state for completion_refspecs. */
 typedef struct {
+    FILE *out;
     const char *branch;   /* current branch (source of the "<branch>:" prefix) */
-    bool prefix;          /* prefix "<branch>:" (all branches) vs bare path (pinned by -p) */
+    bool prefix;          /* prefix "<branch>:" (all branches) vs bare path (pinned) */
     size_t cap;
     size_t emitted;
     bool truncated;
@@ -195,54 +178,49 @@ typedef struct {
  * Tree-walk callback: emit one token per managed file blob.
  *
  * `root` is "" at the top level or "dir/.../" with a trailing slash, so
- * mount_spec_for_path(root) gates emission to files under a storage label, skipping
- * top-level blobs, .dotta/, and any non-label root.
+ * mount_spec_for_path(root) gates emission to files under a storage label,
+ * skipping top-level blobs, .dotta/, and any non-label root.
  */
 static int refspec_emit_cb(
-    const char *root,
-    const git_tree_entry *entry,
-    void *payload
+    const char *root, const git_tree_entry *entry, void *payload
 ) {
-    refspec_walk_ctx_t *ctx = payload;
+    refspec_walk_ctx_t *walk = payload;
 
     if (git_tree_entry_type(entry) != GIT_OBJECT_BLOB) return 0;  /* descend trees */
     if (!mount_spec_for_path(root)) return 0;                     /* storage-label gate */
 
     const char *name = git_tree_entry_name(entry);
-    if (ctx->prefix) {
-        printf("%s:%s%s\n", ctx->branch, root, name);
+    if (walk->prefix) {
+        fprintf(
+            walk->out, "%s:%s%s\n", walk->branch, root, name
+        );
     } else {
-        printf("%s%s\t%s\n", root, name, ctx->branch);
+        fprintf(
+            walk->out, "%s%s\t%s\n", root, name, walk->branch
+        );
     }
 
-    if (++ctx->emitted >= ctx->cap) {
-        ctx->truncated = true;
-        return -1;  /* abort: wrapped as a git error, marked benign via ctx */
+    if (++walk->emitted >= walk->cap) {
+        walk->truncated = true;
+        return -1;  /* abort: wrapped as a git error, marked benign via walk */
     }
     return 0;
 }
 
 /**
- * Output a branch's files as completion tokens, sourced from Git (not the
- * view) so the verbs that name a profile — remove, list, show, revert, export
- * — reach every file the branch holds: shadowed by a higher profile, or in a
- * profile disabled or never enabled here.
- *
- * @param repo Repository (borrowed)
- * @param profile NULL: every local branch, emit "<profile>:<path>". Else: that
- *                branch only, emit bare "<path>" (the profile is pinned).
- * @param cap Backstop on total tokens emitted
+ * A branch's files, read from Git rather than the view
  */
-static void complete_refspecs(
-    git_repository *repo,
-    const char *profile,
-    size_t cap
+void completion_refspecs(
+    const dotta_ctx_t *ctx, FILE *out, const char *pinned
 ) {
+    git_repository *repo = ctx->repo;
+    if (repo == NULL) return;
+
     string_array_t *branches = NULL;
-    if (profile) {
+    if (pinned) {
         branches = string_array_new(1);
         if (!branches) return;
-        error_t *err = string_array_push(branches, profile);
+        error_t *err = string_array_push(branches, pinned);
         if (err) {
             error_free(err);
             string_array_free(branches);
@@ -257,7 +235,12 @@ static void complete_refspecs(
         string_array_sort(branches);  /* deterministic order under the cap */
     }
 
-    refspec_walk_ctx_t ctx = { .cap = cap, .prefix = (profile == NULL) };
+    refspec_walk_ctx_t walk = {
+        .out = out,
+        .cap = COMPLETE_REFSPEC_FILES_MAX,
+        .prefix = (pinned == NULL)
+    };
+
     for (size_t i = 0; i < branches->count; i++) {
         const char *branch = branches->items[i];
 
@@ -268,65 +251,34 @@ static void complete_refspecs(
             continue;
         }
 
-        ctx.branch = branch;
-        error_t *walk_err = gitops_tree_walk(tree, refspec_emit_cb, &ctx);
+        walk.branch = branch;
+        error_t *walk_err = gitops_tree_walk(tree, refspec_emit_cb, &walk);
         git_tree_free(tree);
         if (walk_err) error_free(walk_err);  /* benign on cap-abort; else also silent */
-        if (ctx.truncated) break;            /* cap hit (the walk error above was the abort) */
+        if (walk.truncated) break;           /* cap hit (the walk error above was the abort) */
     }
 
     string_array_free(branches);
 }
 
 /**
- * Output recent commits for completion
+ * Walk each branch's history from its tip, newest first, up to the per-branch
+ * limit; a name that resolves to no branch contributes nothing. When more than
+ * one history is listed, the description carries the branch so the interleaved
+ * hashes stay attributable. `prefix`, when given, is printed before every token
+ * as `<prefix>@<token>`.
  *
- * Walks each branch's history from its tip, newest first, up to `limit` per
- * branch. The branches are the ones named, else the enabled set in precedence
- * order — the set show and diff resolve a bare reference against, in that
- * order. When more than one history is listed, the description carries the
- * branch so the interleaved hashes stay attributable.
- *
- * Output: <short_oid>\t<summary>, or <short_oid>\t<branch>: <summary>.
- *
- * @param repo Repository (borrowed)
- * @param state Borrowed state handle (read only when no branch is named)
- * @param profiles Branches to walk (NULL/0 for the enabled set)
- * @param profile_count Number of branches named
- * @param limit Maximum number of commits per branch
+ * @return Number of commits emitted
  */
-static void complete_commits(
-    git_repository *repo,
-    const state_t *state,
-    char *const *profiles,
-    size_t profile_count,
-    long limit
+static size_t commits_walk(
+    git_repository *repo, FILE *out, const char *prefix,
+    const char *const *branches, size_t branch_count
 ) {
-    string_array_t *branches STRING_ARRAY_CLEANUP = string_array_new(profile_count);
-    if (!branches) return;
+    bool label = branch_count > 1;
+    size_t emitted = 0;
 
-    error_t *err = NULL;
-    if (profile_count > 0) {
-        for (size_t i = 0; i < profile_count && !err; i++) {
-            err = string_array_push(branches, profiles[i]);
-        }
-    } else {
-        const state_profile_entry_t *rows = NULL;
-        size_t count = 0;
-        err = state_peek_profiles(state, &rows, &count);
-        for (size_t i = 0; i < count && !err; i++) {
-            err = string_array_push(branches, rows[i].name);
-        }
-    }
-    if (err) {
-        error_free(err);
-        return;
-    }
-
-    bool label = branches->count > 1;
-
-    for (size_t b = 0; b < branches->count; b++) {
-        const char *branch = branches->items[b];
+    for (size_t b = 0; b < branch_count; b++) {
+        const char *branch = branches[b];
 
         /* Resolve reference using DWIM (handles branches, tags, remotes) */
         git_reference *ref = NULL;
@@ -352,7 +304,7 @@ static void complete_commits(
 
         git_oid oid;
         long count = 0;
-        while (count < limit && git_revwalk_next(&oid, walker) == 0) {
+        while (count < COMPLETE_COMMIT_LIMIT && git_revwalk_next(&oid, walker) == 0) {
             git_commit *commit = NULL;
             if (git_commit_lookup(&commit, repo, &oid) != 0) {
                 continue;
@@ -376,82 +328,218 @@ static void complete_commits(
                 msg_len = COMPLETE_COMMIT_SUMMARY_MAX;
             }
 
+            if (prefix) fprintf(out, "%s@", prefix);
             if (label) {
-                printf("%s\t%s: %.*s\n", oid_str, branch, (int) msg_len, message);
+                fprintf(out, "%s\t%s: %.*s\n", oid_str, branch, (int) msg_len, message);
             } else {
-                printf("%s\t%.*s\n", oid_str, (int) msg_len, message);
+                fprintf(out, "%s\t%.*s\n", oid_str, (int) msg_len, message);
             }
 
             git_commit_free(commit);
             count++;
+            emitted++;
         }
 
         git_revwalk_free(walker);
         git_object_free(obj);
     }
+
+    return emitted;
 }
 
 /**
- * Run completion command
- *
- * Dispatches to appropriate completion function based on mode. Always returns
- * NULL (success) - errors result in no output.
+ * The commit candidates, with or without a `<prefix>@` in front of each: the
+ * reference forms first, then the named histories, else the enabled ones.
+ */
+static void commits_emit(
+    const dotta_ctx_t *ctx, FILE *out, const char *prefix,
+    const char *const *branches, size_t branch_count
+) {
+    git_repository *repo = ctx->repo;
+    if (repo == NULL) return;
+
+    static const struct {
+        const char *ref;
+        const char *summary;
+    } references[] = {
+        { "HEAD",   "Current commit"  },
+        { "HEAD~1", "Previous commit" },
+        { "HEAD~2", "2 commits ago"   },
+        { "HEAD~3", "3 commits ago"   },
+    };
+    for (size_t i = 0; i < sizeof(references) / sizeof(*references); i++) {
+        if (prefix) fprintf(out, "%s@", prefix);
+        fprintf(out, "%s\t%s\n", references[i].ref, references[i].summary);
+    }
+
+    if (branch_count > 0 &&
+        commits_walk(repo, out, prefix, branches, branch_count) > 0) {
+        return;
+    }
+
+    /* None named, or none of them a branch (a positional handed in as a guess
+     * may be a path): the enabled histories stand in. */
+    const state_profile_entry_t *rows = NULL;
+    size_t count = 0;
+    error_t *err = state_peek_profiles(ctx->state, &rows, &count);
+    if (err) {
+        error_free(err);
+        return;
+    }
+    const char **enabled = arena_calloc(ctx->arena, count, sizeof(*enabled));
+    if (enabled == NULL) return;
+    for (size_t i = 0; i < count; i++) {
+        enabled[i] = rows[i].name;
+    }
+    commits_walk(repo, out, prefix, enabled, count);
+}
+
+/**
+ * The profile a token names
+ */
+const char *completion_profile_of(const dotta_ctx_t *ctx, const char *token) {
+    refspec_t rs = { 0 };
+    error_t *err = parse_refspec(ctx->arena, token, &rs);
+    if (err) {
+        error_free(err);
+        return token;
+    }
+    return rs.profile ? rs.profile : rs.file;
+}
+
+/**
+ * Commits of the branches named, else of the enabled set
+ */
+void completion_commits(
+    const dotta_ctx_t *ctx, FILE *out,
+    char *const *branches, size_t branch_count
+) {
+    /* The hooks hold `char **` buckets; the walk reads them. C has no implicit
+     * widening to a pointer to const pointer to const. */
+    commits_emit(ctx, out, NULL, (const char *const *) branches, branch_count);
+}
+
+/**
+ * Commits of one pinned profile
+ */
+void completion_history(
+    const dotta_ctx_t *ctx, FILE *out, const char *pinned
+) {
+    commits_emit(ctx, out, NULL, &pinned, pinned != NULL ? 1 : 0);
+}
+
+/**
+ * Commits behind the `@` of a token being typed
+ */
+bool completion_commits_at(
+    const dotta_ctx_t *ctx, FILE *out, const char *current, const char *pinned
+) {
+    /* The prefix is everything before the last '@'. */
+    const char *at = strrchr(current, '@');
+    if (at == NULL) return false;
+
+    char *prefix = arena_strndup(ctx->arena, current, (size_t) (at - current));
+    if (prefix == NULL) return true;
+
+    const char *branch = pinned ? pinned : completion_profile_of(ctx, prefix);
+    commits_emit(ctx, out, prefix, &branch, 1);
+    return true;
+}
+
+/**
+ * Filesystem paths under a relocatable root
+ */
+bool completion_paths_under(FILE *out, const char *root, const char *current) {
+    /* Mirrors path_input_normalize (infra/path.c): no root, a tilde token, or a
+     * token already inside the root — the path is what the shell sees. */
+    if (root == NULL || root[0] == '\0' || current[0] == '~') return false;
+
+    size_t root_len = strlen(root);
+    while (root_len > 0 && root[root_len - 1] == '/') root_len--;
+    if (root_len == 0) return false;   /* `--target /` re-roots nothing */
+
+    if (strncmp(current, root, root_len) == 0 &&
+        (current[root_len] == '\0' || current[root_len] == '/')) {
+        return false;
+    }
+
+    /* The token relative to the root keeps its leading-slash style on the way
+     * back, so the inserted candidate round-trips the way it was typed. Split
+     * it at its last '/': the directory to list under the root, and the name
+     * prefix to match in it. */
+    const char *leading = current[0] == '/' ? "/" : "";
+    const char *rel = current[0] == '/' ? current + 1 : current;
+    const char *slash = strrchr(rel, '/');
+    size_t dir_len = slash ? (size_t) (slash - rel + 1) : 0;
+    const char *name = slash ? slash + 1 : rel;
+    size_t name_len = strlen(name);
+
+    char *dir = str_format("%.*s/%.*s", (int) root_len, root, (int) dir_len, rel);
+    if (dir == NULL) return true;
+
+    string_array_t *entries = NULL;
+    error_t *err = fs_list_dir(dir, &entries);
+    if (err) {
+        error_free(err);   /* nothing under there: the root applies, nothing to offer */
+        free(dir);
+        return true;
+    }
+
+    for (size_t i = 0; i < entries->count; i++) {
+        const char *entry = entries->items[i];
+        if (strncmp(entry, name, name_len) != 0) continue;
+        if (entry[0] == '.' && name[0] != '.') continue;
+
+        char *path = str_format("%s%s", dir, entry);
+        if (path == NULL) continue;
+        bool is_dir = fs_is_directory(path);
+        free(path);
+
+        fprintf(
+            out, "%s%.*s%s%s\n", leading, (int) dir_len, rel, entry,
+            is_dir ? "/" : ""
+        );
+    }
+
+    string_array_free(entries);
+    free(dir);
+    return true;
+}
+
+/**
+ * Completion command implementation
  */
 error_t *cmd_completion(const dotta_ctx_t *ctx, const cmd_completion_options_t *opts) {
-    if (!ctx || !opts) {
-        return NULL;  /* Silent failure */
-    }
-
-    if (opts->mode == COMPLETE_SPEC_FISH) {
-        /* Build-time emission: projects the root registry into the
-         * fish-completion dialect. Stable, repo-independent, invoked by `make
-         * completions` to generate the schema under build/. Registry is
-         * borrowed from main.c via the typed accessor so the cmds/ layer
-         * never names the registry symbol. */
-        args_export_completion_fish(stdout, ctx->arena, dotta_registry(), "dotta");
-        return NULL;
-    }
-
-    /* OPTIONAL_SILENT + READ: outside a repository the dispatcher hands over
-     * neither repo nor state; every data mode answers with silence. Inside
-     * one, state and mounts follow the repo (the runtime invariants). */
-    git_repository *repo = ctx->repo;
-    if (!repo) {
-        return NULL;
-    }
-
     switch (opts->mode) {
-        case COMPLETE_PROFILES:
-            complete_profiles(repo, ctx->state, ctx->arena, opts->local, opts->remote);
-            break;
-
-        case COMPLETE_FILES:
-            complete_files(
-                repo, ctx->state, ctx->mounts, ctx->arena,
-                opts->profiles, opts->profile_count
-            );
-            break;
-
-        case COMPLETE_REFSPECS:
-            /* post_parse admits at most one -p here */
-            complete_refspecs(
-                repo, opts->profile_count > 0 ? opts->profiles[0] : NULL,
-                COMPLETE_REFSPEC_FILES_MAX
-            );
-            break;
-
-        case COMPLETE_COMMITS:
-            complete_commits(
-                repo, ctx->state, opts->profiles, opts->profile_count, opts->limit
-            );
-            break;
-
-        case COMPLETE_REMOTES:
-            complete_remotes(repo);
-            break;
-
         case COMPLETE_SPEC_FISH:
-            break;  /* handled above */
+            /* Build-time emission: projects the root registry into the
+             * fish-completion dialect, the wrapper calling back into the
+             * `candidates` mode. Stable, repo-independent, invoked by `make
+             * completions`. The registry is borrowed from main.c via the typed
+             * accessor so the cmds/ layer never names the registry symbol. */
+            args_export_completion_fish(
+                stdout, dotta_registry(), "dotta", "__complete candidates"
+            );
+            break;
+
+        case COMPLETE_CANDIDATES: {
+            /* The line as argv: the program, then the tokens after the mode
+             * word. The engine resolves and consumes it and calls the command's
+             * hook; outside a repository the hooks' sources stay silent and
+             * only native-path requests come back. */
+            int argc = (int) opts->positional_count;
+            char **argv = arena_calloc(ctx->arena, (size_t) argc, sizeof(*argv));
+            if (argv == NULL) break;
+            argv[0] = ctx->argv[0];
+            for (int i = 1; i < argc; i++) {
+                argv[i] = opts->positional_args[i];
+            }
+            args_complete_candidates(
+                dotta_registry(), argc, argv,
+                opts->current ? opts->current : "", ctx->arena, ctx, stdout
+            );
+            break;
+        }
     }
 
     return NULL;
@@ -462,27 +550,16 @@ error_t *cmd_completion(const dotta_ctx_t *ctx, const cmd_completion_options_t *
  * ══════════════════════════════════════════════════════════════════ */
 
 /**
- * Seed the default: commits mode returns up to 20 rows per branch when
- * `--limit` isn't supplied.
- */
-static void completion_init_defaults(void *opts_v) {
-    cmd_completion_options_t *o = opts_v;
-    o->limit = COMPLETE_COMMIT_DEFAULT_LIMIT;
-}
-
-/**
  * Map the mandatory first positional into `mode`.
  *
  * Silent-failure semantics (suppressed by the dispatcher when `silent_failure =
  * true`): a missing or unknown mode returns exit 1 with no stderr output — this
- * preserves shell-completion contract with fish scripts that invoke `dotta
+ * preserves the shell-completion contract with the scripts that invoke `dotta
  * __complete ...`.
  *
- * `spec` mode takes a second positional naming the output dialect (currently
- * only `fish`). All other modes require exactly one positional — we reject extras
- * explicitly so a typo like `dotta __complete profiles all` doesn't silently
- * ignore `all`. Likewise each flag is admitted only by the modes that read it:
- * `--local` / `--remote` by profiles, `-p` by files, refspecs (one) and commits.
+ * `spec` takes a second positional naming the output dialect (currently only
+ * `fish`) and nothing else; `candidates` takes the line's tokens, however many,
+ * and is the only mode that reads `--current`.
  */
 static error_t *completion_post_parse(
     void *opts_v, arena_t *arena, const args_command_t *cmd
@@ -492,67 +569,41 @@ static error_t *completion_post_parse(
     cmd_completion_options_t *o = opts_v;
 
     if (o->positional_count == 0) {
-        return error_create(ERR_INVALID_ARG, "completion mode is required");
+        return ERROR(ERR_INVALID_ARG, "completion mode is required");
     }
 
     const char *mode = o->positional_args[0];
 
-    if (strcmp(mode, "profiles") == 0) {
-        o->mode = COMPLETE_PROFILES;
-    } else if (strcmp(mode, "files") == 0) {
-        o->mode = COMPLETE_FILES;
-    } else if (strcmp(mode, "refspecs") == 0) {
-        o->mode = COMPLETE_REFSPECS;
-    } else if (strcmp(mode, "commits") == 0) {
-        o->mode = COMPLETE_COMMITS;
-    } else if (strcmp(mode, "remotes") == 0) {
-        o->mode = COMPLETE_REMOTES;
-    } else if (strcmp(mode, "spec") == 0) {
-        if (o->positional_count < 2) {
-            return error_create(
+    if (strcmp(mode, "candidates") == 0) {
+        o->mode = COMPLETE_CANDIDATES;
+        return NULL;
+    }
+
+    if (strcmp(mode, "spec") == 0) {
+        if (o->positional_count != 2) {
+            return ERROR(
                 ERR_INVALID_ARG,
-                "'spec' mode requires a dialect (e.g. 'fish')"
+                "'spec' mode takes exactly one dialect (e.g. 'fish')"
             );
         }
         const char *dialect = o->positional_args[1];
         if (strcmp(dialect, "fish") != 0) {
-            return error_create(
-                ERR_INVALID_ARG, "unknown spec dialect '%s'", dialect
+            return ERROR(
+                ERR_INVALID_ARG,
+                "unknown spec dialect '%s'", dialect
+            );
+        }
+        if (o->current != NULL) {
+            return ERROR(
+                ERR_INVALID_ARG,
+                "--current is only valid with 'candidates' mode"
             );
         }
         o->mode = COMPLETE_SPEC_FISH;
-    } else {
-        return error_create(ERR_INVALID_ARG, "unknown completion mode '%s'", mode);
+        return NULL;
     }
 
-    /* Non-spec modes take exactly one positional. */
-    if (o->mode != COMPLETE_SPEC_FISH && o->positional_count > 1) {
-        return error_create(
-            ERR_INVALID_ARG,
-            "'%s' mode takes no additional positional arguments", mode
-        );
-    }
-
-    /* Each flag belongs to the modes that read it. */
-    if ((o->local || o->remote) && o->mode != COMPLETE_PROFILES) {
-        return error_create(
-            ERR_INVALID_ARG, "--local and --remote are only valid with 'profiles' mode"
-        );
-    }
-    bool takes_profiles = o->mode == COMPLETE_FILES ||
-        o->mode == COMPLETE_REFSPECS ||
-        o->mode == COMPLETE_COMMITS;
-    if (o->profile_count > 0 && !takes_profiles) {
-        return error_create(
-            ERR_INVALID_ARG, "-p is only valid with 'files', 'refspecs' or 'commits' mode"
-        );
-    }
-    if (o->mode == COMPLETE_REFSPECS && o->profile_count > 1) {
-        return error_create(
-            ERR_INVALID_ARG, "'refspecs' mode pins at most one profile"
-        );
-    }
-    return NULL;
+    return ERROR(ERR_INVALID_ARG, "unknown completion mode '%s'", mode);
 }
 
 static error_t *completion_dispatch(const void *ctx_v, void *opts_v) {
@@ -561,29 +612,14 @@ static error_t *completion_dispatch(const void *ctx_v, void *opts_v) {
 }
 
 static const args_opt_t completion_opts[] = {
-    ARGS_FLAG(
-        "local",
-        cmd_completion_options_t,local,
-        "Profiles: every local branch, the enabled ones marked"
-    ),
-    ARGS_FLAG(
-        "remote",
-        cmd_completion_options_t,remote,
-        "Profiles: remote-tracking branches without a local branch"
-    ),
-    ARGS_APPEND(
-        "p profile",             "<name>",
-        cmd_completion_options_t,profiles,        profile_count,
-        "Files: rows this profile wins; commits: this branch; refspecs: pin it"
-    ),
-    ARGS_INT(
-        "l limit",               "<N>",
-        cmd_completion_options_t,limit,           1,                COMPLETE_COMMIT_MAX_LIMIT,
-        "Commits: maximum per branch (default: 20)"
+    ARGS_STRING(
+        "current",                "<token>",
+        cmd_completion_options_t, current,
+        "Candidates: the token being typed at the cursor"
     ),
     ARGS_POSITIONAL_RAW(
-        cmd_completion_options_t,positional_args, positional_count,
-        1,                       2
+        cmd_completion_options_t, positional_args,positional_count,
+        1,                        0
     ),
     ARGS_END,
 };
@@ -591,10 +627,11 @@ static const args_opt_t completion_opts[] = {
 const args_command_t spec_completion = {
     .name           = "__complete",
     .summary        = "Shell completion helper (hidden)",
-    .usage          = "%s __complete <mode> [<arg>] [options]",
+    .usage          =
+        "%s __complete candidates [--current=<token>] -- <tokens>...\n"
+        "   or: %s __complete spec fish",
     .opts_size      = sizeof(cmd_completion_options_t),
     .opts           = completion_opts,
-    .init_defaults  = completion_init_defaults,
     .post_parse     = completion_post_parse,
     .payload        = &dotta_ext_read_silent,
     .dispatch       = completion_dispatch,

@@ -48,6 +48,14 @@
  *                          command (by name), or a root alias (declared via
  *                          `args_command_t::root_aliases`).
  *
+ *   Completion             Flags and subcommands complete from the rows, as
+ *                          rules the fish exporter writes. What can stand at
+ *                          a positional, or as a flag's value, is the
+ *                          command's `complete` hook, asked at runtime with
+ *                          the buckets a partial parse filled
+ *                          (`args_complete_candidates`); the exported wrapper
+ *                          is how the shell asks.
+ *
  *   Cleanup chain          The engine is signal-safe and key-zero-safe: no
  *                          `exit()`, no libc-free in the error path, no
  *                          process-level state. The dispatcher owns the arena
@@ -185,13 +193,15 @@ typedef args_class_t (*args_classify)(const char *token);
 typedef void (*args_defaults)(void *opts);
 
 /**
- * Post-parse hook: interpret positional buckets, do secondary parsing.
+ * Post-parse hook: interpret positional buckets, do secondary parsing, and
+ * reject what the rows cannot express.
  *
  * Called after all tokens have been consumed without recorded parse errors and
  * after POSITIONAL_RAW min/max counts are validated. Use for refspec parsing,
- * N-positional reinterpretation, mode inference, etc. Allocations may use `arena`.
- * Returning a non-NULL error aborts dispatch; the error is wrapped into the error
- * collector and freed.
+ * N-positional reinterpretation, mode inference, and cross-field invariants
+ * (mutually exclusive flags, a value one mode requires and another forbids).
+ * Allocations may use `arena`. Returning a non-NULL error aborts dispatch; the
+ * error is wrapped into the error collector and freed.
  */
 typedef error_t *(*args_postparse)(
     void *opts, arena_t *arena,
@@ -199,11 +209,37 @@ typedef error_t *(*args_postparse)(
 );
 
 /**
- * Cross-field invariant check. Runs after post_parse. Fail the same way.
+ * Where the cursor stands, for the completion hook.
+ *
+ * The hook reads the command's options struct as the tokens before the
+ * cursor left it — every flag applied, every positional routed to its bucket
+ * — without the settle: no count check, no post_parse, which are written for
+ * a complete line. It re-derives only what the position decides; where the
+ * grammar needs the next token to know (show's second positional is a file
+ * or a commit), it offers the union.
  */
-typedef error_t *(*args_validate)(
-    void *opts,
-    const args_command_t *command
+typedef struct args_completion {
+    const args_opt_t *value_of;  /* Non-NULL: the cursor is this option's value */
+    const char *current;         /* What is being typed: the token, or the text after
+                                  * `=` of an inline `--name=text`; "" when nothing */
+} args_completion_t;
+
+/* What the hook may ask the shell to add beside its candidates. */
+#define ARGS_WANT_FILES  (1u << 0)   /* Native path completion of `current` */
+#define ARGS_WANT_DIRS   (1u << 1)   /* Native directory completion of `current` */
+
+/**
+ * Completion hook: what can stand at the cursor.
+ *
+ * Prints candidates to `out`, one per line as `token` or `token<TAB>description`
+ * — the sources are the application's, the engine never reads them — and
+ * returns the ARGS_WANT_* bits for what the shell should add. `ctx` is the
+ * same opaque payload `dispatch` receives. A command without a hook offers
+ * nothing beyond its flags and subcommands, which the exported rules carry.
+ */
+typedef unsigned (*args_complete)(
+    const void *ctx, const void *opts,
+    const args_completion_t *at, FILE *out
 );
 
 /**
@@ -297,8 +333,8 @@ struct args_command {
     /* Behavior hooks (all optional) */
     args_classify classify;      /* Classify positional token into command-local class ID */
     args_defaults init_defaults; /* Seed opts with non-zero defaults before parsing */
-    args_postparse post_parse;   /* Populate derived fields; non-NULL return aborts dispatch */
-    args_validate validate;      /* Cross-field invariant check; runs after post_parse */
+    args_postparse post_parse;   /* Populate derived fields, reject invariants; non-NULL return aborts dispatch */
+    args_complete complete;      /* What can stand at the cursor; NULL = nothing */
 
     /* Execution  */
     const void *payload;       /* Domain-extension payload (opaque to engine) */
@@ -393,14 +429,13 @@ args_root_outcome_t args_resolve_root(
  *     `default_subcommand` when the user passes no positional.
  *   - Otherwise walks the token stream applying opts, collecting parse errors
  *     up to ARGS_ERRORS_CAP.
- *   - Runs `post_parse` then `validate` if no errors so far.
+ *   - Runs `post_parse` if no errors so far.
  *
  * Help wins over errors: if `-h`/`--help` appears in the token stream the parser
  * returns ARGS_HELP_REQUESTED immediately, discarding any errors already recorded
  * AND any tokens still to read. `dotta add --bogus -h` prints help and exits 0
  * — the user asked for help, so the typo is a secondary concern. Rule of thumb
- * for spec authors: don't rely on post_parse or validate firing when -h is on
- * the line.
+ * for spec authors: don't rely on post_parse firing when -h is on the line.
  *
  * Side effects: none on stdio; none on global state; no exit(). Every allocation
  * comes from `arena`.
@@ -424,6 +459,50 @@ args_outcome_t args_parse(
     const args_command_t *command, int argc, char **argv, int start_idx,
     arena_t *arena, void *opts_out, args_errors_t *errors_out,
     const args_command_t **resolved_out
+);
+
+/* ══════════════════════════════════════════════════════════════════
+ * Completion (runtime)
+ * ══════════════════════════════════════════════════════════════════ */
+
+/**
+ * Answer the shell: what can stand at the cursor of a command line.
+ *
+ * `argv[1..argc)` are the complete tokens of the line, argv[0] the program as
+ * at dispatch; `current` is the token being typed — possibly empty, never
+ * routed to a bucket. The line is resolved and consumed exactly as
+ * `args_parse` would — the registry for argv[1], the subcommand tree, the
+ * option loop — except that it stops where the tokens stop: a trailing value
+ * flag names the value being typed instead of recording an error, and a line
+ * the command would reject (an unknown flag, one positional too many) still
+ * has a next token, so the loop's errors are recorded and ignored. Then the
+ * command's `complete` hook answers with the buckets as they stand.
+ *
+ * Nothing is printed and no hook is called where the exported rules already
+ * answer or nothing can: the root slot (the command names), a tree's
+ * subcommand slot (the subcommand names), the name of a flag being typed
+ * (`-x`, `--name`, `--`), `-h` anywhere on the line, a passthrough command,
+ * a command without a hook.
+ *
+ * Output — the candidates protocol the exported wrapper reads:
+ *
+ *   token<TAB>description, or token     one candidate per line;
+ *   <TAB>files<TAB>current              the shell completes paths natively;
+ *   <TAB>dirs<TAB>current               the shell completes directories.
+ *
+ * A token is never empty, so a line beginning with a tab is a request.
+ *
+ * @param commands NULL-terminated root registry.
+ * @param argc     Count of `argv`.
+ * @param argv     The program name, then the complete tokens of the line.
+ * @param current  The token being typed; "" when none.
+ * @param arena    Arena for the options struct and its buckets.
+ * @param ctx      Opaque payload handed to the hook, as `dispatch`'s.
+ * @param out      Output stream for the candidates.
+ */
+void args_complete_candidates(
+    const args_command_t *const *commands, int argc, char **argv,
+    const char *current, arena_t *arena, const void *ctx, FILE *out
 );
 
 /* ══════════════════════════════════════════════════════════════════
@@ -487,44 +566,42 @@ void args_render_errors(
  * ══════════════════════════════════════════════════════════════════ */
 
 /**
- * Emit a fish-shell completion script body for the command registry.
+ * Emit the fish-shell completion script for the command registry — the whole
+ * of it, ready to be installed as `<prog>.fish`:
  *
- * The generated output is plain fish script lines (`complete -c <prog> ...`) —
- * consumable via `source` or concatenation into a checked-in file. The emitter
- * handles:
- *
+ *   - the condition helpers the rules are guarded by (`__<prog>_needs_command`,
+ *     `__<prog>_using_command`, `__<prog>_needs_subcommand`,
+ *     `__<prog>_using_subcommand`), reading the line as the engine does;
+ *   - the wrapper `__<prog>_candidates`, which runs `<prog> <candidates>` with
+ *     the line's tokens and reads the candidates protocol back
+ *     (`args_complete_candidates`), handing a path request to the shell's own
+ *     path completion;
+ *   - one positional rule, under any command, that asks the wrapper;
  *   - top-level built-ins (`-h`, `-v`),
  *   - one root-alias entry per command with `root_aliases` set,
  *   - one command row per non-hidden command,
- *   - one option row per non-hidden flag/string/int/append,
+ *   - one option row per non-hidden flag/string/int/append, a value-taking
+ *     one asking the wrapper for its value,
  *   - one subcommand row per non-hidden subcommand,
- *   - one option row per subcommand's own flags,
- *   - a `__<prog>_value_flags_<cmd>` variable per command listing its
- *     value-taking flags, a tree's spanning its subcommands (used by fish's
- *     positional-arg scan; a command with none gets no variable).
+ *   - one option row per subcommand's own flags.
  *
- * Dynamic completions (profile names, file names, commit SHAs) are NOT emitted
- * here — they depend on runtime repository state and live in a hand-maintained
- * `<prog>.fish` entry point that sources this output.
+ * What can stand at a positional or as a value — profile names, file names,
+ * commit SHAs, paths — is never in the script: it depends on the line and
+ * the application's state, and the binary answers at runtime.
  *
- * Positional-class hints are NOT emitted either; fish offers a union (profiles
- * ∪ files) for polymorphic positionals and filters by prefix.
- *
- * @param out      Output stream (fully buffered writes are fine).
- * @param arena    Borrowed scratch arena for token storage and dedup set.
- *                 All allocations live until the caller destroys the arena; callers
- *                 typically pass their command-scoped arena. Must not be NULL.
- * @param commands NULL-terminated registry of top-level commands.
- * @param prog     Program name used for `complete -c <prog>` lines and
- *                 `__<prog>_*` helper-function references. Must match the prefix
- *                 used in the hand-maintained fish entry point that sources the
- *                 generated script.
+ * @param out        Output stream (fully buffered writes are fine).
+ * @param commands   NULL-terminated registry of top-level commands.
+ * @param prog       Program name used for `complete -c <prog>` lines and the
+ *                   `__<prog>_*` helper-function names.
+ * @param candidates The arguments after `prog` that run the candidates
+ *                   driver, e.g. "__complete candidates": the wrapper appends
+ *                   `--current=<token> -- <tokens…>`.
  */
 void args_export_completion_fish(
     FILE *out,
-    arena_t *arena,
     const args_command_t *const *commands,
-    const char *prog
+    const char *prog,
+    const char *candidates
 );
 
 /* ══════════════════════════════════════════════════════════════════
@@ -541,6 +618,14 @@ void args_export_completion_fish(
  * @return NULL on success; `error_t *` (caller frees) on failure.
  */
 error_t *args_parse_long(const char *text, long min, long max, long *out);
+
+/**
+ * For a completion hook: true when the cursor is the value of the option row
+ * that targets `field` of the options struct `type`. A row's identity is the
+ * field it writes — no two value-taking rows of one command share one.
+ */
+#define ARGS_VALUE_IS(at, type, field) \
+    ((at)->value_of != NULL && (at)->value_of->offset == offsetof(type, field))
 
 /* ══════════════════════════════════════════════════════════════════
  * Spec-writing macros

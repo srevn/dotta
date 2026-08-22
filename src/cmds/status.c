@@ -15,6 +15,7 @@
 #include "base/error.h"
 #include "base/output.h"
 #include "base/timeutil.h"
+#include "cmds/completion.h"
 #include "core/cleanup.h"
 #include "core/profiles.h"
 #include "core/scope.h"
@@ -1149,6 +1150,20 @@ static error_t *status_post_parse(
     return NULL;
 }
 
+/**
+ * What can stand at the cursor: an enabled profile, by -p or bare.
+ */
+static unsigned status_complete(
+    const void *ctx_v, const void *opts_v, const args_completion_t *at, FILE *out
+) {
+    (void) opts_v;
+    (void) at;
+    const dotta_ctx_t *ctx = ctx_v;
+
+    completion_profiles(ctx, out, COMPLETION_ENABLED);
+    return 0;
+}
+
 static error_t *status_dispatch(const void *ctx_v, void *opts_v) {
     const dotta_ctx_t *ctx = ctx_v;
     return cmd_status(ctx, (const cmd_status_options_t *) opts_v);
@@ -1239,6 +1254,7 @@ const args_command_t spec_status = {
     .opts_size   = sizeof(cmd_status_options_t),
     .opts        = status_opts,
     .post_parse  = status_post_parse,
+    .complete    = status_complete,
     .payload     = &dotta_ext_read_crypto_manifest,
     .dispatch    = status_dispatch,
 };

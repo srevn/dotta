@@ -19,6 +19,7 @@
 #include "base/output.h"
 #include "base/string.h"
 #include "base/timeutil.h"
+#include "cmds/completion.h"
 #include "core/manifest.h"
 #include "core/metadata.h"
 #include "core/scope.h"
@@ -1562,6 +1563,28 @@ static error_t *diff_post_parse(
     return NULL;
 }
 
+/**
+ * What can stand at the cursor: an enabled profile, a file of the view or a
+ * commit, in any order, as diff_classify routes them — the view and the
+ * histories narrowed to the profiles named so far — or a filesystem path.
+ */
+static unsigned diff_complete(
+    const void *ctx_v, const void *opts_v, const args_completion_t *at, FILE *out
+) {
+    const dotta_ctx_t *ctx = ctx_v;
+    const cmd_diff_options_t *o = opts_v;
+
+    if (ARGS_VALUE_IS(at, cmd_diff_options_t, profiles)) {
+        completion_profiles(ctx, out, COMPLETION_ENABLED);
+        return 0;
+    }
+
+    completion_profiles(ctx, out, COMPLETION_ENABLED);
+    completion_files(ctx, out, o->profiles, o->profile_count);
+    completion_commits(ctx, out, o->profiles, o->profile_count);
+    return ARGS_WANT_FILES;
+}
+
 static error_t *diff_dispatch(const void *ctx_v, void *opts_v) {
     const dotta_ctx_t *ctx = ctx_v;
     return cmd_diff(ctx, (const cmd_diff_options_t *) opts_v);
@@ -1638,6 +1661,7 @@ const args_command_t spec_diff = {
     .opts        = diff_opts,
     .classify    = diff_classify,
     .post_parse  = diff_post_parse,
+    .complete    = diff_complete,
     .payload     = &dotta_ext_read_crypto_manifest,
     .dispatch    = diff_dispatch,
 };

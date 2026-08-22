@@ -22,6 +22,7 @@
 #include "base/hashmap.h"
 #include "base/output.h"
 #include "base/string.h"
+#include "cmds/completion.h"
 #include "core/manifest.h"
 #include "core/metadata.h"
 #include "core/policy.h"
@@ -2353,6 +2354,40 @@ static error_t *update_post_parse(
     return NULL;
 }
 
+/**
+ * What can stand at the cursor, by the rule update_post_parse routes with:
+ * an enabled profile while the first positional is still open and -p has
+ * not taken it; at every position a file of the view — narrowed to what the
+ * profiles named so far win — or a filesystem path.
+ */
+static unsigned update_complete(
+    const void *ctx_v, const void *opts_v, const args_completion_t *at, FILE *out
+) {
+    const dotta_ctx_t *ctx = ctx_v;
+    const cmd_update_options_t *o = opts_v;
+
+    if (ARGS_VALUE_IS(at, cmd_update_options_t, profiles)) {
+        completion_profiles(ctx, out, COMPLETION_ENABLED);
+        return 0;
+    }
+    if (at->value_of != NULL) {
+        return 0;   /* -m, -e: free text */
+    }
+
+    char *const *winners = o->profiles;
+    size_t winner_count = o->profile_count;
+    if (o->profile_count == 0) {
+        if (o->positional_count == 0) {
+            completion_profiles(ctx, out, COMPLETION_ENABLED);
+        } else if (!str_looks_like_file_path(o->positional_args[0])) {
+            winners = o->positional_args;   /* the profile slot was taken */
+            winner_count = 1;
+        }
+    }
+    completion_files(ctx, out, winners, winner_count);
+    return ARGS_WANT_FILES;
+}
+
 static error_t *update_dispatch(const void *ctx_v, void *opts_v) {
     const dotta_ctx_t *ctx = ctx_v;
     return cmd_update(ctx, (const cmd_update_options_t *) opts_v);
@@ -2437,6 +2472,7 @@ const args_command_t spec_update = {
     .opts_size   = sizeof(cmd_update_options_t),
     .opts        = update_opts,
     .post_parse  = update_post_parse,
+    .complete    = update_complete,
     .payload     = &dotta_ext_read_crypto_manifest,
     .dispatch    = update_dispatch,
 };

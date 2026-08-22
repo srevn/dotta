@@ -59,17 +59,15 @@ static error_t *validate_options(const cmd_add_options_t *opts) {
  * Check if path should be ignored.
  *
  * Consults two independent mechanisms in order:
- *   1. `rules` — the user's `.dottaignore` layers (baseline, profile,
- *      config, CLI) compiled into a single gitignore ruleset.
- *   2. `source_filter` — the source tree's own `.gitignore`, if the
- *      caller opted in by building a filter (typically gated on
- *      `config.respect_gitignore`).
+ *   1. `rules` — the user's `.dottaignore` layers (baseline, profile, config,
+ *      CLI) compiled into a single gitignore ruleset.
+ *   2. `source_filter` — the source tree's own `.gitignore`, if the caller opted
+ *      in by building a filter (typically gated on `config.respect_gitignore`).
  *
- * Either input may be NULL to skip that mechanism. Source-filter
- * errors degrade to a verbose warning and a "not excluded" verdict
- * so an odd source repo never blocks the user from adding a file
- * they explicitly named. The gitignore evaluator never fails — its
- * verdict is applied directly.
+ * Either input may be NULL to skip that mechanism. Source-filter errors degrade
+ * to a verbose warning and a "not excluded" verdict so an odd source repo never
+ * blocks the user from adding a file they explicitly named. The gitignore evaluator
+ * never fails — its verdict is applied directly.
  */
 static bool is_excluded(
     const char *path,
@@ -107,20 +105,19 @@ static bool is_excluded(
 /**
  * Recursively collect a directory tree into the caller's accumulators.
  *
- * Appends one entry to `directories` on every successful entry (the walker
- * is the sole source of truth for directory tracking), and one entry to
- * `files` for every non-excluded non-directory child. Dedups against
- * already-collected entries so overlapping CLI args (~/.config and
- * ~/.config/fish) don't double-record — within a single walk, tree
- * recursion visits each directory exactly once, so only cross-walk
- * duplicates are possible.
+ * Appends one entry to `directories` on every successful entry (the walker is
+ * the sole source of truth for directory tracking), and one entry to `files`
+ * for every non-excluded non-directory child. Dedups against already-collected
+ * entries so overlapping CLI args (~/.config and ~/.config/fish) don't
+ * double-record — within a single walk, tree recursion visits each directory
+ * exactly once, so only cross-walk duplicates are possible.
  *
- * Symlinks are never recursed into: symlink-to-dir is treated as an
- * atomic entry by the outer loop and never reaches this function.
+ * Symlinks are never recursed into: symlink-to-dir is treated as an atomic entry
+ * by the outer loop and never reaches this function.
  *
- * All pushed strings are owned by the arrays (string_array_push copies).
- * On error, partial results remain in the caller's arrays; the caller's
- * cleanup path frees them.
+ * All pushed strings are owned by the arrays (string_array_push copies). On error,
+ * partial results remain in the caller's arrays; the caller's cleanup path frees
+ * them.
  */
 static error_t *collect_tree(
     const char *dir_path,
@@ -139,9 +136,9 @@ static error_t *collect_tree(
         return ERROR(ERR_FS, "Failed to open directory: %s", dir_path);
     }
 
-    /* Record this directory. Classification-root skip happens later in
-     * the metadata-capture phase; at collection time every walked
-     * directory is a tracking candidate. */
+    /* Record this directory. Classification-root skip happens later in the
+     * metadata-capture phase; at collection time every walked directory is a
+     * tracking candidate. */
     if (!string_array_contains(directories, dir_path)) {
         error_t *push_err = string_array_push(directories, dir_path);
         if (push_err) {
@@ -196,8 +193,8 @@ static error_t *collect_tree(
         errno = 0;
     }
 
-    /* readdir() returns NULL on both end-of-directory and error.
-     * With errno cleared before each call, non-zero errno means I/O error. */
+    /* readdir() returns NULL on both end-of-directory and error. With errno cleared
+     * before each call, non-zero errno means I/O error. */
     if (errno != 0) {
         int saved_errno = errno;
         closedir(dir);
@@ -225,11 +222,10 @@ static error_t *collect_tree(
  * @param config Configuration (for encryption policy; can be NULL)
  * @param metadata Metadata collection (captured entry will be added here)
  * @param out Output context
- * @param out_stat The capture's stat triple — taken from the same lstat
- *                 as the bytes stored, so the record can bind the
- *                 committed blob to it (must not be NULL; unset when a
- *                 symlink could not be stat'd: the next read takes the
- *                 slow path)
+ * @param out_stat The capture's stat triple — taken from the same lstat as the
+ *                 bytes stored, so the record can bind the committed blob to it
+ *                 (must not be NULL; unset when a symlink could not be stat'd:
+ *                 the next read takes the slow path)
  * @return Error or NULL on success
  */
 static error_t *add_file_to_worktree(
@@ -265,14 +261,14 @@ static error_t *add_file_to_worktree(
 
     /* Encryption policy priority-3 source: prior committed bytes.
      *
-     * Captured here so the sniff happens BEFORE the existing-file
-     * removal below — that removal would destroy the byte-truth source.
-     * The dotta worktree is checked out to the profile's HEAD upstream
-     * of this call, so when dest_path exists it holds the previously-
-     * committed bytes — the cheapest source of byte truth for priority-3.
-     * For first-time adds dest_path does not exist and the flag stays
-     * false; priorities 4/5 then decide. Only consumed in the regular-
-     * file branch below (symlinks carry no encryption state to maintain). */
+     * Captured here so the sniff happens BEFORE the existing-file removal below
+     * — that removal would destroy the byte-truth source. The dotta worktree is
+     * checked out to the profile's HEAD upstream of this call, so when dest_path
+     * exists it holds the previously-committed bytes — the cheapest source of
+     * byte truth for priority-3. For first-time adds dest_path does not exist
+     * and the flag stays false; priorities 4/5 then decide. Only consumed in
+     * the regular-file branch below (symlinks carry no encryption state to
+     * maintain). */
     bool previously_encrypted = false;
 
     /* Handle existing files */
@@ -287,10 +283,10 @@ static error_t *add_file_to_worktree(
             return exists_err;
         }
 
-        /* Sniff the prior committed bytes BEFORE removing them. Tolerate
-         * a transient I/O blip on dest_path: defaulting to "no prior
-         * encryption known" lets priorities 4/5 decide; the next dotta
-         * update will surface any divergence. */
+        /* Sniff the prior committed bytes BEFORE removing them. Tolerate a
+         * transient I/O blip on dest_path: defaulting to "no prior encryption
+         * known" lets priorities 4/5 decide; the next dotta update will surface
+         * any divergence. */
         content_kind_t prior_kind = CONTENT_PLAINTEXT;
         error_t *classify_err = content_classify_path(dest_path, &prior_kind);
         if (classify_err) {
@@ -346,8 +342,8 @@ static error_t *add_file_to_worktree(
         }
 
         /* Capture symlink ownership metadata (root/ prefix + root user only).
-         * Uses lstat to get the symlink's own uid/gid, not the target's.
-         * Returns NULL item for home/ prefix or non-root (no metadata needed). */
+         * Uses lstat to get the symlink's own uid/gid, not the target's. Returns
+         * NULL item for home/ prefix or non-root (no metadata needed). */
         struct stat link_stat;
         if (lstat(filesystem_path, &link_stat) == 0) {
             err = metadata_capture_from_symlink(storage_path, &link_stat, &item);
@@ -366,10 +362,10 @@ static error_t *add_file_to_worktree(
             filesystem_path, storage_path
         );
     } else {
-        /* Regular file. previously_encrypted was captured from prior
-         * committed bytes in the existing-file removal block above (force
-         * re-add) or stays false (first-time add); priority-3 in the
-         * encryption policy reads byte truth either way. */
+        /* Regular file. previously_encrypted was captured from prior committed
+         * bytes in the existing-file removal block above (force re-add) or stays
+         * false (first-time add); priority-3 in the encryption policy reads byte
+         * truth either way. */
         bool should_encrypt = false;
         err = encryption_policy_should_encrypt(
             config,
@@ -387,11 +383,11 @@ static error_t *add_file_to_worktree(
             );
         }
 
-        /* Store file to worktree (handles read → encrypt → write) and
-         * capture both stat data and the byte-derived content kind.
+        /* Store file to worktree (handles read → encrypt → write) and capture
+         * both stat data and the byte-derived content kind.
          * SECURITY: Single stat() call eliminates a race condition.
-         * INVARIANT: written_kind is byte-truth for the bytes that hit
-         * the worktree; metadata.encrypted is stamped from it below. */
+         * INVARIANT: written_kind is byte-truth for the bytes that hit the
+         * worktree; metadata.encrypted is stamped from it below. */
         content_kind_t written_kind = CONTENT_PLAINTEXT;
         err = content_store_file_to_worktree(
             filesystem_path,
@@ -422,9 +418,9 @@ static error_t *add_file_to_worktree(
         }
         *out_stat = stat_cache_from_stat(&file_stat);
 
-        /* Stamp metadata.encrypted from byte truth, NOT from policy.
-         * This is the write-time invariant: bytes-on-disk and the
-         * metadata cache are bound at the same boundary, by construction. */
+        /* Stamp metadata.encrypted from byte truth, NOT from policy. This is
+         * the write-time invariant: bytes-on-disk and the metadata cache are
+         * bound at the same boundary, by construction. */
         if (item && item->kind == METADATA_ITEM_FILE) {
             item->file.encrypted = (written_kind != CONTENT_PLAINTEXT);
         }
@@ -515,11 +511,10 @@ static error_t *create_commit(
         return ERROR(ERR_MEMORY, "Failed to allocate storage paths array");
     }
 
-    /* Convert filesystem paths to storage paths for commit message.
-     * Files come from the walker output — already absolute and existing,
-     * so the walker never emits a top-level mount root. ROOT outcome is
-     * impossible here by construction; treat it as a skip should the
-     * invariant ever drift. */
+    /* Convert filesystem paths to storage paths for commit message. Files come
+     * from the walker output — already absolute and existing, so the walker never
+     * emits a top-level mount root. ROOT outcome is impossible here by
+     * construction; treat it as a skip should the invariant ever drift. */
     error_t *err = NULL;
     for (size_t i = 0; i < added_files->count; i++) {
         const char *file_path = added_files->items[i];
@@ -576,64 +571,60 @@ static error_t *create_commit(
 /**
  * Write the record after a successful add operation
  *
- * Called after Git commit succeeds, for a new profile and an existing one
- * alike. Anchors the files this add captured: they were captured FROM
- * disk, so their record is anchored to the just-committed blob with the
- * stat the capture took, and the next status hits the fast path; the
- * directories it tracked are anchored by the same rule — captured, so
- * dotta's. The view is computed, so nothing projects; one build over the
- * enabled set says which rows this profile won.
+ * Called after Git commit succeeds, for a new profile and an existing one alike.
+ * Anchors the files this add captured: they were captured FROM disk, so their
+ * record is anchored to the just-committed blob with the stat the capture took,
+ * and the next status hits the fast path; the directories it tracked are anchored
+ * by the same rule — captured, so dotta's. The view is computed, so nothing
+ * projects; one build over the enabled set says which rows this profile won.
  *
  * Algorithm:
- *   1. Scope. A new profile is enabled here with its deployment target —
- *      creating a profile via add enables it, in the same transaction as
- *      the record. An existing profile has rows in the view only if it
- *      is already enabled: not enabled is success with nothing to do;
- *      when a target was given it is re-bound (UPSERT)
+ *   1. Scope. A new profile is enabled here with its deployment target — creating
+ *      a profile via add enables it, in the same transaction as the record. An
+ *      existing profile has rows in the view only if it is already enabled: not
+ *      enabled is success with nothing to do; when a target was given it is
+ *      re-bound (UPSERT)
  *   2. Build the mount table from the post-mutation row cache
  *   3. Build the view and anchor the rows this profile won
  *   4. Commit transaction (state_save)
  *
- * CRITICAL ORDER: Step 1 must precede step 3. The target stored in step 1
- * is what lets the mount table built in step 2 resolve custom/ storage
- * paths for the view. Transaction atomicity ensures: enable + record
- * succeed together or fail together (automatic rollback on error).
+ * CRITICAL ORDER: Step 1 must precede step 3. The target stored in step 1 is
+ * what lets the mount table built in step 2 resolve custom/ storage paths for
+ * the view. Transaction atomicity ensures: enable + record succeed together or
+ * fail together (automatic rollback on error).
  *
- * A new branch's enabled_profiles row can pre-exist only as a leftover
- * of a branch deleted behind it. state_enable_profile is an UPSERT — the
- * row is re-bound to this add's target and keeps its position — and
- * whatever records the old branch left are orphans the next load reads,
- * since the new HEAD does not have them.
+ * A new branch's enabled_profiles row can pre-exist only as a leftover of a branch
+ * deleted behind it. state_enable_profile is an UPSERT — the row is re-bound to
+ * this add's target and keeps its position — and whatever records the old branch
+ * left are orphans the next load reads, since the new HEAD does not have them.
  *
  * Target Update (existing profile):
- *   When adding custom/ files to an already-enabled profile, the target
- *   must be stored in state BEFORE the view is built — the same
- *   target-before-build ordering as the new profile's enable. Only done
- *   when target is non-NULL to avoid clearing an existing target when
- *   adding home/ or root/ files. cmd_add's pre-flight has already
- *   refused the case where target differs from any existing binding, so
- *   reaching the UPSERT means either no prior binding or an idempotent
+ *   When adding custom/ files to an already-enabled profile, the target must be
+ *   stored in state BEFORE the view is built — the same target-before-build
+ *   ordering as the new profile's enable. Only done when target is non-NULL to
+ *   avoid clearing an existing target when adding home/ or root/ files. cmd_add's
+ *   pre-flight has already refused the case where target differs from any existing
+ *   binding, so reaching the UPSERT means either no prior binding or an idempotent
  *   re-bind to the same value.
  *
  * Ownership:
- *   Captured rows get deployed_at = time(NULL) because ADD captures files
- *   and directories FROM the filesystem. They're already at their target
- *   locations, so deployed_at is set to indicate dotta put them there. A
- *   captured file whose record another profile's deployment had written
- *   is taken over — the write rewrites the record under this profile —
- *   and counted for the receipt: nothing later says so (apply
- *   acknowledges a reassignment the scope made, not one the user's own
- *   add made).
+ *   Captured rows get deployed_at = time(NULL) because ADD captures files and
+ *   directories FROM the filesystem. They're already at their target locations,
+ *   so deployed_at is set to indicate dotta put them there. A captured file whose
+ *   record another profile's deployment had written is taken over — the write
+ *   rewrites the record under this profile — and counted for the receipt: nothing
+ *   later says so (apply acknowledges a reassignment the scope made, not one
+ *   the user's own add made).
  *
  * Error Handling:
  *   - Profile not enabled → rollback transaction, return NULL (success, no update)
  *   - The view fails to build → rollback, return error
  *
  * Non-Fatal Integration:
- *   Caller should treat a record write failure as non-fatal warning.
- *   Git commit already succeeded; the next status reads the committed
- *   blob from Git and confirms the file on its slow path. A new profile
- *   that failed to enable is enabled by hand.
+ *   Caller should treat a record write failure as non-fatal warning. Git commit
+ *   already succeeded; the next status reads the committed blob from Git and
+ *   confirms the file on its slow path. A new profile that failed to enable is
+ *   enabled by hand.
  *
  * Performance: one view build + O(N) point lookups, N = files added
  *
@@ -642,15 +633,15 @@ static error_t *create_commit(
  * @param target Deployment target for custom/ files (can be NULL)
  * @param profile_was_new This add created the profile's branch: enable it here
  * @param added_files Filesystem paths that were added (must not be NULL)
- * @param added_stats The capture's stat triple per added file, aligned
- *                    with added_files (must not be NULL)
- * @param added_dirs Filesystem paths of the directories the walker
- *                   passed through (must not be NULL; a classification
- *                   root among them has no row and is skipped)
+ * @param added_stats The capture's stat triple per added file, aligned with
+ *                    added_files (must not be NULL)
+ * @param added_dirs Filesystem paths of the directories the walker passed through
+ *                   (must not be NULL; a classification root among them has no
+ *                   row and is skipped)
  * @param out_updated Output flag: true if the record was written (must not be NULL)
  * @param out_synced Output: count of files anchored (can be NULL)
- * @param out_taken_over Output: count of those taken over from another
- *                       profile's deployment (can be NULL)
+ * @param out_taken_over Output: count of those taken over from another profile's
+ *                       deployment (can be NULL)
  * @return Error or NULL on success (non-fatal - caller treats as warning)
  */
 static error_t *update_manifest_after_add(
@@ -685,11 +676,10 @@ static error_t *update_manifest_after_add(
 
     /* STEP 1: Scope.
      *
-     * CRITICAL ORDER: Must enable (or re-bind) BEFORE the view is built
-     * so target is available in state for path resolution during the
-     * tree walk. The deployment target is stored in the enabled_profiles
-     * table and read by the mount table built below to resolve custom/
-     * storage paths.
+     * CRITICAL ORDER: Must enable (or re-bind) BEFORE the view is built so target
+     * is available in state for path resolution during the tree walk. The
+     * deployment target is stored in the enabled_profiles table and read by the
+     * mount table built below to resolve custom/ storage paths.
      *
      * Transaction Safety: If the record write below fails, the dispatcher's
      * state_free automatically rolls back this change. */
@@ -699,9 +689,9 @@ static error_t *update_manifest_after_add(
             return error_wrap(err, "Failed to enable profile in state");
         }
     } else {
-        /* Only an enabled profile has rows in the view. Not enabled is
-         * success with nothing to do; the dispatcher's state_free rolls
-         * back the untouched transaction. */
+        /* Only an enabled profile has rows in the view. Not enabled is success
+         * with nothing to do; the dispatcher's state_free rolls back the untouched
+         * transaction. */
         if (!state_has_profile(state, profile)) {
             return NULL;
         }
@@ -715,14 +705,13 @@ static error_t *update_manifest_after_add(
 
     /* STEP 2: Build a fresh mount table from the post-mutation row cache.
      *
-     * STEP 1 may have mutated enabled_profiles (a new row, or a target
-     * re-bound), so ctx->mounts (built in run_spec from the pre-mutation
-     * snapshot) can be stale here: the fresh table is the only handle
-     * that classifies paths under the just-bound target as custom/ for
-     * the view built below. Built unconditionally so the call shape
-     * stays uniform — when nothing was written, the fresh table is
-     * equivalent to ctx->mounts (one extra build is the cost of a
-     * uniform site). Allocated into ctx->arena, reclaimed at command end. */
+     * STEP 1 may have mutated enabled_profiles (a new row, or a target re-bound),
+     * so ctx->mounts (built in run_spec from the pre-mutation snapshot) can be
+     * stale here: the fresh table is the only handle that classifies paths under
+     * the just-bound target as custom/ for the view built below. Built
+     * unconditionally so the call shape stays uniform — when nothing was written,
+     * the fresh table is equivalent to ctx->mounts (one extra build is the cost
+     * of a uniform site). Allocated into ctx->arena, reclaimed at command end. */
     mount_table_t *post_mutation_mounts = NULL;
     err = profile_build_mount_table(state, arena, &post_mutation_mounts);
     if (err) {
@@ -731,13 +720,12 @@ static error_t *update_manifest_after_add(
 
     /* STEP 3: Build the view and anchor the rows this profile won.
      *
-     * Anchor only the rows this profile won: if this profile has lower
-     * precedence than existing enabled profiles, some files are another
-     * profile's rows (synced_count < added_files). Those correctly receive
-     * no anchor — the row is the winner's and so is its record, and the
-     * capture's stat would misattribute to the winner's blob_oid. Write
-     * failures are non-fatal: disk is the just-committed blob, and the
-     * next status's slow path confirms it. */
+     * Anchor only the rows this profile won: if this profile has lower precedence
+     * than existing enabled profiles, some files are another profile's rows
+     * (synced_count < added_files). Those correctly receive no anchor — the row
+     * is the winner's and so is its record, and the capture's stat would
+     * misattribute to the winner's blob_oid. Write failures are non-fatal: disk
+     * is the just-committed blob, and the next status's slow path confirms it. */
     string_array_t *enabled = NULL;
     err = state_get_profiles(state, &enabled);
     if (err) {
@@ -751,8 +739,8 @@ static error_t *update_manifest_after_add(
         return error_wrap(err, "Failed to build manifest");
     }
 
-    /* The record as it stands, indexed by path, so a takeover is known
-     * before the write that rewrites it. */
+    /* The record as it stands, indexed by path, so a takeover is known before
+     * the write that rewrites it. */
     anchor_t *anchors = NULL;
     size_t anchor_count = 0;
     err = state_get_all_anchors(state, arena, &anchors, &anchor_count);
@@ -795,12 +783,12 @@ static error_t *update_manifest_after_add(
         }
     }
 
-    /* The directories this add tracked, by the same rule: captured from
-     * disk, so dotta's to prune on scope exit — the ownership the gate
-     * asks for, which nothing later grants a directory that was already
-     * there (apply observes those; it anchors only the ones it makes).
-     * Cleanup's emptiness rule guards their contents. No stat triple: a
-     * directory has no content confirmation, as apply records them. */
+    /* The directories this add tracked, by the same rule: captured from disk,
+     * so dotta's to prune on scope exit — the ownership the gate asks for, which
+     * nothing later grants a directory that was already there (apply observes
+     * those; it anchors only the ones it makes). Cleanup's emptiness rule guards
+     * their contents. No stat triple: a directory has no content confirmation,
+     * as apply records them. */
     for (size_t i = 0; i < added_dirs->count; i++) {
         const manifest_row_t *row = manifest_lookup(manifest, added_dirs->items[i]);
         if (!row || strcmp(row->profile, profile) != 0) continue;
@@ -811,9 +799,9 @@ static error_t *update_manifest_after_add(
     hashmap_free(anchor_index, NULL);
     manifest_free(manifest);
 
-    /* STEP 4: Commit transaction. state is borrowed from the dispatcher:
-     * if state_save succeeds the transaction is committed; otherwise the
-     * dispatcher's state_free rolls it back. */
+    /* STEP 4: Commit transaction. state is borrowed from the dispatcher: if
+     * state_save succeeds the transaction is committed; otherwise the dispatcher's
+     * state_free rolls it back. */
     err = state_save(repo, state);
     if (err) {
         return error_wrap(err, "Failed to save record updates");
@@ -855,10 +843,9 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     metadata_t *metadata = NULL;
     const mount_table_t *mounts = NULL;
 
-    /* Pre-flight privilege labels. STRING_ARRAY_AUTO releases the
-     * backing buffer at scope exit; the privilege call window closes
-     * inside this function (or the process re-execs), so the array's
-     * lifetime is contained here. */
+    /* Pre-flight privilege labels. STRING_ARRAY_AUTO releases the backing buffer
+     * at scope exit; the privilege call window closes inside this function (or
+     * the process re-execs), so the array's lifetime is contained here. */
     string_array_t preflight_labels STRING_ARRAY_AUTO = { 0 };
 
     /* CLI flags override config */
@@ -871,10 +858,10 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         err = mount_validate_target(opts->target);
         if (err) goto cleanup;
 
-        /* Pre-flight: refuse silent re-targeting. If the profile is already
-         * enabled with a different target, fail BEFORE the Git commit so
-         * the user does not end up with a wasted commit + stale binding.
-         * Setting a target on a profile that previously had none is fine. */
+        /* Pre-flight: refuse silent re-targeting. If the profile is already enabled
+         * with a different target, fail BEFORE the Git commit so the user does
+         * not end up with a wasted commit + stale binding. Setting a target on
+         * a profile that previously had none is fine. */
         const char *existing = state_peek_profile_target(ctx->state, opts->profile);
         if (existing && existing[0] != '\0' && strcmp(existing, opts->target) != 0) {
             err = ERROR(
@@ -894,19 +881,18 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      * Two modes selected by --target:
      *
      *   --target given: a single-mount table pairing opts->profile with
-     *     opts->target. Other enabled profiles' bindings are deliberately
-     *     excluded — narrows classification to "what would adding to THIS
-     *     profile see?", so a path under another profile's --target does
-     *     NOT classify as that profile's custom/ namespace. The narrow
-     *     view also covers the brand-new-profile case (no row in
-     *     ctx->mounts yet) and the existing-profile-same-target case
-     *     (idempotent re-bind already verified at the pre-flight check
-     *     at the top of this function).
+     *     opts->target. Other enabled profiles' bindings are deliberately excluded
+     *     — narrows classification to "what would adding to THIS profile see?",
+     *     so a path under another profile's --target does NOT classify as that
+     *     profile's custom/ namespace. The narrow view also covers the
+     *     brand-new-profile case (no row in ctx->mounts yet) and the
+     *     existing-profile-same-target case (idempotent re-bind already verified
+     *     at the pre-flight check at the top of this function).
      *
      *   --target absent: borrow ctx->mounts. The full enabled set covers
-     *     opts->profile's existing binding (if any) plus HOME and ROOT.
-     *     Paths under opts->profile's stored target classify as custom/X
-     *     correctly without re-deriving the binding. */
+     *     opts->profile's existing binding (if any) plus HOME and ROOT. Paths
+     *     under opts->profile's stored target classify as custom/X correctly
+     *     without re-deriving the binding. */
     if (opts->target) {
         mount_table_t *local_mounts = NULL;
         mount_t mount = { .profile = opts->profile, .target = opts->target };
@@ -940,34 +926,33 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         goto cleanup;
     }
 
-    /* Pre-compute whether deployment target lies outside the user's
-     * HOME. Every input in this add invocation shares opts->target,
-     * so the answer is identical for the whole batch — evaluate once,
-     * reuse below. The kind-keyed predicate that consumes this mirrors
-     * privilege_needs_elevation's rule (ROOT always; CUSTOM iff target
-     * outside HOME); kept inline because the precomputed bool would
-     * leak the privilege module's CUSTOM-vs-ROOT branch through any
-     * public helper signature. */
+    /* Pre-compute whether deployment target lies outside the user's HOME. Every
+     * input in this add invocation shares opts->target, so the answer is identical
+     * for the whole batch — evaluate once, reuse below. The kind-keyed predicate
+     * that consumes this mirrors privilege_needs_elevation's rule (ROOT always;
+     * CUSTOM iff target outside HOME); kept inline because the precomputed bool
+     * would leak the privilege module's CUSTOM-vs-ROOT branch through any public
+     * helper signature. */
     bool custom_needs_elevation = opts->target
         ? !privilege_path_is_user_home(opts->target)
         : false;  /* No target → no custom/ paths → irrelevant */
 
     /* Collect labels for inputs whose label needs elevation. Only
-     * ownership-tracking labels are pushed — home/ never does, and
-     * custom/ only does when the deployment target is outside HOME.
-     * The shape of the test is uniform across both branches:
-     *   spec->tracks_ownership && (!spec->per_profile || custom_needs_elevation)
-     * — ROOT (per_profile=false) is always; CUSTOM (per_profile=true)
-     * defers to the precomputed bool.
+     *   ownership-tracking labels are pushed — home/ never does, and custom/
+     *   only does when the deployment target is outside HOME. The shape of the
+     *   test is uniform across both branches: spec->tracks_ownership &&
+     *   (!spec->per_profile || custom_needs_elevation)
+     * — ROOT (per_profile=false) is always; CUSTOM (per_profile=true) defers to
+     * the precomputed bool.
      *
      * Each input branch owns its own display string:
-     *   - Storage-path input ("home/X" / "root/X" / "custom/X"): the
-     *     user-typed string IS the display.
-     *   - Filesystem input that classifies cleanly: the classified
-     *     storage path the descendants will hit (e.g. "root/etc/hosts").
-     *   - Classification root (e.g. "dotta add /"): the typed filesystem
-     *     path itself. No storage tail exists for the directory-of-a-mount
-     *     case, so the input path is the most informative label. */
+     *   - Storage-path input ("home/X" / "root/X" / "custom/X"): the user-typed
+     *     string IS the display.
+     *   - Filesystem input that classifies cleanly: the classified storage path
+     *     the descendants will hit (e.g. "root/etc/hosts").
+     *   - Classification root (e.g. "dotta add /"): the typed filesystem path
+     *     itself. No storage tail exists for the directory-of-a-mount case, so
+     *     the input path is the most informative label. */
     for (size_t i = 0; i < opts->file_count; i++) {
         const char *file_path = opts->files[i];
         char *absolute = NULL;
@@ -984,34 +969,34 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         }
 
         /* Filesystem path — normalize raw user input to absolute path first.
-         * `--target` acts as a virtual root: every typed path is resolved as
-         * if the user were operating inside that directory (chroot-style).
-         * Tilde inputs bypass — `~/X` always means HOME. Mount classification
-         * below decides which storage namespace each path lands in (longest
-         * match), which for paths under --target is custom/. */
+         * `--target` acts as a virtual root: every typed path is resolved as if
+         * the user were operating inside that directory (chroot-style). Tilde
+         * inputs bypass — `~/X` always means HOME. Mount classification below
+         * decides which storage namespace each path lands in (longest match),
+         * which for paths under --target is custom/. */
         err = path_input_normalize(file_path, opts->target, &absolute);
         if (err) {
             err = error_wrap(err, "Failed to resolve path '%s'", file_path);
             goto cleanup;
         }
 
-        /* Pre-flight policy: skip non-existent paths silently. The main
-         * resolution loop's existence check (search "Path not found" below)
-         * is the canonical user-facing surface for this error; firing it
-         * twice produces no benefit and the pre-flight only exists to
-         * answer "would this op touch a path needing elevation?". A
-         * non-existent path contributes nothing to that question. */
+        /* Pre-flight policy: skip non-existent paths silently. The main resolution
+         * loop's existence check (search "Path not found" below) is the canonical
+         * user-facing surface for this error; firing it twice produces no benefit
+         * and the pre-flight only exists to answer "would this op touch a path
+         * needing elevation?". A non-existent path contributes nothing to that
+         * question. */
         if (!fs_lexists(absolute)) {
             free(absolute);
             continue;
         }
 
-        /* Classify the path. ROOT outcome means the input equals a mount
-         * root exactly ($HOME, "/", or --target). The main loop's walker
-         * will still expand its descendants — what we need here is just
-         * the spec to answer "would this op touch a path needing
-         * elevation?". mount_classify writes the spec in both outcomes;
-         * only the storage-path materialization differs. */
+        /* Classify the path. ROOT outcome means the input equals a mount root
+         * exactly ($HOME, "/", or --target). The main loop's walker will still
+         * expand its descendants — what we need here is just the spec to answer
+         * "would this op touch a path needing elevation?". mount_classify writes
+         * the spec in both outcomes; only the storage-path materialization
+         * differs. */
         mount_classify_outcome_t outcome;
         const char *storage_path = NULL;
         err = mount_classify(
@@ -1041,8 +1026,8 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      * - Interactive: Prompts user, re-execs with sudo if approved
      * - Non-interactive: Returns error with clear message
      *
-     * If re-exec succeeds, this function DOES NOT RETURN.
-     * If re-exec fails or user declines, returns error.
+     * If re-exec succeeds, this function DOES NOT RETURN. If re-exec fails or
+     * user declines, returns error.
      */
     err = privilege_ensure_for_operation(
         (const char *const *) preflight_labels.items,
@@ -1059,15 +1044,14 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
 
     /* Build ignore rules once per command.
      *
-     * Fatal on failure: if we cannot build the ignore rules, proceeding
-     * would risk tracking files the user explicitly told us to ignore
-     * (via baseline, profile, config, or CLI). Surface the error.
+     * Fatal on failure: if we cannot build the ignore rules, proceeding would
+     * risk tracking files the user explicitly told us to ignore (via baseline,
+     * profile, config, or CLI). Surface the error.
      *
-     * The profile-specific ruleset (which layers the profile's own
-     * `.dottaignore` on top of the common layers) is resolved below,
-     * after the branch exists — for a brand-new profile the builder
-     * would otherwise try to load a non-existent branch (a non-error,
-     * but no point walking that code path). */
+     * The profile-specific ruleset (which layers the profile's own `.dottaignore`
+     * on top of the common layers) is resolved below, after the branch exists —
+     * for a brand-new profile the builder would otherwise try to load a
+     * non-existent branch (a non-error, but no point walking that code path). */
     err = ignore_rules_create(
         repo, config,
         opts->exclude_patterns, opts->exclude_count,
@@ -1080,10 +1064,10 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
 
     /* Source-tree .gitignore filter (opt-in via config).
      *
-     * Built once per command and shared across the whole collection
-     * walk so the discovered source-repo handle is reused for every
-     * file under the same source tree. A non-fatal build failure leaves
-     * source_filter NULL, which is_excluded() treats as "layer skipped". */
+     * Built once per command and shared across the whole collection walk so the
+     * discovered source-repo handle is reused for every file under the same source
+     * tree. A non-fatal build failure leaves source_filter NULL, which
+     * is_excluded() treats as "layer skipped". */
     if (config && config->respect_gitignore) {
         err = source_filter_create(&source_filter);
         if (err) {
@@ -1148,10 +1132,10 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         );
     }
 
-    /* Resolve the profile-specific ruleset. Safe for both paths:
-     * existing profile → loads the profile's `.dottaignore`; new
-     * profile → branch doesn't exist yet, builder treats that as
-     * "no profile layer" and the common layers still apply. */
+    /* Resolve the profile-specific ruleset. Safe for both paths: existing profile
+     * → loads the profile's `.dottaignore`; new profile → branch doesn't exist
+     * yet, builder treats that as "no profile layer" and the common layers still
+     * apply. */
     err = ignore_rules_for_profile(ignore_rules, opts->profile, &profile_rules);
     if (err) {
         err = error_wrap(
@@ -1160,8 +1144,8 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         goto cleanup;
     }
 
-    /* Collect all files to add (expanding directories).
-     * The walker appends to both arrays; the caller owns both. */
+    /* Collect all files to add (expanding directories). The walker appends to
+     * both arrays; the caller owns both. */
     all_files = string_array_new(0);
     all_directories = string_array_new(0);
     if (!all_files || !all_directories) {
@@ -1178,10 +1162,10 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         const mount_spec_t *spec = mount_spec_for_path(file);
         if (spec) {
 
-            /* per_profile labels (custom/) require --target. Pre-validate
-             * at the call site so the user gets the directive
-             * "pass --target" message rather than mount_resolve's
-             * generic "no deployment target for profile" surface. */
+            /* per_profile labels (custom/) require --target. Pre-validate at
+             * the call site so the user gets the directive "pass --target" message
+             * rather than mount_resolve's generic "no deployment target for
+             * profile" surface. */
             if (spec->per_profile) {
                 if (!opts->target || opts->target[0] == '\0') {
                     err = ERROR(
@@ -1193,24 +1177,22 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
                 }
             }
 
-            /* CLI input is the write boundary for storage-path arguments.
-             * Validate the syntactic shape here so mount_resolve below can
-             * trust its input — establishes the invariant once and
-             * downstream readers (manifest tree-walk, sync, remove) trust
-             * it for the rest of the command. */
+            /* CLI input is the write boundary for storage-path arguments. Validate
+             * the syntactic shape here so mount_resolve below can trust its input
+             * — establishes the invariant once and downstream readers (manifest
+             * tree-walk, sync, remove) trust it for the rest of the command. */
             err = mount_validate_storage(file);
             if (err) {
                 err = error_wrap(err, "Invalid storage path '%s'", file);
                 goto cleanup;
             }
 
-            /* Convert storage path to filesystem path via the mount table.
-             * For home/ and root/ the profile is ignored; for custom/
-             * the per-profile target binding is consulted. The earlier
-             * spec->per_profile precondition above (--target check)
-             * guarantees the lookup binds — surface a contract violation
-             * via ERR_INTERNAL if a future change weakens that
-             * invariant. */
+            /* Convert storage path to filesystem path via the mount table. For
+             * home/ and root/ the profile is ignored; for custom/ the per-profile
+             * target binding is consulted. The earlier spec->per_profile
+             * precondition above (--target check) guarantees the lookup binds —
+             * surface a contract violation via ERR_INTERNAL if a future change
+             * weakens that invariant. */
             mount_resolve_outcome_t outcome;
             const char *fs_path = NULL;
             err = mount_resolve(
@@ -1267,9 +1249,9 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
                 goto cleanup;
             }
 
-            /* Diagnostic: the walker always pushes the CLI-arg directory
-             * itself, so all_directories grows by at least one. The file
-             * count reflects whether anything trackable was inside. */
+            /* Diagnostic: the walker always pushes the CLI-arg directory itself,
+             * so all_directories grows by at least one. The file count reflects
+             * whether anything trackable was inside. */
             if (all_files->count == files_before &&
                 all_directories->count == dirs_before + 1) {
                 output_info(
@@ -1307,10 +1289,10 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         free(absolute);
     }
 
-    /* Check if we have anything to add (files or directories).
-     * all_directories may contain classification-root entries that Phase 3
-     * skips, but it also captures descendants — so a non-empty array is
-     * sufficient evidence that the walk produced something worth committing. */
+    /* Check if we have anything to add (files or directories). all_directories
+     * may contain classification-root entries that Phase 3 skips, but it also
+     * captures descendants — so a non-empty array is sufficient evidence that
+     * the walk produced something worth committing. */
     if (all_files->count == 0 && all_directories->count == 0) {
         if (opts->exclude_count > 0) {
             err = ERROR(
@@ -1347,13 +1329,12 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         }
     }
 
-    /* Single-pass: add files and capture metadata inline.
-     * Files come from the walker output — already absolute and existing,
-     * never equal to a mount root. ROOT outcome is impossible by
-     * construction; surface as ERR_INTERNAL if the invariant ever drifts.
-     * Each capture's stat triple is kept, aligned with all_files, for the
-     * record: it is the stat of the bytes committed, which a later lstat
-     * could not promise. */
+    /* Single-pass: add files and capture metadata inline. Files come from the
+     * walker output — already absolute and existing, never equal to a mount root.
+     * ROOT outcome is impossible by construction; surface as ERR_INTERNAL if
+     * the invariant ever drifts. Each capture's stat triple is kept, aligned
+     * with all_files, for the record: it is the stat of the bytes committed,
+     * which a later lstat could not promise. */
     added_stats = arena_calloc(ctx->arena, all_files->count, sizeof(*added_stats));
     if (!added_stats) {
         err = ERROR(ERR_MEMORY, "Failed to allocate capture stats");
@@ -1381,16 +1362,17 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
             goto cleanup;
         }
 
-        /* Validate storage path: this is the write boundary into the
-         * worktree (and thence into Git). Establish the well-formed
-         * invariant here so downstream readers (manifest, sync, remove)
-         * can trust the bytes they read. */
+        /* Validate storage path: this is the write boundary into the worktree
+         * (and thence into Git). Establish the well-formed invariant here so
+         * downstream readers (manifest, sync, remove) can trust the bytes they
+         * read. */
         err = mount_validate_storage(storage_path);
         if (err) goto cleanup;
 
         /* Add file to worktree and capture metadata
          * ARCHITECTURE: add_file_to_worktree handles both operations atomically,
-         * sharing stat() data between content and metadata layers to eliminate TOCTOU */
+         * sharing stat() data between content and metadata layers to eliminate
+         * TOCTOU */
         err = add_file_to_worktree(
             wt, file_path, storage_path, opts, ctx->keymgr, config, metadata, out,
             &added_stats[i]
@@ -1404,14 +1386,14 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
 
     /* Capture directory metadata for every walked directory.
      *
-     * Iterates `all_directories` (filesystem paths produced by the walker)
-     * and converts each to a storage path here. The walker records every
-     * directory it walks into — including the CLI-arg top-level — so this
-     * loop captures the full tree, not just the CLI-named entry points.
+     * Iterates `all_directories` (filesystem paths produced by the walker) and
+     * converts each to a storage path here. The walker records every directory
+     * it walks into — including the CLI-arg top-level — so this loop captures
+     * the full tree, not just the CLI-named entry points.
      *
      * Classification roots ($HOME, "/", --target) have no storage-path
-     * representation: mount_classify surfaces MOUNT_CLASSIFY_ROOT and we
-     * skip them by design. Their descendants are captured normally.
+     * representation: mount_classify surfaces MOUNT_CLASSIFY_ROOT and we skip
+     * them by design. Their descendants are captured normally.
      */
     size_t dir_tracked_count = 0;
     for (size_t i = 0; i < all_directories->count; i++) {
@@ -1429,8 +1411,8 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
             goto cleanup;
         }
         if (outcome == MOUNT_CLASSIFY_ROOT) {
-            /* Skip the root itself; its descendants appear as separate
-             * entries and are captured normally. */
+            /* Skip the root itself; its descendants appear as separate entries
+             * and are captured normally. */
             continue;
         }
 
@@ -1526,24 +1508,24 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
 
     /* Write the record - auto-enable new profiles, anchor for enabled ones
      *
-     * The files were captured from disk, so their record is anchored to
-     * the just-committed blob now rather than left for a later status to
-     * confirm. The view itself is computed at every load and needs no
-     * update.
+     * The files were captured from disk, so their record is anchored to the
+     * just-committed blob now rather than left for a later status to confirm.
+     * The view itself is computed at every load and needs no update.
      *
-     * For NEW profiles: Auto-enable provides intuitive UX (creating via 'add' enables it).
-     * UX Decision: Creating a profile via 'add' should enable it automatically.
-     * This matches user expectations: "I just added a file, it should be active."
-     * For EXISTING profiles: Standard behavior (anchor only if already enabled).
+     * For NEW profiles: Auto-enable provides intuitive UX (creating via 'add'
+     * enables it). UX Decision: Creating a profile via 'add' should enable it
+     * automatically. This matches user expectations: "I just added a file, it
+     * should be active." For EXISTING profiles: Standard behavior (anchor only
+     * if already enabled).
      *
-     * Both end in the same loop: one view build says which rows this
-     * profile won, and add's contribution is the anchor — the files were
-     * just captured from disk, so the anchor is stamped from that capture
-     * rather than left for a later status to fill in.
+     * Both end in the same loop: one view build says which rows this profile
+     * won, and add's contribution is the anchor — the files were just captured
+     * from disk, so the anchor is stamped from that capture rather than left
+     * for a later status to fill in.
      *
-     * Non-fatal: If the record write fails, Git commit still succeeded. A
-     * new profile that failed to enable is enabled by hand; the next
-     * status confirms the committed files on its slow path.
+     * Non-fatal: If the record write fails, Git commit still succeeded. A new
+     * profile that failed to enable is enabled by hand; the next status confirms
+     * the committed files on its slow path.
      */
     bool manifest_updated = false;
     size_t manifest_synced_count = 0;
@@ -1625,10 +1607,9 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         /* Manifest status feedback */
         if (manifest_updated) {
             if (added_count > 0) {
-                /* Files were added - show sync results with precedence
-                 * awareness: the rows a higher profile owns got no
-                 * anchor; the ones another profile's deployment had
-                 * written were taken over. */
+                /* Files were added - show sync results with precedence awareness:
+                 * the rows a higher profile owns got no anchor; the ones another
+                 * profile's deployment had written were taken over. */
                 if (manifest_synced_count == added_count) {
                     output_info(
                         out, OUTPUT_NORMAL,
@@ -1706,9 +1687,8 @@ cleanup:
  *   1. -p/--profile was given: every positional is a file path.
  *   2. -p not given: first positional is the profile, rest are files.
  *
- * All validation lives here (not in a separate `validate` hook) so
- * the error message can reference the effective invariant rather
- * than a raw count.
+ * All validation lives here (not in a separate `validate` hook) so the error
+ * message can reference the effective invariant rather than a raw count.
  */
 static error_t *add_post_parse(
     void *opts_v, arena_t *arena, const args_command_t *cmd
@@ -1789,8 +1769,8 @@ static const args_opt_t add_opts[] = {
         ADD_ENCRYPT_FORCE_OFF,
         "Bypass auto-encryption patterns"
     ),
-    /* <profile> <file|dir>... — order-dependent, first is profile.
-     * Mirrors clone's raw-bucket-plus-post_parse approach. */
+    /* <profile> <file|dir>... — order-dependent, first is profile. Mirrors clone's
+     * raw-bucket-plus-post_parse approach. */
     ARGS_POSITIONAL_RAW(
         cmd_add_options_t,    positional_args,  positional_count,
         0,                    0

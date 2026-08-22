@@ -1,22 +1,20 @@
 /**
  * encoding.h - Portable byte-order primitives
  *
- * Little-endian encode/decode for fixed-width integers. Each function
- * consumes or emits exactly the bytes its width implies, independent
- * of host byte order, so binary formats and MAC inputs reproduce bit-
- * for-bit across any architecture dotta runs on.
+ * Little-endian encode/decode for fixed-width integers. Each function consumes
+ * or emits exactly the bytes its width implies, independent of host byte order,
+ * so binary formats and MAC inputs reproduce bit-for-bit across any architecture
+ * dotta runs on.
  *
- * The functions are branch-free on every target the compiler supports;
- * on little-endian hosts a modern optimizer lowers each body to a
- * single aligned load or store, and on big-endian hosts to a load or
- * store plus a bswap. Call overhead is one or two instructions —
- * negligible against the bandwidth-bound work that surrounds every
- * call (keyed-BLAKE2b absorption in `crypto/mac.c`, XChaCha20
- * keystream in `crypto/cipher.c`, and session-cache MAC computation
+ * The functions are branch-free on every target the compiler supports; on
+ * little-endian hosts a modern optimizer lowers each body to a single aligned
+ * load or store, and on big-endian hosts to a load or store plus a bswap. Call
+ * overhead is one or two instructions — negligible against the bandwidth-bound
+ * work that surrounds every call (keyed-BLAKE2b absorption in `crypto/mac.c`,
+ * XChaCha20 keystream in `crypto/cipher.c`, and session-cache MAC computation
  * in `crypto/session.c`).
  *
- * Single source of truth for byte-order conversions across the crypto
- * stack:
+ * Single source of truth for byte-order conversions across the crypto stack:
  *   - `crypto/mac.c`      — canonical LE64 framing of every variable-
  *                           length input absorbed into keyed BLAKE2b.
  *   - `crypto/cipher.c`   — LE16 Argon2-params field in the encrypted-

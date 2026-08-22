@@ -6,10 +6,10 @@
  *   2. Single-profile execution (extract + exec OR in-memory validate).
  *   3. Public orchestrator (filter, iterate, aggregate).
  *
- * This file owns every command-scoped concern of bootstrap: env,
- * timeout, working directory, process-group policy, progress output,
- * and failure aggregation. The sys/bootstrap primitives know none of
- * this and cannot reach back up across the layer boundary.
+ * This file owns every command-scoped concern of bootstrap: env, timeout, working
+ * directory, process-group policy, progress output, and failure aggregation.
+ * The sys/bootstrap primitives know none of this and cannot reach back up across
+ * the layer boundary.
  */
 
 #include "utils/bootstrap.h"
@@ -29,14 +29,13 @@
 #include "sys/filesystem.h"
 #include "sys/process.h"
 
-/* Per-script timeout. Bootstrap scripts may install packages, compile
- * software, or download large artefacts; 10 minutes is generous
- * without being unbounded. */
+/* Per-script timeout. Bootstrap scripts may install packages, compile software,
+ * or download large artefacts; 10 minutes is generous without being unbounded. */
 #define BOOTSTRAP_TIMEOUT_SECONDS 600
 
 /**
- * Free a NULL-terminated environment array of `count` heap strings.
- * No-op on NULL input; callers can free unconditionally.
+ * Free a NULL-terminated environment array of `count` heap strings. No-op on
+ * NULL input; callers can free unconditionally.
  */
 static void env_free(char **env, size_t count) {
     if (!env) return;
@@ -45,16 +44,16 @@ static void env_free(char **env, size_t count) {
 }
 
 /**
- * Build the DOTTA_* environment for a bootstrap script, layered on
- * top of a filtered copy of the parent's environment (DOTTA_*
- * stripped to prevent shadowing).
+ * Build the DOTTA_* environment for a bootstrap script, layered on top of a
+ * filtered copy of the parent's environment (DOTTA_* stripped to prevent
+ * shadowing).
  *
- * Returns a NULL-terminated `char **` suitable for execve, or NULL
- * on allocation failure. On success, *out_count is the number of
- * non-NULL entries; the caller frees via env_free().
+ * Returns a NULL-terminated `char **` suitable for execve, or NULL on allocation
+ * failure. On success, *out_count is the number of non-NULL entries; the caller
+ * frees via env_free().
  *
- * All string inputs are required to be non-NULL — the helper is
- * static and has a single caller that validates upstream.
+ * All string inputs are required to be non-NULL — the helper is static and has
+ * a single caller that validates upstream.
  */
 static char **env_build(
     const char *repo_dir,
@@ -91,9 +90,9 @@ static char **env_build(
     APPEND(str_format("DOTTA_PROFILES=%s", all_profiles));
     APPEND(str_format("DOTTA_DRY_RUN=%s", dry_run ? "1" : "0"));
 
-    /* Passthrough parent env, skipping DOTTA_* to preserve the
-     * invariant that our four variables are the authoritative
-     * DOTTA_* surface visible to the child. */
+    /* Passthrough parent env, skipping DOTTA_* to preserve the invariant that
+     * our four variables are the authoritative DOTTA_* surface visible to the
+     * child. */
     for (char **e = environ; *e; e++) {
         if (str_starts_with(*e, "DOTTA_")) continue;
         APPEND(strdup(*e));
@@ -113,11 +112,10 @@ cleanup:
 /**
  * Map a process_result_t into a domain-specific error.
  *
- * Returns NULL iff the script ran to completion with exit code 0.
- * Otherwise, composes a short message keyed to the most specific
- * reason available — exec_failed takes precedence (child-side errno
- * captures "bad shebang" / "ENOENT interpreter"), then timeout,
- * then signal, then non-zero exit.
+ * Returns NULL iff the script ran to completion with exit code 0. Otherwise,
+ * composes a short message keyed to the most specific reason available —
+ * exec_failed takes precedence (child-side errno captures "bad shebang" / "ENOENT
+ * interpreter"), then timeout, then signal, then non-zero exit.
  */
 static error_t *script_error(const process_result_t *r) {
     if (r->exec_failed) {
@@ -147,11 +145,10 @@ static error_t *script_error(const process_result_t *r) {
 /**
  * Execute one profile's bootstrap script.
  *
- * Extracts to a secure temp file, builds the environment, execs via
- * sys/process in PROCESS_PGRP_SHARED so terminal Ctrl+C reaches the
- * child, then unlinks the temp file unconditionally. The extracted
- * file exists only between bootstrap_extract_to_temp and the exec —
- * the window is tight by design.
+ * Extracts to a secure temp file, builds the environment, execs via sys/process
+ * in PROCESS_PGRP_SHARED so terminal Ctrl+C reaches the child, then unlinks the
+ * temp file unconditionally. The extracted file exists only between
+ * bootstrap_extract_to_temp and the exec — the window is tight by design.
  */
 static error_t *run_live(
     git_repository *repo,
@@ -180,11 +177,10 @@ static error_t *run_live(
         goto cleanup;
     }
 
-    /* Run the script from the invoking user's HOME so it behaves like
-     * a normal interactive shell session (relative paths in the script
-     * resolve under $HOME). fs_get_home is sudo-aware: under sudo we
-     * land in the user's home, not /root. A failure here is non-fatal
-     * — the spec carries `repo_dir` as the fallback. */
+    /* Run the script from the invoking user's HOME so it behaves like a normal
+     * interactive shell session (relative paths in the script resolve under $HOME).
+     * fs_get_home is sudo-aware: under sudo we land in the user's home, not /root.
+     * A failure here is non-fatal — the spec carries `repo_dir` as the fallback. */
     error_t *home_err = fs_get_home(&work_home);
     if (home_err) {
         error_free(home_err);
@@ -221,8 +217,8 @@ cleanup:
 }
 
 /**
- * Dry-run: read the script into memory, validate its shebang, free.
- * No temp file, no subprocess, no environment build.
+ * Dry-run: read the script into memory, validate its shebang, free. No temp file,
+ * no subprocess, no environment build.
  */
 static error_t *run_dry(git_repository *repo, const char *profile) {
     buffer_t content = BUFFER_INIT;
@@ -246,17 +242,16 @@ error_t *bootstrap_fire(output_t *out, const bootstrap_spec_t *spec) {
     CHECK_NULL(spec->repo_dir);
     CHECK_NULL(spec->profiles);
 
-    /* Bootstrap script output is streamed directly to STDOUT_FILENO
-     * (bypassing `out`), so the orchestrator's progress lines and
-     * the child's output interleave correctly only when `out`
-     * routes to stdout. Guard the invariant loudly. */
+    /* Bootstrap script output is streamed directly to STDOUT_FILENO (bypassing
+     * `out`), so the orchestrator's progress lines and the child's output
+     * interleave correctly only when `out` routes to stdout. Guard the invariant
+     * loudly. */
     assert(out->stream == stdout);
 
     error_t *err = NULL;
 
-    /* Single-pass filter: keep only profiles that have a script, in
-     * order. STRING_ARRAY_AUTO ensures the list is freed on every
-     * exit path. */
+    /* Single-pass filter: keep only profiles that have a script, in order.
+     * STRING_ARRAY_AUTO ensures the list is freed on every exit path. */
     string_array_t found STRING_ARRAY_AUTO = { 0 };
     for (size_t i = 0; i < spec->profiles->count; i++) {
         const char *p = spec->profiles->items[i];
@@ -274,18 +269,18 @@ error_t *bootstrap_fire(output_t *out, const bootstrap_spec_t *spec) {
         return NULL;
     }
 
-    /* DOTTA_PROFILES exposes the set of scripts being run to each
-     * child — not the set of profiles the user passed in. This
-     * matches the "[N/M]" progress numbering and avoids misleading
-     * scripts about peers that aren't participating. */
+    /* DOTTA_PROFILES exposes the set of scripts being run to each child — not
+     * the set of profiles the user passed in. This matches the "[N/M]" progress
+     * numbering and avoids misleading scripts about peers that aren't
+     * participating. */
     char *all_profiles = string_array_join(&found, " ");
     if (!all_profiles) {
         return ERROR(ERR_MEMORY, "Failed to join profile names");
     }
 
-    /* Failure tracking: fail_count is authoritative (advances even
-     * if recording the profile name OOMs); `failed` holds the names
-     * we successfully recorded for the end-of-run summary. */
+    /* Failure tracking: fail_count is authoritative (advances even if recording
+     * the profile name OOMs); `failed` holds the names we successfully recorded
+     * for the end-of-run summary. */
     string_array_t failed STRING_ARRAY_AUTO = { 0 };
     size_t fail_count = 0;
 
@@ -297,10 +292,9 @@ error_t *bootstrap_fire(output_t *out, const bootstrap_spec_t *spec) {
             i + 1, found.count, profile, BOOTSTRAP_SCRIPT_NAME
         );
 
-        /* Flush the progress line so it lands on stdout before the
-         * child begins writing. Without this, redirected/piped
-         * stdout can interleave the child's raw writes ahead of our
-         * stdio-buffered line. */
+        /* Flush the progress line so it lands on stdout before the child begins
+         * writing. Without this, redirected/piped stdout can interleave the child's
+         * raw writes ahead of our stdio-buffered line. */
         fflush(out->stream);
 
         error_t *step_err = spec->dry_run
@@ -330,10 +324,10 @@ error_t *bootstrap_fire(output_t *out, const bootstrap_spec_t *spec) {
             );
         }
 
-        /* Continue-on-error: remember for the summary, then free the
-         * per-step error (the details are already on screen). An
-         * OOM while pushing the profile name is not fatal — we still
-         * advance fail_count so the final summary is accurate. */
+        /* Continue-on-error: remember for the summary, then free the per-step
+         * error (the details are already on screen). An OOM while pushing the
+         * profile name is not fatal — we still advance fail_count so the final
+         * summary is accurate. */
         fail_count++;
         error_t *push_err = string_array_push(&failed, profile);
         if (push_err) error_free(push_err);

@@ -31,8 +31,8 @@
 /**
  * Check if content appears to be binary
  *
- * Scans for NUL bytes in the first 8000 bytes, matching Git's heuristic.
- * Must be called on plaintext content (after decryption).
+ * Scans for NUL bytes in the first 8000 bytes, matching Git's heuristic. Must
+ * be called on plaintext content (after decryption).
  */
 static bool content_is_binary(const unsigned char *data, size_t size) {
     size_t check_len = size < 8000 ? size : 8000;
@@ -54,10 +54,10 @@ static const char *filemode_type_str(git_filemode_t mode) {
 /**
  * Write blob bytes to stdout with a trailing newline ensured
  *
- * Terminal display normalization — byte-faithful extraction lives in
- * `dotta export`, not here. Flushes before returning so buffered IO
- * failures (ENOSPC, closed pipe with SIGPIPE ignored) surface as a
- * non-zero exit instead of vanishing at process teardown.
+ * Terminal display normalization — byte-faithful extraction lives in `dotta
+ * export`, not here. Flushes before returning so buffered IO failures (ENOSPC,
+ * closed pipe with SIGPIPE ignored) surface as a non-zero exit instead of vanishing
+ * at process teardown.
  */
 static error_t *write_stdout(const buffer_t *content) {
     if (content->size > 0 &&
@@ -83,11 +83,11 @@ static error_t *write_stdout(const buffer_t *content) {
 /**
  * Print blob content with metadata header
  *
- * Uses content layer for transparent decryption. Password prompt only
- * happens if file is encrypted and key is not cached.
+ * Uses content layer for transparent decryption. Password prompt only happens
+ * if file is encrypted and key is not cached.
  *
- * Handles symlinks (shows target), binary files (shows size without
- * dumping content), and encrypted files (indicates decryption occurred).
+ * Handles symlinks (shows target), binary files (shows size without dumping
+ * content), and encrypted files (indicates decryption occurred).
  */
 static error_t *print_blob_content(
     git_repository *repo,
@@ -107,13 +107,13 @@ static error_t *print_blob_content(
     CHECK_NULL(metadata);
     CHECK_NULL(out);
 
-    /* Get plaintext content (handles encryption transparently — the content
-     * layer classifies by bytes, no caller-supplied flag needed).
+    /* Get plaintext content (handles encryption transparently — the content layer
+     * classifies by bytes, no caller-supplied flag needed).
      *
-     * The metadata-derived `encrypted` bool below is read for display only
-     * (the "(encrypted)" annotation): it is byte-truth via the write-time
-     * invariant in `content_store_file_to_worktree`, but does not influence
-     * routing inside the content layer. */
+     * The metadata-derived `encrypted` bool below is read for display only (the
+     * "(encrypted)" annotation): it is byte-truth via the write-time invariant
+     * in `content_store_file_to_worktree`, but does not influence routing inside
+     * the content layer. */
     bool encrypted = metadata_get_file_encrypted(metadata, storage_path);
 
     buffer_t content = BUFFER_INIT;
@@ -328,9 +328,8 @@ static error_t *show_file(
         /*
          * Print file content with transparent decryption
          *
-         * file_path is the storage_path (e.g., "home/.bashrc")
-         * profile is used for key derivation
-         * metadata is used for encryption state validation
+         * file_path is the storage_path (e.g., "home/.bashrc") profile is used
+         * for key derivation metadata is used for encryption state validation
          * keymgr will prompt for password only if file is encrypted
          */
         err = print_blob_content(
@@ -354,8 +353,8 @@ cleanup:
 /**
  * Callback for printing diff lines with color
  *
- * Colorizes additions (green), deletions (red), and headers (cyan).
- * Matches the diff command's output style.
+ * Colorizes additions (green), deletions (red), and headers (cyan). Matches the
+ * diff command's output style.
  */
 static int print_diff_line_cb(
     const git_diff_delta *delta,
@@ -662,9 +661,10 @@ error_t *cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
     /* Borrow the dispatcher's mount table over all enabled profiles. */
     const mount_table_t *mounts = ctx->mounts;
 
-    /* Resolve file path to storage format (common to both explicit and implicit paths).
-     * On resolution failure, fall back to the original input — it may be a partial-match
-     * pattern that path_input_resolve rejects but the search below accepts. */
+    /* Resolve file path to storage format (common to both explicit and implicit
+     * paths). On resolution failure, fall back to the original input — it may
+     * be a partial-match pattern that path_input_resolve rejects but the search
+     * below accepts. */
     error_t *convert_err = path_input_resolve(
         mounts, opts->file_path, ctx->arena, &converted
     );
@@ -700,8 +700,8 @@ error_t *cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
         goto cleanup;
     }
 
-    /* Discover owning profile via the view: the enabled set at HEAD with
-     * precedence resolved, so the storage path names at most one row */
+    /* Discover owning profile via the view: the enabled set at HEAD with precedence
+     * resolved, so the storage path names at most one row */
     err = state_get_profiles(state, &profiles);
     if (err) {
         err = error_wrap(err, "Failed to get enabled profiles");
@@ -751,12 +751,12 @@ cleanup:
  * ══════════════════════════════════════════════════════════════════ */
 
 /**
- * Interpret the 0-3 raw positionals into `profile`, `file_path`,
- * `commit`, and `mode`.
+ * Interpret the 0-3 raw positionals into `profile`, `file_path`, `commit`, and
+ * `mode`.
  *
- * Allocation model: all refspec strings are allocated in `arena`.
- * Pure positional pointers borrow argv. cmd_show does not free any of
- * these pointers — the engine's arena owns their lifetime.
+ * Allocation model: all refspec strings are allocated in `arena`. Pure positional
+ * pointers borrow argv. cmd_show does not free any of these pointers — the engine's
+ * arena owns their lifetime.
  */
 static error_t *show_post_parse(
     void *opts_v, arena_t *arena, const args_command_t *cmd

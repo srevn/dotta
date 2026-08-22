@@ -1,8 +1,8 @@
 /**
  * config.h - Configuration file parsing
  *
- * Handles loading and parsing dotta configuration files.
- * Config file format is TOML-like with sections and key=value pairs.
+ * Handles loading and parsing dotta configuration files. Config file format is
+ * TOML-like with sections and key=value pairs.
  */
 
 #ifndef DOTTA_CONFIG_H

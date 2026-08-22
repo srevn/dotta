@@ -1,8 +1,8 @@
 /**
  * completion.h - Shell completion helper
  *
- * Hidden subcommand providing completion data for shell scripts.
- * Outputs newline-separated results to stdout, no stderr output.
+ * Hidden subcommand providing completion data for shell scripts. Outputs
+ * newline-separated results to stdout, no stderr output.
  *
  * Design principles:
  * - Silent failures: Never print errors, output nothing on failure
@@ -36,10 +36,10 @@
 /**
  * Completion mode.
  *
- * Runtime modes (check / profiles / files / commits / remotes) emit
- * data that depends on the user's repo state. `spec` modes emit the
- * build-time fish script derived from the root command registry — no
- * repo required, output is deterministic on a given binary.
+ * Runtime modes (check / profiles / files / commits / remotes) emit data that
+ * depends on the user's repo state. `spec` modes emit the build-time fish script
+ * derived from the root command registry — no repo required, output is
+ * deterministic on a given binary.
  */
 typedef enum {
     COMPLETE_CHECK,           /* Check if in dotta repo (exit 0/1) */
@@ -53,8 +53,8 @@ typedef enum {
 /**
  * Completion options
  *
- * `mode` is derived by `completion_post_parse` from the first positional
- * token (check | profiles | files | commits | remotes).
+ * `mode` is derived by `completion_post_parse` from the first positional token
+ * (check | profiles | files | commits | remotes).
  */
 typedef struct {
     /* User-facing (read by cmd_completion). */
@@ -73,9 +73,8 @@ typedef struct {
 /**
  * Run completion command
  *
- * Outputs completion results to stdout.
- * Returns NULL on success (even if no results).
- * Never outputs to stderr - silent failure model.
+ * Outputs completion results to stdout. Returns NULL on success (even if no
+ * results). Never outputs to stderr - silent failure model.
  *
  * @param ctx Dispatch context (ctx->repo may be NULL for COMPLETE_CHECK mode)
  * @param opts Command options (must not be NULL)
@@ -86,9 +85,9 @@ error_t *cmd_completion(const dotta_ctx_t *ctx, const cmd_completion_options_t *
 /**
  * Spec-engine command specification for `dotta __complete`.
  *
- * Hidden from top-level help and from the fish completion export.
- * Registered in main.c's static `dotta_commands[]`; defined in
- * completion.c beside the post_parse and dispatch wrappers.
+ * Hidden from top-level help and from the fish completion export. Registered in
+ * main.c's static `dotta_commands[]`; defined in completion.c beside the post_parse
+ * and dispatch wrappers.
  */
 extern const args_command_t spec_completion;
 

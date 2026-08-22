@@ -6,8 +6,8 @@
  * 2. Config file setting (~/.config/dotta/config.toml)
  * 3. Default location: ~/.local/share/dotta/repo
  *
- * This is different from git's behavior - dotta uses a centralized
- * repository, not discovery from current working directory.
+ * This is different from git's behavior - dotta uses a centralized repository,
+ * not discovery from current working directory.
  */
 
 #ifndef DOTTA_REPO_H
@@ -24,10 +24,9 @@
  * 2. Config file repo_dir setting
  * 3. Default: ~/.local/share/dotta/repo
  *
- * The path is always expanded (~ becomes absolute path).
- * If the config file exists but fails to parse/validate, a warning
- * is emitted to stderr and the resolution continues without config
- * (env var and default are still respected).
+ * The path is always expanded (~ becomes absolute path). If the config file exists
+ * but fails to parse/validate, a warning is emitted to stderr and the resolution
+ * continues without config (env var and default are still respected).
  *
  * @param config Loaded configuration (must not be NULL)
  * @param out Resolved repository path (caller must free)
@@ -38,9 +37,8 @@ error_t *resolve_repo_path(const config_t *config, char **out);
 /**
  * Open dotta repository
  *
- * Resolves the repository path, validates it exists and is a valid git
- * repository, then opens it. This is the standard way to open a repository
- * for dotta commands.
+ * Resolves the repository path, validates it exists and is a valid git repository,
+ * then opens it. This is the standard way to open a repository for dotta commands.
  *
  * RESOLUTION ORDER:
  * 1. DOTTA_REPO_DIR environment variable
@@ -52,8 +50,7 @@ error_t *resolve_repo_path(const config_t *config, char **out);
  * - Returns detailed error with helpful hints if not found
  * - Includes DOTTA_REPO_DIR hint in error if set
  *
- * ERROR MESSAGES:
- * If repository not found, error includes:
+ * ERROR MESSAGES: If repository not found, error includes:
  * - Path that was checked
  * - Hint to run 'dotta init'
  * - DOTTA_REPO_DIR value if set
@@ -73,10 +70,10 @@ error_t *repo_open(const config_t *config, git_repository **repo_out, char **pat
 /**
  * Fix repository ownership if running under sudo
  *
- * Automatically restores normal user ownership of the repository directory
- * and .git/ contents when dotta commands are run via sudo. This prevents
- * "Permission denied" errors and libgit2 ownership validation failures
- * (CVE-2022-24765) on subsequent non-sudo runs.
+ * Automatically restores normal user ownership of the repository directory and
+ * .git/ contents when dotta commands are run via sudo. This prevents "Permission
+ * denied" errors and libgit2 ownership validation failures (CVE-2022-24765) on
+ * subsequent non-sudo runs.
  *
  * WHEN TO CALL:
  * - Call this at process exit, after all Git operations complete
@@ -96,8 +93,8 @@ error_t *repo_open(const config_t *config, git_repository **repo_out, char **pat
  * - Fatal errors (can't get user, .git missing): Returns error
  * - Non-fatal: Even if some files fail, most will be fixed
  *
- * @param repo_path Repository base path (e.g., ~/.local/share/dotta/repo)
- *                  Must not be NULL, must be a valid dotta repository
+ * @param repo_path Repository base path (e.g., ~/.local/share/dotta/repo) Must
+ *                  not be NULL, must be a valid dotta repository
  * @return Error on fatal failures, NULL on success
  */
 error_t *repo_fix_ownership_if_needed(const char *repo_path);

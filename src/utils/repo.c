@@ -29,8 +29,8 @@ error_t *resolve_repo_path(const config_t *config, char **out) {
     char *repo_dir = NULL;
     error_t *err = config_get_repo_dir(config, &repo_dir);
     if (err) {
-        /* Path expansion failed (e.g., invalid home directory).
-         * This is a genuine error that should be propagated.
+        /* Path expansion failed (e.g., invalid home directory). This is a genuine
+         * error that should be propagated.
          */
         return error_wrap(
             err, "Failed to resolve repository path"
@@ -45,8 +45,8 @@ error_t *resolve_repo_path(const config_t *config, char **out) {
  * Ensure repository HEAD points to dotta-worktree
  *
  * Dotta requires the main worktree to always be on the dotta-worktree branch.
- * If HEAD is on a different branch (e.g., user manually ran git checkout),
- * this function automatically switches back using the correct checkout sequence.
+ * If HEAD is on a different branch (e.g., user manually ran git checkout), this
+ * function automatically switches back using the correct checkout sequence.
  *
  * Behavior:
  * - Already on dotta-worktree: no-op (fast path)
@@ -87,8 +87,7 @@ static error_t *repo_ensure_dotta_worktree(git_repository *repo) {
     err = gitops_is_current_branch(repo, "dotta-worktree", &is_current);
     if (err) {
         /*
-         * Non-fatal: could be detached HEAD state.
-         * Continue with recovery attempt.
+         * Non-fatal: could be detached HEAD state. Continue with recovery attempt.
          */
         error_free(err);
         err = NULL;
@@ -104,8 +103,8 @@ static error_t *repo_ensure_dotta_worktree(git_repository *repo) {
     error_t *branch_err = gitops_current_branch(repo, &old_branch);
     if (branch_err) {
         /*
-         * Non-fatal: detached HEAD or other unusual state.
-         * Continue with recovery, use placeholder in message.
+         * Non-fatal: detached HEAD or other unusual state. Continue with recovery,
+         * use placeholder in message.
          */
         error_free(branch_err);
         old_branch = NULL;
@@ -168,10 +167,9 @@ static error_t *repo_ensure_dotta_worktree(git_repository *repo) {
     }
 
     /*
-     * Recovery may have deleted the process CWD (e.g., user was in a
-     * subdirectory that only existed on the old branch). Move to the
-     * repo workdir so subsequent operations (credential helpers, hooks)
-     * don't fail with invalid CWD.
+     * Recovery may have deleted the process CWD (e.g., user was in a subdirectory
+     * that only existed on the old branch). Move to the repo workdir so subsequent
+     * operations (credential helpers, hooks) don't fail with invalid CWD.
      */
     const char *workdir = git_repository_workdir(repo);
     if (workdir) {
@@ -242,9 +240,9 @@ error_t *repo_open(const config_t *config, git_repository **repo_out, char **pat
     /*
      * Ensure HEAD points to dotta-worktree
      *
-     * Dotta's invariant: HEAD must always be on dotta-worktree.
-     * If user manually checked out another branch (e.g., git checkout global),
-     * recover automatically before proceeding.
+     * Dotta's invariant: HEAD must always be on dotta-worktree. If user manually
+     * checked out another branch (e.g., git checkout global), recover automatically
+     * before proceeding.
      */
     err = repo_ensure_dotta_worktree(repo);
     if (err) {
@@ -270,16 +268,16 @@ error_t *repo_open(const config_t *config, git_repository **repo_out, char **pat
 error_t *repo_fix_ownership_if_needed(const char *repo_path) {
     CHECK_NULL(repo_path);
 
-    /* Early exit: only fix ownership when running under sudo
-     * This is the common case - most operations don't need sudo */
+    /* Early exit: only fix ownership when running under sudo This is the common
+     * case - most operations don't need sudo */
     if (!privilege_is_sudo()) {
         return NULL;  /* No-op: not running under sudo */
     }
 
     /* We're running under sudo - need to fix ownership */
 
-    /* Get the actual user's credentials (from SUDO_UID/SUDO_GID)
-     * Delegates to privilege module for consistent sudo handling. */
+    /* Get the actual user's credentials (from SUDO_UID/SUDO_GID) Delegates to
+     * privilege module for consistent sudo handling. */
     uid_t actual_uid = 0;
     gid_t actual_gid = 0;
     error_t *err = privilege_get_actual_user(&actual_uid, &actual_gid);
@@ -296,17 +294,17 @@ error_t *repo_fix_ownership_if_needed(const char *repo_path) {
         return error_wrap(err, "Failed to construct .git path");
     }
 
-    /* Check if .git directory exists
-     * If it doesn't exist, this is likely the init command creating a new repo.
-     * In that case, there's nothing to fix - just return success. */
+    /* Check if .git directory exists If it doesn't exist, this is likely the
+     * init command creating a new repo. In that case, there's nothing to fix -
+     * just return success. */
     if (!fs_is_directory(git_dir)) {
         free(git_dir);
         return NULL;  /* .git doesn't exist - nothing to fix */
     }
 
-    /* Fix ownership of the repository directory itself.
-     * Without this, libgit2 ownership validation (CVE-2022-24765 mitigations)
-     * may reject the repository on subsequent non-sudo runs. */
+    /* Fix ownership of the repository directory itself. Without this, libgit2
+     * ownership validation (CVE-2022-24765 mitigations) may reject the repository
+     * on subsequent non-sudo runs. */
     (void) chown(repo_path, actual_uid, actual_gid);
 
     /* Fix .git/ ownership recursively */

@@ -1,12 +1,11 @@
 /**
  * runtime.h - Cross-layer contract between main.c and the cmds/ layer
  *
- * Declares the types every command handler reads, the payloads every
- * command spec declares, and the accessor through which the cmds/ layer
- * reaches the root registry without naming its storage symbol. The
- * dispatch *implementation* (registry array, run_spec, resource-acquisition
- * helpers) stays file-local in main.c; this header is the typed surface
- * it exposes.
+ * Declares the types every command handler reads, the payloads every command
+ * spec declares, and the accessor through which the cmds/ layer reaches the root
+ * registry without naming its storage symbol. The dispatch *implementation*
+ * (registry array, run_spec, resource-acquisition helpers) stays file-local in
+ * main.c; this header is the typed surface it exposes.
  *
  * Contents:
  *   - `dotta_repo_mode_t`   — repo-open contract honored by the dispatcher;
@@ -14,13 +13,13 @@
  *   - `dotta_crypto_mode_t` — crypto-resources contract (keymgr when REQUIRED);
  *   - `dotta_spec_ext_t`    — payload referenced by `args_command_t::payload`,
  *                             letting each command declare its dispatch
- *                             preconditions in a typed way without the
- *                             base/args engine learning the enums;
+ *                             preconditions in a typed way without the base/args
+ *                             engine learning the enums;
  *   - `dotta_ctx_t`         — bundle handed to each command's dispatch
  *                             handler (repo, state, keymgr, cache, config, ...);
  *   - `dotta_ext_*`         — one per (repo_mode, state_mode, crypto_mode)
- *                             combination actually used; commands point
- *                             `payload` at the constant matching their need;
+ *                             combination actually used; commands point `payload`
+ *                             at the constant matching their need;
  *   - `dotta_registry()`    — typed accessor for the root registry,
  *                             consumed by `cmds/completion.c` when exporting
  *                             the fish completion script.
@@ -31,18 +30,17 @@
 
 #include <types.h>          /* error_t, arena_t, config_t, output_t */
 
-/* libgit2's opaque repo type. Consumers that touch the pointer must
- * `#include <git2.h>` for the API; this header stays free of the
- * libgit2 dependency so it can be included transitively without
- * forcing every TU through git2.h. */
+/* libgit2's opaque repo type. Consumers that touch the pointer must `#include
+ * <git2.h>` for the API; this header stays free of the libgit2 dependency so it
+ * can be included transitively without forcing every TU through git2.h. */
 struct git_repository;
 
-/* Core state handle. The full API lives in `src/core/state.h`; consumers
- * that call state functions include that header. Redeclaring the typedef
- * here keeps the contract typed without pulling core/ into every TU that
- * reaches ctx. C11 §6.7p3 permits a typedef name to be redeclared to the
- * same type, so this coexists with core/state.h's identical typedef in
- * any TU that includes both. Mirrors the struct-tag forward decl above. */
+/* Core state handle. The full API lives in `src/core/state.h`; consumers that
+ * call state functions include that header. Redeclaring the typedef here keeps
+ * the contract typed without pulling core/ into every TU that reaches ctx. C11
+ * §6.7p3 permits a typedef name to be redeclared to the same type, so this coexists
+ * with core/state.h's identical typedef in any TU that includes both. Mirrors
+ * the struct-tag forward decl above. */
 typedef struct state state_t;
 
 /* Per-machine mount-table handle. The full API lives in `src/infra/mount.h`;
@@ -50,25 +48,24 @@ typedef struct state state_t;
  * typedef-redeclaration rationale as state_t above. */
 typedef struct mount_table mount_table_t;
 
-/* Crypto handles. Full APIs in `crypto/keymgr.h` and `infra/content.h`;
- * TUs that call their functions include those headers. */
+/* Crypto handles. Full APIs in `crypto/keymgr.h` and `infra/content.h`; TUs that
+ * call their functions include those headers. */
 typedef struct keymgr keymgr;
 typedef struct content_cache content_cache_t;
 
 /* Spec-engine command descriptor. Forward-declared (rather than pulling
- * `base/args.h`) so that every TU that transitively includes
- * `runtime.h` does not drag the full `args_command_t` definition
- * through its compile. Same rationale as the `struct git_repository`
- * forward decl above, and the pattern `include/types.h` uses for
- * `error_t` / `arena_t`. */
+ * `base/args.h`) so that every TU that transitively includes `runtime.h` does
+ * not drag the full `args_command_t` definition through its compile. Same rationale
+ * as the `struct git_repository` forward decl above, and the pattern
+ * `include/types.h` uses for `error_t` / `arena_t`. */
 typedef struct args_command args_command_t;
 
 /**
  * Repository-opening contract honored by the dispatcher.
  *
- * Each command declares its repo needs via a `dotta_spec_ext_t` payload
- * pointed at by `args_command_t::payload`. Main.c reads the mode in
- * `run_spec` and opens the repo (or not) accordingly before dispatch.
+ * Each command declares its repo needs via a `dotta_spec_ext_t` payload pointed
+ * at by `args_command_t::payload`. Main.c reads the mode in `run_spec` and opens
+ * the repo (or not) accordingly before dispatch.
  */
 typedef enum dotta_repo_mode {
     DOTTA_REPO_NONE,            /* No repo handle needed */
@@ -80,25 +77,23 @@ typedef enum dotta_repo_mode {
 /**
  * State-opening contract honored by the dispatcher.
  *
- * Each command declares its state needs alongside its repo needs on the
- * same `dotta_spec_ext_t` payload. Main.c reads the mode in `run_spec`
- * *after* opening the repo and acquires the handle accordingly. If
- * `repo_mode` produces no repo handle (NONE, or OPTIONAL_SILENT with a
- * missing repo), state_mode is silently skipped and `ctx->state` stays
- * NULL.
+ * Each command declares its state needs alongside its repo needs on the same
+ * `dotta_spec_ext_t` payload. Main.c reads the mode in `run_spec` *after* opening
+ * the repo and acquires the handle accordingly. If `repo_mode` produces no repo
+ * handle (NONE, or OPTIONAL_SILENT with a missing repo), state_mode is silently
+ * skipped and `ctx->state` stays NULL.
  *
- * Commands that declare READ may still take scoped write transactions
- * via `state_begin` / `state_commit` on the borrowed handle — mirroring
- * today's update.c / revert.c / remove.c pattern. Commands that declare
- * WRITE hold `BEGIN IMMEDIATE` for the lifetime of dispatch and call
- * `state_save` when their mutation is complete; `state_free` in the
- * dispatcher rolls back any uncommitted transaction.
+ * Commands that declare READ may still take scoped write transactions via
+ * `state_begin` / `state_commit` on the borrowed handle — mirroring today's
+ * update.c / revert.c / remove.c pattern. Commands that declare WRITE hold `BEGIN
+ * IMMEDIATE` for the lifetime of dispatch and call `state_save` when their mutation
+ * is complete; `state_free` in the dispatcher rolls back any uncommitted
+ * transaction.
  *
- * CREATE-style commands (init, clone) declare NONE and open state
- * themselves, because the database file does not exist before dispatch
- * runs — there is nothing for `run_spec` to acquire. This parallels
- * their `DOTTA_REPO_NONE` declaration: both resources are self-owned
- * during creation.
+ * CREATE-style commands (init, clone) declare NONE and open state themselves,
+ * because the database file does not exist before dispatch runs — there is nothing
+ * for `run_spec` to acquire. This parallels their `DOTTA_REPO_NONE` declaration:
+ * both resources are self-owned during creation.
  */
 typedef enum dotta_state_mode {
     DOTTA_STATE_NONE,   /* No state handle acquired */
@@ -109,34 +104,30 @@ typedef enum dotta_state_mode {
 /**
  * Crypto-resources contract honored by the dispatcher.
  *
- * Each command declares its crypto needs on the same `dotta_spec_ext_t`
- * payload as repo/state modes. Main.c reads the mode in `run_spec`
- * *after* opening state and acquires the handles accordingly. Both
- * handles are borrowed by the handler; the dispatcher tears them down
- * LIFO (cache, then keymgr) before state teardown.
+ * Each command declares its crypto needs on the same `dotta_spec_ext_t` payload
+ * as repo/state modes. Main.c reads the mode in `run_spec` *after* opening state
+ * and acquires the handles accordingly. Both handles are borrowed by the handler;
+ * the dispatcher tears them down LIFO (cache, then keymgr) before state teardown.
  *
  * Two modes — why no split between "key only" and "key + cache"
  * -------------------------------------------------------------
- * The codebase has exactly one cache primitive (`infra/content`'s
- * blob-OID → plaintext map). With one cache, the dispatcher carries
- * no information by distinguishing "needs keymgr" from "needs keymgr
- * and cache" — it would just be a hint about whether the handler
- * iterates blobs in batch. Single-blob handlers (`add`, `show`,
- * `revert`, `key`) tolerate an unused empty cache (one calloc plus a
- * 64-entry hashmap, freed in LIFO teardown) in exchange for a uniform
- * handle shape across every crypto-aware command. If a second cache
- * primitive ever lands, this rationale is the place to revisit the
- * split.
+ * The codebase has exactly one cache primitive (`infra/content`'s blob-OID →
+ * plaintext map). With one cache, the dispatcher carries no information by
+ * distinguishing "needs keymgr" from "needs keymgr and cache" — it would just
+ * be a hint about whether the handler iterates blobs in batch. Single-blob handlers
+ * (`add`, `show`, `revert`, `key`) tolerate an unused empty cache (one calloc
+ * plus a 64-entry hashmap, freed in LIFO teardown) in exchange for a uniform
+ * handle shape across every crypto-aware command. If a second cache primitive
+ * ever lands, this rationale is the place to revisit the split.
  *
  * Disabled-encryption semantics
  * -----------------------------
- * When `config->encryption_enabled == false`, `ctx->keymgr` stays NULL
- * regardless of mode; the cache is still created with a NULL keymgr so
- * callers deal with one shape. Handlers forward `ctx->keymgr` to the
- * content layer unconditionally — it surfaces ERR_CRYPTO with a
- * user-facing message naming the file if a per-file operation asks to
- * encrypt or decrypt without a key, so commands never need to gate on
- * "do I have a key?" before calling through.
+ * When `config->encryption_enabled == false`, `ctx->keymgr` stays NULL regardless
+ * of mode; the cache is still created with a NULL keymgr so callers deal with
+ * one shape. Handlers forward `ctx->keymgr` to the content layer unconditionally
+ * — it surfaces ERR_CRYPTO with a user-facing message naming the file if a per-file
+ * operation asks to encrypt or decrypt without a key, so commands never need to
+ * gate on "do I have a key?" before calling through.
  */
 typedef enum dotta_crypto_mode {
     DOTTA_CRYPTO_NONE,       /* Neither handle acquired */
@@ -146,10 +137,10 @@ typedef enum dotta_crypto_mode {
 /**
  * Per-command extension payload referenced by `args_command_t::payload`.
  *
- * Carries the declarative dispatch preconditions each command has.
- * Additional fields (privilege escalation, verbosity override, etc.)
- * land here as new members without touching the engine — this is the
- * extension point `main.c::run_spec` reads.
+ * Carries the declarative dispatch preconditions each command has. Additional
+ * fields (privilege escalation, verbosity override, etc.) land here as new members
+ * without touching the engine — this is the extension point `main.c::run_spec`
+ * reads.
  */
 typedef struct dotta_spec_ext {
     dotta_repo_mode_t repo_mode;
@@ -160,103 +151,97 @@ typedef struct dotta_spec_ext {
 /**
  * Dispatch context — populated by the dispatcher, read by each command.
  *
- * Bundling is deliberate: future additions (signal cancellation,
- * verbosity override, etc.) land as struct members, not dispatch-signature
- * churn across every command.
+ * Bundling is deliberate: future additions (signal cancellation, verbosity
+ * override, etc.) land as struct members, not dispatch-signature churn across
+ * every command.
  *
  * Invariants
  * ----------
  *   - `repo != NULL`  iff  `repo_path != NULL`. `repo_open` already
- *     resolves the path to open the repo; threading it out costs
- *     nothing and gives commands that need both (e.g. bootstrap, which
- *     exports DOTTA_REPO_DIR to child scripts) a single source of truth
- *     instead of a second `resolve_repo_path` call.
+ *     resolves the path to open the repo; threading it out costs nothing and
+ *     gives commands that need both (e.g. bootstrap, which exports DOTTA_REPO_DIR
+ *     to child scripts) a single source of truth instead of a second
+ *     `resolve_repo_path` call.
  *   - `state != NULL`  iff  `state_mode != NONE AND repo != NULL`. A
- *     spec declaring STATE_READ or STATE_WRITE on a repo_mode that
- *     produced a handle receives a borrowed state; dispatch closes it
- *     on return. Commands never free `ctx->state`.
+ *     spec declaring STATE_READ or STATE_WRITE on a repo_mode that produced a
+ *     handle receives a borrowed state; dispatch closes it on return. Commands
+ *     never free `ctx->state`.
  *   - `content_cache != NULL`  iff  `crypto_mode == REQUIRED AND
- *     repo != NULL`. The cache carries a borrowed pointer to
- *     `ctx->keymgr` (which may be NULL if encryption is disabled) and
- *     is torn down before the keymgr.
- *   - `keymgr != NULL` implies `config->encryption_enabled`. A spec
- *     declaring REQUIRED on a disabled config receives NULL keymgr;
- *     handlers forward the NULL straight into the content layer,
- *     which returns ERR_CRYPTO with a user-facing message if any
- *     per-file operation actually asks to encrypt or decrypt. No
- *     caller-side gate is required.
+ *     repo != NULL`. The cache carries a borrowed pointer to `ctx->keymgr` (which
+ *     may be NULL if encryption is disabled) and is torn down before the keymgr.
+ *   - `keymgr != NULL` implies `config->encryption_enabled`. A spec declaring
+ *     REQUIRED on a disabled config receives NULL keymgr; handlers forward the
+ *     NULL straight into the content layer, which returns ERR_CRYPTO with a
+ *     user-facing message if any per-file operation actually asks to encrypt or
+ *     decrypt. No caller-side gate is required.
  *   - `mounts != NULL`  iff  `state != NULL`. The mount table is a
- *     derived view of state's `enabled_profiles` row cache plus the
- *     process-global `$HOME`. Built once in `run_spec` after state
- *     acquisition, immutable for the lifetime of dispatch. Borrowed
- *     into the command arena; reclaimed by `arena_destroy`. The mount
- *     table arena-borrows row-cache strings via state — the existing
- *     LIFO teardown (state_free before arena_destroy) keeps the borrow
- *     chain valid through dispatch return. Commands that mutate the
- *     binding set (profile enable/disable, clone, interactive,
- *     add-with-implicit-enable) build a *local* fresh mount table for
- *     any post-mutation manifest call — `ctx->mounts` is never
- *     reassigned (see "Members not welcome" #1 below).
- *   - `arena != NULL` always. The command arena is created before
- *     dispatch and destroyed after the handler returns; `run_spec`
- *     is the sole owner. Handlers and every layer beneath borrow the
- *     pointer — never call `arena_destroy(ctx->arena)`.
+ *     derived view of state's `enabled_profiles` row cache plus the process-global
+ *     `$HOME`. Built once in `run_spec` after state acquisition, immutable for
+ *     the lifetime of dispatch. Borrowed into the command arena; reclaimed by
+ *     `arena_destroy`. The mount table arena-borrows row-cache strings via state
+ *     — the existing LIFO teardown (state_free before arena_destroy) keeps the
+ *     borrow chain valid through dispatch return. Commands that mutate the binding
+ *     set (profile enable/disable, clone, interactive, add-with-implicit-enable)
+ *     build a *local* fresh mount table for any post-mutation manifest call —
+ *     `ctx->mounts` is never reassigned (see "Members not welcome" #1 below).
+ *   - `arena != NULL` always. The command arena is created before dispatch and
+ *     destroyed after the handler returns; `run_spec` is the sole owner. Handlers
+ *     and every layer beneath borrow the pointer — never call
+ *     `arena_destroy(ctx->arena)`.
  *
  * Arena lifetimes
  * ---------------
  * The codebase has exactly two arena lifetimes:
  *
- *   - Process-scope. `config->auto_encrypt.arena` holds the compiled
- *     auto-encrypt ruleset, allocated once at config_load and read-only
- *     thereafter. Lives the whole process; outlives every dispatch.
+ *   - Process-scope. `config->auto_encrypt.arena` holds the compiled auto-encrypt
+ *     ruleset, allocated once at config_load and read-only thereafter. Lives
+ *     the whole process; outlives every dispatch.
  *
- *   - Command-scope. `ctx->arena` is the dispatch-wide bump allocator,
- *     created and destroyed by `run_spec`. Handlers allocate into it
- *     directly or thread it as an `arena_t *` parameter; the parser
- *     uses the same arena since its outputs are read by the handler.
+ *   - Command-scope. `ctx->arena` is the dispatch-wide bump allocator, created
+ *     and destroyed by `run_spec`. Handlers allocate into it directly or thread
+ *     it as an `arena_t *` parameter; the parser uses the same arena since its
+ *     outputs are read by the handler.
  *
- * Adding a third arena requires evidence of a genuinely sub-command
- * lifetime in code — an interactive REPL with per-iteration scope, for
- * example. Hypothesised need is not enough; a primitive exists when a
- * real consumer exists. Single-threaded by design (no pthread, no async
- * I/O loop), so concurrent allocation is not a concern.
+ * Adding a third arena requires evidence of a genuinely sub-command lifetime in
+ * code — an interactive REPL with per-iteration scope, for example. Hypothesised
+ * need is not enough; a primitive exists when a real consumer exists.
+ * Single-threaded by design (no pthread, no async I/O loop), so concurrent
+ * allocation is not a concern.
  *
  * Members not welcome on this struct
  * ----------------------------------
- * The following patterns have been rejected by the design and must not
- * be added without first re-evaluating the whole ownership model:
+ * The following patterns have been rejected by the design and must not be added
+ * without first re-evaluating the whole ownership model:
  *
- *   1. No invalidation API on ctx for any field. Command-scoped
- *      resources do not need invalidation; a need to "clear" a
- *      resource mid-command is an API operation on the borrowed handle
- *      (e.g. `keymgr_clear(ctx->keymgr)` inside `dotta key clear`),
- *      not a ctx-layer concern.
- *   2. No lazy accessors (`dotta_ctx_get_X(ctx)` that construct on
- *      first call). Fields are populated eagerly by dispatch before
- *      the handler runs, so handlers see a fixed shape.
- *   3. No "reach inside workspace to borrow its resource" pattern.
- *      Resources that multiple dispatch steps share live on ctx; there
- *      is never a `workspace_get_X` / `state_get_X` accessor that
- *      exposes ctx-scope resources via a lower layer.
+ *   1. No invalidation API on ctx for any field. Command-scoped resources do
+ *      not need invalidation; a need to "clear" a resource mid-command is an
+ *      API operation on the borrowed handle (e.g. `keymgr_clear(ctx->keymgr)`
+ *      inside `dotta key clear`), not a ctx-layer concern.
+ *   2. No lazy accessors (`dotta_ctx_get_X(ctx)` that construct on first call).
+ *      Fields are populated eagerly by dispatch before the handler runs, so
+ *      handlers see a fixed shape.
+ *   3. No "reach inside workspace to borrow its resource" pattern. Resources
+ *      that multiple dispatch steps share live on ctx; there is never a
+ *      `workspace_get_X` / `state_get_X` accessor that exposes ctx-scope resources
+ *      via a lower layer.
  *
  * Exit-code override
  * ------------------
- * Dispatch returns `error_t *` — dotta's native failure channel. For
- * native commands a non-NULL error collapses to process exit `1` and a
- * NULL error collapses to `0`; the single bit is enough.
+ * Dispatch returns `error_t *` — dotta's native failure channel. For native
+ * commands a non-NULL error collapses to process exit `1` and a NULL error
+ * collapses to `0`; the single bit is enough.
  *
- * Pass-through commands (e.g. `dotta git`) run an external tool whose
- * *exact* exit status is the contract users rely on (`git diff
- * --exit-code` returns 1 on diffs, 128+n on signals, etc.). They
- * assign `*ctx->exit_code` to the value they want dotta to exit with
- * and return `NULL` from dispatch. Main honors that value when no
- * error is reported; otherwise the error path wins.
+ * Pass-through commands (e.g. `dotta git`) run an external tool whose *exact*
+ * exit status is the contract users rely on (`git diff --exit-code` returns 1
+ * on diffs, 128+n on signals, etc.). They assign `*ctx->exit_code` to the value
+ * they want dotta to exit with and return `NULL` from dispatch. Main honors that
+ * value when no error is reported; otherwise the error path wins.
  *
- * The runner owns the int: `run_spec` allocates it on its frame,
- * initializes it to 0, and points `exit_code` at it. This keeps `ctx`
- * const-honest — the struct's pointer field never mutates, only the
- * pointee does, which was never const. Native commands that never
- * touch the pointer leave the runner at 0 and exit cleanly.
+ * The runner owns the int: `run_spec` allocates it on its frame, initializes it
+ * to 0, and points `exit_code` at it. This keeps `ctx` const-honest — the struct's
+ * pointer field never mutates, only the pointee does, which was never const.
+ * Native commands that never touch the pointer leave the runner at 0 and exit
+ * cleanly.
  */
 typedef struct dotta_ctx {
     struct git_repository *repo;        /* NULL unless repo_mode opens */
@@ -273,8 +258,8 @@ typedef struct dotta_ctx {
     int *exit_code;                     /* Non-NULL; *exit_code overrides exit when err==NULL */
 } dotta_ctx_t;
 
-/* Per-combination payloads. Each command's spec sets `.payload =
- * &dotta_ext_X` for its needed (repo_mode, state_mode, crypto_mode) */
+/* Per-combination payloads. Each command's spec sets `.payload = &dotta_ext_X`
+ * for its needed (repo_mode, state_mode, crypto_mode) */
 extern const dotta_spec_ext_t dotta_ext_none;          /* NONE,            NONE,  NONE     */
 extern const dotta_spec_ext_t dotta_ext_path_only;     /* PATH_ONLY,       NONE,  NONE     */
 extern const dotta_spec_ext_t dotta_ext_repo_only;     /* REQUIRED,        NONE,  NONE     */
@@ -287,16 +272,15 @@ extern const dotta_spec_ext_t dotta_ext_write_crypto;  /* REQUIRED,        WRITE
 /**
  * Accessor for the root command registry.
  *
- * Returns the NULL-terminated `args_command_t *const []` defined as
- * `static` data in main.c. The pointer is borrowed; never freed by
- * the caller. Only consumer today is `cmds/completion.c`, which
- * projects the registry into the fish-completion dialect when the
- * build emits `etc/completions/dotta-completions.fish`.
+ * Returns the NULL-terminated `args_command_t *const []` defined as `static`
+ * data in main.c. The pointer is borrowed; never freed by the caller. Only consumer
+ * today is `cmds/completion.c`, which projects the registry into the
+ * fish-completion dialect when the build emits
+ * `etc/completions/dotta-completions.fish`.
  *
- * The accessor exists so the cmds/ layer can read the registry
- * without compile-depending on the registry symbol itself — the
- * storage stays file-local in main.c, and this function is its
- * typed public face.
+ * The accessor exists so the cmds/ layer can read the registry without
+ * compile-depending on the registry symbol itself — the storage stays file-local
+ * in main.c, and this function is its typed public face.
  */
 const struct args_command *const *dotta_registry(void);
 

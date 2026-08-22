@@ -41,8 +41,8 @@
 /**
  * Print upstream state indicator
  *
- * Prints a colored upstream tracking indicator (e.g., [=], [↑3], [↕2+1])
- * directly to the output stream via the output_colored API.
+ * Prints a colored upstream tracking indicator (e.g., [=], [↑3], [↕2+1]) directly
+ * to the output stream via the output_colored API.
  */
 static void print_upstream_state(
     output_t *out,
@@ -92,8 +92,7 @@ static void print_upstream_state(
 /**
  * List profiles - Level 1
  *
- * Default: Just profile names
- * Verbose: Add stats (file count, size, last commit)
+ * Default: Just profile names Verbose: Add stats (file count, size, last commit)
  * Remote:  Add tracking indicators
  */
 static error_t *list_profiles(
@@ -306,8 +305,7 @@ static error_t *list_profiles(
 /**
  * List files - Level 2
  *
- * Default: Just file paths
- * Verbose: Add sizes and per-file last commit
+ * Default: Just file paths Verbose: Add sizes and per-file last commit
  */
 static error_t *list_files(
     git_repository *repo,
@@ -363,8 +361,8 @@ static error_t *list_files(
             err = NULL;
         }
 
-        /* Load metadata for encryption status from the tree we just opened.
-         * Don't warn — metadata may not exist yet (perfectly normal). */
+        /* Load metadata for encryption status from the tree we just opened. Don't
+         * warn — metadata may not exist yet (perfectly normal). */
         if (tree) {
             err = metadata_load_from_tree(repo, tree, opts->profile, &metadata);
             if (err) {
@@ -435,10 +433,10 @@ static error_t *list_files(
                 );
                 if (!stats_err) {
                     /* Show plaintext content size for encrypted blobs by
-                     * subtracting the cipher's framing overhead. The
-                     * helper keeps crypto/cipher.h imports out of the
-                     * command layer (only infra/content and the crypto
-                     * layer itself import cipher.h). */
+                     * subtracting the cipher's framing overhead. The helper keeps
+                     * crypto/cipher.h imports out of the command layer (only
+                     * infra/content and the crypto layer itself import
+                     * cipher.h). */
                     content_kind_t kind = encrypted
                                         ? CONTENT_ENCRYPTED
                                         : CONTENT_PLAINTEXT;
@@ -540,8 +538,7 @@ static bool format_time(git_time_t timestamp, char *buf, size_t buf_size) {
 /**
  * List file history - Level 3
  *
- * Default: Oneline format (hash, summary, time)
- * Verbose: Full commit format
+ * Default: Oneline format (hash, summary, time) Verbose: Full commit format
  */
 static error_t *list_file_history(
     git_repository *repo,
@@ -574,8 +571,8 @@ static error_t *list_file_history(
 
     if (!profile) {
         /* The view over the enabled set: precedence resolved, so the storage
-         * path names one row and that row's profile is the owner. The row
-         * is the arena's; only the index is released here. */
+         * path names one row and that row's profile is the owner. The row is
+         * the arena's; only the index is released here. */
         string_array_t *enabled = NULL;
         err = state_get_profiles(state, &enabled);
         if (err) {
@@ -602,8 +599,8 @@ static error_t *list_file_history(
     }
 
     /* Verify profile exists and check if file is in current tree (fast pre-check).
-     * This validates the profile early and gives a clear hint for typos/deleted files
-     * before the expensive O(total_commits) history walk. */
+     * This validates the profile early and gives a clear hint for typos/deleted
+     * files before the expensive O(total_commits) history walk. */
     git_tree *tree = NULL;
     err = gitops_load_branch_tree(repo, profile, &tree, NULL);
     if (err) {
@@ -745,21 +742,21 @@ error_t *cmd_list(const dotta_ctx_t *ctx, const cmd_list_options_t *opts) {
  * ══════════════════════════════════════════════════════════════════ */
 
 /**
- * Derive `mode`, `profile`, and `file_path` from the -p flag and the
- * raw positional bucket.
+ * Derive `mode`, `profile`, and `file_path` from the -p flag and the raw positional
+ * bucket.
  *
- * -p <profile> is the leading positional forced to a profile: it names
- * the profile unambiguously, so every positional is then a file. It is
- * the escape hatch for profiles whose names would trip the path
- * heuristic, and it mirrors add/remove's flag-vs-first-positional split.
+ * -p <profile> is the leading positional forced to a profile: it names the profile
+ * unambiguously, so every positional is then a file. It is the escape hatch for
+ * profiles whose names would trip the path heuristic, and it mirrors add/remove's
+ * flag-vs-first-positional split.
  *
  *   Flag form (-p given):
  *     0 positionals -> LIST_FILES        (profile = flag)
  *     1 positional  -> LIST_FILE_HISTORY (profile = flag, file = pos[0])
  *     2 positionals -> error: only one file may accompany -p
  *
- *   Inference form (no -p): the leading positional is a profile or a
- *   file, disambiguated by str_looks_like_file_path.
+ *   Inference form (no -p): the leading positional is a profile or a file,
+ *   disambiguated by str_looks_like_file_path.
  *     0 positionals -> LIST_PROFILES
  *     1 positional  -> path? LIST_FILE_HISTORY (profile inferred)
  *                      name? LIST_FILES

@@ -15,10 +15,10 @@ void store_le16(uint8_t out[2], uint16_t val) {
 /**
  * Load a uint16_t from little-endian byte order (portable)
  *
- * The byte casts widen each operand to `unsigned` (via integer
- * promotion) before the OR; the explicit final cast back to
- * `uint16_t` makes the narrowing return-type conversion visible to
- * the reader and quiet under any narrowing-warning flag.
+ * The byte casts widen each operand to `unsigned` (via integer promotion) before
+ * the OR; the explicit final cast back to `uint16_t` makes the narrowing
+ * return-type conversion visible to the reader and quiet under any
+ * narrowing-warning flag.
  */
 uint16_t load_le16(const uint8_t in[2]) {
     return (uint16_t) ((uint16_t) in[0]

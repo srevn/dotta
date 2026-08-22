@@ -1,14 +1,13 @@
 /**
  * hashmap.h - Open-addressed hash table with Robin Hood probing
  *
- * String-keyed hash map using Robin Hood hashing with backward-shift
- * deletion. Keys are strings (duplicated internally), values are void
- * pointers.
+ * String-keyed hash map using Robin Hood hashing with backward-shift deletion.
+ * Keys are strings (duplicated internally), values are void pointers.
  *
- * Robin Hood probing bounds probe-sequence variance: entries that hashed
- * far from their ideal slot "steal" from entries closer to theirs,
- * keeping all chains short. Backward-shift deletion avoids tombstones
- * entirely, so the table never degrades over insert/remove cycles.
+ * Robin Hood probing bounds probe-sequence variance: entries that hashed far
+ * from their ideal slot "steal" from entries closer to theirs, keeping all chains
+ * short. Backward-shift deletion avoids tombstones entirely, so the table never
+ * degrades over insert/remove cycles.
  *
  * Memory ownership:
  * - Default: map owns keys (duplicates on insert, frees on remove/destroy)
@@ -46,11 +45,11 @@ typedef void (*hashmap_free_fn)(void *value);
  * Hash map iterator
  *
  * Stack-allocated. Initialize with hashmap_iter_init(), advance with
- * hashmap_iter_next(). Iteration order is undefined but deterministic
- * for a given map state.
+ * hashmap_iter_next(). Iteration order is undefined but deterministic for a given
+ * map state.
  *
- * SAFETY: If the map is modified after init, hashmap_iter_next()
- * detects this and returns false.
+ * SAFETY: If the map is modified after init, hashmap_iter_next() detects this
+ * and returns false.
  */
 typedef struct hashmap_iter {
     const hashmap_t *map;
@@ -61,8 +60,8 @@ typedef struct hashmap_iter {
 /**
  * Create new hash map (owning mode — keys are strdup'd on insert, freed on remove)
  *
- * @param initial_capacity Hint for expected entry count (0 = default 16).
- *                         Rounded up to next power of two internally.
+ * @param initial_capacity Hint for expected entry count (0 = default 16). Rounded
+ *                         up to next power of two internally.
  * @return New hash map, or NULL on allocation failure
  */
 hashmap_t *hashmap_create(size_t initial_capacity);
@@ -101,12 +100,13 @@ void hashmap_free(hashmap_t *map, hashmap_free_fn free_fn);
 /**
  * Insert or update a key-value pair
  *
- * If the key already exists, its value is replaced. The caller is
- * responsible for the old value's lifetime (retrieve it first with
- * hashmap_get if needed, or use hashmap_put for old-value retrieval).
+ * If the key already exists, its value is replaced. The caller is responsible
+ * for the old value's lifetime (retrieve it first with hashmap_get if needed,
+ * or use hashmap_put for old-value retrieval).
  *
  * @param map Hash map (must not be NULL)
- * @param key Key string (duplicated in owning mode, stored directly in borrowing mode; must not be NULL)
+ * @param key Key string (duplicated in owning mode, stored directly in borrowing
+ *            mode; must not be NULL)
  * @param value Value pointer (map does not take ownership)
  * @return NULL on success, error on allocation failure
  */
@@ -115,11 +115,12 @@ error_t *hashmap_set(hashmap_t *map, const char *key, void *value);
 /**
  * Insert or update, returning the previous value
  *
- * Like hashmap_set but writes the displaced value (if any) to *out_prev.
- * When the key is new, *out_prev is set to NULL.
+ * Like hashmap_set but writes the displaced value (if any) to *out_prev. When
+ * the key is new, *out_prev is set to NULL.
  *
  * @param map Hash map (must not be NULL)
- * @param key Key string (duplicated in owning mode, stored directly in borrowing mode; must not be NULL)
+ * @param key Key string (duplicated in owning mode, stored directly in borrowing
+ *            mode; must not be NULL)
  * @param value New value pointer
  * @param out_prev Receives the previous value, or NULL if key was new
  * @return NULL on success, error on allocation failure
@@ -129,8 +130,8 @@ error_t *hashmap_put(hashmap_t *map, const char *key, void *value, void **out_pr
 /**
  * Get value for key
  *
- * Returns NULL both when the key is absent and when its value is NULL.
- * Use hashmap_has() to distinguish the two cases.
+ * Returns NULL both when the key is absent and when its value is NULL. Use
+ * hashmap_has() to distinguish the two cases.
  *
  * @param map Hash map (NULL returns NULL)
  * @param key Key string (NULL returns NULL)
@@ -172,8 +173,8 @@ bool hashmap_is_empty(const hashmap_t *map);
 /**
  * Initialize an iterator
  *
- * Takes a snapshot of the map's modification counter. If the map is
- * modified after this call, hashmap_iter_next() will return false.
+ * Takes a snapshot of the map's modification counter. If the map is modified
+ * after this call, hashmap_iter_next() will return false.
  *
  * @param iter Iterator to initialize (must not be NULL)
  * @param map  Map to iterate (NULL produces an empty iteration)

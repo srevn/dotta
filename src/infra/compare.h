@@ -3,20 +3,19 @@
  *
  * Compares expected content with filesystem state using two strategies:
  *
- * 1. Buffer-based (compare_buffer_to_disk):
- *    Compares plaintext buffers provided by the content layer
- *    (src/infra/content.h). Used for encrypted files where the blob OID
- *    is a ciphertext hash that cannot be compared to the plaintext on disk.
+ * 1. Buffer-based (compare_buffer_to_disk): Compares plaintext buffers provided
+ *    by the content layer (src/infra/content.h). Used for encrypted files where
+ *    the blob OID is a ciphertext hash that cannot be compared to the plaintext
+ *    on disk.
  *
- * 2. OID-based (compare_oid_to_disk):
- *    Hashes the filesystem file and compares to an expected git blob OID.
- *    Used for non-encrypted files where OID comparison avoids expensive
- *    blob loading from pack files.
+ * 2. OID-based (compare_oid_to_disk): Hashes the filesystem file and compares
+ *    to an expected git blob OID. Used for non-encrypted files where OID comparison
+ *    avoids expensive blob loading from pack files.
  *
  * Both strategies share the same stat propagation convention and return
- * compare_result_t for uniform caller integration. Neither strategy
- * accesses the git repository or object database — all operations are
- * pure computation against the filesystem.
+ * compare_result_t for uniform caller integration. Neither strategy accesses
+ * the git repository or object database — all operations are pure computation
+ * against the filesystem.
  *
  * Design principles:
  * - Handle all file types (regular, symlink)
@@ -35,10 +34,10 @@
 /**
  * Comparison result
  *
- * NOTE: Permission checking is explicitly NOT part of this module.
- * The compare module is infrastructure-layer, handling only content and type.
- * Permission validation (git filemode + full metadata) is a core-layer concern
- * handled by workspace.c using metadata from .dotta/metadata.json.
+ * NOTE: Permission checking is explicitly NOT part of this module. The compare
+ * module is infrastructure-layer, handling only content and type. Permission
+ * validation (git filemode + full metadata) is a core-layer concern handled by
+ * workspace.c using metadata from .dotta/metadata.json.
  */
 typedef enum {
     CMP_EQUAL,       /* Files are identical (content and type) */
@@ -60,8 +59,8 @@ typedef struct {
 /**
  * Compare buffer content to disk file (with stat propagation)
  *
- * Pure function with zero git/encryption knowledge.
- * Compares plaintext buffer to file on disk.
+ * Pure function with zero git/encryption knowledge. Compares plaintext buffer
+ * to file on disk.
  *
  * Tests:
  * 1. File exists on disk
@@ -74,8 +73,8 @@ typedef struct {
  * - If out_stat != NULL: Returns stat data for caller reuse
  * - Single stat used for all checks (type, size, mode)
  *
- * This eliminates redundant stat calls when integrated with metadata
- * checking, reducing filesystem syscalls by ~5x in hot paths.
+ * This eliminates redundant stat calls when integrated with metadata checking,
+ * reducing filesystem syscalls by ~5x in hot paths.
  *
  * @param content Buffer containing expected content (must not be NULL)
  * @param disk_path Path to file on disk (must not be NULL)
@@ -97,19 +96,19 @@ error_t *compare_buffer_to_disk(
 /**
  * Compare git blob OID to disk file (with stat propagation)
  *
- * OID-based comparison for non-encrypted files. Hashes the filesystem
- * file using the standard git blob hash algorithm and compares to the
- * expected blob OID. This avoids expensive blob loading from pack files.
+ * OID-based comparison for non-encrypted files. Hashes the filesystem file using
+ * the standard git blob hash algorithm and compares to the expected blob OID.
+ * This avoids expensive blob loading from pack files.
  *
- * IMPORTANT: Only call for plaintext blobs. For encrypted blobs the
- * blob_oid is the hash of ciphertext, while the filesystem contains
- * plaintext, so OID comparison would never match. Two safe paths:
- *   - The kind-routing primitive `content_compare_blob_to_disk` decides
- *     internally and is always safe.
+ * IMPORTANT: Only call for plaintext blobs. For encrypted blobs the blob_oid is
+ * the hash of ciphertext, while the filesystem contains plaintext, so OID
+ * comparison would never match. Two safe paths:
+ *   - The kind-routing primitive `content_compare_blob_to_disk` decides internally
+ *     and is always safe.
  *   - Direct callers must gate on a byte-truth flag (e.g.,
  *     `manifest_entry->encrypted`, byte-derived via the Phase 2 write-time
- *     invariant in `content_store_file_to_worktree`); a stale or
- *     wrong-blob flag silently misroutes.
+ *     invariant in `content_store_file_to_worktree`); a stale or wrong-blob flag
+ *     silently misroutes.
  *
  * Stat propagation optimization:
  * - If in_stat != NULL: Uses provided stat data (zero syscalls)
@@ -140,8 +139,8 @@ error_t *compare_oid_to_disk(
  * Controls which side is treated as "old" and "new" in the unified diff:
  *   CMP_DIR_UPSTREAM:   old=filesystem, new=repo — '-' is current disk content,
  *                       '+' is repo content apply would write.
- *   CMP_DIR_DOWNSTREAM: old=repo, new=filesystem — '-' is repo content,
- *                       '+' is local changes update would commit.
+ *   CMP_DIR_DOWNSTREAM: old=repo, new=filesystem — '-' is repo content, '+' is
+ *                       local changes update would commit.
  */
 typedef enum {
     CMP_DIR_UPSTREAM,    /* old=filesystem, new=repo (what apply would write) */
@@ -151,11 +150,11 @@ typedef enum {
 /**
  * Generate diff from buffer content to disk file
  *
- * Works with decrypted content from the content layer.
- * Uses libgit2's git_diff_buffers for pure in-memory diff generation.
+ * Works with decrypted content from the content layer. Uses libgit2's
+ * git_diff_buffers for pure in-memory diff generation.
  *
- * Stat propagation: Accepts pre-captured stat to avoid redundant syscalls
- * during comparison phase. If in_stat is NULL, performs lstat() internally.
+ * Stat propagation: Accepts pre-captured stat to avoid redundant syscalls during
+ * comparison phase. If in_stat is NULL, performs lstat() internally.
  *
  * @param content Content buffer (e.g., decrypted content, must not be NULL)
  * @param disk_path Disk file path (must not be NULL)

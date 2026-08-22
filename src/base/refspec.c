@@ -1,12 +1,12 @@
 /**
  * refspec.c - Refspec parsing utilities
  *
- * Splits "[profile:]<path>[@commit]" into three arena-backed slices
- * in a single pass. See refspec.h for lifetime rules.
+ * Splits "[profile:]<path>[@commit]" into three arena-backed slices in a single
+ * pass. See refspec.h for lifetime rules.
  *
- * A partial parse that fails mid-way leaves a few unused bytes in the
- * arena; these are reclaimed when the arena is destroyed. No rollback
- * is needed, so the parse body is a straight sequence of returns.
+ * A partial parse that fails mid-way leaves a few unused bytes in the arena;
+ * these are reclaimed when the arena is destroyed. No rollback is needed, so
+ * the parse body is a straight sequence of returns.
  */
 
 #include "base/refspec.h"

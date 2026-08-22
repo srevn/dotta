@@ -1,31 +1,29 @@
 /**
  * export.c - Materialize profile content to the filesystem
  *
- * Export is a copy, not a deployment. It never registers in state,
- * never applies ownership, and dotta makes no ongoing claim over the
- * destination. One profile branch's subtree is copied verbatim: no
- * layer composition, no mount mapping, plaintext bytes with stored
- * permission modes. Single files are the degenerate case of the tree
- * walk.
+ * Export is a copy, not a deployment. It never registers in state, never applies
+ * ownership, and dotta makes no ongoing claim over the destination. One profile
+ * branch's subtree is copied verbatim: no layer composition, no mount mapping,
+ * plaintext bytes with stored permission modes. Single files are the degenerate
+ * case of the tree walk.
  *
  * Two-phase execution model:
  *
- *   Phase 1 (read-only): walk the tree collecting entries, resolve
- *   every final destination path, and validate everything — type
- *   collisions, pre-existing symlinks that would re-route content
- *   writes, unsupported blob formats — then decrypt encrypted files
- *   into memory. Every refusal, including the passphrase prompt and
- *   any decryption failure, lands before the first byte is written.
+ *   Phase 1 (read-only): walk the tree collecting entries, resolve every final
+ *   destination path, and validate everything — type collisions, pre-existing
+ *   symlinks that would re-route content writes, unsupported blob formats — then
+ *   decrypt encrypted files into memory. Every refusal, including the passphrase
+ *   prompt and any decryption failure, lands before the first byte is written.
  *   --dry-run is phase 1 alone.
  *
- *   Phase 2 (write): create directories, write blobs, recreate
- *   symlinks. Fail fast on first error; the remaining failure window
- *   is filesystem errors and repository corruption only.
+ *   Phase 2 (write): create directories, write blobs, recreate symlinks. Fail
+ *   fast on first error; the remaining failure window is filesystem errors and
+ *   repository corruption only.
  *
- * Traversal safety is structural: git forbids '/', '.', and '..' in
- * tree entry names, so joined paths cannot escape the export root.
- * The remaining escape vector — a pre-existing symlink at a
- * content-dictated path below the root — is refused in phase 1.
+ * Traversal safety is structural: git forbids '/', '.', and '..' in tree entry
+ * names, so joined paths cannot escape the export root. The remaining escape
+ * vector — a pre-existing symlink at a content-dictated path below the root —
+ * is refused in phase 1.
  */
 
 #include "cmds/export.h"
@@ -53,13 +51,12 @@
 /**
  * One collected export entry.
  *
- * Paths are arena-owned (command scope). `content` is heap-owned and
- * held only for entries phase 1 must materialize early: decrypted
- * plaintext (so every crypto failure front-loads) and symlink targets
- * (tiny, and the dry-run listing shows them). Plaintext file blobs
- * stay lazy — phase 2 re-reads them so a whole profile is never held
- * in memory, and an ODB read that succeeded in phase 1 can only fail
- * there on repository corruption.
+ * Paths are arena-owned (command scope). `content` is heap-owned and held only
+ * for entries phase 1 must materialize early: decrypted plaintext (so every crypto
+ * failure front-loads) and symlink targets (tiny, and the dry-run listing shows
+ * them). Plaintext file blobs stay lazy — phase 2 re-reads them so a whole profile
+ * is never held in memory, and an ODB read that succeeded in phase 1 can only
+ * fail there on repository corruption.
  */
 typedef enum {
     EXPORT_ENTRY_DIRECTORY,
@@ -89,8 +86,8 @@ typedef struct {
 /**
  * Append an entry, growing the arena-backed spine geometrically.
  *
- * Abandoned blocks stay in the arena until dispatch teardown —
- * bounded waste, same pattern as core/manifest's precedence view.
+ * Abandoned blocks stay in the arena until dispatch teardown — bounded waste,
+ * same pattern as core/manifest's precedence view.
  */
 static error_t *entry_list_append(
     export_entry_list_t *list,
@@ -155,12 +152,12 @@ static const char *path_basename(const char *path) {
 /**
  * Does the first path component decode as a storage label?
  *
- * The mount vocabulary is the authority for the content namespace:
- * everything a profile deploys lives under home/, root/, or custom/.
- * Anything else at branch root (.dotta/, .bootstrap, README, ...) is
- * profile machinery and never part of an export. Bare labels ("home")
- * name the whole subtree. Iterates until mount_spec_for_kind returns
- * NULL so a future fourth label is covered without an edit here.
+ * The mount vocabulary is the authority for the content namespace: everything a
+ * profile deploys lives under home/, root/, or custom/. Anything else at branch
+ * root (.dotta/, .bootstrap, README, ...) is profile machinery and never part
+ * of an export. Bare labels ("home") name the whole subtree. Iterates until
+ * mount_spec_for_kind returns NULL so a future fourth label is covered without
+ * an edit here.
  */
 static bool storage_namespace_contains(const char *path) {
     for (mount_kind_t kind = MOUNT_HOME; ; kind = (mount_kind_t) (kind + 1)) {
@@ -177,10 +174,10 @@ static bool storage_namespace_contains(const char *path) {
 /**
  * Resolve an entry's final mode.
  *
- * Stored metadata mode wins; the fallback is the git filemode for
- * files (mirroring deploy's corruption fallback) and the canonical
- * default for directories. Kind-checked so a stale item of the wrong
- * kind cannot leak its mode across entry types.
+ * Stored metadata mode wins; the fallback is the git filemode for files (mirroring
+ * deploy's corruption fallback) and the canonical default for directories.
+ * Kind-checked so a stale item of the wrong kind cannot leak its mode across
+ * entry types.
  */
 static mode_t export_entry_mode(
     const metadata_t *metadata,
@@ -207,10 +204,10 @@ static mode_t export_entry_mode(
 /**
  * Apply the destination rules shared by every export shape.
  *
- * Expand '~', then on directory intent — an existing directory, or an
- * explicit trailing '/' — append `name` so `-o .` lands under the
- * original name. Order matters: expand, join, and only then let the
- * caller validate the final path. Returned string is arena-owned.
+ * Expand '~', then on directory intent — an existing directory, or an explicit
+ * trailing '/' — append `name` so `-o .` lands under the original name. Order
+ * matters: expand, join, and only then let the caller validate the final path.
+ * Returned string is arena-owned.
  */
 static error_t *dest_resolve(
     const char *dest,
@@ -262,17 +259,17 @@ static int collect_tree_callback(
     struct collect_ctx *ctx = payload;
     const char *name = git_tree_entry_name(entry);
 
-    /* Whole-profile walks start at branch root, where content lives
-     * only under storage-label subtrees; everything else is machinery.
-     * Positive return prunes the entry (and its subtree, pre-order). */
+    /* Whole-profile walks start at branch root, where content lives only under
+     * storage-label subtrees; everything else is machinery. Positive return prunes
+     * the entry (and its subtree, pre-order). */
     if (ctx->whole_profile && root[0] == '\0' &&
         (git_tree_entry_type(entry) != GIT_OBJECT_TREE ||
         !storage_namespace_contains(name))) {
         return 1;
     }
 
-    /* Build path relative to the walked tree (root carries its own
-     * trailing '/' at nested levels). */
+    /* Build path relative to the walked tree (root carries its own trailing '/'
+     * at nested levels). */
     char rel[1024];
     int ret = snprintf(rel, sizeof(rel), "%s%s", root, name);
     if (ret < 0 || (size_t) ret >= sizeof(rel)) {
@@ -336,17 +333,16 @@ static int collect_tree_callback(
 /**
  * Phase-1 destination validation.
  *
- * lstat every entry's final path and refuse anything that would
- * collide by type or write through a pre-existing symlink. Below the
- * export root every intermediate directory is itself a walk entry, so
- * checking entries covers every content-dictated path component; the
- * root's own ancestors are user-typed and deliberately follow normal
- * filesystem resolution (cp semantics).
+ * lstat every entry's final path and refuse anything that would collide by type
+ * or write through a pre-existing symlink. Below the export root every intermediate
+ * directory is itself a walk entry, so checking entries covers every
+ * content-dictated path component; the root's own ancestors are user-typed and
+ * deliberately follow normal filesystem resolution (cp semantics).
  *
- * `single_dest`: a lone user-typed file destination keeps the shipped
- * cp semantics — writing through a symlink at the typed path is the
- * user's stated intent — while content-dictated paths inside a tree
- * export refuse symlinks outright (the escape vector).
+ * `single_dest`: a lone user-typed file destination keeps the shipped cp semantics
+ * — writing through a symlink at the typed path is the user's stated intent —
+ * while content-dictated paths inside a tree export refuse symlinks outright
+ * (the escape vector).
  */
 static error_t *validate_destinations(
     export_entry_list_t *list,
@@ -432,13 +428,12 @@ static error_t *validate_destinations(
 /**
  * Phase-1 content validation.
  *
- * Classify every blob by its bytes — the authoritative source of
- * encryption state (metadata's flag is a cache; bytes win) — refuse
- * version-skewed ciphertext, and decrypt encrypted files NOW, holding
- * the plaintext. The first decryption triggers the passphrase prompt,
- * so the prompt and every crypto failure (wrong key, corruption, path
- * mismatch) land in the pre-write window. Symlink targets are read
- * here too: tiny, needed by phase 2, and shown by --dry-run.
+ * Classify every blob by its bytes — the authoritative source of encryption state
+ * (metadata's flag is a cache; bytes win) — refuse version-skewed ciphertext,
+ * and decrypt encrypted files NOW, holding the plaintext. The first decryption
+ * triggers the passphrase prompt, so the prompt and every crypto failure (wrong
+ * key, corruption, path mismatch) land in the pre-write window. Symlink targets
+ * are read here too: tiny, needed by phase 2, and shown by --dry-run.
  */
 static error_t *validate_content(
     git_repository *repo,
@@ -507,11 +502,10 @@ static error_t *validate_content(
 /**
  * Phase 2: materialize entries.
  *
- * Directories are created with `mode | S_IRWXU` so children can land
- * even under restrictive stored modes (0500), then chmod'd to the
- * exact stored mode deepest-first after the subtree is fully written.
- * Pre-existing directories are never touched — the copy makes no
- * claim over what was already there.
+ * Directories are created with `mode | S_IRWXU` so children can land even under
+ * restrictive stored modes (0500), then chmod'd to the exact stored mode
+ * deepest-first after the subtree is fully written. Pre-existing directories
+ * are never touched — the copy makes no claim over what was already there.
  */
 static error_t *materialize_entries(
     git_repository *repo,
@@ -594,8 +588,8 @@ static error_t *materialize_entries(
             }
 
             case EXPORT_ENTRY_SYMLINK:
-                /* Blob content is the target path; recreate the link.
-                 * symlink(2) cannot overwrite — clear any stale entry. */
+                /* Blob content is the target path; recreate the link. symlink(2)
+                 * cannot overwrite — clear any stale entry. */
                 err = fs_remove_file(e->dest_path);
                 if (err) return err;
 
@@ -621,8 +615,8 @@ static error_t *materialize_entries(
         }
     }
 
-    /* Exact directory modes, deepest-first, created-by-us only. A
-     * stored mode already carrying owner-rwx was applied at creation. */
+    /* Exact directory modes, deepest-first, created-by-us only. A stored mode
+     * already carrying owner-rwx was applied at creation. */
     for (size_t i = list->count; i-- > 0;) {
         export_entry_t *e = &list->items[i];
         if (e->kind != EXPORT_ENTRY_DIRECTORY || e->dest_existed) continue;
@@ -709,9 +703,9 @@ static void print_dry_run(
 /**
  * Write raw bytes to stdout ('-o -').
  *
- * Byte-faithful: no headers, no trailing-newline normalization —
- * unlike show's --raw, which is a terminal display mode. Flushes so
- * buffered IO failures surface as a non-zero exit.
+ * Byte-faithful: no headers, no trailing-newline normalization — unlike show's
+ * --raw, which is a terminal display mode. Flushes so buffered IO failures surface
+ * as a non-zero exit.
  */
 static error_t *write_bytes_stdout(const buffer_t *content) {
     if (content->size > 0 &&
@@ -753,8 +747,8 @@ error_t *cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
     bool tree_export = false;
     char commit_suffix[16] = "";
 
-    /* Export is local-only: no network IO, ever. The explicit
-     * porcelain for making a profile local already exists. */
+    /* Export is local-only: no network IO, ever. The explicit porcelain for making
+     * a profile local already exists. */
     bool exists = false;
     err = gitops_branch_exists(repo, opts->profile, &exists);
     if (err) goto cleanup;
@@ -768,9 +762,9 @@ error_t *cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
         goto cleanup;
     }
 
-    /* Load the tree (HEAD or historical commit). Metadata comes from
-     * the SAME tree below, so historical exports get historical modes
-     * and encryption flags. */
+    /* Load the tree (HEAD or historical commit). Metadata comes from the SAME
+     * tree below, so historical exports get historical modes and encryption
+     * flags. */
     if (opts->commit) {
         git_oid commit_oid;
         err = gitops_resolve_commit_in_branch(
@@ -821,9 +815,9 @@ error_t *cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
     }
 
     if (opts->file_path) {
-        /* Resolve the CLI path to storage form. On resolution failure
-         * fall back to the raw input — the tree lookup below is the
-         * final authority (mirrors show). */
+        /* Resolve the CLI path to storage form. On resolution failure fall back
+         * to the raw input — the tree lookup below is the final authority (mirrors
+         * show). */
         const char *converted = NULL;
         error_t *conv_err = path_input_resolve(
             ctx->mounts, opts->file_path, arena, &converted
@@ -908,8 +902,8 @@ error_t *cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
             };
             err = gitops_tree_walk(subtree, collect_tree_callback, &cctx);
             if (cctx.error) {
-                /* The callback error is the cause; the walk's generic
-                 * user-abort wrapper is noise. */
+                /* The callback error is the cause; the walk's generic user-abort
+                 * wrapper is noise. */
                 error_free(err);
                 err = cctx.error;
             }
@@ -949,9 +943,9 @@ error_t *cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
             goto cleanup;
         }
     } else {
-        /* Whole profile: walk from branch root, storage layout
-         * mirrored verbatim (dest/home/..., dest/root/...). The export
-         * root takes the profile's last segment under a directory
+        /* Whole profile: walk from branch root, storage layout mirrored verbatim
+         * (dest/home/..., dest/root/...). The export root takes the profile's
+         * last segment under a directory
          * destination (hosts/mbp -> mbp). */
         err = dest_resolve(
             opts->output, path_basename(opts->profile), arena, &root_path
@@ -1094,8 +1088,8 @@ cleanup:
  * ══════════════════════════════════════════════════════════════════ */
 
 /**
- * Interpret the 1-3 raw positionals into `profile`, `file_path`,
- * and `commit`. The profile is always explicit — shapes:
+ * Interpret the 1-3 raw positionals into `profile`, `file_path`, and `commit`.
+ * The profile is always explicit — shapes:
  *
  *   <profile>                          whole profile at HEAD
  *   <profile>@<commit>                 whole profile, historical
@@ -1104,8 +1098,8 @@ cleanup:
  *   <profile> <commit>                 whole profile, historical
  *   <profile> <path> <commit>          three positionals
  *
- * Allocation model mirrors show: refspec strings live in `arena`,
- * pure positionals borrow argv.
+ * Allocation model mirrors show: refspec strings live in `arena`, pure positionals
+ * borrow argv.
  */
 static error_t *export_post_parse(
     void *opts_v, arena_t *arena, const args_command_t *cmd
@@ -1114,8 +1108,8 @@ static error_t *export_post_parse(
     cmd_export_options_t *o = opts_v;
     char **args = o->positional_args;
 
-    /* A path in the profile slot is the one predictable misuse —
-     * catch it with a usage hint instead of a branch-lookup error. */
+    /* A path in the profile slot is the one predictable misuse — catch it with
+     * a usage hint instead of a branch-lookup error. */
     const char *first = args[0];
     if (first[0] == '~' || first[0] == '/' ||
         (o->positional_count == 1 && storage_namespace_contains(first))) {
@@ -1149,13 +1143,12 @@ static error_t *export_post_parse(
         return NULL;
     }
 
-    /* Colon-packed refspec first: ':' is never legal in a branch name,
-     * so the token is self-contained and the next positional is the
-     * destination (cp-style; '-o' stays valid as the explicit form).
-     * Only the colon form earns this — every other shape would need a
-     * heuristic on the destination token to distinguish it from a
-     * path or commit, and heuristics on user paths are how silent
-     * misroutes happen. */
+    /* Colon-packed refspec first: ':' is never legal in a branch name, so the
+     * token is self-contained and the next positional is the destination (cp-style;
+     * '-o' stays valid as the explicit form). Only the colon form earns this —
+     * every other shape would need a heuristic on the destination token to
+     * distinguish it from a path or commit, and heuristics on user paths are
+     * how silent misroutes happen. */
     if (strchr(args[0], ':') != NULL) {
         refspec_t rs = { 0 };
         error_t *err = parse_refspec(arena, args[0], &rs);
@@ -1193,8 +1186,8 @@ static error_t *export_post_parse(
     o->profile = args[0];
 
     if (o->positional_count == 2) {
-        /* A bare ref selects a whole-profile historical export;
-         * anything path-shaped goes through refspec parsing. */
+        /* A bare ref selects a whole-profile historical export; anything
+         * path-shaped goes through refspec parsing. */
         if (str_looks_like_git_ref(args[1]) && !strchr(args[1], '/') &&
             !strchr(args[1], '.')) {
             o->commit = args[1];

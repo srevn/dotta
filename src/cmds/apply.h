@@ -31,14 +31,14 @@ typedef struct {
 /**
  * Apply profiles to filesystem
  *
- * Converges the filesystem with the enabled profiles in both directions:
- * deploys the files and tracked directories that diverge, and removes the
- * ones orphaned by a disabled profile or by a deletion in Git.
+ * Converges the filesystem with the enabled profiles in both directions: deploys
+ * the files and tracked directories that diverge, and removes the ones orphaned
+ * by a disabled profile or by a deletion in Git.
  *
- * Orchestrates scope resolution, workspace divergence analysis, plan
- * construction, privilege and pre-flight checks, the apply hooks, and
- * execution. Builds no manifest of its own — core/manifest maintains that
- * when profiles or files change, and apply reads it through the workspace.
+ * Orchestrates scope resolution, workspace divergence analysis, plan construction,
+ * privilege and pre-flight checks, the apply hooks, and execution. Builds no
+ * manifest of its own — core/manifest maintains that when profiles or files change,
+ * and apply reads it through the workspace.
  *
  * @param ctx Dispatch context (must not be NULL)
  * @param opts Command options (must not be NULL)
@@ -49,8 +49,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts);
 /**
  * Spec-engine command specification for `dotta apply`.
  *
- * Registered in cmds/registry.c. Defined in apply.c beside the
- * dispatch wrapper.
+ * Registered in cmds/registry.c. Defined in apply.c beside the dispatch wrapper.
  */
 extern const args_command_t spec_apply;
 

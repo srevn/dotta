@@ -18,8 +18,8 @@
 #define MIN_CAPACITY 64
 
 /**
- * Ensure buffer can hold at least alloc content bytes.
- * Allocates alloc+1 internally (for null terminator).
+ * Ensure buffer can hold at least alloc content bytes. Allocates alloc+1 internally
+ * (for null terminator).
  */
 error_t *buffer_grow(buffer_t *buf, size_t alloc) {
     CHECK_NULL(buf);
@@ -37,8 +37,7 @@ error_t *buffer_grow(buffer_t *buf, size_t alloc) {
         return NULL;
     }
 
-    /* Growth strategy: double from current
-     * or MIN_CAPACITY, whichever is larger */
+    /* Growth strategy: double from current or MIN_CAPACITY, whichever is larger */
     size_t cap = buf->capacity ? buf->capacity : MIN_CAPACITY;
     while (cap < needed) {
         if (cap > SIZE_MAX / 2) {
@@ -230,17 +229,16 @@ void buffer_secure_free(void *ptr, size_t len) {
         return;
     }
 
-    /* Zero before unlock: the wipe must land in physical memory before
-     * the page becomes swap-eligible. secure_wipe resists dead-store
-     * elimination (free-immediately-after would otherwise let the
-     * optimizer delete the zeroization). */
+    /* Zero before unlock: the wipe must land in physical memory before the page
+     * becomes swap-eligible. secure_wipe resists dead-store elimination
+     * (free-immediately-after would otherwise let the optimizer delete the
+     * zeroization). */
     secure_wipe(ptr, len);
 
-    /* Unlock is best-effort. Calling munlock on memory that was never
-     * mlock'd (mlock may have failed at allocation time for want of
-     * RLIMIT_MEMLOCK) returns an error we explicitly ignore — there is
-     * no recovery and no remaining user-visible behavior at this point
-     * in the cleanup. */
+    /* Unlock is best-effort. Calling munlock on memory that was never mlock'd
+     * (mlock may have failed at allocation time for want of RLIMIT_MEMLOCK) returns
+     * an error we explicitly ignore — there is no recovery and no remaining
+     * user-visible behavior at this point in the cleanup. */
     (void) munlock(ptr, len);
 
     free(ptr);

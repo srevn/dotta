@@ -1,17 +1,16 @@
 /**
  * transfer.h - Unified transfer context for network operations
  *
- * Provides an opaque context for Git network operations (clone, fetch,
- * push, delete) that encapsulates credential session identity and
- * progress reporting.
+ * Provides an opaque context for Git network operations (clone, fetch, push,
+ * delete) that encapsulates credential session identity and progress reporting.
  *
  * Design principles:
  * - Single context per command-level network session (one remote, N ops)
  * - Opaque: struct body is private to transfer.c
  * - Encapsulates credential session state and identity
  * - Type-safe payload for libgit2 callbacks
- * - Commits exactly one approve/reject decision to the credential helper
- *   at session teardown (based on classified op outcomes)
+ * - Commits exactly one approve/reject decision to the credential helper at session
+ *   teardown (based on classified op outcomes)
  */
 
 #ifndef DOTTA_TRANSFER_H
@@ -42,13 +41,12 @@ typedef enum {
 /**
  * Cumulative transfer metrics for a session.
  *
- * Aggregated across every op that actually transferred data. Fetches
- * of zero objects (up-to-date) and connect-only ops (remote_ls) are
- * not counted — the intent is "what moved", not "how many syscalls".
+ * Aggregated across every op that actually transferred data. Fetches of zero
+ * objects (up-to-date) and connect-only ops (remote_ls) are not counted — the
+ * intent is "what moved", not "how many syscalls".
  *
- * Fed by the libgit2 progress callbacks TTY-independently, so metrics
- * are accurate on pipes and logs, not just interactive terminals.
- * Access via transfer_stats().
+ * Fed by the libgit2 progress callbacks TTY-independently, so metrics are accurate
+ * on pipes and logs, not just interactive terminals. Access via transfer_stats().
  */
 typedef struct {
     /* Fetch direction */
@@ -92,22 +90,21 @@ error_t *transfer_context_create(
 /**
  * Free a transfer context.
  *
- * Before freeing, commits the session's credential decision to the
- * helper exactly once: approve on VALIDATED, reject on REJECTED,
- * neither on NOT_ACQUIRED (SSH/anonymous) or unresolved ACQUIRED.
- * NULL-safe.
+ * Before freeing, commits the session's credential decision to the helper exactly
+ * once: approve on VALIDATED, reject on REJECTED, neither on NOT_ACQUIRED
+ * (SSH/anonymous) or unresolved ACQUIRED. NULL-safe.
  */
 void transfer_context_free(transfer_context_t *ctx);
 
 /**
  * Begin an op on this transfer session.
  *
- * Resets per-op scratch (anti-loop attempts, last_outcome, stats
- * scratch). Records the direction so transfer_op_end() knows which
- * side of transfer_stats_t to fold into on success.
+ * Resets per-op scratch (anti-loop attempts, last_outcome, stats scratch). Records
+ * the direction so transfer_op_end() knows which side of transfer_stats_t to
+ * fold into on success.
  *
- * Pair with transfer_op_end() around each libgit2 network call
- * (git_clone, git_remote_fetch, git_remote_push, git_remote_connect).
+ * Pair with transfer_op_end() around each libgit2 network call (git_clone,
+ * git_remote_fetch, git_remote_push, git_remote_connect).
  *
  * NULL-safe.
  *
@@ -119,8 +116,7 @@ void transfer_op_begin(transfer_context_t *xfer, git_direction direction);
 /**
  * End an op on this transfer session.
  *
- * Classifies `git_err` into last_outcome and advances the credential
- * state machine:
+ * Classifies `git_err` into last_outcome and advances the credential state machine:
  *
  *   NOT_ACQUIRED  + anything     → NOT_ACQUIRED   (no helper fill happened)
  *   ACQUIRED      + OK           → VALIDATED      (terminal)
@@ -139,8 +135,8 @@ void transfer_op_end(transfer_context_t *xfer, int git_err);
 /**
  * Return the outcome of the most recent op.
  *
- * Callers should inspect this immediately after the op completes,
- * before the next transfer_op_begin() overwrites it.
+ * Callers should inspect this immediately after the op completes, before the
+ * next transfer_op_begin() overwrites it.
  *
  * NULL-safe (returns TRANSFER_OUTCOME_NONE).
  */
@@ -149,8 +145,8 @@ transfer_outcome_t transfer_last_outcome(const transfer_context_t *xfer);
 /**
  * Return the cumulative transfer stats for this session.
  *
- * Read-only view. Updated by transfer_op_end when an op completes
- * successfully with data transferred.
+ * Read-only view. Updated by transfer_op_end when an op completes successfully
+ * with data transferred.
  *
  * NULL-safe (returns NULL).
  */
@@ -159,15 +155,15 @@ const transfer_stats_t *transfer_stats(const transfer_context_t *xfer);
 /**
  * Emit a one-line summary of the session's transfer activity.
  *
- * Writes "Fetched N objects (SIZE)" and/or "Pushed N objects (SIZE)"
- * to `out` at the given verbosity level. Silent when:
+ * Writes "Fetched N objects (SIZE)" and/or "Pushed N objects (SIZE)" to `out`
+ * at the given verbosity level. Silent when:
  *   - `xfer` or `out` is NULL,
- *   - the session's last op failed (the error message already carries
- *     the narrative; a summary would be misleading),
+ *   - the session's last op failed (the error message already carries the
+ *     narrative; a summary would be misleading),
  *   - no direction saw any data (nothing interesting to report).
  *
- * Intended to be called by commands near their existing end-of-run
- * summary so users see what moved on the wire.
+ * Intended to be called by commands near their existing end-of-run summary so
+ * users see what moved on the wire.
  */
 void transfer_summarize(
     const transfer_context_t *xfer,
@@ -178,15 +174,13 @@ void transfer_summarize(
 /**
  * Wire transfer context into a libgit2 remote_callbacks struct.
  *
- * Installs the credential callback (always) and the progress callback
- * matching `direction`. The transfer context is required — every
- * gitops_* network primitive enforces this with CHECK_NULL, so a NULL
- * payload here would be a dotta-internal contract violation, not a
- * user-recoverable case.
+ * Installs the credential callback (always) and the progress callback matching
+ * `direction`. The transfer context is required — every gitops_* network primitive
+ * enforces this with CHECK_NULL, so a NULL payload here would be a dotta-internal
+ * contract violation, not a user-recoverable case.
  *
- * Ops with no byte transfer (e.g., git_remote_connect + git_remote_ls)
- * may pass GIT_DIRECTION_FETCH; the installed progress callback simply
- * never fires.
+ * Ops with no byte transfer (e.g., git_remote_connect + git_remote_ls) may pass
+ * GIT_DIRECTION_FETCH; the installed progress callback simply never fires.
  *
  * @param cb        Callbacks struct (caller must have initialized it)
  * @param xfer      Transfer context (must not be NULL)
@@ -201,10 +195,10 @@ void transfer_configure_callbacks(
 /**
  * Release ownership of the progress line back to the caller.
  *
- * Callers that take manual ownership of the current output line (clearing
- * it or emitting their own content) invoke this to suppress the safety-net
- * newline that transfer_context_free would otherwise emit at teardown.
- * Only marks the line as inactive — does not itself write or clear.
+ * Callers that take manual ownership of the current output line (clearing it or
+ * emitting their own content) invoke this to suppress the safety-net newline
+ * that transfer_context_free would otherwise emit at teardown. Only marks the
+ * line as inactive — does not itself write or clear.
  *
  * NULL-safe.
  */

@@ -52,20 +52,19 @@
 /**
  * Root command registry — every user-facing top-level command.
  *
- * The single place that names every command the CLI exposes. Two
- * consumers project this array into behavior:
+ * The single place that names every command the CLI exposes. Two consumers project
+ * this array into behavior:
  *
- *   - args_resolve_root / args_render_root_usage — direct calls
- *     from main, resolving argv[1] and rendering top-level help;
- *   - the fish completion exporter in cmds/completion.c — reaches
- *     the array through dotta_registry() so the cmds layer never
- *     names the registry symbol.
+ *   - args_resolve_root / args_render_root_usage — direct calls from main,
+ *     resolving argv[1] and rendering top-level help;
+ *   - the fish completion exporter in cmds/completion.c — reaches the array through
+ *     dotta_registry() so the cmds layer never names the registry symbol.
  *
- * Ordered for root-help readability: setup → file ops → deploy/undo →
- * inspect → remote → profile/remote mgmt → config → passthrough →
- * special. Every projection (dispatch, help, fish export) walks this
- * array, so the order is the display order everywhere. NULL-terminated
- * for `for (size_t i = 0; reg[i] != NULL; i++)` loops.
+ * Ordered for root-help readability: setup → file ops → deploy/undo → inspect →
+ * remote → profile/remote mgmt → config → passthrough → special. Every projection
+ * (dispatch, help, fish export) walks this array, so the order is the display
+ * order everywhere. NULL-terminated for `for (size_t i = 0; reg[i] != NULL; i++)`
+ * loops.
  */
 static const args_command_t *const dotta_commands[] = {
     &spec_init,   &spec_clone,       &spec_add,
@@ -78,13 +77,12 @@ static const args_command_t *const dotta_commands[] = {
     NULL
 };
 
-/* Per-combination dispatch payloads — one const per (repo_mode,
- * state_mode, crypto_mode) tuple actually used by the registry. Each
+/* Per-combination dispatch payloads — one const per (repo_mode, state_mode,
+ * crypto_mode) tuple actually used by the registry. Each
  * command's spec sets `.payload = &dotta_ext_X` for its needed tuple;
- * the dispatcher reads it back in `run_spec` to decide how to acquire
- * the repository, state, and crypto handles before calling the handler.
- * Only the combinations used in the registry are defined; new tuples
- * earn new constants. */
+ * the dispatcher reads it back in `run_spec` to decide how to acquire the
+ * repository, state, and crypto handles before calling the handler. Only the
+ * combinations used in the registry are defined; new tuples earn new constants. */
 const dotta_spec_ext_t dotta_ext_none = {
     .repo_mode  = DOTTA_REPO_NONE,
     .state_mode = DOTTA_STATE_NONE,
@@ -123,11 +121,11 @@ const dotta_spec_ext_t dotta_ext_write_crypto = {
 /**
  * Typed public face of the file-local `dotta_commands` registry.
  *
- * Only consumer today is `cmds/completion.c`, which projects the
- * registry into the fish-completion dialect when the build emits
- * `build/completions/dotta-completions.fish`. Keeping the storage
- * `static` and exposing it through this accessor lets the cmds/
- * layer read the array without compile-depending on the symbol.
+ * Only consumer today is `cmds/completion.c`, which projects the registry into
+ * the fish-completion dialect when the build emits
+ * `build/completions/dotta-completions.fish`. Keeping the storage `static` and
+ * exposing it through this accessor lets the cmds/ layer read the array without
+ * compile-depending on the symbol.
  */
 const args_command_t *const *dotta_registry(void) {
     return dotta_commands;
@@ -136,19 +134,19 @@ const args_command_t *const *dotta_registry(void) {
 /**
  * Open a repository handle according to the command's declared mode.
  *
- * Returns 0 on success, 1 on unrecoverable error (error is printed).
- * On success, `*repo_out` and `*path_out` are set per mode:
+ * Returns 0 on success, 1 on unrecoverable error (error is printed). On success,
+ * `*repo_out` and `*path_out` are set per mode:
  *
  *   DOTTA_REPO_NONE            → both NULL
  *   DOTTA_REPO_REQUIRED        → repo set, path set
  *   DOTTA_REPO_OPTIONAL_SILENT → repo maybe NULL, path NULL, no errors
  *   DOTTA_REPO_PATH_ONLY       → repo NULL (released), path set
  *
- * Invariant: whenever `*repo_out` is non-NULL on return, `*path_out` is
- * non-NULL too. `repo_open` already resolves the path to open the repo;
- * threading it out costs nothing and gives commands that need both
- * (e.g. bootstrap, which exports DOTTA_REPO_DIR to child scripts) a
- * single source of truth instead of a second `resolve_repo_path` call.
+ * Invariant: whenever `*repo_out` is non-NULL on return, `*path_out` is non-NULL
+ * too. `repo_open` already resolves the path to open the repo; threading it out
+ * costs nothing and gives commands that need both (e.g. bootstrap, which exports
+ * DOTTA_REPO_DIR to child scripts) a single source of truth instead of a second
+ * `resolve_repo_path` call.
  */
 static int open_repo_for_mode(
     dotta_repo_mode_t mode,
@@ -190,8 +188,8 @@ static int open_repo_for_mode(
                 error_free(err);
                 return 1;
             }
-            /* Consumers want the path, not the handle (e.g. `git`
-             * passthrough forks a child with `--git-dir=<path>`). */
+            /* Consumers want the path, not the handle (e.g. `git` passthrough
+             * forks a child with `--git-dir=<path>`). */
             git_repository_free(repo);
             return 0;
         }
@@ -202,22 +200,22 @@ static int open_repo_for_mode(
 /**
  * Acquire a state handle according to the command's declared mode.
  *
- * Returns 0 on success, 1 on unrecoverable error (error is printed).
- * On success, `*state_out` is set per mode:
+ * Returns 0 on success, 1 on unrecoverable error (error is printed). On success,
+ * `*state_out` is set per mode:
  *
  *   DOTTA_STATE_NONE   → NULL
  *   DOTTA_STATE_READ   → state_load handle (DB absent until first scoped write)
  *   DOTTA_STATE_WRITE  → state_open handle (BEGIN IMMEDIATE held)
  *
- * Parallel in shape to `open_repo_for_mode`. No state is acquired when
- * `repo == NULL`: DOTTA_REPO_NONE commands and DOTTA_REPO_OPTIONAL_SILENT
- * commands that found no repo silently skip the mode — the missing repo
- * is a valid dispatch outcome, not an error condition for state.
+ * Parallel in shape to `open_repo_for_mode`. No state is acquired when `repo ==
+ * NULL`: DOTTA_REPO_NONE commands and DOTTA_REPO_OPTIONAL_SILENT commands that
+ * found no repo silently skip the mode — the missing repo is a valid dispatch
+ * outcome, not an error condition for state.
  *
- * On WRITE acquisition, the transaction lives for the full dispatch;
- * the command calls `state_save` when its mutation is complete. On
- * failure paths or uncommitted exits, `state_free` in the dispatcher
- * auto-rolls-back per state.h's teardown contract.
+ * On WRITE acquisition, the transaction lives for the full dispatch; the command
+ * calls `state_save` when its mutation is complete. On failure paths or uncommitted
+ * exits, `state_free` in the dispatcher auto-rolls-back per state.h's teardown
+ * contract.
  */
 static int open_state_for_mode(
     dotta_state_mode_t mode,
@@ -241,19 +239,18 @@ static int open_state_for_mode(
 /**
  * Build the per-machine mount table iff state was opened.
  *
- * Returns 0 on success, 1 on unrecoverable error (error is printed).
- * On success, `*mounts_out` is set per the runtime invariant
- * `mounts != NULL iff state != NULL`:
+ * Returns 0 on success, 1 on unrecoverable error (error is printed). On success,
+ * `*mounts_out` is set per the runtime invariant `mounts != NULL iff state !=
+ * NULL`:
  *
  *   state == NULL  → NULL (init/clone/version/completion path)
  *   state != NULL  → full-enabled topology (HOME + root sentinel + bindings)
  *
- * Binding-mutating commands (profile enable/disable, clone,
- * interactive, add-with-implicit-enable) build a *local* fresh table
- * post-mutation rather than refreshing this handle — the immutable-ctx
- * contract (see runtime.h "Members not welcome") rules out an in-place
- * rebuild here. Per-site visibility of "the bindings just changed" is
- * the design intent, not centralized auto-invalidation.
+ * Binding-mutating commands (profile enable/disable, clone, interactive,
+ * add-with-implicit-enable) build a *local* fresh table post-mutation rather
+ * than refreshing this handle — the immutable-ctx contract (see runtime.h "Members
+ * not welcome") rules out an in-place rebuild here. Per-site visibility of "the
+ * bindings just changed" is the design intent, not centralized auto-invalidation.
  */
 static int open_mounts_for_state(
     state_t *state,
@@ -278,20 +275,19 @@ static int open_mounts_for_state(
 /**
  * Acquire crypto handles according to the command's declared mode.
  *
- * Returns 0 on success, 1 on unrecoverable error (error is printed).
- * On success, `*keymgr_out` and `*cache_out` are set per mode:
+ * Returns 0 on success, 1 on unrecoverable error (error is printed). On success,
+ * `*keymgr_out` and `*cache_out` are set per mode:
  *
  *   DOTTA_CRYPTO_NONE      → both NULL
  *   DOTTA_CRYPTO_REQUIRED  → cache always set; keymgr set iff encryption enabled
  *
- * Parallel in shape to `open_repo_for_mode` and `open_state_for_mode`.
- * No crypto is acquired when `repo == NULL` (content_cache needs a repo
- * to read blobs from, and a standalone keymgr has no use site downstream).
+ * Parallel in shape to `open_repo_for_mode` and `open_state_for_mode`. No crypto
+ * is acquired when `repo == NULL` (content_cache needs a repo to read blobs from,
+ * and a standalone keymgr has no use site downstream).
  *
- * Under REQUIRED with encryption disabled, the cache is still created
- * with a NULL keymgr; it handles plaintext blobs uniformly and surfaces
- * ERR_CRYPTO on any decrypt attempt — per the runtime.h invariant on
- * `ctx->content_cache`.
+ * Under REQUIRED with encryption disabled, the cache is still created with a
+ * NULL keymgr; it handles plaintext blobs uniformly and surfaces ERR_CRYPTO on
+ * any decrypt attempt — per the runtime.h invariant on `ctx->content_cache`.
  */
 static int open_crypto_for_mode(
     dotta_crypto_mode_t mode,
@@ -306,9 +302,9 @@ static int open_crypto_for_mode(
     if (mode == DOTTA_CRYPTO_NONE || repo == NULL) return 0;
 
     if (config->encryption_enabled) {
-        /* Load the per-repo Argon2id salt from refs/dotta/salt before
-         * constructing the keymgr — the salt is part of the master-key
-         * derivation contract, so the keymgr cannot exist without it. */
+        /* Load the per-repo Argon2id salt from refs/dotta/salt before constructing
+         * the keymgr — the salt is part of the master-key derivation contract,
+         * so the keymgr cannot exist without it. */
         uint8_t salt[KDF_SALT_SIZE];
         error_t *err = salt_load(repo, salt);
         if (err != NULL) {
@@ -328,8 +324,8 @@ static int open_crypto_for_mode(
         }
 
         err = keymgr_create(config, salt, keymgr_out);
-        /* Salt is public; no wipe needed. The keymgr has copied it
-         * into its own storage. */
+        /* Salt is public; no wipe needed. The keymgr has copied it into its own
+         * storage. */
         if (err != NULL) {
             error_print(err, stderr);
             error_free(err);
@@ -337,12 +333,11 @@ static int open_crypto_for_mode(
         }
     }
 
-    /* Cache always created under REQUIRED, possibly with NULL keymgr.
-     * Single-blob handlers (`add`, `show`, `revert`, `key`) leave it
-     * empty; batch handlers populate it across many blob fetches. The
-     * uniform handle shape lets every crypto-aware command read
-     * `ctx->content_cache` without first checking which mode it ran
-     * under. See runtime.h's two-mode rationale. */
+    /* Cache always created under REQUIRED, possibly with NULL keymgr. Single-blob
+     * handlers (`add`, `show`, `revert`, `key`) leave it empty; batch handlers
+     * populate it across many blob fetches. The uniform handle shape lets every
+     * crypto-aware command read `ctx->content_cache` without first checking which
+     * mode it ran under. See runtime.h's two-mode rationale. */
     *cache_out = content_cache_create(repo, *keymgr_out);
     if (*cache_out == NULL) {
         keymgr_free(*keymgr_out);
@@ -369,25 +364,25 @@ static int run_spec(
 ) {
     const char *prog = argv[0];
 
-    /* Command-scoped arena. Sized for the median command — parsing
-     * needs ~few KB, but workspace/scope/manifest paths fit ~140 KB
-     * worst case in one or two blocks at this initial size.
-     * Borrowed by handlers via ctx->arena; destroyed below. */
+    /* Command-scoped arena. Sized for the median command — parsing needs ~few
+     * KB, but workspace/scope/manifest paths fit ~140 KB worst case in one or
+     * two blocks at this initial size. Borrowed by handlers via ctx->arena;
+     * destroyed below. */
     arena_t *arena = arena_create(32UL * 1024);
     if (arena == NULL) {
         fprintf(stderr, "Failed to allocate memory\n");
         return 1;
     }
 
-    /* `resolved` tracks the leaf command after subcommand resolution.
-     * For a flat command this stays equal to `cmd`; for a tree it is
-     * the matched child (so help and errors render against the actual
-     * subcommand the user typed, and dispatch goes to its handler). */
+    /* `resolved` tracks the leaf command after subcommand resolution. For a flat
+     * command this stays equal to `cmd`; for a tree it is the matched child (so
+     * help and errors render against the actual subcommand the user typed, and
+     * dispatch goes to its handler). */
     const args_command_t *resolved = cmd;
 
-    /* Passthrough commands (e.g. `git`) skip parsing but still honor
-     * repo_mode, so PATH_ONLY passthrough can resolve the repo path
-     * without a second `repo_open` inside dispatch. */
+    /* Passthrough commands (e.g. `git`) skip parsing but still honor repo_mode,
+     * so PATH_ONLY passthrough can resolve the repo path without a second
+     * `repo_open` inside dispatch. */
     void *opts = NULL;
     if (!cmd->passthrough) {
         if (cmd->opts_size > 0) {
@@ -399,8 +394,8 @@ static int run_spec(
             }
         }
 
-        /* Parse. The engine resets `errors` in-place, so the uninitialized
-         * stack declaration is intentional. */
+        /* Parse. The engine resets `errors` in-place, so the uninitialized stack
+         * declaration is intentional. */
         args_errors_t errors;
         args_outcome_t outcome = args_parse(
             cmd, argc, argv, 2, arena, opts, &errors, &resolved
@@ -422,9 +417,9 @@ static int run_spec(
         }
     }
 
-    /* Each command's spec stashes its dispatch preconditions in `payload`
-     * via a `dotta_spec_ext_t` constant. NULL falls back to NONE/NONE/NONE
-     * so a spec that omits payload simply gets no handles. */
+    /* Each command's spec stashes its dispatch preconditions in `payload` via a
+     * `dotta_spec_ext_t` constant. NULL falls back to NONE/NONE/NONE so a spec
+     * that omits payload simply gets no handles. */
     const dotta_spec_ext_t *ext = resolved->payload;
     dotta_repo_mode_t repo_mode = ext != NULL ? ext->repo_mode : DOTTA_REPO_NONE;
     dotta_state_mode_t state_mode = ext != NULL ? ext->state_mode : DOTTA_STATE_NONE;
@@ -482,10 +477,10 @@ static int run_spec(
 
     error_t *err = resolved->dispatch(&ctx, opts);
 
-    /* LIFO teardown. content_cache first (holds a borrowed keymgr pointer
-     * but does not dereference it at teardown), then keymgr, then state
-     * (state_free auto-rolls-back any uncommitted transaction per state.h's
-     * contract). All *_free primitives are NULL-safe. */
+    /* LIFO teardown. content_cache first (holds a borrowed keymgr pointer but
+     * does not dereference it at teardown), then keymgr, then state (state_free
+     * auto-rolls-back any uncommitted transaction per state.h's contract). All
+     * *_free primitives are NULL-safe. */
     content_cache_free(cache);
     keymgr_free(keymgr);
     state_free(state);
@@ -498,45 +493,43 @@ static int run_spec(
         error_free(err);
         return 1;
     }
-    /* Passthrough dispatch writes via *ctx->exit_code to propagate the
-     * child's exact status (0, 1, 2, 128+n). Native commands leave it at 0. */
+    /* Passthrough dispatch writes via *ctx->exit_code to propagate the child's
+     * exact status (0, 1, 2, 128+n). Native commands leave it at 0. */
     return exit_override;
 }
 
-/* Definition of the cross-TU symbol declared in sys/process.h.
- * Published by sys/process.c::process_run() while a PROCESS_PGRP_NEW
- * child is alive; zero otherwise. The signal handler below reads it
- * to forward terminating signals to the child's process group before
- * dotta dies, so a Ctrl+C kills both atomically rather than
- * orphaning the spawned hook.
+/* Definition of the cross-TU symbol declared in sys/process.h. Published by
+ * sys/process.c::process_run() while a PROCESS_PGRP_NEW child is alive; zero
+ * otherwise. The signal handler below reads it to forward terminating signals
+ * to the child's process group before dotta dies, so a Ctrl+C kills both atomically
+ * rather than orphaning the spawned hook.
  *
- * PROCESS_PGRP_SHARED children leave this at zero — the kernel
- * already delivers terminal SIGINT/SIGTERM to the entire foreground
- * group, so parent and child receive it without forwarding. */
+ * PROCESS_PGRP_SHARED children leave this at zero — the kernel already delivers
+ * terminal SIGINT/SIGTERM to the entire foreground group, so parent and child
+ * receive it without forwarding. */
 volatile sig_atomic_t active_child_pgid = 0;
 
 /**
  * Signal handler for SIGINT/SIGTERM
  *
- * Forwards the signal to any active child process group (so a hook
- * dies atomically with dotta) and re-raises with the default disposition
- * so the kernel can terminate the process.
+ * Forwards the signal to any active child process group (so a hook dies atomically
+ * with dotta) and re-raises with the default disposition so the kernel can
+ * terminate the process.
  *
- * No resource cleanup runs here by design. Signal handlers must stay
- * AS-safe per POSIX SUSv4 §2.4.3 — which rules out malloc/free (needed
- * by libgit2 teardown) and crypto_wipe/munlock (needed by keymgr
- * teardown). The kernel reclaims mlocked pages on process death and
- * zeroes them before reallocation, so master keys held in the now-freed
- * keymgr cannot surface in another process's memory. Worktrees are
- * orphan-cleaned by worktree.c on the next invocation, and SQLite WAL
- * mode auto-rolls-back any in-flight transaction.
+ * No resource cleanup runs here by design. Signal handlers must stay AS-safe
+ * per POSIX SUSv4 §2.4.3 — which rules out malloc/free (needed by libgit2 teardown)
+ * and crypto_wipe/munlock (needed by keymgr teardown). The kernel reclaims mlocked
+ * pages on process death and zeroes them before reallocation, so master keys
+ * held in the now-freed keymgr cannot surface in another process's memory.
+ * Worktrees are orphan-cleaned by worktree.c on the next invocation, and SQLite
+ * WAL mode auto-rolls-back any in-flight transaction.
  *
- * AS-safe primitives used: kill(2), signal(2), raise(3) per SUSv4
- * §2.4.3. Reading volatile sig_atomic_t is atomic by definition.
+ * AS-safe primitives used: kill(2), signal(2), raise(3) per SUSv4 §2.4.3. Reading
+ * volatile sig_atomic_t is atomic by definition.
  */
 static void signal_cleanup_handler(int signum) {
-    /* Forward first, so the child group starts dying even if the
-     * default disposition takes non-trivial time to kick in. */
+    /* Forward first, so the child group starts dying even if the default
+     * disposition takes non-trivial time to kick in. */
     sig_atomic_t cpgid = active_child_pgid;
     if (cpgid > 0) {
         (void) kill(-(pid_t) cpgid, signum);
@@ -550,21 +543,20 @@ static void signal_cleanup_handler(int signum) {
 int main(int argc, char **argv) {
     /* Line-buffer the report
      *
-     * dotta writes one document to stdout and, from several layers,
-     * diagnostics to stderr: the terminal failure and the prompts from
-     * base/output, and the raw state-corruption notes that core/ emits
-     * where it has no output context. stderr is never fully buffered
-     * (POSIX), while stdout is block-buffered the moment it is not a
-     * terminal — so a redirected run reads back with every diagnostic
-     * hoisted above the report it annotates, and the heading of a block
-     * separated from its list.
+     * dotta writes one document to stdout and, from several layers, diagnostics
+     * to stderr: the terminal failure and the prompts from base/output, and the
+     * raw state-corruption notes that core/ emits where it has no output context.
+     * stderr is never fully buffered (POSIX), while stdout is block-buffered
+     * the moment it is not a terminal — so a redirected run reads back with every
+     * diagnostic hoisted above the report it annotates, and the heading of a
+     * block separated from its list.
      *
-     * Flush granularity is what differs, so flush granularity is what is
-     * fixed: one line, matching stderr's, makes the order the reader sees
-     * the order the code wrote, for every writer in every layer. The
-     * report is at most a few hundred lines and never bulk data (the
-     * machine-readable command, completion, bypasses this stream), so the
-     * extra write(2) per line buys ordering at no cost worth naming.
+     * Flush granularity is what differs, so flush granularity is what is fixed:
+     * one line, matching stderr's, makes the order the reader sees the order
+     * the code wrote, for every writer in every layer. The report is at most a
+     * few hundred lines and never bulk data (the machine-readable command,
+     * completion, bypasses this stream), so the extra write(2) per line buys
+     * ordering at no cost worth naming.
      *
      * Set before anything can print — the libgit2 failure below included.
      */
@@ -576,23 +568,22 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    /* Install signal handlers so child process groups (spawned hooks)
-     * get forwarded terminal signals atomically with dotta. Keymgr
-     * teardown is command-scoped and happens via keymgr_free on the
-     * dispatch return path, not here — see signal_cleanup_handler. */
+    /* Install signal handlers so child process groups (spawned hooks) get forwarded
+     * terminal signals atomically with dotta. Keymgr teardown is command-scoped
+     * and happens via keymgr_free on the dispatch return path, not here — see
+     * signal_cleanup_handler. */
     signal(SIGINT, signal_cleanup_handler);   /* Ctrl+C */
     signal(SIGTERM, signal_cleanup_handler);  /* kill command */
 
-    /* Ignore SIGPIPE so writes to broken pipes return EPIPE instead of
-     * killing dotta. Required for any code path that streams output to a
-     * caller-controlled fd (e.g., bootstrap scripts whose stdout the user
-     * may pipe to a head/grep that closes early). */
+    /* Ignore SIGPIPE so writes to broken pipes return EPIPE instead of killing
+     * dotta. Required for any code path that streams output to a caller-controlled
+     * fd (e.g., bootstrap scripts whose stdout the user may pipe to a head/grep
+     * that closes early). */
     signal(SIGPIPE, SIG_IGN);
 
-    /* Root-level dispatch resolution — pure data projection of the
-     * registry. No config/output needed for help/version/usage, so
-     * resolve first and let those branches exit early without paying
-     * for config loading. */
+    /* Root-level dispatch resolution — pure data projection of the registry. No
+     * config/output needed for help/version/usage, so resolve first and let those
+     * branches exit early without paying for config loading. */
     const args_command_t *spec = NULL;
     switch (args_resolve_root(dotta_commands, argc, argv, &spec)) {
         case ARGS_ROOT_NONE:
@@ -618,11 +609,10 @@ int main(int argc, char **argv) {
 
     /* Load configuration once for entire process.
      *
-     * config_load handles the missing-config-file case internally
-     * (returns defaults with no error). Any error returned here is a
-     * real failure — parse error, unknown key, invalid value, or a
-     * malformed auto-encrypt pattern — and must surface, not fall back
-     * silently to defaults that hide the user's mistake. */
+     * config_load handles the missing-config-file case internally (returns defaults
+     * with no error). Any error returned here is a real failure — parse error,
+     * unknown key, invalid value, or a malformed auto-encrypt pattern — and must
+     * surface, not fall back silently to defaults that hide the user's mistake. */
     config_t *config = NULL;
     error_t *cfg_err = config_load(NULL, &config);
     if (cfg_err) {
@@ -635,8 +625,8 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    /* Create output context once from config settings.
-     * All commands share this context and may override verbosity via CLI flags. */
+    /* Create output context once from config settings. All commands share this
+     * context and may override verbosity via CLI flags. */
     output_t *out = output_create(
         stdout,
         output_parse_verbosity(config->verbosity),
@@ -653,15 +643,15 @@ int main(int argc, char **argv) {
 
     /* Fix repository ownership if running under sudo
      *
-     * This ensures that .git/ files created during privileged operations
-     * (e.g., sudo dotta update crypto) are owned by the original user, not root.
-     * Without this fix, subsequent non-sudo operations would fail with
-     * "Permission denied" when trying to access root-owned files.
+     * This ensures that .git/ files created during privileged operations (e.g.,
+     * sudo dotta update crypto) are owned by the original user, not root. Without
+     * this fix, subsequent non-sudo operations would fail with "Permission denied"
+     * when trying to access root-owned files.
      *
-     * When: After all Git operations complete, before shutdown
-     * Why: Catches all root-owned files created during this run
-     * Where: Only when running under sudo (automatic detection)
-     * Error handling: Log warning but don't change exit code (non-fatal)
+     * When: After all Git operations complete, before shutdown Why: Catches all
+     * root-owned files created during this run Where: Only when running under
+     * sudo (automatic detection) Error handling: Log warning but don't change
+     * exit code (non-fatal)
      */
     if (privilege_is_sudo()) {
         char *repo_path = NULL;
@@ -671,8 +661,8 @@ int main(int argc, char **argv) {
             /* Fix ownership of .git directory */
             err = repo_fix_ownership_if_needed(repo_path);
             if (err) {
-                /* Non-fatal: warn user but don't fail the command
-                 * The command itself succeeded, ownership fix is just cleanup */
+                /* Non-fatal: warn user but don't fail the command The command
+                 * itself succeeded, ownership fix is just cleanup */
                 fprintf(stderr, "\nWarning: Failed to fix repository ownership\n");
                 fprintf(stderr, "The repository may be inaccessible without sudo.\n");
                 fprintf(stderr, "To fix manually, run:\n");
@@ -682,8 +672,8 @@ int main(int argc, char **argv) {
             }
             free(repo_path);
         } else {
-            /* Path resolution failed - unusual but non-fatal
-             * Likely means we're in a context where there's no repo (e.g., init) */
+            /* Path resolution failed - unusual but non-fatal Likely means we're
+             * in a context where there's no repo (e.g., init) */
             error_free(err);
         }
     }

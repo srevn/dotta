@@ -19,30 +19,30 @@
 /**
  * Common buffer size constants for Git operations
  *
- * These constants define standard buffer sizes used throughout dotta.
- * Git allows up to 255 chars per reference component, but we use
- * conservative limits for safety and to catch truncation early.
+ * These constants define standard buffer sizes used throughout dotta. Git allows
+ * up to 255 chars per reference component, but we use conservative limits for
+ * safety and to catch truncation early.
  */
 #define DOTTA_REFNAME_MAX 256    /* For git reference names (refs/heads/...) */
 #define DOTTA_REFSPEC_MAX 512    /* For git refspecs (refs/heads/foo:refs/remotes/origin/foo) */
 #define DOTTA_MESSAGE_MAX 512    /* For commit messages and prompts */
 
 /**
-  * Build a commit signature with fallback for missing git config.
-  *
-  * Tries git_signature_default first (reads user.name / user.email from
-  * .gitconfig); on failure (common on fresh machines before dotfiles are
-  * deployed) falls back to "$USER@$HOSTNAME" via getenv / gethostname,
-  * defaulting to "dotta@localhost" when even those are unavailable.
-  *
-  * Used by every dotta path that creates a commit object — orphan-branch
-  * creation, profile commits, and the repository config ref. Caller frees
-  * the returned signature via `git_signature_free`.
-  *
-  * @param out  Output signature (caller frees with git_signature_free)
-  * @param repo Repository (must not be NULL)
-  * @return Error or NULL on success
-  */
+ * Build a commit signature with fallback for missing git config.
+ *
+ * Tries git_signature_default first (reads user.name / user.email from .gitconfig);
+ * on failure (common on fresh machines before dotfiles are deployed) falls back
+ * to "$USER@$HOSTNAME" via getenv / gethostname, defaulting to "dotta@localhost"
+ * when even those are unavailable.
+ *
+ * Used by every dotta path that creates a commit object — orphan-branch creation,
+ * profile commits, and the repository config ref. Caller frees the returned
+ * signature via `git_signature_free`.
+ *
+ * @param out  Output signature (caller frees with git_signature_free)
+ * @param repo Repository (must not be NULL)
+ * @return Error or NULL on success
+ */
 error_t *gitops_get_signature(git_signature **out, git_repository *repo);
 
 /**
@@ -159,8 +159,8 @@ error_t *gitops_current_branch(git_repository *repo, char **out);
 /**
  * Check if a branch is the currently checked-out branch (HEAD)
  *
- * Compares branch_name against the branch that HEAD references.
- * Returns false for detached HEAD state or bare repositories.
+ * Compares branch_name against the branch that HEAD references. Returns false
+ * for detached HEAD state or bare repositories.
  *
  * @param repo Repository (must not be NULL)
  * @param branch_name Branch to check (must not be NULL)
@@ -192,7 +192,8 @@ error_t *gitops_load_tree(git_repository *repo, const char *ref_name, git_tree *
  *
  * @param repo Repository (must not be NULL)
  * @param branch_name Branch name (must not be NULL)
- * @param out_tree Tree object (must not be NULL, caller must free with git_tree_free)
+ * @param out_tree Tree object (must not be NULL, caller must free with
+ *                 git_tree_free)
  * @param out_oid Peeled HEAD OID (can be NULL to skip)
  * @return Error or NULL on success
  */
@@ -224,7 +225,8 @@ error_t *gitops_tree_walk(
  *
  * @param tree Tree to search (must not be NULL)
  * @param path File path (must not be NULL)
- * @param out Tree entry (must not be NULL, caller must free with git_tree_entry_free)
+ * @param out Tree entry (must not be NULL, caller must free with
+ *            git_tree_entry_free)
  * @return Error or NULL on success
  */
 error_t *gitops_find_file_in_tree(
@@ -236,15 +238,14 @@ error_t *gitops_find_file_in_tree(
 /**
  * Zero-copy view into a git blob's raw bytes.
  *
- * Holds an open git_blob handle and exposes its raw content without
- * copying. The `data` pointer is owned by libgit2's object cache and
- * is valid only between gitops_blob_view_open() and
- * gitops_blob_view_close().
+ * Holds an open git_blob handle and exposes its raw content without copying.
+ * The `data` pointer is owned by libgit2's object cache and is valid only between
+ * gitops_blob_view_open() and gitops_blob_view_close().
  *
- * Use this when you only need to inspect or stream the bytes through
- * another consumer (e.g. magic header check, decryption pipeline).
- * Use gitops_read_blob_content() when you need an owned, null-terminated
- * copy for parsing.
+ * Use this when you only need to inspect or stream the bytes through another
+ * consumer (e.g. magic header check, decryption pipeline). Use
+ * gitops_read_blob_content() when you need an owned, null-terminated copy for
+ * parsing.
  *
  * The `_handle` field is opaque; do not touch it directly.
  */
@@ -257,8 +258,8 @@ typedef struct {
 /**
  * Open a zero-copy view onto a blob.
  *
- * On failure, `*out` is left in a safe state (NULL handle/data, zero
- * size) so gitops_blob_view_close() is a no-op.
+ * On failure, `*out` is left in a safe state (NULL handle/data, zero size) so
+ * gitops_blob_view_close() is a no-op.
  *
  * @param repo Repository (must not be NULL)
  * @param oid Blob OID (must not be NULL)
@@ -274,8 +275,8 @@ error_t *gitops_blob_view_open(
 /**
  * Close a blob view and release its libgit2 handle.
  *
- * Safe to call with NULL, a zero-initialised view, or an already-closed
- * view. After close, all fields are zeroed so double-close is safe.
+ * Safe to call with NULL, a zero-initialised view, or an already-closed view.
+ * After close, all fields are zeroed so double-close is safe.
  *
  * @param view View to close (can be NULL)
  */
@@ -284,13 +285,12 @@ void gitops_blob_view_close(gitops_blob_view_t *view);
 /**
  * Read blob content by OID
  *
- * Looks up a blob by OID, copies its content into a caller-owned
- * null-terminated buffer. The returned size is the raw blob size
- * (not including the null terminator).
+ * Looks up a blob by OID, copies its content into a caller-owned null-terminated
+ * buffer. The returned size is the raw blob size (not including the null
+ * terminator).
  *
- * For callers that only need to inspect or stream the bytes without
- * owning a copy, prefer gitops_blob_view_open() to avoid the extra
- * allocation and memcpy.
+ * For callers that only need to inspect or stream the bytes without owning a
+ * copy, prefer gitops_blob_view_open() to avoid the extra allocation and memcpy.
  *
  * @param repo Repository (must not be NULL)
  * @param oid Blob OID (must not be NULL)
@@ -328,7 +328,8 @@ error_t *gitops_create_commit(
  *
  * @param repo Repository (must not be NULL)
  * @param ref_name Reference name (must not be NULL)
- * @param out Commit object (must not be NULL, caller must free with git_commit_free)
+ * @param out Commit object (must not be NULL, caller must free with
+ *            git_commit_free)
  * @return Error or NULL on success
  */
 error_t *gitops_get_commit(
@@ -340,8 +341,8 @@ error_t *gitops_get_commit(
 /**
  * Resolve a commit reference reachable from a branch
  *
- * Resolves commit_ref to a commit OID and verifies that commit is reachable
- * from branch_name's tip — i.e. equals the tip or is one of its ancestors.
+ * Resolves commit_ref to a commit OID and verifies that commit is reachable from
+ * branch_name's tip — i.e. equals the tip or is one of its ancestors.
  *
  * Supported syntax:
  * - "HEAD"             — branch's tip
@@ -349,18 +350,19 @@ error_t *gitops_get_commit(
  * - Full or short SHA  — must point to a commit reachable from the branch
  * - Annotated/lightweight tags — peeled to commit, must be reachable
  *
- * Reachability invariant: git_revparse_single resolves repository-wide, so
- * a SHA from another branch would otherwise succeed and silently misattribute
- * the commit. This function enforces the constraint the name implies.
+ * Reachability invariant: git_revparse_single resolves repository-wide, so a
+ * SHA from another branch would otherwise succeed and silently misattribute the
+ * commit. This function enforces the constraint the name implies.
  *
- * Returns ERR_NOT_FOUND if commit_ref cannot be resolved or if it resolves
- * to a commit not reachable from branch_name's tip.
+ * Returns ERR_NOT_FOUND if commit_ref cannot be resolved or if it resolves to a
+ * commit not reachable from branch_name's tip.
  *
  * @param repo Repository (must not be NULL)
  * @param branch_name Branch name (must not be NULL)
  * @param commit_ref Commit reference (must not be NULL)
  * @param out_oid Resolved commit OID (must not be NULL)
- * @param out_commit Resolved commit object (can be NULL if not needed, caller must free)
+ * @param out_commit Resolved commit object (can be NULL if not needed, caller
+ *                   must free)
  * @return Error or NULL on success
  */
 error_t *gitops_resolve_commit_in_branch(
@@ -403,16 +405,15 @@ error_t *gitops_resolve_commit_in_branch(
  * - GIT_FILEMODE_BLOB_EXECUTABLE (0100755): Executable file
  *
  * Index handling:
- * - When `branch_name` is NOT the currently-checked-out branch (the
- *   common case — dotta keeps HEAD on dotta-worktree while mutating
- *   profile branches), the repository's shared index is left alone
- *   on purpose. Touching it would corrupt the checked-out branch's
- *   staging area.
- * - When `branch_name` IS the current branch, the shared index is
- *   re-seeded from the new tree so a subsequent workdir sync (e.g.
- *   `gitops_sync_worktree` with GIT_CHECKOUT_SAFE) can proceed
- *   without seeing phantom modifications. The workdir itself is the
- *   caller's responsibility — this function does not write to disk.
+ * - When `branch_name` is NOT the currently-checked-out branch (the common case
+ *   — dotta keeps HEAD on dotta-worktree while mutating profile branches), the
+ *   repository's shared index is left alone on purpose. Touching it would corrupt
+ *   the checked-out branch's staging area.
+ * - When `branch_name` IS the current branch, the shared index is re-seeded from
+ *   the new tree so a subsequent workdir sync (e.g. `gitops_sync_worktree` with
+ *   GIT_CHECKOUT_SAFE) can proceed without seeing phantom modifications. The
+ *   workdir itself is the caller's responsibility — this function does not write
+ *   to disk.
  *
  * @param repo Repository (must not be NULL)
  * @param branch_name Branch name (must not be NULL)
@@ -420,8 +421,10 @@ error_t *gitops_resolve_commit_in_branch(
  * @param content File content (must not be NULL)
  * @param content_size Size of content in bytes
  * @param commit_message Commit message (must not be NULL)
- * @param file_mode Git file mode (GIT_FILEMODE_BLOB or GIT_FILEMODE_BLOB_EXECUTABLE)
- * @param was_modified Optional output: set to true if file was modified, false if no-op (can be NULL)
+ * @param file_mode Git file mode (GIT_FILEMODE_BLOB or
+ *                  GIT_FILEMODE_BLOB_EXECUTABLE)
+ * @param was_modified Optional output: set to true if file was modified, false
+ *                     if no-op (can be NULL)
  * @return Error or NULL on success
  */
 error_t *gitops_update_file(
@@ -438,10 +441,9 @@ error_t *gitops_update_file(
 /**
  * Describes one blob to set/replace in a tree update batch.
  *
- * The blob referenced by `blob_oid` MUST already exist in the
- * repository's ODB. Callers creating fresh content are responsible
- * for writing the blob (e.g. git_blob_create_from_buffer) before
- * passing it in.
+ * The blob referenced by `blob_oid` MUST already exist in the repository's ODB.
+ * Callers creating fresh content are responsible for writing the blob (e.g.
+ * git_blob_create_from_buffer) before passing it in.
  */
 typedef struct {
     const char *path;          /* Path within the tree (must not be empty) */
@@ -452,33 +454,29 @@ typedef struct {
 /**
  * Atomic multi-file tree update on a branch (HEAD-safe)
  *
- * Loads the current tree of `branch_name`, applies the requested
- * `updates` (blob replacements/insertions) and `removals` (path
- * deletions), writes the resulting tree, and creates a single commit
- * with `message`.
+ * Loads the current tree of `branch_name`, applies the requested `updates` (blob
+ * replacements/insertions) and `removals` (path deletions), writes the resulting
+ * tree, and creates a single commit with `message`.
  *
- * This operation is HEAD-safe: it never touches the repository's
- * shared index (.git/index), the worktree, or HEAD. Safe to call
- * regardless of which branch HEAD points at — in dotta this matters
- * because HEAD always tracks `dotta-worktree`, not the profile
- * branches we mutate here.
+ * This operation is HEAD-safe: it never touches the repository's shared index
+ * (.git/index), the worktree, or HEAD. Safe to call regardless of which branch
+ * HEAD points at — in dotta this matters because HEAD always tracks
+ * `dotta-worktree`, not the profile branches we mutate here.
  *
- * Mechanism: builds a standalone in-memory git_index, seeds it from
- * the branch HEAD tree, applies updates/removals, writes the
- * resulting tree directly to the ODB via git_index_write_tree_to,
- * and delegates commit creation to gitops_create_commit.
+ * Mechanism: builds a standalone in-memory git_index, seeds it from the branch
+ * HEAD tree, applies updates/removals, writes the resulting tree directly to
+ * the ODB via git_index_write_tree_to, and delegates commit creation to
+ * gitops_create_commit.
  *
- * git_index_add replaces entries at the same path, so updates that
- * overlap existing paths are "upserts" without needing an explicit
- * remove-before-add.
+ * git_index_add replaces entries at the same path, so updates that overlap existing
+ * paths are "upserts" without needing an explicit remove-before-add.
  *
  * At least one update or removal is required. Supported modes are
- * GIT_FILEMODE_BLOB, GIT_FILEMODE_BLOB_EXECUTABLE, and
- * GIT_FILEMODE_LINK (symlinks).
+ * GIT_FILEMODE_BLOB, GIT_FILEMODE_BLOB_EXECUTABLE, and GIT_FILEMODE_LINK
+ * (symlinks).
  *
- * No-op detection is the caller's responsibility: if all updates
- * collapse to the current tree, an empty-diff commit is still
- * created.
+ * No-op detection is the caller's responsibility: if all updates collapse to
+ * the current tree, an empty-diff commit is still created.
  *
  * @param repo          Repository (must not be NULL)
  * @param branch_name   Target branch (must not be NULL, must exist)
@@ -539,8 +537,8 @@ error_t *gitops_fetch_branch(
 /**
  * Fetch multiple branches from remote in a single operation
  *
- * Performs a batched fetch of multiple branches, significantly reducing
- * network overhead compared to fetching each branch individually.
+ * Performs a batched fetch of multiple branches, significantly reducing network
+ * overhead compared to fetching each branch individually.
  *
  * @param repo Repository (must not be NULL)
  * @param remote_name Remote name (e.g., "origin") (must not be NULL)
@@ -574,9 +572,9 @@ error_t *gitops_push_branch(
 /**
  * Force-push branch to remote (overwrites remote history).
  *
- * Identical to gitops_push_branch except the refspec is prefixed with
- * '+', which instructs the server to accept a non-fast-forward update.
- * Used by sync's 'ours' divergence strategy.
+ * Identical to gitops_push_branch except the refspec is prefixed with '+', which
+ * instructs the server to accept a non-fast-forward update. Used by sync's 'ours'
+ * divergence strategy.
  *
  * @param repo Repository (must not be NULL)
  * @param remote_name Remote name (must not be NULL)
@@ -610,19 +608,17 @@ error_t *gitops_delete_remote_branch(
 /**
  * List branches advertised by the remote server (network op).
  *
- * Connects to the remote and reads the advertised refs via git_remote_ls.
- * Unlike gitops_list_remote_tracking (which reads cached refs under
- * refs/remotes/<remote>/), this is authoritative — it sees branches
- * added to the server since the last fetch — but requires network
- * and credentials.
+ * Connects to the remote and reads the advertised refs via git_remote_ls. Unlike
+ * gitops_list_remote_tracking (which reads cached refs under
+ * refs/remotes/<remote>/), this is authoritative — it sees branches added to
+ * the server since the last fetch — but requires network and credentials.
  *
- * Filters results to refs under refs/heads/, excluding dotta-worktree
- * and empty names.
+ * Filters results to refs under refs/heads/, excluding dotta-worktree and empty
+ * names.
  *
  * @param repo Repository (must not be NULL)
  * @param remote_name Remote name (must not be NULL)
- * @param xfer Transfer context for credentials and op lifecycle
- *             (must not be NULL)
+ * @param xfer Transfer context for credentials and op lifecycle (must not be NULL)
  * @param out_branches Branch names on remote (must not be NULL, caller frees)
  * @return Error or NULL on success
  */
@@ -658,14 +654,14 @@ error_t *gitops_get_remote_url(
  *   3. Multiple remotes without "origin" → error (require explicit choice).
  *   4. No remotes → error with a hint to add one.
  *
- * When `out_url` is non-NULL, also looks up the remote's URL. A remote
- * configured without a URL yields `*out_url = NULL` and a successful
- * return — credentialed transfers tolerate a NULL URL (helper approve /
- * reject become no-ops, SSH/anonymous still works), so this stays a
- * happy-path outcome rather than an error.
+ * When `out_url` is non-NULL, also looks up the remote's URL. A remote configured
+ * without a URL yields `*out_url = NULL` and a successful return — credentialed
+ * transfers tolerate a NULL URL (helper approve / reject become no-ops,
+ * SSH/anonymous still works), so this stays a happy-path outcome rather than an
+ * error.
  *
- * Outputs are arena-borrowed; the caller does not free them, and they
- * remain valid for the lifetime of the arena.
+ * Outputs are arena-borrowed; the caller does not free them, and they remain
+ * valid for the lifetime of the arena.
  *
  * @param repo     Repository (must not be NULL)
  * @param arena    Arena for output strings (must not be NULL)
@@ -701,7 +697,8 @@ error_t *gitops_create_reference(
  *
  * @param repo Repository (must not be NULL)
  * @param name Reference name (must not be NULL)
- * @param out Reference object (must not be NULL, caller must free with git_reference_free)
+ * @param out Reference object (must not be NULL, caller must free with
+ *            git_reference_free)
  * @return Error or NULL on success
  */
 error_t *gitops_lookup_reference(
@@ -713,9 +710,9 @@ error_t *gitops_lookup_reference(
 /**
  * Resolve reference name to OID
  *
- * Convenience function that resolves a reference name directly to its
- * target OID without exposing the intermediate reference object. Handles
- * symbolic references transparently.
+ * Convenience function that resolves a reference name directly to its target
+ * OID without exposing the intermediate reference object. Handles symbolic
+ * references transparently.
  *
  * @param repo Repository (must not be NULL)
  * @param ref_name Full reference name (e.g., "refs/heads/main") (must not be NULL)
@@ -731,8 +728,8 @@ error_t *gitops_resolve_reference_oid(
 /**
  * Resolve a branch's current HEAD OID
  *
- * Convenience for `refs/heads/<branch_name>` resolution. Builds the full
- * refname and dispatches to gitops_resolve_reference_oid.
+ * Convenience for `refs/heads/<branch_name>` resolution. Builds the full refname
+ * and dispatches to gitops_resolve_reference_oid.
  *
  * @param repo Repository (must not be NULL)
  * @param branch_name Branch name without refs/heads/ prefix (must not be NULL)
@@ -748,12 +745,13 @@ error_t *gitops_resolve_branch_head_oid(
 /**
  * Resolve a remote-tracking branch's current OID
  *
- * Convenience for `refs/remotes/<remote_name>/<branch_name>` resolution.
- * Builds the full refname and dispatches to gitops_resolve_reference_oid.
+ * Convenience for `refs/remotes/<remote_name>/<branch_name>` resolution. Builds
+ * the full refname and dispatches to gitops_resolve_reference_oid.
  *
  * @param repo Repository (must not be NULL)
  * @param remote_name Remote name (must not be NULL)
- * @param branch_name Branch name without refs/remotes/<remote>/ prefix (must not be NULL)
+ * @param branch_name Branch name without refs/remotes/<remote>/ prefix (must
+ *                    not be NULL)
  * @param out Target OID (must not be NULL)
  * @return Error or NULL on success (ERR_NOT_FOUND if remote branch missing)
  */
@@ -767,11 +765,11 @@ error_t *gitops_resolve_remote_branch_oid(
 /**
  * Validate and build a Git reference name
  *
- * Builds a reference name using printf-style formatting and validates
- * it fits in the provided buffer without truncation.
+ * Builds a reference name using printf-style formatting and validates it fits
+ * in the provided buffer without truncation.
  *
- * Git allows up to 255 chars per component, but we use conservative limits
- * to prevent silent failures with libgit2 operations.
+ * Git allows up to 255 chars per component, but we use conservative limits to
+ * prevent silent failures with libgit2 operations.
  *
  * @param buffer Output buffer for the reference name (must not be NULL)
  * @param buffer_size Size of output buffer
@@ -819,7 +817,8 @@ error_t *gitops_index_write_tree(git_index *index, git_oid *out);
  *
  * @param repo Repository (must not be NULL)
  * @param commit_oid Commit OID (must not be NULL)
- * @param out_tree Tree object (must not be NULL, caller must free with git_tree_free)
+ * @param out_tree Tree object (must not be NULL, caller must free with
+ *                 git_tree_free)
  * @return Error or NULL on success
  */
 error_t *gitops_get_tree_from_commit(
@@ -831,14 +830,15 @@ error_t *gitops_get_tree_from_commit(
 /**
  * Generate diff between two trees
  *
- * Thin wrapper around git_diff_tree_to_tree.
- * NULL trees are allowed for "added/deleted" semantics.
+ * Thin wrapper around git_diff_tree_to_tree. NULL trees are allowed for
+ * "added/deleted" semantics.
  *
  * @param repo Repository (must not be NULL)
  * @param old_tree Old tree (can be NULL for "added from nothing")
  * @param new_tree New tree (can be NULL for "deleted to nothing")
  * @param opts Diff options (can be NULL for defaults)
- * @param out_diff Output diff object (must not be NULL, caller must free with git_diff_free)
+ * @param out_diff Output diff object (must not be NULL, caller must free with
+ *                 git_diff_free)
  * @return Error or NULL on success
  */
 error_t *gitops_diff_trees(
@@ -855,7 +855,8 @@ error_t *gitops_diff_trees(
  * Extracts files_changed, insertions, deletions counts.
  *
  * @param diff Diff object (must not be NULL)
- * @param out_stats Stats object (must not be NULL, caller must free with git_diff_stats_free)
+ * @param out_stats Stats object (must not be NULL, caller must free with
+ *                  git_diff_stats_free)
  * @return Error or NULL on success
  */
 error_t *gitops_diff_get_stats(
@@ -884,14 +885,15 @@ error_t *gitops_find_merge_base(
 /**
  * Merge trees without modifying HEAD or working directory
  *
- * Performs a three-way merge using common ancestor. This is a pure
- * tree-level operation that never touches HEAD.
+ * Performs a three-way merge using common ancestor. This is a pure tree-level
+ * operation that never touches HEAD.
  *
  * @param repo Repository (must not be NULL)
  * @param ancestor_oid Common ancestor commit (must not be NULL)
  * @param our_oid Our commit (local) (must not be NULL)
  * @param their_oid Their commit (remote) (must not be NULL)
- * @param out_index Resulting merge index (must not be NULL, caller must free with git_index_free)
+ * @param out_index Resulting merge index (must not be NULL, caller must free
+ *                  with git_index_free)
  * @return Error or NULL on success
  */
 error_t *gitops_merge_trees_safe(
@@ -927,8 +929,8 @@ error_t *gitops_create_merge_commit(
 /**
  * Perform in-memory rebase without modifying HEAD
  *
- * Rebases branch_oid onto onto_oid using libgit2's in-memory mode.
- * This never touches HEAD or the working directory.
+ * Rebases branch_oid onto onto_oid using libgit2's in-memory mode. This never
+ * touches HEAD or the working directory.
  *
  * @param repo Repository (must not be NULL)
  * @param branch_oid Branch to rebase (must not be NULL)
@@ -971,9 +973,9 @@ error_t *gitops_update_branch_reference(
  * - GIT_CHECKOUT_SAFE: Abort if local modifications conflict (recommended)
  * - GIT_CHECKOUT_FORCE: Overwrite all local modifications (use with caution)
  *
- * IMPORTANT: GIT_CHECKOUT_FORCE will destroy uncommitted changes without
- * warning. Only use when certain no user data can exist (e.g., immediately
- * after creating a new branch, or during dotta init).
+ * IMPORTANT: GIT_CHECKOUT_FORCE will destroy uncommitted changes without warning.
+ * Only use when certain no user data can exist (e.g., immediately after creating
+ * a new branch, or during dotta init).
  *
  * @param repo Repository (must not be NULL, must not be bare)
  * @param strategy Checkout strategy (GIT_CHECKOUT_SAFE recommended)

@@ -1,8 +1,8 @@
 /**
  * version.c - Version banner renderer.
  *
- * All data comes from the compile-time constants in `<version.h>`;
- * this file owns only the formatting.
+ * All data comes from the compile-time constants in `<version.h>`; this file
+ * owns only the formatting.
  */
 
 #include "utils/version.h"

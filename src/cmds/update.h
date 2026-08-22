@@ -15,10 +15,9 @@
 /**
  * Update command options
  *
- * `files` and `profiles` are populated from the raw positional bucket
- * by `update_post_parse`. The first positional is classified as a file
- * path or profile name via `str_looks_like_file_path`; remaining
- * positionals are always file paths.
+ * `files` and `profiles` are populated from the raw positional bucket by
+ * `update_post_parse`. The first positional is classified as a file path or profile
+ * name via `str_looks_like_file_path`; remaining positionals are always file paths.
  */
 typedef struct {
     /* User-facing (read by cmd_update). */
@@ -54,8 +53,8 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts);
 /**
  * Spec-engine command specification for `dotta update`.
  *
- * Registered in cmds/registry.c. Defined in update.c beside the
- * post_parse and dispatch wrappers.
+ * Registered in cmds/registry.c. Defined in update.c beside the post_parse and
+ * dispatch wrappers.
  */
 extern const args_command_t spec_update;
 

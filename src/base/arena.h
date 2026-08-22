@@ -54,8 +54,8 @@ char *arena_strdup(arena_t *arena, const char *str);
  * Arena-backed strndup: copies up to `n` bytes from `str` and null-terminates.
  *
  * Never reads past `str + n`, even if no null byte is present in that range.
- * Returns NULL if `str` is NULL; a zero-length (but null-terminated) buffer
- * when `n == 0`.
+ * Returns NULL if `str` is NULL; a zero-length (but null-terminated) buffer when
+ * `n == 0`.
  *
  * @return Arena-allocated copy, or NULL if str is NULL or OOM.
  */
@@ -64,13 +64,12 @@ char *arena_strndup(arena_t *arena, const char *str, size_t n);
 /**
  * Arena-backed printf-style string formatter.
  *
- * Mirrors `str_format` from base/string but allocates the result from the
- * arena instead of the heap. Two-pass implementation: vsnprintf once to
- * size the buffer, allocate, vsnprintf again to fill. Never returns a
- * partial string.
+ * Mirrors `str_format` from base/string but allocates the result from the arena
+ * instead of the heap. Two-pass implementation: vsnprintf once to size the buffer,
+ * allocate, vsnprintf again to fill. Never returns a partial string.
  *
- * @return Arena-allocated formatted string, or NULL if `fmt` is NULL,
- *         on encoding error, or on OOM.
+ * @return Arena-allocated formatted string, or NULL if `fmt` is NULL, on encoding
+ *         error, or on OOM.
  */
 char *arena_str_format(arena_t *arena, const char *fmt, ...)
 __attribute__((format(printf, 2, 3)));

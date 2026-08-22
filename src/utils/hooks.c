@@ -30,9 +30,9 @@ typedef enum {
     HOOK_POST_SYNC,
 } hook_type_t;
 
-/* Hook environment. Pointers are borrowed from the invocation and its
- * backing strings; this struct is stack-allocated in hook_fire and
- * lives only for the duration of one hook_execute call. */
+/* Hook environment. Pointers are borrowed from the invocation and its backing
+ * strings; this struct is stack-allocated in hook_fire and lives only for the
+ * duration of one hook_execute call. */
 typedef struct {
     const char *repo_dir;
     const char *command;
@@ -112,9 +112,9 @@ static error_t *hook_get_path(
     if (config->hooks_dir) {
         err = fs_expand_tilde(config->hooks_dir, &hooks_dir);
     } else {
-        /* Fallback when config->hooks_dir is NULL. Backstops an unchecked
-         * strdup in config_create_default (see DOTTA_DEFAULT_HOOKS_DIR's
-         * docblock in include/config.h). */
+        /* Fallback when config->hooks_dir is NULL. Backstops an unchecked strdup
+         * in config_create_default (see DOTTA_DEFAULT_HOOKS_DIR's docblock in
+         * include/config.h). */
         err = fs_expand_tilde(DOTTA_DEFAULT_HOOKS_DIR, &hooks_dir);
     }
 
@@ -183,17 +183,17 @@ static char **build_hook_env(const hook_context_t *context, size_t *env_count) {
         }
     }
 
-    /* Per-command extras (e.g. DOTTA_REMOTE for sync). Appended before
-     * the environ pass-through so the DOTTA_* filter at the next step
-     * doesn't shadow them with stale process-env values. */
+    /* Per-command extras (e.g. DOTTA_REMOTE for sync). Appended before the environ
+     * pass-through so the DOTTA_* filter at the next step doesn't shadow them
+     * with stale process-env values. */
     if (context->extras) {
         for (char *const *e = context->extras; *e; e++) {
             APPEND(strdup(*e));
         }
     }
 
-    /* Copy system environment variables (PATH, HOME, etc.) — DOTTA_*
-     * are skipped so our authoritative surface above isn't shadowed. */
+    /* Copy system environment variables (PATH, HOME, etc.) — DOTTA_* are skipped
+     * so our authoritative surface above isn't shadowed. */
     for (char **e = environ; *e; e++) {
         if (str_starts_with(*e, "DOTTA_")) continue;
         APPEND(strdup(*e));
@@ -234,15 +234,15 @@ static void free_hook_env(char **env, size_t count) {
 /**
  * Execute hook script via the unified process primitive.
  *
- * Builds the hook environment, then delegates fork/exec/timeout/reap
- * to process_run(). Composes a domain-specific error from the result
- * fields (exec failure, timeout, signal, non-zero exit). When the
- * caller passes a non-NULL `result_out`, captured stdout/stderr is
- * transferred into it for downstream printing on failure.
+ * Builds the hook environment, then delegates fork/exec/timeout/reap to
+ * process_run(). Composes a domain-specific error from the result fields (exec
+ * failure, timeout, signal, non-zero exit). When the caller passes a non-NULL
+ * `result_out`, captured stdout/stderr is transferred into it for downstream
+ * printing on failure.
  *
- * Returns NULL on success or if the hook is disabled/missing.
- * Returns error if the hook fails (exec, timeout, exit-code, signal)
- * or if the primitive itself failed.
+ * Returns NULL on success or if the hook is disabled/missing. Returns error if
+ * the hook fails (exec, timeout, exit-code, signal) or if the primitive itself
+ * failed.
  */
 static error_t *hook_execute(
     const config_t *config,
@@ -312,13 +312,12 @@ static error_t *hook_execute(
         goto cleanup;
     }
 
-    /* Map result fields to a domain-specific error. exec_failed is
-     * checked first because it carries the most specific reason
-     * (errno from execve / chdir / dup2). The 126/127 special-cases
-     * present in the legacy implementation are intentionally absent:
-     * with exec_failed in place, those exit codes only signal the
-     * script's own internal failures, which fall through to the
-     * generic "exit code N" branch. */
+    /* Map result fields to a domain-specific error. exec_failed is checked first
+     * because it carries the most specific reason (errno from execve / chdir /
+     * dup2). The 126/127 special-cases present in the legacy implementation are
+     * intentionally absent: with exec_failed in place, those exit codes only
+     * signal the script's own internal failures, which fall through to the generic
+     * "exit code N" branch. */
     if (result.exec_failed) {
         err = ERROR(
             ERR_INTERNAL, "Hook '%s' failed: exec error: %s",
@@ -341,11 +340,10 @@ static error_t *hook_execute(
         );
     }
 
-    /* Transfer ownership to caller if requested. Move the whole
-     * struct so the caller observes captured output even on failure
-     * (printed via print_hook_output). The local `result` is
-     * disposed afterwards; with output set NULL, dispose is a
-     * no-op on the buffer. */
+    /* Transfer ownership to caller if requested. Move the whole struct so the
+     * caller observes captured output even on failure (printed via
+     * print_hook_output). The local `result` is disposed afterwards; with output
+     * set NULL, dispose is a no-op on the buffer. */
     if (result_out) {
         *result_out = result;
         result.output = NULL;
@@ -407,10 +405,10 @@ static void print_hook_output(
 }
 
 /**
- * Stack-build a context from the invocation and execute the hook.
- * `repo_dir` is borrowed from the caller (ctx->repo_path in normal
- * flow). The caller stack-allocates `out_result` and is responsible
- * for calling process_result_dispose() on every path.
+ * Stack-build a context from the invocation and execute the hook. `repo_dir` is
+ * borrowed from the caller (ctx->repo_path in normal flow). The caller
+ * stack-allocates `out_result` and is responsible for calling
+ * process_result_dispose() on every path.
  */
 static error_t *hook_fire(
     const config_t *config,

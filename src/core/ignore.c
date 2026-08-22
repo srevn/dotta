@@ -1,27 +1,23 @@
 /**
  * ignore.c - Layered `.dottaignore` ruleset builder and persistence.
  *
- * The builder pre-loads the three "common" layers (baseline or
- * builtin, config patterns, CLI excludes) into an arena at creation
- * time, and lazily assembles a fresh per-profile ruleset on first
- * call to `ignore_rules_for_profile`. Subsequent calls with the same
- * profile name return the cached pointer — memoisation lives in the
- * builder, not in any caller bookkeeping.
+ * The builder pre-loads the three "common" layers (baseline or builtin, config
+ * patterns, CLI excludes) into an arena at creation time, and lazily assembles
+ * a fresh per-profile ruleset on first call to `ignore_rules_for_profile`.
+ * Subsequent calls with the same profile name return the cached pointer —
+ * memoisation lives in the builder, not in any caller bookkeeping.
  *
- * Why re-append common layers instead of sharing one base ruleset:
- * `base/gitignore` rulesets are append-only values in an arena.
- * Composing a base + profile cheaply across multiple profiles would
- * need a clone primitive in the engine. Re-appending from the saved
- * sources (static `DEFAULT_DOTTAIGNORE` string, Git-loaded baseline
- * content, caller-borrowed config and CLI arrays) parses each input
- * once per profile for a few-hundred-byte cost; trivial next to the
- * SQLite + Git work the surrounding commands do. Option kept on the
- * shelf: if someone ever profiles this as hot, add a `clone_into`
- * to the engine and short-circuit.
+ * Why re-append common layers instead of sharing one base ruleset: `base/gitignore`
+ * rulesets are append-only values in an arena. Composing a base + profile cheaply
+ * across multiple profiles would need a clone primitive in the engine. Re-appending
+ * from the saved sources (static `DEFAULT_DOTTAIGNORE` string, Git-loaded baseline
+ * content, caller-borrowed config and CLI arrays) parses each input once per
+ * profile for a few-hundred-byte cost; trivial next to the SQLite + Git work
+ * the surrounding commands do. Option kept on the shelf: if someone ever profiles
+ * this as hot, add a `clone_into` to the engine and short-circuit.
  *
- * Source-tree `.gitignore` (a foreign repo the user is adding files
- * from) is a separate mechanism — see `sys/source.h`. Consumers
- * compose the two explicitly.
+ * Source-tree `.gitignore` (a foreign repo the user is adding files from) is a
+ * separate mechanism — see `sys/source.h`. Consumers compose the two explicitly.
  */
 
 #include "core/ignore.h"
@@ -40,23 +36,22 @@
 #include "sys/filesystem.h"
 #include "sys/gitops.h"
 
-/* Size cap on `.dottaignore` blobs — an ignore-specific policy
- * guarding against a runaway file pulled in from Git. The underlying
- * gitignore engine already caps per-pattern length and rule count.
- * Typed as size_t so the multiplication happens in size_t and the
- * comparison against blob sizes stays warning-clean. */
+/* Size cap on `.dottaignore` blobs — an ignore-specific policy guarding against
+ * a runaway file pulled in from Git. The underlying gitignore engine already
+ * caps per-pattern length and rule count. Typed as size_t so the multiplication
+ * happens in size_t and the comparison against blob sizes stays warning-clean. */
 #define MAX_DOTTAIGNORE_SIZE ((size_t) 1024 * 1024)   /* 1 MB */
 
-/* Initial profile-cache capacity. Profile counts are almost always
- * single-digit so the cache rarely grows. */
+/* Initial profile-cache capacity. Profile counts are almost always single-digit
+ * so the cache rarely grows. */
 #define INITIAL_PROFILE_CAPACITY 4
 
 /**
  * Default baseline `.dottaignore` content.
  *
- * Seeded into new repos by `dotta init` / `dotta clone`, and used as
- * the BUILTIN fallback whenever the baseline blob is absent so safety
- * patterns stay active regardless of repo state.
+ * Seeded into new repos by `dotta init` / `dotta clone`, and used as the BUILTIN
+ * fallback whenever the baseline blob is absent so safety patterns stay active
+ * regardless of repo state.
  */
 static const char *const DEFAULT_DOTTAIGNORE =
     "# Dotta Ignore Patterns\n"
@@ -156,8 +151,8 @@ static const char *const PROFILE_DOTTAIGNORE =
 /**
  * One entry in the profile-ruleset memoisation table.
  *
- * `name` is the canonicalised key (empty string "" stands for the
- * baseline-only ruleset — NULL and "" collapse to the same entry).
+ * `name` is the canonicalised key (empty string "" stands for the baseline-only
+ * ruleset — NULL and "" collapse to the same entry).
  */
 typedef struct {
     const char *name;
@@ -168,22 +163,21 @@ struct ignore_rules {
     arena_t *arena;                 /* borrowed; backs baseline copy, cache array, all rulesets */
     git_repository *repo;           /* borrowed; used only by lazy profile loads */
 
-    /* Common layers. `baseline_content` is either an arena-owned copy
-     * of the Git blob (origin=BASELINE) or a pointer to the static
-     * DEFAULT_DOTTAIGNORE string (origin=BUILTIN). Either is valid for
-     * the builder's lifetime. */
+    /* Common layers. `baseline_content` is either an arena-owned copy of the
+     * Git blob (origin=BASELINE) or a pointer to the static DEFAULT_DOTTAIGNORE
+     * string (origin=BUILTIN). Either is valid for the builder's lifetime. */
     const char *baseline_content;
     ignore_origin_t baseline_origin;
 
-    /* Borrowed pattern arrays. Callers guarantee they outlive the
-     * builder (command-scoped config and CLI). */
+    /* Borrowed pattern arrays. Callers guarantee they outlive the builder
+     * (command-scoped config and CLI). */
     char *const *config_patterns;
     size_t config_count;
     char *const *cli_patterns;
     size_t cli_count;
 
-    /* Memoised per-profile rulesets. Linear scan — profile counts are
-     * small (typical <= 5, hard cap at the scope of an enabled set). */
+    /* Memoised per-profile rulesets. Linear scan — profile counts are small
+     * (typical <= 5, hard cap at the scope of an enabled set). */
     profile_entry_t *profiles;
     size_t profile_count;
     size_t profile_capacity;
@@ -192,9 +186,9 @@ struct ignore_rules {
 /**
  * Grow the profile cache array if we're at capacity.
  *
- * Arena allocators have no in-place realloc, so growth allocates a
- * larger block and copies. The old block is reclaimed on
- * arena_destroy. Mirrors the pattern in base/gitignore.c.
+ * Arena allocators have no in-place realloc, so growth allocates a larger block
+ * and copies. The old block is reclaimed on arena_destroy. Mirrors the pattern
+ * in base/gitignore.c.
  */
 static error_t *profile_cache_ensure_capacity(ignore_rules_t *r) {
     if (r->profile_count < r->profile_capacity) return NULL;
@@ -220,10 +214,9 @@ static error_t *profile_cache_ensure_capacity(ignore_rules_t *r) {
 /**
  * Build a fresh ruleset for `profile` in the builder's arena.
  *
- * Appends the four layers in precedence order (baseline/builtin,
- * profile, config, CLI). `gitignore_eval` scans in reverse insertion
- * order, so CLI wins last-match and the ordering here establishes
- * the documented precedence for free.
+ * Appends the four layers in precedence order (baseline/builtin, profile, config,
+ * CLI). `gitignore_eval` scans in reverse insertion order, so CLI wins last-match
+ * and the ordering here establishes the documented precedence for free.
  *
  * `profile` is the canonicalised key ("" means baseline-only).
  */
@@ -244,9 +237,9 @@ static error_t *build_profile_ruleset(
         )
     );
 
-    /* 2. Profile-specific `.dottaignore` (if the profile was named and
-     *    has a blob on its branch). A missing branch / missing file /
-     *    empty blob is normal and silently contributes no rules. */
+    /* 2. Profile-specific `.dottaignore` (if the profile was named and has a
+     *    blob on its branch). A missing branch / missing file / empty blob is
+     *    normal and silently contributes no rules. */
     if (profile[0] != '\0') {
         char *content = NULL;
         error_t *err = ignore_blob_read(r->repo, profile, &content, NULL);
@@ -311,14 +304,14 @@ error_t *ignore_blob_read(
     *out_content = NULL;
     if (out_size) *out_size = 0;
 
-    /* Missing branch is not an error — callers treat NULL content as
-     * "no baseline/profile .dottaignore yet". */
+    /* Missing branch is not an error — callers treat NULL content as "no
+     * baseline/profile .dottaignore yet". */
     bool exists = false;
     RETURN_IF_ERROR(gitops_branch_exists(repo, branch, &exists));
     if (!exists) return NULL;
 
-    /* Existence just verified, so a tree load failure is a real error
-     * (I/O, corruption) rather than "branch missing". */
+    /* Existence just verified, so a tree load failure is a real error (I/O,
+     * corruption) rather than "branch missing". */
     git_tree *tree = NULL;
     error_t *err = gitops_load_branch_tree(repo, branch, &tree, NULL);
     if (err) {
@@ -349,8 +342,8 @@ error_t *ignore_blob_read(
         );
     }
 
-    /* Treat empty blobs as absent — nothing to parse, and it lets
-     * callers use "content == NULL" as the single "no source" check. */
+    /* Treat empty blobs as absent — nothing to parse, and it lets callers use
+     * "content == NULL" as the single "no source" check. */
     if (size == 0) {
         free(content);
         return NULL;
@@ -413,10 +406,10 @@ error_t *ignore_rules_create(
 
     /* Load baseline; fall back to compiled defaults when absent.
      *
-     * Load errors are fatal: a corrupted or unreadable baseline must
-     * surface, not silently drop safety defaults. The BUILTIN fallback
-     * only fires when the load returned NULL content (branch missing,
-     * file missing, or empty blob — all non-errors). */
+     * Load errors are fatal: a corrupted or unreadable baseline must surface,
+     * not silently drop safety defaults. The BUILTIN fallback only fires when
+     * the load returned NULL content (branch missing, file missing, or empty
+     * blob — all non-errors). */
     char *baseline = NULL;
     error_t *err = ignore_blob_read(repo, "dotta-worktree", &baseline, NULL);
     if (err) {
@@ -425,8 +418,8 @@ error_t *ignore_rules_create(
     }
 
     if (baseline) {
-        /* Arena-copy so the Git heap buffer can be freed immediately
-         * and the content outlives the function frame. */
+        /* Arena-copy so the Git heap buffer can be freed immediately and the
+         * content outlives the function frame. */
         r->baseline_content = arena_strdup(r->arena, baseline);
         free(baseline);
         if (!r->baseline_content) {
@@ -440,8 +433,8 @@ error_t *ignore_rules_create(
         r->baseline_origin = IGNORE_ORIGIN_BUILTIN;
     }
 
-    /* Borrow config/CLI arrays. The caller guarantees command-scoped
-     * lifetime, which is longer than the builder's. */
+    /* Borrow config/CLI arrays. The caller guarantees command-scoped lifetime,
+     * which is longer than the builder's. */
     if (config && config->ignore_patterns &&
         config->ignore_pattern_count > 0) {
         r->config_patterns = config->ignore_patterns;
@@ -459,9 +452,9 @@ error_t *ignore_rules_create(
 void ignore_rules_free(ignore_rules_t *r) {
     if (!r) return;
 
-    /* Arena is borrowed — owned by the caller (typically ctx->arena).
-     * Per-profile rulesets, baseline copies, and the profile cache
-     * remain valid in that arena until the caller destroys it. */
+    /* Arena is borrowed — owned by the caller (typically ctx->arena). Per-profile
+     * rulesets, baseline copies, and the profile cache remain valid in that arena
+     * until the caller destroys it. */
     free(r);
 }
 

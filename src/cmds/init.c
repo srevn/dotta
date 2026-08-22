@@ -62,24 +62,22 @@ static error_t *init_repository(const char *path, git_repository **out, bool *is
 /**
  * Ensure the dotta-worktree branch exists and HEAD points at it.
  *
- * Idempotent across self-healing re-init: the orphan commit is only
- * created when the branch is absent. Recreating an existing branch
- * would silently overwrite its history — including any user-customised
- * baseline `.dottaignore` blob — which is the bug the old
- * `is_initialized` short-circuit was guarding against. The guard now
- * lives here, where it is precisely scoped to the destructive step.
+ * Idempotent across self-healing re-init: the orphan commit is only created when
+ * the branch is absent. Recreating an existing branch would silently overwrite
+ * its history — including any user-customised baseline `.dottaignore` blob —
+ * which is the bug the old `is_initialized` short-circuit was guarding against.
+ * The guard now lives here, where it is precisely scoped to the destructive step.
  *
- * `set_head` runs unconditionally so a partial prior init that left
- * HEAD on a profile branch (or on the freshly-init'd repo's default
- * `main`) gets corrected. The call is a no-op when HEAD already
- * targets dotta-worktree.
+ * `set_head` runs unconditionally so a partial prior init that left HEAD on a
+ * profile branch (or on the freshly-init'd repo's default `main`) gets corrected.
+ * The call is a no-op when HEAD already targets dotta-worktree.
  *
  * Worktree-sync strategy:
- *   - Branch just created on a brand-new repo: FORCE — there is no
- *     user data anywhere to lose.
- *   - Any other case (healing path, or fresh creation in a pre-
- *     existing git repo): SAFE — local workdir modifications abort
- *     the checkout cleanly with an actionable error.
+ *   - Branch just created on a brand-new repo: FORCE — there is no user data
+ *     anywhere to lose.
+ *   - Any other case (healing path, or fresh creation in a pre-existing git repo):
+ *     SAFE — local workdir modifications abort the checkout cleanly with an
+ *     actionable error.
  */
 static error_t *ensure_worktree_branch(git_repository *repo, bool is_new_repo) {
     CHECK_NULL(repo);
@@ -121,9 +119,9 @@ static error_t *ensure_worktree_branch(git_repository *repo, bool is_new_repo) {
 /**
  * Initialize state file
  *
- * Opens a write-locked handle, which creates .git/dotta.db with the schema
- * if it does not already exist, then commits the empty transaction. A clean
- * state file on disk means subsequent commands do not have to bootstrap it.
+ * Opens a write-locked handle, which creates .git/dotta.db with the schema if
+ * it does not already exist, then commits the empty transaction. A clean state
+ * file on disk means subsequent commands do not have to bootstrap it.
  */
 static error_t *init_state(git_repository *repo) {
     CHECK_NULL(repo);
@@ -194,9 +192,8 @@ error_t *cmd_init(const dotta_ctx_t *ctx, const cmd_init_options_t *opts) {
     }
 
     /*
-     * Idempotent setup. Each step is safe to re-run on an existing
-     * repository: a fully-healthy repo no-ops at every step, and a
-     * partial prior init.
+     * Idempotent setup. Each step is safe to re-run on an existing repository:
+     * a fully-healthy repo no-ops at every step, and a partial prior init.
      */
 
     /* dotta-worktree branch + HEAD */
@@ -211,20 +208,19 @@ error_t *cmd_init(const dotta_ctx_t *ctx, const cmd_init_options_t *opts) {
         goto cleanup;
     }
 
-    /* Per-repo Argon2id salt at refs/dotta/salt. Idempotent — keeps
-     * an existing valid blob; surfaces a malformed blob as an error
-     * rather than overwriting it. Done unconditionally (not gated on
-     * encryption_enabled) so a later `dotta key set` finds the salt
-     * ready, and so `dotta clone` of this repo can fetch the salt
-     * regardless of the cloner's config. */
+    /* Per-repo Argon2id salt at refs/dotta/salt. Idempotent — keeps an existing
+     * valid blob; surfaces a malformed blob as an error rather than overwriting
+     * it. Done unconditionally (not gated on encryption_enabled) so a later `dotta
+     * key set` finds the salt ready, and so `dotta clone` of this repo can fetch
+     * the salt regardless of the cloner's config. */
     err = salt_init(repo);
     if (err) {
         err = error_wrap(err, "Failed to initialize repository salt");
         goto cleanup;
     }
 
-    /* Baseline .dottaignore on dotta-worktree. Idempotent —
-     * gitops_update_file no-ops on identical content. */
+    /* Baseline .dottaignore on dotta-worktree. Idempotent — gitops_update_file
+     * no-ops on identical content. */
     err = ignore_seed_baseline(repo);
     if (err) {
         err = error_wrap(err, "Failed to seed baseline .dottaignore");

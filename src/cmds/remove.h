@@ -21,8 +21,8 @@
 /**
  * Command options
  *
- * `profile` and `paths` are populated from the raw positional bucket
- * by `remove_post_parse`. Consumers read only the user-facing fields.
+ * `profile` and `paths` are populated from the raw positional bucket by
+ * `remove_post_parse`. Consumers read only the user-facing fields.
  */
 typedef struct {
     /* User-facing (read by cmd_remove). */
@@ -58,12 +58,12 @@ typedef struct {
  * - If delete_profile=true: Deletes the entire profile branch
  * - If delete_profile=false: Removes specified files from profile
  *
- * This command modifies the Git repository only. By default, deployed files
- * are released from management and remain on the filesystem. With delete_files=true,
+ * This command modifies the Git repository only. By default, deployed files are
+ * released from management and remain on the filesystem. With delete_files=true,
  * they are staged for removal and deleted when 'dotta apply' is run.
  *
- * Uses temporary worktree to safely modify profile branches.
- * Executes hooks but does not modify deployed files or state file entries.
+ * Uses temporary worktree to safely modify profile branches. Executes hooks but
+ * does not modify deployed files or state file entries.
  *
  * @param ctx Dispatch context (must not be NULL)
  * @param opts Command options (must not be NULL)
@@ -74,8 +74,8 @@ error_t *cmd_remove(const dotta_ctx_t *ctx, const cmd_remove_options_t *opts);
 /**
  * Spec-engine command specification for `dotta remove`.
  *
- * Registered in cmds/registry.c. Defined in remove.c beside the
- * post_parse and dispatch wrappers.
+ * Registered in cmds/registry.c. Defined in remove.c beside the post_parse and
+ * dispatch wrappers.
  */
 extern const args_command_t spec_remove;
 

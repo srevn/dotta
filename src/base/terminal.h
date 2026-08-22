@@ -1,8 +1,8 @@
 /**
  * terminal.h - Terminal control utilities
  *
- * Provides low-level terminal control for building inline TUIs.
- * Handles raw mode, ANSI escape sequences, and input reading.
+ * Provides low-level terminal control for building inline TUIs. Handles raw mode,
+ * ANSI escape sequences, and input reading.
  *
  * Design principles:
  * - Clean abstraction over termios and ANSI codes
@@ -53,13 +53,13 @@ typedef struct {
 /**
  * Special key codes
  *
- * Regular ASCII characters (a-z, 0-9, etc.) are returned as-is.
- * These codes represent special keys that need multi-byte sequences.
+ * Regular ASCII characters (a-z, 0-9, etc.) are returned as-is. These codes
+ * represent special keys that need multi-byte sequences.
  *
- * Every enumerator carries an explicit value so the split stays
- * audit-friendly: inserting a new synthetic key cannot silently shift
- * neighbours into another enumerator's slot, and the ASCII band cannot
- * accidentally collide with the 1000+ band.
+ * Every enumerator carries an explicit value so the split stays audit-friendly:
+ * inserting a new synthetic key cannot silently shift neighbours into another
+ * enumerator's slot, and the ASCII band cannot accidentally collide with the
+ * 1000+ band.
  */
 typedef enum {
     TERM_KEY_UNKNOWN   = -1,
@@ -100,8 +100,7 @@ error_t *terminal_init(terminal_t **out);
 /**
  * Restore terminal to original state
  *
- * Restores settings saved by terminal_init().
- * Safe to call multiple times.
+ * Restores settings saved by terminal_init(). Safe to call multiple times.
  *
  * @param term Terminal state (can be NULL)
  */
@@ -194,8 +193,8 @@ void terminal_clear_line_to_end(void);
 /**
  * Read single key press
  *
- * Blocks until a key is pressed. Handles multi-byte sequences
- * for arrow keys, function keys, etc.
+ * Blocks until a key is pressed. Handles multi-byte sequences for arrow keys,
+ * function keys, etc.
  *
  * Returns:
  * - Regular ASCII (0-127) for printable chars

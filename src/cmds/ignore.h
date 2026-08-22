@@ -14,8 +14,8 @@
 /**
  * Command options
  *
- * `profile` can be set either via `-p/--profile` or via a single
- * optional positional (mapped by `ignore_post_parse`).
+ * `profile` can be set either via `-p/--profile` or via a single optional
+ * positional (mapped by `ignore_post_parse`).
  */
 typedef struct {
     /* User-facing (read by cmd_ignore). */
@@ -47,8 +47,7 @@ error_t *cmd_ignore(const dotta_ctx_t *ctx, const cmd_ignore_options_t *opts);
 /**
  * Spec-engine command specification for `dotta ignore`.
  *
- * Registered in cmds/registry.c. Defined in ignore.c beside the
- * dispatch wrapper.
+ * Registered in cmds/registry.c. Defined in ignore.c beside the dispatch wrapper.
  */
 extern const args_command_t spec_ignore;
 

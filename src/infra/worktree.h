@@ -1,8 +1,8 @@
 /**
  * worktree.h - Temporary git worktree management
  *
- * Manages temporary worktrees for safe git operations without
- * disturbing the main working directory.
+ * Manages temporary worktrees for safe git operations without disturbing the
+ * main working directory.
  *
  * CRITICAL: Worktrees MUST be cleaned up, even on error paths.
  *
@@ -23,16 +23,16 @@
 /**
  * Worktree handle (opaque)
  *
- * Contains all resources needed for worktree operations.
- * Must be cleaned up with worktree_cleanup().
+ * Contains all resources needed for worktree operations. Must be cleaned up with
+ * worktree_cleanup().
  */
 typedef struct worktree_handle worktree_handle_t;
 
 /**
  * Create temporary worktree
  *
- * Creates a new temporary worktree in system temp directory.
- * The worktree is initially empty (no branch checked out).
+ * Creates a new temporary worktree in system temp directory. The worktree is
+ * initially empty (no branch checked out).
  *
  * IMPORTANT: Must call worktree_cleanup() even if subsequent operations fail.
  *
@@ -74,9 +74,9 @@ error_t *worktree_create_orphan(
 /**
  * Cleanup worktree and free all resources
  *
- * Accepts pointer-to-pointer so the caller's pointer is nullified,
- * making the function truly idempotent (safe to call multiple times).
- * Safe to call with NULL pointer or pointer to NULL.
+ * Accepts pointer-to-pointer so the caller's pointer is nullified, making the
+ * function truly idempotent (safe to call multiple times). Safe to call with
+ * NULL pointer or pointer to NULL.
  *
  * Cleanup order (critical):
  * 1. Nullify caller's pointer
@@ -119,8 +119,8 @@ error_t *worktree_get_index(worktree_handle_t *wt, git_index **out);
 /**
  * Stage a file in the worktree index
  *
- * Gets the worktree index, adds the file by path, writes the index,
- * and frees the index handle. Atomic single-file staging.
+ * Gets the worktree index, adds the file by path, writes the index, and frees
+ * the index handle. Atomic single-file staging.
  *
  * @param wt Worktree handle (must not be NULL)
  * @param path Path relative to worktree root (must not be NULL)
@@ -131,8 +131,8 @@ error_t *worktree_stage_file(worktree_handle_t *wt, const char *path);
 /**
  * Unstage (remove) a file from the worktree index
  *
- * Gets the worktree index, removes the file by path, writes the index,
- * and frees the index handle. Atomic single-file unstaging.
+ * Gets the worktree index, removes the file by path, writes the index, and frees
+ * the index handle. Atomic single-file unstaging.
  *
  * @param wt Worktree handle (must not be NULL)
  * @param path Path relative to worktree root (must not be NULL)
@@ -143,9 +143,8 @@ error_t *worktree_unstage_file(worktree_handle_t *wt, const char *path);
 /**
  * Commit current worktree index to a branch
  *
- * Writes the worktree index as a tree and creates a commit on the
- * specified branch. All desired files must be staged in the worktree
- * index before calling.
+ * Writes the worktree index as a tree and creates a commit on the specified branch.
+ * All desired files must be staged in the worktree index before calling.
  *
  * @param wt Worktree handle (must not be NULL)
  * @param branch_name Target branch (must not be NULL)
@@ -163,8 +162,8 @@ error_t *worktree_commit(
 /**
  * RAII cleanup helper
  *
- * Note: This is provided for convenience, but explicit cleanup
- * is recommended for critical resources like worktrees.
+ * Note: This is provided for convenience, but explicit cleanup is recommended
+ * for critical resources like worktrees.
  */
 static inline void cleanup_worktree_handle(worktree_handle_t **wt) {
     worktree_cleanup(wt);

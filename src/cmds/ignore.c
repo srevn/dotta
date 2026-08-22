@@ -90,8 +90,8 @@ static bool pattern_exists(const char *content, const char *pattern) {
 /**
  * Normalize a pattern by trimming leading and trailing whitespace
  *
- * Returns pointer to the normalized pattern in the provided buffer,
- * or NULL if the pattern is empty/NULL after trimming.
+ * Returns pointer to the normalized pattern in the provided buffer, or NULL if
+ * the pattern is empty/NULL after trimming.
  */
 static const char *normalize_pattern(
     const char *pattern,
@@ -134,14 +134,14 @@ static const char *normalize_pattern(
 /**
  * Add patterns to .dottaignore content
  *
- * Appends normalized patterns (whitespace-trimmed) to existing_content,
- * skipping patterns that already exist or are duplicates within the batch.
- * Deduplication is textual — each candidate is compared against lines
- * already present in the accumulating buffer.
+ * Appends normalized patterns (whitespace-trimmed) to existing_content, skipping
+ * patterns that already exist or are duplicates within the batch. Deduplication
+ * is textual — each candidate is compared against lines already present in the
+ * accumulating buffer.
  *
- * Contract: on success, *new_content is NULL iff *added_count == 0. The
- * helper never hands back a buffer that is byte-identical to its input,
- * so callers can treat NULL as "nothing changed" without further checks.
+ * Contract: on success, *new_content is NULL iff *added_count == 0. The helper
+ * never hands back a buffer that is byte-identical to its input, so callers can
+ * treat NULL as "nothing changed" without further checks.
  */
 static error_t *add_patterns_to_content(
     const char *existing_content,
@@ -195,9 +195,9 @@ static error_t *add_patterns_to_content(
     /*
      * Single pass: normalize, deduplicate, append.
      *
-     * Checking pattern_exists() against the accumulated result buffer
-     * handles both existing-content dedup and batch dedup in one call:
-     * previously appended patterns are already in the buffer.
+     * Checking pattern_exists() against the accumulated result buffer handles
+     * both existing-content dedup and batch dedup in one call: previously appended
+     * patterns are already in the buffer.
      */
     for (size_t i = 0; i < pattern_count; i++) {
         char buf[4096];
@@ -219,8 +219,8 @@ static error_t *add_patterns_to_content(
     }
 
     /* Nothing was added: the seeded buffer is a byte-for-byte copy of
-     * existing_content. Drop it and signal "no change" via NULL so the
-     * caller can skip a free(). */
+     * existing_content. Drop it and signal "no change" via NULL so the caller
+     * can skip a free(). */
     if (*added_count == 0) {
         free(result);
         return NULL;
@@ -233,13 +233,13 @@ static error_t *add_patterns_to_content(
 /**
  * Remove patterns from .dottaignore content
  *
- * Filters existing_content line-by-line, dropping any non-comment line
- * that textually matches a normalized entry in patterns. `*not_found_count`
- * reports how many requested patterns were absent from the input and is
- * always populated regardless of whether the buffer changed.
+ * Filters existing_content line-by-line, dropping any non-comment line that
+ * textually matches a normalized entry in patterns. `*not_found_count` reports
+ * how many requested patterns were absent from the input and is always populated
+ * regardless of whether the buffer changed.
  *
- * Contract: on success, *new_content is NULL iff *removed_count == 0.
- * Callers can treat NULL as "nothing changed" without a content compare.
+ * Contract: on success, *new_content is NULL iff *removed_count == 0. Callers
+ * can treat NULL as "nothing changed" without a content compare.
  */
 static error_t *remove_patterns_from_content(
     const char *existing_content,
@@ -259,9 +259,8 @@ static error_t *remove_patterns_from_content(
     *not_found_count = 0;
 
     if (!existing_content || pattern_count == 0) {
-        /* Nothing to filter: no new buffer produced. All requested
-         * patterns are vacuously "not found" so the caller can report
-         * accurately. */
+        /* Nothing to filter: no new buffer produced. All requested patterns are
+         * vacuously "not found" so the caller can report accurately. */
         *not_found_count = pattern_count;
         return NULL;
     }
@@ -364,10 +363,10 @@ static error_t *remove_patterns_from_content(
 
     free(pattern_found);
 
-    /* No line matched — the seeded buffer would be identical to the input.
-     * Drop it and signal "no change" via NULL so the caller can skip a
-     * free(). *not_found_count is still set above, so the "patterns not
-     * found" diagnostic fires correctly. */
+    /* No line matched — the seeded buffer would be identical to the input. Drop
+     * it and signal "no change" via NULL so the caller can skip a free().
+     * *not_found_count is still set above, so the "patterns not found" diagnostic
+     * fires correctly. */
     if (*removed_count == 0) {
         free(result);
         return NULL;
@@ -380,17 +379,16 @@ static error_t *remove_patterns_from_content(
 /**
  * Edit content in an external editor via a temporary file.
  *
- * Seeds a fresh mkstemp file with `seed` (may be empty when
- * `seed_size == 0`), launches the user's preferred editor via
- * editor_launch_with_env (DOTTA_EDITOR / VISUAL / EDITOR, falling
- * back to `vi`), then reads the post-edit contents into a
- * heap-owned NUL-terminated buffer. The tempfile is unlinked on
- * every exit path.
+ * Seeds a fresh mkstemp file with `seed` (may be empty when `seed_size == 0`),
+ * launches the user's preferred editor via editor_launch_with_env (DOTTA_EDITOR
+ * / VISUAL / EDITOR, falling back to `vi`), then reads the post-edit contents
+ * into a heap-owned NUL-terminated buffer. The tempfile is unlinked on every
+ * exit path.
  *
  * @param seed        Seed content (must not be NULL; may be empty)
  * @param seed_size   Bytes of seed to write (0 skips the write call)
- * @param out_content Receives heap-allocated NUL-terminated result
- *                    (caller frees; never NULL on success)
+ * @param out_content Receives heap-allocated NUL-terminated result (caller frees;
+ *                    never NULL on success)
  * @param out_size    Receives byte count of result (excludes NUL)
  * @return Error or NULL on success
  */
@@ -459,13 +457,13 @@ static error_t *edit_content_via_editor(
 }
 
 /**
- * File-local scope for the two .dottaignore-editing surfaces: the
- * baseline on dotta-worktree, and any named profile branch.
+ * File-local scope for the two .dottaignore-editing surfaces: the baseline on
+ * dotta-worktree, and any named profile branch.
  *
- * Captures everything that differs between the two so edit_dottaignore
- * and modify_dottaignore stay branch-agnostic. Constructed on the
- * stack in cmd_ignore; label strings for the profile case are heap-
- * owned with matching cmd_ignore lifetime.
+ * Captures everything that differs between the two so edit_dottaignore and
+ * modify_dottaignore stay branch-agnostic. Constructed on the stack in cmd_ignore;
+ * label strings for the profile case are heap-owned with matching cmd_ignore
+ * lifetime.
  */
 typedef struct {
     const char *branch_name;    /* "dotta-worktree" or profile name */
@@ -476,9 +474,9 @@ typedef struct {
 /**
  * Edit a .dottaignore via external editor.
  *
- * Called with scope->branch_name already verified to exist (cmd_ignore
- * hoists that check). Loads existing content, delegates to the editor
- * helper, commits the result back to the same branch.
+ * Called with scope->branch_name already verified to exist (cmd_ignore hoists
+ * that check). Loads existing content, delegates to the editor helper, commits
+ * the result back to the same branch.
  */
 static error_t *edit_dottaignore(
     git_repository *repo,
@@ -521,11 +519,10 @@ static error_t *edit_dottaignore(
         );
     }
 
-    /* No-op detection: compare against the pre-edit blob. When the
-     * blob was absent before the edit, any non-empty edit counts as a
-     * change (the editor only produced content because the default
-     * seed was non-empty; a user who wiped the buffer to empty still
-     * writes an empty blob intentionally). */
+    /* No-op detection: compare against the pre-edit blob. When the blob was absent
+     * before the edit, any non-empty edit counts as a change (the editor only
+     * produced content because the default seed was non-empty; a user who wiped
+     * the buffer to empty still writes an empty blob intentionally). */
     bool unchanged = existing_content
         && new_size == existing_size
         && (new_size == 0 || memcmp(new_content, existing_content, new_size) == 0);
@@ -572,16 +569,15 @@ static error_t *edit_dottaignore(
 /**
  * Add / remove patterns in a .dottaignore non-interactively.
  *
- * Called with scope->branch_name already verified to exist. Load
- * existing content, apply add/remove transforms, commit the result
- * if it actually changed.
+ * Called with scope->branch_name already verified to exist. Load existing content,
+ * apply add/remove transforms, commit the result if it actually changed.
  *
- * Ownership is linear: `owned` is the single buffer this function frees
- * at every exit. Each transform either leaves `owned` untouched (helper
- * returned NULL = no change) or hands back a fresh buffer we adopt after
- * dropping the old one. The helper contracts guarantee a non-NULL return
- * iff the content actually changed, which is what lets this function
- * get by with one variable and no pointer-identity comparisons.
+ * Ownership is linear: `owned` is the single buffer this function frees at every
+ * exit. Each transform either leaves `owned` untouched (helper returned NULL =
+ * no change) or hands back a fresh buffer we adopt after dropping the old one.
+ * The helper contracts guarantee a non-NULL return iff the content actually
+ * changed, which is what lets this function get by with one variable and no
+ * pointer-identity comparisons.
  */
 static error_t *modify_dottaignore(
     git_repository *repo,
@@ -605,10 +601,9 @@ static error_t *modify_dottaignore(
         );
     }
 
-    /* Nothing to work with: no existing file and no adds to seed one.
-     * Wording uses "%s .dottaignore" so it composes naturally for both
-     * scopes: "No baseline .dottaignore exists" / "No profile 'foo'
-     * .dottaignore exists". */
+    /* Nothing to work with: no existing file and no adds to seed one. Wording
+     * uses "%s .dottaignore" so it composes naturally for both scopes: "No baseline
+     * .dottaignore exists" / "No profile 'foo' .dottaignore exists". */
     if (!owned && add_count == 0) {
         output_info(
             out, OUTPUT_NORMAL, "No %s .dottaignore exists",
@@ -657,9 +652,9 @@ static error_t *modify_dottaignore(
             free(owned);
             return error_wrap(err, "Failed to remove patterns");
         }
-        /* not_found is populated whether or not the buffer changed — always
-         * capture so the "patterns not found" diagnostic fires even when
-         * nothing was removed. */
+        /* not_found is populated whether or not the buffer changed — always capture
+         * so the "patterns not found" diagnostic fires even when nothing was
+         * removed. */
         total_not_found = not_found;
         if (next) {
             free(owned);
@@ -755,15 +750,14 @@ static error_t *modify_dottaignore(
 }
 
 /**
- * Probe the source-tree .gitignore after the .dottaignore layers have
- * returned "not ignored". Requires an absolute path; a relative test
- * target (typical when the user types a non-existent relative path)
- * silently short-circuits to "no source verdict".
+ * Probe the source-tree .gitignore after the .dottaignore layers have returned
+ * "not ignored". Requires an absolute path; a relative test target (typical when
+ * the user types a non-existent relative path) silently short-circuits to "no
+ * source verdict".
  *
- * Errors from the underlying libgit2 query are surfaced at NORMAL
- * verbosity so a --test invocation that can't probe layer 5 makes the
- * limitation visible, then return a "not excluded" verdict so the
- * rest of the output remains coherent.
+ * Errors from the underlying libgit2 query are surfaced at NORMAL verbosity so
+ * a --test invocation that can't probe layer 5 makes the limitation visible,
+ * then return a "not excluded" verdict so the rest of the output remains coherent.
  */
 static bool source_gitignore_matches(
     source_filter_t *filter,
@@ -811,16 +805,16 @@ static error_t *test_path_ignore(
     if (path_exists) {
         is_directory = fs_is_directory(test_path);
     } else {
-        /* For non-existent paths, treat trailing / as directory hint
-         * so directory-only patterns (e.g., "cache/") can be tested */
+        /* For non-existent paths, treat trailing / as directory hint so
+         * directory-only patterns (e.g., "cache/") can be tested */
         size_t len = strlen(test_path);
         is_directory = (len > 0 && test_path[len - 1] == '/');
     }
 
-    /* Resolve relative paths to absolute so the source-tree check below
-     * can discover the enclosing git repository. Non-existent paths are
-     * left as-is — there is no filesystem location to resolve — and the
-     * source check short-circuits on their relative form. */
+    /* Resolve relative paths to absolute so the source-tree check below can
+     * discover the enclosing git repository. Non-existent paths are left as-is
+     * — there is no filesystem location to resolve — and the source check
+     * short-circuits on their relative form. */
     char resolved_buf[4096];
     const char *effective_path = test_path;
 
@@ -834,9 +828,9 @@ static error_t *test_path_ignore(
         output_info(out, OUTPUT_VERBOSE, "Path does not exist: %s", test_path);
     }
 
-    /* Source .gitignore filter (opt-in via config). Built once for the
-     * whole test invocation so the discovered repo handle is reused
-     * across the per-profile loop below. */
+    /* Source .gitignore filter (opt-in via config). Built once for the whole
+     * test invocation so the discovered repo handle is reused across the
+     * per-profile loop below. */
     source_filter_t *source_filter = NULL;
     if (config && config->respect_gitignore) {
         error_t *sf_err = source_filter_create(&source_filter);
@@ -845,8 +839,8 @@ static error_t *test_path_ignore(
         }
     }
 
-    /* Layered-rules builder — loads baseline + config once, memoises
-     * each profile's ruleset on first request. */
+    /* Layered-rules builder — loads baseline + config once, memoises each profile's
+     * ruleset on first request. */
     ignore_rules_t *ignore_rules = NULL;
     error_t *err = ignore_rules_create(
         repo, config, NULL, 0, arena, &ignore_rules
@@ -921,8 +915,8 @@ static error_t *test_path_ignore(
         err = NULL;
 
         /* No enabled profiles - test against baseline + config only.
-         * `ignore_rules_for_profile(..., NULL, ...)` returns the
-         * ruleset with no per-profile layer. */
+         * `ignore_rules_for_profile(..., NULL, ...)` returns the ruleset with
+         * no per-profile layer. */
         output_info(
             out, OUTPUT_NORMAL, "No enabled profiles found"
         );
@@ -1050,8 +1044,8 @@ error_t *cmd_ignore(const dotta_ctx_t *ctx, const cmd_ignore_options_t *opts) {
     }
 
     /* --list-defaults is terminal: print the compiled defaults and exit.
-     * Discoverability aid — lets users inspect the safety patterns
-     * without grepping source or cloning the repo. */
+     * Discoverability aid — lets users inspect the safety patterns without grepping
+     * source or cloning the repo. */
     if (opts->list_defaults) {
         output_print(out, OUTPUT_NORMAL, "%s", ignore_baseline_defaults());
         return NULL;
@@ -1066,8 +1060,8 @@ error_t *cmd_ignore(const dotta_ctx_t *ctx, const cmd_ignore_options_t *opts) {
         return ERROR(ERR_INVALID_ARG, "Cannot use --test with --add or --remove");
     }
 
-    /* --test is a read-only query that walks every enabled profile by
-     * itself; it doesn't use dottaignore_scope_t. Dispatch early. */
+    /* --test is a read-only query that walks every enabled profile by itself;
+     * it doesn't use dottaignore_scope_t. Dispatch early. */
     if (has_test) {
         return test_path_ignore(
             repo, ctx->state, config, opts->test_path,
@@ -1075,8 +1069,8 @@ error_t *cmd_ignore(const dotta_ctx_t *ctx, const cmd_ignore_options_t *opts) {
         );
     }
 
-    /* Build the dottaignore_scope_t for edit / modify. Profile labels
-     * are heap-formatted here; lifetime matches this function frame. */
+    /* Build the dottaignore_scope_t for edit / modify. Profile labels are
+     * heap-formatted here; lifetime matches this function frame. */
     char *profile_label = NULL;
     dottaignore_scope_t scope;
     if (opts->profile) {
@@ -1097,9 +1091,9 @@ error_t *cmd_ignore(const dotta_ctx_t *ctx, const cmd_ignore_options_t *opts) {
         };
     }
 
-    /* Verify the scope branch exists once, up front, so edit/modify
-     * start with a guaranteed-present branch. Error message mirrors
-     * the original per-function wording. */
+    /* Verify the scope branch exists once, up front, so edit/modify start with
+     * a guaranteed-present branch. Error message mirrors the original per-function
+     * wording. */
     bool branch_exists = false;
     error_t *err = gitops_branch_exists(repo, scope.branch_name, &branch_exists);
     if (!err && !branch_exists) {
@@ -1130,10 +1124,9 @@ error_t *cmd_ignore(const dotta_ctx_t *ctx, const cmd_ignore_options_t *opts) {
 /**
  * Route the optional positional profile into `opts->profile`.
  *
- * POSITIONAL_RAW with max=1 gives us the "too many positionals" error
- * for free. When a positional is present, it wins over a preceding
- * -p/--profile flag (matches the legacy precedence — positional sets
- * profile unconditionally when present).
+ * POSITIONAL_RAW with max=1 gives us the "too many positionals" error for free.
+ * When a positional is present, it wins over a preceding -p/--profile flag (matches
+ * the legacy precedence — positional sets profile unconditionally when present).
  */
 static error_t *ignore_post_parse(
     void *opts_v, arena_t *arena, const args_command_t *cmd

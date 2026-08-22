@@ -38,9 +38,9 @@ struct worktree_handle {
  * Generate unique worktree name
  */
 static char *generate_worktree_name(void) {
-    /* Use process ID and timestamp for uniqueness.
-     * sec and usec are kept as separate fields to avoid overflow
-     * when multiplying tv_sec by 1000000 on 32-bit systems. */
+    /* Use process ID and timestamp for uniqueness. sec and usec are kept as
+     * separate fields to avoid overflow when multiplying tv_sec by 1000000 on
+     * 32-bit systems. */
     struct timeval tv;
     gettimeofday(&tv, NULL);
 
@@ -79,13 +79,12 @@ static error_t *generate_temp_path_from_name(
 /**
  * Cleanup orphaned worktrees from dead processes
  *
- * Scans .git/worktrees/ for dotta-temp-* entries from processes that
- * are no longer running and cleans up both Git metadata and filesystem
- * directories.
+ * Scans .git/worktrees/ for dotta-temp-* entries from processes that are no longer
+ * running and cleans up both Git metadata and filesystem directories.
  *
  * This extends the existing self-healing pattern (cleanup_orphaned_worktrees)
- * to handle cross-process orphans from interrupted operations (Ctrl-C),
- * crashes, and kill -9.
+ * to handle cross-process orphans from interrupted operations (Ctrl-C), crashes,
+ * and kill -9.
  *
  * Design principles:
  * - Silent operation (best-effort cleanup, ignores all errors)
@@ -94,9 +93,9 @@ static error_t *generate_temp_path_from_name(
  * - Cleans Git metadata, branches, and filesystem directories
  * - Idempotent (safe to call multiple times)
  *
- * This is called automatically before creating new worktrees to ensure
- * no stale resources from previous interrupted operations block the
- * creation of new worktrees.
+ * This is called automatically before creating new worktrees to ensure no stale
+ * resources from previous interrupted operations block the creation of new
+ * worktrees.
  *
  * @param repo Main repository (must not be NULL)
  */
@@ -131,8 +130,8 @@ static void cleanup_orphaned_worktrees(git_repository *repo) {
         }
         pid_t pid = (pid_t) parsed;
 
-        /* Check if process is alive
-         * kill(pid, 0) performs error checking without sending a signal */
+        /* Check if process is alive kill(pid, 0) performs error checking without
+         * sending a signal */
         if (kill(pid, 0) == 0) {
             continue; /* Process still running - not an orphan */
         }
@@ -142,10 +141,11 @@ static void cleanup_orphaned_worktrees(git_repository *repo) {
         }
 
         /* Process is dead (ESRCH = No such process) - this is an orphaned worktree
-         * Clean it up using the same steps as normal cleanup (see worktree_cleanup) */
+         * Clean it up using the same steps as normal cleanup (see
+         * worktree_cleanup) */
 
-        /* Step 1: Prune Git metadata (.git/worktrees/{name}/)
-         * This is the critical step that unblocks subsequent operations */
+        /* Step 1: Prune Git metadata (.git/worktrees/{name}/) This is the critical
+         * step that unblocks subsequent operations */
         git_worktree *wt = NULL;
         if (git_worktree_lookup(&wt, repo, name) == 0) {
             git_worktree_prune_options opts = { 0 };
@@ -170,8 +170,8 @@ static void cleanup_orphaned_worktrees(git_repository *repo) {
         /* Silently ignore refname build errors during cleanup */
         error_free(err_build);
 
-        /* Step 3: Remove filesystem directory (/tmp/{name}/)
-         * This is best-effort cleanup of the working tree directory */
+        /* Step 3: Remove filesystem directory (/tmp/{name}/) This is best-effort
+         * cleanup of the working tree directory */
         char *path = NULL;
         error_t *err_path = generate_temp_path_from_name(name, &path);
         if (!err_path) {
@@ -193,9 +193,9 @@ error_t *worktree_create_temp(
     CHECK_NULL(out);
     *out = NULL;
 
-    /* Cleanup orphaned worktrees from dead processes (self-healing)
-     * This is transparent, best-effort cleanup that ensures no stale
-     * worktrees from interrupted operations block this creation. */
+    /* Cleanup orphaned worktrees from dead processes (self-healing) This is
+     * transparent, best-effort cleanup that ensures no stale worktrees from
+     * interrupted operations block this creation. */
     cleanup_orphaned_worktrees(repo);
 
     /* Allocate handle (calloc zero-initializes all fields) */
@@ -252,9 +252,9 @@ error_t *worktree_create_temp(
     return NULL;
 
 cleanup:
-    /* worktree_cleanup handles partially-initialized handles correctly:
-     * NULL fields are skipped, and it cleans up the temp branch that
-     * git_worktree_add creates (which the old error paths missed). */
+    /* worktree_cleanup handles partially-initialized handles correctly: NULL
+     * fields are skipped, and it cleans up the temp branch that git_worktree_add
+     * creates (which the old error paths missed). */
     worktree_cleanup(&wt);
     return err;
 }
@@ -313,8 +313,8 @@ error_t *worktree_checkout_branch(
     /*
      * Move HEAD to target branch
      *
-     * At this point, Index and Working Directory already match the target.
-     * This is just updating the HEAD pointer to complete the transition.
+     * At this point, Index and Working Directory already match the target. This
+     * is just updating the HEAD pointer to complete the transition.
      */
     git_err = git_repository_set_head(wt->repo, refname);
     if (git_err < 0) {
@@ -350,10 +350,10 @@ error_t *worktree_create_orphan(
         return error_from_git(rc);
     }
 
-    /* Clear the index to ensure a clean orphan state.
-     * git_worktree_add may have populated the index from the parent
-     * branch. An orphan branch should start with an empty index
-     * so only explicitly added files appear in the first commit. */
+    /* Clear the index to ensure a clean orphan state. git_worktree_add may have
+     * populated the index from the parent branch. An orphan branch should start
+     * with an empty index so only explicitly added files appear in the first
+     * commit. */
     git_index *index = NULL;
     rc = git_repository_index(&index, wt->repo);
     if (rc < 0) {

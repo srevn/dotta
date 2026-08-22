@@ -533,19 +533,18 @@ const void **ptr_array_steal(ptr_array_t *arr, size_t *out_count) {
     }
 
     if (arr->count == 0) {
-        /* Collapse empty-but-reserved state to the NULL/0 contract.
-         * Callers passing the result through output parameters rely on
-         * "NULL means no results" — a zero-length non-NULL buffer would
-         * complicate that. */
+        /* Collapse empty-but-reserved state to the NULL/0 contract. Callers passing
+         * the result through output parameters rely on "NULL means no results"
+         * — a zero-length non-NULL buffer would complicate that. */
         free(arr->items);
         *arr = (ptr_array_t){ 0 };
         *out_count = 0;
         return NULL;
     }
 
-    /* Centralized cast: storage is type-erased void ** to remain universal
-     * across const and mutable callers; the return type advertises that
-     * callers should treat the stolen buffer as read-only references. */
+    /* Centralized cast: storage is type-erased void ** to remain universal across
+     * const and mutable callers; the return type advertises that callers should
+     * treat the stolen buffer as read-only references. */
     const void **buf = (const void **) arr->items;
     *out_count = arr->count;
     *arr = (ptr_array_t){ 0 };

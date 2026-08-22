@@ -1,8 +1,8 @@
 /**
  * refspec.h - Refspec parsing utilities
  *
- * Provides parsing for the refspec syntax: [profile:]<path>[@commit]
- * Used by commands that need to reference files with optional profile/commit context.
+ * Provides parsing for the refspec syntax: [profile:]<path>[@commit] Used by
+ * commands that need to reference files with optional profile/commit context.
  */
 
 #ifndef DOTTA_REFSPEC_H
@@ -13,10 +13,10 @@
 /**
  * Parsed refspec components.
  *
- * String fields point into the arena supplied to parse_refspec, which
- * owns their storage — the caller MUST NOT free them individually. A
- * field is NULL when the corresponding component is absent from the
- * input (except `file`, which is always set on success).
+ * String fields point into the arena supplied to parse_refspec, which owns their
+ * storage — the caller MUST NOT free them individually. A field is NULL when
+ * the corresponding component is absent from the input (except `file`, which is
+ * always set on success).
  */
 typedef struct {
     const char *profile;    /* Profile name, or NULL if not specified */
@@ -27,13 +27,13 @@ typedef struct {
 /**
  * Parse refspec: [profile:]<path>[@commit]
  *
- * Splits the input into profile, file path, and commit components.
- * The ':' separator for profile is optional (profile defaults to NULL).
- * The '@' separator is only recognized when followed by a valid git reference.
+ * Splits the input into profile, file path, and commit components. The ':'
+ * separator for profile is optional (profile defaults to NULL). The '@' separator
+ * is only recognized when followed by a valid git reference.
  *
- * Output slices are bump-allocated in the provided arena and share its
- * lifetime. On error, *out is left unchanged; callers should only read
- * *out after the returned error is NULL.
+ * Output slices are bump-allocated in the provided arena and share its lifetime.
+ * On error, *out is left unchanged; callers should only read *out after the
+ * returned error is NULL.
  *
  * Examples:
  *   "home/.bashrc"                  -> {NULL,         "home/.bashrc", NULL}

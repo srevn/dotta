@@ -6,9 +6,8 @@
  *   string_array_t — owns each element string (push duplicates, deinit frees).
  *   ptr_array_t    — owns only the buffer; elements are borrowed pointers.
  *
- * Both structs are transparent (direct field access is the intended usage)
- * and support stack and heap lifecycles via matching init/deinit and
- * new/free pairs.
+ * Both structs are transparent (direct field access is the intended usage) and
+ * support stack and heap lifecycles via matching init/deinit and new/free pairs.
  */
 
 #ifndef DOTTA_ARRAY_H
@@ -32,9 +31,8 @@ void string_array_init(string_array_t *arr);
 error_t *string_array_init_cap(string_array_t *arr, size_t cap);
 
 /**
- * Release all owned memory (strings + backing array).
- * Resets struct to zero state. Safe to call on zero-initialized or
- * already-deinitialized arrays. No-op on NULL.
+ * Release all owned memory (strings + backing array). Resets struct to zero state.
+ * Safe to call on zero-initialized or already-deinitialized arrays. No-op on NULL.
  */
 void string_array_deinit(string_array_t *arr);
 
@@ -52,8 +50,8 @@ string_array_t *string_array_new(size_t cap);
 void string_array_free(string_array_t *arr);
 
 /**
- * Callback-compatible free for use with hashmap_free() and similar APIs.
- * Casts void* to string_array_t* and calls string_array_free().
+ * Callback-compatible free for use with hashmap_free() and similar APIs. Casts
+ * void* to string_array_t* and calls string_array_free().
  */
 void string_array_free_cb(void *ptr);
 
@@ -67,8 +65,8 @@ void string_array_free_cb(void *ptr);
 error_t *string_array_push(string_array_t *arr, const char *str);
 
 /**
- * Append str to the array, transferring ownership.
- * str must be heap-allocated. On error, caller retains ownership.
+ * Append str to the array, transferring ownership. str must be heap-allocated.
+ * On error, caller retains ownership.
  *
  * @param arr Array (must not be NULL)
  * @param str Heap-allocated string (must not be NULL, ownership transferred)
@@ -84,14 +82,14 @@ error_t *string_array_push_owned(string_array_t *arr, char *str);
 error_t *string_array_reserve(string_array_t *arr, size_t cap);
 
 /**
- * Remove element at index, shifting subsequent elements left. O(n).
- * No-op if arr is NULL or index is out of bounds.
+ * Remove element at index, shifting subsequent elements left. O(n). No-op if
+ * arr is NULL or index is out of bounds.
  */
 void string_array_remove(string_array_t *arr, size_t index);
 
 /**
- * Remove element at index by swapping with the last element. O(1).
- * Does not preserve order. No-op if arr is NULL or index is out of bounds.
+ * Remove element at index by swapping with the last element. O(1). Does not
+ * preserve order. No-op if arr is NULL or index is out of bounds.
  */
 void string_array_swap_remove(string_array_t *arr, size_t index);
 
@@ -120,9 +118,8 @@ bool string_array_contains(const string_array_t *arr, const char *str);
 void string_array_sort(string_array_t *arr);
 
 /**
- * Deep-copy src into dst.
- * dst is initialized by this function — caller must deinit any previous
- * contents before calling to avoid leaks.
+ * Deep-copy src into dst. dst is initialized by this function — caller must deinit
+ * any previous contents before calling to avoid leaks.
  *
  * @param src Source array (must not be NULL)
  * @param dst Destination (must not be NULL, overwritten)
@@ -180,8 +177,8 @@ error_t *ptr_array_init_cap(ptr_array_t *arr, size_t cap);
 /**
  * Release the backing buffer and reset to zero state.
  *
- * Pointed-to elements are NOT freed (they are borrowed). Safe on
- * zero-initialized, already-deinitialized, or NULL arrays.
+ * Pointed-to elements are NOT freed (they are borrowed). Safe on zero-initialized,
+ * already-deinitialized, or NULL arrays.
  */
 void ptr_array_deinit(ptr_array_t *arr);
 
@@ -199,8 +196,8 @@ ptr_array_t *ptr_array_new(size_t cap);
 void ptr_array_free(ptr_array_t *arr);
 
 /**
- * Callback-compatible free for use with hashmap_free() and similar APIs.
- * Casts void* to ptr_array_t* and calls ptr_array_free().
+ * Callback-compatible free for use with hashmap_free() and similar APIs. Casts
+ * void* to ptr_array_t* and calls ptr_array_free().
  */
 void ptr_array_free_cb(void *ptr);
 
@@ -223,8 +220,7 @@ error_t *ptr_array_push(ptr_array_t *arr, const void *p);
 error_t *ptr_array_reserve(ptr_array_t *arr, size_t cap);
 
 /**
- * Reset count to 0 without freeing the backing buffer.
- * No-op on NULL.
+ * Reset count to 0 without freeing the backing buffer. No-op on NULL.
  */
 void ptr_array_clear(ptr_array_t *arr);
 
@@ -235,18 +231,18 @@ void ptr_array_clear(ptr_array_t *arr);
  *   - arr is reset to the empty state ({0}); safe to reuse or deinit.
  *   - Caller owns the returned buffer and must free() it.
  *
- * Empty-array contract: if the array holds zero elements, the internal
- * buffer (if any) is freed and NULL is returned. This guarantees the
+ * Empty-array contract: if the array holds zero elements, the internal buffer
+ * (if any) is freed and NULL is returned. This guarantees the
  * invariant (return == NULL) <=> (*out_count == 0).
  *
- * Invalid-input contract: if arr or out_count is NULL the transfer is
- * refused — arr is left intact and NULL is returned. *out_count is set
- * to 0 whenever non-NULL.
+ * Invalid-input contract: if arr or out_count is NULL the transfer is refused —
+ * arr is left intact and NULL is returned. *out_count is set to 0 whenever
+ * non-NULL.
  *
  * @param arr       Array to drain (must not be NULL)
  * @param out_count Receives element count (must not be NULL)
- * @return Buffer of `count` pointers (caller frees), or NULL when empty
- *         or on invalid input
+ * @return Buffer of `count` pointers (caller frees), or NULL when empty or on
+ *         invalid input
  */
 const void **ptr_array_steal(ptr_array_t *arr, size_t *out_count);
 

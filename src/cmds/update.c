@@ -40,8 +40,10 @@
  * Copy file from filesystem to worktree (with optional encryption)
  *
  * @param config Configuration (for encryption policy; can be NULL)
- * @param out_was_encrypted Optional output - set to true if file was encrypted (can be NULL)
- * @param out_stat Optional output - filled with stat data from source file (can be NULL)
+ * @param out_was_encrypted Optional output - set to true if file was encrypted
+ *                          (can be NULL)
+ * @param out_stat Optional output - filled with stat data from source file (can
+ *                 be NULL)
  */
 static error_t *copy_file_to_worktree(
     worktree_handle_t *wt,
@@ -127,15 +129,15 @@ static error_t *copy_file_to_worktree(
             *out_was_encrypted = false;
         }
     } else {
-        /* Handle regular file - determine encryption policy using centralized logic.
+        /* Handle regular file - determine encryption policy using centralized
+         * logic.
          *
-         * Source of `previously_encrypted`: the existing metadata's
-         * encrypted flag for this path. Update.c always operates on a
-         * file already in the manifest, so metadata is loaded for
-         * permission preservation. After Phase 2's write-time invariant
-         * (this commit), metadata.encrypted is byte-truth — reading it
-         * here is equivalent to classifying the existing worktree blob,
-         * but cheaper (no fs read). */
+         * Source of `previously_encrypted`: the existing metadata's encrypted
+         * flag for this path. Update.c always operates on a file already in the
+         * manifest, so metadata is loaded for permission preservation. After
+         * Phase 2's write-time invariant (this commit), metadata.encrypted is
+         * byte-truth — reading it here is equivalent to classifying the existing
+         * worktree blob, but cheaper (no fs read). */
         bool previously_encrypted =
             metadata_get_file_encrypted(metadata, storage_path);
 
@@ -156,13 +158,13 @@ static error_t *copy_file_to_worktree(
             goto cleanup;
         }
 
-        /* Store file to worktree (handles read → encrypt → write) and
-         * capture stat + byte-derived content kind atomically.
-         * ARCHITECTURE: Single lstat() inside content_store_file_to_worktree
-         * is captured and propagated to caller for metadata operations,
-         * eliminating a race condition.
-         * INVARIANT: written_kind is byte-truth for the bytes that hit
-         * the worktree; out_was_encrypted reflects byte truth, not policy. */
+        /* Store file to worktree (handles read → encrypt → write) and capture
+         * stat + byte-derived content kind atomically.
+         * ARCHITECTURE: Single lstat() inside content_store_file_to_worktree is
+         * captured and propagated to caller for metadata operations, eliminating
+         * a race condition.
+         * INVARIANT: written_kind is byte-truth for the bytes that hit the
+         * worktree; out_was_encrypted reflects byte truth, not policy. */
         struct stat file_stat;
         content_kind_t written_kind = CONTENT_PLAINTEXT;
         err = content_store_file_to_worktree(
@@ -212,9 +214,9 @@ typedef enum {
 /**
  * Per-item result from file copy operations
  *
- * Tracks results from copy_file_to_worktree() for each workspace item.
- * Indexed by item position (not file-only position) to prevent index
- * misalignment between update_profile() and update_metadata_for_profile().
+ * Tracks results from copy_file_to_worktree() for each workspace item. Indexed
+ * by item position (not file-only position) to prevent index misalignment between
+ * update_profile() and update_metadata_for_profile().
  *
  * Memory: calloc-initialized, so unprocessed items have copied=false.
  */
@@ -227,11 +229,11 @@ typedef struct {
 /**
  * One path an update commit captured from disk
  *
- * A file's triple is the one the copy step took from the bytes it
- * committed (content_store_file_to_worktree's single lstat), so the
- * record binds the blob to the stat that matched it — not to a later
- * lstat that could see an edit made since. A directory's is unset: a
- * directory has no content confirmation, and its record carries none.
+ * A file's triple is the one the copy step took from the bytes it committed
+ * (content_store_file_to_worktree's single lstat), so the record binds the blob
+ * to the stat that matched it — not to a later lstat that could see an edit made
+ * since. A directory's is unset: a directory has no content confirmation, and
+ * its record carries none.
  */
 typedef struct {
     const workspace_item_t *item;   /* The captured item (borrowed, workspace lifetime) */
@@ -241,21 +243,19 @@ typedef struct {
 /**
  * What one profile's update commit did, path by path
  *
- * Filled by the steps that do the work — the copy step for files, the
- * metadata step for directories and for the directory entries it prunes
- * as redundant — and read back by the commit message and by the record
- * loop (update_manifest_after_update), so both follow the commit and
- * nothing else: an item a step skipped (a file missing from disk, a
- * directory that changed type) lands in no list, is not named, and gets
- * no record write.
+ * Filled by the steps that do the work — the copy step for files, the metadata
+ * step for directories and for the directory entries it prunes as redundant —
+ * and read back by the commit message and by the record loop
+ * (update_manifest_after_update), so both follow the commit and nothing else:
+ * an item a step skipped (a file missing from disk, a directory that changed
+ * type) lands in no list, is not named, and gets no record write.
  *
- * Items are borrowed (workspace lifetime); the pruned keys are storage
- * paths the metadata step copies out, resolved through the mount table
- * by the record loop — the same route remove's record loop takes.
+ * Items are borrowed (workspace lifetime); the pruned keys are storage paths
+ * the metadata step copies out, resolved through the mount table by the record
+ * loop — the same route remove's record loop takes.
  *
- * Memory: the caller zero-fills the struct; update_profile allocates
- * `captured` (sized to its item count, an upper bound); release with
- * update_commits_free.
+ * Memory: the caller zero-fills the struct; update_profile allocates `captured`
+ * (sized to its item count, an upper bound); release with update_commits_free.
  */
 typedef struct {
     const char *profile;            /* Borrowed from the item group */
@@ -294,21 +294,21 @@ static bool is_update_candidate(
         case WORKSPACE_STATE_DEPLOYED:
             /* Deployed files/dirs with divergence - check what kind.
              *
-             * Any STALE item is skipped: Git moved past the blob dotta
-             * deployed, and update stores bytes — the bytes on disk are
-             * old whether or not a mode bit also differs. [stale] alone is
-             * apply's to resolve; [modified] [stale] is the user's. */
+             * Any STALE item is skipped: Git moved past the blob dotta deployed,
+             * and update stores bytes — the bytes on disk are old whether or
+             * not a mode bit also differs. [stale] alone is apply's to resolve;
+             * [modified] [stale] is the user's. */
             if (item->divergence & DIVERGENCE_STALE) {
                 return false;
             }
-            /* A tracked directory whose path is now a file or a symlink is
-             * never captured through the type change (the metadata step
-             * refuses it: a symlink would stat as its target and launder the
-             * target's attributes into metadata). Resolution is explicit —
-             * apply --force replaces it, remove untracks it — so it is not a
-             * candidate, and the preview does not promise an update the
-             * executor would refuse. A file's type change (file ↔ symlink)
-             * is captured as the new kind and stays a candidate. */
+            /* A tracked directory whose path is now a file or a symlink is never
+             * captured through the type change (the metadata step refuses it: a
+             * symlink would stat as its target and launder the target's attributes
+             * into metadata). Resolution is explicit — apply --force replaces
+             * it, remove untracks it — so it is not a candidate, and the preview
+             * does not promise an update the executor would refuse. A file's
+             * type change (file ↔ symlink) is captured as the new kind and stays
+             * a candidate. */
             if (item->item_kind == PATH_KIND_DIRECTORY && (item->divergence & DIVERGENCE_TYPE)) {
                 return false;
             }
@@ -322,7 +322,8 @@ static bool is_update_candidate(
         case WORKSPACE_STATE_UNTRACKED:
             /* New files - include if:
              * - Explicit flags set (--include-new or --only-new), OR
-             * - Config auto_detect_new_files is enabled (for confirmation prompt) */
+             * - Config auto_detect_new_files is enabled (for confirmation
+             *   prompt) */
             return (opts->include_new || opts->only_new || config->auto_detect_new_files);
 
         case WORKSPACE_STATE_UNDEPLOYED:
@@ -330,8 +331,8 @@ static bool is_update_candidate(
         case WORKSPACE_STATE_RELEASED:
             /* Not relevant for update command:
              * - UNDEPLOYED: handled by apply command
-             * - ORPHANED: apply's — cleanup prunes it, or holds it when
-             *   it was changed (never update's to commit)
+             * - ORPHANED: apply's — cleanup prunes it, or holds it when it was
+             *   changed (never update's to commit)
              * - RELEASED: handled by apply command */
             return false;
     }
@@ -342,10 +343,12 @@ static bool is_update_candidate(
 /**
  * Filter workspace items relevant for update command
  *
- * Returns items that should be updated based on command options, workspace state, and divergence.
+ * Returns items that should be updated based on command options, workspace state,
+ * and divergence.
  *
  * INCLUDED ITEMS (STATE + DIVERGENCE):
- * - DEPLOYED + any divergence but STALE (content/mode/ownership/encryption/type changed)
+ * - DEPLOYED + any divergence but STALE (content/mode/ownership/encryption/type
+ *   changed)
  * - DELETED state (removed from filesystem)
  * - UNTRACKED state (new files, if flags OR config->auto_detect_new_files)
  *
@@ -353,12 +356,12 @@ static bool is_update_candidate(
  * - UNDEPLOYED state (not modified, just not deployed yet - handled by apply)
  * - ORPHANED state (apply's: cleanup prunes or holds it)
  * - DEPLOYED + NONE divergence (clean, nothing to update)
- * - DEPLOYED + STALE (Git moved since deployment: apply's work when alone,
- *   the user's conflict next to CONTENT — never committed; cmd_update counts
- *   these and says so)
- * - DEPLOYED + TYPE on a directory (a file or symlink where a tracked
- *   directory should be: apply --force's or remove's to resolve; counted
- *   and said the same way)
+ * - DEPLOYED + STALE (Git moved since deployment: apply's work when alone, the
+ *   user's conflict next to CONTENT — never committed; cmd_update counts these
+ *   and says so)
+ * - DEPLOYED + TYPE on a directory (a file or symlink where a tracked directory
+ *   should be: apply --force's or remove's to resolve; counted and said the same
+ *   way)
  *
  * CLI FILTERS APPLIED:
  * - opts->files: Only specific files (if provided)
@@ -367,20 +370,20 @@ static bool is_update_candidate(
  * - operation_profiles: Only items from specified profiles (CLI -p filter)
  *
  * CRITICAL CORRECTNESS REQUIREMENTS:
- * 1. UNTRACKED state: Include when flags OR auto_detect is enabled
- *    Flags (--include-new, --only-new) bypass confirmation
- *    Auto-detect includes them for later confirmation prompt
+ * 1. UNTRACKED state: Include when flags OR auto_detect is enabled Flags
+ *    (--include-new, --only-new) bypass confirmation Auto-detect includes them
+ *    for later confirmation prompt
  *
- * 2. MODE/OWNERSHIP divergence: Apply to BOTH files AND directories
- *    Files can have metadata-only changes (e.g., chmod without content change)
+ * 2. MODE/OWNERSHIP divergence: Apply to BOTH files AND directories Files can
+ *    have metadata-only changes (e.g., chmod without content change)
  *
  * @param ws Workspace (must not be NULL)
  * @param opts Update options (must not be NULL)
  * @param scope Operation scope (must not be NULL)
  * @param config Configuration (can be NULL, used for auto_detect_new_files)
  * @param out Output context (for verbose logging, can be NULL)
- * @param out_items Output slice (must not be NULL; entries field is heap-
- *                  allocated, caller frees with free((void *) out_items->entries))
+ * @param out_items Output slice (must not be NULL; entries field is heap-allocated,
+ *                  caller frees with free((void *) out_items->entries))
  * @return Error or NULL on success (out_items zeroed if no matches)
  */
 static error_t *filter_items_for_update(
@@ -450,7 +453,8 @@ static error_t *filter_items_for_update(
  *
  * @param items Array of workspace item pointers (must not be NULL)
  * @param count Number of items
- * @param out_groups Output hashmap (must not be NULL, caller must free with ptr_array_free_cb)
+ * @param out_groups Output hashmap (must not be NULL, caller must free with
+ *                   ptr_array_free_cb)
  * @return Error or NULL on success
  */
 static error_t *group_items_by_profile(
@@ -509,17 +513,17 @@ static error_t *group_items_by_profile(
 /**
  * Update metadata for items (unified for files and directories)
  *
- * copy_results is indexed by item position (same index as items array).
- * Only items with copy_results[i].copied == true have valid stat/encryption data.
+ * copy_results is indexed by item position (same index as items array). Only
+ * items with copy_results[i].copied == true have valid stat/encryption data.
  *
  * @param wt Worktree handle (must not be NULL)
- * @param index Post-edit worktree index: deletions removed, updates
- *              staged (must not be NULL; anchors the directory prune)
+ * @param index Post-edit worktree index: deletions removed, updates staged (must
+ *              not be NULL; anchors the directory prune)
  * @param items Array of workspace items to update (must not be NULL)
  * @param item_count Number of items
  * @param copy_results Per-item copy results indexed by item position (can be NULL)
- * @param commit The commit's bookkeeping: receives the directory claims
- *               captured and the entries pruned (must not be NULL)
+ * @param commit The commit's bookkeeping: receives the directory claims captured
+ *               and the entries pruned (must not be NULL)
  * @param opts Update options (must not be NULL)
  * @param out Output context (can be NULL)
  * @return Error or NULL on success
@@ -633,7 +637,8 @@ static error_t *update_metadata_for_profile(
                 }
 
                 /* meta_item is NULL for home/ prefix symlinks (no metadata needed).
-                 * Non-NULL for files and root/ prefix symlinks (ownership tracked). */
+                 * Non-NULL for files and root/ prefix symlinks (ownership
+                 * tracked). */
                 if (meta_item) {
                     /* Only set encrypted flag for FILE kind (symlinks are never encrypted) */
                     if (meta_item->kind == METADATA_ITEM_FILE) {
@@ -684,11 +689,10 @@ static error_t *update_metadata_for_profile(
             case PATH_KIND_DIRECTORY: {
                 /* Handle directory metadata */
 
-                /* Handle deleted directories (symmetric with the file
-                 * branch above). Without this, the stat() below would fail
-                 * with ENOENT and the metadata entry would survive,
-                 * letting the view keep claiming a directory the user
-                 * just deleted. */
+                /* Handle deleted directories (symmetric with the file branch
+                 * above). Without this, the stat() below would fail with ENOENT
+                 * and the metadata entry would survive, letting the view keep
+                 * claiming a directory the user just deleted. */
                 if (item->state == WORKSPACE_STATE_DELETED) {
                     if (metadata_has_item(metadata, item->storage_path)) {
                         err = metadata_remove_item(metadata, item->storage_path);
@@ -710,11 +714,11 @@ static error_t *update_metadata_for_profile(
                     continue;
                 }
 
-                /* lstat + S_ISDIR: never capture through a type change.
-                 * A tracked directory replaced by a symlink would stat()
-                 * as its target, laundering the target's attributes into
-                 * metadata while workspace still reports DIVERGENCE_TYPE.
-                 * Skip; resolution is explicit (apply --force / remove). */
+                /* lstat + S_ISDIR: never capture through a type change. A tracked
+                 * directory replaced by a symlink would stat() as its target,
+                 * laundering the target's attributes into metadata while workspace
+                 * still reports DIVERGENCE_TYPE. Skip; resolution is explicit
+                 * (apply --force / remove). */
                 struct stat dir_stat;
                 if (lstat(item->filesystem_path, &dir_stat) != 0) {
                     output_warning(
@@ -803,17 +807,16 @@ static error_t *update_metadata_for_profile(
 
     /* Prune redundant directory entries.
      *
-     * Catches the implicit-orphaning case (the DELETED branch above
-     * handles explicit removals): file removals can leave a parent
-     * directory's metadata entry with no anchoring descendants.
-     * Anchoring is judged against the post-edit index (deletions
-     * removed, updates staged by the caller) — never against metadata
-     * items, which omit unelevated symlinks. Only entries that carry
-     * no actionable information are pruned — custom-attribute entries
-     * survive as potential empty-dir intent. Without this, the view
-     * would keep claiming the orphaned entry indefinitely. The keys go
-     * on the commit's bookkeeping: the entry leaves the view by this
-     * commit, so its record is this verb's to retire. */
+     * Catches the implicit-orphaning case (the DELETED branch above handles
+     * explicit removals): file removals can leave a parent directory's metadata
+     * entry with no anchoring descendants. Anchoring is judged against the
+     * post-edit index (deletions removed, updates staged by the caller) — never
+     * against metadata items, which omit unelevated symlinks. Only entries that
+     * carry no actionable information are pruned — custom-attribute entries survive
+     * as potential empty-dir intent. Without this, the view would keep claiming
+     * the orphaned entry indefinitely. The keys go on the commit's bookkeeping:
+     * the entry leaves the view by this commit, so its record is this verb's to
+     * retire. */
     err = metadata_prune_directories(metadata, index, &commit->pruned);
     if (err) {
         metadata_free(metadata);
@@ -855,18 +858,19 @@ static error_t *update_metadata_for_profile(
 /**
  * Update a single profile with workspace items
  *
- * ARCHITECTURE NOTE: This function now receives a pre-created worktree
- * that has been checked out to the target profile branch.
+ * ARCHITECTURE NOTE: This function now receives a pre-created worktree that has
+ * been checked out to the target profile branch.
  *
- * @param wt Worktree handle (must not be NULL, already checked out to profile branch)
+ * @param wt Worktree handle (must not be NULL, already checked out to profile
+ *           branch)
  * @param profile Profile to update (must not be NULL)
  * @param items Array of workspace items to update (must not be NULL)
  * @param item_count Number of items
  * @param opts Update options (must not be NULL)
  * @param out Output context (must not be NULL)
  * @param config Configuration (can be NULL)
- * @param commit The commit's bookkeeping, zero-filled by the caller;
- *               filled here and by the metadata step (must not be NULL)
+ * @param commit The commit's bookkeeping, zero-filled by the caller; filled here
+ *               and by the metadata step (must not be NULL)
  * @param out_processed Output: number of items committed (must not be NULL)
  * @return Error or NULL on success
  */
@@ -930,17 +934,18 @@ static error_t *update_profile(
     }
     owns_metadata = true;
 
-    /* Allocate per-item result tracking (indexed by item position, not file-only position).
-     * This prevents index misalignment between update_profile and update_metadata_for_profile
-     * when files are skipped (e.g., encryption-divergence on missing files). */
+    /* Allocate per-item result tracking (indexed by item position, not file-only
+     * position). This prevents index misalignment between update_profile and
+     * update_metadata_for_profile when files are skipped (e.g.,
+     * encryption-divergence on missing files). */
     copy_results = calloc(item_count, sizeof(file_copy_result_t));
     if (!copy_results) {
         err = ERROR(ERR_MEMORY, "Failed to allocate copy results array");
         goto cleanup;
     }
 
-    /* The capture list can hold every item; the steps below fill it
-     * with the ones that landed. */
+    /* The capture list can hold every item; the steps below fill it with the
+     * ones that landed. */
     commit->captured = calloc(item_count, sizeof(update_capture_t));
     if (!commit->captured) {
         err = ERROR(ERR_MEMORY, "Failed to allocate capture list");
@@ -981,20 +986,24 @@ static error_t *update_profile(
 
                 /* Handle encryption divergence for files missing from filesystem
                  *
-                 * EDGE CASE: File has DIVERGENCE_ENCRYPTION but doesn't exist on filesystem.
-                 * This occurs when:
+                 * EDGE CASE: File has DIVERGENCE_ENCRYPTION but doesn't exist
+                 * on filesystem. This occurs when:
                  *   1. File exists in Git (detected via profile scan)
-                 *   2. File matches auto_encrypt_patterns (policy violation detected)
-                 *   3. File is NOT on filesystem (deleted locally, or never deployed)
+                 *   2. File matches auto_encrypt_patterns (policy violation
+                 *      detected)
+                 *   3. File is NOT on filesystem (deleted locally, or never
+                 *      deployed)
                  *
-                 * DEFENSIVE: Cannot re-encrypt a file that doesn't exist. Skip gracefully
-                 * to prevent errors from copy_file_to_worktree() trying to read missing file.
+                 * DEFENSIVE: Cannot re-encrypt a file that doesn't exist. Skip
+                 * gracefully to prevent errors from copy_file_to_worktree() trying
+                 * to read missing file.
                  *
                  * RESOLUTION PATHS:
-                 *   - User can re-create the file and run update again to fix encryption
+                 *   - User can re-create the file and run update again to fix
+                 *     encryption
                  *   - User can remove file from profile with 'dotta remove'
-                 *   - If file is BOTH deleted AND has encryption divergence, deletion
-                 *     divergence takes precedence (already handled above)
+                 *   - If file is BOTH deleted AND has encryption divergence,
+                 *     deletion divergence takes precedence (already handled above)
                  */
                 if ((item->divergence & DIVERGENCE_ENCRYPTION) && !item->on_filesystem) {
                     output_warning(
@@ -1064,16 +1073,16 @@ static error_t *update_profile(
 
     /* Note: metadata function already wrote the index */
 
-    /* Skip commit if nothing was processed. The pruned entries are the
-     * metadata step's housekeeping and ride along with what did land. */
+    /* Skip commit if nothing was processed. The pruned entries are the metadata
+     * step's housekeeping and ride along with what did land. */
     size_t path_count = commit->captured_count + commit->deleted.count;
     if (path_count == 0) {
         goto cleanup;
     }
 
-    /* Build array of storage paths for commit message: what the commit
-     * captured and what it let go — the bookkeeping, so an item a step
-     * skipped is not named. */
+    /* Build array of storage paths for commit message: what the commit captured
+     * and what it let go — the bookkeeping, so an item a step skipped is not
+     * named. */
     storage_paths = malloc(path_count * sizeof(char *));
     if (!storage_paths) {
         err = ERROR(ERR_MEMORY, "Failed to allocate storage paths array");
@@ -1128,24 +1137,22 @@ cleanup:
 /**
  * Write the record after a successful update operation
  *
- * Called after ALL profile updates succeed. The view is computed, so
- * nothing projects; what update writes is the one thing only it knows
- * about the paths it committed — read off each commit's own bookkeeping
- * (update_commit_t), so a path a step skipped gets no record write. A
- * modified or new file was captured FROM disk, so for the row its profile
- * won in the post-commit view the record advances to the just-committed
- * blob with the stat the copy took (the next status takes the fast path).
- * A path the commit let go — a deleted item, or a directory entry the
- * metadata step pruned as redundant — left Git by this commit: with no
- * row left at the path its record retires (nothing backs it now); with a
- * lower profile's row at the path it is a fallback — the record stays and
- * reads [reassigned] until apply deploys it. The rule "anchor only the
- * rows this profile won" is the same one add applies: a higher profile's
- * row is its own, and its record is its own. Both kinds: a directory's
- * claim (mode, ownership) is captured from disk exactly as add captures
- * it, so the capture owns the directory the same way — the ownership the
- * orphan gate asks for on scope exit — with no stat triple, a directory
- * having no content to confirm.
+ * Called after ALL profile updates succeed. The view is computed, so nothing
+ * projects; what update writes is the one thing only it knows about the paths
+ * it committed — read off each commit's own bookkeeping (update_commit_t), so a
+ * path a step skipped gets no record write. A modified or new file was captured
+ * FROM disk, so for the row its profile won in the post-commit view the record
+ * advances to the just-committed blob with the stat the copy took (the next status
+ * takes the fast path). A path the commit let go — a deleted item, or a directory
+ * entry the metadata step pruned as redundant — left Git by this commit: with
+ * no row left at the path its record retires (nothing backs it now); with a lower
+ * profile's row at the path it is a fallback — the record stays and reads
+ * [reassigned] until apply deploys it. The rule "anchor only the rows this profile
+ * won" is the same one add applies: a higher profile's row is its own, and its
+ * record is its own. Both kinds: a directory's claim (mode, ownership) is captured
+ * from disk exactly as add captures it, so the capture owns the directory the
+ * same way — the ownership the orphan gate asks for on scope exit — with no stat
+ * triple, a directory having no content to confirm.
  *
  * Algorithm:
  *   1. Begin write transaction on caller's handle
@@ -1229,10 +1236,10 @@ static error_t *update_manifest_after_update(
         goto cleanup;
     }
 
-    /* One lookup per committed path, both kinds; the arms of the header
-     * doc. A path let go and a fallback receive no anchor: there is no
-     * disk confirmation for a deleted path, and a fallback's disk content
-     * is what this profile's blob was, not the fallback blob. */
+    /* One lookup per committed path, both kinds; the arms of the header doc. A
+     * path let go and a fallback receive no anchor: there is no disk confirmation
+     * for a deleted path, and a fallback's disk content is what this profile's
+     * blob was, not the fallback blob. */
     time_t now = time(NULL);
     size_t synced = 0, removed = 0, fallbacks = 0;
 
@@ -1255,9 +1262,9 @@ static error_t *update_manifest_after_update(
             synced++;
         }
 
-        /* What the commit let go: the deleted items by their own path,
-         * the pruned entries by the path this profile deploys them at
-         * (UNBOUND names nothing on this machine: nothing to release). */
+        /* What the commit let go: the deleted items by their own path, the pruned
+         * entries by the path this profile deploys them at (UNBOUND names nothing
+         * on this machine: nothing to release). */
         for (size_t i = 0; i < commit->deleted.count; i++) {
             const workspace_item_t *item = commit->deleted.items[i];
             const manifest_row_t *row = manifest_lookup(manifest, item->filesystem_path);
@@ -1269,8 +1276,8 @@ static error_t *update_manifest_after_update(
             } else if (strcmp(row->profile, commit->profile) != 0) {
                 fallbacks++;
             }
-            /* else: still this profile's row — the commit did not remove
-             * it; not ours to count. */
+            /* else: still this profile's row — the commit did not remove it;
+             * not ours to count. */
         }
 
         for (size_t i = 0; i < commit->pruned.count; i++) {
@@ -1327,8 +1334,8 @@ cleanup:
 /**
  * Execute profile updates for all profiles
  *
- * PERFORMANCE NOTE: This function creates a single shared worktree and reuses it
- * for all profile updates, eliminating expensive worktree creation/destruction
+ * PERFORMANCE NOTE: This function creates a single shared worktree and reuses
+ * it for all profile updates, eliminating expensive worktree creation/destruction
  * overhead. Each profile is checked out into the same worktree before updating.
  *
  * @param repo Git repository (must not be NULL)
@@ -1338,10 +1345,12 @@ cleanup:
  * @param opts Update options (must not be NULL)
  * @param out Output context (must not be NULL)
  * @param config Configuration (can be NULL)
- * @param total_updated Output: total items updated across all profiles (must not be NULL)
- * @param out_commits Output: one commit's bookkeeping per profile group
- *                    (must not be NULL; caller frees with update_commits_free)
- * @param out_commit_count Output: number of entries in out_commits (must not be NULL)
+ * @param total_updated Output: total items updated across all profiles (must
+ *                      not be NULL)
+ * @param out_commits Output: one commit's bookkeeping per profile group (must
+ *                    not be NULL; caller frees with update_commits_free)
+ * @param out_commit_count Output: number of entries in out_commits (must not be
+ *                         NULL)
  * @return Error or NULL on success
  */
 static error_t *update_execute_for_all_profiles(
@@ -1399,9 +1408,9 @@ static error_t *update_execute_for_all_profiles(
         goto cleanup;
     }
 
-    /* Update each profile using iterator.
-     * Profile names come from workspace items which are already validated
-     * against the enabled profile set during workspace_load. */
+    /* Update each profile using iterator. Profile names come from workspace items
+     * which are already validated against the enabled profile set during
+     * workspace_load. */
     hashmap_iter_t iter;
     hashmap_iter_init(&iter, by_profile);
     const char *profile;
@@ -1595,8 +1604,8 @@ static error_t *update_display_summary(
                     continue;
                 }
 
-                /* Check if file is deployed and has divergence (filtered
-                 * items never carry STALE) */
+                /* Check if file is deployed and has divergence (filtered items
+                 * never carry STALE) */
                 bool is_modified = (item->state == WORKSPACE_STATE_DEPLOYED &&
                     item->divergence != DIVERGENCE_NONE);
 
@@ -1981,21 +1990,23 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
 
     /* Load workspace for update analysis
      *
-     * Update processes files from the filesystem (either modified tracked files or new files)
-     * and commits them to Git profiles. Analysis configuration:
+     * Update processes files from the filesystem (either modified tracked files
+     * or new files) and commits them to Git profiles. Analysis configuration:
      *
      * - analyze_files: Detects content and metadata changes in tracked files
      * - analyze_orphans: Disabled - update doesn't process orphaned records
-     * - analyze_untracked: Discovers new files in tracked directories (when enabled)
+     * - analyze_untracked: Discovers new files in tracked directories (when
+     *   enabled)
      * - analyze_directories: Detects directory metadata changes for update
      * - analyze_encryption: Validates encryption policy for files being updated
      *
-     * Orphan detection is unnecessary because update operates on view rows
-     * (files from enabled profiles) and new files. Orphans (recorded but not
-     * in any enabled profile) are out of scope for update operations.
+     * Orphan detection is unnecessary because update operates on view rows (files
+     * from enabled profiles) and new files. Orphans (recorded but not in any
+     * enabled profile) are out of scope for update operations.
      *
      * State is borrowed from the dispatcher (ctx->state). Read-only analysis.
-     * The transaction for the record write opens later in update_manifest_after_update().
+     * The transaction for the record write opens later in
+     * update_manifest_after_update().
      */
     workspace_load_t ws_opts = {
         .analyze_files       = true,                    /* Detect content and metadata changes */
@@ -2016,13 +2027,13 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
 
     /* Persist deployment-anchor advances from slow-path CMP_EQUAL checks
      * (self-healing optimization). Seeds the fast path for subsequent
-     * status/apply/update calls, including this command's post-privilege
-     * re-exec if one occurs. Non-fatal on failure — update still proceeds;
-     * just won't seed the fast path.
+     * status/apply/update calls, including this command's post-privilege re-exec
+     * if one occurs. Non-fatal on failure — update still proceeds; just won't
+     * seed the fast path.
      *
-     * Files actually updated by this command get their anchor advanced
-     * separately inside update_manifest_after_update(); this flush covers the
-     * clean files the analysis verified but didn't modify. */
+     * Files actually updated by this command get their anchor advanced separately
+     * inside update_manifest_after_update(); this flush covers the clean files
+     * the analysis verified but didn't modify. */
     error_t *flush_err = workspace_flush_updates(ws);
     if (flush_err) {
         error_free(flush_err);
@@ -2038,13 +2049,12 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
         goto cleanup;
     }
 
-    /* What the filter left out on purpose, said once — above the exit
-     * below, so a workspace whose only divergence is stale explains
-     * itself, and above the prompt. Same scope triplet as the filter.
-     * [stale] alone is apply's to resolve; [modified] [stale] is a
-     * conflict no dotta verb resolves toward disk, so its line must not
-     * send the user to a plain apply that preflight will refuse. A
-     * directory with [type] is not captured through the change
+    /* What the filter left out on purpose, said once — above the exit below, so
+     * a workspace whose only divergence is stale explains itself, and above the
+     * prompt. Same scope triplet as the filter. [stale] alone is apply's to
+     * resolve; [modified] [stale] is a conflict no dotta verb resolves toward
+     * disk, so its line must not send the user to a plain apply that preflight
+     * will refuse. A directory with [type] is not captured through the change
      * (is_update_candidate); its line names the two verbs that resolve it. */
     size_t all_count = 0;
     const workspace_item_t *all = workspace_get_all_diverged(ws, &all_count);
@@ -2112,8 +2122,8 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
      * operations begin. If elevation is needed, the process will re-exec with
      * sudo, and all operations will restart cleanly from main().
      *
-     * NOTE: Pre-update hook may run twice on re-exec (once before privilege
-     * check, once after). Hooks should be idempotent to handle this correctly.
+     * NOTE: Pre-update hook may run twice on re-exec (once before privilege check,
+     * once after). Hooks should be idempotent to handle this correctly.
      *
      * If re-exec succeeds, this function DOES NOT RETURN.
      */
@@ -2134,8 +2144,8 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
          * - Interactive: Prompts user, re-execs with sudo if approved
          * - Non-interactive: Returns error with clear message
          *
-         * If re-exec succeeds, this function DOES NOT RETURN.
-         * If re-exec fails or user declines, returns error.
+         * If re-exec succeeds, this function DOES NOT RETURN. If re-exec fails
+         * or user declines, returns error.
          */
         err = privilege_ensure_for_operation(
             (const char *const *) labels.items,
@@ -2208,8 +2218,8 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
             break;
     }
 
-    /* Execute profile updates. Filtered to operation scope. ctx->keymgr
-     * is borrowed by update_profile inside per-profile iteration. */
+    /* Execute profile updates. Filtered to operation scope. ctx->keymgr is borrowed
+     * by update_profile inside per-profile iteration. */
     update_commit_t *commits = NULL;
     size_t updated_profile_count = 0;
     err = update_execute_for_all_profiles(
@@ -2223,12 +2233,12 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
 
     /* Write the record
      *
-     * Captured files get their record advanced because UPDATE captures
-     * them FROM the filesystem (already at target locations); the view
-     * itself is computed at every load and needs no update.
+     * Captured files get their record advanced because UPDATE captures them FROM
+     * the filesystem (already at target locations); the view itself is computed
+     * at every load and needs no update.
      *
-     * Non-fatal: if the record write fails, Git commits still succeeded;
-     * the next status re-confirms the captured files on its slow path.
+     * Non-fatal: if the record write fails, Git commits still succeeded; the
+     * next status re-confirms the captured files on its slow path.
      */
     bool manifest_updated = false;
     error_t *manifest_err = update_manifest_after_update(
@@ -2240,9 +2250,9 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
     update_commits_free(commits, updated_profile_count);
 
     if (manifest_err) {
-        /* Non-fatal: commits succeeded but the record write failed. The
-         * next load reads the committed blobs from Git and re-confirms
-         * the captured files against disk. */
+        /* Non-fatal: commits succeeded but the record write failed. The next
+         * load reads the committed blobs from Git and re-confirms the captured
+         * files against disk. */
         output_warning(
             out, OUTPUT_NORMAL, "Failed to update the record: %s",
             error_message(manifest_err)
@@ -2266,8 +2276,8 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
         updated_profile_count, updated_profile_count == 1 ? "" : "s"
     );
 
-    /* Record feedback. The failure case already said what happened
-     * (warning above). */
+    /* Record feedback. The failure case already said what happened (warning
+     * above). */
     if (manifest_updated) {
         output_info(
             out, OUTPUT_NORMAL,
@@ -2298,13 +2308,13 @@ cleanup:
  *
  * Positional rule (differs from add — position-dependent):
  *   - First positional: classified as a file path or a profile name via
- *     `str_looks_like_file_path`. A file path lands in `files`; a bare
- *     name lands in `profiles`.
+ *     `str_looks_like_file_path`. A file path lands in `files`; a bare name lands
+ *     in `profiles`.
  *   - Remaining positionals: always file paths.
  *
- * Profiles from `-p` are already populated in `profiles` by the APPEND
- * row; a positional profile appends onto that list. Files go into a
- * fresh arena-backed array.
+ * Profiles from `-p` are already populated in `profiles` by the APPEND row; a
+ * positional profile appends onto that list. Files go into a fresh arena-backed
+ * array.
  */
 static error_t *update_post_parse(
     void *opts_v, arena_t *arena, const args_command_t *cmd
@@ -2326,9 +2336,9 @@ static error_t *update_post_parse(
     for (size_t i = 0; i < o->positional_count; i++) {
         char *arg = o->positional_args[i];
 
-        /* Only the first positional is ambiguous (profile or file).
-         * It becomes a profile only if -p was not given AND it doesn't
-         * look like a file path. */
+        /* Only the first positional is ambiguous (profile or file). It becomes
+         * a profile only if -p was not given AND it doesn't look like a file
+         * path. */
         if (i == 0 && o->profile_count == 0 &&
             !str_looks_like_file_path(arg)) {
             /* Arena-backed 1-slot profile array for the positional. */

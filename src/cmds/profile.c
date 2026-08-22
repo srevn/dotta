@@ -1,8 +1,8 @@
 /**
  * profile.c - Profile lifecycle management
  *
- * Explicit profile management commands for controlling which profiles
- * are enabled vs merely available on this machine.
+ * Explicit profile management commands for controlling which profiles are enabled
+ * vs merely available on this machine.
  */
 
 #include "cmds/profile.h"
@@ -56,12 +56,12 @@ static error_t *count_profile_files(
 /**
  * Print manifest enable statistics
  *
- * Reports gain-side attribution for one enabled profile from the diff of
- * the view before the enable against the view after it: claimed (rows
- * the profile won precedence for, both kinds), of which added + updated
- * are staged — new to the view, or moved past what it held — and the
- * rest were already at the view's values. The diff reads no disk; what
- * is deployed and what is not is status's to say.
+ * Reports gain-side attribution for one enabled profile from the diff of the
+ * view before the enable against the view after it: claimed (rows the profile
+ * won precedence for, both kinds), of which added + updated are staged — new to
+ * the view, or moved past what it held — and the rest were already at the view's
+ * values. The diff reads no disk; what is deployed and what is not is status's
+ * to say.
  */
 static void print_manifest_enable_stats(
     const output_t *out,
@@ -107,13 +107,13 @@ static void print_manifest_enable_stats(
 /**
  * Print manifest disable statistics
  *
- * Reports loss-side attribution for one disabled profile from the diff of
- * the view before the disable against the view after it: reassigned
- * (picked up by a fallback profile) + orphans.owned (left the view with
- * a record dotta owns — apply prunes the deployed copy) +
- * orphans.observed (left the view with a record dotta never owned —
- * apply releases it, the copy stays). A departure with no record is not
- * counted: nothing was ever seen at the path, so nothing pends for apply.
+ * Reports loss-side attribution for one disabled profile from the diff of the
+ * view before the disable against the view after it: reassigned (picked up by a
+ * fallback profile) + orphans.owned (left the view with a record dotta owns —
+ * apply prunes the deployed copy) + orphans.observed (left the view with a record
+ * dotta never owned — apply releases it, the copy stays). A departure with no
+ * record is not counted: nothing was ever seen at the path, so nothing pends
+ * for apply.
  */
 static void print_manifest_disable_stats(
     const output_t *out,
@@ -200,8 +200,8 @@ static error_t *profile_list(
     CHECK_NULL(opts);
     CHECK_NULL(out);
 
-    /* Resource tracking for cleanup. remote_name/remote_url are
-     * arena-borrowed when the --remote branch resolves them. */
+    /* Resource tracking for cleanup. remote_name/remote_url are arena-borrowed
+     * when the --remote branch resolves them. */
     string_array_t *enabled_profiles = NULL;
     string_array_t *all_branches = NULL;
     string_array_t *available = NULL;
@@ -338,8 +338,9 @@ static error_t *profile_list(
             } else {
                 /*
                  * Query remote server for available branches (network operation)
-                 * This contacts the remote server to get the current list of profiles,
-                 * ensuring we see newly added profiles that haven't been fetched yet.
+                 * This contacts the remote server to get the current list of
+                 * profiles, ensuring we see newly added profiles that haven't
+                 * been fetched yet.
                  */
                 remote_err = gitops_list_remote_branches(
                     repo, remote_name, xfer, &remote_branches
@@ -404,8 +405,7 @@ static error_t *profile_fetch(
     CHECK_NULL(opts);
     CHECK_NULL(out);
 
-    /* Resource tracking for cleanup. remote_name/remote_url are
-     * arena-borrowed. */
+    /* Resource tracking for cleanup. remote_name/remote_url are arena-borrowed. */
     const char *remote_name = NULL;
     const char *remote_url = NULL;
     transfer_context_t *xfer = NULL;
@@ -606,8 +606,8 @@ static error_t *profile_fetch(
     }
 
 cleanup:
-    /* Session-level wire stats (silent on failed sessions or no data).
-     * Emit before freeing xfer so stats are still live. */
+    /* Session-level wire stats (silent on failed sessions or no data). Emit before
+     * freeing xfer so stats are still live. */
     transfer_summarize(xfer, out, OUTPUT_NORMAL);
 
     /* Cleanup all resources */
@@ -655,21 +655,21 @@ cleanup:
  * Profile enable subcommand
  *
  * Five-phase flow:
- *   1. Gather & validate — resolve --all/args to a request set, then
- *      filter out already-enabled, missing, and custom-without-target
- *      profiles. Emits per-profile warnings; produces to_enable_validated.
- *   2. The view before — manifest_build over the enabled set as it
- *      stands, under the mount table dispatch built from it. Taken ahead
- *      of the mutation, which invalidates that table's borrows.
- *   3. Commit scope to state — state_enable_profile per target.
- *      enabled_profiles membership and order are now authoritative.
- *      Nothing else is written: the view is computed, never stored.
- *   4. The view after — a fresh mount table and manifest_build over the
- *      post-enable set; manifest_diff attributes the transition to the
- *      newly enabled profiles, so gain-side stats (claimed / added /
- *      updated) land in the right slot per profile.
- *   5. Per-profile feedback — iterate the validated targets to preserve
- *      per-profile output, then state_save.
+ *   1. Gather & validate — resolve --all/args to a request set, then filter out
+ *      already-enabled, missing, and custom-without-target profiles. Emits
+ *      per-profile warnings; produces to_enable_validated.
+ *   2. The view before — manifest_build over the enabled set as it stands, under
+ *      the mount table dispatch built from it. Taken ahead of the mutation, which
+ *      invalidates that table's borrows.
+ *   3. Commit scope to state — state_enable_profile per target. enabled_profiles
+ *      membership and order are now authoritative. Nothing else is written: the
+ *      view is computed, never stored.
+ *   4. The view after — a fresh mount table and manifest_build over the post-enable
+ *      set; manifest_diff attributes the transition to the newly enabled profiles,
+ *      so gain-side stats (claimed / added / updated) land in the right slot
+ *      per profile.
+ *   5. Per-profile feedback — iterate the validated targets to preserve per-profile
+ *      output, then state_save.
  */
 static error_t *profile_enable(
     git_repository *repo,
@@ -710,13 +710,13 @@ static error_t *profile_enable(
         goto cleanup;
     }
 
-    /* O(1) already-enabled lookups; replaces the inner linear scan that
-     * made the previous flow O(K·E) on the membership check.
+    /* O(1) already-enabled lookups; replaces the inner linear scan that made
+     * the previous flow O(K·E) on the membership check.
      *
-     * seen_set tracks profiles decided-about within this command pass, so
-     * duplicate args like `enable foo foo` are silently deduped instead of
-     * producing two rows in to_enable_validated (and, downstream, two
-     * "Enabled foo" lines with split stats attribution). */
+     * seen_set tracks profiles decided-about within this command pass, so duplicate
+     * args like `enable foo foo` are silently deduped instead of producing two
+     * rows in to_enable_validated (and, downstream, two "Enabled foo" lines with
+     * split stats attribution). */
     size_t cap = enabled->count > 0 ? enabled->count * 2 : 16;
     enabled_set = hashmap_borrow(cap);
     seen_set = hashmap_borrow(cap);
@@ -732,9 +732,9 @@ static error_t *profile_enable(
         }
     }
 
-    /* Resolve the request set (--all → list of local branches; args →
-     * verbatim). Both paths deposit into to_enable; Phase 1's filter
-     * loop decides which ones are actually actionable. */
+    /* Resolve the request set (--all → list of local branches; args → verbatim).
+     * Both paths deposit into to_enable; Phase 1's filter loop decides which
+     * ones are actually actionable. */
     to_enable = string_array_new(0);
     if (!to_enable) {
         err = ERROR(ERR_MEMORY, "Failed to create array");
@@ -778,8 +778,8 @@ static error_t *profile_enable(
         }
     }
 
-    /* Fatal up-front: --target binds to a specific profile and cannot
-     * disambiguate among many. Caught here before any state mutation. */
+    /* Fatal up-front: --target binds to a specific profile and cannot disambiguate
+     * among many. Caught here before any state mutation. */
     if (opts->target && to_enable->count > 1) {
         output_error(out, "Cannot use --target with multiple profiles");
         output_hint(out, OUTPUT_NORMAL, "Enable each profile separately:");
@@ -794,11 +794,11 @@ static error_t *profile_enable(
         goto cleanup;
     }
 
-    /* Fatal up-front: validate the prefix value itself. Validating inside
-     * the per-profile loop used to categorize a bad prefix as not_found,
-     * which mislabels a CLI input problem as a missing profile. With the
-     * --target-requires-single-profile rule above, a single validation
-     * here covers every path that can reach Phase 2. */
+    /* Fatal up-front: validate the prefix value itself. Validating inside the
+     * per-profile loop used to categorize a bad prefix as not_found, which
+     * mislabels a CLI input problem as a missing profile. With the
+     * --target-requires-single-profile rule above, a single validation here covers
+     * every path that can reach Phase 2. */
     if (opts->target) {
         err = mount_validate_target(opts->target);
         if (err) {
@@ -807,12 +807,12 @@ static error_t *profile_enable(
         }
     }
 
-    /* Filter: already-enabled and missing-branch are non-fatal per-profile
-     * skips. Custom-without-target is fatal — the profile exists but the
-     * user's input is incomplete, which is categorically different from
-     * "not found". Treating it as a per-profile skip previously leaked
-     * into the not_found tally and produced contradictory diagnostics.
-     * The surviving set lands in to_enable_validated. */
+    /* Filter: already-enabled and missing-branch are non-fatal per-profile skips.
+     * Custom-without-target is fatal — the profile exists but the user's input
+     * is incomplete, which is categorically different from "not found". Treating
+     * it as a per-profile skip previously leaked into the not_found tally and
+     * produced contradictory diagnostics. The surviving set lands in
+     * to_enable_validated. */
     to_enable_validated = string_array_new(0);
     if (!to_enable_validated) {
         err = ERROR(ERR_MEMORY, "Failed to create validated list");
@@ -822,8 +822,8 @@ static error_t *profile_enable(
     for (size_t i = 0; i < to_enable->count; i++) {
         const char *profile = to_enable->items[i];
 
-        /* Silently dedupe duplicate args — we've already decided about
-         * this profile earlier in this pass. */
+        /* Silently dedupe duplicate args — we've already decided about this profile
+         * earlier in this pass. */
         if (hashmap_has(seen_set, profile)) continue;
         err = hashmap_set(seen_set, profile, (void *) (uintptr_t) 1);
         if (err) {
@@ -860,10 +860,9 @@ static error_t *profile_enable(
             err = NULL;
         }
 
-        /* Fatal: the profile exists, but its custom/ files require a
-         * mount point the user didn't provide. Mirrors the
-         * --target-with-multiple-profiles check above — both are
-         * CLI-input errors, not per-profile skips. */
+        /* Fatal: the profile exists, but its custom/ files require a mount point
+         * the user didn't provide. Mirrors the --target-with-multiple-profiles
+         * check above — both are CLI-input errors, not per-profile skips. */
         if (has_custom && !opts->target) {
             output_error(
                 out, "Profile '%s' contains custom/ files but --target not provided",
@@ -887,9 +886,9 @@ static error_t *profile_enable(
         }
     }
 
-    /* Dry-run: preview what a live run would do, skip every state
-     * mutation. Dry-run owns its complete UX below — the live-path
-     * summary is unreachable on this branch (goto cleanup bypasses it). */
+    /* Dry-run: preview what a live run would do, skip every state mutation. Dry-run
+     * owns its complete UX below — the live-path summary is unreachable on this
+     * branch (goto cleanup bypasses it). */
     if (opts->dry_run) {
         if (!output_is_verbose(out)) {
             output_newline(out, OUTPUT_NORMAL);
@@ -924,25 +923,24 @@ static error_t *profile_enable(
                 not_found, not_found == 1 ? "" : "s"
             );
         }
-        /* Mirror the live-path terminal: if nothing would be enabled
-         * because every requested profile was missing, surface the same
-         * error a live run would produce. Idempotent cases (all already
-         * enabled) fall through to cleanup with err == NULL. */
+        /* Mirror the live-path terminal: if nothing would be enabled because
+         * every requested profile was missing, surface the same error a live
+         * run would produce. Idempotent cases (all already enabled) fall through
+         * to cleanup with err == NULL. */
         if (to_enable_validated->count == 0 && not_found > 0) {
             err = ERROR(ERR_NOT_FOUND, "No profiles were enabled");
         }
         goto cleanup;
     }
 
-    /* Phases 2–5 share the "we have work to do" precondition. Wrapping
-     * them together makes the "nothing validated → exit without touching
-     * state" path explicit; the transaction opened by state_open then
-     * rolls back via state_free on the no-op exit. */
+    /* Phases 2–5 share the "we have work to do" precondition. Wrapping them
+     * together makes the "nothing validated → exit without touching state" path
+     * explicit; the transaction opened by state_open then rolls back via state_free
+     * on the no-op exit. */
     if (to_enable_validated->count > 0) {
-        /* Phase 2: The view before. `enabled` and `mounts` are the
-         * pre-mutation set and its table; the view borrows neither once
-         * built, so the mutation below cannot pull anything from under
-         * it. */
+        /* Phase 2: The view before. `enabled` and `mounts` are the pre-mutation
+         * set and its table; the view borrows neither once built, so the mutation
+         * below cannot pull anything from under it. */
         err = manifest_build(repo, enabled, mounts, arena, &before);
         if (err) {
             err = error_wrap(err, "Failed to build manifest before enable");
@@ -964,11 +962,10 @@ static error_t *profile_enable(
 
         /* Phase 4: The view after, and the diff.
          *
-         * Build a fresh mount table from the post-mutation row cache.
-         * The state_enable_profile loop above invalidated ctx->mounts'
-         * borrows; the new bindings (including any --target supplied
-         * for new entries) need to be reflected in classification for
-         * the tree walk. */
+         * Build a fresh mount table from the post-mutation row cache. The
+         * state_enable_profile loop above invalidated ctx->mounts' borrows; the
+         * new bindings (including any --target supplied for new entries) need
+         * to be reflected in classification for the tree walk. */
         mount_table_t *post_enable_mounts = NULL;
         err = profile_build_mount_table(state, arena, &post_enable_mounts);
         if (err) {
@@ -1028,9 +1025,9 @@ static error_t *profile_enable(
         }
     }
 
-    /* Live summary — only runs on non-dry-run, non-error completion.
-     * Any Phase 2-4 failure sets err and jumps to cleanup, skipping
-     * the summary; dry-run owns its own messaging above. */
+    /* Live summary — only runs on non-dry-run, non-error completion. Any Phase
+     * 2-4 failure sets err and jumps to cleanup, skipping the summary; dry-run
+     * owns its own messaging above. */
     if (!output_is_verbose(out)) {
         output_newline(out, OUTPUT_NORMAL);
     }
@@ -1058,10 +1055,10 @@ static error_t *profile_enable(
         );
     }
 
-    /* Terminal: error only if the user's inputs produced zero validated
-     * profiles AND at least one was genuinely missing. Pure idempotent
-     * cases (all already-enabled, or --all on an empty repo) fall
-     * through to cleanup with err == NULL. */
+    /* Terminal: error only if the user's inputs produced zero validated profiles
+     * AND at least one was genuinely missing. Pure idempotent cases (all
+     * already-enabled, or --all on an empty repo) fall through to cleanup with
+     * err == NULL. */
     if (to_enable_validated->count == 0 && not_found > 0) {
         err = ERROR(ERR_NOT_FOUND, "No profiles were enabled");
     }
@@ -1088,23 +1085,22 @@ cleanup:
  * Profile disable subcommand
  *
  * Five-phase flow, the mirror of profile_enable's:
- *   1. Gather & validate — filter requested profiles to those actually
- *      enabled; emit not-enabled diagnostics up front.
- *   2. The view before — manifest_build over the enabled set as it
- *      stands, under the mount table dispatch built from it. It feeds
- *      the receipt only: a set that will not build is warned about and
- *      the disable lands without one.
- *   3. Commit scope to state — state_disable_profile per validated
- *      target; enabled_profiles is now authoritative for the target set.
- *      Nothing else is written: what the next apply prunes or releases
- *      is derivable — the disabled profile's records are no longer in
- *      the view, and the orphan analysis asks Git about each.
+ *   1. Gather & validate — filter requested profiles to those actually enabled;
+ *      emit not-enabled diagnostics up front.
+ *   2. The view before — manifest_build over the enabled set as it stands, under
+ *      the mount table dispatch built from it. It feeds the receipt only: a set
+ *      that will not build is warned about and the disable lands without one.
+ *   3. Commit scope to state — state_disable_profile per validated target;
+ *      enabled_profiles is now authoritative for the target set. Nothing else
+ *      is written: what the next apply prunes or releases is derivable — the
+ *      disabled profile's records are no longer in the view, and the orphan
+ *      analysis asks Git about each.
  *   4. The view after — a fresh mount table and manifest_build over the
- *      post-disable set; manifest_diff attributes the transition to the
- *      disabled profiles, so loss-side stats (reassigned /
- *      orphans.owned / orphans.observed) land in the right slot.
- *   5. Per-profile feedback — iterate the validated targets to preserve
- *      the existing per-profile UX.
+ *      post-disable set; manifest_diff attributes the transition to the disabled
+ *      profiles, so loss-side stats (reassigned / orphans.owned / orphans.observed)
+ *      land in the right slot.
+ *   5. Per-profile feedback — iterate the validated targets to preserve the
+ *      existing per-profile UX.
  */
 static error_t *profile_disable(
     git_repository *repo,
@@ -1142,10 +1138,10 @@ static error_t *profile_disable(
         goto cleanup;
     }
 
-    /* --all on an empty enabled set is idempotent: there is nothing to
-     * disable, which matches `disable <name>` where <name> is not
-     * enabled (also a no-op success). The historic ERR_NOT_FOUND here
-     * made the two paths inconsistent for the same user intent. */
+    /* --all on an empty enabled set is idempotent: there is nothing to disable,
+     * which matches `disable <name>` where <name> is not enabled (also a no-op
+     * success). The historic ERR_NOT_FOUND here made the two paths inconsistent
+     * for the same user intent. */
     if (opts->all_profiles && enabled->count == 0) {
         if (!opts->quiet) {
             output_info(out, OUTPUT_NORMAL, "No enabled profiles to disable");
@@ -1153,13 +1149,13 @@ static error_t *profile_disable(
         goto cleanup;  /* err is NULL — idempotent success */
     }
 
-    /* O(1) membership lookups; pre-loop replaces the inner linear scans
-     * that made the old flow quadratic when many profiles were passed.
+    /* O(1) membership lookups; pre-loop replaces the inner linear scans that
+     * made the old flow quadratic when many profiles were passed.
      *
-     * seen_set tracks profiles decided-about within this command pass,
-     * so duplicate args (`disable foo foo`) are silently deduped and
-     * don't produce two rows in to_disable_validated. Only the explicit-
-     * args path consults it; --all iterates the unique enabled set. */
+     * seen_set tracks profiles decided-about within this command pass, so duplicate
+     * args (`disable foo foo`) are silently deduped and don't produce two rows
+     * in to_disable_validated. Only the explicit-args path consults it; --all
+     * iterates the unique enabled set. */
     size_t cap = enabled->count > 0 ? enabled->count * 2 : 16;
     enabled_set = hashmap_borrow(cap);
     seen_set = hashmap_borrow(cap);
@@ -1203,8 +1199,8 @@ static error_t *profile_disable(
         for (size_t i = 0; i < opts->profile_count; i++) {
             const char *profile = opts->profiles[i];
 
-            /* Silently dedupe duplicate args — we've already decided
-             * about this profile earlier in this pass. */
+            /* Silently dedupe duplicate args — we've already decided about this
+             * profile earlier in this pass. */
             if (hashmap_has(seen_set, profile)) continue;
             err = hashmap_set(seen_set, profile, (void *) (uintptr_t) 1);
             if (err) {
@@ -1227,9 +1223,9 @@ static error_t *profile_disable(
         }
     }
 
-    /* Dry-run: preview what a live run would do, skip every state
-     * mutation. Dry-run owns its complete UX below — the live-path
-     * summary is unreachable on this branch (goto cleanup bypasses it). */
+    /* Dry-run: preview what a live run would do, skip every state mutation. Dry-run
+     * owns its complete UX below — the live-path summary is unreachable on this
+     * branch (goto cleanup bypasses it). */
     if (opts->dry_run) {
         if (!output_is_verbose(out)) {
             output_newline(out, OUTPUT_NORMAL);
@@ -1261,20 +1257,19 @@ static error_t *profile_disable(
         goto cleanup;
     }
 
-    /* Phases 2–5 share the "we have work to do" precondition. Wrapping
-     * them together makes the "nothing validated → exit without touching
-     * state" path explicit; the transaction opened by state_open then
-     * rolls back via state_free on the no-op exit. */
+    /* Phases 2–5 share the "we have work to do" precondition. Wrapping them
+     * together makes the "nothing validated → exit without touching state" path
+     * explicit; the transaction opened by state_open then rolls back via state_free
+     * on the no-op exit. */
     if (to_disable_validated->count > 0) {
         /* Phase 2: The view before (see profile_enable).
          *
-         * Unlike enable's, this build gates nothing: the disable is a
-         * membership write that needs no view, and it must land whatever
-         * the enabled set looks like — it is the way out of a set the
-         * loads cannot build (a profile whose metadata.json will not
-         * parse, a branch that will not load), and that set is exactly
-         * the one this build fails on. The message names the profile;
-         * warn with it and disable without the receipt. */
+         * Unlike enable's, this build gates nothing: the disable is a membership
+         * write that needs no view, and it must land whatever the enabled set
+         * looks like — it is the way out of a set the loads cannot build (a profile
+         * whose metadata.json will not parse, a branch that will not load), and
+         * that set is exactly the one this build fails on. The message names
+         * the profile; warn with it and disable without the receipt. */
         err = manifest_build(repo, enabled, mounts, arena, &before);
         if (err) {
             output_warning(
@@ -1296,15 +1291,15 @@ static error_t *profile_disable(
             }
         }
 
-        /* Phase 4: The view after, and the diff — skipped with `before`,
-         * whose warning already covers it. Once `before` has built, this
-         * build cannot fail on Git's account: the post-disable set is a
-         * subset of the same profiles at the same HEADs.
+        /* Phase 4: The view after, and the diff — skipped with `before`, whose
+         * warning already covers it. Once `before` has built, this build cannot
+         * fail on Git's account: the post-disable set is a subset of the same
+         * profiles at the same HEADs.
          *
-         * Build a fresh mount table from the post-mutation row cache.
-         * The state_disable_profile loop above invalidated ctx->mounts'
-         * borrows; the disabled profiles' bindings must drop out of
-         * classification for the tree walk. */
+         * Build a fresh mount table from the post-mutation row cache. The
+         * state_disable_profile loop above invalidated ctx->mounts' borrows;
+         * the disabled profiles' bindings must drop out of classification for
+         * the tree walk. */
         if (before) {
             mount_table_t *post_disable_mounts = NULL;
             err = profile_build_mount_table(state, arena, &post_disable_mounts);
@@ -1348,8 +1343,7 @@ static error_t *profile_disable(
             }
         }
 
-        /* Phase 5: Per-profile feedback (no stats when the receipt was
-         * skipped) */
+        /* Phase 5: Per-profile feedback (no stats when the receipt was skipped) */
         for (size_t i = 0; i < to_disable_validated->count; i++) {
             output_styled(
                 out, OUTPUT_NORMAL, "  {green}✓{reset} Disabled %s\n",
@@ -1367,14 +1361,14 @@ static error_t *profile_disable(
         }
     }
 
-    /* Live summary — only runs on non-dry-run, non-error completion.
-     * All reachable states here are successes:
+    /* Live summary — only runs on non-dry-run, non-error completion. All reachable
+     * states here are successes:
      *   - count > 0: actual work performed.
-     *   - count == 0 && not_enabled > 0: idempotent (user asked to
-     *     disable profiles that weren't enabled).
-     *   - count == 0 && not_enabled == 0 is unreachable: the explicit-
-     *     args path requires opts->profile_count > 0 (caught earlier),
-     *     and the --all-on-empty case is caught by the early exit. */
+     *   - count == 0 && not_enabled > 0: idempotent (user asked to disable profiles
+     *     that weren't enabled).
+     *   - count == 0 && not_enabled == 0 is unreachable: the explicit-args path
+     *     requires opts->profile_count > 0 (caught earlier), and the --all-on-empty
+     *     case is caught by the early exit. */
     if (!output_is_verbose(out)) {
         output_newline(out, OUTPUT_NORMAL);
     }
@@ -1398,9 +1392,9 @@ static error_t *profile_disable(
     }
 
 cleanup:
-    /* Cleanup all resources. Hashmaps freed before the string_arrays whose
-     * items they borrow — seen_set borrows from opts->profiles (caller-
-     * owned, outlives us) and enabled_set from enabled (owned here). */
+    /* Cleanup all resources. Hashmaps freed before the string_arrays whose items
+     * they borrow — seen_set borrows from opts->profiles (caller-owned, outlives
+     * us) and enabled_set from enabled (owned here). */
     free(stats);
     manifest_free(after);
     manifest_free(before);
@@ -1583,9 +1577,9 @@ static error_t *profile_reorder(
         goto cleanup;
     }
 
-    /* Nothing else to write: the view is computed from the enabled set
-     * at every load, so the new precedence is simply what the next
-     * status, diff or apply reads. */
+    /* Nothing else to write: the view is computed from the enabled set at every
+     * load, so the new precedence is simply what the next status, diff or apply
+     * reads. */
 
     /* Save state (releases lock automatically) */
     err = state_save(repo, state);
@@ -1724,13 +1718,12 @@ static error_t *profile_validate(
 
     /* Check 2: The record references valid profiles
      *
-     * One read of the anchors table, walked once; each distinct profile
-     * is asked of Git once (`probed` remembers the answer), so R records
-     * cost P probes, where P is the distinct-profile count, typically
-     * < 10. `deleted` keeps the missing profiles in first-seen order so
-     * the report is reproducible. Nothing here is fixable in place: a
-     * record whose profile is gone is an orphan the next apply reads,
-     * asks Git about, finds LOST, and releases. */
+     * One read of the anchors table, walked once; each distinct profile is asked
+     * of Git once (`probed` remembers the answer), so R records cost P probes,
+     * where P is the distinct-profile count, typically < 10. `deleted` keeps
+     * the missing profiles in first-seen order so the report is reproducible.
+     * Nothing here is fixable in place: a record whose profile is gone is an
+     * orphan the next apply reads, asks Git about, finds LOST, and releases. */
     anchor_t *anchors = NULL;
     size_t anchor_count = 0;
     err = state_get_all_anchors(state, arena, &anchors, &anchor_count);
@@ -1786,8 +1779,8 @@ static error_t *profile_validate(
     }
 
 cleanup:
-    /* Cleanup all resources. state_rollback is a no-op if no transaction
-     * is active, so it's safe to call unconditionally on the borrowed handle */
+    /* Cleanup all resources. state_rollback is a no-op if no transaction is active,
+     * so it's safe to call unconditionally on the borrowed handle */
     state_rollback(state);
 
     if (probed) hashmap_free(probed, NULL);
@@ -1903,8 +1896,8 @@ error_t *cmd_profile(const dotta_ctx_t *ctx, const cmd_profile_options_t *opts) 
 /**
  * Single dispatch wrapper shared by every subcommand.
  *
- * Each sub's `init_defaults` already set the `subcommand` discriminator,
- * so `cmd_profile`'s switch routes the call.
+ * Each sub's `init_defaults` already set the `subcommand` discriminator, so
+ * `cmd_profile`'s switch routes the call.
  */
 static error_t *profile_dispatch(const void *ctx_v, void *opts_v) {
     const dotta_ctx_t *ctx = ctx_v;

@@ -1,9 +1,9 @@
 /**
  * sync.h - Remote synchronization command
  *
- * Synchronizes local repository with remote (fetch, pull, push).
- * Handles branch divergence resolution strategies.
- * Requires clean workspace - use 'update' command first to commit local changes.
+ * Synchronizes local repository with remote (fetch, pull, push). Handles branch
+ * divergence resolution strategies. Requires clean workspace - use 'update' command
+ * first to commit local changes.
  */
 
 #ifndef DOTTA_CMD_SYNC_H
@@ -16,8 +16,8 @@
 /**
  * Divergence resolution strategy for sync command
  *
- * Note: This is a sync-level enum. The core/divergence module has its own
- * strategy enum. These are mapped in sync.c's switch statements.
+ * Note: This is a sync-level enum. The core/divergence module has its own strategy
+ * enum. These are mapped in sync.c's switch statements.
  */
 typedef enum {
     DIVERGE_WARN,         /* Warn user, manual resolution (default) */
@@ -44,9 +44,9 @@ typedef struct {
 /**
  * Sync command implementation
  *
- * Synchronizes local repository with remote repository.
- * Fetches from remote, analyzes branch states, and pushes/pulls as needed.
- * Handles divergence resolution using configured strategy.
+ * Synchronizes local repository with remote repository. Fetches from remote,
+ * analyzes branch states, and pushes/pulls as needed. Handles divergence resolution
+ * using configured strategy.
  *
  * Requires workspace to be clean (no uncommitted changes) unless --force is used.
  * Run 'update' command first to commit local changes to profile branches.
@@ -60,8 +60,7 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts);
 /**
  * Spec-engine command specification for `dotta sync`.
  *
- * Registered in cmds/registry.c. Defined in sync.c beside the
- * dispatch wrapper.
+ * Registered in cmds/registry.c. Defined in sync.c beside the dispatch wrapper.
  */
 extern const args_command_t spec_sync;
 

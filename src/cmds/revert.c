@@ -33,12 +33,12 @@
 /**
  * Discover file in history (fallback when not found in HEAD)
  *
- * Uses stats_get_file_history() to search the commit history of a profile
- * for evidence that a file existed. This is expensive (O(all commits)) but
- * necessary for reverting deleted files.
+ * Uses stats_get_file_history() to search the commit history of a profile for
+ * evidence that a file existed. This is expensive (O(all commits)) but necessary
+ * for reverting deleted files.
  *
- * This function should only be called as a fallback when the file is not
- * found in the current HEAD and the user has provided a profile hint.
+ * This function should only be called as a fallback when the file is not found
+ * in the current HEAD and the user has provided a profile hint.
  *
  * @param repo Repository (must not be NULL)
  * @param storage_path Storage path (must not be NULL)
@@ -117,14 +117,14 @@ static error_t *discover_file_in_history(
 /**
  * Discover file in profiles
  *
- * Returns profile name and resolved storage path.
- * Accepts filesystem paths or storage paths.
+ * Returns profile name and resolved storage path. Accepts filesystem paths or
+ * storage paths.
  *
- * With profile_hint: Checks specific profile's tree, falls back to
- * history search if file deleted from HEAD.
+ * With profile_hint: Checks specific profile's tree, falls back to history search
+ * if file deleted from HEAD.
  *
- * Without profile_hint: Uses profile_discover_file() for all-branch
- * scan. Handles disambiguation when file exists in multiple profiles.
+ * Without profile_hint: Uses profile_discover_file() for all-branch scan. Handles
+ * disambiguation when file exists in multiple profiles.
  */
 static error_t *discover_file(
     git_repository *repo,
@@ -257,10 +257,9 @@ static error_t *discover_file(
  * Show diff preview between two blobs
  *
  * Uses content layer to transparently decrypt encrypted files before diffing,
- * so users see readable plaintext diffs instead of encrypted gibberish.
- * The content layer classifies each blob by its own bytes, so blobs with
- * different encryption states across commits are routed correctly without
- * any caller-supplied flag.
+ * so users see readable plaintext diffs instead of encrypted gibberish. The content
+ * layer classifies each blob by its own bytes, so blobs with different encryption
+ * states across commits are routed correctly without any caller-supplied flag.
  */
 static error_t *show_diff_preview(
     git_repository *repo,
@@ -287,8 +286,8 @@ static error_t *show_diff_preview(
     /* Get decrypted plaintext content from both blobs.
      *
      * Each call classifies its own blob's bytes — the routing decision lives
-     * with the blob, so encryption-state changes between commits are handled
-     * by the content layer with no caller participation. */
+     * with the blob, so encryption-state changes between commits are handled by
+     * the content layer with no caller participation. */
     buffer_t current_plaintext = BUFFER_INIT;
     error_t *err = content_get_from_blob_oid(
         repo,
@@ -376,11 +375,11 @@ static error_t *show_diff_preview(
 /**
  * Verify profile branch HEAD hasn't moved since we last read it
  *
- * Dotta uses atomic commits to orphan branches — there is no staging area
- * or working directory for profile branches (HEAD always points to
- * dotta-worktree). The traditional "uncommitted changes" check does not
- * apply. Instead, this verifies that no concurrent operation has modified
- * the branch between showing the preview and performing the revert.
+ * Dotta uses atomic commits to orphan branches — there is no staging area or
+ * working directory for profile branches (HEAD always points to dotta-worktree).
+ * The traditional "uncommitted changes" check does not apply. Instead, this
+ * verifies that no concurrent operation has modified the branch between showing
+ * the preview and performing the revert.
  *
  * @param repo Repository (must not be NULL)
  * @param profile Profile branch to check (must not be NULL)
@@ -430,7 +429,8 @@ static error_t *verify_branch_unchanged(
  * @param file_path File path (must not be NULL)
  * @param target_commit_oid Target commit OID (must not be NULL)
  * @param custom_message Custom message (can be NULL for template generation)
- * @return Allocated message string (caller must free), or NULL on allocation failure
+ * @return Allocated message string (caller must free), or NULL on allocation
+ *         failure
  */
 static char *build_revert_commit_message(
     const config_t *config,
@@ -464,9 +464,9 @@ static char *build_revert_commit_message(
 /**
  * Load metadata from a specific commit
  *
- * Extracts .dotta/metadata.json from a commit's tree and parses it.
- * If metadata.json doesn't exist in the commit, returns empty metadata
- * (graceful fallback for old commits or commits without metadata).
+ * Extracts .dotta/metadata.json from a commit's tree and parses it. If
+ * metadata.json doesn't exist in the commit, returns empty metadata (graceful
+ * fallback for old commits or commits without metadata).
  *
  * @param repo Repository (must not be NULL)
  * @param commit Commit to load from (must not be NULL)
@@ -530,9 +530,9 @@ cleanup:
 /**
  * Revert file and metadata in profile branch to target commit
  *
- * This atomically reverts both file content AND its metadata entry to the
- * target commit state in a single commit. This ensures that permissions,
- * ownership, and encryption flags are restored along with file content.
+ * This atomically reverts both file content AND its metadata entry to the target
+ * commit state in a single commit. This ensures that permissions, ownership,
+ * and encryption flags are restored along with file content.
  *
  * The function handles:
  * - Files that exist in both current and target (normal revert)
@@ -845,10 +845,10 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
 
     if (found_in_history) {
         /*
-         * Workflow A: Restoring Deleted File
-         * File doesn't exist in current HEAD but was found in commit history.
-         * Skip tree extraction entirely - not needed for restoration preview.
-         * The revert operation itself will handle all necessary Git operations.
+         * Workflow A: Restoring Deleted File File doesn't exist in current HEAD
+         * but was found in commit history. Skip tree extraction entirely - not
+         * needed for restoration preview. The revert operation itself will handle
+         * all necessary Git operations.
          */
         output_print(
             out, OUTPUT_VERBOSE,
@@ -857,9 +857,9 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
 
     } else {
         /*
-         * Workflow B: Reverting Existing File
-         * File exists in current HEAD - perform standard revert workflow.
-         * Extract trees and entries for blob comparison and diff preview.
+         * Workflow B: Reverting Existing File File exists in current HEAD - perform
+         * standard revert workflow. Extract trees and entries for blob comparison
+         * and diff preview.
          */
         output_print(
             out, OUTPUT_VERBOSE,
@@ -955,10 +955,10 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
             "{green}Restoring deleted file from commit history{reset}\n"
         );
     } else {
-        /* File exists - show detailed diff preview with decryption support.
-         * The content layer classifies each blob by its own bytes, so the
-         * "current vs target may differ in encryption state" case is handled
-         * inside show_diff_preview without caller-side metadata gymnastics. */
+        /* File exists - show detailed diff preview with decryption support. The
+         * content layer classifies each blob by its own bytes, so the "current
+         * vs target may differ in encryption state" case is handled inside
+         * show_diff_preview without caller-side metadata gymnastics. */
         err = show_diff_preview(
             repo, resolved_path, profile, keymgr, current_blob_oid,
             target_blob_oid, out
@@ -1027,11 +1027,10 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
         goto cleanup;
     }
 
-    /* Step 9: Report. Nothing to write: the revert moved the branch HEAD,
-     * and the next load's view carries the reverted blob — the record
-     * stays where apply last confirmed it, so the workspace reads the
-     * result as [stale] until apply deploys it. A disabled profile's
-     * revert reaches no view at all. */
+    /* Step 9: Report. Nothing to write: the revert moved the branch HEAD, and
+     * the next load's view carries the reverted blob — the record stays where
+     * apply last confirmed it, so the workspace reads the result as [stale] until
+     * apply deploys it. A disabled profile's revert reaches no view at all. */
     if (!state_has_profile(state, profile)) {
         output_success(
             out, OUTPUT_NORMAL, "Reverted %s in profile '%s'",
@@ -1071,8 +1070,7 @@ cleanup:
  * ══════════════════════════════════════════════════════════════════ */
 
 /**
- * Interpret the 1-3 raw positionals into `profile`, `file_path`, and
- * `commit`.
+ * Interpret the 1-3 raw positionals into `profile`, `file_path`, and `commit`.
  *
  * Forms (POSITIONAL_RAW min=0, max=3; commit is always required):
  *   0 args        → error "file specification is required"
@@ -1081,12 +1079,12 @@ cleanup:
  *                   <profile> <file[@commit]> otherwise (refspec on 2nd)
  *   3 args        → <profile> <file> <commit>
  *
- * Allocation model: refspec substrings are arena-allocated; pure
- * positional pointers borrow argv. cmd_revert does not free any of
- * these pointers — the engine's arena owns their lifetime.
+ * Allocation model: refspec substrings are arena-allocated; pure positional
+ * pointers borrow argv. cmd_revert does not free any of these pointers — the
+ * engine's arena owns their lifetime.
  *
- * A refspec that yields an explicit profile always overrides a
- * previously-set one (from -p or a positional).
+ * A refspec that yields an explicit profile always overrides a previously-set
+ * one (from -p or a positional).
  */
 static error_t *revert_post_parse(
     void *opts_v, arena_t *arena, const args_command_t *cmd
@@ -1137,8 +1135,8 @@ static error_t *revert_post_parse(
         return ERROR(ERR_INTERNAL, "revert: too many positionals");
     }
 
-    /* A commit is required by the command; file_path is guaranteed set
-     * by successful refspec parsing or explicit positional assignment. */
+    /* A commit is required by the command; file_path is guaranteed set by
+     * successful refspec parsing or explicit positional assignment. */
     if (o->commit == NULL) {
         return ERROR(
             ERR_INVALID_ARG, "commit reference is required"

@@ -1,9 +1,9 @@
 /**
  * config.h - Configuration type definition
  *
- * Defines the config struct layout. Include this header when you need
- * to access config fields directly. For config lifecycle functions
- * (load, free, validate), include "utils/config.h" instead.
+ * Defines the config struct layout. Include this header when you need to access
+ * config fields directly. For config lifecycle functions (load, free, validate),
+ * include "utils/config.h" instead.
  */
 
 #ifndef DOTTA_CONFIG_DEF_H
@@ -16,20 +16,20 @@
  */
 #define DOTTA_DEFAULT_HOOKS_DIR "~/.config/dotta/hooks"
 
-/* Forward declaration — kept opaque so consumers of struct config do
- * not transitively pull in the gitignore engine. The full type lives
- * in base/gitignore.h; only utils/config.c and core/policy.c touch
- * the rules directly. */
+/* Forward declaration — kept opaque so consumers of struct config do not
+ * transitively pull in the gitignore engine. The full type lives in
+ * base/gitignore.h; only utils/config.c and core/policy.c touch the rules
+ * directly. */
 typedef struct gitignore_ruleset gitignore_ruleset_t;
 
 /**
  * Compiled auto-encrypt ruleset.
  *
- * Materialized once at config_load from config->auto_encrypt_patterns
- * and destroyed by config_free. Arena owns the ruleset storage;
- * destroying the arena drops both. Both fields are NULL when encryption
- * is disabled or no patterns are configured — consumers treat a NULL
- * rules pointer as the fast "no auto-encrypt applies" sentinel.
+ * Materialized once at config_load from config->auto_encrypt_patterns and destroyed
+ * by config_free. Arena owns the ruleset storage; destroying the arena drops
+ * both. Both fields are NULL when encryption is disabled or no patterns are
+ * configured — consumers treat a NULL rules pointer as the fast "no auto-encrypt
+ * applies" sentinel.
  */
 typedef struct config_auto_encrypt_rules {
     arena_t *arena;

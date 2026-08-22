@@ -68,8 +68,8 @@ typedef struct {
 /**
  * Workspace state - where an item exists
  *
- * Represents the location/deployment status of a file or directory across
- * the view (Git), the record (.git/dotta.db) and the filesystem.
+ * Represents the location/deployment status of a file or directory across the
+ * view (Git), the record (.git/dotta.db) and the filesystem.
  *
  * This enum captures WHERE an item exists, separate from WHAT is wrong with it
  * (see divergence_type_t). States are mutually exclusive.
@@ -87,10 +87,11 @@ typedef enum {
  * Divergence type - what is wrong with an item
  *
  * Bit flags representing types of divergence between expected and actual state.
- * Multiple flags can be set simultaneously (e.g., content changed AND mode changed).
+ * Multiple flags can be set simultaneously (e.g., content changed AND mode
+ * changed).
  *
- * This enum captures WHAT is wrong, separate from WHERE the item exists
- * (see workspace_state_t). Flags can be combined with bitwise OR.
+ * This enum captures WHAT is wrong, separate from WHERE the item exists (see
+ * workspace_state_t). Flags can be combined with bitwise OR.
  */
 typedef enum {
     DIVERGENCE_NONE       = 0,       /* No divergence detected */
@@ -106,11 +107,11 @@ typedef enum {
 /**
  * Path kind — what a managed storage path refers to
  *
- * The manifest's kind, not the on-disk kind: a tracked directory currently
- * squatted by a regular file is still PATH_KIND_DIRECTORY. Symlinks are
- * files (matching gitignore's treatment — a symlink is never descended).
- * Layer-neutral: carried by workspace items and consumed by the infra
- * matchers, whose directory-only patterns (`dir/`) need it.
+ * The manifest's kind, not the on-disk kind: a tracked directory currently squatted
+ * by a regular file is still PATH_KIND_DIRECTORY. Symlinks are files (matching
+ * gitignore's treatment — a symlink is never descended). Layer-neutral: carried
+ * by workspace items and consumed by the infra matchers, whose directory-only
+ * patterns (`dir/`) need it.
  */
 typedef enum {
     PATH_KIND_FILE,       /* Regular file, symlink, or executable — content + metadata */
@@ -120,12 +121,11 @@ typedef enum {
 /**
  * Path type — what stands at a managed path
  *
- * The one type axis for a manifest row and for the record dotta keeps of
- * it (core/manifest.h, core/state.h). The first three are the Git filemodes a
- * blob can carry; the fourth is a metadata-only container dotta creates
- * and converges, claimed through a profile's metadata.json rather than its
- * tree. Kind is coarse and derived from it (path_type_kind); it is never
- * stored beside the type.
+ * The one type axis for a manifest row and for the record dotta keeps of it
+ * (core/manifest.h, core/state.h). The first three are the Git filemodes a blob
+ * can carry; the fourth is a metadata-only container dotta creates and converges,
+ * claimed through a profile's metadata.json rather than its tree. Kind is coarse
+ * and derived from it (path_type_kind); it is never stored beside the type.
  */
 typedef enum {
     PATH_TYPE_FILE,        /* Regular blob, 0644 default */

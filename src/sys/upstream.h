@@ -17,9 +17,9 @@
 /**
  * Sync state for a profile relative to remote
  *
- * UNKNOWN encodes "no local branch": the analysis could not start.
- * NO_REMOTE encodes "local branch exists but no remote tracking branch."
- * The other four states all imply both branches exist.
+ * UNKNOWN encodes "no local branch": the analysis could not start. NO_REMOTE
+ * encodes "local branch exists but no remote tracking branch." The other four
+ * states all imply both branches exist.
  */
 typedef enum {
     UPSTREAM_UP_TO_DATE,   /* Local and remote are identical */
@@ -33,9 +33,8 @@ typedef enum {
 /**
  * Sync state plus commit counts.
  *
- * `ahead` and `behind` are meaningful only when state is one of
- * LOCAL_AHEAD / REMOTE_AHEAD / DIVERGED / UP_TO_DATE; for NO_REMOTE
- * and UNKNOWN they are zero.
+ * `ahead` and `behind` are meaningful only when state is one of LOCAL_AHEAD /
+ * REMOTE_AHEAD / DIVERGED / UP_TO_DATE; for NO_REMOTE and UNKNOWN they are zero.
  */
 typedef struct {
     upstream_state_t state;
@@ -47,8 +46,8 @@ typedef struct {
  * Analyze upstream state for a single profile
  *
  * Compares local branch with remote tracking branch to determine sync state.
- * Zero-initializes *out at function entry so the struct is in a defined
- * state on every code path; callers must not read *out after an error.
+ * Zero-initializes *out at function entry so the struct is in a defined state
+ * on every code path; callers must not read *out after an error.
  *
  * @param repo Repository (must not be NULL)
  * @param remote_name Remote name (e.g., "origin")
@@ -81,8 +80,8 @@ const char *upstream_state_symbol(upstream_state_t state);
  *   NO_REMOTE    → CYAN     (informational, not an issue)
  *   UNKNOWN      → DIM      (state could not be determined)
  *
- * Centralizing the map keeps every display path in agreement on what each
- * state looks like.
+ * Centralizing the map keeps every display path in agreement on what each state
+ * looks like.
  */
 output_color_t upstream_state_color(upstream_state_t state);
 
@@ -97,9 +96,9 @@ output_color_t upstream_state_color(upstream_state_t state);
  * This function is useful after a fetch/clone when remote tracking refs exist
  * and you want to see what's available to create local branches from.
  *
- * **Limitation**: If a remote was just added without fetching, this returns
- * empty because no remote tracking refs exist yet. Use
- * gitops_list_remote_branches() instead to query the actual server.
+ * **Limitation**: If a remote was just added without fetching, this returns empty
+ * because no remote tracking refs exist yet. Use gitops_list_remote_branches()
+ * instead to query the actual server.
  *
  * **Use cases:**
  * - After git clone, to show unfetched profiles
@@ -119,8 +118,8 @@ error_t *upstream_discover_branches(
 /**
  * Create local tracking branch from remote
  *
- * Creates a local branch that tracks a remote branch, setting the
- * local branch to point at the same commit as the remote.
+ * Creates a local branch that tracks a remote branch, setting the local branch
+ * to point at the same commit as the remote.
  *
  * @param repo Repository (must not be NULL)
  * @param remote_name Remote name (e.g., "origin")

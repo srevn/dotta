@@ -1,17 +1,16 @@
 /*
  * Copyright (C) the libgit2 contributors. All rights reserved.
  *
- * This file is part of libgit2, distributed under the GNU GPL v2 with
- * a Linking Exception. For full terms see the included COPYING file.
+ * This file is part of libgit2, distributed under the GNU GPL v2 with a Linking
+ * Exception. For full terms see the included COPYING file.
  *
- * Do shell-style pattern matching for ?, \, [], and * characters.
- * It is 8bit clean.
+ * Do shell-style pattern matching for ?, \, [], and * characters. It is 8bit clean.
  *
- * Written by Rich $alz, mirror!rs, Wed Nov 26 19:03:17 EST 1986.
- * Rich $alz is now <rsalz@bbn.com>.
+ * Written by Rich $alz, mirror!rs, Wed Nov 26 19:03:17 EST 1986. Rich $alz is
+ * now <rsalz@bbn.com>.
  *
- * Modified by Wayne Davison to special-case '/' matching, to make '**'
- * work differently than '*', and to fix the character-class code.
+ * Modified by Wayne Davison to special-case '/' matching, to make '**' work
+ * differently than '*', and to fix the character-class code.
  *
  * Imported from git.git.
  */
@@ -136,13 +135,12 @@ static int dowild(const uchar *p, const uchar *text, unsigned int flags) {
                         (*p == '\0' || *p == '/' ||
                         (p[0] == '\\' && p[1] == '/'))) {
                         /*
-                         * Assuming we already match 'foo/' and are at
-                         * <star star slash>, just assume it matches
-                         * nothing and go ahead match the rest of the
-                         * pattern with the remaining string. This
-                         * helps make foo/<*><*>/bar (<> because
-                         * otherwise it breaks C comment syntax) match
-                         * both foo/bar and foo/a/bar.
+                         * Assuming we already match 'foo/' and are at <star star
+                         * slash>, just assume it matches nothing and go ahead
+                         * match the rest of the pattern with the remaining string.
+                         * This helps make foo/<*><*>/bar (<> because otherwise
+                         * it breaks C comment syntax) match both foo/bar and
+                         * foo/a/bar.
                          */
                         if (p[0] == '/' &&
                             dowild(p + 1, text, flags) == WM_MATCH)
@@ -163,9 +161,8 @@ static int dowild(const uchar *p, const uchar *text, unsigned int flags) {
                     return WM_MATCH;
                 } else if (!match_slash && *p == '/') {
                     /*
-                     * _one_ asterisk followed by a slash
-                     * with WM_PATHNAME matches the next
-                     * directory
+                     * _one_ asterisk followed by a slash with WM_PATHNAME matches
+                     * the next directory
                      */
                     const char *slash = strchr((char *) text, '/');
                     if (!slash)
@@ -178,12 +175,10 @@ static int dowild(const uchar *p, const uchar *text, unsigned int flags) {
                     if (t_ch == '\0')
                         break;
                     /*
-                     * Try to advance faster when an asterisk is
-                     * followed by a literal. We know in this case
-                     * that the string before the literal
-                     * must belong to "*".
-                     * If match_slash is false, do not look past
-                     * the first slash as it cannot belong to '*'.
+                     * Try to advance faster when an asterisk is followed by a
+                     * literal. We know in this case that the string before the
+                     * literal must belong to "*". If match_slash is false, do
+                     * not look past the first slash as it cannot belong to '*'.
                      */
                     if (!is_glob_special(*p)) {
                         p_ch = *p;

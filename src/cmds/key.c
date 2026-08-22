@@ -38,18 +38,17 @@ static error_t *cmd_key_set(
         );
     }
 
-    /* Invariant: encryption_enabled implies ctx->keymgr != NULL for a
-     * command declaring crypto_mode = KEY. See runtime.h ctx invariants. */
+    /* Invariant: encryption_enabled implies ctx->keymgr != NULL for a command
+     * declaring crypto_mode = KEY. See runtime.h ctx invariants. */
     CHECK_NULL(keymgr);
 
     error_t *err = NULL;
 
-    /* Notify if key is already cached (check both memory and disk).
-     * Rotation UX: when a key is already cached, the new passphrase
-     * silently invalidates every blob encrypted under the old one.
-     * Surfacing the warning here (per sketch §5.4) keeps the
-     * keymgr_set_passphrase contract narrow — the function does the
-     * derivation; the CLI owns the human-facing warning. */
+    /* Notify if key is already cached (check both memory and disk). Rotation
+     * UX: when a key is already cached, the new passphrase silently invalidates
+     * every blob encrypted under the old one. Surfacing the warning here (per
+     * sketch §5.4) keeps the keymgr_set_passphrase contract narrow — the function
+     * does the derivation; the CLI owns the human-facing warning. */
     if (keymgr_probe_key(keymgr)) {
         int64_t seconds_remaining = keymgr_time_until_expiry(keymgr, NULL);
         if (seconds_remaining == -1) {
@@ -90,17 +89,16 @@ static error_t *cmd_key_set(
         goto cleanup;
     }
 
-    /* Set passphrase in keymgr (derives and caches master key). The
-     * cast bridges the passphrase API (`char *` for TTY ergonomics)
+    /* Set passphrase in keymgr (derives and caches master key). The cast bridges
+     * the passphrase API (`char *` for TTY ergonomics)
      * with the crypto API (`uint8_t *` for byte-array discipline);
-     * both types alias `unsigned char` on every platform with
-     * <stdint.h>. */
+     * both types alias `unsigned char` on every platform with <stdint.h>. */
     err = keymgr_set_passphrase(
         keymgr, (const uint8_t *) passphrase, passphrase_len
     );
 
-    /* Securely clear passphrase from memory. passphrase_prompt
-     * returns a buffer of exactly passphrase_len + 1 bytes with mlock. */
+    /* Securely clear passphrase from memory. passphrase_prompt returns a buffer
+     * of exactly passphrase_len + 1 bytes with mlock. */
     buffer_secure_free(passphrase, passphrase_len + 1);
 
     if (err) {
@@ -141,8 +139,8 @@ cleanup:
 /**
  * Execute key clear action
  *
- * Clears the cached passphrase from the dispatcher-owned keymgr and
- * its on-disk session cache.
+ * Clears the cached passphrase from the dispatcher-owned keymgr and its on-disk
+ * session cache.
  */
 static error_t *cmd_key_clear(
     keymgr *keymgr,
@@ -157,15 +155,14 @@ static error_t *cmd_key_clear(
         );
     }
 
-    /* Invariant: encryption_enabled implies ctx->keymgr != NULL for a
-     * command declaring crypto_mode = KEY. See runtime.h ctx invariants. */
+    /* Invariant: encryption_enabled implies ctx->keymgr != NULL for a command
+     * declaring crypto_mode = KEY. See runtime.h ctx invariants. */
     CHECK_NULL(keymgr);
 
-    /* Probe consults both in-memory and on-disk caches, loading the
-     * latter into memory if present. ctx->keymgr is freshly-created
-     * for this command (one process, one dispatch), so an in-memory
-     * hit is impossible — `true` here means the on-disk cache
-     * existed, which is what users mean by "had a key". */
+    /* Probe consults both in-memory and on-disk caches, loading the latter into
+     * memory if present. ctx->keymgr is freshly-created for this command (one
+     * process, one dispatch), so an in-memory hit is impossible — `true` here
+     * means the on-disk cache existed, which is what users mean by "had a key". */
     bool had_key = keymgr_probe_key(keymgr);
 
     /* Always clear both memory and file cache (even if no in-memory key) */
@@ -216,11 +213,10 @@ static error_t *cmd_key_status(
             out, OUTPUT_NORMAL, "  Status: {green}enabled{reset}\n"
         );
 
-        /* Show Argon2id derivation parameters. The pair is what the
-         * config schema exposes (either as a `strength` preset or as
-         * raw `memory` (MiB) / `passes`); printing the resolved values
-         * keeps the status output independent of which input form the
-         * user wrote. */
+        /* Show Argon2id derivation parameters. The pair is what the config schema
+         * exposes (either as a `strength` preset or as raw `memory` (MiB) /
+         * `passes`); printing the resolved values keeps the status output
+         * independent of which input form the user wrote. */
         output_print(
             out, OUTPUT_VERBOSE, "  Argon2id: %u MiB, %u passes\n",
             (unsigned) config->encryption_argon2_memory_mib,
@@ -291,8 +287,8 @@ static error_t *cmd_key_status(
     /* Display key cache status */
     output_section(out, OUTPUT_NORMAL, "Key Cache Status");
 
-    /* Encryption-enabled path guarantees ctx->keymgr is populated by
-     * the dispatcher under crypto_mode = KEY. */
+    /* Encryption-enabled path guarantees ctx->keymgr is populated by the dispatcher
+     * under crypto_mode = KEY. */
     CHECK_NULL(keymgr);
 
     bool key_cached = keymgr_probe_key(keymgr);
@@ -346,8 +342,8 @@ static error_t *cmd_key_status(
         );
     }
 
-    /* Count and display encrypted files: the view over the enabled set,
-     * whose rows carry the metadata-projected flag */
+    /* Count and display encrypted files: the view over the enabled set, whose
+     * rows carry the metadata-projected flag */
     output_section(out, OUTPUT_NORMAL, "Encrypted Files");
 
     string_array_t *enabled = NULL;
@@ -407,9 +403,9 @@ error_t *cmd_key(const dotta_ctx_t *ctx, const cmd_key_options_t *opts) {
         output_set_verbosity(out, OUTPUT_VERBOSE);
     }
 
-    /* Dispatch to appropriate action. Each handler takes the borrowed
-     * ctx->keymgr (NULL when encryption is disabled — each handler
-     * short-circuits on that via its own config->encryption_enabled check). */
+    /* Dispatch to appropriate action. Each handler takes the borrowed ctx->keymgr
+     * (NULL when encryption is disabled — each handler short-circuits on that
+     * via its own config->encryption_enabled check). */
     error_t *err = NULL;
     switch (opts->action) {
         case KEY_ACTION_SET:
@@ -445,9 +441,9 @@ error_t *cmd_key(const dotta_ctx_t *ctx, const cmd_key_options_t *opts) {
 /**
  * Map the mandatory first positional into `action`.
  *
- * Preserves the legacy error phrasing on unknown actions. The engine
- * renders the usage line after the post_parse error, so the message
- * body doesn't need to repeat it.
+ * Preserves the legacy error phrasing on unknown actions. The engine renders
+ * the usage line after the post_parse error, so the message body doesn't need
+ * to repeat it.
  */
 static error_t *key_post_parse(
     void *opts_v, arena_t *arena, const args_command_t *cmd

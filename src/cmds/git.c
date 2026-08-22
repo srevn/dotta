@@ -41,8 +41,7 @@ int cmd_git(const char *repo_path, const cmd_git_options_t *opts) {
         return 1;
     }
 
-    /* Build argv for execvp
-     * Format: "git" "-C" "<repo-path>" <user-args...> NULL
+    /* Build argv for execvp Format: "git" "-C" "<repo-path>" <user-args...> NULL
      */
     int total_args = 3 + opts->arg_count + 1;  /* git + -C + path + args + NULL */
     char **argv = malloc((size_t) total_args * sizeof(char *));
@@ -72,14 +71,12 @@ int cmd_git(const char *repo_path, const cmd_git_options_t *opts) {
     }
 
     if (pid == 0) {
-        /* Child process: execute git
-         * argv is intentionally not freed - execvp replaces the process image,
-         * and _exit() bypasses cleanup on failure */
+        /* Child process: execute git argv is intentionally not freed - execvp
+         * replaces the process image, and _exit() bypasses cleanup on failure */
         execvp("git", argv);
 
-        /* If we get here, exec failed
-         * Use _exit() to avoid flushing parent's stdio buffers
-         * and running parent's atexit handlers */
+        /* If we get here, exec failed Use _exit() to avoid flushing parent's
+         * stdio buffers and running parent's atexit handlers */
         perror("execvp: git");
         _exit(127);
     }
@@ -115,12 +112,12 @@ int cmd_git(const char *repo_path, const cmd_git_options_t *opts) {
 /**
  * Passthrough dispatch: the engine hands us the full argv untouched.
  *
- * Exit-code preservation: `cmd_git` returns git's own status (0, 1, 2,
- * 128+n). That status IS the user-visible contract — `git diff
- * --exit-code`, merge-base probes, CI scripts all branch on it. We
- * can't funnel it through `error_t *` (which collapses to 0 or 1), so
- * we write through `*ctx->exit_code`; `run_spec` honors that when
- * dispatch returns NULL. See `struct args_ctx` docs for the channel.
+ * Exit-code preservation: `cmd_git` returns git's own status (0, 1, 2, 128+n).
+ * That status IS the user-visible contract — `git diff --exit-code`, merge-base
+ * probes, CI scripts all branch on it. We can't funnel it through `error_t *`
+ * (which collapses to 0 or 1), so we write through `*ctx->exit_code`; `run_spec`
+ * honors that when dispatch returns NULL. See `struct args_ctx` docs for the
+ * channel.
  */
 static error_t *git_dispatch(const void *ctx_v, void *opts_v) {
     const dotta_ctx_t *ctx = ctx_v;

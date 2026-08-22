@@ -29,12 +29,12 @@ void format_relative_time(time_t timestamp, char *buf, size_t buf_size);
 /**
  * Portable, thread-safe replacement for timegm() (which is not POSIX standard)
  *
- * Converts a struct tm in UTC to time_t using pure calculation without
- * manipulating environment variables (TZ), making it fully thread-safe.
- * It does not normalize out-of-range `tm` values (e.g. a month greater than 11).
+ * Converts a struct tm in UTC to time_t using pure calculation without manipulating
+ * environment variables (TZ), making it fully thread-safe. It does not normalize
+ * out-of-range `tm` values (e.g. a month greater than 11).
  *
- * This implementation calculates seconds since Unix epoch (1970-01-01 00:00:00 UTC)
- * using a formula based on the proleptic Gregorian calendar.
+ * This implementation calculates seconds since Unix epoch (1970-01-01 00:00:00
+ * UTC) using a formula based on the proleptic Gregorian calendar.
  *
  * @param tm Time structure in UTC. Must not be NULL and its members must be within
  *           their valid ranges.

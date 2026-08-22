@@ -55,8 +55,8 @@ error_t *error_create_with_location(
 /**
  * Wrap an existing error with additional context
  *
- * Ownership of cause is always consumed: on success, cause becomes the
- * new error's cause chain; on OOM, cause is returned directly (no leak).
+ * Ownership of cause is always consumed: on success, cause becomes the new error's
+ * cause chain; on OOM, cause is returned directly (no leak).
  *
  * @param cause Original error (ownership transferred)
  * @param fmt Context message format

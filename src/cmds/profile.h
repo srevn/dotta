@@ -1,8 +1,8 @@
 /**
  * profile.h - Profile lifecycle management
  *
- * Explicit profile management: list, fetch, enable, disable, validate.
- * Separates profile availability from management.
+ * Explicit profile management: list, fetch, enable, disable, validate. Separates
+ * profile availability from management.
  */
 
 #ifndef DOTTA_CMD_PROFILE_H
@@ -69,8 +69,8 @@ error_t *cmd_profile(const dotta_ctx_t *ctx, const cmd_profile_options_t *opts);
 /**
  * Spec-engine command specification for `dotta profile`.
  *
- * Subcommand tree: list / fetch / enable / disable / reorder / validate.
- * All subs share `cmd_profile_options_t` and dispatch through a single
+ * Subcommand tree: list / fetch / enable / disable / reorder / validate. All
+ * subs share `cmd_profile_options_t` and dispatch through a single
  * wrapper that calls cmd_profile(). Registered in cmds/registry.c;
  * defined in profile.c beside the dispatch wrapper.
  */

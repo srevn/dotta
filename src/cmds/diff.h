@@ -30,10 +30,10 @@ typedef enum {
 /**
  * Diff direction (for workspace mode only)
  *
- * Numeric 0 is reserved as the "unset" sentinel so post_parse can
- * detect whether the user supplied an explicit direction flag. The
- * three real directions are written by ARGS_FLAG_SET rows; post_parse
- * maps unset→UPSTREAM after validating mode compatibility.
+ * Numeric 0 is reserved as the "unset" sentinel so post_parse can detect whether
+ * the user supplied an explicit direction flag. The three real directions are
+ * written by ARGS_FLAG_SET rows; post_parse maps unset→UPSTREAM after validating
+ * mode compatibility.
  */
 typedef enum {
     DIFF_DIR_UNSET = 0,  /* Internal sentinel (no flag seen yet). */
@@ -45,10 +45,10 @@ typedef enum {
 /**
  * Command options
  *
- * `mode`, `commit1`, `commit2` are derived by `diff_post_parse` from
- * the three classified positional buckets (git refs, files, profiles).
- * `direction == DIFF_DIR_UNSET` (0) signals "no direction flag was
- * supplied" so post_parse can reject a direction in commit modes.
+ * `mode`, `commit1`, `commit2` are derived by `diff_post_parse` from the three
+ * classified positional buckets (git refs, files, profiles). `direction ==
+ * DIFF_DIR_UNSET` (0) signals "no direction flag was supplied" so post_parse
+ * can reject a direction in commit modes.
  */
 typedef struct {
     /* User-facing (read by cmd_diff) */
@@ -79,8 +79,8 @@ error_t *cmd_diff(const dotta_ctx_t *ctx, const cmd_diff_options_t *opts);
 /**
  * Spec-engine command specification for `dotta diff`.
  *
- * Registered in cmds/registry.c. Defined in diff.c beside the
- * classifier, post_parse, and dispatch wrappers.
+ * Registered in cmds/registry.c. Defined in diff.c beside the classifier,
+ * post_parse, and dispatch wrappers.
  */
 extern const args_command_t spec_diff;
 

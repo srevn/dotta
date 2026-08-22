@@ -1,8 +1,8 @@
 /**
  * editor.h - Editor invocation utilities
  *
- * Provides secure editor selection and invocation for interactive editing.
- * Uses fork()+execlp() pattern instead of system() for better security.
+ * Provides secure editor selection and invocation for interactive editing. Uses
+ * fork()+execlp() pattern instead of system() for better security.
  */
 
 #ifndef DOTTA_EDITOR_H

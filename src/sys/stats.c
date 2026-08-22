@@ -189,10 +189,10 @@ struct tree_populate_data {
 /**
  * Tree walk callback: add each blob path to hashmap with NULL value
  *
- * Pre-populates the map with all file paths from the current tree.
- * NULL values serve as sentinels for "not yet mapped to a commit".
- * This ensures the commit walker only processes files that actually
- * exist in the current tree, preventing premature early termination.
+ * Pre-populates the map with all file paths from the current tree. NULL values
+ * serve as sentinels for "not yet mapped to a commit". This ensures the commit
+ * walker only processes files that actually exist in the current tree, preventing
+ * premature early termination.
  */
 static int populate_tree_paths_callback(
     const char *root,
@@ -244,8 +244,8 @@ static int populate_tree_paths_callback(
 /**
  * Populate hashmap with all file paths from tree
  *
- * Walks the tree once, adding all blob paths as keys with NULL values.
- * Returns the total file count for early termination tracking.
+ * Walks the tree once, adding all blob paths as keys with NULL values. Returns
+ * the total file count for early termination tracking.
  */
 static error_t *populate_tree_paths(
     git_tree *tree,
@@ -327,9 +327,9 @@ static int tree_walk_callback(
  * Unified commit walker
  *
  * Walks commit history and processes diffs based on mode:
- * - MAP mode: Populates pre-seeded hashmap entries with commit info.
- *   The map must be pre-populated with current-tree paths (NULL values)
- *   to ensure only valid files are mapped and early termination is correct.
+ * - MAP mode: Populates pre-seeded hashmap entries with commit info. The map
+ *   must be pre-populated with current-tree paths (NULL values) to ensure only
+ *   valid files are mapped and early termination is correct.
  * - HISTORY mode: Collects all commits that modified a specific file.
  */
 static error_t *walk_commits(
@@ -465,10 +465,10 @@ static error_t *walk_commits(
 
                 if (!path) continue;
 
-                /* Only map files that exist in the current tree.
-                 * The map is pre-populated with current-tree paths (NULL values).
-                 * Skip paths not in the tree (deleted files, old renames) and
-                 * paths already mapped (non-NULL value). */
+                /* Only map files that exist in the current tree. The map is
+                 * pre-populated with current-tree paths (NULL values). Skip paths
+                 * not in the tree (deleted files, old renames) and paths already
+                 * mapped (non-NULL value). */
                 if (!hashmap_has(ctx->map, path) || hashmap_get(ctx->map, path)) {
                     continue;
                 }
@@ -688,10 +688,10 @@ error_t *stats_build_file_commit_map(
         return ERROR(ERR_MEMORY, "Failed to create hashmap");
     }
 
-    /* Pre-populate map with all current-tree file paths (NULL values).
-     * This ensures the commit walker only maps files that actually exist
-     * in the current tree, preventing spurious entries from deleted/renamed
-     * files and fixing premature early termination. */
+    /* Pre-populate map with all current-tree file paths (NULL values). This ensures
+     * the commit walker only maps files that actually exist in the current tree,
+     * preventing spurious entries from deleted/renamed files and fixing premature
+     * early termination. */
     size_t files_needed;
     error_t *err = populate_tree_paths(tree, map->map, &files_needed);
     if (err) {
@@ -802,8 +802,8 @@ const commit_info_t *stats_file_commit_map_get(
 /**
  * Free commit info
  *
- * Generic callback signature for use with containers (e.g., hashmap_free).
- * Accepts void* to match standard C cleanup callback pattern.
+ * Generic callback signature for use with containers (e.g., hashmap_free). Accepts
+ * void* to match standard C cleanup callback pattern.
  */
 void stats_free_commit_info(void *ptr) {
     commit_info_t *info = ptr;

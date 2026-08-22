@@ -1,85 +1,81 @@
 /**
  * args.h - Declarative argument-parser engine
  *
- * A command's argument signature is data, not imperative code. The
- * `args_command_t` struct is the single source of truth: parser, help,
- * completion, and dispatch are all projections of the same row.
+ * A command's argument signature is data, not imperative code. The `args_command_t`
+ * struct is the single source of truth: parser, help, completion, and dispatch
+ * are all projections of the same row.
  *
  * A command is declared as:
  *   - an options-struct typedef owned by `src/cmds/<name>.h`;
  *   - a `static const args_opt_t opts[]` table terminated by ARGS_END;
- *   - a `const args_command_t` static value exposing name, summary, usage,
- *     help text, the opts table, hooks, and a dispatch function.
+ *   - a `const args_command_t` static value exposing name, summary, usage, help
+ *     text, the opts table, hooks, and a dispatch function.
  *
  * The engine:
  *   - never writes to stdio (rendering is caller-driven);
  *   - never calls exit();
  *   - holds no global state;
- *   - uses a caller-supplied arena for every allocation (error messages,
- *     positional arrays, post-parse strings).
+ *   - uses a caller-supplied arena for every allocation (error messages, positional
+ *     arrays, post-parse strings).
  *
  * Key design points
  * -----------------
  *   `flags`                Space-separated list of names. Single-char tokens
  *                          are short forms (emitted with a single dash);
- *                          multi-char tokens are long forms (double dash).
- *                          Display order follows write order — no "canonical"
- *                          vs "alias" distinction in the renderer.
+ *                          multi-char tokens are long forms (double dash). Display
+ *                          order follows write order — no "canonical" vs "alias"
+ *                          distinction in the renderer.
  *
  *   Positional model       Three shapes: classified (engine routes token
- *                          by `classify(token)` to the matching POSITIONAL
- *                          / POSITIONAL_ARG row), unclassified bucket
- *                          (POSITIONAL_ANY / POSITIONAL_ANY_ARG — all
- *                          tokens land together, no classify needed), and
- *                          raw bucket (POSITIONAL_RAW — commands interpret
- *                          in post_parse). Anything that needs order-
- *                          sensitive interpretation uses POSITIONAL_RAW.
+ *                          by `classify(token)` to the matching POSITIONAL /
+ *                          POSITIONAL_ARG row), unclassified bucket (POSITIONAL_ANY
+ *                          / POSITIONAL_ANY_ARG — all tokens land together, no
+ *                          classify needed), and raw bucket (POSITIONAL_RAW —
+ *                          commands interpret in post_parse). Anything that needs
+ *                          order-sensitive interpretation uses POSITIONAL_RAW.
  *
  *   Tri-state flags        Model as `int` fields with init_defaults seeding
  *                          a default value; use `ARGS_FLAG_SET` rows whose
  *                          set_value is the enum value.
  *
  *   Subcommand trees       Parent has `subcommands`. Every subcommand in a
- *                          tree MUST share the parent's options struct type
- *                          (so `opts_size` allocates enough for any sub).
- *                          Each sub's `init_defaults` sets the discriminator.
+ *                          tree MUST share the parent's options struct type (so
+ *                          `opts_size` allocates enough for any sub). Each sub's
+ *                          `init_defaults` sets the discriminator.
  *
  *   Root-level dispatch    `args_resolve_root` classifies argv[1] into a
- *                          built-in flag (`-h`/`--help`, `-v`/`--version`),
- *                          a command (by name), or a root alias (declared
- *                          via `args_command_t::root_aliases`).
+ *                          built-in flag (`-h`/`--help`, `-v`/`--version`), a
+ *                          command (by name), or a root alias (declared via
+ *                          `args_command_t::root_aliases`).
  *
  *   Cleanup chain          The engine is signal-safe and key-zero-safe: no
  *                          `exit()`, no libc-free in the error path, no
- *                          process-level state. The dispatcher owns the
- *                          arena and destroys it after dispatch returns.
+ *                          process-level state. The dispatcher owns the arena
+ *                          and destroys it after dispatch returns.
  *
  * Picking a subcommand pattern
  * ----------------------------
- * Three patterns coexist because real CLIs vary. Pick by shape, not by
- * taste:
+ * Three patterns coexist because real CLIs vary. Pick by shape, not by taste:
  *
  *   Subcommand tree        Use when each sub has a DISJOINT option set
  *   (.subcommands)         and there's no shorthand to a default action.
- *                          Example: `dotta profile {list|enable|...}` —
- *                          each sub owns different flags.
+ *                          Example: `dotta profile {list|enable|...}` — each
+ *                          sub owns different flags.
  *
  *   POSITIONAL_RAW         Use when subs SHARE options or when a bareword
  *   + post_parse switch    positional encodes the mode. Also required
- *                          for bareword-fallback forms like
- *                          `dotta remote <name>` → `remote show <name>`.
- *                          Example: `dotta key {set|clear|status}` —
- *                          all three share `-v`.
+ *                          for bareword-fallback forms like `dotta remote <name>`
+ *                          → `remote show <name>`. Example: `dotta key
+ *                          {set|clear|status}` — all three share `-v`.
  *
  *   Classify + POSITIONAL  Use for a SINGLE action whose positionals
  *   (multiple class rows)  are polymorphic by shape. The classifier
- *                          maps each token to a class; matching rows
- *                          route to distinct fields.
- *                          Example: `dotta apply [profile|file]...` —
- *                          both kinds can appear in any order.
+ *                          maps each token to a class; matching rows route to
+ *                          distinct fields. Example: `dotta apply
+ *                          [profile|file]...` — both kinds can appear in any order.
  *
- * If two or more fit, prefer the tree: it gives per-sub `--help` for free,
- * cleanest fish completion, and no hand-rolled dispatch switch.
+ * If two or more fit, prefer the tree: it gives per-sub `--help` for free, cleanest
+ * fish completion, and no hand-rolled dispatch switch.
  */
 
 #ifndef DOTTA_ARGS_H
@@ -89,10 +85,9 @@
 #include <stddef.h>
 #include <stdio.h>
 
-/* Local forward declarations of base-layer types. Defined as typedefs
- * in <types.h>; we re-declare here (compatible since the struct tags
- * match) so args.h has zero domain dependencies and can compile as a
- * standalone parser engine. */
+/* Local forward declarations of base-layer types. Defined as typedefs in <types.h>;
+ * we re-declare here (compatible since the struct tags match) so args.h has zero
+ * domain dependencies and can compile as a standalone parser engine. */
 typedef struct error error_t;
 typedef struct arena arena_t;
 
@@ -124,17 +119,16 @@ typedef enum args_kind {
 } args_kind_t;
 
 /**
- * Positional classification ID — opaque integer the engine compares
- * by equality, nothing more. Each command that needs polymorphic
- * positionals declares a command-local enum and returns those values
- * from `classify()`. The engine has no interest in the value space
- * beyond `class_accept == classify(tok)`, so domain vocabulary
- * (profiles, files, git refs, ...) stays out of this header.
+ * Positional classification ID — opaque integer the engine compares by equality,
+ * nothing more. Each command that needs polymorphic positionals declares a
+ * command-local enum and returns those values from `classify()`. The engine has
+ * no interest in the value space beyond `class_accept == classify(tok)`, so domain
+ * vocabulary (profiles, files, git refs, ...) stays out of this header.
  *
- * Commands without polymorphic positionals don't touch this field at
- * all — they use `ARGS_POSITIONAL_ANY` / `ARGS_POSITIONAL_ANY_ARG`
- * and the zero-initialized `class_accept` matches the engine's zero
- * default (cls=0 when no classifier is configured).
+ * Commands without polymorphic positionals don't touch this field at all — they
+ * use `ARGS_POSITIONAL_ANY` / `ARGS_POSITIONAL_ANY_ARG` and the zero-initialized
+ * `class_accept` matches the engine's zero default (cls=0 when no classifier is
+ * configured).
  */
 typedef int args_class_t;
 
@@ -150,10 +144,10 @@ typedef enum args_outcome {
 /**
  * Outcome of `args_resolve_root()`.
  *
- * One value per distinct dispatcher response. The caller branches on
- * this to render help, print version, dispatch a matched command, or
- * report an unknown token — keeping the root-layer decision table in
- * the caller rather than the parser.
+ * One value per distinct dispatcher response. The caller branches on this to
+ * render help, print version, dispatch a matched command, or report an unknown
+ * token — keeping the root-layer decision table in the caller rather than the
+ * parser.
  */
 typedef enum args_root_outcome {
     ARGS_ROOT_NONE,            /* argc < 2 — no command typed */
@@ -170,34 +164,34 @@ typedef enum args_root_outcome {
 /**
  * Classifier: inspect a positional token and return its class ID.
  *
- * Called for every positional token when the command defines it. The
- * returned value is matched against `class_accept` on each POSITIONAL
- * / POSITIONAL_ARG row; the first row with equal value wins. A token
- * whose class matches no row falls back to the POSITIONAL_RAW bucket
- * (if present) or reports an "unexpected argument" error.
+ * Called for every positional token when the command defines it. The returned
+ * value is matched against `class_accept` on each POSITIONAL / POSITIONAL_ARG
+ * row; the first row with equal value wins. A token whose class matches no row
+ * falls back to the POSITIONAL_RAW bucket (if present) or reports an "unexpected
+ * argument" error.
  *
- * Return values are defined by the command itself via a local enum
- * starting at 1 — see `args_class_t`.
+ * Return values are defined by the command itself via a local enum starting at
+ * 1 — see `args_class_t`.
  */
 typedef args_class_t (*args_classify)(const char *token);
 
 /**
  * Seed non-zero defaults on the options struct before parsing begins.
  *
- * Called exactly once after the struct is zero-initialized and before
- * any tokens are processed. Use for flags whose default is `true` or
- * for tri-state enums with a non-zero neutral value.
+ * Called exactly once after the struct is zero-initialized and before any tokens
+ * are processed. Use for flags whose default is `true` or for tri-state enums
+ * with a non-zero neutral value.
  */
 typedef void (*args_defaults)(void *opts);
 
 /**
  * Post-parse hook: interpret positional buckets, do secondary parsing.
  *
- * Called after all tokens have been consumed without recorded parse
- * errors and after POSITIONAL_RAW min/max counts are validated. Use
- * for refspec parsing, N-positional reinterpretation, mode inference,
- * etc. Allocations may use `arena`. Returning a non-NULL error aborts
- * dispatch; the error is wrapped into the error collector and freed.
+ * Called after all tokens have been consumed without recorded parse errors and
+ * after POSITIONAL_RAW min/max counts are validated. Use for refspec parsing,
+ * N-positional reinterpretation, mode inference, etc. Allocations may use `arena`.
+ * Returning a non-NULL error aborts dispatch; the error is wrapped into the error
+ * collector and freed.
  */
 typedef error_t *(*args_postparse)(
     void *opts, arena_t *arena,
@@ -215,11 +209,11 @@ typedef error_t *(*args_validate)(
 /**
  * Command entry point. Called by the dispatcher after successful parse.
  *
- * `ctx` is opaque to the engine — it is whatever the caller wants to
- * thread through to the command (typically a domain-specific dispatch
- * bundle holding repo handle, config, output stream, arena, etc.).
- * Each command's dispatch wrapper casts `ctx` to its expected type on
- * the first line. `opts` points to the parsed options struct.
+ * `ctx` is opaque to the engine — it is whatever the caller wants to thread through
+ * to the command (typically a domain-specific dispatch bundle holding repo handle,
+ * config, output stream, arena, etc.). Each command's dispatch wrapper casts
+ * `ctx` to its expected type on the first line. `opts` points to the parsed options
+ * struct.
  */
 typedef error_t *(*args_dispatch)(const void *ctx, void *opts);
 
@@ -230,10 +224,10 @@ typedef error_t *(*args_dispatch)(const void *ctx, void *opts);
 /**
  * One row in an opts[] table.
  *
- * All fields beyond `kind` are optional per kind; unused bytes stay
- * zero. A single struct (not a union) is used because it lets tables
- * be declared as `static const args_opt_t opts[] = { ... }` at file
- * scope and keeps rows trivially copyable.
+ * All fields beyond `kind` are optional per kind; unused bytes stay zero. A single
+ * struct (not a union) is used because it lets tables be declared as `static
+ * const args_opt_t opts[] = { ... }` at file scope and keeps rows trivially
+ * copyable.
  */
 struct args_opt {
     args_kind_t kind;
@@ -262,10 +256,10 @@ struct args_opt {
 /**
  * Subcommand entry in a tree.
  *
- * `name` is a space-separated alias list; the first token is the
- * canonical form shown in help output. Every subcommand in a tree
- * must share the parent's options struct type (same opts_size), since
- * the dispatcher allocates opts based on the top-level command.
+ * `name` is a space-separated alias list; the first token is the canonical form
+ * shown in help output. Every subcommand in a tree must share the parent's options
+ * struct type (same opts_size), since the dispatcher allocates opts based on
+ * the top-level command.
  */
 struct args_subcommand {
     const char *name;               /* "remove rm" — space-separated */
@@ -276,9 +270,9 @@ struct args_subcommand {
 /**
  * A command as a first-class value.
  *
- * All projections (parser, help renderer, completion exporter,
- * dispatcher) consume this struct. Registry entries are
- * `const args_command_t` at file scope with static storage duration.
+ * All projections (parser, help renderer, completion exporter, dispatcher) consume
+ * this struct. Registry entries are `const args_command_t` at file scope with
+ * static storage duration.
  */
 struct args_command {
     /* Identity */
@@ -331,9 +325,9 @@ struct args_error {
 /**
  * Fixed-capacity error collector.
  *
- * Eight slots hold every realistic typo-heavy parse. Overflow sets the
- * flag; later errors are dropped silently and the renderer shows a
- * "more errors suppressed" trailer.
+ * Eight slots hold every realistic typo-heavy parse. Overflow sets the flag;
+ * later errors are dropped silently and the renderer shows a "more errors
+ * suppressed" trailer.
  */
 #define ARGS_ERRORS_CAP 8
 struct args_errors {
@@ -349,11 +343,11 @@ struct args_errors {
 /**
  * Resolve argv[1] against a root command registry in a single pass.
  *
- * Pure function: no allocations, no I/O, no global state. The caller
- * branches on the returned outcome — rendering help, printing version,
- * dispatching the matched spec, or reporting an unknown token. The
- * dispatcher sits above the parser: once a command is resolved here,
- * `args_parse()` handles argv[2..] under the spec's own rules.
+ * Pure function: no allocations, no I/O, no global state. The caller branches
+ * on the returned outcome — rendering help, printing version, dispatching the
+ * matched spec, or reporting an unknown token. The dispatcher sits above the
+ * parser: once a command is resolved here, `args_parse()` handles argv[2..] under
+ * the spec's own rules.
  *
  * Resolution order:
  *   1. argc < 2                              → ARGS_ROOT_NONE
@@ -364,15 +358,15 @@ struct args_errors {
  *      `cmd->root_aliases`                   → ARGS_ROOT_COMMAND
  *   6. anything else                         → ARGS_ROOT_UNKNOWN
  *
- * Built-ins win over `root_aliases` — a command that declares
- * `root_aliases = "help h"` is shadowed silently. Universal CLI
- * conventions cannot be overridden from user data.
+ * Built-ins win over `root_aliases` — a command that declares `root_aliases =
+ * "help h"` is shadowed silently. Universal CLI conventions cannot be overridden
+ * from user data.
  *
  * @param commands    NULL-terminated registry of top-level commands.
  * @param argc        Process argc.
  * @param argv        Process argv.
- * @param command_out On ARGS_ROOT_COMMAND, populated with the matched
- *                    spec; unchanged otherwise. NULL is allowed.
+ * @param command_out On ARGS_ROOT_COMMAND, populated with the matched spec;
+ *                    unchanged otherwise. NULL is allowed.
  * @return            One of `args_root_outcome_t`.
  */
 args_root_outcome_t args_resolve_root(
@@ -397,19 +391,19 @@ args_root_outcome_t args_resolve_root(
  *   - Seeds defaults via `init_defaults` if set.
  *   - For subcommand trees: recurses into the matching child, or into
  *     `default_subcommand` when the user passes no positional.
- *   - Otherwise walks the token stream applying opts, collecting parse
- *     errors up to ARGS_ERRORS_CAP.
+ *   - Otherwise walks the token stream applying opts, collecting parse errors
+ *     up to ARGS_ERRORS_CAP.
  *   - Runs `post_parse` then `validate` if no errors so far.
  *
- * Help wins over errors: if `-h`/`--help` appears in the token stream
- * the parser returns ARGS_HELP_REQUESTED immediately, discarding any
- * errors already recorded AND any tokens still to read. `dotta add
- * --bogus -h` prints help and exits 0 — the user asked for help, so
- * the typo is a secondary concern. Rule of thumb for spec authors:
- * don't rely on post_parse or validate firing when -h is on the line.
+ * Help wins over errors: if `-h`/`--help` appears in the token stream the parser
+ * returns ARGS_HELP_REQUESTED immediately, discarding any errors already recorded
+ * AND any tokens still to read. `dotta add --bogus -h` prints help and exits 0
+ * — the user asked for help, so the typo is a secondary concern. Rule of thumb
+ * for spec authors: don't rely on post_parse or validate firing when -h is on
+ * the line.
  *
- * Side effects: none on stdio; none on global state; no exit(). Every
- * allocation comes from `arena`.
+ * Side effects: none on stdio; none on global state; no exit(). Every allocation
+ * comes from `arena`.
  *
  * @param command      Command spec (must not be NULL).
  * @param argc         Argument count.
@@ -418,13 +412,12 @@ args_root_outcome_t args_resolve_root(
  * @param arena        Arena for error messages / positional arrays.
  * @param opts_out     Zero-initialized options struct; populated in place.
  * @param errors_out   Caller-provided; populated with parse errors.
- * @param resolved_out If non-NULL, set to the leaf command actually
- *                     reached after subcommand resolution. The caller
- *                     uses this to render help/errors against the
- *                     correct command and to invoke the leaf's
- *                     dispatch. For a non-tree command this is just
- *                     `command`. NULL is allowed for callers that do
- *                     not care (test fixtures, etc.).
+ * @param resolved_out If non-NULL, set to the leaf command actually reached after
+ *                     subcommand resolution. The caller uses this to render
+ *                     help/errors against the correct command and to invoke the
+ *                     leaf's dispatch. For a non-tree command this is just
+ *                     `command`. NULL is allowed for callers that do not care
+ *                     (test fixtures, etc.).
  * @return Outcome enum (`-v`/`--version` is handled at root, not here).
  */
 args_outcome_t args_parse(
@@ -440,8 +433,7 @@ args_outcome_t args_parse(
 /**
  * Render the root-level usage banner and command summary list.
  *
- * Hidden commands are skipped. The commands array is terminated by
- * a NULL entry.
+ * Hidden commands are skipped. The commands array is terminated by a NULL entry.
  */
 void args_render_root_usage(
     FILE *out,
@@ -469,8 +461,8 @@ void args_render_usage_line(
  *   7) examples,
  *   8) epilogue.
  *
- * Empty fields are silently skipped. `%s` substitutes to `prog` in any
- * free-form block.
+ * Empty fields are silently skipped. `%s` substitutes to `prog` in any free-form
+ * block.
  */
 void args_render_help(
     FILE *out,
@@ -479,9 +471,9 @@ void args_render_help(
 );
 
 /**
- * Render collected parse errors followed by the usage line and
- * "Try '<prog> <cmd> --help'" hint. Safe to call with errors->count == 0
- * (it will still emit the usage/help hint).
+ * Render collected parse errors followed by the usage line and "Try '<prog> <cmd>
+ * --help'" hint. Safe to call with errors->count == 0 (it will still emit the
+ * usage/help hint).
  */
 void args_render_errors(
     FILE *out,
@@ -497,9 +489,9 @@ void args_render_errors(
 /**
  * Emit a fish-shell completion script body for the command registry.
  *
- * The generated output is plain fish script lines (`complete -c <prog>
- * ...`) — consumable via `source` or concatenation into a checked-in
- * file. The emitter handles:
+ * The generated output is plain fish script lines (`complete -c <prog> ...`) —
+ * consumable via `source` or concatenation into a checked-in file. The emitter
+ * handles:
  *
  *   - top-level built-ins (`-h`, `-v`),
  *   - one root-alias entry per command with `root_aliases` set,
@@ -507,27 +499,25 @@ void args_render_errors(
  *   - one option row per non-hidden flag/string/int/append,
  *   - one subcommand row per non-hidden subcommand,
  *   - one option row per subcommand's own flags,
- *   - a `__<prog>_value_flags` variable listing all value-taking flags
- *     across the entire registry (used by fish's positional-arg scan).
+ *   - a `__<prog>_value_flags` variable listing all value-taking flags across
+ *     the entire registry (used by fish's positional-arg scan).
  *
- * Dynamic completions (profile names, file names, commit SHAs) are
- * NOT emitted here — they depend on runtime repository state and live
- * in a hand-maintained `<prog>.fish` entry point that sources this
- * output.
+ * Dynamic completions (profile names, file names, commit SHAs) are NOT emitted
+ * here — they depend on runtime repository state and live in a hand-maintained
+ * `<prog>.fish` entry point that sources this output.
  *
- * Positional-class hints are NOT emitted either; fish offers a union
- * (profiles ∪ files) for polymorphic positionals and filters by prefix.
+ * Positional-class hints are NOT emitted either; fish offers a union (profiles
+ * ∪ files) for polymorphic positionals and filters by prefix.
  *
  * @param out      Output stream (fully buffered writes are fine).
  * @param arena    Borrowed scratch arena for token storage and dedup set.
- *                 All allocations live until the caller destroys the
- *                 arena; callers typically pass their command-scoped
- *                 arena. Must not be NULL.
+ *                 All allocations live until the caller destroys the arena; callers
+ *                 typically pass their command-scoped arena. Must not be NULL.
  * @param commands NULL-terminated registry of top-level commands.
  * @param prog     Program name used for `complete -c <prog>` lines and
- *                 `__<prog>_*` helper-function references. Must match
- *                 the prefix used in the hand-maintained fish entry
- *                 point that sources the generated script.
+ *                 `__<prog>_*` helper-function references. Must match the prefix
+ *                 used in the hand-maintained fish entry point that sources the
+ *                 generated script.
  */
 void args_export_completion_fish(
     FILE *out,
@@ -541,11 +531,11 @@ void args_export_completion_fish(
  * ══════════════════════════════════════════════════════════════════ */
 
 /**
- * Parse a bounded decimal long. Used internally by ARGS_KIND_INT and
- * exposed for post_parse hooks that need identical semantics.
+ * Parse a bounded decimal long. Used internally by ARGS_KIND_INT and exposed
+ * for post_parse hooks that need identical semantics.
  *
- * Fails on: NULL, empty, non-numeric trailing chars, value outside
- * [min, max], or ERANGE from strtol.
+ * Fails on: NULL, empty, non-numeric trailing chars, value outside [min, max],
+ * or ERANGE from strtol.
  *
  * @return NULL on success; `error_t *` (caller frees) on failure.
  */
@@ -555,8 +545,8 @@ error_t *args_parse_long(const char *text, long min, long max, long *out);
  * Spec-writing macros
  *
  * Naming rule for `flags`:
- *   - Space-separated. No dashes. Single-char = short (-x),
- *     multi-char = long (--xxx). Author controls display order.
+ *   - Space-separated. No dashes. Single-char = short (-x), multi-char = long
+ *     (--xxx). Author controls display order.
  * ══════════════════════════════════════════════════════════════════ */
 
 #define ARGS_END \
@@ -566,8 +556,7 @@ error_t *args_parse_long(const char *text, long min, long max, long *out);
     { .kind = ARGS_KIND_GROUP, .help = (title_s) }
 
 /**
- * Flag → bool field is set to true when any listed name is seen.
- * Field type: bool.
+ * Flag → bool field is set to true when any listed name is seen. Field type: bool.
  */
 #define ARGS_FLAG(flags_s, type, field, help_s) \
     { .kind   = ARGS_KIND_FLAG, \
@@ -576,10 +565,9 @@ error_t *args_parse_long(const char *text, long min, long max, long *out);
       .offset = offsetof(type, field) }
 
 /**
- * Flag → int field is set to `value` when any listed name is seen.
- * Use for tri-state enums where multiple flags write distinct values
- * into the same field (e.g., `--encrypt` sets 1, `--no-encrypt` sets 2).
- * Field type: int.
+ * Flag → int field is set to `value` when any listed name is seen. Use for
+ * tri-state enums where multiple flags write distinct values into the same field
+ * (e.g., `--encrypt` sets 1, `--no-encrypt` sets 2). Field type: int.
  */
 #define ARGS_FLAG_SET(flags_s, type, field, value, help_s) \
     { .kind      = ARGS_KIND_FLAG_SET, \
@@ -600,10 +588,10 @@ error_t *args_parse_long(const char *text, long min, long max, long *out);
       .offset      = offsetof(type, field) }
 
 /**
- * Repeatable option: each occurrence appends to a char** array.
- * Field types: `char **field; size_t count_field;`. Both borrow argv.
- * An ARGS_POSITIONAL row may target the same field/count pair to
- * merge bare positionals into the same array (argv-order preserved).
+ * Repeatable option: each occurrence appends to a char** array. Field types:
+ * `char **field; size_t count_field;`. Both borrow argv. An ARGS_POSITIONAL row
+ * may target the same field/count pair to merge bare positionals into the same
+ * array (argv-order preserved).
  */
 #define ARGS_APPEND(flags_s, label_s, type, field, count_field, help_s) \
     { .kind         = ARGS_KIND_APPEND, \
@@ -614,8 +602,7 @@ error_t *args_parse_long(const char *text, long min, long max, long *out);
       .count_offset = offsetof(type, count_field) }
 
 /**
- * Typed integer: parsed via strtol, range-checked [min, max].
- * Field type: long.
+ * Typed integer: parsed via strtol, range-checked [min, max]. Field type: long.
  */
 #define ARGS_INT(flags_s, label_s, type, field, min_v, max_v, help_s) \
     { .kind        = ARGS_KIND_INT, \
@@ -627,9 +614,9 @@ error_t *args_parse_long(const char *text, long min, long max, long *out);
       .int_max     = (max_v) }
 
 /**
- * Classified positional → append to a char** array.
- * The command's classify() routes each positional to the row whose
- * class_accept matches. Field types: `char **field; size_t count;`.
+ * Classified positional → append to a char** array. The command's classify()
+ * routes each positional to the row whose class_accept matches. Field types:
+ * `char **field; size_t count;`.
  */
 #define ARGS_POSITIONAL(cls, type, field, count_field) \
     { .kind         = ARGS_KIND_POSITIONAL, \
@@ -638,11 +625,10 @@ error_t *args_parse_long(const char *text, long min, long max, long *out);
       .count_offset = offsetof(type, count_field) }
 
 /**
- * Classified documented positional: single-value target with an inline
- * label + help string (rendered under "Arguments:"). The `cls` routes
- * tokens from classify() to this row; multiple matches silently
- * overwrite, so pair with a classifier that returns a unique class
- * for single-value semantics.
+ * Classified documented positional: single-value target with an inline label +
+ * help string (rendered under "Arguments:"). The `cls` routes tokens from
+ * classify() to this row; multiple matches silently overwrite, so pair with a
+ * classifier that returns a unique class for single-value semantics.
  */
 #define ARGS_POSITIONAL_ARG(cls, label_s, type, field, help_s) \
     { .kind         = ARGS_KIND_POSITIONAL_ARG, \
@@ -652,11 +638,10 @@ error_t *args_parse_long(const char *text, long min, long max, long *out);
       .offset       = offsetof(type, field) }
 
 /**
- * Unclassified positional bucket — all positionals append here. Use
- * for commands that don't need a classify() function (single-bucket
- * positionals). `class_accept` is left at zero-init, matching the
- * engine's zero default for cls when no classifier runs.
- * Field types: `char **field; size_t count;`.
+ * Unclassified positional bucket — all positionals append here. Use for commands
+ * that don't need a classify() function (single-bucket positionals). `class_accept`
+ * is left at zero-init, matching the engine's zero default for cls when no
+ * classifier runs. Field types: `char **field; size_t count;`.
  */
 #define ARGS_POSITIONAL_ANY(type, field, count_field) \
     { .kind         = ARGS_KIND_POSITIONAL, \
@@ -664,10 +649,9 @@ error_t *args_parse_long(const char *text, long min, long max, long *out);
       .count_offset = offsetof(type, count_field) }
 
 /**
- * Unclassified documented positional: single-value target with an
- * inline label + help (rendered under "Arguments:"). Companion to
- * ANY for commands that take at most one positional and want to
- * document it.
+ * Unclassified documented positional: single-value target with an inline label
+ * + help (rendered under "Arguments:"). Companion to ANY for commands that take
+ * at most one positional and want to document it.
  */
 #define ARGS_POSITIONAL_ANY_ARG(label_s, type, field, help_s) \
     { .kind        = ARGS_KIND_POSITIONAL_ARG, \
@@ -676,10 +660,10 @@ error_t *args_parse_long(const char *text, long min, long max, long *out);
       .offset      = offsetof(type, field) }
 
 /**
- * Unclassified raw positional bucket: every positional that does not
- * match a POSITIONAL / POSITIONAL_ARG row lands here. Enforced min/max
- * bounds are reported as parse errors. The command's post_parse hook
- * is responsible for interpreting the bucket.
+ * Unclassified raw positional bucket: every positional that does not match a
+ * POSITIONAL / POSITIONAL_ARG row lands here. Enforced min/max bounds are reported
+ * as parse errors. The command's post_parse hook is responsible for interpreting
+ * the bucket.
  */
 #define ARGS_POSITIONAL_RAW(type, field, count_field, min_c, max_c) \
     { .kind           = ARGS_KIND_POSITIONAL_RAW, \

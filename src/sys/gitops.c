@@ -465,11 +465,10 @@ error_t *gitops_is_current_branch(
         return error_from_git(err);
     }
 
-    /* Get branch name from HEAD.
-     * git_branch_name returns GIT_ERROR (-1) with GIT_ERROR_INVALID when the
-     * reference is not a local branch (detached HEAD, direct commit ref, etc.).
-     * Any failure here means HEAD is not pointing to a named branch, so the
-     * branch we are checking is definitely not current. */
+    /* Get branch name from HEAD. git_branch_name returns GIT_ERROR (-1) with
+     * GIT_ERROR_INVALID when the reference is not a local branch (detached HEAD,
+     * direct commit ref, etc.). Any failure here means HEAD is not pointing to
+     * a named branch, so the branch we are checking is definitely not current. */
     const char *current_name = NULL;
     err = git_branch_name(&current_name, head);
     if (err < 0) {
@@ -492,12 +491,11 @@ error_t *gitops_is_current_branch(
 /**
  * Resolve a Git reference to its tree, optionally capturing the peeled OID
  *
- * Shared implementation for gitops_load_tree and gitops_load_branch_tree.
- * The OID captured (when out_oid is non-NULL) is the peeled object's OID:
- * the commit OID for commit-backed branches, the tree OID for orphan-tree
- * branches. This matches the OID that the old profile_load captured
- * via the same git_reference_peel(ANY) path, ensuring staleness detection
- * consistency.
+ * Shared implementation for gitops_load_tree and gitops_load_branch_tree. The
+ * OID captured (when out_oid is non-NULL) is the peeled object's OID: the commit
+ * OID for commit-backed branches, the tree OID for orphan-tree branches. This
+ * matches the OID that the old profile_load captured via the same
+ * git_reference_peel(ANY) path, ensuring staleness detection consistency.
  */
 static error_t *resolve_ref_to_tree(
     git_repository *repo,
@@ -771,9 +769,9 @@ static error_t *split_path_to_segments(
         );
     }
 
-    /* Parse segments using strchr to find delimiters.
-     * Loop invariant: p points to the start of a non-empty segment
-     * (guaranteed by leading/trailing slash rejection and slash-skipping). */
+    /* Parse segments using strchr to find delimiters. Loop invariant: p points
+     * to the start of a non-empty segment (guaranteed by leading/trailing slash
+     * rejection and slash-skipping). */
     while (*p != '\0') {
         const char *end = strchr(p, '/');
         size_t seg_len = end ? (size_t) (end - p) : strlen(p);
@@ -812,9 +810,9 @@ static error_t *split_path_to_segments(
         }
     }
 
-    /* Guard against pathologically deep paths that would cause stack
-     * overflow in recursive tree construction. Real-world dotfile paths
-     * rarely exceed ~10 levels; 64 is extremely generous. */
+    /* Guard against pathologically deep paths that would cause stack overflow
+     * in recursive tree construction. Real-world dotfile paths rarely exceed
+     * ~10 levels; 64 is extremely generous. */
     if (segments->count > 64) {
         string_array_free(segments);
         return ERROR(
@@ -860,8 +858,8 @@ static error_t *build_tree_for_path(
         /*
          * Base case: Insert blob at this level
          *
-         * Create treebuilder from parent (copies existing entries),
-         * insert/update the file, write tree.
+         * Create treebuilder from parent (copies existing entries), insert/update
+         * the file, write tree.
          */
         git_treebuilder *builder = NULL;
         git_err = git_treebuilder_new(&builder, repo, parent_tree);
@@ -966,12 +964,12 @@ static error_t *build_tree_for_path(
 /**
  * Helper: Check if file exists in tree with matching OID and file mode
  *
- * Uses git_tree_entry_bypath for arbitrary depth path traversal.
- * Returns true only if the file exists, is a blob, its OID matches
- * target_oid, AND its filemode matches target_mode.
+ * Uses git_tree_entry_bypath for arbitrary depth path traversal. Returns true
+ * only if the file exists, is a blob, its OID matches target_oid, AND its filemode
+ * matches target_mode.
  *
- * The mode check is critical: without it, a change from regular to
- * executable (same content, different mode) would be treated as a no-op.
+ * The mode check is critical: without it, a change from regular to executable
+ * (same content, different mode) would be treated as a no-op.
  */
 static bool file_matches_oid_and_mode(
     git_tree *tree,
@@ -1061,9 +1059,9 @@ error_t *gitops_update_file(
         );
     }
 
-    /* Check for no-op: file exists with identical content AND mode.
-     * Both must match - same content with a different mode (e.g. regular →
-     * executable) is a real change that requires a commit. */
+    /* Check for no-op: file exists with identical content AND mode. Both must
+     * match - same content with a different mode (e.g. regular → executable) is
+     * a real change that requires a commit. */
     if (file_matches_oid_and_mode(current_tree, file_path, &blob_oid, file_mode)) {
         git_tree_free(current_tree);
         return NULL;  /* Success, no modification needed */
@@ -1130,37 +1128,34 @@ error_t *gitops_update_file(
         return err;
     }
 
-    /* Commit succeeded: the ref advanced and the tree changed. Report it
-     * via was_modified *before* the sync attempt so the flag stays a
-     * faithful signal of "did the commit happen" even if a later step
-     * fails. Errors below carry recovery context so callers can still
-     * tell a commit failure from a post-commit sync failure. */
+    /* Commit succeeded: the ref advanced and the tree changed. Report it via
+     * was_modified *before* the sync attempt so the flag stays a faithful signal
+     * of "did the commit happen" even if a later step fails. Errors below carry
+     * recovery context so callers can still tell a commit failure from a
+     * post-commit sync failure. */
     if (was_modified) *was_modified = true;
 
     /*
      * Sync INDEX and workdir when we advance the current branch.
      *
-     * The commit we just created advanced the branch ref, but the
-     * repo's shared index (.git/index) still points at the previous
-     * tree and the workdir still holds the previous content. When the
-     * target is the currently-checked-out branch (typically only
-     * dotta-worktree here), the next time anything inspects working
-     * state — `git status`, a subsequent `git_checkout_head`, or the
-     * caller's own logic — it sees phantom "local modifications"
-     * pointing backwards at the file we just committed.
+     * The commit we just created advanced the branch ref, but the repo's shared
+     * index (.git/index) still points at the previous tree and the workdir still
+     * holds the previous content. When the target is the currently-checked-out
+     * branch (typically only dotta-worktree here), the next time anything inspects
+     * working state — `git status`, a subsequent `git_checkout_head`, or the
+     * caller's own logic — it sees phantom "local modifications" pointing backwards
+     * at the file we just committed.
      *
-     * `git_checkout_tree` with a single-path pathspec and FORCE is the
-     * canonical libgit2 primitive for "make INDEX and workdir match
-     * this tree entry, leaving other paths alone". Scoping to one path
-     * ensures we don't touch unrelated workdir files the user may
-     * have modified.
+     * `git_checkout_tree` with a single-path pathspec and FORCE is the canonical
+     * libgit2 primitive for "make INDEX and workdir match this tree entry, leaving
+     * other paths alone". Scoping to one path ensures we don't touch unrelated
+     * workdir files the user may have modified.
      *
-     * Profile-branch writes (the vast majority of callers) skip this —
-     * their indexes and workdirs are never observed while HEAD stays
-     * on dotta-worktree, and mutating the shared index for another
-     * branch would corrupt the checked-out branch's staging area. See
-     * the long comment in gitops_commit_tree_updates_safe for the
-     * rationale behind that invariant.
+     * Profile-branch writes (the vast majority of callers) skip this — their
+     * indexes and workdirs are never observed while HEAD stays on dotta-worktree,
+     * and mutating the shared index for another branch would corrupt the
+     * checked-out branch's staging area. See the long comment in
+     * gitops_commit_tree_updates_safe for the rationale behind that invariant.
      */
     bool on_current = false;
     err = gitops_is_current_branch(repo, branch_name, &on_current);
@@ -1285,19 +1280,18 @@ error_t *gitops_commit_tree_updates_safe(
 
     /* Standalone in-memory index for HEAD-safe tree construction.
      *
-     * CRITICAL: We must NOT call git_repository_index() here. That
-     * returns the repository's shared index (backed by .git/index),
-     * which is tied to whichever branch HEAD currently points at
-     * (typically dotta-worktree). Mutating it would corrupt the
-     * checked-out branch's staging area.
+     * CRITICAL: We must NOT call git_repository_index() here. That returns the
+     * repository's shared index (backed by .git/index), which is tied to whichever
+     * branch HEAD currently points at (typically dotta-worktree). Mutating it
+     * would corrupt the checked-out branch's staging area.
      *
      * A standalone index has no backing file, so we:
      *   - Seed it from the branch HEAD tree via git_index_read_tree()
-     *   - Stage entries by blob OID with git_index_add() (no worktree
-     *     I/O — the blobs already live in the ODB)
+     *   - Stage entries by blob OID with git_index_add() (no worktree I/O — the
+     *     blobs already live in the ODB)
      *   - Write the resulting tree directly to the repo ODB via
-     *     git_index_write_tree_to(), NOT git_index_write() which
-     *     would try to persist to a non-existent backing file.
+     *     git_index_write_tree_to(), NOT git_index_write() which would try to
+     *     persist to a non-existent backing file.
      */
     git_index *index = NULL;
     git_tree *new_tree = NULL;
@@ -1314,8 +1308,8 @@ error_t *gitops_commit_tree_updates_safe(
         goto cleanup;
     }
 
-    /* Apply updates. git_index_add() replaces entries at the same
-     * path, so explicit remove-before-add is not needed. */
+    /* Apply updates. git_index_add() replaces entries at the same path, so explicit
+     * remove-before-add is not needed. */
     for (size_t i = 0; i < update_count; i++) {
         git_index_entry entry;
         memset(&entry, 0, sizeof(entry));
@@ -1334,8 +1328,8 @@ error_t *gitops_commit_tree_updates_safe(
         }
     }
 
-    /* Apply removals. Missing entries are an error so the caller
-     * notices bugs rather than silently no-op'ing. */
+    /* Apply removals. Missing entries are an error so the caller notices bugs
+     * rather than silently no-op'ing. */
     for (size_t i = 0; i < removal_count; i++) {
         git_err = git_index_remove_bypath(index, removals[i]);
         if (git_err < 0) {
@@ -1362,8 +1356,8 @@ error_t *gitops_commit_tree_updates_safe(
         goto cleanup;
     }
 
-    /* Commit the new tree onto the branch (gitops_create_commit
-     * handles signature, parent lookup, and reference update). */
+    /* Commit the new tree onto the branch (gitops_create_commit handles signature,
+     * parent lookup, and reference update). */
     err = gitops_create_commit(repo, branch_name, new_tree, message, out_oid);
 
 cleanup:
@@ -1391,10 +1385,10 @@ error_t *gitops_clone(
     git_clone_options opts;
     git_clone_options_init(&opts, GIT_CLONE_OPTIONS_VERSION);
 
-    /* Skip the default-branch checkout: the sole caller (cmd_clone)
-     * establishes the workdir view itself by checking out dotta-worktree.
-     * Materializing the remote HEAD's tree here is discarded work and
-     * transiently lands profile (or foreign) files in the workdir. */
+    /* Skip the default-branch checkout: the sole caller (cmd_clone) establishes
+     * the workdir view itself by checking out dotta-worktree. Materializing the
+     * remote HEAD's tree here is discarded work and transiently lands profile
+     * (or foreign) files in the workdir. */
     opts.checkout_opts.checkout_strategy = GIT_CHECKOUT_NONE;
 
     transfer_configure_callbacks(
@@ -1735,9 +1729,9 @@ error_t *gitops_list_remote_branches(
         return error_from_git(git_err);
     }
 
-    /* git_remote_connect + git_remote_ls transfer no byte payload, so the
-     * progress callback never fires; GIT_DIRECTION_FETCH keeps the
-     * credential path aligned with fetch semantics. */
+    /* git_remote_connect + git_remote_ls transfer no byte payload, so the progress
+     * callback never fires; GIT_DIRECTION_FETCH keeps the credential path aligned
+     * with fetch semantics. */
     git_remote_callbacks callbacks;
     git_remote_init_callbacks(&callbacks, GIT_REMOTE_CALLBACKS_VERSION);
     transfer_configure_callbacks(&callbacks, xfer, GIT_DIRECTION_FETCH);
@@ -1884,9 +1878,9 @@ error_t *gitops_resolve_default_remote(
         return ERROR(ERR_MEMORY, "Failed to allocate remote name");
     }
 
-    /* URL is optional. A remote without URL is legal — credentialed
-     * transfer tolerates a NULL URL — so leave *out_url = NULL on that
-     * branch instead of erroring. */
+    /* URL is optional. A remote without URL is legal — credentialed transfer
+     * tolerates a NULL URL — so leave *out_url = NULL on that branch instead of
+     * erroring. */
     if (out_url) {
         git_remote *remote = NULL;
         int lookup_err = git_remote_lookup(&remote, repo, name);
@@ -2082,10 +2076,10 @@ error_t *gitops_find_file_in_tree(
     CHECK_NULL(out);
     CHECK_ARG(path[0] != '\0', "Path cannot be empty");
 
-    /* Normalize path: strip all leading slashes.
-     * Consistent with split_path_to_segments which uses the same while-loop
-     * approach. A single-slash strip would leave "//foo" as "/foo" which
-     * git_tree_entry_bypath would reject as an absolute path. */
+    /* Normalize path: strip all leading slashes. Consistent with
+     * split_path_to_segments which uses the same while-loop approach. A
+     * single-slash strip would leave "//foo" as "/foo" which git_tree_entry_bypath
+     * would reject as an absolute path. */
     const char *normalized_path = path;
     while (*normalized_path == '/') {
         normalized_path++;
@@ -2213,10 +2207,10 @@ error_t *gitops_resolve_commit_in_branch(
 
     /* Look up the branch and capture its tip OID by value.
      *
-     * The tip is the authoritative reference for downstream reachability
-     * checks. Copying the OID (20 bytes) decouples this function from the
-     * git_reference handle's lifetime, so we can release branch_ref
-     * immediately and operate on the OID alone. */
+     * The tip is the authoritative reference for downstream reachability checks.
+     * Copying the OID (20 bytes) decouples this function from the git_reference
+     * handle's lifetime, so we can release branch_ref immediately and operate
+     * on the OID alone. */
     git_reference *branch_ref = NULL;
     int ret = git_reference_lookup(&branch_ref, repo, ref_name);
     if (ret < 0) {
@@ -2236,8 +2230,8 @@ error_t *gitops_resolve_commit_in_branch(
 
     /* Fast path: "HEAD" resolves to the tip we just captured.
      *
-     * Skips revparse and the reachability check below — both would be
-     * redundant since the tip is, by definition, reachable from itself. */
+     * Skips revparse and the reachability check below — both would be redundant
+     * since the tip is, by definition, reachable from itself. */
     if (strcmp(commit_ref, "HEAD") == 0) {
         git_oid_cpy(out_oid, &branch_tip_oid);
         if (out_commit) {
@@ -2253,13 +2247,13 @@ error_t *gitops_resolve_commit_in_branch(
      *
      * "HEAD~N" / "HEAD^N" must resolve relative to branch_name (not the
      * repository's HEAD), so we rewrite them as "<branch>~N" / "<branch>^N".
-     * Anything else (raw SHA, tag, "<branch>~N") is passed through as-is —
-     * the reachability check below catches inputs that resolve to commits
-     * on other branches, regardless of input syntax.
+     * Anything else (raw SHA, tag, "<branch>~N") is passed through as-is — the
+     * reachability check below catches inputs that resolve to commits on other
+     * branches, regardless of input syntax.
      *
-     * Exact "HEAD" was matched above; using str_starts_with("HEAD") alone
-     * would also match strings like a hypothetical "HEADLESS" tag and
-     * misroute them into the ancestry-rewrite path. */
+     * Exact "HEAD" was matched above; using str_starts_with("HEAD") alone would
+     * also match strings like a hypothetical "HEADLESS" tag and misroute them
+     * into the ancestry-rewrite path. */
     char *allocated_ref = NULL;
     const char *resolve_ref = commit_ref;
 
@@ -2284,17 +2278,17 @@ error_t *gitops_resolve_commit_in_branch(
 
     /* Peel to a commit object.
      *
-     * Annotated tags wrap commits — git_revparse_single returns the tag
-     * object whose OID is the tag's, not the commit's. Peeling normalises
-     * tag/commit/symbolic-ref inputs to a commit so out_oid always names a
-     * commit and the reachability check below operates on commit OIDs (as
+     * Annotated tags wrap commits — git_revparse_single returns the tag object
+     * whose OID is the tag's, not the commit's. Peeling normalises
+     * tag/commit/symbolic-ref inputs to a commit so out_oid always names a commit
+     * and the reachability check below operates on commit OIDs (as
      * git_graph_descendant_of requires).
      *
-     * For inputs that are already commits, peel returns a refcount-bumped
-     * reference to the same object — which is why obj is freed separately.
+     * For inputs that are already commits, peel returns a refcount-bumped reference
+     * to the same object — which is why obj is freed separately.
      *
-     * Inputs that cannot be peeled to a commit (trees, blobs) yield an
-     * error here rather than a confusing failure later. */
+     * Inputs that cannot be peeled to a commit (trees, blobs) yield an error
+     * here rather than a confusing failure later. */
     git_object *commit_obj = NULL;
     ret = git_object_peel(&commit_obj, obj, GIT_OBJECT_COMMIT);
     git_object_free(obj);
@@ -2307,14 +2301,14 @@ error_t *gitops_resolve_commit_in_branch(
 
     /* Constrain the resolved commit to ones reachable from branch_name.
      *
-     * git_revparse_single resolves repository-wide; without this check, a
-     * SHA that exists on a different branch would resolve successfully and
-     * silently misattribute the commit. The invariant we enforce: the
-     * resolved OID must equal the branch tip or be one of its ancestors.
+     * git_revparse_single resolves repository-wide; without this check, a SHA
+     * that exists on a different branch would resolve successfully and silently
+     * misattribute the commit. The invariant we enforce: the resolved OID must
+     * equal the branch tip or be one of its ancestors.
      *
-     * git_graph_descendant_of returns 0 for self, so an exact tip match
-     * needs an explicit oid_equal short-circuit (the same pairing sync.c
-     * uses for fast-forward checks). */
+     * git_graph_descendant_of returns 0 for self, so an exact tip match needs
+     * an explicit oid_equal short-circuit (the same pairing sync.c uses for
+     * fast-forward checks). */
     const git_oid *resolved_oid = git_object_id(commit_obj);
     if (!git_oid_equal(resolved_oid, &branch_tip_oid)) {
         int reach = git_graph_descendant_of(
@@ -2493,8 +2487,9 @@ error_t *gitops_create_merge_commit(
     }
 
     /* Write index to tree
-     * IMPORTANT: Use git_index_write_tree_to() because the index from git_merge_trees()
-     * is not backed by a repository, so we must explicitly write to the repo's ODB.
+     * IMPORTANT: Use git_index_write_tree_to() because the index from
+     * git_merge_trees() is not backed by a repository, so we must explicitly
+     * write to the repo's ODB.
      */
     git_oid tree_oid;
     int err = git_index_write_tree_to(&tree_oid, index, repo);
@@ -2601,18 +2596,17 @@ error_t *gitops_rebase_inmemory_safe(
         return error_wrap(err, "Failed to get signature for rebase");
     }
 
-    /* Process each rebase operation
-     * Initialize commit_oid to onto_oid - if there are no operations to rebase
-     * (branch is already up-to-date or behind), we return onto_oid which is
-     * correct for both cases (no-op or fast-forward).
+    /* Process each rebase operation Initialize commit_oid to onto_oid - if there
+     * are no operations to rebase (branch is already up-to-date or behind), we
+     * return onto_oid which is correct for both cases (no-op or fast-forward).
      */
     git_rebase_operation *op = NULL;
     git_oid commit_oid;
     git_oid_cpy(&commit_oid, onto_oid);
 
     while ((git_err = git_rebase_next(&op, rebase)) == 0) {
-        /* Commit the rebased operation
-         * In inmemory mode, this doesn't touch HEAD or working directory
+        /* Commit the rebased operation In inmemory mode, this doesn't touch HEAD
+         * or working directory
          */
         git_err = git_rebase_commit(&commit_oid, rebase, NULL, sig, NULL, NULL);
 
@@ -2621,8 +2615,8 @@ error_t *gitops_rebase_inmemory_safe(
             git_rebase_abort(rebase);
             git_rebase_free(rebase);
 
-            /* Check for merge conflicts
-             * Both GIT_EMERGECONFLICT (-13) and GIT_EUNMERGED (-10) indicate conflicts
+            /* Check for merge conflicts Both GIT_EMERGECONFLICT (-13) and
+             * GIT_EUNMERGED (-10) indicate conflicts
              */
             if (git_err == GIT_EMERGECONFLICT || git_err == GIT_EUNMERGED) {
                 return ERROR(
@@ -2692,8 +2686,8 @@ error_t *gitops_update_branch_reference(
         return error_from_git(git_err);
     }
 
-    /* Update reference to new OID with reflog message
-     * This is an atomic operation that updates the branch without touching HEAD
+    /* Update reference to new OID with reflog message This is an atomic operation
+     * that updates the branch without touching HEAD
      */
     git_reference *new_ref = NULL;
     git_err = git_reference_set_target(
@@ -2731,8 +2725,8 @@ error_t *gitops_sync_worktree(
     if (err < 0) {
         if (strategy == GIT_CHECKOUT_SAFE) {
             /*
-             * SAFE checkout failed - likely due to local modifications.
-             * Provide a clear, actionable error message.
+             * SAFE checkout failed - likely due to local modifications. Provide
+             * a clear, actionable error message.
              */
             return ERROR(
                 ERR_CONFLICT,

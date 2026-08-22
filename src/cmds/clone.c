@@ -39,8 +39,8 @@
 /**
  * Extract repository name from URL
  *
- * Handles both HTTP-style URLs (https://host/user/repo.git)
- * and SCP-style URLs (git@host:user/repo.git)
+ * Handles both HTTP-style URLs (https://host/user/repo.git) and SCP-style URLs
+ * (git@host:user/repo.git)
  */
 static char *extract_repo_name(const char *url) {
     const char *last_slash = strrchr(url, '/');
@@ -100,7 +100,8 @@ static char *extract_repo_name(const char *url) {
  * @param out Output context for messages
  * @param cred_ctx Credential context
  * @param fetched_count Output: number successfully fetched (can be NULL)
- * @param fetched_profiles Optional: array to populate with successfully fetched names (can be NULL)
+ * @param fetched_profiles Optional: array to populate with successfully fetched
+ *                         names (can be NULL)
  * @return Error or NULL on success
  */
 static error_t *fetch_profiles(
@@ -266,19 +267,17 @@ static error_t *initialize_state(
         return error_wrap(err, "Failed to initialize state database");
     }
 
-    /* Enable each profile individually, then build the view over the
-     * new set once.
+    /* Enable each profile individually, then build the view over the new set once.
      *
-     * state_enable_profile is the membership primitive — clone calls it
-     * once per profile (with target=NULL since custom/-bearing profiles
-     * are filtered out by the post-fetch warn-and-skip loop below before
-     * reaching this path).
+     * state_enable_profile is the membership primitive — clone calls it once
+     * per profile (with target=NULL since custom/-bearing profiles are filtered
+     * out by the post-fetch warn-and-skip loop below before reaching this path).
      *
-     * The view is computed, never stored: the build writes nothing and
-     * its result is discarded. It is the tripwire that keeps clone from
-     * landing an enabled set the next load cannot build — a branch that
-     * exists but will not load fails here, before state_save, and the
-     * repository is left with nothing enabled. */
+     * The view is computed, never stored: the build writes nothing and its result
+     * is discarded. It is the tripwire that keeps clone from landing an enabled
+     * set the next load cannot build — a branch that exists but will not load
+     * fails here, before state_save, and the repository is left with nothing
+     * enabled. */
     if (profiles->count > 0) {
         for (size_t i = 0; i < profiles->count; i++) {
             err = state_enable_profile(state, profiles->items[i], NULL);
@@ -290,11 +289,10 @@ static error_t *initialize_state(
             }
         }
 
-        /* Build a fresh mount table from the post-mutation row cache.
-         * Clone's run_spec sees state_mode == NONE (the DB doesn't
-         * exist yet), so ctx->mounts is NULL even after this point. The
-         * mount table built here covers the freshly-bootstrapped
-         * binding set for the tree walk. */
+        /* Build a fresh mount table from the post-mutation row cache. Clone's
+         * run_spec sees state_mode == NONE (the DB doesn't exist yet), so
+         * ctx->mounts is NULL even after this point. The mount table built here
+         * covers the freshly-bootstrapped binding set for the tree walk. */
         mount_table_t *post_mutation_mounts = NULL;
         err = profile_build_mount_table(state, arena, &post_mutation_mounts);
         if (err) {
@@ -344,13 +342,12 @@ static error_t *initialize_state(
 /**
  * Remove what a failed clone left behind.
  *
- * Clone's entire side-effect surface is the target directory (state DB
- * and branches live under .git/, the seeded .dottaignore in the
- * workdir), so all-or-nothing means one thing: after a fatal error,
- * nothing dotta created remains. A pre-existing (empty) target
- * directory is kept and only emptied; a directory the clone created is
- * removed outright. Best-effort — the fatal error being unwound still
- * stands, so a removal failure only warns.
+ * Clone's entire side-effect surface is the target directory (state DB and branches
+ * live under .git/, the seeded .dottaignore in the workdir), so all-or-nothing
+ * means one thing: after a fatal error, nothing dotta created remains. A
+ * pre-existing (empty) target directory is kept and only emptied; a directory
+ * the clone created is removed outright. Best-effort — the fatal error being
+ * unwound still stands, so a removal failure only warns.
  */
 static void rollback_clone_dir(
     const char *path,
@@ -460,9 +457,9 @@ error_t *cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
     final_err = transfer_context_create(&xfer_opts, &xfer);
     if (final_err) goto cleanup;
 
-    /* Track whether the target directory predates the clone (git_clone
-     * accepts an existing empty directory): rollback preserves a
-     * pre-existing directory and only empties it. */
+    /* Track whether the target directory predates the clone (git_clone accepts
+     * an existing empty directory): rollback preserves a pre-existing directory
+     * and only empties it. */
     path_preexisted = fs_is_directory(local_path);
 
     /* Clone repository with progress reporting */
@@ -473,21 +470,20 @@ error_t *cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
     }
     clone_landed = true;
 
-    /* Identity gate + salt acquisition. refs/dotta/salt is the one
-     * unconditional, synced dotta artifact (dotta-worktree never leaves
-     * the local repo), so a remote that does not advertise it is not a
-     * dotta repository — refuse before any local materialization below
-     * (state DB, dotta-worktree branch, baseline .dottaignore). The ref
-     * also carries the per-repo Argon2id salt; without it, every
-     * encrypted blob is undecryptable. */
+    /* Identity gate + salt acquisition. refs/dotta/salt is the one unconditional,
+     * synced dotta artifact (dotta-worktree never leaves the local repo), so a
+     * remote that does not advertise it is not a dotta repository — refuse before
+     * any local materialization below (state DB, dotta-worktree branch, baseline
+     * .dottaignore). The ref also carries the per-repo Argon2id salt; without
+     * it, every encrypted blob is undecryptable. */
     err = salt_fetch(repo, "origin", xfer);
     if (err) {
         if (err->code == ERR_NOT_FOUND) {
             error_free(err);
 
-            /* Split the diagnostic: an empty remote is a publish-first
-             * problem, a ref-bearing one is simply not dotta's. On a
-             * listing failure fall through to the foreign diagnostic. */
+            /* Split the diagnostic: an empty remote is a publish-first problem,
+             * a ref-bearing one is simply not dotta's. On a listing failure fall
+             * through to the foreign diagnostic. */
             bool remote_empty = false;
             string_array_t *remote_refs = NULL;
             error_t *list_err = gitops_list_remote_tracking(
@@ -521,12 +517,11 @@ error_t *cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
             }
             goto cleanup;
         } else if (err->code == ERR_CRYPTO) {
-            /* Malformed remote salt — salt_fetch already rolled back, so
-             * no garbage ref persists. The advertised ref establishes
-             * identity (the gate above), but its payload is a crypto
-             * concern: warn-and-continue, a plaintext clone is still
-             * fine, only encryption is unavailable until a valid salt
-             * arrives. */
+            /* Malformed remote salt — salt_fetch already rolled back, so no garbage
+             * ref persists. The advertised ref establishes identity (the gate
+             * above), but its payload is a crypto concern: warn-and-continue, a
+             * plaintext clone is still fine, only encryption is unavailable until
+             * a valid salt arrives. */
             output_warning(
                 out, OUTPUT_NORMAL,
                 "%s. Encryption operations will fail until a valid salt "
@@ -760,14 +755,14 @@ error_t *cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
 
     /* Seed baseline .dottaignore on dotta-worktree with default patterns.
      *
-     * dotta-worktree is filtered from push/fetch (see upstream.c), so a
-     * cloned machine starts without one. Seeding here gives every repo
-     * the same visible, editable starting point that `dotta init`
-     * creates — and ensures the safety defaults are applied via the
-     * baseline path rather than only through the compiled fallback.
+     * dotta-worktree is filtered from push/fetch (see upstream.c), so a cloned
+     * machine starts without one. Seeding here gives every repo the same visible,
+     * editable starting point that `dotta init` creates — and ensures the safety
+     * defaults are applied via the baseline path rather than only through the
+     * compiled fallback.
      *
-     * Idempotent via gitops_update_file's no-op detection; no-op when
-     * the branch already has matching content (e.g. repeat invocations). */
+     * Idempotent via gitops_update_file's no-op detection; no-op when the branch
+     * already has matching content (e.g. repeat invocations). */
     err = ignore_seed_baseline(repo);
     if (err) {
         final_err = error_wrap(err, "Failed to seed baseline .dottaignore");
@@ -776,10 +771,10 @@ error_t *cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
 
     /* Bootstrap detection and execution.
      *
-     * Single-pass filter: walk fetched_profiles once, collect those
-     * with a .bootstrap script into `bootstrap_found`, then display,
-     * prompt, and (conditionally) fire. bootstrap_available is a
-     * simple derived flag used by the final "Next steps" hint. */
+     * Single-pass filter: walk fetched_profiles once, collect those with a
+     * .bootstrap script into `bootstrap_found`, then display, prompt, and
+     * (conditionally) fire. bootstrap_available is a simple derived flag used
+     * by the final "Next steps" hint. */
     bool run_bootstrap = false;
     bool bootstrap_available = false;
 
@@ -871,10 +866,10 @@ cleanup:
         gitops_close_repository(repo);
     }
 
-    /* All-or-nothing: a fatal error after the clone landed must not
-     * leave a half-initialized repository that blocks the retry
-     * (git_clone refuses a non-empty directory). Runs after the repo
-     * handle is closed so nothing holds the directory open. */
+    /* All-or-nothing: a fatal error after the clone landed must not leave a
+     * half-initialized repository that blocks the retry (git_clone refuses a
+     * non-empty directory). Runs after the repo handle is closed so nothing holds
+     * the directory open. */
     if (final_err && clone_landed) {
         rollback_clone_dir(local_path, path_preexisted, out);
     }
@@ -892,11 +887,10 @@ cleanup:
  * ══════════════════════════════════════════════════════════════════ */
 
 /**
- * Interpret the 1-2 raw positionals: first is the URL, optional second
- * is the local path. Ordering matters (URL must precede path), so the
- * engine's classifier (position-agnostic by design) isn't expressive
- * enough; a raw bucket plus this post_parse hook keeps the logic local
- * and linear.
+ * Interpret the 1-2 raw positionals: first is the URL, optional second is the
+ * local path. Ordering matters (URL must precede path), so the engine's classifier
+ * (position-agnostic by design) isn't expressive enough; a raw bucket plus this
+ * post_parse hook keeps the logic local and linear.
  */
 static error_t *clone_post_parse(
     void *opts_v, arena_t *arena, const args_command_t *cmd
@@ -914,9 +908,9 @@ static error_t *clone_post_parse(
 }
 
 /**
- * Mutual-exclusion check: `--all` and `-p/--profile(s)` cannot both
- * constrain the fetch set. Everything else has already been validated
- * by the engine's per-row rules.
+ * Mutual-exclusion check: `--all` and `-p/--profile(s)` cannot both constrain
+ * the fetch set. Everything else has already been validated by the engine's per-row
+ * rules.
  */
 static error_t *clone_validate(
     void *opts_v, const args_command_t *cmd
@@ -939,12 +933,11 @@ static error_t *clone_dispatch(const void *ctx_v, void *opts_v) {
 
 static const args_opt_t clone_opts[] = {
     ARGS_GROUP("Options:"),
-    /* Three aliases — `-p`, `--profile`, `--profiles` — preserving
-     * the flag names the legacy parser accepted. Arity differs:
-     * ARGS_APPEND binds one value per occurrence, whereas the legacy
-     * parser consumed every bare token until the next flag. Users
-     * must write `-p a -p b` (not `-p a b`). Peer-list order is the
-     * help display order: "-p, --profile, --profiles". */
+    /* Three aliases — `-p`, `--profile`, `--profiles` — preserving the flag names
+     * the legacy parser accepted. Arity differs: ARGS_APPEND binds one value
+     * per occurrence, whereas the legacy parser consumed every bare token until
+     * the next flag. Users must write `-p a -p b` (not `-p a b`). Peer-list order
+     * is the help display order: "-p, --profile, --profiles". */
     ARGS_APPEND(
         "p profile",          "<name>",
         cmd_clone_options_t,  profiles,        profile_count,
@@ -976,9 +969,9 @@ static const args_opt_t clone_opts[] = {
         cmd_clone_options_t,  verbose,
         "Verbose output"
     ),
-    /* <url> [<path>] — order-dependent. Classifier has no position
-     * awareness, so a raw bucket with post_parse assignment is cleaner
-     * than two POSITIONAL_ONE rows differentiated by ad-hoc classes. */
+    /* <url> [<path>] — order-dependent. Classifier has no position awareness,
+     * so a raw bucket with post_parse assignment is cleaner than two POSITIONAL_ONE
+     * rows differentiated by ad-hoc classes. */
     ARGS_POSITIONAL_RAW(
         cmd_clone_options_t,  positional_args, positional_count,
         1,                    2

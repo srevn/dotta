@@ -1,14 +1,14 @@
 /**
  * cleanup.c - Orphaned file and directory pruning: plan / preflight / execute
  *
- * See cleanup.h for the contract. Orphan detection, Git authority and
- * divergence are the workspace's; this module decides which orphans the
- * run may touch, what becomes of each, and carries that out.
+ * See cleanup.h for the contract. Orphan detection, Git authority and divergence
+ * are the workspace's; this module decides which orphans the run may touch, what
+ * becomes of each, and carries that out.
  *
- * The file-side verdict re-verifies nothing and touches neither disk, Git
- * nor state — every input is a field of the workspace item, observed once
- * at load. Only the directory side looks, because emptiness is not a
- * property any earlier phase could have recorded.
+ * The file-side verdict re-verifies nothing and touches neither disk, Git nor
+ * state — every input is a field of the workspace item, observed once at load.
+ * Only the directory side looks, because emptiness is not a property any earlier
+ * phase could have recorded.
  */
 
 #include "core/cleanup.h"
@@ -30,8 +30,8 @@
 /**
  * Order two orphaned directories deepest first
  *
- * Descending path length, then ascending path so the order is total and
- * the reports are reproducible.
+ * Descending path length, then ascending path so the order is total and the reports
+ * are reproducible.
  */
 static int compare_deepest_first(const void *a, const void *b) {
     const char *pa = (*(const workspace_item_t *const *) a)->filesystem_path;
@@ -66,8 +66,8 @@ error_t *cleanup_plan_build(
         return ERROR(ERR_MEMORY, "Failed to allocate cleanup plan");
     }
 
-    /* --keep-orphans: nothing is planned, by request. The empty plan is
-     * what every later stage reads, so no stage re-encodes the flag. */
+    /* --keep-orphans: nothing is planned, by request. The empty plan is what
+     * every later stage reads, so no stage re-encodes the flag. */
     if (keep_orphans) {
         *out = plan;
         return NULL;
@@ -80,17 +80,16 @@ error_t *cleanup_plan_build(
     for (size_t i = 0; i < count; i++) {
         const workspace_item_t *item = &items[i];
 
-        /* Both kinds reach both states: the kind decides the bucket, the
-         * state is a verdict's input. */
+        /* Both kinds reach both states: the kind decides the bucket, the state
+         * is a verdict's input. */
         if (item->state != WORKSPACE_STATE_ORPHANED &&
             item->state != WORKSPACE_STATE_RELEASED) {
             continue;
         }
 
-        /* Coherent Scope principle: the same operation-scope triplet the
-         * deploy planner applies. Profile / path dimensions reject
-         * silently — the orphan is outside the user's declared operation
-         * scope. */
+        /* Coherent Scope principle: the same operation-scope triplet the deploy
+         * planner applies. Profile / path dimensions reject silently — the orphan
+         * is outside the user's declared operation scope. */
         if (!scope_accepts_profile(scope, item->profile) ||
             !scope_accepts_path(scope, item->storage_path, item->item_kind)) {
             continue;
@@ -107,16 +106,16 @@ error_t *cleanup_plan_build(
         if (err) goto cleanup;
     }
 
-    /* Prune order, established once. A child's path is its parent's path
-     * plus a separator and a name, so it is strictly longer; descending
-     * length therefore places every directory after its own descendants,
-     * and two paths of equal length can never be parent and child. That
-     * order is what lets a single pass decide a directory whose emptiness
-     * depends on its children — no second look, no iterating to a fixpoint.
+    /* Prune order, established once. A child's path is its parent's path plus a
+     * separator and a name, so it is strictly longer; descending length therefore
+     * places every directory after its own descendants, and two paths of equal
+     * length can never be parent and child. That order is what lets a single
+     * pass decide a directory whose emptiness depends on its children — no second
+     * look, no iterating to a fixpoint.
      *
-     * Established here rather than borrowed from the state layer's
-     * ORDER BY filesystem_path: it is this module's correctness that rests
-     * on it, and a producer two layers away is free to change its sort. */
+     * Established here rather than borrowed from the state layer's ORDER BY
+     * filesystem_path: it is this module's correctness that rests on it, and a
+     * producer two layers away is free to change its sort. */
     if (plan->directories.count > 1) {
         qsort(
             plan->directories.items, plan->directories.count,
@@ -151,8 +150,8 @@ void cleanup_plan_free(cleanup_plan_t *plan) {
 /**
  * Map an orphaned file's divergence to the reason it is skipped
  *
- * The table and its rationale are in cleanup.h — kept in one place, where
- * a caller reading the enum finds them.
+ * The table and its rationale are in cleanup.h — kept in one place, where a caller
+ * reading the enum finds them.
  */
 cleanup_skip_reason_t cleanup_skip_reason(const workspace_item_t *item) {
     divergence_type_t divergence = item->divergence;
@@ -179,8 +178,8 @@ cleanup_skip_reason_t cleanup_skip_reason(const workspace_item_t *item) {
 
     /* All priority flags handled above. Remaining flags:
      * - ENCRYPTION: Policy mismatch (not user modification) — safe
-     * - STALE: never emitted for an orphan (compute_orphan_divergence asks
-     *   one question, of disk alone) — listed so it cannot block
+     * - STALE: never emitted for an orphan (compute_orphan_divergence asks one
+     *   question, of disk alone) — listed so it cannot block
      * Unknown flags: block removal until explicitly handled above. */
     static const divergence_type_t known_flags = DIVERGENCE_CONTENT |
         DIVERGENCE_TYPE | DIVERGENCE_MODE | DIVERGENCE_OWNERSHIP |
@@ -193,22 +192,21 @@ cleanup_skip_reason_t cleanup_skip_reason(const workspace_item_t *item) {
 /**
  * What stands at an orphaned directory's path, right now
  *
- * The one question the verdicts and the prune must answer identically, so
- * one function answers it for both.
+ * The one question the verdicts and the prune must answer identically, so one
+ * function answers it for both.
  *
- * ABSENT is stat truth — a dangling symlink reads absent and its row is
- * reclaimed, which is what the prune's reclaim arm has always done and
- * what the workspace's own on_filesystem says for a directory orphan.
- * Making it lstat-based would change behavior rather than counts, and
- * belongs with the decision about what to do with a foreign occupant.
+ * ABSENT is stat truth — a dangling symlink reads absent and its row is reclaimed,
+ * which is what the prune's reclaim arm has always done and what the workspace's
+ * own on_filesystem says for a directory orphan. Making it lstat-based would
+ * change behavior rather than counts, and belongs with the decision about what
+ * to do with a foreign occupant.
  *
- * FOREIGN is anything rmdir(2) cannot remove and dotta does not own — a
- * symlink, a regular file. Both phases skip it, under the label the
- * outcome already uses.
+ * FOREIGN is anything rmdir(2) cannot remove and dotta does not own — a symlink,
+ * a regular file. Both phases skip it, under the label the outcome already uses.
  *
- * Only a real directory earns an emptiness verdict, and that is the one
- * thing the two phases decide differently on purpose: the verdict against
- * this run's planned effects, the prune against the disk it has changed.
+ * Only a real directory earns an emptiness verdict, and that is the one thing
+ * the two phases decide differently on purpose: the verdict against this run's
+ * planned effects, the prune against the disk it has changed.
  */
 typedef enum {
     DIR_PROBE_ABSENT,      /* Nothing there — reclaimed, no filesystem effect */
@@ -230,9 +228,8 @@ static dir_probe_t probe_orphan_directory(const char *path) {
 /**
  * Is this directory entry one the run is about to prune?
  *
- * The hole in the verdict phase's emptiness walk. Membership is keyed by
- * filesystem path, which is why the entry arrives as a full path rather
- * than a basename.
+ * The hole in the verdict phase's emptiness walk. Membership is keyed by filesystem
+ * path, which is why the entry arrives as a full path rather than a basename.
  */
 static bool entry_is_prunable(const char *child, void *prunable) {
     return hashmap_has((const hashmap_t *) prunable, child);
@@ -241,23 +238,22 @@ static bool entry_is_prunable(const char *child, void *prunable) {
 /**
  * Will this run's deployment put something inside this directory?
  *
- * Deployment runs before cleanup, so a path the plan is about to
- * materialize is content that will be there when the prune looks — even
- * though nothing of it is on disk now, which is exactly why the disk
- * cannot answer this and the plan must.
+ * Deployment runs before cleanup, so a path the plan is about to materialize is
+ * content that will be there when the prune looks — even though nothing of it
+ * is on disk now, which is exactly why the disk cannot answer this and the plan
+ * must.
  *
- * Every directory above a deployed path is occupied by it, not just its
- * immediate parent: the ones deployment creates on the way count too.
+ * Every directory above a deployed path is occupied by it, not just its immediate
+ * parent: the ones deployment creates on the way count too.
  */
 static bool deploys_into(const cleanup_options_t *opts, const char *dir) {
     size_t len = strlen(dir);
 
-    /* Strictly inside: a prefix and then a separator, so "/a/bc" is not
-     * inside "/a/b" — and neither is "/a/b" itself. strncmp == 0
-     * guarantees the candidate has at least len bytes, so reading
-     * path[len] is in bounds: it is either the terminator or a real
-     * character. Both sides are canonical filesystem paths without a
-     * trailing separator. */
+    /* Strictly inside: a prefix and then a separator, so "/a/bc" is not inside
+     * "/a/b" — and neither is "/a/b" itself. strncmp == 0 guarantees the candidate
+     * has at least len bytes, so reading path[len] is in bounds: it is either
+     * the terminator or a real character. Both sides are canonical filesystem
+     * paths without a trailing separator. */
     for (size_t i = 0; i < opts->deploying_files.count; i++) {
         const char *path = opts->deploying_files.entries[i]->filesystem_path;
 
@@ -289,15 +285,15 @@ error_t *cleanup_preflight(
     CHECK_NULL(opts);
     CHECK_NULL(out);
 
-    /* calloc zeroes the eight buckets — an empty answer needs no NULL
-     * guard downstream */
+    /* calloc zeroes the eight buckets — an empty answer needs no NULL guard
+     * downstream */
     cleanup_preflight_result_t *verdicts = calloc(1, sizeof(*verdicts));
     if (!verdicts) {
         return ERROR(ERR_MEMORY, "Failed to allocate cleanup verdicts");
     }
 
-    /* Everything this run prunes, in one set: the directory pass asks it
-     * about every entry it meets. Borrowed keys, all workspace-owned. */
+    /* Everything this run prunes, in one set: the directory pass asks it about
+     * every entry it meets. Borrowed keys, all workspace-owned. */
     hashmap_t *prunable = hashmap_borrow(plan->files.count + plan->directories.count);
     if (!prunable) {
         cleanup_preflight_result_free(verdicts);
@@ -306,34 +302,33 @@ error_t *cleanup_preflight(
 
     error_t *err = NULL;
 
-    /* One test per file, in the order presence → authority → skip reason.
-     * The first two are the workspace's observations, read straight off the
-     * item; the third is cleanup_skip_reason. No syscalls, no queries. */
+    /* One test per file, in the order presence → authority → skip reason. The
+     * first two are the workspace's observations, read straight off the item;
+     * the third is cleanup_skip_reason. No syscalls, no queries. */
     workspace_items_t files = workspace_items_view(&plan->files);
 
     for (size_t i = 0; i < files.count; i++) {
         const workspace_item_t *item = files.entries[i];
 
         if (!item->on_filesystem) {
-            /* Already gone: nothing to protect, nothing to remove — a pure
-             * state reclaim whatever Git or the divergence bits say. It has
-             * no filesystem effect to preview, so it joins neither the
-             * prune count nor the prune set; on_filesystem was established
-             * by workspace orphan analysis and is trusted here. */
+            /* Already gone: nothing to protect, nothing to remove — a pure state
+             * reclaim whatever Git or the divergence bits say. It has no filesystem
+             * effect to preview, so it joins neither the prune count nor the
+             * prune set; on_filesystem was established by workspace orphan analysis
+             * and is trusted here. */
             err = ptr_array_push(&verdicts->absent_files, item);
 
         } else if (item->state == WORKSPACE_STATE_RELEASED) {
-            /* Git no longer backs the file — the branch was deleted, the
-             * path was removed from it — or dotta never deployed it (the
-             * workspace's ownership gate); the workspace observed it
-             * either way. The file stays on disk to protect the user's
-             * data, and the record retires because dotta cannot manage
-             * what Git cannot restore, and does not remove what it did not
-             * put there: it is released from dotta's management, not
-             * pruned.
+            /* Git no longer backs the file — the branch was deleted, the path
+             * was removed from it — or dotta never deployed it (the workspace's
+             * ownership gate); the workspace observed it either way. The file
+             * stays on disk to protect the user's data, and the record retires
+             * because dotta cannot manage what Git cannot restore, and does not
+             * remove what it did not put there: it is released from dotta's
+             * management, not pruned.
              *
-             * Decided before --force is consulted: --force prunes what
-             * would be skipped, never what is released. */
+             * Decided before --force is consulted: --force prunes what would be
+             * skipped, never what is released. */
             err = ptr_array_push(&verdicts->released_files, item);
 
         } else if (!opts->force && cleanup_skip_reason(item) != CLEANUP_SKIP_NONE) {
@@ -349,15 +344,15 @@ error_t *cleanup_preflight(
         if (err) goto cleanup;
     }
 
-    /* A directory is prunable iff everything in it is OS metadata, a file
-     * this run unlinks, or an orphaned directory beneath it that is itself
-     * prunable — and nothing this run deploys lands inside it. That is what
-     * the prune arrives at by acting, read off the plan here in one pass
-     * because the plan orders every child before its parent.
+    /* A directory is prunable iff everything in it is OS metadata, a file this
+     * run unlinks, or an orphaned directory beneath it that is itself prunable
+     * — and nothing this run deploys lands inside it. That is what the prune
+     * arrives at by acting, read off the plan here in one pass because the plan
+     * orders every child before its parent.
      *
-     * `prunable` enters holding every prunable file and leaves holding
-     * every prunable directory as well, which is what lets a parent see its
-     * pruned children as gone.
+     * `prunable` enters holding every prunable file and leaves holding every
+     * prunable directory as well, which is what lets a parent see its pruned
+     * children as gone.
      *
      * The buckets fill in walk order, which is prune order: deepest first. */
     workspace_items_t dirs = workspace_items_view(&plan->directories);
@@ -367,11 +362,11 @@ error_t *cleanup_preflight(
         const char *path = item->filesystem_path;
 
         if (item->state == WORKSPACE_STATE_RELEASED) {
-            /* The same verdict as a released file, for the same reasons:
-             * Git no longer claims the directory, or dotta never made it.
-             * Left alone — unprobed, because nothing about its contents
-             * changes the answer — and the record retires. It is not in
-             * the prune set, so a parent above it stays occupied by it. */
+            /* The same verdict as a released file, for the same reasons: Git no
+             * longer claims the directory, or dotta never made it. Left alone —
+             * unprobed, because nothing about its contents changes the answer —
+             * and the record retires. It is not in the prune set, so a parent
+             * above it stays occupied by it. */
             err = ptr_array_push(&verdicts->released_dirs, item);
             if (err) goto cleanup;
             continue;
@@ -380,8 +375,8 @@ error_t *cleanup_preflight(
         switch (probe_orphan_directory(path)) {
             case DIR_PROBE_ABSENT:
                 /* A pure state reclaim: no filesystem effect to preview. Not a
-                 * departure either — a dangling link reads absent here and
-                 * still occupies its parent, and nothing removes it. */
+                 * departure either — a dangling link reads absent here and still
+                 * occupies its parent, and nothing removes it. */
                 err = ptr_array_push(&verdicts->absent_dirs, item);
                 break;
 
@@ -441,12 +436,11 @@ void cleanup_preflight_result_free(cleanup_preflight_result_t *verdicts) {
 /**
  * Prune the files the verdicts cleared
  *
- * Acts on prunable_files alone; skipped, released and absent are decided
- * at preflight and confirmed here by passing them through, so the receipt
- * accounts for the whole plan and apply's record step reads one object
- * (cleanup.h). Data-loss prevention happened at preflight, in
- * cleanup_skip_reason and the released test; nothing is re-checked here
- * and nothing pretends to be.
+ * Acts on prunable_files alone; skipped, released and absent are decided at
+ * preflight and confirmed here by passing them through, so the receipt accounts
+ * for the whole plan and apply's record step reads one object (cleanup.h).
+ * Data-loss prevention happened at preflight, in cleanup_skip_reason and the
+ * released test; nothing is re-checked here and nothing pretends to be.
  *
  * @param verdicts Verdicts from cleanup_preflight (must not be NULL)
  * @param result Result to fill (must not be NULL)
@@ -462,16 +456,15 @@ static error_t *prune_orphaned_files(
         const workspace_item_t *item = prunable.entries[i];
         const char *path = item->filesystem_path;
 
-        /* Gone before we got here: no filesystem effect happened or was
-         * needed — the record retires. Reporting it as "pruned" would claim
-         * an effect that never occurred.
+        /* Gone before we got here: no filesystem effect happened or was needed
+         * — the record retires. Reporting it as "pruned" would claim an effect
+         * that never occurred.
          *
-         * lstat, matching both the workspace's on_filesystem for a file
-         * orphan and unlink's own view of the path: a symlink row whose
-         * link now dangles is an object dotta deployed and is here to
-         * remove, not an absence to reclaim around. stat would follow the
-         * link, call it gone, retire the row and leave the link behind
-         * with nothing left that knows about it. */
+         * lstat, matching both the workspace's on_filesystem for a file orphan
+         * and unlink's own view of the path: a symlink row whose link now dangles
+         * is an object dotta deployed and is here to remove, not an absence to
+         * reclaim around. stat would follow the link, call it gone, retire the
+         * row and leave the link behind with nothing left that knows about it. */
         if (!fs_lexists(path)) {
             RETURN_IF_ERROR(ptr_array_push(&result->reclaimed_files, item));
             continue;
@@ -510,25 +503,23 @@ static error_t *prune_orphaned_files(
 /**
  * Prune the directories the verdicts predicted empty
  *
- * Runs after the files, so the filesystem it looks at is the one the user
- * will be left with. Prune order comes from the verdicts (deepest first,
- * the plan's order): every child is decided before its parent, so a parent
- * this run empties is seen empty when its turn comes — the whole reason
- * the old iterate-until-stable loop existed.
+ * Runs after the files, so the filesystem it looks at is the one the user will
+ * be left with. Prune order comes from the verdicts (deepest first, the plan's
+ * order): every child is decided before its parent, so a parent this run empties
+ * is seen empty when its turn comes — the whole reason the old iterate-until-stable
+ * loop existed.
  *
- * fs_remove_empty_dir is the mechanism and also the guard: it clears the
- * OS metadata the prediction looked past and nothing else, and it refuses
- * — before touching anything — the moment it meets an entry it may not
- * remove. So an entry that arrived while the prompt waited, or a child
- * whose own removal failed above, stops the removal instead of going with
- * it. That refusal is the "not empty" verdict by another route —
- * ERR_CONFLICT — not a failure.
+ * fs_remove_empty_dir is the mechanism and also the guard: it clears the OS
+ * metadata the prediction looked past and nothing else, and it refuses — before
+ * touching anything — the moment it meets an entry it may not remove. So an entry
+ * that arrived while the prompt waited, or a child whose own removal failed above,
+ * stops the removal instead of going with it. That refusal is the "not empty"
+ * verdict by another route — ERR_CONFLICT — not a failure.
  *
- * The probe runs again here even though the verdict is taken, because the
- * mechanism cannot tell the receipt what it found: fs_remove_empty_dir
- * treats absence as success (an absent directory would read "pruned", not
- * "reclaimed"), and rmdir on a symlink fails with ENOTDIR ("failed", not
- * "skipped").
+ * The probe runs again here even though the verdict is taken, because the mechanism
+ * cannot tell the receipt what it found: fs_remove_empty_dir treats absence as
+ * success (an absent directory would read "pruned", not "reclaimed"), and rmdir
+ * on a symlink fails with ENOTDIR ("failed", not "skipped").
  *
  * @param verdicts Verdicts from cleanup_preflight (must not be NULL)
  * @param result Result to fill (must not be NULL)
@@ -546,8 +537,8 @@ static error_t *prune_orphaned_directories(
 
         switch (probe_orphan_directory(path)) {
             case DIR_PROBE_ABSENT:
-                /* No filesystem effect happened or was needed — the record
-                 * retires, nothing is removed. */
+                /* No filesystem effect happened or was needed — the record retires,
+                 * nothing is removed. */
                 RETURN_IF_ERROR(ptr_array_push(&result->reclaimed_dirs, item));
                 continue;
 
@@ -604,8 +595,8 @@ error_t *cleanup_execute(
     CHECK_NULL(verdicts);
     CHECK_NULL(out);
 
-    /* calloc zeroes the ten buckets. Handed to the caller at once so a
-     * fatal error mid-run still leaves the partial receipt in its hands. */
+    /* calloc zeroes the ten buckets. Handed to the caller at once so a fatal
+     * error mid-run still leaves the partial receipt in its hands. */
     cleanup_result_t *result = calloc(1, sizeof(*result));
     if (!result) {
         return ERROR(ERR_MEMORY, "Failed to allocate cleanup result");

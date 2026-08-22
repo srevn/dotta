@@ -17,17 +17,17 @@
 #include "sys/filesystem.h"
 #include "sys/process.h"
 
-/* Credential helper subprocess timeout. Accommodates TouchID/Keychain
- * prompts and LDAP-backed corporate helpers on first use; a hung helper
- * is killed after this window so dotta does not wedge indefinitely. */
+/* Credential helper subprocess timeout. Accommodates TouchID/Keychain prompts
+ * and LDAP-backed corporate helpers on first use; a hung helper is killed after
+ * this window so dotta does not wedge indefinitely. */
 #define CRED_HELPER_TIMEOUT_SECONDS 30
 
 /**
  * Validate a credential field for git credential protocol compliance.
  *
- * The git credential protocol is line-based (key=value\n format).
- * Field values MUST NOT contain newlines or carriage returns, as they
- * would break the protocol parser and could leak later fields.
+ * The git credential protocol is line-based (key=value\n format). Field values
+ * MUST NOT contain newlines or carriage returns, as they would break the protocol
+ * parser and could leak later fields.
  */
 static bool is_valid_credential_field(const char *field) {
     /* Defensive check - caller should ensure non-NULL */
@@ -50,15 +50,15 @@ static bool is_valid_credential_field(const char *field) {
  * Validate a host string.
  *
  * Accepts two forms:
- *   - Bracketed IPv6: "[<address>]" optionally followed by ":<port>".
- *     Inner address is hex digits, ':' separators, and '.' (for the
- *     IPv4-mapped form ::ffff:1.2.3.4).
- *   - Plain hostname[:port]: alphanumerics plus '.', '-', '_', then
- *     an optional ":<port>" of digits only.
+ *   - Bracketed IPv6: "[<address>]" optionally followed by ":<port>". Inner address
+ *     is hex digits, ':' separators, and '.' (for the IPv4-mapped form
+ *     ::ffff:1.2.3.4).
+ *   - Plain hostname[:port]: alphanumerics plus '.', '-', '_', then an optional
+ *     ":<port>" of digits only.
  *
- * Brackets are preserved on IPv6 hosts so the value can travel
- * directly into a `host=` line — internal address colons are not
- * mistaken for a port separator by the helper.
+ * Brackets are preserved on IPv6 hosts so the value can travel directly into a
+ * `host=` line — internal address colons are not mistaken for a port separator
+ * by the helper.
  */
 static bool is_valid_host(const char *host) {
     if (!host || !*host) {
@@ -72,8 +72,8 @@ static bool is_valid_host(const char *host) {
             return false;
         }
 
-        /* Inside brackets: hex digits, ':' separators, '.' (for IPv4-
-         * mapped addresses like ::ffff:1.2.3.4). */
+        /* Inside brackets: hex digits, ':' separators, '.' (for IPv4-mapped
+         * addresses like ::ffff:1.2.3.4). */
         for (const char *p = host + 1; p < close; p++) {
             char c = *p;
             bool is_hex = (c >= '0' && c <= '9') ||
@@ -128,10 +128,9 @@ static bool is_valid_host(const char *host) {
 error_t *credential_url_parse(const char *url, credential_url_t *out) {
     CHECK_NULL(out);
 
-    /* Reset before any return so callers that forgot to zero-initialize
-     * still see well-defined fields on the failure paths. The header
-     * documents the zero-init contract; this guarantees it instead of
-     * just expecting it. */
+    /* Reset before any return so callers that forgot to zero-initialize still
+     * see well-defined fields on the failure paths. The header documents the
+     * zero-init contract; this guarantees it instead of just expecting it. */
     out->protocol = NULL;
     out->host = NULL;
 
@@ -158,9 +157,9 @@ error_t *credential_url_parse(const char *url, credential_url_t *out) {
         protocol[plen] = '\0';
         authority_start = scheme_sep + 3;
     } else {
-        /* No "://" — only SCP-style user@host:path is accepted. A bare
-         * hostname is not a valid git remote URL; reject explicitly so
-         * the caller can fall through to its no-credentials path. */
+        /* No "://" — only SCP-style user@host:path is accepted. A bare hostname
+         * is not a valid git remote URL; reject explicitly so the caller can
+         * fall through to its no-credentials path. */
         const char *at = strchr(url, '@');
         const char *colon = strchr(url, ':');
         if (!(at && colon && at < colon)) {
@@ -176,10 +175,10 @@ error_t *credential_url_parse(const char *url, credential_url_t *out) {
         authority_start = url;
     }
 
-    /* Walk to the authority terminator. For standard URLs that's '/'.
-     * For SCP it's the first unbracketed ':' (path separator). Bracketed
-     * regions (IPv6 literals) are skipped wholesale so internal colons
-     * are not confused for a port or path separator. */
+    /* Walk to the authority terminator. For standard URLs that's '/'. For SCP
+     * it's the first unbracketed ':' (path separator). Bracketed regions (IPv6
+     * literals) are skipped wholesale so internal colons are not confused for a
+     * port or path separator. */
     const char *authority_end = authority_start;
     while (*authority_end) {
         char c = *authority_end;
@@ -198,9 +197,9 @@ error_t *credential_url_parse(const char *url, credential_url_t *out) {
         authority_end++;
     }
 
-    /* Skip userinfo: take the LAST '@' before the authority terminator
-     * so a password containing an unencoded '@' (uncommon but legal
-     * pre-encoding) does not split the host away. */
+    /* Skip userinfo: take the LAST '@' before the authority terminator so a
+     * password containing an unencoded '@' (uncommon but legal pre-encoding)
+     * does not split the host away. */
     const char *host_start = authority_start;
     for (const char *p = authority_start; p < authority_end; p++) {
         if (*p == '@') {
@@ -241,9 +240,7 @@ void credential_url_dispose(credential_url_t *u) {
 /**
  * Build a git credential protocol request into `out`.
  *
- *   protocol=<protocol>\n
- *   host=<hostname>\n
- *   [username=<username>\n]
+ *   protocol=<protocol>\n host=<hostname>\n [username=<username>\n]
  *   [password=<password>\n]
  *   \n  (blank line terminates request)
  *
@@ -251,10 +248,10 @@ void credential_url_dispose(credential_url_t *u) {
  * The fill path passes `username_from_url` (or NULL) and no password;
  * the approve/reject path passes both.
  *
- * Pre-sizes the buffer so no mid-fill realloc occurs. Buffers used to
- * carry passwords are scrubbed and freed by the caller; pre-sizing
- * means the scrub covers the complete lifetime of the password bytes
- * — no freed-and-reused intermediate heap pages escape zeroization.
+ * Pre-sizes the buffer so no mid-fill realloc occurs. Buffers used to carry
+ * passwords are scrubbed and freed by the caller; pre-sizing means the scrub
+ * covers the complete lifetime of the password bytes — no freed-and-reused
+ * intermediate heap pages escape zeroization.
  */
 static error_t *build_credential_request(
     buffer_t *out,
@@ -287,13 +284,12 @@ static error_t *build_credential_request(
 /**
  * Run `git credential <subcommand>` with `request` piped to stdin.
  *
- * Shared by fill / approve / reject. Shell-free: the child is spawned
- * via `sys/process` using execve — no popen, no heredoc, no
- * interpolation of user data into any command string.
+ * Shared by fill / approve / reject. Shell-free: the child is spawned via
+ * `sys/process` using execve — no popen, no heredoc, no interpolation of user
+ * data into any command string.
  *
- * `capture` controls whether the helper's response is captured into
- * `*result`. Approve/reject pass false (fire-and-forget, output
- * ignored); fill passes true.
+ * `capture` controls whether the helper's response is captured into `*result`.
+ * Approve/reject pass false (fire-and-forget, output ignored); fill passes true.
  */
 static error_t *run_credential_helper(
     const char *subcommand,
@@ -302,8 +298,8 @@ static error_t *run_credential_helper(
     bool capture,
     process_result_t *result
 ) {
-    /* `env` locates `git` on PATH; process_run does no PATH lookup of
-     * its own (argv[0] must be an absolute path). */
+    /* `env` locates `git` on PATH; process_run does no PATH lookup of its own
+     * (argv[0] must be an absolute path). */
     char *const argv[] = {
         "/usr/bin/env",
         "git",
@@ -311,11 +307,10 @@ static error_t *run_credential_helper(
         (char *) subcommand,
         NULL
     };
-    /* Helper inherits the user's environment — git needs $HOME for
-     * ~/.gitconfig, $PATH to dispatch to `git-credential-<name>`
-     * binaries, and possibly $DISPLAY / $SSH_AUTH_SOCK / $XDG_* for
-     * GUI-backed helpers. Curating a narrower list risks missing a
-     * var some helper silently depends on. */
+    /* Helper inherits the user's environment — git needs $HOME for ~/.gitconfig,
+     * $PATH to dispatch to `git-credential-<name>` binaries, and possibly $DISPLAY
+     * / $SSH_AUTH_SOCK / $XDG_* for GUI-backed helpers. Curating a narrower list
+     * risks missing a var some helper silently depends on. */
     extern char **environ;
     process_spec_t spec = {
         .argv              = argv,
@@ -335,10 +330,9 @@ static error_t *run_credential_helper(
 /**
  * Scrub and free the request buffer.
  *
- * Request buffers may hold a password (approve/reject). The pre-size
- * in build_credential_request prevents realloc, so scrubbing the
- * capacity before buffer_free wipes every byte that ever held
- * credential data.
+ * Request buffers may hold a password (approve/reject). The pre-size in
+ * build_credential_request prevents realloc, so scrubbing the capacity before
+ * buffer_free wipes every byte that ever held credential data.
  */
 static void credential_request_secure_free(buffer_t *req) {
     if (req->data) {
@@ -348,15 +342,14 @@ static void credential_request_secure_free(buffer_t *req) {
 }
 
 /**
- * Inspect a process_result_t for primitive-level helper failures
- * (exec failed / timed out) and synthesize an error_t describing the
- * cause. Returns NULL when the process completed normally — even when
- * the exit code is non-zero, since many helpers signal "no creds for
- * this URL" or "subcommand not implemented" via non-zero exit, which
- * the caller treats as a non-fatal outcome.
+ * Inspect a process_result_t for primitive-level helper failures (exec failed /
+ * timed out) and synthesize an error_t describing the cause. Returns NULL when
+ * the process completed normally — even when the exit code is non-zero, since
+ * many helpers signal "no creds for this URL" or "subcommand not implemented"
+ * via non-zero exit, which the caller treats as a non-fatal outcome.
  *
- * `subcommand` is woven into the message so the caller doesn't need
- * to repeat the context.
+ * `subcommand` is woven into the message so the caller doesn't need to repeat
+ * the context.
  */
 static error_t *helper_outcome_error(
     const char *subcommand, const process_result_t *result
@@ -379,19 +372,16 @@ static error_t *helper_outcome_error(
 }
 
 /**
- * Run the git credential helper subcommand (approve/reject) for a
- * single credential tuple. Shared body for
- * credential_helper_{approve,reject}.
+ * Run the git credential helper subcommand (approve/reject) for a single credential
+ * tuple. Shared body for credential_helper_{approve,reject}.
  *
- * SECURITY: No user data is interpolated into any shell command —
- * there is no shell. argv is a fixed-literal vector; credential fields
- * flow through the subprocess stdin pipe assembled in
- * build_credential_request.
+ * SECURITY: No user data is interpolated into any shell command — there is no
+ * shell. argv is a fixed-literal vector; credential fields flow through the
+ * subprocess stdin pipe assembled in build_credential_request.
  *
- * A non-zero exit from the helper is NOT propagated as an error — many
- * helpers are read-only and don't implement approve/reject. Only exec
- * failure or timeout produce an error_t; the caller decides whether
- * to surface it.
+ * A non-zero exit from the helper is NOT propagated as an error — many helpers
+ * are read-only and don't implement approve/reject. Only exec failure or timeout
+ * produce an error_t; the caller decides whether to surface it.
  */
 static error_t *credential_helper_commit(
     const char *subcommand,
@@ -462,10 +452,9 @@ error_t *credential_helper_fill(
     bool forward_user = username_from_url && *username_from_url &&
         is_valid_credential_field(username_from_url);
 
-    /* Build the fill request. No password in fill requests; the
-     * username-from-URL is optional and disambiguates multi-account
-     * configs (helper picks the matching entry instead of the default
-     * for this host). */
+    /* Build the fill request. No password in fill requests; the username-from-URL
+     * is optional and disambiguates multi-account configs (helper picks the
+     * matching entry instead of the default for this host). */
     buffer_t req = BUFFER_INIT;
     error_t *err = build_credential_request(
         &req, u->protocol, u->host,
@@ -481,14 +470,14 @@ error_t *credential_helper_fill(
     err = run_credential_helper("fill", req.data, req.size, true, &result);
 
     /* Request bytes (protocol, host, optionally username-from-URL) are
-     * low-sensitivity, but scrub on the same path as approve/reject so
-     * the discipline is uniform and future changes do not silently
-     * leak a newly added field. */
+     * low-sensitivity, but scrub on the same path as approve/reject so the
+     * discipline is uniform and future changes do not silently leak a newly added
+     * field. */
     credential_request_secure_free(&req);
 
-    /* All process_result_dispose paths below scrub the capture buffer
-     * automatically because run_credential_helper opted into
-     * secure_capture — no separate per-exit scrub call needed. */
+    /* All process_result_dispose paths below scrub the capture buffer automatically
+     * because run_credential_helper opted into secure_capture — no separate
+     * per-exit scrub call needed. */
     if (err) {
         process_result_dispose(&result);
         return err;
@@ -500,23 +489,22 @@ error_t *credential_helper_fill(
         return err;
     }
 
-    /* A non-zero exit means "helper has nothing for this URL" — common
-     * (helper not configured, public repo). Not an error; the caller
-     * falls through to its anonymous / default path. */
+    /* A non-zero exit means "helper has nothing for this URL" — common (helper
+     * not configured, public repo). Not an error; the caller falls through to
+     * its anonymous / default path. */
     if (result.exit_code != 0 || !result.output) {
         process_result_dispose(&result);
         return NULL;
     }
 
-    /* Parse key=value\n lines from stdout. Helper stderr is merged
-     * into the same capture stream; lines that don't match the
-     * key=value shape are skipped (benign). The parse is destructive —
-     * it rewrites the output buffer — which is fine because the
-     * buffer is scrubbed and freed by process_result_dispose below.
+    /* Parse key=value\n lines from stdout. Helper stderr is merged into the same
+     * capture stream; lines that don't match the key=value shape are skipped
+     * (benign). The parse is destructive — it rewrites the output buffer — which
+     * is fine because the buffer is scrubbed and freed by process_result_dispose
+     * below.
      *
-     * strdup'ing each value gives a right-sized heap allocation
-     * (no fixed-buffer truncation) that the caller scrubs and
-     * frees with buffer_secure_free. */
+     * strdup'ing each value gives a right-sized heap allocation (no fixed-buffer
+     * truncation) that the caller scrubs and frees with buffer_secure_free. */
     char *user_buf = NULL;
     char *pass_buf = NULL;
     error_t *parse_err = NULL;
@@ -559,19 +547,18 @@ error_t *credential_helper_fill(
         return parse_err;
     }
 
-    /* Atomic both-or-neither: a partial response is treated as "no
-     * creds" so the caller falls through cleanly. The git credential
-     * protocol contracts both fields on a successful fill. */
+    /* Atomic both-or-neither: a partial response is treated as "no creds" so
+     * the caller falls through cleanly. The git credential protocol contracts
+     * both fields on a successful fill. */
     if (!user_buf || !pass_buf) {
         if (user_buf) buffer_secure_free(user_buf, strlen(user_buf) + 1);
         if (pass_buf) buffer_secure_free(pass_buf, strlen(pass_buf) + 1);
         return NULL;
     }
 
-    /* Defensive: a misbehaving helper can't inject additional protocol
-     * lines (we rebuild the request from scratch each call), but it
-     * could poison fields we forward elsewhere. Reject malformed values
-     * outright. */
+    /* Defensive: a misbehaving helper can't inject additional protocol lines
+     * (we rebuild the request from scratch each call), but it could poison fields
+     * we forward elsewhere. Reject malformed values outright. */
     if (!is_valid_credential_field(user_buf) ||
         !is_valid_credential_field(pass_buf)) {
         buffer_secure_free(user_buf, strlen(user_buf) + 1);
@@ -597,9 +584,9 @@ static bool file_exists(const char *path) {
 /**
  * Find an SSH private key in standard locations.
  *
- * Routes through fs_get_home so the search lands under the invoking
- * user's home regardless of sudo: under `sudo git fetch`, we want the
- * user's keys, not /root/.ssh/.
+ * Routes through fs_get_home so the search lands under the invoking user's home
+ * regardless of sudo: under `sudo git fetch`, we want the user's keys, not
+ * /root/.ssh/.
  */
 static char *find_ssh_key(void) {
     char *home = NULL;
@@ -645,12 +632,11 @@ int credential_try_ssh(
 ) {
     const char *username = username_from_url;
     if (!username && url) {
-        /* Default SSH username for the common URL shapes that don't
-         * already encode one. libgit2 itself extracts userinfo for
-         * standard ssh://user@host paths and SCP-style user@host:path,
-         * so the only case we still need to cover is the bare `git@`
-         * convention with no userinfo and the `ssh://host/path` form
-         * — both default to "git" in practice. */
+        /* Default SSH username for the common URL shapes that don't already encode
+         * one. libgit2 itself extracts userinfo for standard ssh://user@host
+         * paths and SCP-style user@host:path, so the only case we still need to
+         * cover is the bare `git@` convention with no userinfo and the
+         * `ssh://host/path` form — both default to "git" in practice. */
         if (str_starts_with(url, "git@") || strstr(url, "ssh://") != NULL) {
             username = "git";
         }

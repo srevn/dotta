@@ -1,10 +1,10 @@
 /**
  * hooks.h - Hook execution system
  *
- * Provides pre/post command hooks for extensibility. Hooks are shell
- * scripts that run before or after commands. The entire public surface
- * is two functions — hook_fire_pre and hook_fire_post — plus the value
- * type used to describe one invocation.
+ * Provides pre/post command hooks for extensibility. Hooks are shell scripts
+ * that run before or after commands. The entire public surface is two functions
+ * — hook_fire_pre and hook_fire_post — plus the value type used to describe one
+ * invocation.
  */
 
 #ifndef DOTTA_HOOKS_H
@@ -17,8 +17,8 @@
 /**
  * Hook-bearing command
  *
- * The commands that invoke pre/post hooks. Maps internally to a
- * pre_<cmd> / post_<cmd> hook script pair.
+ * The commands that invoke pre/post hooks. Maps internally to a pre_<cmd> /
+ * post_<cmd> hook script pair.
  */
 typedef enum {
     HOOK_CMD_ADD,
@@ -31,10 +31,10 @@ typedef enum {
 /**
  * Hook invocation description
  *
- * Describes one pre/post hook pair. Value type — callers allocate on
- * the stack and populate via designated initializers. All pointer
- * fields are borrowed; callers must keep them valid for the span
- * between hook_fire_pre() and hook_fire_post().
+ * Describes one pre/post hook pair. Value type — callers allocate on the stack
+ * and populate via designated initializers. All pointer fields are borrowed;
+ * callers must keep them valid for the span between hook_fire_pre() and
+ * hook_fire_post().
  *
  * Fields:
  *   cmd        Which command is firing (ADD/REMOVE/APPLY/UPDATE/SYNC).
@@ -43,10 +43,10 @@ typedef enum {
  *   files      NULL → no DOTTA_FILE_* env. Otherwise borrowed array.
  *   file_count Number of entries in files (0 if files is NULL).
  *   extras     NULL → no extra env vars. Otherwise NULL-terminated
- *              "KEY=VALUE" string array, appended after the standard
- *              DOTTA_* and DOTTA_FILE_N surface (before the system
- *              environ pass-through, so authoritative values are not
- *              shadowed). Borrowed pointers — must outlive the fire.
+ *              "KEY=VALUE" string array, appended after the standard DOTTA_*
+ *              and DOTTA_FILE_N surface (before the system environ pass-through,
+ *              so authoritative values are not shadowed). Borrowed pointers —
+ *              must outlive the fire.
  *   dry_run    Sets DOTTA_DRY_RUN for pre-hook; suppresses post-hook.
  */
 typedef struct {
@@ -61,16 +61,15 @@ typedef struct {
 /**
  * Fire a pre-command hook
  *
- * Builds a hook environment from inv and runs the pre_<cmd> hook
- * script (if configured and present). On failure, prints captured hook
- * output (if any) at OUTPUT_NORMAL and returns a wrapped error
- * "Pre-<cmd> hook failed". Callers should goto-cleanup on non-NULL
- * return.
+ * Builds a hook environment from inv and runs the pre_<cmd> hook script (if
+ * configured and present). On failure, prints captured hook output (if any) at
+ * OUTPUT_NORMAL and returns a wrapped error "Pre-<cmd> hook failed". Callers
+ * should goto-cleanup on non-NULL return.
  *
- * `repo_dir` is exported to the hook as DOTTA_REPO_DIR. Expected to
- * come from ctx->repo_path — the dispatcher already resolved it when
- * opening the repo, so callers borrow the string rather than re-
- * resolving. NULL suppresses the DOTTA_REPO_DIR export.
+ * `repo_dir` is exported to the hook as DOTTA_REPO_DIR. Expected to come from
+ * ctx->repo_path — the dispatcher already resolved it when opening the repo, so
+ * callers borrow the string rather than re-resolving. NULL suppresses the
+ * DOTTA_REPO_DIR export.
  */
 error_t *hook_fire_pre(
     const config_t *config,
@@ -82,10 +81,10 @@ error_t *hook_fire_pre(
 /**
  * Fire a post-command hook
  *
- * No-op if inv->dry_run is true. Otherwise builds a hook environment
- * from inv and runs the post_<cmd> hook script (if configured and
- * present). Failures never propagate: on error, prints a warning and
- * any captured hook output, then swallows the error.
+ * No-op if inv->dry_run is true. Otherwise builds a hook environment from inv
+ * and runs the post_<cmd> hook script (if configured and present). Failures never
+ * propagate: on error, prints a warning and any captured hook output, then swallows
+ * the error.
  *
  * `repo_dir` is exported as DOTTA_REPO_DIR (see hook_fire_pre).
  */

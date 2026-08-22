@@ -250,8 +250,8 @@ static int read_byte(void) {
 /**
  * Read escape sequence
  *
- * Called after reading ESC (0x1B). Reads the following bytes
- * and maps them to TERM_KEY_* codes.
+ * Called after reading ESC (0x1B). Reads the following bytes and maps them to
+ * TERM_KEY_* codes.
  *
  * Common sequences:
  * - ESC [ A -> Up
@@ -263,8 +263,8 @@ static int read_byte(void) {
  * - ESC [ 3 ~ -> Delete
  */
 static int read_escape_sequence(void) {
-    /* Check if more input is available without blocking.
-     * If not, this was just a standalone ESC key press. */
+    /* Check if more input is available without blocking. If not, this was just
+     * a standalone ESC key press. */
     if (!terminal_has_input()) {
         return TERM_KEY_ESCAPE;
     }
@@ -375,7 +375,7 @@ bool terminal_has_input(void) {
         /* Retry on EINTR (interrupted by signal) */
     } while (result < 0 && errno == EINTR);
 
-    /* Return true only if input is available.
-     * Other errors are treated as "no input" (conservative). */
+    /* Return true only if input is available. Other errors are treated as "no
+     * input" (conservative). */
     return result > 0;
 }

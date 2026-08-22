@@ -22,8 +22,7 @@
 #define MAX_FILES_DETAIL 5
 
 /**
- * Get current hostname
- * Returns allocated string or NULL on error
+ * Get current hostname Returns allocated string or NULL on error
  */
 static char *get_hostname(void) {
     char hostname[MAX_HOSTNAME];
@@ -40,8 +39,7 @@ static char *get_hostname(void) {
 }
 
 /**
- * Get current username
- * Returns allocated string or NULL on error
+ * Get current username Returns allocated string or NULL on error
  */
 static char *get_username(void) {
     /* Prefer USER env var (reliable in non-TTY contexts) */
@@ -60,8 +58,8 @@ static char *get_username(void) {
 }
 
 /**
- * Get current datetime in local timezone as ISO 8601 format
- * Returns allocated string or NULL on error
+ * Get current datetime in local timezone as ISO 8601 format Returns allocated
+ * string or NULL on error
  */
 static char *get_datetime_local(void) {
     time_t now = time(NULL);
@@ -80,8 +78,8 @@ static char *get_datetime_local(void) {
 }
 
 /**
- * Get current date in ISO 8601 format (YYYY-MM-DD)
- * Returns allocated string or NULL on error
+ * Get current date in ISO 8601 format (YYYY-MM-DD) Returns allocated string or
+ * NULL on error
  */
 static char *get_date_local(void) {
     time_t now = time(NULL);
@@ -126,8 +124,8 @@ const char *commit_action_name_past(commit_action_t action) {
 }
 
 /**
- * Format file list as bullet points with truncation
- * Returns allocated string or NULL on error
+ * Format file list as bullet points with truncation Returns allocated string or
+ * NULL on error
  */
 static char *format_file_list(char **files, size_t count) {
     if (count == 0 || !files) {
@@ -176,9 +174,8 @@ cleanup:
 /**
  * Substitute template variables in a string
  *
- * Replaces {variable} placeholders with actual values.
- * Variables: host, user, profile, action, action_past,
- * count, date, datetime, files, target_commit
+ * Replaces {variable} placeholders with actual values. Variables: host, user,
+ * profile, action, action_past, count, date, datetime, files, target_commit
  *
  * @param template Template string with {variable} placeholders
  * @param hostname Hostname value

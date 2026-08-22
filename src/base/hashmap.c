@@ -1,15 +1,15 @@
 /**
  * hashmap.c - Robin Hood hash table implementation
  *
- * Open addressing with linear probing and Robin Hood displacement.
- * Backward-shift deletion keeps the table tombstone-free.
+ * Open addressing with linear probing and Robin Hood displacement. Backward-shift
+ * deletion keeps the table tombstone-free.
  *
  * Slot layout:
  *   key != NULL  →  occupied (key is owned or borrowed per borrow_keys flag)
  *   key == NULL  →  empty
  *
- * Hash: FNV-1a (64-bit compute, XOR-folded to 32-bit for compact slots).
- * Capacity: always a power of two for fast masking.
+ * Hash: FNV-1a (64-bit compute, XOR-folded to 32-bit for compact slots). Capacity:
+ * always a power of two for fast masking.
  */
 
 #include "base/hashmap.h"
@@ -282,9 +282,8 @@ static error_t *hashmap_insert(
 /**
  * Find a slot by key.
  *
- * Returns pointer to the occupied slot, or NULL if absent. Uses Robin
- * Hood early termination: if our probe distance exceeds the slot's,
- * the key cannot be present.
+ * Returns pointer to the occupied slot, or NULL if absent. Uses Robin Hood early
+ * termination: if our probe distance exceeds the slot's, the key cannot be present.
  */
 static const hashmap_slot_t *hashmap_find(
     const hashmap_t *map,
@@ -446,8 +445,8 @@ bool hashmap_remove(hashmap_t *map, const char *key, void **out_old) {
     if (!map->borrow_keys) free(map->slots[pos].key);
 
     /*
-     * Backward-shift deletion: pull subsequent displaced entries back
-     * one slot until we hit an empty slot or one at its ideal position.
+     * Backward-shift deletion: pull subsequent displaced entries back one slot
+     * until we hit an empty slot or one at its ideal position.
      */
     for (;;) {
         size_t next = (pos + 1) & mask;

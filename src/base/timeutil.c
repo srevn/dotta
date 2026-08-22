@@ -17,8 +17,8 @@ static bool is_leap_year(int year) {
 /**
  * Portable, thread-safe replacement for timegm()
  *
- * Converts a struct tm in UTC to time_t using pure calculation without
- * manipulating environment variables (TZ), making it fully thread-safe.
+ * Converts a struct tm in UTC to time_t using pure calculation without manipulating
+ * environment variables (TZ), making it fully thread-safe.
  */
 time_t portable_timegm(struct tm *tm) {
     if (!tm) {
@@ -38,16 +38,16 @@ time_t portable_timegm(struct tm *tm) {
     int year = 1900 + tm->tm_year;
     int month = tm->tm_mon;      /* 0-11 */
 
-    /* Calculate days since epoch (1970-01-01)
-     * Formula: total_days = (year-1970)*365 + leap_days + month_days + day */
+    /* Calculate days since epoch (1970-01-01) Formula: total_days = (year-1970)*365
+     * + leap_days + month_days + day */
 
     /* Days from complete years since 1970 (not including leap days yet) */
     long long days = (long long) (year - 1970) * 365;
 
     /* Add leap days between 1970 and 'year'. This is done by calculating the
      * number of leap years up to 'year-1' and subtracting the number of leap
-     * years up to 1969. The formula for leap years up to year Y is
-     * (Y/4 - Y/100 + Y/400). This avoids loops and handles years before 1970.
+     * years up to 1969. The formula for leap years up to year Y is (Y/4 - Y/100
+     * + Y/400). This avoids loops and handles years before 1970.
      */
     int leap_years_until_year = (year - 1) / 4 - (year - 1) / 100 + (year - 1) / 400;
     int leap_years_until_1970 = 1969 / 4 - 1969 / 100 + 1969 / 400;

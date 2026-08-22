@@ -1,13 +1,14 @@
 /**
  * profiles.h - Profile name resolution and Git queries
  *
- * Handles profile detection, name resolution, and branch-level queries.
- * Pure query module — no manifest types or construction.
+ * Handles profile detection, name resolution, and branch-level queries. Pure
+ * query module — no manifest types or construction.
  *
  * Profile precedence (lowest to highest):
  * 1. global
  * 2. <os> (darwin, linux, freebsd) - base OS profile
- * 3. <os>/<variant> (darwin/name, freebsd/services) - OS sub-profiles (sorted alphabetically)
+ * 3. <os>/<variant> (darwin/name, freebsd/services) - OS sub-profiles (sorted
+ *    alphabetically)
  * 4. hosts/<hostname> - host base profile
  * 5. hosts/<hostname>/<variant> - host sub-profiles (sorted alphabetically)
  *
@@ -47,9 +48,9 @@
 /**
  * Detect matching profile names from a list of available branches
  *
- * Pure name-based detection using system information (OS, hostname).
- * Returns names in precedence order. Always includes "global" first
- * if present in the available branches.
+ * Pure name-based detection using system information (OS, hostname). Returns
+ * names in precedence order. Always includes "global" first if present in the
+ * available branches.
  *
  * Detection order:
  * 1. "global" — always included if available
@@ -58,11 +59,13 @@
  * 4. hosts/<hostname> — host base profile
  * 5. hosts/<hostname>/<variant> — host sub-profiles (sorted alphabetically)
  *
- * No Git operations — takes a branch name list, returns matching names.
- * All detection steps are non-fatal (skip on system call failure).
+ * No Git operations — takes a branch name list, returns matching names. All
+ * detection steps are non-fatal (skip on system call failure).
  *
- * @param available_branches List of branch names to match against (must not be NULL)
- * @param out_profiles Matched profile names in precedence order (must not be NULL, caller must free)
+ * @param available_branches List of branch names to match against (must not be
+ *                           NULL)
+ * @param out_profiles Matched profile names in precedence order (must not be
+ *                     NULL, caller must free)
  * @return Error or NULL on success
  */
 error_t *profile_detect(
@@ -74,8 +77,8 @@ error_t *profile_detect(
  * Resolve CLI profile names for operation filtering
  *
  * Lightweight validation of CLI profile arguments: checks that each name
- * corresponds to an existing branch without resolving Git refs or loading
- * profile objects. Returns validated names as a string array.
+ * corresponds to an existing branch without resolving Git refs or loading profile
+ * objects. Returns validated names as a string array.
  *
  * Use this when opts->profiles != NULL && opts->profile_count > 0.
  *
@@ -97,15 +100,15 @@ error_t *profile_resolve_filter(
 /**
  * Resolve enabled profile names from state database
  *
- * Lightweight name-only resolution: reads enabled profiles from state,
- * validates that each exists as a branch, and returns validated names.
- * Warns on stderr about profiles referenced in state that no longer exist.
+ * Lightweight name-only resolution: reads enabled profiles from state, validates
+ * that each exists as a branch, and returns validated names. Warns on stderr
+ * about profiles referenced in state that no longer exist.
  *
  * Does NOT resolve Git references or load profile trees.
  *
  * @param repo Repository (must not be NULL)
- * @param state State handle (must not be NULL; borrowed, not freed).
- *              Only SELECTs are executed — safe to pass a state_open() handle.
+ * @param state State handle (must not be NULL; borrowed, not freed). Only SELECTs
+ *              are executed — safe to pass a state_open() handle.
  * @param out Validated profile names (must not be NULL, caller must free)
  * @return Error (ERR_NOT_FOUND if no enabled profiles) or NULL on success
  */
@@ -118,29 +121,28 @@ error_t *profile_resolve_enabled(
 /**
  * Build a per-machine mount table from state
  *
- * Materializes the profile→target bindings recorded in enabled_profiles
- * into a mount_table_t handle, augmented internally with HOME and the
- * empty-prefix root sentinel. The handle is the single downstream entry
- * point for both filesystem→storage classification and profile-keyed
- * storage→filesystem resolution.
+ * Materializes the profile→target bindings recorded in enabled_profiles into a
+ * mount_table_t handle, augmented internally with HOME and the empty-prefix root
+ * sentinel. The handle is the single downstream entry point for both
+ * filesystem→storage classification and profile-keyed storage→filesystem
+ * resolution.
  *
- * Single mode: every enabled profile contributes a binding (full
- * row-cache scan in position order). The mount table is per-machine
- * topology, not a CLI artifact — narrowing happens at the operation
- * level (scope filters, profile predicates), never on the topology view.
+ * Single mode: every enabled profile contributes a binding (full row-cache scan
+ * in position order). The mount table is per-machine topology, not a CLI artifact
+ * — narrowing happens at the operation level (scope filters, profile predicates),
+ * never on the topology view.
  *
  * Lifetime contract:
  *   - The returned handle is allocated entirely from `arena`.
- *   - Profile names and target strings are borrowed directly from the
- *     state row cache. The borrow stays valid as long as no
- *     enabled_profiles shape mutation runs (state_enable_profile,
- *     state_disable_profile, state_reorder_profiles, state_rollback,
- *     state_free).
+ *   - Profile names and target strings are borrowed directly from the state row
+ *     cache. The borrow stays valid as long as no enabled_profiles shape mutation
+ *     runs (state_enable_profile, state_disable_profile, state_reorder_profiles,
+ *     state_rollback, state_free).
  *
  * Failure modes:
- *   - State-read failure (cold clone, transient DB issue) is absorbed:
- *     the function falls back to a bare table (HOME + root sentinel
- *     only). Callers do not need to handle this case.
+ *   - State-read failure (cold clone, transient DB issue) is absorbed: the function
+ *     falls back to a bare table (HOME + root sentinel only). Callers do not
+ *     need to handle this case.
  *   - Arena allocation failure surfaces as ERR_MEMORY.
  *
  * @param state State handle (must not be NULL; borrowed, not freed)
@@ -157,9 +159,9 @@ error_t *profile_build_mount_table(
 /**
  * Validate that filter profiles are enabled
  *
- * Ensures CLI filter only references profiles that are actually enabled
- * in the workspace. This prevents confusing behavior where user filters
- * to a disabled profile.
+ * Ensures CLI filter only references profiles that are actually enabled in the
+ * workspace. This prevents confusing behavior where user filters to a disabled
+ * profile.
  *
  * @param enabled_profiles Enabled profile names from state (must not be NULL)
  * @param filter CLI filter profile names (NULL = no filter)
@@ -173,9 +175,8 @@ error_t *profile_validate_filter(
 /**
  * List all local profile branch names
  *
- * Returns names of all local branches except 'dotta-worktree'.
- * Iterates Git refs and extracts branch names without resolving
- * references or loading trees.
+ * Returns names of all local branches except 'dotta-worktree'. Iterates Git refs
+ * and extracts branch names without resolving references or loading trees.
  *
  * @param repo Repository (must not be NULL)
  * @param out String array of branch names (must not be NULL, caller must free)
@@ -198,8 +199,8 @@ bool profile_exists(git_repository *repo, const char *profile);
 /**
  * List files in profile
  *
- * Loads the profile's Git tree internally and walks it to collect
- * storage paths. Tree is freed before return.
+ * Loads the profile's Git tree internally and walks it to collect storage paths.
+ * Tree is freed before return.
  *
  * @param repo Repository (must not be NULL)
  * @param profile Profile name (must not be NULL)
@@ -215,8 +216,8 @@ error_t *profile_list_files(
 /**
  * Check if profile contains any custom/ files
  *
- * Loads profile and scans for files with custom/ prefix.
- * Used by command layer to validate --target requirement.
+ * Loads profile and scans for files with custom/ prefix. Used by command layer
+ * to validate --target requirement.
  *
  * @param repo Repository (must not be NULL)
  * @param profile Profile name (must not be NULL)
@@ -232,8 +233,8 @@ error_t *profile_has_custom_files(
 /**
  * Build inverted index of all files across profiles
  *
- * Creates a hashmap that maps storage paths to lists of profile names,
- * enabling O(1) lookups for multi-profile conflict detection and overlap analysis.
+ * Creates a hashmap that maps storage paths to lists of profile names, enabling
+ * O(1) lookups for multi-profile conflict detection and overlap analysis.
  *
  * The index maps: storage_path (char*) -> string_array_t* (list of profile names)
  *
@@ -252,7 +253,8 @@ error_t *profile_has_custom_files(
  * @param repo Repository (must not be NULL)
  * @param exclude_profile Optional profile name to exclude from index (can be NULL)
  * @param out_index Output hashmap: storage_path -> string_array_t* of profile names
- *                  (must not be NULL, caller must free with hashmap_free(..., string_array_free))
+ *                  (must not be NULL, caller must free with hashmap_free(...,
+ *                  string_array_free))
  * @return Error or NULL on success
  */
 error_t *profile_build_file_index(
@@ -264,12 +266,11 @@ error_t *profile_build_file_index(
 /**
  * Discover which profile(s) contain a file, across every local branch
  *
- * Branch scan, O(M×D) where D = path depth: each branch's HEAD tree is
- * asked for the one path. Returns ALL profiles containing the file,
- * enabled or not — revert's question. A caller that wants the owning
- * profile among the enabled set asks the view instead
- * (manifest_lookup_storage on a manifest_build over the enabled
- * profiles — list, show).
+ * Branch scan, O(M×D) where D = path depth: each branch's HEAD tree is asked
+ * for the one path. Returns ALL profiles containing the file, enabled or not —
+ * revert's question. A caller that wants the owning profile among the enabled
+ * set asks the view instead (manifest_lookup_storage on a manifest_build over
+ * the enabled profiles — list, show).
  *
  * The storage_path must already be resolved (use path_input_resolve() first).
  *

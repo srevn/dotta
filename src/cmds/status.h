@@ -14,10 +14,9 @@
 /**
  * Command options
  *
- * `show_local` / `show_remote` are derived by `status_post_parse`
- * from the explicit `want_local` / `want_remote` intent flags. If
- * neither was given, both derived fields are true (show both scopes,
- * matching the legacy default).
+ * `show_local` / `show_remote` are derived by `status_post_parse` from the explicit
+ * `want_local` / `want_remote` intent flags. If neither was given, both derived
+ * fields are true (show both scopes, matching the legacy default).
  */
 typedef struct {
     char **profiles;            /* Profile names (NULL = use state/config) */
@@ -40,8 +39,7 @@ typedef struct {
 /**
  * Show status of managed files
  *
- * Compares the filesystem with the view and the record.
- * Reports:
+ * Compares the filesystem with the view and the record. Reports:
  * - Files that would be deployed
  * - Files that have been modified locally
  * - Files that are up to date
@@ -55,8 +53,8 @@ error_t *cmd_status(const dotta_ctx_t *ctx, const cmd_status_options_t *opts);
 /**
  * Spec-engine command specification for `dotta status`.
  *
- * Registered in cmds/registry.c. Defined in status.c beside the
- * post_parse and dispatch wrappers.
+ * Registered in cmds/registry.c. Defined in status.c beside the post_parse and
+ * dispatch wrappers.
  */
 extern const args_command_t spec_status;
 

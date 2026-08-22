@@ -1,8 +1,8 @@
 /**
  * revert.h - Revert file to previous commit state
  *
- * Restores a file in a profile branch to its state at a specific commit,
- * optionally deploying the reverted file to the filesystem.
+ * Restores a file in a profile branch to its state at a specific commit, optionally
+ * deploying the reverted file to the filesystem.
  */
 
 #ifndef DOTTA_CMD_REVERT_H
@@ -15,11 +15,10 @@
 /**
  * Revert command options
  *
- * The trailing `positional_args` / `positional_count` pair is a raw
- * bucket populated by the spec engine; `revert_post_parse` reads it and
- * assigns the user-facing `profile`/`file_path`/`commit` fields based
- * on how many positionals the user provided. Consumers of cmd_revert
- * read only the user-facing fields.
+ * The trailing `positional_args` / `positional_count` pair is a raw bucket
+ * populated by the spec engine; `revert_post_parse` reads it and assigns the
+ * user-facing `profile`/`file_path`/`commit` fields based on how many positionals
+ * the user provided. Consumers of cmd_revert read only the user-facing fields.
  */
 typedef struct {
     /* User-facing (read by cmd_revert). */
@@ -39,9 +38,9 @@ typedef struct {
 /**
  * Execute revert command
  *
- * Reverts a file in a profile branch to its state at the specified commit.
- * This command modifies the Git repository only - deployed files remain
- * unchanged until 'dotta apply' is run.
+ * Reverts a file in a profile branch to its state at the specified commit. This
+ * command modifies the Git repository only - deployed files remain unchanged
+ * until 'dotta apply' is run.
  *
  * The operation:
  * 1. Discovers file in profiles (requires --profile if ambiguous)
@@ -60,8 +59,8 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts);
 /**
  * Spec-engine command specification for `dotta revert`.
  *
- * Registered in cmds/registry.c. Defined in revert.c beside the
- * post_parse and dispatch wrappers.
+ * Registered in cmds/registry.c. Defined in revert.c beside the post_parse and
+ * dispatch wrappers.
  */
 extern const args_command_t spec_revert;
 

@@ -42,11 +42,11 @@
  * - Prepared statements cached (eliminate preparation overhead)
  *
  * Row cache invariant:
- *   The cache is the materialized view of enabled_profiles. It is populated
- *   ONLY by lazy load_profile_entries(). Shape mutations (add / remove / bulk
- *   replace) call invalidate_profile_entries() — never optimistically update
- *   the in-memory layout — so that a subsequent rollback cannot leave the
- *   cache out of sync with the DB.
+ *   The cache is the materialized view of enabled_profiles. It is populated ONLY
+ *   by lazy load_profile_entries(). Shape mutations (add / remove / bulk replace)
+ *   call invalidate_profile_entries() — never optimistically update the in-memory
+ *   layout — so that a subsequent rollback cannot leave the cache out of sync
+ *   with the DB.
  */
 struct state {
     /* Database connection */
@@ -94,8 +94,8 @@ static error_t *get_db_path(git_repository *repo, char **out) {
 /**
  * Wrap SQLite error with context
  *
- * Extracts error message from database connection and creates
- * descriptive error with context.
+ * Extracts error message from database connection and creates descriptive error
+ * with context.
  *
  * @param db Database connection (can be NULL)
  * @param context Error context message
@@ -112,12 +112,11 @@ static error_t *sqlite_error(sqlite3 *db, const char *context) {
 }
 
 /**
- * Path type ↔ SQL text — the single boundary between the in-memory enum
- * and the on-disk text representation of the type column. The strings are
- * file-scope literals so SQLITE_STATIC is valid at every bind site. The
- * table's CHECK constraint rejects unknown text on write; the read-side
- * fallback to PATH_TYPE_FILE exists only as graceful degradation against
- * a manually edited DB.
+ * Path type ↔ SQL text — the single boundary between the in-memory enum and the
+ * on-disk text representation of the type column. The strings are file-scope
+ * literals so SQLITE_STATIC is valid at every bind site. The table's CHECK
+ * constraint rejects unknown text on write; the read-side fallback to
+ * PATH_TYPE_FILE exists only as graceful degradation against a manually edited DB.
  */
 static const char *path_type_to_sql_text(path_type_t type) {
     switch (type) {
@@ -179,18 +178,18 @@ static error_t *initialize_schema(sqlite3 *db) {
         "CREATE INDEX IF NOT EXISTS idx_enabled_name "
         "ON enabled_profiles(name);"
 
-        /* The record: what dotta last reconciled each managed path against,
-         * and what it confirmed there. A row exists iff dotta has observed
-         * the path on disk while it was managed. One path, one kind, one
-         * record — the PRIMARY KEY; the kind is `type`. No foreign key in
-         * either direction: nothing is a parent, nothing cascades.
+        /* The record: what dotta last reconciled each managed path against, and
+         * what it confirmed there. A row exists iff dotta has observed the path
+         * on disk while it was managed. One path, one kind, one record — the
+         * PRIMARY KEY; the kind is `type`. No foreign key in either direction:
+         * nothing is a parent, nothing cascades.
          *
          * Held by the schema:
          *   - observed_at > 0 always (observed ⇔ row exists; no zero sentinel)
          *   - a directory has no content confirmation (blob_oid IS NULL)
-         *   - ownership implies confirmation for a file (deployed_at > 0 ⇒
-         *     blob_oid set); a row with a blob and deployed_at = 0 is a
-         *     confirmation, not a deployment
+         *   - ownership implies confirmation for a file (deployed_at > 0 ⇒ blob_oid
+         *     set); a row with a blob and deployed_at = 0 is a confirmation,
+         *     not a deployment
          *   - a stored blob is a real OID (20 bytes, never zeroblob) */
         "CREATE TABLE IF NOT EXISTS anchors ("
         "    filesystem_path TEXT PRIMARY KEY,"
@@ -202,7 +201,7 @@ static error_t *initialize_schema(sqlite3 *db) {
         "    \"group\" TEXT,"
         "    "
         "    blob_oid BLOB CHECK(blob_oid IS NULL"
-        "                        OR (length(blob_oid) = 20 AND blob_oid != zeroblob(20))),"
+        "        OR (length(blob_oid) = 20 AND blob_oid != zeroblob(20))),"
         "    stat_mtime INTEGER NOT NULL DEFAULT 0,"
         "    stat_size  INTEGER NOT NULL DEFAULT 0,"
         "    stat_ino   INTEGER NOT NULL DEFAULT 0,"
@@ -235,9 +234,9 @@ static error_t *initialize_schema(sqlite3 *db) {
 /**
  * Verify schema version
  *
- * Checks that database schema matches the version expected by this code.
- * This prevents incompatibilities when database was created by a different
- * version of dotta.
+ * Checks that database schema matches the version expected by this code. This
+ * prevents incompatibilities when database was created by a different version
+ * of dotta.
  *
  * @param db Database connection (must not be NULL)
  * @return Error or NULL on success
@@ -360,8 +359,8 @@ static error_t *configure_db(sqlite3 *db) {
 /**
  * Open database connection
  *
- * Opens or creates database, initializes schema, and configures pragmas.
- * Does NOT start a transaction - use state_open() for that.
+ * Opens or creates database, initializes schema, and configures pragmas. Does
+ * NOT start a transaction - use state_open() for that.
  *
  * @param db_path Path to database file (must not be NULL)
  * @param create_if_missing Create database if it doesn't exist
@@ -443,9 +442,9 @@ static error_t *open_db(const char *db_path, bool create_if_missing, sqlite3 **o
 /**
  * Finalize all prepared statements
  *
- * Called from state_free() before closing database, and by
- * prepare_statements on any failure: every slot is NULL until its
- * statement is prepared, so finalizing the roster is safe at any point.
+ * Called from state_free() before closing database, and by prepare_statements
+ * on any failure: every slot is NULL until its statement is prepared, so finalizing
+ * the roster is safe at any point.
  *
  * @param state State (can be NULL)
  */
@@ -474,10 +473,10 @@ static void finalize_statements(state_t *state) {
 /**
  * Prepare all statements for state operations
  *
- * Called once per database connection. Statements are reused for all
- * operations, providing 100x speedup for bulk operations. On any failure
- * the statements already prepared are finalized before returning, so a
- * handle never carries a half-prepared roster.
+ * Called once per database connection. Statements are reused for all operations,
+ * providing 100x speedup for bulk operations. On any failure the statements already
+ * prepared are finalized before returning, so a handle never carries a
+ * half-prepared roster.
  *
  * @param state State (must not be NULL, db must be open)
  * @return Error or NULL on success
@@ -500,9 +499,9 @@ static error_t *prepare_statements(state_t *state) {
     }
 
     /* Observe: presence only, idempotent. Creates the record with the row's
-     * identity and metadata and observed_at = now; no blob, no stat. Never
-     * touches an existing row — OR IGNORE is what makes the first observer
-     * win without a CASE.
+     * identity and metadata and observed_at = now; no blob, no stat. Never touches
+     * an existing row — OR IGNORE is what makes the first observer win without
+     * a CASE.
      *
      * Bind order (numbered placeholders):
      *   ?1 filesystem_path  ?2 storage_path  ?3 profile  ?4 type
@@ -518,10 +517,10 @@ static error_t *prepare_statements(state_t *state) {
         return sqlite_error(state->db, "Failed to prepare observe statement");
     }
 
-    /* Confirm: the content confirmation — what CMP_EQUAL established and
-     * nothing of the claim. An UPDATE, never an INSERT: the record exists
-     * (the flush observes before it confirms), and a confirmation of a
-     * path dotta has not seen is not a thing.
+    /* Confirm: the content confirmation — what CMP_EQUAL established and nothing
+     * of the claim. An UPDATE, never an INSERT: the record exists (the flush
+     * observes before it confirms), and a confirmation of a path dotta has not
+     * seen is not a thing.
      *
      * Bind order (numbered placeholders):
      *   ?1 filesystem_path
@@ -529,8 +528,8 @@ static error_t *prepare_statements(state_t *state) {
      *             directory row, and CMP_EQUAL confirmed the kind as well
      *   ?3 blob_oid  ?4 stat_mtime  ?5 stat_size  ?6 stat_ino
      *
-     * prune_ordered resets to 0: the path is back under a live row, and
-     * any order predating that is void. */
+     * prune_ordered resets to 0: the path is back under a live row, and any order
+     * predating that is void. */
     const char *sql_confirm =
         "UPDATE anchors SET "
         "  type          = ?2, "
@@ -547,28 +546,27 @@ static error_t *prepare_statements(state_t *state) {
         return sqlite_error(state->db, "Failed to prepare confirm statement");
     }
 
-    /* Anchor: the ownership event — the recorded row and the confirmation
-     * together, the writer of every record column but observed_at's
-     * existing value.
+    /* Anchor: the ownership event — the recorded row and the confirmation together,
+     * the writer of every record column but observed_at's existing value.
      *
      * Bind order (numbered placeholders):
      *   ?1 filesystem_path  ?2 storage_path  ?3 profile  ?4 type
      *   ?5 mode  ?6 owner  ?7 group
      *   ?8 blob_oid — NULL for a directory
      *   ?9 stat_mtime  ?10 stat_size  ?11 stat_ino
-     *   ?12 now — observed_at on the INSERT arm alone (the UPDATE arm does
-     *             not name the column, so an existing stamp is never
-     *             rewritten and the first writer wins) and deployed_at on
-     *             both arms: one placeholder, one moment
+     *   ?12 now — observed_at on the INSERT arm alone (the UPDATE arm does not
+     *             name the column, so an existing stamp is never rewritten and
+     *             the first writer wins) and deployed_at on both arms: one
+     *             placeholder, one moment
      *
-     * prune_ordered resets to 0 on the UPDATE arm: the path is back under
-     * a live row, and any order predating that is void.
+     * prune_ordered resets to 0 on the UPDATE arm: the path is back under a live
+     * row, and any order predating that is void.
      *
      * RETURNING projects the one column the two arms decide differently —
-     * observed_at (INSERT arm: now; UPDATE arm: the existing stamp) — so a
-     * caller mirroring an in-memory snapshot (workspace_anchor) can assign
-     * the canonical record without re-deriving the rule in C. Every other
-     * column is what the caller bound. */
+     * observed_at (INSERT arm: now; UPDATE arm: the existing stamp) — so a caller
+     * mirroring an in-memory snapshot (workspace_anchor) can assign the canonical
+     * record without re-deriving the rule in C. Every other column is what the
+     * caller bound. */
     const char *sql_anchor =
         "INSERT INTO anchors "
         "(filesystem_path, storage_path, profile, type, mode, owner, \"group\", "
@@ -625,10 +623,10 @@ static error_t *prepare_statements(state_t *state) {
 /**
  * Free the row cache and mark it unloaded
  *
- * Safe to call repeatedly. Invoked by shape-mutating paths
- * (state_enable_profile, state_disable_profile, state_reorder_profiles) and by
- * state_rollback / state_free. The cache must never outlive the last
- * committed DB state it was built from.
+ * Safe to call repeatedly. Invoked by shape-mutating paths (state_enable_profile,
+ * state_disable_profile, state_reorder_profiles) and by state_rollback /
+ * state_free. The cache must never outlive the last committed DB state it was
+ * built from.
  */
 static void invalidate_profile_entries(state_t *state) {
     if (!state || !state->profile_entries) {
@@ -650,22 +648,21 @@ static void invalidate_profile_entries(state_t *state) {
 /**
  * Load the enabled_profiles row cache
  *
- * Lazy loader: performs one SELECT over enabled_profiles and materializes
- * every row (name, target) into the cache. Rows are ordered by position
- * to match the user's precedence order.
+ * Lazy loader: performs one SELECT over enabled_profiles and materializes every
+ * row (name, target) into the cache. Rows are ordered by position to match the
+ * user's precedence order.
  *
  * The cache replaces four previous query-shape functions (get_prefix_map,
- * get_profile_prefix, get_profile_commit_oid, load_commit_oid_map) with a
- * single lazy load + linear peek.
+ * get_profile_prefix, get_profile_commit_oid, load_commit_oid_map) with a single
+ * lazy load + linear peek.
  */
 static error_t *load_profile_entries(state_t *state) {
     CHECK_NULL(state);
 
-    /* Already loaded — return immediately.
-     * Must precede the db check: state_load() on a repository without
-     * .git/dotta.db allocates a handle with db==NULL and pre-marks the
-     * cache as loaded (zero rows), a valid view of "no enabled profiles".
-     * Lazy promotion via state_begin() opens the DB without disturbing
+    /* Already loaded — return immediately. Must precede the db check: state_load()
+     * on a repository without .git/dotta.db allocates a handle with db==NULL
+     * and pre-marks the cache as loaded (zero rows), a valid view of "no enabled
+     * profiles". Lazy promotion via state_begin() opens the DB without disturbing
      * this cached view; mutations invalidate it on their own. */
     if (state->profile_entries_loaded) return NULL;
 
@@ -710,8 +707,8 @@ static error_t *load_profile_entries(state_t *state) {
     size_t i = 0;
     while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
         if (i >= row_count) {
-            /* Concurrent INSERT between COUNT and SELECT would be unusual
-             * under our write-lock discipline, but guard anyway. */
+            /* Concurrent INSERT between COUNT and SELECT would be unusual under
+             * our write-lock discipline, but guard anyway. */
             err = ERROR(ERR_STATE_INVALID, "Profile row count changed during load");
             break;
         }
@@ -724,10 +721,10 @@ static error_t *load_profile_entries(state_t *state) {
             break;
         }
 
-        /* Allocate the row's owned strings atomically. If either strdup
-         * fails, free whatever succeeded right here before breaking — the
-         * outer cleanup loop only walks rows [0, i), so a half-built row
-         * at index i would otherwise leak its successful allocations. */
+        /* Allocate the row's owned strings atomically. If either strdup fails,
+         * free whatever succeeded right here before breaking — the outer cleanup
+         * loop only walks rows [0, i), so a half-built row at index i would
+         * otherwise leak its successful allocations. */
         state_profile_entry_t *row = &entries[i];
         row->name = strdup(name_db);
         row->target = prefix_db ? strdup(prefix_db) : NULL;
@@ -767,8 +764,8 @@ static error_t *load_profile_entries(state_t *state) {
 /**
  * Linear lookup into the row cache (caller guarantees load)
  *
- * Row count is bounded by the user's enabled-profile list (typically < 10),
- * so the linear scan is faster than a hash lookup and fits comfortably in L1.
+ * Row count is bounded by the user's enabled-profile list (typically < 10), so
+ * the linear scan is faster than a hash lookup and fits comfortably in L1.
  */
 static const state_profile_entry_t *find_profile_entry(
     const state_t *state,
@@ -857,9 +854,9 @@ error_t *state_get_profiles(const state_t *state, string_array_t **out) {
 /**
  * Check if a profile is enabled
  *
- * Fast O(n) check where n = number of enabled profiles (typically < 10).
- * Useful for commands that need to conditionally write the record based
- * on whether a profile is enabled.
+ * Fast O(n) check where n = number of enabled profiles (typically < 10). Useful
+ * for commands that need to conditionally write the record based on whether a
+ * profile is enabled.
  *
  * @param state State (must not be NULL)
  * @param profile Profile name to check (must not be NULL)
@@ -897,11 +894,10 @@ error_t *state_enable_profile(
 
     /* UPSERT: Insert or update on conflict.
      *
-     * Position is `COALESCE(MAX(position) + 1, 0)`: on an empty table
-     * MAX returns NULL and the COALESCE drops to 0, matching the 0-based
-     * position assignment used by state_reorder_profiles. On UPSERT
-     * conflict (profile already enabled) the position is kept — only the
-     * target and the timestamp move. */
+     * Position is `COALESCE(MAX(position) + 1, 0)`: on an empty table MAX returns
+     * NULL and the COALESCE drops to 0, matching the 0-based position assignment
+     * used by state_reorder_profiles. On UPSERT conflict (profile already enabled)
+     * the position is kept — only the target and the timestamp move. */
     const char *sql =
         "INSERT INTO enabled_profiles (name, target, enabled_at, position) "
         "VALUES (?1, ?2, ?3, "
@@ -970,16 +966,15 @@ error_t *state_disable_profile(
 /**
  * Reorder enabled profiles to match a new precedence order
  *
- * Reorder-only contract: every name in `profiles` must already be a row
- * in enabled_profiles. Additions and removals belong to the membership
- * primitives (state_enable_profile / state_disable_profile). A name not
- * currently enabled returns ERR_INVALID_ARG and leaves the table
- * untouched — closing the silent (custom-profile, NULL-target) trap at
- * the write boundary.
+ * Reorder-only contract: every name in `profiles` must already be a row in
+ * enabled_profiles. Additions and removals belong to the membership primitives
+ * (state_enable_profile / state_disable_profile). A name not currently enabled
+ * returns ERR_INVALID_ARG and leaves the table untouched — closing the silent
+ * (custom-profile, NULL-target) trap at the write boundary.
  *
- * Per-row state (the target) is read from the row cache and preserved
- * across the DELETE + re-INSERT rewrite. Only the position column changes
- * meaning per call; everything else is byte-for-byte preserved.
+ * Per-row state (the target) is read from the row cache and preserved across
+ * the DELETE + re-INSERT rewrite. Only the position column changes meaning per
+ * call; everything else is byte-for-byte preserved.
  *
  * Hot path - must be fast even with 10,000 deployed files. Only modifies
  * enabled_profiles (the record untouched).
@@ -996,29 +991,28 @@ error_t *state_reorder_profiles(
     CHECK_NULL(profiles);
     CHECK_NULL(state->db);
 
-    /* Transaction is a precondition — the DELETE below would auto-commit
-     * on an unguarded connection and leave no recovery path for errors
-     * in the INSERT loop. The caller must hold BEGIN IMMEDIATE (state_open
-     * or state_begin). */
+    /* Transaction is a precondition — the DELETE below would auto-commit on an
+     * unguarded connection and leave no recovery path for errors in the INSERT
+     * loop. The caller must hold BEGIN IMMEDIATE (state_open or state_begin). */
     if (!state->in_transaction) {
         return ERROR(
             ERR_STATE_INVALID, "state_reorder_profiles requires an active transaction"
         );
     }
 
-    /* Ensure the row cache is populated — we read every row from it to
-     * verify the in-cache precondition and to preserve the target across
-     * DELETE + re-INSERT. */
+    /* Ensure the row cache is populated — we read every row from it to verify
+     * the in-cache precondition and to preserve the target across DELETE +
+     * re-INSERT. */
     error_t *err = load_profile_entries(state);
     if (err) {
         return error_wrap(err, "Failed to load profile row cache");
     }
 
-    /* Precondition: every name in `profiles` must already be enabled.
-     * Reorder permutes membership; it never adds or removes rows. A name
-     * missing from the cache means the caller wants to add a profile —
-     * they should call state_enable_profile first, which is the only
-     * primitive that can record a target for custom/-bearing profiles. */
+    /* Precondition: every name in `profiles` must already be enabled. Reorder
+     * permutes membership; it never adds or removes rows. A name missing from
+     * the cache means the caller wants to add a profile — they should call
+     * state_enable_profile first, which is the only primitive that can record a
+     * target for custom/-bearing profiles. */
     for (size_t i = 0; i < profiles->count; i++) {
         if (!find_profile_entry(state, profiles->items[i])) {
             return ERROR(
@@ -1030,8 +1024,8 @@ error_t *state_reorder_profiles(
         }
     }
 
-    /* Delete all existing rows under the caller's transaction. On failure,
-     * SQL is unchanged and the cache still matches — safe to return. */
+    /* Delete all existing rows under the caller's transaction. On failure, SQL
+     * is unchanged and the cache still matches — safe to return. */
     char *errmsg = NULL;
     int rc = sqlite3_exec(state->db, "DELETE FROM enabled_profiles;", NULL, NULL, &errmsg);
     if (rc != SQLITE_OK) {
@@ -1046,24 +1040,25 @@ error_t *state_reorder_profiles(
     /* Insert rows. SQLITE_TRANSIENT on every binding means SQLite copies the
      * value at bind time, so the cache pointers we pass below do not need to
      * outlive sqlite3_step — future refactors that mutate the cache mid-loop
-     * stay safe. Cost is <100 bytes of memcpy per row; the table tops out
-     * around ten rows in practice. */
+     * stay safe. Cost is <100 bytes of memcpy per row; the table tops out around
+     * ten rows in practice. */
     time_t now = time(NULL);
     for (size_t i = 0; i < profiles->count; i++) {
         const char *name = profiles->items[i];
         const state_profile_entry_t *preserved = find_profile_entry(state, name);
 
-        /* The precondition loop above guarantees preserved is non-NULL.
-         * No NULL branch on target either: a profile with no deployment
-         * target (home/root) legitimately has preserved->target == NULL,
-         * which sqlite3_bind_null handles explicitly. */
+        /* The precondition loop above guarantees preserved is non-NULL. No NULL
+         * branch on target either: a profile with no deployment target (home/root)
+         * legitimately has preserved->target == NULL, which sqlite3_bind_null
+         * handles explicitly. */
 
         /* Reset and bind statement */
         sqlite3_reset(state->stmt_insert_profile);
         sqlite3_clear_bindings(state->stmt_insert_profile);
 
         /* Bind parameters: position, name, enabled_at, target.
-         * SQLITE_TRANSIENT: SQLite copies immediately; source lifetimes are ours. */
+         * SQLITE_TRANSIENT: SQLite copies immediately; source lifetimes are
+         * ours. */
         sqlite3_bind_int64(state->stmt_insert_profile, 1, (sqlite3_int64) i);
         sqlite3_bind_text(
             state->stmt_insert_profile, 2, name, -1, SQLITE_TRANSIENT
@@ -1083,8 +1078,8 @@ error_t *state_reorder_profiles(
         }
     }
 
-    /* SQL now reflects the new order. Invalidate so the next peek reloads
-     * fresh rows in the new position order. */
+    /* SQL now reflects the new order. Invalidate so the next peek reloads fresh
+     * rows in the new position order. */
     invalidate_profile_entries(state);
     return NULL;
 }
@@ -1092,8 +1087,8 @@ error_t *state_reorder_profiles(
 /**
  * Load state from repository (read-only)
  *
- * If database doesn't exist, returns empty state.
- * No transaction started - safe for concurrent reads.
+ * If database doesn't exist, returns empty state. No transaction started - safe
+ * for concurrent reads.
  *
  * @param repo Repository (must not be NULL)
  * @param out State structure (must not be NULL, caller must free with state_free)
@@ -1119,13 +1114,13 @@ error_t *state_load(git_repository *repo, state_t **out) {
         return err;
     }
 
-    /* Allocate the handle whether or not the DB exists. When the file is
-     * absent, state->db stays NULL while state->db_path is retained so a
-     * later state_begin() can lazily create the DB — honoring the
-     * READ → scoped-write contract advertised by dotta_state_mode
-     * (runtime.h::dotta_state_mode_t). Reads short-circuit through
-     * load_profile_entries on the profile_entries_loaded flag set below;
-     * zero rows is the correct view of a never-initialized state. */
+    /* Allocate the handle whether or not the DB exists. When the file is absent,
+     * state->db stays NULL while state->db_path is retained so a later
+     * state_begin() can lazily create the DB — honoring the READ → scoped-write
+     * contract advertised by dotta_state_mode (runtime.h::dotta_state_mode_t).
+     * Reads short-circuit through load_profile_entries on the
+     * profile_entries_loaded flag set below; zero rows is the correct view of a
+     * never-initialized state. */
     state = calloc(1, sizeof(state_t));
     if (!state) {
         if (db) sqlite3_close(db);
@@ -1141,9 +1136,9 @@ error_t *state_load(git_repository *repo, state_t **out) {
     state->profile_entries_loaded = (db == NULL);
 
     if (db) {
-        /* Prepare statements only when a live connection exists. On lazy
-         * promotion, state_begin() runs the same prepare_statements() call
-         * before taking BEGIN IMMEDIATE. */
+        /* Prepare statements only when a live connection exists. On lazy promotion,
+         * state_begin() runs the same prepare_statements() call before taking
+         * BEGIN IMMEDIATE. */
         err = prepare_statements(state);
         if (err) {
             sqlite3_close(state->db);
@@ -1161,8 +1156,8 @@ error_t *state_load(git_repository *repo, state_t **out) {
 /**
  * Load state for update (with transaction)
  *
- * Opens database with write lock (BEGIN IMMEDIATE transaction).
- * Creates database if it doesn't exist.
+ * Opens database with write lock (BEGIN IMMEDIATE transaction). Creates database
+ * if it doesn't exist.
  *
  * @param repo Repository (must not be NULL)
  * @param out State structure (must not be NULL, caller must free with state_free)
@@ -1238,11 +1233,10 @@ error_t *state_open(git_repository *repo, state_t **out) {
 /**
  * Save state to repository
  *
- * Commits the transaction started by state_open() if one is active.
- * Safe on any handle shape: a state_load() handle for a repository
- * without .git/dotta.db that was never promoted via state_begin
- * holds no connection (state->db == NULL), and the guard below makes
- * save a no-op for it.
+ * Commits the transaction started by state_open() if one is active. Safe on any
+ * handle shape: a state_load() handle for a repository without .git/dotta.db
+ * that was never promoted via state_begin holds no connection (state->db == NULL),
+ * and the guard below makes save a no-op for it.
  *
  * @param repo Repository (must not be NULL)
  * @param state State to save (must not be NULL)
@@ -1273,10 +1267,9 @@ error_t *state_save(git_repository *repo, state_t *state) {
 /**
  * Begin an explicit transaction on a state handle
  *
- * Post-condition on success: state->db is open and write-locked
- * (BEGIN IMMEDIATE held). Mirrors state_open()'s create semantics,
- * deferred to the moment of actual write intent — see the lazy
- * promotion block below.
+ * Post-condition on success: state->db is open and write-locked (BEGIN IMMEDIATE
+ * held). Mirrors state_open()'s create semantics, deferred to the moment of actual
+ * write intent — see the lazy promotion block below.
  */
 error_t *state_begin(state_t *state) {
     CHECK_NULL(state);
@@ -1285,18 +1278,17 @@ error_t *state_begin(state_t *state) {
         return ERROR(ERR_STATE_INVALID, "Transaction already active");
     }
 
-    /* Lazy promotion: a state_load() on a repository with no
-     * .git/dotta.db leaves this handle with state->db == NULL but
-     * state->db_path populated. Create the DB on first write attempt
-     * to honor the READ → scoped-write contract documented in
-     * runtime.h::dotta_state_mode_t — matching state_open()'s create
+    /* Lazy promotion: a state_load() on a repository with no .git/dotta.db leaves
+     * this handle with state->db == NULL but state->db_path populated. Create
+     * the DB on first write attempt to honor the READ → scoped-write contract
+     * documented in runtime.h::dotta_state_mode_t — matching state_open()'s create
      * semantics, just deferred to the moment of actual mutation.
      *
-     * The profile_entries_loaded=true cached zero-row view (set by
-     * state_load's empty branch) remains accurate against the
-     * freshly-created empty schema; the first mutating call
-     * (state_reorder_profiles / state_enable_profile / state_disable_profile)
-     * invalidates the cache on its own per the existing discipline. */
+     * The profile_entries_loaded=true cached zero-row view (set by state_load's
+     * empty branch) remains accurate against the freshly-created empty schema;
+     * the first mutating call (state_reorder_profiles / state_enable_profile /
+     * state_disable_profile) invalidates the cache on its own per the existing
+     * discipline. */
     if (!state->db) {
         if (!state->db_path) {
             return ERROR(
@@ -1362,11 +1354,11 @@ error_t *state_commit(state_t *state) {
 /**
  * Roll back a transaction started by state_begin()
  *
- * Invalidates the row cache defensively: mutation paths already invalidate
- * before returning, so the cache should be consistent with the DB heading
- * into rollback — but any future author who forgets the discipline would
- * otherwise leave a stale cache behind. Invalidation is O(row_count) and
- * the next peek repopulates from the rolled-back DB state.
+ * Invalidates the row cache defensively: mutation paths already invalidate before
+ * returning, so the cache should be consistent with the DB heading into rollback
+ * — but any future author who forgets the discipline would otherwise leave a
+ * stale cache behind. Invalidation is O(row_count) and the next peek repopulates
+ * from the rolled-back DB state.
  */
 void state_rollback(state_t *state) {
     if (!state || !state->db || !state->in_transaction) {
@@ -1388,8 +1380,8 @@ bool state_locked(const state_t *state) {
 /**
  * Free state structure
  *
- * Automatically rolls back transaction if not committed.
- * Closes database and frees all memory.
+ * Automatically rolls back transaction if not committed. Closes database and
+ * frees all memory.
  *
  * @param state State to free (can be NULL)
  */
@@ -1425,9 +1417,8 @@ void state_free(state_t *state) {
 /**
  * Get every anchor, in filesystem_path order
  *
- * Count, allocate, one full-table SELECT — a local prepare+finalize: a
- * single-pass scan run once per command gains nothing from a cached
- * statement.
+ * Count, allocate, one full-table SELECT — a local prepare+finalize: a single-pass
+ * scan run once per command gains nothing from a cached statement.
  */
 error_t *state_get_all_anchors(
     const state_t *state,
@@ -1495,8 +1486,8 @@ error_t *state_get_all_anchors(
         /* Column layout matches sql_anchors:
          *   0-2:  identity (filesystem_path, storage_path, profile)
          *   3-6:  what dotta set (type, mode, owner, group)
-         *   7-13: what dotta confirmed (blob_oid, stat_mtime, stat_size,
-         *         stat_ino, observed_at, deployed_at, prune_ordered) */
+         *   7-13: what dotta confirmed (blob_oid, stat_mtime, stat_size, stat_ino,
+         *         observed_at, deployed_at, prune_ordered) */
         anchor_t *anchor = &anchors[i];
 
         const char *fs_path = (const char *) sqlite3_column_text(stmt, 0);
@@ -1513,8 +1504,8 @@ error_t *state_get_all_anchors(
         const char *owner = (const char *) sqlite3_column_text(stmt, 5);
         const char *group = (const char *) sqlite3_column_text(stmt, 6);
 
-        /* A NULL blob (a directory, or observed only) hydrates to the zero
-         * OID calloc left; a stored blob is 20 bytes by CHECK. */
+        /* A NULL blob (a directory, or observed only) hydrates to the zero OID
+         * calloc left; a stored blob is 20 bytes by CHECK. */
         if (sqlite3_column_type(stmt, 7) != SQLITE_NULL) {
             memcpy(anchor->blob_oid.id, sqlite3_column_blob(stmt, 7), GIT_OID_RAWSZ);
         }
@@ -1569,10 +1560,10 @@ error_t *state_get_all_anchors(
 /**
  * Bind a row's identity and metadata as placeholders ?1-?7
  *
- * The shared prefix of sql_observe and sql_anchor: filesystem_path,
- * storage_path, profile, type, mode, owner, group — the columns a record
- * takes from the row it is written from. Both statements lay their
- * placeholders out to start this way so one bind sequence serves both.
+ * The shared prefix of sql_observe and sql_anchor: filesystem_path, storage_path,
+ * profile, type, mode, owner, group — the columns a record takes from the row
+ * it is written from. Both statements lay their placeholders out to start this
+ * way so one bind sequence serves both.
  */
 static void bind_row(sqlite3_stmt *stmt, const manifest_row_t *row) {
     /* 1-3. filesystem_path, storage_path, profile */
@@ -1608,10 +1599,9 @@ static void bind_row(sqlite3_stmt *stmt, const manifest_row_t *row) {
 /**
  * Observe a managed path: record its first sighting on disk
  *
- * INSERT OR IGNORE — see the SQL comment on sql_observe and the header
- * contract. Binds the row's identity and metadata plus the stamp; the
- * blob and stat columns take their NULL / zero defaults, and an existing
- * row is left exactly as it was.
+ * INSERT OR IGNORE — see the SQL comment on sql_observe and the header contract.
+ * Binds the row's identity and metadata plus the stamp; the blob and stat columns
+ * take their NULL / zero defaults, and an existing row is left exactly as it was.
  */
 error_t *state_observe(state_t *state, const manifest_row_t *row, time_t now) {
     CHECK_NULL(state);
@@ -1643,10 +1633,9 @@ error_t *state_observe(state_t *state, const manifest_row_t *row, time_t now) {
 /**
  * Confirm a managed path: record that disk content equals the row's blob
  *
- * UPDATE by filesystem_path — see the SQL comment on sql_confirm and the
- * header contract. Writes the kind, the blob and the stat the comparison
- * established; the claim columns are not named and a row that does not
- * exist is not created.
+ * UPDATE by filesystem_path — see the SQL comment on sql_confirm and the header
+ * contract. Writes the kind, the blob and the stat the comparison established;
+ * the claim columns are not named and a row that does not exist is not created.
  */
 error_t *state_confirm(
     state_t *state,
@@ -1659,10 +1648,10 @@ error_t *state_confirm(
     CHECK_NULL(state->db);
     CHECK_NULL(state->stmt_confirm);
 
-    /* A directory has no content to confirm, and a zero blob_oid would
-     * record "never confirmed" for a path this call claims to have
-     * confirmed. Reject rather than silently poison — and name the bug,
-     * where the schema's CHECK would only refuse the zeroblob. */
+    /* A directory has no content to confirm, and a zero blob_oid would record
+     * "never confirmed" for a path this call claims to have confirmed. Reject
+     * rather than silently poison — and name the bug, where the schema's CHECK
+     * would only refuse the zeroblob. */
     if (row->type == PATH_TYPE_DIRECTORY) {
         return ERROR(
             ERR_STATE_INVALID,
@@ -1702,17 +1691,16 @@ error_t *state_confirm(
  * Anchor a managed path: record the row dotta reconciled it against
  *
  * The ownership event. See state.h for the full contract. In brief:
- *   - row->blob_oid must be non-zero for a file row; a DIRECTORY row
- *     binds NULL.
+ *   - row->blob_oid must be non-zero for a file row; a DIRECTORY row binds NULL.
  *   - deployed_at = now, both arms.
  *   - observed_at is the INSERT arm's alone.
  *   - stat is always written (zeros when NULL).
  *   - prune_ordered resets to 0.
  *
- * The SQL UPSERT encodes those rules and RETURNING projects the one
- * column the arms decide differently. Callers that mirror an in-memory
- * snapshot pass a non-NULL resolved_out and assign it directly — the SQL
- * is the single specification, no C-side mirror of the rule exists.
+ * The SQL UPSERT encodes those rules and RETURNING projects the one column the
+ * arms decide differently. Callers that mirror an in-memory snapshot pass a
+ * non-NULL resolved_out and assign it directly — the SQL is the single
+ * specification, no C-side mirror of the rule exists.
  */
 error_t *state_anchor(
     state_t *state,
@@ -1732,10 +1720,10 @@ error_t *state_anchor(
 
     bool directory = (row->type == PATH_TYPE_DIRECTORY);
 
-    /* A zero blob_oid on a file row would record "never confirmed" for a
-     * path this call claims to have confirmed, and strand it in the stale
-     * path. Reject rather than silently poison — and name the bug, where
-     * the schema's CHECK would only refuse the zeroblob. */
+    /* A zero blob_oid on a file row would record "never confirmed" for a path
+     * this call claims to have confirmed, and strand it in the stale path. Reject
+     * rather than silently poison — and name the bug, where the schema's CHECK
+     * would only refuse the zeroblob. */
     if (!directory && git_oid_is_zero(&row->blob_oid)) {
         return ERROR(
             ERR_STATE_INVALID,
@@ -1760,8 +1748,8 @@ error_t *state_anchor(
         sqlite3_bind_blob(stmt, 8, row->blob_oid.id, GIT_OID_RAWSZ, SQLITE_TRANSIENT);
     }
 
-    /* 9-11. stat triple (fast-path proof, bound to blob_oid; zeros when the
-     * caller had none — the next read takes the slow path). */
+    /* 9-11. stat triple (fast-path proof, bound to blob_oid; zeros when the caller
+     * had none — the next read takes the slow path). */
     stat_cache_t triple = stat ? *stat : STAT_CACHE_UNSET;
     sqlite3_bind_int64(stmt, 9, triple.mtime);
     sqlite3_bind_int64(stmt, 10, triple.size);
@@ -1770,15 +1758,15 @@ error_t *state_anchor(
     /* 12. now — observed_at for a new row, deployed_at for every row. */
     sqlite3_bind_int64(stmt, 12, (sqlite3_int64) now);
 
-    /* RETURNING yields exactly one row — an UPSERT always writes one — and
-     * a single follow-up step drains to SQLITE_DONE. */
+    /* RETURNING yields exactly one row — an UPSERT always writes one — and a
+     * single follow-up step drains to SQLITE_DONE. */
     int rc = sqlite3_step(stmt);
 
     if (rc == SQLITE_ROW) {
         if (resolved_out) {
-            /* Every field the caller supplied, borrowed, plus the one
-             * column the SQL decided. Column layout matches the RETURNING
-             * list: observed_at. */
+            /* Every field the caller supplied, borrowed, plus the one column
+             * the SQL decided. Column layout matches the RETURNING list:
+             * observed_at. */
             *resolved_out = (anchor_t){
                 .filesystem_path = row->filesystem_path,
                 .storage_path = row->storage_path,
@@ -1807,8 +1795,7 @@ error_t *state_anchor(
 /**
  * Retire a managed path's record
  *
- * DELETE by filesystem_path; a missing row is success (see the header
- * contract).
+ * DELETE by filesystem_path; a missing row is success (see the header contract).
  */
 error_t *state_retire_anchor(state_t *state, const char *filesystem_path) {
     CHECK_NULL(state);
@@ -1832,8 +1819,7 @@ error_t *state_retire_anchor(state_t *state, const char *filesystem_path) {
 /**
  * Order a managed path's deployed copy pruned
  *
- * UPDATE by filesystem_path; a missing row is success (see the header
- * contract).
+ * UPDATE by filesystem_path; a missing row is success (see the header contract).
  */
 error_t *state_order_prune(state_t *state, const char *filesystem_path) {
     CHECK_NULL(state);

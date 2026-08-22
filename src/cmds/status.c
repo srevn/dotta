@@ -30,10 +30,10 @@
  *
  * @param out Output context (must not be NULL)
  * @param profiles Enabled profile names (must not be NULL)
- * @param files Active file slice: the per-profile last-deployed timestamp
- *              and the verbose per-profile count are both folded from it
- * @param ws Workspace the slice came from, for each row's record (NULL
- *           when no workspace was loaded; the slice is empty then too)
+ * @param files Active file slice: the per-profile last-deployed timestamp and
+ *              the verbose per-profile count are both folded from it
+ * @param ws Workspace the slice came from, for each row's record (NULL when no
+ *           workspace was loaded; the slice is empty then too)
  */
 static void display_enabled_profiles(
     output_t *out,
@@ -52,9 +52,9 @@ static void display_enabled_profiles(
         /* Format profile name */
         output_styled(out, OUTPUT_NORMAL, "  {cyan}%s{reset}", profile);
 
-        /* One walk of the active slice per profile: the latest ownership
-         * event among the rows the profile owns now — the honest set for
-         * an enabled-profiles header — and the verbose file count. */
+        /* One walk of the active slice per profile: the latest ownership event
+         * among the rows the profile owns now — the honest set for an
+         * enabled-profiles header — and the verbose file count. */
         time_t profile_deploy_time = 0;
         size_t profile_file_count = 0;
         for (size_t j = 0; j < files.count; j++) {
@@ -98,17 +98,17 @@ static void display_enabled_profiles(
 /**
  * Display the manifest — every active row, with its state
  *
- * The window onto the view (--full): one line per managed path, both
- * kinds merged in path order, tagged as the diverged item at the path
- * says or [clean] when there is none, with the owning profile ("from P",
- * or "P → Q" for a pending reassignment). The one listing that shows
- * the whole view rather than what diverged from it; printed whatever
- * the workspace's cleanliness. Orphans are records, not rows — they
- * stay in the Issues section. Scoped by the CLI filter like every other
- * section.
+ * The window onto the view (--full): one line per managed path, both kinds merged
+ * in path order, tagged as the diverged item at the path says or [clean] when
+ * there is none, with the owning profile ("from P", or "P → Q" for a pending
+ * reassignment). The one listing that shows the whole view rather than what
+ * diverged from it; printed whatever the workspace's cleanliness. Orphans are
+ * records, not rows — they stay in the Issues section. Scoped by the CLI filter
+ * like every other section.
  *
  * @param ws Workspace (must not be NULL, borrowed from caller)
- * @param scope Operation scope (must not be NULL; its filter dimension drives display)
+ * @param scope Operation scope (must not be NULL; its filter dimension drives
+ *              display)
  * @param out Output context (must not be NULL)
  */
 static void display_manifest(
@@ -123,9 +123,9 @@ static void display_manifest(
     );
     if (!list) return;
 
-    /* Both slices are in filesystem_path order and share no path (one
-     * row per path, one kind), so a two-finger merge walks the view as
-     * one path-ordered sequence. */
+    /* Both slices are in filesystem_path order and share no path (one row per
+     * path, one kind), so a two-finger merge walks the view as one path-ordered
+     * sequence. */
     manifest_rows_t files = workspace_files(ws);
     manifest_rows_t dirs = workspace_directories(ws);
     size_t f = 0;
@@ -177,8 +177,8 @@ static void display_manifest(
 /**
  * Display workspace status
  *
- * Shows the consistency between the view, the record and the filesystem.
- * Organized into actionable sections (git-like structure).
+ * Shows the consistency between the view, the record and the filesystem. Organized
+ * into actionable sections (git-like structure).
  *
  * When a profile filter is active, the status line is scoped to the filtered
  * profile(s), showing file counts and per-profile divergence instead of global
@@ -186,7 +186,8 @@ static void display_manifest(
  * profile is clean but other enabled profiles have divergence.
  *
  * @param ws Workspace (must not be NULL, borrowed from caller)
- * @param scope Operation scope (must not be NULL; its filter dimension drives display)
+ * @param scope Operation scope (must not be NULL; its filter dimension drives
+ *              display)
  * @param files Active state slice (used for profile-scoped file counts)
  * @param out Output context (must not be NULL)
  */
@@ -205,8 +206,8 @@ static void display_workspace_status(
     size_t all_count = 0;
     const workspace_item_t *all_items = workspace_get_all_diverged(ws, &all_count);
 
-    /* Pre-scan: count files and diverged items scoped to profile filter.
-     * Needed before the status line to determine filtered workspace state. */
+    /* Pre-scan: count files and diverged items scoped to profile filter. Needed
+     * before the status line to determine filtered workspace state. */
     size_t profile_file_count = 0;
     size_t filtered_diverged = 0;
     size_t hidden_count = 0;
@@ -305,9 +306,11 @@ static void display_workspace_status(
         /* When filter active and filtered profile is clean, skip detailed sections */
         if ((!scope_has_filter(scope) || filtered_diverged > 0) && all_count > 0) {
 
-            /* Single allocation for all category pointers (6 categories × all_count slots)
-             * Memory layout: [conflicts][uncommitted][undeployed][new_files][orphaned][reassigned]
-             * This provides cache-friendly contiguous memory with single malloc/free. */
+            /* Single allocation for all category pointers (6 categories × all_count
+             * slots) Memory layout:
+             * [conflicts][uncommitted][undeployed][new_files][orphaned][reassigned]
+             * This provides cache-friendly contiguous memory with single
+             * malloc/free. */
             const workspace_item_t **categorized =
                 malloc(all_count * 6 * sizeof(workspace_item_t *));
             if (!categorized) {
@@ -348,15 +351,14 @@ static void display_workspace_status(
                     case WORKSPACE_STATE_DEPLOYED:
                         if ((item->divergence & DIVERGENCE_STALE) &&
                             !(item->divergence & DIVERGENCE_CONTENT)) {
-                            /* Git moved, disk did not → apply's work, the
-                             * same bucket as a file never deployed; the
-                             * [stale] tag says which */
+                            /* Git moved, disk did not → apply's work, the same
+                             * bucket as a file never deployed; the [stale] tag
+                             * says which */
                             undeployed[undeployed_count++] = item;
                         } else if (item->divergence & DIVERGENCE_STALE) {
-                            /* Both sides moved: update skips it and apply
-                             * refuses it without --force, so it belongs to
-                             * neither verb's section — its own header
-                             * names the way out */
+                            /* Both sides moved: update skips it and apply refuses
+                             * it without --force, so it belongs to neither verb's
+                             * section — its own header names the way out */
                             conflicts[conflict_count++] = item;
                         } else if (item->divergence != DIVERGENCE_NONE) {
                             /* Real divergence → uncommitted changes */
@@ -387,8 +389,8 @@ static void display_workspace_status(
                 }
             }
 
-            /* Section 1: Conflicts — the one bucket no default verb
-             * resolves, so it leads and its header carries the remedy */
+            /* Section 1: Conflicts — the one bucket no default verb resolves,
+             * so it leads and its header carries the remedy */
             if (conflict_count > 0) {
                 output_list_t *list = output_list_create(
                     out, "Conflicts",
@@ -547,13 +549,12 @@ static void display_workspace_status(
                 );
 
                 if (list) {
-                    /* The header promises a prune; a clean orphan gets one
-                     * and needs no more words. Every other hint is keyed
-                     * below by the exact tags its line shows, once per
-                     * distinct tag string, so the key reads back against
-                     * the list it follows. The hint is cleanup's — absent,
-                     * then released, then the skip reason, the plan's own
-                     * order — this only names it. */
+                    /* The header promises a prune; a clean orphan gets one and
+                     * needs no more words. Every other hint is keyed below by
+                     * the exact tags its line shows, once per distinct tag string,
+                     * so the key reads back against the list it follows. The
+                     * hint is cleanup's — absent, then released, then the skip
+                     * reason, the plan's own order — this only names it. */
                     struct { char tags[64]; const char *hint; } legend[16];
                     size_t legend_count = 0;
                     size_t legend_width = 0;
@@ -602,8 +603,8 @@ static void display_workspace_status(
                         }
                         if (!hint) continue;
 
-                        /* Same bracketing and spacing the list gives the
-                         * item line, so the column below matches the one above */
+                        /* Same bracketing and spacing the list gives the item
+                         * line, so the column below matches the one above */
                         char key[64] = "";
                         for (size_t t = 0; t < tag_count; t++) {
                             size_t used = strlen(key);
@@ -676,8 +677,8 @@ static error_t *display_remote_status(
 
     bool verbose = output_is_verbose(out);
 
-    /* Detect remote (name + URL — URL feeds the credential helper when we
-     * fetch below). Both outputs are arena-borrowed for the call's lifetime. */
+    /* Detect remote (name + URL — URL feeds the credential helper when we fetch
+     * below). Both outputs are arena-borrowed for the call's lifetime. */
     const char *remote_name = NULL;
     const char *remote_url = NULL;
     error_t *err = gitops_resolve_default_remote(
@@ -709,10 +710,10 @@ static error_t *display_remote_status(
 
     /* Fetch if requested */
     if (!no_fetch) {
-        /* xfer is required by gitops network ops (credential state machine
-         * + approve/reject are needed even without verbose progress).
-         * Status's fetch is a background refresh: progress is always
-         * ephemeral so it never persists between status sections. */
+        /* xfer is required by gitops network ops (credential state machine +
+         * approve/reject are needed even without verbose progress). Status's
+         * fetch is a background refresh: progress is always ephemeral so it never
+         * persists between status sections. */
         transfer_options_t xfer_opts = {
             .output             = out,
             .url                = remote_url,
@@ -722,9 +723,9 @@ static error_t *display_remote_status(
         error_t *xfer_err = transfer_context_create(&xfer_opts, &xfer);
 
         if (xfer_err) {
-            /* Non-fatal: skip the fetch and fall through to cached status
-             * display. Matches the "skip section on failure" pattern used
-             * earlier for remote detection. */
+            /* Non-fatal: skip the fetch and fall through to cached status display.
+             * Matches the "skip section on failure" pattern used earlier for
+             * remote detection. */
             output_warning(
                 out, OUTPUT_NORMAL, "Skipping remote fetch: %s",
                 error_message(xfer_err)
@@ -733,8 +734,8 @@ static error_t *display_remote_status(
         } else {
             if (verbose) {
                 /* Ephemeral fetch message (no newline — resolved after fetch).
-                 * On TTY: progress overwrites via \r, then line is cleared.
-                 * On pipe: falls back to inline " done.\n" resolution. */
+                 * On TTY: progress overwrites via \r, then line is cleared. On
+                 * pipe: falls back to inline " done.\n" resolution. */
                 output_print(
                     out, OUTPUT_VERBOSE, "Fetching from '%s'...", remote_name
                 );
@@ -749,9 +750,8 @@ static error_t *display_remote_status(
             /* Resolve the "Fetching from ..." preamble line (verbose only) */
             if (verbose) {
                 if (output_is_tty(out)) {
-                    /* TTY: clear any remaining text. Handles all cases
-                     * uniformly (callback-finalized, mid-progress error,
-                     * up-to-date). */
+                    /* TTY: clear any remaining text. Handles all cases uniformly
+                     * (callback-finalized, mid-progress error, up-to-date). */
                     transfer_progress_resolved(xfer);
                     output_clear_line(out);
                 } else if (fetch_err) {
@@ -799,9 +799,8 @@ static error_t *display_remote_status(
             continue;
         }
 
-        /* Format display based on state. Color comes from the shared
-         * map; only the descriptive text and the per-state counter are
-         * caller-specific. */
+        /* Format display based on state. Color comes from the shared map; only
+         * the descriptive text and the per-state counter are caller-specific. */
         const char *symbol = upstream_state_symbol(info.state);
         output_color_t color = upstream_state_color(info.state);
         char status_str[128];
@@ -853,10 +852,9 @@ static error_t *display_remote_status(
 
         /* Display with colors */
         if (verbose && info.state != UPSTREAM_NO_REMOTE && info.state != UPSTREAM_UNKNOWN) {
-            /* Verbose mode: show detailed commit info. The enclosing branch
-             * has already filtered out NO_REMOTE/UNKNOWN, so both local and
-             * remote refs are guaranteed to exist on every state reaching
-             * this block. */
+            /* Verbose mode: show detailed commit info. The enclosing branch has
+             * already filtered out NO_REMOTE/UNKNOWN, so both local and remote
+             * refs are guaranteed to exist on every state reaching this block. */
             output_newline(out, OUTPUT_VERBOSE);
             output_print(out, OUTPUT_VERBOSE, "Profile: %s\n", profile);
 
@@ -893,8 +891,8 @@ static error_t *display_remote_status(
             }
             error_free(commit_err);
 
-            /* Remote commit info — guaranteed reachable per the enclosing
-             * filter above. */
+            /* Remote commit info — guaranteed reachable per the enclosing filter
+             * above. */
             char remote_ref[DOTTA_REFNAME_MAX];
             error_t *remote_ref_err = gitops_build_refname(
                 remote_ref, sizeof(remote_ref), "refs/remotes/%s/%s",
@@ -981,14 +979,14 @@ error_t *cmd_status(const dotta_ctx_t *ctx, const cmd_status_options_t *opts) {
 
     /* Build operation scope
      *
-     *   scope_enabled — the persistent enabled set (passed to workspace_load for
-     *                   accurate orphan detection).
+     *   scope_enabled — the persistent enabled set (passed to workspace_load
+     *                   for accurate orphan detection).
      *   scope_active  — display face (enabled profile list, remote status).
      *
-     * Zero enabled profiles is a valid state: workspace classifies all
-     * state entries as orphaned. This enables the "disable last profile,
-     * then status" workflow. scope_build returns success with an empty
-     * enabled set — no special handling needed here. */
+     * Zero enabled profiles is a valid state: workspace classifies all state
+     * entries as orphaned. This enables the "disable last profile, then status"
+     * workflow. scope_build returns success with an empty enabled set — no special
+     * handling needed here. */
     scope_inputs_t scope_inputs = {
         .profiles      = opts->profiles,
         .profile_count = opts->profile_count,
@@ -1021,9 +1019,9 @@ error_t *cmd_status(const dotta_ctx_t *ctx, const cmd_status_options_t *opts) {
         }
 
         /* Persist deployment-anchor advances from slow-path CMP_EQUAL checks
-         * (self-healing optimization). Seeds the fast path for subsequent
-         * status calls. Non-fatal on failure — status still renders correctly,
-         * just won't benefit from the fast path. */
+         * (self-healing optimization). Seeds the fast path for subsequent status
+         * calls. Non-fatal on failure — status still renders correctly, just
+         * won't benefit from the fast path. */
         error_t *flush_err = workspace_flush_updates(ws);
         if (flush_err) {
             error_free(flush_err);
@@ -1088,18 +1086,18 @@ error_t *cmd_status(const dotta_ctx_t *ctx, const cmd_status_options_t *opts) {
     /* Display enabled profiles and last deployment info */
     display_enabled_profiles(out, scope_active(scope), active, ws);
 
-    /* The whole view, on request — before the verdict and the sections
-     * that name only what diverged from it */
+    /* The whole view, on request — before the verdict and the sections that name
+     * only what diverged from it */
     if (opts->show_local && opts->full) {
         display_manifest(ws, scope, out);
     }
 
     /* Display workspace status (with profile filtering for Coherent Scope)
      *
-     * The workspace was loaded with the persistent enabled set
-     * (scope_enabled) for accurate divergence analysis. display_workspace_status
-     * then applies the CLI filter dimension via scope_accepts_profile so
-     * `dotta status -p work` matches `dotta apply -p work` behavior.
+     * The workspace was loaded with the persistent enabled set (scope_enabled)
+     * for accurate divergence analysis. display_workspace_status then applies
+     * the CLI filter dimension via scope_accepts_profile so `dotta status -p
+     * work` matches `dotta apply -p work` behavior.
      */
     if (opts->show_local) {
         display_workspace_status(ws, scope, active, out);
@@ -1130,10 +1128,9 @@ cleanup:
  * ══════════════════════════════════════════════════════════════════ */
 
 /**
- * Resolve the --local / --remote intent pair into show_local /
- * show_remote. Legacy default: both true when neither flag given.
- * Explicit flags reduce to their own scope; giving both is identical
- * to the default.
+ * Resolve the --local / --remote intent pair into show_local / show_remote. Legacy
+ * default: both true when neither flag given. Explicit flags reduce to their
+ * own scope; giving both is identical to the default.
  */
 static error_t *status_post_parse(
     void *opts_v, arena_t *arena, const args_command_t *cmd

@@ -68,9 +68,9 @@ static const char *const BOOTSTRAP_TEMPLATE =
 /**
  * Create bootstrap script from template.
  *
- * Commits the default template directly into the profile's Git tree
- * (no working-tree write). Fails if the profile is missing or if a
- * bootstrap script already exists for it.
+ * Commits the default template directly into the profile's Git tree (no
+ * working-tree write). Fails if the profile is missing or if a bootstrap script
+ * already exists for it.
  */
 static error_t *bootstrap_create_template(
     git_repository *repo,
@@ -141,10 +141,9 @@ static error_t *bootstrap_create_template(
 /**
  * Edit bootstrap script.
  *
- * Extracts the script to a temporary file, hands it to the user's
- * editor, validates the edited content, and commits the result back
- * to Git. If the profile has no script yet, one is created from the
- * template first.
+ * Extracts the script to a temporary file, hands it to the user's editor, validates
+ * the edited content, and commits the result back to Git. If the profile has no
+ * script yet, one is created from the template first.
  */
 static error_t *bootstrap_edit(
     git_repository *repo,
@@ -293,8 +292,8 @@ static error_t *bootstrap_show(
 /**
  * List bootstrap scripts across profiles.
  *
- * For each profile: green ✓ with path if the script exists, red ✗
- * otherwise. Closes with a hint about how to create one.
+ * For each profile: green ✓ with path if the script exists, red ✗ otherwise.
+ * Closes with a hint about how to create one.
  */
 static error_t *bootstrap_list(
     git_repository *repo,
@@ -435,9 +434,8 @@ error_t *cmd_bootstrap(const dotta_ctx_t *ctx, const cmd_bootstrap_options_t *op
         goto cleanup;
     }
 
-    /* Single-pass filter: collect profiles that actually have a
-     * script. Display list and pass straight into bootstrap_fire —
-     * no double tree-walk. */
+    /* Single-pass filter: collect profiles that actually have a script. Display
+     * list and pass straight into bootstrap_fire — no double tree-walk. */
     for (size_t i = 0; i < profiles->count; i++) {
         if (bootstrap_exists(repo, profiles->items[i])) {
             err = string_array_push(&found, profiles->items[i]);
@@ -495,8 +493,8 @@ error_t *cmd_bootstrap(const dotta_ctx_t *ctx, const cmd_bootstrap_options_t *op
     err = bootstrap_fire(out, &spec);
     if (err) {
         if (opts->continue_on_error) {
-            /* Partial failure — per-profile details already on screen
-             * and the failed list was printed by bootstrap_fire. */
+            /* Partial failure — per-profile details already on screen and the
+             * failed list was printed by bootstrap_fire. */
             had_failures = true;
             error_free(err);
             err = NULL;

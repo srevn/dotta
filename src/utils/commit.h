@@ -36,8 +36,8 @@ typedef struct {
 /**
  * Build a commit message from context
  *
- * If custom_msg is provided, uses it directly.
- * Otherwise, builds message from config templates with variable substitution.
+ * If custom_msg is provided, uses it directly. Otherwise, builds message from
+ * config templates with variable substitution.
  *
  * Available template variables:
  *   {host}          - System hostname

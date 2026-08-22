@@ -1,10 +1,9 @@
 /**
  * interactive.c - Interactive TUI for profile management and ordering
  *
- * Single-entrypoint module. Inline raw-mode interface that lets the user
- * select, reorder, and target-bind profiles before applying them. The
- * public surface is exactly `spec_interactive`; everything below is
- * file-local.
+ * Single-entrypoint module. Inline raw-mode interface that lets the user select,
+ * reorder, and target-bind profiles before applying them. The public surface is
+ * exactly `spec_interactive`; everything below is file-local.
  */
 
 #include "cmds/interactive.h"
@@ -78,8 +77,8 @@ typedef enum {
     INTERACTIVE_EXIT_ERROR    /* Quit on error; out_err carries the cause */
 } interactive_result_t;
 
-/* Save-time diff plan. Pointer arrays live in the caller's arena;
- * new_order owns its strings via string_array_deinit. */
+/* Save-time diff plan. Pointer arrays live in the caller's arena; new_order owns
+ * its strings via string_array_deinit. */
 typedef struct {
     string_array_t new_order;  /* Ordered enabled names, in display order */
     item_t **new_order_items;  /* Parallel pointers into view->items (same indexing as new_order) */
@@ -133,9 +132,8 @@ static int prompt_push(prompt_t *p, char c) {
     return 0;
 }
 
-/* Replace the buffer with a copy of src (empty when src is NULL/empty).
- * On OOM the buffer is left empty so the caller can fall back to a
- * fresh prompt. */
+/* Replace the buffer with a copy of src (empty when src is NULL/empty). On OOM
+ * the buffer is left empty so the caller can fall back to a fresh prompt. */
 static int prompt_set(prompt_t *p, const char *src) {
     if (!src || *src == '\0') {
         p->len = 0;
@@ -164,8 +162,8 @@ static int prompt_set(prompt_t *p, const char *src) {
     return 0;
 }
 
-/* Opening helpers — mirror prompt_close so the input dispatcher never
- * reaches into the prompt's representation. */
+/* Opening helpers — mirror prompt_close so the input dispatcher never reaches
+ * into the prompt's representation. */
 static void prompt_open_capture(prompt_t *p, size_t item_index) {
     p->active = true;
     p->enable = true;
@@ -177,16 +175,16 @@ static void prompt_open_edit(prompt_t *p, size_t item_index, const char *current
     p->active = true;
     p->enable = false;
     p->item_index = item_index;
-    /* OOM here is acceptable: fall back to an empty buffer rather than
-     * refuse to open the prompt; the user can type a fresh path. */
+    /* OOM here is acceptable: fall back to an empty buffer rather than refuse
+     * to open the prompt; the user can type a fresh path. */
     (void) prompt_set(p, current);
 }
 
 /* --- View lifecycle --- */
 
-/* Allocate view->items and populate name/enabled/exists_locally. On
- * failure, item_count is set to the populated prefix and view_free
- * (via view_create's fail path) releases what was allocated. */
+/* Allocate view->items and populate name/enabled/exists_locally. On failure,
+ * item_count is set to the populated prefix and view_free (via view_create's
+ * fail path) releases what was allocated. */
 static error_t *build_items(
     git_repository *repo, state_t *deploy_state, view_t *view
 ) {
@@ -205,9 +203,9 @@ static error_t *build_items(
         goto cleanup;
     }
 
-    /* First-run case: a handle whose underlying DB doesn't exist yields
-     * an empty enabled set, not an error. Save via 'w' lazily creates
-     * .git/dotta.db in state_begin. */
+    /* First-run case: a handle whose underlying DB doesn't exist yields an empty
+     * enabled set, not an error. Save via 'w' lazily creates .git/dotta.db in
+     * state_begin. */
     err = state_get_profiles(deploy_state, &state_profiles);
     if (err) {
         error_free(err);
@@ -215,8 +213,8 @@ static error_t *build_items(
         state_profiles = NULL;
     }
 
-    /* Hash map for O(1) lookups. Store (i + 1) so index 0 doesn't
-     * collide with the "not found" NULL return. */
+    /* Hash map for O(1) lookups. Store (i + 1) so index 0 doesn't collide with
+     * the "not found" NULL return. */
     profile_map = hashmap_borrow(0);
     if (!profile_map) {
         err = error_create(ERR_MEMORY, "failed to create profile hashmap");
@@ -287,13 +285,13 @@ cleanup:
 
 /* Pass two: eagerly seed has_custom and target.
  *
- * has_custom is computed up front so toggling becomes a constant-time
- * field check. Lazy probing would force a Git tree read inside a
- * raw-mode keystroke handler — visible latency on the first space.
+ * has_custom is computed up front so toggling becomes a constant-time field check.
+ * Lazy probing would force a Git tree read inside a raw-mode keystroke handler
+ * — visible latency on the first space.
  *
- * Target borrows from state_peek_profile_target's row cache, whose
- * lifetime ends at the next state_enable/disable/reorder. Save runs
- * those calls much later; copy across the boundary now. */
+ * Target borrows from state_peek_profile_target's row cache, whose lifetime ends
+ * at the next state_enable/disable/reorder. Save runs those calls much later;
+ * copy across the boundary now. */
 static error_t *seed_metadata(
     git_repository *repo, state_t *deploy_state, view_t *view
 ) {
@@ -357,8 +355,8 @@ static error_t *view_create(
     err = seed_metadata(repo, deploy_state, view);
     if (err) goto fail;
 
-    /* Pre-allocate the prompt buffer so the keystroke handler stays
-     * alloc-free on the common typing path. */
+    /* Pre-allocate the prompt buffer so the keystroke handler stays alloc-free
+     * on the common typing path. */
     view->prompt.cap = PROMPT_INITIAL_CAP;
     view->prompt.buffer = calloc(view->prompt.cap, sizeof(char));
     if (!view->prompt.buffer) {
@@ -404,8 +402,8 @@ static inline void plan_cleanup(plan_t *p) {
 }
 #define PLAN_AUTO __attribute__((cleanup(plan_cleanup)))
 
-/* Phase: collect enabled rows in display order. Pure view sweep; no
- * state interaction. */
+/* Phase: collect enabled rows in display order. Pure view sweep; no state
+ * interaction. */
 static error_t *plan_collect(arena_t *arena, view_t *view, plan_t *plan) {
     if (view->item_count > 0) {
         plan->new_order_items = arena_calloc(
@@ -428,12 +426,11 @@ static error_t *plan_collect(arena_t *arena, view_t *view, plan_t *plan) {
 
 /* Phase: classify diff against the persisted set BEFORE any mutation.
  *
- * state_peek_profiles returns borrowed pointers into the row cache. The
- * first state_enable/disable call invalidates the cache and frees the
- * underlying strings. Both needs_enable (additions plus retained rows
- * whose target was edited in-session) and removal_names must be decided
- * here, while the borrows are live. Removal names are arena-strdup'd
- * so they survive the invalidation. */
+ * state_peek_profiles returns borrowed pointers into the row cache. The first
+ * state_enable/disable call invalidates the cache and frees the underlying strings.
+ * Both needs_enable (additions plus retained rows whose target was edited
+ * in-session) and removal_names must be decided here, while the borrows are live.
+ * Removal names are arena-strdup'd so they survive the invalidation. */
 static error_t *plan_classify(
     arena_t *arena, state_t *deploy_state, plan_t *plan
 ) {
@@ -461,8 +458,8 @@ static error_t *plan_classify(
         }
     }
 
-    /* Walk persisted; nested linear scan beats a hashmap on these tiny
-     * sets (typically < 10 profiles). */
+    /* Walk persisted; nested linear scan beats a hashmap on these tiny sets
+     * (typically < 10 profiles). */
     for (size_t i = 0; i < persisted_count; i++) {
         const char *p_name = persisted[i].name;
         bool retained = false;
@@ -498,8 +495,8 @@ static error_t *plan_classify(
             plan->needs_enable[i] = true;
             continue;
         }
-        /* Retained: re-enable only when the user changed the target
-         * in-session. Strict equality, NULL == NULL counts as same. */
+        /* Retained: re-enable only when the user changed the target in-session.
+         * Strict equality, NULL == NULL counts as same. */
         const char *a = it->target;
         const char *b = persisted_target;
         bool same_target = (a == NULL && b == NULL) ||
@@ -510,11 +507,11 @@ static error_t *plan_classify(
     return NULL;
 }
 
-/* Phase: validate user-supplied targets at the boundary, mirroring the
- * check `cmd profile enable` runs. NULL targets are legitimate for
- * non-custom rows; for custom rows the prompt is the source-of-truth
- * gate, and manifest_build's UNBOUND tripwire fires downstream
- * (plan_check) if a bug ever breaches that gate. No second guard here. */
+/* Phase: validate user-supplied targets at the boundary, mirroring the check
+ * `cmd profile enable` runs. NULL targets are legitimate for non-custom rows;
+ * for custom rows the prompt is the source-of-truth gate, and manifest_build's
+ * UNBOUND tripwire fires downstream (plan_check) if a bug ever breaches that
+ * gate. No second guard here. */
 static error_t *plan_validate(const plan_t *plan) {
     for (size_t i = 0; i < plan->new_order.count; i++) {
         if (!plan->needs_enable[i]) continue;
@@ -531,10 +528,10 @@ static error_t *plan_validate(const plan_t *plan) {
     return NULL;
 }
 
-/* Phase: apply the diff. Enables first (cache holds every reorder name
- * when reorder runs), removals next, reorder last over the post-diff
- * set. Each enable/disable invalidates the row cache; reorder reloads
- * it on entry so the precondition holds. */
+/* Phase: apply the diff. Enables first (cache holds every reorder name when reorder
+ * runs), removals next, reorder last over the post-diff set. Each enable/disable
+ * invalidates the row cache; reorder reloads it on entry so the precondition
+ * holds. */
 static error_t *plan_apply(state_t *deploy_state, const plan_t *plan) {
     for (size_t i = 0; i < plan->new_order.count; i++) {
         if (!plan->needs_enable[i]) continue;
@@ -562,12 +559,12 @@ static error_t *plan_apply(state_t *deploy_state, const plan_t *plan) {
     return NULL;
 }
 
-/* Phase: rebuild the mount table from the post-mutation binding set
- * and build the view over the post-diff set. The view is computed,
- * never stored — the build writes nothing and its result is discarded.
- * It is the tripwire that keeps the save from landing an enabled set
- * the next load cannot build: a custom/ row that breached the target
- * gate (UNBOUND), a branch that exists but will not load. */
+/* Phase: rebuild the mount table from the post-mutation binding set and build
+ * the view over the post-diff set. The view is computed, never stored — the build
+ * writes nothing and its result is discarded. It is the tripwire that keeps the
+ * save from landing an enabled set the next load cannot build: a custom/ row
+ * that breached the target gate (UNBOUND), a branch that exists but will not
+ * load. */
 static error_t *plan_check(
     git_repository *repo, state_t *deploy_state, arena_t *arena, const plan_t *plan
 ) {
@@ -585,9 +582,9 @@ static error_t *plan_check(
     return NULL;
 }
 
-/* Save orchestrator. Holds a scoped write transaction for the diff
- * window only; declaring WRITE at the spec level would hold BEGIN
- * IMMEDIATE for the whole session, blocking other dotta processes. */
+/* Save orchestrator. Holds a scoped write transaction for the diff window only;
+ * declaring WRITE at the spec level would hold BEGIN IMMEDIATE for the whole
+ * session, blocking other dotta processes. */
 static error_t *save_order(
     git_repository *repo, state_t *deploy_state, arena_t *arena, view_t *view
 ) {
@@ -595,10 +592,10 @@ static error_t *save_order(
     error_t *err = plan_collect(arena, view, &plan);
     if (err) return err;
 
-    /* Refuse a save that would empty enabled_profiles. Checked here —
-     * after collect — instead of via a cached counter on view: the
-     * items array is the single source of truth for "is this enabled?".
-     * A sibling counter would be a cache of a cache. */
+    /* Refuse a save that would empty enabled_profiles. Checked here — after collect
+     * — instead of via a cached counter on view: the items array is the single
+     * source of truth for "is this enabled?". A sibling counter would be a cache
+     * of a cache. */
     if (plan.new_order.count == 0) {
         return error_create(ERR_INVALID_ARG, "no profiles enabled");
     }
@@ -636,10 +633,10 @@ rollback:
  *   2. Enabled custom  "  ▶ ✓ name → <target>"
  *   3. Disabled custom "    name (custom)"
  *
- * Trailing '_' is the visible caret; hardware cursor stays hidden for
- * the whole session. Annotations print from their own fprintf so the
- * unbounded target string sidesteps the "how big a buffer" question;
- * stdout is line-buffered and view_render emits a single fflush. */
+ * Trailing '_' is the visible caret; hardware cursor stays hidden for the whole
+ * session. Annotations print from their own fprintf so the unbounded target string
+ * sidesteps the "how big a buffer" question; stdout is line-buffered and
+ * view_render emits a single fflush. */
 static void row_render(const view_t *view, size_t i) {
     const item_t *it = &view->items[i];
     bool is_cursor = (i == view->cursor);
@@ -648,9 +645,9 @@ static void row_render(const view_t *view, size_t i) {
     fprintf(stdout, "\r" ANSI_CLEAR_LINE);
 
     if (is_prompt) {
-        /* The cursor is always on the prompt row by construction
-         * (prompt_open_* anchors item_index to view->cursor and
-         * navigation keys are shadowed while active). */
+        /* The cursor is always on the prompt row by construction (prompt_open_*
+         * anchors item_index to view->cursor and navigation keys are shadowed
+         * while active). */
         fprintf(
             stdout, "  " UI_CURSOR "   " UI_BOLD "Target:" UI_RESET " %s_\r\n",
             view->prompt.buffer
@@ -749,11 +746,11 @@ static int view_render(const view_t *view) {
 
 /* --- Input --- */
 
-/* Prompt mode: every navigation/save/quit key loses its TUI meaning by
- * key-set shadowing — they are valid bytes in a path. Only Enter
- * (commit), Esc/Ctrl-C/Ctrl-D (cancel), Backspace, and printable bytes
- * are honored. Effects are in-memory and recoverable; OOM at commit
- * keeps the prompt open so the user can retry. */
+/* Prompt mode: every navigation/save/quit key loses its TUI meaning by key-set
+ * shadowing — they are valid bytes in a path. Only Enter (commit),
+ * Esc/Ctrl-C/Ctrl-D (cancel), Backspace, and printable bytes are honored. Effects
+ * are in-memory and recoverable; OOM at commit keeps the prompt open so the user
+ * can retry. */
 static interactive_result_t handle_key_prompt(view_t *view, int key) {
     prompt_t *p = &view->prompt;
 
@@ -768,8 +765,8 @@ static interactive_result_t handle_key_prompt(view_t *view, int key) {
                 return INTERACTIVE_CONTINUE;
             }
             item_t *it = &view->items[p->item_index];
-            /* Replace whatever target was on the item (NULL for capture,
-             * the prior string for edit). free(NULL) is safe. */
+            /* Replace whatever target was on the item (NULL for capture, the
+             * prior string for edit). free(NULL) is safe. */
             free(it->target);
             it->target = captured;
             if (p->enable) {
@@ -794,10 +791,10 @@ static interactive_result_t handle_key_prompt(view_t *view, int key) {
             return INTERACTIVE_CONTINUE;
 
         default:
-            /* Printable ASCII (0x20..0x7E) plus the high-bit band
-             * (0x80..0xFF) for UTF-8 path bytes. 0x7F (DEL) is excluded
-             * defensively — the terminal layer maps both 0x7F and 0x08
-             * to TERM_KEY_BACKSPACE, so 0x7F should be unreachable. */
+            /* Printable ASCII (0x20..0x7E) plus the high-bit band (0x80..0xFF)
+             * for UTF-8 path bytes. 0x7F (DEL) is excluded defensively — the
+             * terminal layer maps both 0x7F and 0x08 to TERM_KEY_BACKSPACE, so
+             * 0x7F should be unreachable. */
             if (key >= 0x20 && key <= 0xFF && key != 0x7F) {
                 (void) prompt_push(p, (char) key);
             }
@@ -843,11 +840,11 @@ static interactive_result_t handle_key_normal(
             item_t *it = &view->items[view->cursor];
             bool toggling_on = !it->enabled;
 
-            /* Three-gate trigger: prompt opens iff (1) row has custom
-             * files, (2) toggle is OFF→ON, (3) no target captured or
-             * seeded yet. The captured target survives transient
-             * toggle-off / toggle-on cycles within a session, so a
-             * re-enable skips the prompt naturally via gate 3. */
+            /* Three-gate trigger: prompt opens iff (1) row has custom files,
+             * (2) toggle is OFF→ON, (3) no target captured or seeded yet. The
+             * captured target survives transient toggle-off / toggle-on cycles
+             * within a session, so a re-enable skips the prompt naturally via
+             * gate 3. */
             if (toggling_on && it->has_custom && it->target == NULL) {
                 prompt_open_capture(&view->prompt, view->cursor);
                 return INTERACTIVE_CONTINUE;
@@ -860,9 +857,9 @@ static interactive_result_t handle_key_normal(
 
         case 't':
         case 'T': {
-            /* Edit existing target on a custom-bearing row. Same prompt
-             * as space but with enable cleared so committing only
-             * updates the target string. No-op on non-custom rows. */
+            /* Edit existing target on a custom-bearing row. Same prompt as space
+             * but with enable cleared so committing only updates the target string.
+             * No-op on non-custom rows. */
             if (view->cursor >= view->item_count) {
                 return INTERACTIVE_CONTINUE;
             }
@@ -923,11 +920,11 @@ static interactive_result_t view_handle_key(
 /* Reject the session if the terminal can't host the static row layout.
  *
  * Row geometry: "  " + cursor + " " + checkbox + " " + name + annotation.
- * The static prefix is ROW_PREFIX_COLS; the worst static annotation is
- * " (custom)" at ROW_ANNOTATION_COLS. The dynamic "→ <target>" can run
- * longer than that, but it is user data and its visual overflow is
- * allowed to wrap rather than block startup. Same logic applies to the
- * mid-session "Target: <buffer>" overlay. */
+ * The static prefix is ROW_PREFIX_COLS; the worst static annotation is " (custom)"
+ * at ROW_ANNOTATION_COLS. The dynamic "→ <target>" can run longer than that,
+ * but it is user data and its visual overflow is allowed to wrap rather than
+ * block startup. Same logic applies to the mid-session "Target: <buffer>"
+ * overlay. */
 static error_t *check_screen(const view_t *view) {
     terminal_size_t size;
     error_t *err = terminal_get_size(&size);
@@ -1009,9 +1006,9 @@ static error_t *interactive_run(
 
     err = view_loop(view, repo, deploy_state, arena, lines);
 
-    /* Always move past the UI before terminal_restore brings the cursor
-     * back, regardless of whether the loop exited cleanly or with an
-     * error. VIEW_AUTO and TERMINAL_CLEANUP handle the rest. */
+    /* Always move past the UI before terminal_restore brings the cursor back,
+     * regardless of whether the loop exited cleanly or with an error. VIEW_AUTO
+     * and TERMINAL_CLEANUP handle the rest. */
     fprintf(stdout, "\r\n");
     fflush(stdout);
     return err;
@@ -1031,9 +1028,9 @@ static error_t *interactive_dispatch(const void *ctx_v, void *opts_v) {
 const args_command_t spec_interactive = {
     .name         = "interactive",
     .summary      = "Interactive profile management and ordering",
-    /* Root-level flag aliases: `dotta --interactive` and `dotta -i`
-     * both dispatch here. The bare `dotta interactive` form is served
-     * by `.name`; `.root_aliases` covers only the flag-prefixed forms. */
+    /* Root-level flag aliases: `dotta --interactive` and `dotta -i` both dispatch
+     * here. The bare `dotta interactive` form is served by `.name`; `.root_aliases`
+     * covers only the flag-prefixed forms. */
     .root_aliases = "i interactive",
     .usage        =
         "%s interactive\n"

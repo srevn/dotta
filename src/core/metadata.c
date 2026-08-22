@@ -64,8 +64,8 @@ error_t *metadata_create_empty(metadata_t **out) {
 /**
  * Free metadata item
  *
- * Handles both file and directory items correctly.
- * Frees kind-specific union fields based on kind discriminator.
+ * Handles both file and directory items correctly. Frees kind-specific union
+ * fields based on kind discriminator.
  */
 void metadata_item_free(metadata_item_t *item) {
     if (!item) {
@@ -85,8 +85,8 @@ void metadata_item_free(metadata_item_t *item) {
  *
  * Frees all items (handling union fields correctly) and the structure itself.
  *
- * Generic callback signature for use with containers (e.g., hashmap_free).
- * Accepts void* to match standard C cleanup callback pattern.
+ * Generic callback signature for use with containers (e.g., hashmap_free). Accepts
+ * void* to match standard C cleanup callback pattern.
  */
 void metadata_free(void *ptr) {
     /* Safe cast: this function is designed to accept metadata_t* via void* */
@@ -206,8 +206,8 @@ error_t *metadata_item_create_directory(
  * Create symlink metadata item
  *
  * Mode is always 0: symlink permissions are not settable via symlink() syscall,
- * and chmod() on symlinks changes the target or fails (OS-dependent).
- * Only ownership is meaningful (applied via lchown during deployment).
+ * and chmod() on symlinks changes the target or fails (OS-dependent). Only
+ * ownership is meaningful (applied via lchown during deployment).
  */
 error_t *metadata_item_create_symlink(
     const char *storage_path,
@@ -243,12 +243,13 @@ error_t *metadata_item_create_symlink(
 /**
  * Clone metadata item (deep copy)
  *
- * Creates a deep copy of a metadata item, duplicating all strings and
- * union fields based on the item's kind. This is useful when you need
- * to preserve an item while modifying the original collection.
+ * Creates a deep copy of a metadata item, duplicating all strings and union fields
+ * based on the item's kind. This is useful when you need to preserve an item
+ * while modifying the original collection.
  *
  * @param source Source item to clone (must not be NULL)
- * @param out Cloned item (must not be NULL, caller must free with metadata_item_free)
+ * @param out Cloned item (must not be NULL, caller must free with
+ *            metadata_item_free)
  * @return Error or NULL on success
  */
 error_t *metadata_item_clone(const metadata_item_t *source, metadata_item_t **out) {
@@ -317,8 +318,8 @@ error_t *metadata_item_clone(const metadata_item_t *source, metadata_item_t **ou
  *
  * After realloc, all pointers in the hashmap are invalid and must be updated.
  * If rebuild fails, the hashmap is freed and set to NULL, causing fallback to
- * linear search. This ensures the data structure remains consistent even if
- * hashmap rebuild fails.
+ * linear search. This ensures the data structure remains consistent even if hashmap
+ * rebuild fails.
  *
  * @param metadata Metadata structure (must not be NULL)
  */
@@ -336,8 +337,8 @@ static void rebuild_hashmap_index(metadata_t *metadata) {
 
         error_t *err = hashmap_set(metadata->index, item->key, item);
         if (err) {
-            /* Rebuild failed - free hashmap and set to NULL
-             * This causes fallback to linear search (slower but correct) */
+            /* Rebuild failed - free hashmap and set to NULL This causes fallback
+             * to linear search (slower but correct) */
             hashmap_free(metadata->index, NULL);
             metadata->index = NULL;
             error_free(err);
@@ -349,8 +350,8 @@ static void rebuild_hashmap_index(metadata_t *metadata) {
 /**
  * Grow metadata items array if needed
  *
- * Doubles the array capacity when full. After realloc, the hashmap index
- * must be rebuilt since all pointers have changed.
+ * Doubles the array capacity when full. After realloc, the hashmap index must
+ * be rebuilt since all pointers have changed.
  *
  * @param metadata Metadata structure (must not be NULL)
  * @return Error or NULL on success
@@ -380,8 +381,8 @@ static error_t *ensure_capacity(metadata_t *metadata) {
     metadata->items = new_items;
     metadata->capacity = new_capacity;
 
-    /* Rebuild hashmap index since array pointers changed after realloc
-     * Non-fatal: if rebuild fails, index is set to NULL and we fall back to linear search */
+    /* Rebuild hashmap index since array pointers changed after realloc Non-fatal:
+     * if rebuild fails, index is set to NULL and we fall back to linear search */
     rebuild_hashmap_index(metadata);
 
     return NULL;
@@ -390,11 +391,11 @@ static error_t *ensure_capacity(metadata_t *metadata) {
 /**
  * Add or update metadata item
  *
- * Works for both files and directories. If an item with the same key exists,
- * it is updated. Otherwise, a new item is added.
+ * Works for both files and directories. If an item with the same key exists, it
+ * is updated. Otherwise, a new item is added.
  *
- * IMPORTANT: This function COPIES the source item. Caller must still free
- * the source item after calling this function.
+ * IMPORTANT: This function COPIES the source item. Caller must still free the
+ * source item after calling this function.
  *
  * Memory allocation strategy:
  * 1. For UPDATE: Allocate all new strings first (fail-fast), then update in-place
@@ -553,8 +554,8 @@ error_t *metadata_add_item(
 /**
  * Get metadata item (const version)
  *
- * Works for both files and directories. Caller should check item->kind
- * after retrieval if type matters.
+ * Works for both files and directories. Caller should check item->kind after
+ * retrieval if type matters.
  */
 error_t *metadata_get_item(
     const metadata_t *metadata,
@@ -641,8 +642,8 @@ error_t *metadata_remove_item(
     /* Decrement count */
     metadata->count--;
 
-    /* Rebuild hashmap since array pointers changed after memmove
-     * Non-fatal: if rebuild fails, index is set to NULL and we fall back to linear search */
+    /* Rebuild hashmap since array pointers changed after memmove Non-fatal: if
+     * rebuild fails, index is set to NULL and we fall back to linear search */
     if (metadata->index && (size_t) index < metadata->count) {
         /* Only rebuild if we moved items (not if we removed the last item) */
         rebuild_hashmap_index(metadata);
@@ -654,10 +655,10 @@ error_t *metadata_remove_item(
 /**
  * Prune redundant directory entries
  *
- * Two-pass collect-then-prune: metadata_remove_item shifts the items
- * array, which would invalidate borrowed pointers from
- * metadata_get_items_by_kind. string_array_push duplicates each key, so
- * the prune pass operates on independent strings.
+ * Two-pass collect-then-prune: metadata_remove_item shifts the items array, which
+ * would invalidate borrowed pointers from metadata_get_items_by_kind.
+ * string_array_push duplicates each key, so the prune pass operates on independent
+ * strings.
  */
 error_t *metadata_prune_directories(
     metadata_t *metadata,
@@ -677,8 +678,8 @@ error_t *metadata_prune_directories(
         return NULL;
     }
 
-    /* The keys this call appends start here; the removal pass below
-     * walks only them. */
+    /* The keys this call appends start here; the removal pass below walks only
+     * them. */
     error_t *err = NULL;
     const size_t first = pruned->count;
 
@@ -687,10 +688,9 @@ error_t *metadata_prune_directories(
     for (size_t d = 0; d < dir_count; d++) {
         const metadata_item_t *dir = directories[d];
 
-        /* Preserve any entry that carries distinguishing information:
-         * custom mode, or any owner/group overlay. Today this is the
-         * only signal that separates legitimate empty-dir intent from
-         * walker-captured residue. */
+        /* Preserve any entry that carries distinguishing information: custom
+         * mode, or any owner/group overlay. Today this is the only signal that
+         * separates legitimate empty-dir intent from walker-captured residue. */
         if (dir->mode != DIR_MODE_DEFAULT) continue;
         if (dir->owner != NULL || dir->group != NULL) continue;
 
@@ -698,10 +698,9 @@ error_t *metadata_prune_directories(
         size_t dir_key_len = strlen(dir_key);
         bool anchored = false;
 
-        /* Anchor against the index: any tracked path under the
-         * directory blocks the prune. Metadata items are not the
-         * universe — a symlink tracked without elevation carries no
-         * item, yet still anchors its parent. */
+        /* Anchor against the index: any tracked path under the directory blocks
+         * the prune. Metadata items are not the universe — a symlink tracked
+         * without elevation carries no item, yet still anchors its parent. */
         for (size_t e = 0; e < entry_count && !anchored; e++) {
             const git_index_entry *entry = git_index_get_byindex(index, e);
             if (entry &&
@@ -777,10 +776,10 @@ bool metadata_has_item(
  * - Item not found in metadata
  * - Item exists but is a directory (not a file)
  *
- * This function is used by historical operations (diff, show, revert) to
- * extract the encrypted flag from metadata loaded from Git commits.
- * Workspace-backed operations read the view row's encrypted flag, which
- * manifest_build projects from this metadata.
+ * This function is used by historical operations (diff, show, revert) to extract
+ * the encrypted flag from metadata loaded from Git commits. Workspace-backed
+ * operations read the view row's encrypted flag, which manifest_build projects
+ * from this metadata.
  *
  * @param metadata Metadata collection (can be NULL)
  * @param storage_path Storage path to lookup (can be NULL)
@@ -815,8 +814,8 @@ bool metadata_get_file_encrypted(
 /**
  * Get all items (unfiltered)
  *
- * Returns direct pointer to internal items array (borrowed reference).
- * Zero-cost operation - no allocation, no copying.
+ * Returns direct pointer to internal items array (borrowed reference). Zero-cost
+ * operation - no allocation, no copying.
  *
  * The returned pointer is only valid until the next modification to metadata.
  *
@@ -838,25 +837,27 @@ const metadata_item_t *metadata_get_all_items(
 
     *count = metadata->count;
 
-    /* Return direct pointer to array (borrowed reference)
-     * Note: metadata->items is always allocated (even for empty metadata),
-     * so this is safe even when count=0 */
+    /* Return direct pointer to array (borrowed reference) Note: metadata->items
+     * is always allocated (even for empty metadata), so this is safe even when
+     * count=0 */
     return metadata->items;
 }
 
 /**
  * Get items filtered by kind
  *
- * Returns allocated array of pointers to matching items.
- * Caller must free the returned pointer array (but not the items themselves).
+ * Returns allocated array of pointers to matching items. Caller must free the
+ * returned pointer array (but not the items themselves).
  *
- * This performs a small allocation (pointers only, ~8 bytes per item).
- * Items themselves remain in the metadata structure and are not copied.
+ * This performs a small allocation (pointers only, ~8 bytes per item). Items
+ * themselves remain in the metadata structure and are not copied.
  *
  * @param metadata Metadata collection (must not be NULL)
- * @param kind Item kind to filter by (METADATA_ITEM_FILE or METADATA_ITEM_DIRECTORY)
+ * @param kind Item kind to filter by (METADATA_ITEM_FILE or
+ *             METADATA_ITEM_DIRECTORY)
  * @param count Output count (must not be NULL)
- * @return Allocated array of item pointers (caller must free), or NULL if no matches
+ * @return Allocated array of item pointers (caller must free), or NULL if no
+ *         matches
  *
  * Return value semantics:
  * - NULL with count=0: No matches, or allocation failure, or invalid input
@@ -898,11 +899,11 @@ const metadata_item_t **metadata_get_items_by_kind(
 /**
  * Capture ownership from stat data into metadata item
  *
- * Resolves UID to username and GID to groupname, storing as strings.
- * Gracefully handles unresolvable UIDs/GIDs (leaves field NULL).
+ * Resolves UID to username and GID to groupname, storing as strings. Gracefully
+ * handles unresolvable UIDs/GIDs (leaves field NULL).
  *
- * On failure (memory allocation), item fields may be partially set.
- * Caller is responsible for freeing the item on error.
+ * On failure (memory allocation), item fields may be partially set. Caller is
+ * responsible for freeing the item on error.
  *
  * @param item Item to set ownership on (must not be NULL)
  * @param st Stat data with uid/gid (must not be NULL)
@@ -936,16 +937,16 @@ static error_t *capture_ownership(
 /**
  * Capture metadata from filesystem file
  *
- * Creates a file metadata item from stat data.
- * For symlinks, delegates to metadata_capture_from_symlink().
+ * Creates a file metadata item from stat data. For symlinks, delegates to
+ * metadata_capture_from_symlink().
  *
  * Ownership capture (user/group):
  * - ONLY captured for root/ and custom/ prefix files when running as root (UID 0)
  * - home/ prefix files: ownership never captured (always current user)
  * - Regular users: ownership never captured (can't chown anyway)
  *
- * This function creates a metadata_item_t with kind=FILE.
- * The encryption flag is set to false by default; caller should update it if needed.
+ * This function creates a metadata_item_t with kind=FILE. The encryption flag
+ * is set to false by default; caller should update it if needed.
  */
 error_t *metadata_capture_from_file(
     const char *filesystem_path,
@@ -958,8 +959,8 @@ error_t *metadata_capture_from_file(
     CHECK_NULL(st);
     CHECK_NULL(out);
 
-    /* Symlinks need ownership tracking, not file metadata.
-     * Delegate to symlink-specific capture (handles root/ prefix check). */
+    /* Symlinks need ownership tracking, not file metadata. Delegate to
+     * symlink-specific capture (handles root/ prefix check). */
     if (S_ISLNK(st->st_mode)) {
         return metadata_capture_from_symlink(storage_path, st, out);
     }
@@ -969,8 +970,8 @@ error_t *metadata_capture_from_file(
         return ERROR(ERR_INVALID_ARG, "Not a regular file: %s", filesystem_path);
     }
 
-    /* Create file item via factory
-     * (handles allocation, key duplication, mode validation) */
+    /* Create file item via factory (handles allocation, key duplication, mode
+     * validation) */
     mode_t mode = st->st_mode & 0777;
     metadata_item_t *item = NULL;
     error_t *err = metadata_item_create_file(storage_path, mode, false, &item);
@@ -978,9 +979,9 @@ error_t *metadata_capture_from_file(
         return err;
     }
 
-    /* Capture ownership for paths whose label tracks it (root/ and
-     * custom/). The vocabulary lives in the mount spec; the elevation
-     * gate stays here because ownership capture needs root either way. */
+    /* Capture ownership for paths whose label tracks it (root/ and custom/).
+     * The vocabulary lives in the mount spec; the elevation gate stays here because
+     * ownership capture needs root either way. */
     const mount_spec_t *spec = mount_spec_for_path(storage_path);
     if (spec && spec->tracks_ownership && privilege_is_elevated()) {
         err = capture_ownership(item, st);
@@ -998,14 +999,14 @@ error_t *metadata_capture_from_file(
 /**
  * Capture metadata from filesystem symlink
  *
- * Creates a symlink metadata item with ownership data only.
- * Mode is always 0 (symlink permissions are not settable).
+ * Creates a symlink metadata item with ownership data only. Mode is always 0
+ * (symlink permissions are not settable).
  *
- * Symlinks only need metadata for ownership tracking on root/ prefix paths.
- * For home/ prefix or non-root users, returns *out = NULL (no metadata needed).
+ * Symlinks only need metadata for ownership tracking on root/ prefix paths. For
+ * home/ prefix or non-root users, returns *out = NULL (no metadata needed).
  *
- * Ownership capture uses lstat data (st parameter), which returns the
- * symlink's own uid/gid, not the target's.
+ * Ownership capture uses lstat data (st parameter), which returns the symlink's
+ * own uid/gid, not the target's.
  */
 error_t *metadata_capture_from_symlink(
     const char *storage_path,
@@ -1046,11 +1047,12 @@ error_t *metadata_capture_from_symlink(
 /**
  * Capture metadata from filesystem directory
  *
- * Creates a directory metadata item from stat data.
- * Follows the same ownership rules as file capture.
+ * Creates a directory metadata item from stat data. Follows the same ownership
+ * rules as file capture.
  *
  * Ownership capture (user/group):
- * - ONLY captured for root/ and custom/ prefix directories when running as root (UID 0)
+ * - ONLY captured for root/ and custom/ prefix directories when running as root
+ *   (UID 0)
  * - home/ prefix directories: ownership never captured (always current user)
  * - Regular users: ownership never captured (can't chown anyway)
  *
@@ -1070,8 +1072,8 @@ error_t *metadata_capture_from_directory(
         return ERROR(ERR_INVALID_ARG, "Path is not a directory: %s", storage_path);
     }
 
-    /* Create directory item via factory
-     * (handles allocation, key duplication, mode validation) */
+    /* Create directory item via factory (handles allocation, key duplication,
+     * mode validation) */
     mode_t mode = st->st_mode & 0777;
     metadata_item_t *item = NULL;
     error_t *err = metadata_item_create_directory(storage_path, mode, &item);
@@ -1079,8 +1081,8 @@ error_t *metadata_capture_from_directory(
         return err;
     }
 
-    /* Capture ownership for paths whose label tracks it (root/ and
-     * custom/). Mirrors the file-capture branch above. */
+    /* Capture ownership for paths whose label tracks it (root/ and custom/).
+     * Mirrors the file-capture branch above. */
     const mount_spec_t *spec = mount_spec_for_path(storage_path);
     if (spec && spec->tracks_ownership && privilege_is_elevated()) {
         err = capture_ownership(item, st);
@@ -1098,8 +1100,8 @@ error_t *metadata_capture_from_directory(
 /**
  * Convert metadata to JSON
  *
- * Creates unified JSON with single "items" array containing both files and directories.
- * Each item has explicit "kind" discriminator.
+ * Creates unified JSON with single "items" array containing both files and
+ * directories. Each item has explicit "kind" discriminator.
  */
 error_t *metadata_to_json(const metadata_t *metadata, buffer_t *out) {
     CHECK_NULL(metadata);
@@ -1248,8 +1250,8 @@ cleanup:
 /**
  * Parse metadata from JSON
  *
- * Parses unified JSON with single "items" array.
- * REJECTS old versions with clear error message (NO migration code).
+ * Parses unified JSON with single "items" array. REJECTS old versions with clear
+ * error message (NO migration code).
  */
 error_t *metadata_from_json(const char *json_str, metadata_t **out) {
     CHECK_NULL(json_str);
@@ -1463,15 +1465,14 @@ error_t *metadata_from_json(const char *json_str, metadata_t **out) {
 /**
  * Load metadata from profile branch
  *
- * Reads .dotta/metadata.json from the branch's tree. Handles both
- * commit-backed branches (the common shape) and orphan refs that point
- * directly to a tree (no enclosing commit) — the same shape distinction
- * gitops.c:resolve_ref_to_tree handles for general tree loads.
+ * Reads .dotta/metadata.json from the branch's tree. Handles both commit-backed
+ * branches (the common shape) and orphan refs that point directly to a tree (no
+ * enclosing commit) — the same shape distinction gitops.c:resolve_ref_to_tree
+ * handles for general tree loads.
  *
- * Returns ERR_NOT_FOUND if either the branch ref or the metadata blob
- * is absent, distinguished by the error message prefix. Other failures
- * (peel error, unexpected ref target type, blob read, JSON parse) propagate
- * as ERR_GIT or wrapped causes.
+ * Returns ERR_NOT_FOUND if either the branch ref or the metadata blob is absent,
+ * distinguished by the error message prefix. Other failures (peel error, unexpected
+ * ref target type, blob read, JSON parse) propagate as ERR_GIT or wrapped causes.
  */
 error_t *metadata_load_from_branch(
     git_repository *repo,
@@ -1515,8 +1516,8 @@ error_t *metadata_load_from_branch(
      *   - GIT_OBJECT_TREE   → ref points directly at a tree (orphan-tree
      *                         ref); use it as-is.
      * Anything else is a malformed ref. Mirrors the dispatch in
-     * gitops.c:resolve_ref_to_tree so both entry points accept the same
-     * set of ref shapes. */
+     * gitops.c:resolve_ref_to_tree so both entry points accept the same set of
+     * ref shapes. */
     git_err = git_reference_peel(&peeled, ref, GIT_OBJECT_ANY);
     if (git_err < 0) {
         err = error_from_git(git_err);
@@ -1525,18 +1526,18 @@ error_t *metadata_load_from_branch(
 
     git_object_t peeled_type = git_object_type(peeled);
     if (peeled_type == GIT_OBJECT_COMMIT) {
-        /* SAFETY: type-checked above. git_commit_tree allocates a fresh
-         * git_tree; peeled (the commit) and tree have independent lifetimes
-         * and are both freed in cleanup. */
+        /* SAFETY: type-checked above. git_commit_tree allocates a fresh git_tree;
+         * peeled (the commit) and tree have independent lifetimes and are both
+         * freed in cleanup. */
         git_err = git_commit_tree(&tree, (git_commit *) peeled);
         if (git_err < 0) {
             err = error_from_git(git_err);
             goto cleanup;
         }
     } else if (peeled_type == GIT_OBJECT_TREE) {
-        /* SAFETY: type-checked above. The peeled object IS the tree —
-         * transfer ownership to `tree` and null out `peeled` to avoid
-         * double-free in cleanup (git_tree_free will dispose of it). */
+        /* SAFETY: type-checked above. The peeled object IS the tree — transfer
+         * ownership to `tree` and null out `peeled` to avoid double-free in cleanup
+         * (git_tree_free will dispose of it). */
         tree = (git_tree *) peeled;
         peeled = NULL;
     } else {
@@ -1596,8 +1597,8 @@ cleanup:
 /**
  * Load metadata from a Git tree
  *
- * Loads metadata.json from a specific Git tree. This is useful for
- * loading metadata from historical commits or arbitrary tree objects.
+ * Loads metadata.json from a specific Git tree. This is useful for loading metadata
+ * from historical commits or arbitrary tree objects.
  *
  * @param repo Repository (must not be NULL)
  * @param tree Git tree to load from (must not be NULL)
@@ -1667,8 +1668,8 @@ cleanup:
 /**
  * Load metadata from file path
  *
- * Reads and parses metadata from filesystem.
- * Returns ERR_NOT_FOUND if file doesn't exist.
+ * Reads and parses metadata from filesystem. Returns ERR_NOT_FOUND if file doesn't
+ * exist.
  */
 error_t *metadata_load_from_file(
     const char *file_path,
@@ -1714,8 +1715,8 @@ error_t *metadata_load_from_file(
 /**
  * Save metadata to worktree
  *
- * Writes metadata as JSON to .dotta/metadata.json in worktree.
- * Creates .dotta/ directory if it doesn't exist.
+ * Writes metadata as JSON to .dotta/metadata.json in worktree. Creates .dotta/
+ * directory if it doesn't exist.
  */
 error_t *metadata_save_to_worktree(
     const char *worktree_path,
@@ -1775,8 +1776,8 @@ cleanup:
 /**
  * Parse mode string to mode_t
  *
- * Parses octal mode string (e.g., "0600", "0644", "0755") to mode_t.
- * Validates that mode is within valid range (0000-0777).
+ * Parses octal mode string (e.g., "0600", "0644", "0755") to mode_t. Validates
+ * that mode is within valid range (0000-0777).
  */
 error_t *metadata_parse_mode(const char *mode_str, mode_t *out) {
     CHECK_NULL(mode_str);
@@ -1833,8 +1834,8 @@ error_t *metadata_format_mode(mode_t mode, char **out) {
 /**
  * Resolve ownership from owner/group strings to UID/GID
  *
- * Converts owner and group names to UID/GID values.
- * This is pure data transformation - no filesystem operations.
+ * Converts owner and group names to UID/GID values. This is pure data
+ * transformation - no filesystem operations.
  *
  * Rules:
  * - Only works when running as root (returns ERR_PERMISSION otherwise)
@@ -1842,8 +1843,8 @@ error_t *metadata_format_mode(mode_t mode, char **out) {
  * - If owner is set but group is not, uses owner's primary group
  * - Returns uid=-1 or gid=-1 to indicate "don't change ownership"
  *
- * The caller is responsible for applying the resolved ownership
- * using fchown() or similar system calls.
+ * The caller is responsible for applying the resolved ownership using fchown()
+ * or similar system calls.
  */
 error_t *metadata_resolve_ownership(
     const char *owner,

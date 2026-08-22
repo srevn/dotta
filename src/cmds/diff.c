@@ -34,11 +34,11 @@
  * Determine if workspace item should be shown for the given direction
  *
  * Direction semantics:
- * - UPSTREAM: Show items where repository would change filesystem
- *   (undeployed files, files where Git differs from filesystem,
- *    profile reassignments that apply would acknowledge)
- * - DOWNSTREAM: Show items where filesystem would change repository
- *   (modified files, deleted files that exist in Git)
+ * - UPSTREAM: Show items where repository would change filesystem (undeployed
+ *   files, files where Git differs from filesystem, profile reassignments that
+ *   apply would acknowledge)
+ * - DOWNSTREAM: Show items where filesystem would change repository (modified
+ *   files, deleted files that exist in Git)
  *
  * @param item Workspace item (must not be NULL)
  * @param direction Diff direction
@@ -51,8 +51,8 @@ static bool should_show_item_for_direction(
     if (direction == DIFF_UPSTREAM) {
         /* Upstream: What would apply do? */
         /* Show: undeployed, deleted (apply would restore), content/mode differs,
-         * stale (Git moved past the deployed blob; apply would deploy),
-         * or profile reassignment (apply acknowledges reassignment) */
+         * stale (Git moved past the deployed blob; apply would deploy), or profile
+         * reassignment (apply acknowledges reassignment) */
         return (item->state == WORKSPACE_STATE_UNDEPLOYED) ||
                (item->state == WORKSPACE_STATE_DELETED) ||
                (item->state == WORKSPACE_STATE_DEPLOYED &&
@@ -63,8 +63,8 @@ static bool should_show_item_for_direction(
 
     if (direction == DIFF_DOWNSTREAM) {
         /* Downstream: What would update do? */
-        /* Show: deleted, content/mode differs (filesystem → Git). Never a
-         * STALE item — update skips every one of them. */
+        /* Show: deleted, content/mode differs (filesystem → Git). Never a STALE
+         * item — update skips every one of them. */
         return (item->state == WORKSPACE_STATE_DELETED) ||
                (item->state == WORKSPACE_STATE_DEPLOYED &&
                !(item->divergence & DIVERGENCE_STALE) &&
@@ -72,16 +72,16 @@ static bool should_show_item_for_direction(
                DIVERGENCE_OWNERSHIP)));
     }
 
-    /* DIFF_BOTH is always decomposed into two explicit calls by the caller
-     * before reaching this function — it should never arrive here. */
+    /* DIFF_BOTH is always decomposed into two explicit calls by the caller before
+     * reaching this function — it should never arrive here. */
     return false;
 }
 
 /**
  * Get status message from workspace item and direction
  *
- * Determines the appropriate status message based on item's state,
- * divergence flags, and diff direction. This replaces the comparison-based
+ * Determines the appropriate status message based on item's state, divergence
+ * flags, and diff direction. This replaces the comparison-based
  * get_status_message() for workspace-aware diffs.
  *
  * @param item Workspace item (must not be NULL)
@@ -112,8 +112,8 @@ static const char *get_status_message_from_item(
                 : "type changed locally";
     }
 
-    /* Git moved past the deployed blob. Only reachable via UPSTREAM
-     * (DOWNSTREAM filters every STALE item out). */
+    /* Git moved past the deployed blob. Only reachable via UPSTREAM (DOWNSTREAM
+     * filters every STALE item out). */
     if (item->divergence & DIVERGENCE_STALE) {
         return (item->divergence & DIVERGENCE_CONTENT)
                 ? "changed in Git and on disk (apply --force keeps Git's)"
@@ -132,8 +132,8 @@ static const char *get_status_message_from_item(
                 : "mode changed locally";
     }
 
-    /* Profile reassignment with no content/metadata divergence.
-     * Only reachable via UPSTREAM (DOWNSTREAM filtered by should_show_item). */
+    /* Profile reassignment with no content/metadata divergence. Only reachable
+     * via UPSTREAM (DOWNSTREAM filtered by should_show_item). */
     if (item->profile_changed) {
         return "profile reassigned (acknowledged by apply)";
     }
@@ -144,8 +144,8 @@ static const char *get_status_message_from_item(
 /**
  * Show diff for a single file using workspace data
  *
- * Simplified version of show_file_diff() that uses pre-computed divergence
- * from workspace analysis. Doesn't re-analyze - just formats and displays.
+ * Simplified version of show_file_diff() that uses pre-computed divergence from
+ * workspace analysis. Doesn't re-analyze - just formats and displays.
  *
  * @param item Workspace item with divergence info (must not be NULL)
  * @param file The path's view row — blob, storage path, profile (must not be NULL)
@@ -213,8 +213,8 @@ static error_t *show_file_diff_from_workspace(
         return NULL;
     }
 
-    /* For mode-only changes (content matches), no content diff. A STALE
-     * item's content does differ — disk holds the blob Git moved past. */
+    /* For mode-only changes (content matches), no content diff. A STALE item's
+     * content does differ — disk holds the blob Git moved past. */
     if ((item->divergence & (DIVERGENCE_MODE | DIVERGENCE_OWNERSHIP)) &&
         !(item->divergence & (DIVERGENCE_CONTENT | DIVERGENCE_STALE))) {
         return NULL;
@@ -268,8 +268,8 @@ static error_t *show_file_diff_from_workspace(
 /**
  * Present diffs for a specific direction using workspace analysis
  *
- * Filters pre-analyzed divergence and generates diffs for display.
- * Uses cached metadata and content from workspace/caches.
+ * Filters pre-analyzed divergence and generates diffs for display. Uses cached
+ * metadata and content from workspace/caches.
  *
  * @param ws Workspace handle for active-row lookup (must not be NULL)
  * @param diverged Array of diverged items from workspace (must not be NULL)
@@ -335,8 +335,8 @@ static error_t *present_diffs_for_direction(
         }
 
         /* Resolve to the active row via the workspace's active index (O(1)).
-         * Untracked or orphaned items have no active row — skip them. The
-         * item is a file item (Filter 1), so the row is a file row. */
+         * Untracked or orphaned items have no active row — skip them. The item
+         * is a file item (Filter 1), so the row is a file row. */
         const manifest_row_t *file =
             workspace_lookup(ws, item->filesystem_path);
         if (!file) {
@@ -365,8 +365,8 @@ static error_t *present_diffs_for_direction(
 /**
  * Resolve commit reference across enabled profiles
  *
- * Searches for the commit in enabled profiles in order.
- * Returns the first match found.
+ * Searches for the commit in enabled profiles in order. Returns the first match
+ * found.
  *
  * @param repo Repository (must not be NULL)
  * @param profiles Selected profiles to search (must not be NULL)
@@ -613,12 +613,12 @@ static int print_diff_line_cb(
  *
  * Generic comparison function for commit-to-workspace diffs. Takes a
  * manifest_rows_t slice of a historical tree's file rows (the view
- * manifest_build_tree computes, directories set aside) and compares each
- * file against the current filesystem state.
+ * manifest_build_tree computes, directories set aside) and compares each file
+ * against the current filesystem state.
  *
  * @param repo Repository (must not be NULL)
- * @param files Tree-built file slice (passed by value; rows borrowed from
- *              the caller's arena and live until command end)
+ * @param files Tree-built file slice (passed by value; rows borrowed from the
+ *              caller's arena and live until command end)
  * @param profile Profile name (must not be NULL)
  * @param file_filter File filter for CLI (can be NULL for no filter)
  * @param opts Command options (must not be NULL)
@@ -807,20 +807,19 @@ cleanup:
 /**
  * Validate file filter entries against a state file slice
  *
- * Checks each filter entry (exact paths and glob patterns) against the
- * slice's storage paths. Outputs a warning for each unmatched entry,
- * which likely indicates a typo.
+ * Checks each filter entry (exact paths and glob patterns) against the slice's
+ * storage paths. Outputs a warning for each unmatched entry, which likely indicates
+ * a typo.
  *
- * Per-pattern isolation matters here: a combined-ruleset evaluation
- * folds one pattern's negation into another's verdict and would under-
- * count coverage on overlap. The pathspec_glob_matches_at primitive
- * gives each glob independent attribution.
+ * Per-pattern isolation matters here: a combined-ruleset evaluation folds one
+ * pattern's negation into another's verdict and would under-count coverage on
+ * overlap. The pathspec_glob_matches_at primitive gives each glob independent
+ * attribution.
  *
  * One implementation serves both diff paths — the historical-diff path
  * (commit-to-workspace) feeds the file rows of a tree-built view
- * (manifest_build_tree); the workspace-diff path feeds the workspace's
- * active slice via workspace_files. Both flow through the same
- * manifest_rows_t carrier.
+ * (manifest_build_tree); the workspace-diff path feeds the workspace's active
+ * slice via workspace_files. Both flow through the same manifest_rows_t carrier.
  *
  * @param file_filter File filter to validate (NULL = no validation, returns 0)
  * @param files File slice to check against (passed by value)
@@ -893,14 +892,14 @@ static size_t validate_filter_paths(
 /**
  * Diff commit to workspace - Compare historical commit with filesystem
  *
- * CURRENT LIMITATION: Single-profile comparison only.
- * When multiple profiles are enabled, this function compares only the
- * profile that contains the specified commit (first match in precedence order)
+ * CURRENT LIMITATION: Single-profile comparison only. When multiple profiles
+ * are enabled, this function compares only the profile that contains the specified
+ * commit (first match in precedence order)
  *
- * Type-enforced invariant: historical commit search walks the persistent
- * enabled set via scope_enabled — the CLI filter must not hide commits
- * belonging to other enabled profiles. The path filter is derived from
- * scope_paths (raw CLI positional args, never narrowed).
+ * Type-enforced invariant: historical commit search walks the persistent enabled
+ * set via scope_enabled — the CLI filter must not hide commits belonging to other
+ * enabled profiles. The path filter is derived from scope_paths (raw CLI positional
+ * args, never narrowed).
  *
  * @param repo Repository (must not be NULL)
  * @param state State handle (must not be NULL)
@@ -954,8 +953,8 @@ static error_t *diff_commit_to_workspace(
     char oid_str[8];
     git_oid_tostr(oid_str, sizeof(oid_str), &commit_oid);
 
-    /* Warn when multiple profiles are enabled: only the profile containing
-     * the commit is compared against the filesystem. */
+    /* Warn when multiple profiles are enabled: only the profile containing the
+     * commit is compared against the filesystem. */
     if (profiles->count > 1) {
         output_info(
             out, OUTPUT_NORMAL, "Note: comparing commit against profile '%s' only "
@@ -990,13 +989,12 @@ static error_t *diff_commit_to_workspace(
 
     /* Step 5: Build the historical tree's view and take its file rows.
      *
-     * Rows, per-row strings, and the pointer array are allocated into
-     * the borrowed command arena; they outlive both this call and the
-     * subsequent compare_tree_files_to_filesystem call, then live until
-     * command end. Only the view's index is released, at cleanup. A
-     * DIRECTORY row (a claim of the tree's own metadata.json) has no
-     * content to diff; the consumers take a file slice, so the kind is
-     * settled here, once. */
+     * Rows, per-row strings, and the pointer array are allocated into the borrowed
+     * command arena; they outlive both this call and the subsequent
+     * compare_tree_files_to_filesystem call, then live until command end. Only
+     * the view's index is released, at cleanup. A DIRECTORY row (a claim of the
+     * tree's own metadata.json) has no content to diff; the consumers take a
+     * file slice, so the kind is settled here, once. */
     err = manifest_build_tree(
         tree, profile, mounts, metadata, arena, &historical
     );
@@ -1045,9 +1043,9 @@ static error_t *diff_commit_to_workspace(
     }
 
 cleanup:
-    /* tree_files is arena-backed (borrowed from `arena`); the caller owns
-     * the arena's lifetime and reclaims every row, string, and the pointer
-     * array at command end. Only the view's index is freed here. */
+    /* tree_files is arena-backed (borrowed from `arena`); the caller owns the
+     * arena's lifetime and reclaims every row, string, and the pointer array at
+     * command end. Only the view's index is freed here. */
     manifest_free(historical);
     metadata_free(metadata);
     git_tree_free(tree);
@@ -1066,15 +1064,13 @@ cleanup:
  * Memory ownership:
  *   - The returned strings array is heap-allocated; the caller frees
  *     opts->pathspec.strings after the diff operation completes.
- *   - Individual string pointers borrow from the filter and remain
- *     valid for the filter's lifetime; the filter MUST outlive the
- *     diff operation.
+ *   - Individual string pointers borrow from the filter and remain valid for
+ *     the filter's lifetime; the filter MUST outlive the diff operation.
  *
  * Behaviour:
- *   - NULL filter or empty filter: no-op (libgit2 treats unset
- *     pathspec as "match all").
- *   - Allocation failure: returns ERR_MEMORY; opts->pathspec is left
- *     untouched.
+ *   - NULL filter or empty filter: no-op (libgit2 treats unset pathspec as "match
+ *     all").
+ *   - Allocation failure: returns ERR_MEMORY; opts->pathspec is left untouched.
  *
  * @param filter Path filter (can be NULL)
  * @param opts   Diff options to populate (must not be NULL)
@@ -1108,8 +1104,8 @@ static error_t *build_diff_pathspec(
         strings[index++] = (char *) pathspec_glob_at(filter, i);
     }
 
-    /* Structural invariant: pathspec_count == exact_count + glob_count.
-     * Held by pathspec_create; the pathspec is immutable thereafter. */
+    /* Structural invariant: pathspec_count == exact_count + glob_count. Held by
+     * pathspec_create; the pathspec is immutable thereafter. */
     assert(index == total);
 
     opts->pathspec.strings = strings;
@@ -1120,10 +1116,10 @@ static error_t *build_diff_pathspec(
 /**
  * Diff two commits
  *
- * Type-enforced invariant: historical commit search walks the persistent
- * enabled set via scope_enabled — hiding commits behind the CLI filter would
- * make legitimately-referenceable commits unreachable. The path filter is
- * derived from scope_paths (raw CLI positional args, never narrowed).
+ * Type-enforced invariant: historical commit search walks the persistent enabled
+ * set via scope_enabled — hiding commits behind the CLI filter would make
+ * legitimately-referenceable commits unreachable. The path filter is derived
+ * from scope_paths (raw CLI positional args, never narrowed).
  */
 static error_t *diff_commits(
     git_repository *repo,
@@ -1169,9 +1165,9 @@ static error_t *diff_commits(
         goto cleanup;
     }
 
-    /* Validate both commits are from the same profile.
-     * Dotta profiles are orphan branches — comparing commits across profiles
-     * would diff two completely unrelated trees, producing meaningless output. */
+    /* Validate both commits are from the same profile. Dotta profiles are orphan
+     * branches — comparing commits across profiles would diff two completely
+     * unrelated trees, producing meaningless output. */
     if (strcmp(profile1_name, profile2_name) != 0) {
         err = ERROR(
             ERR_VALIDATION,
@@ -1327,9 +1323,9 @@ static error_t *diff_workspace(
     }
 
     /* Persist deployment-anchor advances from slow-path CMP_EQUAL checks
-     * (self-healing optimization). Seeds the fast path for subsequent
-     * status/apply calls. Non-fatal on failure — diff still renders correctly,
-     * just won't seed the fast path. */
+     * (self-healing optimization). Seeds the fast path for subsequent status/apply
+     * calls. Non-fatal on failure — diff still renders correctly, just won't
+     * seed the fast path. */
     error_t *flush_err = workspace_flush_updates(ws);
     if (flush_err) {
         error_free(flush_err);
@@ -1435,8 +1431,8 @@ error_t *cmd_diff(const dotta_ctx_t *ctx, const cmd_diff_options_t *opts) {
 
     /* Build operation scope
      *
-     *   scope_enabled — the persistent enabled set (workspace_load, historical-
-     *                   mode branch resolution search).
+     *   scope_enabled — the persistent enabled set (workspace_load, historical-mode
+     *                   branch resolution search).
      *   scope_active  — diff display face.
      *   scope_paths   — CLI positional file filter (threaded into
      *                   historical modes and diff_workspace).
@@ -1458,9 +1454,9 @@ error_t *cmd_diff(const dotta_ctx_t *ctx, const cmd_diff_options_t *opts) {
         goto cleanup;
     }
 
-    /* Route to diff implementation based on mode. All historical and
-     * workspace paths share ctx->content_cache so that unchanged OIDs
-     * get cache hits regardless of which path decodes them first. */
+    /* Route to diff implementation based on mode. All historical and workspace
+     * paths share ctx->content_cache so that unchanged OIDs get cache hits
+     * regardless of which path decodes them first. */
     switch (opts->mode) {
         case DIFF_COMMIT_TO_COMMIT:
             /* Diff two commits — historical mode, path filter only */
@@ -1496,8 +1492,8 @@ cleanup:
  * Spec-engine integration
  * ══════════════════════════════════════════════════════════════════ */
 
-/* Command-local positional classes. Start at 1 to reserve 0 for the
- * engine's "unclassified" sentinel (see args.h:args_class_t). */
+/* Command-local positional classes. Start at 1 to reserve 0 for the engine's
+ * "unclassified" sentinel (see args.h:args_class_t). */
 enum diff_class { DIFF_CLASS_FILE = 1, DIFF_CLASS_GIT_REF, DIFF_CLASS_PROFILE, };
 
 /**
@@ -1508,8 +1504,8 @@ enum diff_class { DIFF_CLASS_FILE = 1, DIFF_CLASS_GIT_REF, DIFF_CLASS_PROFILE, }
  *   - Git refs   → git_refs[] bucket (diff mode selector).
  *   - Else       → profiles[] bucket (profile filter).
  *
- * Mode (workspace vs commit-to-workspace vs commit-to-commit) is
- * inferred from the number of git refs in diff_post_parse.
+ * Mode (workspace vs commit-to-workspace vs commit-to-commit) is inferred from
+ * the number of git refs in diff_post_parse.
  */
 static args_class_t diff_classify(const char *tok) {
     if (str_looks_like_file_path(tok)) return DIFF_CLASS_FILE;
@@ -1518,10 +1514,9 @@ static args_class_t diff_classify(const char *tok) {
 }
 
 /**
- * Infer mode from git_refs count, validate direction flag only fires
- * in workspace mode. Zero-default on `direction` (DIFF_DIR_UNSET) is
- * the signal that no direction flag was seen; it resolves to
- * DIFF_UPSTREAM as the legacy default.
+ * Infer mode from git_refs count, validate direction flag only fires in workspace
+ * mode. Zero-default on `direction` (DIFF_DIR_UNSET) is the signal that no
+ * direction flag was seen; it resolves to DIFF_UPSTREAM as the legacy default.
  */
 static error_t *diff_post_parse(
     void *opts_v, arena_t *arena, const args_command_t *cmd
@@ -1577,9 +1572,9 @@ static const args_opt_t diff_opts[] = {
         cmd_diff_options_t,profiles,           profile_count,
         "Filter diff to profile(s) (repeatable)"
     ),
-    /* Three direction flags, each writing its enum into the same
-     * int. Default (no flag): direction stays at DIFF_DIR_UNSET (0)
-     * which diff_post_parse resolves to DIFF_UPSTREAM. */
+    /* Three direction flags, each writing its enum into the same int. Default
+     * (no flag): direction stays at DIFF_DIR_UNSET (0) which diff_post_parse
+     * resolves to DIFF_UPSTREAM. */
     ARGS_FLAG_SET(
         "upstream",
         cmd_diff_options_t,direction,          DIFF_UPSTREAM,
@@ -1600,9 +1595,8 @@ static const args_opt_t diff_opts[] = {
         cmd_diff_options_t,name_only,
         "Print changed file names only"
     ),
-    /* Classified positionals: files go to files[], git refs to
-     * git_refs[], everything else to profiles[]. The classify()
-     * function above decides. */
+    /* Classified positionals: files go to files[], git refs to git_refs[],
+     * everything else to profiles[]. The classify() function above decides. */
     ARGS_POSITIONAL(
         DIFF_CLASS_FILE,   cmd_diff_options_t, files, file_count
     ),

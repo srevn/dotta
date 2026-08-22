@@ -1,18 +1,18 @@
 /**
  * cipher.h - Deterministic authenticated encryption (SIV)
  *
- * Deterministic AEAD for sensitive dotfiles. Identical
- * (mac_key, prf_key, header, storage_path, plaintext) yields
- * byte-identical ciphertext, preserving Git deduplication.
+ * Deterministic AEAD for sensitive dotfiles. Identical (mac_key, prf_key, header,
+ * storage_path, plaintext) yields byte-identical ciphertext, preserving Git
+ * deduplication.
  *
  * SIV pipeline:
  *   1. siv  = MAC(mac_key, CIPHER_SIV, header(9), storage_path, plaintext)
  *   2. seed = MAC(prf_key, CIPHER_KEY, siv)
  *   3. ciphertext = XChaCha20(key=seed, nonce=siv[0..24], ctr=0, plaintext)
  *
- * The 32-byte SIV doubles as MAC tag and as the source of XChaCha20's
- * 24-byte nonce; `crypto_mac_absorb` LE64-prefixes each variable input
- * so distinct tuples produce distinct absorbed streams.
+ * The 32-byte SIV doubles as MAC tag and as the source of XChaCha20's 24-byte
+ * nonce; `crypto_mac_absorb` LE64-prefixes each variable input so distinct tuples
+ * produce distinct absorbed streams.
  *
  * On-disk blob layout:
  *
@@ -27,37 +27,35 @@
  *     │  41    │ ciphertext (XChaCha20 keystream)   │  N B   │
  *     └────────┴────────────────────────────────────┴────────┘
  *
- * The 9-byte header is the FIRST input absorbed into the SIV.
- * Tampering any of magic, version, or Argon2 params fails MAC
- * verification, not parse validation, keeping error paths uniform.
+ * The 9-byte header is the FIRST input absorbed into the SIV. Tampering any of
+ * magic, version, or Argon2 params fails MAC verification, not parse validation,
+ * keeping error paths uniform.
  *
  * Security properties:
  *   - Determinism. Same inputs → same ciphertext (Git-friendly).
- *   - Authentication. 32-byte keyed-BLAKE2b tag over
- *     (header || path || plaintext); constant-time verify on decrypt.
- *   - Path binding. `storage_path` bytes are absorbed verbatim; no
- *     normalization. A blob encrypted under one path cannot decrypt
- *     under another.
- *   - Params binding. Argon2 (memory_mib, passes) live in the bound
- *     header, so config edits cannot invalidate old blobs and a
- *     tampered params field fails MAC.
- *   - Nonce-misuse resistance. Distinct plaintexts under the same
- *     (mac_key, path, header) yield distinct SIVs and keystreams.
- *   - Key isolation. Operates only on the per-operation
- *     (mac_key, prf_key) pair; never sees master key or profile name.
+ *   - Authentication. 32-byte keyed-BLAKE2b tag over (header || path || plaintext);
+ *     constant-time verify on decrypt.
+ *   - Path binding. `storage_path` bytes are absorbed verbatim; no normalization.
+ *     A blob encrypted under one path cannot decrypt under another.
+ *   - Params binding. Argon2 (memory_mib, passes) live in the bound header, so
+ *     config edits cannot invalidate old blobs and a tampered params field fails
+ *     MAC.
+ *   - Nonce-misuse resistance. Distinct plaintexts under the same (mac_key, path,
+ *     header) yield distinct SIVs and keystreams.
+ *   - Key isolation. Operates only on the per-operation (mac_key, prf_key) pair;
+ *     never sees master key or profile name.
  *
- * Format-version policy: `CIPHER_VERSION` bumps on any incompatible
- * change. A bump invalidates every blob keyed under the prior version
- * — no migration path (alpha policy in CLAUDE.md).
+ * Format-version policy: `CIPHER_VERSION` bumps on any incompatible change. A
+ * bump invalidates every blob keyed under the prior version — no migration path
+ * (alpha policy in CLAUDE.md).
  *
- * Caller contract: `cipher_encrypt` / `cipher_decrypt` accept a raw
- * `(mac_key, prf_key)` pair so this module stays free of master-key
- * and profile-name knowledge. The canonical caller is `crypto/keymgr`,
- * which derives the pair via `kdf_siv_subkeys` and wipes both buffers
- * after the single per-operation use. Any other call site needs
- * explicit justification — `kdf_siv_subkeys` is what makes the two
- * subkeys cryptographically independent, and per-operation derive +
- * wipe is what bounds subkey lifetime on the stack.
+ * Caller contract: `cipher_encrypt` / `cipher_decrypt` accept a raw `(mac_key,
+ * prf_key)` pair so this module stays free of master-key and profile-name
+ * knowledge. The canonical caller is `crypto/keymgr`, which derives the pair
+ * via `kdf_siv_subkeys` and wipes both buffers after the single per-operation
+ * use. Any other call site needs explicit justification — `kdf_siv_subkeys` is
+ * what makes the two subkeys cryptographically independent, and per-operation
+ * derive + wipe is what bounds subkey lifetime on the stack.
  */
 
 #ifndef DOTTA_CRYPTO_CIPHER_H
@@ -81,11 +79,10 @@
 /**
  * Detection-prefix length (magic + version).
  *
- * Callers sample the first `CIPHER_DETECT_BYTES` to discriminate a
- * current-build cipher blob (`"DOTTA" || CIPHER_VERSION`) from
- * arbitrary plaintext. Classification lives at the infra layer
- * (see `content_classify` in `infra/content.h`); cipher exports
- * only the format constants.
+ * Callers sample the first `CIPHER_DETECT_BYTES` to discriminate a current-build
+ * cipher blob (`"DOTTA" || CIPHER_VERSION`) from arbitrary plaintext.
+ * Classification lives at the infra layer (see `content_classify` in
+ * `infra/content.h`); cipher exports only the format constants.
  */
 #define CIPHER_DETECT_BYTES   6
 
@@ -97,8 +94,8 @@
  *   bytes [6..8)  = LE16 argon2_memory_mib
  *   byte   [8]    = argon2_passes
  *
- * Bound into the SIV as the first absorbed input — tampering fails
- * MAC, not parse, closing version-confusion / params-rollback attacks.
+ * Bound into the SIV as the first absorbed input — tampering fails MAC, not parse,
+ * closing version-confusion / params-rollback attacks.
  */
 #define CIPHER_HEADER_SIZE    9
 
@@ -111,8 +108,8 @@
 /**
  * Defensive plaintext / ciphertext-body cap (100 MiB).
  *
- * Policy bound, not a primitive limit: dotfiles are small. Prevents
- * runaway input from forcing huge keystream / ciphertext allocations.
+ * Policy bound, not a primitive limit: dotfiles are small. Prevents runaway input
+ * from forcing huge keystream / ciphertext allocations.
  */
 #define CIPHER_MAX_CONTENT    ((size_t) 100 * 1024 * 1024)
 
@@ -130,17 +127,16 @@ _Static_assert(
 );
 
 /**
- * Read the Argon2 params from a cipher-blob header without
- * touching the SIV or attempting decryption.
+ * Read the Argon2 params from a cipher-blob header without touching the SIV or
+ * attempting decryption.
  *
- * Used by `keymgr_decrypt` to derive the master key under the params
- * the producer used. Applies `kdf_validate_params` so an out-of-range
- * header rejects before any Argon2 work area is allocated — closes
- * the DoS surface where an attacker-planted blob would otherwise
- * force tens-of-GiB allocations.
+ * Used by `keymgr_decrypt` to derive the master key under the params the producer
+ * used. Applies `kdf_validate_params` so an out-of-range header rejects before
+ * any Argon2 work area is allocated — closes the DoS surface where an
+ * attacker-planted blob would otherwise force tens-of-GiB allocations.
  *
- * Failure modes (all ERR_CRYPTO): too short, magic mismatch,
- * unsupported version, params out of [KDF_ARGON2_*_MIN..MAX].
+ * Failure modes (all ERR_CRYPTO): too short, magic mismatch, unsupported version,
+ * params out of [KDF_ARGON2_*_MIN..MAX].
  *
  * @param data            Blob bytes (must include at least HEADER_SIZE)
  * @param data_len        Blob length
@@ -156,15 +152,15 @@ error_t *cipher_peek_params(
 );
 
 /**
- * Encrypt a plaintext buffer under (mac_key, prf_key) bound to
- * `storage_path`, recording the Argon2 params in the header.
+ * Encrypt a plaintext buffer under (mac_key, prf_key) bound to `storage_path`,
+ * recording the Argon2 params in the header.
  *
- * Output ownership: on success `*out_ciphertext` becomes the caller's
- * (release with `buffer_free`); on any error the in-progress buffer
- * is wiped and freed before return.
+ * Output ownership: on success `*out_ciphertext` becomes the caller's (release
+ * with `buffer_free`); on any error the in-progress buffer is wiped and freed
+ * before return.
  *
- * Subkey wiping: `mac_key` / `prf_key` are NOT wiped here. The
- * caller (typically `keymgr_encrypt`) owns the per-operation lifetime.
+ * Subkey wiping: `mac_key` / `prf_key` are NOT wiped here. The caller (typically
+ * `keymgr_encrypt`) owns the per-operation lifetime.
  *
  * @param plaintext         Input bytes (non-NULL)
  * @param plaintext_len     Input length (≤ CIPHER_MAX_CONTENT)
@@ -192,19 +188,17 @@ error_t *cipher_encrypt(
 /**
  * Decrypt a dotta-encrypted blob bound to `storage_path`.
  *
- * Validates the header, derives the keystream seed from
- * (prf_key, stored SIV), produces a candidate plaintext, recomputes
- * the SIV over (header || path || candidate), and constant-time
- * compares against the stored SIV. On mismatch the candidate is
- * wiped before return and never surfaces.
+ * Validates the header, derives the keystream seed from (prf_key, stored SIV),
+ * produces a candidate plaintext, recomputes the SIV over (header || path ||
+ * candidate), and constant-time compares against the stored SIV. On mismatch
+ * the candidate is wiped before return and never surfaces.
  *
- * Output ownership: on success `*out_plaintext` becomes the caller's
- * (release with `buffer_free`); on any error the candidate is wiped
- * and freed before return.
+ * Output ownership: on success `*out_plaintext` becomes the caller's (release
+ * with `buffer_free`); on any error the candidate is wiped and freed before return.
  *
- * SIV mismatch surfaces as a single generic "authentication failed"
- * regardless of which bound input was tampered. Parse-level errors
- * carry specific messages but no key-derivable information.
+ * SIV mismatch surfaces as a single generic "authentication failed" regardless
+ * of which bound input was tampered. Parse-level errors carry specific messages
+ * but no key-derivable information.
  *
  * @param ciphertext     Encrypted input (≥ CIPHER_OVERHEAD bytes)
  * @param ciphertext_len Input length

@@ -42,9 +42,9 @@ static inline error_t *validate_path(const char *path) {
 /**
  * Check if filename is OS metadata
  *
- * Detects OS-generated metadata files that should be transparent to dotta.
- * These files are created automatically by operating systems and do not
- * represent user content.
+ * Detects OS-generated metadata files that should be transparent to dotta. These
+ * files are created automatically by operating systems and do not represent user
+ * content.
  *
  * - Takes basename only (not full path) for simplicity and efficiency
  * - Uses exact string matching for safety (no regex overhead or complexity)
@@ -80,8 +80,8 @@ bool fs_is_os_metadata_file(const char *filename) {
 
     /* Pattern match: AppleDouble resource fork files (._*)
      *
-     * Safety check: Require at least one character after ._ to avoid
-     * matching malformed filenames like "._" (edge case but defensive).
+     * Safety check: Require at least one character after ._ to avoid matching
+     * malformed filenames like "._" (edge case but defensive).
      */
     if (filename[0] == '.' && filename[1] == '_' && filename[2] != '\0') {
         return true;
@@ -119,9 +119,9 @@ error_t *fs_read_file(const char *path, buffer_t *out) {
         );
     }
 
-    /* Guard against unreasonably large files. st_size is signed
-     * (off_t); reject negatives (pathological) before the unsigned
-     * comparison so we never widen a negative into a huge size_t. */
+    /* Guard against unreasonably large files. st_size is signed (off_t); reject
+     * negatives (pathological) before the unsigned comparison so we never widen
+     * a negative into a huge size_t. */
     if (st.st_size < 0 || (size_t) st.st_size > FS_MAX_READ_SIZE) {
         close(fd);
         return ERROR(
@@ -178,10 +178,10 @@ error_t *fs_read_file(const char *path, buffer_t *out) {
 /**
  * Helper: Apply metadata, write data, sync, and close a file descriptor
  *
- * Core write sequence shared by both the atomic (temp file) and direct
- * (O_TRUNC fallback) paths. Ownership and permissions are set via fd-based
- * operations (fchown/fchmod) BEFORE any data is written, preserving the
- * security invariant that sensitive content is never exposed with wrong metadata.
+ * Core write sequence shared by both the atomic (temp file) and direct (O_TRUNC
+ * fallback) paths. Ownership and permissions are set via fd-based operations
+ * (fchown/fchmod) BEFORE any data is written, preserving the security invariant
+ * that sensitive content is never exposed with wrong metadata.
  *
  * The fd is always closed on return (both success and error).
  *
@@ -206,8 +206,8 @@ static error_t *write_and_close_fd(
     /* SECURITY CRITICAL: Apply ownership BEFORE writing data
      *
      * This ensures that if the file contains sensitive data (e.g., SSH keys,
-     * API tokens, passwords), it has the correct owner from the moment data
-     * is written, preventing unauthorized access.
+     * API tokens, passwords), it has the correct owner from the moment data is
+     * written, preventing unauthorized access.
      *
      * Use -1 to skip ownership change (preserve current user ownership).
      */
@@ -224,9 +224,9 @@ static error_t *write_and_close_fd(
 
     /* SECURITY CRITICAL: Set exact permissions BEFORE writing data
      *
-     * At this point, the file has correct ownership and is about to receive
-     * correct permissions. It's still empty, so even if the process crashes
-     * here, no sensitive data has been exposed.
+     * At this point, the file has correct ownership and is about to receive correct
+     * permissions. It's still empty, so even if the process crashes here, no
+     * sensitive data has been exposed.
      *
      * Using fchmod() on the file descriptor (not chmod() on path) ensures:
      * 1. Atomicity: No TOCTOU race with file replacement
@@ -249,8 +249,8 @@ static error_t *write_and_close_fd(
      * - File has exact permissions requested (mode)
      * - File is still empty (no data exposure risk)
      *
-     * Now it's safe to write sensitive data. If the process crashes during
-     * write, we have an incomplete file with correct metadata (acceptable).
+     * Now it's safe to write sensitive data. If the process crashes during write,
+     * we have an incomplete file with correct metadata (acceptable).
      */
     size_t written = 0;
     while (written < size) {
@@ -317,20 +317,20 @@ error_t *fs_write_file_raw(
     }
 
     /* Build temp file path in the target's own directory. Two names in one
-     * directory are necessarily on one filesystem, so the rename below can
-     * never fail with EXDEV — there is no cross-device case to fall back
-     * from, and no second write strategy at all. */
+     * directory are necessarily on one filesystem, so the rename below can never
+     * fail with EXDEV — there is no cross-device case to fall back from, and no
+     * second write strategy at all. */
     const char *dir = parent ? parent : ".";
     char tmp_path[PATH_MAX];
     int n = snprintf(tmp_path, sizeof(tmp_path), "%s/.dotta-tmp-XXXXXX", dir);
 
     /* Create temp file with restrictive 0600 mode (mkstemp guarantee).
      *
-     * A failure here is the directory refusing a new entry, and it is
-     * final: the alternative — opening the target itself with O_TRUNC —
-     * destroys the file before a single byte of the replacement is
-     * written, and does so for every mkstemp errno, ENOSPC included. A
-     * write that cannot be atomic is reported, not attempted. */
+     * A failure here is the directory refusing a new entry, and it is final:
+     * the alternative — opening the target itself with O_TRUNC — destroys the
+     * file before a single byte of the replacement is written, and does so for
+     * every mkstemp errno, ENOSPC included. A write that cannot be atomic is
+     * reported, not attempted. */
     int fd = -1;
     error_t *tmp_err = NULL;
 
@@ -347,17 +347,17 @@ error_t *fs_write_file_raw(
     if (tmp_err) return tmp_err;
 
     /* Write data to temp file with correct ownership and permissions.
-     * SECURITY: All metadata is applied via fd operations before data is
-     * written. If anything fails, the original file is untouched. */
+     * SECURITY: All metadata is applied via fd operations before data is written.
+     * If anything fails, the original file is untouched. */
     err = write_and_close_fd(fd, path, data, size, mode, uid, gid);
     if (err) {
         unlink(tmp_path);
         return err;
     }
 
-    /* Atomic replace: rename temp over target.
-     * POSIX guarantees this is atomic on the same filesystem — at no point
-     * does the target path contain partial content. */
+    /* Atomic replace: rename temp over target. POSIX guarantees this is atomic
+     * on the same filesystem — at no point does the target path contain partial
+     * content. */
     if (rename(tmp_path, path) < 0) {
         int saved_errno = errno;
         unlink(tmp_path);
@@ -546,16 +546,16 @@ error_t *fs_create_dir_with_mode(const char *path, mode_t mode, bool parents) {
      *
      * Why chmod() is needed in BOTH cases:
      *
-     * 1. New directory: mkdir() mode is affected by umask
-     *    Example: mkdir(path, 0700) with umask 022 creates 0755
-     *    chmod() enforces exact mode regardless of umask
+     * 1. New directory: mkdir() mode is affected by umask Example: mkdir(path,
+     *    0700) with umask 022 creates 0755 chmod() enforces exact mode regardless
+     *    of umask
      *
-     * 2. Existing directory: May have wrong permissions
-     *    Example: User runs `dotta apply --force` to fix ~/.ssh/ from 0755 to 0700
-     *    chmod() updates mode to match metadata (security fix!)
+     * 2. Existing directory: May have wrong permissions Example: User runs `dotta
+     *    apply --force` to fix ~/.ssh/ from 0755 to 0700 chmod() updates mode
+     *    to match metadata (security fix!)
      *
-     * This makes the function idempotent: "ensure directory exists with exact mode"
-     * Matches file behavior (fs_write_file_raw always sets exact mode)
+     * This makes the function idempotent: "ensure directory exists with exact
+     * mode" Matches file behavior (fs_write_file_raw always sets exact mode)
      */
     if (chmod(path, mode) < 0) {
         return ERROR(
@@ -584,11 +584,11 @@ error_t *fs_create_dir_with_ownership(
     }
 
     /* Try to open existing directory first (eliminates TOCTOU race)
-     * SECURITY: This open-first pattern prevents race conditions where
-     * a directory is checked, then deleted/replaced before we operate on it.
-     * By attempting to open first, we either get a valid fd or a clear error.
-     * O_NOFOLLOW prevents symlink substitution attacks - if an attacker replaces
-     * the directory with a symlink, open() fails with ELOOP instead of following. */
+     * SECURITY: This open-first pattern prevents race conditions where a directory
+     * is checked, then deleted/replaced before we operate on it. By attempting
+     * to open first, we either get a valid fd or a clear error. O_NOFOLLOW prevents
+     * symlink substitution attacks - if an attacker replaces the directory with
+     * a symlink, open() fails with ELOOP instead of following. */
     int dirfd = open(path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
     if (dirfd >= 0) {
         /* Directory exists - update ownership and mode atomically */
@@ -639,9 +639,9 @@ error_t *fs_create_dir_with_ownership(
 
 apply_metadata:
     /* Apply ownership atomically via file descriptor
-     * SECURITY: Using fchown() on the file descriptor ensures atomicity.
-     * The ownership is applied to the directory we have open, not to whatever
-     * might be at 'path' if a race condition occurred. */
+     * SECURITY: Using fchown() on the file descriptor ensures atomicity. The
+     * ownership is applied to the directory we have open, not to whatever might
+     * be at 'path' if a race condition occurred. */
     if (uid != (uid_t) -1 || gid != (gid_t) -1) {
         if (fchown(dirfd, uid, gid) < 0) {
             int saved_errno = errno;
@@ -655,8 +655,8 @@ apply_metadata:
 
     /* Apply final mode atomically via file descriptor
      * SECURITY: fchmod() ensures the mode is set on the directory we have open.
-     * This is the final step - after this completes, the directory has the
-     * exact ownership and permissions requested, with no security windows. */
+     * This is the final step - after this completes, the directory has the exact
+     * ownership and permissions requested, with no security windows. */
     if (fchmod(dirfd, mode) < 0) {
         int saved_errno = errno;
         close(dirfd);
@@ -694,11 +694,10 @@ error_t *fs_remove_dir(const char *path, bool recursive) {
                 return err;
             }
 
-            /* Use lstat to determine type WITHOUT following symlinks.
-             * This prevents symlink-traversal attacks where a symlink
-             * inside the tree points to a directory outside it - using
-             * stat() would follow the symlink and recursively delete the
-             * target directory's contents. */
+            /* Use lstat to determine type WITHOUT following symlinks. This prevents
+             * symlink-traversal attacks where a symlink inside the tree points
+             * to a directory outside it - using stat() would follow the symlink
+             * and recursively delete the target directory's contents. */
             struct stat st;
             if (lstat(full_path, &st) < 0) {
                 /* If lstat fails, try unlink as fallback */
@@ -786,15 +785,14 @@ bool fs_is_directory(const char *path) {
 /**
  * Is this directory entry OS metadata dotta may remove?
  *
- * Name and type together, because two functions act on the answer and
- * they must not disagree: fs_is_directory_empty looks past such an entry,
- * fs_remove_empty_dir unlinks it. The name rule is
- * fs_is_os_metadata_file's; the type rule is this one's — metadata is a
- * regular file, so a directory or a symlink wearing one of those names is
- * a user object that neither function may pretend away.
+ * Name and type together, because two functions act on the answer and they must
+ * not disagree: fs_is_directory_empty looks past such an entry, fs_remove_empty_dir
+ * unlinks it. The name rule is fs_is_os_metadata_file's; the type rule is this
+ * one's — metadata is a regular file, so a directory or a symlink wearing one
+ * of those names is a user object that neither function may pretend away.
  *
- * Anything that cannot be stat'd is not metadata: the conservative answer
- * for both callers.
+ * Anything that cannot be stat'd is not metadata: the conservative answer for
+ * both callers.
  */
 static bool entry_is_removable_metadata(const char *dir, const char *name) {
     if (!fs_is_os_metadata_file(name)) {
@@ -823,24 +821,24 @@ bool fs_is_directory_empty_except(const char *path, fs_path_pred_fn gone, void *
     /* Try to open directory (opendir checks stat internally) */
     DIR *dir = opendir(path);
     if (!dir) {
-        /* Can't open (doesn't exist, not a dir, or permission denied).
-         * For safety (don't delete what we can't verify), return false.
-         * Non-existent directories handled gracefully by caller (fs_exists check).
+        /* Can't open (doesn't exist, not a dir, or permission denied). For safety
+         * (don't delete what we can't verify), return false. Non-existent
+         * directories handled gracefully by caller (fs_exists check).
          */
         return false;
     }
 
     /* Check if directory contains only metadata and vouched-for entries
      *
-     * This prevents "zombie" directories that contain only OS-generated
-     * metadata (like .DS_Store on macOS) from blocking cleanup operations.
+     * This prevents "zombie" directories that contain only OS-generated metadata
+     * (like .DS_Store on macOS) from blocking cleanup operations.
      */
     bool is_empty = true;
 
     for (;;) {
-        /* readdir returns NULL on both EOF and error, and the entry test
-         * below stats — so errno is reset immediately before each call
-         * rather than once for the whole walk. */
+        /* readdir returns NULL on both EOF and error, and the entry test below
+         * stats — so errno is reset immediately before each call rather than
+         * once for the whole walk. */
         errno = 0;
         struct dirent *entry = readdir(dir);
 
@@ -857,14 +855,14 @@ bool fs_is_directory_empty_except(const char *path, fs_path_pred_fn gone, void *
             continue;
         }
 
-        /* Skip exactly what fs_remove_empty_dir can clear away, so "empty"
-         * means the same thing to the predicate and to the mechanism. */
+        /* Skip exactly what fs_remove_empty_dir can clear away, so "empty" means
+         * the same thing to the predicate and to the mechanism. */
         if (entry_is_removable_metadata(path, entry->d_name)) {
             continue;
         }
 
-        /* Skip what the caller is about to remove. Its full path, because
-         * the caller reasons about paths, not about basenames. */
+        /* Skip what the caller is about to remove. Its full path, because the
+         * caller reasons about paths, not about basenames. */
         if (gone) {
             char *child = NULL;
             error_t *err = fs_path_join(path, entry->d_name, &child);
@@ -906,8 +904,8 @@ static inline bool errno_means_not_empty(int code) {
 error_t *fs_remove_empty_dir(const char *path) {
     RETURN_IF_ERROR(validate_path(path));
 
-    /* The whole story for a directory that is empty by the kernel's
-     * definition, which is nearly all of them. */
+    /* The whole story for a directory that is empty by the kernel's definition,
+     * which is nearly all of them. */
     if (rmdir(path) == 0 || errno == ENOENT) {
         return NULL;
     }
@@ -918,15 +916,15 @@ error_t *fs_remove_empty_dir(const char *path) {
         );
     }
 
-    /* Not empty by the kernel's definition; it may still be empty by ours.
-     * List first — removing entries from an open DIR* leaves the rest of
-     * the walk unspecified. */
+    /* Not empty by the kernel's definition; it may still be empty by ours. List
+     * first — removing entries from an open DIR* leaves the rest of the walk
+     * unspecified. */
     string_array_t *entries = NULL;
     RETURN_IF_ERROR(fs_list_dir(path, &entries));
 
-    /* Two passes: refuse before touching anything. A directory refused
-     * here keeps every entry it had, metadata included — the caller
-     * reports "not empty", and nothing of the user's has moved. */
+    /* Two passes: refuse before touching anything. A directory refused here keeps
+     * every entry it had, metadata included — the caller reports "not empty",
+     * and nothing of the user's has moved. */
     error_t *err = NULL;
     for (size_t i = 0; i < entries->count; i++) {
         if (!entry_is_removable_metadata(path, entries->items[i])) {
@@ -949,8 +947,8 @@ error_t *fs_remove_empty_dir(const char *path) {
         return err;
     }
 
-    /* An entry that appeared while the metadata was being cleared lands
-     * here, and it is the same refusal by another route. */
+    /* An entry that appeared while the metadata was being cleared lands here,
+     * and it is the same refusal by another route. */
     if (rmdir(path) != 0 && errno != ENOENT) {
         if (errno_means_not_empty(errno)) {
             return ERROR(ERR_CONFLICT, "Directory '%s' is not empty", path);
@@ -1054,8 +1052,8 @@ error_t *fs_make_absolute(const char *path, char **out) {
     }
 
     /* Validate existence using lstat (doesn't follow final symlink component).
-     * This ensures the path refers to something real on the filesystem,
-     * preserving symlink locations for storage path determination. */
+     * This ensures the path refers to something real on the filesystem, preserving
+     * symlink locations for storage path determination. */
     struct stat st;
     if (lstat(absolute, &st) < 0) {
         int saved_errno = errno;
@@ -1266,25 +1264,24 @@ error_t *fs_path_join(const char *base, const char *component, char **out) {
 error_t *fs_get_home(char **out) {
     CHECK_NULL(out);
 
-    /* Single source of truth for "the invoking user's HOME". Every
-     * downstream consumer (mount table HOME entry, tilde expansion,
-     * privilege home-membership predicate, session cache, credentials
-     * lookup, bootstrap work_dir) trusts this answer.
+    /* Single source of truth for "the invoking user's HOME". Every downstream
+     * consumer (mount table HOME entry, tilde expansion, privilege home-membership
+     * predicate, session cache, credentials lookup, bootstrap work_dir) trusts
+     * this answer.
      *
-     * Sudo-aware: under sudo, $HOME is unreliable — `sudo -H` rewrites
-     * it to /root, env_keep policies vary, and dropping all of those
-     * onto consumers produces a kaleidoscope of disagreements. The
-     * invoking user is authoritative via SUDO_UID's passwd entry.
+     * Sudo-aware: under sudo, $HOME is unreliable — `sudo -H` rewrites it to
+     * /root, env_keep policies vary, and dropping all of those onto consumers
+     * produces a kaleidoscope of disagreements. The invoking user is authoritative
+     * via SUDO_UID's passwd entry.
      *
-     *   1. Under sudo (SUDO_UID set & parseable):
-     *        getpwuid(SUDO_UID)->pw_dir
-     *      Falls through to (2) on lookup failure so a transient
-     *      passwd error doesn't deny the entire command.
-     *   2. Not under sudo: $HOME from env. The CLAUDE.md test
-     *      isolation pattern (HOME=/tmp/dotta-test) depends on this
-     *      branch firing for ordinary user invocations.
-     *   3. Last resort: passwd lookup of the effective uid. Catches
-     *      service-account / no-env contexts. */
+     *   1. Under sudo (SUDO_UID set & parseable): getpwuid(SUDO_UID)->pw_dir
+     *      Falls through to (2) on lookup failure so a transient passwd error
+     *      doesn't deny the entire command.
+     *   2. Not under sudo: $HOME from env. The CLAUDE.md test isolation pattern
+     *      (HOME=/tmp/dotta-test) depends on this branch firing for ordinary
+     *      user invocations.
+     *   3. Last resort: passwd lookup of the effective uid. Catches service-account
+     *      / no-env contexts. */
 
     const char *suid = getenv("SUDO_UID");
     if (suid && suid[0] != '\0') {
@@ -1300,10 +1297,9 @@ error_t *fs_get_home(char **out) {
                     : ERROR(ERR_MEMORY, "Failed to allocate HOME path");
             }
         }
-        /* SUDO_UID malformed or its passwd lookup failed — fall
-         * through. The privilege module's parser surfaces malformation
-         * when the actual UID itself is needed; here we just want a
-         * reasonable HOME. */
+        /* SUDO_UID malformed or its passwd lookup failed — fall through. The
+         * privilege module's parser surfaces malformation when the actual UID
+         * itself is needed; here we just want a reasonable HOME. */
     }
 
     const char *home = getenv("HOME");
@@ -1545,8 +1541,8 @@ error_t *fs_ensure_parent_dirs(const char *path) {
 /**
  * Context for ownership fix callback
  *
- * Since nftw() doesn't support passing user data to the callback,
- * we use a static context pointer. This is safe because:
+ * Since nftw() doesn't support passing user data to the callback, we use a static
+ * context pointer. This is safe because:
  * 1. dotta is single-threaded
  * 2. nftw() is not re-entrant
  * 3. We only use this during a single fix operation
@@ -1564,9 +1560,9 @@ static ownership_fix_context_t *g_fix_context = NULL;
 /**
  * Callback for nftw() - fixes ownership of a single file/directory
  *
- * This function is called by nftw() for each file/directory in the tree.
- * It checks if the current ownership matches the target, and if not,
- * calls lchown() to fix it.
+ * This function is called by nftw() for each file/directory in the tree. It checks
+ * if the current ownership matches the target, and if not, calls lchown() to
+ * fix it.
  *
  * Error handling:
  * - lstat() failure: Count as failed, continue
@@ -1612,8 +1608,8 @@ static int fix_ownership_callback(
         /* Success */
         g_fix_context->fixed_count++;
     } else {
-        /* Failed (e.g., permission denied on some system files)
-         * This is expected and not fatal - just count it */
+        /* Failed (e.g., permission denied on some system files) This is expected
+         * and not fatal - just count it */
         g_fix_context->failed_count++;
     }
 
@@ -1645,8 +1641,8 @@ error_t *fs_fix_ownership_recursive(
         .failed_count = 0
     };
 
-    /* Set global context pointer for callback
-     * Safe because we're single-threaded and nftw is not re-entrant */
+    /* Set global context pointer for callback Safe because we're single-threaded
+     * and nftw is not re-entrant */
     g_fix_context = &context;
 
     /* Traverse directory tree and fix ownership
@@ -1655,9 +1651,9 @@ error_t *fs_fix_ownership_recursive(
      * - FTW_PHYS: Don't follow symlinks (safer)
      * - FTW_DEPTH: Process directories after their contents (cleaner)
      *
-     * nopenfd: Maximum number of file descriptors nftw may use.
-     * 64 is a reasonable limit that avoids exhausting fd limit while
-     * still allowing efficient traversal.
+     * nopenfd: Maximum number of file descriptors nftw may use. 64 is a reasonable
+     * limit that avoids exhausting fd limit while still allowing efficient
+     * traversal.
      */
     int result = nftw(path, fix_ownership_callback, 64, FTW_PHYS | FTW_DEPTH);
 

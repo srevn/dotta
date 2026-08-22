@@ -67,17 +67,17 @@ static error_t *validate_options(const cmd_remove_options_t *opts) {
 /**
  * Resolve input paths to storage paths
  *
- * Accepts both filesystem paths and storage paths as input.
- * Uses hashmap for O(M+N) performance instead of O(N×M) nested loops.
+ * Accepts both filesystem paths and storage paths as input. Uses hashmap for
+ * O(M+N) performance instead of O(N×M) nested loops.
  *
- * Complexity: O(M) to build index + O(N) to process inputs = O(M+N)
- * Old implementation: O(N×M) with nested loops
+ * Complexity: O(M) to build index + O(N) to process inputs = O(M+N) Old
+ * implementation: O(N×M) with nested loops
  *
  * @param mounts Per-machine mount table (must not be NULL). Caller passes
  *               ctx->mounts; the table covers HOME, ROOT, and every enabled
- *               profile's binding. Unenabled-profile lookups (custom/X)
- *               surface MOUNT_RESOLVE_UNBOUND, which the caller handles as
- *               "no filesystem path on this machine".
+ *               profile's binding. Unenabled-profile lookups (custom/X) surface
+ *               MOUNT_RESOLVE_UNBOUND, which the caller handles as "no filesystem
+ *               path on this machine".
  */
 static error_t *resolve_paths_to_remove(
     git_repository *repo,
@@ -159,10 +159,10 @@ static error_t *resolve_paths_to_remove(
             continue;
         }
 
-        /* Try to get filesystem path for output. UNBOUND fires when the
-         * profile has no --target on this machine; the storage path
-         * serves as fallback. Genuine resolve errors (malformed input,
-         * OOM) are also non-fatal here — same fallback. */
+        /* Try to get filesystem path for output. UNBOUND fires when the profile
+         * has no --target on this machine; the storage path serves as fallback.
+         * Genuine resolve errors (malformed input, OOM) are also non-fatal here
+         * — same fallback. */
         mount_resolve_outcome_t canonical_outcome;
         const char *canonical = NULL;
         error_t *convert_err = mount_resolve(
@@ -184,8 +184,9 @@ static error_t *resolve_paths_to_remove(
             err = string_array_push(storage_paths, storage_path);
             if (!err) {
                 /* If filesystem path unavailable (custom/ without prefix context),
-                 * fall back to storage path. Downstream consumers handle gracefully:
-                 * state lookups return "not found", display shows storage format. */
+                 * fall back to storage path. Downstream consumers handle
+                 * gracefully: state lookups return "not found", display shows
+                 * storage format. */
                 err = string_array_push(filesystem_paths, canonical ? canonical : storage_path);
             }
 
@@ -210,10 +211,10 @@ static error_t *resolve_paths_to_remove(
             if (str_starts_with(profile_file, storage_path)) {
                 /* Ensure it's a directory boundary */
                 if (profile_file[storage_path_len] == '/') {
-                    /* Reconstruct filesystem path for this file. UNBOUND
-                     * fires when the profile has no --target on this
-                     * machine — fall back to the storage path so the
-                     * hook context still names the file. */
+                    /* Reconstruct filesystem path for this file. UNBOUND fires
+                     * when the profile has no --target on this machine — fall
+                     * back to the storage path so the hook context still names
+                     * the file. */
                     mount_resolve_outcome_t file_outcome;
                     const char *file_fs_path = NULL;
                     err = mount_resolve(
@@ -351,9 +352,9 @@ static error_t *remove_file_from_worktree(
  *
  * Checks each file against all other profiles and determines:
  * - Which other profiles contain the file
- * - Whether the file is owned by another profile in the view — the
- *   enabled set's precedence gives the path to a profile other than the
- *   one the user is removing from, so the removal changes nothing on disk
+ * - Whether the file is owned by another profile in the view — the enabled set's
+ *   precedence gives the path to a profile other than the one the user is removing
+ *   from, so the removal changes nothing on disk
  *
  * Performance: O(M×P + N) where M=profiles, P=avg files/profile, N=files checked
  * Uses centralized profile_build_file_index() for optimal performance.
@@ -387,8 +388,8 @@ static error_t *analyze_multi_profile_conflicts(
         return ERROR(ERR_MEMORY, "Failed to allocate multi-profile tracking");
     }
 
-    /* Build profile file index once (O(M×P) - loads all profiles)
-     * Uses centralized function from core/profiles.c */
+    /* Build profile file index once (O(M×P) - loads all profiles) Uses centralized
+     * function from core/profiles.c */
     hashmap_t *profile_index = NULL;
     err = profile_build_file_index(repo, current_profile, &profile_index);
     if (err) {
@@ -416,9 +417,9 @@ static error_t *analyze_multi_profile_conflicts(
                 }
                 multi_profile_count++;
 
-                /* Check if another profile owns the path in the view.
-                 * Only valid with actual filesystem paths (absolute), not
-                 * storage path fallbacks (relative, e.g., "home/.bashrc"). */
+                /* Check if another profile owns the path in the view. Only valid
+                 * with actual filesystem paths (absolute), not storage path
+                 * fallbacks (relative, e.g., "home/.bashrc"). */
                 if (filesystem_path[0] == '/') {
                     const manifest_row_t *row = manifest_lookup(view, filesystem_path);
                     if (row && strcmp(row->profile, current_profile) != 0) {
@@ -660,11 +661,11 @@ static error_t *create_removal_commit(
 /**
  * Remove metadata entries for removed files
  *
- * Loads existing metadata from worktree, removes entries for deleted files,
- * and saves the updated metadata back. The metadata.json file is then staged.
- * The directory entries pruned as redundant on the way are appended to
- * `pruned` (storage paths): they leave the view by this commit too, and
- * the record loop after it retires them beside the removed files.
+ * Loads existing metadata from worktree, removes entries for deleted files, and
+ * saves the updated metadata back. The metadata.json file is then staged. The
+ * directory entries pruned as redundant on the way are appended to `pruned`
+ * (storage paths): they leave the view by this commit too, and the record loop
+ * after it retires them beside the removed files.
  */
 static error_t *cleanup_metadata(
     worktree_handle_t *wt,
@@ -726,14 +727,13 @@ static error_t *cleanup_metadata(
 
     /* Prune redundant directory entries.
      *
-     * Removing a file may leave its parent directory metadata entry
-     * with no anchoring descendants. Anchoring is judged against the
-     * post-edit worktree index (removals already unstaged by the
-     * caller) — never against metadata items, which omit unelevated
-     * symlinks. Only entries that carry no actionable information are
+     * Removing a file may leave its parent directory metadata entry with no
+     * anchoring descendants. Anchoring is judged against the post-edit worktree
+     * index (removals already unstaged by the caller) — never against metadata
+     * items, which omit unelevated symlinks. Only entries that carry no actionable
+     * information are
      * dropped (default mode, no ownership, no tracked descendants);
-     * custom-attribute entries are preserved as potential empty-dir
-     * intent. */
+     * custom-attribute entries are preserved as potential empty-dir intent. */
     git_index *index = NULL;
     err = worktree_get_index(wt, &index);
     if (err) {
@@ -836,11 +836,11 @@ static error_t *remove_files_from_profile(
         goto cleanup;
     }
 
-    /* The view before the commit. Who owns a path a moment before this
-     * command removes it is a fact neither the post-commit view nor the
-     * record can state — a path never seen here has no record, and a
-     * record can be a higher profile's — so it is read here, once, and
-     * serves both the conflict analysis and the record update below. */
+    /* The view before the commit. Who owns a path a moment before this command
+     * removes it is a fact neither the post-commit view nor the record can state
+     * — a path never seen here has no record, and a record can be a higher
+     * profile's — so it is read here, once, and serves both the conflict analysis
+     * and the record update below. */
     err = state_get_profiles(state, &enabled);
     if (err) {
         err = error_wrap(err, "Failed to get enabled profiles");
@@ -869,9 +869,9 @@ static error_t *remove_files_from_profile(
         goto cleanup;
     }
 
-    /* Capture profile-enabled status. The record-update phase below
-     * promotes the borrowed read handle to a write transaction via
-     * state_begin; no reopen needed. */
+    /* Capture profile-enabled status. The record-update phase below promotes
+     * the borrowed read handle to a write transaction via state_begin; no reopen
+     * needed. */
     profile_enabled = state_has_profile(state, opts->profile);
 
     /* Display multi-profile warnings BEFORE any operation */
@@ -926,9 +926,9 @@ static error_t *remove_files_from_profile(
     other_profiles = NULL;
 
     /* Build hook invocation with filesystem paths (resolved by
-     * resolve_paths_to_remove). Reached only on non-dry-run: the dry-run
-     * branch above early-cleanups before this point, so dry_run is
-     * always false here in practice — still passed for honesty. */
+     * resolve_paths_to_remove). Reached only on non-dry-run: the dry-run branch
+     * above early-cleanups before this point, so dry_run is always false here
+     * in practice — still passed for honesty. */
     const hook_invocation_t hook_inv = {
         .cmd        = HOOK_CMD_REMOVE,
         .profile    = opts->profile,
@@ -1032,41 +1032,40 @@ static error_t *remove_files_from_profile(
     worktree_cleanup(&wt);
 
     /*
-     * Architectural note: We do NOT delete files from the filesystem here.
-     * This maintains separation of concerns:
+     * Architectural note: We do NOT delete files from the filesystem here. This
+     * maintains separation of concerns:
      * - `remove` modifies the Git repository (profile branches)
      * - `apply` synchronizes the filesystem (prunes orphaned files by default)
      *
      * This ensures `apply` has global context from all enabled profiles to
-     * correctly determine if a file should be removed (avoiding premature
-     * deletion of files still needed by higher-priority profiles).
+     * correctly determine if a file should be removed (avoiding premature deletion
+     * of files still needed by higher-priority profiles).
      */
 
     /* Write the record if the profile is enabled.
      *
-     * profile_enabled==true implies state was successfully loaded with a live DB
-     * (state_has_profile returns false for NULL/empty state), so
-     * state_begin is safe without an additional guard. The handle
-     * is reused — no second state_open that would re-prepare
-     * statements and re-query enabled_profiles from scratch.
+     * profile_enabled==true implies state was successfully loaded with a live
+     * DB (state_has_profile returns false for NULL/empty state), so state_begin
+     * is safe without an additional guard. The handle is reused — no second
+     * state_open that would re-prepare statements and re-query enabled_profiles
+     * from scratch.
      *
-     * Which paths this commit let go is read off the two views: `before`
-     * says which were this profile's a moment ago; `after` (the enabled
-     * set at its post-commit HEADs) says which a lower profile provides
-     * now — a fallback, whose record stays and reads [reassigned] until
-     * apply deploys it. A path that was ours and that nothing provides now
-     * gets the fate the user chose, if dotta has a record of it at all
-     * (never seen here: nothing to release or prune): --delete-files
-     * orders the deployed copy pruned at the next apply; the default
-     * retires the record — released from management now. The directory
-     * entries the metadata step pruned as redundant left the view by the
-     * same commit and take the same route: an owned directory is pruned
-     * under cleanup's emptiness rule, or released.
+     * Which paths this commit let go is read off the two views: `before` says
+     * which were this profile's a moment ago; `after` (the enabled set at its
+     * post-commit HEADs) says which a lower profile provides now — a fallback,
+     * whose record stays and reads [reassigned] until apply deploys it. A path
+     * that was ours and that nothing provides now gets the fate the user chose,
+     * if dotta has a record of it at all (never seen here: nothing to release
+     * or prune): --delete-files orders the deployed copy pruned at the next apply;
+     * the default retires the record — released from management now. The directory
+     * entries the metadata step pruned as redundant left the view by the same
+     * commit and take the same route: an owned directory is pruned under cleanup's
+     * emptiness rule, or released.
      *
-     * Non-fatal throughout: Git succeeded and stands. A record this block
-     * fails to write is an orphan the next apply reads, asks Git about,
-     * finds let go, and releases — the default outcome, minus the prune
-     * order under --delete-files. */
+     * Non-fatal throughout: Git succeeded and stands. A record this block fails
+     * to write is an orphan the next apply reads, asks Git about, finds let go,
+     * and releases — the default outcome, minus the prune order under
+     * --delete-files. */
     size_t manifest_removed_count = 0, manifest_fallback_count = 0;
 
     if (profile_enabled) {
@@ -1103,9 +1102,9 @@ static error_t *remove_files_from_profile(
                 for (size_t i = 0; !manifest_err && i < let_go[b]->count; i++) {
                     const char *storage_path = let_go[b]->items[i];
 
-                    /* The path as this profile deploys it. UNBOUND (custom/
-                     * under a profile with no target here) names nothing on
-                     * this machine: nothing to release. */
+                    /* The path as this profile deploys it. UNBOUND (custom/ under
+                     * a profile with no target here) names nothing on this machine:
+                     * nothing to release. */
                     mount_resolve_outcome_t outcome;
                     const char *fs_path = NULL;
                     manifest_err = mount_resolve(
@@ -1192,10 +1191,10 @@ static error_t *remove_files_from_profile(
     }
 
 cleanup:
-    /* Free all resources in reverse order of allocation. state is borrowed
-     * from the dispatcher — do not free it. state_rollback is a no-op if
-     * no transaction is active (state.c:2898-2906), so it safely closes
-     * any partially-begun record-update transaction on error paths. */
+    /* Free all resources in reverse order of allocation. state is borrowed from
+     * the dispatcher — do not free it. state_rollback is a no-op if no transaction
+     * is active (state.c:2898-2906), so it safely closes any partially-begun
+     * record-update transaction on error paths. */
     state_rollback(state);
     if (anchor_index) hashmap_free(anchor_index, NULL);
     manifest_free(after);
@@ -1301,14 +1300,14 @@ static error_t *delete_profile_branch(
         goto cleanup;  /* err is NULL, will return success */
     }
 
-    /* Check for unpushed changes and detect remote
-     * Keep remote_name for later use when pushing deletion
+    /* Check for unpushed changes and detect remote Keep remote_name for later
+     * use when pushing deletion
      */
     bool has_unpushed = false;
     bool is_local_only = false;
 
-    /* Resolve remote name + URL up-front: the URL feeds the credential
-     * helper for the deletion-push xfer further down (see line where
+    /* Resolve remote name + URL up-front: the URL feeds the credential helper
+     * for the deletion-push xfer further down (see line where
      * transfer_context_create is called). One resolve, two consumers. */
     err = gitops_resolve_default_remote(
         repo, arena, &remote_name, &remote_url
@@ -1356,18 +1355,16 @@ static error_t *delete_profile_branch(
     }
 
     /* Informational queries and enabled check on the borrowed state. Under
-     * spec-driven READ the handle is always non-NULL here (CHECK_NULL at
-     * entry), and state_load for a missing DB still returns a usable
-     * handle (DB-less, reads degrade to empty) — no defensive fallback
-     * needed. */
+     * spec-driven READ the handle is always non-NULL here (CHECK_NULL at entry),
+     * and state_load for a missing DB still returns a usable handle (DB-less,
+     * reads degrade to empty) — no defensive fallback needed. */
     bool profile_was_enabled = state_has_profile(state, opts->profile);
     size_t deployed_count = 0;
 
-    /* Count the records dotta owns under the profile for informational
-     * display. Failure is non-fatal: the count is purely cosmetic, so
-     * swallow any error and display 0. Read outside the transaction the
-     * record update below takes; that update reads the record again,
-     * inside it. */
+    /* Count the records dotta owns under the profile for informational display.
+     * Failure is non-fatal: the count is purely cosmetic, so swallow any error
+     * and display 0. Read outside the transaction the record update below takes;
+     * that update reads the record again, inside it. */
     {
         anchor_t *anchors = NULL;
         size_t anchor_count = 0;
@@ -1415,14 +1412,14 @@ static error_t *delete_profile_branch(
         goto cleanup;  /* err is NULL, will return success */
     }
 
-    /* Convert storage paths to filesystem paths for hook consistency.
-     * The file removal path passes filesystem paths to hooks; do the same here.
+    /* Convert storage paths to filesystem paths for hook consistency. The file
+     * removal path passes filesystem paths to hooks; do the same here.
      *
-     * Borrows the caller-supplied mount table. HOME and ROOT are always
-     * present, so home/ and root/ paths resolve unconditionally. CUSTOM
-     * paths resolve only when the profile is enabled with a binding;
-     * otherwise MOUNT_RESOLVE_UNBOUND fires and the loop substitutes the
-     * storage path as the user-visible fallback. */
+     * Borrows the caller-supplied mount table. HOME and ROOT are always present,
+     * so home/ and root/ paths resolve unconditionally. CUSTOM paths resolve
+     * only when the profile is enabled with a binding; otherwise
+     * MOUNT_RESOLVE_UNBOUND fires and the loop substitutes the storage path as
+     * the user-visible fallback. */
     if (files) {
         hook_fs_paths = string_array_new(0);
         if (hook_fs_paths) {
@@ -1435,15 +1432,15 @@ static error_t *delete_profile_branch(
                 );
                 if (conv_err) {
                     error_free(conv_err);
-                    /* Fall back to storage path (allocation failure or
-                     * malformed input — non-fatal here). */
+                    /* Fall back to storage path (allocation failure or malformed
+                     * input — non-fatal here). */
                     string_array_push(hook_fs_paths, files->items[i]);
                 } else if (outcome == MOUNT_RESOLVE_BOUND) {
                     string_array_push(hook_fs_paths, fs_path);
                 } else {
-                    /* UNBOUND: custom/ profile without binding on this
-                     * host. Fall back to storage path so the hook sees a
-                     * meaningful name. */
+                    /* UNBOUND: custom/ profile without binding on this host.
+                     * Fall back to storage path so the hook sees a meaningful
+                     * name. */
                     string_array_push(hook_fs_paths, files->items[i]);
                 }
             }
@@ -1451,8 +1448,8 @@ static error_t *delete_profile_branch(
     }
 
     /* Build hook invocation. Prefer filesystem paths (consistent with the
-     * file-removal subcommand); fall back to storage paths if synthesis
-     * was skipped. Both arrays live until cleanup. */
+     * file-removal subcommand); fall back to storage paths if synthesis was
+     * skipped. Both arrays live until cleanup. */
     const string_array_t *hook_files = hook_fs_paths ? hook_fs_paths : files;
     const hook_invocation_t hook_inv = {
         .cmd        = HOOK_CMD_REMOVE,
@@ -1467,8 +1464,8 @@ static error_t *delete_profile_branch(
     if (err) goto cleanup;
 
     /*
-     * Architectural note: We do NOT delete files from the filesystem here.
-     * This maintains separation of concerns - `apply` handles filesystem cleanup.
+     * Architectural note: We do NOT delete files from the filesystem here. This
+     * maintains separation of concerns - `apply` handles filesystem cleanup.
      * This ensures proper global context when determining file removal.
      */
 
@@ -1483,22 +1480,21 @@ static error_t *delete_profile_branch(
 
     /* Post-deletion: the enabled set and the record, in one transaction.
      *
-     * The order of the branch deletion and this block does not matter:
-     * the view is computed, and prune_ordered is the one fact the
-     * workspace reads for these records — written once, here, after the
-     * branch is gone. The profile leaves the enabled set (if it was in
-     * it), and every record under it is decided against the view that
-     * remains: a path the view still has is a fallback — its record is
-     * kept and reads [reassigned] P → Q until apply deploys Q's; a path
-     * the view lacks gets the fate the user chose — --delete-files orders
-     * the deployed copy pruned at the next apply, the default retires the
-     * record (released from management now). One rule whether P was
-     * enabled or not, and whether P's tree still claimed the path or had
-     * let it go: the user is deleting P and P's files.
+     * The order of the branch deletion and this block does not matter: the view
+     * is computed, and prune_ordered is the one fact the workspace reads for
+     * these records — written once, here, after the branch is gone. The profile
+     * leaves the enabled set (if it was in it), and every record under it is
+     * decided against the view that remains: a path the view still has is a
+     * fallback — its record is kept and reads [reassigned] P → Q until apply
+     * deploys Q's; a path the view lacks gets the fate the user chose —
+     * --delete-files orders the deployed copy pruned at the next apply, the default
+     * retires the record (released from management now). One rule whether P was
+     * enabled or not, and whether P's tree still claimed the path or had let it
+     * go: the user is deleting P and P's files.
      *
-     * Non-fatal: the branch is gone and stands. A record this block fails
-     * to write is an orphan the next apply reads, asks Git about, finds
-     * the branch gone, and releases. */
+     * Non-fatal: the branch is gone and stands. A record this block fails to
+     * write is an orphan the next apply reads, asks Git about, finds the branch
+     * gone, and releases. */
     error_t *delete_err = state_begin(state);
     if (!delete_err) {
         string_array_t *enabled_after = NULL;
@@ -1512,10 +1508,10 @@ static error_t *delete_profile_branch(
             delete_err = state_disable_profile(state, opts->profile);
         }
 
-        /* Build a fresh mount table from the post-disable row cache: the
-         * borrowed `mounts` parameter still references the deleted
-         * profile, which would let custom/ paths under its target keep
-         * classifying after it has left scope. */
+        /* Build a fresh mount table from the post-disable row cache: the borrowed
+         * `mounts` parameter still references the deleted profile, which would
+         * let custom/ paths under its target keep classifying after it has left
+         * scope. */
         if (!delete_err) {
             delete_err = profile_build_mount_table(state, arena, &post_delete_mounts);
         }
@@ -1571,8 +1567,8 @@ static error_t *delete_profile_branch(
         manifest_free(after);
         if (enabled_after) string_array_free(enabled_after);
     } else {
-        /* Non-fatal: the next workspace load observes the branch gone and
-         * releases these records conservatively */
+        /* Non-fatal: the next workspace load observes the branch gone and releases
+         * these records conservatively */
         output_warning(
             out, OUTPUT_NORMAL, "Failed to begin transaction for post-deletion update: %s",
             error_message(delete_err)
@@ -1580,8 +1576,8 @@ static error_t *delete_profile_branch(
         error_free(delete_err);
     }
 
-    /* Push deletion to remote if remote exists
-     * This is critical for sync to work - other repos need to know the branch was deleted
+    /* Push deletion to remote if remote exists This is critical for sync to work -
+     * other repos need to know the branch was deleted
      */
     if (remote_name && !is_local_only) {
         output_info(
@@ -1589,9 +1585,8 @@ static error_t *delete_profile_branch(
             remote_name
         );
 
-        /* remote_url was resolved alongside remote_name above. NULL is
-         * legal — unauthenticated paths still work, helper approve/reject
-         * become no-ops. */
+        /* remote_url was resolved alongside remote_name above. NULL is legal —
+         * unauthenticated paths still work, helper approve/reject become no-ops. */
         transfer_context_t *del_xfer = NULL;
         transfer_options_t del_opts = { .output = out, .url = remote_url };
         error_t *del_xfer_err = transfer_context_create(&del_opts, &del_xfer);
@@ -1610,8 +1605,8 @@ static error_t *delete_profile_branch(
             transfer_context_free(del_xfer);
         }
         if (err) {
-            /* Non-fatal: warn but don't fail the whole operation
-             * The local branch is already deleted, so this is just about syncing
+            /* Non-fatal: warn but don't fail the whole operation The local branch
+             * is already deleted, so this is just about syncing
              */
             output_warning(
                 out, OUTPUT_NORMAL, "Failed to push deletion to remote: %s",
@@ -1635,8 +1630,8 @@ static error_t *delete_profile_branch(
 
     /*
      * Architectural note: the profile's records were prune-ordered (with
-     * --delete-files) or retired in the post-deletion block above. The
-     * prune itself happens on `apply`.
+     * --delete-files) or retired in the post-deletion block above. The prune
+     * itself happens on `apply`.
      */
 
     /* Execute post-remove hook */
@@ -1661,10 +1656,10 @@ static error_t *delete_profile_branch(
     }
 
 cleanup:
-    /* Free all resources in reverse order of allocation. state is borrowed
-     * from the dispatcher — do not free it. state_rollback is a no-op if
-     * no transaction is active; this safely closes any partially-begun
-     * record-update or post-deletion transaction on an error path. */
+    /* Free all resources in reverse order of allocation. state is borrowed from
+     * the dispatcher — do not free it. state_rollback is a no-op if no transaction
+     * is active; this safely closes any partially-begun record-update or
+     * post-deletion transaction on an error path. */
     state_rollback(state);
 
     if (hook_fs_paths) string_array_free(hook_fs_paths);

@@ -38,8 +38,8 @@ error_t *cmd_bootstrap(const dotta_ctx_t *ctx, const cmd_bootstrap_options_t *op
 /**
  * Spec-engine command specification for `dotta bootstrap`.
  *
- * Registered in cmds/registry.c. Defined in bootstrap.c beside the
- * dispatch wrapper.
+ * Registered in cmds/registry.c. Defined in bootstrap.c beside the dispatch
+ * wrapper.
  */
 extern const args_command_t spec_bootstrap;
 

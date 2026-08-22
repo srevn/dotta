@@ -21,44 +21,28 @@
  *
  * JSON Schema (Version 4):
  * {
- *   "version": 4,
- *   "items": [
+ *   "version": 4, "items": [
  *     {
- *       "kind": "file",
- *       "key": "home/.bashrc",
- *       "mode": "0644"
+ *       "kind": "file", "key": "home/.bashrc", "mode": "0644"
  *     },
  *     {
- *       "kind": "file",
- *       "key": "home/.ssh/id_rsa",
- *       "mode": "0600",
- *       "encrypted": true
+ *       "kind": "file", "key": "home/.ssh/id_rsa", "mode": "0600", "encrypted":
+ *       true
  *     },
  *     {
- *       "kind": "file",
- *       "key": "root/etc/nginx.conf",
- *       "mode": "0644",
- *       "owner": "root",
- *       "group": "wheel"
+ *       "kind": "file", "key": "root/etc/nginx.conf", "mode": "0644", "owner":
+ *       "root", "group": "wheel"
  *     },
  *     {
- *       "kind": "directory",
- *       "key": "home/.config/nvim",
- *       "mode": "0700"
+ *       "kind": "directory", "key": "home/.config/nvim", "mode": "0700"
  *     },
  *     {
- *       "kind": "directory",
- *       "key": "root/etc/nginx",
- *       "mode": "0755",
- *       "owner": "root",
- *       "group": "wheel"
+ *       "kind": "directory", "key": "root/etc/nginx", "mode": "0755", "owner":
+ *       "root", "group": "wheel"
  *     },
  *     {
- *       "kind": "symlink",
- *       "key": "root/etc/alternatives/python",
- *       "mode": "0000",
- *       "owner": "root",
- *       "group": "wheel"
+ *       "kind": "symlink", "key": "root/etc/alternatives/python", "mode": "0000",
+ *       "owner": "root", "group": "wheel"
  *     }
  *   ]
  * }
@@ -78,17 +62,15 @@
 /**
  * Default mode for tracked directories without an explicit override.
  *
- * Mirrors the umask default any newly-mkdir'd directory gets on Linux/
- * macOS/BSD (0755 = rwxr-xr-x) — the same mode file deploy's
- * fs_create_dir(parents=true) produces when materialising an ancestor
- * that no metadata.json entry claims.
+ * Mirrors the umask default any newly-mkdir'd directory gets on Linux/ macOS/BSD
+ * (0755 = rwxr-xr-x) — the same mode file deploy's fs_create_dir(parents=true)
+ * produces when materialising an ancestor that no metadata.json entry claims.
  *
- * Used by metadata_prune_directories as the residue discriminator: a
- * kind=directory entry with this mode and no ownership carries no
- * preservation intent over what the filesystem already does by default,
- * so when it has no anchoring descendants either, the entry is walker
- * residue from a path the user no longer tracks and can be dropped
- * without information loss.
+ * Used by metadata_prune_directories as the residue discriminator: a kind=directory
+ * entry with this mode and no ownership carries no preservation intent over what
+ * the filesystem already does by default, so when it has no anchoring descendants
+ * either, the entry is walker residue from a path the user no longer tracks and
+ * can be dropped without information loss.
  */
 #define DIR_MODE_DEFAULT 0755
 
@@ -104,16 +86,15 @@ typedef enum {
 /**
  * Unified metadata item (files, directories, and symlinks)
  *
- * This structure uses a discriminated union to store file, directory, and
- * symlink metadata efficiently. Common fields (mode, owner, group) are shared,
- * while kind-specific fields are stored in the union.
+ * This structure uses a discriminated union to store file, directory, and symlink
+ * metadata efficiently. Common fields (mode, owner, group) are shared, while
+ * kind-specific fields are stored in the union.
  *
  * Key interpretation (unified for all kinds):
  * - ALL ITEMS: key = storage_path (e.g., "home/.bashrc", "home/.config/nvim")
  *
- * This ensures metadata portability across machines.
- * Filesystem paths are derived on-demand via mount_resolve() when needed
- * for deployment or stat operations.
+ * This ensures metadata portability across machines. Filesystem paths are derived
+ * on-demand via mount_resolve() when needed for deployment or stat operations.
  *
  * Symlink semantics:
  * - mode is always 0 (symlink permissions are not settable via symlink())
@@ -153,8 +134,9 @@ typedef struct hashmap hashmap_t;
 /**
  * Unified metadata collection
  *
- * Uses single array (for iteration/serialization) and single hashmap (for O(1) lookups).
- * The hashmap values point to items in the array (no separate allocation).
+ * Uses single array (for iteration/serialization) and single hashmap (for O(1)
+ * lookups). The hashmap values point to items in the array (no separate
+ * allocation).
  */
 typedef struct metadata {
     metadata_item_t *items;          /* Unified array of files and directories */
@@ -167,7 +149,8 @@ typedef struct metadata {
 /**
  * Create empty metadata collection
  *
- * @param out Metadata structure (must not be NULL, caller must free with metadata_free)
+ * @param out Metadata structure (must not be NULL, caller must free with
+ *            metadata_free)
  * @return Error or NULL on success
  */
 error_t *metadata_create_empty(metadata_t **out);
@@ -175,11 +158,11 @@ error_t *metadata_create_empty(metadata_t **out);
 /**
  * Free metadata structure
  *
- * Frees all items and the structure itself.
- * Handles kind-specific union fields correctly.
+ * Frees all items and the structure itself. Handles kind-specific union fields
+ * correctly.
  *
- * Generic callback signature for use with containers (e.g., hashmap_free).
- * Accepts void* to match standard C cleanup callback pattern.
+ * Generic callback signature for use with containers (e.g., hashmap_free). Accepts
+ * void* to match standard C cleanup callback pattern.
  *
  * @param ptr Metadata to free (can be NULL)
  */
@@ -204,7 +187,8 @@ error_t *metadata_item_create_file(
 /**
  * Create directory metadata item
  *
- * @param storage_path Storage path in profile (must not be NULL, e.g., "home/.config/nvim")
+ * @param storage_path Storage path in profile (must not be NULL, e.g.,
+ *                     "home/.config/nvim")
  * @param mode Permission mode (e.g., 0700, 0755)
  * @param out Item (must not be NULL, caller must free with metadata_item_free)
  * @return Error or NULL on success
@@ -218,12 +202,12 @@ error_t *metadata_item_create_directory(
 /**
  * Create symlink metadata item
  *
- * Creates a metadata item for a symbolic link. Mode is always 0 because
- * symlink permissions are not settable (symlink() has no mode parameter,
- * and chmod() on a symlink changes the target or fails, OS-dependent).
+ * Creates a metadata item for a symbolic link. Mode is always 0 because symlink
+ * permissions are not settable (symlink() has no mode parameter, and chmod() on
+ * a symlink changes the target or fails, OS-dependent).
  *
- * Only ownership (owner/group) is meaningful for symlinks, applied via
- * lchown() during deployment.
+ * Only ownership (owner/group) is meaningful for symlinks, applied via lchown()
+ * during deployment.
  *
  * @param storage_path Path in profile (must not be NULL)
  * @param out Item (must not be NULL, caller must free with metadata_item_free)
@@ -237,8 +221,8 @@ error_t *metadata_item_create_symlink(
 /**
  * Free metadata item
  *
- * Handles both file and directory items correctly.
- * Frees kind-specific union fields based on kind.
+ * Handles both file and directory items correctly. Frees kind-specific union
+ * fields based on kind.
  *
  * @param item Item to free (can be NULL)
  */
@@ -247,12 +231,13 @@ void metadata_item_free(metadata_item_t *item);
 /**
  * Clone metadata item (deep copy)
  *
- * Creates a deep copy of a metadata item, duplicating all strings and
- * union fields based on the item's kind. Useful when preserving an item
- * while modifying the original collection.
+ * Creates a deep copy of a metadata item, duplicating all strings and union fields
+ * based on the item's kind. Useful when preserving an item while modifying the
+ * original collection.
  *
  * @param source Source item to clone (must not be NULL)
- * @param out Cloned item (must not be NULL, caller must free with metadata_item_free)
+ * @param out Cloned item (must not be NULL, caller must free with
+ *            metadata_item_free)
  * @return Error or NULL on success
  */
 error_t *metadata_item_clone(
@@ -263,11 +248,11 @@ error_t *metadata_item_clone(
 /**
  * Add or update metadata item
  *
- * Works for both files and directories.
- * If an item with the same key exists, it is updated.
- * Otherwise, a new item is added.
+ * Works for both files and directories. If an item with the same key exists, it
+ * is updated. Otherwise, a new item is added.
  *
- * IMPORTANT: This function COPIES the item, so caller must still free the source item.
+ * IMPORTANT: This function COPIES the item, so caller must still free the source
+ * item.
  *
  * @param metadata Metadata collection (must not be NULL)
  * @param source Source item to copy from (must not be NULL)
@@ -281,8 +266,8 @@ error_t *metadata_add_item(
 /**
  * Get metadata item (const version)
  *
- * Works for both files and directories.
- * Caller should check item->kind after retrieval if type matters.
+ * Works for both files and directories. Caller should check item->kind after
+ * retrieval if type matters.
  *
  * @param metadata Metadata collection (must not be NULL)
  * @param key Lookup key (storage_path for both files and directories)
@@ -312,48 +297,43 @@ error_t *metadata_remove_item(
 /**
  * Prune redundant directory entries
  *
- * Removes kind=directory items that carry no actionable information
- * beyond what an unwritten entry would. An entry is "redundant" when
- * ALL of these hold:
+ * Removes kind=directory items that carry no actionable information beyond what
+ * an unwritten entry would. An entry is "redundant" when ALL of these hold:
  *
- *   - No index entry lives under it (no anchoring descendants in the
- *     tree the impending commit will record).
- *   - mode == DIR_MODE_DEFAULT (no mode override to preserve over the
- *     filesystem's umask default).
+ *   - No index entry lives under it (no anchoring descendants in the tree the
+ *     impending commit will record).
+ *   - mode == DIR_MODE_DEFAULT (no mode override to preserve over the filesystem's
+ *     umask default).
  *   - owner == NULL AND group == NULL (no ownership override to preserve).
  *
- * Anchoring is judged against the post-edit worktree index — the sole
- * authority for which paths the profile tracks. Metadata items are
- * deliberately NOT the universe: the collection is sparse by design
- * (a symlink carries an item only when captured with ownership, i.e.
- * elevated), so "no item descendants" does not imply "no tracked
- * descendants". A directory whose only tracked content is an item-less
- * symlink is anchored by the index and survives.
+ * Anchoring is judged against the post-edit worktree index — the sole authority
+ * for which paths the profile tracks. Metadata items are deliberately NOT the
+ * universe: the collection is sparse by design (a symlink carries an item only
+ * when captured with ownership, i.e. elevated), so "no item descendants" does
+ * not imply "no tracked descendants". A directory whose only tracked content is
+ * an item-less symlink is anchored by the index and survives.
  *
- * Such an entry has no role in any downstream pipeline: file deploy
- * already mkdirs ancestors at the same default mode, the view would
- * only claim it as a default-mode scan anchor for an emptied subtree,
- * and divergence detection has nothing to compare against. Typically
- * it's walker residue from a path the user no longer tracks (e.g.,
- * `dotta add ~/dir/` followed by `dotta remove` of every file
- * underneath). Without this prune, the view would keep claiming the
- * entry indefinitely.
+ * Such an entry has no role in any downstream pipeline: file deploy already mkdirs
+ * ancestors at the same default mode, the view would only claim it as a
+ * default-mode scan anchor for an emptied subtree, and divergence detection has
+ * nothing to compare against. Typically it's walker residue from a path the user
+ * no longer tracks (e.g., `dotta add ~/dir/` followed by `dotta remove` of every
+ * file underneath). Without this prune, the view would keep claiming the entry
+ * indefinitely.
  *
- * Custom-attribute entries (mode != default, or non-NULL owner/group)
- * are preserved even when unanchored: they may represent legitimate
- * "track this empty directory with these attributes" intent. Today
- * the schema cannot distinguish that from leftover residue, so we err
- * on the side of preservation for entries that carry distinguishing
- * information.
+ * Custom-attribute entries (mode != default, or non-NULL owner/group) are preserved
+ * even when unanchored: they may represent legitimate "track this empty directory
+ * with these attributes" intent. Today the schema cannot distinguish that from
+ * leftover residue, so we err on the side of preservation for entries that carry
+ * distinguishing information.
  *
- * Caller pattern: invoke after every index edit for the impending
- * commit (additions staged, deletions removed) and before
- * metadata_save_to_worktree, so the prune sees the commit's exact
- * tracked set and lands in the same commit as the triggering removals.
- * The keys pruned are appended to `pruned`, in item order: the entry
- * leaves the view by the verb's own commit, so the verb retires its
- * record the way it does a path it removed. Nothing appended means
- * nothing was pruned (caller may use this to skip a no-op rewrite).
+ * Caller pattern: invoke after every index edit for the impending commit (additions
+ * staged, deletions removed) and before metadata_save_to_worktree, so the prune
+ * sees the commit's exact tracked set and lands in the same commit as the
+ * triggering removals. The keys pruned are appended to `pruned`, in item order:
+ * the entry leaves the view by the verb's own commit, so the verb retires its
+ * record the way it does a path it removed. Nothing appended means nothing was
+ * pruned (caller may use this to skip a no-op rewrite).
  *
  * @param metadata Metadata collection (must not be NULL; mutated in place)
  * @param index Post-edit worktree index (must not be NULL)
@@ -396,9 +376,8 @@ bool metadata_has_item(
  *   bool encrypted = metadata_get_file_encrypted(metadata, storage_path);
  *   err = content_get_from_blob_oid(..., encrypted, ...);
  *
- * Note: the view carries the flag on its rows (manifest_row_t.encrypted,
- * projected from this metadata at build); workspace-backed operations
- * read it there.
+ * Note: the view carries the flag on its rows (manifest_row_t.encrypted, projected
+ * from this metadata at build); workspace-backed operations read it there.
  *
  * @param metadata Metadata collection (can be NULL)
  * @param storage_path Storage path to lookup (can be NULL)
@@ -412,8 +391,8 @@ bool metadata_get_file_encrypted(
 /**
  * Get all items (unfiltered)
  *
- * Returns direct pointer to internal items array (borrowed reference).
- * Zero-cost operation - no allocation, no copying.
+ * Returns direct pointer to internal items array (borrowed reference). Zero-cost
+ * operation - no allocation, no copying.
  *
  * The returned pointer is only valid until the next modification to metadata.
  *
@@ -429,16 +408,18 @@ const metadata_item_t *metadata_get_all_items(
 /**
  * Get items filtered by kind
  *
- * Returns allocated array of pointers to matching items.
- * Caller must free the returned pointer array (but not the items themselves).
+ * Returns allocated array of pointers to matching items. Caller must free the
+ * returned pointer array (but not the items themselves).
  *
- * This performs a small allocation (pointers only, ~8 bytes per item).
- * Items themselves remain in the metadata structure and are not copied.
+ * This performs a small allocation (pointers only, ~8 bytes per item). Items
+ * themselves remain in the metadata structure and are not copied.
  *
  * @param metadata Metadata collection (must not be NULL)
- * @param kind Item kind to filter by (METADATA_ITEM_FILE or METADATA_ITEM_DIRECTORY)
+ * @param kind Item kind to filter by (METADATA_ITEM_FILE or
+ *             METADATA_ITEM_DIRECTORY)
  * @param count Output count (must not be NULL)
- * @return Allocated array of item pointers (caller must free), or NULL if no matches
+ * @return Allocated array of item pointers (caller must free), or NULL if no
+ *         matches
  *
  * Return value semantics:
  * - NULL with count=0: No matches, or allocation failure, or invalid input
@@ -453,15 +434,16 @@ const metadata_item_t **metadata_get_items_by_kind(
 /**
  * Capture metadata from filesystem file
  *
- * Creates a file metadata item from stat data.
- * For symlinks, delegates to metadata_capture_from_symlink().
+ * Creates a file metadata item from stat data. For symlinks, delegates to
+ * metadata_capture_from_symlink().
  *
  * Ownership capture (user/group):
  * - ONLY captured for root/ prefix files when running as root (UID 0)
  * - home/ prefix files: ownership never captured (always current user)
  * - Regular users: ownership never captured (can't chown anyway)
  *
- * @param filesystem_path Path to file on disk (must not be NULL, for error messages)
+ * @param filesystem_path Path to file on disk (must not be NULL, for error
+ *                        messages)
  * @param storage_path Path in profile (must not be NULL)
  * @param st File stat data (must not be NULL)
  * @param out Item (must not be NULL, caller must free with metadata_item_free)
@@ -478,11 +460,11 @@ error_t *metadata_capture_from_file(
 /**
  * Capture metadata from filesystem symlink
  *
- * Creates a symlink metadata item with ownership data only.
- * Mode is always 0 (symlink permissions are not settable).
+ * Creates a symlink metadata item with ownership data only. Mode is always 0
+ * (symlink permissions are not settable).
  *
- * Symlinks only need metadata for ownership tracking on root/ prefix paths.
- * For home/ prefix or non-root users, returns *out = NULL (no metadata needed).
+ * Symlinks only need metadata for ownership tracking on root/ prefix paths. For
+ * home/ prefix or non-root users, returns *out = NULL (no metadata needed).
  *
  * Ownership capture (user/group):
  * - ONLY captured for root/ prefix symlinks when running as root (UID 0)
@@ -504,15 +486,16 @@ error_t *metadata_capture_from_symlink(
 /**
  * Capture metadata from filesystem directory
  *
- * Creates a directory metadata item from stat data.
- * Follows the same ownership rules as file capture.
+ * Creates a directory metadata item from stat data. Follows the same ownership
+ * rules as file capture.
  *
  * Ownership capture (user/group):
  * - ONLY captured for root/ prefix directories when running as root (UID 0)
  * - home/ prefix directories: ownership never captured (always current user)
  * - Regular users: ownership never captured (can't chown anyway)
  *
- * @param storage_path Storage path in profile (must not be NULL, e.g., "home/.config/nvim")
+ * @param storage_path Storage path in profile (must not be NULL, e.g.,
+ *                     "home/.config/nvim")
  * @param st Directory stat data (must not be NULL)
  * @param out Item (must not be NULL, caller must free with metadata_item_free)
  * @return Error or NULL on success
@@ -526,9 +509,9 @@ error_t *metadata_capture_from_directory(
 /**
  * Load metadata from profile branch
  *
- * Reads .dotta/metadata.json from the specified branch.
- * If the file doesn't exist, returns ERR_NOT_FOUND (not a fatal error).
- * Rejects version mismatches with clear error message (no migration code).
+ * Reads .dotta/metadata.json from the specified branch. If the file doesn't exist,
+ * returns ERR_NOT_FOUND (not a fatal error). Rejects version mismatches with
+ * clear error message (no migration code).
  *
  * @param repo Repository (must not be NULL)
  * @param branch_name Branch name (must not be NULL)
@@ -544,8 +527,8 @@ error_t *metadata_load_from_branch(
 /**
  * Load metadata from a Git tree
  *
- * Loads metadata.json from a specific Git tree. This is useful for
- * loading metadata from historical commits or arbitrary tree objects.
+ * Loads metadata.json from a specific Git tree. This is useful for loading metadata
+ * from historical commits or arbitrary tree objects.
  *
  * @param repo Repository (must not be NULL)
  * @param tree Git tree to load from (must not be NULL)
@@ -577,8 +560,8 @@ error_t *metadata_to_json(
 /**
  * Parse metadata from JSON string
  *
- * Parses metadata from JSON content.
- * Rejects version mismatches with clear error message (no migration code).
+ * Parses metadata from JSON content. Rejects version mismatches with clear error
+ * message (no migration code).
  *
  * @param json_str JSON string (must not be NULL)
  * @param out Metadata (must not be NULL, caller must free with metadata_free)
@@ -592,9 +575,8 @@ error_t *metadata_from_json(
 /**
  * Load metadata from file path
  *
- * Reads and parses metadata from a JSON file.
- * Returns ERR_NOT_FOUND if file doesn't exist.
- * Rejects version mismatches with clear error message (no migration code).
+ * Reads and parses metadata from a JSON file. Returns ERR_NOT_FOUND if file doesn't
+ * exist. Rejects version mismatches with clear error message (no migration code).
  *
  * @param file_path Path to metadata JSON file (must not be NULL)
  * @param out Metadata (must not be NULL, caller must free with metadata_free)
@@ -608,9 +590,9 @@ error_t *metadata_load_from_file(
 /**
  * Save metadata to worktree
  *
- * Writes .dotta/metadata.json to a worktree directory.
- * Creates the .dotta/ directory if it doesn't exist.
- * The file should then be staged and committed by the caller.
+ * Writes .dotta/metadata.json to a worktree directory. Creates the .dotta/
+ * directory if it doesn't exist. The file should then be staged and committed
+ * by the caller.
  *
  * @param worktree_path Path to worktree root (must not be NULL)
  * @param metadata Metadata to save (must not be NULL)
@@ -624,8 +606,8 @@ error_t *metadata_save_to_worktree(
 /**
  * Parse mode string to mode_t
  *
- * Parses octal mode string (e.g., "0600", "0644", "0755") to mode_t.
- * Validates that mode is within valid range (0000-0777).
+ * Parses octal mode string (e.g., "0600", "0644", "0755") to mode_t. Validates
+ * that mode is within valid range (0000-0777).
  *
  * @param mode_str Mode string (must not be NULL)
  * @param out Mode value (must not be NULL)
@@ -647,8 +629,8 @@ error_t *metadata_format_mode(mode_t mode, char **out);
 /**
  * Resolve ownership from owner/group strings to UID/GID
  *
- * Converts owner and group names to UID/GID values.
- * This is pure data transformation - no filesystem operations.
+ * Converts owner and group names to UID/GID values. This is pure data
+ * transformation - no filesystem operations.
  *
  * Rules:
  * - Only works when running as root (returns ERR_PERMISSION otherwise)
@@ -656,11 +638,11 @@ error_t *metadata_format_mode(mode_t mode, char **out);
  * - If owner is set but group is not, uses owner's primary group
  * - Returns uid=-1 or gid=-1 to indicate "don't change ownership"
  *
- * The caller is responsible for applying the resolved ownership
- * using fchown() or similar system calls.
+ * The caller is responsible for applying the resolved ownership using fchown()
+ * or similar system calls.
  *
- * This function works with raw strings, making it usable for both
- * file and directory items without requiring temporary structs.
+ * This function works with raw strings, making it usable for both file and
+ * directory items without requiring temporary structs.
  *
  * @param owner Owner username (can be NULL if no owner change desired)
  * @param group Group name (can be NULL if no group change desired)

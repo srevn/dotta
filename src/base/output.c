@@ -3,17 +3,17 @@
  *
  * Style engine with {tag} markup, verbosity control, and a list builder.
  *
- * Tag expansion uses a single-pass scanner with a stack-allocated buffer
- * (heap fallback on overflow). Tags are resolved via a sorted lookup
- * table with binary search. Compound tags ({bold;red}) are supported.
+ * Tag expansion uses a single-pass scanner with a stack-allocated buffer (heap
+ * fallback on overflow). Tags are resolved via a sorted lookup table with binary
+ * search. Compound tags ({bold;red}) are supported.
  *
  * Tag syntax:
  *   {red}, {bold}, {dim}, ...  — apply style/color
  *   {bold;red}                 — compound (multiple styles)
  *   {reset}                    — explicit reset
  *
- * Tags expand to ANSI codes when colors enabled, empty strings when not.
- * Auto-reset appends ANSI_RESET when an unclosed color span is detected.
+ * Tags expand to ANSI codes when colors enabled, empty strings when not. Auto-reset
+ * appends ANSI_RESET when an unclosed color span is detected.
  */
 
 #include "base/output.h"
@@ -26,9 +26,9 @@
 /* ═══════════════════════════════════════════════════════════════════
  * ANSI Escape Codes
  *
- * Defined as macros (not variables) to enable compile-time string
- * concatenation: ANSI_BOLD ANSI_RED "text" ANSI_RESET collapses to
- * a single string literal in the binary.
+ * Defined as macros (not variables) to enable compile-time string concatenation:
+ * ANSI_BOLD ANSI_RED "text" ANSI_RESET collapses to a single string literal in
+ * the binary.
  * ═══════════════════════════════════════════════════════════════════ */
 
 #define ANSI_RESET   "\033[0m"
@@ -64,9 +64,9 @@ static const char *const EMPTY = "";
 /* ═══════════════════════════════════════════════════════════════════
  * Style Buffer
  *
- * Stack-primary, heap-fallback buffer for building expanded format
- * strings. The 512-byte stack covers the vast majority of format
- * strings without heap allocation. Overflow promotes to heap.
+ * Stack-primary, heap-fallback buffer for building expanded format strings. The
+ * 512-byte stack covers the vast majority of format strings without heap
+ * allocation. Overflow promotes to heap.
  * ═══════════════════════════════════════════════════════════════════ */
 
 #define STYLE_BUF_STACK_SIZE 512
@@ -92,9 +92,8 @@ static inline void style_buf_free(style_buf_t *sb) {
 /**
  * Ensure buffer has room for `need` more bytes
  *
- * On first overflow, copies stack to a heap allocation. Subsequent
- * overflows realloc the heap buffer. Returns false on OOM (data is
- * preserved but truncated).
+ * On first overflow, copies stack to a heap allocation. Subsequent overflows
+ * realloc the heap buffer. Returns false on OOM (data is preserved but truncated).
  */
 static bool style_buf_grow(style_buf_t *sb, size_t need) {
     size_t required = sb->len + need;
@@ -138,8 +137,8 @@ static inline void style_buf_puts(style_buf_t *sb, const char *s, size_t n) {
 /* ═══════════════════════════════════════════════════════════════════
  * Tag Table
  *
- * Sorted alphabetically for binary search. The STYLE_TAG macro
- * computes string lengths at compile time — no runtime strlen.
+ * Sorted alphabetically for binary search. The STYLE_TAG macro computes string
+ * lengths at compile time — no runtime strlen.
  * ═══════════════════════════════════════════════════════════════════ */
 
 typedef struct {
@@ -170,8 +169,8 @@ static const style_tag_t TAG_TABLE[] = {
 /**
  * Binary search for a tag by name
  *
- * Lexicographic comparison against the sorted TAG_TABLE.
- * Returns pointer to matching entry, or NULL for unknown tags.
+ * Lexicographic comparison against the sorted TAG_TABLE. Returns pointer to
+ * matching entry, or NULL for unknown tags.
  */
 static const style_tag_t *resolve_tag(const char *name, size_t len) {
     int lo = 0;
@@ -206,11 +205,10 @@ static const style_tag_t *resolve_tag(const char *name, size_t len) {
 /**
  * Expand a (possibly compound) tag into ANSI codes
  *
- * Handles simple tags ({red}) and compound tags ({bold;red}).
- * Splits on ';', resolves each part independently. If ANY part
- * is unknown, the entire tag is rejected (caller passes it through
- * literally). Empty parts from leading/trailing/double semicolons
- * are silently skipped.
+ * Handles simple tags ({red}) and compound tags ({bold;red}). Splits on ';',
+ * resolves each part independently. If ANY part is unknown, the entire tag is
+ * rejected (caller passes it through literally). Empty parts from
+ * leading/trailing/double semicolons are silently skipped.
  *
  * @param sb Buffer to append ANSI codes to
  * @param color_on Whether to emit ANSI codes (false = strip tags)
@@ -264,9 +262,9 @@ static bool expand_tag(
 /**
  * Expand {tag} markup in a format string
  *
- * Single-pass scan: literal characters are copied directly, recognized
- * {tag} sequences are replaced with ANSI codes (or stripped when colors
- * disabled). Unknown tags and unclosed braces pass through literally.
+ * Single-pass scan: literal characters are copied directly, recognized {tag}
+ * sequences are replaced with ANSI codes (or stripped when colors disabled).
+ * Unknown tags and unclosed braces pass through literally.
  *
  * @param color_on  Whether to emit ANSI codes or strip tags
  * @param fmt       Format string with {tag} markup
@@ -352,8 +350,8 @@ static void styled_vfprintf(
 /**
  * Expand {tags} in str, then fputs (no printf formatting)
  *
- * Use for styled prefixes and labels. Avoids format-string risks
- * since the expanded string is never interpreted by printf.
+ * Use for styled prefixes and labels. Avoids format-string risks since the expanded
+ * string is never interpreted by printf.
  */
 static void styled_fputs(bool color_on, FILE *stream, const char *str) {
     style_buf_t sb;
@@ -805,8 +803,8 @@ bool output_confirm(
 ) {
     if (!ctx || !message) return false;
 
-    /* Finish the report's line: the preview this asks about is the line
-     * above, and the question must not land inside it. */
+    /* Finish the report's line: the preview this asks about is the line above,
+     * and the question must not land inside it. */
     fflush(ctx->stream);
 
     FILE *prompt = stderr;

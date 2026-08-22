@@ -19,20 +19,19 @@
 /**
  * Internal scope representation.
  *
- * `enabled`, `filter`, and `paths` are owned by scope_t and freed in
- * scope_free. `active` is a borrowed pointer into either `enabled` or
- * `filter` — set once during build, dangles after scope_free returns
- * (which is fine: no one is meant to dereference it post-free).
+ * `enabled`, `filter`, and `paths` are owned by scope_t and freed in scope_free.
+ * `active` is a borrowed pointer into either `enabled` or `filter` — set once
+ * during build, dangles after scope_free returns (which is fine: no one is meant
+ * to dereference it post-free).
  *
  * `excludes_ruleset` is arena-borrowed (typically from `ctx->arena`);
- * released by arena_destroy, not scope_free. Matching goes through
- * base/gitignore for full `!`-negation, directory walk-up, and anchoring
- * semantics — the same engine that powers the layered `.dottaignore`
- * ruleset in core/ignore.
+ * released by arena_destroy, not scope_free. Matching goes through base/gitignore
+ * for full `!`-negation, directory walk-up, and anchoring semantics — the same
+ * engine that powers the layered `.dottaignore` ruleset in core/ignore.
  *
- * The mount table is supplied by the caller (typically `ctx->mounts`)
- * and consumed by pathspec_create only. scope_t does not store it —
- * per-machine topology has process scope, not per-scope_build scope.
+ * The mount table is supplied by the caller (typically `ctx->mounts`) and consumed
+ * by pathspec_create only. scope_t does not store it — per-machine topology has
+ * process scope, not per-scope_build scope.
  */
 struct scope {
     string_array_t *enabled;            /* Persistent enabled set; non-NULL, may be empty */
@@ -49,9 +48,9 @@ struct scope {
 /**
  * Resolve the enabled set, converting ERR_NOT_FOUND to an empty array.
  *
- * profile_resolve_enabled returns ERR_NOT_FOUND on zero enabled
- * profiles; scope_build's contract is "empty enabled is not an error".
- * This helper smooths that boundary.
+ * profile_resolve_enabled returns ERR_NOT_FOUND on zero enabled profiles;
+ * scope_build's contract is "empty enabled is not an error". This helper smooths
+ * that boundary.
  */
 static error_t *resolve_enabled_lenient(
     git_repository *repo,
@@ -77,15 +76,14 @@ static error_t *resolve_enabled_lenient(
  * Compile exclude patterns into a gitignore ruleset in the caller's arena.
  *
  * Pre-compiling the ruleset (rather than storing raw strings) lets
- * scope_is_excluded reduce to a single gitignore_is_ignored call per
- * query, with full gitignore semantics: `!`-negation, directory walk-up,
- * anchoring, and `**` recursive globs. Matches the engine used for
- * .dottaignore so the `-e` CLI flag is consistent with all other
- * exclusion surfaces.
+ * scope_is_excluded reduce to a single gitignore_is_ignored call per query, with
+ * full gitignore semantics: `!`-negation, directory walk-up, anchoring, and `**`
+ * recursive globs. Matches the engine used for .dottaignore so the `-e` CLI flag
+ * is consistent with all other exclusion surfaces.
  *
- * The ruleset is borrowed from `arena`; the caller's arena lifetime
- * governs it. Leaves *out_rules NULL when the input array is empty —
- * the zero-excludes case touches the arena only when patterns exist.
+ * The ruleset is borrowed from `arena`; the caller's arena lifetime governs it.
+ * Leaves *out_rules NULL when the input array is empty — the zero-excludes case
+ * touches the arena only when patterns exist.
  */
 static error_t *compile_excludes(
     char *const *patterns,
@@ -157,13 +155,13 @@ error_t *scope_build(
         if (err) goto fail;  /* validate_filter returns a user-facing message */
     }
 
-    /* 3. Derive active pointer — used by scope_active accessor.
-     *    Valid as long as scope is alive. */
+    /* 3. Derive active pointer — used by scope_active accessor. Valid as long
+     *    as scope is alive. */
     s->active = s->filter ? s->filter : s->enabled;
 
-    /* 4. Build path filter consuming the caller-supplied mount table —
-     *    no intermediate prefix-array round-trip. The mount table is
-     *    borrowed for this call only; scope_t does not store it. */
+    /* 4. Build path filter consuming the caller-supplied mount table — no
+     *    intermediate prefix-array round-trip. The mount table is borrowed for
+     *    this call only; scope_t does not store it. */
     if (in->file_count > 0) {
         err = pathspec_create(
             in->files, in->file_count, mounts, arena, &s->paths

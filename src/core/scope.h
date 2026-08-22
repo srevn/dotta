@@ -1,61 +1,57 @@
 /**
  * scope.h - Operation scope for view-touching commands
  *
- * A single typed abstraction for "what subset of the view — every
- * enabled profile at HEAD, precedence resolved — does this invocation
- * touch?". Bundles the three filter dimensions every such command carries:
+ * A single typed abstraction for "what subset of the view — every enabled profile
+ * at HEAD, precedence resolved — does this invocation touch?". Bundles the three
+ * filter dimensions every such command carries:
  *
  *   1. Profile filter     — CLI -p <names> (optional)
  *   2. Path filter        — CLI positional file arguments (optional)
  *   3. Exclude patterns   — CLI -e <patterns>            (optional)
  *
- * Plus the persistent enabled set resolved from state. Constructed once
- * per command via scope_build; consulted many times via predicates that
- * replace the per-iteration triplet of `continue` guards at filter sites.
+ * Plus the persistent enabled set resolved from state. Constructed once per command
+ * via scope_build; consulted many times via predicates that replace the
+ * per-iteration triplet of `continue` guards at filter sites.
  *
  * Vocabulary
  * ----------
- *   enabled — persistent enabled profile names, always non-NULL, may be
- *             empty. Workspace scope (the view is built from all of it): workspace_load
- *             reads this via scope_enabled internally; callers pass the
- *             whole scope_t to workspace_load.
+ *   enabled — persistent enabled profile names, always non-NULL, may be empty.
+ *             Workspace scope (the view is built from all of it): workspace_load
+ *             reads this via scope_enabled internally; callers pass the whole
+ *             scope_t to workspace_load.
  *   active  — display/hook face of the scope. Equal to the CLI filter
- *             names when one was given, else equal to enabled. "What the
- *             user asked for, not the underlying world."
+ *             names when one was given, else equal to enabled. "What the user
+ *             asked for, not the underlying world."
  *   paths   — the CLI-derived path filter (NULL when no positional args).
- *             Exposed for the historical diff paths that thread a raw
- *             pathspec_t through libgit2 pathspec APIs and have no
- *             profile or exclude semantics to honor. In-workspace sites
- *             should prefer scope_accepts_path.
+ *             Exposed for the historical diff paths that thread a raw pathspec_t
+ *             through libgit2 pathspec APIs and have no profile or exclude
+ *             semantics to honor. In-workspace sites should prefer
+ *             scope_accepts_path.
  *
- * The CRITICAL invariant previously expressed as prose comments in
- * apply.c / sync.c ("use enabled, not active, for workspace_load") is
- * now type-enforced: workspace_load takes `const scope_t *` and reads
- * the enabled set internally. Callers cannot pass the wrong array by
- * mistake.
+ * The CRITICAL invariant previously expressed as prose comments in apply.c /
+ * sync.c ("use enabled, not active, for workspace_load") is now type-enforced:
+ * workspace_load takes `const scope_t *` and reads the enabled set internally.
+ * Callers cannot pass the wrong array by mistake.
  *
  * Lifetime and ownership
  * ----------------------
- * scope_t is command-scoped and immutable after scope_build returns.
- * All CLI-derived inputs are deep-copied; the caller may free its inputs
- * immediately after scope_build returns. scope_t is entirely
- * self-contained.
+ * scope_t is command-scoped and immutable after scope_build returns. All
+ * CLI-derived inputs are deep-copied; the caller may free its inputs immediately
+ * after scope_build returns. scope_t is entirely self-contained.
  *
  * Lifetime ordering at command cleanup:
  *
  *     workspace_free(ws)   // borrows scope's enabled array — free FIRST
  *     scope_free(scope)    // releases the enabled array — free SECOND
  *
- * scope_enabled's underlying array is owned by scope_t; workspace_t
- * borrows it via its `profiles` field (resolved inside workspace_load).
- * Freeing in the wrong order is a use-after-free in workspace_free's
- * teardown.
+ * scope_enabled's underlying array is owned by scope_t; workspace_t borrows it
+ * via its `profiles` field (resolved inside workspace_load). Freeing in the wrong
+ * order is a use-after-free in workspace_free's teardown.
  *
  * Empty-enabled policy
  * --------------------
- * scope_build returns success with an empty enabled set — it does NOT
- * translate "no enabled profiles" into an error. Callers apply their own
- * policy:
+ * scope_build returns success with an empty enabled set — it does NOT translate
+ * "no enabled profiles" into an error. Callers apply their own policy:
  *
  *   apply   — empty is a valid convergence target (an empty view, orphan
  *             cleanup runs). No special handling needed.
@@ -78,31 +74,29 @@
 #include "infra/mount.h"
 #include "infra/pathspec.h"
 
-/* Forward decl: state_t's full API lives in core/state.h. scope only
- * passes the pointer through to profile_resolve_enabled, so the header
- * stays free of the state dependency. C11 §6.7p3 permits typedef-name
- * redeclaration. */
+/* Forward decl: state_t's full API lives in core/state.h. scope only passes the
+ * pointer through to profile_resolve_enabled, so the header stays free of the
+ * state dependency. C11 §6.7p3 permits typedef-name redeclaration. */
 typedef struct state state_t;
 
 /**
  * Opaque scope handle.
  *
- * Definition lives in scope.c; consumers interact only via the accessors
- * and predicates below.
+ * Definition lives in scope.c; consumers interact only via the accessors and
+ * predicates below.
  */
 typedef struct scope scope_t;
 
 /**
  * Aggregated build inputs.
  *
- * A command-agnostic view of the three CLI-derived filter dimensions.
- * All array fields may be NULL when the corresponding count is zero.
- * Config-derived behavior (strict_mode) is read from the config handle
- * passed separately to scope_build, keeping this struct a pure CLI bundle.
+ * A command-agnostic view of the three CLI-derived filter dimensions. All array
+ * fields may be NULL when the corresponding count is zero. Config-derived behavior
+ * (strict_mode) is read from the config handle passed separately to scope_build,
+ * keeping this struct a pure CLI bundle.
  *
- * Ownership: borrowed. scope_build deep-copies everything it needs; the
- * caller may free the backing arrays immediately after scope_build
- * returns.
+ * Ownership: borrowed. scope_build deep-copies everything it needs; the caller
+ * may free the backing arrays immediately after scope_build returns.
  */
 typedef struct scope_inputs {
     char *const *profiles;          /* -p profile names (raw CLI) */
@@ -117,26 +111,26 @@ typedef struct scope_inputs {
  * Build a scope from resolved repo+state and raw CLI inputs.
  *
  * Steps performed (in order):
- *   1. Resolve enabled profile names from state (catches ERR_NOT_FOUND
- *      and converts to empty set — see "Empty-enabled policy" above).
- *   2. If in->profile_count > 0, resolve and validate the CLI filter
- *      against the enabled set (error if any filter name is not enabled).
- *      Strictness of the filter resolution is read from config->strict_mode.
- *   3. If in->file_count > 0, build the pathspec consuming the
- *      caller-supplied mount table.
- *   4. If in->exclude_count > 0, compile patterns into a borrowed-arena
- *      gitignore ruleset.
+ *   1. Resolve enabled profile names from state (catches ERR_NOT_FOUND and converts
+ *      to empty set — see "Empty-enabled policy" above).
+ *   2. If in->profile_count > 0, resolve and validate the CLI filter against
+ *      the enabled set (error if any filter name is not enabled). Strictness of
+ *      the filter resolution is read from config->strict_mode.
+ *   3. If in->file_count > 0, build the pathspec consuming the caller-supplied
+ *      mount table.
+ *   4. If in->exclude_count > 0, compile patterns into a borrowed-arena gitignore
+ *      ruleset.
  *
  * @param repo   Repository (must not be NULL)
  * @param state  State handle (must not be NULL, borrowed for the call)
  * @param in     Inputs (must not be NULL)
  * @param config Configuration (must not be NULL, read for strict_mode)
- * @param mounts Per-machine mount table covering enabled profiles
- *               (must not be NULL; arena-borrowed; consumed by
- *               pathspec_create only — scope_t does not store it)
+ * @param mounts Per-machine mount table covering enabled profiles (must not be
+ *               NULL; arena-borrowed; consumed by pathspec_create only — scope_t
+ *               does not store it)
  * @param arena  Borrowed allocator backing the compiled exclude ruleset
- *               and the path filter's glob storage; must outlive the
- *               returned scope (must not be NULL)
+ *               and the path filter's glob storage; must outlive the returned
+ *               scope (must not be NULL)
  * @param out    Scope (must not be NULL, caller frees with scope_free)
  * @return Error or NULL on success
  */
@@ -162,20 +156,19 @@ void scope_free(scope_t *s);
 /**
  * Persistent enabled set — the view's scope.
  *
- * Pass this (and ONLY this) to workspace_load. Never the filter.
- * Always non-NULL; the array may be empty (an empty view is a valid state).
+ * Pass this (and ONLY this) to workspace_load. Never the filter. Always non-NULL;
+ * the array may be empty (an empty view is a valid state).
  *
- * The returned pointer is borrowed from scope_t and valid until
- * scope_free.
+ * The returned pointer is borrowed from scope_t and valid until scope_free.
  */
 const string_array_t *scope_enabled(const scope_t *s);
 
 /**
  * Active set — display and hook face of the scope.
  *
- * Equal to the CLI filter names when -p was given, else equal to
- * scope_enabled(s). Use this for hook context strings ("what the user
- * asked for") and for verbose output.
+ * Equal to the CLI filter names when -p was given, else equal to scope_enabled(s).
+ * Use this for hook context strings ("what the user asked for") and for verbose
+ * output.
  *
  * Always non-NULL. Borrowed; valid until scope_free.
  */
@@ -188,12 +181,11 @@ const string_array_t *scope_active(const scope_t *s);
 /**
  * Raw path filter (NULL when no positional file args were given).
  *
- * Consumers that need to enumerate the compiled entries (e.g. diff's
- * historical modes flattening the filter into a libgit2 git_strarray,
- * filter-coverage validation) use this with the pathspec indexed
- * accessors (pathspec_count / pathspec_exact_at / pathspec_glob_at /
- * pathspec_glob_matches_at). Per-iteration path-vs-filter checks
- * should use scope_accepts_path instead.
+ * Consumers that need to enumerate the compiled entries (e.g. diff's historical
+ * modes flattening the filter into a libgit2 git_strarray, filter-coverage
+ * validation) use this with the pathspec indexed accessors (pathspec_count /
+ * pathspec_exact_at / pathspec_glob_at / pathspec_glob_matches_at). Per-iteration
+ * path-vs-filter checks should use scope_accepts_path instead.
  *
  * Borrowed; valid until scope_free.
  */
@@ -216,22 +208,20 @@ bool scope_has_paths(const scope_t *s);
 /**
  * Profile dimension check.
  *
- * NULL profile returns false (defensive — a NULL name never matches,
- * even the "match all" case). When no CLI filter was given, every
- * non-NULL profile matches.
+ * NULL profile returns false (defensive — a NULL name never matches, even the
+ * "match all" case). When no CLI filter was given, every non-NULL profile matches.
  */
 bool scope_accepts_profile(const scope_t *s, const char *profile);
 
 /**
  * Path dimension check.
  *
- * When no path filter was built, any non-NULL storage_path matches
- * (matches pathspec_matches semantics). NULL storage_path returns
- * false.
+ * When no path filter was built, any non-NULL storage_path matches (matches
+ * pathspec_matches semantics). NULL storage_path returns false.
  *
- * `kind` is the manifest's kind of the path — PATH_KIND_DIRECTORY for a
- * tracked directory even when a file currently squats it on disk. State
- * file rows are always PATH_KIND_FILE; workspace items carry item_kind.
+ * `kind` is the manifest's kind of the path — PATH_KIND_DIRECTORY for a tracked
+ * directory even when a file currently squats it on disk. State file rows are
+ * always PATH_KIND_FILE; workspace items carry item_kind.
  */
 bool scope_accepts_path(
     const scope_t *s, const char *storage_path, path_kind_t kind
@@ -240,17 +230,16 @@ bool scope_accepts_path(
 /**
  * Exclude dimension check.
  *
- * Returns true when storage_path IS excluded by a CLI -e pattern
- * (asymmetric with scope_accepts_* by design — reads naturally at call
- * sites: `if (scope_is_excluded(s, p, k)) { ... }`).
+ * Returns true when storage_path IS excluded by a CLI -e pattern (asymmetric
+ * with scope_accepts_* by design — reads naturally at call sites: `if
+ * (scope_is_excluded(s, p, k)) { ... }`).
  *
- * Uses gitignore semantics via base/gitignore: `!`-negation, directory
- * walk-up (so `-e 'build/'` matches files under `build/`), anchoring,
- * and `**` recursive globs. A directory-only pattern (`build/`) matches
- * the directory itself only for PATH_KIND_DIRECTORY — the kind is what
- * makes `-e 'dir/'` mean "leave that directory alone" for the directory
- * as well as its contents. NULL storage_path or no exclude patterns
- * returns false.
+ * Uses gitignore semantics via base/gitignore: `!`-negation, directory walk-up
+ * (so `-e 'build/'` matches files under `build/`), anchoring, and `**` recursive
+ * globs. A directory-only pattern (`build/`) matches the directory itself only
+ * for PATH_KIND_DIRECTORY — the kind is what makes `-e 'dir/'` mean "leave that
+ * directory alone" for the directory as well as its contents. NULL storage_path
+ * or no exclude patterns returns false.
  */
 bool scope_is_excluded(
     const scope_t *s, const char *storage_path, path_kind_t kind
@@ -260,13 +249,11 @@ bool scope_is_excluded(
  * Combined per-iteration check.
  *
  * Equivalent to:
- *     scope_accepts_profile(s, profile)
- *         && scope_accepts_path(s, storage_path, kind)
- *         && !scope_is_excluded(s, storage_path, kind)
+ *     scope_accepts_profile(s, profile) && scope_accepts_path(s, storage_path,
+ *         kind) && !scope_is_excluded(s, storage_path, kind)
  *
- * Use at sites that do not need by-reason granularity. Sites that count
- * or report exclusion reasons separately should use the three granular
- * predicates above.
+ * Use at sites that do not need by-reason granularity. Sites that count or report
+ * exclusion reasons separately should use the three granular predicates above.
  */
 bool scope_accepts_entry(
     const scope_t *s,

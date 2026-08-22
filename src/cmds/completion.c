@@ -1,9 +1,9 @@
 /**
  * completion.c - Shell completion helper
  *
- * Hidden subcommand providing completion data for shell scripts.
- * All functions follow the silent failure model - errors result in
- * no output rather than error messages to stderr.
+ * Hidden subcommand providing completion data for shell scripts. All functions
+ * follow the silent failure model - errors result in no output rather than error
+ * messages to stderr.
  */
 
 #include "cmds/completion.h"
@@ -61,8 +61,8 @@ static void complete_enabled_profiles(state_t *state) {
 /**
  * Output all available profiles
  *
- * Lists all local branches and remote-tracking branches,
- * excluding the internal dotta-worktree branch.
+ * Lists all local branches and remote-tracking branches, excluding the internal
+ * dotta-worktree branch.
  */
 static void complete_all_profiles(git_repository *repo, arena_t *arena) {
     /* 1. Local branches */
@@ -131,8 +131,8 @@ static void complete_remotes(git_repository *repo) {
  *
  * @param repo Repository (must not be NULL when state is)
  * @param state Borrowed state handle; NULL when running outside a repo
- * @param mounts Per-machine mount table over the enabled set (non-NULL
- *               iff state is — the runtime invariant)
+ * @param mounts Per-machine mount table over the enabled set (non-NULL iff state
+ *               is — the runtime invariant)
  * @param arena Borrowed scratch arena (caller's command arena)
  * @param profile Optional profile filter (NULL for all files)
  * @param storage_paths If true, output storage_path; if false, filesystem_path
@@ -166,13 +166,13 @@ static void complete_files(
     for (size_t i = 0; i < rows.count; i++) {
         const manifest_row_t *row = rows.entries[i];
 
-        /* Files only: a directory row is a metadata claim, not a path
-         * the file-taking verbs complete to */
+        /* Files only: a directory row is a metadata claim, not a path the
+         * file-taking verbs complete to */
         if (row->type == PATH_TYPE_DIRECTORY) {
             continue;
         }
-        /* Profile filter, applied here rather than at the build: one
-         * view, one loop. */
+        /* Profile filter, applied here rather than at the build: one view, one
+         * loop. */
         if (profile && strcmp(row->profile, profile) != 0) {
             continue;
         }
@@ -197,8 +197,8 @@ typedef struct {
  * Tree-walk callback: emit one token per managed file blob.
  *
  * `root` is "" at the top level or "dir/.../" with a trailing slash, so
- * mount_spec_for_path(root) gates emission to files under a storage label,
- * skipping top-level blobs, .dotta/, and any non-label root.
+ * mount_spec_for_path(root) gates emission to files under a storage label, skipping
+ * top-level blobs, .dotta/, and any non-label root.
  */
 static int refspec_emit_cb(
     const char *root,
@@ -229,8 +229,8 @@ static int refspec_emit_cb(
  * show/revert reach profiles disabled or never enabled here.
  *
  * @param repo Repository (borrowed)
- * @param profile NULL: all branches, emit "<profile>:<path>". Else: that
- *                branch only, emit bare "<path>" (profile pinned by -p).
+ * @param profile NULL: all branches, emit "<profile>:<path>". Else: that branch
+ *                only, emit bare "<path>" (profile pinned by -p).
  * @param cap Backstop on total tokens emitted
  */
 static void complete_refspec_files(
@@ -268,8 +268,8 @@ static void complete_refspec_files(
 /**
  * Output recent commits for completion
  *
- * Outputs commits in tab-separated format: <short_oid>\t<summary>
- * This allows fish to display the summary as a description.
+ * Outputs commits in tab-separated format: <short_oid>\t<summary> This allows
+ * fish to display the summary as a description.
  *
  * @param repo Repository (borrowed)
  * @param state Borrowed state handle; NULL when running outside a repo
@@ -380,8 +380,8 @@ static void complete_commits(
 /**
  * Run completion command
  *
- * Dispatches to appropriate completion function based on mode.
- * Always returns NULL (success) - errors result in no output.
+ * Dispatches to appropriate completion function based on mode. Always returns
+ * NULL (success) - errors result in no output.
  */
 error_t *cmd_completion(const dotta_ctx_t *ctx, const cmd_completion_options_t *opts) {
     if (!ctx || !opts) {
@@ -389,15 +389,15 @@ error_t *cmd_completion(const dotta_ctx_t *ctx, const cmd_completion_options_t *
     }
 
     git_repository *repo = ctx->repo;
-    /* OPTIONAL_SILENT + READ: the dispatcher skips state acquisition when
-     * no repo is available, so state may legitimately be NULL here */
+    /* OPTIONAL_SILENT + READ: the dispatcher skips state acquisition when no
+     * repo is available, so state may legitimately be NULL here */
     state_t *state = ctx->state;
 
     switch (opts->mode) {
         case COMPLETE_CHECK:
-            /* The dispatcher opens the repo in OPTIONAL_SILENT mode.
-             * Repo presence is the signal; silent_failure turns a
-             * missing repo into exit 1 with no output. */
+            /* The dispatcher opens the repo in OPTIONAL_SILENT mode. Repo presence
+             * is the signal; silent_failure turns a missing repo into exit 1
+             * with no output. */
             if (!repo) {
                 return error_create(ERR_NOT_FOUND, "not in a dotta repository");
             }
@@ -444,10 +444,10 @@ error_t *cmd_completion(const dotta_ctx_t *ctx, const cmd_completion_options_t *
 
         case COMPLETE_SPEC_FISH:
             /* Build-time emission: projects the root registry into the
-             * fish-completion dialect. Stable, repo-independent, invoked
-             * by `make completions` to generate the schema under build/.
-             * Registry is borrowed from main.c via the typed accessor
-             * so the cmds/ layer never names the registry symbol. */
+             * fish-completion dialect. Stable, repo-independent, invoked by `make
+             * completions` to generate the schema under build/. Registry is
+             * borrowed from main.c via the typed accessor so the cmds/ layer
+             * never names the registry symbol. */
             args_export_completion_fish(stdout, ctx->arena, dotta_registry(), "dotta");
             break;
 
@@ -464,8 +464,8 @@ error_t *cmd_completion(const dotta_ctx_t *ctx, const cmd_completion_options_t *
  * ══════════════════════════════════════════════════════════════════ */
 
 /**
- * Seed the legacy default: commits mode returns up to 20 rows when
- * `--limit` isn't supplied.
+ * Seed the legacy default: commits mode returns up to 20 rows when `--limit`
+ * isn't supplied.
  */
 static void completion_init_defaults(void *opts_v) {
     cmd_completion_options_t *o = opts_v;
@@ -475,15 +475,15 @@ static void completion_init_defaults(void *opts_v) {
 /**
  * Map the mandatory first positional into `mode`.
  *
- * Silent-failure semantics (suppressed by the dispatcher when
- * `silent_failure = true`): a missing or unknown mode returns exit 1
- * with no stderr output — this preserves shell-completion contract
- * with fish scripts that invoke `dotta __complete ...`.
+ * Silent-failure semantics (suppressed by the dispatcher when `silent_failure =
+ * true`): a missing or unknown mode returns exit 1 with no stderr output — this
+ * preserves shell-completion contract with fish scripts that invoke `dotta
+ * __complete ...`.
  *
- * `spec` mode takes a second positional naming the output dialect
- * (currently only `fish`). All other modes require exactly one
- * positional — we reject extras explicitly so a typo like
- * `dotta __complete profiles all` doesn't silently ignore `all`.
+ * `spec` mode takes a second positional naming the output dialect (currently
+ * only `fish`). All other modes require exactly one positional — we reject extras
+ * explicitly so a typo like `dotta __complete profiles all` doesn't silently
+ * ignore `all`.
  */
 static error_t *completion_post_parse(
     void *opts_v, arena_t *arena, const args_command_t *cmd

@@ -1,10 +1,9 @@
 /**
  * privilege.c - Privilege management implementation
  *
- * ARCHITECTURE:
- * This module ensures operations have required privileges BEFORE they begin,
- * preventing partial operations and silent metadata loss. Uses explicit user
- * interaction (prompts) rather than automatic elevation for transparency.
+ * ARCHITECTURE: This module ensures operations have required privileges BEFORE
+ * they begin, preventing partial operations and silent metadata loss. Uses explicit
+ * user interaction (prompts) rather than automatic elevation for transparency.
  *
  * SECURITY CONSIDERATIONS:
  * 1. Uses execvp() directly - no shell interpretation prevents injection
@@ -34,22 +33,21 @@
  * Boundary-aware ancestor check with symlink awareness.
  *
  * Returns true when `absolute_path` is under (or equal to) `reference_dir`,
- * comparing both raw and canonical (realpath-resolved) forms of each side.
- * A single match across the (raw, canonical) x (raw, canonical) cross
- * product is sufficient, catching symlinks on either side (e.g.,
+ * comparing both raw and canonical (realpath-resolved) forms of each side. A
+ * single match across the (raw, canonical) x (raw, canonical) cross product is
+ * sufficient, catching symlinks on either side (e.g.,
  * macOS's /tmp -> /private/tmp, or a $HOME that traverses a bind mount).
  *
  * Boundary rule (component-aware):
- *   /home/user matches /home/user and /home/user/.bashrc
- *   /home/user does NOT match /home/username (false-prefix guard)
+ *   /home/user matches /home/user and /home/user/.bashrc /home/user does NOT
+ *   match /home/username (false-prefix guard)
  *
  * Trailing slashes on `reference_dir` are normalised internally so that
  * "/home/user/" and "/home/user" behave identically.
  *
  * Privilege-internal: the sole caller is privilege_path_is_user_home.
- * Generic-looking but specifically tuned for the HOME-boundary query —
- * moving it elsewhere when no second consumer exists would be premature
- * indirection.
+ * Generic-looking but specifically tuned for the HOME-boundary query — moving
+ * it elsewhere when no second consumer exists would be premature indirection.
  */
 static bool is_under(
     const char *absolute_path,
@@ -57,10 +55,9 @@ static bool is_under(
 ) {
     if (!absolute_path || !reference_dir) return false;
 
-    /* Best-effort canonicalize both sides; either may fail (e.g., the
-     * path does not exist on this system, or symlink resolution hits
-     * EACCES). On failure, the raw form is the only comparison
-     * candidate for that side. */
+    /* Best-effort canonicalize both sides; either may fail (e.g., the path does
+     * not exist on this system, or symlink resolution hits EACCES). On failure,
+     * the raw form is the only comparison candidate for that side. */
     char *path_canonical = NULL;
     char *ref_canonical = NULL;
 
@@ -79,18 +76,18 @@ static bool is_under(
         for (int r = 0; r < 2 && !under; r++) {
             if (!refs[r]) continue;
 
-            /* Trim trailing slashes from the reference for boundary
-             * parity. fs_get_home, pw_dir, and user-supplied targets
-             * may carry a stray trailing slash; "/home/user/" and
-             * "/home/user" must classify the same path identically. */
+            /* Trim trailing slashes from the reference for boundary parity.
+             * fs_get_home, pw_dir, and user-supplied targets may carry a stray
+             * trailing slash; "/home/user/" and "/home/user" must classify the
+             * same path identically. */
             size_t ref_len = strlen(refs[r]);
             while (ref_len > 1 && refs[r][ref_len - 1] == '/') {
                 ref_len--;
             }
             if (strncmp(paths[p], refs[r], ref_len) != 0) continue;
 
-            /* Component boundary: next char must be '/' or '\0'.
-             * Rejects /home/username when reference is /home/user. */
+            /* Component boundary: next char must be '/' or '\0'. Rejects
+             * /home/username when reference is /home/user. */
             char boundary = paths[p][ref_len];
             if (boundary == '/' || boundary == '\0') under = true;
         }
@@ -113,8 +110,8 @@ bool privilege_is_elevated(void) {
  * Check if running under sudo
  */
 bool privilege_is_sudo(void) {
-    /* Sudo sets SUDO_UID and SUDO_GID to the original user's IDs
-     * If both are present, we're running under sudo */
+    /* Sudo sets SUDO_UID and SUDO_GID to the original user's IDs If both are
+     * present, we're running under sudo */
     const char *sudo_uid = getenv("SUDO_UID");
     const char *sudo_gid = getenv("SUDO_GID");
 
@@ -124,16 +121,15 @@ bool privilege_is_sudo(void) {
 /**
  * Check if a filesystem path is under the invoking user's HOME.
  *
- * Single boundary predicate. fs_get_home is the chokepoint that
- * reconciles env, sudo, and passwd inputs into one HOME answer; we
- * trust it here. The boundary-aware comparison cross-checks raw and
- * canonical forms to avoid symlink false negatives.
+ * Single boundary predicate. fs_get_home is the chokepoint that reconciles env,
+ * sudo, and passwd inputs into one HOME answer; we trust it here. The
+ * boundary-aware comparison cross-checks raw and canonical forms to avoid symlink
+ * false negatives.
  *
  * Returns false when:
  *   - filesystem_path is NULL
- *   - fs_get_home fails (no env, no passwd) — caller's natural
- *     negation then yields "needs elevation" / "do not de-escalate",
- *     both conservative.
+ *   - fs_get_home fails (no env, no passwd) — caller's natural negation then
+ *     yields "needs elevation" / "do not de-escalate", both conservative.
  */
 bool privilege_path_is_user_home(const char *filesystem_path) {
     if (!filesystem_path) return false;
@@ -154,9 +150,8 @@ bool privilege_path_is_user_home(const char *filesystem_path) {
 /**
  * Check if a storage path requires elevation for pre-flight purposes.
  *
- * Composer: label vocabulary (does this kind track ownership? is it
- * profile-keyed?) crossed with the resolved filesystem path's
- * home-membership.
+ * Composer: label vocabulary (does this kind track ownership? is it profile-keyed?)
+ * crossed with the resolved filesystem path's home-membership.
  *
  *   home/   → spec->tracks_ownership=false  → no elevation
  *   root/   → spec->tracks_ownership=true,
@@ -165,8 +160,8 @@ bool privilege_path_is_user_home(const char *filesystem_path) {
  *              spec->per_profile=true         → elevation iff fs path
  *                                               is outside the user's HOME
  *
- * NULL filesystem_path is treated conservatively (assume elevation
- * needed) for ownership-tracking labels — matches the prior contract.
+ * NULL filesystem_path is treated conservatively (assume elevation needed) for
+ * ownership-tracking labels — matches the prior contract.
  */
 bool privilege_needs_elevation(
     const char *storage_path,
@@ -184,10 +179,12 @@ bool privilege_needs_elevation(
 /**
  * Get actual user UID/GID (handling sudo context)
  *
- * When running under sudo, returns the original user's UID/GID from SUDO_UID/SUDO_GID
- * environment variables. When not under sudo, returns effective UID/GID.
+ * When running under sudo, returns the original user's UID/GID from
+ * SUDO_UID/SUDO_GID environment variables. When not under sudo, returns effective
+ * UID/GID.
  *
- * This is the single source of truth for sudo context detection and actual user resolution.
+ * This is the single source of truth for sudo context detection and actual user
+ * resolution.
  */
 error_t *privilege_get_actual_user(uid_t *uid, gid_t *gid) {
     CHECK_NULL(uid);
@@ -245,13 +242,13 @@ error_t *privilege_get_actual_user(uid_t *uid, gid_t *gid) {
 /**
  * Display privilege requirement message to user.
  *
- * Shows which items require root and explains why. Limits output to
- * first 10 items to avoid overwhelming the user. The header is a
- * warning, not an error: the operation will still proceed cleanly
- * after the user authenticates with sudo.
+ * Shows which items require root and explains why. Limits output to first 10
+ * items to avoid overwhelming the user. The header is a warning, not an error:
+ * the operation will still proceed cleanly after the user authenticates with sudo.
  *
  * @param operation Operation name (e.g., "add", "update")
- * @param labels Storage paths needing root (pre-filtered, must not be NULL when count > 0)
+ * @param labels Storage paths needing root (pre-filtered, must not be NULL when
+ *               count > 0)
  * @param count Number of labels
  * @param out Output context
  */
@@ -295,8 +292,8 @@ static void display_privilege_requirement(
  * - Uses sudo -E to preserve environment (including DOTTA_*)
  * - Requires user authentication (system sudo policy)
  *
- * If successful, this function DOES NOT RETURN (process is replaced).
- * If exec() fails, returns an error.
+ * If successful, this function DOES NOT RETURN (process is replaced). If exec()
+ * fails, returns an error.
  *
  * @param argc Original argc from main()
  * @param argv Original argv from main()
@@ -316,12 +313,9 @@ static error_t *reexec_with_sudo(int argc, char **argv) {
      *   New:      sudo -E dotta add -p test /etc/hosts
      *
      * Array layout:
-     *   sudo_argv[0] = "sudo"
-     *   sudo_argv[1] = "-E"
-     *   sudo_argv[2] = argv[0] (original "dotta")
-     *   sudo_argv[3] = argv[1] (original "add")
-     *   ...
-     *   sudo_argv[argc + 2] = NULL
+     *   sudo_argv[0] = "sudo" sudo_argv[1] = "-E" sudo_argv[2] = argv[0] (original
+     *   "dotta") sudo_argv[3] = argv[1] (original "add") ... sudo_argv[argc +
+     *   2] = NULL
      */
 
     /* Allocate new argv array: sudo, -E, original args, NULL */
@@ -341,8 +335,8 @@ static error_t *reexec_with_sudo(int argc, char **argv) {
 
     sudo_argv[argc + 2] = NULL;  /* NULL terminator required by execvp */
 
-    /* Execute sudo - replaces current process on success
-     * execvp searches PATH for "sudo" and handles it properly */
+    /* Execute sudo - replaces current process on success execvp searches PATH
+     * for "sudo" and handles it properly */
     execvp("sudo", sudo_argv);
 
     /* If we reach here, exec failed */
@@ -366,14 +360,13 @@ static error_t *reexec_with_sudo(int argc, char **argv) {
 /**
  * Append a label iff this entry needs elevation.
  *
- * Self-enforcing filter at the collection boundary: callers cannot
- * surface entries that don't actually need elevation. The privilege
- * decision and the push live in one call; there is no intermediate
- * state where a caller could forget the predicate.
+ * Self-enforcing filter at the collection boundary: callers cannot surface entries
+ * that don't actually need elevation. The privilege decision and the push live
+ * in one call; there is no intermediate state where a caller could forget the
+ * predicate.
  *
- * The label that goes into the array is always the storage_path —
- * stable, user-recognizable, already what every view-driven caller
- * wants displayed.
+ * The label that goes into the array is always the storage_path — stable,
+ * user-recognizable, already what every view-driven caller wants displayed.
  */
 error_t *privilege_collect_label(
     string_array_t *labels,
@@ -393,10 +386,10 @@ error_t *privilege_collect_label(
 /**
  * Ensure proper privileges for an operation.
  *
- * Main entry point for privilege management. Call this BEFORE starting
- * any operation that might need elevated privileges (kinds whose spec
- * marks tracks_ownership: root/ files always; custom/ files when the
- * deployment target is outside $HOME).
+ * Main entry point for privilege management. Call this BEFORE starting any
+ * operation that might need elevated privileges (kinds whose spec marks
+ * tracks_ownership: root/ files always; custom/ files when the deployment target
+ * is outside $HOME).
  *
  * WORKFLOW:
  * 1. count == 0 → already nothing to elevate for, proceed.
@@ -407,8 +400,8 @@ error_t *privilege_collect_label(
  *    - Declined  → return ERR_PERMISSION.
  * 5. Non-interactive → return ERR_PERMISSION with hint.
  *
- * CRITICAL: May re-execute entire process. Any state changes before
- * calling this function will be lost.
+ * CRITICAL: May re-execute entire process. Any state changes before calling this
+ * function will be lost.
  */
 error_t *privilege_ensure_for_operation(
     const char *const *labels,

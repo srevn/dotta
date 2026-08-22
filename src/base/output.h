@@ -1,8 +1,8 @@
 /**
  * output.h - Output formatting and styling
  *
- * Provides centralized output formatting with color support, verbosity
- * levels, and different output formats.
+ * Provides centralized output formatting with color support, verbosity levels,
+ * and different output formats.
  */
 
 #ifndef DOTTA_OUTPUT_H
@@ -60,16 +60,16 @@ typedef struct output {
 /**
  * Parse verbosity string from config
  *
- * Converts config verbosity string ("quiet", "normal", "verbose") to enum.
- * Returns OUTPUT_NORMAL for NULL or unrecognized values.
+ * Converts config verbosity string ("quiet", "normal", "verbose") to enum. Returns
+ * OUTPUT_NORMAL for NULL or unrecognized values.
  */
 output_verbosity_t output_parse_verbosity(const char *str);
 
 /**
  * Parse color mode string from config
  *
- * Converts config color string ("auto", "always", "never") to enum.
- * Returns OUTPUT_COLOR_AUTO for NULL or unrecognized values.
+ * Converts config color string ("auto", "always", "never") to enum. Returns
+ * OUTPUT_COLOR_AUTO for NULL or unrecognized values.
  */
 output_color_mode_t output_parse_color_mode(const char *str);
 
@@ -109,13 +109,13 @@ bool output_colors_enabled(const output_t *ctx);
 /**
  * Check if the output stream is a TTY
  *
- * Returns true if ctx->stream is connected to a terminal.
- * This is distinct from output_colors_enabled():
+ * Returns true if ctx->stream is connected to a terminal. This is distinct from
+ * output_colors_enabled():
  *   - colors_enabled can be true on non-TTY (--color=always)
  *   - is_tty can be true with colors disabled (NO_COLOR, TERM=dumb)
  *
- * Use for decisions about ephemeral output (progress indicators,
- * inline status), not for color decisions.
+ * Use for decisions about ephemeral output (progress indicators, inline status),
+ * not for color decisions.
  *
  * @param ctx Output context (returns false if NULL)
  * @return true if ctx->stream is a terminal
@@ -140,9 +140,9 @@ void output_print(
 /**
  * Print with inline style tags and verbosity check
  *
- * Like output_print() but supports {tag} markup for inline coloring.
- * Tags are replaced with ANSI codes when colors are enabled, or removed
- * when disabled. Unknown tags pass through literally.
+ * Like output_print() but supports {tag} markup for inline coloring. Tags are
+ * replaced with ANSI codes when colors are enabled, or removed when disabled.
+ * Unknown tags pass through literally.
  *
  * Supported tags:
  *   {red}, {green}, {yellow}, {blue}, {magenta}, {cyan}, {white}
@@ -150,8 +150,8 @@ void output_print(
  *   {reset}
  *   {bold;red} (compound tags via semicolon)
  *
- * Auto-appends RESET if any color tag was used (prevents color bleed).
- * Printf format specifiers (%s, %d, %zu) work normally alongside tags.
+ * Auto-appends RESET if any color tag was used (prevents color bleed). Printf
+ * format specifiers (%s, %d, %zu) work normally alongside tags.
  *
  * @param ctx Output context
  * @param min_level Minimum verbosity level
@@ -171,12 +171,12 @@ void output_styled(
 /**
  * Print with a runtime-determined color wrapping the output
  *
- * Applies `color` to the entire formatted output and auto-resets.
- * Use when the color is determined at runtime (variable output_color_t).
- * For compile-time colors, prefer output_styled() with {tags} instead.
+ * Applies `color` to the entire formatted output and auto-resets. Use when the
+ * color is determined at runtime (variable output_color_t). For compile-time
+ * colors, prefer output_styled() with {tags} instead.
  *
- * When color is OUTPUT_COLOR_RESET, no color wrapping is applied
- * (content prints plain). This allows using RESET as a "no color" sentinel.
+ * When color is OUTPUT_COLOR_RESET, no color wrapping is applied (content prints
+ * plain). This allows using RESET as a "no color" sentinel.
  *
  * The format string also supports {tag} markup (routes through the style engine).
  */
@@ -191,8 +191,8 @@ void output_colored(
 /**
  * Print error message
  *
- * The terminal failure: stderr, no verbosity gate, and the report is
- * flushed first so it lands after the partial run it ends.
+ * The terminal failure: stderr, no verbosity gate, and the report is flushed
+ * first so it lands after the partial run it ends.
  */
 void output_error(const output_t *ctx, const char *fmt, ...)
 __attribute__((format(printf, 2, 3)));
@@ -200,8 +200,8 @@ __attribute__((format(printf, 2, 3)));
 /**
  * Print warning message
  *
- * A line of the report, prefixed "Warning: " — same destination and same
- * color decision as the section, list or hint it belongs with.
+ * A line of the report, prefixed "Warning: " — same destination and same color
+ * decision as the section, list or hint it belongs with.
  */
 void output_warning(
     const output_t *ctx,
@@ -233,9 +233,9 @@ void output_info(
 /**
  * Print hint message (always dimmed when colors enabled)
  *
- * Automatically adds "Hint: " prefix and applies DIM styling to the entire
- * message. Supports printf-style formatting. Leading whitespace is preserved
- * for indentation support.
+ * Automatically adds "Hint: " prefix and applies DIM styling to the entire message.
+ * Supports printf-style formatting. Leading whitespace is preserved for indentation
+ * support.
  *
  * @param ctx Output context
  * @param min_level Minimum verbosity level
@@ -258,9 +258,9 @@ void output_hint(
 /**
  * Print hint continuation line (no "Hint:" prefix, but still dimmed)
  *
- * For multi-line hints where only the first line has "Hint:" prefix.
- * Still applies DIM color and respects verbosity. Use for continuation lines.
- * Leading whitespace is preserved for indentation.
+ * For multi-line hints where only the first line has "Hint:" prefix. Still applies
+ * DIM color and respects verbosity. Use for continuation lines. Leading whitespace
+ * is preserved for indentation.
  *
  * @param ctx Output context
  * @param min_level Minimum verbosity level
@@ -269,8 +269,7 @@ void output_hint(
  * Example:
  *   output_hint(out, OUTPUT_NORMAL, "Create a bootstrap script with:");
  *   output_hintline(out, OUTPUT_NORMAL, "  dotta bootstrap --profile <profile> --edit");
- *   → Output:
- *   "Hint: Create a bootstrap script with:" (dimmed)
+ *   → Output: "Hint: Create a bootstrap script with:" (dimmed)
  *   "  dotta bootstrap --profile <profile> --edit" (dimmed)
  */
 void output_hintline(
@@ -283,8 +282,8 @@ void output_hintline(
 /**
  * Print newline (respects verbosity)
  *
- * Use this instead of fprintf(out->stream, "\n") for consistent
- * output that respects verbosity settings.
+ * Use this instead of fprintf(out->stream, "\n") for consistent output that
+ * respects verbosity settings.
  *
  * @param ctx Output context
  * @param min_level Minimum verbosity level
@@ -294,9 +293,8 @@ void output_newline(const output_t *ctx, output_verbosity_t min_level);
 /**
  * Print section header
  *
- * Supports printf-style format strings for dynamic titles.
- * Automatically adds a leading blank line between sections
- * (tracked via has_content in output context).
+ * Supports printf-style format strings for dynamic titles. Automatically adds a
+ * leading blank line between sections (tracked via has_content in output context).
  *
  * @param ctx Output context
  * @param min_level Minimum verbosity level
@@ -316,12 +314,11 @@ void output_section(
 /**
  * Clear current line and flush (for inline progress)
  *
- * Designed for cleaning up ephemeral progress output (spinners,
- * progress bars, status lines that should vanish when done).
+ * Designed for cleaning up ephemeral progress output (spinners, progress bars,
+ * status lines that should vanish when done).
  *
- * TTY: carriage return + ANSI clear line
- * Non-TTY: newline (ANSI clear doesn't work on pipes)
- * Always flushes the stream.
+ * TTY: carriage return + ANSI clear line Non-TTY: newline (ANSI clear doesn't
+ * work on pipes) Always flushes the stream.
  *
  * @param ctx Output context
  */
@@ -335,8 +332,8 @@ void output_clear_line(const output_t *ctx);
  *   Red    (-): deletions (excludes --- headers)
  *   Cyan  (@@): hunk headers
  *
- * When colors are disabled, prints the diff text as-is in one call.
- * No-op when ctx or diff_text is NULL.
+ * When colors are disabled, prints the diff text as-is in one call. No-op when
+ * ctx or diff_text is NULL.
  *
  * @param ctx Output context (must not be NULL)
  * @param diff_text Unified diff text (NULL-safe, no-op)
@@ -346,8 +343,8 @@ void output_print_diff(const output_t *ctx, const char *diff_text);
 /**
  * Format file size in human-readable form
  *
- * Formats byte sizes into human-readable strings (B, KB, MB, GB).
- * The buffer must be at least 32 bytes to accommodate all formats.
+ * Formats byte sizes into human-readable strings (B, KB, MB, GB). The buffer
+ * must be at least 32 bytes to accommodate all formats.
  *
  * @param bytes Size in bytes
  * @param buffer Output buffer for formatted string
@@ -358,8 +355,8 @@ void output_format_size(size_t bytes, char *buffer, size_t buffer_size);
 /**
  * Prompt user for confirmation
  *
- * Displays a yes/no prompt and waits for user input. Handles input buffer
- * clearing to prevent pollution. Uses stderr for prompts (standard practice).
+ * Displays a yes/no prompt and waits for user input. Handles input buffer clearing
+ * to prevent pollution. Uses stderr for prompts (standard practice).
  *
  * @param ctx Output context (for color/format settings)
  * @param message Confirmation message to display
@@ -375,9 +372,9 @@ bool output_confirm(
 /**
  * Prompt for confirmation with TTY detection
  *
- * Like output_confirm() but handles non-interactive mode gracefully.
- * When stdin is not a TTY (e.g., piped input, CI/CD), uses the
- * non_interactive_default value and prints a warning or error.
+ * Like output_confirm() but handles non-interactive mode gracefully. When stdin
+ * is not a TTY (e.g., piped input, CI/CD), uses the non_interactive_default value
+ * and prints a warning or error.
  *
  * @param ctx Output context
  * @param message Confirmation message
@@ -395,8 +392,8 @@ bool output_confirm_or_default(
 /**
  * Prompt for destructive operation
  *
- * Specialized confirmation for destructive operations. Shows warning
- * before prompting. Always defaults to NO for safety.
+ * Specialized confirmation for destructive operations. Shows warning before
+ * prompting. Always defaults to NO for safety.
  *
  * @param ctx Output context
  * @param confirm_destructive Whether to require confirmation (false = skip prompt)
@@ -414,9 +411,9 @@ bool output_confirm_destructive(
 /**
  * List builder - opaque structure for building aligned lists
  *
- * Provides a generic list rendering utility that automatically calculates
- * alignment based on tag widths. Suitable for any module that needs to
- * display lists of items with variable-width labels.
+ * Provides a generic list rendering utility that automatically calculates alignment
+ * based on tag widths. Suitable for any module that needs to display lists of
+ * items with variable-width labels.
  *
  * Usage pattern:
  *   1. Create list with title and optional hint
@@ -428,8 +425,8 @@ typedef struct output_list output_list_t;
 /**
  * Create list builder with section title
  *
- * Creates a new list builder for rendering aligned items. The builder
- * will display a section header with item count and optional hint text.
+ * Creates a new list builder for rendering aligned items. The builder will display
+ * a section header with item count and optional hint text.
  *
  * @param ctx Output context (must not be NULL, borrowed reference)
  * @param title Section title (e.g., "Uncommitted changes")
@@ -445,8 +442,8 @@ output_list_t *output_list_create(
 /**
  * Add item to list with tags
  *
- * Adds an item with multiple tags (e.g., ["modified", "mode"]).
- * Tags will be formatted as: [modified] [mode]
+ * Adds an item with multiple tags (e.g., ["modified", "mode"]). Tags will be
+ * formatted as: [modified] [mode]
  *
  * All strings are copied internally - caller retains ownership of inputs.
  *
@@ -470,15 +467,15 @@ int output_list_add(
 /**
  * Render list with auto-calculated alignment
  *
- * Automatically adds a leading blank line between sections/lists
- * (tracked via has_content in output context).
+ * Automatically adds a leading blank line between sections/lists (tracked via
+ * has_content in output context).
  *
  * Performs two-pass rendering:
- *   Pass 1: Calculate maximum tag width across all items
- *   Pass 2: Render all items with tags aligned to max width
+ *   Pass 1: Calculate maximum tag width across all items Pass 2: Render all items
+ *   with tags aligned to max width
  *
- * Does nothing if list is empty (count == 0).
- * Respects output context verbosity and color settings.
+ * Does nothing if list is empty (count == 0). Respects output context verbosity
+ * and color settings.
  *
  * @param list List builder (must not be NULL)
  */
@@ -487,8 +484,8 @@ void output_list_render(output_list_t *list);
 /**
  * Get item count
  *
- * Returns the number of items currently in the list.
- * Useful for conditional rendering (only render if count > 0).
+ * Returns the number of items currently in the list. Useful for conditional
+ * rendering (only render if count > 0).
  *
  * @param list List builder (must not be NULL)
  * @return Number of items added to list
@@ -498,8 +495,8 @@ size_t output_list_count(const output_list_t *list);
 /**
  * Free list builder and all associated memory
  *
- * Frees the list builder and all internal allocations (tags, content,
- * metadata strings). Safe to call with NULL.
+ * Frees the list builder and all internal allocations (tags, content, metadata
+ * strings). Safe to call with NULL.
  *
  * @param list List builder (NULL-safe)
  */

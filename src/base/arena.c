@@ -1,8 +1,8 @@
 /**
  * arena.c - Chained-block bump allocator
  *
- * Singly-linked list of contiguous blocks. The first block is sized by
- * the caller; subsequent blocks double the previous capacity (or match
+ * Singly-linked list of contiguous blocks. The first block is sized by the caller;
+ * subsequent blocks double the previous capacity (or match
  * the request, whichever is larger).  Typical workloads fit in one block.
  */
 
@@ -36,8 +36,8 @@ static inline size_t align_up(size_t n) {
 }
 
 /**
- * Allocate a new block with at least min_cap usable bytes.
- * Doubles prev_cap for amortised growth; falls back to min_cap on overflow.
+ * Allocate a new block with at least min_cap usable bytes. Doubles prev_cap for
+ * amortised growth; falls back to min_cap on overflow.
  */
 static arena_block_t *block_new(size_t prev_cap, size_t min_cap) {
     size_t cap = prev_cap * 2;
@@ -78,9 +78,9 @@ arena_t *arena_create(size_t initial_capacity) {
 void *arena_alloc(arena_t *arena, size_t size) {
     if (!arena) return NULL;
 
-    /* Zero-byte request: return a non-NULL sentinel so callers can
-     * distinguish from OOM. The pointer aliases the current block's
-     * data and must not be dereferenced. */
+    /* Zero-byte request: return a non-NULL sentinel so callers can distinguish
+     * from OOM. The pointer aliases the current block's data and must not be
+     * dereferenced. */
     if (size == 0) return arena->current->data;
 
     size_t aligned = align_up(size);
@@ -152,8 +152,8 @@ char *arena_str_format(arena_t *arena, const char *fmt, ...) {
         return NULL;
     }
 
-    /* Pass 2: allocate and format. The +1 is the null terminator;
-     * vsnprintf's `len` excludes it but its `size` argument includes it. */
+    /* Pass 2: allocate and format. The +1 is the null terminator; vsnprintf's
+     * `len` excludes it but its `size` argument includes it. */
     char *buf = arena_alloc(arena, (size_t) len + 1);
     if (!buf) {
         va_end(args);

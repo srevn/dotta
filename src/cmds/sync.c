@@ -98,8 +98,8 @@ static void sync_results_free(sync_results_t *results) {
 }
 
 /**
- * Single funnel for SYNC_OUTCOME_FAILED. Takes ownership of err.
- * Caller must print any output_error messages before calling.
+ * Single funnel for SYNC_OUTCOME_FAILED. Takes ownership of err. Caller must
+ * print any output_error messages before calling.
  */
 static void mark_result_failed(
     profile_sync_result_t *result,
@@ -150,8 +150,7 @@ static bool parse_divergence_strategy(
 }
 
 /**
- * Pull branch with fast-forward only
- * Returns true if branch was updated
+ * Pull branch with fast-forward only Returns true if branch was updated
  */
 static error_t *pull_branch_ff(
     git_repository *repo,
@@ -266,10 +265,10 @@ static error_t *pull_branch_ff(
 /**
  * Phase 1: Fetch profiles in sync scope from remote
  *
- * Operates on the active set (scope_active): fetching is driven by what the
- * user asked for. `dotta sync -p work` fetches only `work`, not every
- * enabled profile. Precedence-adjacent work (push phase) still uses the
- * full enabled set — different role, different accessor.
+ * Operates on the active set (scope_active): fetching is driven by what the user
+ * asked for. `dotta sync -p work` fetches only `work`, not every enabled profile.
+ * Precedence-adjacent work (push phase) still uses the full enabled set — different
+ * role, different accessor.
  */
 static error_t *sync_fetch_phase(
     git_repository *repo,
@@ -301,9 +300,9 @@ static error_t *sync_fetch_phase(
     }
     git_remote_free(remote);
 
-    /* Ephemeral fetch progress — shown while fetching, cleared after.
-     * On TTY: transfer progress overwrites via \r, then line cleared entirely.
-     * On pipe: falls back to persistent line with newline. */
+    /* Ephemeral fetch progress — shown while fetching, cleared after. On TTY:
+     * transfer progress overwrites via \r, then line cleared entirely. On pipe:
+     * falls back to persistent line with newline. */
     bool ephemeral = output_is_tty(out);
     output_print(
         out, OUTPUT_NORMAL, "Fetching from '%s'...",
@@ -314,9 +313,9 @@ static error_t *sync_fetch_phase(
     /* Build array of fetchable branch names.
      *
      * Only include profiles that have a remote tracking ref — these are known
-     * to exist (or have existed) on the remote. Local-only profiles (never
-     * pushed) have no tracking ref and would cause the entire batched fetch
-     * to fail with a "ref not found" error from the remote. */
+     * to exist (or have existed) on the remote. Local-only profiles (never pushed)
+     * have no tracking ref and would cause the entire batched fetch to fail with
+     * a "ref not found" error from the remote. */
     char **branch_names = malloc(profiles->count * sizeof(char *));
     if (!branch_names) {
         if (ephemeral) {
@@ -375,9 +374,9 @@ static error_t *sync_fetch_phase(
     }
 
     if (err) {
-        /* Classify authoritatively from the transfer outcome rather than
-         * matching libgit2's English error strings. Read immediately:
-         * the next transfer_op_begin would overwrite last_outcome. */
+        /* Classify authoritatively from the transfer outcome rather than matching
+         * libgit2's English error strings. Read immediately: the next
+         * transfer_op_begin would overwrite last_outcome. */
         const char *err_msg = error_message(err);
         if (transfer_last_outcome(xfer) == TRANSFER_OUTCOME_AUTH_FAILED) {
             output_error(out, "Authentication failed: %s", err_msg);
@@ -398,9 +397,9 @@ static error_t *sync_fetch_phase(
 /**
  * Phase 2: Analyze branch states for profiles in sync scope
  *
- * Operates on the active set (scope_active), matching sync_fetch_phase:
- * analyze only what the user asked for. results is sized from
- * scope_active(scope)->count by the caller; the two counts agree.
+ * Operates on the active set (scope_active), matching sync_fetch_phase: analyze
+ * only what the user asked for. results is sized from scope_active(scope)->count
+ * by the caller; the two counts agree.
  */
 static error_t *sync_analyze_phase(
     git_repository *repo,
@@ -447,8 +446,8 @@ static error_t *sync_analyze_phase(
 /**
  * Attempt divergence rollback after resolution failure
  *
- * Returns critical error if rollback itself fails (caller must propagate).
- * Returns NULL and prints informational message on successful rollback.
+ * Returns critical error if rollback itself fails (caller must propagate). Returns
+ * NULL and prints informational message on successful rollback.
  */
 static error_t *attempt_rollback(
     resolve_context_t *ctx,
@@ -530,9 +529,9 @@ static void handle_remote_ahead(
     }
 
     if (!pulled) {
-        /* Race: analyze saw REMOTE_AHEAD but FF found nothing new
-         * (we caught up between phases). Reclassify to reflect reality
-         * so downstream consumers (summary, hooks) see coherent state. */
+        /* Race: analyze saw REMOTE_AHEAD but FF found nothing new (we caught up
+         * between phases). Reclassify to reflect reality so downstream consumers
+         * (summary, hooks) see coherent state. */
         result->state = UPSTREAM_UP_TO_DATE;
         result->outcome = SYNC_OUTCOME_UP_TO_DATE;
         output_colored(
@@ -543,8 +542,8 @@ static void handle_remote_ahead(
         return;
     }
 
-    /* Pull succeeded. What the pull did to the view is reported by
-     * cmd_sync's manifest block, once, after every profile's Git work. */
+    /* Pull succeeded. What the pull did to the view is reported by cmd_sync's
+     * manifest block, once, after every profile's Git work. */
     result->outcome = SYNC_OUTCOME_PULLED;
     output_styled(
         out, OUTPUT_NORMAL,
@@ -556,11 +555,11 @@ static void handle_remote_ahead(
 /**
  * Resolve divergence via rebase or merge, then push
  *
- * Unified handler for DIVERGE_REBASE and DIVERGE_MERGE strategies
- * (structurally identical — only the strategy enum and log strings differ).
+ * Unified handler for DIVERGE_REBASE and DIVERGE_MERGE strategies (structurally
+ * identical — only the strategy enum and log strings differ).
  *
- * Returns critical error only on rollback failure (caller must propagate).
- * All other failures are recorded in result/results and return NULL.
+ * Returns critical error only on rollback failure (caller must propagate). All
+ * other failures are recorded in result/results and return NULL.
  */
 static error_t *resolve_and_push_divergence(
     git_repository *repo,
@@ -790,8 +789,8 @@ static error_t *handle_diverged_theirs(
 
     /* Verify reset succeeded
      *
-     * No rollback on failure — theirs strategy already reset the branch to
-     * the desired state. Rolling back would undo what the user requested.
+     * No rollback on failure — theirs strategy already reset the branch to the
+     * desired state. Rolling back would undo what the user requested.
      */
     err = resolve_verify(&ctx, NULL, NULL);
     if (err) {
@@ -887,9 +886,9 @@ static error_t *handle_diverged(
 /**
  * Phase 3: Sync branches with remote (push/pull/divergence handling)
  *
- * Git only. Every pull, rebase, merge and reset moves a branch HEAD and
- * nothing else; what that did to the view is read off once, for every
- * enabled profile, in cmd_sync's manifest block after this loop returns.
+ * Git only. Every pull, rebase, merge and reset moves a branch HEAD and nothing
+ * else; what that did to the view is read off once, for every enabled profile,
+ * in cmd_sync's manifest block after this loop returns.
  */
 static error_t *sync_push_phase(
     git_repository *repo,
@@ -939,8 +938,8 @@ static error_t *sync_push_phase(
             }
 
             case UPSTREAM_LOCAL_AHEAD: {
-                /* theirs: discard local commits, reset to remote
-                 * Blocked by --no-pull since resetting to remote incorporates remote state */
+                /* theirs: discard local commits, reset to remote Blocked by
+                 * --no-pull since resetting to remote incorporates remote state */
                 if (diverged_strategy == DIVERGE_THEIRS && !no_pull) {
                     output_colored(
                         out, OUTPUT_NORMAL, upstream_state_color(result->state),
@@ -1108,9 +1107,9 @@ static error_t *sync_push_phase(
 /**
  * Render dry-run analysis: per-profile state, then closing banner.
  *
- * Glyph and color flow from upstream_state_symbol / upstream_state_color
- * so the visual stays in lockstep with list/status as those maps evolve.
- * Analyze-phase failures use the outcome glyph (✗), not a state glyph.
+ * Glyph and color flow from upstream_state_symbol / upstream_state_color so the
+ * visual stays in lockstep with list/status as those maps evolve. Analyze-phase
+ * failures use the outcome glyph (✗), not a state glyph.
  */
 static void sync_render_dry_run(
     const sync_results_t *results,
@@ -1185,15 +1184,15 @@ static void sync_render_dry_run(
 /**
  * Render the final sync summary.
  *
- * Tallies per-row outcomes (single source of truth), disambiguates the
- * DIVERGED umbrella by the captured analyze-phase state into
- * needs_pull / needs_push / diverged buckets, then emits the count lines,
- * the session-level transfer stats, and — when apply has work, whether
- * the manifest block just staged, released or reassigned it or the
- * record already disagreed with the view — the "Run apply" hint.
+ * Tallies per-row outcomes (single source of truth), disambiguates the DIVERGED
+ * umbrella by the captured analyze-phase state into needs_pull / needs_push /
+ * diverged buckets, then emits the count lines, the session-level transfer stats,
+ * and — when apply has work, whether the manifest block just staged, released
+ * or reassigned it or the record already disagreed with the view — the "Run apply"
+ * hint.
  *
- * The summary keeps the finer-grained user vocabulary; hook env (Tier 2)
- * will expose the cleaner outcome partition.
+ * The summary keeps the finer-grained user vocabulary; hook env (Tier 2) will
+ * expose the cleaner outcome partition.
  */
 static void sync_render_summary(
     const sync_results_t *results,
@@ -1287,14 +1286,13 @@ static void sync_render_summary(
     /* Session-level wire stats (silent if nothing moved) */
     transfer_summarize(xfer, out, OUTPUT_NORMAL);
 
-    /* The hint states a fact about the record, not about this sync. The
-     * manifest block is the direct evidence of new work — it is empty
-     * exactly when the Git phase touched nothing managed (a pull of
-     * README or .dottaignore, a push, 'ours'), which no guess from the
-     * outcome tallies could tell apart — and apply_pending is the work
-     * that was already there: an earlier sync reviewed with status
-     * instead of apply, a scope change, local drift. The block is a
-     * delta and prints once; the hint prints for as long as the work
+    /* The hint states a fact about the record, not about this sync. The manifest
+     * block is the direct evidence of new work — it is empty exactly when the
+     * Git phase touched nothing managed (a pull of README or .dottaignore, a
+     * push, 'ours'), which no guess from the outcome tallies could tell apart —
+     * and apply_pending is the work that was already there: an earlier sync
+     * reviewed with status instead of apply, a scope change, local drift. The
+     * block is a delta and prints once; the hint prints for as long as the work
      * stands. */
     if (manifest_changed || apply_pending) {
         output_newline(out, OUTPUT_NORMAL);
@@ -1305,9 +1303,9 @@ static void sync_render_summary(
 }
 
 /*
- * Render the one unrecoverable cell: the local salt differs from the
- * remote's canonical salt and local ciphertext depends on the local one.
- * Warn loudly and continue — plaintext profiles still sync.
+ * Render the one unrecoverable cell: the local salt differs from the remote's
+ * canonical salt and local ciphertext depends on the local one. Warn loudly and
+ * continue — plaintext profiles still sync.
  */
 static void salt_emit_conflict(output_t *out) {
     output_warning(
@@ -1323,15 +1321,15 @@ static void salt_emit_conflict(output_t *out) {
 }
 
 /*
- * Apply the CLI gates to salt_resolve's verdict, render the
- * outcome, and run the chosen git action (establish via salt_push, adopt
- * via salt_fetch). The fact-finding already happened in infra/salt; this
- * layer is pure policy + rendering.
+ * Apply the CLI gates to salt_resolve's verdict, render the outcome, and run
+ * the chosen git action (establish via salt_push, adopt via salt_fetch). The
+ * fact-finding already happened in infra/salt; this layer is pure policy +
+ * rendering.
  *
- * Runs before the fetch phase so the decision's census is never
- * contaminated by pulled remote ciphertext. Best-effort: returns NULL on
- * every salt-level outcome (warn-and-continue); a non-NULL return is
- * reserved for programmer misuse surfaced by the decide call.
+ * Runs before the fetch phase so the decision's census is never contaminated by
+ * pulled remote ciphertext. Best-effort: returns NULL on every salt-level outcome
+ * (warn-and-continue); a non-NULL return is reserved for programmer misuse surfaced
+ * by the decide call.
  */
 static error_t *salt_reconcile(
     const dotta_ctx_t *ctx,
@@ -1345,16 +1343,16 @@ static error_t *salt_reconcile(
     salt_reconcile_t decision;
     error_t *err = salt_resolve(repo, remote_name, xfer, &decision);
     if (err) {
-        /* decide errors only on programmer misuse (a NULL argument) — it
-         * folds transport failure to UNREACHABLE. Surface the bug rather
-         * than swallow it as best-effort. */
+        /* decide errors only on programmer misuse (a NULL argument) — it folds
+         * transport failure to UNREACHABLE. Surface the bug rather than swallow
+         * it as best-effort. */
         return err;
     }
 
     switch (decision) {
         case SALT_RECONCILE_UNREACHABLE:
-            /* The authoritative "remote unreachable" error comes from the
-             * fetch phase that runs next. */
+            /* The authoritative "remote unreachable" error comes from the fetch
+             * phase that runs next. */
             output_info(out, OUTPUT_VERBOSE, "Skipped salt sync (remote unreachable)");
             return NULL;
 
@@ -1426,8 +1424,8 @@ static error_t *salt_reconcile(
             err = salt_fetch(repo, remote_name, xfer);
             if (err) {
                 if (err->code == ERR_CRYPTO) {
-                    /* salt_fetch validated the bytes and rolled the local
-                     * ref back; nothing landed. */
+                    /* salt_fetch validated the bytes and rolled the local ref
+                     * back; nothing landed. */
                     output_warning(
                         out, OUTPUT_NORMAL,
                         "Remote salt is malformed; the remote repo may be corrupt"
@@ -1446,11 +1444,11 @@ static error_t *salt_reconcile(
                 out, OUTPUT_VERBOSE,
                 "Adopted repository salt from remote (local salt was unused)"
             );
-            /* Hygiene: the in-process keymgr (if any) was derived from the
-             * salt we just replaced. Clear it so a later same-process crypto
-             * op re-derives from the adopted salt. NULL-safe; the on-disk
-             * session cache MAC-binds the salt and self-heals regardless,
-             * and sync itself performs no decrypt. */
+            /* Hygiene: the in-process keymgr (if any) was derived from the salt
+             * we just replaced. Clear it so a later same-process crypto op
+             * re-derives from the adopted salt. NULL-safe; the on-disk session
+             * cache MAC-binds the salt and self-heals regardless, and sync itself
+             * performs no decrypt. */
             keymgr_clear(ctx->keymgr);
             return NULL;
         }
@@ -1542,9 +1540,9 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
         goto cleanup;
     }
 
-    /* Auto-detect remote early — fail fast before expensive workspace load.
-     * URL is resolved alongside the name; the credential helper consumes it
-     * when transfer_context_create runs further down. */
+    /* Auto-detect remote early — fail fast before expensive workspace load. URL
+     * is resolved alongside the name; the credential helper consumes it when
+     * transfer_context_create runs further down. */
     err = gitops_resolve_default_remote(
         repo, ctx->arena, &remote_name, &remote_url
     );
@@ -1557,9 +1555,9 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
      * Skip entirely when --force is used: the clean check result is unused, and
      * workspace_load can be expensive (filesystem analysis, directory scanning).
      * Either way the view ahead of the Git phase is kept as `before`: the
-     * workspace's own, or — under --force, where no workspace is loaded —
-     * one built here, no disk involved. The block after the Git phase
-     * diffs it against the view the pulls produced.
+     * workspace's own, or — under --force, where no workspace is loaded — one
+     * built here, no disk involved. The block after the Git phase diffs it against
+     * the view the pulls produced.
      */
     if (opts->force) {
         err = manifest_build(
@@ -1591,8 +1589,8 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
 
         /* Persist the observations and slow-path CMP_EQUAL confirmations
          * (self-healing optimization). Seeds the fast path for subsequent
-         * status/apply calls. Non-fatal on failure — sync's workspace
-         * validation still works correctly. */
+         * status/apply calls. Non-fatal on failure — sync's workspace validation
+         * still works correctly. */
         error_t *flush_err = workspace_flush_updates(ws);
         if (flush_err) {
             error_free(flush_err);
@@ -1615,12 +1613,11 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
             switch (item->state) {
                 case WORKSPACE_STATE_DEPLOYED:
                     if (item->divergence & DIVERGENCE_STALE) {
-                        /* Git moved past the deployed blob. Alone — with or
-                         * without a mode bit — that is apply's work, not an
-                         * uncommitted change. Beside CONTENT both sides
-                         * moved: the edit is real, but update will not
-                         * commit it, so it is counted apart and the hints
-                         * below must not send it to update. */
+                        /* Git moved past the deployed blob. Alone — with or without
+                         * a mode bit — that is apply's work, not an uncommitted
+                         * change. Beside CONTENT both sides moved: the edit is
+                         * real, but update will not commit it, so it is counted
+                         * apart and the hints below must not send it to update. */
                         if (item->divergence & DIVERGENCE_CONTENT) conflict_count++;
                         break;
                     }
@@ -1637,9 +1634,9 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
                 case WORKSPACE_STATE_UNDEPLOYED:
                 case WORKSPACE_STATE_ORPHANED:
                 case WORKSPACE_STATE_RELEASED:
-                    /* Not sync's concern — handled by apply command.
-                     * RELEASED is never emitted here anyway: it comes only
-                     * from orphan analysis, which this load switches off. */
+                    /* Not sync's concern — handled by apply command. RELEASED
+                     * is never emitted here anyway: it comes only from orphan
+                     * analysis, which this load switches off. */
                     break;
             }
         }
@@ -1716,10 +1713,10 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
             /* Non-strict mode: Warn and require user confirmation
              *
              * The risk: syncing before committing local changes can turn them
-             * into conflicts. If the pull moves a file the user edited, the
-             * edit becomes [modified] [stale] — update will not commit over
-             * git's newer content, and no dotta verb commits ours over theirs;
-             * the user resolves it by hand.
+             * into conflicts. If the pull moves a file the user edited, the edit
+             * becomes [modified] [stale] — update will not commit over git's
+             * newer content, and no dotta verb commits ours over theirs; the
+             * user resolves it by hand.
              *
              * Safe workflow: update → sync → resolve any divergence explicitly
              */
@@ -1779,10 +1776,10 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
         }
     }
 
-    /* Build the hook invocation. Same struct is reused for both pre-sync
-     * (here) and post-sync (after the manifest block). profiles_str / remote_env
-     * are heap-allocated and freed at cleanup; sync_extras is a stack
-     * literal whose lifetime is cmd_sync's frame — covers both fire sites. */
+    /* Build the hook invocation. Same struct is reused for both pre-sync (here)
+     * and post-sync (after the manifest block). profiles_str / remote_env are
+     * heap-allocated and freed at cleanup; sync_extras is a stack literal whose
+     * lifetime is cmd_sync's frame — covers both fire sites. */
     profiles_str = string_array_join(scope_active(scope), " ");
     if (!profiles_str) {
         err = ERROR(ERR_MEMORY, "Failed to join profile names for hook env");
@@ -1808,8 +1805,8 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
     err = hook_fire_pre(config, out, ctx->repo_path, &hook_inv);
     if (err) goto cleanup;
 
-    /* Create transfer context for progress reporting. URL was resolved
-     * alongside the remote name above; it feeds the credential helper here */
+    /* Create transfer context for progress reporting. URL was resolved alongside
+     * the remote name above; it feeds the credential helper here */
     transfer_options_t xfer_opts = {
         .output             = out,
         .url                = remote_url,
@@ -1832,8 +1829,8 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
         goto cleanup;
     }
 
-    /* Reconcile the repository salt with the remote. Placed before the
-     * fetch phase so the in-use census cannot see pulled remote ciphertext. */
+    /* Reconcile the repository salt with the remote. Placed before the fetch
+     * phase so the in-use census cannot see pulled remote ciphertext. */
     err = salt_reconcile(ctx, remote_name, xfer, opts);
     if (err) {
         goto cleanup;
@@ -1864,14 +1861,13 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
 
     /* Phase 3: Sync with remote (push/pull/divergence handling)
      *
-     * Git only — no state is written in this phase, so the write lock is
-     * never held across network IO. Nothing catches up afterwards either:
-     * the view is computed, and the block that follows only reports what
-     * the phase did to it.
+     * Git only — no state is written in this phase, so the write lock is never
+     * held across network IO. Nothing catches up afterwards either: the view is
+     * computed, and the block that follows only reports what the phase did to it.
      *
-     * When all profiles are up-to-date and not in verbose mode, the sync
-     * section is ephemeral — shown as progress during execution, cleared after.
-     * This avoids noise when there's nothing actionable to report. */
+     * When all profiles are up-to-date and not in verbose mode, the sync section
+     * is ephemeral — shown as progress during execution, cleared after. This
+     * avoids noise when there's nothing actionable to report. */
     bool no_push = opts->no_push;
     bool all_quiet = true;
     for (size_t i = 0; i < results->profile_count; i++) {
@@ -1902,28 +1898,28 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
         goto cleanup;
     }
 
-    /* Manifest block — the view after the Git phase, diffed against the
-     * view before it. A true delta in both modes: a local external commit
-     * that predates the sync is in `before` and `after` alike and is
+    /* Manifest block — the view after the Git phase, diffed against the view
+     * before it. A true delta in both modes: a local external commit that predates
+     * the sync is in `before` and `after` alike and is
      * reported by its results (status's [stale], [released]), not here;
-     * what the block names is what the pulls and resolutions above did to
-     * the view. Sync writes no state.
+     * what the block names is what the pulls and resolutions above did to the
+     * view. Sync writes no state.
      *
-     * Attribution is per enabled profile. scope_enabled, never the -p
-     * narrowed scope_active: precedence runs across the whole enabled set,
-     * validated by profile_resolve_enabled (a missing branch was filtered
-     * and warned about at scope_build time) and untouched since — nothing
-     * between scope_build and here mutates enabled_profiles. A path p lost
-     * to q is p's reassignment and q's claim; a path that moved between
-     * two pulled profiles is one reassignment, never a transient release.
+     * Attribution is per enabled profile. scope_enabled, never the -p narrowed
+     * scope_active: precedence runs across the whole enabled set, validated by
+     * profile_resolve_enabled (a missing branch was filtered and warned about
+     * at scope_build time) and untouched since — nothing between scope_build
+     * and here mutates enabled_profiles. A path p lost to q is p's reassignment
+     * and q's claim; a path that moved between two pulled profiles is one
+     * reassignment, never a transient release.
      *
-     * Sync does not deploy. Apply's divergence analysis does that, which
-     * is what the summary's hint points at.
+     * Sync does not deploy. Apply's divergence analysis does that, which is what
+     * the summary's hint points at.
      *
-     * A failed build is not sync's failure — every Git ref already moved
-     * and stands — and its message carries the repair (a pulled custom/
-     * path under a profile with no target, a tree that will not load):
-     * warn with it and carry on. */
+     * A failed build is not sync's failure — every Git ref already moved and
+     * stands — and its message carries the repair (a pulled custom/ path under
+     * a profile with no target, a tree that will not load): warn with it and
+     * carry on. */
     const string_array_t *enabled = scope_enabled(scope);
     bool manifest_changed = false;    /* The block printed: the Git phase moved something managed */
     bool apply_pending = false;       /* The record disagrees with the view, whenever that began */
@@ -1962,10 +1958,10 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
             const manifest_diff_stats_t *s = &stats[i];
             size_t staged = s->added + s->updated;
 
-            /* A departure here is a Git-side removal, so every orphan it
-             * leaves is one apply releases (the record retires, the copy
-             * stays); a departure with no record has no filesystem effect
-             * and asks nothing of the user, so it is not counted. */
+            /* A departure here is a Git-side removal, so every orphan it leaves
+             * is one apply releases (the record retires, the copy stays); a
+             * departure with no record has no filesystem effect and asks nothing
+             * of the user, so it is not counted. */
             size_t released = s->orphans.owned + s->orphans.observed;
 
             if (staged + released + s->reassigned == 0) continue;
@@ -1994,23 +1990,22 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
             output_print(out, OUTPUT_NORMAL, "\n");
         }
 
-        /* The hint's standing half: what the record already disagreed
-         * with the view about, whichever sync or scope change left it
-         * there. Read off the view the Git phase produced and the two
-         * facts anchor_t's doc states, no disk and no second workspace
-         * load: a record whose path the view lacks is an orphan apply
-         * prunes, releases or reclaims; a record whose confirmed kind and
-         * content are not the row's is stale, or was never confirmed; an
-         * owned file record under another profile is a reassignment apply
-         * has not acknowledged (a directory's record keeps whoever made
-         * it — reassignment is a file's fact, derived in the file analyzer
-         * and acknowledged over files.clean); and a row with no record is
-         * undeployed, or was never observed. Mode, owner and group are
-         * claims the record copies, not facts it confirms, and say nothing
-         * here: a pulled metadata change is the block's to report, once.
+        /* The hint's standing half: what the record already disagreed with the
+         * view about, whichever sync or scope change left it there. Read off
+         * the view the Git phase produced and the two facts anchor_t's doc states,
+         * no disk and no second workspace load: a record whose path the view
+         * lacks is an orphan apply prunes, releases or reclaims; a record whose
+         * confirmed kind and content are not the row's is stale, or was never
+         * confirmed; an owned file record under another profile is a reassignment
+         * apply has not acknowledged (a directory's record keeps whoever made
+         * it — reassignment is a file's fact, derived in the file analyzer and
+         * acknowledged over files.clean); and a row with no record is undeployed,
+         * or was never observed. Mode, owner and group are claims the record
+         * copies, not facts it confirms, and say nothing here: a pulled metadata
+         * change is the block's to report, once.
          *
-         * The record's paths are unique and so are the view's, so the
-         * records that found a row count the rows that have one. */
+         * The record's paths are unique and so are the view's, so the records
+         * that found a row count the rows that have one. */
         size_t recorded = 0;
         for (size_t i = 0; i < anchor_count; i++) {
             const anchor_t *anchor = &anchors[i];
@@ -2035,8 +2030,8 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
         }
     }
 
-    /* Post-sync fires once the Git phase and the manifest block are done;
-     * a failed build was warned above and is not a reason to skip it. */
+    /* Post-sync fires once the Git phase and the manifest block are done; a failed
+     * build was warned above and is not a reason to skip it. */
     hook_fire_post(config, out, ctx->repo_path, &hook_inv);
 
     /* Final summary */
@@ -2046,11 +2041,11 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
     err = NULL;
 
 cleanup:
-    /* Free resources in reverse order of allocation. state is borrowed
-     * from the dispatcher and sync opens no transaction of its own (the
-     * flush scopes its own; nothing else writes); workspace borrows
-     * scope's enabled array internally, so free workspace first, then
-     * scope. `before` is the workspace's view unless --force built it. */
+    /* Free resources in reverse order of allocation. state is borrowed from the
+     * dispatcher and sync opens no transaction of its own (the flush scopes its
+     * own; nothing else writes); workspace borrows scope's enabled array
+     * internally, so free workspace first, then scope. `before` is the workspace's
+     * view unless --force built it. */
     if (current_branch) free(current_branch);
     manifest_free(after);
     manifest_free(before_forced);

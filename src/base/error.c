@@ -13,8 +13,8 @@
  * Static OOM sentinel - returned when error allocation itself fails.
  *
  * Without this, OOM during error creation returns NULL, which every caller
- * interprets as "no error" — silently swallowing the real failure.
- * The sentinel is pre-allocated in static storage, never freed.
+ * interprets as "no error" — silently swallowing the real failure. The sentinel
+ * is pre-allocated in static storage, never freed.
  */
 static error_t oom_sentinel = {
     .code    = ERR_MEMORY,
@@ -99,8 +99,8 @@ error_t *error_wrap(error_t *cause, const char *fmt, ...) {
     va_end(args);
 
     if (err == &oom_sentinel) {
-        /* Can't allocate wrapper — return cause to preserve the error
-         * chain and avoid leaking the cause we took ownership of */
+        /* Can't allocate wrapper — return cause to preserve the error chain and
+         * avoid leaking the cause we took ownership of */
         return cause;
     }
 

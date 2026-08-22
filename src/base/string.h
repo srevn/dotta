@@ -73,8 +73,8 @@ error_t *str_dup(const char *str, char **out);
  * 2. Allocating a copy of the new value (NULL if new_value is NULL)
  * 3. Returning error if allocation fails (target left as NULL)
  *
- * Use this when you own a string pointer and need to replace it with a
- * different value while ensuring proper memory management.
+ * Use this when you own a string pointer and need to replace it with a different
+ * value while ensuring proper memory management.
  *
  * Example:
  *   char *name = strdup("Alice");
@@ -114,8 +114,8 @@ bool str_looks_like_git_ref(const char *str);
  * - Storage paths: starts with "home/", "root/", "custom/"
  * - Glob patterns: contains *, ?, [
  *
- * Counterpart to str_looks_like_git_ref(). Together they classify
- * positional arguments without repo access.
+ * Counterpart to str_looks_like_git_ref(). Together they classify positional
+ * arguments without repo access.
  *
  * @param str String to check (can be NULL)
  * @return true if str looks like a file path or pattern

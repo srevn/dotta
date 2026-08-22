@@ -34,9 +34,9 @@ struct content_cache {
 /**
  * Securely free buffer (zero memory before release)
  *
- * SECURITY: This function zeros the buffer's memory before freeing it.
- * Critical for preventing memory disclosure of decrypted sensitive data
- * (SSH keys, API tokens, passwords, etc.) via:
+ * SECURITY: This function zeros the buffer's memory before freeing it. Critical
+ * for preventing memory disclosure of decrypted sensitive data (SSH keys, API
+ * tokens, passwords, etc.) via:
  * - Swap files (if memory is paged to disk)
  * - Core dumps (crash analysis)
  * - Memory inspection tools
@@ -65,17 +65,17 @@ static void buffer_destroy_secure(void *ptr) {
  *
  * Pure computation; no I/O. Boundary handling:
  *
- * - Short blob (size < CIPHER_DETECT_BYTES) → PLAINTEXT.
- *   Real cipher blobs are at least CIPHER_OVERHEAD (41) bytes; even a
- *   bare 5-byte "DOTTA" prefix lacks both the version byte and the
- *   SIV, so plaintext is the only safe interpretation.
+ * - Short blob (size < CIPHER_DETECT_BYTES) → PLAINTEXT. Real cipher blobs are
+ *   at least CIPHER_OVERHEAD (41) bytes; even a bare 5-byte "DOTTA" prefix lacks
+ *   both the version byte and the SIV, so plaintext is the only safe
+ *   interpretation.
  * - Magic prefix mismatch → PLAINTEXT.
  * - Magic match + current version → ENCRYPTED.
  * - Magic match + non-current version → UNSUPPORTED_VERSION.
  *
- * Indexing the version byte by `CIPHER_MAGIC_SIZE` keeps cipher's
- * internal field offsets (CIPHER_OFFSET_VERSION) opaque to this
- * layer; the static_assert in cipher.c guards their equivalence.
+ * Indexing the version byte by `CIPHER_MAGIC_SIZE` keeps cipher's internal field
+ * offsets (CIPHER_OFFSET_VERSION) opaque to this layer; the static_assert in
+ * cipher.c guards their equivalence.
  */
 content_kind_t content_classify_bytes(
     const uint8_t *data,
@@ -124,10 +124,10 @@ error_t *content_classify_path(
     CHECK_NULL(fs_path);
     CHECK_NULL(out_kind);
 
-    /* Read only the cipher detection window. For files on the order of
-     * megabytes this is materially cheaper than fs_read_file + classify
-     * — we never inflate past the header. EINTR loop covers signals on
-     * slow filesystems (NFS, FUSE). */
+    /* Read only the cipher detection window. For files on the order of megabytes
+     * this is materially cheaper than fs_read_file + classify — we never inflate
+     * past the header. EINTR loop covers signals on slow filesystems (NFS,
+     * FUSE). */
     int fd = open(fs_path, O_RDONLY | O_CLOEXEC);
     if (fd < 0) {
         int saved_errno = errno;
@@ -166,10 +166,10 @@ error_t *content_classify_path(
 size_t content_estimated_plaintext_size(
     content_kind_t kind, size_t blob_size
 ) {
-    /* Only ENCRYPTED blobs carry the cipher's framing overhead. For
-     * PLAINTEXT and UNSUPPORTED_VERSION, blob_size is the only honest
-     * number — subtracting overhead under UNSUPPORTED_VERSION would be
-     * a lie, since this build cannot decrypt to confirm. */
+    /* Only ENCRYPTED blobs carry the cipher's framing overhead. For PLAINTEXT
+     * and UNSUPPORTED_VERSION, blob_size is the only honest number — subtracting
+     * overhead under UNSUPPORTED_VERSION would be a lie, since this build cannot
+     * decrypt to confirm. */
     if (kind != CONTENT_ENCRYPTED) {
         return blob_size;
     }
@@ -180,18 +180,18 @@ size_t content_estimated_plaintext_size(
 /**
  * Get plaintext from blob (internal workhorse)
  *
- * Classifies the blob by magic header (the single source of truth for
- * encryption state) and routes accordingly:
+ * Classifies the blob by magic header (the single source of truth for encryption
+ * state) and routes accordingly:
  *   - PLAINTEXT           → copy bytes
  *   - ENCRYPTED           → decrypt via keymgr
  *   - UNSUPPORTED_VERSION → ERR_CRYPTO with version-skew diagnostic
  *
- * Works on a zero-copy view, so callers must keep the backing blob alive
- * for the duration of the call.
+ * Works on a zero-copy view, so callers must keep the backing blob alive for
+ * the duration of the call.
  *
- * No external claim is consulted: the bytes carry the answer. This is
- * the choke point that makes the "metadata says encrypted but bytes say
- * plaintext" drift class structurally impossible.
+ * No external claim is consulted: the bytes carry the answer. This is the choke
+ * point that makes the "metadata says encrypted but bytes say plaintext" drift
+ * class structurally impossible.
  *
  * @param blob_data Raw blob bytes (must not be NULL unless blob_size == 0)
  * @param blob_size Raw blob size in bytes
@@ -215,8 +215,8 @@ static error_t *get_plaintext_from_blob(
 
     *out_content = (buffer_t){ 0 };
 
-    /* Bytes are authoritative. content_classify_bytes is total: every blob
-     * lands in exactly one of three states regardless of any external claim. */
+    /* Bytes are authoritative. content_classify_bytes is total: every blob lands
+     * in exactly one of three states regardless of any external claim. */
     content_kind_t kind = content_classify_bytes(blob_data, blob_size);
 
     switch (kind) {
@@ -241,8 +241,8 @@ static error_t *get_plaintext_from_blob(
                 );
             }
 
-            /* Decrypt via keymgr (fetches profile key, decrypts, zeroes the
-             * key buffer; raw key material never leaves the crypto layer). */
+            /* Decrypt via keymgr (fetches profile key, decrypts, zeroes the key
+             * buffer; raw key material never leaves the crypto layer). */
             error_t *err = keymgr_decrypt(
                 keymgr, profile, storage_path, blob_data, blob_size, out_content
             );
@@ -259,10 +259,9 @@ static error_t *get_plaintext_from_blob(
         }
 
         case CONTENT_UNSUPPORTED_VERSION: {
-            /* content_classify_bytes only returns this branch when blob_size
-             * is large enough to carry the version byte at offset
-             * CIPHER_MAGIC_SIZE, so reading it here is safe. Surface the byte
-             * for diagnostics. */
+            /* content_classify_bytes only returns this branch when blob_size is
+             * large enough to carry the version byte at offset CIPHER_MAGIC_SIZE,
+             * so reading it here is safe. Surface the byte for diagnostics. */
             unsigned blob_version = blob_data[CIPHER_MAGIC_SIZE];
             return ERROR(
                 ERR_CRYPTO,
@@ -429,9 +428,9 @@ error_t *content_compare_blob_to_disk(
     CHECK_NULL(cache);
     CHECK_NULL(out_result);
 
-    /* Bytes are authoritative: classify the blob, route by the answer.
-     * No proxy field can disagree with this — there is no proxy. The
-     * routing-on-stale-flag bug class is structurally impossible here. */
+    /* Bytes are authoritative: classify the blob, route by the answer. No proxy
+     * field can disagree with this — there is no proxy. The routing-on-stale-flag
+     * bug class is structurally impossible here. */
     content_kind_t kind;
     error_t *err = content_classify(repo, blob_oid, &kind);
     if (err) {
@@ -439,17 +438,17 @@ error_t *content_compare_blob_to_disk(
     }
 
     if (kind == CONTENT_PLAINTEXT) {
-        /* Fast path: stream-hash disk file, compare to OID. The stored
-         * Git blob is never inflated for the comparison itself. */
+        /* Fast path: stream-hash disk file, compare to OID. The stored Git blob
+         * is never inflated for the comparison itself. */
         return compare_oid_to_disk(
             blob_oid, fs_path, expected_mode, initial_stat, out_result, out_stat
         );
     }
 
-    /* Encrypted or unsupported-version blob: load via cache. The cache
-     * call routes through get_plaintext_from_blob, which surfaces
-     * ERR_CRYPTO with a version-skew diagnostic for UNSUPPORTED_VERSION
-     * — callers receive the actionable error directly. */
+    /* Encrypted or unsupported-version blob: load via cache. The cache call routes
+     * through get_plaintext_from_blob, which surfaces ERR_CRYPTO with a
+     * version-skew diagnostic for UNSUPPORTED_VERSION — callers receive the
+     * actionable error directly. */
     const buffer_t *content = NULL;
     err = content_cache_get_from_blob_oid(
         cache, blob_oid, storage_path, profile, &content
@@ -470,7 +469,8 @@ void content_cache_free(content_cache_t *cache) {
 
     /* Free all cached buffers with secure cleanup
      * SECURITY: Use buffer_free_secure() to zero plaintext memory before freeing.
-     * The cache contains decrypted sensitive data that must not linger in memory. */
+     * The cache contains decrypted sensitive data that must not linger in
+     * memory. */
     if (cache->cache_map) {
         hashmap_free(cache->cache_map, buffer_destroy_secure);
     }
@@ -526,11 +526,10 @@ error_t *content_store_file_to_worktree(
 
     /* Step 2: Read file from filesystem
      *
-     * The 100 MiB content cap lives in crypto/cipher.c as the single
-     * enforcement point; the encrypt path rejects oversize input after
-     * this read. For the plaintext path we rely on fs_read_file's own
-     * bounds and libgit2's blob handling rather than duplicating the
-     * policy here. */
+     * The 100 MiB content cap lives in crypto/cipher.c as the single enforcement
+     * point; the encrypt path rejects oversize input after this read. For the
+     * plaintext path we rely on fs_read_file's own bounds and libgit2's blob
+     * handling rather than duplicating the policy here. */
     buffer_t content = BUFFER_INIT;
     error_t *err = fs_read_file(filesystem_path, &content);
     if (err) {
@@ -574,16 +573,17 @@ error_t *content_store_file_to_worktree(
 
     /* Step 5: Classify the bytes about to be written.
      *
-     * Write-time invariant: out_kind is byte-truth for what hits the
-     * worktree. Callers stamp metadata.encrypted from this verdict, not
-     * from should_encrypt. */
+     * Write-time invariant: out_kind is byte-truth for what hits the worktree.
+     * Callers stamp metadata.encrypted from this verdict, not from
+     * should_encrypt. */
     content_kind_t kind = content_classify_bytes(
         (const uint8_t *) data_to_write->data, data_to_write->size
     );
 
     /* Step 6: Write to worktree with original mode
      * CRITICAL: Use source file's mode so git commits with correct permissions.
-     * This ensures git mode matches metadata mode, preventing spurious MODE diffs. */
+     * This ensures git mode matches metadata mode, preventing spurious MODE
+     * diffs. */
     err = fs_write_file_raw(
         worktree_path,
         (const unsigned char *) data_to_write->data,
@@ -604,8 +604,8 @@ error_t *content_store_file_to_worktree(
         );
     }
 
-    /* Publish byte truth to caller. Done last so a write failure does
-     * not leave a stale kind in the caller's slot. */
+    /* Publish byte truth to caller. Done last so a write failure does not leave
+     * a stale kind in the caller's slot. */
     if (out_kind) *out_kind = kind;
 
     return NULL;

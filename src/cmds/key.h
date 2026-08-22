@@ -1,8 +1,8 @@
 /**
  * key.h - Encryption key management command
  *
- * Manages encryption passphrases and key caching lifecycle.
- * Provides explicit control over the keymgr session state.
+ * Manages encryption passphrases and key caching lifecycle. Provides explicit
+ * control over the keymgr session state.
  */
 
 #ifndef DOTTA_CMD_KEY_H
@@ -25,8 +25,8 @@ typedef enum {
 /**
  * Key command options
  *
- * `action` is derived by `key_post_parse` from the first positional
- * token (set | clear | status).
+ * `action` is derived by `key_post_parse` from the first positional token (set
+ * | clear | status).
  */
 typedef struct {
     /* User-facing (read by cmd_key). */
@@ -55,8 +55,8 @@ error_t *cmd_key(const dotta_ctx_t *ctx, const cmd_key_options_t *opts);
 /**
  * Spec-engine command specification for `dotta key`.
  *
- * Registered in cmds/registry.c. Defined in key.c beside the
- * post_parse and dispatch wrappers.
+ * Registered in cmds/registry.c. Defined in key.c beside the post_parse and
+ * dispatch wrappers.
  */
 extern const args_command_t spec_key;
 

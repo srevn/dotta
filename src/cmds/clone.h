@@ -11,10 +11,10 @@
 /**
  * Bootstrap behavior selector.
  *
- * The user has three intentions, not two: unset (ask), explicit yes
- * (--bootstrap), explicit no (--no-bootstrap). Representing these as
- * a single `int` field removes the legacy bool-pair reconciliation
- * and hands the consumer a closed enum to switch on.
+ * The user has three intentions, not two: unset (ask), explicit yes (--bootstrap),
+ * explicit no (--no-bootstrap). Representing these as a single `int` field removes
+ * the legacy bool-pair reconciliation and hands the consumer a closed enum to
+ * switch on.
  */
 typedef enum {
     CLONE_BOOTSTRAP_DEFAULT = 0, /* No flag given: prompt if scripts exist */
@@ -25,8 +25,8 @@ typedef enum {
 /**
  * Clone options
  *
- * `url` and `path` are filled from the raw positional bucket by
- * `clone_post_parse`. Consumers read only the user-facing fields.
+ * `url` and `path` are filled from the raw positional bucket by `clone_post_parse`.
+ * Consumers read only the user-facing fields.
  */
 typedef struct {
     /* User-facing (read by cmd_clone). */
@@ -58,8 +58,8 @@ error_t *cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts);
 /**
  * Spec-engine command specification for `dotta clone`.
  *
- * Registered in cmds/registry.c. Defined in clone.c beside the
- * post_parse and dispatch wrappers.
+ * Registered in cmds/registry.c. Defined in clone.c beside the post_parse and
+ * dispatch wrappers.
  */
 extern const args_command_t spec_clone;
 

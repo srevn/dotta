@@ -22,8 +22,8 @@ typedef struct {
 /**
  * Initialize a dotta repository
  *
- * Creates or opens a git repository and sets up dotta branch structure.
- * Creates initial empty state file.
+ * Creates or opens a git repository and sets up dotta branch structure. Creates
+ * initial empty state file.
  *
  * @param ctx Dispatch context (must not be NULL)
  * @param opts Command options (must not be NULL)
@@ -34,8 +34,7 @@ error_t *cmd_init(const dotta_ctx_t *ctx, const cmd_init_options_t *opts);
 /**
  * Spec-engine command specification for `dotta init`.
  *
- * Registered in cmds/registry.c. Defined in init.c beside the
- * dispatch wrapper.
+ * Registered in cmds/registry.c. Defined in init.c beside the dispatch wrapper.
  */
 extern const args_command_t spec_init;
 

@@ -24,13 +24,13 @@
  * Argon2id strength presets.
  *
  * The user-friendly knob is `strength = "fast" | "balanced" | "paranoid"`;
- * `memory` (MiB) and `passes` exist as raw overrides for users who
- * want exact control. Wall-clock timings below are indicative only —
- * they were measured on a 2024-era laptop and scale with single-thread
- * memory bandwidth and L3 cache size.
+ * `memory` (MiB) and `passes` exist as raw overrides for users who want exact
+ * control. Wall-clock timings below are indicative only — they were measured on
+ * a 2024-era laptop and scale with single-thread memory bandwidth and L3 cache
+ * size.
  *
- * Adding a preset: append a row here. The lookup is linear; the
- * three-row count is the design ceiling, not a vector limit.
+ * Adding a preset: append a row here. The lookup is linear; the three-row count
+ * is the design ceiling, not a vector limit.
  */
 typedef struct {
     const char *name;
@@ -47,8 +47,8 @@ static const size_t ENCRYPTION_STRENGTH_PRESETS_COUNT =
     sizeof(ENCRYPTION_STRENGTH_PRESETS) / sizeof(ENCRYPTION_STRENGTH_PRESETS[0]);
 
 /**
- * Default preset name used when [encryption] omits both `strength` and
- * the raw mib/passes overrides. Must match a row in the table above.
+ * Default preset name used when [encryption] omits both `strength` and the raw
+ * mib/passes overrides. Must match a row in the table above.
  */
 #define DEFAULT_ENCRYPTION_STRENGTH "balanced"
 
@@ -100,8 +100,8 @@ static bool extract_string_array(toml_datum_t arr, char ***out_items, size_t *ou
 /**
  * Helper: Safe string field assignment with allocation check
  *
- * Duplicates value first, then frees old content. This order is safe
- * even if *field and value alias (cannot happen here, but defensive).
+ * Duplicates value first, then frees old content. This order is safe even if
+ * *field and value alias (cannot happen here, but defensive).
  */
 static error_t *set_string(char **field, const char *value) {
     char *copy = strdup(value);
@@ -116,13 +116,13 @@ static error_t *set_string(char **field, const char *value) {
 /**
  * Helper: Compile config->auto_encrypt_patterns into a gitignore ruleset.
  *
- * Populates config->auto_encrypt.{arena,rules}. Leaves both NULL when
- * encryption is disabled or no patterns are configured — consumers
- * treat NULL rules as the "no auto-encrypt applies" sentinel.
+ * Populates config->auto_encrypt.{arena,rules}. Leaves both NULL when encryption
+ * is disabled or no patterns are configured — consumers treat NULL rules as the
+ * "no auto-encrypt applies" sentinel.
  *
- * Eager compile at load time: any per-pattern length or per-ruleset
- * rule-count violation surfaces once, at startup, via the existing
- * config_load error path — no per-command deferred failures.
+ * Eager compile at load time: any per-pattern length or per-ruleset rule-count
+ * violation surfaces once, at startup, via the existing config_load error path
+ * — no per-command deferred failures.
  */
 static error_t *config_compile_auto_encrypt(config_t *config) {
     if (!config->encryption_enabled || !config->auto_encrypt_patterns ||
@@ -162,9 +162,8 @@ static error_t *config_compile_auto_encrypt(config_t *config) {
 /**
  * Helper: Validate that a TOML table contains only recognized keys
  *
- * Returns an error for the first unrecognized key found.
- * section_name is used in error messages — NULL means top-level
- * (where keys are section names).
+ * Returns an error for the first unrecognized key found. section_name is used
+ * in error messages — NULL means top-level (where keys are section names).
  */
 static error_t *validate_known_keys(
     toml_datum_t table,
@@ -251,9 +250,9 @@ config_t *config_create_default(void) {
     config->auto_pull = true;                   /* Default: auto-pull when remote ahead */
     config->diverged_strategy = strdup("warn"); /* Default: warn on divergence */
 
-    /* [encryption] defaults — match the "balanced" preset (~1.0 s
-     * derivation on commodity HW). The parser overwrites these if the
-     * user sets `strength`, `memory`, or `passes`. */
+    /* [encryption] defaults — match the "balanced" preset (~1.0 s derivation on
+     * commodity HW). The parser overwrites these if the user sets `strength`,
+     * `memory`, or `passes`. */
     config->encryption_enabled = false;            /* Default: disabled (opt-in) */
     config->auto_encrypt_patterns = NULL;
     config->auto_encrypt_pattern_count = 0;
@@ -297,8 +296,8 @@ void config_free(config_t *config) {
         free(config->auto_encrypt_patterns);
     }
 
-    /* Drop the compiled auto-encrypt ruleset. arena_destroy is NULL-safe
-     * and owns the ruleset storage — no separate rules free needed. */
+    /* Drop the compiled auto-encrypt ruleset. arena_destroy is NULL-safe and
+     * owns the ruleset storage — no separate rules free needed. */
     arena_destroy(config->auto_encrypt.arena);
 
     free(config);
@@ -514,8 +513,8 @@ error_t *config_load(const char *config_path, config_t **out) {
 
         toml_datum_t patterns = toml_get(ignore, "patterns");
         if (patterns.type == TOML_ARRAY) {
-            /* Free existing default patterns, then reset to safe state
-             * before extraction (prevents double-free on failure) */
+            /* Free existing default patterns, then reset to safe state before
+             * extraction (prevents double-free on failure) */
             if (config->ignore_patterns) {
                 for (size_t i = 0; i < config->ignore_pattern_count; i++) {
                     free(config->ignore_patterns[i]);
@@ -619,8 +618,8 @@ error_t *config_load(const char *config_path, config_t **out) {
         /* Parse auto_encrypt patterns */
         toml_datum_t auto_encrypt = toml_get(encryption, "auto_encrypt");
         if (auto_encrypt.type == TOML_ARRAY) {
-            /* Free existing patterns, then reset to safe state
-             * before extraction (prevents double-free on failure) */
+            /* Free existing patterns, then reset to safe state before extraction
+             * (prevents double-free on failure) */
             if (config->auto_encrypt_patterns) {
                 for (size_t i = 0; i < config->auto_encrypt_pattern_count; i++) {
                     free(config->auto_encrypt_patterns[i]);
@@ -642,8 +641,8 @@ error_t *config_load(const char *config_path, config_t **out) {
         }
 
         /* Argon2id derivation parameters — sketch §9.3 resolution:
-         *   - Both `memory` and `passes` set → use them.
-         *     Warn-once if `strength` is also set (raw wins).
+         *   - Both `memory` and `passes` set → use them. Warn-once if `strength`
+         *     is also set (raw wins).
          *   - Exactly one of the raw pair set → ERR_INVALID_ARG.
          *   - Only `strength` set → look up preset.
          *   - Nothing set → defaults from config_create_default stand. */
@@ -665,9 +664,9 @@ error_t *config_load(const char *config_path, config_t **out) {
         }
 
         if (mib_set) {
-            /* Bounds-check using KDF_ARGON2_*_MIN/MAX (defense-in-depth
-             * against the same constants kdf_validate_params re-checks at
-             * the crypto boundary; see crypto/kdf.h's bounds rationale). */
+            /* Bounds-check using KDF_ARGON2_*_MIN/MAX (defense-in-depth against
+             * the same constants kdf_validate_params re-checks at the crypto
+             * boundary; see crypto/kdf.h's bounds rationale). */
             if (mib.u.int64 < KDF_ARGON2_MEMORY_MIB_MIN ||
                 mib.u.int64 > KDF_ARGON2_MEMORY_MIB_MAX) {
                 err = ERROR(
@@ -750,9 +749,9 @@ error_t *config_load(const char *config_path, config_t **out) {
         return err;
     }
 
-    /* Materialize derived state (compiled auto-encrypt ruleset) after
-     * validation. Pattern-compile errors are real config errors — same
-     * failure class as invalid verbosity or out-of-range argon2 params. */
+    /* Materialize derived state (compiled auto-encrypt ruleset) after validation.
+     * Pattern-compile errors are real config errors — same failure class as invalid
+     * verbosity or out-of-range argon2 params. */
     err = config_compile_auto_encrypt(config);
     if (err) {
         config_free(config);
@@ -851,22 +850,21 @@ error_t *config_validate(const config_t *config) {
         );
     }
 
-    /* Defense-in-depth Argon2 params bounds check. Same constants the
-     * parse step already applied; this guards against a future code path
-     * that mutates config_t after load (today there is none). The check
-     * runs unconditionally — even with encryption disabled — because the
-     * defaults set by config_create_default are within bounds and a
-     * caller that flips `encryption_enabled = true` mid-session would
-     * otherwise be deriving keys with whatever stale values the struct
-     * carries. */
+    /* Defense-in-depth Argon2 params bounds check. Same constants the parse step
+     * already applied; this guards against a future code path that mutates config_t
+     * after load (today there is none). The check runs unconditionally — even
+     * with encryption disabled — because the defaults set by config_create_default
+     * are within bounds and a caller that flips `encryption_enabled = true`
+     * mid-session would otherwise be deriving keys with whatever stale values
+     * the struct carries. */
     error_t *kdf_err = kdf_validate_params(
         config->encryption_argon2_memory_mib,
         config->encryption_argon2_passes
     );
     if (kdf_err) {
         /* Re-wrap as INVALID_ARG so config-layer errors stay uniform —
-         * kdf_validate_params returns ERR_CRYPTO for the parse-tampered
-         * blob-header use case, which is wrong-class for a config error. */
+         * kdf_validate_params returns ERR_CRYPTO for the parse-tampered blob-header
+         * use case, which is wrong-class for a config error. */
         char *msg = strdup(error_message(kdf_err));
         error_free(kdf_err);
         error_t *wrapped = ERROR(

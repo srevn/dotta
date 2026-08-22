@@ -181,7 +181,8 @@ error_t *compare_buffer_to_disk(
          * NOTE: We do NOT check permissions here. Permission validation is a
          * core-layer concern handled by workspace.c, which checks:
          * 1. Git filemode (executable bit from tree)
-         * 2. Full metadata (all permission bits + ownership from .dotta/metadata.json)
+         * 2. Full metadata (all permission bits + ownership from
+         *    .dotta/metadata.json)
          *
          * This separation keeps the infrastructure layer pure and focused on
          * content comparison only. */
@@ -196,15 +197,15 @@ error_t *compare_buffer_to_disk(
 /**
  * Compare git blob OID to disk file with stat propagation
  *
- * OID-based counterpart to compare_buffer_to_disk. Hashes the filesystem
- * file using git's blob hash algorithm (SHA-1("blob <size>\0" + content))
- * and compares to the expected OID.
+ * OID-based counterpart to compare_buffer_to_disk. Hashes the filesystem file
+ * using git's blob hash algorithm (SHA-1("blob <size>\0" + content)) and compares
+ * to the expected OID.
  *
- * For symlinks, reads the target string and hashes it identically to how
- * Git stores symlinks (blob containing the target path as raw bytes).
+ * For symlinks, reads the target string and hashes it identically to how Git
+ * stores symlinks (blob containing the target path as raw bytes).
  *
- * For regular files, uses git_odb_hashfile() which streams file content
- * using constant memory regardless of file size.
+ * For regular files, uses git_odb_hashfile() which streams file content using
+ * constant memory regardless of file size.
  */
 error_t *compare_oid_to_disk(
     const git_oid *blob_oid,
@@ -234,8 +235,8 @@ error_t *compare_oid_to_disk(
             memcpy(out_stat, in_stat, sizeof(struct stat));
         }
     } else {
-        /* No pre-captured stat - perform lstat internally
-         * Using lstat() to not follow symlinks.
+        /* No pre-captured stat - perform lstat internally Using lstat() to not
+         * follow symlinks.
          */
         if (lstat(disk_path, &st) != 0) {
             if (errno == ENOENT) {
@@ -303,9 +304,9 @@ error_t *compare_oid_to_disk(
 
         /* Hash file directly from path
          *
-         * git_odb_hashfile() streams the file content and computes the
-         * standard Git blob hash: SHA-1("blob <size>\0" + content).
-         * This uses constant memory regardless of file size.
+         * git_odb_hashfile() streams the file content and computes the standard
+         * Git blob hash: SHA-1("blob <size>\0" + content). This uses constant
+         * memory regardless of file size.
          */
         int ret = git_odb_hashfile(&computed, disk_path, GIT_OBJECT_BLOB);
         if (ret != 0) {
@@ -384,8 +385,8 @@ cleanup:
 /**
  * Generate symlink diff from buffer
  *
- * Helper for compare_generate_diff().
- * Generates a human-readable diff for symlink target changes.
+ * Helper for compare_generate_diff(). Generates a human-readable diff for symlink
+ * target changes.
  */
 static error_t *generate_symlink_diff(
     const buffer_t *content,
@@ -446,8 +447,8 @@ cleanup:
 /**
  * Generate text diff from buffer
  *
- * Helper for compare_generate_diff().
- * Uses in-memory buffers with libgit2's buffer-based diff API.
+ * Helper for compare_generate_diff(). Uses in-memory buffers with libgit2's
+ * buffer-based diff API.
  */
 static error_t *generate_text_diff(
     const buffer_t *content,
@@ -467,10 +468,10 @@ static error_t *generate_text_diff(
     const void *repo_data = content->data;
     size_t repo_size = content->size;
 
-    /* Read disk file content
-     * This function is only called when compare_buffer_to_disk returned
-     * CMP_DIFFERENT, so the file is known to exist. Read directly without
-     * a separate existence check to avoid TOCTOU races. */
+    /* Read disk file content This function is only called when
+     * compare_buffer_to_disk returned CMP_DIFFERENT, so the file is known to
+     * exist. Read directly without a separate existence check to avoid TOCTOU
+     * races. */
     const void *disk_data = NULL;
     size_t disk_size = 0;
 
@@ -629,9 +630,9 @@ error_t *compare_generate_diff(
             return err;
         }
 
-        /* Binary files: libgit2 skips the line callback entirely when it
-         * detects binary content, so generate_text_diff returns NULL.
-         * Provide an explicit message rather than silent empty output. */
+        /* Binary files: libgit2 skips the line callback entirely when it detects
+         * binary content, so generate_text_diff returns NULL. Provide an explicit
+         * message rather than silent empty output. */
         if (!diff->diff_text) {
             diff->diff_text = strdup("Binary files differ");
         }

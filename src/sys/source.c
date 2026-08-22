@@ -3,26 +3,23 @@
  *
  * Implementation notes:
  *
- *   - The cache stores at most one repo handle at a time. A query
- *     whose `abs_path` falls outside the cached workdir invalidates
- *     the cache before re-discovering. This matches the common
- *     `dotta add` pattern (walking a single source tree) without
- *     growing memory on pathological workloads.
+ *   - The cache stores at most one repo handle at a time. A query whose `abs_path`
+ *     falls outside the cached workdir invalidates the cache before re-discovering.
+ *     This matches the common `dotta add` pattern (walking a single source tree)
+ *     without growing memory on pathological workloads.
  *
- *   - `git_repository_workdir` returns a string ending in `/`; the
- *     prefix-stripping helper is defensive either way and consumes
- *     any leading slashes on the resulting relative path so later
- *     comparisons start from a real component.
+ *   - `git_repository_workdir` returns a string ending in `/`; the prefix-stripping
+ *     helper is defensive either way and consumes any leading slashes on the
+ *     resulting relative path so later comparisons start from a real component.
  *
- *   - Directory queries get a trailing `/` appended before the libgit2
- *     call so directory-only patterns (e.g. `node_modules/`) match.
- *     An allocation failure on that append surfaces as ERR_MEMORY
- *     rather than silently falling back to the non-suffixed query,
- *     which would change the verdict under OOM.
+ *   - Directory queries get a trailing `/` appended before the libgit2 call so
+ *     directory-only patterns (e.g. `node_modules/`) match. An allocation failure
+ *     on that append surfaces as ERR_MEMORY rather than silently falling back
+ *     to the non-suffixed query, which would change the verdict under OOM.
  *
- *   - The cache is populated only after a successful query. If the
- *     query errors, the freshly-opened repo is freed and the cache
- *     stays empty so the next query starts clean.
+ *   - The cache is populated only after a successful query. If the query errors,
+ *     the freshly-opened repo is freed and the cache stays empty so the next
+ *     query starts clean.
  */
 
 #include "sys/source.h"
@@ -62,8 +59,8 @@ void source_filter_free(source_filter_t *f) {
 }
 
 /**
- * Query an already-opened repo for `rel_path`'s ignore status.
- * Handles the is_dir→trailing-slash convention in one place.
+ * Query an already-opened repo for `rel_path`'s ignore status. Handles the
+ * is_dir→trailing-slash convention in one place.
  */
 static error_t *query_repo(
     git_repository *repo, const char *rel_path, bool is_dir, bool *out
@@ -92,9 +89,9 @@ static error_t *query_repo(
 }
 
 /**
- * Compute the portion of `abs_path` that lies below `workdir`, or NULL
- * when `abs_path` is not under `workdir`. Consumes any leading slashes
- * on the result so empty input is reported as "the workdir itself".
+ * Compute the portion of `abs_path` that lies below `workdir`, or NULL when
+ * `abs_path` is not under `workdir`. Consumes any leading slashes on the result
+ * so empty input is reported as "the workdir itself".
  */
 static const char *strip_workdir(const char *workdir, const char *abs_path) {
     if (!str_starts_with(abs_path, workdir)) return NULL;
@@ -169,8 +166,8 @@ error_t *source_filter_is_excluded(
         return err;
     }
 
-    /* Adopt into cache. Allocation failure drops the repo but keeps the
-     * successful result — the next call will re-discover from scratch. */
+    /* Adopt into cache. Allocation failure drops the repo but keeps the successful
+     * result — the next call will re-discover from scratch. */
     char *workdir_copy = strdup(workdir);
     if (!workdir_copy) {
         git_repository_free(repo);

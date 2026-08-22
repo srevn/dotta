@@ -1,29 +1,27 @@
 /**
  * keymgr.c — Master-key lifecycle and per-operation subkey acquisition
  *
- * Implements the two-tier cache (in-memory slot + on-disk session)
- * and the params-aware resolution chain documented in keymgr.h.
+ * Implements the two-tier cache (in-memory slot + on-disk session) and the
+ * params-aware resolution chain documented in keymgr.h.
  *
  * Internal layout:
  *   - `is_slot_valid_for` — slot freshness predicate (params + expiry).
- *   - `evict_slot` / `install_slot` — single chokepoints for slot
- *     mutations; every write to (master_key, has_key, params,
- *     cached_at) goes through one of these.
+ *   - `evict_slot` / `install_slot` — single chokepoints for slot mutations;
+ *     every write to (master_key, has_key, params, cached_at) goes through one
+ *     of these.
  *   - `try_memory_hit` / `try_disk_hit` / `prompt_passphrase` /
- *     `derive_and_install` — the four tiers of the resolution
- *     decision tree. Each owns one storage location, one decision.
- *   - `keymgr_resolve` — orchestrator composing the four tiers in
- *     memory → disk → env → prompt order.
- *   - `keymgr_acquire_subkeys` — atomic resolve + derive + wipe-master
- *     used by both encrypt and decrypt so the operation paths only
- *     own the (mac, prf) pair.
+ *     `derive_and_install` — the four tiers of the resolution decision tree.
+ *     Each owns one storage location, one decision.
+ *   - `keymgr_resolve` — orchestrator composing the four tiers in memory → disk
+ *     → env → prompt order.
+ *   - `keymgr_acquire_subkeys` — atomic resolve + derive + wipe-master used by
+ *     both encrypt and decrypt so the operation paths only own the (mac, prf) pair.
  *
- * Wipe discipline: every slot eviction, every per-call key
- * intermediate, every error return path scrubs the relevant buffer
- * via `crypto_wipe` (monocypher's primitive, used directly inside
- * the crypto layer; non-crypto layers use `secure_wipe` from
- * `base/secure.h`). Public API symmetry: every entry point either
- * returns `error_t *` with the cleanup-on-error contract, or runs
+ * Wipe discipline: every slot eviction, every per-call key intermediate, every
+ * error return path scrubs the relevant buffer via `crypto_wipe` (monocypher's
+ * primitive, used directly inside the crypto layer; non-crypto layers use
+ * `secure_wipe` from `base/secure.h`). Public API symmetry: every entry point
+ * either returns `error_t *` with the cleanup-on-error contract, or runs
  * idempotently with no error surface (free, clear).
  */
 
@@ -50,15 +48,15 @@
 /**
  * Key manager structure.
  *
- * Configuration snapshot (Argon2 params, timeout) plus the single
- * in-memory cache slot. Best-effort mlock'd; the much larger Argon2
- * work area is mlock'd separately by `kdf_master_key`.
+ * Configuration snapshot (Argon2 params, timeout) plus the single in-memory cache
+ * slot. Best-effort mlock'd; the much larger Argon2 work area is mlock'd separately
+ * by `kdf_master_key`.
  */
 struct keymgr {
-    /* Configuration snapshot — set at create time, never mutated.
-     * `keymgr_encrypt` derives under these; `keymgr_set_passphrase` and
-     * `keymgr_probe_key` route through these; `keymgr_decrypt` ignores
-     * them and uses the params from the blob header instead. */
+    /* Configuration snapshot — set at create time, never mutated. `keymgr_encrypt`
+     * derives under these; `keymgr_set_passphrase` and `keymgr_probe_key` route
+     * through these; `keymgr_decrypt` ignores them and uses the params from the
+     * blob header instead. */
     uint16_t current_memory_mib;
     uint8_t current_passes;
     int32_t session_timeout;        /* seconds; 0 = always prompt, -1 = never expire */
@@ -66,8 +64,8 @@ struct keymgr {
     /* Per-repo Argon2id salt — set at create time, never mutated.*/
     uint8_t salt[KDF_SALT_SIZE];
 
-    /* Cache slot — params recorded so cross-params transitions can
-     * detect a stale slot and evict before re-deriving. */
+    /* Cache slot — params recorded so cross-params transitions can detect a stale
+     * slot and evict before re-deriving. */
     bool has_key;
     uint16_t cached_memory_mib;
     uint8_t cached_passes;
@@ -78,17 +76,16 @@ struct keymgr {
 };
 
 /**
- * Monotonic timestamp in seconds — used for in-memory cache expiry
- * so the user cannot stretch cache lifetime by skewing the wall
- * clock. The on-disk cache uses wall-clock instead (must survive
- * reboots, which reset CLOCK_MONOTONIC).
+ * Monotonic timestamp in seconds — used for in-memory cache expiry so the user
+ * cannot stretch cache lifetime by skewing the wall clock. The on-disk cache
+ * uses wall-clock instead (must survive reboots, which reset CLOCK_MONOTONIC).
  */
 static time_t get_monotonic_time(void) {
     struct timespec ts;
     if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) {
-        /* Falls back to wall-clock so a malfunctioning monotonic
-         * clock degrades gracefully rather than crashing. Should not
-         * happen on any modern POSIX system. */
+        /* Falls back to wall-clock so a malfunctioning monotonic clock degrades
+         * gracefully rather than crashing. Should not happen on any modern POSIX
+         * system. */
         return time(NULL);
     }
     return ts.tv_sec;
@@ -97,9 +94,8 @@ static time_t get_monotonic_time(void) {
 /**
  * Is the in-memory slot a valid hit for `(target_mib, target_passes)`?
  *
- * `session_timeout == 0` (always-prompt) treats the slot as
- * already-expired; `session_timeout < 0` (never-expire) skips the
- * elapsed-time check.
+ * `session_timeout == 0` (always-prompt) treats the slot as already-expired;
+ * `session_timeout < 0` (never-expire) skips the elapsed-time check.
  */
 static bool is_slot_valid_for(
     const keymgr *km,
@@ -125,8 +121,8 @@ static bool is_slot_valid_for(
 }
 
 /**
- * Evict the in-memory slot. Scrubs the master key and resets every
- * cache field to its post-`calloc` state. Idempotent.
+ * Evict the in-memory slot. Scrubs the master key and resets every cache field
+ * to its post-`calloc` state. Idempotent.
  */
 static void evict_slot(keymgr *km) {
     crypto_wipe(km->master_key, sizeof(km->master_key));
@@ -139,8 +135,8 @@ static void evict_slot(keymgr *km) {
 /**
  * Install a freshly resolved master key into the slot.
  *
- * Caller must evict any prior occupant first — calling over a
- * non-empty slot leaks the old key.
+ * Caller must evict any prior occupant first — calling over a non-empty slot
+ * leaks the old key.
  */
 static void install_slot(
     keymgr *km,
@@ -175,9 +171,9 @@ error_t *keymgr_create(
     km->session_timeout = config->session_timeout;
     memcpy(km->salt, salt, KDF_SALT_SIZE);
 
-    /* Best-effort mlock to keep the cached master off swap. Failure
-     * is non-fatal; the advisory is process-wide so the user sees
-     * one warning regardless of which subsystem hit RLIMIT_MEMLOCK. */
+    /* Best-effort mlock to keep the cached master off swap. Failure is non-fatal;
+     * the advisory is process-wide so the user sees one warning regardless of
+     * which subsystem hit RLIMIT_MEMLOCK. */
     if (mlock(km, sizeof(*km)) == 0) {
         km->mlocked = true;
     } else {
@@ -203,8 +199,8 @@ void keymgr_free(keymgr *km) {
 }
 
 /*
- * Resolution decision tree. Four tiers, each owning one storage
- * location and one decision:
+ * Resolution decision tree. Four tiers, each owning one storage location and
+ * one decision:
  *
  *   try_memory_hit     — in-memory slot   (fast path; evicts mismatch)
  *   try_disk_hit       — on-disk session  (process-fresh warm path)
@@ -217,9 +213,9 @@ void keymgr_free(keymgr *km) {
 /**
  * Tier 1: in-memory cache hit.
  *
- * Hit copies the master key to `out_master_key`. On miss, any
- * non-matching slot occupant is evicted so the caller can install
- * fresh material. Never writes to `out_master_key` on miss.
+ * Hit copies the master key to `out_master_key`. On miss, any non-matching slot
+ * occupant is evicted so the caller can install fresh material. Never writes to
+ * `out_master_key` on miss.
  */
 static bool try_memory_hit(
     keymgr *km,
@@ -240,14 +236,14 @@ static bool try_memory_hit(
 /**
  * Tier 2: on-disk session cache hit.
  *
- * Hit copies the master to `out_master_key` AND installs it into
- * the in-memory slot. Miss covers cache-disabled, file missing,
- * expired, MAC failure, wrong perms, or params mismatch. Transient
- * I/O failure surfaces a stderr advisory and counts as a miss.
+ * Hit copies the master to `out_master_key` AND installs it into the in-memory
+ * slot. Miss covers cache-disabled, file missing, expired, MAC failure, wrong
+ * perms, or params mismatch. Transient I/O failure surfaces a stderr advisory
+ * and counts as a miss.
  *
- * A successful load that records non-target params leaves the file
- * in place (it remains the canonical current-config slot, just for
- * a different params set). On miss `out_master_key` is scrubbed.
+ * A successful load that records non-target params leaves the file in place (it
+ * remains the canonical current-config slot, just for a different params set).
+ * On miss `out_master_key` is scrubbed.
  */
 static bool try_disk_hit(
     keymgr *km,
@@ -256,8 +252,8 @@ static bool try_disk_hit(
     uint8_t out_master_key[KDF_KEY_SIZE]
 ) {
     if (km->session_timeout == 0) {
-        /* Always-prompt mode: file never exists (gated in
-         * derive_and_install); skipping the load avoids a syscall. */
+        /* Always-prompt mode: file never exists (gated in derive_and_install);
+         * skipping the load avoids a syscall. */
         return false;
     }
 
@@ -276,23 +272,22 @@ static bool try_disk_hit(
             );
             return true;
         }
-        /* Loaded but params don't match the target. Discard the
-         * non-target key and leave the file in place. */
+        /* Loaded but params don't match the target. Discard the non-target key
+         * and leave the file in place. */
         crypto_wipe(out_master_key, KDF_KEY_SIZE);
         return false;
     }
 
     if (err->code == ERR_NOT_FOUND || err->code == ERR_CRYPTO) {
-        /* Expected misses: missing, expired, tampered, wrong perms.
-         * session_load already unlinked unrecoverable files and
-         * scrubbed `out_master_key` per its own contract. */
+        /* Expected misses: missing, expired, tampered, wrong perms. session_load
+         * already unlinked unrecoverable files and scrubbed `out_master_key`
+         * per its own contract. */
         error_free(err);
         return false;
     }
 
-    /* Unexpected I/O failure. Warn but keep the file — a flaky disk
-     * should not destroy the cache. session_load already wiped
-     * `out_master_key`. */
+    /* Unexpected I/O failure. Warn but keep the file — a flaky disk should not
+     * destroy the cache. session_load already wiped `out_master_key`. */
     fprintf(
         stderr, "Warning: Failed to load session cache: %s\n",
         error_message(err)
@@ -305,15 +300,13 @@ static bool try_disk_hit(
 /**
  * Tier 3: acquire passphrase via env var or interactive prompt.
  *
- * On success `*out_passphrase` is a heap-allocated, mlock'd buffer
- * the caller releases via
- * `buffer_secure_free(passphrase, *out_passphrase_len + 1)` (the
+ * On success `*out_passphrase` is a heap-allocated, mlock'd buffer the caller
+ * releases via `buffer_secure_free(passphrase, *out_passphrase_len + 1)` (the
  * `+1` accounts for the NUL both backends append).
  *
- * A successful env-var read prints a stderr advisory; the
- * interactive prompt runs only when the env var is unset and
- * disables echo around the read. All errors are wrapped under
- * "Failed to get passphrase".
+ * A successful env-var read prints a stderr advisory; the interactive prompt
+ * runs only when the env var is unset and disables echo around the read. All
+ * errors are wrapped under "Failed to get passphrase".
  */
 static error_t *prompt_passphrase(
     char **out_passphrase,
@@ -322,8 +315,8 @@ static error_t *prompt_passphrase(
     error_t *err = passphrase_from_env(out_passphrase, out_passphrase_len);
 
     if (err == NULL) {
-        /* Env-var advisory: env-var passphrases are a legitimate but
-         * weaker automation contract; warn rather than error. */
+        /* Env-var advisory: env-var passphrases are a legitimate but weaker
+         * automation contract; warn rather than error. */
         fprintf(
             stderr,
             "Warning: Using passphrase from DOTTA_ENCRYPTION_PASSPHRASE environment variable\n"
@@ -334,9 +327,8 @@ static error_t *prompt_passphrase(
     }
 
     if (err->code != ERR_NOT_FOUND) {
-        /* Env-read failed for some reason other than "not set" —
-         * surface it; falling back to the prompt would mask a real
-         * underlying problem. */
+        /* Env-read failed for some reason other than "not set" — surface it;
+         * falling back to the prompt would mask a real underlying problem. */
         return error_wrap(err, "Failed to get passphrase");
     }
 
@@ -353,21 +345,20 @@ static error_t *prompt_passphrase(
 }
 
 /**
- * Tier 4: derive master under target params; install in the slot and
- * conditionally persist to the on-disk session cache — except under
- * always-prompt mode, where the master must not outlive one operation.
+ * Tier 4: derive master under target params; install in the slot and conditionally
+ * persist to the on-disk session cache — except under always-prompt mode, where
+ * the master must not outlive one operation.
  *
- * Slot must already be empty (caller evicts). On success
- * `out_master_key` holds the derived master. Slot/disk state branches
- * on session_timeout:
- *   - `session_timeout != 0`: slot mirrors `out_master_key`; on-disk
- *     cache is updated only when target params equal the keymgr's
- *     current-config snapshot, so old-params decrypts never pollute
- *     the persistent cache. `session_save` failures are non-fatal —
- *     the in-memory slot is authoritative for this process.
- *   - `session_timeout == 0` (always-prompt): slot stays empty; disk
- *     is not touched. The caller's wipe path bounds the master's
- *     lifetime to a single operation, honoring the user's opt-out.
+ * Slot must already be empty (caller evicts). On success `out_master_key` holds
+ * the derived master. Slot/disk state branches on session_timeout:
+ *   - `session_timeout != 0`: slot mirrors `out_master_key`; on-disk cache is
+ *     updated only when target params equal the keymgr's current-config snapshot,
+ *     so old-params decrypts never pollute the persistent cache. `session_save`
+ *     failures are non-fatal — the in-memory slot is authoritative for this
+ *     process.
+ *   - `session_timeout == 0` (always-prompt): slot stays empty; disk is not
+ *     touched. The caller's wipe path bounds the master's lifetime to a single
+ *     operation, honoring the user's opt-out.
  *
  * On failure the buffer is wiped and the slot is unchanged.
  */
@@ -385,17 +376,17 @@ static error_t *derive_and_install(
         out_master_key
     );
     if (err) {
-        /* kdf_master_key wipes its own output per its contract; the
-         * redundant wipe keeps cleanup self-contained against future
-         * drift in that contract. */
+        /* kdf_master_key wipes its own output per its contract; the redundant
+         * wipe keeps cleanup self-contained against future drift in that
+         * contract. */
         crypto_wipe(out_master_key, KDF_KEY_SIZE);
         return error_wrap(err, "Failed to derive encryption key");
     }
 
-    /* Always-prompt mode: hand the master back via out_master_key for
-     * one-shot use, but skip the slot install AND the disk cache. The
-     * caller's wipe (keymgr_acquire_subkeys → wipe master after subkey
-     * derivation) is the master's full lifetime in this mode. */
+    /* Always-prompt mode: hand the master back via out_master_key for one-shot
+     * use, but skip the slot install AND the disk cache. The caller's wipe
+     * (keymgr_acquire_subkeys → wipe master after subkey derivation) is the
+     * master's full lifetime in this mode. */
     if (km->session_timeout == 0) {
         return NULL;
     }
@@ -409,9 +400,9 @@ static error_t *derive_and_install(
             km->salt, km->session_timeout
         );
         if (save_err) {
-            /* Non-fatal. The in-memory slot is authoritative for this
-             * process; failing to persist the cache only costs a
-             * re-prompt in the next process. */
+            /* Non-fatal. The in-memory slot is authoritative for this process;
+             * failing to persist the cache only costs a re-prompt in the next
+             * process. */
             fprintf(
                 stderr, "Warning: Failed to save session cache: %s\n",
                 error_message(save_err)
@@ -426,10 +417,9 @@ static error_t *derive_and_install(
 /**
  * Resolve the master key for `(target_memory_mib, target_passes)`.
  *
- * Composition of the four tier helpers in
- * memory → disk → env/TTY → derive order. Every error path scrubs
- * `out_master_key` before return; tier helpers own scrubbing for the
- * buffers they touch.
+ * Composition of the four tier helpers in memory → disk → env/TTY → derive order.
+ * Every error path scrubs `out_master_key` before return; tier helpers own
+ * scrubbing for the buffers they touch.
  */
 static error_t *keymgr_resolve(
     keymgr *km,
@@ -455,9 +445,9 @@ static error_t *keymgr_resolve(
     size_t passphrase_len = 0;
     error_t *err = prompt_passphrase(&passphrase, &passphrase_len);
     if (err) {
-        /* Defense in depth: `out_master_key` should already be wiped
-         * by the prior tiers, but a redundant scrub guards against
-         * future tier additions leaving residual material. */
+        /* Defense in depth: `out_master_key` should already be wiped by the prior
+         * tiers, but a redundant scrub guards against future tier additions leaving
+         * residual material. */
         crypto_wipe(out_master_key, KDF_KEY_SIZE);
         return err;
     }
@@ -468,22 +458,21 @@ static error_t *keymgr_resolve(
         out_master_key
     );
 
-    /* Wipe and free the passphrase regardless of derivation outcome.
-     * Both backends return a buffer of `passphrase_len + 1` bytes
-     * (NUL-terminated, mlock'd). */
+    /* Wipe and free the passphrase regardless of derivation outcome. Both backends
+     * return a buffer of `passphrase_len + 1` bytes (NUL-terminated, mlock'd). */
     buffer_secure_free(passphrase, passphrase_len + 1);
 
     return err;
 }
 
 /**
- * Resolve the master key, derive (mac_key, prf_key) for a profile,
- * and scrub the master copy before return.
+ * Resolve the master key, derive (mac_key, prf_key) for a profile, and scrub
+ * the master copy before return.
  *
- * Both encrypt and decrypt go through this single entry point so the
- * master-key lifetime is owned in one place. The caller wipes
- * (mac_key, prf_key) after per-operation use; this helper guarantees
- * only that the master never leaks past its boundary.
+ * Both encrypt and decrypt go through this single entry point so the master-key
+ * lifetime is owned in one place. The caller wipes (mac_key, prf_key) after
+ * per-operation use; this helper guarantees only that the master never leaks
+ * past its boundary.
  */
 static error_t *keymgr_acquire_subkeys(
     keymgr *km,
@@ -499,8 +488,8 @@ static error_t *keymgr_acquire_subkeys(
     );
 
     if (err) {
-        /* Defense-in-depth scrub against future drift in the resolve
-         * contract; keymgr_resolve already wipes on error. */
+        /* Defense-in-depth scrub against future drift in the resolve contract;
+         * keymgr_resolve already wipes on error. */
         crypto_wipe(master_key, sizeof(master_key));
         return err;
     }
@@ -522,9 +511,8 @@ error_t *keymgr_set_passphrase(
         return ERROR(ERR_INVALID_ARG, "Passphrase cannot be empty");
     }
 
-    /* Stage the new master locally so a derivation failure cannot
-     * leave a half-key in the slot — evict and install only on
-     * success. */
+    /* Stage the new master locally so a derivation failure cannot leave a half-key
+     * in the slot — evict and install only on success. */
     uint8_t new_master[KDF_KEY_SIZE];
     error_t *err = kdf_master_key(
         passphrase, passphrase_len, km->salt, km->current_memory_mib,
@@ -536,12 +524,11 @@ error_t *keymgr_set_passphrase(
         return error_wrap(err, "Failed to derive encryption key");
     }
 
-    /* Always-prompt mode: derivation succeeded, which validates the
-     * passphrase, but the master must not survive past return —
-     * neither in the slot nor on disk. Defensively evict any stray
-     * slot occupant (under timeout==0 the slot should already be
-     * empty, but a future code path that landed material here would
-     * otherwise leak past return). */
+    /* Always-prompt mode: derivation succeeded, which validates the passphrase,
+     * but the master must not survive past return — neither in the slot nor on
+     * disk. Defensively evict any stray slot occupant (under timeout==0 the slot
+     * should already be empty, but a future code path that landed material here
+     * would otherwise leak past return). */
     if (km->session_timeout == 0) {
         if (km->has_key) {
             evict_slot(km);
@@ -585,8 +572,8 @@ bool keymgr_probe_key(keymgr *km) {
         return false;
     }
 
-    /* The in-memory slot must hold the current-config key — a slot
-     * warmed for non-current params is not "warm" for this probe. */
+    /* The in-memory slot must hold the current-config key — a slot warmed for
+     * non-current params is not "warm" for this probe. */
     if (is_slot_valid_for(km, km->current_memory_mib, km->current_passes)) {
         return true;
     }
@@ -604,25 +591,24 @@ bool keymgr_probe_key(keymgr *km) {
         loaded, &loaded_memory_mib, &loaded_passes, km->salt
     );
     if (err) {
-        /* ERR_NOT_FOUND, ERR_CRYPTO, ERR_FS — all "no current key
-         * available without prompting". Forget the error; probe is a
-         * boolean question. */
+        /* ERR_NOT_FOUND, ERR_CRYPTO, ERR_FS — all "no current key available without
+         * prompting". Forget the error; probe is a boolean question. */
         error_free(err);
         return false;
     }
 
     if (loaded_memory_mib != km->current_memory_mib
         || loaded_passes != km->current_passes) {
-        /* Different params recorded on disk — leave the file in
-         * place and report "not warm for the current config". */
+        /* Different params recorded on disk — leave the file in place and report
+         * "not warm for the current config". */
         crypto_wipe(loaded, sizeof(loaded));
         return false;
     }
 
-    /* Disk hit. Promote into the in-memory slot, evicting any prior
-     * occupant first (defensive — this branch is unreachable with the
-     * is_slot_valid_for + match invariant above, but evict_slot is
-     * cheap and keeps the install_slot precondition uniform). */
+    /* Disk hit. Promote into the in-memory slot, evicting any prior occupant
+     * first (defensive — this branch is unreachable with the is_slot_valid_for
+     * + match invariant above, but evict_slot is cheap and keeps the install_slot
+     * precondition uniform). */
     if (km->has_key) {
         evict_slot(km);
     }
@@ -651,8 +637,8 @@ int64_t keymgr_time_until_expiry(
     }
 
     if (km->session_timeout == 0) {
-        /* Always-prompt mode: surface "0 seconds remaining" so the
-         * UI renders "expired" rather than "indefinite". */
+        /* Always-prompt mode: surface "0 seconds remaining" so the UI renders
+         * "expired" rather than "indefinite". */
         if (out_expires_at) {
             *out_expires_at = time(NULL);
         }
@@ -667,9 +653,9 @@ int64_t keymgr_time_until_expiry(
     }
 
     if (out_expires_at) {
-        /* Convert to wall-clock for display: monotonic and wall-clock
-         * have different epochs, so add `remaining` to time(NULL)
-         * rather than mixing `cached_at` directly. */
+        /* Convert to wall-clock for display: monotonic and wall-clock have
+         * different epochs, so add `remaining` to time(NULL) rather than mixing
+         * `cached_at` directly. */
         *out_expires_at = time(NULL) + remaining;
     }
 
@@ -697,8 +683,8 @@ error_t *keymgr_encrypt(
         profile, mac_key, prf_key
     );
     if (err) {
-        /* Subkey-derivation errors get the uniform profile-name wrap
-         * per the header docstring's error-policy contract. */
+        /* Subkey-derivation errors get the uniform profile-name wrap per the
+         * header docstring's error-policy contract. */
         return error_wrap(
             err, "Failed to derive SIV subkeys for '%s'", profile
         );
@@ -712,13 +698,13 @@ error_t *keymgr_encrypt(
         out_ciphertext
     );
 
-    /* Wipe on every path; otherwise 64 bytes of subkey material
-     * survive on the stack until the frame is overwritten. */
+    /* Wipe on every path; otherwise 64 bytes of subkey material survive on the
+     * stack until the frame is overwritten. */
     crypto_wipe(mac_key, sizeof(mac_key));
     crypto_wipe(prf_key, sizeof(prf_key));
 
-    /* cipher_encrypt errors pass through unwrapped so callers can
-     * attach file-level context. */
+    /* cipher_encrypt errors pass through unwrapped so callers can attach file-level
+     * context. */
     return err;
 }
 
@@ -736,19 +722,19 @@ error_t *keymgr_decrypt(
     CHECK_NULL(ciphertext);
     CHECK_NULL(out_plaintext);
 
-    /* Read the params bound into the blob header so the master is
-     * derived under the producer's Argon2 parameters. A tampered
-     * params field surfaces later as a SIV authentication failure;
-     * cipher_peek_params runs the range check up front so an
-     * out-of-range header is rejected before any Argon2 allocation. */
+    /* Read the params bound into the blob header so the master is derived under
+     * the producer's Argon2 parameters. A tampered params field surfaces later
+     * as a SIV authentication failure; cipher_peek_params runs the range check
+     * up front so an out-of-range header is rejected before any Argon2
+     * allocation. */
     uint16_t blob_memory_mib = 0;
     uint8_t blob_passes = 0;
     error_t *err = cipher_peek_params(
         ciphertext, ciphertext_len, &blob_memory_mib, &blob_passes
     );
     if (err) {
-        /* Parse-level errors pass through unwrapped so the precise
-         * diagnostic (bad magic, version, params) reaches the caller. */
+        /* Parse-level errors pass through unwrapped so the precise diagnostic
+         * (bad magic, version, params) reaches the caller. */
         return err;
     }
 

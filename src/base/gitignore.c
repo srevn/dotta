@@ -3,32 +3,31 @@
  *
  * Parser and matcher adapted from libgit2:
  *   src/libgit2/attr_file.c  (git_attr_fnmatch__parse,
- *                             git_attr_fnmatch__match,
- *                             trailing_space_length, unescape_spaces,
- *                             parse_optimized_patterns)
+ *                             git_attr_fnmatch__match, trailing_space_length,
+ *                             unescape_spaces, parse_optimized_patterns)
  *   src/libgit2/ignore.c     (ignore_lookup_in_rules and the walk-up
- *                             inside git_ignore_path_is_ignored,
- *                             does_negate_rule, does_negate_pattern)
+ *                             inside git_ignore_path_is_ignored, does_negate_rule,
+ *                             does_negate_pattern)
  * Copyright (C) the libgit2 contributors. GPLv2 with Linking Exception.
  *
  * Adaptations from the original:
  *  - Drops macros/attributes/assignments (gitignore-only, no gitattributes).
- *  - Drops ICASE handling. Matches libgit2's gitignore ALLOWSPACE
- *    semantics: leading whitespace is preserved as pattern content;
- *    the caller pre-splits on `\n`, so the body scan runs to end-of-line.
- *  - Drops containing_dir / subdirectory .gitignore inheritance
- *    (dotta stores .dottaignore at repo root only).
- *  - Drops file source abstraction; rules come from caller-supplied
- *    content strings.
- *  - Replaces git_pool with base/arena and git_vector with a small
- *    inline dynamic array.
+ *  - Drops ICASE handling. Matches libgit2's gitignore ALLOWSPACE semantics:
+ *    leading whitespace is preserved as pattern content; the caller pre-splits
+ *    on `\n`, so the body scan runs to end-of-line.
+ *  - Drops containing_dir / subdirectory .gitignore inheritance (dotta stores
+ *    .dottaignore at repo root only).
+ *  - Drops file source abstraction; rules come from caller-supplied content
+ *    strings.
+ *  - Replaces git_pool with base/arena and git_vector with a small inline dynamic
+ *    array.
  *  - Adds per-rule origin tag for exact source attribution.
  *  - Optimizes only "*" (not "."): libgit2's "." shortcut fires only at
- *    end-of-buffer, which a line-based port would generalise to every
- *    "." line, diverging from gitignore's literal-filename semantics.
+ *    end-of-buffer, which a line-based port would generalise to every "." line,
+ *    diverging from gitignore's literal-filename semantics.
  *  - Walk-up is inlined into gitignore_eval, mirroring the outer
- *    git_ignore_path_is_ignored so parent-directory matching works when
- *    callers pass is_dir=false against a nested file.
+ *    git_ignore_path_is_ignored so parent-directory matching works when callers
+ *    pass is_dir=false against a nested file.
  */
 
 #include "base/gitignore.h"
@@ -68,8 +67,8 @@ struct gitignore_ruleset {
 };
 
 /* --- Character predicates ------------------------------------------- */
-/* Mirror libgit2's git__isspace and git__iswildcard so parse behaviour
- * stays identical. Inline and private to avoid cross-module coupling. */
+/* Mirror libgit2's git__isspace and git__iswildcard so parse behaviour stays
+ * identical. Inline and private to avoid cross-module coupling. */
 
 static inline bool is_ws(char c) {
     return c == ' ' || c == '\t' || c == '\n'
@@ -88,8 +87,8 @@ static size_t trailing_space_length(const char *p, size_t len) {
         if (p[n - 1] != ' ' && p[n - 1] != '\t')
             break;
 
-        /* Odd escape count before the space keeps it escaped; even count
-         * means the backslash is escaped and the space is free to trim. */
+        /* Odd escape count before the space keeps it escaped; even count means
+         * the backslash is escaped and the space is free to trim. */
         i = n;
         while (i > 1 && p[i - 2] == '\\')
             i--;
@@ -130,8 +129,8 @@ static size_t unescape_spaces(char *str) {
 
 /* --- Rule storage growth -------------------------------------------- */
 
-/* Arena allocators have no in-place realloc, so growth allocates a
- * larger block and copies. The old block is reclaimed on arena_destroy. */
+/* Arena allocators have no in-place realloc, so growth allocates a larger block
+ * and copies. The old block is reclaimed on arena_destroy. */
 static error_t *ensure_capacity(gitignore_ruleset_t *set) {
     if (set->count < set->capacity)
         return NULL;
@@ -155,8 +154,7 @@ static error_t *ensure_capacity(gitignore_ruleset_t *set) {
 /* --- Per-line parse ------------------------------------------------- */
 
 /* On success, *have_rule is true for a produced rule, false for
- * blank/comment/trimmed-to-empty lines. Returns an error on arena
- * exhaustion. */
+ * blank/comment/trimmed-to-empty lines. Returns an error on arena exhaustion. */
 static error_t *parse_one_rule(
     arena_t *arena,
     const char *line,
@@ -173,16 +171,16 @@ static error_t *parse_one_rule(
     /* Blank line produced by the caller's `\n` split. */
     if (rem == 0)
         return NULL;
-    /* Comment: `#` at column 0 only. Leading whitespace is preserved
-     * verbatim as pattern content (libgit2 ALLOWSPACE semantics), so a
+    /* Comment: `#` at column 0 only. Leading whitespace is preserved verbatim
+     * as pattern content (libgit2 ALLOWSPACE semantics), so a
      * line like `  # literal` is a three-char-indented pattern, not a
      * comment. */
     if (*pattern == '#')
         return NULL;
 
-    /* `*` shortcut mirrors libgit2 parse_optimized_patterns (scoped to
-     * `*` only; see module header for why `.` is intentionally skipped).
-     * Kept before the negation strip to match libgit2's call order. */
+    /* `*` shortcut mirrors libgit2 parse_optimized_patterns (scoped to `*` only;
+     * see module header for why `.` is intentionally skipped). Kept before the
+     * negation strip to match libgit2's call order. */
     if (rem == 1 && *pattern == '*') {
         char *copy = arena_strndup(arena, pattern, 1);
         if (!copy)
@@ -203,10 +201,10 @@ static error_t *parse_one_rule(
         rem--;
     }
 
-    /* Body scan: track slashes and wildcards over the full line. No
-     * early break at whitespace — libgit2 ALLOWSPACE mode lets spaces,
-     * tabs, and `\r` be part of the pattern. Trailing whitespace and a
-     * trailing `\r` are stripped below. Mirrors attr_file.c:763-784. */
+    /* Body scan: track slashes and wildcards over the full line. No early break
+     * at whitespace — libgit2 ALLOWSPACE mode lets spaces, tabs, and `\r` be
+     * part of the pattern. Trailing whitespace and a trailing `\r` are stripped
+     * below. Mirrors attr_file.c:763-784. */
     int slash_count = 0;
     bool escaped = false;
     const char *scan = pattern;
@@ -238,9 +236,9 @@ static error_t *parse_one_rule(
     if (length == 0)
         return NULL;
 
-    /* Trim a single trailing `\r` (CRLF files). The caller splits on
-     * `\n`, so the `\r` of a CRLF terminator is the last byte of the
-     * line. Done before trailing_space_length so a mixed
+    /* Trim a single trailing `\r` (CRLF files). The caller splits on `\n`, so
+     * the `\r` of a CRLF terminator is the last byte of the line. Done before
+     * trailing_space_length so a mixed
      * `pattern\r   ` does not swallow the `\r` inside the pattern —
      * parity with attr_file.c:791-798. */
     if (pattern[length - 1] == '\r') {
@@ -278,11 +276,11 @@ static error_t *parse_one_rule(
 }
 
 /* --- Negation filter ------------------------------------------------- */
-/* gitignore's "a parent directory cannot be re-included" rule: a
- * non-wildcard negation that no earlier rule could match is silently
- * discarded during parse. Without this filter, `build/` followed by
- * `!build/important.log` would leave the negation live and the file
- * unignored — diverging from git(1). Mirrors libgit2 ignore.c:50-168. */
+/* gitignore's "a parent directory cannot be re-included" rule: a non-wildcard
+ * negation that no earlier rule could match is silently discarded during parse.
+ * Without this filter, `build/` followed by `!build/important.log` would leave
+ * the negation live and the file unignored — diverging from git(1). Mirrors libgit2
+ * ignore.c:50-168. */
 
 static bool does_negate_pattern(
     const gitignore_rule_t *rule,
@@ -298,9 +296,9 @@ static bool does_negate_pattern(
     const gitignore_rule_t *shorter = rule->length < neg->length ? rule : neg;
     const gitignore_rule_t *longer = rule->length < neg->length ? neg : rule;
 
-    /* shorter must be basename-only AND match the tail of longer on a
-     * `/` boundary. Length inequality guarantees tail > longer->pattern,
-     * so tail[-1] is always inside longer's buffer. */
+    /* shorter must be basename-only AND match the tail of longer on a `/` boundary.
+     * Length inequality guarantees tail > longer->pattern, so tail[-1] is always
+     * inside longer's buffer. */
     const char *tail = longer->pattern + longer->length - shorter->length;
     if (tail[-1] != '/')
         return false;
@@ -309,9 +307,9 @@ static bool does_negate_pattern(
     return memcmp(tail, shorter->pattern, shorter->length) == 0;
 }
 
-/* Return true if `neg` could actually un-ignore a file matched by some
- * earlier rule in `set`. Called only for non-wildcard negations — the
- * wildcard case is indeterminate and libgit2 keeps them unconditionally. */
+/* Return true if `neg` could actually un-ignore a file matched by some earlier
+ * rule in `set`. Called only for non-wildcard negations — the wildcard case is
+ * indeterminate and libgit2 keeps them unconditionally. */
 static bool negation_has_effect(
     const gitignore_ruleset_t *set,
     const gitignore_rule_t *neg
@@ -325,10 +323,10 @@ static bool negation_has_effect(
             continue;
         }
 
-        /* For wildcard predecessors, mirror libgit2's wildmatch of the
-         * neg's pattern against the predecessor's pattern. WM_PATHNAME
-         * is gated on the predecessor having FULLPATH so that e.g.
-         * `*.log` still matches nested `path/foo.log`. */
+        /* For wildcard predecessors, mirror libgit2's wildmatch of the neg's
+         * pattern against the predecessor's pattern. WM_PATHNAME is gated on
+         * the predecessor having FULLPATH so that e.g. `*.log` still matches
+         * nested `path/foo.log`. */
         unsigned int flags = (rule->flags & GITIGNORE_FLAG_FULLPATH)
                                  ? WM_PATHNAME
                                  : 0;
@@ -387,8 +385,8 @@ error_t *gitignore_ruleset_append(
         );
 
         /* Drop a non-wildcard negation that no earlier rule could match
-         * (gitignore's "parent directory cannot be re-included" rule).
-         * Mirrors the gate in libgit2's parse_ignore_file. */
+         * (gitignore's "parent directory cannot be re-included" rule). Mirrors
+         * the gate in libgit2's parse_ignore_file. */
         if (have &&
             (rule.flags & GITIGNORE_FLAG_NEGATIVE) &&
             !(rule.flags & GITIGNORE_FLAG_HASWILD) &&
@@ -396,8 +394,8 @@ error_t *gitignore_ruleset_append(
             have = false;
 
         /* Gate MAX_RULES only when we're actually about to store — a
-         * blank/comment/discarded line at index 10 000 must not falsely
-         * trip the limit. */
+         * blank/comment/discarded line at index 10 000 must not falsely trip
+         * the limit. */
         if (have) {
             if (set->count >= MAX_RULES)
                 return ERROR(
@@ -428,8 +426,8 @@ error_t *gitignore_ruleset_append_patterns(
     if (!patterns || count == 0)
         return NULL;
 
-    /* Compute buffer size in one pass; NULL entries are skipped. Each
-     * pattern contributes strlen + 1 (for the trailing '\n' separator). */
+    /* Compute buffer size in one pass; NULL entries are skipped. Each pattern
+     * contributes strlen + 1 (for the trailing '\n' separator). */
     size_t total = 0;
     for (size_t i = 0; i < count; i++) {
         if (!patterns[i])
@@ -439,10 +437,10 @@ error_t *gitignore_ruleset_append_patterns(
     if (total == 0)
         return NULL;
 
-    /* Join into an arena-backed buffer. The buffer is transient — only
-     * used during the append call — but using the ruleset's arena keeps
-     * the allocator path consistent with the rest of gitignore.c. The
-     * extra bytes are reclaimed at arena_destroy alongside the rules. */
+    /* Join into an arena-backed buffer. The buffer is transient — only used during
+     * the append call — but using the ruleset's arena keeps the allocator path
+     * consistent with the rest of gitignore.c. The extra bytes are reclaimed at
+     * arena_destroy alongside the rules. */
     char *joined = arena_alloc(set->arena, total + 1);
     if (!joined)
         return ERROR(ERR_MEMORY, "gitignore: arena exhausted");
@@ -478,16 +476,14 @@ void gitignore_eval(
     if (!set || !path)
         return;
 
-    /* Copy to a mutable, NUL-terminated buffer. Walk-up shortens the
-     * logical path in place by inserting NUL at each `/`; strrchr and
-     * wildmatch both read until NUL, so no explicit length tracking
-     * is needed.
+    /* Copy to a mutable, NUL-terminated buffer. Walk-up shortens the logical
+     * path in place by inserting NUL at each `/`; strrchr and wildmatch both
+     * read until NUL, so no explicit length tracking is needed.
      *
-     * Buffer strategy: stack covers the common case; longer paths
-     * borrow heap so the matcher never silently degrades. A heap-alloc
-     * failure on a single path-sized block means the system is in dire
-     * straits; we keep the never-fails contract by leaving
-     * out->decided = false (caller treats as not-ignored). */
+     * Buffer strategy: stack covers the common case; longer paths borrow heap
+     * so the matcher never silently degrades. A heap-alloc failure on a single
+     * path-sized block means the system is in dire straits; we keep the never-fails
+     * contract by leaving out->decided = false (caller treats as not-ignored). */
     char stack_buf[PATH_STACK_BUFFER];
     char *buf = stack_buf;
     char *heap = NULL;
@@ -507,8 +503,8 @@ void gitignore_eval(
     if (*p == '\0')
         goto cleanup;
 
-    /* A trailing slash conveys "directory"; strip and flip is_dir so
-     * callers may pass either form. */
+    /* A trailing slash conveys "directory"; strip and flip is_dir so callers
+     * may pass either form. */
     size_t len = strlen(p);
     while (len > 0 && p[len - 1] == '/') {
         p[--len] = '\0';
@@ -545,9 +541,8 @@ void gitignore_eval(
             }
         }
 
-        /* Walk up one directory. Single-component paths terminate the
-         * scan (matches the basename == path check in libgit2's
-         * git_ignore_path_is_ignored). */
+        /* Walk up one directory. Single-component paths terminate the scan (matches
+         * the basename == path check in libgit2's git_ignore_path_is_ignored). */
         if (!slash)
             break;
         *slash = '\0';

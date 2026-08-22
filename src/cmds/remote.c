@@ -517,11 +517,11 @@ error_t *cmd_remote(const dotta_ctx_t *ctx, const cmd_remote_options_t *opts) {
 /**
  * Map (positional_count, args[0]) onto the subcommand discriminator.
  *
- * Single spec + post_parse instead of a seven-node subcommand tree:
- * every "subcommand" shares the same options struct and the same flag
- * set, and the bareword fallback (`dotta remote <name>` → show <name>)
- * cannot be expressed by an args_subcommand_t entry — `<name>` would
- * trigger "unknown subcommand". Two lines of post_parse handle it.
+ * Single spec + post_parse instead of a seven-node subcommand tree: every
+ * "subcommand" shares the same options struct and the same flag set, and the
+ * bareword fallback (`dotta remote <name>` → show <name>) cannot be expressed
+ * by an args_subcommand_t entry — `<name>` would trigger "unknown subcommand".
+ * Two lines of post_parse handle it.
  */
 static error_t *remote_post_parse(
     void *opts_v, arena_t *arena, const args_command_t *cmd

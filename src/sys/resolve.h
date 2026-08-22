@@ -1,9 +1,9 @@
 /**
  * resolve.h - Branch divergence resolution strategies
  *
- * This module encapsulates all branch resolution logic for sync operations.
- * It provides a clean abstraction over merge/rebase operations that never
- * modifies HEAD, maintaining dotta's architectural principle.
+ * This module encapsulates all branch resolution logic for sync operations. It
+ * provides a clean abstraction over merge/rebase operations that never modifies
+ * HEAD, maintaining dotta's architectural principle.
  *
  * All operations are designed to be atomic: either the entire operation succeeds
  * and the branch is updated, or it fails and the branch remains unchanged.
@@ -28,8 +28,8 @@ typedef enum {
 /**
  * Divergence resolution context
  *
- * Encapsulates all information needed for divergence resolution.
- * The saved_oid is used for rollback if resolution fails.
+ * Encapsulates all information needed for divergence resolution. The saved_oid
+ * is used for rollback if resolution fails.
  */
 typedef struct {
     git_repository *repo;           /* Repository handle (must not be NULL) */
@@ -79,9 +79,9 @@ error_t *resolve_execute(
 /**
  * Rollback divergence resolution to saved state
  *
- * Resets the branch to the OID saved in the context (saved during init).
- * This is used when resolution succeeds but subsequent operations fail
- * (e.g., push fails after rebase).
+ * Resets the branch to the OID saved in the context (saved during init). This
+ * is used when resolution succeeds but subsequent operations fail (e.g., push
+ * fails after rebase).
  *
  * @param ctx Divergence context (must not be NULL)
  * @return Error or NULL on success
@@ -91,8 +91,8 @@ error_t *resolve_rollback(resolve_context_t *ctx);
 /**
  * Verify divergence was resolved
  *
- * Checks that the branch is now ahead of remote (or up-to-date) and
- * not behind or diverged anymore.
+ * Checks that the branch is now ahead of remote (or up-to-date) and not behind
+ * or diverged anymore.
  *
  * @param ctx Divergence context (must not be NULL)
  * @param out_ahead Commits ahead of remote (can be NULL)

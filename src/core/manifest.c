@@ -1,27 +1,25 @@
 /**
  * manifest.c - Manifest module implementation
  *
- * The precedence oracle: manifest_build (every enabled profile, in
- * precedence order) and manifest_build_tree (one tree) share one
- * per-profile claim routine that produces manifest_row_t rows directly.
- * There is no persistence step and no bridge type: the view is computed
- * into the caller's arena and read through the accessors below.
+ * The precedence oracle: manifest_build (every enabled profile, in precedence
+ * order) and manifest_build_tree (one tree) share one per-profile claim routine
+ * that produces manifest_row_t rows directly. There is no persistence step and
+ * no bridge type: the view is computed into the caller's arena and read through
+ * the accessors below.
  *
  * Key patterns:
- *   - Precedence by claim: manifest_claim is the one find-or-append-and-
- *     reset primitive. A later (higher) claim on a path replaces the
- *     slot whatever its kind; the view holds one row per path.
- *   - Blob OID Extraction: the tree walker reads blob_oid, type and the
- *     Git-derived mode from each borrowed tree entry for O(1) content
- *     identity.
- *   - Metadata Integration: the walker attributes per-profile metadata
- *     onto each row during the tree walk (single profile per row, no
- *     cross-profile merge — storage_path collisions across profiles with
- *     distinct target values are kept apart), and the same metadata's
- *     DIRECTORY items are claimed after the walk.
- *   - Diff, not delta-tracking: what a scope transition or a sync did to
- *     the view is read off two views (manifest_diff), never recorded
- *     while it happened.
+ *   - Precedence by claim: manifest_claim is the one find-or-append-and-reset
+ *     primitive. A later (higher) claim on a path replaces the slot whatever
+ *     its kind; the view holds one row per path.
+ *   - Blob OID Extraction: the tree walker reads blob_oid, type and the Git-derived
+ *     mode from each borrowed tree entry for O(1) content identity.
+ *   - Metadata Integration: the walker attributes per-profile metadata onto each
+ *     row during the tree walk (single profile per row, no cross-profile merge
+ *     — storage_path collisions across profiles with distinct target values are
+ *     kept apart), and the same metadata's DIRECTORY items are claimed after
+ *     the walk.
+ *   - Diff, not delta-tracking: what a scope transition or a sync did to the
+ *     view is read off two views (manifest_diff), never recorded while it happened.
  */
 
 #include "core/manifest.h"
@@ -41,16 +39,15 @@
 /**
  * Manifest — the precedence oracle's product
  *
- * A pointer spine over rows allocated one by one from the caller's
- * arena, and a path index over them. Rows are stable from the moment
- * they are allocated — only the spine is ever reallocated — so the index
- * stores row pointers directly and manifest_rows hands the spine out as
- * the public slice.
+ * A pointer spine over rows allocated one by one from the caller's arena, and a
+ * path index over them. Rows are stable from the moment they are allocated —
+ * only the spine is ever reallocated — so the index stores row pointers directly
+ * and manifest_rows hands the spine out as the public slice.
  *
- * Spine growth uses arena_calloc + memcpy (abandon-and-realloc): the old
- * chunk is left to the arena (released at arena_destroy). The index is
- * heap-allocated and released by manifest_free; its keys borrow each
- * row's arena-backed filesystem_path.
+ * Spine growth uses arena_calloc + memcpy (abandon-and-realloc): the old chunk
+ * is left to the arena (released at arena_destroy). The index is heap-allocated
+ * and released by manifest_free; its keys borrow each row's arena-backed
+ * filesystem_path.
  */
 struct manifest {
     manifest_row_t **rows;         /* arena-backed pointer spine, abandon-and-realloc growth */
@@ -62,20 +59,20 @@ struct manifest {
 /**
  * Context for the blob-claim tree-walk callback
  *
- * Passed to gitops_tree_walk() to populate a manifest directly during
- * tree traversal, eliminating O(N×D) two-pass overhead. The callback
- * extracts identity fields from borrowed tree entries at O(1) per file.
+ * Passed to gitops_tree_walk() to populate a manifest directly during tree
+ * traversal, eliminating O(N×D) two-pass overhead. The callback extracts identity
+ * fields from borrowed tree entries at O(1) per file.
  *
  * Memory ownership:
  * - manifest: borrowed, caller retains ownership
  * - profile: arena-backed name every row of this profile borrows
- * - mounts: borrowed, must not be NULL — keyed by ctx->profile to resolve
- *          custom/ entries; a missing binding (MOUNT_RESOLVE_UNBOUND) is
- *          a hard error naming the profile and the repair command
- * - metadata: borrowed (per-profile, reloaded for each profile in the outer
- *             build loop), can be NULL (profile lacks metadata.json)
- * - arena: borrowed, must not be NULL; per-row strings + spine growth
- *          allocations are abandoned to it
+ * - mounts: borrowed, must not be NULL — keyed by ctx->profile to resolve custom/
+ *          entries; a missing binding (MOUNT_RESOLVE_UNBOUND) is a hard error
+ *          naming the profile and the repair command
+ * - metadata: borrowed (per-profile, reloaded for each profile in the outer build
+ *             loop), can be NULL (profile lacks metadata.json)
+ * - arena: borrowed, must not be NULL; per-row strings + spine growth allocations
+ *          are abandoned to it
  * - error: owned by callback, caller must free on error
  */
 struct claim_ctx {
@@ -90,22 +87,20 @@ struct claim_ctx {
 /**
  * Apply per-profile metadata to a Git-built blob row.
  *
- * Selectively overrides the metadata-owned fields (mode, owner, group,
- * encrypted) on a row whose Git-derived defaults have already been set.
- * Each call attributes a single profile's claim to the row; precedence
- * across profiles is resolved by manifest_claim's reset and the paired
- * re-application of this helper.
+ * Selectively overrides the metadata-owned fields (mode, owner, group, encrypted)
+ * on a row whose Git-derived defaults have already been set. Each call attributes
+ * a single profile's claim to the row; precedence across profiles is resolved
+ * by manifest_claim's reset and the paired re-application of this helper.
  *
  * Per-kind semantics when an item exists for the row's storage_path:
  *   FILE      → override mode; set encrypted; copy owner/group
  *   SYMLINK   → leave mode at 0 (links carry no settable mode); copy owner/group
- *   DIRECTORY → no-op: a path is a tree or a blob, so a DIRECTORY item at
- *               a blob's storage_path is stale metadata, and the tree is
- *               the content authority — the item contributes nothing,
- *               not even its owner/group
+ *   DIRECTORY → no-op: a path is a tree or a blob, so a DIRECTORY item at a blob's
+ *               storage_path is stale metadata, and the tree is the content
+ *               authority — the item contributes nothing, not even its owner/group
  *
- * NULL metadata, missing item, and ERR_NOT_FOUND all leave the row's
- * Git-derived defaults intact. Other lookup failures propagate.
+ * NULL metadata, missing item, and ERR_NOT_FOUND all leave the row's Git-derived
+ * defaults intact. Other lookup failures propagate.
  *
  * Override-path callers may freely overwrite owner/group: prior values are
  * arena-borrowed and abandoned to the arena, no per-pointer free required.
@@ -134,11 +129,10 @@ static error_t *manifest_apply_metadata(
 
     if (item->kind == METADATA_ITEM_DIRECTORY) return NULL;
 
-    /* owner/group apply to both remaining kinds; copy first so the
-     * mode/encrypted overrides below can short-circuit after the
-     * allocations have already succeeded. arena_strdup returns NULL only
-     * on real failure (NULL item->owner/group bypasses the if-guards and
-     * leaves the dup NULL). */
+    /* owner/group apply to both remaining kinds; copy first so the mode/encrypted
+     * overrides below can short-circuit after the allocations have already
+     * succeeded. arena_strdup returns NULL only on real failure (NULL
+     * item->owner/group bypasses the if-guards and leaves the dup NULL). */
     char *owner_dup = NULL;
     if (item->owner) {
         owner_dup = arena_strdup(arena, item->owner);
@@ -184,17 +178,16 @@ static error_t *manifest_apply_metadata(
 /**
  * Claim a filesystem path: the row for it, reset, ready to be filled
  *
- * The one precedence primitive. A path already in the view is being
- * claimed by a later — higher — profile (or by the same profile's
- * directory pass, which yields before calling; see manifest_claim_tree): the
- * existing row is zeroed so nothing of the loser survives — not its
- * owner/group/encrypted, not its kind — and keeps only the indexed key.
- * A new path gets a fresh arena row, indexed then appended, so a failed
- * index insert leaves the spine untouched.
+ * The one precedence primitive. A path already in the view is being claimed by
+ * a later — higher — profile (or by the same profile's directory pass, which
+ * yields before calling; see manifest_claim_tree): the existing row is zeroed
+ * so nothing of the loser survives — not its owner/group/encrypted, not its kind
+ * — and keeps only the indexed key. A new path gets a fresh arena row, indexed
+ * then appended, so a failed index insert leaves the spine untouched.
  *
- * The old strings of a reset row are arena-borrowed and abandoned to the
- * caller's arena; the index's key is the row's original filesystem_path
- * string, which stays valid and equal.
+ * The old strings of a reset row are arena-borrowed and abandoned to the caller's
+ * arena; the index's key is the row's original filesystem_path string, which
+ * stays valid and equal.
  *
  * @param manifest Target view (must not be NULL)
  * @param filesystem_path Arena-backed path the row is keyed by (must not be NULL)
@@ -219,11 +212,11 @@ static error_t *manifest_claim(
 
     /* Grow the spine if needed.
      *
-     * Arena abandon-and-realloc: allocate a new chunk from the arena,
-     * memcpy the existing pointers, and swap. The old chunk stays valid
-     * for the arena's lifetime but is no longer referenced; the arena
-     * reclaims it at arena_destroy. The rows themselves never move, so
-     * the index's row pointers are unaffected by the spine relocation. */
+     * Arena abandon-and-realloc: allocate a new chunk from the arena, memcpy
+     * the existing pointers, and swap. The old chunk stays valid for the arena's
+     * lifetime but is no longer referenced; the arena reclaims it at arena_destroy.
+     * The rows themselves never move, so the index's row pointers are unaffected
+     * by the spine relocation. */
     if (manifest->count >= manifest->capacity) {
         if (manifest->capacity > SIZE_MAX / 2) {
             return ERROR(ERR_INTERNAL, "Manifest capacity overflow");
@@ -246,9 +239,9 @@ static error_t *manifest_claim(
         return ERROR(ERR_MEMORY, "Failed to allocate manifest row");
     }
 
-    /* filesystem_path is arena-borrowed via mount_resolve; the cast
-     * discards the const qualifier exposed by mount_resolve's output
-     * type. It is the index's key for the rest of the view's life. */
+    /* filesystem_path is arena-borrowed via mount_resolve; the cast discards
+     * the const qualifier exposed by mount_resolve's output type. It is the index's
+     * key for the rest of the view's life. */
     row->filesystem_path = (char *) filesystem_path;
 
     error_t *err = hashmap_set(manifest->index, row->filesystem_path, row);
@@ -265,12 +258,12 @@ static error_t *manifest_claim(
  * Tree-walk callback that claims the tree's blobs into the manifest
  *
  * Performance optimization: Instead of collecting paths in pass 1 then
- * re-traversing via git_tree_entry_bypath() in pass 2 (O(N×D)), this
- * callback writes manifest_row_t rows directly in O(N) time.
+ * re-traversing via git_tree_entry_bypath() in pass 2 (O(N×D)), this callback
+ * writes manifest_row_t rows directly in O(N) time.
  *
- * Extracts identity fields (blob_oid, type, mode) from the borrowed tree
- * entry at the callback boundary — no git_tree_entry_dup needed, no opaque
- * handle stored on the row.
+ * Extracts identity fields (blob_oid, type, mode) from the borrowed tree entry
+ * at the callback boundary — no git_tree_entry_dup needed, no opaque handle stored
+ * on the row.
  *
  * Handles:
  * - Metadata file filtering (.dotta/, .bootstrap, etc.)
@@ -335,21 +328,19 @@ static int manifest_claim_blob(
 
     /* Convert storage path to filesystem path against the mount table.
      *
-     * MOUNT_RESOLVE_UNBOUND fires only when storage_path is custom/...
-     * and ctx->profile has no target binding in mounts. Under the
-     * tightened reorder-only contract on state_reorder_profiles plus
-     * the custom-target preconditions enforced by every command that
-     * can enable a profile (cmd profile enable, cmd add, cmd clone,
-     * interactive save), this state is unreachable through documented
-     * paths — a row in enabled_profiles is now guaranteed to carry a
-     * target whenever its profile has custom/ files.
+     * MOUNT_RESOLVE_UNBOUND fires only when storage_path is custom/... and
+     * ctx->profile has no target binding in mounts. Under the tightened
+     * reorder-only contract on state_reorder_profiles plus the custom-target
+     * preconditions enforced by every command that can enable a profile (cmd
+     * profile enable, cmd add, cmd clone, interactive save), this state is
+     * unreachable through documented paths — a row in enabled_profiles is now
+     * guaranteed to carry a target whenever its profile has custom/ files.
      *
-     * Reaching UNBOUND here therefore means external DB tampering or a
-     * code bug. Surface it as a hard error naming the profile and the
-     * repair command instead of silently dropping the row (which used
-     * to leave the user with a profile enabled in the DB whose files
-     * never deploy). Genuine errors (malformed path, OOM) propagate
-     * via the err branch above. */
+     * Reaching UNBOUND here therefore means external DB tampering or a code bug.
+     * Surface it as a hard error naming the profile and the repair command instead
+     * of silently dropping the row (which used to leave the user with a profile
+     * enabled in the DB whose files never deploy). Genuine errors (malformed
+     * path, OOM) propagate via the err branch above. */
     mount_resolve_outcome_t outcome;
     const char *filesystem_path = NULL;
     error_t *err = mount_resolve(
@@ -381,9 +372,9 @@ static int manifest_claim_blob(
         return -1;
     }
 
-    /* Claim the path: a fresh row, or the lower-precedence profile's slot
-     * reset (precedence override). Either way the row is zero but for its
-     * key, and everything below is written the same way. */
+    /* Claim the path: a fresh row, or the lower-precedence profile's slot reset
+     * (precedence override). Either way the row is zero but for its key, and
+     * everything below is written the same way. */
     manifest_row_t *row = NULL;
     err = manifest_claim(ctx->manifest, filesystem_path, ctx->arena, &row);
     if (err) {
@@ -391,14 +382,13 @@ static int manifest_claim_blob(
         return -1;
     }
 
-    /* ctx->profile is the arena-backed name the builder duplicated; the
-     * cast discards its const decoration to fit the row's `char *profile`
-     * slot. */
+    /* ctx->profile is the arena-backed name the builder duplicated; the cast
+     * discards its const decoration to fit the row's `char *profile` slot. */
     row->storage_path = dup_storage_path;
     row->profile = (char *) ctx->profile;
 
-    /* Extract identity from borrowed tree entry (blob_oid, type, mode).
-     * The overriding profile may differ in filemode (e.g., executable bit). */
+    /* Extract identity from borrowed tree entry (blob_oid, type, mode). The
+     * overriding profile may differ in filemode (e.g., executable bit). */
     git_oid_cpy(&row->blob_oid, git_tree_entry_id(entry));
     switch (git_tree_entry_filemode(entry)) {
         case GIT_FILEMODE_BLOB_EXECUTABLE:
@@ -416,14 +406,14 @@ static int manifest_claim_blob(
             break;
     }
 
-    /* Apply this profile's metadata claim (if any) to the row. The
-     * Git-derived defaults set above are the floor; metadata may override
-     * mode and encrypted, and contribute owner/group. */
+    /* Apply this profile's metadata claim (if any) to the row. The Git-derived
+     * defaults set above are the floor; metadata may override mode and encrypted,
+     * and contribute owner/group. */
     err = manifest_apply_metadata(row, ctx->metadata, ctx->arena);
     if (err) {
-        /* The caller's outer error path propagates without freeing the
-         * view's rows (spine + strings are arena-backed); a half-built
-         * row in a failed build is never read. */
+        /* The caller's outer error path propagates without freeing the view's
+         * rows (spine + strings are arena-backed); a half-built row in a failed
+         * build is never read. */
         ctx->error = error_wrap(
             err, "Failed to apply metadata to '%s'",
             row->storage_path
@@ -437,22 +427,21 @@ static int manifest_claim_blob(
 /**
  * Claim one profile's contribution: the tree's blobs, then its directories
  *
- * The per-profile step both builders run. The tree walk claims every
- * blob (manifest_claim_blob); then every DIRECTORY item of the profile's metadata
- * claims its path — resolved against the mount table, the same way files
- * are — unless this profile already holds the path with a blob: a path is
- * a tree or a blob, so a DIRECTORY item at a blob's storage_path is stale
- * metadata, and the tree is the content authority. A DIRECTORY item under
- * a profile lacking a target binding on this host is the same UNBOUND
- * corruption the file side treats as a hard error with a repair hint,
- * matching the precedence-builder's symmetric treatment for files.
+ * The per-profile step both builders run. The tree walk claims every blob
+ * (manifest_claim_blob); then every DIRECTORY item of the profile's metadata
+ * claims its path — resolved against the mount table, the same way files are —
+ * unless this profile already holds the path with a blob: a path is a tree or a
+ * blob, so a DIRECTORY item at a blob's storage_path is stale metadata, and the
+ * tree is the content authority. A DIRECTORY item under a profile lacking a target
+ * binding on this host is the same UNBOUND corruption the file side treats as a
+ * hard error with a repair hint, matching the precedence-builder's symmetric
+ * treatment for files.
  *
- * `profile` is the arena-backed name every row borrows; `metadata` may be
- * NULL (no metadata.json: Git-derived defaults stand, no directories).
+ * `profile` is the arena-backed name every row borrows; `metadata` may be NULL
+ * (no metadata.json: Git-derived defaults stand, no directories).
  *
- * Memory: every allocation lands in `arena`. On error, rows already
- * claimed are left as they are — the build fails whole and the caller
- * releases the index.
+ * Memory: every allocation lands in `arena`. On error, rows already claimed are
+ * left as they are — the build fails whole and the caller releases the index.
  */
 static error_t *manifest_claim_tree(
     manifest_t *manifest,
@@ -464,13 +453,13 @@ static error_t *manifest_claim_tree(
 ) {
     /* Build view rows via single-pass tree traversal.
      *
-     * The callback extracts identity fields (blob_oid, type, mode) from
-     * borrowed tree entries, converts paths via mount_resolve, handles
-     * precedence override, applies per-profile metadata to
-     * mode/owner/group/encrypted, and populates manifest_row_t rows
+     * The callback extracts identity fields (blob_oid, type, mode) from borrowed
+     * tree entries, converts paths via mount_resolve, handles precedence override,
+     * applies per-profile metadata to mode/owner/group/encrypted, and populates
+     * manifest_row_t rows
      * directly — all in O(N) time. mounts is borrowed from the caller;
-     * bindings are keyed by profile (which the callback feeds verbatim
-     * into mount_resolve). */
+     * bindings are keyed by profile (which the callback feeds verbatim into
+     * mount_resolve). */
     struct claim_ctx ctx = {
         .manifest = manifest,
         .profile  = profile,
@@ -531,8 +520,8 @@ static error_t *manifest_claim_tree(
         err = manifest_claim(manifest, filesystem_path, arena, &row);
         if (err) break;
 
-        /* A directory row is claimed from metadata alone: blob_oid stays
-         * zero and encrypted false; mode, owner and group are the item's. */
+        /* A directory row is claimed from metadata alone: blob_oid stays zero
+         * and encrypted false; mode, owner and group are the item's. */
         row->storage_path = arena_strdup(arena, item->key);
         row->profile = (char *) profile;
         row->type = PATH_TYPE_DIRECTORY;
@@ -554,13 +543,12 @@ static error_t *manifest_claim_tree(
 /**
  * Allocate a fresh manifest_t, ready for the claim routine.
  *
- * Both the view struct and the initial spine are arena-allocated. The
- * index hashmap is heap-allocated (borrowed-key mode — keys live in the
- * caller's arena and survive the hashmap's lifetime).
+ * Both the view struct and the initial spine are arena-allocated. The index hashmap
+ * is heap-allocated (borrowed-key mode — keys live in the caller's arena and
+ * survive the hashmap's lifetime).
  *
- * On error, the function returns ERR_MEMORY and *out is NULL; arena
- * allocations are abandoned to the arena and no heap allocation is
- * outstanding.
+ * On error, the function returns ERR_MEMORY and *out is NULL; arena allocations
+ * are abandoned to the arena and no heap allocation is outstanding.
  */
 static error_t *manifest_allocate(
     arena_t *arena,
@@ -614,22 +602,20 @@ error_t *manifest_build(
 
     /* Process each profile in order (later profiles override earlier) */
     for (size_t i = 0; i < profiles->count; i++) {
-        /* Arena-allocate the profile name. Rows borrow this pointer; the
-         * caller's arena outlives the view (it backs every per-row string
-         * the walk writes), so the view never depends on the caller's
-         * profile list. */
+        /* Arena-allocate the profile name. Rows borrow this pointer; the caller's
+         * arena outlives the view (it backs every per-row string the walk writes),
+         * so the view never depends on the caller's profile list. */
         const char *profile = arena_strdup(arena, profiles->items[i]);
         if (!profile) {
             err = ERROR(ERR_MEMORY, "Failed to duplicate profile name");
             goto cleanup;
         }
 
-        /* Does the branch exist? Asked separately because the tree loader
-         * maps a missing ref to ERR_GIT like every other failure, and
-         * "gone" must not be confused with "broken": gone is an
-         * observation — the profile contributes nothing and the workspace
-         * reads its records as orphans — broken is an error that must
-         * propagate. */
+        /* Does the branch exist? Asked separately because the tree loader maps
+         * a missing ref to ERR_GIT like every other failure, and "gone" must
+         * not be confused with "broken": gone is an observation — the profile
+         * contributes nothing and the workspace reads its records as orphans —
+         * broken is an error that must propagate. */
         bool exists = false;
         err = gitops_branch_exists(repo, profile, &exists);
         if (err) {
@@ -650,14 +636,13 @@ error_t *manifest_build(
             goto cleanup;
         }
 
-        /* Load this profile's metadata.json from the tree we just opened
-         * (avoid a second ref/commit/tree walk). Per-profile lookup is the
-         * correctness boundary for attribution: each profile claims its
-         * own files and directories via its own metadata, never via a
-         * cross-profile merge. ERR_NOT_FOUND here means "no metadata blob
-         * in this tree" — normal for old or freshly created profiles, and
-         * the claim routine degrades gracefully (Git-derived defaults
-         * stand, no directories). */
+        /* Load this profile's metadata.json from the tree we just opened (avoid
+         * a second ref/commit/tree walk). Per-profile lookup is the correctness
+         * boundary for attribution: each profile claims its own files and
+         * directories via its own metadata, never via a cross-profile merge.
+         * ERR_NOT_FOUND here means "no metadata blob in this tree" — normal for
+         * old or freshly created profiles, and the claim routine degrades
+         * gracefully (Git-derived defaults stand, no directories). */
         metadata_t *profile_metadata = NULL;
         err = metadata_load_from_tree(repo, tree, profile, &profile_metadata);
         if (err) {
@@ -713,17 +698,17 @@ error_t *manifest_build_tree(
     error_t *err = manifest_allocate(arena, 64, 128, &manifest);
     if (err) return err;
 
-    /* Arena-allocate the profile name. Rows borrow this pointer; the
-     * caller's arena outlives the view (it backs every per-row string
-     * the walk writes), so the borrow stays valid until arena_destroy. */
+    /* Arena-allocate the profile name. Rows borrow this pointer; the caller's
+     * arena outlives the view (it backs every per-row string the walk writes),
+     * so the borrow stays valid until arena_destroy. */
     const char *owned_profile = arena_strdup(arena, profile);
     if (!owned_profile) {
         err = ERROR(ERR_MEMORY, "Failed to duplicate profile name");
         goto cleanup;
     }
 
-    /* mounts and metadata borrow from function parameters — both outlive
-     * the tree walk. */
+    /* mounts and metadata borrow from function parameters — both outlive the
+     * tree walk. */
     err = manifest_claim_tree(manifest, tree, owned_profile, mounts, metadata, arena);
     if (err) {
         err = error_wrap(err, "Failed to build manifest from tree");
@@ -741,9 +726,9 @@ cleanup:
 /**
  * Every row of the view, both kinds, unordered
  *
- * The cast adds const at both pointer levels (T ** → const T *const *) —
- * legal per the C standard's qualifier-conversion rule, no diagnostic
- * required. Mirrors workspace_files's identical bridge cast.
+ * The cast adds const at both pointer levels (T ** → const T *const *) — legal
+ * per the C standard's qualifier-conversion rule, no diagnostic required. Mirrors
+ * workspace_files's identical bridge cast.
  */
 manifest_rows_t manifest_rows(const manifest_t *manifest) {
     if (!manifest) return (manifest_rows_t){ 0 };
@@ -796,12 +781,11 @@ void manifest_free(manifest_t *manifest) {
 /**
  * Attribute the transition between two views to profiles
  *
- * Two passes — every row of `after` for the gain side, every row of
- * `before` for the loss side — over two indexes: profile → stats slot,
- * and the record by path for the departure split. Nothing is written;
- * the rule for what a departure means for apply is the record's
- * presence and ownership at the path, the same fact the workspace reads
- * when it meets the orphan.
+ * Two passes — every row of `after` for the gain side, every row of `before`
+ * for the loss side — over two indexes: profile → stats slot, and the record by
+ * path for the departure split. Nothing is written; the rule for what a departure
+ * means for apply is the record's presence and ownership at the path, the same
+ * fact the workspace reads when it meets the orphan.
  */
 error_t *manifest_diff(
     const manifest_t *before,
@@ -819,11 +803,10 @@ error_t *manifest_diff(
     hashmap_t *stats_map = NULL;
     hashmap_t *anchor_index = NULL;
 
-    /* Stats attribution index. Maps profile name → (array index + 1).
-     * The +1 offset distinguishes "found at index 0" from "not found"
-     * in hashmap_get (which returns NULL when a key is absent). Keys
-     * are borrowed from profiles; the caller keeps it alive for the
-     * duration of this call. */
+    /* Stats attribution index. Maps profile name → (array index + 1). The +1
+     * offset distinguishes "found at index 0" from "not found" in hashmap_get
+     * (which returns NULL when a key is absent). Keys are borrowed from profiles;
+     * the caller keeps it alive for the duration of this call. */
     stats_map = hashmap_borrow(profiles->count > 0 ? profiles->count * 2 : 16);
     if (!stats_map) {
         return ERROR(ERR_MEMORY, "Failed to create stats attribution map");
@@ -831,10 +814,10 @@ error_t *manifest_diff(
     for (size_t i = 0; i < profiles->count; i++) {
         const char *name = profiles->items[i];
 
-        /* Duplicate profile names would silently collapse: hashmap_set
-         * overwrites, so the later occurrence's slot would receive all
-         * attribution and the earlier slot would stay zero-filled. Fail
-         * loudly instead — this is a caller-side contract violation. */
+        /* Duplicate profile names would silently collapse: hashmap_set overwrites,
+         * so the later occurrence's slot would receive all attribution and the
+         * earlier slot would stay zero-filled. Fail loudly instead — this is a
+         * caller-side contract violation. */
         if (hashmap_has(stats_map, name)) {
             err = ERROR(
                 ERR_INVALID_ARG,
@@ -853,11 +836,11 @@ error_t *manifest_diff(
         }
     }
 
-    /* The record, indexed by path, for the orphan split: a departed row
-     * with a record dotta owns leaves an orphan apply prunes (or releases,
-     * if Git let go), one with a record dotta never owned leaves one the
-     * ownership gate releases, one without leaves nothing for apply to
-     * do. Keys borrow the records' arena-backed paths. */
+    /* The record, indexed by path, for the orphan split: a departed row with a
+     * record dotta owns leaves an orphan apply prunes (or releases, if Git let
+     * go), one with a record dotta never owned leaves one the ownership gate
+     * releases, one without leaves nothing for apply to do. Keys borrow the
+     * records' arena-backed paths. */
     anchor_index = hashmap_borrow(anchor_count > 0 ? anchor_count : 16);
     if (!anchor_index) {
         err = ERROR(ERR_MEMORY, "Failed to create anchors index");
@@ -871,9 +854,8 @@ error_t *manifest_diff(
         }
     }
 
-    /* Gain side: every row of `after`, attributed to its winner. What
-     * `before` had at the path splits claimed into added / updated /
-     * unchanged. */
+    /* Gain side: every row of `after`, attributed to its winner. What `before`
+     * had at the path splits claimed into added / updated / unchanged. */
     manifest_rows_t rows = manifest_rows(after);
     for (size_t i = 0; i < rows.count; i++) {
         const manifest_row_t *row = rows.entries[i];
@@ -893,10 +875,10 @@ error_t *manifest_diff(
         }
     }
 
-    /* Loss side: every row of `before`, attributed to its former owner.
-     * A path still in `after` under another profile is a reassignment
-     * (for user-facing "A → B" messaging); a path `after` lacks is an
-     * orphan if a record stands at it, and ownership says which kind. */
+    /* Loss side: every row of `before`, attributed to its former owner. A path
+     * still in `after` under another profile is a reassignment (for user-facing
+     * "A → B" messaging); a path `after` lacks is an orphan if a record stands
+     * at it, and ownership says which kind. */
     rows = manifest_rows(before);
     for (size_t i = 0; i < rows.count; i++) {
         const manifest_row_t *old = rows.entries[i];

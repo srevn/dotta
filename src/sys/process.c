@@ -1,15 +1,14 @@
 /**
  * process.c - Unified subprocess primitive implementation
  *
- * Single linear procedure: validate spec → open pipes (output +
- * exec-errno) → fork → child sets up its environment and execs →
- * parent drains output with a monotonic-clock select() loop →
- * parent reaps the child (escalating SIGTERM→SIGKILL on timeout) →
- * parent decodes wait status into the result struct.
+ * Single linear procedure: validate spec → open pipes (output + exec-errno) →
+ * fork → child sets up its environment and execs → parent drains output with a
+ * monotonic-clock select() loop → parent reaps the child (escalating
+ * SIGTERM→SIGKILL on timeout) → parent decodes wait status into the result struct.
  *
- * One cleanup label handles all error paths. Every resource
- * (pipe fds, capture buffer, stray child) is initialized to a
- * sentinel so cleanup is unconditional and order-independent.
+ * One cleanup label handles all error paths. Every resource (pipe fds, capture
+ * buffer, stray child) is initialized to a sentinel so cleanup is unconditional
+ * and order-independent.
  */
 
 #include "sys/process.h"
@@ -34,30 +33,29 @@
 /* Read chunk size for draining the child's output pipe. */
 #define PROCESS_READ_CHUNK 4096
 
-/* Cap for sysconf(_SC_OPEN_MAX) before the close-fds loop, so a
- * pathological RLIMIT_NOFILE doesn't cost millions of close()
- * syscalls in the child. */
+/* Cap for sysconf(_SC_OPEN_MAX) before the close-fds loop, so a pathological
+ * RLIMIT_NOFILE doesn't cost millions of close() syscalls in the child. */
 #define PROCESS_FD_CAP 65536
 #define PROCESS_FD_FALLBACK 1024
 
-/* Polling cadence for the post-EOF and post-kill waitpid loops.
- * 50ms is a balance between wake-up latency and CPU burn. */
+/* Polling cadence for the post-EOF and post-kill waitpid loops. 50ms is a balance
+ * between wake-up latency and CPU burn. */
 #define PROCESS_POLL_INTERVAL_NS (50L * 1000L * 1000L)
 
-/* Grace periods for the timeout escalation. SIGTERM gets the longer
- * window; SIGKILL is essentially instantaneous but we still bound
- * the wait so a stuck reap doesn't block forever. */
+/* Grace periods for the timeout escalation. SIGTERM gets the longer window; SIGKILL
+ * is essentially instantaneous but we still bound the wait so a stuck reap doesn't
+ * block forever. */
 #define PROCESS_GRACE_TERM_SECONDS 5
 #define PROCESS_GRACE_KILL_SECONDS 3
 
-/* Best-effort orphan reap window during cleanup. Short — if the
- * child won't die in this time, we abandon and let init reap. */
+/* Best-effort orphan reap window during cleanup. Short — if the child won't die
+ * in this time, we abandon and let init reap. */
 #define PROCESS_GRACE_ORPHAN_SECONDS 1
 
 /**
- * Write all `n` bytes of `buf` to `fd`, retrying on partial writes
- * and EINTR. Returns the number of bytes written, or -1 if no
- * progress was made before a non-recoverable error.
+ * Write all `n` bytes of `buf` to `fd`, retrying on partial writes and EINTR.
+ * Returns the number of bytes written, or -1 if no progress was made before a
+ * non-recoverable error.
  */
 static ssize_t write_full(int fd, const void *buf, size_t n) {
     const char *p = buf;
@@ -78,14 +76,12 @@ static ssize_t write_full(int fd, const void *buf, size_t n) {
 }
 
 /**
- * Send `sig` to `kill_target` (a pid or negative pgid), then poll
- * waitpid(pid) for up to `grace_seconds`. On reap, *status is
- * filled and true is returned. On grace expiry or unrecoverable
- * waitpid error, false is returned.
+ * Send `sig` to `kill_target` (a pid or negative pgid), then poll waitpid(pid)
+ * for up to `grace_seconds`. On reap, *status is filled and true is returned.
+ * On grace expiry or unrecoverable waitpid error, false is returned.
  *
- * Used in three places: timeout-during-read, timeout-during-wait,
- * and orphan reap during cleanup. Single source of truth for the
- * SIGTERM/SIGKILL escalation.
+ * Used in three places: timeout-during-read, timeout-during-wait, and orphan
+ * reap during cleanup. Single source of truth for the SIGTERM/SIGKILL escalation.
  */
 static bool process_kill_and_wait(
     pid_t pid,
@@ -94,8 +90,8 @@ static bool process_kill_and_wait(
     int grace_seconds,
     int *status
 ) {
-    /* kill() failure is non-fatal — the target may already be gone,
-     * in which case waitpid() will tell us via reap or ECHILD. */
+    /* kill() failure is non-fatal — the target may already be gone, in which
+     * case waitpid() will tell us via reap or ECHILD. */
     (void) kill(kill_target, sig);
 
     struct timespec start = { 0, 0 };
@@ -122,10 +118,9 @@ static bool process_kill_and_wait(
 }
 
 /**
- * Set FD_CLOEXEC on a pipe pair, ignoring failures (the explicit
- * close-loop in the child still handles fd cleanup; CLOEXEC is
- * defense-in-depth for any future code path that doesn't follow
- * the close-loop discipline).
+ * Set FD_CLOEXEC on a pipe pair, ignoring failures (the explicit close-loop in
+ * the child still handles fd cleanup; CLOEXEC is defense-in-depth for any future
+ * code path that doesn't follow the close-loop discipline).
  */
 static void set_pipe_cloexec(int fds[2]) {
     (void) fcntl(fds[0], F_SETFD, FD_CLOEXEC);
@@ -133,8 +128,8 @@ static void set_pipe_cloexec(int fds[2]) {
 }
 
 /**
- * Compute remaining seconds until deadline. Returns 0 if the
- * deadline has passed. Returns -1 if no timeout is set.
+ * Compute remaining seconds until deadline. Returns 0 if the deadline has passed.
+ * Returns -1 if no timeout is set.
  */
 static long process_remaining(
     const struct timespec *start,
@@ -153,9 +148,9 @@ static long process_remaining(
 /**
  * Compute the next capacity in the doubling schedule.
  *
- * Returns 0 on overflow, otherwise the smallest power-of-two-step
- * capacity that fits `needed`. Shared by both grow strategies so the
- * size policy stays in one place.
+ * Returns 0 on overflow, otherwise the smallest power-of-two-step capacity that
+ * fits `needed`. Shared by both grow strategies so the size policy stays in one
+ * place.
  */
 static size_t capture_next_capacity(size_t current, size_t needed) {
     while (current < needed) {
@@ -168,9 +163,9 @@ static size_t capture_next_capacity(size_t current, size_t needed) {
 }
 
 /**
- * Grow the capture buffer to fit `needed` bytes. Returns NULL on
- * allocation failure or arithmetic overflow; otherwise returns the
- * (possibly reallocated) buffer and updates *capacity_inout.
+ * Grow the capture buffer to fit `needed` bytes. Returns NULL on allocation failure
+ * or arithmetic overflow; otherwise returns the (possibly reallocated) buffer
+ * and updates *capacity_inout.
  */
 static char *capture_grow(char *buf, size_t needed, size_t *capacity_inout) {
     size_t cap = capture_next_capacity(*capacity_inout, needed);
@@ -188,22 +183,19 @@ static char *capture_grow(char *buf, size_t needed, size_t *capacity_inout) {
 /**
  * Secure variant of capture_grow.
  *
- * Used when the capture buffer holds secrets (passwords from a
- * credential helper response). realloc may relocate, leaving the
- * old bytes on the freelist unscrubbed; this helper performs an
- * explicit malloc → memcpy → memzero → free so every byte that
- * ever held a secret is wiped before the page returns to the
+ * Used when the capture buffer holds secrets (passwords from a credential helper
+ * response). realloc may relocate, leaving the old bytes on the freelist
+ * unscrubbed; this helper performs an explicit malloc → memcpy → memzero → free
+ * so every byte that ever held a secret is wiped before the page returns to the
  * allocator.
  *
- * `cur_len` is the number of valid bytes in `buf` (the live data
- * to preserve). The full prior capacity is zeroed so dead-store
- * elimination cannot drop the wipe and the entire allocation
- * (not just the live prefix) is clean before free.
+ * `cur_len` is the number of valid bytes in `buf` (the live data to preserve).
+ * The full prior capacity is zeroed so dead-store elimination cannot drop the
+ * wipe and the entire allocation (not just the live prefix) is clean before free.
  *
- * Cost is one extra memcpy + memzero per grow event. The doubling
- * schedule keeps grow events O(log n), and for the realistic case
- * (helper response slightly over PROCESS_CAPTURE_INITIAL) only one
- * grow fires per call.
+ * Cost is one extra memcpy + memzero per grow event. The doubling schedule keeps
+ * grow events O(log n), and for the realistic case (helper response slightly
+ * over PROCESS_CAPTURE_INITIAL) only one grow fires per call.
  */
 static char *capture_grow_secure(
     char *buf, size_t cur_len, size_t needed, size_t *capacity_inout
@@ -245,10 +237,9 @@ error_t *process_run(const process_spec_t *spec, process_result_t *result) {
         );
     }
 
-    /* stdin_content / stdin_content_len are load-bearing only for
-     * BUFFER; any stray setting under INHERIT/DEVNULL means the caller
-     * expected a stdin payload that will not be delivered. Reject
-     * rather than silently ignore. */
+    /* stdin_content / stdin_content_len are load-bearing only for BUFFER; any
+     * stray setting under INHERIT/DEVNULL means the caller expected a stdin payload
+     * that will not be delivered. Reject rather than silently ignore. */
     if (spec->stdin_policy == PROCESS_STDIN_BUFFER) {
         if (spec->stdin_content_len > 0 && !spec->stdin_content) {
             return ERROR(
@@ -270,8 +261,8 @@ error_t *process_run(const process_spec_t *spec, process_result_t *result) {
         );
     }
 
-    /* Zero result so every path through cleanup leaves callers with
-     * a well-defined struct. */
+    /* Zero result so every path through cleanup leaves callers with a well-defined
+     * struct. */
     *result = (process_result_t) { 0 };
 
     /* All resources initialized to safe sentinels. */
@@ -297,8 +288,7 @@ error_t *process_run(const process_spec_t *spec, process_result_t *result) {
     set_pipe_cloexec(pipefd);
 
     /* Exec-errno self-pipe (child writes errno+_exit on exec failure;
-     * on exec success, FD_CLOEXEC closes the write end and parent
-     * reads EOF). */
+     * on exec success, FD_CLOEXEC closes the write end and parent reads EOF). */
     if (pipe(errfd) != 0) {
         err = ERROR(
             ERR_FS, "Failed to create exec-errno pipe: %s",
@@ -308,8 +298,8 @@ error_t *process_run(const process_spec_t *spec, process_result_t *result) {
     }
     set_pipe_cloexec(errfd);
 
-    /* Stdin payload pipe (parent writes spec->stdin_content; child
-     * reads from its stdin). Only created for BUFFER policy. */
+    /* Stdin payload pipe (parent writes spec->stdin_content; child reads from
+     * its stdin). Only created for BUFFER policy. */
     if (spec->stdin_policy == PROCESS_STDIN_BUFFER) {
         if (pipe(stdin_pipe) != 0) {
             err = ERROR(
@@ -321,8 +311,8 @@ error_t *process_run(const process_spec_t *spec, process_result_t *result) {
         set_pipe_cloexec(stdin_pipe);
     }
 
-    /* Pre-allocate capture buffer if requested. Failure here is
-     * surfaced as ERR_MEMORY rather than silently degrading. */
+    /* Pre-allocate capture buffer if requested. Failure here is surfaced as
+     * ERR_MEMORY rather than silently degrading. */
     if (spec->capture) {
         cap_capacity = PROCESS_CAPTURE_INITIAL;
         capture = malloc(cap_capacity);
@@ -341,15 +331,14 @@ error_t *process_run(const process_spec_t *spec, process_result_t *result) {
     if (pid == 0) {
         /* ───── Child ─────────────────────────────────────────────
          *
-         * From this point until execve(), no error_t / no malloc /
-         * no goto-cleanup. Failures write errno to errfd[1] (which
-         * the parent drains after our exit) and _exit(126|127).
+         * From this point until execve(), no error_t / no malloc / no goto-cleanup.
+         * Failures write errno to errfd[1] (which the parent drains after our
+         * exit) and _exit(126|127).
          */
 
-        /* Reset signal disposition so parent's SIGINT handler does
-         * not run between fork and exec. execve() itself resets
-         * non-ignored handlers to SIG_DFL, but we reset early to
-         * cover the fork→exec window. */
+        /* Reset signal disposition so parent's SIGINT handler does not run between
+         * fork and exec. execve() itself resets non-ignored handlers to SIG_DFL,
+         * but we reset early to cover the fork→exec window. */
         signal(SIGINT, SIG_DFL);
         signal(SIGTERM, SIG_DFL);
         signal(SIGPIPE, SIG_DFL);
@@ -375,15 +364,15 @@ error_t *process_run(const process_spec_t *spec, process_result_t *result) {
                     (void) dup2(dn, STDIN_FILENO);
                     close(dn);
                 }
-                /* If dn == STDIN_FILENO (parent had stdin closed), it is
-                 * already in the right slot — leave it open. */
+                /* If dn == STDIN_FILENO (parent had stdin closed), it is already
+                 * in the right slot — leave it open. */
             }
-            /* If open failed, child inherits whatever stdin parent had.
-             * No clean way to report from the child here; the worst case
-             * is the script blocks on a terminal read and we time out. */
+            /* If open failed, child inherits whatever stdin parent had. No clean
+             * way to report from the child here; the worst case is the script
+             * blocks on a terminal read and we time out. */
         } else if (spec->stdin_policy == PROCESS_STDIN_BUFFER) {
-            /* Parent holds the write end; close it so the child cannot
-             * see its own stdin source as writable. */
+            /* Parent holds the write end; close it so the child cannot see its
+             * own stdin source as writable. */
             close(stdin_pipe[1]);
             if (stdin_pipe[0] != STDIN_FILENO) {
                 if (dup2(stdin_pipe[0], STDIN_FILENO) < 0) {
@@ -393,10 +382,10 @@ error_t *process_run(const process_spec_t *spec, process_result_t *result) {
                 }
                 close(stdin_pipe[0]);
             }
-            /* If stdin_pipe[0] == STDIN_FILENO already (parent's stdin was
-             * closed pre-fork), it is in the right slot — leave it open.
-             * The explicit closes above make stdin_pipe[0]/[1] invisible
-             * to the close-fds loop below. */
+            /* If stdin_pipe[0] == STDIN_FILENO already (parent's stdin was closed
+             * pre-fork), it is in the right slot — leave it open. The explicit
+             * closes above make stdin_pipe[0]/[1] invisible to the close-fds
+             * loop below. */
         }
 
         if (dup2(pipefd[1], STDOUT_FILENO) < 0
@@ -407,9 +396,9 @@ error_t *process_run(const process_spec_t *spec, process_result_t *result) {
         }
         close(pipefd[1]);
 
-        /* Close every other inherited fd so libgit2/SQLite handles do
-         * not leak into the script. errfd[1] must survive — it carries
-         * any exec-failure errno back to the parent. */
+        /* Close every other inherited fd so libgit2/SQLite handles do not leak
+         * into the script. errfd[1] must survive — it carries any exec-failure
+         * errno back to the parent. */
         long maxfd = sysconf(_SC_OPEN_MAX);
         if (maxfd < 0 || maxfd > PROCESS_FD_CAP) {
             maxfd = PROCESS_FD_FALLBACK;
@@ -442,17 +431,15 @@ error_t *process_run(const process_spec_t *spec, process_result_t *result) {
 
     /* ───── Parent ──────────────────────────────────────────────── */
 
-    /* Race-mitigate: ensure the child's pgrp is set even if it has
-     * not yet executed setpgid(0,0) itself. setpgid() is idempotent
-     * with respect to the (pid,pid) target; EACCES (child already
-     * exec'd) is acceptable because the child's own setpgid ran
-     * before exec. */
+    /* Race-mitigate: ensure the child's pgrp is set even if it has not yet executed
+     * setpgid(0,0) itself. setpgid() is idempotent with respect to the (pid,pid)
+     * target; EACCES (child already exec'd) is acceptable because the child's
+     * own setpgid ran before exec. */
     if (spec->pgrp_policy == PROCESS_PGRP_NEW) {
-        /* Publish before our own setpgid so the signal handler can
-         * forward to the child group during the sub-window where
-         * the child has setpgid'd but the parent has not. If neither
-         * side has called setpgid yet, the pgrp does not exist and
-         * kill(-pid) returns ESRCH — benign. */
+        /* Publish before our own setpgid so the signal handler can forward to
+         * the child group during the sub-window where the child has setpgid'd
+         * but the parent has not. If neither side has called setpgid yet, the
+         * pgrp does not exist and kill(-pid) returns ESRCH — benign. */
         active_child_pgid = (sig_atomic_t) pid;
         (void) setpgid(pid, pid);
         kill_target = -pid;
@@ -466,13 +453,12 @@ error_t *process_run(const process_spec_t *spec, process_result_t *result) {
     close(errfd[1]);
     errfd[1] = -1;
 
-    /* Deliver the stdin payload before entering the capture loop. The
-     * spec-entry cap on stdin_content_len keeps the payload within any
-     * POSIX-conformant pipe buffer, so the write returns immediately
-     * even if the child has not yet reached its consuming read. EPIPE
-     * (child exec failed or exited before reading) is benign — the
-     * exec-errno drain and wait-status decode below surface the real
-     * cause. */
+    /* Deliver the stdin payload before entering the capture loop. The spec-entry
+     * cap on stdin_content_len keeps the payload within any POSIX-conformant
+     * pipe buffer, so the write returns immediately even if the child has not
+     * yet reached its consuming read. EPIPE (child exec failed or exited before
+     * reading) is benign — the exec-errno drain and wait-status decode below
+     * surface the real cause. */
     if (spec->stdin_policy == PROCESS_STDIN_BUFFER) {
         close(stdin_pipe[0]);
         stdin_pipe[0] = -1;
@@ -485,8 +471,8 @@ error_t *process_run(const process_spec_t *spec, process_result_t *result) {
         stdin_pipe[1] = -1;
     }
 
-    /* Non-blocking output pipe so the select+read loop never blocks
-     * past the timeout. */
+    /* Non-blocking output pipe so the select+read loop never blocks past the
+     * timeout. */
     {
         int flags = fcntl(pipefd[0], F_GETFL, 0);
         if (flags >= 0) {
@@ -572,10 +558,9 @@ error_t *process_run(const process_spec_t *spec, process_result_t *result) {
         if (spec->stream_fd >= 0 && !stream_broken) {
             ssize_t w = write_full(spec->stream_fd, buf, (size_t) n);
             if (w < 0) {
-                /* Sink is broken (likely EPIPE because the consumer
-                 * closed its end). Drop further chunks but keep
-                 * draining so the child can finish naturally rather
-                 * than blocking on a full pipe. */
+                /* Sink is broken (likely EPIPE because the consumer closed its
+                 * end). Drop further chunks but keep draining so the child can
+                 * finish naturally rather than blocking on a full pipe. */
                 stream_broken = true;
             }
         }
@@ -585,9 +570,9 @@ error_t *process_run(const process_spec_t *spec, process_result_t *result) {
         capture[cap_len] = '\0';
     }
 
-    /* Drain the exec-errno channel: 0 bytes (EOF) means execve
-     * succeeded and FD_CLOEXEC closed the write end; sizeof(int)
-     * bytes means the child wrote an errno before _exit. */
+    /* Drain the exec-errno channel: 0 bytes (EOF) means execve succeeded and
+     * FD_CLOEXEC closed the write end; sizeof(int) bytes means the child wrote
+     * an errno before _exit. */
     {
         int e_buf = 0;
         ssize_t er = read(errfd[0], &e_buf, sizeof(e_buf));
@@ -618,10 +603,9 @@ error_t *process_run(const process_spec_t *spec, process_result_t *result) {
         }
         pid = -1;
     } else {
-        /* Pipe drained (read returned 0). Child usually exits in the
-         * same instant; the loop's first WNOHANG catches that. The
-         * 50ms polling fallback handles "child closed stdout but kept
-         * running" (e.g., `exec >&-; sleep 9999`). */
+        /* Pipe drained (read returned 0). Child usually exits in the same instant;
+         * the loop's first WNOHANG catches that. The 50ms polling fallback handles
+         * "child closed stdout but kept running" (e.g., `exec >&-; sleep 9999`). */
         for ( ; ;) {
             pid_t r = waitpid(pid, &status, WNOHANG);
             if (r == pid) {
@@ -657,10 +641,10 @@ error_t *process_run(const process_spec_t *spec, process_result_t *result) {
         }
     }
 
-    /* Decode wait status. exec_failed (already set from the errno
-     * pipe) is independent — exit_code reflects what the wait
-     * returned (typically 126/127 for our child-side _exit), which
-     * is still useful information for the caller. */
+    /* Decode wait status. exec_failed (already set from the errno pipe) is
+     * independent — exit_code reflects what the wait returned (typically 126/127
+     * for our child-side _exit), which is still useful information for the
+     * caller. */
     result->timed_out = timed_out;
     if (WIFEXITED(status)) {
         result->exit_code = WEXITSTATUS(status);
@@ -669,16 +653,16 @@ error_t *process_run(const process_spec_t *spec, process_result_t *result) {
         result->signal_num = WTERMSIG(status);
         result->exit_code = 128 + result->signal_num;
     } else {
-        /* WIFSTOPPED or other unexpected wait state — should not
-         * occur because we do not pass WUNTRACED. Map to a generic
-         * failure so callers do not see uninitialized fields. */
+        /* WIFSTOPPED or other unexpected wait state — should not occur because
+         * we do not pass WUNTRACED. Map to a generic failure so callers do not
+         * see uninitialized fields. */
         result->exit_code = 1;
         result->signal_num = 0;
     }
 
-    /* Transfer capture ownership into the result. The secure flag
-     * mirrors the spec so process_result_dispose can scrub before
-     * free without re-deriving intent. */
+    /* Transfer capture ownership into the result. The secure flag mirrors the
+     * spec so process_result_dispose can scrub before free without re-deriving
+     * intent. */
     if (spec->capture) {
         result->output = capture;
         result->output_len = cap_len;
@@ -687,11 +671,10 @@ error_t *process_run(const process_spec_t *spec, process_result_t *result) {
     }
 
 cleanup:
-    /* Stop the async signal handler from chasing this pgid before
-     * the synchronous orphan reap below fires its own kill(). Two
-     * scopes, one source of truth: the global is for the handler;
-     * kill_target is for in-function cleanup. Pre-fork failure paths
-     * write 0-over-0 — harmless. */
+    /* Stop the async signal handler from chasing this pgid before the synchronous
+     * orphan reap below fires its own kill(). Two scopes, one source of truth:
+     * the global is for the handler; kill_target is for in-function cleanup.
+     * Pre-fork failure paths write 0-over-0 — harmless. */
     active_child_pgid = 0;
 
     if (pipefd[0] >= 0) close(pipefd[0]);
@@ -701,10 +684,9 @@ cleanup:
     if (stdin_pipe[0] >= 0) close(stdin_pipe[0]);
     if (stdin_pipe[1] >= 0) close(stdin_pipe[1]);
 
-    /* Reap any stray child. We get here with pid > 0 only if a
-     * mid-execution failure prevented the normal wait paths from
-     * running. Best-effort; if it does not die in the orphan
-     * window, the kernel reaps when dotta exits. */
+    /* Reap any stray child. We get here with pid > 0 only if a mid-execution
+     * failure prevented the normal wait paths from running. Best-effort; if it
+     * does not die in the orphan window, the kernel reaps when dotta exits. */
     if (pid > 0) {
         (void) process_kill_and_wait(
             pid, kill_target, SIGKILL,
@@ -712,9 +694,9 @@ cleanup:
         );
     }
 
-    /* Free capture buffer only if ownership was not transferred.
-     * Secure captures get a wipe first so partial-read bytes do
-     * not linger after a mid-capture failure. */
+    /* Free capture buffer only if ownership was not transferred. Secure captures
+     * get a wipe first so partial-read bytes do not linger after a mid-capture
+     * failure. */
     if (capture && spec->secure_capture) {
         secure_wipe(capture, cap_capacity);
     }

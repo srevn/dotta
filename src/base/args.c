@@ -1,10 +1,10 @@
 /**
  * args.c - Declarative argument-parser engine
  *
- * Straight-line parse over a caller-supplied (command, argv) pair, with
- * every allocation drawn from a caller-supplied arena. Errors are
- * accumulated in a fixed-capacity collector so a single mis-typed argv
- * reports every mistake at once.
+ * Straight-line parse over a caller-supplied (command, argv) pair, with every
+ * allocation drawn from a caller-supplied arena. Errors are accumulated in a
+ * fixed-capacity collector so a single mis-typed argv reports every mistake at
+ * once.
  *
  * Layout:
  *   1) internal cursor + token classifier,
@@ -109,11 +109,11 @@ static enum token_kind classify_token(const char *t, bool end_of_opts) {
 
 /**
  * Return true iff any whitespace-separated token in `flags` equals
- * `tok[0..tok_len)` and has the expected is_long length class
- * (single-char = short, multi-char = long).
+ * `tok[0..tok_len)` and has the expected is_long length class (single-char =
+ * short, multi-char = long).
  *
- * Zero allocation, zero bookkeeping. For N ≤ 12 opts per command
- * this scans the whole table in a handful of memcmps per parse.
+ * Zero allocation, zero bookkeeping. For N ≤ 12 opts per command this scans the
+ * whole table in a handful of memcmps per parse.
  */
 static bool opt_matches(
     const char *flags, const char *tok, size_t tok_len, bool is_long
@@ -190,8 +190,8 @@ static void record_error_v(
         return;
     }
 
-    /* Two-pass formatting: first pass sizes the buffer, second fills
-     * it. `vsnprintf(NULL, 0, ...)` is a standard C99 idiom. */
+    /* Two-pass formatting: first pass sizes the buffer, second fills it.
+     * `vsnprintf(NULL, 0, ...)` is a standard C99 idiom. */
     va_list ap_copy;
     va_copy(ap_copy, ap);
     int needed = vsnprintf(NULL, 0, fmt, ap_copy);
@@ -259,8 +259,8 @@ error_t *args_parse_long(const char *text, long min, long max, long *out) {
 /* ══════════════════════════════════════════════════════════════════
  * Field-writer helpers
  *
- *   `offsetof` rows in the opts table point into a `void *opts` struct.
- *   These helpers cast back to typed pointers for assignment.
+ *   `offsetof` rows in the opts table point into a `void *opts` struct. These
+ *   helpers cast back to typed pointers for assignment.
  * ══════════════════════════════════════════════════════════════════ */
 
 static bool *bool_field(void *opts, const args_opt_t *opt) {
@@ -288,9 +288,9 @@ static size_t *count_field(void *opts, const args_opt_t *opt) {
 }
 
 /**
- * Lazy-allocate an array large enough to hold every remaining argv
- * token. Over-allocates the common case; the arena makes that cheap.
- * Idempotent — subsequent calls with a non-NULL slot are no-ops.
+ * Lazy-allocate an array large enough to hold every remaining argv token.
+ * Over-allocates the common case; the arena makes that cheap. Idempotent —
+ * subsequent calls with a non-NULL slot are no-ops.
  */
 static char **ensure_array(
     char ***arr_ptr, arena_t *arena, int argc
@@ -308,8 +308,8 @@ static char **ensure_array(
 /**
  * Apply a value-taking opt (STRING / APPEND / INT).
  *
- * `inline_value` is non-NULL iff the user wrote `--name=value`; else
- * the value is consumed from the cursor's next token.
+ * `inline_value` is non-NULL iff the user wrote `--name=value`; else the value
+ * is consumed from the cursor's next token.
  */
 static void apply_value_opt(
     const args_opt_t *opt, const char *inline_value, args_cursor_t *cur,
@@ -432,9 +432,9 @@ static void apply_short_opt(
     args_errors_t *errors,
     int tok_idx
 ) {
-    /* v1 rejects bundling (`-fv` != `-f -v`); each short opt must be
-     * exactly `-X`. The bundling enhancement can be added later
-     * without breaking any existing spec. */
+    /* v1 rejects bundling (`-fv` != `-f -v`); each short opt must be exactly
+     * `-X`. The bundling enhancement can be added later without breaking any
+     * existing spec. */
     if (tok[2] != '\0') {
         record_error(
             errors, arena, tok_idx, NULL,
@@ -482,10 +482,9 @@ static void apply_positional(
     int tok_idx,
     int argc
 ) {
-    /* Classify the token. cls=0 when the command has no classifier,
-     * matching rows declared via ARGS_POSITIONAL_ANY (zero-init on
-     * class_accept). Commands with a classifier enumerate their
-     * classes from 1. */
+    /* Classify the token. cls=0 when the command has no classifier, matching
+     * rows declared via ARGS_POSITIONAL_ANY (zero-init on class_accept). Commands
+     * with a classifier enumerate their classes from 1. */
     args_class_t cls = 0;
     if (cmd->classify != NULL) cls = cmd->classify(tok);
 
@@ -547,8 +546,8 @@ static void apply_positional(
 }
 
 /**
- * Validate POSITIONAL_RAW count against declared `min`. The `max`
- * bound is enforced during parse (it's a cap, not a floor).
+ * Validate POSITIONAL_RAW count against declared `min`. The `max` bound is enforced
+ * during parse (it's a cap, not a floor).
  */
 static void check_positional_counts(
     const args_command_t *cmd,
@@ -585,9 +584,9 @@ args_root_outcome_t args_resolve_root(
 
     const char *tok = argv[1];
 
-    /* Universal CLI conventions. Matched first so a misdeclared
-     * `root_aliases = "help h"` cannot shadow them — the built-ins
-     * always win, the collision is ignored silently. */
+    /* Universal CLI conventions. Matched first so a misdeclared `root_aliases =
+     * "help h"` cannot shadow them — the built-ins always win, the collision is
+     * ignored silently. */
     if (strcmp(tok, "-h") == 0 || strcmp(tok, "--help") == 0) {
         return ARGS_ROOT_HELP;
     }
@@ -595,10 +594,9 @@ args_root_outcome_t args_resolve_root(
         return ARGS_ROOT_VERSION;
     }
 
-    /* Flag form (`-X` or `--XXX`): match against each command's
-     * `root_aliases` using the same flag-matcher the parser uses.
-     * `opt_matches()` tolerates a NULL flags string, so commands
-     * without `root_aliases` skip cleanly. */
+    /* Flag form (`-X` or `--XXX`): match against each command's `root_aliases`
+     * using the same flag-matcher the parser uses. `opt_matches()` tolerates a
+     * NULL flags string, so commands without `root_aliases` skip cleanly. */
     if (tok[0] == '-') {
         const char *name;
         size_t name_len;
@@ -649,17 +647,17 @@ args_outcome_t args_parse(
     arena_t *arena, void *opts_out, args_errors_t *errors_out,
     const args_command_t **resolved_out
 ) {
-    /* Reset the error collector in-place so callers can stack-declare
-     * it without pre-zeroing. */
+    /* Reset the error collector in-place so callers can stack-declare it without
+     * pre-zeroing. */
     if (errors_out != NULL) {
         errors_out->count = 0;
         errors_out->overflowed = false;
     }
 
-    /* Surface the current command as the resolved leaf. Recursive calls
-     * into a subcommand will overwrite this with the deeper command, so
-     * after the top-level call returns, *resolved_out points to the
-     * leaf actually reached (whichever subcommand owned the parse). */
+    /* Surface the current command as the resolved leaf. Recursive calls into a
+     * subcommand will overwrite this with the deeper command, so after the
+     * top-level call returns, *resolved_out points to the leaf actually reached
+     * (whichever subcommand owned the parse). */
     if (resolved_out != NULL) {
         *resolved_out = command;
     }
@@ -671,15 +669,15 @@ args_outcome_t args_parse(
 
     /* --- Subcommand tree path ---------------------------------------
      *
-     * A pure-subcommand parent has `subcommands != NULL`. The first
-     * positional token selects the child; a flag at that position
-     * falls through to `default_subcommand` when set, matching how
-     * `git fetch --all` implies `git fetch`. */
+     * A pure-subcommand parent has `subcommands != NULL`. The first positional
+     * token selects the child; a flag at that position falls through to
+     * `default_subcommand` when set, matching how `git fetch --all` implies `git
+     * fetch`. */
     if (command->subcommands != NULL) {
-        /* Spec-author guard: the subcommand path never parses the
-         * parent's opts — flags fall through to the default sub.
-         * Catching a stray ARGS_FLAG/STRING/etc. on a tree parent
-         * here turns a silent-no-op bug into a visible parse error. */
+        /* Spec-author guard: the subcommand path never parses the parent's opts
+         * — flags fall through to the default sub. Catching a stray
+         * ARGS_FLAG/STRING/etc. on a tree parent here turns a silent-no-op bug
+         * into a visible parse error. */
         if (command->opts != NULL) {
             for (const args_opt_t *o = command->opts;
                 o->kind != ARGS_KIND_END; o++) {
@@ -751,20 +749,19 @@ args_outcome_t args_parse(
 
     /* --- Passthrough path -------------------------------------------
      *
-     * `git`-style commands that fork a child process with the raw
-     * argv. The engine skips parsing entirely; the dispatcher sees
-     * the full argv. */
+     * `git`-style commands that fork a child process with the raw argv. The engine
+     * skips parsing entirely; the dispatcher sees the full argv. */
     if (command->passthrough) {
         return ARGS_OK;
     }
 
     /* --- Standard option loop ---------------------------------------
      *
-     * Once `-h`/`--help` is seen the loop short-circuits: the user's
-     * intent is to read help, and any trailing argv is about to be
-     * thrown away by the render path. Processing further tokens would
-     * only record errors that help_seen suppresses anyway — wasted
-     * work and misleading if a post_parse hook were still invoked. */
+     * Once `-h`/`--help` is seen the loop short-circuits: the user's intent is
+     * to read help, and any trailing argv is about to be thrown away by the render
+     * path. Processing further tokens would only record errors that help_seen
+     * suppresses anyway — wasted work and misleading if a post_parse hook were
+     * still invoked. */
     args_cursor_t cur = { .argc = argc, .argv = argv, .index = start_idx };
     bool end_of_opts = false;
 
@@ -832,9 +829,9 @@ args_outcome_t args_parse(
  * ══════════════════════════════════════════════════════════════════ */
 
 /**
- * Emit `text` to `out`, substituting `%s` → `prog` and `%%` → `%`.
- * Any other `%X` sequence is emitted verbatim. Avoids passing
- * attacker-controlled strings to printf's format parser.
+ * Emit `text` to `out`, substituting `%s` → `prog` and `%%` → `%`. Any other
+ * `%X` sequence is emitted verbatim. Avoids passing attacker-controlled strings
+ * to printf's format parser.
  */
 static void render_with_prog(FILE *out, const char *text, const char *prog) {
     for (const char *p = text; *p;) {
@@ -851,21 +848,21 @@ static void render_with_prog(FILE *out, const char *text, const char *prog) {
     }
 }
 
-/* Column where option help text begins (after two-space indent and
- * the flag+label block). Matches the existing hand-written help
- * style closely enough that migrated commands look identical. */
+/* Column where option help text begins (after two-space indent and the flag+label
+ * block). Matches the existing hand-written help style closely enough that migrated
+ * commands look identical. */
 #define HELP_OPT_COL 28
 
 /**
- * Format a space-separated flags string ("force f") into a
- * "--force, -f"-style label in `buf`. Tokens are emitted in source
- * order, single-char tokens as `-X`, multi-char as `--XXX`, joined
+ * Format a space-separated flags string ("force f") into a "--force, -f"-style
+ * label in `buf`. Tokens are emitted in source order, single-char tokens as `-X`,
+ * multi-char as `--XXX`, joined
  * with `", "`. Returns bytes written (excluding the terminator);
  * truncates silently if `buf` is too small. Accepts NULL flags.
  *
  * Used by every renderer that needs a human-readable flag label:
- * `render_option_row` (per-command options table) and
- * `args_render_root_usage` (root-level aliases in the Options block).
+ * `render_option_row` (per-command options table) and `args_render_root_usage`
+ * (root-level aliases in the Options block).
  */
 static size_t format_flag_label(
     char *buf, size_t buf_size, const char *flags
@@ -906,9 +903,8 @@ static size_t format_flag_label(
  * Render a single opts[] row as:
  *     "  -f, --force <value>  Description text"
  *
- * For unusually long flag blocks that would push help past the
- * column, the help text is wrapped onto a second line aligned to
- * the column.
+ * For unusually long flag blocks that would push help past the column, the help
+ * text is wrapped onto a second line aligned to the column.
  */
 static void render_option_row(FILE *out, const args_opt_t *opt) {
     if (opt->hidden) return;
@@ -939,12 +935,11 @@ void args_render_root_usage(
 ) {
     fprintf(out, "Usage: %s <command> [options]\n\n", prog);
 
-    /* Commands section: verb-style commands only. Commands with
-     * `root_aliases` are flag-mode actions (e.g. `--interactive`) and
-     * appear in Options instead, alongside `-h`/`-v`. The bareword
-     * still dispatches and still tab-completes — help just promotes
-     * the canonical (flag) form rather than advertising both. Help
-     * and completion serve different audiences: help shows canonical
+    /* Commands section: verb-style commands only. Commands with `root_aliases`
+     * are flag-mode actions (e.g. `--interactive`) and appear in Options instead,
+     * alongside `-h`/`-v`. The bareword still dispatches and still tab-completes
+     * — help just promotes the canonical (flag) form rather than advertising
+     * both. Help and completion serve different audiences: help shows canonical
      * shape, completion accepts anything the parser will dispatch. */
     fputs("Commands:\n", out);
     for (size_t i = 0; commands[i] != NULL; i++) {
@@ -956,12 +951,11 @@ void args_render_root_usage(
         );
     }
 
-    /* Options section: built-ins (`-h`/`-v`) plus the canonical home
-     * for every command with `root_aliases`. Built-in labels are bound
-     * to locals so the width pass and the emit pass agree without
-     * scrolling; help text appears once per built-in and stays inline
-     * at its emit site. Column width is computed from content so a
-     * long alias like "-i, --interactive" fits without a magic
+    /* Options section: built-ins (`-h`/`-v`) plus the canonical home for every
+     * command with `root_aliases`. Built-in labels are bound to locals so the
+     * width pass and the emit pass agree without scrolling; help text appears
+     * once per built-in and stays inline at its emit site. Column width is computed
+     * from content so a long alias like "-i, --interactive" fits without a magic
      * number. */
     const char *help_label = "-h, --help";
     const char *vers_label = "-v, --version";
@@ -1032,23 +1026,21 @@ static bool is_positional_kind(args_kind_t k) {
 }
 
 /**
- * Render an "Arguments:" section from positional rows that carry a
- * value_label + help. Opt-in: rows without a label stay invisible
- * (commands that prefer prose-in-description keep working unchanged).
+ * Render an "Arguments:" section from positional rows that carry a value_label
+ * + help. Opt-in: rows without a label stay invisible (commands that prefer
+ * prose-in-description keep working unchanged).
  *
- * Called between `description` and the options table so the order
- * mirrors the natural reading of a usage line: positional args first,
- * then flags. Returns true iff the section was emitted; the caller
- * uses that signal to manage the inter-section blank line (the first
- * ARGS_GROUP in options does NOT emit its own leading blank, so the
- * caller has to).
+ * Called between `description` and the options table so the order mirrors the
+ * natural reading of a usage line: positional args first, then flags. Returns
+ * true iff the section was emitted; the caller uses that signal to manage the
+ * inter-section blank line (the first ARGS_GROUP in options does NOT emit its
+ * own leading blank, so the caller has to).
  */
 static bool render_arguments(FILE *out, const args_opt_t *opts) {
     if (opts == NULL) return false;
 
-    /* Two-pass: only emit the header if at least one row qualifies.
-     * Avoids an empty "Arguments:" block on commands with prose-only
-     * positional docs. */
+    /* Two-pass: only emit the header if at least one row qualifies. Avoids an
+     * empty "Arguments:" block on commands with prose-only positional docs. */
     bool any = false;
     for (const args_opt_t *o = opts; o->kind != ARGS_KIND_END; o++) {
         if (!is_positional_kind(o->kind)) continue;
@@ -1072,9 +1064,8 @@ static bool render_arguments(FILE *out, const args_opt_t *opts) {
 }
 
 /**
- * Render the "Subcommands:" section, showing the first token of each
- * sub's alias list as the canonical form and the child command's
- * summary as its one-liner.
+ * Render the "Subcommands:" section, showing the first token of each sub's alias
+ * list as the canonical form and the child command's summary as its one-liner.
  */
 static void render_subcommands(FILE *out, const args_subcommand_t *subs) {
     fputs("\nSubcommands:\n", out);
@@ -1114,15 +1105,15 @@ void args_render_help(
     }
 
     /* Arguments — opt-in, rendered from rows that declare a value_label.
-     * POSITIONAL_ARG / POSITIONAL_ANY_ARG declare both via their macro;
-     * POSITIONAL and POSITIONAL_RAW can set them via struct literal for
-     * commands that want row-level argument docs.
+     * POSITIONAL_ARG / POSITIONAL_ANY_ARG declare both via their macro; POSITIONAL
+     * and POSITIONAL_RAW can set them via struct literal for commands that want
+     * row-level argument docs.
      *
-     * render_arguments itself emits NO leading or trailing blank line.
-     * The preceding section (description/summary) already ended with a
-     * blank; we add a trailing blank here ONLY when the section fired,
-     * so Options — which has no self-leading blank on its first group
-     * — gets the separator it needs. */
+     * render_arguments itself emits NO leading or trailing blank line. The
+     * preceding section (description/summary) already ended with a blank; we
+     * add a trailing blank here ONLY when the section fired, so Options — which
+     * has no self-leading blank on its first group — gets the separator it
+     * needs. */
     if (render_arguments(out, command->opts)) {
         fputc('\n', out);
     }
@@ -1140,9 +1131,9 @@ void args_render_help(
                 any_shown = true;
                 continue;
             }
-            /* Positional rows are rendered separately (see render_arguments
-             * above) — skip them here, since they lack the flag syntax
-             * that render_option_row emits. */
+            /* Positional rows are rendered separately (see render_arguments above)
+             * — skip them here, since they lack the flag syntax that
+             * render_option_row emits. */
             if (is_positional_kind(o->kind)) continue;
 
             render_option_row(out, o);
@@ -1162,18 +1153,16 @@ void args_render_help(
         render_subcommands(out, command->subcommands);
     }
 
-    /* Section separation convention for `notes`, `examples`,
-     * `epilogue`: each block adds exactly one leading `\n` for the
-     * blank line before the section; the content itself must end
-     * with `\n` for the final line to terminate. We do NOT append a
-     * trailing `\n` here because the NEXT block (or the renderer's
-     * own end-of-output) handles its own separation. Adding one
-     * would double the blank line between consecutive blocks such
-     * as notes → examples.
+    /* Section separation convention for `notes`, `examples`, `epilogue`: each
+     * block adds exactly one leading `\n` for the blank line before the section;
+     * the content itself must end with `\n` for the final line to terminate. We
+     * do NOT append a trailing `\n` here because the NEXT block (or the renderer's
+     * own end-of-output) handles its own separation. Adding one would double
+     * the blank line between consecutive blocks such as notes → examples.
      *
-     * `description` is different: its next section (options) deliberately
-     * has no leading `\n` on the first ARGS_GROUP header, so the
-     * trailing `\n` there IS the separator. See render loop above. */
+     * `description` is different: its next section (options) deliberately has
+     * no leading `\n` on the first ARGS_GROUP header, so the trailing `\n` there
+     * IS the separator. See render loop above. */
     if (command->notes != NULL) {
         fputc('\n', out);
         render_with_prog(out, command->notes, prog);
@@ -1210,17 +1199,16 @@ static bool opt_takes_value(const args_opt_t *o) {
 }
 
 /**
- * Write `s` into `out` with fish double-quoted-string escaping. Fish
- * treats `"`, `$`, and `\` as special inside double quotes, and a raw
- * `\n` (newline) would break a `complete -c <prog> ... -d "..."` line
- * mid-description. Defensive — current help strings don't contain any
- * of these, but the generated script is user-facing; a future `Cost:
- * $5`, `"quoted"`, or multi-line help must not break the output.
+ * Write `s` into `out` with fish double-quoted-string escaping. Fish treats `"`,
+ * `$`, and `\` as special inside double quotes, and a raw `\n` (newline) would
+ * break a `complete -c <prog> ... -d "..."` line mid-description. Defensive —
+ * current help strings don't contain any of these, but the generated script is
+ * user-facing; a future `Cost: $5`, `"quoted"`, or multi-line help must not break
+ * the output.
  *
- * Newline is translated to the two-character sequence `\n` (a backslash
- * followed by the letter n), which fish's double-quoted-string lexer
- * parses back into a newline. Carriage returns get the same treatment
- * for symmetry.
+ * Newline is translated to the two-character sequence `\n` (a backslash followed
+ * by the letter n), which fish's double-quoted-string lexer parses back into a
+ * newline. Carriage returns get the same treatment for symmetry.
  */
 static void fputs_fish_escaped(FILE *out, const char *s) {
     if (s == NULL) return;
@@ -1236,15 +1224,14 @@ static void fputs_fish_escaped(FILE *out, const char *s) {
 }
 
 /**
- * Emit a `complete -c <prog> ...` line for one opt row. `condition_fish`
- * is the fish `-n` guard expression (e.g., `__<prog>_using_command init`).
+ * Emit a `complete -c <prog> ...` line for one opt row. `condition_fish` is the
+ * fish `-n` guard expression (e.g., `__<prog>_using_command init`).
  *
- * Every short-form token in the opt's `flags` becomes a `-s X`; every
- * long-form token becomes a `-l XXX`. Fish renders the aliases as
- * a single completion entry (that's the whole reason we can list them
- * all on one `complete` line). Value-taking kinds add `-r` so fish
- * knows the flag needs a parameter and defers other suggestions until
- * it's supplied.
+ * Every short-form token in the opt's `flags` becomes a `-s X`; every long-form
+ * token becomes a `-l XXX`. Fish renders the aliases as a single completion entry
+ * (that's the whole reason we can list them all on one `complete` line).
+ * Value-taking kinds add `-r` so fish knows the flag needs a parameter and defers
+ * other suggestions until it's supplied.
  */
 static void emit_complete_line(
     FILE *out,
@@ -1289,12 +1276,11 @@ static void emit_complete_line(
 }
 
 /**
- * Emit a root-level `complete -c <prog>` line for a command's flag
- * aliases — no `-n` guard, since root options are valid at the start
- * of argv regardless of what follows. Each space-separated token in
- * `aliases` becomes a `-s X` (single-char) or `-l XXX` (multi-char)
- * entry; all tokens share the single line so fish renders them as
- * aliases of the same completion.
+ * Emit a root-level `complete -c <prog>` line for a command's flag aliases — no
+ * `-n` guard, since root options are valid at the start of argv regardless of
+ * what follows. Each space-separated token in `aliases` becomes a `-s X`
+ * (single-char) or `-l XXX` (multi-char) entry; all tokens share the single line
+ * so fish renders them as aliases of the same completion.
  */
 static void emit_root_alias_complete(
     FILE *out, const char *prog,
@@ -1324,8 +1310,8 @@ static void emit_root_alias_complete(
 }
 
 /**
- * Emit a `complete -c <prog> ... -a NAME -d "SUMMARY"` line for a
- * subcommand entry. NAME is the first alias (canonical form).
+ * Emit a `complete -c <prog> ... -a NAME -d "SUMMARY"` line for a subcommand
+ * entry. NAME is the first alias (canonical form).
  */
 static void emit_sub_row(
     FILE *out, const char *prog,
@@ -1350,10 +1336,10 @@ static void emit_sub_row(
     fputs("\"\n", out);
 }
 
-/* Value-flag deduplication. Many commands share the same value-bearing
- * flag (e.g. `--profile` appears on 9+ specs); emitting one token per
- * occurrence makes the generated `__<prog>_value_flags` list grow
- * quadratically in N (commands) × F (flags) and adds no information.
+/* Value-flag deduplication. Many commands share the same value-bearing flag (e.g.
+ * `--profile` appears on 9+ specs); emitting one token per occurrence makes the
+ * generated `__<prog>_value_flags` list grow quadratically in N (commands) × F
+ * (flags) and adds no information.
  */
 typedef struct value_flag_set {
     const char **tokens;   /* Each entry is a fish argv token (`-p`,    */
@@ -1388,12 +1374,12 @@ static void value_flag_set_add(
 }
 
 /**
- * Scan every value-taking flag-token in `opts` and add the formatted
- * argv form (`-X` or `--XXX`) to `set`. Duplicates (same token already
- * seen) are skipped so a flag declared on N commands appears once.
+ * Scan every value-taking flag-token in `opts` and add the formatted argv form
+ * (`-X` or `--XXX`) to `set`. Duplicates (same token already seen) are skipped
+ * so a flag declared on N commands appears once.
  *
- * The tokens themselves are written out in `args_export_completion_fish`
- * after the full scan; this function never writes to `out`.
+ * The tokens themselves are written out in `args_export_completion_fish` after
+ * the full scan; this function never writes to `out`.
  */
 static void collect_value_flags(
     const args_opt_t *opts, value_flag_set_t *set, arena_t *arena
@@ -1434,10 +1420,9 @@ static void collect_value_flags(
 }
 
 /**
- * True if `opts` holds at least one opt that would produce a
- * `complete` line. Mirrors the early-returns in emit_complete_line():
- * GROUP is help-only, POSITIONAL kinds don't surface in fish
- * completion, and hidden opts are skipped everywhere.
+ * True if `opts` holds at least one opt that would produce a `complete` line.
+ * Mirrors the early-returns in emit_complete_line(): GROUP is help-only, POSITIONAL
+ * kinds don't surface in fish completion, and hidden opts are skipped everywhere.
  */
 static bool has_visible_completable_opt(const args_opt_t *opts) {
     if (opts == NULL) return false;
@@ -1453,10 +1438,10 @@ static bool has_visible_completable_opt(const args_opt_t *opts) {
 }
 
 /**
- * True if emit_command() would produce at least one `complete` line
- * for `cmd`. Used by the per-command section loop to suppress orphan
- * `# NAME` headers for commands that exist only as dispatch shells
- * (bareword + root-alias flag with no flags/subs/passthrough, e.g.
+ * True if emit_command() would produce at least one `complete` line for `cmd`.
+ * Used by the per-command section loop to suppress orphan `# NAME` headers for
+ * commands that exist only as dispatch shells (bareword + root-alias flag with
+ * no flags/subs/passthrough, e.g.
  * `spec_interactive`). The gates below mirror emit_command() exactly;
  * any change there must be reflected here or headers will drift.
  */
@@ -1469,9 +1454,9 @@ static bool command_has_completions(const args_command_t *cmd) {
             s->name != NULL; s++) {
             if (!s->hidden) return true;
         }
-        /* A hidden subcommand list can still contribute opts via
-         * default_subcommand — emit_command() emits those at the
-         * pre-sub position regardless of sibling visibility. */
+        /* A hidden subcommand list can still contribute opts via default_subcommand
+         * — emit_command() emits those at the pre-sub position regardless of
+         * sibling visibility. */
         if (cmd->default_subcommand != NULL &&
             has_visible_completable_opt(cmd->default_subcommand->opts)) {
             return true;
@@ -1481,9 +1466,9 @@ static bool command_has_completions(const args_command_t *cmd) {
 }
 
 /**
- * Walk a command and its subcommand tree, emitting completion lines.
- * `parent_fish` is the fish `-n` condition fragment identifying the
- * caller's context; for root commands it's `__<prog>_using_command NAME`.
+ * Walk a command and its subcommand tree, emitting completion lines. `parent_fish`
+ * is the fish `-n` condition fragment identifying the caller's context; for root
+ * commands it's `__<prog>_using_command NAME`.
  */
 static void emit_command(
     FILE *out,
@@ -1493,11 +1478,11 @@ static void emit_command(
 ) {
     if (cmd == NULL || cmd->hidden) return;
 
-    /* Passthrough commands hand the tail of argv to an external tool
-     * (e.g. `<prog> git <git-args...>` forwards everything after `git`
-     * to a spawned git process). Delegate completion for the entire
-     * tail to that tool's fish integration — there are no flags or
-     * subs to emit on our side, since the spec is intentionally empty. */
+    /* Passthrough commands hand the tail of argv to an external tool (e.g. `<prog>
+     * git <git-args...>` forwards everything after `git` to a spawned git process).
+     * Delegate completion for the entire tail to that tool's fish integration —
+     * there are no flags or subs to emit on our side, since the spec is
+     * intentionally empty. */
     if (cmd->passthrough) {
         fprintf(
             out,
@@ -1516,9 +1501,9 @@ static void emit_command(
 
     /* Subcommand rows and their own options. */
     if (cmd->subcommands != NULL) {
-        /* One-liner pointing users at each sub. The guard must require
-         * both the parent context AND the absence of a sub selection
-         * so names only show as completions before the sub is chosen. */
+        /* One-liner pointing users at each sub. The guard must require both the
+         * parent context AND the absence of a sub selection so names only show
+         * as completions before the sub is chosen. */
         char needs_sub[256];
         snprintf(
             needs_sub, sizeof(needs_sub),
@@ -1531,11 +1516,11 @@ static void emit_command(
             emit_sub_row(out, prog, needs_sub, s);
         }
 
-        /* Parse accepts `<prog> <cmd> --flag` as a shorthand for
-         * `<prog> <cmd> <default-sub> --flag` when a default_subcommand
-         * is set. Mirror that in completion: at the pre-sub position
-         * (parent ctx AND no sub chosen yet), offer the default sub's
-         * flags so tab-complete matches the parser's behavior. */
+        /* Parse accepts `<prog> <cmd> --flag` as a shorthand for `<prog> <cmd>
+         * <default-sub> --flag` when a default_subcommand is set. Mirror that
+         * in completion: at the pre-sub position (parent ctx AND no sub chosen
+         * yet), offer the default sub's flags so tab-complete matches the parser's
+         * behavior. */
         if (cmd->default_subcommand != NULL &&
             cmd->default_subcommand->opts != NULL) {
             for (const args_opt_t *o = cmd->default_subcommand->opts;
@@ -1581,21 +1566,21 @@ void args_export_completion_fish(
     fprintf(out, "# Auto-generated by `%s __complete spec fish`.\n", prog);
     fprintf(out, "# Dynamic completion helpers live in %s.fish.\n\n", prog);
 
-    /* Disable fish's default file completion for `<prog>` — our commands
-     * use explicit rules (or helper-provided value completions) and
-     * letting the shell fall back to filenames creates noisy TAB
-     * expansions for commands that accept profile names, not paths. */
+    /* Disable fish's default file completion for `<prog>` — our commands use
+     * explicit rules (or helper-provided value completions) and letting the shell
+     * fall back to filenames creates noisy TAB expansions for commands that accept
+     * profile names, not paths. */
     fprintf(out, "complete -c %s -f\n\n", prog);
 
-    /* Token storage and the dedup set live in the borrowed arena.
-     * `vset.tokens` points into arena memory; tokens are emitted via
-     * fprintf below, then the pointers go out of scope when this
-     * function returns — the arena outlives this call. */
+    /* Token storage and the dedup set live in the borrowed arena. `vset.tokens`
+     * points into arena memory; tokens are emitted via fprintf below, then the
+     * pointers go out of scope when this function returns — the arena outlives
+     * this call. */
     value_flag_set_t vset = { 0 };
 
-    /* Collect value-taking flag tokens across every non-hidden command
-     * (and its non-hidden subcommands). Dedup happens at insert time, so
-     * `--profile` appears once even if nine specs declare it. */
+    /* Collect value-taking flag tokens across every non-hidden command (and its
+     * non-hidden subcommands). Dedup happens at insert time, so `--profile` appears
+     * once even if nine specs declare it. */
     for (size_t i = 0; commands[i] != NULL; i++) {
         const args_command_t *c = commands[i];
         if (c->hidden) continue;
@@ -1611,17 +1596,17 @@ void args_export_completion_fish(
         }
     }
 
-    /* Value-taking flags: used by fish's positional-arg counter in
-     * <prog>.fish to know which tokens are "flag + value" pairs. */
+    /* Value-taking flags: used by fish's positional-arg counter in <prog>.fish
+     * to know which tokens are "flag + value" pairs. */
     fprintf(out, "set -g __%s_value_flags", prog);
     for (size_t i = 0; i < vset.count; i++) {
         fprintf(out, " %s", vset.tokens[i]);
     }
     fputs("\n\n", out);
 
-    /* Top-level flags. `-h` / `-v` are universal conventions so they
-     * stay hardcoded here; command-declared root aliases are projected
-     * from the registry so the data flows from one source of truth. */
+    /* Top-level flags. `-h` / `-v` are universal conventions so they stay hardcoded
+     * here; command-declared root aliases are projected from the registry so
+     * the data flows from one source of truth. */
     fputs("# Root options\n", out);
     fprintf(out, "complete -c %s -s h -l help -d \"Show help\"\n", prog);
     fprintf(out, "complete -c %s -s v -l version -d \"Show version\"\n", prog);
@@ -1646,10 +1631,9 @@ void args_export_completion_fish(
     }
     fputc('\n', out);
 
-    /* Per-command options. Skip commands with no body to emit — purely
-     * dispatch shells (e.g. `spec_interactive`, reachable only via
-     * bareword or root-alias flag) otherwise leave an orphan `# NAME`
-     * header with nothing underneath. */
+    /* Per-command options. Skip commands with no body to emit — purely dispatch
+     * shells (e.g. `spec_interactive`, reachable only via bareword or root-alias
+     * flag) otherwise leave an orphan `# NAME` header with nothing underneath. */
     for (size_t i = 0; commands[i] != NULL; i++) {
         const args_command_t *c = commands[i];
         if (!command_has_completions(c)) continue;

@@ -1,9 +1,9 @@
 /**
  * bootstrap.c - Profile bootstrap script primitives
  *
- * See sys/bootstrap.h for the contract. This file is deliberately
- * narrow: pure Git-content operations, with no knowledge of process
- * spawning, output formatting, or profile iteration.
+ * See sys/bootstrap.h for the contract. This file is deliberately narrow: pure
+ * Git-content operations, with no knowledge of process spawning, output formatting,
+ * or profile iteration.
  */
 
 #include "sys/bootstrap.h"
@@ -23,12 +23,12 @@
 /**
  * Load a profile's Git tree and look up its .bootstrap entry.
  *
- * On success: *out_tree is owned by the caller (git_tree_free) and
- * *out_entry is borrowed from the tree (same lifetime). On failure,
- * both outputs are left untouched.
+ * On success: *out_tree is owned by the caller (git_tree_free) and *out_entry
+ * is borrowed from the tree (same lifetime). On failure, both outputs are left
+ * untouched.
  *
- * Returns ERR_NOT_FOUND if the tree exists but has no .bootstrap
- * entry; wraps any underlying Git error otherwise.
+ * Returns ERR_NOT_FOUND if the tree exists but has no .bootstrap entry; wraps
+ * any underlying Git error otherwise.
  */
 static error_t *load_bootstrap_entry(
     git_repository *repo,
@@ -62,8 +62,8 @@ static error_t *load_bootstrap_entry(
 /**
  * Resolve the directory for temporary files.
  *
- * Honors TMPDIR when set and non-empty; falls back to "/tmp" which
- * POSIX guarantees exists.
+ * Honors TMPDIR when set and non-empty; falls back to "/tmp" which POSIX guarantees
+ * exists.
  */
 static const char *tmp_dir(void) {
     const char *d = getenv("TMPDIR");
@@ -71,8 +71,8 @@ static const char *tmp_dir(void) {
 }
 
 /**
- * Write exactly `size` bytes from `data` to `fd`, retrying on EINTR
- * and handling short writes. Returns NULL on success.
+ * Write exactly `size` bytes from `data` to `fd`, retrying on EINTR and handling
+ * short writes. Returns NULL on success.
  */
 static error_t *write_all(int fd, const void *data, size_t size) {
     const unsigned char *p = data;
@@ -183,8 +183,8 @@ error_t *bootstrap_extract_to_temp(
     );
     if (err) goto cleanup;
 
-    /* Validate BEFORE creating the temp file — a bad shebang never
-     * produces a half-written artifact on disk. */
+    /* Validate BEFORE creating the temp file — a bad shebang never produces a
+     * half-written artifact on disk. */
     err = bootstrap_validate((const unsigned char *) raw, size);
     if (err) {
         err = error_wrap(

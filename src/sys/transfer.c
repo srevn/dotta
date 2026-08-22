@@ -18,11 +18,10 @@
 /**
  * Credential session states (file-local).
  *
- * Terminal states (VALIDATED, REJECTED) are absorbing: once reached,
- * further ops cannot change the decision that will be committed at
- * transfer_context_free(). NOT_ACQUIRED means no helper fill happened
- * (SSH agent, SSH key, anonymous, default) — nothing to approve or
- * reject.
+ * Terminal states (VALIDATED, REJECTED) are absorbing: once reached, further
+ * ops cannot change the decision that will be committed at transfer_context_free().
+ * NOT_ACQUIRED means no helper fill happened (SSH agent, SSH key, anonymous,
+ * default) — nothing to approve or reject.
  */
 typedef enum {
     CRED_STATE_NOT_ACQUIRED = 0,  /* Initial; SSH/anonymous stay here. */
@@ -42,8 +41,8 @@ typedef enum {
  *
  * Per-op counters (op_attempts, last_outcome, op scratch) are reset by
  * transfer_op_begin and classified/folded by transfer_op_end. The cached
- * credentials are filled at most once per session by the first successful
- * helper fill (cache-once identity pinning).
+ * credentials are filled at most once per session by the first successful helper
+ * fill (cache-once identity pinning).
  */
 struct transfer_context_s {
     output_t *output;               /* Borrowed. */
@@ -55,9 +54,8 @@ struct transfer_context_s {
     /* Cumulative session stats (TTY-independent) */
     transfer_stats_t stats;
 
-    /* Per-op scratch. Written by the progress callbacks on each update;
-     * folded into `stats` by transfer_op_end on success. Reset by
-     * transfer_op_begin. */
+    /* Per-op scratch. Written by the progress callbacks on each update; folded
+     * into `stats` by transfer_op_end on success. Reset by transfer_op_begin. */
     struct {
         git_direction direction;    /* Op direction (fetch/push). */
         size_t last_count;          /* Last received_objects or current. */
@@ -75,34 +73,32 @@ struct transfer_context_s {
     transfer_outcome_t last_outcome;
     int op_attempts;                /* Per-op anti-loop counter. */
 
-    /* Transport classification (cached from `url` at create time).
-     * True for file:// or plain filesystem paths. libgit2's local push
-     * transport leaves the `bytes` parameter of push_transfer_progress
-     * uninitialized (no wire bytes to count), so byte accounting must
-     * be suppressed for these sessions. */
+    /* Transport classification (cached from `url` at create time). True for file://
+     * or plain filesystem paths. libgit2's local push transport leaves the `bytes`
+     * parameter of push_transfer_progress uninitialized (no wire bytes to count),
+     * so byte accounting must be suppressed for these sessions. */
     bool local_transport;
 };
 
 /**
- * Classify a remote URL as local (file:// or plain filesystem path) or
- * remote (http(s)://, ssh://, git://, user@host:path).
+ * Classify a remote URL as local (file:// or plain filesystem path) or remote
+ * (http(s)://, ssh://, git://, user@host:path).
  *
- * libgit2's local transport synthesizes push progress from packfile
- * creation and does not populate the `bytes` parameter reliably. We use
- * this classification to suppress byte accounting for local sessions so
- * the summary line does not report nonsense (observed: 131038.9 GiB for
- * an 8-object push against a file:// remote).
+ * libgit2's local transport synthesizes push progress from packfile creation
+ * and does not populate the `bytes` parameter reliably. We use this classification
+ * to suppress byte accounting for local sessions so the summary line does not
+ * report nonsense (observed: 131038.9 GiB for an 8-object push against a file://
+ * remote).
  *
  * Why this is not credential_url_parse:
- *   The credential parser deliberately rejects URLs that have no
- *   credential identity — file:// (empty host) and bare filesystem
- *   paths both fail the "valid host" rule. Those are exactly the
- *   shapes this function must classify as local. The two predicates
- *   partition URL space — credential_url_parse for "is this an
- *   authenticated transport?", url_is_local for "did libgit2 pick its
- *   local transport?" — and pulling them through one function would
- *   cost an allocate-and-free on every session create just to reuse
- *   a 4-line shape check. The duplication is the right trade.
+ *   The credential parser deliberately rejects URLs that have no credential
+ *   identity — file:// (empty host) and bare filesystem paths both fail the "valid
+ *   host" rule. Those are exactly the shapes this function must classify as local.
+ *   The two predicates partition URL space — credential_url_parse for "is this
+ *   an authenticated transport?", url_is_local for "did libgit2 pick its local
+ *   transport?" — and pulling them through one function would cost an
+ *   allocate-and-free on every session create just to reuse a 4-line shape check.
+ *   The duplication is the right trade.
  */
 static bool url_is_local(const char *url) {
     if (!url || !*url) return false;
@@ -113,9 +109,8 @@ static bool url_is_local(const char *url) {
     /* Any other `scheme://` is a remote network transport. */
     if (strstr(url, "://")) return false;
 
-    /* SCP-style `user@host:path` → SSH. Detect by `@` preceding the
-     * first `:`. Plain filesystem paths can contain `@` but not in
-     * this position. */
+    /* SCP-style `user@host:path` → SSH. Detect by `@` preceding the first `:`.
+     * Plain filesystem paths can contain `@` but not in this position. */
     const char *at = strchr(url, '@');
     const char *colon = strchr(url, ':');
     if (at && colon && at < colon) return false;
@@ -127,16 +122,15 @@ static bool url_is_local(const char *url) {
 /**
  * Map a libgit2 return code to a transfer outcome class.
  *
- * GIT_EAUTH is libgit2's canonical auth-failure signal — returned when
- * our credential callback bails with GIT_EAUTH, or when libgit2 exhausts
- * its own retry budget against server rejections. We treat it as
- * definitive.
+ * GIT_EAUTH is libgit2's canonical auth-failure signal — returned when our
+ * credential callback bails with GIT_EAUTH, or when libgit2 exhausts its own
+ * retry budget against server rejections. We treat it as definitive.
  *
- * Rarely, auth failures may surface as generic errors (certain TLS/SSH
- * paths, HTTP 401 before the credential callback runs). Those classify
- * as OTHER_FAILURE here; the resulting wording is suboptimal but not
- * incorrect. If smoke tests surface a misclassified case, widen the
- * match (e.g., inspect giterr_last()->klass).
+ * Rarely, auth failures may surface as generic errors (certain TLS/SSH paths,
+ * HTTP 401 before the credential callback runs). Those classify as OTHER_FAILURE
+ * here; the resulting wording is suboptimal but not incorrect. If smoke tests
+ * surface a misclassified case, widen the match (e.g., inspect
+ * giterr_last()->klass).
  */
 static transfer_outcome_t classify_outcome(int git_err) {
     if (git_err == 0) return TRANSFER_OUTCOME_OK;
@@ -145,8 +139,8 @@ static transfer_outcome_t classify_outcome(int git_err) {
 }
 
 /**
- * Advance credential_state on first helper fill. Idempotent: subsequent
- * calls (cached-cred replays, terminal states) do not regress the state.
+ * Advance credential_state on first helper fill. Idempotent: subsequent calls
+ * (cached-cred replays, terminal states) do not regress the state.
  */
 static void transfer_mark_cred_acquired(transfer_context_t *xfer) {
     if (!xfer) return;
@@ -158,9 +152,9 @@ static void transfer_mark_cred_acquired(transfer_context_t *xfer) {
 /**
  * Securely replace a heap-allocated secret with a new heap-allocated value.
  *
- * Wipes and frees the old buffer (if any), then installs the new pointer.
- * `*slot` is a field slot (e.g., `&ctx->username`). Ownership of `incoming`
- * transfers to the slot; the caller must NOT free it after this call.
+ * Wipes and frees the old buffer (if any), then installs the new pointer. `*slot`
+ * is a field slot (e.g., `&ctx->username`). Ownership of `incoming` transfers
+ * to the slot; the caller must NOT free it after this call.
  */
 static void secure_replace(char **slot, char *incoming) {
     if (*slot) {
@@ -172,9 +166,9 @@ static void secure_replace(char **slot, char *incoming) {
 /**
  * Finalize the current progress line.
  *
- * In ephemeral mode on a TTY, clears the entire line (progress vanishes).
- * In persistent mode, appends the given completion text (e.g., ", done.\n").
- * Non-TTY ephemeral falls back to newline (ANSI clear requires terminal).
+ * In ephemeral mode on a TTY, clears the entire line (progress vanishes). In
+ * persistent mode, appends the given completion text (e.g., ", done.\n"). Non-TTY
+ * ephemeral falls back to newline (ANSI clear requires terminal).
  */
 static void finalize_progress(transfer_context_t *ctx, const char *completion) {
     if (ctx->ephemeral) {
@@ -221,14 +215,14 @@ error_t *transfer_context_create(
 /**
  * Commit the session's credential decision to the helper.
  *
- * Approve on VALIDATED (a successful op confirmed the cred), reject
- * on REJECTED (an auth-failed op invalidated it). Other states never
- * acquired creds in the first place — nothing to commit.
+ * Approve on VALIDATED (a successful op confirmed the cred), reject on REJECTED
+ * (an auth-failed op invalidated it). Other states never acquired creds in the
+ * first place — nothing to commit.
  *
- * Helper IPC errors (exec failure, timeout) are surfaced as warnings
- * so users have a breadcrumb when the helper subprocess misbehaves;
- * "helper has nothing to say about approve/reject" (a non-zero exit
- * from a read-only helper) is intentionally not surfaced.
+ * Helper IPC errors (exec failure, timeout) are surfaced as warnings so users
+ * have a breadcrumb when the helper subprocess misbehaves; "helper has nothing
+ * to say about approve/reject" (a non-zero exit from a read-only helper) is
+ * intentionally not surfaced.
  */
 static void transfer_commit_credential_decision(transfer_context_t *ctx) {
     if (ctx->credential_state != CRED_STATE_VALIDATED &&
@@ -242,9 +236,9 @@ static void transfer_commit_credential_decision(transfer_context_t *ctx) {
     credential_url_t u = { 0 };
     error_t *parse_err = credential_url_parse(ctx->url, &u);
     if (parse_err) {
-        /* URL came from gitops_get_remote_url, so a parse failure here
-         * is an internal correctness issue rather than user-actionable.
-         * Surface verbose-only. */
+        /* URL came from gitops_get_remote_url, so a parse failure here is an
+         * internal correctness issue rather than user-actionable. Surface
+         * verbose-only. */
         output_print(
             ctx->output, OUTPUT_VERBOSE,
             "credential helper: skipping commit — %s\n",
@@ -316,9 +310,9 @@ void transfer_op_end(transfer_context_t *xfer, int git_err) {
 
     xfer->last_outcome = classify_outcome(git_err);
 
-    /* Fold per-op values into cumulative stats. Only count ops that
-     * actually transferred data — connect+ls (list_remote_branches) and
-     * up-to-date fetches would otherwise pollute the summary. */
+    /* Fold per-op values into cumulative stats. Only count ops that actually
+     * transferred data — connect+ls (list_remote_branches) and up-to-date fetches
+     * would otherwise pollute the summary. */
     if (git_err == 0 &&
         (xfer->op.last_count > 0 || xfer->op.last_bytes > 0)) {
         if (xfer->op.direction == GIT_DIRECTION_PUSH) {
@@ -333,8 +327,8 @@ void transfer_op_end(transfer_context_t *xfer, int git_err) {
     }
 
     if (xfer->credential_state != CRED_STATE_ACQUIRED) {
-        /* NOT_ACQUIRED (no helper fill) and terminal states (VALIDATED,
-         * REJECTED) absorb any outcome without transitioning. */
+        /* NOT_ACQUIRED (no helper fill) and terminal states (VALIDATED, REJECTED)
+         * absorb any outcome without transitioning. */
         return;
     }
 
@@ -347,8 +341,8 @@ void transfer_op_end(transfer_context_t *xfer, int git_err) {
             break;
         case TRANSFER_OUTCOME_OTHER_FAILURE:
         case TRANSFER_OUTCOME_NONE:
-            /* Non-auth failure: session identity is still pending;
-             * a subsequent op may validate or invalidate it. */
+            /* Non-auth failure: session identity is still pending; a subsequent
+             * op may validate or invalidate it. */
             break;
     }
 }
@@ -370,8 +364,8 @@ const transfer_stats_t *transfer_stats(const transfer_context_t *xfer) {
 /**
  * Emit a one-line summary of the session's transfer activity.
  *
- * Silent on failed sessions (errors already carry the narrative) and on
- * sessions with no data transferred (nothing to report).
+ * Silent on failed sessions (errors already carry the narrative) and on sessions
+ * with no data transferred (nothing to report).
  */
 void transfer_summarize(
     const transfer_context_t *xfer,
@@ -407,8 +401,8 @@ void transfer_summarize(
     }
 
     if (s->objects_sent > 0) {
-        /* Local transports leave bytes_sent at zero (see push callback).
-         * Suppress the "(SIZE)" suffix rather than reporting a bogus value. */
+        /* Local transports leave bytes_sent at zero (see push callback). Suppress
+         * the "(SIZE)" suffix rather than reporting a bogus value. */
         if (s->bytes_sent > 0) {
             output_format_size(s->bytes_sent, bytes_str, sizeof(bytes_str));
             output_info(
@@ -453,9 +447,9 @@ void transfer_progress_resolved(transfer_context_t *xfer) {
 }
 
 /**
- * Drop credentials handed back by credential_helper_fill that we
- * couldn't install (libgit2 cred construction failed under memory
- * pressure). Both inputs are heap-owned and must be wiped before free.
+ * Drop credentials handed back by credential_helper_fill that we couldn't install
+ * (libgit2 cred construction failed under memory pressure). Both inputs are
+ * heap-owned and must be wiped before free.
  */
 static void discard_obtained_credentials(char *user, char *pass) {
     if (user) buffer_secure_free(user, strlen(user) + 1);
@@ -465,27 +459,25 @@ static void discard_obtained_credentials(char *user, char *pass) {
 /**
  * libgit2 credential callback.
  *
- * Composes the credential primitives directly so all session policy
- * — REJECTED fast-fail, anti-loop, cache-once, fill-then-cache,
- * anonymous fallback — lives next to the state it touches.
+ * Composes the credential primitives directly so all session policy — REJECTED
+ * fast-fail, anti-loop, cache-once, fill-then-cache, anonymous fallback — lives
+ * next to the state it touches.
  *
- *   1. Fast-fail on REJECTED — once the server has rejected helper
- *      creds in this session, subsequent ops skip sending the same
- *      creds. Saves a wasted round-trip per op in a multi-profile
- *      sync after an auth failure.
+ *   1. Fast-fail on REJECTED — once the server has rejected helper creds in this
+ *      session, subsequent ops skip sending the same creds. Saves a wasted
+ *      round-trip per op in a multi-profile sync after an auth failure.
  *
- *   2. Anti-loop — libgit2 re-invokes this callback when the server
- *      rejects creds within a single negotiation. transfer_op_begin
- *      resets the per-op counter, so across-op retries are allowed.
+ *   2. Anti-loop — libgit2 re-invokes this callback when the server rejects creds
+ *      within a single negotiation. transfer_op_begin resets the per-op counter,
+ *      so across-op retries are allowed.
  *
- *   3. SSH path takes precedence when allowed; SSH never populates
- *      the cred cache, so the session stays in NOT_ACQUIRED.
+ *   3. SSH path takes precedence when allowed; SSH never populates the cred cache,
+ *      so the session stays in NOT_ACQUIRED.
  *
- *   4. HTTPS userpass path: replay the cache-once cred if pinned;
- *      otherwise parse the URL, fill the helper, install the cred,
- *      and cache it for subsequent ops in the same session. Helper
- *      / parse failures fall through to anonymous (public-repo path)
- *      and finally libgit2's default.
+ *   4. HTTPS userpass path: replay the cache-once cred if pinned; otherwise parse
+ *      the URL, fill the helper, install the cred, and cache it for subsequent
+ *      ops in the same session. Helper / parse failures fall through to anonymous
+ *      (public-repo path) and finally libgit2's default.
  */
 int transfer_credentials_callback(
     git_credential **out,
@@ -509,11 +501,10 @@ int transfer_credentials_callback(
 
     /* HTTPS userpass path. */
     if (allowed_types & GIT_CREDENTIAL_USERPASS_PLAINTEXT) {
-        /* Cache-once replay. If construction fails (memory pressure
-         * is the only realistic cause), fall through to the libgit2
-         * default rather than re-prompting the helper — the user
-         * already authed once, surprising them with a fresh prompt
-         * mid-session is worse than a passthrough. */
+        /* Cache-once replay. If construction fails (memory pressure is the only
+         * realistic cause), fall through to the libgit2 default rather than
+         * re-prompting the helper — the user already authed once, surprising
+         * them with a fresh prompt mid-session is worse than a passthrough. */
         if (ctx->username && ctx->password) {
             if (credential_make_userpass(out, ctx->username, ctx->password) == 0) {
                 return 0;
@@ -540,8 +531,8 @@ int transfer_credentials_callback(
             credential_url_dispose(&u);
 
             if (fill_err) {
-                /* Exec failure / timeout / malformed response — surface
-                 * to the user so they can diagnose helper issues. */
+                /* Exec failure / timeout / malformed response — surface to the
+                 * user so they can diagnose helper issues. */
                 output_warning(
                     ctx->output, OUTPUT_NORMAL,
                     "credential helper: %s", error_message(fill_err)
@@ -552,12 +543,11 @@ int transfer_credentials_callback(
 
         if (fresh_user && fresh_pass) {
             if (credential_make_userpass(out, fresh_user, fresh_pass) == 0) {
-                /* Cache-once: ownership of fresh_user/fresh_pass moves
-                 * into the session. secure_replace wipes any stale
-                 * value before installing the new one (defensive — the
-                 * REJECTED fast-fail above makes re-entry impossible
-                 * today, but a future code-path change must not
-                 * silently leak secrets through an overwrite). */
+                /* Cache-once: ownership of fresh_user/fresh_pass moves into the
+                 * session. secure_replace wipes any stale value before installing
+                 * the new one (defensive — the REJECTED fast-fail above makes
+                 * re-entry impossible today, but a future code-path change must
+                 * not silently leak secrets through an overwrite). */
                 secure_replace(&ctx->username, fresh_user);
                 secure_replace(&ctx->password, fresh_pass);
                 transfer_mark_cred_acquired(ctx);
@@ -589,8 +579,8 @@ int transfer_progress_callback(
 
     transfer_context_t *ctx = (transfer_context_t *) payload;
 
-    /* Record latest values for the stats fold at op_end. TTY-independent:
-     * running in a pipe or over a log must still produce correct totals. */
+    /* Record latest values for the stats fold at op_end. TTY-independent: running
+     * in a pipe or over a log must still produce correct totals. */
     ctx->op.last_count = stats->received_objects;
     ctx->op.last_bytes = stats->received_bytes;
 
@@ -656,10 +646,10 @@ int transfer_push_progress_callback(
 
     transfer_context_t *ctx = (transfer_context_t *) payload;
 
-    /* Record latest values for the stats fold at op_end (TTY-independent).
-     * For local transports libgit2 does not populate `bytes` meaningfully
-     * (no wire to count) — treat it as absent rather than fold garbage
-     * into the session total. */
+    /* Record latest values for the stats fold at op_end (TTY-independent). For
+     * local transports libgit2 does not populate `bytes` meaningfully (no wire
+     * to count) — treat it as absent rather than fold garbage into the session
+     * total. */
     ctx->op.last_count = current;
     ctx->op.last_bytes = ctx->local_transport ? 0 : bytes;
 

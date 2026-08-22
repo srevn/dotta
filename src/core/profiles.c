@@ -200,24 +200,24 @@ cleanup:
 /**
  * Build a per-machine mount table from state
  *
- * State-aware adapter that materializes enabled_profiles' (name, target)
- * rows into mount_t entries and delegates the augmentation (HOME,
- * canonical HOME, root sentinel) to mount_table_build. Single chokepoint
- * for "what does the mount table look like for this command?".
+ * State-aware adapter that materializes enabled_profiles' (name, target) rows
+ * into mount_t entries and delegates the augmentation (HOME, canonical HOME,
+ * root sentinel) to mount_table_build. Single chokepoint for "what does the mount
+ * table look like for this command?".
  *
- * Both name and target are borrowed from the state row cache; their
- * lifetime ties to the next enabled_profiles shape mutation, which by
- * dispatcher construction is the next state_enable_profile /
- * state_disable_profile / state_reorder_profiles call (always paired with
- * a fresh local rebuild at binding-mutation sites). State outlives the
- * arena, so the borrows are sound for the arena's lifetime.
+ * Both name and target are borrowed from the state row cache; their lifetime
+ * ties to the next enabled_profiles shape mutation, which by dispatcher
+ * construction is the next state_enable_profile / state_disable_profile /
+ * state_reorder_profiles call (always paired with a fresh local rebuild at
+ * binding-mutation sites). State outlives the arena, so the borrows are sound
+ * for the arena's lifetime.
  *
- * Lenient on state-read failure: a cold clone or transient DB issue
- * means there are no per-profile mounts to materialize, but HOME and
- * the universal root sentinel are still useful for input classification.
- * Falling back to a bare table here makes the call sites (run_spec,
- * binding-mutation rebuilders) unconditional — they no longer carry
- * boilerplate to recover from this exact failure.
+ * Lenient on state-read failure: a cold clone or transient DB issue means there
+ * are no per-profile mounts to materialize, but HOME and the universal root
+ * sentinel are still useful for input classification. Falling back to a bare
+ * table here makes the call sites (run_spec, binding-mutation rebuilders)
+ * unconditional — they no longer carry boilerplate to recover from this exact
+ * failure.
  */
 error_t *profile_build_mount_table(
     const state_t *state,
@@ -258,8 +258,8 @@ error_t *profile_build_mount_table(
 /**
  * Validate state profiles and filter out non-existent ones
  *
- * Checks that all profiles listed in state exist as local branches.
- * Warns about missing profiles and filters them out.
+ * Checks that all profiles listed in state exist as local branches. Warns about
+ * missing profiles and filters them out.
  *
  * @param repo Repository (must not be NULL)
  * @param state_profiles Profiles from state (must not be NULL)
@@ -331,10 +331,10 @@ cleanup:
 /**
  * Resolve enabled profile names from state database
  *
- * Lightweight name-only resolution — no Git ref resolution or tree loading.
- * Reads enabled profiles from the borrowed state handle, validates that
- * each still exists as a branch, and returns the validated names. Warns
- * on stderr about missing profiles.
+ * Lightweight name-only resolution — no Git ref resolution or tree loading. Reads
+ * enabled profiles from the borrowed state handle, validates that each still
+ * exists as a branch, and returns the validated names. Warns on stderr about
+ * missing profiles.
  *
  * @param repo Repository (must not be NULL)
  * @param state Borrowed state handle (must not be NULL)
@@ -379,8 +379,8 @@ error_t *profile_resolve_enabled(
     /* Warn about missing profiles (diagnostic message)
      *
      * Note: We use fprintf(stderr) here because this is a low-level core module
-     * without access to an output_t. This is consistent with other core
-     * modules (deploy.c, workspace.c) that also write diagnostic warnings to stderr.
+     * without access to an output_t. This is consistent with other core modules
+     * (deploy.c, workspace.c) that also write diagnostic warnings to stderr.
      */
     if (missing_profiles && missing_profiles->count > 0) {
         fprintf(
@@ -421,8 +421,8 @@ cleanup:
 /**
  * Resolve CLI profile names for operation filtering
  *
- * Lightweight validation: checks branch existence without resolving
- * Git refs or loading profile objects.
+ * Lightweight validation: checks branch existence without resolving Git refs or
+ * loading profile objects.
  */
 error_t *profile_resolve_filter(
     git_repository *repo,
@@ -476,8 +476,8 @@ error_t *profile_resolve_filter(
 /**
  * Validate that filter profiles are enabled
  *
- * Ensures CLI filter only references profiles that are actually enabled
- * in the workspace.
+ * Ensures CLI filter only references profiles that are actually enabled in the
+ * workspace.
  */
 error_t *profile_validate_filter(
     const string_array_t *enabled_profiles,
@@ -607,9 +607,9 @@ static int tree_walk_callback(
 /**
  * List deployable files in a Git tree
  *
- * Walks the tree, filters metadata paths, and returns storage paths.
- * This is the lightweight primitive for "files in a branch" — takes
- * a pre-loaded tree and returns storage paths.
+ * Walks the tree, filters metadata paths, and returns storage paths. This is
+ * the lightweight primitive for "files in a branch" — takes a pre-loaded tree
+ * and returns storage paths.
  *
  * @param tree Git tree to walk (must not be NULL)
  * @param out String array of storage paths (must not be NULL, caller must free)
@@ -688,9 +688,8 @@ error_t *profile_has_custom_files(
         );
     }
 
-    /* Check for custom/ directory using O(log k) lookup.
-     * git_tree_entry_byname returns a pointer owned by the tree —
-     * must read before git_tree_free. */
+    /* Check for custom/ directory using O(log k) lookup. git_tree_entry_byname
+     * returns a pointer owned by the tree — must read before git_tree_free. */
     const git_tree_entry *entry = git_tree_entry_byname(tree, "custom");
     if (entry) {
         *out_has_custom = (git_tree_entry_type(entry) == GIT_OBJECT_TREE);
@@ -714,9 +713,9 @@ struct file_index_ctx {
  * Tree walk callback that populates the file index directly
  *
  * Inserts each file's storage path into the index hashmap during the walk,
- * eliminating the intermediate string_array_t that the old approach needed
- * per branch (each path was strdup'd into the array, strdup'd again into
- * the hashmap, then the array copy was freed).
+ * eliminating the intermediate string_array_t that the old approach needed per
+ * branch (each path was strdup'd into the array, strdup'd again into the hashmap,
+ * then the array copy was freed).
  */
 static int file_index_callback(
     const char *root,
@@ -794,13 +793,13 @@ static int file_index_callback(
 /**
  * Build inverted index of all files across profiles
  *
- * Walks each branch tree directly into a hashmap that maps storage paths
- * to lists of profile names. Uses gitops_load_branch_tree for direct tree
- * loading, and populates the hashmap
- * during the tree walk to eliminate intermediate string arrays.
+ * Walks each branch tree directly into a hashmap that maps storage paths to lists
+ * of profile names. Uses gitops_load_branch_tree for direct tree loading, and
+ * populates the hashmap during the tree walk to eliminate intermediate string
+ * arrays.
  *
- * Complexity: O(M×P) where M = profile count, P = avg files per profile.
- * Lookups are then O(1) instead of O(M×GitOps).
+ * Complexity: O(M×P) where M = profile count, P = avg files per profile. Lookups
+ * are then O(1) instead of O(M×GitOps).
  */
 error_t *profile_build_file_index(
     git_repository *repo,
@@ -901,9 +900,9 @@ error_t *profile_discover_file(
     error_t *err = NULL;
     *out_profiles = NULL;
 
-    /* Targeted branch scan: O(M×D) where D = path depth in tree.
-     * Checks each branch for the specific file instead of building the
-     * full file index (profile_build_file_index walks every tree, O(M×P)). */
+    /* Targeted branch scan: O(M×D) where D = path depth in tree. Checks each
+     * branch for the specific file instead of building the full file index
+     * (profile_build_file_index walks every tree, O(M×P)). */
     string_array_t *all_branches = NULL;
     err = gitops_list_branches(repo, &all_branches);
     if (err) {

@@ -225,8 +225,8 @@ static error_t *resolve_merge_trees(
 /**
  * Resolve with "ours" strategy (keep local, handled by caller)
  *
- * This strategy doesn't modify the local branch - it stays at saved_oid.
- * The actual force push to remote is handled by the caller.
+ * This strategy doesn't modify the local branch - it stays at saved_oid. The
+ * actual force push to remote is handled by the caller.
  */
 static error_t *resolve_ours(resolve_context_t *ctx, git_oid *out_oid) {
     CHECK_NULL(ctx);

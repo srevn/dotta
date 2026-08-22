@@ -28,9 +28,8 @@ typedef enum {
 /**
  * Command options
  *
- * `mode`, `profile`, and `file_path` are derived by `list_post_parse`
- * from the raw positional bucket. Consumers read only the user-facing
- * fields.
+ * `mode`, `profile`, and `file_path` are derived by `list_post_parse` from the
+ * raw positional bucket. Consumers read only the user-facing fields.
  */
 typedef struct {
     /* User-facing (read by cmd_list). */
@@ -57,8 +56,8 @@ error_t *cmd_list(const dotta_ctx_t *ctx, const cmd_list_options_t *opts);
 /**
  * Spec-engine command specification for `dotta list`.
  *
- * Registered in cmds/registry.c. Defined in list.c beside the
- * post_parse and dispatch wrappers.
+ * Registered in cmds/registry.c. Defined in list.c beside the post_parse and
+ * dispatch wrappers.
  */
 extern const args_command_t spec_list;
 

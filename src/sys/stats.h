@@ -45,8 +45,8 @@ typedef struct {
 /**
  * File→commit mapping
  *
- * Maps each file path to its most recent commit.
- * Optimized for the use case: "for each file in current tree, get last commit"
+ * Maps each file path to its most recent commit. Optimized for the use case:
+ * "for each file in current tree, get last commit"
  *
  * Internal implementation is opaque. Use accessor functions.
  */
@@ -55,8 +55,8 @@ typedef struct file_commit_map file_commit_map_t;
 /**
  * File history
  *
- * List of all commits that modified a specific file, in reverse
- * chronological order (newest first).
+ * List of all commits that modified a specific file, in reverse chronological
+ * order (newest first).
  */
 typedef struct {
     commit_info_t *commits;  /* Array of commits (caller must free with stats_free_file_history) */
@@ -66,11 +66,10 @@ typedef struct {
 /**
  * Get profile statistics
  *
- * Walks profile tree once to compute file count and total size.
- * Uses git_odb_read_header for efficient metadata-only reads (no decompression).
+ * Walks profile tree once to compute file count and total size. Uses
+ * git_odb_read_header for efficient metadata-only reads (no decompression).
  *
- * Performance: O(files) - single tree walk
- * Memory: O(1) - constant space
+ * Performance: O(files) - single tree walk Memory: O(1) - constant space
  *
  * @param repo Repository (required)
  * @param tree Tree to analyze (required)
@@ -86,8 +85,8 @@ error_t *stats_get_profile_stats(
 /**
  * Get blob size efficiently
  *
- * Reads only object metadata using git_odb_read_header (no decompression).
- * This is 10-50x faster than git_blob_lookup for size-only queries.
+ * Reads only object metadata using git_odb_read_header (no decompression). This
+ * is 10-50x faster than git_blob_lookup for size-only queries.
  *
  * @param repo Repository (required)
  * @param blob_oid Blob OID (required)
@@ -103,12 +102,12 @@ error_t *stats_get_blob_size(
 /**
  * Build file→commit mapping
  *
- * Walks commit history from newest to oldest, building a mapping from each
- * file (in the given tree) to its most recent commit.
+ * Walks commit history from newest to oldest, building a mapping from each file
+ * (in the given tree) to its most recent commit.
  *
- * Optimization: Stops early when all files in tree have been found.
- * This makes the operation much faster for profiles where files were
- * modified recently (common case).
+ * Optimization: Stops early when all files in tree have been found. This makes
+ * the operation much faster for profiles where files were modified recently (common
+ * case).
  *
  * Performance: O(commits_needed × files_per_commit) - with early termination
  * Memory: O(files_in_tree) - one commit_info per file
@@ -118,7 +117,8 @@ error_t *stats_get_blob_size(
  * @param repo Repository (required)
  * @param branch_name Branch name (required, e.g., "global")
  * @param tree Tree containing files to track (required)
- * @param out File→commit map (required, caller must free with stats_free_file_commit_map)
+ * @param out File→commit map (required, caller must free with
+ *            stats_free_file_commit_map)
  * @return Error or NULL on success
  */
 error_t *stats_build_file_commit_map(
@@ -131,14 +131,14 @@ error_t *stats_build_file_commit_map(
 /**
  * Get file history
  *
- * Returns all commits that modified the specified file, in reverse
- * chronological order (newest first).
+ * Returns all commits that modified the specified file, in reverse chronological
+ * order (newest first).
  *
- * Performance: O(total_commits) - walks entire branch history
- * Memory: O(matching_commits) - allocates array for all commits touching file
+ * Performance: O(total_commits) - walks entire branch history Memory:
+ * O(matching_commits) - allocates array for all commits touching file
  *
- * Note: This is very expensive. Use only when user explicitly requests
- *       file history (e.g., `dotta list -p <profile> <file>`).
+ * Note: This is very expensive. Use only when user explicitly requests file history
+ *       (e.g., `dotta list -p <profile> <file>`).
  *
  * @param repo Repository (required)
  * @param branch_name Branch name (required)
@@ -156,14 +156,15 @@ error_t *stats_get_file_history(
 /**
  * Lookup commit info for a file
  *
- * Returns the commit info for the specified file path, or NULL if the
- * file is not in the map.
+ * Returns the commit info for the specified file path, or NULL if the file is
+ * not in the map.
  *
  * Performance: O(1) - constant time hashmap lookup
  *
  * @param map File→commit map (required)
  * @param file_path File path (required)
- * @return Commit info (borrowed pointer, valid until map is freed) or NULL if not found
+ * @return Commit info (borrowed pointer, valid until map is freed) or NULL if
+ *         not found
  */
 const commit_info_t *stats_file_commit_map_get(
     const file_commit_map_t *map,
@@ -173,8 +174,8 @@ const commit_info_t *stats_file_commit_map_get(
 /**
  * Free commit info
  *
- * Generic callback signature for use with containers (e.g., hashmap_free).
- * Accepts void* to match standard C cleanup callback pattern.
+ * Generic callback signature for use with containers (e.g., hashmap_free). Accepts
+ * void* to match standard C cleanup callback pattern.
  *
  * @param ptr Commit info to free (NULL safe)
  */

@@ -64,7 +64,7 @@
  * - filesystem_path, storage_path: a view row's or a record's (arena), or the
  *   untracked scan's arena copies
  * - profile: a view row's or a record's (arena), or — an untracked item's — the
- *   enabled set's (the scope outlives the workspace)
+ *   view's profile list's (arena)
  * - old_profile: the record's profile (arena; can be NULL)
  */
 typedef struct {
@@ -121,11 +121,6 @@ static inline workspace_items_t workspace_items_view(const ptr_array_t *bucket) 
 typedef struct workspace workspace_t;
 
 /**
- * Forward declarations
- */
-typedef struct scope scope_t;
-
-/**
  * Workspace cleanliness status
  */
 typedef enum {
@@ -175,18 +170,16 @@ typedef struct {
  * status -p global` still load the full workspace and apply the filter at
  * display time via scope_accepts_profile).
  *
- * Profile loading: The workspace borrows the enabled name array from the scope
- * (`scope_enabled(scope)`; caller must keep the scope alive until
- * workspace_free) for its profile membership set and the untracked scan's
- * precedence order. The view itself is the dispatcher's, built over the same
- * enabled set at the start of the command and borrowed here — one tree walk
- * per enabled profile, once per command.
+ * Profile set: the view's (manifest_profiles — the enabled profiles whose
+ * branch existed at build, in precedence order), read for the orphan label's
+ * membership set and the untracked scan's order. The view itself is the
+ * dispatcher's, built over the enabled set at the start of the command and
+ * borrowed here — one tree walk per enabled profile, once per command — so
+ * the workspace borrows nothing a caller must keep alive beside it.
  *
  * @param repo Git repository (must not be NULL)
  * @param state State handle (must not be NULL, borrowed from caller;
  *              caller retains ownership and must free it after workspace_free)
- * @param scope Operation scope (must not be NULL; workspace reads
- *              scope_enabled(scope) as its profile set)
  * @param config Configuration (for ignore patterns, can be NULL)
  * @param content_cache Shared blob-content cache (must not be NULL;
  *              borrowed — lifetime must extend past workspace_free. Obtain from
@@ -207,7 +200,6 @@ typedef struct {
 error_t *workspace_load(
     git_repository *repo,
     state_t *state,
-    const scope_t *scope,
     const struct config *config,
     content_cache_t *content_cache,
     const manifest_t *manifest,

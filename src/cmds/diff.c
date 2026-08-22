@@ -1319,7 +1319,7 @@ static error_t *diff_workspace(
     };
 
     err = workspace_load(
-        repo, state, scope, config, cache, manifest, &ws_opts, arena, &ws
+        repo, state, config, cache, manifest, &ws_opts, arena, &ws
     );
     if (err) {
         return error_wrap(err, "Failed to load workspace");
@@ -1434,8 +1434,8 @@ error_t *cmd_diff(const dotta_ctx_t *ctx, const cmd_diff_options_t *opts) {
 
     /* Build operation scope
      *
-     *   scope_enabled — the persistent enabled set (workspace_load, historical-mode
-     *                   branch resolution search).
+     *   scope_enabled — the persistent enabled set (the CLI filter's bound,
+     *                   historical-mode branch resolution search).
      *   scope_active  — diff display face.
      *   scope_paths   — CLI positional file filter (threaded into
      *                   historical modes and diff_workspace).

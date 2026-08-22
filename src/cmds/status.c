@@ -980,8 +980,7 @@ error_t *cmd_status(const dotta_ctx_t *ctx, const cmd_status_options_t *opts) {
 
     /* Build operation scope
      *
-     *   scope_enabled — the persistent enabled set (passed to workspace_load
-     *                   for accurate orphan detection).
+     *   scope_enabled — the persistent enabled set, the CLI filter's bound.
      *   scope_active  — display face (enabled profile list, remote status).
      *
      * Zero enabled profiles is a valid state: workspace classifies all state
@@ -999,8 +998,8 @@ error_t *cmd_status(const dotta_ctx_t *ctx, const cmd_status_options_t *opts) {
 
     /* Load workspace for divergence analysis (only needed for local status)
      *
-     * Uses persistent enabled profiles to ensure accurate orphan detection.
-     * Manifest scope matches state scope, preventing false orphan reports.
+     * The workspace's profile set is the view's — the persistent enabled set —
+     * so orphan detection is exact whatever -p narrowed.
      */
     if (opts->show_local) {
         workspace_load_t ws_opts = {
@@ -1011,8 +1010,8 @@ error_t *cmd_status(const dotta_ctx_t *ctx, const cmd_status_options_t *opts) {
             .analyze_encryption  = true
         };
         err = workspace_load(
-            repo, state, scope, config, ctx->content_cache, ctx->manifest,
-            &ws_opts, ctx->arena, &ws
+            repo, state, config, ctx->content_cache, ctx->manifest, &ws_opts,
+            ctx->arena, &ws
         );
         if (err) {
             err = error_wrap(err, "Failed to load workspace");
@@ -1095,7 +1094,7 @@ error_t *cmd_status(const dotta_ctx_t *ctx, const cmd_status_options_t *opts) {
 
     /* Display workspace status (with profile filtering for Coherent Scope)
      *
-     * The workspace was loaded with the persistent enabled set (scope_enabled)
+     * The workspace was loaded over the persistent enabled set (the view's)
      * for accurate divergence analysis. display_workspace_status then applies
      * the CLI filter dimension via scope_accepts_profile so `dotta status -p
      * work` matches `dotta apply -p work` behavior.

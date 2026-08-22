@@ -41,7 +41,6 @@
 #include "core/manifest.h"
 #include "core/metadata.h"
 #include "core/policy.h"
-#include "core/scope.h"
 #include "infra/compare.h"
 #include "infra/content.h"
 #include "sys/filesystem.h"
@@ -114,9 +113,12 @@ struct workspace {
     const anchor_t **orphans;                    /* Arena-allocated array into the snapshot */
     size_t orphan_count;                         /* Number of orphans */
 
-    /* State and profile scope */
+    /* State and profile set — the view's profiles (manifest_profiles), in
+     * precedence order: the untracked scan walks them in that order and the
+     * orphan label asks the index whether a record's profile is among them. */
     state_t *state;                              /* The record's handle (borrowed from caller) */
-    const string_array_t *profiles;              /* Borrowed; valid for workspace lifetime */
+    const char *const *profiles;                 /* The view's names (arena); valid for workspace lifetime */
+    size_t profile_count;                        /* Number of profiles */
     hashmap_t *profile_index;                    /* Maps profile -> NULL (membership set, O(1) lookup) */
 
     /* Content cache for encrypted blob reads during divergence analysis */
@@ -154,14 +156,17 @@ struct workspace {
 
 /**
  * Create empty workspace
+ *
+ * The profile set is the view's (manifest_profiles): the names are the arena's,
+ * so the workspace borrows nothing that a caller has to keep alive beside it.
  */
 static error_t *workspace_create_empty(
     git_repository *repo,
-    const string_array_t *profiles,
+    const manifest_t *manifest,
     workspace_t **out
 ) {
     CHECK_NULL(repo);
-    CHECK_NULL(profiles);
+    CHECK_NULL(manifest);
     CHECK_NULL(out);
 
     workspace_t *ws = calloc(1, sizeof(workspace_t));
@@ -170,9 +175,9 @@ static error_t *workspace_create_empty(
     }
 
     ws->repo = repo;
-    ws->profiles = profiles;           /* Borrowed — caller keeps alive past workspace_free */
+    ws->profiles = manifest_profiles(manifest, &ws->profile_count);
 
-    ws->profile_index = hashmap_borrow(32); /* Keys: borrowed from profiles->items[] */
+    ws->profile_index = hashmap_borrow(32); /* Keys: the view's arena-backed names */
     if (!ws->profile_index) {
         free(ws);
         return ERROR(ERR_MEMORY, "Failed to create profile index");
@@ -187,8 +192,8 @@ static error_t *workspace_create_empty(
 
     /* Build profile membership set for O(1) scope checks. Values are NULL — this
      * is a pure name set, not a value map. */
-    for (size_t i = 0; i < profiles->count; i++) {
-        error_t *err = hashmap_set(ws->profile_index, profiles->items[i], NULL);
+    for (size_t i = 0; i < ws->profile_count; i++) {
+        error_t *err = hashmap_set(ws->profile_index, ws->profiles[i], NULL);
         if (err) {
             hashmap_free(ws->diverged_index, NULL);
             hashmap_free(ws->profile_index, NULL);
@@ -304,14 +309,14 @@ error_t *check_item_metadata_divergence(
  *
  * Every string is borrowed for the workspace's lifetime: a row's (the view, arena),
  * a record's (the anchors snapshot, arena), the untracked scan's arena copies,
- * or — the profile of an untracked item — the enabled set's, which the scope
- * keeps alive past workspace_free by contract. Nothing is copied here.
+ * or — the profile of an untracked item — the view's profile list (arena).
+ * Nothing is copied here.
  *
  * @param ws Workspace context (must not be NULL)
  * @param filesystem_path Target path on filesystem (must not be NULL)
  * @param storage_path Path in profile (can be NULL for directories)
  * @param profile Source profile name — every producer passes one (a row's, a
- *                record's, or the enabled set's)
+ *                record's, or the view's profile list's)
  * @param old_profile The record's profile when it differs from the row's (can
  *                    be NULL)
  * @param state Where the item exists (deployed/undeployed/etc.)
@@ -1868,11 +1873,10 @@ static error_t *analyze_untracked_files(
     const config_t *config
 ) {
     CHECK_NULL(ws);
-    CHECK_NULL(ws->profiles);
 
     error_t *err = NULL;
 
-    if (ws->profiles->count == 0) {
+    if (ws->profile_count == 0) {
         return NULL;  /* No profiles to analyze */
     }
 
@@ -1911,18 +1915,18 @@ static error_t *analyze_untracked_files(
     }
 
     /* Iterate the active directory partition, filtering by profile per outer
-     * iteration. The outer loop runs in scope_enabled order — the user's
+     * iteration. The outer loop runs in the view's profile order — the user's
      * enabled-precedence position — so when two profiles share an ancestor
      * directory, the highest-precedence profile scans first and claims new files
      * via ws->diverged_index (subsequent profiles' scans skip the entry via the
      * dedup check in scan_directory_for_untracked).
      *
-     * The dirs.count × ws->profiles->count strcmp filter below is trivially
+     * The dirs.count × ws->profile_count strcmp filter below is trivially
      * negligible (P ≤ 10, D ≤ 10²) and replaces a per-profile SQL query. */
     manifest_rows_t dirs = workspace_directories(ws);
 
-    for (size_t p = 0; p < ws->profiles->count; p++) {
-        const char *profile = ws->profiles->items[p];
+    for (size_t p = 0; p < ws->profile_count; p++) {
+        const char *profile = ws->profiles[p];
 
         /* Resolve the profile-specific ruleset (memoised in the builder).
          *
@@ -2459,7 +2463,6 @@ static error_t *workspace_partition(workspace_t *ws) {
 error_t *workspace_load(
     git_repository *repo,
     state_t *state,
-    const scope_t *scope,
     const config_t *config,
     content_cache_t *content_cache,
     const manifest_t *manifest,
@@ -2469,23 +2472,19 @@ error_t *workspace_load(
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(state);
-    CHECK_NULL(scope);
     CHECK_NULL(content_cache);
     CHECK_NULL(manifest);
     CHECK_NULL(options);
     CHECK_NULL(arena);
     CHECK_NULL(out);
 
-    /* Workspace scope is the persistent enabled set — never the CLI filter. The
-     * scope accessor type-enforces this invariant (see scope.h's "Vocabulary"
-     * section). The pointer is borrowed from scope, which must outlive the returned
-     * workspace. */
-    const string_array_t *profiles = scope_enabled(scope);
-
     workspace_t *ws = NULL;
     error_t *err = NULL;
 
-    err = workspace_create_empty(repo, profiles, &ws);
+    /* The workspace's profile set is the view's — the persistent enabled set
+     * the view was built over, never a CLI filter: `dotta status -p global`
+     * loads the whole workspace and filters at display time. */
+    err = workspace_create_empty(repo, manifest, &ws);
     if (err) {
         return err;
     }

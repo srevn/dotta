@@ -1936,7 +1936,7 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
 
     /* Build operation scope
      *
-     *   scope_enabled — the persistent enabled set (passed to workspace_load).
+     *   scope_enabled — the persistent enabled set, the CLI filter's bound.
      *   scope_active  — update operation face (hook context string).
      *   scope_paths / scope_is_excluded — per-item gates in filter_items_for_update
      */
@@ -2008,8 +2008,8 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
         .analyze_encryption  = true                     /* Encryption policy validation */
     };
     err = workspace_load(
-        repo, state, scope, config, ctx->content_cache, ctx->manifest,
-        &ws_opts, ctx->arena, &ws
+        repo, state, config, ctx->content_cache, ctx->manifest, &ws_opts,
+        ctx->arena, &ws
     );
     if (err) {
         err = error_wrap(err, "Failed to analyze workspace");

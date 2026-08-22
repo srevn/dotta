@@ -1519,7 +1519,8 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
 
     /* Build operation scope
      *
-     *   scope_enabled — the persistent enabled set (passed to workspace_load).
+     *   scope_enabled — the persistent enabled set, the CLI filter's bound and
+     *                   the Manifest block's attribution.
      *   scope_active  — sync operation face (fetch / analyze / pull targets).
      */
     scope_inputs_t scope_inputs = {
@@ -1575,8 +1576,8 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
             .analyze_encryption  = false   /* Encryption is apply's concern */
         };
         err = workspace_load(
-            repo, state, scope, config, ctx->content_cache, ctx->manifest,
-            &ws_opts, ctx->arena, &ws
+            repo, state, config, ctx->content_cache, ctx->manifest, &ws_opts,
+            ctx->arena, &ws
         );
         if (err) {
             err = error_wrap(err, "Failed to load workspace");
@@ -2039,9 +2040,8 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
 cleanup:
     /* Free resources in reverse order of allocation. state is borrowed from the
      * dispatcher and sync opens no transaction of its own (the flush scopes its
-     * own; nothing else writes); workspace borrows scope's enabled array
-     * internally, so free workspace first, then scope. `before` is the
-     * dispatcher's view — not freed here. */
+     * own; nothing else writes). `before` is the dispatcher's view — not freed
+     * here. */
     if (current_branch) free(current_branch);
     manifest_free(after);
     if (ws) workspace_free(ws);

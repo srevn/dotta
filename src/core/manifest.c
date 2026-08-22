@@ -55,6 +55,8 @@ struct manifest {
     size_t count;                  /* Rows in the spine */
     size_t capacity;               /* Spine slots allocated */
     hashmap_t *index;              /* fs_path → manifest_row_t *, heap-allocated */
+    const char **profiles;         /* The profiles the rows came from, in precedence order (arena) */
+    size_t profile_count;          /* Profiles listed */
 };
 
 /**
@@ -544,7 +546,8 @@ static error_t *manifest_claim_tree(
 /**
  * Allocate a fresh manifest_t, ready for the claim routine.
  *
- * Both the view struct and the initial spine are arena-allocated. The index hashmap
+ * Both the view struct, the initial spine and the profile list (sized for the
+ * profiles the build will walk at most) are arena-allocated. The index hashmap
  * is heap-allocated (borrowed-key mode — keys live in the caller's arena and
  * survive the hashmap's lifetime).
  *
@@ -555,6 +558,7 @@ static error_t *manifest_allocate(
     arena_t *arena,
     size_t initial_capacity,
     size_t index_capacity,
+    size_t profile_capacity,
     manifest_t **out
 ) {
     *out = NULL;
@@ -568,6 +572,15 @@ static error_t *manifest_allocate(
     manifest->rows = arena_calloc(arena, manifest->capacity, sizeof(*manifest->rows));
     if (!manifest->rows) {
         return ERROR(ERR_MEMORY, "Failed to allocate manifest spine");
+    }
+
+    if (profile_capacity > 0) {
+        manifest->profiles = arena_calloc(
+            arena, profile_capacity, sizeof(*manifest->profiles)
+        );
+        if (!manifest->profiles) {
+            return ERROR(ERR_MEMORY, "Failed to allocate manifest profile list");
+        }
     }
 
     manifest->index = hashmap_borrow(index_capacity);
@@ -615,7 +628,7 @@ error_t *manifest_build(
     }
 
     manifest_t *manifest = NULL;
-    err = manifest_allocate(arena, 64, 128, &manifest);
+    err = manifest_allocate(arena, 64, 128, profile_count, &manifest);
     if (err) return err;
 
     /* Process each profile in order (later profiles override earlier) */
@@ -632,8 +645,9 @@ error_t *manifest_build(
         /* Does the branch exist? Asked separately because the tree loader maps
          * a missing ref to ERR_GIT like every other failure, and "gone" must
          * not be confused with "broken": gone is an observation — the profile
-         * contributes nothing and the workspace reads its records as orphans —
-         * broken is an error that must propagate. */
+         * contributes nothing, is not listed among the view's profiles, and
+         * the workspace reads its records as orphans — broken is an error that
+         * must propagate. */
         bool exists = false;
         err = gitops_branch_exists(repo, profile, &exists);
         if (err) {
@@ -643,6 +657,8 @@ error_t *manifest_build(
             goto cleanup;
         }
         if (!exists) continue;
+
+        manifest->profiles[manifest->profile_count++] = profile;
 
         /* Load tree for this profile (scoped to iteration). */
         git_tree *tree = NULL;
@@ -713,7 +729,7 @@ error_t *manifest_build_tree(
     *out = NULL;
 
     manifest_t *manifest = NULL;
-    error_t *err = manifest_allocate(arena, 64, 128, &manifest);
+    error_t *err = manifest_allocate(arena, 64, 128, 1, &manifest);
     if (err) return err;
 
     /* Arena-allocate the profile name. Rows borrow this pointer; the caller's
@@ -724,6 +740,7 @@ error_t *manifest_build_tree(
         err = ERROR(ERR_MEMORY, "Failed to duplicate profile name");
         goto cleanup;
     }
+    manifest->profiles[manifest->profile_count++] = owned_profile;
 
     /* mounts and metadata borrow from function parameters — both outlive the
      * tree walk. */
@@ -754,6 +771,18 @@ manifest_rows_t manifest_rows(const manifest_t *manifest) {
         .entries = (const manifest_row_t *const *) manifest->rows,
         .count = manifest->count,
     };
+}
+
+/**
+ * The profiles the view was built from, in precedence order
+ */
+const char *const *manifest_profiles(const manifest_t *manifest, size_t *count) {
+    if (!manifest) {
+        *count = 0;
+        return NULL;
+    }
+    *count = manifest->profile_count;
+    return manifest->profiles;
 }
 
 /**

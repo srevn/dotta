@@ -16,11 +16,11 @@
  * Vocabulary
  * ----------
  *   enabled — persistent enabled profile names, always non-NULL, may be empty.
- *             Workspace scope — the same set the dispatcher built the view
- *             over (ctx->manifest), validated against the branches: workspace_load
- *             reads this via scope_enabled internally for its profile
- *             membership set and the untracked scan's precedence order; callers
- *             pass the whole scope_t to workspace_load.
+ *             The same set the dispatcher built the view over (ctx->manifest),
+ *             validated against the branches — the set the CLI filter is checked
+ *             against, and the one the receipts attribute to (sync). The
+ *             workspace does not read it: its profile set is the view's own
+ *             (manifest_profiles), the same names by construction.
  *   active  — display/hook face of the scope. Equal to the CLI filter
  *             names when one was given, else equal to enabled. "What the user
  *             asked for, not the underlying world."
@@ -31,25 +31,18 @@
  *             scope_accepts_path.
  *
  * The CRITICAL invariant previously expressed as prose comments in apply.c /
- * sync.c ("use enabled, not active, for workspace_load") is now type-enforced:
- * workspace_load takes `const scope_t *` and reads the enabled set internally,
- * and the view it joins is built over the state's rows, never over a list a
- * caller hands in. Callers cannot pass the wrong array by mistake.
+ * sync.c ("use enabled, not active, for workspace_load") is enforced by
+ * construction: the workspace never takes a profile list — the view it joins
+ * is built over the state's rows, and its profile set is the view's. A CLI
+ * filter narrows what a command touches, never what it loads.
  *
  * Lifetime and ownership
  * ----------------------
  * scope_t is command-scoped and immutable after scope_build returns. All
  * CLI-derived inputs are deep-copied; the caller may free its inputs immediately
- * after scope_build returns. scope_t is entirely self-contained.
- *
- * Lifetime ordering at command cleanup:
- *
- *     workspace_free(ws)   // borrows scope's enabled array — free FIRST
- *     scope_free(scope)    // releases the enabled array — free SECOND
- *
- * scope_enabled's underlying array is owned by scope_t; workspace_t borrows it
- * via its `profiles` field (resolved inside workspace_load). Freeing in the wrong
- * order is a use-after-free in workspace_free's teardown.
+ * after scope_build returns. scope_t is entirely self-contained, and nothing
+ * borrows from it past its life — the workspace and the scope are freed in
+ * any order.
  *
  * Empty-enabled policy
  * --------------------
@@ -159,9 +152,9 @@ void scope_free(scope_t *s);
 /**
  * Persistent enabled set — the view's scope.
  *
- * The set the workspace's profile membership is read from (workspace_load takes
- * the scope and reads this internally). Never the filter. Always non-NULL; the
- * array may be empty (an empty view is a valid state).
+ * The enabled profiles, validated against the branches, in precedence order.
+ * Never the filter. Always non-NULL; the array may be empty (an empty view is
+ * a valid state).
  *
  * The returned pointer is borrowed from scope_t and valid until scope_free.
  */

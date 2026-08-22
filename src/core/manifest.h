@@ -18,7 +18,8 @@
  *     commands that declare it (ctx->manifest, include/runtime.h); a command
  *     that moves Git or the enabled set builds the post-mutation view itself.
  *
- *   - Readers: manifest_rows (both kinds, unordered), manifest_lookup (by
+ *   - Readers: manifest_rows (both kinds, unordered), manifest_profiles (the
+ *     profiles the rows came from, in precedence order), manifest_lookup (by
  *     filesystem path, O(1)) and manifest_lookup_storage (by storage path, linear);
  *     and manifest_diff, the per-profile delta between two views that the
  *     scope-changing verbs and sync print their receipts from.
@@ -276,6 +277,24 @@ error_t *manifest_build_tree(
  * @return Borrowed slice over every row
  */
 manifest_rows_t manifest_rows(const manifest_t *manifest);
+
+/**
+ * The profiles the view was built from, in precedence order
+ *
+ * Every enabled profile whose branch existed at build, lowest precedence first
+ * — the set the rows came from, as the enabled set reads once the branches
+ * that are gone (and contributed nothing) are left out; for a tree view, the
+ * one profile. The workspace reads its profile set here: the untracked scan's
+ * order and the orphan label's membership are the view's, by construction.
+ *
+ * Pure value return — no allocation, no error path. The names are the arena's,
+ * the same pointers the rows carry, valid for the arena's lifetime.
+ *
+ * @param manifest Manifest (NULL yields count 0)
+ * @param count Receives the number of profiles (must not be NULL)
+ * @return Borrowed array of profile names, or NULL when count is 0
+ */
+const char *const *manifest_profiles(const manifest_t *manifest, size_t *count);
 
 /**
  * Look up a row by filesystem path

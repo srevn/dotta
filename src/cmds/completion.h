@@ -8,23 +8,28 @@
  * - Silent failures: Never print errors, output nothing on failure
  * - Cheap queries: one state read or one view build, never a workspace load
  * - Simple output: Newline-separated for fish consumption
+ * - One authority per mode: a mode reads the enabled set, the view, or Git,
+ *   never a blend — the shell composes sources, the binary names them
  *
  * Usage:
- *   dotta __complete check                 # Exit 0 if in repo, 1 otherwise
- *   dotta __complete profiles              # Enabled profiles
- *   dotta __complete profiles --all        # All available profiles (branches)
- *   dotta __complete files                 # All managed files
- *   dotta __complete files -p <profile>    # Files in specific profile
- *   dotta __complete files --storage       # Storage paths instead of filesystem
- *   dotta __complete files --refspec       # profile:storage_path from git (all branches)
- *   dotta __complete files --refspec -p X  # bare storage_path from branch X (git source)
- *   dotta __complete commits               # Recent commits from first enabled profile
- *   dotta __complete commits -p <profile>  # Recent commits from specific profile
- *   dotta __complete commits --limit <n>   # Limit number of commits
- *   dotta __complete spec fish             # Emit the fish completion script for
- *                                          #   the entire root registry. Used by
- *                                          #   the Makefile to generate
- *                                          #   dotta-completions.fish at install time.
+ *   dotta __complete profiles                 # The enabled set, in precedence order
+ *   dotta __complete profiles --local         # Every local branch (enabled ones marked)
+ *   dotta __complete profiles --remote        # Remote-tracking branches without a local
+ *   dotta __complete files                    # The view: every managed file, with its winner
+ *   dotta __complete files -p X [-p Y]        # The view's rows won by X (or Y)
+ *   dotta __complete refspecs                 # Every local branch's files as profile:path
+ *   dotta __complete refspecs -p X            # Branch X's files, bare (the profile is pinned)
+ *   dotta __complete commits                  # Recent commits of the enabled set, in order
+ *   dotta __complete commits -p X [-p Y]      # Recent commits of branch X (and Y)
+ *   dotta __complete commits --limit <n>      # Cap per branch (default 20)
+ *   dotta __complete remotes                  # Configured git remotes
+ *   dotta __complete spec fish                # Emit the fish completion script for
+ *                                             #   the entire root registry. Used by
+ *                                             #   the Makefile to generate
+ *                                             #   dotta-completions.fish at install time.
+ *
+ * Outside a repository every data mode prints nothing and exits 0; the shell
+ * reads silence as "no candidates".
  */
 
 #ifndef DOTTA_CMD_COMPLETION_H
@@ -36,17 +41,17 @@
 /**
  * Completion mode.
  *
- * Runtime modes (check / profiles / files / commits / remotes) emit data that
+ * Runtime modes (profiles / files / refspecs / commits / remotes) emit data that
  * depends on the user's repo state. `spec` modes emit the build-time fish script
  * derived from the root command registry — no repo required, output is
  * deterministic on a given binary.
  */
 typedef enum {
-    COMPLETE_CHECK,           /* Check if in dotta repo (exit 0/1) */
-    COMPLETE_PROFILES,        /* List profiles (enabled or all) */
-    COMPLETE_FILES,           /* List managed files */
-    COMPLETE_COMMITS,         /* List recent commits */
-    COMPLETE_REMOTES,         /* List git remotes */
+    COMPLETE_PROFILES,        /* Profile names (enabled, local, remote) */
+    COMPLETE_FILES,           /* The view's file rows */
+    COMPLETE_REFSPECS,        /* Git trees: files of every branch, or of one */
+    COMPLETE_COMMITS,         /* Recent commits of one or more branches */
+    COMPLETE_REMOTES,         /* Git remotes */
     COMPLETE_SPEC_FISH,       /* Emit fish completion script (build-time) */
 } completion_mode_t;
 
@@ -54,16 +59,20 @@ typedef enum {
  * Completion options
  *
  * `mode` is derived by `completion_post_parse` from the first positional token
- * (check | profiles | files | commits | remotes).
+ * (profiles | files | refspecs | commits | remotes | spec). Each flag belongs to
+ * the modes that read it; post_parse rejects it elsewhere so a stray flag never
+ * passes silently.
  */
 typedef struct {
     /* User-facing (read by cmd_completion). */
     completion_mode_t mode;   /* What to complete */
-    const char *profile;      /* Optional: filter by profile */
-    bool all;                 /* For profiles: include all (not just enabled) */
-    bool storage_paths;       /* For files: output storage_path instead of filesystem_path */
-    bool refspec;             /* For files: git-sourced profile:storage_path */
-    long limit;               /* For commits: max results (default 20) */
+    bool local;               /* profiles: every local branch */
+    bool remote;              /* profiles: remote-tracking branches without a local */
+    char **profiles;          /* -p (repeatable): the view's winners (files), the
+                               * branches to walk (commits), the one branch pinned
+                               * (refspecs) */
+    size_t profile_count;
+    long limit;               /* commits: max results per branch (default 20) */
 
     /* Raw positional bucket (engine-populated; interpreted in post_parse). */
     char **positional_args;
@@ -76,7 +85,7 @@ typedef struct {
  * Outputs completion results to stdout. Returns NULL on success (even if no
  * results). Never outputs to stderr - silent failure model.
  *
- * @param ctx Dispatch context (ctx->repo may be NULL for COMPLETE_CHECK mode)
+ * @param ctx Dispatch context (ctx->repo is NULL outside a repository)
  * @param opts Command options (must not be NULL)
  * @return Error or NULL on success
  */

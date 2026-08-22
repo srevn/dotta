@@ -1276,9 +1276,10 @@ static void emit_complete_line(
 }
 
 /**
- * Emit a root-level `complete -c <prog>` line for a command's flag aliases — no
- * `-n` guard, since root options are valid at the start of argv regardless of
- * what follows. Each space-separated token in `aliases` becomes a `-s X`
+ * Emit a root-level `complete -c <prog>` line for a command's flag aliases,
+ * guarded by `__<prog>_needs_command`: the root resolver reads a flag form
+ * only as argv[1], so once a command is typed the alias is no longer valid
+ * there. Each space-separated token in `aliases` becomes a `-s X`
  * (single-char) or `-l XXX` (multi-char) entry; all tokens share the single line
  * so fish renders them as aliases of the same completion.
  */
@@ -1287,7 +1288,7 @@ static void emit_root_alias_complete(
     const char *aliases, const char *summary
 ) {
     if (aliases == NULL) return;
-    fprintf(out, "complete -c %s", prog);
+    fprintf(out, "complete -c %s -n __%s_needs_command", prog, prog);
     for (const char *p = aliases; *p;) {
         while (*p == ' ') p++;
         if (*p == '\0') break;
@@ -1336,10 +1337,9 @@ static void emit_sub_row(
     fputs("\"\n", out);
 }
 
-/* Value-flag deduplication. Many commands share the same value-bearing flag (e.g.
- * `--profile` appears on 9+ specs); emitting one token per occurrence makes the
- * generated `__<prog>_value_flags` list grow quadratically in N (commands) × F
- * (flags) and adds no information.
+/* Value-flag deduplication. A command and its subcommands may declare the same
+ * value-bearing flag more than once (a tree's subs each carry `--target`, say);
+ * the per-command `__<prog>_value_flags_<cmd>` list names each token once.
  */
 typedef struct value_flag_set {
     const char **tokens;   /* Each entry is a fish argv token (`-p`,    */
@@ -1376,10 +1376,10 @@ static void value_flag_set_add(
 /**
  * Scan every value-taking flag-token in `opts` and add the formatted argv form
  * (`-X` or `--XXX`) to `set`. Duplicates (same token already seen) are skipped
- * so a flag declared on N commands appears once.
+ * so a flag declared on N subcommands of one tree appears once.
  *
  * The tokens themselves are written out in `args_export_completion_fish` after
- * the full scan; this function never writes to `out`.
+ * the command's scan; this function never writes to `out`.
  */
 static void collect_value_flags(
     const args_opt_t *opts, value_flag_set_t *set, arena_t *arena
@@ -1572,44 +1572,57 @@ void args_export_completion_fish(
      * profile names, not paths. */
     fprintf(out, "complete -c %s -f\n\n", prog);
 
-    /* Token storage and the dedup set live in the borrowed arena. `vset.tokens`
-     * points into arena memory; tokens are emitted via fprintf below, then the
-     * pointers go out of scope when this function returns — the arena outlives
+    /* Value-taking flags, one list per command: the positional scan in
+     * <prog>.fish reads `__<prog>_value_flags_<cmd>` to know which of that
+     * command's tokens are "flag + value" pairs. Per command, not a union
+     * across the registry — the same letter is a value flag on one command
+     * and a bare flag on another (`-e` is `--exclude <pattern>` on add and
+     * `--edit` on bootstrap), and a union would swallow the token after the
+     * bare one. A tree's list spans its subcommands (and its default sub),
+     * since the scan keys on the top-level command token. Commands with no
+     * value flag get no line; the scan reads an unset list as empty.
+     *
+     * Token storage and each dedup set live in the borrowed arena; tokens are
+     * emitted via fprintf as each command is scanned — the arena outlives
      * this call. */
-    value_flag_set_t vset = { 0 };
-
-    /* Collect value-taking flag tokens across every non-hidden command (and its
-     * non-hidden subcommands). Dedup happens at insert time, so `--profile` appears
-     * once even if nine specs declare it. */
+    fputs("# Value-taking flags, per command\n", out);
     for (size_t i = 0; commands[i] != NULL; i++) {
         const args_command_t *c = commands[i];
         if (c->hidden) continue;
-        collect_value_flags(c->opts, &vset, arena);
 
-        /* Also scan subcommands' opts. */
+        value_flag_set_t vset = { 0 };
+        collect_value_flags(c->opts, &vset, arena);
         if (c->subcommands != NULL) {
             for (const args_subcommand_t *s = c->subcommands;
                 s->name != NULL; s++) {
                 if (s->hidden || s->command == NULL) continue;
                 collect_value_flags(s->command->opts, &vset, arena);
             }
+            if (c->default_subcommand != NULL) {
+                collect_value_flags(c->default_subcommand->opts, &vset, arena);
+            }
         }
-    }
+        if (vset.count == 0) continue;
 
-    /* Value-taking flags: used by fish's positional-arg counter in <prog>.fish
-     * to know which tokens are "flag + value" pairs. */
-    fprintf(out, "set -g __%s_value_flags", prog);
-    for (size_t i = 0; i < vset.count; i++) {
-        fprintf(out, " %s", vset.tokens[i]);
+        fprintf(out, "set -g __%s_value_flags_%s", prog, c->name);
+        for (size_t j = 0; j < vset.count; j++) {
+            fprintf(out, " %s", vset.tokens[j]);
+        }
+        fputc('\n', out);
     }
-    fputs("\n\n", out);
+    fputc('\n', out);
 
     /* Top-level flags. `-h` / `-v` are universal conventions so they stay hardcoded
      * here; command-declared root aliases are projected from the registry so
-     * the data flows from one source of truth. */
+     * the data flows from one source of truth. Help is a token every command
+     * accepts, so its row carries no guard; version and the aliases are read
+     * as argv[1] only and are guarded by `__<prog>_needs_command`. */
     fputs("# Root options\n", out);
     fprintf(out, "complete -c %s -s h -l help -d \"Show help\"\n", prog);
-    fprintf(out, "complete -c %s -s v -l version -d \"Show version\"\n", prog);
+    fprintf(
+        out, "complete -c %s -n __%s_needs_command -s v -l version -d \"Show version\"\n",
+        prog, prog
+    );
     for (size_t i = 0; commands[i] != NULL; i++) {
         const args_command_t *c = commands[i];
         if (c->hidden || c->root_aliases == NULL) continue;

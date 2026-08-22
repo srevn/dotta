@@ -4,6 +4,11 @@
  * Hidden subcommand providing completion data for shell scripts. All functions
  * follow the silent failure model - errors result in no output rather than error
  * messages to stderr.
+ *
+ * Each mode reads one authority: the enabled set (state), the view (every
+ * enabled profile at HEAD, precedence resolved), or Git (a branch's tree or
+ * history). The shell composes them per command; nothing here guesses which
+ * one a command wants.
  */
 
 #include "cmds/completion.h"
@@ -16,6 +21,7 @@
 #include "base/array.h"
 #include "base/error.h"
 #include "core/manifest.h"
+#include "core/profiles.h"
 #include "core/state.h"
 #include "infra/mount.h"
 #include "sys/gitops.h"
@@ -29,75 +35,72 @@
 #define COMPLETE_REFSPEC_FILES_MAX 2000
 
 /**
- * Output enabled profiles from state database
+ * Output profile names
  *
- * Queries the enabled_profiles table and outputs profile names.
+ * Three sets, selected by flag: with neither, the enabled set in precedence
+ * order; `local` every local branch, the enabled ones marked; `remote` the
+ * remote-tracking branches no local branch has been created from yet (what
+ * `profile fetch` would download). The two flags compose; the sets are
+ * disjoint by construction. Branch order is the ref iteration's; the shell
+ * sorts its candidates.
  *
- * @param state Borrowed state handle; NULL when running outside a repo
+ * @param repo Repository (borrowed)
+ * @param state Borrowed state handle
+ * @param arena Borrowed scratch arena (the remote name is arena-owned)
+ * @param local Include every local branch
+ * @param remote Include remote-tracking branches without a local counterpart
  */
-static void complete_enabled_profiles(state_t *state) {
-    if (!state) return;
-
-    string_array_t *profiles = NULL;
-    error_t *err = state_get_profiles(state, &profiles);
-    if (err) {
-        error_free(err);
+static void complete_profiles(
+    git_repository *repo,
+    const state_t *state,
+    arena_t *arena,
+    bool local,
+    bool remote
+) {
+    if (!local && !remote) {
+        const state_profile_entry_t *rows = NULL;
+        size_t count = 0;
+        error_t *err = state_peek_profiles(state, &rows, &count);
+        if (err) {
+            error_free(err);
+            return;
+        }
+        for (size_t i = 0; i < count; i++) {
+            printf("%s\tEnabled profile\n", rows[i].name);
+        }
         return;
     }
 
-    /* Sort enabled profiles alphabetically for easier completion */
-    string_array_sort(profiles);
-
-    for (size_t i = 0; i < profiles->count; i++) {
-        printf(
-            "%s\tEnabled Profile\n",
-            profiles->items[i]
-        );
-    }
-
-    string_array_free(profiles);
-}
-
-/**
- * Output all available profiles
- *
- * Lists all local branches and remote-tracking branches, excluding the internal
- * dotta-worktree branch.
- */
-static void complete_all_profiles(git_repository *repo, arena_t *arena) {
-    /* 1. Local branches */
-    string_array_t *branches = NULL;
-    error_t *err = gitops_list_branches(repo, &branches);
-    if (!err) {
-        string_array_sort(branches);
-        for (size_t i = 0; i < branches->count; i++) {
-            const char *profile = branches->items[i];
-            /* Skip internal worktree branch */
-            if (strcmp(profile, "dotta-worktree") != 0) {
-                printf("%s\tProfile\n", profile);
-            }
-        }
-    } else {
-        error_free(err);
-    }
-
-    /* 2. Remote tracking branches */
-    const char *remote_name = NULL;
-    if (gitops_resolve_default_remote(repo, arena, &remote_name, NULL) == NULL) {
-        string_array_t *remote_branches = NULL;
-        if (upstream_discover_branches(repo, remote_name, &remote_branches) == NULL) {
-            string_array_sort(remote_branches);
-            for (size_t i = 0; i < remote_branches->count; i++) {
+    if (local) {
+        string_array_t *branches = NULL;
+        error_t *err = profile_list_all_local(repo, &branches);
+        if (err) {
+            error_free(err);
+        } else {
+            for (size_t i = 0; i < branches->count; i++) {
+                const char *branch = branches->items[i];
                 printf(
-                    "%s\tRemote Profile\n",
-                    remote_branches->items[i]
+                    "%s\t%s\n", branch,
+                    state_has_profile(state, branch) ? "Enabled profile"
+                                                     : "Available profile"
                 );
             }
-            string_array_free(remote_branches);
+            string_array_free(branches);
         }
     }
 
-    if (branches) {
+    if (remote) {
+        const char *remote_name = NULL;
+        if (gitops_resolve_default_remote(repo, arena, &remote_name, NULL) != NULL) {
+            return;  /* no remote configured: nothing to download */
+        }
+        string_array_t *branches = NULL;
+        if (upstream_discover_branches(repo, remote_name, &branches) != NULL) {
+            return;
+        }
+        for (size_t i = 0; i < branches->count; i++) {
+            printf("%s\tRemote profile\n", branches->items[i]);
+        }
         string_array_free(branches);
     }
 }
@@ -127,26 +130,27 @@ static void complete_remotes(git_repository *repo) {
 /**
  * Output managed files: the view over the enabled set
  *
- * Rows come in the view's order; the shell sorts its candidates.
+ * One row per managed path, the winning profile beside it. A profile filter
+ * keeps the rows those profiles win — exactly the rows a workspace verb with
+ * that filter acts on; a path a filtered profile holds but does not win is not
+ * offered because the verb would skip it. Rows come in the view's order; the
+ * shell sorts its candidates.
  *
- * @param repo Repository (must not be NULL when state is)
- * @param state Borrowed state handle; NULL when running outside a repo
- * @param mounts Per-machine mount table over the enabled set (non-NULL iff state
- *               is — the runtime invariant)
+ * @param repo Repository (borrowed)
+ * @param state Borrowed state handle
+ * @param mounts Per-machine mount table over the enabled set
  * @param arena Borrowed scratch arena (caller's command arena)
- * @param profile Optional profile filter (NULL for all files)
- * @param storage_paths If true, output storage_path; if false, filesystem_path
+ * @param profiles Optional winner filter (NULL/0 for every row)
+ * @param profile_count Number of names in the filter
  */
 static void complete_files(
     git_repository *repo,
-    state_t *state,
+    const state_t *state,
     const mount_table_t *mounts,
     arena_t *arena,
-    const char *profile,
-    bool storage_paths
+    char *const *profiles,
+    size_t profile_count
 ) {
-    if (!state) return;
-
     manifest_t *manifest = NULL;
     error_t *err = manifest_build(repo, state, mounts, arena, &manifest);
     if (err) {
@@ -163,23 +167,25 @@ static void complete_files(
         if (row->type == PATH_TYPE_DIRECTORY) {
             continue;
         }
-        /* Profile filter, applied here rather than at the build: one view, one
+        /* Winner filter, applied here rather than at the build: one view, one
          * loop. */
-        if (profile && strcmp(row->profile, profile) != 0) {
-            continue;
+        if (profile_count > 0) {
+            bool wanted = false;
+            for (size_t j = 0; j < profile_count && !wanted; j++) {
+                wanted = strcmp(row->profile, profiles[j]) == 0;
+            }
+            if (!wanted) continue;
         }
-        const char *path = storage_paths ? row->storage_path
-                                         : row->filesystem_path;
-        printf("%s\t%s\n", path, row->profile);
+        printf("%s\t%s\n", row->storage_path, row->profile);
     }
 
     manifest_free(manifest);
 }
 
-/* Tree-walk state for complete_refspec_files. */
+/* Tree-walk state for complete_refspecs. */
 typedef struct {
     const char *branch;   /* current branch (source of the "<branch>:" prefix) */
-    bool prefix;          /* prefix "<branch>:" (all branches) vs bare path (scoped to -p) */
+    bool prefix;          /* prefix "<branch>:" (all branches) vs bare path (pinned by -p) */
     size_t cap;
     size_t emitted;
     bool truncated;
@@ -217,35 +223,50 @@ static int refspec_emit_cb(
 }
 
 /**
- * Output managed files as completion tokens, sourced from git (not the DB) so
- * show/revert reach profiles disabled or never enabled here.
+ * Output a branch's files as completion tokens, sourced from Git (not the
+ * view) so the verbs that name a profile — remove, list, show, revert, export
+ * — reach every file the branch holds: shadowed by a higher profile, or in a
+ * profile disabled or never enabled here.
  *
  * @param repo Repository (borrowed)
- * @param profile NULL: all branches, emit "<profile>:<path>". Else: that branch
- *                only, emit bare "<path>" (profile pinned by -p).
+ * @param profile NULL: every local branch, emit "<profile>:<path>". Else: that
+ *                branch only, emit bare "<path>" (the profile is pinned).
  * @param cap Backstop on total tokens emitted
  */
-static void complete_refspec_files(
+static void complete_refspecs(
     git_repository *repo,
     const char *profile,
     size_t cap
 ) {
     string_array_t *branches = NULL;
-    error_t *err = gitops_list_branches(repo, &branches);
-    if (err) {
-        error_free(err);  /* silent-failure model */
-        return;
+    if (profile) {
+        branches = string_array_new(1);
+        if (!branches) return;
+        error_t *err = string_array_push(branches, profile);
+        if (err) {
+            error_free(err);
+            string_array_free(branches);
+            return;
+        }
+    } else {
+        error_t *err = profile_list_all_local(repo, &branches);
+        if (err) {
+            error_free(err);  /* silent-failure model */
+            return;
+        }
+        string_array_sort(branches);  /* deterministic order under the cap */
     }
-    string_array_sort(branches);  /* deterministic order */
 
     refspec_walk_ctx_t ctx = { .cap = cap, .prefix = (profile == NULL) };
     for (size_t i = 0; i < branches->count; i++) {
         const char *branch = branches->items[i];
-        if (strcmp(branch, "dotta-worktree") == 0) continue;
-        if (profile && strcmp(branch, profile) != 0) continue;
 
         git_tree *tree = NULL;
-        if (gitops_load_branch_tree(repo, branch, &tree, NULL)) continue;
+        error_t *load_err = gitops_load_branch_tree(repo, branch, &tree, NULL);
+        if (load_err) {
+            error_free(load_err);  /* not a branch, or unloadable: silent */
+            continue;
+        }
 
         ctx.branch = branch;
         error_t *walk_err = gitops_tree_walk(tree, refspec_emit_cb, &ctx);
@@ -260,113 +281,114 @@ static void complete_refspec_files(
 /**
  * Output recent commits for completion
  *
- * Outputs commits in tab-separated format: <short_oid>\t<summary> This allows
- * fish to display the summary as a description.
+ * Walks each branch's history from its tip, newest first, up to `limit` per
+ * branch. The branches are the ones named, else the enabled set in precedence
+ * order — the set show and diff resolve a bare reference against, in that
+ * order. When more than one history is listed, the description carries the
+ * branch so the interleaved hashes stay attributable.
+ *
+ * Output: <short_oid>\t<summary>, or <short_oid>\t<branch>: <summary>.
  *
  * @param repo Repository (borrowed)
- * @param state Borrowed state handle; NULL when running outside a repo
- * @param profile Profile to get commits from (NULL uses first enabled profile)
- * @param limit Maximum number of commits to output
+ * @param state Borrowed state handle (read only when no branch is named)
+ * @param profiles Branches to walk (NULL/0 for the enabled set)
+ * @param profile_count Number of branches named
+ * @param limit Maximum number of commits per branch
  */
 static void complete_commits(
     git_repository *repo,
-    state_t *state,
-    const char *profile,
+    const state_t *state,
+    char *const *profiles,
+    size_t profile_count,
     long limit
 ) {
-    /* Clamp limit to reasonable bounds */
-    if (limit <= 0) {
-        limit = COMPLETE_COMMIT_DEFAULT_LIMIT;
-    }
-    if (limit > COMPLETE_COMMIT_MAX_LIMIT) {
-        limit = COMPLETE_COMMIT_MAX_LIMIT;
-    }
+    string_array_t *branches STRING_ARRAY_CLEANUP = string_array_new(profile_count);
+    if (!branches) return;
 
-    /* Determine target profile */
-    const char *target_profile = profile;
-    string_array_t *profiles STRING_ARRAY_CLEANUP = NULL;
-
-    /* If no profile specified, use first enabled profile from state */
-    if (!profile) {
-        if (!state) return;
-
-        error_t *err = state_get_profiles(state, &profiles);
-        if (err) {
-            error_free(err);
-            return;
+    error_t *err = NULL;
+    if (profile_count > 0) {
+        for (size_t i = 0; i < profile_count && !err; i++) {
+            err = string_array_push(branches, profiles[i]);
         }
-
-        if (profiles->count > 0) {
-            target_profile = profiles->items[0];
+    } else {
+        const state_profile_entry_t *rows = NULL;
+        size_t count = 0;
+        err = state_peek_profiles(state, &rows, &count);
+        for (size_t i = 0; i < count && !err; i++) {
+            err = string_array_push(branches, rows[i].name);
         }
     }
-
-    if (!target_profile) return;
-
-    /* Resolve reference using DWIM (handles branches, tags, remotes) */
-    git_reference *ref = NULL;
-    int git_err = git_reference_dwim(&ref, repo, target_profile);
-    if (git_err != 0) {
+    if (err) {
+        error_free(err);
         return;
     }
 
-    /* Peel to commit (handles symbolic refs and tags automatically) */
-    git_object *obj = NULL;
-    git_err = git_reference_peel(&obj, ref, GIT_OBJECT_COMMIT);
-    git_reference_free(ref);
-    if (git_err != 0) {
-        return;
-    }
+    bool label = branches->count > 1;
 
-    const git_oid *head_oid = git_object_id(obj);
+    for (size_t b = 0; b < branches->count; b++) {
+        const char *branch = branches->items[b];
 
-    /* Create revision walker */
-    git_revwalk *walker = NULL;
-    git_err = git_revwalk_new(&walker, repo);
-    if (git_err != 0) {
-        git_object_free(obj);
-        return;
-    }
+        /* Resolve reference using DWIM (handles branches, tags, remotes) */
+        git_reference *ref = NULL;
+        if (git_reference_dwim(&ref, repo, branch) != 0) {
+            continue;  /* not a branch: nothing from it */
+        }
 
-    git_revwalk_push(walker, head_oid);
-    git_revwalk_sorting(walker, GIT_SORT_TIME);
-
-    /* Walk commits and output */
-    git_oid oid;
-    long count = 0;
-    while (git_revwalk_next(&oid, walker) == 0 && count < limit) {
-        git_commit *commit = NULL;
-        if (git_commit_lookup(&commit, repo, &oid) != 0) {
+        /* Peel to commit (handles symbolic refs and tags automatically) */
+        git_object *obj = NULL;
+        int git_err = git_reference_peel(&obj, ref, GIT_OBJECT_COMMIT);
+        git_reference_free(ref);
+        if (git_err != 0) {
             continue;
         }
 
-        /* Format short OID */
-        char oid_str[COMPLETE_COMMIT_SHORT_OID_LEN + 1];
-        git_oid_tostr(oid_str, sizeof(oid_str), &oid);
+        git_revwalk *walker = NULL;
+        if (git_revwalk_new(&walker, repo) != 0) {
+            git_object_free(obj);
+            continue;
+        }
+        git_revwalk_push(walker, git_object_id(obj));
+        git_revwalk_sorting(walker, GIT_SORT_TIME);
 
-        /* Extract first line of commit message */
-        const char *message = git_commit_message(commit);
-        if (!message) {
+        git_oid oid;
+        long count = 0;
+        while (count < limit && git_revwalk_next(&oid, walker) == 0) {
+            git_commit *commit = NULL;
+            if (git_commit_lookup(&commit, repo, &oid) != 0) {
+                continue;
+            }
+
+            const char *message = git_commit_message(commit);
+            if (!message) {
+                git_commit_free(commit);
+                continue;
+            }
+
+            /* Format short OID */
+            char oid_str[COMPLETE_COMMIT_SHORT_OID_LEN + 1];
+            git_oid_tostr(oid_str, sizeof(oid_str), &oid);
+
+            /* Extract first line of commit message */
+            const char *newline = strchr(message, '\n');
+            size_t msg_len =
+                newline ? (size_t) (newline - message) : strlen(message);
+            if (msg_len > COMPLETE_COMMIT_SUMMARY_MAX) {
+                msg_len = COMPLETE_COMMIT_SUMMARY_MAX;
+            }
+
+            if (label) {
+                printf("%s\t%s: %.*s\n", oid_str, branch, (int) msg_len, message);
+            } else {
+                printf("%s\t%.*s\n", oid_str, (int) msg_len, message);
+            }
+
             git_commit_free(commit);
-            continue;
-        }
-        const char *newline = strchr(message, '\n');
-        size_t msg_len =
-            newline ? (size_t) (newline - message) : strlen(message);
-
-        if (msg_len > COMPLETE_COMMIT_SUMMARY_MAX) {
-            msg_len = COMPLETE_COMMIT_SUMMARY_MAX;
+            count++;
         }
 
-        /* Output: <oid>\t<summary> */
-        printf("%s\t%.*s\n", oid_str, (int) msg_len, message);
-
-        git_commit_free(commit);
-        count++;
+        git_revwalk_free(walker);
+        git_object_free(obj);
     }
-
-    git_revwalk_free(walker);
-    git_object_free(obj);
 }
 
 /**
@@ -380,72 +402,56 @@ error_t *cmd_completion(const dotta_ctx_t *ctx, const cmd_completion_options_t *
         return NULL;  /* Silent failure */
     }
 
+    if (opts->mode == COMPLETE_SPEC_FISH) {
+        /* Build-time emission: projects the root registry into the
+         * fish-completion dialect. Stable, repo-independent, invoked by `make
+         * completions` to generate the schema under build/. Registry is
+         * borrowed from main.c via the typed accessor so the cmds/ layer
+         * never names the registry symbol. */
+        args_export_completion_fish(stdout, ctx->arena, dotta_registry(), "dotta");
+        return NULL;
+    }
+
+    /* OPTIONAL_SILENT + READ: outside a repository the dispatcher hands over
+     * neither repo nor state; every data mode answers with silence. Inside
+     * one, state and mounts follow the repo (the runtime invariants). */
     git_repository *repo = ctx->repo;
-    /* OPTIONAL_SILENT + READ: the dispatcher skips state acquisition when no
-     * repo is available, so state may legitimately be NULL here */
-    state_t *state = ctx->state;
+    if (!repo) {
+        return NULL;
+    }
 
     switch (opts->mode) {
-        case COMPLETE_CHECK:
-            /* The dispatcher opens the repo in OPTIONAL_SILENT mode. Repo presence
-             * is the signal; silent_failure turns a missing repo into exit 1
-             * with no output. */
-            if (!repo) {
-                return error_create(ERR_NOT_FOUND, "not in a dotta repository");
-            }
-            break;
-
         case COMPLETE_PROFILES:
-            if (!repo) {
-                return NULL;
-            }
-            if (opts->all) {
-                complete_all_profiles(repo, ctx->arena);
-            } else {
-                complete_enabled_profiles(state);
-            }
+            complete_profiles(repo, ctx->state, ctx->arena, opts->local, opts->remote);
             break;
 
         case COMPLETE_FILES:
-            if (!repo) {
-                return NULL;
-            }
-            if (opts->refspec) {
-                complete_refspec_files(repo, opts->profile, COMPLETE_REFSPEC_FILES_MAX);
-            } else {
-                complete_files(
-                    repo, state, ctx->mounts, ctx->arena, opts->profile,
-                    opts->storage_paths
-                );
-            }
+            complete_files(
+                repo, ctx->state, ctx->mounts, ctx->arena,
+                opts->profiles, opts->profile_count
+            );
+            break;
+
+        case COMPLETE_REFSPECS:
+            /* post_parse admits at most one -p here */
+            complete_refspecs(
+                repo, opts->profile_count > 0 ? opts->profiles[0] : NULL,
+                COMPLETE_REFSPEC_FILES_MAX
+            );
             break;
 
         case COMPLETE_COMMITS:
-            if (!repo) {
-                return NULL;
-            }
-            complete_commits(repo, state, opts->profile, opts->limit);
+            complete_commits(
+                repo, ctx->state, opts->profiles, opts->profile_count, opts->limit
+            );
             break;
 
         case COMPLETE_REMOTES:
-            if (!repo) {
-                return NULL;
-            }
             complete_remotes(repo);
             break;
 
         case COMPLETE_SPEC_FISH:
-            /* Build-time emission: projects the root registry into the
-             * fish-completion dialect. Stable, repo-independent, invoked by `make
-             * completions` to generate the schema under build/. Registry is
-             * borrowed from main.c via the typed accessor so the cmds/ layer
-             * never names the registry symbol. */
-            args_export_completion_fish(stdout, ctx->arena, dotta_registry(), "dotta");
-            break;
-
-        default:
-            /* Unknown mode - silent failure */
-            break;
+            break;  /* handled above */
     }
 
     return NULL;
@@ -456,8 +462,8 @@ error_t *cmd_completion(const dotta_ctx_t *ctx, const cmd_completion_options_t *
  * ══════════════════════════════════════════════════════════════════ */
 
 /**
- * Seed the legacy default: commits mode returns up to 20 rows when `--limit`
- * isn't supplied.
+ * Seed the default: commits mode returns up to 20 rows per branch when
+ * `--limit` isn't supplied.
  */
 static void completion_init_defaults(void *opts_v) {
     cmd_completion_options_t *o = opts_v;
@@ -475,7 +481,8 @@ static void completion_init_defaults(void *opts_v) {
  * `spec` mode takes a second positional naming the output dialect (currently
  * only `fish`). All other modes require exactly one positional — we reject extras
  * explicitly so a typo like `dotta __complete profiles all` doesn't silently
- * ignore `all`.
+ * ignore `all`. Likewise each flag is admitted only by the modes that read it:
+ * `--local` / `--remote` by profiles, `-p` by files, refspecs (one) and commits.
  */
 static error_t *completion_post_parse(
     void *opts_v, arena_t *arena, const args_command_t *cmd
@@ -490,20 +497,12 @@ static error_t *completion_post_parse(
 
     const char *mode = o->positional_args[0];
 
-    /* --refspec is files-mode only; reject up front so 'spec' mode (which
-     * early-returns below) can't slip past. */
-    if (o->refspec && strcmp(mode, "files") != 0) {
-        return error_create(
-            ERR_INVALID_ARG, "--refspec is only valid with 'files' mode"
-        );
-    }
-
-    if (strcmp(mode, "check") == 0) {
-        o->mode = COMPLETE_CHECK;
-    } else if (strcmp(mode, "profiles") == 0) {
+    if (strcmp(mode, "profiles") == 0) {
         o->mode = COMPLETE_PROFILES;
     } else if (strcmp(mode, "files") == 0) {
         o->mode = COMPLETE_FILES;
+    } else if (strcmp(mode, "refspecs") == 0) {
+        o->mode = COMPLETE_REFSPECS;
     } else if (strcmp(mode, "commits") == 0) {
         o->mode = COMPLETE_COMMITS;
     } else if (strcmp(mode, "remotes") == 0) {
@@ -516,23 +515,41 @@ static error_t *completion_post_parse(
             );
         }
         const char *dialect = o->positional_args[1];
-        if (strcmp(dialect, "fish") == 0) {
-            o->mode = COMPLETE_SPEC_FISH;
-        } else {
+        if (strcmp(dialect, "fish") != 0) {
             return error_create(
                 ERR_INVALID_ARG, "unknown spec dialect '%s'", dialect
             );
         }
-        return NULL;
+        o->mode = COMPLETE_SPEC_FISH;
     } else {
         return error_create(ERR_INVALID_ARG, "unknown completion mode '%s'", mode);
     }
 
     /* Non-spec modes take exactly one positional. */
-    if (o->positional_count > 1) {
+    if (o->mode != COMPLETE_SPEC_FISH && o->positional_count > 1) {
         return error_create(
             ERR_INVALID_ARG,
             "'%s' mode takes no additional positional arguments", mode
+        );
+    }
+
+    /* Each flag belongs to the modes that read it. */
+    if ((o->local || o->remote) && o->mode != COMPLETE_PROFILES) {
+        return error_create(
+            ERR_INVALID_ARG, "--local and --remote are only valid with 'profiles' mode"
+        );
+    }
+    bool takes_profiles = o->mode == COMPLETE_FILES ||
+        o->mode == COMPLETE_REFSPECS ||
+        o->mode == COMPLETE_COMMITS;
+    if (o->profile_count > 0 && !takes_profiles) {
+        return error_create(
+            ERR_INVALID_ARG, "-p is only valid with 'files', 'refspecs' or 'commits' mode"
+        );
+    }
+    if (o->mode == COMPLETE_REFSPECS && o->profile_count > 1) {
+        return error_create(
+            ERR_INVALID_ARG, "'refspecs' mode pins at most one profile"
         );
     }
     return NULL;
@@ -545,29 +562,24 @@ static error_t *completion_dispatch(const void *ctx_v, void *opts_v) {
 
 static const args_opt_t completion_opts[] = {
     ARGS_FLAG(
-        "a all",
-        cmd_completion_options_t,all,
-        "Include all available profiles (not just enabled)"
+        "local",
+        cmd_completion_options_t,local,
+        "Profiles: every local branch, the enabled ones marked"
     ),
     ARGS_FLAG(
-        "s storage",
-        cmd_completion_options_t,storage_paths,
-        "Output storage paths instead of filesystem paths"
+        "remote",
+        cmd_completion_options_t,remote,
+        "Profiles: remote-tracking branches without a local branch"
     ),
-    ARGS_FLAG(
-        "refspec",
-        cmd_completion_options_t,refspec,
-        "Emit git-sourced profile:storage_path tokens; overrides --storage"
-    ),
-    ARGS_STRING(
+    ARGS_APPEND(
         "p profile",             "<name>",
-        cmd_completion_options_t,profile,
-        "Filter by profile"
+        cmd_completion_options_t,profiles,        profile_count,
+        "Files: rows this profile wins; commits: this branch; refspecs: pin it"
     ),
     ARGS_INT(
         "l limit",               "<N>",
-        cmd_completion_options_t,limit,           1,                 1000,
-        "Maximum number of commits to list (default: 20)"
+        cmd_completion_options_t,limit,           1,                COMPLETE_COMMIT_MAX_LIMIT,
+        "Commits: maximum per branch (default: 20)"
     ),
     ARGS_POSITIONAL_RAW(
         cmd_completion_options_t,positional_args, positional_count,

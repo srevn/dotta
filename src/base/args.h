@@ -499,8 +499,9 @@ void args_render_errors(
  *   - one option row per non-hidden flag/string/int/append,
  *   - one subcommand row per non-hidden subcommand,
  *   - one option row per subcommand's own flags,
- *   - a `__<prog>_value_flags` variable listing all value-taking flags across
- *     the entire registry (used by fish's positional-arg scan).
+ *   - a `__<prog>_value_flags_<cmd>` variable per command listing its
+ *     value-taking flags, a tree's spanning its subcommands (used by fish's
+ *     positional-arg scan; a command with none gets no variable).
  *
  * Dynamic completions (profile names, file names, commit SHAs) are NOT emitted
  * here — they depend on runtime repository state and live in a hand-maintained

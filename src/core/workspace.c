@@ -82,7 +82,7 @@ struct workspace {
     arena_t *arena;                              /* Borrowed; backs every workspace-lifetime string */
 
     /* The view: every enabled profile at HEAD, built by the dispatcher at the
-     * start of the command and borrowed here (ctx->manifest — its rows are the
+     * start of the command and borrowed here (ctx->run.manifest — its rows are the
      * command arena's, its index the dispatcher's to release). Rows are
      * read-only for the whole run — the record a writer patches lives in the
      * anchors snapshot below, never in a row. The view's own index answers
@@ -2490,8 +2490,8 @@ error_t *workspace_load(
     }
 
     /* Borrow caller-owned resources. Lifetime guarantees: state comes from
-     * ctx->state (command-scoped); content_cache comes from ctx->content_cache
-     * (command-scoped, wraps ctx->keymgr); manifest is ctx->manifest (the view
+     * ctx->run.state (command-scoped); content_cache comes from ctx->run.content_cache
+     * (command-scoped, wraps ctx->run.keymgr); manifest is ctx->run.manifest (the view
      * the dispatcher built over the enabled set, command-scoped); arena is
      * ctx->arena (command-scoped). All four must outlive workspace_free. */
     ws->state = state;

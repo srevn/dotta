@@ -1015,9 +1015,8 @@ static error_t *interactive_run(
 
 static error_t *interactive_dispatch(const void *ctx_v, void *opts_v) {
     const dotta_ctx_t *ctx = ctx_v;
-    CHECK_NULL(ctx->state);
     (void) opts_v;
-    return interactive_run(ctx->repo, ctx->state, ctx->arena);
+    return interactive_run(ctx->run.repo, ctx->run.state, ctx->arena);
 }
 
 const args_command_t spec_interactive = {
@@ -1050,6 +1049,9 @@ const args_command_t spec_interactive = {
         "  - Profile order determines layering (later overrides earlier)\n"
         "  - Toggling on a custom/-bearing profile opens an inline target prompt\n"
         "  - Use regular commands (apply, update, sync) after enabling profiles\n",
-    .payload      = &dotta_ext_read,
+    .payload      = &(const dotta_needs_t){
+        .repo     = true,
+        .state    = DOTTA_STATE_READ,
+    },
     .dispatch     = interactive_dispatch,
 };

@@ -336,11 +336,10 @@ static error_t *bootstrap_list(
  */
 error_t *cmd_bootstrap(const dotta_ctx_t *ctx, const cmd_bootstrap_options_t *opts) {
     CHECK_NULL(ctx);
-    CHECK_NULL(ctx->repo);
     CHECK_NULL(opts);
 
-    git_repository *repo = ctx->repo;
-    const char *repo_path = ctx->repo_path;
+    git_repository *repo = ctx->run.repo;
+    const char *repo_path = ctx->run.repo_path;
     output_t *out = ctx->out;
 
     error_t *err = NULL;
@@ -389,7 +388,7 @@ error_t *cmd_bootstrap(const dotta_ctx_t *ctx, const cmd_bootstrap_options_t *op
         }
     } else {
         /* Use enabled profiles from state */
-        err = profile_resolve_enabled(repo, ctx->state, &profiles);
+        err = profile_resolve_enabled(repo, ctx->run.state, &profiles);
         if (err) {
             if (error_code(err) == ERR_NOT_FOUND) {
                 /* No profiles enabled — expected case, show guidance */
@@ -629,6 +628,9 @@ const args_command_t spec_bootstrap = {
     .opts_size   = sizeof(cmd_bootstrap_options_t),
     .opts        = bootstrap_opts,
     .complete    = bootstrap_complete,
-    .payload     = &dotta_ext_read,
+    .payload     = &(const dotta_needs_t){
+        .repo    = true,
+        .state   = DOTTA_STATE_READ,
+    },
     .dispatch    = bootstrap_dispatch,
 };

@@ -1345,7 +1345,7 @@ static error_t *salt_reconcile(
     transfer_context_t *xfer,
     const cmd_sync_options_t *opts
 ) {
-    git_repository *repo = ctx->repo;
+    git_repository *repo = ctx->run.repo;
     output_t *out = ctx->out;
 
     salt_reconcile_t decision;
@@ -1457,7 +1457,7 @@ static error_t *salt_reconcile(
              * re-derives from the adopted salt. NULL-safe; the on-disk session
              * cache MAC-binds the salt and self-heals regardless, and sync itself
              * performs no decrypt. */
-            keymgr_clear(ctx->keymgr);
+            keymgr_clear(ctx->run.keymgr);
             return NULL;
         }
     }
@@ -1470,19 +1470,17 @@ static error_t *salt_reconcile(
  */
 error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
     CHECK_NULL(ctx);
-    CHECK_NULL(ctx->repo);
-    CHECK_NULL(ctx->state);
     CHECK_NULL(opts);
 
-    git_repository *repo = ctx->repo;
-    state_t *state = ctx->state;
+    git_repository *repo = ctx->run.repo;
+    state_t *state = ctx->run.state;
     const config_t *config = ctx->config;
     output_t *out = ctx->out;
 
     /* Declare all resources, initialized to NULL. */
     error_t *err = NULL;
     workspace_t *ws = NULL;
-    const manifest_t *before = ctx->manifest;  /* The view ahead of the Git phase: the dispatcher's */
+    const manifest_t *before = ctx->run.manifest;  /* The view ahead of the Git phase: the dispatcher's */
     manifest_t *after = NULL;                  /* The view after the Git phase (owned) */
     scope_t *scope = NULL;
     sync_results_t *results = NULL;
@@ -1528,7 +1526,7 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
         .profile_count = opts->profile_count,
     };
     err = scope_build(
-        repo, state, &scope_inputs, config, ctx->mounts, ctx->arena, &scope
+        repo, state, &scope_inputs, config, ctx->run.mounts, ctx->arena, &scope
     );
     if (err) goto cleanup;
 
@@ -1576,7 +1574,7 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
             .analyze_encryption  = false   /* Encryption is apply's concern */
         };
         err = workspace_load(
-            repo, state, config, ctx->content_cache, ctx->manifest, &ws_opts,
+            repo, state, config, ctx->run.content_cache, ctx->run.manifest, &ws_opts,
             ctx->arena, &ws
         );
         if (err) {
@@ -1799,7 +1797,7 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
         .dry_run    = opts->dry_run,
     };
 
-    err = hook_fire_pre(config, out, ctx->repo_path, &hook_inv);
+    err = hook_fire_pre(config, out, ctx->run.repo_path, &hook_inv);
     if (err) goto cleanup;
 
     /* Create transfer context for progress reporting. URL was resolved alongside
@@ -2029,7 +2027,7 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
 
     /* Post-sync fires once the Git phase and the manifest block are done; a failed
      * build was warned above and is not a reason to skip it. */
-    hook_fire_post(config, out, ctx->repo_path, &hook_inv);
+    hook_fire_post(config, out, ctx->run.repo_path, &hook_inv);
 
     /* Final summary */
     sync_render_summary(results, xfer, manifest_changed, apply_pending, out);
@@ -2132,21 +2130,21 @@ static const args_opt_t sync_opts[] = {
 };
 
 const args_command_t spec_sync = {
-    .name        = "sync",
-    .summary     = "Synchronize profiles with remote repository",
-    .usage       = "%s sync [options] [profile]...",
-    .description =
+    .name         = "sync",
+    .summary      = "Synchronize profiles with remote repository",
+    .usage        = "%s sync [options] [profile]...",
+    .description  =
         "Fetch, analyze, and reconcile enabled profiles with their\n"
         "remote counterparts. Requires a clean workspace; run '%s\n"
         "update' to commit pending filesystem changes first.\n",
-    .notes       =
+    .notes        =
         "Diverged Strategies:\n"
         "  warn          Report and stop (default).\n"
         "  rebase        Replay local commits atop remote.\n"
         "  merge         Create a merge commit.\n"
         "  ours          Keep local side; overwrite remote on push.\n"
         "  theirs        Keep remote side; drop local commits.\n",
-    .examples    =
+    .examples     =
         "  %s sync                    # All enabled profiles\n"
         "  %s sync global             # Single profile\n"
         "  %s sync global darwin      # Multiple profiles\n"
@@ -2154,13 +2152,19 @@ const args_command_t spec_sync = {
         "  %s sync -f                 # Bypass clean-workspace check\n"
         "  %s sync --no-pull          # Push only\n"
         "  %s sync --diverged rebase  # Override divergence strategy\n",
-    .epilogue    =
+    .epilogue     =
         "See also:\n"
         "  %s update          # Commit local changes first\n"
         "  %s status --remote # Inspect remote state before syncing\n",
-    .opts_size   = sizeof(cmd_sync_options_t),
-    .opts        = sync_opts,
-    .complete    = sync_complete,
-    .payload     = &dotta_ext_read_crypto_manifest,
-    .dispatch    = sync_dispatch,
+    .opts_size    = sizeof(cmd_sync_options_t),
+    .opts         = sync_opts,
+    .complete     = sync_complete,
+    .payload      = &(const dotta_needs_t){
+        .repo     = true,
+        .state    = DOTTA_STATE_READ,
+        .mounts   = true,
+        .crypto   = true,
+        .manifest = true,
+    },
+    .dispatch     = sync_dispatch,
 };

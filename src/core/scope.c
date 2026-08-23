@@ -29,7 +29,7 @@
  * for full `!`-negation, directory walk-up, and anchoring semantics — the same
  * engine that powers the layered `.dottaignore` ruleset in core/ignore.
  *
- * The mount table is supplied by the caller (typically `ctx->mounts`) and consumed
+ * The mount table is supplied by the caller (typically `ctx->run.mounts`) and consumed
  * by pathspec_create only. scope_t does not store it — per-machine topology has
  * process scope, not per-scope_build scope.
  */

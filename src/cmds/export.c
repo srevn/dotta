@@ -724,12 +724,11 @@ static error_t *write_bytes_stdout(const buffer_t *content) {
  */
 error_t *cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
     CHECK_NULL(ctx);
-    CHECK_NULL(ctx->repo);
     CHECK_NULL(opts);
     CHECK_NULL(opts->profile);
     CHECK_NULL(opts->output);
 
-    git_repository *repo = ctx->repo;
+    git_repository *repo = ctx->run.repo;
     output_t *out = ctx->out;
     arena_t *arena = ctx->arena;
     bool to_stdout = strcmp(opts->output, "-") == 0;
@@ -821,7 +820,7 @@ error_t *cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
          * show). */
         const char *converted = NULL;
         error_t *conv_err = path_input_resolve(
-            ctx->mounts, opts->file_path, arena, &converted
+            ctx->run.mounts, opts->file_path, arena, &converted
         );
         const char *storage = conv_err ? opts->file_path : converted;
         if (conv_err) error_free(conv_err);
@@ -1022,7 +1021,7 @@ error_t *cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
         if (err) goto cleanup;
     }
 
-    err = validate_content(repo, ctx->keymgr, opts->profile, &list);
+    err = validate_content(repo, ctx->run.keymgr, opts->profile, &list);
     if (err) goto cleanup;
 
     /* ── Reporting / phase 2 ── */
@@ -1046,7 +1045,7 @@ error_t *cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
             buffer_t local = BUFFER_INIT;
             err = content_get_from_blob_oid(
                 repo, &e->blob_oid, e->storage_path, opts->profile,
-                ctx->keymgr, &local
+                ctx->run.keymgr, &local
             );
             if (!err) err = write_bytes_stdout(&local);
             buffer_free(&local);
@@ -1055,7 +1054,7 @@ error_t *cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
     }
 
     err = materialize_entries(
-        repo, ctx->keymgr, opts->profile, root_path, root_existed,
+        repo, ctx->run.keymgr, opts->profile, root_path, root_existed,
         root_mode, &list, verbose, out
     );
     if (err) goto cleanup;
@@ -1341,6 +1340,11 @@ const args_command_t spec_export = {
     .opts        = export_opts,
     .post_parse  = export_post_parse,
     .complete    = export_complete,
-    .payload     = &dotta_ext_read_crypto,
+    .payload     = &(const dotta_needs_t){
+        .repo    = true,
+        .state   = DOTTA_STATE_READ,
+        .mounts  = true,
+        .crypto  = true,
+    },
     .dispatch    = export_dispatch,
 };

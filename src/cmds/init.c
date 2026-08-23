@@ -300,6 +300,5 @@ const args_command_t spec_init = {
     .opts_size   = sizeof(cmd_init_options_t),
     .opts        = init_opts,
     .complete    = init_complete,
-    .payload     = &dotta_ext_none,
     .dispatch    = init_dispatch,
 };

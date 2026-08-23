@@ -160,7 +160,7 @@ typedef struct {
  * Returns NULL whatever happens — even nothing to offer is an answer, and the
  * shell's wrapper must never see an error.
  *
- * @param ctx Dispatch context (ctx->repo is NULL outside a repository)
+ * @param ctx Dispatch context (ctx->run.repo is NULL outside a repository)
  * @param opts Command options (must not be NULL)
  */
 error_t *cmd_complete(const dotta_ctx_t *ctx, const cmd_complete_options_t *opts);

@@ -14,7 +14,7 @@
  * Snapshot ownership:
  *   The workspace is the authority for the join within its lifetime: the view
  *   (core/manifest.h — every enabled profile at HEAD, built by the dispatcher
- *   at the start of the command and borrowed here, `ctx->manifest`) and the
+ *   at the start of the command and borrowed here, `ctx->run.manifest`) and the
  *   record (the anchors snapshot, state_get_all_anchors). Downstream consumers
  *   (deploy, cleanup, command-internal analyses) read both through workspace
  *   accessors (workspace_files, workspace_directories, workspace_lookup,
@@ -183,12 +183,12 @@ typedef struct {
  * @param config Configuration (for ignore patterns, can be NULL)
  * @param content_cache Shared blob-content cache (must not be NULL;
  *              borrowed — lifetime must extend past workspace_free. Obtain from
- *              `ctx->content_cache` under crypto_mode == KEY_CACHE)
+ *              `ctx->run.content_cache` under a spec that declares crypto)
  * @param manifest The view over the enabled set (must not be NULL; borrowed —
- *                 lifetime must extend past workspace_free. `ctx->manifest`,
- *                 which the command's spec declares with manifest_mode ==
- *                 REQUIRED; no command mutates Git or the enabled set between
- *                 dispatch and workspace_load, so it is current)
+ *                 lifetime must extend past workspace_free. `ctx->run.manifest`,
+ *                 which the command's spec declares with `.manifest`; no
+ *                 command mutates Git or the enabled set between dispatch and
+ *                 workspace_load, so it is current)
  * @param options Analysis options (must not be NULL)
  * @param arena Borrowed allocator backing every workspace-lifetime string (the
  *              view's rows, the record, diverged items, partition pointer arrays).

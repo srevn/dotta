@@ -67,7 +67,7 @@ typedef struct {
  * should goto-cleanup on non-NULL return.
  *
  * `repo_dir` is exported to the hook as DOTTA_REPO_DIR. Expected to come from
- * ctx->repo_path — the dispatcher already resolved it when opening the repo, so
+ * ctx->run.repo_path — the dispatcher already resolved it when opening the repo, so
  * callers borrow the string rather than re-resolving. NULL suppresses the
  * DOTTA_REPO_DIR export.
  */

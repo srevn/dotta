@@ -1281,7 +1281,7 @@ cleanup:
  * @param scope Operation scope — profile and path filters (must not be NULL)
  * @param config Configuration (can be NULL)
  * @param cache Shared blob-content cache (must not be NULL)
- * @param manifest The view over the enabled set (must not be NULL; ctx->manifest)
+ * @param manifest The view over the enabled set (must not be NULL; ctx->run.manifest)
  * @param opts Command options (must not be NULL)
  * @param arena Command arena (must not be NULL)
  * @param out Output context (must not be NULL)
@@ -1421,15 +1421,14 @@ cleanup:
  */
 error_t *cmd_diff(const dotta_ctx_t *ctx, const cmd_diff_options_t *opts) {
     CHECK_NULL(ctx);
-    CHECK_NULL(ctx->repo);
     CHECK_NULL(opts);
 
-    git_repository *repo = ctx->repo;
+    git_repository *repo = ctx->run.repo;
     const config_t *config = ctx->config;
     output_t *out = ctx->out;
 
     error_t *err = NULL;
-    state_t *state = ctx->state;  /* Borrowed from dispatcher; do not free */
+    state_t *state = ctx->run.state;  /* Borrowed from dispatcher; do not free */
     scope_t *scope = NULL;
 
     /* Build operation scope
@@ -1447,7 +1446,7 @@ error_t *cmd_diff(const dotta_ctx_t *ctx, const cmd_diff_options_t *opts) {
         .file_count    = opts->file_count,
     };
     err = scope_build(
-        repo, state, &scope_inputs, config, ctx->mounts, ctx->arena, &scope
+        repo, state, &scope_inputs, config, ctx->run.mounts, ctx->arena, &scope
     );
     if (err) goto cleanup;
 
@@ -1458,7 +1457,7 @@ error_t *cmd_diff(const dotta_ctx_t *ctx, const cmd_diff_options_t *opts) {
     }
 
     /* Route to diff implementation based on mode. All historical and workspace
-     * paths share ctx->content_cache so that unchanged OIDs get cache hits
+     * paths share ctx->run.content_cache so that unchanged OIDs get cache hits
      * regardless of which path decodes them first. */
     switch (opts->mode) {
         case DIFF_COMMIT_TO_COMMIT:
@@ -1471,15 +1470,15 @@ error_t *cmd_diff(const dotta_ctx_t *ctx, const cmd_diff_options_t *opts) {
         case DIFF_COMMIT_TO_WORKSPACE:
             /* Commit-to-workspace — historical mode, path filter only */
             err = diff_commit_to_workspace(
-                repo, opts->commit1, scope, ctx->mounts, ctx->arena,
-                opts, ctx->content_cache, out
+                repo, opts->commit1, scope, ctx->run.mounts, ctx->arena,
+                opts, ctx->run.content_cache, out
             );
             goto cleanup;
 
         case DIFF_WORKSPACE:
             /* Workspace diff — full scope (profile + path dimensions) */
             err = diff_workspace(
-                repo, state, scope, config, ctx->content_cache, ctx->manifest,
+                repo, state, scope, config, ctx->run.content_cache, ctx->run.manifest,
                 opts, ctx->arena, out
             );
             goto cleanup;
@@ -1635,16 +1634,16 @@ static const args_opt_t diff_opts[] = {
 };
 
 const args_command_t spec_diff = {
-    .name        = "diff",
-    .summary     = "Show differences between profiles and filesystem",
-    .usage       = "%s diff [options] [<commit>] [<commit>] [<file>...]",
-    .description =
+    .name         = "diff",
+    .summary      = "Show differences between profiles and filesystem",
+    .usage        = "%s diff [options] [<commit>] [<commit>] [<file>...]",
+    .description  =
         "Modes:\n"
         "  (no args)             Workspace diff (profile <-> filesystem).\n"
         "  <commit>              Commit -> workspace.\n"
         "  <commit> <commit>     Commit -> commit (must share a profile).\n"
         "  [<file>...]           Restrict any mode to the named files.\n",
-    .examples    =
+    .examples     =
         "  %s diff                          # Preview apply (default)\n"
         "  %s diff --name-only              # Only changed file names\n"
         "  %s diff --downstream             # Preview update\n"
@@ -1653,15 +1652,21 @@ const args_command_t spec_diff = {
         "  %s diff b3e1f9a                  # Commit -> workspace\n"
         "  %s diff HEAD~2 HEAD              # Commit -> commit\n"
         "  %s diff HEAD~1 home/.bashrc      # File at commit vs workspace\n",
-    .epilogue    =
+    .epilogue     =
         "See also:\n"
         "  %s list <profile> <file>   # Find commit hashes for a file\n"
         "  %s show <commit>           # View commit with diff\n",
-    .opts_size   = sizeof(cmd_diff_options_t),
-    .opts        = diff_opts,
-    .classify    = diff_classify,
-    .post_parse  = diff_post_parse,
-    .complete    = diff_complete,
-    .payload     = &dotta_ext_read_crypto_manifest,
-    .dispatch    = diff_dispatch,
+    .opts_size    = sizeof(cmd_diff_options_t),
+    .opts         = diff_opts,
+    .classify     = diff_classify,
+    .post_parse   = diff_post_parse,
+    .complete     = diff_complete,
+    .payload      = &(const dotta_needs_t){
+        .repo     = true,
+        .state    = DOTTA_STATE_READ,
+        .mounts   = true,
+        .crypto   = true,
+        .manifest = true,
+    },
+    .dispatch     = diff_dispatch,
 };

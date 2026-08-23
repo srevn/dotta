@@ -1031,11 +1031,9 @@ cleanup:
  */
 error_t *cmd_ignore(const dotta_ctx_t *ctx, const cmd_ignore_options_t *opts) {
     CHECK_NULL(ctx);
-    CHECK_NULL(ctx->repo);
-    CHECK_NULL(ctx->config);
     CHECK_NULL(opts);
 
-    git_repository *repo = ctx->repo;
+    git_repository *repo = ctx->run.repo;
     const config_t *config = ctx->config;
     output_t *out = ctx->out;
 
@@ -1065,7 +1063,7 @@ error_t *cmd_ignore(const dotta_ctx_t *ctx, const cmd_ignore_options_t *opts) {
      * it doesn't use dottaignore_scope_t. Dispatch early. */
     if (has_test) {
         return test_path_ignore(
-            repo, ctx->state, config, opts->test_path,
+            repo, ctx->run.state, config, opts->test_path,
             opts->profile, ctx->arena, out
         );
     }
@@ -1231,6 +1229,9 @@ const args_command_t spec_ignore = {
     .opts_size   = sizeof(cmd_ignore_options_t),
     .opts        = ignore_opts,
     .complete    = ignore_complete,
-    .payload     = &dotta_ext_read,
+    .payload     = &(const dotta_needs_t){
+        .repo    = true,
+        .state   = DOTTA_STATE_READ,
+    },
     .dispatch    = ignore_dispatch,
 };

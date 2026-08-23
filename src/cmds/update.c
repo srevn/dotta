@@ -1912,17 +1912,15 @@ static error_t *update_confirm_operation(
  */
 error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
     CHECK_NULL(ctx);
-    CHECK_NULL(ctx->repo);
-    CHECK_NULL(ctx->config);
     CHECK_NULL(opts);
 
-    git_repository *repo = ctx->repo;
+    git_repository *repo = ctx->run.repo;
     const config_t *config = ctx->config;
     output_t *out = ctx->out;
 
     /* Declare all resources at top, initialized to NULL */
     error_t *err = NULL;
-    state_t *state = ctx->state;  /* Borrowed from dispatcher; do not free */
+    state_t *state = ctx->run.state;  /* Borrowed from dispatcher; do not free */
     workspace_t *ws = NULL;
     scope_t *scope = NULL;
     char *profiles_str = NULL;
@@ -1949,7 +1947,7 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
         .exclude_count    = opts->exclude_count,
     };
     err = scope_build(
-        repo, state, &scope_inputs, config, ctx->mounts, ctx->arena, &scope
+        repo, state, &scope_inputs, config, ctx->run.mounts, ctx->arena, &scope
     );
     if (err) goto cleanup;
 
@@ -1976,7 +1974,7 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
     };
 
     /* Execute pre-update hook */
-    err = hook_fire_pre(config, out, ctx->repo_path, &hook_inv);
+    err = hook_fire_pre(config, out, ctx->run.repo_path, &hook_inv);
     if (err) goto cleanup;
 
     /* Load workspace for update analysis
@@ -1995,7 +1993,7 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
      * from enabled profiles) and new files. Orphans (recorded but not in any
      * enabled profile) are out of scope for update operations.
      *
-     * State is borrowed from the dispatcher (ctx->state). Read-only analysis.
+     * State is borrowed from the dispatcher (ctx->run.state). Read-only analysis.
      * The transaction for the record write opens later in
      * update_manifest_after_update().
      */
@@ -2008,7 +2006,7 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
         .analyze_encryption  = true                     /* Encryption policy validation */
     };
     err = workspace_load(
-        repo, state, config, ctx->content_cache, ctx->manifest, &ws_opts,
+        repo, state, config, ctx->run.content_cache, ctx->run.manifest, &ws_opts,
         ctx->arena, &ws
     );
     if (err) {
@@ -2209,13 +2207,13 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
             break;
     }
 
-    /* Execute profile updates. Filtered to operation scope. ctx->keymgr is borrowed
+    /* Execute profile updates. Filtered to operation scope. ctx->run.keymgr is borrowed
      * by update_profile inside per-profile iteration. */
     update_commit_t *commits = NULL;
     size_t updated_profile_count = 0;
     err = update_execute_for_all_profiles(
         repo, (const workspace_item_t **) update_items.entries,
-        update_items.count, opts, out, config, ctx->keymgr,
+        update_items.count, opts, out, config, ctx->run.keymgr,
         &total_updated, &commits, &updated_profile_count
     );
     if (err) {
@@ -2233,7 +2231,7 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
      */
     bool manifest_updated = false;
     error_t *manifest_err = update_manifest_after_update(
-        repo, state, ctx->arena, ctx->mounts, commits, updated_profile_count, out,
+        repo, state, ctx->arena, ctx->run.mounts, commits, updated_profile_count, out,
         &manifest_updated
     );
 
@@ -2257,7 +2255,7 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
     }
 
     /* Execute post-update hook */
-    hook_fire_post(config, out, ctx->repo_path, &hook_inv);
+    hook_fire_post(config, out, ctx->run.repo_path, &hook_inv);
 
     /* Summary (report updated profile count) */
     output_newline(out, OUTPUT_NORMAL);
@@ -2443,20 +2441,20 @@ static const args_opt_t update_opts[] = {
 };
 
 const args_command_t spec_update = {
-    .name        = "update",
-    .summary     = "Commit filesystem changes back to profiles",
-    .usage       = "%s update [options] [profile|file]...",
-    .description =
+    .name         = "update",
+    .summary      = "Commit filesystem changes back to profiles",
+    .usage        = "%s update [options] [profile|file]...",
+    .description  =
         "Commit filesystem modifications to the matching profile branches\n"
         "(the reverse direction of 'apply'). Metadata changes on root/\n"
         "files are captured alongside content.\n",
-    .notes       =
+    .notes        =
         "File Detection:\n"
         "  New files inside tracked directories are included based on\n"
         "  config: core.auto_detect_new_files toggles detection,\n"
         "  security.confirm_new_files toggles the prompt. --include-new\n"
         "  and --only-new override both for this invocation.\n",
-    .examples    =
+    .examples     =
         "  %s update                             # All modified files\n"
         "  %s update ~/.bashrc                   # Specific file\n"
         "  %s update -p global                   # Filter to 'global'\n"
@@ -2465,14 +2463,20 @@ const args_command_t spec_update = {
         "  %s update -n                          # Preview without writing\n"
         "  %s update --exclude '*.log'           # Skip log files\n"
         "  %s update -m \"Update shell config\"    # Custom commit message\n",
-    .epilogue    =
+    .epilogue     =
         "See also:\n"
         "  %s status          # See what will be committed\n"
         "  %s sync            # Publish committed changes to remote\n",
-    .opts_size   = sizeof(cmd_update_options_t),
-    .opts        = update_opts,
-    .post_parse  = update_post_parse,
-    .complete    = update_complete,
-    .payload     = &dotta_ext_read_crypto_manifest,
-    .dispatch    = update_dispatch,
+    .opts_size    = sizeof(cmd_update_options_t),
+    .opts         = update_opts,
+    .post_parse   = update_post_parse,
+    .complete     = update_complete,
+    .payload      = &(const dotta_needs_t){
+        .repo     = true,
+        .state    = DOTTA_STATE_READ,
+        .mounts   = true,
+        .crypto   = true,
+        .manifest = true,
+    },
+    .dispatch     = update_dispatch,
 };

@@ -16,7 +16,6 @@
 #include "base/args.h"
 #include "base/error.h"
 #include "base/output.h"
-#include "infra/mount.h"
 #include "sys/process.h"
 #include "cmds/add.h"
 #include "cmds/apply.h"
@@ -80,70 +79,6 @@ static const args_command_t *const dotta_commands[] = {
     NULL
 };
 
-/* Per-combination dispatch payloads — one const per (repo_mode, state_mode,
- * crypto_mode, manifest_mode) tuple actually used by the registry. Each
- * command's spec sets `.payload = &dotta_ext_X` for its needed tuple;
- * the dispatcher reads it back in `run_spec` to decide how to acquire the
- * repository, state, crypto handles and the view before calling the handler.
- * Only the combinations used in the registry are defined; new tuples earn new
- * constants. */
-const dotta_spec_ext_t dotta_ext_none = {
-    .repo_mode  = DOTTA_REPO_NONE,
-    .state_mode = DOTTA_STATE_NONE,
-};
-const dotta_spec_ext_t dotta_ext_path_only = {
-    .repo_mode  = DOTTA_REPO_PATH_ONLY,
-    .state_mode = DOTTA_STATE_NONE,
-};
-const dotta_spec_ext_t dotta_ext_repo_only = {
-    .repo_mode  = DOTTA_REPO_REQUIRED,
-    .state_mode = DOTTA_STATE_NONE,
-};
-const dotta_spec_ext_t dotta_ext_read = {
-    .repo_mode  = DOTTA_REPO_REQUIRED,
-    .state_mode = DOTTA_STATE_READ,
-};
-const dotta_spec_ext_t dotta_ext_write = {
-    .repo_mode  = DOTTA_REPO_REQUIRED,
-    .state_mode = DOTTA_STATE_WRITE,
-};
-const dotta_spec_ext_t dotta_ext_read_silent = {
-    .repo_mode  = DOTTA_REPO_OPTIONAL_SILENT,
-    .state_mode = DOTTA_STATE_READ,
-};
-const dotta_spec_ext_t dotta_ext_read_crypto = {
-    .repo_mode   = DOTTA_REPO_REQUIRED,
-    .state_mode  = DOTTA_STATE_READ,
-    .crypto_mode = DOTTA_CRYPTO_REQUIRED,
-};
-const dotta_spec_ext_t dotta_ext_write_crypto = {
-    .repo_mode   = DOTTA_REPO_REQUIRED,
-    .state_mode  = DOTTA_STATE_WRITE,
-    .crypto_mode = DOTTA_CRYPTO_REQUIRED,
-};
-const dotta_spec_ext_t dotta_ext_read_manifest = {
-    .repo_mode     = DOTTA_REPO_REQUIRED,
-    .state_mode    = DOTTA_STATE_READ,
-    .manifest_mode = DOTTA_MANIFEST_REQUIRED,
-};
-const dotta_spec_ext_t dotta_ext_write_manifest = {
-    .repo_mode     = DOTTA_REPO_REQUIRED,
-    .state_mode    = DOTTA_STATE_WRITE,
-    .manifest_mode = DOTTA_MANIFEST_REQUIRED,
-};
-const dotta_spec_ext_t dotta_ext_read_crypto_manifest = {
-    .repo_mode     = DOTTA_REPO_REQUIRED,
-    .state_mode    = DOTTA_STATE_READ,
-    .crypto_mode   = DOTTA_CRYPTO_REQUIRED,
-    .manifest_mode = DOTTA_MANIFEST_REQUIRED,
-};
-const dotta_spec_ext_t dotta_ext_write_crypto_manifest = {
-    .repo_mode     = DOTTA_REPO_REQUIRED,
-    .state_mode    = DOTTA_STATE_WRITE,
-    .crypto_mode   = DOTTA_CRYPTO_REQUIRED,
-    .manifest_mode = DOTTA_MANIFEST_REQUIRED,
-};
-
 /**
  * Typed public face of the file-local `dotta_commands` registry.
  *
@@ -158,266 +93,147 @@ const args_command_t *const *dotta_registry(void) {
 }
 
 /**
- * Open a repository handle according to the command's declared mode.
+ * Open the run: every member the spec declares, in dependency order.
  *
- * Returns 0 on success, 1 on unrecoverable error (error is printed). On success,
- * `*repo_out` and `*path_out` are set per mode:
+ * The needs are checked for closure first — the spec names the full set its
+ * handler reads, and the set must hold its own inputs (runtime.h). Then the
+ * repository, state, the crypto handles, the mount table and the view, each
+ * iff declared; every member starts NULL and is populated in place, so on an
+ * error the members already opened are exactly what `close_run` releases.
  *
- *   DOTTA_REPO_NONE            → both NULL
- *   DOTTA_REPO_REQUIRED        → repo set, path set
- *   DOTTA_REPO_OPTIONAL_SILENT → repo maybe NULL, path NULL, no errors
- *   DOTTA_REPO_PATH_ONLY       → repo NULL (released), path set
- *
- * Invariant: whenever `*repo_out` is non-NULL on return, `*path_out` is non-NULL
- * too. `repo_open` already resolves the path to open the repo; threading it out
- * costs nothing and gives commands that need both (e.g. bootstrap, which exports
- * DOTTA_REPO_DIR to child scripts) a single source of truth instead of a second
- * `resolve_repo_path` call.
+ * The first open that fails returns its own error — it names the resource and,
+ * for the salt and the view, the repair — and the run stays partially open for
+ * `close_run`. Under `tolerant` the same failure ends the open silently: what
+ * opened stays, the rest is NULL, and the handler runs with that shape.
  */
-static int open_repo_for_mode(
-    dotta_repo_mode_t mode,
+static error_t *open_run(
+    dotta_run_t *run,
+    const dotta_needs_t *needs,
     const config_t *config,
-    git_repository **repo_out,
-    char **path_out
+    arena_t *arena
 ) {
-    *repo_out = NULL;
-    *path_out = NULL;
+    /* Closure: a derived member's input is declared beside it. An incoherent
+     * spec is a programming error, caught on the command's first run. */
+    bool has_state = needs->state != DOTTA_STATE_NONE;
+    CHECK_ARG(!has_state || needs->repo, "Spec declares state without repo");
+    CHECK_ARG(!needs->crypto || needs->repo, "Spec declares crypto without repo");
+    CHECK_ARG(!needs->mounts || has_state, "Spec declares mounts without state");
+    CHECK_ARG(!needs->manifest || has_state, "Spec declares manifest without state");
 
-    switch (mode) {
-        case DOTTA_REPO_NONE:
-            return 0;
+    error_t *err = NULL;
 
-        case DOTTA_REPO_REQUIRED: {
-            error_t *err = repo_open(config, repo_out, path_out);
-            if (err != NULL) {
-                error_print(err, stderr);
-                error_free(err);
-                return 1;
-            }
-            return 0;
-        }
+    /* The repository and its path. `repo_open` resolves the path to open the
+     * repo; the run keeps an arena copy so it holds no heap string. */
+    if (needs->repo) {
+        char *repo_path = NULL;
+        err = repo_open(config, &run->repo, &repo_path);
+        if (err) goto done;
 
-        case DOTTA_REPO_OPTIONAL_SILENT: {
-            error_t *err = repo_open(config, repo_out, NULL);
-            if (err != NULL) {
-                error_free(err);
-                *repo_out = NULL;
-            }
-            return 0;
-        }
-
-        case DOTTA_REPO_PATH_ONLY: {
-            git_repository *repo = NULL;
-            error_t *err = repo_open(config, &repo, path_out);
-            if (err != NULL) {
-                error_print(err, stderr);
-                error_free(err);
-                return 1;
-            }
-            /* Consumers want the path, not the handle (e.g. `git` passthrough
-             * forks a child with `--git-dir=<path>`). */
-            git_repository_free(repo);
-            return 0;
+        run->repo_path = arena_strdup(arena, repo_path);
+        free(repo_path);
+        if (!run->repo_path) {
+            err = ERROR(ERR_MEMORY, "Failed to copy repository path");
+            goto done;
         }
     }
-    return 0;
-}
 
-/**
- * Acquire a state handle according to the command's declared mode.
- *
- * Returns 0 on success, 1 on unrecoverable error (error is printed). On success,
- * `*state_out` is set per mode:
- *
- *   DOTTA_STATE_NONE   → NULL
- *   DOTTA_STATE_READ   → state_load handle (DB absent until first scoped write)
- *   DOTTA_STATE_WRITE  → state_open handle (BEGIN IMMEDIATE held)
- *
- * Parallel in shape to `open_repo_for_mode`. No state is acquired when `repo ==
- * NULL`: DOTTA_REPO_NONE commands and DOTTA_REPO_OPTIONAL_SILENT commands that
- * found no repo silently skip the mode — the missing repo is a valid dispatch
- * outcome, not an error condition for state.
- *
- * On WRITE acquisition, the transaction lives for the full dispatch; the command
- * calls `state_save` when its mutation is complete. On failure paths or uncommitted
- * exits, `state_free` in the dispatcher auto-rolls-back per state.h's teardown
- * contract.
- */
-static int open_state_for_mode(
-    dotta_state_mode_t mode,
-    git_repository *repo,
-    state_t **state_out
-) {
-    *state_out = NULL;
+    /* State, in the shape the spec declared. A WRITE handle holds BEGIN
+     * IMMEDIATE for the whole dispatch; the command calls state_save, and
+     * close_run's state_free rolls back anything it did not. */
+    if (has_state) {
+        err = (needs->state == DOTTA_STATE_WRITE) ? state_open(run->repo, &run->state)
+                                                  : state_load(run->repo, &run->state);
+        if (err) goto done;
+    }
 
-    if (mode == DOTTA_STATE_NONE || repo == NULL) return 0;
+    /* The crypto handles: the keymgr iff encryption is enabled, the content
+     * cache always (possibly with a NULL keymgr — see runtime.h's crypto
+     * rationale). */
+    if (needs->crypto) {
+        if (config->encryption_enabled) {
+            /* Load the per-repo Argon2id salt from refs/dotta/salt before
+             * constructing the keymgr — the salt is part of the master-key
+             * derivation contract, so the keymgr cannot exist without it. */
+            uint8_t salt[KDF_SALT_SIZE];
+            err = salt_load(run->repo, salt);
+            if (err) {
+                if (err->code == ERR_NOT_FOUND) {
+                    err = error_wrap(
+                        err,
+                        "Encryption requires repository config (%s)\n"
+                        "  - For new repositories: run 'dotta init'\n"
+                        "  - For clones: re-run with the salt fetched "
+                        "(remote may not be a dotta v7 repository)",
+                        SALT_REF
+                    );
+                }
+                goto done;
+            }
 
-    error_t *err = (mode == DOTTA_STATE_WRITE) ? state_open(repo, state_out)
-                                               : state_load(repo, state_out);
-    if (err != NULL) {
-        error_print(err, stderr);
+            err = keymgr_create(config, salt, &run->keymgr);
+            /* Salt is public; no wipe needed. The keymgr has copied it into its
+             * own storage. */
+            if (err) goto done;
+        }
+
+        run->content_cache = content_cache_create(run->repo, run->keymgr);
+        if (!run->content_cache) {
+            err = ERROR(ERR_MEMORY, "Failed to create content cache");
+            goto done;
+        }
+    }
+
+    /* The mount table built from the state's rows — the topology at dispatch,
+     * for classifying the command's input. The arena's; nothing to close. */
+    if (needs->mounts) {
+        mount_table_t *mounts = NULL;
+        err = profile_build_mount_table(run->state, arena, &mounts);
+        if (err) goto done;
+        run->mounts = mounts;
+    }
+
+    /* The view over the enabled set as it stands. The builder's error is
+     * returned as it is: it names the profile and, for a custom/ path under a
+     * profile with no target, the repair. The rows land in the command arena;
+     * the index is close_run's to release. */
+    if (needs->manifest) {
+        err = manifest_build(run->repo, run->state, arena, &run->manifest);
+        if (err) goto done;
+    }
+
+done:
+    if (err && needs->tolerant) {
         error_free(err);
-        return 1;
+        err = NULL;
     }
-    return 0;
+    return err;
 }
 
 /**
- * Build the per-machine mount table iff state was opened.
+ * Close the run: LIFO over what open_run opened.
  *
- * Returns 0 on success, 1 on unrecoverable error (error is printed). On success,
- * `*mounts_out` is set per the runtime invariant `mounts != NULL iff state !=
- * NULL`:
- *
- *   state == NULL  → NULL (init/clone/version/completion path)
- *   state != NULL  → full-enabled topology (HOME + root sentinel + bindings)
- *
- * The table classifies the command's input; it is a value (the topology at
- * dispatch) and is never refreshed — the immutable-ctx contract (see runtime.h
- * "Members not welcome"). The view derives its own from the rows it reads, so
- * a binding-mutating command has nothing to rebuild here.
+ * The view's index first (its rows are the arena's), then the content cache
+ * (holds a borrowed keymgr pointer but does not dereference it at teardown),
+ * then the keymgr, then state (state_free auto-rolls-back any uncommitted
+ * transaction per state.h's contract), then the repository. The mount table and
+ * the repository path are the arena's. Every dotta primitive is NULL-safe, so
+ * a run that opened partway — an acquisition error, or a tolerant open that
+ * stopped early — closes the same way as a whole one.
  */
-static int open_mounts_for_state(
-    state_t *state,
-    arena_t *arena,
-    const mount_table_t **mounts_out
-) {
-    *mounts_out = NULL;
-
-    if (state == NULL) return 0;
-
-    mount_table_t *mounts = NULL;
-    error_t *err = profile_build_mount_table(state, arena, &mounts);
-    if (err != NULL) {
-        error_print(err, stderr);
-        error_free(err);
-        return 1;
-    }
-    *mounts_out = mounts;
-    return 0;
-}
-
-/**
- * Build the view according to the command's declared mode.
- *
- * Returns 0 on success, 1 on unrecoverable error (error is printed). On success,
- * `*manifest_out` is set per mode:
- *
- *   DOTTA_MANIFEST_NONE      → NULL
- *   DOTTA_MANIFEST_REQUIRED  → manifest_build over the enabled set
- *
- * Parallel in shape to `open_state_for_mode`. No view is built when `state ==
- * NULL` (there is no enabled set to build it over): a NONE / OPTIONAL_SILENT
- * repo mode that produced no state silently skips the mode, per the runtime
- * invariant `manifest != NULL iff manifest_mode == REQUIRED AND state != NULL`.
- *
- * The builder's error is printed as it is: it names the profile and, for a
- * custom/ path under a profile with no target, the repair. The rows land in the
- * command arena; the index is released in `run_spec`'s LIFO teardown.
- */
-static int open_manifest_for_mode(
-    dotta_manifest_mode_t mode,
-    git_repository *repo,
-    const state_t *state,
-    arena_t *arena,
-    manifest_t **manifest_out
-) {
-    *manifest_out = NULL;
-
-    if (mode == DOTTA_MANIFEST_NONE || state == NULL) return 0;
-
-    error_t *err = manifest_build(repo, state, arena, manifest_out);
-    if (err != NULL) {
-        error_print(err, stderr);
-        error_free(err);
-        return 1;
-    }
-    return 0;
-}
-
-/**
- * Acquire crypto handles according to the command's declared mode.
- *
- * Returns 0 on success, 1 on unrecoverable error (error is printed). On success,
- * `*keymgr_out` and `*cache_out` are set per mode:
- *
- *   DOTTA_CRYPTO_NONE      → both NULL
- *   DOTTA_CRYPTO_REQUIRED  → cache always set; keymgr set iff encryption enabled
- *
- * Parallel in shape to `open_repo_for_mode` and `open_state_for_mode`. No crypto
- * is acquired when `repo == NULL` (content_cache needs a repo to read blobs from,
- * and a standalone keymgr has no use site downstream).
- *
- * Under REQUIRED with encryption disabled, the cache is still created with a
- * NULL keymgr; it handles plaintext blobs uniformly and surfaces ERR_CRYPTO on
- * any decrypt attempt — per the runtime.h invariant on `ctx->content_cache`.
- */
-static int open_crypto_for_mode(
-    dotta_crypto_mode_t mode,
-    git_repository *repo,
-    const config_t *config,
-    keymgr **keymgr_out,
-    content_cache_t **cache_out
-) {
-    *keymgr_out = NULL;
-    *cache_out = NULL;
-
-    if (mode == DOTTA_CRYPTO_NONE || repo == NULL) return 0;
-
-    if (config->encryption_enabled) {
-        /* Load the per-repo Argon2id salt from refs/dotta/salt before constructing
-         * the keymgr — the salt is part of the master-key derivation contract,
-         * so the keymgr cannot exist without it. */
-        uint8_t salt[KDF_SALT_SIZE];
-        error_t *err = salt_load(repo, salt);
-        if (err != NULL) {
-            if (err->code == ERR_NOT_FOUND) {
-                err = error_wrap(
-                    err,
-                    "Encryption requires repository config (%s)\n"
-                    "  - For new repositories: run 'dotta init'\n"
-                    "  - For clones: re-run with the salt fetched "
-                    "(remote may not be a dotta v7 repository)",
-                    SALT_REF
-                );
-            }
-            error_print(err, stderr);
-            error_free(err);
-            return 1;
-        }
-
-        err = keymgr_create(config, salt, keymgr_out);
-        /* Salt is public; no wipe needed. The keymgr has copied it into its own
-         * storage. */
-        if (err != NULL) {
-            error_print(err, stderr);
-            error_free(err);
-            return 1;
-        }
-    }
-
-    /* Cache always created under REQUIRED, possibly with NULL keymgr. Single-blob
-     * handlers (`add`, `show`, `revert`, `key`) leave it empty; batch handlers
-     * populate it across many blob fetches. The uniform handle shape lets every
-     * crypto-aware command read `ctx->content_cache` without first checking which
-     * mode it ran under. See runtime.h's two-mode rationale. */
-    *cache_out = content_cache_create(repo, *keymgr_out);
-    if (*cache_out == NULL) {
-        keymgr_free(*keymgr_out);
-        *keymgr_out = NULL;
-        fprintf(stderr, "Failed to create content cache\n");
-        return 1;
-    }
-
-    return 0;
+static void close_run(dotta_run_t *run) {
+    manifest_free(run->manifest);
+    content_cache_free(run->content_cache);
+    keymgr_free(run->keymgr);
+    state_free(run->state);
+    if (run->repo != NULL) git_repository_free(run->repo);
 }
 
 /**
  * Parse, dispatch, and cleanup for one spec-engine command.
  *
- * Owns a command-scoped arena (destroyed before return). Follows the
- * outcome → render → dispatch → teardown sequence. Never calls exit();
- * the caller's cleanup chain is preserved unchanged.
+ * Owns a command-scoped arena (destroyed before return) and the run that is
+ * opened into it. Follows the parse → open → dispatch → close sequence. Never
+ * calls exit(); the caller's cleanup chain is preserved unchanged.
  */
 static int run_spec(
     const args_command_t *cmd,
@@ -429,8 +245,8 @@ static int run_spec(
 
     /* Command-scoped arena. Sized for the median command — parsing needs ~few
      * KB, but workspace/scope/manifest paths fit ~140 KB worst case in one or
-     * two blocks at this initial size. Borrowed by handlers via ctx->arena;
-     * destroyed below. */
+     * two blocks at this initial size. Borrowed by handlers via ctx->arena and
+     * by every derived member of the run; destroyed below. */
     arena_t *arena = arena_create(32UL * 1024);
     if (arena == NULL) {
         fprintf(stderr, "Failed to allocate memory\n");
@@ -443,9 +259,8 @@ static int run_spec(
      * dispatch goes to its handler). */
     const args_command_t *resolved = cmd;
 
-    /* Passthrough commands (e.g. `git`) skip parsing but still honor repo_mode,
-     * so PATH_ONLY passthrough can resolve the repo path without a second
-     * `repo_open` inside dispatch. */
+    /* Passthrough commands (e.g. `git`) skip parsing but still open their run,
+     * so the repository path reaches dispatch without a second `repo_open`. */
     void *opts = NULL;
     if (!cmd->passthrough) {
         if (cmd->opts_size > 0) {
@@ -480,92 +295,29 @@ static int run_spec(
         }
     }
 
-    /* Each command's spec stashes its dispatch preconditions in `payload` via a
-     * `dotta_spec_ext_t` constant. NULL falls back to NONE/NONE/NONE so a spec
-     * that omits payload simply gets no handles. */
-    const dotta_spec_ext_t *ext = resolved->payload;
-    dotta_repo_mode_t repo_mode = ext != NULL ? ext->repo_mode : DOTTA_REPO_NONE;
-    dotta_state_mode_t state_mode = ext != NULL ? ext->state_mode : DOTTA_STATE_NONE;
-    dotta_crypto_mode_t crypto_mode = ext != NULL ? ext->crypto_mode : DOTTA_CRYPTO_NONE;
-    dotta_manifest_mode_t manifest_mode =
-        ext != NULL ? ext->manifest_mode : DOTTA_MANIFEST_NONE;
-
-    git_repository *repo = NULL;
-    char *repo_path = NULL;
-    state_t *state = NULL;
-    keymgr *keymgr = NULL;
-    content_cache_t *cache = NULL;
-    const mount_table_t *mounts = NULL;
-    manifest_t *manifest = NULL;
-
-    if (open_repo_for_mode(repo_mode, config, &repo, &repo_path) != 0) {
-        arena_destroy(arena);
-        return 1;
-    }
-    if (open_state_for_mode(state_mode, repo, &state) != 0) {
-        if (repo != NULL) git_repository_free(repo);
-        free(repo_path);
-        arena_destroy(arena);
-        return 1;
-    }
-    if (open_crypto_for_mode(crypto_mode, repo, config, &keymgr, &cache) != 0) {
-        state_free(state);
-        if (repo != NULL) git_repository_free(repo);
-        free(repo_path);
-        arena_destroy(arena);
-        return 1;
-    }
-    if (open_mounts_for_state(state, arena, &mounts) != 0) {
-        content_cache_free(cache);
-        keymgr_free(keymgr);
-        state_free(state);
-        if (repo != NULL) git_repository_free(repo);
-        free(repo_path);
-        arena_destroy(arena);
-        return 1;
-    }
-    if (open_manifest_for_mode(manifest_mode, repo, state, arena, &manifest) != 0) {
-        content_cache_free(cache);
-        keymgr_free(keymgr);
-        state_free(state);
-        if (repo != NULL) git_repository_free(repo);
-        free(repo_path);
-        arena_destroy(arena);
-        return 1;
-    }
-
+    /* The spec's needs — every run member its handler reads (runtime.h); a
+     * spec without a payload opens nothing. The context is zero-initialised:
+     * open_run populates the run in place, and what it opened is what
+     * close_run releases, on every path. */
     int exit_override = 0;
     dotta_ctx_t ctx = {
-        .repo          = repo,
-        .repo_path     = repo_path,
-        .state         = state,
-        .keymgr        = keymgr,
-        .content_cache = cache,
-        .mounts        = mounts,
-        .manifest      = manifest,
-        .arena         = arena,
-        .config        = config,
-        .out           = out,
-        .argc          = argc,
-        .argv          = argv,
-        .exit_code     = &exit_override,
+        .arena     = arena,
+        .config    = config,
+        .out       = out,
+        .argc      = argc,
+        .argv      = argv,
+        .exit_code = &exit_override,
     };
 
-    error_t *err = resolved->dispatch(&ctx, opts);
+    const dotta_needs_t *needs = resolved->payload;
+    error_t *err = needs != NULL ? open_run(&ctx.run, needs, config, arena) : NULL;
+    if (err == NULL) err = resolved->dispatch(&ctx, opts);
 
-    /* LIFO teardown. The view's index first (its rows are the arena's), then
-     * content_cache (holds a borrowed keymgr pointer but does not dereference
-     * it at teardown), then keymgr, then state (state_free auto-rolls-back any
-     * uncommitted transaction per state.h's contract). All *_free primitives
-     * are NULL-safe. */
-    manifest_free(manifest);
-    content_cache_free(cache);
-    keymgr_free(keymgr);
-    state_free(state);
-    if (repo != NULL) git_repository_free(repo);
-    free(repo_path);
+    close_run(&ctx.run);
     arena_destroy(arena);
 
+    /* One line renders every failure — an open that refused and a handler
+     * that did, under the same flag. */
     if (err != NULL) {
         if (!resolved->silent_failure) error_print(err, stderr);
         error_free(err);

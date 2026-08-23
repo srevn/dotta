@@ -574,11 +574,10 @@ cleanup:
  */
 error_t *cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
     CHECK_NULL(ctx);
-    CHECK_NULL(ctx->repo);
     CHECK_NULL(opts);
 
-    git_repository *repo = ctx->repo;
-    const state_t *state = ctx->state;  /* Borrowed from dispatcher; do not free */
+    git_repository *repo = ctx->run.repo;
+    const state_t *state = ctx->run.state;  /* Borrowed from dispatcher; do not free */
     output_t *out = ctx->out;
 
     error_t *err = NULL;
@@ -660,7 +659,7 @@ error_t *cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
     CHECK_NULL(opts->file_path);
 
     /* Borrow the dispatcher's mount table over all enabled profiles. */
-    const mount_table_t *mounts = ctx->mounts;
+    const mount_table_t *mounts = ctx->run.mounts;
 
     /* Resolve file path to storage format (common to both explicit and implicit
      * paths). On resolution failure, fall back to the original input — it may
@@ -684,7 +683,7 @@ error_t *cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
 
         err = show_file(
             repo, opts->profile, search_path, opts->commit, opts->raw,
-            ctx->keymgr, out
+            ctx->run.keymgr, out
         );
         goto cleanup;
     }
@@ -729,7 +728,7 @@ error_t *cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
         );
     }
     err = show_file(
-        repo, found_profile, search_path, NULL, opts->raw, ctx->keymgr, out
+        repo, found_profile, search_path, NULL, opts->raw, ctx->run.keymgr, out
     );
 
 cleanup:
@@ -934,6 +933,11 @@ const args_command_t spec_show = {
     .opts        = show_opts,
     .post_parse  = show_post_parse,
     .complete    = show_complete,
-    .payload     = &dotta_ext_read_crypto,
+    .payload     = &(const dotta_needs_t){
+        .repo    = true,
+        .state   = DOTTA_STATE_READ,
+        .mounts  = true,
+        .crypto  = true,
+    },
     .dispatch    = show_dispatch,
 };

@@ -992,6 +992,5 @@ const args_command_t spec_clone = {
     .opts        = clone_opts,
     .post_parse  = clone_post_parse,
     .complete    = clone_complete,
-    .payload     = &dotta_ext_none,
     .dispatch    = clone_dispatch,
 };

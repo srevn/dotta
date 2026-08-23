@@ -15,7 +15,7 @@
  *     applied once. Both produce manifest_row_t rows directly, the one row shape
  *     every consumer reads, so there is no bridge between the build step and
  *     its readers. The dispatcher builds the view once per command for the
- *     commands that declare it (ctx->manifest, include/runtime.h); a command
+ *     commands that declare it (ctx->run.manifest, include/runtime.h); a command
  *     that moves Git or the enabled set builds the post-mutation view itself.
  *
  *   - Readers: manifest_rows (both kinds, unordered), manifest_profiles (the

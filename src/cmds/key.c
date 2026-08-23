@@ -35,8 +35,8 @@ static error_t *cmd_key_set(
         );
     }
 
-    /* Invariant: encryption_enabled implies ctx->keymgr != NULL for a command
-     * declaring crypto_mode = KEY. See runtime.h ctx invariants. */
+    /* Invariant: encryption_enabled implies ctx->run.keymgr != NULL for a
+     * command that declares crypto. See runtime.h's run invariants. */
     CHECK_NULL(keymgr);
 
     error_t *err = NULL;
@@ -152,12 +152,12 @@ static error_t *cmd_key_clear(
         );
     }
 
-    /* Invariant: encryption_enabled implies ctx->keymgr != NULL for a command
-     * declaring crypto_mode = KEY. See runtime.h ctx invariants. */
+    /* Invariant: encryption_enabled implies ctx->run.keymgr != NULL for a
+     * command that declares crypto. See runtime.h's run invariants. */
     CHECK_NULL(keymgr);
 
     /* Probe consults both in-memory and on-disk caches, loading the latter into
-     * memory if present. ctx->keymgr is freshly-created for this command (one
+     * memory if present. ctx->run.keymgr is freshly-created for this command (one
      * process, one dispatch), so an in-memory hit is impossible — `true` here
      * means the on-disk cache existed, which is what users mean by "had a key". */
     bool had_key = keymgr_probe_key(keymgr);
@@ -283,8 +283,8 @@ static error_t *cmd_key_status(
     /* Display key cache status */
     output_section(out, OUTPUT_NORMAL, "Key Cache Status");
 
-    /* Encryption-enabled path guarantees ctx->keymgr is populated by the dispatcher
-     * under crypto_mode = KEY. */
+    /* Encryption-enabled path guarantees ctx->run.keymgr is populated by the
+     * dispatcher under a spec that declares crypto. */
     CHECK_NULL(keymgr);
 
     bool key_cached = keymgr_probe_key(keymgr);
@@ -382,8 +382,6 @@ static error_t *cmd_key_status(
  */
 error_t *cmd_key(const dotta_ctx_t *ctx, const cmd_key_options_t *opts) {
     CHECK_NULL(ctx);
-    CHECK_NULL(ctx->repo);
-    CHECK_NULL(ctx->state);
     CHECK_NULL(opts);
 
     const config_t *config = ctx->config;
@@ -394,22 +392,22 @@ error_t *cmd_key(const dotta_ctx_t *ctx, const cmd_key_options_t *opts) {
         output_set_verbosity(out, OUTPUT_VERBOSE);
     }
 
-    /* Dispatch to appropriate action. Each handler takes the borrowed ctx->keymgr
+    /* Dispatch to appropriate action. Each handler takes the borrowed ctx->run.keymgr
      * (NULL when encryption is disabled — each handler short-circuits on that
      * via its own config->encryption_enabled check). */
     error_t *err = NULL;
     switch (opts->action) {
         case KEY_ACTION_SET:
-            err = cmd_key_set(ctx->keymgr, config, out);
+            err = cmd_key_set(ctx->run.keymgr, config, out);
             break;
 
         case KEY_ACTION_CLEAR:
-            err = cmd_key_clear(ctx->keymgr, config, out);
+            err = cmd_key_clear(ctx->run.keymgr, config, out);
             break;
 
         case KEY_ACTION_STATUS:
             err = cmd_key_status(
-                ctx->keymgr, ctx->repo, ctx->state, ctx->arena, config, out
+                ctx->run.keymgr, ctx->run.repo, ctx->run.state, ctx->arena, config, out
             );
             break;
 
@@ -465,7 +463,7 @@ static const args_command_t spec_key_set = {
     .opts_size     = sizeof(cmd_key_options_t),
     .opts          = key_set_opts,
     .init_defaults = key_set_defaults,
-    .payload       = &dotta_ext_read_crypto,
+    .payload       = &(const dotta_needs_t){ .repo = true,  .crypto= true },
     .dispatch      = key_dispatch,
 };
 
@@ -492,7 +490,7 @@ static const args_command_t spec_key_clear = {
     .opts_size     = sizeof(cmd_key_options_t),
     .opts          = key_clear_opts,
     .init_defaults = key_clear_defaults,
-    .payload       = &dotta_ext_read_crypto,
+    .payload       = &(const dotta_needs_t){ .repo = true,       .crypto= true },
     .dispatch      = key_dispatch,
 };
 
@@ -519,7 +517,10 @@ static const args_command_t spec_key_status = {
     .opts_size     = sizeof(cmd_key_options_t),
     .opts          = key_status_opts,
     .init_defaults = key_status_defaults,
-    .payload       = &dotta_ext_read_crypto,
+    .payload       = &(const dotta_needs_t){
+        .repo      = true,                     .state= DOTTA_STATE_READ,
+        .crypto    = true,
+    },
     .dispatch      = key_dispatch,
 };
 

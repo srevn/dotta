@@ -33,9 +33,10 @@ int cmd_git(const char *repo_path, const cmd_git_options_t *opts);
 /**
  * Spec-engine command specification for `dotta git`.
  *
- * Passthrough + PATH_ONLY: the engine skips argv parsing entirely and the
- * dispatcher opens the dotta repo just long enough to resolve the path, then
- * frees the handle before the fork/exec in cmd_git.
+ * Passthrough, and `.repo` declared: the engine skips argv parsing entirely;
+ * the dispatcher opens the dotta repo, and cmd_git forks the child over its
+ * path. The handle is held while the child runs — libgit2 takes no lock on
+ * open, and nothing the child writes is read back afterwards.
  *
  * Registered in cmds/registry.c; defined in git.c beside the dispatch wrapper.
  */

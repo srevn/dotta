@@ -1786,11 +1786,10 @@ cleanup:
  */
 error_t *cmd_profile(const dotta_ctx_t *ctx, const cmd_profile_options_t *opts) {
     CHECK_NULL(ctx);
-    CHECK_NULL(ctx->repo);
     CHECK_NULL(opts);
 
-    git_repository *repo = ctx->repo;
-    state_t *state = ctx->state;  /* NULL for fetch (repo_only) */
+    git_repository *repo = ctx->run.repo;
+    state_t *state = ctx->run.state;  /* NULL for fetch, whose spec declares none */
     output_t *out = ctx->out;
 
     /* Override verbosity from CLI */
@@ -1813,7 +1812,7 @@ error_t *cmd_profile(const dotta_ctx_t *ctx, const cmd_profile_options_t *opts) 
             break;
 
         case PROFILE_ENABLE:
-            result = profile_enable(repo, state, ctx->arena, ctx->manifest, opts, out);
+            result = profile_enable(repo, state, ctx->arena, ctx->run.manifest, opts, out);
             break;
 
         case PROFILE_DISABLE:
@@ -1877,7 +1876,10 @@ static const args_command_t spec_profile_list = {
     .opts_size     = sizeof(cmd_profile_options_t),
     .opts          = profile_list_opts,
     .init_defaults = profile_list_defaults,
-    .payload       = &dotta_ext_read,
+    .payload       = &(const dotta_needs_t){
+        .repo      = true,
+        .state     = DOTTA_STATE_READ,
+    },
     .dispatch      = profile_dispatch,
 };
 
@@ -1923,7 +1925,7 @@ static const args_command_t spec_profile_fetch = {
     .opts          = profile_fetch_opts,
     .init_defaults = profile_fetch_defaults,
     .complete      = profile_fetch_complete,
-    .payload       = &dotta_ext_repo_only,
+    .payload       = &(const dotta_needs_t){ .repo = true },
     .dispatch      = profile_dispatch,
 };
 
@@ -1993,7 +1995,11 @@ static const args_command_t spec_profile_enable = {
     .opts          = profile_enable_opts,
     .init_defaults = profile_enable_defaults,
     .complete      = profile_enable_complete,
-    .payload       = &dotta_ext_write_manifest,
+    .payload       = &(const dotta_needs_t){
+        .repo      = true,
+        .state     = DOTTA_STATE_WRITE,
+        .manifest  = true,
+    },
     .dispatch      = profile_dispatch,
 };
 
@@ -2049,7 +2055,10 @@ static const args_command_t spec_profile_disable = {
     .opts          = profile_disable_opts,
     .init_defaults = profile_disable_defaults,
     .complete      = profile_disable_complete,
-    .payload       = &dotta_ext_write,
+    .payload       = &(const dotta_needs_t){
+        .repo      = true,
+        .state     = DOTTA_STATE_WRITE,
+    },
     .dispatch      = profile_dispatch,
 };
 
@@ -2099,7 +2108,10 @@ static const args_command_t spec_profile_reorder = {
     .opts          = profile_reorder_opts,
     .init_defaults = profile_reorder_defaults,
     .complete      = profile_reorder_complete,
-    .payload       = &dotta_ext_write,
+    .payload       = &(const dotta_needs_t){
+        .repo      = true,
+        .state     = DOTTA_STATE_WRITE,
+    },
     .dispatch      = profile_dispatch,
 };
 
@@ -2126,7 +2138,10 @@ static const args_command_t spec_profile_validate = {
     .opts_size     = sizeof(cmd_profile_options_t),
     .opts          = profile_validate_opts,
     .init_defaults = profile_validate_defaults,
-    .payload       = &dotta_ext_read,
+    .payload       = &(const dotta_needs_t){
+        .repo      = true,
+        .state     = DOTTA_STATE_READ,
+    },
     .dispatch      = profile_dispatch,
 };
 

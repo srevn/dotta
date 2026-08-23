@@ -126,7 +126,7 @@ static error_t *git_dispatch(const void *ctx_v, void *opts_v) {
         .args      = &ctx->argv[2],
         .arg_count = ctx->argc - 2,
     };
-    *ctx->exit_code = cmd_git(ctx->repo_path, &opts);
+    *ctx->exit_code = cmd_git(ctx->run.repo_path, &opts);
     return NULL;
 }
 
@@ -145,7 +145,7 @@ const args_command_t spec_git = {
         "  %s git log --oneline\n"
         "  %s git show HEAD:home/.bashrc\n"
         "  %s git reflog\n",
-    .payload     = &dotta_ext_path_only,
+    .payload     = &(const dotta_needs_t){ .repo = true },
     .dispatch    = git_dispatch,
     .passthrough = true,
 };

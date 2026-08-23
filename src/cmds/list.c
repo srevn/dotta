@@ -695,10 +695,9 @@ static error_t *list_file_history(
  */
 error_t *cmd_list(const dotta_ctx_t *ctx, const cmd_list_options_t *opts) {
     CHECK_NULL(ctx);
-    CHECK_NULL(ctx->repo);
     CHECK_NULL(opts);
 
-    git_repository *repo = ctx->repo;
+    git_repository *repo = ctx->run.repo;
     output_t *out = ctx->out;
 
     error_t *err = NULL;
@@ -715,12 +714,12 @@ error_t *cmd_list(const dotta_ctx_t *ctx, const cmd_list_options_t *opts) {
 
     /* Dispatch to appropriate list function based on mode */
     if (opts->mode == LIST_PROFILES) {
-        err = list_profiles(repo, ctx->state, ctx->arena, opts, out);
+        err = list_profiles(repo, ctx->run.state, ctx->arena, opts, out);
     } else if (opts->mode == LIST_FILES) {
         err = list_files(repo, opts, out);
     } else if (opts->mode == LIST_FILE_HISTORY) {
         err = list_file_history(
-            repo, ctx->state, ctx->mounts, ctx->arena, opts, out
+            repo, ctx->run.state, ctx->run.mounts, ctx->arena, opts, out
         );
     } else {
         err = ERROR(ERR_INVALID_ARG, "Invalid list mode");
@@ -910,6 +909,10 @@ const args_command_t spec_list = {
     .opts        = list_opts,
     .post_parse  = list_post_parse,
     .complete    = list_complete,
-    .payload     = &dotta_ext_read,
+    .payload     = &(const dotta_needs_t){
+        .repo    = true,
+        .state   = DOTTA_STATE_READ,
+        .mounts  = true,
+    },
     .dispatch    = list_dispatch,
 };

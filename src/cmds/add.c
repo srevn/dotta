@@ -800,10 +800,8 @@ static error_t *update_manifest_after_add(
  */
 error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     CHECK_NULL(ctx);
-    CHECK_NULL(ctx->repo);
-    CHECK_NULL(ctx->state);
 
-    git_repository *repo = ctx->repo;
+    git_repository *repo = ctx->run.repo;
     const config_t *config = ctx->config;
     output_t *out = ctx->out;
 
@@ -842,7 +840,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
          * with a different target, fail BEFORE the Git commit so the user does
          * not end up with a wasted commit + stale binding. Setting a target on
          * a profile that previously had none is fine. */
-        const char *existing = state_peek_profile_target(ctx->state, opts->profile);
+        const char *existing = state_peek_profile_target(ctx->run.state, opts->profile);
         if (existing && existing[0] != '\0' && strcmp(existing, opts->target) != 0) {
             err = ERROR(
                 ERR_INVALID_ARG,
@@ -865,11 +863,11 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      *     — narrows classification to "what would adding to THIS profile see?",
      *     so a path under another profile's --target does NOT classify as that
      *     profile's custom/ namespace. The narrow view also covers the
-     *     brand-new-profile case (no row in ctx->mounts yet) and the
+     *     brand-new-profile case (no row in ctx->run.mounts yet) and the
      *     existing-profile-same-target case (idempotent re-bind already verified
      *     at the pre-flight check at the top of this function).
      *
-     *   --target absent: borrow ctx->mounts. The full enabled set covers
+     *   --target absent: borrow ctx->run.mounts. The full enabled set covers
      *     opts->profile's existing binding (if any) plus HOME and ROOT. Paths
      *     under opts->profile's stored target classify as custom/X correctly
      *     without re-deriving the binding. */
@@ -883,7 +881,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         }
         mounts = local_mounts;
     } else {
-        mounts = ctx->mounts;
+        mounts = ctx->run.mounts;
     }
 
     /* PRE-FLIGHT PRIVILEGE CHECK
@@ -1066,7 +1064,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     };
 
     /* Execute pre-add hook */
-    err = hook_fire_pre(config, out, ctx->repo_path, &hook_inv);
+    err = hook_fire_pre(config, out, ctx->run.repo_path, &hook_inv);
     if (err) goto cleanup;
 
     /* Create temporary worktree */
@@ -1354,7 +1352,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
          * sharing stat() data between content and metadata layers to eliminate
          * TOCTOU */
         err = add_file_to_worktree(
-            wt, file_path, storage_path, opts, ctx->keymgr, config, metadata, out,
+            wt, file_path, storage_path, opts, ctx->run.keymgr, config, metadata, out,
             &added_stats[i]
         );
         if (err) {
@@ -1512,7 +1510,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     size_t manifest_taken_over = 0;
 
     error_t *manifest_err = update_manifest_after_add(
-        repo, ctx->state, ctx->arena, opts->profile, opts->target, profile_was_new,
+        repo, ctx->run.state, ctx->arena, opts->profile, opts->target, profile_was_new,
         all_files, added_stats, all_directories,
         &manifest_updated, &manifest_synced_count, &manifest_taken_over
     );
@@ -1547,7 +1545,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     worktree_cleanup(&wt);
 
     /* Execute post-add hook */
-    hook_fire_post(config, out, ctx->repo_path, &hook_inv);
+    hook_fire_post(config, out, ctx->run.repo_path, &hook_inv);
 
     /* Show summary on success */
     if ((added_count > 0 || dir_tracked_count > 0)) {
@@ -1821,6 +1819,11 @@ const args_command_t spec_add = {
     .opts        = add_opts,
     .post_parse  = add_post_parse,
     .complete    = add_complete,
-    .payload     = &dotta_ext_write_crypto,
+    .payload     = &(const dotta_needs_t){
+        .repo    = true,
+        .state   = DOTTA_STATE_WRITE,
+        .mounts  = true,
+        .crypto  = true,
+    },
     .dispatch    = add_dispatch,
 };

@@ -959,17 +959,16 @@ static error_t *display_remote_status(
  */
 error_t *cmd_status(const dotta_ctx_t *ctx, const cmd_status_options_t *opts) {
     CHECK_NULL(ctx);
-    CHECK_NULL(ctx->repo);
     CHECK_NULL(opts);
 
-    git_repository *repo = ctx->repo;
+    git_repository *repo = ctx->run.repo;
     const config_t *config = ctx->config;
     output_t *out = ctx->out;
 
     /* Declare all resources at top and initialize to NULL/zero */
     error_t *err = NULL;
     workspace_t *ws = NULL;
-    state_t *state = ctx->state;  /* Borrowed from dispatcher; do not free */
+    state_t *state = ctx->run.state;  /* Borrowed from dispatcher; do not free */
     manifest_rows_t active = { 0 }; /* Borrowed slice when workspace is loaded */
     scope_t *scope = NULL;
 
@@ -992,7 +991,7 @@ error_t *cmd_status(const dotta_ctx_t *ctx, const cmd_status_options_t *opts) {
         .profile_count = opts->profile_count,
     };
     err = scope_build(
-        repo, state, &scope_inputs, config, ctx->mounts, ctx->arena, &scope
+        repo, state, &scope_inputs, config, ctx->run.mounts, ctx->arena, &scope
     );
     if (err) goto cleanup;
 
@@ -1010,7 +1009,7 @@ error_t *cmd_status(const dotta_ctx_t *ctx, const cmd_status_options_t *opts) {
             .analyze_encryption  = true
         };
         err = workspace_load(
-            repo, state, config, ctx->content_cache, ctx->manifest, &ws_opts,
+            repo, state, config, ctx->run.content_cache, ctx->run.manifest, &ws_opts,
             ctx->arena, &ws
         );
         if (err) {
@@ -1218,14 +1217,14 @@ static const args_opt_t status_opts[] = {
 };
 
 const args_command_t spec_status = {
-    .name        = "status",
-    .summary     = "Show workspace status and remote sync state",
-    .usage       = "%s status [options] [profile]...",
-    .description =
+    .name         = "status",
+    .summary      = "Show workspace status and remote sync state",
+    .usage        = "%s status [options] [profile]...",
+    .description  =
         "Report divergence between enabled profiles and the filesystem,\n"
         "plus each profile's push/pull state against its remote. Default\n"
         "scope covers both; --local and --remote restrict it.\n",
-    .notes       =
+    .notes        =
         "Privilege Requirements:\n"
         "  Ownership checks on root/ files require root privileges. When\n"
         "  invoked without root, dotta prompts for sudo. --no-sudo skips\n"
@@ -1237,7 +1236,7 @@ const args_command_t spec_status = {
         "  vn   n commits behind remote (run '%s sync' to pull)\n"
         "  <>   diverged from remote (needs resolution)\n"
         "  .    no remote tracking branch\n",
-    .examples    =
+    .examples     =
         "  %s status                         # Local + remote\n"
         "  %s status --local                 # Filesystem only\n"
         "  %s status --remote                # Remote only\n"
@@ -1245,15 +1244,21 @@ const args_command_t spec_status = {
         "  %s status -p work -p home         # Named profiles only\n"
         "  %s status --all                   # Include non-enabled profiles\n"
         "  %s status --full                  # Every managed path, clean ones too\n",
-    .epilogue    =
+    .epilogue     =
         "See also:\n"
         "  %s apply           # Deploy the pending filesystem changes\n"
         "  %s update          # Commit local filesystem changes\n"
         "  %s sync            # Reconcile with remote\n",
-    .opts_size   = sizeof(cmd_status_options_t),
-    .opts        = status_opts,
-    .post_parse  = status_post_parse,
-    .complete    = status_complete,
-    .payload     = &dotta_ext_read_crypto_manifest,
-    .dispatch    = status_dispatch,
+    .opts_size    = sizeof(cmd_status_options_t),
+    .opts         = status_opts,
+    .post_parse   = status_post_parse,
+    .complete     = status_complete,
+    .payload      = &(const dotta_needs_t){
+        .repo     = true,
+        .state    = DOTTA_STATE_READ,
+        .mounts   = true,
+        .crypto   = true,
+        .manifest = true,
+    },
+    .dispatch     = status_dispatch,
 };

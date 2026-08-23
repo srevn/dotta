@@ -75,7 +75,7 @@ static error_t *validate_options(const cmd_remove_options_t *opts) {
  * implementation: O(N×M) with nested loops
  *
  * @param mounts Per-machine mount table (must not be NULL). Caller passes
- *               ctx->mounts; the table covers HOME, ROOT, and every enabled
+ *               ctx->run.mounts; the table covers HOME, ROOT, and every enabled
  *               profile's binding. Unenabled-profile lookups (custom/X) surface
  *               MOUNT_RESOLVE_UNBOUND, which the caller handles as "no filesystem
  *               path on this machine".
@@ -1653,12 +1653,10 @@ cleanup:
  */
 error_t *cmd_remove(const dotta_ctx_t *ctx, const cmd_remove_options_t *opts) {
     CHECK_NULL(ctx);
-    CHECK_NULL(ctx->repo);
-    CHECK_NULL(ctx->state);
     CHECK_NULL(opts);
 
-    git_repository *repo = ctx->repo;
-    state_t *state = ctx->state;
+    git_repository *repo = ctx->run.repo;
+    state_t *state = ctx->run.state;
     const config_t *config = ctx->config;
     output_t *out = ctx->out;
 
@@ -1671,14 +1669,14 @@ error_t *cmd_remove(const dotta_ctx_t *ctx, const cmd_remove_options_t *opts) {
     /* Branch: Delete profile or remove files */
     if (opts->delete_profile) {
         return delete_profile_branch(
-            repo, state, ctx->arena, ctx->mounts, config, out,
-            ctx->repo_path, opts
+            repo, state, ctx->arena, ctx->run.mounts, config, out,
+            ctx->run.repo_path, opts
         );
     }
 
     return remove_files_from_profile(
-        repo, state, ctx->arena, ctx->mounts, ctx->manifest, config, out,
-        ctx->repo_path, opts
+        repo, state, ctx->arena, ctx->run.mounts, ctx->run.manifest, config, out,
+        ctx->run.repo_path, opts
     );
 }
 
@@ -1827,16 +1825,16 @@ static const args_opt_t remove_opts[] = {
 };
 
 const args_command_t spec_remove = {
-    .name        = "remove",
-    .summary     = "Remove files from a profile or delete profile",
-    .usage       =
+    .name         = "remove",
+    .summary      = "Remove files from a profile or delete profile",
+    .usage        =
         "%s remove [options] <profile> <path>...\n"
         "   or: %s remove [options] <profile> --delete-profile\n"
         "   or: %s remove [options] --profile <name> <path>...",
-    .description =
+    .description  =
         "Untrack files from a profile, optionally scheduling removal of\n"
         "the deployed copies, or delete the profile branch outright.\n",
-    .notes       =
+    .notes        =
         "Operation Modes:\n"
         "  (default)           Remove files from the profile branch. Deployed\n"
         "                      items are released from management and stay\n"
@@ -1846,19 +1844,24 @@ const args_command_t spec_remove = {
         "  --delete-profile    Delete the entire profile branch. No paths\n"
         "                      may be given; cannot be combined with\n"
         "                      --delete-files.\n",
-    .examples    =
+    .examples     =
         "  %s remove global ~/.bashrc                  # Untrack, keep on disk\n"
         "  %s remove darwin ~/.config/nvim -n          # Preview removal\n"
         "  %s remove darwin ~/.config/nvim --delete-files  # Remove on apply\n"
         "  %s remove staging --delete-profile          # Delete whole profile\n",
-    .epilogue    =
+    .epilogue     =
         "See also:\n"
         "  %s profile disable <name>  # Stop deploying without deleting\n"
         "  %s apply                   # Carry out staged file removals\n",
-    .opts_size   = sizeof(cmd_remove_options_t),
-    .opts        = remove_opts,
-    .post_parse  = remove_post_parse,
-    .complete    = remove_complete,
-    .payload     = &dotta_ext_read_manifest,
-    .dispatch    = remove_dispatch,
+    .opts_size    = sizeof(cmd_remove_options_t),
+    .opts         = remove_opts,
+    .post_parse   = remove_post_parse,
+    .complete     = remove_complete,
+    .payload      = &(const dotta_needs_t){
+        .repo     = true,
+        .state    = DOTTA_STATE_READ,
+        .mounts   = true,
+        .manifest = true,
+    },
+    .dispatch     = remove_dispatch,
 };

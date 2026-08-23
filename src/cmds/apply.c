@@ -941,17 +941,15 @@ static error_t *ensure_complete_apply_privileges(
  */
 error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     CHECK_NULL(ctx);
-    CHECK_NULL(ctx->repo);
-    CHECK_NULL(ctx->state);
     CHECK_NULL(opts);
 
-    git_repository *repo = ctx->repo;
+    git_repository *repo = ctx->run.repo;
     const config_t *config = ctx->config;
     output_t *out = ctx->out;
 
     /* Declare all resources at the top, initialized to NULL/zero */
     error_t *err = NULL;
-    state_t *state = ctx->state;                /* Borrowed from dispatcher (WRITE) */
+    state_t *state = ctx->run.state;                /* Borrowed from dispatcher (WRITE) */
     scope_t *scope = NULL;
     workspace_t *ws = NULL;
     deploy_plan_t *deploy_plan = NULL;          /* Rows borrow from ws; free before ws */
@@ -991,7 +989,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         .exclude_count    = opts->exclude_count,
     };
     err = scope_build(
-        repo, state, &scope_inputs, config, ctx->mounts, ctx->arena, &scope
+        repo, state, &scope_inputs, config, ctx->run.mounts, ctx->arena, &scope
     );
     if (err) goto cleanup;
 
@@ -1037,7 +1035,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         .analyze_encryption  = false             /* Not needed for deployment */
     };
     err = workspace_load(
-        repo, state, config, ctx->content_cache, ctx->manifest, &ws_opts,
+        repo, state, config, ctx->run.content_cache, ctx->run.manifest, &ws_opts,
         ctx->arena, &ws
     );
     if (err) {
@@ -1515,7 +1513,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     };
 
     /* Execute pre-apply hook */
-    err = hook_fire_pre(config, out, ctx->repo_path, &hook_inv);
+    err = hook_fire_pre(config, out, ctx->run.repo_path, &hook_inv);
     if (err) goto cleanup;
 
     /* Confirm before deployment if configured (unless --force or --dry-run) */
@@ -1601,10 +1599,10 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
             );
         }
 
-        /* ctx->content_cache was populated with decrypted content during workspace
+        /* ctx->run.content_cache was populated with decrypted content during workspace
          * divergence analysis; deploy's fetches hit it. */
         err = deploy_execute(
-            repo, ws, deploy_plan, &deploy_opts, ctx->content_cache, &deploy_res
+            repo, ws, deploy_plan, &deploy_opts, ctx->run.content_cache, &deploy_res
         );
         if (err) {
             if (deploy_res) {
@@ -1875,7 +1873,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     }
 
     /* Execute post-apply hook */
-    hook_fire_post(config, out, ctx->repo_path, &hook_inv);
+    hook_fire_post(config, out, ctx->run.repo_path, &hook_inv);
 
     /* Success - fall through to cleanup */
     err = NULL;
@@ -1996,14 +1994,14 @@ static const args_opt_t apply_opts[] = {
 };
 
 const args_command_t spec_apply = {
-    .name        = "apply",
-    .summary     = "Deploy enabled profiles to the filesystem",
-    .usage       = "%s apply [options] [profile|file]...",
-    .description =
+    .name         = "apply",
+    .summary      = "Deploy enabled profiles to the filesystem",
+    .usage        = "%s apply [options] [profile|file]...",
+    .description  =
         "Converge the filesystem with enabled profiles: deploy new and\n"
         "updated files, prune files orphaned by disabled profiles, and\n"
         "update the deployment state.\n",
-    .notes       =
+    .notes        =
         "Path Arguments:\n"
         "  A path narrows the run to what lies at or beneath it, in both\n"
         "  directions: tracked files there are deployed and orphaned ones\n"
@@ -2015,7 +2013,7 @@ const args_command_t spec_apply = {
         "  Excluded paths are protected from deployment, directory\n"
         "  convergence and pruning. Patterns follow gitignore glob syntax;\n"
         "  a trailing slash restricts a pattern to directories. Repeatable.\n",
-    .examples    =
+    .examples     =
         "  %s apply                            # Deploy all enabled profiles\n"
         "  %s apply --force                    # Force overwrite of modifications\n"
         "  %s apply -p work                    # Filter to 'work' profile\n"
@@ -2023,15 +2021,21 @@ const args_command_t spec_apply = {
         "  %s apply ~/.bashrc ~/.zshrc         # Deploy specific files only\n"
         "  %s apply -n                         # Preview without writing\n"
         "  %s apply --exclude 'home/.ssh/*'    # Protect matched files\n",
-    .epilogue    =
+    .epilogue     =
         "See also:\n"
         "  %s status          # Preview pending deployment\n"
         "  %s update          # Commit filesystem changes back\n"
         "  %s profile enable  # Stage a profile for deployment\n",
-    .opts_size   = sizeof(cmd_apply_options_t),
-    .opts        = apply_opts,
-    .classify    = apply_classify,
-    .complete    = apply_complete,
-    .payload     = &dotta_ext_write_crypto_manifest,
-    .dispatch    = apply_dispatch,
+    .opts_size    = sizeof(cmd_apply_options_t),
+    .opts         = apply_opts,
+    .classify     = apply_classify,
+    .complete     = apply_complete,
+    .payload      = &(const dotta_needs_t){
+        .repo     = true,
+        .state    = DOTTA_STATE_WRITE,
+        .mounts   = true,
+        .crypto   = true,
+        .manifest = true,
+    },
+    .dispatch     = apply_dispatch,
 };

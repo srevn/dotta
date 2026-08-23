@@ -46,13 +46,13 @@
 void completion_profiles(
     const dotta_ctx_t *ctx, FILE *out, completion_profiles_t set
 ) {
-    git_repository *repo = ctx->repo;
+    git_repository *repo = ctx->run.repo;
     if (repo == NULL) return;
 
     if (set == COMPLETION_ENABLED) {
         const state_profile_entry_t *rows = NULL;
         size_t count = 0;
-        error_t *err = state_peek_profiles(ctx->state, &rows, &count);
+        error_t *err = state_peek_profiles(ctx->run.state, &rows, &count);
         if (err) {
             error_free(err);
             return;
@@ -72,7 +72,7 @@ void completion_profiles(
             const char *branch = branches->items[i];
             fprintf(
                 out, "%s\t%s\n", branch,
-                state_has_profile(ctx->state, branch) ? "Enabled profile"
+                state_has_profile(ctx->run.state, branch) ? "Enabled profile"
                                                       : "Available profile"
             );
         }
@@ -105,7 +105,7 @@ void completion_profiles(
  * Configured git remotes, the URL as description
  */
 void completion_remotes(const dotta_ctx_t *ctx, FILE *out) {
-    git_repository *repo = ctx->repo;
+    git_repository *repo = ctx->run.repo;
     if (repo == NULL) return;
 
     git_strarray remotes = { 0 };
@@ -130,11 +130,11 @@ void completion_files(
     const dotta_ctx_t *ctx, FILE *out,
     char *const *winners, size_t winner_count
 ) {
-    git_repository *repo = ctx->repo;
+    git_repository *repo = ctx->run.repo;
     if (repo == NULL) return;
 
     manifest_t *manifest = NULL;
-    error_t *err = manifest_build(repo, ctx->state, ctx->arena, &manifest);
+    error_t *err = manifest_build(repo, ctx->run.state, ctx->arena, &manifest);
     if (err) {
         error_free(err);
         return;
@@ -211,7 +211,7 @@ static int refspec_emit_cb(
 void completion_refspecs(
     const dotta_ctx_t *ctx, FILE *out, const char *pinned
 ) {
-    git_repository *repo = ctx->repo;
+    git_repository *repo = ctx->run.repo;
     if (repo == NULL) return;
 
     string_array_t *branches = NULL;
@@ -353,7 +353,7 @@ static void commits_emit(
     const dotta_ctx_t *ctx, FILE *out, const char *prefix,
     const char *const *branches, size_t branch_count
 ) {
-    git_repository *repo = ctx->repo;
+    git_repository *repo = ctx->run.repo;
     if (repo == NULL) return;
 
     static const struct {
@@ -379,7 +379,7 @@ static void commits_emit(
      * may be a path): the enabled histories stand in. */
     const state_profile_entry_t *rows = NULL;
     size_t count = 0;
-    error_t *err = state_peek_profiles(ctx->state, &rows, &count);
+    error_t *err = state_peek_profiles(ctx->run.state, &rows, &count);
     if (err) {
         error_free(err);
         return;
@@ -570,7 +570,11 @@ const args_command_t spec_complete = {
     .usage          = "%s __complete [--current=<token>] -- <tokens>...",
     .opts_size      = sizeof(cmd_complete_options_t),
     .opts           = complete_opts,
-    .payload        = &dotta_ext_read_silent,
+    .payload        = &(const dotta_needs_t){
+        .repo       = true,
+        .state      = DOTTA_STATE_READ,
+        .tolerant   = true,
+    },
     .dispatch       = complete_dispatch,
     .silent_failure = true,
     .hidden         = true,
@@ -639,6 +643,5 @@ const args_command_t spec_completion = {
     .opts        = completion_opts,
     .post_parse  = completion_post_parse,
     .complete    = completion_complete,
-    .payload     = &dotta_ext_none,
     .dispatch    = completion_dispatch,
 };

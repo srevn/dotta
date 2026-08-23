@@ -460,10 +460,9 @@ static error_t *remote_show(
  */
 error_t *cmd_remote(const dotta_ctx_t *ctx, const cmd_remote_options_t *opts) {
     CHECK_NULL(ctx);
-    CHECK_NULL(ctx->repo);
     CHECK_NULL(opts);
 
-    git_repository *repo = ctx->repo;
+    git_repository *repo = ctx->run.repo;
     output_t *out = ctx->out;
 
     /* The operands are required rows of their subcommands: the parser
@@ -546,7 +545,7 @@ static const args_command_t spec_remote_list = {
     .opts_size     = sizeof(cmd_remote_options_t),
     .opts          = remote_list_opts,
     .init_defaults = remote_list_defaults,
-    .payload       = &dotta_ext_repo_only,
+    .payload       = &(const dotta_needs_t){ .repo = true },
     .dispatch      = remote_dispatch,
 };
 
@@ -577,7 +576,7 @@ static const args_command_t spec_remote_add = {
     .opts_size     = sizeof(cmd_remote_options_t),
     .opts          = remote_add_opts,
     .init_defaults = remote_add_defaults,
-    .payload       = &dotta_ext_repo_only,
+    .payload       = &(const dotta_needs_t){ .repo = true },
     .dispatch      = remote_dispatch,
 };
 
@@ -604,7 +603,7 @@ static const args_command_t spec_remote_remove = {
     .opts          = remote_remove_opts,
     .init_defaults = remote_remove_defaults,
     .complete      = remote_name_complete,
-    .payload       = &dotta_ext_repo_only,
+    .payload       = &(const dotta_needs_t){ .repo = true },
     .dispatch      = remote_dispatch,
 };
 
@@ -636,7 +635,7 @@ static const args_command_t spec_remote_set_url = {
     .opts          = remote_set_url_opts,
     .init_defaults = remote_set_url_defaults,
     .complete      = remote_name_complete,
-    .payload       = &dotta_ext_repo_only,
+    .payload       = &(const dotta_needs_t){ .repo = true },
     .dispatch      = remote_dispatch,
 };
 
@@ -668,7 +667,7 @@ static const args_command_t spec_remote_rename = {
     .opts          = remote_rename_opts,
     .init_defaults = remote_rename_defaults,
     .complete      = remote_name_complete,
-    .payload       = &dotta_ext_repo_only,
+    .payload       = &(const dotta_needs_t){ .repo = true },
     .dispatch      = remote_dispatch,
 };
 
@@ -695,7 +694,7 @@ static const args_command_t spec_remote_show = {
     .opts          = remote_show_opts,
     .init_defaults = remote_show_defaults,
     .complete      = remote_name_complete,
-    .payload       = &dotta_ext_repo_only,
+    .payload       = &(const dotta_needs_t){ .repo = true },
     .dispatch      = remote_dispatch,
 };
 

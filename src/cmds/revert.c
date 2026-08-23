@@ -770,12 +770,11 @@ cleanup:
  */
 error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
     CHECK_NULL(ctx);
-    CHECK_NULL(ctx->repo);
     CHECK_NULL(opts);
     CHECK_NULL(opts->file_path);
     CHECK_NULL(opts->commit);
 
-    git_repository *repo = ctx->repo;
+    git_repository *repo = ctx->run.repo;
     const config_t *config = ctx->config;
     output_t *out = ctx->out;
 
@@ -790,8 +789,8 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
     git_tree *target_tree = NULL;
     git_tree_entry *current_entry = NULL;
     git_tree_entry *target_entry = NULL;
-    keymgr *keymgr = ctx->keymgr; /* Borrowed from dispatcher; NULL if encryption disabled */
-    state_t *state = ctx->state;  /* Borrowed from dispatcher; do not free */
+    keymgr *keymgr = ctx->run.keymgr; /* Borrowed from dispatcher; NULL if encryption disabled */
+    state_t *state = ctx->run.state;  /* Borrowed from dispatcher; do not free */
     bool user_aborted = false;
 
     /* CLI flags override config */
@@ -806,7 +805,7 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
 
     bool found_in_history = false;
     err = discover_file(
-        repo, state, ctx->mounts, ctx->arena, opts->file_path, opts->profile,
+        repo, state, ctx->run.mounts, ctx->arena, opts->file_path, opts->profile,
         out, &found_in_history, &profile, &resolved_path
     );
     if (err) goto cleanup;
@@ -1262,6 +1261,11 @@ const args_command_t spec_revert = {
     .opts        = revert_opts,
     .post_parse  = revert_post_parse,
     .complete    = revert_complete,
-    .payload     = &dotta_ext_read_crypto,
+    .payload     = &(const dotta_needs_t){
+        .repo    = true,
+        .state   = DOTTA_STATE_READ,
+        .mounts  = true,
+        .crypto  = true,
+    },
     .dispatch    = revert_dispatch,
 };

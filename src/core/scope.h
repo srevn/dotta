@@ -16,7 +16,7 @@
  * Vocabulary
  * ----------
  *   enabled — persistent enabled profile names, always non-NULL, may be empty.
- *             The same set the dispatcher built the view over (ctx->manifest),
+ *             The same set the dispatcher built the view over (ctx->run.manifest),
  *             validated against the branches — the set the CLI filter is checked
  *             against, and the one the receipts attribute to (sync). The
  *             workspace does not read it: its profile set is the view's own

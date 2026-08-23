@@ -434,11 +434,12 @@ bool workspace_item_extract_display_info(
  * left exactly as it is and no statement runs: observation is idempotent on both
  * sides.
  *
- * Single entry point for every workspace-scope observation:
- *   - workspace_flush_updates (rows found on disk with no record during analysis,
- *     either kind)
- *   - apply's post-deploy loop (directories apply fixed rather than made, and
- *     active directories present on disk without a record)
+ * Single entry point for every workspace-scope observation: the flush
+ * (workspace_flush_updates — rows found on disk with no record during analysis,
+ * either kind). That is the one producer of observations, because the analysis
+ * is where presence is established: every active path present at load has a
+ * record once the flush has run, and a path the run makes afterwards is an
+ * ownership event (workspace_anchor), not an observation.
  *
  * The row pointer is borrowed from the workspace's active partition; the record
  * created here borrows its strings from that row for the workspace's lifetime.
@@ -469,7 +470,9 @@ error_t *workspace_observe(
  *   - apply's adoption loop (ownership event on first claim, and the
  *     acknowledgement of a clean reassignment — the record's profile becomes
  *     the row's)
- *   - apply's post-deploy loop (ownership event after a write, file or directory)
+ *   - apply's record step (ownership event after a write: a file deployed, a
+ *     directory made — where nothing stood, in a squatter's place, or as the
+ *     parent of a planned path)
  * Confirmations are not ownership events and do not come through here: the flush
  * persists them with state_confirm and patches the record's confirmed columns
  * itself.

@@ -27,12 +27,21 @@
 #include "utils/privilege.h"
 
 /**
- * Print deploy pre-flight results
+ * Print deploy pre-flight results: the warnings, then the findings
+ *
+ * A warning is an anomaly preflight met while deciding — a mode it substituted,
+ * an ownership it could not resolve — and the run goes on; it prints first, so
+ * that when a finding follows, the remedy is the last thing on the screen. The
+ * findings block the run, and the caller tests their counts after this prints.
  */
 static void print_deploy_preflight_results(
     const output_t *out,
     const deploy_preflight_result_t *result
 ) {
+    for (size_t i = 0; i < result->warnings->count; i++) {
+        output_warning(out, OUTPUT_NORMAL, "%s", result->warnings->items[i]);
+    }
+
     /* Print conflicts */
     if (result->conflicts->count > 0) {
         output_section(out, OUTPUT_NORMAL, "Conflicts (modified locally or wrong type)");
@@ -70,6 +79,138 @@ static void print_deploy_preflight_results(
                 out, OUTPUT_NORMAL, "  {red}✗{reset} %s\n",
                 result->permission_errors->items[i]
             );
+        }
+    }
+}
+
+/**
+ * Print the deployment preview
+ *
+ * What deploy will do BEFORE user confirmation, read off the verdicts: every
+ * number is a verdict count, and the preview, the prompt below it and the
+ * receipt after it are three sentences about the same work — "will be deployed"
+ * / "Deploy N files?" / "Deployed" — differing only in tense. In a dry run this
+ * is the whole of deploy's output: the verdicts are the run's decisions, and
+ * nothing else is asked or done.
+ *
+ * A directory's verb is its verdict's occupant (deploy_verdict_t): created where
+ * nothing stood, fixed where a directory did, replaced where a squatter did —
+ * the replace is the one destructive deploy verb, counted on its own line and
+ * coloured the way cleanup colours a removal. At verbose the paths are listed
+ * under their count, capped the way every preview list is. The ancestors the
+ * run may make on the way are not here: they are the mechanics of landing a
+ * planned path, and the receipt names the ones it made.
+ *
+ * Empty verdicts have nothing to say, and say nothing.
+ */
+static void print_deploy_preview(
+    const output_t *out,
+    const deploy_preflight_result_t *verdicts
+) {
+    const size_t limit = 20;   /* Don't flood the terminal */
+    const deploy_verdicts_t *files = &verdicts->files;
+    const deploy_verdicts_t *dirs = &verdicts->directories;
+
+    size_t created = 0;
+    size_t fixed = 0;
+    size_t replaced = 0;
+
+    for (size_t i = 0; i < dirs->count; i++) {
+        switch (dirs->entries[i].occupant) {
+            case FS_OCCUPANT_NONE:      created++; break;
+            case FS_OCCUPANT_DIRECTORY: fixed++; break;
+            default:                    replaced++; break;
+        }
+    }
+
+    if (files->count + dirs->count == 0) {
+        return;
+    }
+
+    output_section(out, OUTPUT_NORMAL, "Deployment");
+
+    if (files->count > 0) {
+        output_styled(
+            out, OUTPUT_NORMAL, "  {green}%zu{reset} file%s will be deployed\n",
+            files->count, files->count == 1 ? "" : "s"
+        );
+
+        size_t matched = 0;   /* printed up to the cap, counted past it */
+        for (size_t i = 0; i < files->count; i++) {
+            if (matched++ < limit) {
+                output_styled(
+                    out, OUTPUT_VERBOSE, "    {cyan}•{reset} %s\n",
+                    files->entries[i].row->filesystem_path
+                );
+            }
+        }
+        if (matched > limit) {
+            output_print(out, OUTPUT_VERBOSE, "    ... and %zu more\n", matched - limit);
+        }
+    }
+
+    if (created > 0) {
+        output_styled(
+            out, OUTPUT_NORMAL, "  {green}%zu{reset} tracked director%s will be created\n",
+            created, created == 1 ? "y" : "ies"
+        );
+
+        size_t matched = 0;   /* printed up to the cap, counted past it */
+        for (size_t i = 0; i < dirs->count; i++) {
+            if (dirs->entries[i].occupant != FS_OCCUPANT_NONE) continue;
+            if (matched++ < limit) {
+                output_styled(
+                    out, OUTPUT_VERBOSE, "    {cyan}•{reset} %s\n",
+                    dirs->entries[i].row->filesystem_path
+                );
+            }
+        }
+        if (matched > limit) {
+            output_print(out, OUTPUT_VERBOSE, "    ... and %zu more\n", matched - limit);
+        }
+    }
+
+    if (fixed > 0) {
+        output_styled(
+            out, OUTPUT_NORMAL, "  {green}%zu{reset} tracked director%s will be fixed\n",
+            fixed, fixed == 1 ? "y" : "ies"
+        );
+
+        size_t matched = 0;   /* printed up to the cap, counted past it */
+        for (size_t i = 0; i < dirs->count; i++) {
+            if (dirs->entries[i].occupant != FS_OCCUPANT_DIRECTORY) continue;
+            if (matched++ < limit) {
+                output_styled(
+                    out, OUTPUT_VERBOSE, "    {cyan}•{reset} %s\n",
+                    dirs->entries[i].row->filesystem_path
+                );
+            }
+        }
+        if (matched > limit) {
+            output_print(out, OUTPUT_VERBOSE, "    ... and %zu more\n", matched - limit);
+        }
+    }
+
+    if (replaced > 0) {
+        output_styled(
+            out, OUTPUT_NORMAL, "  {yellow}%zu{reset} tracked director%s will be replaced\n",
+            replaced, replaced == 1 ? "y" : "ies"
+        );
+
+        size_t matched = 0;   /* printed up to the cap, counted past it */
+        for (size_t i = 0; i < dirs->count; i++) {
+            fs_occupant_t occ = dirs->entries[i].occupant;
+
+            if (occ == FS_OCCUPANT_NONE || occ == FS_OCCUPANT_DIRECTORY) continue;
+            if (matched++ < limit) {
+                output_styled(
+                    out, OUTPUT_VERBOSE, "    {yellow}•{reset} %s\n",
+                    dirs->entries[i].row->filesystem_path
+                );
+            }
+        }
+        if (matched > limit) {
+            output_print(out, OUTPUT_VERBOSE, "    ... and %zu more\n", matched - limit);
         }
     }
 }
@@ -200,23 +341,27 @@ static void print_skipped(
  *
  * Categories (each semantically distinct):
  * - deployed: Files written to disk (green)
- * - created / fixed / replaced: Tracked directories, by what the executor found
- *   at the path — one line each, so the squatter --force displaced is named at
- *   every verbosity (green; the replaced count yellow, as cleanup colours a
- *   removal)
+ * - created / fixed / replaced: Tracked directories, by what the verdict said
+ *   stood at the path — one line each, so the squatter --force displaced is
+ *   named at every verbosity (green; the replaced count yellow, as cleanup
+ *   colours a removal)
+ * - ancestors: Tracked directories the run made on the way to a planned path,
+ *   outside the plan. Verbose only — the preview never counted them, and the
+ *   summary says what the preview said; the verbose listing accounts for every
+ *   owned record the run wrote
  *
- * The verb is execution truth; the tags are plan truth. A fixed row is tagged
+ * The verb is the verdict's; the tags are plan truth. A fixed row is tagged
  * [mode] / [ownership] from the workspace's divergence index — why the planner
  * chose it — never from a fresh stat: the run has just converged the directory,
  * so disk would say nothing. A pending row the planner chose on its own verdict
  * has an indexed item (deploy_needs_work(NULL) is false); one planned as absent
  * beneath a squatted directory may have none, and is created rather than fixed.
  * A fixed row whose item carries neither bit, or no item, prints no tag, and
- * the other two buckets never carry one, since the verb already says what the
+ * the other buckets never carry one, since the verb already says what the
  * path held.
  *
  * Mode and ownership print as recorded on the row, corruption included: a mode-0
- * row shows (mode: 0000) under the stderr warning that named the substitution.
+ * row shows (mode: 0000) under the preflight warning that named the substitution.
  * The receipt reports the row, the warning reports the repair. A symlink row
  * records no mode by design and says so instead.
  *
@@ -231,8 +376,7 @@ static void print_skipped(
 static void print_deploy_results(
     const output_t *out,
     const workspace_t *ws,
-    const deploy_result_t *result,
-    bool dry_run
+    const deploy_result_t *result
 ) {
     if (!result) return;
 
@@ -240,13 +384,11 @@ static void print_deploy_results(
     manifest_rows_t created = manifest_rows_view(&result->created);
     manifest_rows_t fixed = manifest_rows_view(&result->fixed);
     manifest_rows_t replaced = manifest_rows_view(&result->replaced);
+    manifest_rows_t ancestors = manifest_rows_view(&result->ancestors);
 
     /* Verbose mode: show individual items per outcome */
     if (deployed.count > 0) {
-        output_section(
-            out, OUTPUT_VERBOSE, dry_run ? "Would deploy files"
-                                         : "Deployed files"
-        );
+        output_section(out, OUTPUT_VERBOSE, "Deployed files");
         for (size_t i = 0; i < deployed.count; i++) {
             const manifest_row_t *file = deployed.entries[i];
 
@@ -273,10 +415,7 @@ static void print_deploy_results(
     }
 
     if (created.count > 0) {
-        output_section(
-            out, OUTPUT_VERBOSE, dry_run ? "Would create tracked directories"
-                                         : "Created tracked directories"
-        );
+        output_section(out, OUTPUT_VERBOSE, "Created tracked directories");
         for (size_t i = 0; i < created.count; i++) {
             const manifest_row_t *dir = created.entries[i];
 
@@ -295,10 +434,7 @@ static void print_deploy_results(
     }
 
     if (fixed.count > 0) {
-        output_section(
-            out, OUTPUT_VERBOSE, dry_run ? "Would fix tracked directories"
-                                         : "Fixed tracked directories"
-        );
+        output_section(out, OUTPUT_VERBOSE, "Fixed tracked directories");
         for (size_t i = 0; i < fixed.count; i++) {
             const manifest_row_t *dir = fixed.entries[i];
 
@@ -331,12 +467,28 @@ static void print_deploy_results(
     }
 
     if (replaced.count > 0) {
-        output_section(
-            out, OUTPUT_VERBOSE, dry_run ? "Would replace tracked directories"
-                                         : "Replaced tracked directories"
-        );
+        output_section(out, OUTPUT_VERBOSE, "Replaced tracked directories");
         for (size_t i = 0; i < replaced.count; i++) {
             const manifest_row_t *dir = replaced.entries[i];
+
+            output_styled(
+                out, OUTPUT_VERBOSE, "  {green}✓{reset} %s (mode: %04o",
+                dir->filesystem_path, dir->mode
+            );
+            if (dir->owner || dir->group) {
+                output_print(
+                    out, OUTPUT_VERBOSE, ", owner: %s:%s",
+                    dir->owner ? dir->owner : "?", dir->group ? dir->group : "?"
+                );
+            }
+            output_print(out, OUTPUT_VERBOSE, ")\n");
+        }
+    }
+
+    if (ancestors.count > 0) {
+        output_section(out, OUTPUT_VERBOSE, "Created tracked ancestors (outside the plan)");
+        for (size_t i = 0; i < ancestors.count; i++) {
+            const manifest_row_t *dir = ancestors.entries[i];
 
             output_styled(
                 out, OUTPUT_VERBOSE, "  {green}✓{reset} %s (mode: %04o",
@@ -356,36 +508,28 @@ static void print_deploy_results(
     if (!output_is_verbose(out)) {
         if (deployed.count > 0) {
             output_styled(
-                out, OUTPUT_NORMAL,
-                dry_run ? "Would deploy {green}%zu{reset} file%s\n"
-                        : "Deployed {green}%zu{reset} file%s\n",
+                out, OUTPUT_NORMAL, "Deployed {green}%zu{reset} file%s\n",
                 deployed.count, deployed.count == 1 ? "" : "s"
             );
         }
 
         if (created.count > 0) {
             output_styled(
-                out, OUTPUT_NORMAL,
-                dry_run ? "Would create {green}%zu{reset} tracked director%s\n"
-                        : "Created {green}%zu{reset} tracked director%s\n",
+                out, OUTPUT_NORMAL, "Created {green}%zu{reset} tracked director%s\n",
                 created.count, created.count == 1 ? "y" : "ies"
             );
         }
 
         if (fixed.count > 0) {
             output_styled(
-                out, OUTPUT_NORMAL,
-                dry_run ? "Would fix {green}%zu{reset} tracked director%s\n"
-                        : "Fixed {green}%zu{reset} tracked director%s\n",
+                out, OUTPUT_NORMAL, "Fixed {green}%zu{reset} tracked director%s\n",
                 fixed.count, fixed.count == 1 ? "y" : "ies"
             );
         }
 
         if (replaced.count > 0) {
             output_styled(
-                out, OUTPUT_NORMAL,
-                dry_run ? "Would replace {yellow}%zu{reset} tracked director%s\n"
-                        : "Replaced {yellow}%zu{reset} tracked director%s\n",
+                out, OUTPUT_NORMAL, "Replaced {yellow}%zu{reset} tracked director%s\n",
                 replaced.count, replaced.count == 1 ? "y" : "ies"
             );
         }
@@ -951,10 +1095,10 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     error_t *err = NULL;
     scope_t *scope = NULL;
     workspace_t *ws = NULL;
-    deploy_plan_t *deploy_plan = NULL;          /* Rows borrow from ws; free before ws */
-    cleanup_plan_t *cleanup_plan = NULL;        /* Items borrow from ws; free before ws */
-    ptr_array_t reassigned = { 0 };             /* In-scope items with profile_changed (borrowed) */
-    deploy_preflight_result_t *deploy_findings = NULL;
+    deploy_plan_t *deploy_plan = NULL;                 /* Rows borrow from ws; free before ws */
+    cleanup_plan_t *cleanup_plan = NULL;               /* Items borrow from ws; free before ws */
+    ptr_array_t reassigned = { 0 };                    /* In-scope items with profile_changed (borrowed) */
+    deploy_preflight_result_t *deploy_verdicts = NULL; /* Verdicts borrow rows from ws; free before ws */
     cleanup_preflight_result_t *cleanup_verdicts = NULL;
     char *profiles_str = NULL;
     deploy_result_t *deploy_res = NULL;
@@ -1442,38 +1586,41 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         goto cleanup;
     }
 
-    /* Run pre-flight checks over the plan
+    /* Decide deploy's verdicts from the plan, and the findings that block the run
      *
-     * Divergence verdicts come from workspace_load's analysis (O(1) index probes);
-     * the landing and writability checks are filesystem-level.
+     * Divergence verdicts and occupants come from workspace_load's analysis (O(1)
+     * index probes); the landing check is filesystem-level. The mode and ownership
+     * every write applies are decided here too, so a strict-mode ownership failure
+     * ends the run before the prompt, and the anomalies met on the way — a mode
+     * substituted, an owner this system does not know — print as warnings ahead
+     * of the preview.
      */
     output_print(out, OUTPUT_VERBOSE, "\nRunning pre-flight checks...\n");
 
     deploy_options_t deploy_opts = {
         .force            = opts->force,
-        .dry_run          = opts->dry_run,
         .strict_ownership = config->strict_mode,
     };
 
-    err = deploy_preflight(ws, deploy_plan, &deploy_opts, &deploy_findings);
+    err = deploy_preflight(ws, deploy_plan, &deploy_opts, &deploy_verdicts);
     if (err) {
         err = error_wrap(err, "Pre-flight checks failed");
         goto cleanup;
     }
 
-    print_deploy_preflight_results(out, deploy_findings);
+    print_deploy_preflight_results(out, deploy_verdicts);
     print_reassignments(out, &reassigned);
 
     /* Check for blocking findings (conflicts, blocked paths, permissions) */
-    if (deploy_findings->conflicts->count > 0 || deploy_findings->blocked->count > 0 ||
-        deploy_findings->permission_errors->count > 0) {
+    if (deploy_verdicts->conflicts->count > 0 || deploy_verdicts->blocked->count > 0 ||
+        deploy_verdicts->permission_errors->count > 0) {
         err = ERROR(ERR_CONFLICT, "Pre-flight checks failed");
         goto cleanup;
     }
 
-    /* Preflight checks passed - free the results as we don't need them anymore */
-    deploy_preflight_result_free(deploy_findings);
-    deploy_findings = NULL;
+    /* The verdicts are what the run does; the preview reads them, real run and
+     * dry run alike. */
+    print_deploy_preview(out, deploy_verdicts);
 
     /* Decide cleanup's verdicts from the plan. An empty plan (--keep-orphans,
      * no orphans in scope) yields empty verdicts and a silent preview — no gate
@@ -1514,18 +1661,20 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     if (config->confirm_destructive && !opts->force && !opts->dry_run) {
         char prompt[512];   /* Larger buffer for enhanced prompt */
 
-        /* Both numbers are cleanup's, and the preview printed exactly these two
-         * — so what the user consents to is what runs. Directory pruning can be
-         * the only pending action (no files move). */
+        /* Every number is a verdict count, and the two previews printed exactly
+         * these — so what the user consents to is what runs. Directory pruning
+         * can be the only pending action (no files move). */
         size_t prune_file_count = cleanup_verdicts->prunable_files.count;
         size_t prune_dir_count = cleanup_verdicts->prunable_dirs.count;
 
         /* Compose the prompt from the non-zero parts — "Deploy 2 files, converge
          * 1 tracked directory and prune 3 orphaned files?". No part means every
          * pending action is state-only reclamation (e.g. an all-absent orphan
-         * set) — non-destructive, no consent needed. */
-        size_t deploy_count = deploy_plan->files.pending.count;
-        size_t converge_count = deploy_plan->directories.pending.count;
+         * set) — non-destructive, no consent needed. The one destructive deploy
+         * verb, a replace, never reaches this prompt: it needs --force, and
+         * --force is the consent. */
+        size_t deploy_count = deploy_verdicts->files.count;
+        size_t converge_count = deploy_verdicts->directories.count;
 
         char parts[4][64];
         size_t part_count = 0;
@@ -1580,40 +1729,34 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         }
     }
 
-    /* Execute the plan (files-only, directories-only, or mixed — one call).
-     * Reporting reads the result: outcomes, never plan counts. */
-    if (!deploy_plan_is_empty(deploy_plan)) {
-        if (opts->dry_run) {
-            output_print(
-                out, OUTPUT_VERBOSE, "\nDry-run mode - no files will be modified\n"
-            );
-        } else {
-            output_print(
-                out, OUTPUT_VERBOSE, "\nExecuting deployment plan...\n"
-            );
-        }
-
-        /* The content cache was populated with decrypted content during
-         * workspace divergence analysis; deploy's fetches hit it. */
-        err = deploy_execute(
-            repo, ws, deploy_plan, &deploy_opts, content_cache, &deploy_res
-        );
-        if (err) {
-            if (deploy_res) {
-                print_deploy_results(out, ws, deploy_res, opts->dry_run);
-            }
-            err = error_wrap(err, "Deployment failed");
-            goto cleanup;
-        }
-
-        print_deploy_results(out, ws, deploy_res, opts->dry_run);
+    /* A dry run ends here. Both previews have printed, and neither engine is
+     * called: the verdicts are the run's decisions, and executing would teach
+     * a dry run nothing it does not already know. Everything below is for the
+     * run that writes — the two engines, then the record of what they did. */
+    if (opts->dry_run) {
+        output_print(out, OUTPUT_VERBOSE, "\nDry-run mode - no files will be modified\n");
     } else {
-        output_print(out, OUTPUT_VERBOSE, "\nNo deployment work in scope\n");
-    }
+        /* Carry the verdicts out (files-only, directories-only, or mixed — one
+         * call). Reporting reads the result: outcomes, never plan counts. */
+        if (!deploy_plan_is_empty(deploy_plan)) {
+            output_print(out, OUTPUT_VERBOSE, "\nExecuting deployment plan...\n");
 
-    /* Record what happened (only if not dry-run): cleanup, anchors, observations.
-     * Acknowledgements and the commit follow for both modes. */
-    if (!opts->dry_run) {
+            /* The content cache was populated with decrypted content during
+             * workspace divergence analysis; deploy's fetches hit it. */
+            err = deploy_execute(repo, ws, deploy_verdicts, content_cache, &deploy_res);
+            if (err) {
+                if (deploy_res) {
+                    print_deploy_results(out, ws, deploy_res);
+                }
+                err = error_wrap(err, "Deployment failed");
+                goto cleanup;
+            }
+
+            print_deploy_results(out, ws, deploy_res);
+        } else {
+            output_print(out, OUTPUT_VERBOSE, "\nNo deployment work in scope\n");
+        }
+
         /* Prune the orphans the verdicts cleared and retire their records.
          *
          * cleanup_execute changes the filesystem only; apply, as the transaction
@@ -1708,21 +1851,21 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
          * record-write failures are non-fatal warnings (preserve consistency).
          *
          * The receipt's buckets split by what dotta did, and the record follows
-         * the split:
-         *   deployed            files written or linked — an owned anchor
-         *                       with a fresh stat
-         *   created ∪ replaced  directories dotta made (where nothing stood,
-         *                       or in a squatter's place) — an owned anchor;
-         *                       a directory has no blob and no stat
-         *   fixed               directories converged in place — dotta did
-         *                       not make them: an observation, which leaves an
-         *                       existing record exactly as it is
-         * and then every active directory still without a record and present on
-         * disk — create_ancestor's parents, and directories present since before
-         * this run that the load-time flush did not reach — is observed too.
-         * Presence is the fact, so that last pass walks the active slice rather
-         * than the receipt; observation is idempotent, so it never regresses a
-         * record.
+         * the split — the receipt is the whole of it:
+         *   deployed              files written or linked — an owned anchor
+         *                         with a fresh stat
+         *   created ∪ replaced    directories dotta made (where nothing stood,
+         *   ∪ ancestors           or in a squatter's place, or as the parent of
+         *                         a planned path) — an owned anchor; a directory
+         *                         has no blob and no stat
+         *   fixed                 directories converged in place — dotta did not
+         *                         make them, and they were present at load, so
+         *                         the flush has already observed any that had
+         *                         no record: nothing to write
+         * Every other active directory present on disk was present at load too,
+         * and has its record from the flush by the same argument; the load
+         * established presence at the boundary, and nothing here walks the disk
+         * to establish it again.
          *
          * A deployed file whose item read [reassigned] had its record rewritten
          * under the row's profile by the write just made — the deployment is
@@ -1731,9 +1874,6 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
          */
         if (deploy_res) {
             manifest_rows_t deployed = manifest_rows_view(&deploy_res->deployed);
-            manifest_rows_t created = manifest_rows_view(&deploy_res->created);
-            manifest_rows_t replaced = manifest_rows_view(&deploy_res->replaced);
-            manifest_rows_t fixed = manifest_rows_view(&deploy_res->fixed);
 
             if (deployed.count > 0) {
                 output_print(out, OUTPUT_VERBOSE, "\nUpdating deployment anchors...\n");
@@ -1775,7 +1915,11 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
                 );
             }
 
-            const manifest_rows_t made[] = { created, replaced };
+            const manifest_rows_t made[] = {
+                manifest_rows_view(&deploy_res->created),
+                manifest_rows_view(&deploy_res->replaced),
+                manifest_rows_view(&deploy_res->ancestors),
+            };
             for (size_t b = 0; b < sizeof(made) / sizeof(made[0]); b++) {
                 for (size_t i = 0; i < made[b].count; i++) {
                     const manifest_row_t *dir = made[b].entries[i];
@@ -1789,50 +1933,6 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
                         error_free(err);
                         err = NULL;
                     }
-                }
-            }
-
-            for (size_t i = 0; i < fixed.count; i++) {
-                const manifest_row_t *dir = fixed.entries[i];
-
-                err = workspace_observe(ws, dir, now);
-                if (err) {
-                    output_warning(
-                        out, OUTPUT_NORMAL, "Failed to record observation for %s: %s",
-                        dir->filesystem_path, error_message(err)
-                    );
-                    error_free(err);
-                    err = NULL;
-                }
-            }
-        }
-
-        /* The last pass of the record: every active directory still without a
-         * record, present on disk. Walks the active slice, not the receipt (see
-         * above). */
-        {
-            manifest_rows_t dirs = workspace_directories(ws);
-
-            for (size_t i = 0; i < dirs.count; i++) {
-                const manifest_row_t *dir = dirs.entries[i];
-
-                if (workspace_get_anchor(ws, dir->filesystem_path)) continue;
-
-                /* lstat semantics, matching the analyzer's probe: a path of any
-                 * type counts as observed (a squatting file is still "something
-                 * was here"; type divergence is a separate signal). fs_exists
-                 * would follow a final symlink and observe a path that is not
-                 * the one being tracked. */
-                if (!fs_lexists(dir->filesystem_path)) continue;
-
-                err = workspace_observe(ws, dir, now);
-                if (err) {
-                    output_warning(
-                        out, OUTPUT_NORMAL, "Failed to record observation for %s: %s",
-                        dir->filesystem_path, error_message(err)
-                    );
-                    error_free(err);
-                    err = NULL;
                 }
             }
         }
@@ -1880,7 +1980,7 @@ cleanup:
     ptr_array_deinit(&reassigned);
     if (cleanup_verdicts) cleanup_preflight_result_free(cleanup_verdicts);
     if (cleanup_plan) cleanup_plan_free(cleanup_plan);
-    if (deploy_findings) deploy_preflight_result_free(deploy_findings);
+    if (deploy_verdicts) deploy_preflight_result_free(deploy_verdicts);
     if (profiles_str) free(profiles_str);
     if (ws) workspace_free(ws);
     if (scope) scope_free(scope);

@@ -454,9 +454,8 @@ static void workspace_record_confirmation(
  * the row is accumulated — the observation timestamp is the flush's.
  *
  * Same OOM asymmetry as the confirmation recorder, for the same reason: a dropped
- * observation costs no correctness, only a deferral to the next observation event
- * (next flush, apply's post-deploy pass), each of which re-derives it from a
- * live lstat.
+ * observation costs no correctness, only a deferral to the next load's flush,
+ * which re-derives it from a live lstat.
  *
  * @param ws Workspace (must not be NULL)
  * @param row Active row found on disk without a record (borrowed; workspace

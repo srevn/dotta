@@ -17,7 +17,6 @@
 #include "base/string.h"
 #include "core/metadata.h"
 #include "core/scope.h"
-#include "core/state.h"
 #include "core/workspace.h"
 #include "infra/content.h"
 #include "infra/mount.h"
@@ -27,7 +26,7 @@
 
 /**
  * The mode create_ancestor gives an untracked missing parent, and the fallback
- * resolve_directory_metadata substitutes for a tracked row state never gave a
+ * resolve_metadata substitutes for a tracked directory row state never gave a
  * mode to. One constant, two readers.
  */
 #define DEPLOY_DIR_MODE_DEFAULT 0755
@@ -182,23 +181,25 @@ static error_t *partition_push(
  * Is `path` beneath a pending directory row observed squatted?
  *
  * A non-directory at a tracked directory's path is what every probe of the paths
- * beneath it went through — the workspace's lstat, and so its verdicts; preflight's
- * occupant and landing probes; a dry run's. With a symlink to a directory
- * squatting, those probes reach the link's target and come back with answers
- * about *its* tree: a child reads clean, a parent reads present. The directory
- * pass replaces the squatter before anything beneath it is touched (prefix order),
- * so the observations describe a tree the run itself dismantles: after the replace,
- * nothing stands at any path beneath it. Such a path is planned and predicted
- * as absent — work, not occupied, nothing to ask of it — whatever the index says.
- * A file or dangling-link squatter changes nothing: beneath it every probe already
- * failed (ENOTDIR), and absent was the verdict anyway.
+ * beneath it went through — the workspace's lstat, and so its verdicts and the
+ * occupant preflight reads off the item; preflight's landing probes. With a
+ * symlink to a directory squatting, those probes reach the link's target and
+ * come back with answers about *its* tree: a child reads clean, a parent reads
+ * present. The directory pass replaces the squatter before anything beneath it
+ * is touched (prefix order), so the observations describe a tree the run itself
+ * dismantles: after the replace, nothing stands at any path beneath it. Such a
+ * path is planned and predicted as absent — work, not occupied, nothing to ask
+ * of it — whatever the index says. A file or dangling-link squatter changes
+ * nothing: beneath it every probe already failed (ENOTDIR), and absent was the
+ * verdict anyway.
  *
  * Squatted is the workspace's TYPE verdict on the row, and only a *pending* row
  * counts: one -e skips is not replaced this run, so what was observed
  * through it stands. Walks directories.pending, which is in prefix order, so
  * the planner can ask this of a directory row while the bucket is still filling
- * and find the row's ancestors already there. The run-time counterpart is
- * beneath_replaced_directory.
+ * and find the row's ancestors already there. Preflight asks it once more per
+ * row and writes the answer into the verdict's occupant, which is where the
+ * executors read it.
  *
  * @param ws Workspace, for the ancestor's verdict (must not be NULL)
  * @param plan Plan whose pending directories are the candidates (must not be NULL)
@@ -380,10 +381,10 @@ typedef enum {
 /**
  * Deploy's rule for clearing a planned path
  *
- * One rule, three consumers: preflight predicts with it, and both executors
- * re-decide with it from a fresh lstat at mutation time — a prompt may have sat
- * between the plan and the syscall, and a load-time guarantee is no guarantee
- * about a runtime act.
+ * One rule, one consumer: preflight decides with it, and the executors clear
+ * what the verdict says stood there — never re-deciding from a fresh look. A
+ * prompt may have sat between the verdict and the syscall; what the verdict no
+ * longer describes, the mechanism refuses (clear_occupant).
  *
  * --force is the first half. Clearing an occupant is the destructive reading of
  * "overwrite modified files", and preflight already gates a type divergence on
@@ -401,10 +402,15 @@ typedef enum {
  * "Holds something" is fs_is_directory_empty's negation, so a directory carrying
  * nothing but OS metadata is clearable and fs_remove_empty_dir removes exactly
  * that much. A directory that cannot be read answers "not empty" — don't remove
- * what you cannot verify — and its remedy is the same one.
+ * what you cannot verify — and its remedy is the same one. This readdir is the
+ * one look preflight takes at a planned path itself; the occupant is the
+ * workspace's.
+ *
+ * Asked only of a present occupant that conflicts (occupant_conflicts): an
+ * absent path needs no clearing, and the answer is undefined for one.
  *
  * @param path Planned path (must not be NULL)
- * @param occ Its occupant, freshly probed
+ * @param occ Its occupant, as the workspace observed it
  * @param force Whether --force was given
  */
 static clearance_t path_clearance(const char *path, fs_occupant_t occ, bool force) {
@@ -569,10 +575,9 @@ static bool directory_is_pending(const deploy_plan_t *plan, const char *path) {
 /**
  * Is this row's content not dotta's to overwrite unasked?
  *
- * The counterpart of occupant_conflicts, and deliberately the only question here
- * still answered from the workspace: content is compared against a blob that is
- * not on disk, so the load-time verdict is the only authority there is — no fresh
- * lstat can improve on it.
+ * The counterpart of occupant_conflicts, answered from the workspace's divergence
+ * verdict: content is compared against a blob that is not on disk, so the
+ * load-time verdict is the only authority there is — no lstat can improve on it.
  *
  * A TYPE verdict counts, because it means the compare never produced a content
  * verdict at all: whatever stood at the path was never measured against the row.
@@ -588,16 +593,17 @@ static bool content_conflicts(const workspace_item_t *item) {
 }
 
 /**
- * Record a finding that carries its own reason — a blocked path, or a landing
- * directory that refuses us. Takes ownership of `entry`; NULL means the
- * formatting itself failed.
+ * Record a formatted entry in one of the preflight arrays — a finding that
+ * carries its own reason (a blocked path, a landing directory that refuses us),
+ * or a warning. Takes ownership of `entry`; NULL means the formatting itself
+ * failed.
  */
-static error_t *push_finding(string_array_t *findings, char *entry) {
+static error_t *push_entry(string_array_t *entries, char *entry) {
     if (!entry) {
-        return ERROR(ERR_MEMORY, "Failed to format preflight finding");
+        return ERROR(ERR_MEMORY, "Failed to format preflight entry");
     }
 
-    error_t *err = string_array_push_owned(findings, entry);
+    error_t *err = string_array_push_owned(entries, entry);
     if (err) {
         free(entry);
     }
@@ -662,7 +668,7 @@ static error_t *check_landing(
 
     if (!nearest_ancestor(scratch, &slash, &occ, &is_dir, &st)) {
         if (errno == EACCES) {
-            err = push_finding(
+            err = push_entry(
                 result->permission_errors,
                 str_format("%s (ancestry cannot be reached)", path)
             );
@@ -683,12 +689,12 @@ static error_t *check_landing(
     }
 
     if (is_dir) {
-        err = push_finding(
+        err = push_entry(
             result->permission_errors,
             str_format("%s (%s is not writable)", path, scratch)
         );
     } else {
-        err = push_finding(
+        err = push_entry(
             result->blocked,
             str_format("%s (%s is not a directory)", path, scratch)
         );
@@ -700,11 +706,258 @@ cleanup:
 }
 
 /**
- * Run pre-flight checks over the plan
+ * Resolve deployment ownership for a path
+ *
+ * Unified ownership resolution logic for both files and directories. Handles
+ * home/ vs root/custom/ prefix logic and sudo detection.
+ *
+ * Resolution rules:
+ * - Files deploying to user's home under sudo: Use actual user's UID/GID
+ * - root/ or custom/ prefix with owner/group metadata: Resolve names to UID/GID
+ * - All other cases: Return -1 (no ownership change)
+ *
+ * Home detection for sudo de-escalation:
+ * - Primary: storage_path starts with "home/" (always deploys to $HOME)
+ * - Fallback: filesystem_path is under actual user's home (catches custom/ prefix
+ *   files reclassified by --target that still land under $HOME)
+ *
+ * Strict ownership mode (strict_ownership=true):
+ * - ERR_NOT_FOUND (user/group missing): Fatal error, abort deployment
+ * - ERR_PERMISSION (not root): Silent (can't chown anyway; see below)
+ *
+ * Pure decision, taken at preflight — no filesystem mutation — so the strict-mode
+ * abort is met before the prompt and never mid-run. A warning is an anomaly
+ * report and travels in the preflight result for the caller to print; nothing
+ * here reads a verbosity flag, because the warning's visibility is not this
+ * module's output policy to set.
+ *
+ * @param storage_path Path in profile (e.g., "home/.bashrc", "root/etc/hosts")
+ * @param filesystem_path Resolved deployment path for home detection
+ * @param owner Owner username from metadata (can be NULL)
+ * @param group Group name from metadata (can be NULL)
+ * @param out_uid Resolved UID or -1 for no change (must not be NULL)
+ * @param out_gid Resolved GID or -1 for no change (must not be NULL)
+ * @param strict_ownership Fail deployment if ownership cannot be resolved
+ * @param warnings Preflight warnings, for a non-fatal failure (must not be NULL)
+ * @return Error on fatal failures, NULL on success (non-fatal errors recorded
+ *         as warnings and suppressed)
+ */
+static error_t *resolve_deployment_ownership(
+    const char *storage_path,
+    const char *filesystem_path,
+    const char *owner, const char *group,
+    uid_t *out_uid, gid_t *out_gid,
+    bool strict_ownership,
+    string_array_t *warnings
+) {
+    CHECK_NULL(storage_path);
+    CHECK_NULL(out_uid);
+    CHECK_NULL(out_gid);
+
+    /* Initialize to "no change" */
+    *out_uid = (uid_t) -1;
+    *out_gid = (gid_t) -1;
+
+    const mount_spec_t *spec = mount_spec_for_path(storage_path);
+    bool requires_root_privileges = spec && spec->tracks_ownership;
+
+    /* Case 1: file lands in the invoking user's HOME when running as root.
+     *
+     * fs_get_home is the single source of truth for "the user's home" (sudo-aware
+     * via SUDO_UID's pw_dir); privilege_path_is_user_home trusts it. No label
+     * dispatch needed:
+     *   home/X    → resolves under HOME → de-escalate
+     *   root/X    → /X, never under HOME → fall through
+     *   custom/X with --target $HOME/jail → under HOME → de-escalate
+     *   custom/X with --target /jail      → outside HOME → fall through
+     *
+     * The fs path tells us directly. The kind dispatch this replaces was a
+     * workaround for HOME-truth divergence between fs_get_home and the inlined
+     * SUDO_UID lookup; once both share fs_get_home, the dispatch collapses. */
+    if (privilege_is_elevated()
+        && filesystem_path && privilege_path_is_user_home(filesystem_path)) {
+        error_t *err = privilege_get_actual_user(out_uid, out_gid);
+        if (err) {
+            return error_wrap(
+                err, "Failed to determine actual user for home path: %s",
+                storage_path
+            );
+        }
+        return NULL;
+    }
+
+    /* Case 2: root/ or custom/ prefix with ownership metadata -> resolve to UID/GID */
+    if (requires_root_privileges && (owner || group)) {
+        error_t *err = metadata_resolve_ownership(owner, group, out_uid, out_gid);
+        if (err) {
+            /* Determine error type and whether it should be fatal
+             *
+             * ERR_NOT_FOUND: User/group doesn't exist on this system
+             *   - strict_ownership=true: Fatal (configuration/environment mismatch)
+             *   - strict_ownership=false: Warning, continue with default ownership
+             *
+             * ERR_PERMISSION: Not running as root (can't chown anyway)
+             *   - Silent. Not an anomaly but the expected shape of an unelevated
+             *     run, and reachable only in a dry one: a real run's privilege
+             *     check has re-exec'd under sudo or failed hard before preflight.
+             */
+            bool is_resolution_failure = (err->code == ERR_NOT_FOUND);
+            bool should_fail = is_resolution_failure && strict_ownership;
+
+            if (should_fail) {
+                /* Fatal: Return error to abort deployment */
+                return error_wrap(
+                    err, "Ownership resolution failed for '%s' (strict_mode enabled)\n"
+                    "Hint: Create the user/group on this system, or disable strict_mode",
+                    storage_path
+                );
+            }
+
+            /* Non-fatal: record the anomaly and continue */
+            if (err->code != ERR_PERMISSION) {
+                error_t *push_err = push_entry(
+                    warnings,
+                    str_format(
+                    "Could not resolve ownership for %s: %s",
+                    storage_path, error_message(err)
+                    )
+                );
+                if (push_err) {
+                    error_free(err);
+                    return push_err;
+                }
+            }
+
+            error_free(err);
+            /* Reset to "no change" */
+            *out_uid = (uid_t) -1;
+            *out_gid = (gid_t) -1;
+        }
+        return NULL;
+    }
+
+    /* Case 3: All other cases -> no ownership change */
+    return NULL;
+}
+
+/**
+ * The metadata a row's write applies: the mode, then the ownership — in that
+ * order, so a corrupt row is named even when a strict-mode ownership failure
+ * ends preflight there.
+ *
+ * A row's mode is its metadata item's — a blob row's the filemode default
+ * (0644 / 0755) unless the profile's metadata claims otherwise, a directory
+ * row's the claim alone — and 0 is the one value the item can carry that is
+ * no claim at all: a "0000" in the profile's metadata.json. The workspace reads
+ * that zero as "no claim" (check_item_metadata_divergence skips the mode
+ * check), so preflight reads it the same way — the default keyed on the row's
+ * type — and says so, because the recorded value is the user's and they may
+ * want to know it is not being honoured. One decision for both kinds; the
+ * default is the only thing the kind changes.
+ *
+ * A symlink row is the one honest zero: the view carries mode 0 for
+ * GIT_FILEMODE_LINK and metadata keeps it there, symlink(2) takes no mode and
+ * the symlink arm never reads it. Its zero is the recorded value, not a hole —
+ * so the question is asked only of the kinds that carry a mode.
+ *
+ * Ownership is resolved ahead of the write so the write applies it atomically
+ * through the descriptor (fchown on the file or directory fd, lchown on a
+ * link): there is never a moment when the path exists with the wrong owner.
+ *
+ * @param row View row (must not be NULL; borrowed, read-only)
+ * @param opts Deployment options (must not be NULL)
+ * @param warnings Preflight warnings (must not be NULL)
+ * @param v Verdict whose mode, uid and gid are decided (must not be NULL)
+ * @return Error or NULL on success (a strict-mode ownership failure is one)
+ */
+static error_t *resolve_metadata(
+    const manifest_row_t *row,
+    const deploy_options_t *opts,
+    string_array_t *warnings,
+    deploy_verdict_t *v
+) {
+    mode_t mode = row->mode;
+
+    if (row->type != PATH_TYPE_SYMLINK && mode == 0) {
+        mode = (row->type == PATH_TYPE_DIRECTORY) ? DEPLOY_DIR_MODE_DEFAULT
+             : (row->type == PATH_TYPE_EXECUTABLE) ? 0755 : 0644;
+
+        error_t *err = push_entry(
+            warnings,
+            str_format(
+            "Mode 0000 recorded for '%s' in profile '%s' "
+            "(.dotta/metadata.json), using default %04o",
+            row->filesystem_path, row->profile, mode
+            )
+        );
+        if (err) {
+            return err;
+        }
+    }
+    v->mode = mode;
+
+    error_t *err = resolve_deployment_ownership(
+        row->storage_path,
+        row->filesystem_path,
+        row->owner, row->group,
+        &v->uid, &v->gid,
+        opts->strict_ownership,
+        warnings
+    );
+    if (err) {
+        return error_wrap(
+            err, "Failed to resolve ownership for '%s'",
+            row->filesystem_path
+        );
+    }
+
+    return NULL;
+}
+
+/**
+ * Does a pending row of either kind lie beneath `dir`?
+ *
+ * The question that makes a tracked directory outside the plan an ancestor the
+ * run may create: ensure_parents climbs from each planned path to its nearest
+ * present ancestor and creates every component in between, so a directory row
+ * above no pending row is never reached. Strictly beneath — the same test
+ * beneath_squatted_directory makes.
+ *
+ * @param plan Deployment plan (must not be NULL)
+ * @param dir Directory path (must not be NULL)
+ */
+static bool above_pending_row(const deploy_plan_t *plan, const char *dir) {
+    const ptr_array_t *buckets[] = { &plan->directories.pending, &plan->files.pending };
+    size_t len = strlen(dir);
+
+    for (size_t b = 0; b < sizeof(buckets) / sizeof(buckets[0]); b++) {
+        manifest_rows_t rows = manifest_rows_view(buckets[b]);
+
+        for (size_t i = 0; i < rows.count; i++) {
+            const char *path = rows.entries[i]->filesystem_path;
+
+            if (strncmp(path, dir, len) == 0 && path[len] == '/') {
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+/**
+ * Decide the verdicts, and the findings that block the run
  *
  * Workspace = analysis layer, preflight = decision layer, execute = execution
- * layer. Divergence verdicts are O(1) index probes; the occupancy and landing
- * checks are filesystem-level.
+ * layer. Divergence verdicts and occupants are O(1) index probes; the one
+ * filesystem-level question is the landing (and, for a directory standing where
+ * a file belongs, the readdir under path_clearance).
+ *
+ * Every pending row gets a verdict, findings or not: the arrays are the plan's
+ * pending buckets in order, and a caller that meets a finding reads the counts
+ * and never the verdicts. A row planned beneath a squatter this run replaces
+ * gets its verdict too — absent, nothing asked — so the executors read one
+ * shape for every row.
  */
 error_t *deploy_preflight(
     const workspace_t *ws,
@@ -725,18 +978,39 @@ error_t *deploy_preflight(
     result->conflicts = string_array_new(0);
     result->blocked = string_array_new(0);
     result->permission_errors = string_array_new(0);
+    result->warnings = string_array_new(0);
 
-    if (!result->conflicts || !result->blocked || !result->permission_errors) {
+    if (!result->conflicts || !result->blocked || !result->permission_errors ||
+        !result->warnings) {
         deploy_preflight_result_free(result);
         return ERROR(ERR_MEMORY, "Failed to allocate result arrays");
     }
 
+    /* One slot per pending row, and one per directory row of the view for the
+     * ancestors (an upper bound; the count says how many were decided). A zero
+     * count allocates one slot rather than nothing, so every array is an array. */
+    manifest_rows_t files = manifest_rows_view(&plan->files.pending);
+    manifest_rows_t dirs = manifest_rows_view(&plan->directories.pending);
+    manifest_rows_t all_dirs = workspace_directories(ws);
+
+    result->directories.entries = calloc(dirs.count + 1, sizeof(deploy_verdict_t));
+    result->files.entries = calloc(files.count + 1, sizeof(deploy_verdict_t));
+    result->ancestors.entries = calloc(all_dirs.count + 1, sizeof(deploy_verdict_t));
+
+    if (!result->directories.entries || !result->files.entries ||
+        !result->ancestors.entries) {
+        deploy_preflight_result_free(result);
+        return ERROR(ERR_MEMORY, "Failed to allocate verdict arrays");
+    }
+
     error_t *err = NULL;
 
-    manifest_rows_t files = manifest_rows_view(&plan->files.pending);
     for (size_t i = 0; i < files.count; i++) {
         const manifest_row_t *row = files.entries[i];
         const char *path = row->filesystem_path;
+        deploy_verdict_t *v = &result->files.entries[result->files.count++];
+
+        v->row = row;
 
         /* Planned as absent: every probe of this path would reach the squatter's
          * target and answer for the wrong tree, and the path is empty once the
@@ -744,18 +1018,20 @@ error_t *deploy_preflight(
          * in the way. Its landing is the pending ancestor's, whose own row is
          * asked below. */
         if (beneath_squatted_directory(ws, plan, path)) {
+            v->occupant = FS_OCCUPANT_NONE;
+            err = resolve_metadata(row, opts, result->warnings, v);
+            if (err) goto cleanup;
             continue;
         }
 
+        /* A pending row not beneath a squatter has an item: the planner routed
+         * it through deploy_needs_work, and deploy_needs_work(NULL) is false. */
         const workspace_item_t *item = workspace_get_item(ws, path);
-        fs_occupant_t occ = fs_lstat_occupant(path, NULL);
+        v->occupant = item->occupant;
 
-        if (occupant_conflicts(occ, file_row_occupant(row))) {
-            /* Type: decided from the fresh probe, because lstat is the authority
-             * for it and re-asking costs one syscall — the same question
-             * deploy_file will ask again at mutation time. What stands at the
-             * path also decides the remedy. */
-            switch (path_clearance(path, occ, opts->force)) {
+        if (occupant_conflicts(v->occupant, file_row_occupant(row))) {
+            /* Type: what stands at the path decides the remedy. */
+            switch (path_clearance(path, v->occupant, opts->force)) {
                 case CLEARANCE_OK:
                     break;
 
@@ -765,7 +1041,7 @@ error_t *deploy_preflight(
                     break;
 
                 case CLEARANCE_REFUSED:
-                    err = push_finding(
+                    err = push_entry(
                         result->blocked,
                         str_format("%s (a non-empty directory is in the way)", path)
                     );
@@ -782,41 +1058,115 @@ error_t *deploy_preflight(
         /* Every file row lands through its parent, whichever arm writes it and
          * whether or not something is already at the path — so one question covers
          * both, and it is never about the path itself. */
+        size_t findings = result->permission_errors->count + result->blocked->count;
+
         err = check_landing(ws, plan, path, result);
+        if (err) goto cleanup;
+
+        /* An occupant the workspace could not examine is no verdict: nothing can
+         * say what the run will find there, and nothing is written on a guess
+         * (neither question above is asked of it — UNKNOWN is not present). The
+         * ancestry that refused the lstat is what refuses the write, and the
+         * landing has just named it when it could (EACCES on the way up); the
+         * path is named on its own only when the landing had nothing to say —
+         * an errno the write would otherwise have surfaced mid-run. */
+        if (v->occupant == FS_OCCUPANT_UNKNOWN &&
+            result->permission_errors->count + result->blocked->count == findings) {
+            err = push_entry(
+                result->permission_errors,
+                str_format("%s (cannot be verified)", path)
+            );
+            if (err) goto cleanup;
+        }
+
+        err = resolve_metadata(row, opts, result->warnings, v);
         if (err) goto cleanup;
     }
 
-    manifest_rows_t dirs = manifest_rows_view(&plan->directories.pending);
     for (size_t i = 0; i < dirs.count; i++) {
-        const char *path = dirs.entries[i]->filesystem_path;
+        const manifest_row_t *row = dirs.entries[i];
+        const char *path = row->filesystem_path;
+        deploy_verdict_t *v = &result->directories.entries[result->directories.count++];
+
+        v->row = row;
 
         /* Planned as absent (see the file loop): created beneath a directory
          * this run replaces first, so neither a conflict nor a landing question
          * is its own. */
         if (beneath_squatted_directory(ws, plan, path)) {
+            v->occupant = FS_OCCUPANT_NONE;
+            err = resolve_metadata(row, opts, result->warnings, v);
+            if (err) goto cleanup;
             continue;
         }
 
-        fs_occupant_t occ = fs_lstat_occupant(path, NULL);
+        const workspace_item_t *item = workspace_get_item(ws, path);
+        v->occupant = item->occupant;
 
         /* A planned directory squatted by a non-directory (the link itself, so
          * a symlink to a directory counts) is replaced under --force, one node
          * at a time. The squatter can never be a directory — that is the row
          * converging in place — so path_clearance cannot refuse here and "use
          * --force" is always the true remedy. */
-        if (occupant_conflicts(occ, FS_OCCUPANT_DIRECTORY) &&
-            path_clearance(path, occ, opts->force) != CLEARANCE_OK) {
+        if (occupant_conflicts(v->occupant, FS_OCCUPANT_DIRECTORY) &&
+            path_clearance(path, v->occupant, opts->force) != CLEARANCE_OK) {
             err = string_array_push(result->conflicts, path);
             if (err) goto cleanup;
         }
 
         /* A directory already there is converged in place: fchmod and fchown
          * ask for ownership, not for a writable parent. Only a create or a replace
-         * lands a new entry. */
-        if (occ != FS_OCCUPANT_DIRECTORY) {
+         * lands a new entry. An unexaminable occupant is asked too, and named on
+         * its own when the landing had nothing to say — as for a file. */
+        size_t findings = result->permission_errors->count + result->blocked->count;
+
+        if (v->occupant != FS_OCCUPANT_DIRECTORY) {
             err = check_landing(ws, plan, path, result);
             if (err) goto cleanup;
         }
+
+        if (v->occupant == FS_OCCUPANT_UNKNOWN &&
+            result->permission_errors->count + result->blocked->count == findings) {
+            err = push_entry(
+                result->permission_errors,
+                str_format("%s (cannot be verified)", path)
+            );
+            if (err) goto cleanup;
+        }
+
+        err = resolve_metadata(row, opts, result->warnings, v);
+        if (err) goto cleanup;
+    }
+
+    /* The ancestors: every directory row the plan does not act on, absent as
+     * the plan reads it, that stands above a pending row. Absent as the plan
+     * reads it is the planner's own reading — beneath a squatter this run
+     * replaces, or the workspace's occupant (a row without an item is present
+     * and converged). ensure_parents creates exactly these on the way down to
+     * a planned path, with the metadata decided here; a candidate the world
+     * makes present before then is simply not created, and costs nothing. */
+    for (size_t i = 0; i < all_dirs.count; i++) {
+        const manifest_row_t *row = all_dirs.entries[i];
+        const char *path = row->filesystem_path;
+
+        if (directory_is_pending(plan, path)) {
+            continue;
+        }
+
+        const workspace_item_t *item = workspace_get_item(ws, path);
+        bool absent = beneath_squatted_directory(ws, plan, path) ||
+            (item && item->occupant == FS_OCCUPANT_NONE);
+
+        if (!absent || !above_pending_row(plan, path)) {
+            continue;
+        }
+
+        deploy_verdict_t *v = &result->ancestors.entries[result->ancestors.count++];
+
+        v->row = row;
+        v->occupant = FS_OCCUPANT_NONE;
+        err = resolve_metadata(row, opts, result->warnings, v);
+        if (err) goto cleanup;
     }
 
     *out = result;
@@ -824,7 +1174,7 @@ error_t *deploy_preflight(
 
 cleanup:
     deploy_preflight_result_free(result);
-    return error_wrap(err, "Failed to record preflight finding");
+    return err;
 }
 
 /* ══════════════════════════════════════════════════════════════════
@@ -841,50 +1191,17 @@ typedef struct {
 } held_directory_t;
 
 /**
- * One execution of the plan: what deploy_execute was handed, plus the state the
- * run accumulates. Lives exactly as long as deploy_execute.
+ * One execution of the verdicts: what deploy_execute was handed, plus the state
+ * the run accumulates. Lives exactly as long as deploy_execute.
  */
 typedef struct {
     git_repository *repo;
     content_cache_t *cache;
-    const workspace_t *ws;           /* tracked-ancestor metadata (create_ancestor) */
-    const deploy_options_t *opts;
-    deploy_result_t *result;         /* the receipt so far (beneath_replaced_directory) */
-    ptr_array_t held;                /* held_directory_t * (owned), in the order taken */
+    const workspace_t *ws;                     /* a landing directory's row (holdable_directory) */
+    const deploy_preflight_result_t *verdicts; /* the ancestors' metadata (create_ancestor) */
+    deploy_result_t *result;                   /* the receipt so far (the ancestors bucket) */
+    ptr_array_t held;                          /* held_directory_t * (owned), in the order taken */
 } deploy_run_t;
-
-/**
- * Is `path` beneath a directory this run has replaced?
- *
- * The run-time counterpart of beneath_squatted_directory: the plan said which
- * paths were observed through a squatter, the receipt says which squatters this
- * run actually displaced — and the receipt is the one to trust here, since a
- * squatter that healed into a directory before the run was fixed in place, not
- * replaced, and left its subtree standing for the fresh lstat to judge. A replace
- * leaves an empty directory, and the run creates beneath it only in prefix order,
- * so when a planned path beneath one is reached nothing stands there. The real
- * run's fresh lstat says as much; a dry run's still reaches the squatter's target,
- * so for it this answer is the lstat it cannot take — and the preview lands in
- * the bucket the real run will.
- *
- * @param run Run context (must not be NULL)
- * @param path Planned path (must not be NULL)
- */
-static bool beneath_replaced_directory(const deploy_run_t *run, const char *path) {
-    manifest_rows_t dirs = manifest_rows_view(&run->result->replaced);
-
-    for (size_t i = 0; i < dirs.count; i++) {
-        const char *dir = dirs.entries[i]->filesystem_path;
-        size_t len = strlen(dir);
-
-        /* Strictly beneath — see beneath_squatted_directory */
-        if (strncmp(path, dir, len) == 0 && path[len] == '/') {
-            return true;
-        }
-    }
-
-    return false;
-}
 
 /**
  * The mode a directory carries while this run writes beneath it
@@ -976,190 +1293,6 @@ static error_t *release_directories(deploy_run_t *run) {
 }
 
 /**
- * Resolve deployment ownership for a path
- *
- * Unified ownership resolution logic for both files and directories. Handles
- * home/ vs root/custom/ prefix logic and sudo detection.
- *
- * Resolution rules:
- * - Files deploying to user's home under sudo: Use actual user's UID/GID
- * - root/ or custom/ prefix with owner/group metadata: Resolve names to UID/GID
- * - All other cases: Return -1 (no ownership change)
- *
- * Home detection for sudo de-escalation:
- * - Primary: storage_path starts with "home/" (always deploys to $HOME)
- * - Fallback: filesystem_path is under actual user's home (catches custom/ prefix
- *   files reclassified by --target that still land under $HOME)
- *
- * Strict ownership mode (strict_ownership=true):
- * - ERR_NOT_FOUND (user/group missing): Fatal error, abort deployment
- * - ERR_PERMISSION (not root): Silent (can't chown anyway; see below)
- *
- * Pure decision — no filesystem mutation, and nothing here reads the run's dry-run
- * flag — so executors call it ahead of their gate and a dry run reaches the verdict
- * the real run reaches, the strict-mode abort included. Nothing here reads a
- * verbosity flag either: a warning is an anomaly report and its visibility is
- * not the caller's output policy to set.
- *
- * @param storage_path Path in profile (e.g., "home/.bashrc", "root/etc/hosts")
- * @param filesystem_path Resolved deployment path for home detection
- * @param owner Owner username from metadata (can be NULL)
- * @param group Group name from metadata (can be NULL)
- * @param out_uid Resolved UID or -1 for no change (must not be NULL)
- * @param out_gid Resolved GID or -1 for no change (must not be NULL)
- * @param strict_ownership Fail deployment if ownership cannot be resolved
- * @return Error on fatal failures, NULL on success (non-fatal errors logged and
- *         suppressed)
- */
-static error_t *resolve_deployment_ownership(
-    const char *storage_path,
-    const char *filesystem_path,
-    const char *owner, const char *group,
-    uid_t *out_uid, gid_t *out_gid,
-    bool strict_ownership
-) {
-    CHECK_NULL(storage_path);
-    CHECK_NULL(out_uid);
-    CHECK_NULL(out_gid);
-
-    /* Initialize to "no change" */
-    *out_uid = (uid_t) -1;
-    *out_gid = (gid_t) -1;
-
-    const mount_spec_t *spec = mount_spec_for_path(storage_path);
-    bool requires_root_privileges = spec && spec->tracks_ownership;
-
-    /* Case 1: file lands in the invoking user's HOME when running as root.
-     *
-     * fs_get_home is the single source of truth for "the user's home" (sudo-aware
-     * via SUDO_UID's pw_dir); privilege_path_is_user_home trusts it. No label
-     * dispatch needed:
-     *   home/X    → resolves under HOME → de-escalate
-     *   root/X    → /X, never under HOME → fall through
-     *   custom/X with --target $HOME/jail → under HOME → de-escalate
-     *   custom/X with --target /jail      → outside HOME → fall through
-     *
-     * The fs path tells us directly. The kind dispatch this replaces was a
-     * workaround for HOME-truth divergence between fs_get_home and the inlined
-     * SUDO_UID lookup; once both share fs_get_home, the dispatch collapses. */
-    if (privilege_is_elevated()
-        && filesystem_path && privilege_path_is_user_home(filesystem_path)) {
-        error_t *err = privilege_get_actual_user(out_uid, out_gid);
-        if (err) {
-            return error_wrap(
-                err, "Failed to determine actual user for home path: %s",
-                storage_path
-            );
-        }
-        return NULL;
-    }
-
-    /* Case 2: root/ or custom/ prefix with ownership metadata -> resolve to UID/GID */
-    if (requires_root_privileges && (owner || group)) {
-        error_t *err = metadata_resolve_ownership(owner, group, out_uid, out_gid);
-        if (err) {
-            /* Determine error type and whether it should be fatal
-             *
-             * ERR_NOT_FOUND: User/group doesn't exist on this system
-             *   - strict_ownership=true: Fatal (configuration/environment mismatch)
-             *   - strict_ownership=false: Warning, continue with default ownership
-             *
-             * ERR_PERMISSION: Not running as root (can't chown anyway)
-             *   - Silent. Not an anomaly but the expected shape of an unelevated
-             *     run, and reachable only in a dry one: a real run's privilege
-             *     phase has re-exec'd under sudo or failed hard before any row
-             *     gets here.
-             */
-            bool is_resolution_failure = (err->code == ERR_NOT_FOUND);
-            bool should_fail = is_resolution_failure && strict_ownership;
-
-            if (should_fail) {
-                /* Fatal: Return error to abort deployment */
-                return error_wrap(
-                    err, "Ownership resolution failed for '%s' (strict_mode enabled)\n"
-                    "Hint: Create the user/group on this system, or disable strict_mode",
-                    storage_path
-                );
-            }
-
-            /* Non-fatal: Log appropriate message and continue */
-            if (err->code != ERR_PERMISSION) {
-                fprintf(
-                    stderr, "Warning: Could not resolve ownership for %s: %s\n",
-                    storage_path, error_message(err)
-                );
-            }
-
-            error_free(err);
-            /* Reset to "no change" */
-            *out_uid = (uid_t) -1;
-            *out_gid = (gid_t) -1;
-        }
-        return NULL;
-    }
-
-    /* Case 3: All other cases -> no ownership change */
-    return NULL;
-}
-
-/**
- * A tracked directory row's target metadata: mode (with the missing-mode fallback
- * and its warning) and resolved ownership. Pure decision — no filesystem mutation,
- * so it runs ahead of the dry-run gate.
- *
- * @param dir View row (must not be NULL; borrowed, read-only)
- * @param opts Deployment options (must not be NULL)
- * @param out_mode Resolved permission mode (must not be NULL)
- * @param out_uid Resolved UID or -1 for no change (must not be NULL)
- * @param out_gid Resolved GID or -1 for no change (must not be NULL)
- * @return Error or NULL on success
- */
-static error_t *resolve_directory_metadata(
-    const manifest_row_t *dir,
-    const deploy_options_t *opts,
-    mode_t *out_mode,
-    uid_t *out_uid, gid_t *out_gid
-) {
-    /* Resolve the directory mode from the row (before skip/dry-run checks)
-     *
-     * A directory row's mode is its metadata item's, and 0 is the one value the
-     * item can carry that is no claim at all: a "0000" in the profile's
-     * metadata.json. The workspace reads that zero as "no claim"
-     * (check_item_metadata_divergence skips the mode check), so the deploy side
-     * reads it the same way — the safe default — and says so, because the recorded
-     * value is the user's and they may want to know it is not being honoured.
-     */
-    mode_t mode = dir->mode;
-    if (mode == 0) {
-        mode = DEPLOY_DIR_MODE_DEFAULT;
-
-        fprintf(
-            stderr,
-            "Warning: Mode 0000 recorded for directory '%s' in profile '%s' "
-            "(.dotta/metadata.json), using default %04o\n",
-            dir->filesystem_path, dir->profile, mode
-        );
-    }
-    *out_mode = mode;
-
-    error_t *err = resolve_deployment_ownership(
-        dir->storage_path,
-        dir->filesystem_path,
-        dir->owner, dir->group,
-        out_uid, out_gid,
-        opts->strict_ownership
-    );
-    if (err) {
-        return error_wrap(
-            err, "Failed to resolve ownership for directory: %s",
-            dir->storage_path
-        );
-    }
-
-    return NULL;
-}
-
-/**
  * Create or converge a tracked directory at its working mode
  *
  * Ownership applies atomically through the descriptor
@@ -1169,7 +1302,7 @@ static error_t *resolve_directory_metadata(
  *
  * @param run Run context (must not be NULL)
  * @param dir Tracked row (must not be NULL; borrowed, read-only)
- * @param mode Resolved target mode (resolve_directory_metadata)
+ * @param mode Resolved target mode (the verdict's)
  * @param uid Resolved UID or -1 for no change
  * @param gid Resolved GID or -1 for no change
  * @return Error or NULL on success
@@ -1191,10 +1324,17 @@ static error_t *materialize_tracked_directory(
 
 /**
  * Materialize one absent ancestor whose own parent exists: a tracked directory
- * (any profile, in scope or not) with its tracked metadata, anything else 0755
- * owned like the planned path beneath it. The 0755 is exact (fchmod), not
- * umask-masked — dotta reproduces modes, it does not negotiate them — and already
- * carries the owner triad, so an untracked parent is never held.
+ * (any profile, in scope or not) with the metadata its ancestor verdict carries,
+ * anything else 0755 owned like the planned path beneath it. The 0755 is exact
+ * (fchmod), not umask-masked — dotta reproduces modes, it does not negotiate
+ * them — and already carries the owner triad, so an untracked parent is never
+ * held.
+ *
+ * The verdicts are the authority for what is tracked here, not the view: a
+ * tracked directory preflight did not foresee as absent (present then, gone
+ * since) has no metadata decided for it, is made like an untracked parent, and
+ * is left for the next load to read — which sees its record and its row, and
+ * says [mode] if the two disagree.
  *
  * @param run Run context (must not be NULL)
  * @param path Absent ancestor to create (must not be NULL)
@@ -1207,18 +1347,19 @@ static error_t *create_ancestor(
     const char *path,
     uid_t uid, gid_t gid
 ) {
-    const manifest_row_t *dir = workspace_lookup(run->ws, path);
+    const deploy_verdicts_t *ancestors = &run->verdicts->ancestors;
 
-    if (dir && dir->type == PATH_TYPE_DIRECTORY) {
-        mode_t mode;
-        uid_t dir_uid;
-        gid_t dir_gid;
+    for (size_t i = 0; i < ancestors->count; i++) {
+        const deploy_verdict_t *v = &ancestors->entries[i];
+
+        if (strcmp(v->row->filesystem_path, path) != 0) {
+            continue;
+        }
 
         RETURN_IF_ERROR(
-            resolve_directory_metadata(dir, run->opts, &mode, &dir_uid, &dir_gid)
+            materialize_tracked_directory(run, v->row, v->mode, v->uid, v->gid)
         );
-
-        return materialize_tracked_directory(run, dir, mode, dir_uid, dir_gid);
+        return ptr_array_push(&run->result->ancestors, v->row);
     }
 
     return fs_create_dir_with_ownership(path, DEPLOY_DIR_MODE_DEFAULT, uid, gid);
@@ -1280,11 +1421,11 @@ static error_t *open_landing_directory(
  * Create the missing parents of a planned path, top-down from its nearest present
  * ancestor — opening that ancestor for the run first when it is ours and refuses.
  *
- * Mutation, not decision — called behind the dry-run gate. Whether the path can
- * land was preflight's question, and the directory pass has already replaced
- * any planned squatter above it; a non-directory ancestor met here (a prompt
- * sat in between) is a named error rather than a mkdir errno. A dangling symlink
- * is one: mkdir would report EEXIST for a path that leads nowhere.
+ * Mutation, not decision. Whether the path can land was preflight's question,
+ * and the directory pass has already replaced any planned squatter above it; a
+ * non-directory ancestor met here (a prompt sat in between) is a named error
+ * rather than a mkdir errno. A dangling symlink is one: mkdir would report
+ * EEXIST for a path that leads nowhere.
  *
  * @param run Run context (must not be NULL)
  * @param path Planned path whose parents must exist (must not be NULL)
@@ -1352,142 +1493,47 @@ cleanup:
 /**
  * Deploy a single view row to its target filesystem location.
  *
- * Decide, then gate, then mutate: the blob sanity check, the verdict on whatever
- * occupies the path, and the row's target metadata are decisions and run ahead
- * of the dry-run gate, so a dry run refuses what the real run refuses and warns
- * what it warns; every mutation sits behind it, missing parents first. Mode
- * resolves before ownership — the order deploy_directory resolves them in — so
- * a corrupt row is named even when a strict-mode ownership failure ends the run
- * there.
+ * Mechanism only: the verdict says what stands at the path and what the write
+ * applies, and this lands it — missing parents first, then the one arm the row's
+ * type calls for. Nothing here looks at the disk to decide anything; a path the
+ * world has moved under since preflight meets the mechanism's refusal (rename
+ * over a directory is EISDIR, symlink over anything is EEXIST, rmdir of a
+ * directory that filled up is ENOTEMPTY) and the run fail-stops there.
  *
  * The row:
- * - file->mode: Permission mode — 0 on a symlink row (links carry none), a "0000"
- *   metadata claim on any other, which falls back by type
- * - file->owner/group: Ownership strings for root/ prefix files (NULL for home/)
+ * - file->type: which arm — a symlink is re-linked from its blob, anything else
+ *   is written from the content cache
  * - file->encrypted: handled transparently by the content cache
  * - file->blob_oid: the tree entry's, by construction — a blob row never carries
  *   a zero OID
  *
  * @param run Run context (must not be NULL)
- * @param file View row to deploy (must not be NULL; borrowed from the workspace's
- *             view, read-only for deploy).
+ * @param v Verdict for the row (must not be NULL; the row is borrowed from the
+ *          workspace's view, read-only for deploy)
  * @return Error or NULL on success
  */
-static error_t *deploy_file(deploy_run_t *run, const manifest_row_t *file) {
+static error_t *deploy_file(deploy_run_t *run, const deploy_verdict_t *v) {
     CHECK_NULL(run);
-    CHECK_NULL(file);
+    CHECK_NULL(v);
 
-    const deploy_options_t *opts = run->opts;
+    const manifest_row_t *file = v->row;
 
     /* Declare all resources at top, initialized to NULL */
     error_t *err = NULL;
     const buffer_t *content_buffer = NULL;  /* Borrowed from cache (const) */
     char *target_str = NULL;
 
-    /* What is at the path decides what may happen to it, and it is asked here
-     * rather than taken from the plan: a prompt may have sat in between, and
-     * preflight's verdict was about the path as it was then. Type is the whole
-     * of what one lstat can settle; the content verdict stays the workspace's,
-     * because the blob it was compared against is not on disk to re-ask. Beneath
-     * a directory this run has replaced, the run's own receipt settles it instead:
-     * nothing stands there, and an lstat that says otherwise (a dry run's, through
-     * the squatter still in place) is answering for the wrong tree. */
-    fs_occupant_t occ = beneath_replaced_directory(run, file->filesystem_path)
-                      ? FS_OCCUPANT_NONE : fs_lstat_occupant(file->filesystem_path, NULL);
-    fs_occupant_t want = file_row_occupant(file);
-
-    if (occupant_conflicts(occ, want)) {
-        switch (path_clearance(file->filesystem_path, occ, opts->force)) {
-            case CLEARANCE_REFUSED:
-                return ERROR(
-                    ERR_CONFLICT, "'%s' is a non-empty directory (remove it by hand)",
-                    file->filesystem_path
-                );
-
-            case CLEARANCE_NEEDS_FORCE:
-                return ERROR(
-                    ERR_CONFLICT, "'%s' is not a %s (use --force to replace it)",
-                    file->filesystem_path,
-                    want == FS_OCCUPANT_SYMLINK ? "symlink" : "regular file"
-                );
-
-            case CLEARANCE_OK:
-                break;
-        }
-    }
-
     /* Whether the occupant must go before the write, which is mechanism rather
      * than policy: rename(2) replaces any non-directory in place, so the regular
      * arm clears only a directory; symlink(2) is EEXIST-strict, so the symlink
      * arm clears whatever is there — including an occupant of its own type, which
-     * is no conflict and needs no --force. */
-    bool must_clear = (want == FS_OCCUPANT_SYMLINK) ? occupant_present(occ)
-                                                    : (occ == FS_OCCUPANT_DIRECTORY);
-
-    /* Determine permissions from the row
-     *
-     * A blob row's mode is the filemode default (0644 / 0755) unless the profile's
-     * metadata claims otherwise, and 0 is the one claim that is no claim at all:
-     * a "0000" in metadata.json. The workspace reads that zero as "no claim"
-     * (check_item_metadata_divergence skips the mode check), so the deploy side
-     * reads it the same way — the default keyed on file type — and says so, because
-     * the recorded value is the user's and they may want to know it is not being
-     * honoured.
-     *
-     * A symlink row is the one honest zero: the view carries mode 0 for
-     * GIT_FILEMODE_LINK and metadata keeps it there, symlink(2) takes no mode
-     * and the symlink arm never reads this. Its zero is the recorded value, not
-     * a hole — so the question is asked only of the kinds that carry a mode. */
-    mode_t file_mode = file->mode;
-    if (file->type != PATH_TYPE_SYMLINK && file_mode == 0) {
-        file_mode = (file->type == PATH_TYPE_EXECUTABLE) ? 0755 : 0644;
-
-        fprintf(
-            stderr,
-            "Warning: Mode 0000 recorded for '%s' in profile '%s' "
-            "(.dotta/metadata.json), using default %04o\n",
-            file->filesystem_path, file->profile, file_mode
-        );
-    }
-
-    /* Resolve ownership for the file based on prefix - RESOLVED BEFORE WRITING
-     *
-     * SECURITY: Ownership resolution happens BEFORE file creation to enable atomic
-     * ownership via fchown() on the file descriptor. This eliminates the security
-     * window where files exist with incorrect ownership.
-     *
-     * The row is the authority: file->owner and file->group.
-     * - root/ prefix files: owner/group are username/groupname strings from
-     *   metadata
-     * - home/ prefix files: owner/group are NULL (current user ownership)
-     *
-     * Unified helper handles:
-     * - home/ files when running as root: Use actual user's UID/GID (sudo handling)
-     * - root/ files with owner/group: Resolve username/groupname -> UID/GID
-     * - All other cases: Return -1 (preserve current user/root ownership)
-     */
-    uid_t target_uid, target_gid;
-    err = resolve_deployment_ownership(
-        file->storage_path,
-        file->filesystem_path,
-        file->owner, file->group,
-        &target_uid, &target_gid,
-        opts->strict_ownership
-    );
-    if (err) {
-        return error_wrap(
-            err, "Failed to resolve ownership for '%s'",
-            file->filesystem_path
-        );
-    }
-
-    /* The one mutation gate */
-    if (opts->dry_run) {
-        return NULL;
-    }
+     * is no conflict and needed no --force. */
+    fs_occupant_t want = file_row_occupant(file);
+    bool must_clear = (want == FS_OCCUPANT_SYMLINK) ? occupant_present(v->occupant)
+                                                    : (v->occupant == FS_OCCUPANT_DIRECTORY);
 
     /* Land the path: parents first, whichever arm writes it */
-    err = ensure_parents(run, file->filesystem_path, target_uid, target_gid);
+    err = ensure_parents(run, file->filesystem_path, v->uid, v->gid);
     if (err) {
         return err;
     }
@@ -1503,10 +1549,10 @@ static error_t *deploy_file(deploy_run_t *run, const manifest_row_t *file) {
         if (err) goto cleanup;
 
         /* symlink(2) refuses an occupied path outright, so the link's own
-         * predecessor goes too — cleared by the decision taken above the gate,
-         * never by a fresh look from down here. */
+         * predecessor goes too — the one the verdict named, never one found by
+         * a fresh look from down here. */
         if (must_clear) {
-            err = clear_occupant(file->filesystem_path, occ);
+            err = clear_occupant(file->filesystem_path, v->occupant);
             if (err) goto cleanup;
         }
 
@@ -1523,8 +1569,8 @@ static error_t *deploy_file(deploy_run_t *run, const manifest_row_t *file) {
         /* Symlink permissions are ignored by most filesystems, but symlink
          * OWNERSHIP matters for auditing and consistency. lchown() changes the
          * link itself, not its target. */
-        if (target_uid != (uid_t) -1 || target_gid != (gid_t) -1) {
-            if (lchown(file->filesystem_path, target_uid, target_gid) != 0) {
+        if (v->uid != (uid_t) -1 || v->gid != (gid_t) -1) {
+            if (lchown(file->filesystem_path, v->uid, v->gid) != 0) {
                 err = ERROR(
                     ERR_FS, "Failed to set ownership on symlink '%s': %s",
                     file->filesystem_path, strerror(errno)
@@ -1564,7 +1610,7 @@ static error_t *deploy_file(deploy_run_t *run, const manifest_row_t *file) {
      * what it points to) or a device in place — but never a directory (EISDIR).
      * Only that one case needs clearing first. */
     if (must_clear) {
-        err = clear_occupant(file->filesystem_path, occ);
+        err = clear_occupant(file->filesystem_path, v->occupant);
         if (err) goto cleanup;
     }
 
@@ -1572,10 +1618,10 @@ static error_t *deploy_file(deploy_run_t *run, const manifest_row_t *file) {
      * permissions.
      * SECURITY: fs_write_file_raw atomically sets BOTH ownership and permissions
      * via fchown() and fchmod() on the file descriptor, eliminating any security
-     * window. This is the ONLY place where ownership is applied - metadata layer
+     * window. This is the ONLY place where ownership is applied - the verdict
      * only resolves. */
     err = fs_write_file_raw(
-        file->filesystem_path, content, size, file_mode, target_uid, target_gid
+        file->filesystem_path, content, size, v->mode, v->uid, v->gid
     );
 
     if (err) {
@@ -1595,127 +1641,61 @@ cleanup:
 }
 
 /**
- * How deploy_directory will materialize a planned row — decided from a fresh
- * lstat, never from the load-time observation — and the bucket the row lands in
- * afterwards: deploy_result_t keeps one per action, so the receipt's verb is
- * this decision and nothing re-derived from disk.
- */
-typedef enum {
-    DIR_ACTION_CREATE,     /* absent */
-    DIR_ACTION_FIX,        /* a directory is there — ensure mode/ownership */
-    DIR_ACTION_REPLACE     /* a non-directory squats the path — clear it (--force) */
-} directory_action_t;
-
-/**
  * Materialize one planned tracked directory to its expected state.
  *
- * The plan settled *that* the row is acted on; this decides *how* from a fresh
- * lstat — reality between plan and execution (a prompt sat in between) is not
- * the plan's to know. Same decide → gate → mutate order as deploy_file: the type
- * check and metadata resolution are decisions; the dry-run gate follows; then
- * the clear (REPLACE) or the missing parents (CREATE), and the create/fix, which
- * is idempotent — a planned directory whose reality healed meanwhile is simply
- * confirmed.
+ * Mechanism only, by the verdict's occupant: a squatter is cleared (one node,
+ * the one the verdict named), an absent path gets its missing parents, and then
+ * the create-or-fix, which is idempotent — a planned directory whose reality
+ * healed meanwhile is simply confirmed, and one a prompt-window race turned
+ * into a symlink is refused by O_NOFOLLOW rather than chmod'd through.
  *
  * The directory lands at its working mode and is released to its exact recorded
  * mode once the run is over (working_mode, release_directories), so a recorded
  * mode without owner-write never refuses the tracked children written after it.
  *
- * The row:
- * - dir->filesystem_path: already resolved against the mount target
- * - dir->storage_path: portable path, drives ownership resolution
- * - dir->mode / owner / group: target metadata (mode 0 = fallback 0755)
- *
  * @param run Run context (must not be NULL)
- * @param dir View row (must not be NULL; borrowed, read-only)
- * @param out_action What the row's path called for (must not be NULL;
- *        set once decided, ahead of the gate, so a dry run reports it too)
+ * @param v Verdict for the row (must not be NULL; the row is borrowed, read-only)
  * @return Error or NULL on success
  */
-static error_t *deploy_directory(
-    deploy_run_t *run,
-    const manifest_row_t *dir,
-    directory_action_t *out_action
-) {
+static error_t *deploy_directory(deploy_run_t *run, const deploy_verdict_t *v) {
     CHECK_NULL(run);
-    CHECK_NULL(dir);
-    CHECK_NULL(out_action);
+    CHECK_NULL(v);
 
-    const deploy_options_t *opts = run->opts;
+    const manifest_row_t *dir = v->row;
     const char *path = dir->filesystem_path;
+    error_t *err = NULL;
 
-    /* Decide how, from disk truth now — the occupant is the link itself, so a
-     * symlink to a directory is not the directory being tracked. Beneath a
-     * directory this run has replaced, the receipt answers instead of the lstat
-     * (beneath_replaced_directory). */
-    directory_action_t action;
-    fs_occupant_t occ = beneath_replaced_directory(run, path) ? FS_OCCUPANT_NONE
-                                                              : fs_lstat_occupant(path, NULL);
-
-    switch (occ) {
+    switch (v->occupant) {
         case FS_OCCUPANT_DIRECTORY:
-            action = DIR_ACTION_FIX;
+            /* Converged in place below */
             break;
 
         case FS_OCCUPANT_NONE:
             /* Absent — or beneath a non-directory, which preflight blocked when
              * unplanned and the directory pass replaces when planned (prefix
-             * order); one still there is ensure_parents' named error. Or beneath
-             * a directory this run replaced, which is the same absence, settled
-             * by the receipt. */
-            action = DIR_ACTION_CREATE;
+             * order); one still there is ensure_parents' named error. */
+            err = ensure_parents(run, path, v->uid, v->gid);
+            if (err) {
+                return err;
+            }
             break;
 
         case FS_OCCUPANT_UNKNOWN:
-            return ERROR(ERR_FS, "Failed to stat '%s': %s", path, strerror(errno));
+            /* Not a verdict: preflight turned it into a finding, and a caller
+             * with a finding does not execute. Said here rather than unlinked. */
+            return ERROR(ERR_INTERNAL, "No verdict for '%s' (occupant unknown)", path);
 
         default:
-            /* Anything else is a single node in the way. It can never be a
-             * directory (that is FIX above), so path_clearance cannot refuse
-             * and --force is always the true remedy. */
-            if (path_clearance(path, occ, opts->force) != CLEARANCE_OK) {
-                return ERROR(
-                    ERR_CONFLICT, "'%s' is not a directory (use --force to replace it)",
-                    path
-                );
-            }
-            action = DIR_ACTION_REPLACE;
+            /* A single node in the way, cleared before the mkdir — the node the
+             * verdict named. It can never be a directory (that is the first arm),
+             * and --force was preflight's question. */
+            RETURN_IF_ERROR(clear_occupant(path, v->occupant));
             break;
-    }
-    *out_action = action;
-
-    /* Metadata is resolved BEFORE creation so fs_create_dir_with_ownership applies
-     * it atomically via fchown()/fchmod() on the descriptor. */
-    mode_t mode;
-    uid_t target_uid;
-    gid_t target_gid;
-
-    error_t *err = resolve_directory_metadata(
-        dir, opts, &mode, &target_uid, &target_gid
-    );
-    if (err) {
-        return err;
-    }
-
-    /* The one mutation gate */
-    if (opts->dry_run) {
-        return NULL;
-    }
-
-    if (action == DIR_ACTION_REPLACE) {
-        /* The squatter goes before the mkdir — one node, by the decision taken
-         * above the gate. */
-        RETURN_IF_ERROR(clear_occupant(path, occ));
-    } else if (action == DIR_ACTION_CREATE) {
-        err = ensure_parents(run, path, target_uid, target_gid);
-        if (err) {
-            return err;
-        }
     }
 
     /* Create-or-fix with atomic ownership and permissions (fchown/fchmod on the
      * directory fd — no window with wrong metadata). Idempotent. */
-    err = materialize_tracked_directory(run, dir, mode, target_uid, target_gid);
+    err = materialize_tracked_directory(run, dir, v->mode, v->uid, v->gid);
     if (err) {
         return error_wrap(err, "Failed to create tracked directory: %s", path);
     }
@@ -1724,7 +1704,7 @@ static error_t *deploy_directory(
 }
 
 /**
- * Execute the plan
+ * Carry the verdicts out
  *
  * Every exit passes through release_directories: a held directory takes its exact
  * recorded mode whether the run completed or fail-stopped, so the tree a failure
@@ -1734,15 +1714,13 @@ static error_t *deploy_directory(
 error_t *deploy_execute(
     git_repository *repo,
     const workspace_t *ws,
-    const deploy_plan_t *plan,
-    const deploy_options_t *opts,
+    const deploy_preflight_result_t *verdicts,
     content_cache_t *cache,
     deploy_result_t **out
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(ws);
-    CHECK_NULL(plan);
-    CHECK_NULL(opts);
+    CHECK_NULL(verdicts);
     CHECK_NULL(cache);
     CHECK_NULL(out);
 
@@ -1755,48 +1733,45 @@ error_t *deploy_execute(
     }
 
     deploy_run_t run = {
-        .repo   = repo,
-        .cache  = cache,
-        .ws     = ws,
-        .opts   = opts,
-        .result = result,
-        .held   = { 0 },
+        .repo     = repo,
+        .cache    = cache,
+        .ws       = ws,
+        .verdicts = verdicts,
+        .result   = result,
+        .held     = { 0 },
     };
 
     /* Directories first: parents before the files beneath them, and under --force
-     * a squatting symlink is gone before anything is written through it. Prefix
-     * order within the bucket = parents before children, which is also what lets
-     * a replace settle everything beneath it: by the time a planned path under
-     * a replaced directory is reached, the receipt already names the replace
-     * (beneath_replaced_directory). */
-    manifest_rows_t dirs = manifest_rows_view(&plan->directories.pending);
-    for (size_t i = 0; i < dirs.count; i++) {
-        const manifest_row_t *dir = dirs.entries[i];
-        directory_action_t action;
+     * a squatting symlink is gone before anything is written through it. Verdict
+     * order is the plan's prefix order = parents before children, which is also
+     * what lets a replace settle everything beneath it: a planned path under a
+     * replaced directory carries an absent occupant, and by the time it is
+     * reached the replace has made that true. */
+    for (size_t i = 0; i < verdicts->directories.count; i++) {
+        const deploy_verdict_t *v = &verdicts->directories.entries[i];
 
-        /* Deploy tracked directories (workspace owns the active slice) */
-        err = deploy_directory(&run, dir, &action);
+        err = deploy_directory(&run, v);
         if (err) {
             /* Fail-stop with the partial result; the error names the path */
             err = error_wrap(
                 err, "Failed to converge directory '%s'",
-                dir->filesystem_path
+                v->row->filesystem_path
             );
             goto done;
         }
 
-        /* Record success in the bucket for what the executor found there */
-        switch (action) {
-            case DIR_ACTION_CREATE:
-                err = ptr_array_push(&result->created, dir);
+        /* Record success in the bucket for what the verdict said stood there */
+        switch (v->occupant) {
+            case FS_OCCUPANT_NONE:
+                err = ptr_array_push(&result->created, v->row);
                 break;
 
-            case DIR_ACTION_FIX:
-                err = ptr_array_push(&result->fixed, dir);
+            case FS_OCCUPANT_DIRECTORY:
+                err = ptr_array_push(&result->fixed, v->row);
                 break;
 
-            case DIR_ACTION_REPLACE:
-                err = ptr_array_push(&result->replaced, dir);
+            default:
+                err = ptr_array_push(&result->replaced, v->row);
                 break;
         }
         if (err) {
@@ -1805,29 +1780,26 @@ error_t *deploy_execute(
         }
     }
 
-    manifest_rows_t files = manifest_rows_view(&plan->files.pending);
+    /* Every verdict is work the plan chose, by construction: the planner
+     * routed the row through deploy_needs_work and past every reason to skip
+     * it, so this loop applies no filter of its own. Clean in-scope rows with
+     * deployed_at == 0 are apply's adoption step, which stamps the anchor
+     * without deploy_file. */
+    for (size_t i = 0; i < verdicts->files.count; i++) {
+        const deploy_verdict_t *v = &verdicts->files.entries[i];
 
-    /* Every pending row is work the plan chose, by construction: the planner
-     * routed it through deploy_needs_work and past every reason to skip it, so
-     * this loop applies no filter of its own. Clean in-scope rows with deployed_at
-     * == 0 are apply's adoption step, which stamps the anchor without
-     * deploy_file. */
-    for (size_t i = 0; i < files.count; i++) {
-        const manifest_row_t *file = files.entries[i];
-
-        /* Deploy the file */
-        err = deploy_file(&run, file);
+        err = deploy_file(&run, v);
         if (err) {
             /* Fail-stop with the partial result; the error names the path */
             err = error_wrap(
                 err, "Deployment failed at '%s'",
-                file->filesystem_path
+                v->row->filesystem_path
             );
             goto done;
         }
 
         /* Record success */
-        err = ptr_array_push(&result->deployed, file);
+        err = ptr_array_push(&result->deployed, v->row);
         if (err) {
             err = error_wrap(err, "Failed to record deployed file");
             goto done;
@@ -1860,7 +1832,8 @@ done:
  * ══════════════════════════════════════════════════════════════════ */
 
 /**
- * Free preflight result
+ * Free preflight result — the findings, the warnings, and the verdict arrays.
+ * The rows the verdicts point at belong to the workspace.
  */
 void deploy_preflight_result_free(deploy_preflight_result_t *result) {
     if (!result) {
@@ -1870,6 +1843,10 @@ void deploy_preflight_result_free(deploy_preflight_result_t *result) {
     string_array_free(result->conflicts);
     string_array_free(result->blocked);
     string_array_free(result->permission_errors);
+    string_array_free(result->warnings);
+    free(result->directories.entries);
+    free(result->files.entries);
+    free(result->ancestors.entries);
     free(result);
 }
 
@@ -1888,5 +1865,6 @@ void deploy_result_free(deploy_result_t *result) {
     ptr_array_deinit(&result->created);
     ptr_array_deinit(&result->fixed);
     ptr_array_deinit(&result->replaced);
+    ptr_array_deinit(&result->ancestors);
     free(result);
 }

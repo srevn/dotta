@@ -1009,7 +1009,8 @@ static error_t *update_profile(
                  *   - If file is BOTH deleted AND has encryption divergence,
                  *     deletion divergence takes precedence (already handled above)
                  */
-                if ((item->divergence & DIVERGENCE_ENCRYPTION) && !item->on_filesystem) {
+                if ((item->divergence & DIVERGENCE_ENCRYPTION) &&
+                    item->occupant == FS_OCCUPANT_NONE) {
                     output_warning(
                         out, OUTPUT_VERBOSE,
                         "Skipping encryption fix for missing file: %s", item->filesystem_path
@@ -1766,7 +1767,7 @@ static error_t *update_display_summary(
 
                 /* Build metadata with profile and resolution status */
                 char metadata[512];
-                const char *status = item->on_filesystem
+                const char *status = (item->occupant != FS_OCCUPANT_NONE)
                     ? "will be encrypted" : "file missing - cannot fix";
 
                 snprintf(

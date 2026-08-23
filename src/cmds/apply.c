@@ -33,10 +33,8 @@ static void print_deploy_preflight_results(
     const output_t *out,
     const deploy_preflight_result_t *result
 ) {
-    if (!result) return;
-
     /* Print conflicts */
-    if (result->conflicts && result->conflicts->count > 0) {
+    if (result->conflicts->count > 0) {
         output_section(out, OUTPUT_NORMAL, "Conflicts (modified locally or wrong type)");
         for (size_t i = 0; i < result->conflicts->count; i++) {
             output_styled(
@@ -49,7 +47,7 @@ static void print_deploy_preflight_results(
     }
 
     /* Print blocked paths (an ancestry that refuses the planned path) */
-    if (result->blocked && result->blocked->count > 0) {
+    if (result->blocked->count > 0) {
         output_section(out, OUTPUT_NORMAL, "Blocked (resolve these by hand)");
         for (size_t i = 0; i < result->blocked->count; i++) {
             output_styled(
@@ -65,7 +63,7 @@ static void print_deploy_preflight_results(
     }
 
     /* Print permission errors */
-    if (result->permission_errors && result->permission_errors->count > 0) {
+    if (result->permission_errors->count > 0) {
         output_section(out, OUTPUT_NORMAL, "Permission errors");
         for (size_t i = 0; i < result->permission_errors->count; i++) {
             output_styled(
@@ -101,16 +99,14 @@ static void print_reassignments(const output_t *out, const ptr_array_t *reassign
 }
 
 /**
- * Report the work the plan withheld, by reason — and answer how much
+ * Report the work the plans skipped, by reason
  *
  * -e (files, tracked directories, orphans) and --skip-existing (files) both mean
- * "in scope, needed work, deliberately not done". This report needs the two counts
- * split for its two lines, so it is the only place either is derived; the sum
- * goes back to the caller, whose nothing-to-do line must not call a workspace
- * clean when its only work was held back.
+ * "in scope, needed work, deliberately not done". The two reasons take two lines,
+ * and -e's line splits its count by kind at verbose.
  *
  * Printed once, above the nothing-to-do exit — so a run that does nothing else
- * still says what it held back — and therefore also above the confirmation prompt,
+ * still says what it skipped — and therefore also above the confirmation prompt,
  * where a user weighing the rest of the run should already know what is missing
  * from it. Per-item traces stay at plan time, beside the decision that produced
  * them.
@@ -118,9 +114,8 @@ static void print_reassignments(const output_t *out, const ptr_array_t *reassign
  * @param deploy_plan Deployment plan (must not be NULL)
  * @param cleanup_plan Cleanup plan, whose `excluded` bucket carries the orphans
  *        an -e pattern spared (must not be NULL)
- * @return Paths withheld, both reasons together
  */
-static size_t print_withheld(
+static void print_skipped(
     const output_t *out,
     const deploy_plan_t *deploy_plan,
     const cleanup_plan_t *cleanup_plan
@@ -192,8 +187,6 @@ static size_t print_withheld(
             existing, existing == 1 ? "" : "s"
         );
     }
-
-    return excluded + existing;
 }
 
 /**
@@ -227,7 +220,7 @@ static size_t print_withheld(
  * The receipt reports the row, the warning reports the repair. A symlink row
  * records no mode by design and says so instead.
  *
- * Work the run held back is not here: the plan decided it, print_withheld reports
+ * Work the run skipped is not here: the plan decided it, print_skipped reports
  * it, and it must be said even on runs that never execute. Nor is a failure:
  * fail-stop returns the error naming the path, and cmd_apply prints the partial
  * receipt ahead of it.
@@ -845,28 +838,26 @@ static void print_cleanup_preflight_results(
  * deploy creates on the way are prefixes of planned paths, so a planned path's
  * own label already covers them.
  *
+ * Called before the first write of the run — the adoption loop's — so a re-exec
+ * restarts a process that has recorded nothing and printed no receipt line
+ * twice. With both plans empty it collects no label and returns at once, so
+ * the nothing-to-do exit below it never prompts for privileges it will not use.
+ *
  * @param ctx Dispatch context (must not be NULL; argv for the re-exec, out)
  * @param deploy_plan Deployment plan (must not be NULL)
  * @param cleanup_plan Orphans the run may remove; the present ones are checked
  *        (must not be NULL — empty under --keep-orphans)
- * @param opts Apply command options (must not be NULL)
  * @return NULL if OK to proceed, error otherwise (or does not return if re-exec
  *         with sudo)
  */
 static error_t *ensure_complete_apply_privileges(
     const dotta_ctx_t *ctx,
     const deploy_plan_t *deploy_plan,
-    const cleanup_plan_t *cleanup_plan,
-    const cmd_apply_options_t *opts
+    const cleanup_plan_t *cleanup_plan
 ) {
     CHECK_NULL(ctx);
     CHECK_NULL(deploy_plan);
     CHECK_NULL(cleanup_plan);
-    CHECK_NULL(opts);
-
-    if (opts->dry_run) {
-        return NULL;  /* Read-only operation, no privileges needed */
-    }
 
     manifest_rows_t files = manifest_rows_view(&deploy_plan->files.pending);
     manifest_rows_t dirs = manifest_rows_view(&deploy_plan->directories.pending);
@@ -911,7 +902,7 @@ static error_t *ensure_complete_apply_privileges(
     for (size_t i = 0; i < file_orphans.count; i++) {
         const workspace_item_t *item = file_orphans.entries[i];
 
-        if (!item->on_filesystem) continue;
+        if (item->occupant == FS_OCCUPANT_NONE) continue;
 
         err = privilege_collect_label(&labels, item->storage_path, item->filesystem_path);
         if (err) return err;
@@ -920,7 +911,7 @@ static error_t *ensure_complete_apply_privileges(
     for (size_t i = 0; i < dir_orphans.count; i++) {
         const workspace_item_t *item = dir_orphans.entries[i];
 
-        if (!item->on_filesystem) continue;
+        if (item->occupant == FS_OCCUPANT_NONE) continue;
 
         err = privilege_collect_label(&labels, item->storage_path, item->filesystem_path);
         if (err) return err;
@@ -1063,10 +1054,10 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     /* PLAN: decide once what deploy will do, from (workspace, scope).
      *
      * Every later consumer — preview, adoption, privileges, preflight, the prompt,
-     * execution and the withheld report — reads this one object. The workspace
+     * execution and the skipped report — reads this one object. The workspace
      * already computed fresh divergence for every active row; the planner gates
      * each row on scope and classifies it by deploy's work predicate into pending
-     * / clean, or into one of the two held-back buckets (-e, --skip-existing). */
+     * / clean, or into one of the two skipped buckets (-e, --skip-existing). */
     output_print(out, OUTPUT_VERBOSE, "\nPlanning deployment...\n");
 
     err = deploy_plan_build(ws, scope, opts->skip_existing, &deploy_plan);
@@ -1075,7 +1066,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         goto cleanup;
     }
 
-    /* Per-item trace of the work the planner held back, by reason: -e for both
+    /* Per-item trace of the work the planner skipped, by reason: -e for both
      * kinds, --skip-existing for files. output_print gates on the verbosity level,
      * so normal runs pay only the loop cost. */
     {
@@ -1135,7 +1126,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      *
      * Coherent Scope — the same operation-scope triplet the deployment planner
      * applies: orphans outside the profile / path dimensions are invisible; orphans
-     * an -e pattern names are held back and reported. The filter shapes that
+     * an -e pattern names are skipped and reported. The filter shapes that
      * reach the planner:
      *
      *   full sync (no filter)   every orphan converges — a disabled
@@ -1165,7 +1156,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         output_print(out, OUTPUT_VERBOSE, "  Orphans kept (--keep-orphans)\n");
     }
 
-    /* Mirror the deployment-loop trace: for each orphan held back by --exclude,
+    /* Mirror the deployment-loop trace: for each orphan skipped by --exclude,
      * emit a per-file line. output_print gates on the verbosity level, so
      * non-verbose runs pay only the loop cost. */
     {
@@ -1229,7 +1220,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         }
     }
 
-    /* Warn if a file filter was given but matched no managed path at all (held-back
+    /* Warn if a file filter was given but matched no managed path at all (skipped
      * rows count as matched — the filter found them). Asked after both planners:
      * a path can name an orphan as well as an active row, and finding either is
      * a match. */
@@ -1241,6 +1232,26 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         output_hint(
             out, OUTPUT_NORMAL, "Check if the file path is correct and profile is enabled"
         );
+    }
+
+    /* Check privileges for root/ files AND directories BEFORE the first write
+     *
+     * Both plans are known, so every path the run will touch is known; nothing
+     * has been written yet — the adoption loop below is the run's first write
+     * — so a re-exec with sudo restarts the whole process from main() cleanly
+     * (the state lock is released before execvp() replaces the process) and no
+     * receipt line prints twice across it. Cryptic mid-operation failures and
+     * partial deployments are prevented the same way.
+     *
+     * Skipped in dry-run: a read-only operation needs no privileges. */
+    if (!opts->dry_run) {
+        output_print(out, OUTPUT_VERBOSE, "\nChecking privilege requirements...\n");
+
+        err = ensure_complete_apply_privileges(ctx, deploy_plan, cleanup_plan);
+        if (err) {
+            err = error_wrap(err, "Insufficient privileges for operation");
+            goto cleanup;
+        }
     }
 
     /* One moment for everything this run records — the adoption loop below and
@@ -1373,10 +1384,15 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         );
     }
 
-    /* Everything the plans held back, said once — above the exit below, so a
-     * run whose only work was withheld still reports it, and above the prompt,
-     * so consent is given with the full picture. */
-    size_t withheld = print_withheld(out, deploy_plan, cleanup_plan);
+    /* Everything the plans skipped, said once — above the exit below, so a run
+     * whose only work was skipped still reports it, and above the prompt, so
+     * consent is given with the full picture. The count below is the same four
+     * buckets: the nothing-to-do line must not call a workspace clean when its
+     * only work was skipped. */
+    print_skipped(out, deploy_plan, cleanup_plan);
+    size_t skipped = deploy_plan->files.excluded.count +
+        deploy_plan->directories.excluded.count + cleanup_plan->excluded.count +
+        deploy_plan->files.skipped_existing.count;
 
     /* Nothing pends on the filesystem: report the bookkeeping (if any) and leave.
      * Privilege checks, preflight, hooks and the prompt are for runs that touch
@@ -1397,7 +1413,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
                     acknowledged_count, acknowledged_count == 1 ? "" : "s"
                 );
             }
-        } else if (withheld > 0) {
+        } else if (skipped > 0) {
             /* The report above named what and why; this only has to avoid claiming
              * the work was never there. */
             output_info(out, OUTPUT_NORMAL, "Nothing left to deploy");
@@ -1417,28 +1433,6 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
 
         err = NULL;
         goto cleanup;
-    }
-
-    /* Check privileges for root/ files AND directories BEFORE deployment begins
-     *
-     * This ensures we have required privileges upfront, preventing partial
-     * deployments and cryptic mid-operation failures. Checks occur AFTER both
-     * plans (every path the run will touch is known) but BEFORE any filesystem
-     * modification.
-     *
-     * Skip check if dry-run (read-only operation, no privileges needed).
-     *
-     * If re-exec with sudo occurs, the entire process restarts from main(), and
-     * state lock is safely released before execvp() replaces the process.
-     */
-    if (!opts->dry_run) {
-        output_print(out, OUTPUT_VERBOSE, "\nChecking privilege requirements...\n");
-
-        err = ensure_complete_apply_privileges(ctx, deploy_plan, cleanup_plan, opts);
-        if (err) {
-            err = error_wrap(err, "Insufficient privileges for operation");
-            goto cleanup;
-        }
     }
 
     /* Run pre-flight checks over the plan
@@ -1464,7 +1458,8 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     print_reassignments(out, &reassigned);
 
     /* Check for blocking findings (conflicts, blocked paths, permissions) */
-    if (deploy_findings->has_errors) {
+    if (deploy_findings->conflicts->count > 0 || deploy_findings->blocked->count > 0 ||
+        deploy_findings->permission_errors->count > 0) {
         err = ERROR(ERR_CONFLICT, "Pre-flight checks failed");
         goto cleanup;
     }

@@ -813,19 +813,17 @@ static bool entry_is_removable_metadata(const char *dir, const char *name) {
     return removable;
 }
 
-bool fs_is_directory_empty_except(const char *path, fs_path_pred_fn gone, void *ctx) {
+fs_emptiness_t fs_directory_emptiness(const char *path, fs_path_pred_fn vouch, void *ctx) {
     if (!path) {
-        return true;  /* NULL path is considered "empty" */
+        return FS_DIR_UNREADABLE;
     }
 
     /* Try to open directory (opendir checks stat internally) */
     DIR *dir = opendir(path);
     if (!dir) {
-        /* Can't open (doesn't exist, not a dir, or permission denied). For safety
-         * (don't delete what we can't verify), return false. Non-existent
-         * directories handled gracefully by caller (fs_exists check).
-         */
-        return false;
+        /* Can't open (doesn't exist, not a dir, or permission denied): nothing
+         * can be said about what it holds. */
+        return FS_DIR_UNREADABLE;
     }
 
     /* Check if directory contains only metadata and vouched-for entries
@@ -833,7 +831,7 @@ bool fs_is_directory_empty_except(const char *path, fs_path_pred_fn gone, void *
      * This prevents "zombie" directories that contain only OS-generated metadata
      * (like .DS_Store on macOS) from blocking cleanup operations.
      */
-    bool is_empty = true;
+    fs_emptiness_t answer = FS_DIR_EMPTY;
 
     for (;;) {
         /* readdir returns NULL on both EOF and error, and the entry test below
@@ -844,7 +842,7 @@ bool fs_is_directory_empty_except(const char *path, fs_path_pred_fn gone, void *
 
         if (!entry) {
             if (errno != 0) {
-                is_empty = false;  /* read error - assume not empty for safety */
+                answer = FS_DIR_UNREADABLE;  /* read error: the walk is incomplete */
             }
             break;
         }
@@ -861,19 +859,19 @@ bool fs_is_directory_empty_except(const char *path, fs_path_pred_fn gone, void *
             continue;
         }
 
-        /* Skip what the caller is about to remove. Its full path, because the
-         * caller reasons about paths, not about basenames. */
-        if (gone) {
+        /* Skip what the caller vouches for. Its full path, because the caller
+         * reasons about paths, not about basenames. */
+        if (vouch) {
             char *child = NULL;
             error_t *err = fs_path_join(path, entry->d_name, &child);
             if (err) {
                 /* Cannot name it, so cannot let the caller vouch for it. */
                 error_free(err);
-                is_empty = false;
+                answer = FS_DIR_OCCUPIED;
                 break;
             }
 
-            bool vouched = gone(child, ctx);
+            bool vouched = vouch(child, ctx);
             free(child);
 
             if (vouched) {
@@ -882,16 +880,16 @@ bool fs_is_directory_empty_except(const char *path, fs_path_pred_fn gone, void *
         }
 
         /* Found a real entry - directory is not empty */
-        is_empty = false;
+        answer = FS_DIR_OCCUPIED;
         break;
     }
 
     closedir(dir);
-    return is_empty;
+    return answer;
 }
 
 bool fs_is_directory_empty(const char *path) {
-    return fs_is_directory_empty_except(path, NULL, NULL);
+    return fs_directory_emptiness(path, NULL, NULL) == FS_DIR_EMPTY;
 }
 
 /**
@@ -1453,6 +1451,27 @@ bool fs_lexists(const char *path) {
 
     struct stat st;
     return lstat(path, &st) == 0;
+}
+
+fs_occupant_t fs_lstat_occupant(const char *path, struct stat *st) {
+    struct stat local;
+    if (!st) {
+        st = &local;
+    }
+
+    if (lstat(path, st) != 0) {
+        /* ENOTDIR: a component above the path is not a directory, so nothing
+         * can be at the path either. Whether that ancestor is anyone's to replace
+         * is the caller's question, not this one's. */
+        return (errno == ENOENT || errno == ENOTDIR) ? FS_OCCUPANT_NONE
+                                                     : FS_OCCUPANT_UNKNOWN;
+    }
+
+    if (S_ISREG(st->st_mode)) return FS_OCCUPANT_REGULAR;
+    if (S_ISLNK(st->st_mode)) return FS_OCCUPANT_SYMLINK;
+    if (S_ISDIR(st->st_mode)) return FS_OCCUPANT_DIRECTORY;
+
+    return FS_OCCUPANT_OTHER;
 }
 
 /**

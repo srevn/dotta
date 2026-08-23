@@ -61,9 +61,11 @@ typedef struct scope scope_t;
  *                      but not ours) and not writable, or the ancestry cannot
  *                      be reached — privileges, or the directory's owner. Each
  *                      entry names the directory
+ *
+ * Any one non-empty blocks the run; the three arrays are always allocated, so
+ * a consumer reads counts and needs no NULL guard.
  */
 typedef struct {
-    bool has_errors;                     /* Are there any blocking errors? */
     string_array_t *conflicts;           /* Paths modified locally / wrong type */
     string_array_t *blocked;             /* "<path> (<reason>)" */
     string_array_t *permission_errors;   /* "<path> (<directory> is not writable)" */
@@ -174,7 +176,7 @@ typedef struct {
  * for the link's target, so a child there reads clean — and the directory pass
  * replaces the squatter before anything beneath it is touched. Such a row is
  * work, and not occupied for --skip-existing's purpose; -e still holds it back.
- * Only a pending ancestor counts (one held back by -e is not replaced this run),
+ * Only a pending ancestor counts (one -e skips is not replaced this run),
  * and only an in-scope descendant is reached: a row scope itself rejects (-p, a
  * path filter) is not planned on its ancestor's account — Coherent Scope — and
  * converges on the next apply that covers it. Preflight and the executors carry

@@ -252,28 +252,42 @@ bool fs_is_directory(const char *path);
 typedef bool (*fs_path_pred_fn)(const char *path, void *ctx);
 
 /**
- * Check if directory is empty once the entries the caller vouches for are gone
+ * What a directory holds, once OS metadata and vouched-for entries are looked past
  *
- * fs_is_directory_empty with a hole: an entry is looked past when it is OS metadata
- * — exactly what fs_remove_empty_dir clears — or when `gone`, handed the entry's
- * full path, answers true. That lets a caller who is about to remove things beneath
- * a directory ask whether the directory will then be empty, without mutating
- * anything and without a second walk of its own. With gone == NULL this is
- * fs_is_directory_empty.
+ * Three answers, because "not empty" and "cannot tell" are different facts: a
+ * caller that removes what it has verified empty treats the two alike, but a
+ * caller that reports on the directory must not call one the other.
+ */
+typedef enum {
+    FS_DIR_EMPTY,        /* nothing but OS metadata and vouched-for entries */
+    FS_DIR_OCCUPIED,     /* an entry nobody vouched for — the walk stopped at it */
+    FS_DIR_UNREADABLE    /* opendir or readdir failed; nothing can be said */
+} fs_emptiness_t;
+
+/**
+ * Is the directory empty once the entries the caller vouches for are looked past?
+ *
+ * An entry is looked past when it is OS metadata — exactly what fs_remove_empty_dir
+ * clears — or when `vouch`, handed the entry's full path, answers true: the
+ * caller is about to remove it, or has decided it does not count. That lets a
+ * caller who is about to remove things beneath a directory ask whether the
+ * directory will then be empty, without mutating anything and without a second
+ * walk of its own. With vouch == NULL only metadata is looked past.
  *
  * One walk, so a prediction and the removal that follows it cannot mean different
- * things by "empty".
+ * things by "empty". The walk stops at the first entry nobody vouches for, so
+ * the predicate is not asked about every entry.
  *
- * Returns false if the directory cannot be opened or read — don't promise a removal
- * you cannot verify. An entry whose path cannot be built counts as present, for
- * the same reason.
+ * UNREADABLE when the directory cannot be opened or read (absent, not a directory,
+ * permission denied, an I/O error) and for a NULL path. An entry whose path
+ * cannot be built is OCCUPIED — don't promise a removal you cannot verify.
  *
- * @param path Directory path to check (can be NULL, treated as empty)
- * @param gone Predicate answering "this caller removes that entry" (may be NULL)
- * @param ctx Opaque context handed to gone
- * @return true if the directory holds nothing but metadata and vouched-for entries
+ * @param path Directory path to check (NULL reads UNREADABLE)
+ * @param vouch Predicate answering "look past that entry" (may be NULL)
+ * @param ctx Opaque context handed to vouch
+ * @return What the directory holds
  */
-bool fs_is_directory_empty_except(const char *path, fs_path_pred_fn gone, void *ctx);
+fs_emptiness_t fs_directory_emptiness(const char *path, fs_path_pred_fn vouch, void *ctx);
 
 /**
  * Check if directory is empty (ignoring OS metadata)
@@ -287,11 +301,11 @@ bool fs_is_directory_empty_except(const char *path, fs_path_pred_fn gone, void *
  * past it would promise a removal fs_remove_empty_dir cannot deliver.
  *
  * Returns false if the directory cannot be opened (doesn't exist, not a directory,
- * permission denied, or read error) for safety (don't delete what we can't verify).
+ * permission denied, or read error) for safety (don't delete what we can't verify):
+ * the FS_DIR_EMPTY reading of fs_directory_emptiness with no predicate, for the
+ * callers that treat "occupied" and "cannot tell" alike.
  *
- * The gone == NULL case of fs_is_directory_empty_except.
- *
- * @param path Directory path to check (can be NULL, treated as empty)
+ * @param path Directory path to check (must not be NULL)
  * @return true if directory contains no user content, false otherwise
  */
 bool fs_is_directory_empty(const char *path);
@@ -552,6 +566,41 @@ bool fs_exists(const char *path);
  * @return true if path exists
  */
 bool fs_lexists(const char *path);
+
+/**
+ * What occupies a path, from one lstat
+ *
+ * The link itself, never its target: a symlink is a distinct occupant, not the
+ * thing it points to. Every reader that removes or replaces a path acts on the
+ * node at the path, so the target's type and permissions are none of its
+ * business.
+ *
+ * Two failures are absence: ENOENT, and ENOTDIR — a component above the path
+ * is not a directory, so nothing can be at the path either. Any other failure
+ * (EACCES, ELOOP, EIO, …) is UNKNOWN: something may well be there, and a reader
+ * must never infer absence from a failure to look.
+ */
+typedef enum {
+    FS_OCCUPANT_NONE,        /* absent, or beneath a non-directory */
+    FS_OCCUPANT_REGULAR,
+    FS_OCCUPANT_SYMLINK,     /* the link itself, never its target */
+    FS_OCCUPANT_DIRECTORY,
+    FS_OCCUPANT_OTHER,       /* fifo, socket, device */
+    FS_OCCUPANT_UNKNOWN      /* unstattable for a reason other than absence */
+} fs_occupant_t;
+
+/**
+ * lstat a path and name what it found
+ *
+ * On FS_OCCUPANT_UNKNOWN, errno is lstat's — read it before anything else runs.
+ * *st is meaningful only for a present occupant; a caller that wants the type
+ * alone passes NULL.
+ *
+ * @param path Path to probe (must not be NULL)
+ * @param st Receives the lstat of a present occupant (may be NULL)
+ * @return What stands at the path
+ */
+fs_occupant_t fs_lstat_occupant(const char *path, struct stat *st);
 
 /**
  * Stat-based type checking helpers

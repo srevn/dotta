@@ -32,8 +32,8 @@
  *   emptiness permitting
  * - what stands at an orphaned directory's path: one type probe, shared by
  *   preflight and execute so they cannot label it differently
- * - whether a directory ends up empty: fs_is_directory_empty_except with this
- *   run's own removals as the hole (preflight) and fs_remove_empty_dir, which
+ * - whether a directory ends up empty: fs_directory_emptiness with this run's
+ *   own removals as the hole (preflight) and fs_remove_empty_dir, which
  *   removes exactly what that walk looks past and refuses anything else before
  *   touching it (execute)
  *
@@ -131,7 +131,7 @@ static inline bool cleanup_plan_is_empty(const cleanup_plan_t *plan) {
  * Distinct from cleanup_plan_is_empty, which counts only *work*: a plan of nothing
  * but spared items is empty there and non-zero here. Apply reads this beside
  * deploy_plan_row_count to tell a path filter that named nothing dotta manages
- * from one whose paths are all held back — an orphan the filter found is a match,
+ * from one whose paths are all skipped — an orphan the filter found is a match,
  * whatever its verdict.
  *
  * The bucket set lives here so a consumer never has to enumerate it.

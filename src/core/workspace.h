@@ -51,6 +51,7 @@
 #include "core/manifest.h"
 #include "core/state.h"
 #include "infra/content.h"
+#include "sys/filesystem.h"
 
 /* Maximum number of display tags that can be extracted from a workspace item */
 #define WORKSPACE_ITEM_MAX_DISPLAY_TAGS 5
@@ -74,6 +75,18 @@
  * - profile: a view row's or a record's (arena), or — an untracked item's — the
  *   view's profile list's (arena)
  * - old_profile: the record's profile (arena; can be NULL)
+ *
+ * The occupant is the analysis's one observation of the disk, carried as the
+ * sys layer names it rather than folded to a presence bit: what the analyzer's
+ * lstat found at the path — the link itself, never its target. FS_OCCUPANT_NONE
+ * is absence; FS_OCCUPANT_UNKNOWN is a path the analyzer could not stat and
+ * assumes present (absence is never inferred from a failure to look; the item
+ * carries DIVERGENCE_UNVERIFIED beside it). Presence is therefore
+ * `occupant != FS_OCCUPANT_NONE`. The divergence bits are the verdict over
+ * that observation (DIVERGENCE_TYPE: the occupant is not the row's or the
+ * record's kind); every consumer that once re-probed the path to learn its
+ * type reads this field instead, so status, deploy and cleanup cannot see three
+ * different occupants at one path.
  */
 typedef struct {
     char *filesystem_path;      /* Target path on filesystem (borrowed) */
@@ -86,8 +99,8 @@ typedef struct {
     divergence_type_t divergence; /* What's wrong with it (bit flags, can combine) */
     path_kind_t item_kind;        /* PATH_KIND_FILE or PATH_KIND_DIRECTORY */
 
-    /* State flags */
-    bool on_filesystem;         /* Exists on actual filesystem */
+    /* The observation and its labels */
+    fs_occupant_t occupant;     /* What the analysis's lstat found at the path (see above) */
     bool profile_enabled;       /* Is source profile in workspace's enabled list? */
     bool profile_changed;       /* Profile differs from the record's (reassigned) */
 } workspace_item_t;

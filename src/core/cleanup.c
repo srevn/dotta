@@ -196,10 +196,11 @@ cleanup_skip_reason_t cleanup_skip_reason(const workspace_item_t *item) {
  * function answers it for both.
  *
  * ABSENT is stat truth — a dangling symlink reads absent and its row is reclaimed,
- * which is what the prune's reclaim arm has always done and what the workspace's
- * own on_filesystem says for a directory orphan. Making it lstat-based would
- * change behavior rather than counts, and belongs with the decision about what
- * to do with a foreign occupant.
+ * which is what the prune's reclaim arm has always done. The workspace's own
+ * lstat disagrees (a dangling link is present to it, either kind), so status
+ * and apply can differ on such a path; making this lstat-based would change
+ * behavior rather than counts, and belongs with the decision about what to do
+ * with a foreign occupant.
  *
  * FOREIGN is anything rmdir(2) cannot remove and dotta does not own — a symlink,
  * a regular file. Both phases skip it, under the label the outcome already uses.
@@ -310,11 +311,11 @@ error_t *cleanup_preflight(
     for (size_t i = 0; i < files.count; i++) {
         const workspace_item_t *item = files.entries[i];
 
-        if (!item->on_filesystem) {
+        if (item->occupant == FS_OCCUPANT_NONE) {
             /* Already gone: nothing to protect, nothing to remove — a pure state
              * reclaim whatever Git or the divergence bits say. It has no filesystem
              * effect to preview, so it joins neither the prune count nor the
-             * prune set; on_filesystem was established by workspace orphan analysis
+             * prune set; the occupant was established by workspace orphan analysis
              * and is trusted here. */
             err = ptr_array_push(&verdicts->absent_files, item);
 
@@ -385,7 +386,7 @@ error_t *cleanup_preflight(
                 break;
 
             case DIR_PROBE_DIRECTORY:
-                if (fs_is_directory_empty_except(path, entry_is_prunable, prunable) &&
+                if (fs_directory_emptiness(path, entry_is_prunable, prunable) == FS_DIR_EMPTY &&
                     !deploys_into(opts, path)) {
                     err = ptr_array_push(&verdicts->prunable_dirs, item);
 
@@ -434,34 +435,59 @@ void cleanup_preflight_result_free(cleanup_preflight_result_t *verdicts) {
  * ══════════════════════════════════════════════════════════════════ */
 
 /**
- * Prune the files the verdicts cleared
+ * Carry the verdicts out
  *
- * Acts on prunable_files alone; skipped, released and absent are decided at
- * preflight and confirmed here by passing them through, so the receipt accounts
- * for the whole plan and apply's record step reads one object (cleanup.h).
- * Data-loss prevention happened at preflight, in cleanup_skip_reason and the
- * released test; nothing is re-checked here and nothing pretends to be.
+ * Acts on prunable_files and prunable_dirs alone; skipped, released and absent
+ * are decided at preflight and confirmed here by passing them through, so the
+ * receipt accounts for the whole plan and apply's record step reads one object
+ * (cleanup.h). Data-loss prevention happened at preflight, in cleanup_skip_reason
+ * and the released test; nothing is re-checked here and nothing pretends to be.
  *
- * @param verdicts Verdicts from cleanup_preflight (must not be NULL)
- * @param result Result to fill (must not be NULL)
- * @return Error on allocation failure, NULL otherwise
+ * Files first, then the directories those files emptied, in the verdicts' prune
+ * order (deepest first, the plan's order): every child is decided before its
+ * parent, so a parent this run empties is seen empty when its turn comes — the
+ * whole reason the old iterate-until-stable loop existed.
+ *
+ * fs_remove_empty_dir is the mechanism and also the guard: it clears the OS
+ * metadata the prediction looked past and nothing else, and it refuses — before
+ * touching anything — the moment it meets an entry it may not remove. So an entry
+ * that arrived while the prompt waited, or a child whose own removal failed above,
+ * stops the removal instead of going with it. That refusal is the "not empty"
+ * verdict by another route — ERR_CONFLICT — not a failure.
+ *
+ * The directory probe runs again here even though the verdict is taken, because
+ * the mechanism cannot tell the receipt what it found: fs_remove_empty_dir treats
+ * absence as success (an absent directory would read "pruned", not "reclaimed"),
+ * and rmdir on a symlink fails with ENOTDIR ("failed", not "skipped").
  */
-static error_t *prune_orphaned_files(
+error_t *cleanup_execute(
     const cleanup_preflight_result_t *verdicts,
-    cleanup_result_t *result
+    cleanup_result_t **out
 ) {
-    workspace_items_t prunable = workspace_items_view(&verdicts->prunable_files);
+    CHECK_NULL(verdicts);
+    CHECK_NULL(out);
 
-    for (size_t i = 0; i < prunable.count; i++) {
-        const workspace_item_t *item = prunable.entries[i];
+    /* calloc zeroes the ten buckets. Handed to the caller at once so a fatal
+     * error mid-run still leaves the partial receipt in its hands. */
+    cleanup_result_t *result = calloc(1, sizeof(*result));
+    if (!result) {
+        return ERROR(ERR_MEMORY, "Failed to allocate cleanup result");
+    }
+    *out = result;
+
+    /* Step 1: Prune the orphaned files the verdicts cleared */
+    workspace_items_t files = workspace_items_view(&verdicts->prunable_files);
+
+    for (size_t i = 0; i < files.count; i++) {
+        const workspace_item_t *item = files.entries[i];
         const char *path = item->filesystem_path;
 
         /* Gone before we got here: no filesystem effect happened or was needed
          * — the record retires. Reporting it as "pruned" would claim an effect
          * that never occurred.
          *
-         * lstat, matching both the workspace's on_filesystem for a file orphan
-         * and unlink's own view of the path: a symlink row whose link now dangles
+         * lstat, matching both the workspace's occupant for a file orphan and
+         * unlink's own view of the path: a symlink row whose link now dangles
          * is an object dotta deployed and is here to remove, not an absence to
          * reclaim around. stat would follow the link, call it gone, retire the
          * row and leave the link behind with nothing left that knows about it. */
@@ -480,59 +506,11 @@ static error_t *prune_orphaned_files(
         }
     }
 
-    /* The verdicts this phase does not act on, confirmed. */
-    for (size_t i = 0; i < verdicts->absent_files.count; i++) {
-        RETURN_IF_ERROR(
-            ptr_array_push(&result->reclaimed_files, verdicts->absent_files.items[i])
-        );
-    }
-    for (size_t i = 0; i < verdicts->released_files.count; i++) {
-        RETURN_IF_ERROR(
-            ptr_array_push(&result->released_files, verdicts->released_files.items[i])
-        );
-    }
-    for (size_t i = 0; i < verdicts->skipped_files.count; i++) {
-        RETURN_IF_ERROR(
-            ptr_array_push(&result->skipped_files, verdicts->skipped_files.items[i])
-        );
-    }
+    /* Step 2: Prune the orphaned directories those files emptied */
+    workspace_items_t dirs = workspace_items_view(&verdicts->prunable_dirs);
 
-    return NULL;
-}
-
-/**
- * Prune the directories the verdicts predicted empty
- *
- * Runs after the files, so the filesystem it looks at is the one the user will
- * be left with. Prune order comes from the verdicts (deepest first, the plan's
- * order): every child is decided before its parent, so a parent this run empties
- * is seen empty when its turn comes — the whole reason the old iterate-until-stable
- * loop existed.
- *
- * fs_remove_empty_dir is the mechanism and also the guard: it clears the OS
- * metadata the prediction looked past and nothing else, and it refuses — before
- * touching anything — the moment it meets an entry it may not remove. So an entry
- * that arrived while the prompt waited, or a child whose own removal failed above,
- * stops the removal instead of going with it. That refusal is the "not empty"
- * verdict by another route — ERR_CONFLICT — not a failure.
- *
- * The probe runs again here even though the verdict is taken, because the mechanism
- * cannot tell the receipt what it found: fs_remove_empty_dir treats absence as
- * success (an absent directory would read "pruned", not "reclaimed"), and rmdir
- * on a symlink fails with ENOTDIR ("failed", not "skipped").
- *
- * @param verdicts Verdicts from cleanup_preflight (must not be NULL)
- * @param result Result to fill (must not be NULL)
- * @return Error on allocation failure, NULL otherwise
- */
-static error_t *prune_orphaned_directories(
-    const cleanup_preflight_result_t *verdicts,
-    cleanup_result_t *result
-) {
-    workspace_items_t prunable = workspace_items_view(&verdicts->prunable_dirs);
-
-    for (size_t i = 0; i < prunable.count; i++) {
-        const workspace_item_t *item = prunable.entries[i];
+    for (size_t i = 0; i < dirs.count; i++) {
+        const workspace_item_t *item = dirs.entries[i];
         const char *path = item->filesystem_path;
 
         switch (probe_orphan_directory(path)) {
@@ -565,54 +543,20 @@ static error_t *prune_orphaned_directories(
         RETURN_IF_ERROR(ptr_array_push(outcome, item));
     }
 
-    /* The verdicts this phase does not act on, confirmed. */
-    for (size_t i = 0; i < verdicts->absent_dirs.count; i++) {
-        RETURN_IF_ERROR(
-            ptr_array_push(&result->reclaimed_dirs, verdicts->absent_dirs.items[i])
-        );
-    }
-    for (size_t i = 0; i < verdicts->released_dirs.count; i++) {
-        RETURN_IF_ERROR(
-            ptr_array_push(&result->released_dirs, verdicts->released_dirs.items[i])
-        );
-    }
-    for (size_t i = 0; i < verdicts->skipped_dirs.count; i++) {
-        RETURN_IF_ERROR(
-            ptr_array_push(&result->skipped_dirs, verdicts->skipped_dirs.items[i])
-        );
-    }
+    /* The verdicts this run does not act on, confirmed. */
+    const struct { const ptr_array_t *from; ptr_array_t *to; } confirmed[] = {
+        { &verdicts->absent_files,   &result->reclaimed_files },
+        { &verdicts->released_files, &result->released_files  },
+        { &verdicts->skipped_files,  &result->skipped_files   },
+        { &verdicts->absent_dirs,    &result->reclaimed_dirs  },
+        { &verdicts->released_dirs,  &result->released_dirs   },
+        { &verdicts->skipped_dirs,   &result->skipped_dirs    },
+    };
 
-    return NULL;
-}
-
-/**
- * Carry the verdicts out
- */
-error_t *cleanup_execute(
-    const cleanup_preflight_result_t *verdicts,
-    cleanup_result_t **out
-) {
-    CHECK_NULL(verdicts);
-    CHECK_NULL(out);
-
-    /* calloc zeroes the ten buckets. Handed to the caller at once so a fatal
-     * error mid-run still leaves the partial receipt in its hands. */
-    cleanup_result_t *result = calloc(1, sizeof(*result));
-    if (!result) {
-        return ERROR(ERR_MEMORY, "Failed to allocate cleanup result");
-    }
-    *out = result;
-
-    /* Step 1: Prune the orphaned files the verdicts cleared */
-    error_t *err = prune_orphaned_files(verdicts, result);
-    if (err) {
-        return error_wrap(err, "Failed to prune orphaned files");
-    }
-
-    /* Step 2: Prune the orphaned directories those files emptied */
-    err = prune_orphaned_directories(verdicts, result);
-    if (err) {
-        return error_wrap(err, "Failed to prune orphaned directories");
+    for (size_t b = 0; b < sizeof(confirmed) / sizeof(confirmed[0]); b++) {
+        for (size_t i = 0; i < confirmed[b].from->count; i++) {
+            RETURN_IF_ERROR(ptr_array_push(confirmed[b].to, confirmed[b].from->items[i]));
+        }
     }
 
     return NULL;

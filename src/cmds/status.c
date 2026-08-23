@@ -578,7 +578,7 @@ static void display_workspace_status(
                         );
 
                         const char *hint = NULL;
-                        if (!orphaned[i]->on_filesystem) {
+                        if (orphaned[i]->occupant == FS_OCCUPANT_NONE) {
                             hint = "already gone from disk; apply reclaims its entry";
                         } else if (orphaned[i]->state == WORKSPACE_STATE_RELEASED) {
                             hint = "no longer in Git, or dotta never deployed it; "

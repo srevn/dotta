@@ -323,7 +323,7 @@ error_t *check_item_metadata_divergence(
  * @param state Where the item exists (deployed/undeployed/etc.)
  * @param divergence What's wrong with it (bit flags, can combine)
  * @param item_kind FILE or DIRECTORY (explicit type)
- * @param on_filesystem Exists on actual filesystem
+ * @param occupant What the producer's lstat found at the path (workspace.h)
  * @param profile_enabled Is source profile in enabled list?
  * @param profile_changed Has owning profile changed vs the record?
  */
@@ -336,7 +336,7 @@ static error_t *workspace_add_diverged(
     workspace_state_t state,
     divergence_type_t divergence,
     path_kind_t item_kind,
-    bool on_filesystem,
+    fs_occupant_t occupant,
     bool profile_enabled,
     bool profile_changed
 ) {
@@ -373,7 +373,7 @@ static error_t *workspace_add_diverged(
     entry->state = state;
     entry->divergence = divergence;
     entry->item_kind = item_kind;
-    entry->on_filesystem = on_filesystem;
+    entry->occupant = occupant;
     entry->profile_enabled = profile_enabled;
     entry->profile_changed = profile_changed;
 
@@ -553,44 +553,40 @@ static error_t *analyze_file_divergence(
     /* Single stat capture for the entire analysis
      *
      * This stat is reused for:
-     * 1. Existence check (on_filesystem flag)
+     * 1. Existence check (the occupant)
      * 2. Type verification in comparison functions
      * 3. Metadata divergence checks (mode, ownership)
      */
     struct stat initial_stat;
-    bool on_filesystem;
+    fs_occupant_t occupant = fs_lstat_occupant(fs_path, &initial_stat);
 
-    if (lstat(fs_path, &initial_stat) != 0) {
-        if (errno != ENOENT && errno != ENOTDIR) {
-            /* Inaccessible, not absent (EACCES, ELOOP, EIO). ENOTDIR is absence:
-             * a component above the path is not a directory, so nothing can be
-             * at the path either — deploy's lstat_occupant reads it the same
-             * way. Same policy as the orphan path below: assume the path is there
-             * and record the uncertainty, rather than failing the load and taking
-             * every other managed path down with one unreadable one.
-             *
-             * DEPLOYED is the load-bearing half — absence must never be inferred
-             * from a failure to look, or update commits a deletion that never
-             * happened. UNVERIFIED keeps consumers conservative: apply retries
-             * the write and surfaces the real errno, cleanup's UNVERIFIED skip
-             * blocks removal.
-             *
-             * Returns here because every phase below needs a valid stat. */
-            return workspace_add_diverged(
-                ws, fs_path, storage_path, profile, old_profile,
-                WORKSPACE_STATE_DEPLOYED, DIVERGENCE_UNVERIFIED,
-                PATH_KIND_FILE,
-                true,                        /* on_filesystem (assumed present) */
-                true,                        /* profile_enabled */
-                profile_changed
-            );
-        }
+    if (occupant == FS_OCCUPANT_UNKNOWN) {
+        /* Inaccessible, not absent (EACCES, ELOOP, EIO; ENOTDIR is absence —
+         * fs_lstat_occupant reads it so). Same policy as the orphan path below:
+         * assume the path is there and record the uncertainty, rather than
+         * failing the load and taking every other managed path down with one
+         * unreadable one.
+         *
+         * DEPLOYED is the load-bearing half — absence must never be inferred
+         * from a failure to look, or update commits a deletion that never
+         * happened. UNVERIFIED keeps consumers conservative: apply retries
+         * the write and surfaces the real errno, cleanup's UNVERIFIED skip
+         * blocks removal.
+         *
+         * Returns here because every phase below needs a valid stat. */
+        return workspace_add_diverged(
+            ws, fs_path, storage_path, profile, old_profile,
+            WORKSPACE_STATE_DEPLOYED, DIVERGENCE_UNVERIFIED,
+            PATH_KIND_FILE,
+            occupant,                    /* assumed present */
+            true,                        /* profile_enabled */
+            profile_changed
+        );
+    }
 
-        on_filesystem = false;
+    if (occupant == FS_OCCUPANT_NONE) {
         memset(&initial_stat, 0, sizeof(initial_stat));
     } else {
-        on_filesystem = true;
-
         /* The lstat just observed the path in scope (any type counts). A path
          * with no record gets one — presence only; a CMP_EQUAL below supersedes
          * it with a confirmation, and the flush writes each path once. Closes
@@ -646,7 +642,7 @@ static error_t *analyze_file_divergence(
      * blob), has no base. Cross-process correct by construction — every invocation
      * sees the same answer.
      */
-    if (on_filesystem) {
+    if (occupant != FS_OCCUPANT_NONE) {
         /* The row's blob_oid is already a 20-byte binary OID — no parse step. */
         const git_oid *blob_oid_ptr = &row->blob_oid;
 
@@ -831,14 +827,15 @@ static error_t *analyze_file_divergence(
                  * Return immediately with TYPE divergence. */
                 return workspace_add_diverged(
                     ws, fs_path, storage_path, profile, NULL, WORKSPACE_STATE_DEPLOYED,
-                    DIVERGENCE_TYPE, PATH_KIND_FILE, on_filesystem, true, false
+                    DIVERGENCE_TYPE, PATH_KIND_FILE, occupant, true, false
                 );
 
             case CMP_MISSING:
                 /* File was deleted during analysis (rare edge case). With stat
                  * propagation this case is unlikely but kept for robustness.
-                 * Update flag and skip permission checks below. */
-                on_filesystem = false;
+                 * The observation is the compare's now: absent. Skip the
+                 * permission checks below. */
+                occupant = FS_OCCUPANT_NONE;
                 break;
 
             case CMP_UNVERIFIED:
@@ -869,7 +866,8 @@ static error_t *analyze_file_divergence(
          * Both phases use the SAME file_stat (captured above), so no extra
          * syscalls. Flags are accumulated with |=.
          */
-        if (on_filesystem && cmp_result != CMP_TYPE_DIFF && cmp_result != CMP_MISSING) {
+        if (occupant != FS_OCCUPANT_NONE && cmp_result != CMP_TYPE_DIFF
+            && cmp_result != CMP_MISSING) {
             /* PHASE A: Check executable bit (skip symlinks) */
             if (expected_mode != GIT_FILEMODE_LINK) {
                 bool expect_exec = (expected_mode == GIT_FILEMODE_BLOB_EXECUTABLE);
@@ -942,7 +940,7 @@ static error_t *analyze_file_divergence(
      * "(deployed X ago)" display and the adoption-loop gate; it just no longer
      * controls classification.
      */
-    if (!on_filesystem) {
+    if (occupant == FS_OCCUPANT_NONE) {
         /* Row claims this path but the filesystem doesn't have it. classify_absent
          * gates on the record (see the classification table above). */
         state = classify_absent(anchor);
@@ -960,7 +958,7 @@ static error_t *analyze_file_divergence(
     if (state != WORKSPACE_STATE_DEPLOYED || divergence != DIVERGENCE_NONE || profile_changed) {
         error_t *err = workspace_add_diverged(
             ws, fs_path, storage_path, profile, old_profile, state,
-            divergence, PATH_KIND_FILE, on_filesystem, true, profile_changed
+            divergence, PATH_KIND_FILE, occupant, true, profile_changed
         );
         if (err) return err;
     }
@@ -1468,8 +1466,8 @@ static error_t *compute_orphan_authority(
  *
  * Presence comes first, so an absent record never reaches a RELEASED arm: whatever
  * Git would have said, it reads [orphaned] [absent] and apply reclaims it.
- * on_filesystem still travels with the item for cleanup's verdict phase, which
- * reads the same flag.
+ * The occupant travels with the item for cleanup's verdict phase, which reads
+ * the same observation.
  *
  * Each orphan is tagged with profile_enabled — whether its profile is in the
  * workspace's enabled set. It is a label, not a filter: every reader sees every
@@ -1505,33 +1503,16 @@ static error_t *analyze_orphans(workspace_t *ws) {
 
         /* Single stat capture, reused for type verification, content comparison,
          * and metadata checks — eliminates redundant lstat syscalls. One rule
-         * for every orphan, whatever its kind.
-         *
-         * stat_valid tracks whether we have usable stat data:
-         * - true: lstat succeeded, orphan_stat contains valid data
-         * - false: lstat failed, orphan_stat is zeroed (unusable)
+         * for every orphan, whatever its kind: FS_OCCUPANT_NONE is the orphan
+         * already removed by hand (or a component above it no longer a
+         * directory) — a reclaim; FS_OCCUPANT_UNKNOWN (EACCES, EIO, ELOOP, …)
+         * is assumed present but leaves no usable stat, so a file's divergence
+         * cannot be computed and becomes UNVERIFIED below:
+         * - Status shows [orphaned, unverified] (user visibility)
+         * - Apply skips removal (can't verify what we can't stat)
          */
         struct stat orphan_stat;
-        bool on_filesystem;
-        bool stat_valid = false;
-
-        if (lstat(fs_path, &orphan_stat) != 0) {
-            /* ENOENT: the orphan was already removed by hand — a reclaim.
-             * ENOTDIR: a component above it is not a directory, so the path cannot
-             * be there either — the same reclaim.
-             *
-             * Anything else (EACCES, EIO, ELOOP, …): assume the path exists but
-             * is inaccessible. We lack valid stat data, so a file's divergence
-             * cannot be computed and becomes UNVERIFIED below, so:
-             * - Status shows [orphaned, unverified] (user visibility)
-             * - Apply skips removal (can't verify what we can't stat)
-             */
-            on_filesystem = (errno != ENOENT && errno != ENOTDIR);
-            memset(&orphan_stat, 0, sizeof(orphan_stat));
-        } else {
-            on_filesystem = true;
-            stat_valid = true;
-        }
+        fs_occupant_t occupant = fs_lstat_occupant(fs_path, &orphan_stat);
 
         workspace_state_t item_state = WORKSPACE_STATE_ORPHANED;
         divergence_type_t divergence = DIVERGENCE_NONE;
@@ -1541,7 +1522,7 @@ static error_t *analyze_orphans(workspace_t *ws) {
         bool measurable = (kind == PATH_KIND_DIRECTORY) ||
             !git_oid_is_zero(&anchor->blob_oid);
 
-        if (!on_filesystem) {
+        if (occupant == FS_OCCUPANT_NONE) {
             /* Absent: ORPHANED with no divergence — a reclaim whatever Git says. */
 
         } else if (anchor->prune_ordered && measurable) {
@@ -1549,7 +1530,7 @@ static error_t *analyze_orphans(workspace_t *ws) {
              * Git is not asked. Divergence still protects an edited copy —
              * cleanup's skip reasons read the same bits. */
             if (kind == PATH_KIND_FILE) {
-                divergence = stat_valid
+                divergence = (occupant != FS_OCCUPANT_UNKNOWN)
                     ? compute_orphan_divergence(ws, anchor, &orphan_stat)
                     : DIVERGENCE_UNVERIFIED;
             }
@@ -1580,7 +1561,7 @@ static error_t *analyze_orphans(workspace_t *ws) {
             } else if (kind == PATH_KIND_FILE) {
                 /* Divergence for a prunable orphan: disk against what dotta last
                  * deployed. */
-                divergence = stat_valid
+                divergence = (occupant != FS_OCCUPANT_UNKNOWN)
                     ? compute_orphan_divergence(ws, anchor, &orphan_stat)
                     : DIVERGENCE_UNVERIFIED;
 
@@ -1603,7 +1584,7 @@ static error_t *analyze_orphans(workspace_t *ws) {
             item_state,
             divergence,
             kind,
-            on_filesystem,
+            occupant,
             profile_enabled,
             false               /* No profile change for orphans */
         );
@@ -1742,10 +1723,11 @@ static error_t *scan_directory_for_untracked(
             return ERROR(ERR_MEMORY, "Failed to allocate path");
         }
 
-        /* Check if path exists and get its type (single syscall, don't follow symlinks) */
-        struct stat st;
-        if (lstat(full_path, &st) != 0) {
-            /* Path might have been deleted (race condition) */
+        /* What stands there, from one lstat (don't follow symlinks) */
+        fs_occupant_t occupant = fs_lstat_occupant(full_path, NULL);
+        if (occupant == FS_OCCUPANT_NONE || occupant == FS_OCCUPANT_UNKNOWN) {
+            /* Deleted since readdir listed it (a race), or unstattable: nothing
+             * this scan can say about it. */
             free(full_path);
             free(storage_path);
             errno = 0;
@@ -1756,7 +1738,7 @@ static error_t *scan_directory_for_untracked(
          * layer decided, the source tree's .gitignore on the filesystem path
          * (its root is that repo's) — the lowest layer, so a `!` rule above
          * it wins. */
-        bool is_dir = S_ISDIR(st.st_mode);
+        bool is_dir = (occupant == FS_OCCUPANT_DIRECTORY);
         gitignore_match_t match;
         gitignore_eval(rules, mount_strip_label(storage_path), is_dir, &match);
         bool ignored = match.decided && match.ignored;
@@ -1831,7 +1813,7 @@ static error_t *scan_directory_for_untracked(
                     WORKSPACE_STATE_UNTRACKED,  /* State: on filesystem in tracked dir */
                     DIVERGENCE_NONE,            /* Divergence: none */
                     PATH_KIND_FILE,
-                    true,                       /* on filesystem */
+                    occupant,
                     true,                       /* profile_enabled */
                     false                       /* No profile change */
                 );
@@ -2055,44 +2037,45 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
 
         /* Stat directory to get current metadata
          *
-         * Use lstat() for both existence and type checking:
-         * - ENOENT: Directory truly deleted
-         * - ENOTDIR: A component above it is not a directory — nothing can be
-         *   at the path either; as absent as ENOENT
-         * - Other errno: Inaccessible — state undeterminable, not absent
-         * - Success + !S_ISDIR: Type changed (file, symlink - including broken
-         *   ones)
-         * - Success + S_ISDIR: Actual directory, check metadata */
+         * One lstat, read as fs_lstat_occupant names it:
+         * - NONE: Directory truly deleted, or a component above it is not a
+         *   directory — nothing can be at the path either
+         * - UNKNOWN: Inaccessible — state undeterminable, not absent
+         * - Anything but DIRECTORY: Type changed (file, symlink - including
+         *   broken ones)
+         * - DIRECTORY: Actual directory, check metadata */
         struct stat dir_stat;
-        if (lstat(filesystem_path, &dir_stat) != 0) {
-            if (errno == ENOENT || errno == ENOTDIR) {
-                /* Absent path: record-gated classification. An observed directory
-                 * was deleted by the user (update propagates the removal); a
-                 * never-observed one was never there — apply's job is to create
-                 * it, never to commit a phantom deletion. */
-                err = workspace_add_diverged(
-                    ws,
-                    filesystem_path,
-                    storage_path,
-                    profile,
-                    NULL,                     /* No old_profile for directories */
-                    classify_absent(anchor),
-                    DIVERGENCE_NONE,          /* Divergence: none (path is absent) */
-                    PATH_KIND_DIRECTORY,
-                    false,                    /* on_filesystem (absent) */
-                    true,                     /* profile_enabled */
-                    false                     /* No profile change */
+        fs_occupant_t occupant = fs_lstat_occupant(filesystem_path, &dir_stat);
+
+        if (occupant == FS_OCCUPANT_NONE) {
+            /* Absent path: record-gated classification. An observed directory
+             * was deleted by the user (update propagates the removal); a
+             * never-observed one was never there — apply's job is to create
+             * it, never to commit a phantom deletion. */
+            err = workspace_add_diverged(
+                ws,
+                filesystem_path,
+                storage_path,
+                profile,
+                NULL,                     /* No old_profile for directories */
+                classify_absent(anchor),
+                DIVERGENCE_NONE,          /* Divergence: none (path is absent) */
+                PATH_KIND_DIRECTORY,
+                occupant,
+                true,                     /* profile_enabled */
+                false                     /* No profile change */
+            );
+
+            if (err) {
+                return error_wrap(
+                    err, "Failed to record absent directory '%s'",
+                    filesystem_path
                 );
-
-                if (err) {
-                    return error_wrap(
-                        err, "Failed to record absent directory '%s'",
-                        filesystem_path
-                    );
-                }
-                continue;  /* Successfully recorded, check next directory */
             }
+            continue;  /* Successfully recorded, check next directory */
+        }
 
+        if (occupant == FS_OCCUPANT_UNKNOWN) {
             /* Inaccessible, not absent: record the uncertainty rather than dropping
              * the row, which left status reporting a clean workspace for a path
              * it had just failed to read. Same three-way policy as the file
@@ -2106,7 +2089,7 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
                 WORKSPACE_STATE_DEPLOYED,
                 DIVERGENCE_UNVERIFIED,    /* Divergence: state undeterminable */
                 PATH_KIND_DIRECTORY,
-                true,                     /* on_filesystem (assumed present) */
+                occupant,                 /* assumed present */
                 true,                     /* profile_enabled */
                 false                     /* No profile change */
             );
@@ -2131,16 +2114,15 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
 
         /* Verify it's actually a directory (type may have changed)
          *
-         * Type changes (dir -> file, dir -> symlink) are detected here because:
-         * 1. lstat() doesn't follow symlinks, so symlinks are caught
-         * 2. S_ISDIR() fails for regular files and symlinks
+         * Type changes (dir -> file, dir -> symlink) are detected here because
+         * the occupant is the link itself, never its target.
          *
          * Record DIVERGENCE_TYPE to enable:
          * - status shows [type] divergence
          * - preflight blocks without --force
          * - apply clears and recreates with --force
          */
-        if (!S_ISDIR(dir_stat.st_mode)) {
+        if (occupant != FS_OCCUPANT_DIRECTORY) {
             err = workspace_add_diverged(
                 ws,
                 filesystem_path,
@@ -2150,7 +2132,7 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
                 WORKSPACE_STATE_DEPLOYED,  /* Path exists, just wrong type */
                 DIVERGENCE_TYPE,           /* Type changed (dir -> file/symlink) */
                 PATH_KIND_DIRECTORY,
-                true,                      /* on_filesystem (path exists, wrong type) */
+                occupant,                  /* path exists, wrong type */
                 true,                      /* profile_enabled */
                 false                      /* No profile change */
             );
@@ -2200,7 +2182,7 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
                 WORKSPACE_STATE_DEPLOYED,  /* State: directory exists as expected */
                 divergence,                /* Divergence: mode/ownership flags */
                 PATH_KIND_DIRECTORY,
-                true,                      /* on_filesystem */
+                occupant,
                 true,                      /* profile_enabled */
                 false                      /* No profile change */
             );
@@ -2294,10 +2276,9 @@ static error_t *analyze_encryption_policy_mismatch(
             /* No existing divergence row for this file — encryption policy is
              * the only issue. Classify the workspace state from presence + the
              * record, mirroring analyze_file_divergence Phase 2. */
-            struct stat enc_stat;
-            bool on_filesystem = (lstat(row->filesystem_path, &enc_stat) == 0);
+            fs_occupant_t occupant = fs_lstat_occupant(row->filesystem_path, NULL);
 
-            workspace_state_t item_state = on_filesystem
+            workspace_state_t item_state = (occupant != FS_OCCUPANT_NONE)
                 ? WORKSPACE_STATE_DEPLOYED
                 : classify_absent(workspace_get_anchor(ws, row->filesystem_path));
 
@@ -2310,7 +2291,7 @@ static error_t *analyze_encryption_policy_mismatch(
                 item_state,
                 DIVERGENCE_ENCRYPTION, /* Divergence: encryption policy violated */
                 PATH_KIND_FILE,
-                on_filesystem,
+                occupant,
                 true,                  /* profile_enabled */
                 false                  /* No profile change */
             );
@@ -2857,7 +2838,7 @@ bool workspace_item_extract_display_info(
             }
 
             /* Determine color and secondary tags based on divergence */
-            if (!item->on_filesystem) {
+            if (item->occupant == FS_OCCUPANT_NONE) {
                 /* Gone from disk already: apply reclaims the row and removes
                  * nothing. Cyan, the receipt's colour for a reclaim — no action
                  * on the user's files is coming. Checked before the divergence
@@ -2930,7 +2911,7 @@ bool workspace_item_extract_display_info(
             }
             *color_out = OUTPUT_COLOR_MAGENTA;
 
-            if (!item->on_filesystem) {
+            if (item->occupant == FS_OCCUPANT_NONE) {
                 /* Nothing is left to leave on disk: apply retires the row and
                  * reports a reclaim, so the display says so too. The ORPHANED
                  * arm reads the same flag for the same reason. */

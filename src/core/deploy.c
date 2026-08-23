@@ -194,7 +194,7 @@ static error_t *partition_push(
  * failed (ENOTDIR), and absent was the verdict anyway.
  *
  * Squatted is the workspace's TYPE verdict on the row, and only a *pending* row
- * counts: one held back by -e is not replaced this run, so what was observed
+ * counts: one -e skips is not replaced this run, so what was observed
  * through it stands. Walks directories.pending, which is in prefix order, so
  * the planner can ask this of a directory row while the bucket is still filling
  * and find the row's ancestors already there. The run-time counterpart is
@@ -298,7 +298,7 @@ error_t *deploy_plan_build(
         skip_reason_t skip = SKIP_NONE;
         if (scope_is_excluded(scope, row->storage_path, PATH_KIND_FILE)) {
             skip = SKIP_EXCLUDED;
-        } else if (skip_existing && !absent && item && item->on_filesystem) {
+        } else if (skip_existing && !absent && item && item->occupant != FS_OCCUPANT_NONE) {
             skip = SKIP_EXISTING;
         }
 
@@ -339,71 +339,32 @@ void deploy_plan_free(deploy_plan_t *plan) {
  * ══════════════════════════════════════════════════════════════════ */
 
 /**
- * What occupies a path, from one lstat
- *
- * The link itself, never its target: a symlink is a distinct occupant, not the
- * thing it points to. Deploy unlinks the link and never follows it, so the target's
- * type and permissions are none of its business.
- */
-typedef enum {
-    OCCUPANT_NONE,       /* absent, or beneath a non-directory */
-    OCCUPANT_REGULAR,
-    OCCUPANT_SYMLINK,
-    OCCUPANT_DIRECTORY,
-    OCCUPANT_OTHER,      /* fifo, socket, device — never what a row deploys */
-    OCCUPANT_UNKNOWN     /* unstattable for a reason other than absence */
-} occupant_t;
-
-/**
- * lstat a path into *st and name what it found. On OCCUPANT_UNKNOWN, errno is
- * lstat's — read it before anything else runs.
- */
-static occupant_t lstat_occupant(const char *path, struct stat *st) {
-    if (lstat(path, st) != 0) {
-        /* ENOTDIR: a component above the path is not a directory, so nothing
-         * can be at the path either. Whether that ancestor is this run's to replace
-         * is check_landing's question, not this one's. */
-        return (errno == ENOENT || errno == ENOTDIR) ? OCCUPANT_NONE : OCCUPANT_UNKNOWN;
-    }
-
-    if (S_ISREG(st->st_mode)) return OCCUPANT_REGULAR;
-    if (S_ISLNK(st->st_mode)) return OCCUPANT_SYMLINK;
-    if (S_ISDIR(st->st_mode)) return OCCUPANT_DIRECTORY;
-
-    return OCCUPANT_OTHER;
-}
-
-/**
- * Probe a path's occupant — the type alone, for callers that need nothing else
- * from the stat.
- */
-static occupant_t path_occupant(const char *path) {
-    struct stat st;
-    return lstat_occupant(path, &st);
-}
-
-/**
  * What a file row materializes at its path
+ *
+ * The occupant vocabulary is sys/filesystem's (fs_occupant_t): the link itself,
+ * never its target. Deploy unlinks the link and never follows it, so the
+ * target's type and permissions are none of its business.
  */
-static occupant_t file_row_occupant(const manifest_row_t *file) {
-    return file->type == PATH_TYPE_SYMLINK ? OCCUPANT_SYMLINK : OCCUPANT_REGULAR;
+static fs_occupant_t file_row_occupant(const manifest_row_t *file) {
+
+    return file->type == PATH_TYPE_SYMLINK ? FS_OCCUPANT_SYMLINK : FS_OCCUPANT_REGULAR;
 }
 
 /**
  * Is something known to be standing at the path?
  *
- * OCCUPANT_UNKNOWN deliberately answers no. Deploy judges nothing it could not
+ * FS_OCCUPANT_UNKNOWN deliberately answers no. Deploy judges nothing it could not
  * see: the mutation goes ahead and surfaces the real errno, rather than acting
  * on a guess about what it failed to stat.
  */
-static bool occupant_present(occupant_t occ) {
-    return occ != OCCUPANT_NONE && occ != OCCUPANT_UNKNOWN;
+static bool occupant_present(fs_occupant_t occ) {
+    return occ != FS_OCCUPANT_NONE && occ != FS_OCCUPANT_UNKNOWN;
 }
 
 /**
  * Does what stands at the path disagree with what the row materializes?
  */
-static bool occupant_conflicts(occupant_t occ, occupant_t want) {
+static bool occupant_conflicts(fs_occupant_t occ, fs_occupant_t want) {
     return occupant_present(occ) && occ != want;
 }
 
@@ -445,8 +406,8 @@ typedef enum {
  * @param occ Its occupant, freshly probed
  * @param force Whether --force was given
  */
-static clearance_t path_clearance(const char *path, occupant_t occ, bool force) {
-    if (occ == OCCUPANT_DIRECTORY && !fs_is_directory_empty(path)) {
+static clearance_t path_clearance(const char *path, fs_occupant_t occ, bool force) {
+    if (occ == FS_OCCUPANT_DIRECTORY && !fs_is_directory_empty(path)) {
         return CLEARANCE_REFUSED;
     }
 
@@ -463,9 +424,9 @@ static clearance_t path_clearance(const char *path, occupant_t occ, bool force) 
  * fills up between the two stops the run instead of going with it. Absence is
  * success — a race that removes the occupant first has done this function's work.
  */
-static error_t *clear_occupant(const char *path, occupant_t occ) {
-    return (occ == OCCUPANT_DIRECTORY) ? fs_remove_empty_dir(path)
-                                       : fs_remove_file(path);
+static error_t *clear_occupant(const char *path, fs_occupant_t occ) {
+    return (occ == FS_OCCUPANT_DIRECTORY) ? fs_remove_empty_dir(path)
+                                          : fs_remove_file(path);
 }
 
 /* ══════════════════════════════════════════════════════════════════
@@ -489,21 +450,21 @@ static size_t ancestor_len(size_t slash) {
  * they would over a file. stat, for a symlink only, says whether the path leads
  * to a directory: a symlinked configuration directory is a directory for the
  * purpose of writing beneath it. *out_is_dir is that second answer; *out_st is
- * the lstat of a present ancestor. errno is lstat's on OCCUPANT_UNKNOWN.
+ * the lstat of a present ancestor. errno is lstat's on FS_OCCUPANT_UNKNOWN.
  */
-static occupant_t probe_ancestor(
+static fs_occupant_t probe_ancestor(
     char *scratch, size_t slash, bool *out_is_dir, struct stat *out_st
 ) {
     size_t len = ancestor_len(slash);
     char saved = scratch[len];
     scratch[len] = '\0';
 
-    occupant_t occ = lstat_occupant(scratch, out_st);
+    fs_occupant_t occ = fs_lstat_occupant(scratch, out_st);
     int saved_errno = errno;
 
-    if (occ == OCCUPANT_DIRECTORY) {
+    if (occ == FS_OCCUPANT_DIRECTORY) {
         *out_is_dir = true;
-    } else if (occ == OCCUPANT_SYMLINK) {
+    } else if (occ == FS_OCCUPANT_SYMLINK) {
         struct stat target;
         *out_is_dir = (stat(scratch, &target) == 0) && S_ISDIR(target.st_mode);
     } else {
@@ -527,7 +488,7 @@ static occupant_t probe_ancestor(
  */
 static bool nearest_ancestor(
     char *scratch, size_t *out_slash,
-    occupant_t *out_occ, bool *out_is_dir, struct stat *out_st
+    fs_occupant_t *out_occ, bool *out_is_dir, struct stat *out_st
 ) {
     size_t i = strlen(scratch);
     for (;;) {
@@ -538,11 +499,11 @@ static bool nearest_ancestor(
             }
         } while (scratch[--i] != '/');
 
-        occupant_t occ = probe_ancestor(scratch, i, out_is_dir, out_st);
-        if (occ == OCCUPANT_UNKNOWN) {
+        fs_occupant_t occ = probe_ancestor(scratch, i, out_is_dir, out_st);
+        if (occ == FS_OCCUPANT_UNKNOWN) {
             return false;
         }
-        if (occ != OCCUPANT_NONE) {
+        if (occ != FS_OCCUPANT_NONE) {
             *out_slash = i;
             *out_occ = occ;
             return true;
@@ -626,54 +587,20 @@ static bool content_conflicts(const workspace_item_t *item) {
 }
 
 /**
- * Record a conflict — a planned path --force resolves
+ * Record a finding that carries its own reason — a blocked path, or a landing
+ * directory that refuses us. Takes ownership of `entry`; NULL means the
+ * formatting itself failed.
  */
-static error_t *push_conflict(deploy_preflight_result_t *result, const char *path) {
-    RETURN_IF_ERROR(string_array_push(result->conflicts, path));
-
-    result->has_errors = true;
-    return NULL;
-}
-
-/**
- * Record a blocked finding — a planned path that neither --force nor privileges
- * can land, so the entry carries its own reason. Takes ownership of `entry`;
- * NULL means the formatting itself failed.
- */
-static error_t *push_blocked(deploy_preflight_result_t *result, char *entry) {
+static error_t *push_finding(string_array_t *findings, char *entry) {
     if (!entry) {
-        return ERROR(ERR_MEMORY, "Failed to format blocked entry");
+        return ERROR(ERR_MEMORY, "Failed to format preflight finding");
     }
 
-    error_t *err = string_array_push_owned(result->blocked, entry);
+    error_t *err = string_array_push_owned(findings, entry);
     if (err) {
         free(entry);
-        return err;
     }
-
-    result->has_errors = true;
-    return NULL;
-}
-
-/**
- * Record a permission finding — a planned path whose landing directory refuses
- * us, and only privileges change that. The entry names the directory, because
- * that is the thing to fix. Takes ownership of `entry`; NULL means the formatting
- * itself failed.
- */
-static error_t *push_permission_error(deploy_preflight_result_t *result, char *entry) {
-    if (!entry) {
-        return ERROR(ERR_MEMORY, "Failed to format permission entry");
-    }
-
-    error_t *err = string_array_push_owned(result->permission_errors, entry);
-    if (err) {
-        free(entry);
-        return err;
-    }
-
-    result->has_errors = true;
-    return NULL;
+    return err;
 }
 
 /**
@@ -728,14 +655,15 @@ static error_t *check_landing(
 
     error_t *err = NULL;
     size_t slash;
-    occupant_t occ;
+    fs_occupant_t occ;
     bool is_dir;
     struct stat st;
 
     if (!nearest_ancestor(scratch, &slash, &occ, &is_dir, &st)) {
         if (errno == EACCES) {
-            err = push_permission_error(
-                result, str_format("%s (ancestry cannot be reached)", path)
+            err = push_finding(
+                result->permission_errors,
+                str_format("%s (ancestry cannot be reached)", path)
             );
         }
         goto cleanup;  /* anything else: the write reports it */
@@ -749,17 +677,19 @@ static error_t *check_landing(
     if (is_dir && access(scratch, W_OK | X_OK) == 0) {
         goto cleanup;
     }
-    if (occ == OCCUPANT_DIRECTORY && holdable_directory(ws, scratch, &st)) {
+    if (occ == FS_OCCUPANT_DIRECTORY && holdable_directory(ws, scratch, &st)) {
         goto cleanup;
     }
 
     if (is_dir) {
-        err = push_permission_error(
-            result, str_format("%s (%s is not writable)", path, scratch)
+        err = push_finding(
+            result->permission_errors,
+            str_format("%s (%s is not writable)", path, scratch)
         );
     } else {
-        err = push_blocked(
-            result, str_format("%s (%s is not a directory)", path, scratch)
+        err = push_finding(
+            result->blocked,
+            str_format("%s (%s is not a directory)", path, scratch)
         );
     }
 
@@ -817,7 +747,7 @@ error_t *deploy_preflight(
         }
 
         const workspace_item_t *item = workspace_get_item(ws, path);
-        occupant_t occ = path_occupant(path);
+        fs_occupant_t occ = fs_lstat_occupant(path, NULL);
 
         if (occupant_conflicts(occ, file_row_occupant(row))) {
             /* Type: decided from the fresh probe, because lstat is the authority
@@ -829,13 +759,13 @@ error_t *deploy_preflight(
                     break;
 
                 case CLEARANCE_NEEDS_FORCE:
-                    err = push_conflict(result, path);
+                    err = string_array_push(result->conflicts, path);
                     if (err) goto cleanup;
                     break;
 
                 case CLEARANCE_REFUSED:
-                    err = push_blocked(
-                        result,
+                    err = push_finding(
+                        result->blocked,
                         str_format("%s (a non-empty directory is in the way)", path)
                     );
                     if (err) goto cleanup;
@@ -844,7 +774,7 @@ error_t *deploy_preflight(
         } else if (!opts->force && content_conflicts(item)) {
             /* Content, asked only when the occupant is the row's own type: a
              * path holding something else has no content to compare. */
-            err = push_conflict(result, path);
+            err = string_array_push(result->conflicts, path);
             if (err) goto cleanup;
         }
 
@@ -866,23 +796,23 @@ error_t *deploy_preflight(
             continue;
         }
 
-        occupant_t occ = path_occupant(path);
+        fs_occupant_t occ = fs_lstat_occupant(path, NULL);
 
         /* A planned directory squatted by a non-directory (the link itself, so
          * a symlink to a directory counts) is replaced under --force, one node
          * at a time. The squatter can never be a directory — that is the row
          * converging in place — so path_clearance cannot refuse here and "use
          * --force" is always the true remedy. */
-        if (occupant_conflicts(occ, OCCUPANT_DIRECTORY) &&
+        if (occupant_conflicts(occ, FS_OCCUPANT_DIRECTORY) &&
             path_clearance(path, occ, opts->force) != CLEARANCE_OK) {
-            err = push_conflict(result, path);
+            err = string_array_push(result->conflicts, path);
             if (err) goto cleanup;
         }
 
         /* A directory already there is converged in place: fchmod and fchown
          * ask for ownership, not for a writable parent. Only a create or a replace
          * lands a new entry. */
-        if (occ != OCCUPANT_DIRECTORY) {
+        if (occ != FS_OCCUPANT_DIRECTORY) {
             err = check_landing(ws, plan, path, result);
             if (err) goto cleanup;
         }
@@ -1319,10 +1249,10 @@ static error_t *create_ancestor(
 static error_t *open_landing_directory(
     deploy_run_t *run,
     const char *ancestor,
-    occupant_t occ,
+    fs_occupant_t occ,
     const struct stat *st
 ) {
-    if (occ != OCCUPANT_DIRECTORY || access(ancestor, W_OK | X_OK) == 0) {
+    if (occ != FS_OCCUPANT_DIRECTORY || access(ancestor, W_OK | X_OK) == 0) {
         return NULL;
     }
 
@@ -1373,7 +1303,7 @@ static error_t *ensure_parents(
 
     error_t *err = NULL;
     size_t ancestor_slash;
-    occupant_t occ;
+    fs_occupant_t occ;
     bool is_dir;
     struct stat st;
     if (!nearest_ancestor(scratch, &ancestor_slash, &occ, &is_dir, &st)) {
@@ -1461,9 +1391,9 @@ static error_t *deploy_file(deploy_run_t *run, const manifest_row_t *file) {
      * a directory this run has replaced, the run's own receipt settles it instead:
      * nothing stands there, and an lstat that says otherwise (a dry run's, through
      * the squatter still in place) is answering for the wrong tree. */
-    occupant_t occ = beneath_replaced_directory(run, file->filesystem_path)
-                   ? OCCUPANT_NONE : path_occupant(file->filesystem_path);
-    occupant_t want = file_row_occupant(file);
+    fs_occupant_t occ = beneath_replaced_directory(run, file->filesystem_path)
+                      ? FS_OCCUPANT_NONE : fs_lstat_occupant(file->filesystem_path, NULL);
+    fs_occupant_t want = file_row_occupant(file);
 
     if (occupant_conflicts(occ, want)) {
         switch (path_clearance(file->filesystem_path, occ, opts->force)) {
@@ -1477,7 +1407,7 @@ static error_t *deploy_file(deploy_run_t *run, const manifest_row_t *file) {
                 return ERROR(
                     ERR_CONFLICT, "'%s' is not a %s (use --force to replace it)",
                     file->filesystem_path,
-                    want == OCCUPANT_SYMLINK ? "symlink" : "regular file"
+                    want == FS_OCCUPANT_SYMLINK ? "symlink" : "regular file"
                 );
 
             case CLEARANCE_OK:
@@ -1490,8 +1420,8 @@ static error_t *deploy_file(deploy_run_t *run, const manifest_row_t *file) {
      * arm clears only a directory; symlink(2) is EEXIST-strict, so the symlink
      * arm clears whatever is there — including an occupant of its own type, which
      * is no conflict and needs no --force. */
-    bool must_clear = (want == OCCUPANT_SYMLINK) ? occupant_present(occ)
-                                                 : (occ == OCCUPANT_DIRECTORY);
+    bool must_clear = (want == FS_OCCUPANT_SYMLINK) ? occupant_present(occ)
+                                                    : (occ == FS_OCCUPANT_DIRECTORY);
 
     /* Determine permissions from the row
      *
@@ -1718,15 +1648,15 @@ static error_t *deploy_directory(
      * directory this run has replaced, the receipt answers instead of the lstat
      * (beneath_replaced_directory). */
     directory_action_t action;
-    occupant_t occ = beneath_replaced_directory(run, path) ? OCCUPANT_NONE
-                                                           : path_occupant(path);
+    fs_occupant_t occ = beneath_replaced_directory(run, path) ? FS_OCCUPANT_NONE
+                                                              : fs_lstat_occupant(path, NULL);
 
     switch (occ) {
-        case OCCUPANT_DIRECTORY:
+        case FS_OCCUPANT_DIRECTORY:
             action = DIR_ACTION_FIX;
             break;
 
-        case OCCUPANT_NONE:
+        case FS_OCCUPANT_NONE:
             /* Absent — or beneath a non-directory, which preflight blocked when
              * unplanned and the directory pass replaces when planned (prefix
              * order); one still there is ensure_parents' named error. Or beneath
@@ -1735,7 +1665,7 @@ static error_t *deploy_directory(
             action = DIR_ACTION_CREATE;
             break;
 
-        case OCCUPANT_UNKNOWN:
+        case FS_OCCUPANT_UNKNOWN:
             return ERROR(ERR_FS, "Failed to stat '%s': %s", path, strerror(errno));
 
         default:

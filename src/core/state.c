@@ -629,12 +629,6 @@ static error_t *prepare_statements(state_t *state) {
  * built from.
  */
 static void invalidate_profile_entries(state_t *state) {
-    if (!state || !state->profile_entries) {
-        state->profile_entries_loaded = false;
-        state->profile_entry_count = 0;
-        return;
-    }
-
     for (size_t i = 0; i < state->profile_entry_count; i++) {
         free(state->profile_entries[i].name);
         free(state->profile_entries[i].target);

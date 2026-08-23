@@ -1409,8 +1409,8 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      *
      * Placement rationale: MUST run before the nothing-to-do early exit below,
      * otherwise the canonical case (clean manifest, no orphans) never reaches
-     * any anchor-writer. The writes land in the open transaction; the early exit's
-     * state_save and the main path's both commit them.
+     * any anchor-writer. The writes land in the dispatch transaction, which the
+     * checkpoint below commits — on every path, the early exit included.
      *
      * Write gated by !dry_run: stamping deployed_at is a write-effect that
      * contradicts dry-run's read-only ownership contract, so the workspace_anchor
@@ -1525,10 +1525,33 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         deploy_plan->directories.excluded.count + cleanup_plan->excluded.count +
         deploy_plan->files.skipped_existing.count;
 
+    /* Checkpoint: the run's reading of the present is complete, and recorded
+     *
+     * Everything written so far is a fact about the load — the flush's
+     * observations and confirmations, and the ownership events above, which
+     * claim rows the analysis found clean — and it stays a fact whatever the
+     * rest of the run does. What follows can end without writing anything
+     * else: the nothing-to-do exit below, a blocking finding, a strict-mode
+     * ownership error, a hook that refuses, a declined prompt. The dispatch
+     * transaction is committed here so that none of those exits rolls the
+     * present back — "Adopted N files" has already been said, and the record
+     * must say it too, or the next run adopts them again and the next status
+     * reads a path the load observed as never seen. Dry run included: its
+     * flush is as true as a real run's, and status persists the same writes.
+     *
+     * The record of the run's own effects — the anchors the deployment writes,
+     * the records cleanup retires — is the run's second transaction, begun
+     * past the early exit and committed at the end. */
+    err = state_save(state);
+    if (err) {
+        err = error_wrap(err, "Failed to commit state changes");
+        goto cleanup;
+    }
+
     /* Nothing pends on the filesystem: report the bookkeeping (if any) and leave.
      * Privilege checks, preflight, hooks and the prompt are for runs that touch
-     * disk — pure state bookkeeping skips them. The save also persists the flush's
-     * observations and confirmations, dry-run included, as status does. */
+     * disk — pure state bookkeeping skips them. Nothing is written past the
+     * checkpoint, so there is nothing left to save. */
     if (deploy_plan_is_empty(deploy_plan) && cleanup_plan_is_empty(cleanup_plan)) {
         if (reassigned.count > 0) {
             print_reassignments(out, &reassigned);
@@ -1554,15 +1577,18 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
             output_info(out, OUTPUT_NORMAL, "Nothing to deploy (workspace is clean)");
         }
 
-        /* Commit the transaction: the flush's observations and confirmations,
-         * the adoptions and acknowledgements above. */
-        err = state_save(state);
-        if (err) {
-            err = error_wrap(err, "Failed to commit state changes");
-            goto cleanup;
-        }
-
         err = NULL;
+        goto cleanup;
+    }
+
+    /* The run's transaction: the record of what the two engines do, committed
+     * at the end. Begun here rather than at the first write so the lock the
+     * dispatcher took is this process's again across the preview, the prompt
+     * and the execution — two applies must not interleave, and a status must
+     * not record paths this run is rewriting. */
+    err = state_begin(state);
+    if (err) {
+        err = error_wrap(err, "Failed to begin the run's state transaction");
         goto cleanup;
     }
 
@@ -1935,11 +1961,10 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         );
     }
 
-    /* Commit the state transaction: anchors, observations, retired records (partial
-     * success model — a cleanup failure leaves the record's writes to commit).
-     * Dry-run included: the transaction then holds only the load-time flush's
-     * observations and confirmations, which status and the nothing-to-do exit
-     * persist too. */
+    /* Commit the run's transaction: the anchors the deployment wrote and the
+     * records cleanup retired (partial success model — a cleanup failure leaves
+     * the record's writes to commit). The present was committed at the
+     * checkpoint; a dry run's transaction is empty and the save only closes it. */
     err = state_save(state);
     if (err) {
         err = error_wrap(err, "Failed to commit state changes");

@@ -215,8 +215,16 @@ error_t *state_open(git_repository *repo, state_t **out);
 /**
  * Save state
  *
- * Commits the transaction started by state_open(). All modifications made since
- * load are atomically committed.
+ * Commits the open transaction — the one state_open() started, or the one
+ * state_begin() started after an earlier save. All modifications made since the
+ * transaction began are atomically committed; a handle with no open transaction
+ * saves nothing and succeeds.
+ *
+ * A command whose writes have two lifetimes saves at the boundary between them
+ * and begins again (state_begin): apply commits what the load established —
+ * observations, confirmations, adoptions — before the first exit it can take
+ * without executing, then holds a second transaction for the record of what it
+ * executed. Each save is one lifetime's commit.
  *
  * @param state State to save (must not be NULL)
  * @return Error or NULL on success
@@ -227,12 +235,13 @@ error_t *state_save(state_t *state);
  * Begin an explicit transaction on a state handle
  *
  * Acquires a write lock (BEGIN IMMEDIATE). Used by batch operations that need
- * atomicity on a state opened via state_load() (no inherent transaction). On a
- * handle whose underlying DB does not yet exist on disk (state_load() on a
- * repository never touched by `dotta init`), this lazily creates .git/dotta.db
- * before taking the lock — mirroring state_open()'s create semantics, deferred
- * to the moment of actual write intent. Must be paired with state_commit() or
- * state_rollback().
+ * atomicity on a state opened via state_load() (no inherent transaction), and by
+ * a state_open() handle that has saved once and has more to write (see
+ * state_save). On a handle whose underlying DB does not yet exist on disk
+ * (state_load() on a repository never touched by `dotta init`), this lazily
+ * creates .git/dotta.db before taking the lock — mirroring state_open()'s create
+ * semantics, deferred to the moment of actual write intent. Must be paired with
+ * state_commit(), state_save() or state_rollback().
  *
  * @param state State (must not be NULL, must not be in transaction)
  * @return Error or NULL on success

@@ -87,8 +87,9 @@ typedef struct args_command args_command_t;
  * transactions via `state_begin` / `state_commit` on the borrowed handle —
  * update, revert, remove. WRITE is `state_open`: `BEGIN IMMEDIATE` held for the
  * lifetime of dispatch, and the command calls `state_save` when its mutation is
- * complete; `state_free` in the dispatcher rolls back any uncommitted
- * transaction.
+ * complete — or at a boundary inside it, taking the lock again with
+ * `state_begin` for what remains (apply's checkpoint, core/state.h); `state_free`
+ * in the dispatcher rolls back any uncommitted transaction.
  *
  * CREATE-style commands (init, clone) declare NONE and open state themselves,
  * because the database file does not exist before dispatch runs — there is

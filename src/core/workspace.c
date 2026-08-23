@@ -1752,12 +1752,15 @@ static error_t *scan_directory_for_untracked(
             continue;
         }
 
-        /* Check if ignored: the rules on the mount-relative path, the source
-         * tree's .gitignore on the filesystem path (its root is that repo's). */
+        /* Check if ignored: the rules on the mount-relative path; where no
+         * layer decided, the source tree's .gitignore on the filesystem path
+         * (its root is that repo's) — the lowest layer, so a `!` rule above
+         * it wins. */
         bool is_dir = S_ISDIR(st.st_mode);
-        bool ignored = rules &&
-            gitignore_is_ignored(rules, mount_strip_label(storage_path), is_dir);
-        if (!ignored && source_filter) {
+        gitignore_match_t match;
+        gitignore_eval(rules, mount_strip_label(storage_path), is_dir, &match);
+        bool ignored = match.decided && match.ignored;
+        if (!match.decided && source_filter) {
             error_t *err = source_filter_is_excluded(
                 source_filter, full_path, is_dir, &ignored
             );

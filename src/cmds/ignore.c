@@ -754,8 +754,8 @@ static error_t *modify_dottaignore(
 }
 
 /**
- * Probe the source-tree .gitignore after the .dottaignore layers have returned
- * "not ignored". Requires an absolute path; a NULL one (a custom/ storage path
+ * Probe the source-tree .gitignore where no .dottaignore layer decided — the
+ * lowest layer. Requires an absolute path; a NULL one (a custom/ storage path
  * with no target bound here) silently short-circuits to "no source verdict".
  *
  * Errors from the underlying libgit2 query are surfaced at NORMAL verbosity so
@@ -939,7 +939,7 @@ static error_t *test_path_ignore(
                 ignore_origin_describe((ignore_origin_t) match.origin),
                 match.pattern
             );
-        } else if (source_gitignore_matches(
+        } else if (!match.decided && source_gitignore_matches(
             source_filter, fs_path, is_directory, out
             )) {
             output_styled(
@@ -998,7 +998,7 @@ static error_t *test_path_ignore(
                 ignore_origin_describe((ignore_origin_t) match.origin),
                 match.pattern
             );
-        } else if (source_gitignore_matches(
+        } else if (!match.decided && source_gitignore_matches(
             source_filter, fs_path, is_directory, out
             )) {
             output_styled(out, OUTPUT_NORMAL, "{red}✗{reset} IGNORED\n");
@@ -1035,7 +1035,7 @@ static error_t *test_path_ignore(
 
         bool ignored_here = match.decided && match.ignored;
         bool by_source = false;
-        if (!ignored_here) {
+        if (!match.decided) {
             by_source = source_gitignore_matches(
                 source_filter, fs_path, is_directory, out
             );

@@ -102,7 +102,9 @@ static error_t *validate_options(const cmd_add_options_t *opts) {
  *      mount root would see.
  *   2. The source tree's own `.gitignore`, if the command built a filter
  *      (gated on `config.respect_gitignore`), evaluated on `fs_path`: that
- *      repository's root is the root its rules are relative to.
+ *      repository's root is the root its rules are relative to. The lowest
+ *      layer: asked only when no `.dottaignore` layer decided, so a `!` rule
+ *      in any of them overrides it.
  *
  * Either mechanism may be absent. `*out_match` is the rules' verdict — the
  * layer and the rule as written when they decided, undecided when the source
@@ -122,8 +124,8 @@ static bool is_excluded(
     gitignore_eval(
         walk->rules, mount_strip_label(storage_path), is_directory, out_match
     );
-    if (out_match->decided && out_match->ignored) {
-        return true;
+    if (out_match->decided) {
+        return out_match->ignored;
     }
 
     if (walk->source_filter) {

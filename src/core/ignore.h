@@ -18,7 +18,8 @@
  * The source tree's own `.gitignore` (when the user runs `dotta add` against
  * files that live inside a different git repository) is a separate mechanism in
  * `sys/source.h`. Callers that want that behaviour build a `source_filter_t`
- * alongside and consult it explicitly.
+ * alongside and consult it explicitly — where no layer above decided, so it
+ * is the lowest layer and a `!` rule in any of the four overrides it.
  *
  * Runtime shape
  * -------------

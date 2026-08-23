@@ -40,6 +40,41 @@
 #include "utils/privilege.h"
 
 /**
+ * One path the walk collected, under both its names
+ *
+ * The walk is where the mount boundary is crossed: each path it collects is
+ * classified there, once, through the command's table, and everything after
+ * reads the name it needs — the capture and the commit message the storage
+ * path, the record loop the filesystem path. A file's stat is the capture's
+ * (add_file_to_worktree's single lstat of the bytes it stored), so the record
+ * binds the committed blob to it; a directory's stays unset, as apply records
+ * them.
+ */
+typedef struct {
+    const char *fs_path;          /* Absolute, as walked (arena) */
+    const char *storage_path;     /* Classified at collection (arena) */
+    stat_cache_t stat;            /* The capture's triple; STAT_CACHE_UNSET for a directory */
+} add_path_t;
+
+/**
+ * The walk: what every frame reads, and the two lists it fills
+ *
+ * `seen` holds every filesystem path the walk passed so far, so overlapping
+ * CLI arguments (~/.config and ~/.config/fish) list each path once: a
+ * directory already walked is skipped with its subtree, a file already listed
+ * is not listed again. Keys borrow the arena strings the lists hold.
+ */
+typedef struct {
+    const dotta_ctx_t *ctx;              /* The arena the paths live in, and the output */
+    const mount_table_t *mounts;         /* The command's table (see cmd_add) */
+    const gitignore_ruleset_t *rules;    /* The profile's .dottaignore layers */
+    source_filter_t *source_filter;      /* The source tree's .gitignore, when consulted */
+    hashmap_t *seen;                     /* Filesystem path -> walked (borrowed keys) */
+    ptr_array_t files;                   /* add_path_t *: every non-directory listed */
+    ptr_array_t directories;             /* add_path_t *: every directory walked into */
+} add_walk_t;
+
+/**
  * Validate command options
  */
 static error_t *validate_options(const cmd_add_options_t *opts) {
@@ -104,48 +139,68 @@ static bool is_excluded(
 }
 
 /**
- * Recursively collect a directory tree into the caller's accumulators.
+ * List `fs_path` under both names. The item is the arena's; the list borrows it.
+ */
+static error_t *list_path(
+    arena_t *arena,
+    ptr_array_t *list,
+    const char *fs_path,
+    const char *storage_path
+) {
+    add_path_t *path = arena_calloc(arena, 1, sizeof(*path));
+    if (!path) {
+        return ERROR(ERR_MEMORY, "Failed to allocate path entry");
+    }
+    path->fs_path = fs_path;
+    path->storage_path = storage_path;
+    path->stat = STAT_CACHE_UNSET;
+
+    return ptr_array_push(list, path);
+}
+
+/**
+ * Collect a directory tree into the walk.
  *
- * Appends one entry to `directories` on every successful entry (the walker is
- * the sole source of truth for directory tracking), and one entry to `files`
- * for every non-excluded non-directory child. Dedups against already-collected
- * entries so overlapping CLI args (~/.config and ~/.config/fish) don't
- * double-record — within a single walk, tree recursion visits each directory
- * exactly once, so only cross-walk duplicates are possible.
+ * `dir_storage` is the directory's own storage path, NULL when it is a mount
+ * root ($HOME, "/", a --target): a root has no name in the storage namespace
+ * and is not listed; its descendants are. Every other directory walked into is
+ * listed — the walk is the sole source of directory tracking — and so is every
+ * non-excluded non-directory child. Symlinks are never followed: a symlink to
+ * a directory is an entry like any other.
  *
- * Symlinks are never recursed into: symlink-to-dir is treated as an atomic entry
- * by the outer loop and never reaches this function.
+ * Each child is classified here, once; the recursion receives both names and
+ * never classifies again. A child that is itself a mount root (a --target
+ * nested in the tree being walked) is walked through unlisted when it is a
+ * directory, and skipped otherwise: nothing in the namespace names it.
  *
- * All pushed strings are owned by the arrays (string_array_push copies). On error,
- * partial results remain in the caller's arrays; the caller's cleanup path frees
- * them.
+ * On error the lists keep what was collected; the caller's cleanup owns them.
  */
 static error_t *collect_tree(
-    const char *dir_path,
-    const gitignore_ruleset_t *rules,
-    source_filter_t *source_filter,
-    output_t *out,
-    string_array_t *files,
-    string_array_t *directories
+    add_walk_t *walk,
+    const char *dir_fs,
+    const char *dir_storage
 ) {
-    CHECK_NULL(dir_path);
-    CHECK_NULL(files);
-    CHECK_NULL(directories);
+    CHECK_NULL(walk);
+    CHECK_NULL(dir_fs);
 
-    DIR *dir = opendir(dir_path);
+    arena_t *arena = walk->ctx->arena;
+    output_t *out = walk->ctx->out;
+
+    /* A directory already walked was walked whole: nothing new beneath it. */
+    if (hashmap_has(walk->seen, dir_fs)) return NULL;
+
+    DIR *dir = opendir(dir_fs);
     if (!dir) {
-        return ERROR(ERR_FS, "Failed to open directory: %s", dir_path);
+        return ERROR(ERR_FS, "Failed to open directory: %s", dir_fs);
     }
 
-    /* Record this directory. Classification-root skip happens later in the
-     * metadata-capture phase; at collection time every walked directory is a
-     * tracking candidate. */
-    if (!string_array_contains(directories, dir_path)) {
-        error_t *push_err = string_array_push(directories, dir_path);
-        if (push_err) {
-            closedir(dir);
-            return push_err;
-        }
+    error_t *err = hashmap_set(walk->seen, dir_fs, (void *) 1);
+    if (!err && dir_storage) {
+        err = list_path(arena, &walk->directories, dir_fs, dir_storage);
+    }
+    if (err) {
+        closedir(dir);
+        return err;
     }
 
     struct dirent *entry;
@@ -158,35 +213,62 @@ static error_t *collect_tree(
             continue;
         }
 
-        /* Build full path */
-        char *full_path = str_format("%s/%s", dir_path, entry->d_name);
-        if (!full_path) {
+        const char *child_fs =
+            arena_str_format(arena, "%s/%s", dir_fs, entry->d_name);
+        if (!child_fs) {
             closedir(dir);
             return ERROR(ERR_MEMORY, "Failed to allocate path");
         }
 
-        /* Determine entry type */
-        bool is_symlink = fs_is_symlink(full_path);
-        bool is_dir = !is_symlink && fs_is_directory(full_path);
+        /* One lstat decides the kind: a symlink is never a directory here. */
+        struct stat st;
+        if (lstat(child_fs, &st) != 0) {
+            int saved_errno = errno;
+            closedir(dir);
+            return ERROR(
+                ERR_FS, "Failed to stat '%s': %s", child_fs, strerror(saved_errno)
+            );
+        }
+        bool is_dir = S_ISDIR(st.st_mode);
 
-        /* Check exclude patterns */
-        if (is_excluded(full_path, is_dir, rules, source_filter, out)) {
-            output_info(out, OUTPUT_VERBOSE, "Excluded: %s", full_path);
-            free(full_path);
+        /* The crossing: the child's storage name, or ROOT when it is a mount
+         * root — not a name in the namespace, so neither excludable nor listed. */
+        mount_classify_outcome_t outcome;
+        const char *child_storage = NULL;
+        err = mount_classify(
+            walk->mounts, child_fs, arena, &outcome, &child_storage, NULL
+        );
+        if (err) {
+            closedir(dir);
+            return error_wrap(err, "Failed to classify '%s'", child_fs);
+        }
+
+        if (outcome == MOUNT_CLASSIFY_ROOT && !is_dir) {
+            /* A symlink standing at a mount root (a --target the user reaches
+             * through a symlink): the walk does not follow symlinks, and the
+             * root itself has no name. */
+            output_info(out, OUTPUT_VERBOSE, "Skipped mount root: %s", child_fs);
             errno = 0;
             continue;
         }
 
-        error_t *err = NULL;
-        if (is_dir) {
-            /* Recurse: child pushes itself on entry. */
-            err = collect_tree(
-                full_path, rules, source_filter, out, files, directories
-            );
-        } else if (!string_array_contains(files, full_path)) {
-            err = string_array_push(files, full_path);
+        /* Check exclude patterns */
+        if (child_storage &&
+            is_excluded(child_fs, is_dir, walk->rules, walk->source_filter, out)) {
+            output_info(out, OUTPUT_VERBOSE, "Excluded: %s", child_fs);
+            errno = 0;
+            continue;
         }
-        free(full_path);
+
+        if (is_dir) {
+            /* Recurse: the child lists itself on entry. */
+            err = collect_tree(walk, child_fs, child_storage);
+        } else if (!hashmap_has(walk->seen, child_fs)) {
+            err = hashmap_set(walk->seen, child_fs, (void *) 1);
+            if (!err) {
+                err = list_path(arena, &walk->files, child_fs, child_storage);
+            }
+        }
         if (err) {
             closedir(dir);
             return err;
@@ -201,7 +283,7 @@ static error_t *collect_tree(
         closedir(dir);
         return ERROR(
             ERR_FS, "Error reading directory '%s': %s",
-            dir_path, strerror(saved_errno)
+            dir_fs, strerror(saved_errno)
         );
     }
 
@@ -490,10 +572,7 @@ static error_t *add_file_to_worktree(
  * @param ctx Dispatch context (must not be NULL)
  * @param wt Worktree handle
  * @param opts Command options
- * @param added_files Files that were added
- * @param mounts The table the added paths classify under — the run's, or under
- *               --target the one-binding table cmd_add built for this profile
- *               (must not be NULL)
+ * @param added_files The files the walk listed, as captured (must not be NULL)
  * @param out_commit_oid Output for commit OID (optional, can be NULL)
  * @return Error or NULL on success
  */
@@ -501,50 +580,29 @@ static error_t *create_commit(
     const dotta_ctx_t *ctx,
     worktree_handle_t *wt,
     const cmd_add_options_t *opts,
-    string_array_t *added_files,
-    const mount_table_t *mounts,
+    const ptr_array_t *added_files,
     git_oid *out_commit_oid
 ) {
     CHECK_NULL(ctx);
     CHECK_NULL(wt);
     CHECK_NULL(opts);
     CHECK_NULL(added_files);
-    CHECK_NULL(mounts);
 
     const config_t *config = ctx->config;
 
-    /* Build commit message using storage paths */
+    /* Build commit message using storage paths — the walk's, classified once. */
     string_array_t *storage_paths = string_array_new(0);
     if (!storage_paths) {
         return ERROR(ERR_MEMORY, "Failed to allocate storage paths array");
     }
 
-    /* Convert filesystem paths to storage paths for commit message. Files come
-     * from the walker output — already absolute and existing, so the walker never
-     * emits a top-level mount root. ROOT outcome is impossible here by
-     * construction; treat it as a skip should the invariant ever drift. */
     error_t *err = NULL;
     for (size_t i = 0; i < added_files->count; i++) {
-        const char *file_path = added_files->items[i];
-        mount_classify_outcome_t outcome;
-        const char *storage_path = NULL;
-
-        err = mount_classify(
-            mounts, file_path, ctx->arena, &outcome, &storage_path, NULL
-        );
+        const add_path_t *path = added_files->items[i];
+        err = string_array_push(storage_paths, path->storage_path);
         if (err) {
-            /* Skip if conversion fails (shouldn't happen at this point) */
-            error_free(err);
-            err = NULL;
-            continue;
-        }
-        if (outcome == MOUNT_CLASSIFY_ROOT) continue;
-
-        err = string_array_push(storage_paths, storage_path);
-        if (err) {
-            error_free(err);
-            err = NULL;
-            break;
+            string_array_free(storage_paths);
+            return err;
         }
     }
 
@@ -641,12 +699,9 @@ static error_t *create_commit(
  * @param profile Profile that files were added to (must not be NULL)
  * @param target Deployment target for custom/ files (can be NULL)
  * @param profile_was_new This add created the profile's branch: enable it here
- * @param added_files Filesystem paths that were added (must not be NULL)
- * @param added_stats The capture's stat triple per added file, aligned with
- *                    added_files (must not be NULL)
- * @param added_dirs Filesystem paths of the directories the walker passed through
- *                   (must not be NULL; a classification root among them has no
- *                   row and is skipped)
+ * @param added_files The files the walk listed, each with the capture's stat
+ *                    (must not be NULL)
+ * @param added_dirs The directories the walk passed through (must not be NULL)
  * @param out_updated Output flag: true if the record was written (must not be NULL)
  * @param out_synced Output: count of files anchored (can be NULL)
  * @param out_taken_over Output: count of those taken over from another profile's
@@ -658,9 +713,8 @@ static error_t *update_manifest_after_add(
     const char *profile,
     const char *target,
     bool profile_was_new,
-    const string_array_t *added_files,
-    const stat_cache_t *added_stats,
-    const string_array_t *added_dirs,
+    const ptr_array_t *added_files,
+    const ptr_array_t *added_dirs,
     bool *out_updated,
     size_t *out_synced,
     size_t *out_taken_over
@@ -668,7 +722,6 @@ static error_t *update_manifest_after_add(
     CHECK_NULL(ctx);
     CHECK_NULL(profile);
     CHECK_NULL(added_files);
-    CHECK_NULL(added_stats);
     CHECK_NULL(added_dirs);
     CHECK_NULL(out_updated);
 
@@ -754,10 +807,11 @@ static error_t *update_manifest_after_add(
     size_t synced_count = 0;
     size_t taken_over = 0;
     for (size_t i = 0; i < added_files->count; i++) {
-        const manifest_row_t *row = manifest_lookup(manifest, added_files->items[i]);
+        const add_path_t *path = added_files->items[i];
+        const manifest_row_t *row = manifest_lookup(manifest, path->fs_path);
         if (!row || strcmp(row->profile, profile) != 0) continue;
 
-        error_t *anchor_err = state_anchor(state, row, &added_stats[i], now, NULL);
+        error_t *anchor_err = state_anchor(state, row, &path->stat, now, NULL);
         if (anchor_err) {
             error_free(anchor_err);
             continue;
@@ -777,7 +831,8 @@ static error_t *update_manifest_after_add(
      * their contents. No stat triple: a directory has no content confirmation,
      * as apply records them. */
     for (size_t i = 0; i < added_dirs->count; i++) {
-        const manifest_row_t *row = manifest_lookup(manifest, added_dirs->items[i]);
+        const add_path_t *path = added_dirs->items[i];
+        const manifest_row_t *row = manifest_lookup(manifest, path->fs_path);
         if (!row || strcmp(row->profile, profile) != 0) continue;
 
         error_t *anchor_err = state_anchor(state, row, NULL, now, NULL);
@@ -822,9 +877,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     const gitignore_ruleset_t *profile_rules = NULL;
     source_filter_t *source_filter = NULL;
     worktree_handle_t *wt = NULL;
-    string_array_t *all_files = NULL;
-    string_array_t *all_directories = NULL;
-    stat_cache_t *added_stats = NULL;    /* The capture's stat triple per file in all_files (arena) */
+    add_walk_t walk = { .ctx = ctx };    /* Filled once the table and the rules are known */
     size_t added_count = 0;
     bool profile_was_new = false;
     metadata_t *metadata = NULL;
@@ -979,11 +1032,10 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         }
 
         /* Classify the path. ROOT outcome means the input equals a mount root
-         * exactly ($HOME, "/", or --target). The main loop's walker will still
-         * expand its descendants — what we need here is just the spec to answer
-         * "would this op touch a path needing elevation?". mount_classify writes
-         * the spec in both outcomes; only the storage-path materialization
-         * differs. */
+         * exactly ($HOME, "/", or --target). The walk will still expand its
+         * descendants — what we need here is just the spec to answer "would
+         * this op touch a path needing elevation?". mount_classify writes the
+         * spec in both outcomes; only the storage-path materialization differs. */
         mount_classify_outcome_t outcome;
         const char *storage_path = NULL;
         err = mount_classify(
@@ -1131,12 +1183,15 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         goto cleanup;
     }
 
-    /* Collect all files to add (expanding directories). The walker appends to
-     * both arrays; the caller owns both. */
-    all_files = string_array_new(0);
-    all_directories = string_array_new(0);
-    if (!all_files || !all_directories) {
-        err = ERROR(ERR_MEMORY, "Failed to allocate collection arrays");
+    /* Collect every path to add, expanding directories. The walk lists each
+     * path once, under both names: the CLI argument crosses the mount boundary
+     * here, and what the walk finds beneath it crosses in the walk. */
+    walk.mounts = mounts;
+    walk.rules = profile_rules;
+    walk.source_filter = source_filter;
+    walk.seen = hashmap_borrow(0);
+    if (!walk.seen) {
+        err = ERROR(ERR_MEMORY, "Failed to allocate the walk's index");
         goto cleanup;
     }
 
@@ -1213,74 +1268,84 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
             }
         }
 
+        /* The walk keeps what it lists, so the path lives in the arena. */
+        const char *fs_path = arena_strdup(ctx->arena, absolute);
+        free(absolute);
+        if (!fs_path) {
+            err = ERROR(ERR_MEMORY, "Failed to allocate path");
+            goto cleanup;
+        }
+
         /* Check path exists (use lexists to allow broken symlinks) */
-        if (!fs_lexists(absolute)) {
-            err = ERROR(ERR_NOT_FOUND, "Path not found: %s", absolute);
-            free(absolute);
+        if (!fs_lexists(fs_path)) {
+            err = ERROR(ERR_NOT_FOUND, "Path not found: %s", fs_path);
+            goto cleanup;
+        }
+
+        /* The argument's storage name — NULL for a mount root ($HOME, "/", the
+         * --target), which has none. */
+        mount_classify_outcome_t outcome;
+        const char *storage_path = NULL;
+        err = mount_classify(
+            mounts, fs_path, ctx->arena, &outcome, &storage_path, NULL
+        );
+        if (err) {
+            err = error_wrap(err, "Failed to classify '%s'", file);
             goto cleanup;
         }
 
         /* Handle symlinks, directories, and files */
-        if (!fs_is_symlink(absolute) && fs_is_directory(absolute)) {
+        if (!fs_is_symlink(fs_path) && fs_is_directory(fs_path)) {
             /* Remember counts so we can describe what the walk produced. */
-            size_t files_before = all_files->count;
-            size_t dirs_before = all_directories->count;
+            size_t files_before = walk.files.count;
+            size_t dirs_before = walk.directories.count;
 
-            err = collect_tree(
-                absolute, profile_rules, source_filter, out,
-                all_files, all_directories
-            );
+            /* A root is walked through unlisted: its descendants are listed. */
+            err = collect_tree(&walk, fs_path, storage_path);
             if (err) {
-                free(absolute);
                 err = error_wrap(err, "Failed to collect from '%s'", file);
                 goto cleanup;
             }
 
-            /* Diagnostic: the walker always pushes the CLI-arg directory itself,
-             * so all_directories grows by at least one. The file count reflects
-             * whether anything trackable was inside. */
-            if (all_files->count == files_before &&
-                all_directories->count == dirs_before + 1) {
-                output_info(
-                    out, OUTPUT_VERBOSE,
-                    "Directory has no trackable contents (tracking dir only): %s",
-                    absolute
-                );
-            } else if (all_files->count == files_before) {
-                output_info(
-                    out, OUTPUT_VERBOSE,
-                    "All files excluded (tracking directory tree only): %s",
-                    absolute
-                );
-            } else {
-                output_info(out, OUTPUT_VERBOSE, "Added directory: %s", absolute);
-            }
+            size_t files_found = walk.files.count - files_before;
+            size_t dirs_found = walk.directories.count - dirs_before;
+            output_info(
+                out, OUTPUT_VERBOSE,
+                "Collected %zu file%s and %zu director%s under %s",
+                files_found, files_found == 1 ? "" : "s",
+                dirs_found, dirs_found == 1 ? "y" : "ies", fs_path
+            );
         } else {
+            if (outcome == MOUNT_CLASSIFY_ROOT) {
+                /* A symlink standing at a mount root: $HOME itself when HOME is
+                 * a symlink, or a --target reached through one. The root has no
+                 * name, and the walk does not follow symlinks. */
+                err = ERROR(
+                    ERR_INVALID_ARG,
+                    "'%s' is a mount root and cannot be added itself; "
+                    "name what is inside it", file
+                );
+                goto cleanup;
+            }
+
             /* Single file or symlink - check if excluded */
-            if (is_excluded(absolute, false, profile_rules, source_filter, out)) {
-                output_info(out, OUTPUT_VERBOSE, "Excluded: %s", absolute);
-                free(absolute);
+            if (is_excluded(fs_path, false, profile_rules, source_filter, out)) {
+                output_info(out, OUTPUT_VERBOSE, "Excluded: %s", fs_path);
                 continue;
             }
 
-            /* Add to list (dedup: skip if already collected via directory expansion) */
-            if (!string_array_contains(all_files, absolute)) {
-                err = string_array_push(all_files, absolute);
-                if (err) {
-                    free(absolute);
-                    goto cleanup;
-                }
+            /* List it, unless a walk already did. */
+            if (hashmap_has(walk.seen, fs_path)) continue;
+            err = hashmap_set(walk.seen, fs_path, (void *) 1);
+            if (!err) {
+                err = list_path(ctx->arena, &walk.files, fs_path, storage_path);
             }
+            if (err) goto cleanup;
         }
-
-        free(absolute);
     }
 
-    /* Check if we have anything to add (files or directories). all_directories
-     * may contain classification-root entries that Phase 3 skips, but it also
-     * captures descendants — so a non-empty array is sufficient evidence that
-     * the walk produced something worth committing. */
-    if (all_files->count == 0 && all_directories->count == 0) {
+    /* Check if we have anything to add (files or directories). */
+    if (walk.files.count == 0 && walk.directories.count == 0) {
         if (opts->exclude_count > 0) {
             err = ERROR(
                 ERR_INVALID_ARG,
@@ -1316,44 +1381,17 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         }
     }
 
-    /* Single-pass: add files and capture metadata inline. Files come from the
-     * walker output — already absolute and existing, never equal to a mount root.
-     * ROOT outcome is impossible by construction; surface as ERR_INTERNAL if
-     * the invariant ever drifts. Each capture's stat triple is kept, aligned
-     * with all_files, for the record: it is the stat of the bytes committed,
-     * which a later lstat could not promise. */
-    added_stats = arena_calloc(ctx->arena, all_files->count, sizeof(*added_stats));
-    if (!added_stats) {
-        err = ERROR(ERR_MEMORY, "Failed to allocate capture stats");
-        goto cleanup;
-    }
-
-    for (size_t i = 0; i < all_files->count; i++) {
-        const char *file_path = all_files->items[i];
-
-        /* Compute storage path once */
-        mount_classify_outcome_t outcome;
-        const char *storage_path = NULL;
-        err = mount_classify(
-            mounts, file_path, ctx->arena, &outcome, &storage_path, NULL
-        );
-        if (err) {
-            err = error_wrap(err, "Failed to convert path '%s'", file_path);
-            goto cleanup;
-        }
-        if (outcome != MOUNT_CLASSIFY_TAIL) {
-            err = ERROR(
-                ERR_INTERNAL,
-                "Walker emitted classification root for '%s'", file_path
-            );
-            goto cleanup;
-        }
+    /* Single-pass: add files and capture metadata inline. Each capture's stat
+     * triple is kept on the path, for the record: it is the stat of the bytes
+     * committed, which a later lstat could not promise. */
+    for (size_t i = 0; i < walk.files.count; i++) {
+        add_path_t *path = walk.files.items[i];
 
         /* Validate storage path: this is the write boundary into the worktree
          * (and thence into Git). Establish the well-formed invariant here so
          * downstream readers (manifest, sync, remove) can trust the bytes they
          * read. */
-        err = mount_validate_storage(storage_path);
+        err = mount_validate_storage(path->storage_path);
         if (err) goto cleanup;
 
         /* Add file to worktree and capture metadata
@@ -1361,10 +1399,10 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
          * sharing stat() data between content and metadata layers to eliminate
          * TOCTOU */
         err = add_file_to_worktree(
-            ctx, wt, file_path, storage_path, opts, metadata, &added_stats[i]
+            ctx, wt, path->fs_path, path->storage_path, opts, metadata, &path->stat
         );
         if (err) {
-            err = error_wrap(err, "Failed to add file '%s'", file_path);
+            err = error_wrap(err, "Failed to add file '%s'", path->fs_path);
             goto cleanup;
         }
         added_count++;
@@ -1372,35 +1410,16 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
 
     /* Capture directory metadata for every walked directory.
      *
-     * Iterates `all_directories` (filesystem paths produced by the walker) and
-     * converts each to a storage path here. The walker records every directory
-     * it walks into — including the CLI-arg top-level — so this loop captures
-     * the full tree, not just the CLI-named entry points.
-     *
-     * Classification roots ($HOME, "/", --target) have no storage-path
-     * representation: mount_classify surfaces MOUNT_CLASSIFY_ROOT and we skip
-     * them by design. Their descendants are captured normally.
+     * The walk lists every directory it walks into — including the CLI-arg
+     * top-level — so this loop captures the full tree, not just the CLI-named
+     * entry points. A mount root ($HOME, "/", --target) is never listed: it has
+     * no storage name; its descendants are captured normally.
      */
     size_t dir_tracked_count = 0;
-    for (size_t i = 0; i < all_directories->count; i++) {
-        const char *filesystem_path = all_directories->items[i];
-
-        mount_classify_outcome_t outcome;
-        const char *storage_path = NULL;
-        err = mount_classify(
-            mounts, filesystem_path, ctx->arena, &outcome, &storage_path, NULL
-        );
-        if (err) {
-            err = error_wrap(
-                err, "Failed to convert directory path '%s'", filesystem_path
-            );
-            goto cleanup;
-        }
-        if (outcome == MOUNT_CLASSIFY_ROOT) {
-            /* Skip the root itself; its descendants appear as separate entries
-             * and are captured normally. */
-            continue;
-        }
+    for (size_t i = 0; i < walk.directories.count; i++) {
+        const add_path_t *path = walk.directories.items[i];
+        const char *filesystem_path = path->fs_path;
+        const char *storage_path = path->storage_path;
 
         /* Stat directory to capture mode (and ownership if root/custom). */
         struct stat dir_stat;
@@ -1489,7 +1508,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     }
 
     /* Create commit */
-    err = create_commit(ctx, wt, opts, all_files, mounts, NULL);
+    err = create_commit(ctx, wt, opts, &walk.files, NULL);
     if (err) goto cleanup;
 
     /* Write the record - auto-enable new profiles, anchor for enabled ones
@@ -1519,7 +1538,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
 
     error_t *manifest_err = update_manifest_after_add(
         ctx, opts->profile, opts->target, profile_was_new,
-        all_files, added_stats, all_directories,
+        &walk.files, &walk.directories,
         &manifest_updated, &manifest_synced_count, &manifest_taken_over
     );
     if (manifest_err) {
@@ -1653,8 +1672,9 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
 cleanup:
     /* Free resources in reverse order of allocation */
     if (metadata) metadata_free(metadata);
-    if (all_directories) string_array_free(all_directories);
-    if (all_files) string_array_free(all_files);
+    ptr_array_deinit(&walk.directories);
+    ptr_array_deinit(&walk.files);
+    hashmap_free(walk.seen, NULL);
     if (wt) worktree_cleanup(&wt);
     source_filter_free(source_filter);
     ignore_rules_free(ignore_rules);

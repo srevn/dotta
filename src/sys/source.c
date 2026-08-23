@@ -8,9 +8,13 @@
  *     This matches the common `dotta add` pattern (walking a single source tree)
  *     without growing memory on pathological workloads.
  *
- *   - `git_repository_workdir` returns a string ending in `/`; the prefix-stripping
- *     helper is defensive either way and consumes any leading slashes on the
- *     resulting relative path so later comparisons start from a real component.
+ *   - `git_repository_workdir` returns a string ending in `/`, canonical
+ *     (symlinks resolved); the query path's directory is canonicalised the
+ *     same way, its own name kept, before the two are compared, and discovery
+ *     starts from that directory — libgit2 resolves its start path, so an
+ *     entry that does not exist cannot be it. The prefix-stripping helper is
+ *     defensive either way and consumes any leading slashes on the resulting
+ *     relative path so later comparisons start from a real component.
  *
  *   - Directory queries get a trailing `/` appended before the libgit2 call so
  *     directory-only patterns (e.g. `node_modules/`) match. An allocation failure
@@ -30,6 +34,7 @@
 
 #include "base/error.h"
 #include "base/string.h"
+#include "sys/filesystem.h"
 
 struct source_filter {
     git_repository *cached_repo;   /* Owned; NULL when cache is cold */
@@ -89,16 +94,57 @@ static error_t *query_repo(
 }
 
 /**
- * Compute the portion of `abs_path` that lies below `workdir`, or NULL when
- * `abs_path` is not under `workdir`. Consumes any leading slashes on the result
- * so empty input is reported as "the workdir itself".
+ * Compute the portion of `path` that lies below `workdir`, or NULL when `path`
+ * is not under `workdir`. Consumes any leading slashes on the result so empty
+ * input is reported as "the workdir itself".
  */
-static const char *strip_workdir(const char *workdir, const char *abs_path) {
-    if (!str_starts_with(abs_path, workdir)) return NULL;
+static const char *strip_workdir(const char *workdir, const char *path) {
+    if (!str_starts_with(path, workdir)) return NULL;
 
-    const char *rel = abs_path + strlen(workdir);
+    const char *rel = path + strlen(workdir);
     while (*rel == '/') rel++;
     return rel;
+}
+
+/**
+ * Locate `abs_path` the way libgit2 will: its directory resolved through
+ * realpath, its own name kept. Discovery starts at the directory — libgit2
+ * resolves its start path, so it must exist, while the entry need not
+ * (`ignore --test`); a symlink entry is judged where it stands, not where it
+ * points. libgit2 reports the workdir canonical, so the path compares with it
+ * only in this form: under a symlinked prefix (macOS's /tmp -> /private/tmp,
+ * a symlinked $HOME) the raw spelling never matched. Falls back to the raw
+ * directory when it cannot be resolved. The caller frees both outputs.
+ */
+static error_t *locate(const char *abs_path, char **out_dir, char **out_path) {
+    const char *slash = strrchr(abs_path, '/');
+    const char *name = slash + 1;
+
+    char *dir = slash == abs_path
+        ? strdup("/")
+        : strndup(abs_path, (size_t) (slash - abs_path));
+    if (!dir) {
+        return ERROR(ERR_MEMORY, "Failed to allocate directory path");
+    }
+
+    char *resolved = NULL;
+    error_t *err = fs_canonicalize_path(dir, &resolved);
+    if (err) {
+        error_free(err);
+    } else {
+        free(dir);
+        dir = resolved;
+    }
+
+    char *path = str_format("%s/%s", strcmp(dir, "/") == 0 ? "" : dir, name);
+    if (!path) {
+        free(dir);
+        return ERROR(ERR_MEMORY, "Failed to allocate query path");
+    }
+
+    *out_dir = dir;
+    *out_path = path;
+    return NULL;
 }
 
 error_t *source_filter_is_excluded(
@@ -111,13 +157,22 @@ error_t *source_filter_is_excluded(
 
     *out = false;
 
+    char *dir = NULL;
+    char *path = NULL;
+    error_t *err = locate(abs_path, &dir, &path);
+    if (err) return err;
+
     /* Fast path: cached repo still covers this path. */
     if (f->cached_repo && f->cached_workdir) {
-        const char *rel = strip_workdir(f->cached_workdir, abs_path);
+        const char *rel = strip_workdir(f->cached_workdir, path);
         if (rel) {
             /* Path IS the workdir: no gitignore decision to make. */
-            if (*rel == '\0') return NULL;
-            return query_repo(f->cached_repo, rel, is_dir, out);
+            if (*rel != '\0') {
+                err = query_repo(f->cached_repo, rel, is_dir, out);
+            }
+            free(dir);
+            free(path);
+            return err;
         }
 
         /* Outside cached workdir — drop the cache and re-discover. */
@@ -127,14 +182,16 @@ error_t *source_filter_is_excluded(
         f->cached_workdir = NULL;
     }
 
-    /* Slow path: discover the containing repository. */
+    /* Slow path: discover the containing repository, from the directory. */
     git_buf discovered = GIT_BUF_INIT;
     int rc = git_repository_discover(
-        &discovered, abs_path,
+        &discovered, dir,
         /* across_fs */ 0,
         /* ceiling_dirs */ NULL
     );
+    free(dir);
     if (rc < 0) {
+        free(path);
         /* Not in any git repo: a legitimate "no verdict", not an error. */
         if (rc == GIT_ENOTFOUND) return NULL;
         return error_from_git(rc);
@@ -144,6 +201,7 @@ error_t *source_filter_is_excluded(
     rc = git_repository_open(&repo, discovered.ptr);
     git_buf_dispose(&discovered);
     if (rc < 0) {
+        free(path);
         return error_from_git(rc);
     }
 
@@ -151,16 +209,19 @@ error_t *source_filter_is_excluded(
     if (!workdir) {
         /* Bare repo — no workdir, no paths to resolve against. */
         git_repository_free(repo);
+        free(path);
         return NULL;
     }
 
-    const char *rel = strip_workdir(workdir, abs_path);
+    const char *rel = strip_workdir(workdir, path);
     if (!rel || *rel == '\0') {
         git_repository_free(repo);
+        free(path);
         return NULL;
     }
 
-    error_t *err = query_repo(repo, rel, is_dir, out);
+    err = query_repo(repo, rel, is_dir, out);
+    free(path);
     if (err) {
         git_repository_free(repo);
         return err;

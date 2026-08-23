@@ -1051,19 +1051,6 @@ error_t *fs_make_absolute(const char *path, char **out) {
         }
     }
 
-    /* Validate existence using lstat (doesn't follow final symlink component).
-     * This ensures the path refers to something real on the filesystem, preserving
-     * symlink locations for storage path determination. */
-    struct stat st;
-    if (lstat(absolute, &st) < 0) {
-        int saved_errno = errno;
-        free(absolute);
-        return ERROR(
-            ERR_NOT_FOUND, "Path does not exist: '%s': %s",
-            path, strerror(saved_errno)
-        );
-    }
-
     *out = absolute;
     return NULL;
 }

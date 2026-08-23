@@ -2158,14 +2158,17 @@ static const args_command_t spec_profile_validate = {
 
 /* --- parent: subcommand index + spec --- */
 
+/* Every verb but `list` — `dotta list` is the list command — also stands at
+ * the root: `dotta enable work` for `dotta profile enable work`. */
 static const args_subcommand_t profile_subs[] = {
-    { "list",     &spec_profile_list,     false },
-    { "fetch",    &spec_profile_fetch,    false },
-    { "enable",   &spec_profile_enable,   false },
-    { "disable",  &spec_profile_disable,  false },
-    { "reorder",  &spec_profile_reorder,  false },
-    { "validate", &spec_profile_validate, false },
-    { NULL,       NULL,                   false }
+    /* aliases     spec                    hidden shortcut */
+    { "list",     &spec_profile_list,     false, false },
+    { "fetch",    &spec_profile_fetch,    false, true  },
+    { "enable",   &spec_profile_enable,   false, true  },
+    { "disable",  &spec_profile_disable,  false, true  },
+    { "reorder",  &spec_profile_reorder,  false, true  },
+    { "validate", &spec_profile_validate, false, true  },
+    { NULL,       NULL,                   false, false }
 };
 
 const args_command_t spec_profile = {

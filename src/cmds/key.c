@@ -529,10 +529,11 @@ static const args_command_t spec_key_status = {
 /* --- parent: subcommand index + spec --- */
 
 static const args_subcommand_t key_subs[] = {
-    { "set",    &spec_key_set,    false },
-    { "clear",  &spec_key_clear,  false },
-    { "status", &spec_key_status, false },
-    { NULL,     NULL,             false }
+    /* aliases   spec              hidden shortcut */
+    { "set",    &spec_key_set,    false, false },
+    { "clear",  &spec_key_clear,  false, false },
+    { "status", &spec_key_status, false, false },
+    { NULL,     NULL,             false, false }
 };
 
 const args_command_t spec_key = {

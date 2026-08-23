@@ -702,13 +702,14 @@ static const args_command_t spec_remote_show = {
 /* --- parent: subcommand index + spec --- */
 
 static const args_subcommand_t remote_subs[] = {
-    { "list",      &spec_remote_list,    false },
-    { "add",       &spec_remote_add,     false },
-    { "remove rm", &spec_remote_remove,  false },
-    { "set-url",   &spec_remote_set_url, false },
-    { "rename",    &spec_remote_rename,  false },
-    { "show",      &spec_remote_show,    false },
-    { NULL,        NULL,                 false }
+    /* aliases      spec                  hidden shortcut */
+    { "list",      &spec_remote_list,    false, false },
+    { "add",       &spec_remote_add,     false, false },
+    { "remove rm", &spec_remote_remove,  false, false },
+    { "set-url",   &spec_remote_set_url, false, false },
+    { "rename",    &spec_remote_rename,  false, false },
+    { "show",      &spec_remote_show,    false, false },
+    { NULL,        NULL,                 false, false }
 };
 
 const args_command_t spec_remote = {

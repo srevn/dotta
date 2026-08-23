@@ -52,8 +52,11 @@
  *
  *   Root-level dispatch    `args_resolve_root` classifies argv[1] into a
  *                          built-in flag (`-h`/`--help`, `-v`/`--version`), a
- *                          command (by name), or a root alias (declared via
- *                          `args_command_t::root_aliases`).
+ *                          command (by name), a shortcut — a subcommand whose
+ *                          aliases stand at the root too, `<prog> enable` for
+ *                          `<prog> profile enable` (`args_subcommand_t::
+ *                          shortcut`), resolved to the subcommand's own spec —
+ *                          or a root alias (`args_command_t::root_aliases`).
  *
  *   Completion             Flags and subcommands complete from the rows, as
  *                          rules the fish exporter writes. What can stand at a
@@ -309,15 +312,24 @@ struct args_opt {
 /**
  * Subcommand entry in a tree.
  *
- * `name` is a space-separated alias list; the first token is the canonical form
+ * `name` is a space-separated alias list; the first name is the canonical form
  * shown in help output. Every subcommand in a tree must share the parent's options
  * struct type (same opts_size), since the dispatcher allocates opts based on
  * the top-level command.
+ *
+ * A `shortcut` — read on the subcommands of a top-level command — also stands
+ * at the root by its aliases: `<prog> enable <name>` for `<prog> profile enable
+ * <name>`. The root resolver answers it with the subcommand's own spec, so
+ * parse, help and dispatch are the subcommand's as if its parent had been
+ * typed; the root usage lists it under "Shortcuts:" as the word and the
+ * subcommand it stands for, and the completion export gives it a command's
+ * rows. A command's name wins over a shortcut's alias.
  */
 struct args_subcommand {
     const char *name;               /* "remove rm" — space-separated */
     const args_command_t *command;  /* Subcommand specification */
     bool hidden;                    /* Hide from help output */
+    bool shortcut;                  /* Its aliases stand at the root too */
 };
 
 /**
@@ -407,19 +419,26 @@ struct args_errors {
  *   2. argv[1] ∈ {-h, --help}                → ARGS_ROOT_HELP
  *   3. argv[1] ∈ {-v, --version}             → ARGS_ROOT_VERSION
  *   4. bare word matching `cmd->name`        → ARGS_ROOT_COMMAND
- *   5. flag form (`-X` / `--XXX`) matching
+ *   5. bare word matching an alias of a
+ *      `shortcut` subcommand of a command    → ARGS_ROOT_COMMAND, the
+ *                                              subcommand's own spec
+ *   6. flag form (`-X` / `--XXX`) matching
  *      `cmd->root_aliases`                   → ARGS_ROOT_COMMAND
- *   6. anything else                         → ARGS_ROOT_UNKNOWN
+ *   7. anything else                         → ARGS_ROOT_UNKNOWN
  *
  * Built-ins win over `root_aliases` — a command that declares `root_aliases =
  * "help h"` is shadowed silently. Universal CLI conventions cannot be overridden
- * from user data.
+ * from user data. Likewise a command's name wins over a shortcut's alias, and
+ * the first shortcut in registry order over a later one spelled the same: the
+ * shadowed one is unreachable, and the root usage shows both.
  *
  * @param commands    NULL-terminated registry of top-level commands.
  * @param argc        Process argc.
  * @param argv        Process argv.
- * @param command_out On ARGS_ROOT_COMMAND, populated with the matched spec;
- *                    unchanged otherwise. NULL is allowed.
+ * @param command_out On ARGS_ROOT_COMMAND, populated with the matched spec —
+ *                    a shortcut's is the subcommand's own, which `args_parse()`
+ *                    reads from argv[2] like any command's; unchanged otherwise.
+ *                    NULL is allowed.
  * @return            One of `args_root_outcome_t`.
  */
 args_root_outcome_t args_resolve_root(
@@ -530,9 +549,12 @@ void args_complete_candidates(
  * ══════════════════════════════════════════════════════════════════ */
 
 /**
- * Render the root-level usage banner and command summary list.
+ * Render the root-level usage banner and command summary list, then the
+ * shortcuts — each as the word and the subcommand it stands for — and the
+ * root options.
  *
- * Hidden commands are skipped. The commands array is terminated by a NULL entry.
+ * Hidden commands and subcommands are skipped. The commands array is terminated
+ * by a NULL entry.
  */
 void args_render_root_usage(
     FILE *out,
@@ -601,7 +623,8 @@ void args_render_errors(
  *     the token being typed is a flag name, which the flag rows answer;
  *   - top-level built-ins (`-h`, `-v`),
  *   - one root-alias entry per command with `root_aliases` set,
- *   - one command row per non-hidden command,
+ *   - one command row per non-hidden command, and one per shortcut subcommand,
+ *     whose rules then stand under its aliases as a command's do,
  *   - one option row per non-hidden flag/string/int/append, a value-taking one
  *     asking the wrapper for its value; a single-char name is declared as fish's
  *     old-style option (`-o X`) — exactly `-X`, never bundled, its value the

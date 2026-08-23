@@ -681,11 +681,22 @@ args_root_outcome_t args_resolve_root(
         return ARGS_ROOT_UNKNOWN;
     }
 
-    /* Bare word: match by command name. */
+    /* Bare word: match by command name; then by the aliases of a shortcut
+     * subcommand, answered with the subcommand's own spec — a command's name
+     * wins. */
     for (size_t i = 0; commands[i] != NULL; i++) {
         const args_command_t *c = commands[i];
         if (c->name != NULL && strcmp(c->name, tok) == 0) {
             if (command_out != NULL) *command_out = c;
+            return ARGS_ROOT_COMMAND;
+        }
+    }
+    for (size_t i = 0; commands[i] != NULL; i++) {
+        const args_subcommand_t *s = find_subcommand(
+            commands[i]->subcommands, tok
+        );
+        if (s != NULL && s->shortcut && s->command != NULL) {
+            if (command_out != NULL) *command_out = s->command;
             return ARGS_ROOT_COMMAND;
         }
     }
@@ -1101,6 +1112,29 @@ void args_render_root_usage(
             out, "  %-14s %s\n",
             c->name, c->summary ? c->summary : ""
         );
+    }
+
+    /* Shortcuts section: a subcommand's word at the root, and the subcommand
+     * it stands for — its qualified name says where it lives. */
+    bool shortcuts = false;
+    for (size_t i = 0; commands[i] != NULL; i++) {
+        const args_command_t *c = commands[i];
+        if (c->hidden || c->subcommands == NULL) continue;
+        for (const args_subcommand_t *s = c->subcommands; s->name != NULL; s++) {
+            if (!s->shortcut || s->hidden || s->command == NULL) continue;
+            if (!shortcuts) {
+                fputs("\nShortcuts:\n", out);
+                shortcuts = true;
+            }
+            const char *p = s->name;
+            const char *canonical = "";
+            size_t len = 0;
+            (void) next_name(&p, &canonical, &len);
+            fprintf(
+                out, "  %-14.*s %s\n", (int) len, canonical,
+                s->command->name ? s->command->name : ""
+            );
+        }
     }
 
     /* Options section: built-ins (`-h`/`-v`) plus the canonical home for every
@@ -1557,14 +1591,18 @@ static void emit_sub_row(
 }
 
 /**
- * Walk a top-level command and its subcommand tree, emitting its rules.
+ * Walk a command and its subcommand tree, emitting its rules under `names` —
+ * the words it stands under at the root: a top-level command's name, or a
+ * shortcut subcommand's alias list. The guards of a tree's slot and of a
+ * passthrough read one word — the first.
  */
 static void emit_command(
     FILE *out,
     const char *prog,
-    const args_command_t *cmd
+    const args_command_t *cmd,
+    const char *names
 ) {
-    const fish_guard_t own = { "using_command", cmd->name, NULL };
+    const fish_guard_t own = { "using_command", names, NULL };
 
     /* Passthrough commands hand the tail of argv to an external tool (e.g. `<prog>
      * git <git-args...>` forwards everything after `git` to a spawned git process).
@@ -1572,11 +1610,15 @@ static void emit_command(
      * there are no flags or subs to emit on our side, since the spec is
      * intentionally empty. */
     if (cmd->passthrough) {
+        const char *p = names;
+        const char *canonical = "";
+        size_t len = 0;
+        (void) next_name(&p, &canonical, &len);
         fprintf(out, "complete -c %s", prog);
         emit_guard(out, prog, &own);
         fprintf(
-            out, " -xa \"(__fish_complete_subcommand --command %s)\"\n",
-            cmd->name
+            out, " -xa \"(__fish_complete_subcommand --command %.*s)\"\n",
+            (int) len, canonical
         );
         return;
     }
@@ -1592,7 +1634,7 @@ static void emit_command(
     if (cmd->subcommands != NULL) {
         /* One-liner pointing users at each sub, offered only while the subcommand
          * slot is still open. */
-        const fish_guard_t slot = { "needs_subcommand", cmd->name, NULL };
+        const fish_guard_t slot = { "needs_subcommand", names, NULL };
 
         for (const args_subcommand_t *s = cmd->subcommands;
             s->name != NULL; s++) {
@@ -1605,7 +1647,7 @@ static void emit_command(
          * default sub's flags. */
         if (cmd->default_subcommand != NULL &&
             cmd->default_subcommand->opts != NULL) {
-            const fish_guard_t dflt = { "using_default_subcommand", cmd->name, NULL };
+            const fish_guard_t dflt = { "using_default_subcommand", names, NULL };
             for (const args_opt_t *o = cmd->default_subcommand->opts;
                 o->kind != ARGS_KIND_END; o++) {
                 emit_complete_line(out, prog, &dflt, o);
@@ -1617,7 +1659,7 @@ static void emit_command(
             s->name != NULL; s++) {
             if (s->hidden || s->command == NULL) continue;
 
-            const fish_guard_t under = { "using_subcommand", cmd->name, s->name };
+            const fish_guard_t under = { "using_subcommand", names, s->name };
             if (s->command->opts != NULL) {
                 for (const args_opt_t *o = s->command->opts;
                     o->kind != ARGS_KIND_END; o++) {
@@ -1626,6 +1668,33 @@ static void emit_command(
             }
         }
     }
+}
+
+/**
+ * Emit a command's rules as a block under a `# NAMES` header, or nothing when
+ * there are none.
+ */
+static void emit_block(
+    FILE *out, const char *prog, const args_command_t *cmd, const char *names
+) {
+    char *block = NULL;
+    size_t block_len = 0;
+    FILE *mem = open_memstream(&block, &block_len);
+    if (mem == NULL) {
+        fprintf(out, "# %s\n", names);
+        emit_command(out, prog, cmd, names);
+        fputc('\n', out);
+        return;
+    }
+
+    emit_command(mem, prog, cmd, names);
+    fclose(mem);
+    if (block_len > 0) {
+        fprintf(out, "# %s\n", names);
+        fwrite(block, 1, block_len, out);
+        fputc('\n', out);
+    }
+    free(block);
 }
 
 /**
@@ -1787,7 +1856,9 @@ error_t *args_export_completion_fish(
     }
     fputc('\n', out);
 
-    /* Command list. */
+    /* Command list: each command, then its shortcut subcommands — words at the
+     * root like it. A command's `-a` is its name; a shortcut's the canonical
+     * alias, as the subcommand rows offer it. */
     fputs("# Commands\n", out);
     for (size_t i = 0; commands[i] != NULL; i++) {
         const args_command_t *c = commands[i];
@@ -1798,10 +1869,26 @@ error_t *args_export_completion_fish(
         );
         fputs_fish_escaped(out, c->summary ? c->summary : "");
         fputs("\"\n", out);
+
+        if (c->subcommands == NULL) continue;
+        for (const args_subcommand_t *s = c->subcommands; s->name != NULL; s++) {
+            if (!s->shortcut || s->hidden || s->command == NULL) continue;
+            const char *p = s->name;
+            const char *canonical = "";
+            size_t len = 0;
+            (void) next_name(&p, &canonical, &len);
+            fprintf(
+                out, "complete -c %s -n __%s_needs_command -a %.*s -d \"",
+                prog, prog, (int) len, canonical
+            );
+            fputs_fish_escaped(out, s->command->summary ? s->command->summary : "");
+            fputs("\"\n", out);
+        }
     }
     fputc('\n', out);
 
-    /* Per-command rules, each block under a `# NAME` header. The block is rendered
+    /* Per-command rules, each block under a `# NAME` header — a command's,
+     * then its shortcut subcommands' under their aliases. The block is rendered
      * first so a command with nothing to say — a dispatch shell reachable by
      * bareword or root alias alone, like `interactive` — leaves no orphan header.
      * Without a memstream (out of memory) the block goes straight through, header
@@ -1810,24 +1897,13 @@ error_t *args_export_completion_fish(
         const args_command_t *c = commands[i];
         if (c->hidden) continue;
 
-        char *block = NULL;
-        size_t block_len = 0;
-        FILE *mem = open_memstream(&block, &block_len);
-        if (mem == NULL) {
-            fprintf(out, "# %s\n", c->name);
-            emit_command(out, prog, c);
-            fputc('\n', out);
-            continue;
-        }
+        emit_block(out, prog, c, c->name);
 
-        emit_command(mem, prog, c);
-        fclose(mem);
-        if (block_len > 0) {
-            fprintf(out, "# %s\n", c->name);
-            fwrite(block, 1, block_len, out);
-            fputc('\n', out);
+        if (c->subcommands == NULL) continue;
+        for (const args_subcommand_t *s = c->subcommands; s->name != NULL; s++) {
+            if (!s->shortcut || s->hidden || s->command == NULL) continue;
+            emit_block(out, prog, s->command, s->name);
         }
-        free(block);
     }
     return NULL;
 }

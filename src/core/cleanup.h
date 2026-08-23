@@ -62,10 +62,8 @@
 
 #include <stdbool.h>
 
+#include "core/scope.h"
 #include "core/workspace.h"
-
-/* The scope the plan is read under (core/scope.h); named here, defined there. */
-typedef struct scope scope_t;
 
 /* ── Plan ─────────────────────────────────────────────────────────── */
 

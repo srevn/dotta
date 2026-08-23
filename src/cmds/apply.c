@@ -1102,7 +1102,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     deploy_preflight_result_t *deploy_verdicts = NULL; /* Verdicts borrow rows from ws; free before ws */
     cleanup_preflight_result_t *cleanup_verdicts = NULL;
     char *profiles_str = NULL;
-    deploy_result_t *deploy_res = NULL;
+    deploy_result_t *deploy_result = NULL;
 
     /* CLI flags override config */
     if (opts->verbose) {
@@ -1557,7 +1557,8 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
             print_reassignments(out, &reassigned);
             if (opts->dry_run) {
                 output_info(
-                    out, OUTPUT_NORMAL, "Would acknowledge %zu profile reassignment%s",
+                    out, OUTPUT_NORMAL,
+                    "Would acknowledge %zu profile reassignment%s",
                     reassigned.count, reassigned.count == 1 ? "" : "s"
                 );
             } else if (acknowledged_count > 0) {
@@ -1615,17 +1616,20 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     }
 
     print_deploy_preflight_results(out, deploy_verdicts);
-    print_reassignments(out, &reassigned);
 
-    /* Check for blocking findings (conflicts, blocked paths, permissions) */
+    /* Check for blocking findings (conflicts, blocked paths, permissions). A
+     * blocked run previews nothing: the findings and their remedy are the
+     * whole of what it has to say, and the remedy stays the last line before
+     * the error. */
     if (deploy_verdicts->conflicts->count > 0 || deploy_verdicts->blocked->count > 0 ||
         deploy_verdicts->permission_errors->count > 0) {
         err = ERROR(ERR_CONFLICT, "Pre-flight checks failed");
         goto cleanup;
     }
 
-    /* The verdicts are what the run does; the preview reads them, real run and
-     * dry run alike. */
+    /* The previews: the reassignments the run acknowledges, then the verdicts
+     * — what the run does — read the same way in a real run and a dry run. */
+    print_reassignments(out, &reassigned);
     print_deploy_preview(out, deploy_verdicts);
 
     /* Decide cleanup's verdicts from the plan. An empty plan (--keep-orphans,
@@ -1749,16 +1753,16 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
 
             /* The content cache was populated with decrypted content during
              * workspace divergence analysis; deploy's fetches hit it. */
-            err = deploy_execute(repo, ws, deploy_verdicts, content_cache, &deploy_res);
+            err = deploy_execute(repo, ws, deploy_verdicts, content_cache, &deploy_result);
             if (err) {
-                if (deploy_res) {
-                    print_deploy_results(out, ws, deploy_res);
+                if (deploy_result) {
+                    print_deploy_results(out, ws, deploy_result);
                 }
                 err = error_wrap(err, "Deployment failed");
                 goto cleanup;
             }
 
-            print_deploy_results(out, ws, deploy_res);
+            print_deploy_results(out, ws, deploy_result);
         } else {
             output_print(out, OUTPUT_VERBOSE, "\nNo deployment work in scope\n");
         }
@@ -1878,8 +1882,8 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
          * the acknowledgement — and is counted with the clean ones the adoption
          * loop re-stamped.
          */
-        if (deploy_res) {
-            manifest_rows_t deployed = manifest_rows_view(&deploy_res->deployed);
+        if (deploy_result) {
+            manifest_rows_t deployed = manifest_rows_view(&deploy_result->deployed);
 
             if (deployed.count > 0) {
                 output_print(out, OUTPUT_VERBOSE, "\nUpdating deployment anchors...\n");
@@ -1922,9 +1926,9 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
             }
 
             const manifest_rows_t made[] = {
-                manifest_rows_view(&deploy_res->created),
-                manifest_rows_view(&deploy_res->replaced),
-                manifest_rows_view(&deploy_res->ancestors),
+                manifest_rows_view(&deploy_result->created),
+                manifest_rows_view(&deploy_result->replaced),
+                manifest_rows_view(&deploy_result->ancestors),
             };
             for (size_t b = 0; b < sizeof(made) / sizeof(made[0]); b++) {
                 for (size_t i = 0; i < made[b].count; i++) {
@@ -1980,7 +1984,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
 cleanup:
     /* Result and plan buckets borrow rows from the workspace arena — free them
      * before workspace_free. reassigned borrows into the diverged array. */
-    if (deploy_res) deploy_result_free(deploy_res);
+    if (deploy_result) deploy_result_free(deploy_result);
     if (deploy_plan) deploy_plan_free(deploy_plan);
     ptr_array_deinit(&reassigned);
     if (cleanup_verdicts) cleanup_preflight_result_free(cleanup_verdicts);

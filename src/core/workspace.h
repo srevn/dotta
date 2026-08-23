@@ -99,9 +99,8 @@ typedef struct {
     divergence_type_t divergence; /* What's wrong with it (bit flags, can combine) */
     path_kind_t item_kind;        /* PATH_KIND_FILE or PATH_KIND_DIRECTORY */
 
-    /* The observation and its labels */
+    /* The observation and its label */
     fs_occupant_t occupant;     /* What the analysis's lstat found at the path (see above) */
-    bool profile_enabled;       /* Is source profile in workspace's enabled list? */
     bool profile_changed;       /* Profile differs from the record's (reassigned) */
 } workspace_item_t;
 
@@ -262,8 +261,11 @@ const workspace_item_t *workspace_get_all_diverged(
  * Get workspace item by filesystem path
  *
  * Returns the divergence information for a specific file or directory via O(1)
- * hashmap lookup. If the item exists in the workspace but has no divergence
- * (CLEAN), this returns NULL. Only items with divergence are indexed.
+ * hashmap lookup. Every item the analysis produced is indexed — a row with a
+ * state other than DEPLOYED, a divergence bit, or a reassignment (a clean row
+ * whose owned record names another profile has an item carrying only
+ * profile_changed); a row with none of the three has no item, and this returns
+ * NULL.
  *
  * This function enables preflight to efficiently query workspace data instead
  * of re-analyzing files, eliminating redundant comparisons.

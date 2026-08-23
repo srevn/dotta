@@ -115,12 +115,10 @@ struct workspace {
     size_t orphan_count;                         /* Number of orphans */
 
     /* State and profile set — the view's profiles (manifest_profiles), in
-     * precedence order: the untracked scan walks them in that order and the
-     * orphan label asks the index whether a record's profile is among them. */
+     * precedence order: the untracked scan walks them in that order. */
     state_t *state;                              /* The record's handle (borrowed from caller) */
     const char *const *profiles;                 /* The view's names (arena); valid for workspace lifetime */
     size_t profile_count;                        /* Number of profiles */
-    hashmap_t *profile_index;                    /* Maps profile -> NULL (membership set, O(1) lookup) */
 
     /* Content cache for encrypted blob reads during divergence analysis */
     content_cache_t *content_cache;              /* Borrowed — NOT freed in workspace_free */
@@ -178,29 +176,10 @@ static error_t *workspace_create_empty(
     ws->repo = repo;
     ws->profiles = manifest_profiles(manifest, &ws->profile_count);
 
-    ws->profile_index = hashmap_borrow(32); /* Keys: the view's arena-backed names */
-    if (!ws->profile_index) {
-        free(ws);
-        return ERROR(ERR_MEMORY, "Failed to create profile index");
-    }
-
     ws->diverged_index = hashmap_borrow(256);  /* Keys: arena-backed filesystem_path */
     if (!ws->diverged_index) {
-        hashmap_free(ws->profile_index, NULL);
         free(ws);
         return ERROR(ERR_MEMORY, "Failed to create diverged index");
-    }
-
-    /* Build profile membership set for O(1) scope checks. Values are NULL — this
-     * is a pure name set, not a value map. */
-    for (size_t i = 0; i < ws->profile_count; i++) {
-        error_t *err = hashmap_set(ws->profile_index, ws->profiles[i], NULL);
-        if (err) {
-            hashmap_free(ws->diverged_index, NULL);
-            hashmap_free(ws->profile_index, NULL);
-            free(ws);
-            return error_wrap(err, "Failed to index profile");
-        }
     }
 
     ws->diverged = NULL;
@@ -324,7 +303,6 @@ error_t *check_item_metadata_divergence(
  * @param divergence What's wrong with it (bit flags, can combine)
  * @param item_kind FILE or DIRECTORY (explicit type)
  * @param occupant What the producer's lstat found at the path (workspace.h)
- * @param profile_enabled Is source profile in enabled list?
  * @param profile_changed Has owning profile changed vs the record?
  */
 static error_t *workspace_add_diverged(
@@ -337,7 +315,6 @@ static error_t *workspace_add_diverged(
     divergence_type_t divergence,
     path_kind_t item_kind,
     fs_occupant_t occupant,
-    bool profile_enabled,
     bool profile_changed
 ) {
     CHECK_NULL(ws);
@@ -374,7 +351,6 @@ static error_t *workspace_add_diverged(
     entry->divergence = divergence;
     entry->item_kind = item_kind;
     entry->occupant = occupant;
-    entry->profile_enabled = profile_enabled;
     entry->profile_changed = profile_changed;
 
     /* Store array index in hashmap for O(1) lookup */
@@ -578,7 +554,6 @@ static error_t *analyze_file_divergence(
             WORKSPACE_STATE_DEPLOYED, DIVERGENCE_UNVERIFIED,
             PATH_KIND_FILE,
             occupant,                    /* assumed present */
-            true,                        /* profile_enabled */
             profile_changed
         );
     }
@@ -826,7 +801,7 @@ static error_t *analyze_file_divergence(
                  * Return immediately with TYPE divergence. */
                 return workspace_add_diverged(
                     ws, fs_path, storage_path, profile, NULL, WORKSPACE_STATE_DEPLOYED,
-                    DIVERGENCE_TYPE, PATH_KIND_FILE, occupant, true, false
+                    DIVERGENCE_TYPE, PATH_KIND_FILE, occupant, false
                 );
 
             case CMP_MISSING:
@@ -957,7 +932,7 @@ static error_t *analyze_file_divergence(
     if (state != WORKSPACE_STATE_DEPLOYED || divergence != DIVERGENCE_NONE || profile_changed) {
         error_t *err = workspace_add_diverged(
             ws, fs_path, storage_path, profile, old_profile, state,
-            divergence, PATH_KIND_FILE, occupant, true, profile_changed
+            divergence, PATH_KIND_FILE, occupant, profile_changed
         );
         if (err) return err;
     }
@@ -1483,15 +1458,9 @@ static error_t *compute_orphan_authority(
  * Git would have said, it reads [orphaned] [absent] and apply reclaims it.
  * The occupant travels with the item for cleanup's verdict phase, which reads
  * the same observation.
- *
- * Each orphan is tagged with profile_enabled — whether its profile is in the
- * workspace's enabled set. It is a label, not a filter: every reader sees every
- * orphan, and apply's verbose breakdown ("N from disabled profiles" / "N from
- * enabled profiles") is its only consumer.
  */
 static error_t *analyze_orphans(workspace_t *ws) {
     CHECK_NULL(ws);
-    CHECK_NULL(ws->profile_index);
 
     if (ws->orphan_count == 0) {
         return NULL;
@@ -1513,8 +1482,6 @@ static error_t *analyze_orphans(workspace_t *ws) {
         const char *storage_path = anchor->storage_path;
         const char *profile = anchor->profile;
         path_kind_t kind = path_type_kind(anchor->type);
-
-        bool profile_enabled = hashmap_has(ws->profile_index, profile);
 
         /* Single stat capture, reused for type verification, content comparison,
          * and metadata checks — eliminates redundant lstat syscalls. One rule
@@ -1623,7 +1590,6 @@ static error_t *analyze_orphans(workspace_t *ws) {
             divergence,
             kind,
             occupant,
-            profile_enabled,
             false               /* No profile change for orphans */
         );
         if (err) {
@@ -1852,7 +1818,6 @@ static error_t *scan_directory_for_untracked(
                     DIVERGENCE_NONE,            /* Divergence: none */
                     PATH_KIND_FILE,
                     occupant,
-                    true,                       /* profile_enabled */
                     false                       /* No profile change */
                 );
 
@@ -2100,7 +2065,6 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
                 DIVERGENCE_NONE,          /* Divergence: none (path is absent) */
                 PATH_KIND_DIRECTORY,
                 occupant,
-                true,                     /* profile_enabled */
                 false                     /* No profile change */
             );
 
@@ -2128,7 +2092,6 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
                 DIVERGENCE_UNVERIFIED,    /* Divergence: state undeterminable */
                 PATH_KIND_DIRECTORY,
                 occupant,                 /* assumed present */
-                true,                     /* profile_enabled */
                 false                     /* No profile change */
             );
 
@@ -2171,7 +2134,6 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
                 DIVERGENCE_TYPE,           /* Type changed (dir -> file/symlink) */
                 PATH_KIND_DIRECTORY,
                 occupant,                  /* path exists, wrong type */
-                true,                      /* profile_enabled */
                 false                      /* No profile change */
             );
 
@@ -2221,7 +2183,6 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
                 divergence,                /* Divergence: mode/ownership flags */
                 PATH_KIND_DIRECTORY,
                 occupant,
-                true,                      /* profile_enabled */
                 false                      /* No profile change */
             );
 
@@ -2330,7 +2291,6 @@ static error_t *analyze_encryption_policy_mismatch(
                 DIVERGENCE_ENCRYPTION, /* Divergence: encryption policy violated */
                 PATH_KIND_FILE,
                 occupant,
-                true,                  /* profile_enabled */
                 false                  /* No profile change */
             );
 
@@ -3218,7 +3178,6 @@ void workspace_free(workspace_t *ws) {
 
     /* Free indices (values are borrowed, so pass NULL for value free function).
      * anchor_index values are records in ws->arena — also borrowed. */
-    hashmap_free(ws->profile_index, NULL);
     hashmap_free(ws->diverged_index, NULL);
     hashmap_free(ws->anchor_index, NULL);
 

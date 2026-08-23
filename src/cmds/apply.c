@@ -218,9 +218,10 @@ static void print_deploy_preview(
 /**
  * Print pending profile reassignments
  *
- * `reassigned` holds the in-scope diverged items whose owning profile changed
- * (workspace_item_t *, borrowed) — the exact set the run will acknowledge: a
- * content-clean one by the adoption loop's re-stamp, a stale one by its deployment.
+ * `reassigned` holds the items of the planned rows whose owning profile changed
+ * (workspace_item_t *, borrowed; collected off the plan's clean and pending
+ * buckets) — the exact set the run will acknowledge: a content-clean one by
+ * the adoption loop's re-stamp, a stale one by its deployment.
  */
 static void print_reassignments(const output_t *out, const ptr_array_t *reassigned) {
     if (reassigned->count == 0) return;
@@ -1097,7 +1098,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     workspace_t *ws = NULL;
     deploy_plan_t *deploy_plan = NULL;                 /* Rows borrow from ws; free before ws */
     cleanup_plan_t *cleanup_plan = NULL;               /* Items borrow from ws; free before ws */
-    ptr_array_t reassigned = { 0 };                    /* In-scope items with profile_changed (borrowed) */
+    ptr_array_t reassigned = { 0 };                    /* The claimed rows' items with profile_changed (borrowed) */
     deploy_preflight_result_t *deploy_verdicts = NULL; /* Verdicts borrow rows from ws; free before ws */
     cleanup_preflight_result_t *cleanup_verdicts = NULL;
     char *profiles_str = NULL;
@@ -1114,9 +1115,14 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      *                   Empty is a valid convergence target: every record becomes
      *                   an orphan and apply cleans them up. Enables the "disable
      *                   last profile, then apply" workflow.
-     *   scope_active  — operation face (hook context).
-     *   scope_paths / scope_is_excluded / scope_accepts_profile — per-iteration
-     *     filter gates below.
+     *   scope_active  — operation face (the verbose listing, hook context).
+     *   scope_has_filter / scope_has_paths / scope_paths — the build's shape,
+     *                   for the wording of the no-match warning and the
+     *                   nothing-to-do exit.
+     *
+     * The per-iteration predicates are the two planners' (deploy_plan_build,
+     * cleanup_plan_build): apply reads the scope through the plans and applies
+     * no gate of its own.
      *
      * Scope_build resolves enabled (lenient on empty), resolves and validates
      * the CLI filter, harvests custom targets from the active set, builds the
@@ -1335,42 +1341,6 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         );
     }
 
-    /* Breakdown by profile status — profile_enabled's only consumer. */
-    if (!cleanup_plan_is_empty(cleanup_plan)) {
-        workspace_items_t orphan_files = workspace_items_view(&cleanup_plan->files);
-        workspace_items_t orphan_dirs = workspace_items_view(&cleanup_plan->directories);
-        size_t disabled_count = 0;
-        size_t enabled_count = 0;
-
-        for (size_t i = 0; i < orphan_files.count; i++) {
-            if (orphan_files.entries[i]->profile_enabled) {
-                enabled_count++;
-            } else {
-                disabled_count++;
-            }
-        }
-        for (size_t i = 0; i < orphan_dirs.count; i++) {
-            if (orphan_dirs.entries[i]->profile_enabled) {
-                enabled_count++;
-            } else {
-                disabled_count++;
-            }
-        }
-
-        if (disabled_count > 0) {
-            output_print(
-                out, OUTPUT_VERBOSE, "  %zu from disabled profile%s\n",
-                disabled_count, disabled_count == 1 ? "" : "s"
-            );
-        }
-        if (enabled_count > 0) {
-            output_print(
-                out, OUTPUT_VERBOSE, "  %zu from enabled profiles (deleted from Git)\n",
-                enabled_count
-            );
-        }
-    }
-
     /* Warn if a file filter was given but matched no managed path at all (skipped
      * rows count as matched — the filter found them). Asked after both planners:
      * a path can name an orphan as well as an active row, and finding either is
@@ -1488,38 +1458,48 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         );
     }
 
-    /* Collect pending profile reassignments and count stale files within operation
-     * scope.
+    /* Collect the pending profile reassignments and count the stale files, off
+     * the plan.
+     *
+     * Both are facts the planner read from the item and did not carry — the
+     * plan says what the run does, the item says why — so the planned rows are
+     * walked once more, each paired with its item. The two file buckets are
+     * exactly the rows whose record this run's ownership events rewrite: the
+     * clean ones by the adoption loop above, the pending ones by the deployment
+     * — so what the preview names is what the receipt counts. A row the plan
+     * skips (-e, --skip-existing) is in neither bucket and is neither previewed
+     * nor counted: the run will not acknowledge it. The scope is not re-derived
+     * — the planner applied it once, and the buckets are its answer. Collected
+     * before the early exit so a reassignment-only workspace is reported and
+     * acknowledged there too.
      *
      * A reassignment is the workspace's reading of the record against the row —
-     * the record dotta owns names one profile, the row another. The preview names
-     * the files; the loop above has acknowledged the clean ones and the deployment
-     * acknowledges the stale ones, and the receipt counts both. Collected before
-     * the early exit so a reassignment-only workspace is reported and acknowledged
-     * there too.
-     *
-     * DIVERGENCE_STALE is the workspace's verdict that Git moved past the blob
-     * dotta last deployed (anchor.blob_oid ≠ row.blob_oid) — a persistent signal
-     * that survives status→apply sequences and counts the same however the branch
-     * moved.
-     *
-     * Coherent Scope: the same triplet the planner applies. */
+     * the record dotta owns names one profile, the row another — and the one
+     * reason a clean row has an item at all (workspace_get_item). DIVERGENCE_STALE
+     * is the workspace's verdict that Git moved past the blob dotta last deployed
+     * (anchor.blob_oid ≠ row.blob_oid) — a persistent signal that survives
+     * status→apply sequences and counts the same however the branch moved;
+     * work by definition, so only a pending row carries it. */
     size_t stale_count = 0;
-    size_t all_count = 0;
-    const workspace_item_t *all_items = workspace_get_all_diverged(ws, &all_count);
+    const manifest_rows_t claimed[] = {
+        manifest_rows_view(&deploy_plan->files.clean),
+        manifest_rows_view(&deploy_plan->files.pending),
+    };
 
-    for (size_t i = 0; i < all_count; i++) {
-        if (!scope_accepts_entry(
-            scope, all_items[i].profile, all_items[i].storage_path, all_items[i].item_kind
-            )) {
-            continue;
-        }
-        if (all_items[i].divergence & DIVERGENCE_STALE) stale_count++;
-        if (all_items[i].profile_changed) {
-            err = ptr_array_push(&reassigned, &all_items[i]);
-            if (err) {
-                err = error_wrap(err, "Failed to record profile reassignment");
-                goto cleanup;
+    for (size_t b = 0; b < sizeof(claimed) / sizeof(claimed[0]); b++) {
+        for (size_t i = 0; i < claimed[b].count; i++) {
+            const workspace_item_t *item = workspace_get_item(
+                ws, claimed[b].entries[i]->filesystem_path
+            );
+            if (!item) continue;   /* no item: nothing stale, no reassignment */
+
+            if (item->divergence & DIVERGENCE_STALE) stale_count++;
+            if (item->profile_changed) {
+                err = ptr_array_push(&reassigned, item);
+                if (err) {
+                    err = error_wrap(err, "Failed to record profile reassignment");
+                    goto cleanup;
+                }
             }
         }
     }

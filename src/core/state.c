@@ -1242,8 +1242,7 @@ error_t *state_open(git_repository *repo, state_t **out) {
  * @param state State to save (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *state_save(git_repository *repo, state_t *state) {
-    CHECK_NULL(repo);
+error_t *state_save(state_t *state) {
     CHECK_NULL(state);
 
     if (state->db && state->in_transaction) {

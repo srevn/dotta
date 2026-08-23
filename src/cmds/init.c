@@ -132,7 +132,7 @@ static error_t *init_state(git_repository *repo) {
         return err;
     }
 
-    err = state_save(repo, state);
+    err = state_save(state);
     state_free(state);
 
     if (err) {

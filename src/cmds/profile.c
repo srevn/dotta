@@ -1003,7 +1003,7 @@ static error_t *profile_enable(
             );
         }
 
-        err = state_save(repo, state);
+        err = state_save(state);
         if (err) {
             err = error_wrap(err, "Failed to save state");
             goto cleanup;
@@ -1330,7 +1330,7 @@ static error_t *profile_disable(
             );
         }
 
-        err = state_save(repo, state);
+        err = state_save(state);
         if (err) {
             err = error_wrap(err, "Failed to save state");
             goto cleanup;
@@ -1557,7 +1557,7 @@ static error_t *profile_reorder(
      * reads. */
 
     /* Save state (releases lock automatically) */
-    err = state_save(repo, state);
+    err = state_save(state);
     if (err) {
         err = error_wrap(err, "Failed to save state");
         goto cleanup;

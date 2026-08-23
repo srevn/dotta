@@ -1411,7 +1411,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
 
         /* Commit the transaction: the flush's observations and confirmations,
          * the adoptions and acknowledgements above. */
-        err = state_save(repo, state);
+        err = state_save(state);
         if (err) {
             err = error_wrap(err, "Failed to commit state changes");
             goto cleanup;
@@ -1868,7 +1868,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * Dry-run included: the transaction then holds only the load-time flush's
      * observations and confirmations, which status and the nothing-to-do exit
      * persist too. */
-    err = state_save(repo, state);
+    err = state_save(state);
     if (err) {
         err = error_wrap(err, "Failed to commit state changes");
         goto cleanup;

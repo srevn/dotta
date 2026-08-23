@@ -310,7 +310,7 @@ static error_t *initialize_state(
     }
 
     /* Commit transaction */
-    err = state_save(repo, state);
+    err = state_save(state);
     if (err) {
         state_free(state);
         return error_wrap(err, "Failed to save state");

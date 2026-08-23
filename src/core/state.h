@@ -213,16 +213,15 @@ error_t *state_load(git_repository *repo, state_t **out);
 error_t *state_open(git_repository *repo, state_t **out);
 
 /**
- * Save state to repository
+ * Save state
  *
  * Commits the transaction started by state_open(). All modifications made since
  * load are atomically committed.
  *
- * @param repo Repository (must not be NULL)
  * @param state State to save (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *state_save(git_repository *repo, state_t *state);
+error_t *state_save(state_t *state);
 
 /**
  * Begin an explicit transaction on a state handle

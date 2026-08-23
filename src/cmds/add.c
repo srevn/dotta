@@ -794,7 +794,7 @@ static error_t *update_manifest_after_add(
     /* STEP 4: Commit transaction. state is borrowed from the dispatcher: if
      * state_save succeeds the transaction is committed; otherwise the dispatcher's
      * state_free rolls it back. */
-    err = state_save(repo, state);
+    err = state_save(state);
     if (err) {
         return error_wrap(err, "Failed to save record updates");
     }

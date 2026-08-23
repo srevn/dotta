@@ -845,12 +845,11 @@ static void print_cleanup_preflight_results(
  * deploy creates on the way are prefixes of planned paths, so a planned path's
  * own label already covers them.
  *
- * @param ctx Command context (must not be NULL)
+ * @param ctx Dispatch context (must not be NULL; argv for the re-exec, out)
  * @param deploy_plan Deployment plan (must not be NULL)
  * @param cleanup_plan Orphans the run may remove; the present ones are checked
  *        (must not be NULL — empty under --keep-orphans)
  * @param opts Apply command options (must not be NULL)
- * @param out Output context for messages (must not be NULL)
  * @return NULL if OK to proceed, error otherwise (or does not return if re-exec
  *         with sudo)
  */
@@ -858,14 +857,12 @@ static error_t *ensure_complete_apply_privileges(
     const dotta_ctx_t *ctx,
     const deploy_plan_t *deploy_plan,
     const cleanup_plan_t *cleanup_plan,
-    const cmd_apply_options_t *opts,
-    output_t *out
+    const cmd_apply_options_t *opts
 ) {
     CHECK_NULL(ctx);
     CHECK_NULL(deploy_plan);
     CHECK_NULL(cleanup_plan);
     CHECK_NULL(opts);
-    CHECK_NULL(out);
 
     if (opts->dry_run) {
         return NULL;  /* Read-only operation, no privileges needed */
@@ -932,7 +929,7 @@ static error_t *ensure_complete_apply_privileges(
     return privilege_ensure_for_operation(
         (const char *const *) labels.items, labels.count, "apply",
         true,  /* interactive: prompt user if elevation needed */
-        ctx->argc, ctx->argv, out
+        ctx->argc, ctx->argv, ctx->out
     );
 }
 
@@ -944,12 +941,16 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     CHECK_NULL(opts);
 
     git_repository *repo = ctx->run.repo;
+    const char *repo_path = ctx->run.repo_path;
+    state_t *state = ctx->run.state;                /* Borrowed from dispatcher (WRITE) */
+    const mount_table_t *mounts = ctx->run.mounts;
+    content_cache_t *content_cache = ctx->run.content_cache;
+    const manifest_t *manifest = ctx->run.manifest; /* The view at dispatch */
     const config_t *config = ctx->config;
     output_t *out = ctx->out;
 
     /* Declare all resources at the top, initialized to NULL/zero */
     error_t *err = NULL;
-    state_t *state = ctx->run.state;                /* Borrowed from dispatcher (WRITE) */
     scope_t *scope = NULL;
     workspace_t *ws = NULL;
     deploy_plan_t *deploy_plan = NULL;          /* Rows borrow from ws; free before ws */
@@ -989,7 +990,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         .exclude_count    = opts->exclude_count,
     };
     err = scope_build(
-        repo, state, &scope_inputs, config, ctx->run.mounts, ctx->arena, &scope
+        repo, state, &scope_inputs, config, mounts, ctx->arena, &scope
     );
     if (err) goto cleanup;
 
@@ -1035,8 +1036,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         .analyze_encryption  = false             /* Not needed for deployment */
     };
     err = workspace_load(
-        repo, state, config, ctx->run.content_cache, ctx->run.manifest, &ws_opts,
-        ctx->arena, &ws
+        repo, state, config, content_cache, manifest, &ws_opts, ctx->arena, &ws
     );
     if (err) {
         err = error_wrap(err, "Failed to load workspace");
@@ -1434,9 +1434,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     if (!opts->dry_run) {
         output_print(out, OUTPUT_VERBOSE, "\nChecking privilege requirements...\n");
 
-        err = ensure_complete_apply_privileges(
-            ctx, deploy_plan, cleanup_plan, opts, out
-        );
+        err = ensure_complete_apply_privileges(ctx, deploy_plan, cleanup_plan, opts);
         if (err) {
             err = error_wrap(err, "Insufficient privileges for operation");
             goto cleanup;
@@ -1513,7 +1511,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     };
 
     /* Execute pre-apply hook */
-    err = hook_fire_pre(config, out, ctx->run.repo_path, &hook_inv);
+    err = hook_fire_pre(config, out, repo_path, &hook_inv);
     if (err) goto cleanup;
 
     /* Confirm before deployment if configured (unless --force or --dry-run) */
@@ -1599,10 +1597,10 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
             );
         }
 
-        /* ctx->run.content_cache was populated with decrypted content during workspace
-         * divergence analysis; deploy's fetches hit it. */
+        /* The content cache was populated with decrypted content during
+         * workspace divergence analysis; deploy's fetches hit it. */
         err = deploy_execute(
-            repo, ws, deploy_plan, &deploy_opts, ctx->run.content_cache, &deploy_res
+            repo, ws, deploy_plan, &deploy_opts, content_cache, &deploy_res
         );
         if (err) {
             if (deploy_res) {
@@ -1873,7 +1871,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     }
 
     /* Execute post-apply hook */
-    hook_fire_post(config, out, ctx->run.repo_path, &hook_inv);
+    hook_fire_post(config, out, repo_path, &hook_inv);
 
     /* Success - fall through to cleanup */
     err = NULL;

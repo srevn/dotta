@@ -22,11 +22,11 @@
  *
  * Prompts user for passphrase and caches it in the dispatcher-owned keymgr.
  */
-static error_t *cmd_key_set(
-    keymgr *keymgr,
-    const config_t *config,
-    output_t *out
-) {
+static error_t *cmd_key_set(const dotta_ctx_t *ctx) {
+    keymgr *keymgr = ctx->run.keymgr;
+    const config_t *config = ctx->config;
+    output_t *out = ctx->out;
+
     /* Check if encryption is enabled */
     if (!config->encryption_enabled) {
         return ERROR(
@@ -139,11 +139,11 @@ cleanup:
  * Clears the cached passphrase from the dispatcher-owned keymgr and its on-disk
  * session cache.
  */
-static error_t *cmd_key_clear(
-    keymgr *keymgr,
-    const config_t *config,
-    output_t *out
-) {
+static error_t *cmd_key_clear(const dotta_ctx_t *ctx) {
+    keymgr *keymgr = ctx->run.keymgr;
+    const config_t *config = ctx->config;
+    output_t *out = ctx->out;
+
     /* Check if encryption is enabled */
     if (!config->encryption_enabled) {
         return ERROR(
@@ -193,14 +193,13 @@ static error_t *cmd_key_clear(
  *
  * Displays encryption configuration and key cache status.
  */
-static error_t *cmd_key_status(
-    keymgr *keymgr,
-    git_repository *repo,
-    const state_t *state,
-    arena_t *arena,
-    const config_t *config,
-    output_t *out
-) {
+static error_t *cmd_key_status(const dotta_ctx_t *ctx) {
+    git_repository *repo = ctx->run.repo;
+    const state_t *state = ctx->run.state;
+    keymgr *keymgr = ctx->run.keymgr;
+    const config_t *config = ctx->config;
+    output_t *out = ctx->out;
+
     /* Display encryption status */
     output_section(out, OUTPUT_NORMAL, "Encryption Configuration");
 
@@ -343,7 +342,7 @@ static error_t *cmd_key_status(
     output_section(out, OUTPUT_NORMAL, "Encrypted Files");
 
     manifest_t *manifest = NULL;
-    error_t *err = manifest_build(repo, state, arena, &manifest);
+    error_t *err = manifest_build(repo, state, ctx->arena, &manifest);
     if (err) {
         /* Non-fatal error - concise at normal, detail at verbose */
         output_print(
@@ -384,31 +383,26 @@ error_t *cmd_key(const dotta_ctx_t *ctx, const cmd_key_options_t *opts) {
     CHECK_NULL(ctx);
     CHECK_NULL(opts);
 
-    const config_t *config = ctx->config;
-    output_t *out = ctx->out;
-
     /* CLI flags override config */
     if (opts->verbose) {
-        output_set_verbosity(out, OUTPUT_VERBOSE);
+        output_set_verbosity(ctx->out, OUTPUT_VERBOSE);
     }
 
-    /* Dispatch to appropriate action. Each handler takes the borrowed ctx->run.keymgr
-     * (NULL when encryption is disabled — each handler short-circuits on that
-     * via its own config->encryption_enabled check). */
+    /* Dispatch to appropriate action. Each handler reads the borrowed
+     * ctx->run.keymgr (NULL when encryption is disabled — each handler
+     * short-circuits on that via its own config->encryption_enabled check). */
     error_t *err = NULL;
     switch (opts->action) {
         case KEY_ACTION_SET:
-            err = cmd_key_set(ctx->run.keymgr, config, out);
+            err = cmd_key_set(ctx);
             break;
 
         case KEY_ACTION_CLEAR:
-            err = cmd_key_clear(ctx->run.keymgr, config, out);
+            err = cmd_key_clear(ctx);
             break;
 
         case KEY_ACTION_STATUS:
-            err = cmd_key_status(
-                ctx->run.keymgr, ctx->run.repo, ctx->run.state, ctx->arena, config, out
-            );
+            err = cmd_key_status(ctx);
             break;
 
         default:

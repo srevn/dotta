@@ -41,31 +41,30 @@
  * This function should only be called as a fallback when the file is not found
  * in the current HEAD and the user has provided a profile hint.
  *
- * @param repo Repository (must not be NULL)
+ * @param ctx Dispatch context (must not be NULL; ctx->arena owns the returned
+ *            strings)
  * @param storage_path Storage path (must not be NULL)
  * @param profile Profile name (must not be NULL)
- * @param arena Arena that owns the returned strings
- * @param out Output context (must not be NULL)
  * @param out_profile Arena-borrowed profile name (must not be NULL)
  * @param out_resolved_path Arena-borrowed storage path (must not be NULL)
  * @return Error or NULL on success
  */
 static error_t *discover_file_in_history(
-    git_repository *repo,
+    const dotta_ctx_t *ctx,
     const char *storage_path,
     const char *profile,
-    arena_t *arena,
-    const output_t *out,
     const char **out_profile,
     const char **out_resolved_path
 ) {
-    CHECK_NULL(repo);
+    CHECK_NULL(ctx);
     CHECK_NULL(storage_path);
     CHECK_NULL(profile);
-    CHECK_NULL(arena);
-    CHECK_NULL(out);
     CHECK_NULL(out_profile);
     CHECK_NULL(out_resolved_path);
+
+    git_repository *repo = ctx->run.repo;
+    arena_t *arena = ctx->arena;
+    output_t *out = ctx->out;
 
     /* Inform user about expensive operation */
     output_info(
@@ -128,26 +127,23 @@ static error_t *discover_file_in_history(
  * disambiguation when file exists in multiple profiles.
  */
 static error_t *discover_file(
-    git_repository *repo,
-    const state_t *state,
-    const mount_table_t *mounts,
-    arena_t *arena,
+    const dotta_ctx_t *ctx,
     const char *file_path,
     const char *profile_hint,
-    const output_t *out,
     bool *found_in_history,
     const char **out_profile,
     const char **out_resolved_path
 ) {
-    CHECK_NULL(repo);
-    CHECK_NULL(state);
-    CHECK_NULL(mounts);
-    CHECK_NULL(arena);
+    CHECK_NULL(ctx);
     CHECK_NULL(file_path);
-    CHECK_NULL(out);
     CHECK_NULL(found_in_history);
     CHECK_NULL(out_profile);
     CHECK_NULL(out_resolved_path);
+
+    git_repository *repo = ctx->run.repo;
+    const mount_table_t *mounts = ctx->run.mounts;
+    arena_t *arena = ctx->arena;
+    output_t *out = ctx->out;
 
     error_t *err = NULL;
     const char *storage_path = NULL;
@@ -182,8 +178,7 @@ static error_t *discover_file(
         if (!exists) {
             /* File not in HEAD - try history search as fallback */
             err = discover_file_in_history(
-                repo, storage_path, profile_hint, arena, out,
-                out_profile, out_resolved_path
+                ctx, storage_path, profile_hint, out_profile, out_resolved_path
             );
             if (err) {
                 return err;
@@ -263,20 +258,21 @@ static error_t *discover_file(
  * states across commits are routed correctly without any caller-supplied flag.
  */
 static error_t *show_diff_preview(
-    git_repository *repo,
+    const dotta_ctx_t *ctx,
     const char *file_path,
     const char *profile,
-    keymgr *keymgr,
     const git_oid *current_oid,
-    const git_oid *target_oid,
-    output_t *out
+    const git_oid *target_oid
 ) {
-    CHECK_NULL(repo);
+    CHECK_NULL(ctx);
     CHECK_NULL(file_path);
     CHECK_NULL(profile);
     CHECK_NULL(current_oid);
     CHECK_NULL(target_oid);
-    CHECK_NULL(out);
+
+    git_repository *repo = ctx->run.repo;
+    keymgr *keymgr = ctx->run.keymgr; /* NULL if encryption disabled */
+    output_t *out = ctx->out;
 
     /* Check if blobs are identical */
     if (git_oid_equal(current_oid, target_oid)) {
@@ -542,19 +538,20 @@ cleanup:
  * - Symlinks (restore ownership metadata if present at target commit)
  */
 static error_t *revert_file_in_branch(
-    git_repository *repo,
-    const config_t *config,
+    const dotta_ctx_t *ctx,
     const char *profile,
     const char *file_path,
     const git_oid *target_commit_oid,
-    const char *commit_message,
-    const output_t *out
+    const char *commit_message
 ) {
-    CHECK_NULL(repo);
+    CHECK_NULL(ctx);
     CHECK_NULL(profile);
     CHECK_NULL(file_path);
     CHECK_NULL(target_commit_oid);
-    CHECK_NULL(out);
+
+    git_repository *repo = ctx->run.repo;
+    const config_t *config = ctx->config;
+    output_t *out = ctx->out;
 
     error_t *err = NULL;
     git_commit *target_commit = NULL;
@@ -775,6 +772,7 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
     CHECK_NULL(opts->commit);
 
     git_repository *repo = ctx->run.repo;
+    state_t *state = ctx->run.state;  /* Borrowed from dispatcher; do not free */
     const config_t *config = ctx->config;
     output_t *out = ctx->out;
 
@@ -789,8 +787,6 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
     git_tree *target_tree = NULL;
     git_tree_entry *current_entry = NULL;
     git_tree_entry *target_entry = NULL;
-    keymgr *keymgr = ctx->run.keymgr; /* Borrowed from dispatcher; NULL if encryption disabled */
-    state_t *state = ctx->run.state;  /* Borrowed from dispatcher; do not free */
     bool user_aborted = false;
 
     /* CLI flags override config */
@@ -805,8 +801,8 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
 
     bool found_in_history = false;
     err = discover_file(
-        repo, state, ctx->run.mounts, ctx->arena, opts->file_path, opts->profile,
-        out, &found_in_history, &profile, &resolved_path
+        ctx, opts->file_path, opts->profile, &found_in_history, &profile,
+        &resolved_path
     );
     if (err) goto cleanup;
 
@@ -960,8 +956,7 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
          * vs target may differ in encryption state" case is handled inside
          * show_diff_preview without caller-side metadata gymnastics. */
         err = show_diff_preview(
-            repo, resolved_path, profile, keymgr, current_blob_oid,
-            target_blob_oid, out
+            ctx, resolved_path, profile, current_blob_oid, target_blob_oid
         );
         if (err) {
             /* Non-fatal: the revert itself doesn't need decryption (copies blobs).
@@ -1014,13 +1009,11 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
 
     /* Perform revert */
     err = revert_file_in_branch(
-        repo,
-        config,
+        ctx,
         profile,
         resolved_path,
         &target_oid,
-        opts->message,
-        out
+        opts->message
     );
     if (err) {
         err = error_wrap(err, "Failed to revert file");

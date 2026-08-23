@@ -340,6 +340,7 @@ error_t *cmd_bootstrap(const dotta_ctx_t *ctx, const cmd_bootstrap_options_t *op
 
     git_repository *repo = ctx->run.repo;
     const char *repo_path = ctx->run.repo_path;
+    state_t *state = ctx->run.state;
     output_t *out = ctx->out;
 
     error_t *err = NULL;
@@ -388,7 +389,7 @@ error_t *cmd_bootstrap(const dotta_ctx_t *ctx, const cmd_bootstrap_options_t *op
         }
     } else {
         /* Use enabled profiles from state */
-        err = profile_resolve_enabled(repo, ctx->run.state, &profiles);
+        err = profile_resolve_enabled(repo, state, &profiles);
         if (err) {
             if (error_code(err) == ERR_NOT_FOUND) {
                 /* No profiles enabled — expected case, show guidance */

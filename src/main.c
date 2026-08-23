@@ -296,9 +296,9 @@ static int run_spec(
     }
 
     /* The spec's needs — every run member its handler reads (runtime.h); a
-     * spec without a payload opens nothing. The context is zero-initialised:
-     * open_run populates the run in place, and what it opened is what
-     * close_run releases, on every path. */
+     * spec without a payload opens nothing. The run starts zeroed: open_run
+     * populates it in place, and what it opened is what close_run releases,
+     * on every path. */
     int exit_override = 0;
     dotta_ctx_t ctx = {
         .arena     = arena,

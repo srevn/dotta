@@ -664,17 +664,16 @@ static void display_workspace_status(
  * Use show_all_profiles to report on every branch in the repository.
  */
 static error_t *display_remote_status(
-    git_repository *repo,
-    arena_t *arena,
+    const dotta_ctx_t *ctx,
     const string_array_t *profiles,
-    output_t *out,
     bool show_all_profiles,
     bool no_fetch
 ) {
-    CHECK_NULL(repo);
-    CHECK_NULL(arena);
+    CHECK_NULL(ctx);
     CHECK_NULL(profiles);
-    CHECK_NULL(out);
+
+    git_repository *repo = ctx->run.repo;
+    output_t *out = ctx->out;
 
     bool verbose = output_is_verbose(out);
 
@@ -683,7 +682,7 @@ static error_t *display_remote_status(
     const char *remote_name = NULL;
     const char *remote_url = NULL;
     error_t *err = gitops_resolve_default_remote(
-        repo, arena, &remote_name, no_fetch ? NULL : &remote_url
+        repo, ctx->arena, &remote_name, no_fetch ? NULL : &remote_url
     );
     if (err) {
         /* No remote configured - not an error, just skip this section */
@@ -962,13 +961,16 @@ error_t *cmd_status(const dotta_ctx_t *ctx, const cmd_status_options_t *opts) {
     CHECK_NULL(opts);
 
     git_repository *repo = ctx->run.repo;
+    state_t *state = ctx->run.state;  /* Borrowed from dispatcher; do not free */
+    const mount_table_t *mounts = ctx->run.mounts;
+    content_cache_t *content_cache = ctx->run.content_cache;
+    const manifest_t *manifest = ctx->run.manifest;  /* The view at dispatch */
     const config_t *config = ctx->config;
     output_t *out = ctx->out;
 
     /* Declare all resources at top and initialize to NULL/zero */
     error_t *err = NULL;
     workspace_t *ws = NULL;
-    state_t *state = ctx->run.state;  /* Borrowed from dispatcher; do not free */
     manifest_rows_t active = { 0 }; /* Borrowed slice when workspace is loaded */
     scope_t *scope = NULL;
 
@@ -991,7 +993,7 @@ error_t *cmd_status(const dotta_ctx_t *ctx, const cmd_status_options_t *opts) {
         .profile_count = opts->profile_count,
     };
     err = scope_build(
-        repo, state, &scope_inputs, config, ctx->run.mounts, ctx->arena, &scope
+        repo, state, &scope_inputs, config, mounts, ctx->arena, &scope
     );
     if (err) goto cleanup;
 
@@ -1009,8 +1011,7 @@ error_t *cmd_status(const dotta_ctx_t *ctx, const cmd_status_options_t *opts) {
             .analyze_encryption  = true
         };
         err = workspace_load(
-            repo, state, config, ctx->run.content_cache, ctx->run.manifest, &ws_opts,
-            ctx->arena, &ws
+            repo, state, config, content_cache, manifest, &ws_opts, ctx->arena, &ws
         );
         if (err) {
             err = error_wrap(err, "Failed to load workspace");
@@ -1105,8 +1106,7 @@ error_t *cmd_status(const dotta_ctx_t *ctx, const cmd_status_options_t *opts) {
     /* Show remote sync status (if requested) */
     if (opts->show_remote) {
         err = display_remote_status(
-            repo, ctx->arena, scope_active(scope), out,
-            opts->all_profiles, opts->no_fetch
+            ctx, scope_active(scope), opts->all_profiles, opts->no_fetch
         );
         if (err) {
             /* Non-fatal: might not have remote configured */

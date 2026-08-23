@@ -40,26 +40,29 @@
 /**
  * Copy file from filesystem to worktree (with optional encryption)
  *
- * @param config Configuration (for encryption policy; can be NULL)
+ * @param ctx Dispatch context (must not be NULL; supplies the key and the
+ *            encryption policy)
  * @param out_was_encrypted Optional output - set to true if file was encrypted
  *                          (can be NULL)
  * @param out_stat Optional output - filled with stat data from source file (can
  *                 be NULL)
  */
 static error_t *copy_file_to_worktree(
+    const dotta_ctx_t *ctx,
     worktree_handle_t *wt,
     const char *filesystem_path,
     const char *storage_path,
     const char *profile,
-    keymgr *keymgr,
-    const config_t *config,
     const metadata_t *metadata,
     bool *out_was_encrypted,
     struct stat *out_stat
 ) {
+    CHECK_NULL(ctx);
     CHECK_NULL(wt);
     CHECK_NULL(filesystem_path);
     CHECK_NULL(storage_path);
+
+    keymgr *keymgr = ctx->run.keymgr;
 
     /* Initialize all resources to NULL for goto cleanup */
     char *dest_path = NULL;
@@ -144,7 +147,7 @@ static error_t *copy_file_to_worktree(
 
         bool should_encrypt = false;
         err = encryption_policy_should_encrypt(
-            config,
+            ctx->config,
             storage_path,
             false,                  /* No explicit --encrypt flag in update.c */
             false,                  /* No explicit --no-encrypt flag in update.c */
@@ -862,38 +865,38 @@ static error_t *update_metadata_for_profile(
  * ARCHITECTURE NOTE: This function now receives a pre-created worktree that has
  * been checked out to the target profile branch.
  *
+ * @param ctx Dispatch context (must not be NULL; the copy step reads the key
+ *            and the encryption policy off it)
  * @param wt Worktree handle (must not be NULL, already checked out to profile
  *           branch)
  * @param profile Profile to update (must not be NULL)
  * @param items Array of workspace items to update (must not be NULL)
  * @param item_count Number of items
  * @param opts Update options (must not be NULL)
- * @param out Output context (must not be NULL)
- * @param config Configuration (can be NULL)
  * @param commit The commit's bookkeeping, zero-filled by the caller; filled here
  *               and by the metadata step (must not be NULL)
  * @param out_processed Output: number of items committed (must not be NULL)
  * @return Error or NULL on success
  */
 static error_t *update_profile(
+    const dotta_ctx_t *ctx,
     worktree_handle_t *wt,
     const char *profile,
     const workspace_item_t **items,
     size_t item_count,
     const cmd_update_options_t *opts,
-    output_t *out,
-    const config_t *config,
-    keymgr *ctx_keymgr,
     update_commit_t *commit,
     size_t *out_processed
 ) {
+    CHECK_NULL(ctx);
     CHECK_NULL(wt);
     CHECK_NULL(profile);
     CHECK_NULL(items);
     CHECK_NULL(opts);
-    CHECK_NULL(out);
     CHECK_NULL(commit);
     CHECK_NULL(out_processed);
+
+    output_t *out = ctx->out;
 
     *out_processed = 0;
     commit->profile = profile;
@@ -1024,12 +1027,11 @@ static error_t *update_profile(
 
                 /* Copy to worktree and capture stat atomically */
                 err = copy_file_to_worktree(
+                    ctx,
                     wt,
                     item->filesystem_path,
                     item->storage_path,
                     profile,
-                    ctx_keymgr,
-                    config,
                     existing_metadata,
                     &copy_results[i].encrypted,
                     &copy_results[i].stat
@@ -1100,7 +1102,7 @@ static error_t *update_profile(
     }
 
     /* Build commit message context */
-    commit_message_context_t ctx = {
+    commit_message_context_t msg_ctx = {
         .action        = COMMIT_ACTION_UPDATE,
         .profile       = profile,
         .files         = storage_paths,
@@ -1109,7 +1111,7 @@ static error_t *update_profile(
         .target_commit = NULL
     };
 
-    message = build_commit_message(config, &ctx);
+    message = build_commit_message(ctx->config, &msg_ctx);
     if (!message) {
         err = ERROR(ERR_MEMORY, "Failed to build commit message");
         goto cleanup;
@@ -1163,7 +1165,7 @@ cleanup:
  *
  * Preconditions:
  *   - All profile updates already succeeded (Git commits done)
- *   - state is a live handle (non-NULL, DB open) owned by caller
+ *   - the run's state is a live handle (DB open), borrowed from the dispatcher
  *   - commits is what update_execute_for_all_profiles returned
  *
  * Postconditions:
@@ -1179,31 +1181,27 @@ cleanup:
  *
  * Performance: one view build + O(N) point lookups, N = committed paths
  *
- * @param repo Git repository (must not be NULL)
- * @param state Caller's state handle (must not be NULL, must have open DB)
- * @param arena Arena for the view (must not be NULL)
- * @param mounts Per-machine mount table (must not be NULL)
+ * @param ctx Dispatch context (must not be NULL; the repository, the state
+ *            handle and the mount table come off the run, the view is built
+ *            into ctx->arena)
  * @param commits One commit's bookkeeping per profile (may be NULL when count is 0)
  * @param commit_count Number of commits
- * @param out Output context for verbose logging (can be NULL)
  * @param out_updated Output flag: true if the record was written (must not be NULL)
  * @return Error or NULL on success
  */
 static error_t *update_manifest_after_update(
-    git_repository *repo,
-    state_t *state,
-    arena_t *arena,
-    const mount_table_t *mounts,
+    const dotta_ctx_t *ctx,
     const update_commit_t *commits,
     size_t commit_count,
-    output_t *out,
     bool *out_updated
 ) {
-    CHECK_NULL(repo);
-    CHECK_NULL(state);
-    CHECK_NULL(arena);
-    CHECK_NULL(mounts);
+    CHECK_NULL(ctx);
     CHECK_NULL(out_updated);
+
+    git_repository *repo = ctx->run.repo;
+    state_t *state = ctx->run.state;
+    const mount_table_t *mounts = ctx->run.mounts;
+    output_t *out = ctx->out;
 
     error_t *err = NULL;
     manifest_t *manifest = NULL;
@@ -1225,7 +1223,7 @@ static error_t *update_manifest_after_update(
     }
 
     /* The post-commit view, once */
-    err = manifest_build(repo, state, arena, &manifest);
+    err = manifest_build(repo, state, ctx->arena, &manifest);
     if (err) goto cleanup;
 
     /* One lookup per committed path, both kinds; the arms of the header doc. A
@@ -1276,7 +1274,8 @@ static error_t *update_manifest_after_update(
             mount_resolve_outcome_t outcome;
             const char *fs_path = NULL;
             err = mount_resolve(
-                mounts, commit->profile, commit->pruned.items[i], arena, &outcome, &fs_path
+                mounts, commit->profile, commit->pruned.items[i], ctx->arena,
+                &outcome, &fs_path
             );
             if (err) goto cleanup;
             if (outcome == MOUNT_RESOLVE_UNBOUND) continue;
@@ -1329,13 +1328,12 @@ cleanup:
  * it for all profile updates, eliminating expensive worktree creation/destruction
  * overhead. Each profile is checked out into the same worktree before updating.
  *
- * @param repo Git repository (must not be NULL)
- * @param profiles Profile list for lookup (must not be NULL)
+ * @param ctx Dispatch context (must not be NULL; the run's repository carries
+ *            the shared worktree, the copy step reads the key and the
+ *            encryption policy)
  * @param update_items Pre-filtered items to update (must not be NULL)
  * @param update_count Number of items
  * @param opts Update options (must not be NULL)
- * @param out Output context (must not be NULL)
- * @param config Configuration (can be NULL)
  * @param total_updated Output: total items updated across all profiles (must
  *                      not be NULL)
  * @param out_commits Output: one commit's bookkeeping per profile group (must
@@ -1345,24 +1343,23 @@ cleanup:
  * @return Error or NULL on success
  */
 static error_t *update_execute_for_all_profiles(
-    git_repository *repo,
+    const dotta_ctx_t *ctx,
     const workspace_item_t **update_items,
     size_t update_count,
     const cmd_update_options_t *opts,
-    output_t *out,
-    const config_t *config,
-    keymgr *ctx_keymgr,
     size_t *total_updated,
     update_commit_t **out_commits,
     size_t *out_commit_count
 ) {
-    CHECK_NULL(repo);
+    CHECK_NULL(ctx);
     CHECK_NULL(update_items);
     CHECK_NULL(opts);
-    CHECK_NULL(out);
     CHECK_NULL(total_updated);
     CHECK_NULL(out_commits);
     CHECK_NULL(out_commit_count);
+
+    git_repository *repo = ctx->run.repo;
+    output_t *out = ctx->out;
 
     *total_updated = 0;
     *out_commits = NULL;
@@ -1433,8 +1430,8 @@ static error_t *update_execute_for_all_profiles(
         /* Update this profile using shared worktree */
         size_t processed = 0;
         err = update_profile(
-            wt, profile, (const workspace_item_t **) array->items, array->count,
-            opts, out, config, ctx_keymgr, &commits[commit_count], &processed
+            ctx, wt, profile, (const workspace_item_t **) array->items,
+            array->count, opts, &commits[commit_count], &processed
         );
         commit_count++;
 
@@ -1915,12 +1912,16 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
     CHECK_NULL(opts);
 
     git_repository *repo = ctx->run.repo;
+    const char *repo_path = ctx->run.repo_path;
+    state_t *state = ctx->run.state;  /* Borrowed from dispatcher; do not free */
+    const mount_table_t *mounts = ctx->run.mounts;
+    content_cache_t *content_cache = ctx->run.content_cache;
+    const manifest_t *manifest = ctx->run.manifest;
     const config_t *config = ctx->config;
     output_t *out = ctx->out;
 
     /* Declare all resources at top, initialized to NULL */
     error_t *err = NULL;
-    state_t *state = ctx->run.state;  /* Borrowed from dispatcher; do not free */
     workspace_t *ws = NULL;
     scope_t *scope = NULL;
     char *profiles_str = NULL;
@@ -1947,7 +1948,7 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
         .exclude_count    = opts->exclude_count,
     };
     err = scope_build(
-        repo, state, &scope_inputs, config, ctx->run.mounts, ctx->arena, &scope
+        repo, state, &scope_inputs, config, mounts, ctx->arena, &scope
     );
     if (err) goto cleanup;
 
@@ -1974,7 +1975,7 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
     };
 
     /* Execute pre-update hook */
-    err = hook_fire_pre(config, out, ctx->run.repo_path, &hook_inv);
+    err = hook_fire_pre(config, out, repo_path, &hook_inv);
     if (err) goto cleanup;
 
     /* Load workspace for update analysis
@@ -2006,8 +2007,7 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
         .analyze_encryption  = true                     /* Encryption policy validation */
     };
     err = workspace_load(
-        repo, state, config, ctx->run.content_cache, ctx->run.manifest, &ws_opts,
-        ctx->arena, &ws
+        repo, state, config, content_cache, manifest, &ws_opts, ctx->arena, &ws
     );
     if (err) {
         err = error_wrap(err, "Failed to analyze workspace");
@@ -2208,12 +2208,12 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
     }
 
     /* Execute profile updates. Filtered to operation scope. ctx->run.keymgr is borrowed
-     * by update_profile inside per-profile iteration. */
+     * by the copy step inside per-profile iteration. */
     update_commit_t *commits = NULL;
     size_t updated_profile_count = 0;
     err = update_execute_for_all_profiles(
-        repo, (const workspace_item_t **) update_items.entries,
-        update_items.count, opts, out, config, ctx->run.keymgr,
+        ctx, (const workspace_item_t **) update_items.entries,
+        update_items.count, opts,
         &total_updated, &commits, &updated_profile_count
     );
     if (err) {
@@ -2231,8 +2231,7 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
      */
     bool manifest_updated = false;
     error_t *manifest_err = update_manifest_after_update(
-        repo, state, ctx->arena, ctx->run.mounts, commits, updated_profile_count, out,
-        &manifest_updated
+        ctx, commits, updated_profile_count, &manifest_updated
     );
 
     /* The bookkeeping has served the record */
@@ -2255,7 +2254,7 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
     }
 
     /* Execute post-update hook */
-    hook_fire_post(config, out, ctx->run.repo_path, &hook_inv);
+    hook_fire_post(config, out, repo_path, &hook_inv);
 
     /* Summary (report updated profile count) */
     output_newline(out, OUTPUT_NORMAL);

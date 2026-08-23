@@ -785,19 +785,17 @@ static bool source_gitignore_matches(
  * Test if path is ignored across profiles
  */
 static error_t *test_path_ignore(
-    git_repository *repo,
-    const state_t *state,
-    const config_t *config,
+    const dotta_ctx_t *ctx,
     const char *test_path,
-    const char *specific_profile,
-    arena_t *arena,
-    output_t *out
+    const char *specific_profile
 ) {
-    CHECK_NULL(repo);
-    CHECK_NULL(state);
+    CHECK_NULL(ctx);
     CHECK_NULL(test_path);
-    CHECK_NULL(arena);
-    CHECK_NULL(out);
+
+    git_repository *repo = ctx->run.repo;
+    const state_t *state = ctx->run.state;
+    const config_t *config = ctx->config;
+    output_t *out = ctx->out;
 
     /* Check if path exists and determine if it's a directory */
     bool path_exists = fs_exists(test_path);
@@ -844,7 +842,7 @@ static error_t *test_path_ignore(
      * ruleset on first request. */
     ignore_rules_t *ignore_rules = NULL;
     error_t *err = ignore_rules_create(
-        repo, config, NULL, 0, arena, &ignore_rules
+        repo, config, NULL, 0, ctx->arena, &ignore_rules
     );
     if (err) {
         source_filter_free(source_filter);
@@ -1034,7 +1032,6 @@ error_t *cmd_ignore(const dotta_ctx_t *ctx, const cmd_ignore_options_t *opts) {
     CHECK_NULL(opts);
 
     git_repository *repo = ctx->run.repo;
-    const config_t *config = ctx->config;
     output_t *out = ctx->out;
 
     /* CLI flags override config */
@@ -1062,10 +1059,7 @@ error_t *cmd_ignore(const dotta_ctx_t *ctx, const cmd_ignore_options_t *opts) {
     /* --test is a read-only query that walks every enabled profile by itself;
      * it doesn't use dottaignore_scope_t. Dispatch early. */
     if (has_test) {
-        return test_path_ignore(
-            repo, ctx->run.state, config, opts->test_path,
-            opts->profile, ctx->arena, out
-        );
+        return test_path_ignore(ctx, opts->test_path, opts->profile);
     }
 
     /* Build the dottaignore_scope_t for edit / modify. Profile labels are

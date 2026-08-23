@@ -31,6 +31,14 @@
  *   profile enable / disable, sync's --force arm, completion) read the
  *   dispatcher's view or build their own with manifest_build, and write the
  *   record through state.h directly; no snapshot exists for them to desync.
+ *
+ *   The workspace's products (rows, records, verdicts) are read through the
+ *   workspace; the run's resources (the repository, the content cache) are
+ *   read through the dispatch context, at every layer — the workspace borrows
+ *   them for its own reads and lends none of them (include/runtime.h, "Members
+ *   not welcome" #3). A core step that acts on the workspace's plan and reads
+ *   Git or content takes those handles by name beside the workspace
+ *   (deploy_execute).
  */
 
 #ifndef DOTTA_WORKSPACE_H

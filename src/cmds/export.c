@@ -437,11 +437,13 @@ static error_t *validate_destinations(
  * are read here too: tiny, needed by phase 2, and shown by --dry-run.
  */
 static error_t *validate_content(
-    git_repository *repo,
-    keymgr *km,
+    const dotta_ctx_t *ctx,
     const char *profile,
     export_entry_list_t *list
 ) {
+    git_repository *repo = ctx->run.repo;
+    keymgr *keymgr = ctx->run.keymgr;
+
     for (size_t i = 0; i < list->count; i++) {
         export_entry_t *e = &list->items[i];
         error_t *err = NULL;
@@ -450,7 +452,7 @@ static error_t *validate_content(
 
         if (e->kind == EXPORT_ENTRY_SYMLINK) {
             err = content_get_from_blob_oid(
-                repo, &e->blob_oid, e->storage_path, profile, km,
+                repo, &e->blob_oid, e->storage_path, profile, keymgr,
                 &e->content
             );
             if (err) {
@@ -485,7 +487,7 @@ static error_t *validate_content(
         if (ckind == CONTENT_ENCRYPTED) {
             e->encrypted = true;
             err = content_get_from_blob_oid(
-                repo, &e->blob_oid, e->storage_path, profile, km,
+                repo, &e->blob_oid, e->storage_path, profile, keymgr,
                 &e->content
             );
             if (err) {
@@ -509,16 +511,18 @@ static error_t *validate_content(
  * are never touched — the copy makes no claim over what was already there.
  */
 static error_t *materialize_entries(
-    git_repository *repo,
-    keymgr *km,
+    const dotta_ctx_t *ctx,
     const char *profile,
     const char *root_path,     /* NULL for single-file exports */
     bool root_existed,
     mode_t root_mode,
     export_entry_list_t *list,
-    bool verbose,
-    output_t *out
+    bool verbose
 ) {
+    git_repository *repo = ctx->run.repo;
+    keymgr *keymgr = ctx->run.keymgr;
+    output_t *out = ctx->out;
+
     error_t *err = NULL;
 
     if (root_path && !root_existed) {
@@ -556,7 +560,7 @@ static error_t *materialize_entries(
                 const buffer_t *bytes = &e->content;
                 if (!e->content_held) {
                     err = content_get_from_blob_oid(
-                        repo, &e->blob_oid, e->storage_path, profile, km,
+                        repo, &e->blob_oid, e->storage_path, profile, keymgr,
                         &local
                     );
                     if (err) {
@@ -729,6 +733,8 @@ error_t *cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
     CHECK_NULL(opts->output);
 
     git_repository *repo = ctx->run.repo;
+    const mount_table_t *mounts = ctx->run.mounts;
+    keymgr *keymgr = ctx->run.keymgr;
     output_t *out = ctx->out;
     arena_t *arena = ctx->arena;
     bool to_stdout = strcmp(opts->output, "-") == 0;
@@ -820,7 +826,7 @@ error_t *cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
          * show). */
         const char *converted = NULL;
         error_t *conv_err = path_input_resolve(
-            ctx->run.mounts, opts->file_path, arena, &converted
+            mounts, opts->file_path, arena, &converted
         );
         const char *storage = conv_err ? opts->file_path : converted;
         if (conv_err) error_free(conv_err);
@@ -1021,7 +1027,7 @@ error_t *cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
         if (err) goto cleanup;
     }
 
-    err = validate_content(repo, ctx->run.keymgr, opts->profile, &list);
+    err = validate_content(ctx, opts->profile, &list);
     if (err) goto cleanup;
 
     /* ── Reporting / phase 2 ── */
@@ -1045,7 +1051,7 @@ error_t *cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
             buffer_t local = BUFFER_INIT;
             err = content_get_from_blob_oid(
                 repo, &e->blob_oid, e->storage_path, opts->profile,
-                ctx->run.keymgr, &local
+                keymgr, &local
             );
             if (!err) err = write_bytes_stdout(&local);
             buffer_free(&local);
@@ -1054,8 +1060,8 @@ error_t *cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
     }
 
     err = materialize_entries(
-        repo, ctx->run.keymgr, opts->profile, root_path, root_existed,
-        root_mode, &list, verbose, out
+        ctx, opts->profile, root_path, root_existed, root_mode, &list,
+        verbose
     );
     if (err) goto cleanup;
 

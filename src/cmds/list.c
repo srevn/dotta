@@ -97,17 +97,15 @@ static void print_upstream_state(
  * Remote:  Add tracking indicators
  */
 static error_t *list_profiles(
-    git_repository *repo,
-    state_t *state,
-    arena_t *arena,
-    const cmd_list_options_t *opts,
-    output_t *out
+    const dotta_ctx_t *ctx,
+    const cmd_list_options_t *opts
 ) {
-    CHECK_NULL(repo);
-    CHECK_NULL(state);
-    CHECK_NULL(arena);
+    CHECK_NULL(ctx);
     CHECK_NULL(opts);
-    CHECK_NULL(out);
+
+    git_repository *repo = ctx->run.repo;
+    const state_t *state = ctx->run.state;  /* Borrowed from dispatcher; do not free */
+    output_t *out = ctx->out;
 
     bool verbose = output_is_verbose(out);
 
@@ -128,7 +126,7 @@ static error_t *list_profiles(
     const char *remote_name = NULL;
     bool show_remote = false;
     if (opts->remote) {
-        err = gitops_resolve_default_remote(repo, arena, &remote_name, NULL);
+        err = gitops_resolve_default_remote(repo, ctx->arena, &remote_name, NULL);
         if (err) {
             output_warning(
                 out, OUTPUT_NORMAL, "Could not detect remote: %s",
@@ -542,27 +540,26 @@ static bool format_time(git_time_t timestamp, char *buf, size_t buf_size) {
  * Default: Oneline format (hash, summary, time) Verbose: Full commit format
  */
 static error_t *list_file_history(
-    git_repository *repo,
-    const state_t *state,
-    const mount_table_t *mounts,
-    arena_t *arena,
-    const cmd_list_options_t *opts,
-    output_t *out
+    const dotta_ctx_t *ctx,
+    const cmd_list_options_t *opts
 ) {
-    CHECK_NULL(repo);
-    CHECK_NULL(state);
-    CHECK_NULL(mounts);
-    CHECK_NULL(arena);
+    CHECK_NULL(ctx);
     CHECK_NULL(opts);
     CHECK_NULL(opts->file_path);
-    CHECK_NULL(out);
+
+    git_repository *repo = ctx->run.repo;
+    const state_t *state = ctx->run.state;  /* Borrowed from dispatcher; do not free */
+    const mount_table_t *mounts = ctx->run.mounts;
+    output_t *out = ctx->out;
 
     bool verbose = output_is_verbose(out);
 
     /* Resolve input path to storage format (handles absolute, tilde, relative,
      * and storage paths). File need not exist on disk. */
     const char *storage_path = NULL;
-    error_t *err = path_input_resolve(mounts, opts->file_path, arena, &storage_path);
+    error_t *err = path_input_resolve(
+        mounts, opts->file_path, ctx->arena, &storage_path
+    );
     if (err) {
         return error_wrap(err, "Failed to resolve path '%s'", opts->file_path);
     }
@@ -575,7 +572,7 @@ static error_t *list_file_history(
          * path names one row and that row's profile is the owner. The row is
          * the arena's; only the index is released here. */
         manifest_t *manifest = NULL;
-        err = manifest_build(repo, state, arena, &manifest);
+        err = manifest_build(repo, state, ctx->arena, &manifest);
         if (err) return err;
 
         const manifest_row_t *row = manifest_lookup_storage(manifest, storage_path);
@@ -714,13 +711,11 @@ error_t *cmd_list(const dotta_ctx_t *ctx, const cmd_list_options_t *opts) {
 
     /* Dispatch to appropriate list function based on mode */
     if (opts->mode == LIST_PROFILES) {
-        err = list_profiles(repo, ctx->run.state, ctx->arena, opts, out);
+        err = list_profiles(ctx, opts);
     } else if (opts->mode == LIST_FILES) {
         err = list_files(repo, opts, out);
     } else if (opts->mode == LIST_FILE_HISTORY) {
-        err = list_file_history(
-            repo, ctx->run.state, ctx->run.mounts, ctx->arena, opts, out
-        );
+        err = list_file_history(ctx, opts);
     } else {
         err = ERROR(ERR_INVALID_ARG, "Invalid list mode");
     }

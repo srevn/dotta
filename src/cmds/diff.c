@@ -151,7 +151,6 @@ static const char *get_status_message_from_item(
  * @param item Workspace item with divergence info (must not be NULL)
  * @param file The path's view row — blob, storage path, profile (must not be NULL)
  * @param cache Content cache (must not be NULL)
- * @param repo Repository (must not be NULL)
  * @param direction Diff direction
  * @param opts Command options (must not be NULL)
  * @param out Output context (must not be NULL)
@@ -161,7 +160,6 @@ static error_t *show_file_diff_from_workspace(
     const workspace_item_t *item,
     const manifest_row_t *file,
     content_cache_t *cache,
-    git_repository *repo,
     diff_direction_t direction,
     const cmd_diff_options_t *opts,
     output_t *out
@@ -169,7 +167,6 @@ static error_t *show_file_diff_from_workspace(
     CHECK_NULL(item);
     CHECK_NULL(file);
     CHECK_NULL(cache);
-    CHECK_NULL(repo);
     CHECK_NULL(opts);
     CHECK_NULL(out);
 
@@ -275,8 +272,7 @@ static error_t *show_file_diff_from_workspace(
  * @param ws Workspace handle for active-row lookup (must not be NULL)
  * @param diverged Array of diverged items from workspace (must not be NULL)
  * @param diverged_count Number of diverged items
- * @param content_cache Content cache for blob access (must not be NULL)
- * @param repo Repository (must not be NULL)
+ * @param cache Content cache for blob access (must not be NULL)
  * @param direction Diff direction (UPSTREAM or DOWNSTREAM)
  * @param scope Operation scope (profile + path dimensions; diff has no excludes)
  * @param opts Command options (must not be NULL)
@@ -288,8 +284,7 @@ static error_t *present_diffs_for_direction(
     const workspace_t *ws,
     const workspace_item_t *diverged,
     size_t diverged_count,
-    content_cache_t *content_cache,
-    git_repository *repo,
+    content_cache_t *cache,
     diff_direction_t direction,
     const scope_t *scope,
     const cmd_diff_options_t *opts,
@@ -297,8 +292,7 @@ static error_t *present_diffs_for_direction(
     size_t *diff_count
 ) {
     CHECK_NULL(ws);
-    CHECK_NULL(content_cache);
-    CHECK_NULL(repo);
+    CHECK_NULL(cache);
     CHECK_NULL(scope);
     CHECK_NULL(opts);
     CHECK_NULL(out);
@@ -351,7 +345,7 @@ static error_t *present_diffs_for_direction(
 
         /* Show the diff (content already analyzed by workspace) */
         err = show_file_diff_from_workspace(
-            item, file, content_cache, repo, direction, opts, out
+            item, file, cache, direction, opts, out
         );
         if (err) {
             return err;
@@ -617,19 +611,17 @@ static int print_diff_line_cb(
  * manifest_build_tree computes, directories set aside) and compares each file
  * against the current filesystem state.
  *
- * @param repo Repository (must not be NULL)
  * @param files Tree-built file slice (passed by value; rows borrowed from the
  *              caller's arena and live until command end)
  * @param profile Profile name (must not be NULL)
  * @param file_filter File filter for CLI (can be NULL for no filter)
  * @param opts Command options (must not be NULL)
- * @param cache Shared content cache (borrowed from ctx, must not be NULL)
+ * @param cache Shared content cache (the run's, must not be NULL)
  * @param out Output context (must not be NULL)
  * @param diff_count Output: number of diffs shown (must not be NULL)
  * @return Error or NULL on success
  */
 static error_t *compare_tree_files_to_filesystem(
-    git_repository *repo,
     manifest_rows_t files,
     const char *profile,
     const pathspec_t *file_filter,
@@ -638,7 +630,6 @@ static error_t *compare_tree_files_to_filesystem(
     output_t *out,
     size_t *diff_count
 ) {
-    CHECK_NULL(repo);
     CHECK_NULL(profile);
     CHECK_NULL(opts);
     CHECK_NULL(cache);
@@ -902,33 +893,30 @@ static size_t validate_filter_paths(
  * enabled profiles. The path filter is derived from scope_paths (raw CLI positional
  * args, never narrowed).
  *
- * @param repo Repository (must not be NULL)
- * @param state State handle (must not be NULL)
+ * @param ctx Dispatch context (must not be NULL; reads the repository, this
+ *            machine's mount table, and the borrowed command arena that backs
+ *            the tree-built file slice)
  * @param commit_ref Commit reference to compare (must not be NULL)
  * @param scope Operation scope (must not be NULL)
- * @param arena Borrowed command arena (backs the tree-built file slice)
  * @param opts Command options (must not be NULL)
- * @param cache Shared content cache (borrowed from ctx, must not be NULL)
- * @param out Output context (must not be NULL)
  * @return Error or NULL on success
  */
 static error_t *diff_commit_to_workspace(
-    git_repository *repo,
+    const dotta_ctx_t *ctx,
     const char *commit_ref,
     const scope_t *scope,
-    const mount_table_t *mounts,
-    arena_t *arena,
-    const cmd_diff_options_t *opts,
-    content_cache_t *cache,
-    output_t *out
+    const cmd_diff_options_t *opts
 ) {
-    CHECK_NULL(repo);
+    CHECK_NULL(ctx);
     CHECK_NULL(commit_ref);
     CHECK_NULL(scope);
-    CHECK_NULL(mounts);
-    CHECK_NULL(arena);
     CHECK_NULL(opts);
-    CHECK_NULL(out);
+
+    git_repository *repo = ctx->run.repo;
+    const mount_table_t *mounts = ctx->run.mounts;
+    content_cache_t *cache = ctx->run.content_cache;
+    arena_t *arena = ctx->arena;
+    output_t *out = ctx->out;
 
     const string_array_t *profiles = scope_enabled(scope);
     const pathspec_t *file_filter = scope_paths(scope);
@@ -1022,7 +1010,7 @@ static error_t *diff_commit_to_workspace(
     /* Step 6: Compare historical slice against current filesystem */
     size_t diff_count = 0;
     err = compare_tree_files_to_filesystem(
-        repo, tree_files, profile, file_filter, opts, cache, out, &diff_count
+        tree_files, profile, file_filter, opts, cache, out, &diff_count
     );
     if (err) {
         goto cleanup;
@@ -1276,35 +1264,29 @@ cleanup:
  *
  * Performance: O(P) metadata loads + O(F) file analysis (where P=profiles, F=files)
  *
- * @param repo Repository (must not be NULL)
- * @param state State handle (must not be NULL; borrowed)
+ * @param ctx Dispatch context (must not be NULL; reads the repository, the
+ *            borrowed state handle, the shared blob-content cache, and the view
+ *            over the enabled set)
  * @param scope Operation scope — profile and path filters (must not be NULL)
- * @param config Configuration (can be NULL)
- * @param cache Shared blob-content cache (must not be NULL)
- * @param manifest The view over the enabled set (must not be NULL; ctx->run.manifest)
  * @param opts Command options (must not be NULL)
- * @param arena Command arena (must not be NULL)
- * @param out Output context (must not be NULL)
  * @return Error or NULL on success
  */
 static error_t *diff_workspace(
-    git_repository *repo,
-    state_t *state,
+    const dotta_ctx_t *ctx,
     const scope_t *scope,
-    const config_t *config,
-    content_cache_t *cache,
-    const manifest_t *manifest,
-    const cmd_diff_options_t *opts,
-    arena_t *arena,
-    output_t *out
+    const cmd_diff_options_t *opts
 ) {
-    CHECK_NULL(repo);
+    CHECK_NULL(ctx);
     CHECK_NULL(scope);
-    CHECK_NULL(cache);
-    CHECK_NULL(manifest);
     CHECK_NULL(opts);
-    CHECK_NULL(arena);
-    CHECK_NULL(out);
+
+    git_repository *repo = ctx->run.repo;
+    state_t *state = ctx->run.state;  /* Borrowed from dispatcher; do not free */
+    content_cache_t *cache = ctx->run.content_cache;
+    const manifest_t *manifest = ctx->run.manifest;
+    const config_t *config = ctx->config;
+    arena_t *arena = ctx->arena;
+    output_t *out = ctx->out;
 
     error_t *err = NULL;
     workspace_t *ws = NULL;
@@ -1366,7 +1348,7 @@ static error_t *diff_workspace(
         output_info(out, OUTPUT_NORMAL, "Shows what 'dotta apply' would change\n");
 
         err = present_diffs_for_direction(
-            ws, diverged, diverged_count, cache, repo, DIFF_UPSTREAM,
+            ws, diverged, diverged_count, cache, DIFF_UPSTREAM,
             scope, opts, out, &upstream_count
         );
         if (err) goto cleanup;
@@ -1380,7 +1362,7 @@ static error_t *diff_workspace(
         output_info(out, OUTPUT_NORMAL, "Shows what 'dotta update' would commit\n");
 
         err = present_diffs_for_direction(
-            ws, diverged, diverged_count, cache, repo, DIFF_DOWNSTREAM,
+            ws, diverged, diverged_count, cache, DIFF_DOWNSTREAM,
             scope, opts, out, &downstream_count
         );
         if (err) goto cleanup;
@@ -1394,7 +1376,7 @@ static error_t *diff_workspace(
     } else {
         /* Single direction */
         err = present_diffs_for_direction(
-            ws, diverged, diverged_count, cache, repo, opts->direction,
+            ws, diverged, diverged_count, cache, opts->direction,
             scope, opts, out, &total_diff_count
         );
         if (err) goto cleanup;
@@ -1424,11 +1406,12 @@ error_t *cmd_diff(const dotta_ctx_t *ctx, const cmd_diff_options_t *opts) {
     CHECK_NULL(opts);
 
     git_repository *repo = ctx->run.repo;
+    state_t *state = ctx->run.state;  /* Borrowed from dispatcher; do not free */
+    const mount_table_t *mounts = ctx->run.mounts;
     const config_t *config = ctx->config;
     output_t *out = ctx->out;
 
     error_t *err = NULL;
-    state_t *state = ctx->run.state;  /* Borrowed from dispatcher; do not free */
     scope_t *scope = NULL;
 
     /* Build operation scope
@@ -1446,7 +1429,7 @@ error_t *cmd_diff(const dotta_ctx_t *ctx, const cmd_diff_options_t *opts) {
         .file_count    = opts->file_count,
     };
     err = scope_build(
-        repo, state, &scope_inputs, config, ctx->run.mounts, ctx->arena, &scope
+        repo, state, &scope_inputs, config, mounts, ctx->arena, &scope
     );
     if (err) goto cleanup;
 
@@ -1469,18 +1452,12 @@ error_t *cmd_diff(const dotta_ctx_t *ctx, const cmd_diff_options_t *opts) {
 
         case DIFF_COMMIT_TO_WORKSPACE:
             /* Commit-to-workspace — historical mode, path filter only */
-            err = diff_commit_to_workspace(
-                repo, opts->commit1, scope, ctx->run.mounts, ctx->arena,
-                opts, ctx->run.content_cache, out
-            );
+            err = diff_commit_to_workspace(ctx, opts->commit1, scope, opts);
             goto cleanup;
 
         case DIFF_WORKSPACE:
             /* Workspace diff — full scope (profile + path dimensions) */
-            err = diff_workspace(
-                repo, state, scope, config, ctx->run.content_cache, ctx->run.manifest,
-                opts, ctx->arena, out
-            );
+            err = diff_workspace(ctx, scope, opts);
             goto cleanup;
     }
 

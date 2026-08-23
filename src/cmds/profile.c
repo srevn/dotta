@@ -189,17 +189,15 @@ static void print_manifest_disable_stats(
  * Shows enabled vs available profiles with clear visual distinction.
  */
 static error_t *profile_list(
-    git_repository *repo,
-    state_t *state,
-    arena_t *arena,
-    const cmd_profile_options_t *opts,
-    output_t *out
+    const dotta_ctx_t *ctx,
+    const cmd_profile_options_t *opts
 ) {
-    CHECK_NULL(repo);
-    CHECK_NULL(state);
-    CHECK_NULL(arena);
+    CHECK_NULL(ctx);
     CHECK_NULL(opts);
-    CHECK_NULL(out);
+
+    git_repository *repo = ctx->run.repo;
+    state_t *state = ctx->run.state;
+    output_t *out = ctx->out;
 
     /* Resource tracking for cleanup. remote_name/remote_url are arena-borrowed
      * when the --remote branch resolves them. */
@@ -315,7 +313,7 @@ static error_t *profile_list(
     /* Show remote profiles if requested */
     if (opts->show_remote) {
         error_t *remote_err = gitops_resolve_default_remote(
-            repo, arena, &remote_name, &remote_url
+            repo, ctx->arena, &remote_name, &remote_url
         );
         if (remote_err) {
             output_warning(
@@ -396,15 +394,14 @@ cleanup:
  * Downloads profiles without enabling them.
  */
 static error_t *profile_fetch(
-    git_repository *repo,
-    arena_t *arena,
-    const cmd_profile_options_t *opts,
-    output_t *out
+    const dotta_ctx_t *ctx,
+    const cmd_profile_options_t *opts
 ) {
-    CHECK_NULL(repo);
-    CHECK_NULL(arena);
+    CHECK_NULL(ctx);
     CHECK_NULL(opts);
-    CHECK_NULL(out);
+
+    git_repository *repo = ctx->run.repo;
+    output_t *out = ctx->out;
 
     /* Resource tracking for cleanup. remote_name/remote_url are arena-borrowed. */
     const char *remote_name = NULL;
@@ -419,7 +416,7 @@ static error_t *profile_fetch(
 
     /* Detect remote (name + URL — URL feeds the credential helper). */
     err = gitops_resolve_default_remote(
-        repo, arena, &remote_name, &remote_url
+        repo, ctx->arena, &remote_name, &remote_url
     );
     if (err) {
         err = error_wrap(err, "No remote configured");
@@ -673,19 +670,16 @@ cleanup:
  *      output, then state_save.
  */
 static error_t *profile_enable(
-    git_repository *repo,
-    state_t *state,
-    arena_t *arena,
-    const manifest_t *before,
-    const cmd_profile_options_t *opts,
-    output_t *out
+    const dotta_ctx_t *ctx,
+    const cmd_profile_options_t *opts
 ) {
-    CHECK_NULL(repo);
-    CHECK_NULL(state);
-    CHECK_NULL(arena);
-    CHECK_NULL(before);
+    CHECK_NULL(ctx);
     CHECK_NULL(opts);
-    CHECK_NULL(out);
+
+    git_repository *repo = ctx->run.repo;
+    state_t *state = ctx->run.state;
+    const manifest_t *before = ctx->run.manifest;
+    output_t *out = ctx->out;
 
     /* Resource tracking for cleanup */
     string_array_t *enabled = NULL;
@@ -953,7 +947,7 @@ static error_t *profile_enable(
         /* Phase 3: The view after, and the diff. The builder reads the rows
          * as the loop above left them, any --target supplied for the new
          * entries included. */
-        err = manifest_build(repo, state, arena, &after);
+        err = manifest_build(repo, state, ctx->arena, &after);
         if (err) {
             err = error_wrap(err, "Failed to build manifest after enable");
             goto cleanup;
@@ -961,7 +955,7 @@ static error_t *profile_enable(
 
         anchor_t *anchors = NULL;
         size_t anchor_count = 0;
-        err = state_get_all_anchors(state, arena, &anchors, &anchor_count);
+        err = state_get_all_anchors(state, ctx->arena, &anchors, &anchor_count);
         if (err) {
             err = error_wrap(err, "Failed to read anchors");
             goto cleanup;
@@ -1074,17 +1068,15 @@ cleanup:
  *      existing per-profile UX.
  */
 static error_t *profile_disable(
-    git_repository *repo,
-    state_t *state,
-    arena_t *arena,
-    const cmd_profile_options_t *opts,
-    output_t *out
+    const dotta_ctx_t *ctx,
+    const cmd_profile_options_t *opts
 ) {
-    CHECK_NULL(repo);
-    CHECK_NULL(state);
-    CHECK_NULL(arena);
+    CHECK_NULL(ctx);
     CHECK_NULL(opts);
-    CHECK_NULL(out);
+
+    git_repository *repo = ctx->run.repo;
+    state_t *state = ctx->run.state;
+    output_t *out = ctx->out;
 
     /* Resource tracking for cleanup */
     string_array_t *enabled = NULL;
@@ -1238,7 +1230,7 @@ static error_t *profile_disable(
          * whose metadata.json will not parse, a branch that will not load), and
          * that set is exactly the one this build fails on. The message names
          * the profile; warn with it and disable without the receipt. */
-        err = manifest_build(repo, state, arena, &before);
+        err = manifest_build(repo, state, ctx->arena, &before);
         if (err) {
             output_warning(
                 out, OUTPUT_NORMAL, "Manifest build failed: %s", error_message(err)
@@ -1264,7 +1256,7 @@ static error_t *profile_disable(
          * fail on Git's account: the post-disable set is a subset of the same
          * profiles at the same HEADs. */
         if (before) {
-            err = manifest_build(repo, state, arena, &after);
+            err = manifest_build(repo, state, ctx->arena, &after);
             if (err) {
                 err = error_wrap(err, "Failed to build manifest after disable");
                 goto cleanup;
@@ -1272,7 +1264,7 @@ static error_t *profile_disable(
 
             anchor_t *anchors = NULL;
             size_t anchor_count = 0;
-            err = state_get_all_anchors(state, arena, &anchors, &anchor_count);
+            err = state_get_all_anchors(state, ctx->arena, &anchors, &anchor_count);
             if (err) {
                 err = error_wrap(err, "Failed to read anchors");
                 goto cleanup;
@@ -1362,17 +1354,14 @@ cleanup:
  * Changes the order of enabled profiles, which affects layering precedence.
  */
 static error_t *profile_reorder(
-    git_repository *repo,
-    state_t *state,
-    arena_t *arena,
-    const cmd_profile_options_t *opts,
-    output_t *out
+    const dotta_ctx_t *ctx,
+    const cmd_profile_options_t *opts
 ) {
-    CHECK_NULL(repo);
-    CHECK_NULL(state);
-    CHECK_NULL(arena);
+    CHECK_NULL(ctx);
     CHECK_NULL(opts);
-    CHECK_NULL(out);
+
+    state_t *state = ctx->run.state;
+    output_t *out = ctx->out;
 
     /* Resource tracking for cleanup */
     string_array_t *current_enabled = NULL;
@@ -1565,17 +1554,15 @@ cleanup:
  * Checks state consistency and offers to fix issues.
  */
 static error_t *profile_validate(
-    git_repository *repo,
-    state_t *state,
-    arena_t *arena,
-    const cmd_profile_options_t *opts,
-    output_t *out
+    const dotta_ctx_t *ctx,
+    const cmd_profile_options_t *opts
 ) {
-    CHECK_NULL(repo);
-    CHECK_NULL(state);
-    CHECK_NULL(arena);
+    CHECK_NULL(ctx);
     CHECK_NULL(opts);
-    CHECK_NULL(out);
+
+    git_repository *repo = ctx->run.repo;
+    state_t *state = ctx->run.state;
+    output_t *out = ctx->out;
 
     /* Resource tracking for cleanup */
     string_array_t *enabled = NULL;
@@ -1675,7 +1662,7 @@ static error_t *profile_validate(
      * orphan the next apply reads, asks Git about, finds LOST, and releases. */
     anchor_t *anchors = NULL;
     size_t anchor_count = 0;
-    err = state_get_all_anchors(state, arena, &anchors, &anchor_count);
+    err = state_get_all_anchors(state, ctx->arena, &anchors, &anchor_count);
     if (err) goto cleanup;
 
     deleted = string_array_new(0);
@@ -1788,8 +1775,6 @@ error_t *cmd_profile(const dotta_ctx_t *ctx, const cmd_profile_options_t *opts) 
     CHECK_NULL(ctx);
     CHECK_NULL(opts);
 
-    git_repository *repo = ctx->run.repo;
-    state_t *state = ctx->run.state;  /* NULL for fetch, whose spec declares none */
     output_t *out = ctx->out;
 
     /* Override verbosity from CLI */
@@ -1804,27 +1789,27 @@ error_t *cmd_profile(const dotta_ctx_t *ctx, const cmd_profile_options_t *opts) 
     error_t *result = NULL;
     switch (opts->subcommand) {
         case PROFILE_LIST:
-            result = profile_list(repo, state, ctx->arena, opts, out);
+            result = profile_list(ctx, opts);
             break;
 
         case PROFILE_FETCH:
-            result = profile_fetch(repo, ctx->arena, opts, out);
+            result = profile_fetch(ctx, opts);
             break;
 
         case PROFILE_ENABLE:
-            result = profile_enable(repo, state, ctx->arena, ctx->run.manifest, opts, out);
+            result = profile_enable(ctx, opts);
             break;
 
         case PROFILE_DISABLE:
-            result = profile_disable(repo, state, ctx->arena, opts, out);
+            result = profile_disable(ctx, opts);
             break;
 
         case PROFILE_REORDER:
-            result = profile_reorder(repo, state, ctx->arena, opts, out);
+            result = profile_reorder(ctx, opts);
             break;
 
         case PROFILE_VALIDATE:
-            result = profile_validate(repo, state, ctx->arena, opts, out);
+            result = profile_validate(ctx, opts);
             break;
 
         default:

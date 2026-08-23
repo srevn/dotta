@@ -47,12 +47,13 @@ void completion_profiles(
     const dotta_ctx_t *ctx, FILE *out, completion_profiles_t set
 ) {
     git_repository *repo = ctx->run.repo;
+    state_t *state = ctx->run.state;
     if (repo == NULL) return;
 
     if (set == COMPLETION_ENABLED) {
         const state_profile_entry_t *rows = NULL;
         size_t count = 0;
-        error_t *err = state_peek_profiles(ctx->run.state, &rows, &count);
+        error_t *err = state_peek_profiles(state, &rows, &count);
         if (err) {
             error_free(err);
             return;
@@ -72,8 +73,8 @@ void completion_profiles(
             const char *branch = branches->items[i];
             fprintf(
                 out, "%s\t%s\n", branch,
-                state_has_profile(ctx->run.state, branch) ? "Enabled profile"
-                                                      : "Available profile"
+                state_has_profile(state, branch) ? "Enabled profile"
+                                                 : "Available profile"
             );
         }
 
@@ -131,10 +132,11 @@ void completion_files(
     char *const *winners, size_t winner_count
 ) {
     git_repository *repo = ctx->run.repo;
+    state_t *state = ctx->run.state;
     if (repo == NULL) return;
 
     manifest_t *manifest = NULL;
-    error_t *err = manifest_build(repo, ctx->run.state, ctx->arena, &manifest);
+    error_t *err = manifest_build(repo, state, ctx->arena, &manifest);
     if (err) {
         error_free(err);
         return;
@@ -354,6 +356,7 @@ static void commits_emit(
     const char *const *branches, size_t branch_count
 ) {
     git_repository *repo = ctx->run.repo;
+    state_t *state = ctx->run.state;
     if (repo == NULL) return;
 
     static const struct {
@@ -379,7 +382,7 @@ static void commits_emit(
      * may be a path): the enabled histories stand in. */
     const state_profile_entry_t *rows = NULL;
     size_t count = 0;
-    error_t *err = state_peek_profiles(ctx->run.state, &rows, &count);
+    error_t *err = state_peek_profiles(state, &rows, &count);
     if (err) {
         error_free(err);
         return;

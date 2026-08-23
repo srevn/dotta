@@ -215,14 +215,14 @@ static error_t *collect_tree(
  * Handles file storage, encryption, and metadata capture in a single operation.
  * Uses stat data from content layer to eliminate race conditions.
  *
+ * @param ctx Dispatch context (must not be NULL; reads ctx->run.keymgr for
+ *            encryption — NULL when encryption is disabled — and ctx->config
+ *            for the encryption policy)
  * @param wt Worktree handle
  * @param filesystem_path Source path on filesystem
  * @param storage_path Pre-computed storage path (e.g., "home/.bashrc")
  * @param opts Command options
- * @param keymgr Key manager (for encryption, can be NULL if encryption disabled)
- * @param config Configuration (for encryption policy; can be NULL)
  * @param metadata Metadata collection (captured entry will be added here)
- * @param out Output context
  * @param out_stat The capture's stat triple — taken from the same lstat as the
  *                 bytes stored, so the record can bind the committed blob to it
  *                 (must not be NULL; unset when a symlink could not be stat'd:
@@ -230,22 +230,25 @@ static error_t *collect_tree(
  * @return Error or NULL on success
  */
 static error_t *add_file_to_worktree(
+    const dotta_ctx_t *ctx,
     worktree_handle_t *wt,
     const char *filesystem_path,
     const char *storage_path,
     const cmd_add_options_t *opts,
-    keymgr *keymgr,
-    const config_t *config,
     metadata_t *metadata,
-    output_t *out,
     stat_cache_t *out_stat
 ) {
+    CHECK_NULL(ctx);
     CHECK_NULL(wt);
     CHECK_NULL(filesystem_path);
     CHECK_NULL(storage_path);
     CHECK_NULL(opts);
     CHECK_NULL(metadata);
     CHECK_NULL(out_stat);
+
+    keymgr *keymgr = ctx->run.keymgr;  /* NULL if encryption disabled */
+    const config_t *config = ctx->config;
+    output_t *out = ctx->out;
 
     *out_stat = STAT_CACHE_UNSET;
 
@@ -484,27 +487,31 @@ static error_t *add_file_to_worktree(
 /**
  * Create commit in worktree
  *
+ * @param ctx Dispatch context (must not be NULL)
  * @param wt Worktree handle
  * @param opts Command options
  * @param added_files Files that were added
- * @param config Configuration
+ * @param mounts The table the added paths classify under — the run's, or under
+ *               --target the one-binding table cmd_add built for this profile
+ *               (must not be NULL)
  * @param out_commit_oid Output for commit OID (optional, can be NULL)
  * @return Error or NULL on success
  */
 static error_t *create_commit(
+    const dotta_ctx_t *ctx,
     worktree_handle_t *wt,
     const cmd_add_options_t *opts,
     string_array_t *added_files,
     const mount_table_t *mounts,
-    arena_t *arena,
-    const config_t *config,
     git_oid *out_commit_oid
 ) {
+    CHECK_NULL(ctx);
     CHECK_NULL(wt);
     CHECK_NULL(opts);
     CHECK_NULL(added_files);
     CHECK_NULL(mounts);
-    CHECK_NULL(arena);
+
+    const config_t *config = ctx->config;
 
     /* Build commit message using storage paths */
     string_array_t *storage_paths = string_array_new(0);
@@ -523,7 +530,7 @@ static error_t *create_commit(
         const char *storage_path = NULL;
 
         err = mount_classify(
-            mounts, file_path, arena, &outcome, &storage_path, NULL
+            mounts, file_path, ctx->arena, &outcome, &storage_path, NULL
         );
         if (err) {
             /* Skip if conversion fails (shouldn't happen at this point) */
@@ -542,7 +549,7 @@ static error_t *create_commit(
     }
 
     /* Build commit message context */
-    commit_message_context_t ctx = {
+    commit_message_context_t msg_ctx = {
         .action        = COMMIT_ACTION_ADD,
         .profile       = opts->profile,
         .files         = storage_paths->items,
@@ -551,7 +558,7 @@ static error_t *create_commit(
         .target_commit = NULL
     };
 
-    char *message = build_commit_message(config, &ctx);
+    char *message = build_commit_message(config, &msg_ctx);
     string_array_free(storage_paths);
 
     if (!message) {
@@ -629,7 +636,8 @@ static error_t *create_commit(
  *
  * Performance: one view build + O(N) point lookups, N = files added
  *
- * @param repo Git repository (must not be NULL)
+ * @param ctx Dispatch context (must not be NULL; reads the repository, the
+ *            state and the command arena)
  * @param profile Profile that files were added to (must not be NULL)
  * @param target Deployment target for custom/ files (can be NULL)
  * @param profile_was_new This add created the profile's branch: enable it here
@@ -646,9 +654,7 @@ static error_t *create_commit(
  * @return Error or NULL on success (non-fatal - caller treats as warning)
  */
 static error_t *update_manifest_after_add(
-    git_repository *repo,
-    state_t *state,
-    arena_t *arena,
+    const dotta_ctx_t *ctx,
     const char *profile,
     const char *target,
     bool profile_was_new,
@@ -659,14 +665,15 @@ static error_t *update_manifest_after_add(
     size_t *out_synced,
     size_t *out_taken_over
 ) {
-    CHECK_NULL(repo);
-    CHECK_NULL(state);
-    CHECK_NULL(arena);
+    CHECK_NULL(ctx);
     CHECK_NULL(profile);
     CHECK_NULL(added_files);
     CHECK_NULL(added_stats);
     CHECK_NULL(added_dirs);
     CHECK_NULL(out_updated);
+
+    git_repository *repo = ctx->run.repo;
+    state_t *state = ctx->run.state;   /* Borrowed from dispatcher (WRITE) */
 
     error_t *err = NULL;
 
@@ -716,14 +723,14 @@ static error_t *update_manifest_after_add(
      * misattribute to the winner's blob_oid. Write failures are non-fatal: disk
      * is the just-committed blob, and the next status's slow path confirms it. */
     manifest_t *manifest = NULL;
-    err = manifest_build(repo, state, arena, &manifest);
+    err = manifest_build(repo, state, ctx->arena, &manifest);
     if (err) return err;
 
     /* The record as it stands, indexed by path, so a takeover is known before
      * the write that rewrites it. */
     anchor_t *anchors = NULL;
     size_t anchor_count = 0;
-    err = state_get_all_anchors(state, arena, &anchors, &anchor_count);
+    err = state_get_all_anchors(state, ctx->arena, &anchors, &anchor_count);
     if (err) {
         manifest_free(manifest);
         return error_wrap(err, "Failed to read anchors");
@@ -802,6 +809,8 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     CHECK_NULL(ctx);
 
     git_repository *repo = ctx->run.repo;
+    const char *repo_path = ctx->run.repo_path;
+    state_t *state = ctx->run.state;   /* Borrowed from dispatcher (WRITE) */
     const config_t *config = ctx->config;
     output_t *out = ctx->out;
 
@@ -819,7 +828,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     size_t added_count = 0;
     bool profile_was_new = false;
     metadata_t *metadata = NULL;
-    const mount_table_t *mounts = NULL;
+    const mount_table_t *mounts = NULL;   /* The command's table: see below */
 
     /* Pre-flight privilege labels. STRING_ARRAY_AUTO releases the backing buffer
      * at scope exit; the privilege call window closes inside this function (or
@@ -840,7 +849,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
          * with a different target, fail BEFORE the Git commit so the user does
          * not end up with a wasted commit + stale binding. Setting a target on
          * a profile that previously had none is fine. */
-        const char *existing = state_peek_profile_target(ctx->run.state, opts->profile);
+        const char *existing = state_peek_profile_target(state, opts->profile);
         if (existing && existing[0] != '\0' && strcmp(existing, opts->target) != 0) {
             err = ERROR(
                 ERR_INVALID_ARG,
@@ -1064,7 +1073,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     };
 
     /* Execute pre-add hook */
-    err = hook_fire_pre(config, out, ctx->run.repo_path, &hook_inv);
+    err = hook_fire_pre(config, out, repo_path, &hook_inv);
     if (err) goto cleanup;
 
     /* Create temporary worktree */
@@ -1352,8 +1361,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
          * sharing stat() data between content and metadata layers to eliminate
          * TOCTOU */
         err = add_file_to_worktree(
-            wt, file_path, storage_path, opts, ctx->run.keymgr, config, metadata, out,
-            &added_stats[i]
+            ctx, wt, file_path, storage_path, opts, metadata, &added_stats[i]
         );
         if (err) {
             err = error_wrap(err, "Failed to add file '%s'", file_path);
@@ -1481,7 +1489,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     }
 
     /* Create commit */
-    err = create_commit(wt, opts, all_files, mounts, ctx->arena, config, NULL);
+    err = create_commit(ctx, wt, opts, all_files, mounts, NULL);
     if (err) goto cleanup;
 
     /* Write the record - auto-enable new profiles, anchor for enabled ones
@@ -1510,7 +1518,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     size_t manifest_taken_over = 0;
 
     error_t *manifest_err = update_manifest_after_add(
-        repo, ctx->run.state, ctx->arena, opts->profile, opts->target, profile_was_new,
+        ctx, opts->profile, opts->target, profile_was_new,
         all_files, added_stats, all_directories,
         &manifest_updated, &manifest_synced_count, &manifest_taken_over
     );
@@ -1545,7 +1553,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     worktree_cleanup(&wt);
 
     /* Execute post-add hook */
-    hook_fire_post(config, out, ctx->run.repo_path, &hook_inv);
+    hook_fire_post(config, out, repo_path, &hook_inv);
 
     /* Show summary on success */
     if ((added_count > 0 || dir_tracked_count > 0)) {

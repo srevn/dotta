@@ -74,32 +74,30 @@ static error_t *validate_options(const cmd_remove_options_t *opts) {
  * Complexity: O(M) to build index + O(N) to process inputs = O(M+N) Old
  * implementation: O(N×M) with nested loops
  *
- * @param mounts Per-machine mount table (must not be NULL). Caller passes
- *               ctx->run.mounts; the table covers HOME, ROOT, and every enabled
- *               profile's binding. Unenabled-profile lookups (custom/X) surface
- *               MOUNT_RESOLVE_UNBOUND, which the caller handles as "no filesystem
- *               path on this machine".
+ * @param ctx Dispatch context (must not be NULL). ctx->run.mounts covers HOME,
+ *            ROOT, and every enabled profile's binding. Unenabled-profile lookups
+ *            (custom/X) surface MOUNT_RESOLVE_UNBOUND, which the caller handles
+ *            as "no filesystem path on this machine".
  */
 static error_t *resolve_paths_to_remove(
-    git_repository *repo,
+    const dotta_ctx_t *ctx,
     const char *profile,
     char **input_paths,
     size_t path_count,
     string_array_t **storage_paths_out,
     string_array_t **filesystem_paths_out,
-    const cmd_remove_options_t *opts,
-    output_t *out,
-    const mount_table_t *mounts,
-    arena_t *arena
+    const cmd_remove_options_t *opts
 ) {
-    CHECK_NULL(repo);
+    CHECK_NULL(ctx);
     CHECK_NULL(profile);
     CHECK_NULL(input_paths);
     CHECK_NULL(storage_paths_out);
     CHECK_NULL(filesystem_paths_out);
     CHECK_NULL(opts);
-    CHECK_NULL(mounts);
-    CHECK_NULL(arena);
+
+    git_repository *repo = ctx->run.repo;
+    const mount_table_t *mounts = ctx->run.mounts;
+    output_t *out = ctx->out;
 
     /* Initialize all resources to NULL for safe cleanup */
     error_t *err = NULL;
@@ -145,7 +143,7 @@ static error_t *resolve_paths_to_remove(
         const char *storage_path = NULL;
 
         /* Resolve input path to storage format (file need not exist) */
-        err = path_input_resolve(mounts, input_path, arena, &storage_path);
+        err = path_input_resolve(mounts, input_path, ctx->arena, &storage_path);
         if (err) {
             if (!opts->force) {
                 goto cleanup;
@@ -167,7 +165,8 @@ static error_t *resolve_paths_to_remove(
         mount_resolve_outcome_t canonical_outcome;
         const char *canonical = NULL;
         error_t *convert_err = mount_resolve(
-            mounts, profile, storage_path, arena, &canonical_outcome, &canonical
+            mounts, profile, storage_path, ctx->arena,
+            &canonical_outcome, &canonical
         );
         if (convert_err) {
             error_free(convert_err);
@@ -219,7 +218,7 @@ static error_t *resolve_paths_to_remove(
                     mount_resolve_outcome_t file_outcome;
                     const char *file_fs_path = NULL;
                     err = mount_resolve(
-                        mounts, profile, profile_file, arena,
+                        mounts, profile, profile_file, ctx->arena,
                         &file_outcome, &file_fs_path
                     );
                     if (err) {
@@ -363,22 +362,24 @@ static error_t *remove_file_from_worktree(
  * Returns arrays of other profiles per file (caller must free).
  */
 static error_t *analyze_multi_profile_conflicts(
-    git_repository *repo,
+    const dotta_ctx_t *ctx,
     const string_array_t *storage_paths,
     const string_array_t *filesystem_paths,
     const char *current_profile,
-    const manifest_t *view,
     string_array_t ***other_profiles_out,
     size_t *multi_profile_count_out,
     bool *has_deployed_from_other_out
 ) {
-    CHECK_NULL(repo);
+    CHECK_NULL(ctx);
     CHECK_NULL(storage_paths);
     CHECK_NULL(filesystem_paths);
     CHECK_NULL(current_profile);
     CHECK_NULL(other_profiles_out);
     CHECK_NULL(multi_profile_count_out);
     CHECK_NULL(has_deployed_from_other_out);
+
+    git_repository *repo = ctx->run.repo;
+    const manifest_t *view = ctx->run.manifest;
 
     error_t *err = NULL;
     size_t file_count = storage_paths->count;
@@ -797,22 +798,19 @@ static error_t *cleanup_metadata(
  * and the record update.
  */
 static error_t *remove_files_from_profile(
-    git_repository *repo,
-    state_t *state,
-    arena_t *arena,
-    const mount_table_t *mounts,
-    const manifest_t *before,
-    const config_t *config,
-    output_t *out,
-    const char *repo_path,
+    const dotta_ctx_t *ctx,
     const cmd_remove_options_t *opts
 ) {
-    CHECK_NULL(repo);
-    CHECK_NULL(state);
-    CHECK_NULL(arena);
-    CHECK_NULL(mounts);
-    CHECK_NULL(before);
+    CHECK_NULL(ctx);
     CHECK_NULL(opts);
+
+    git_repository *repo = ctx->run.repo;
+    const char *repo_path = ctx->run.repo_path;
+    state_t *state = ctx->run.state;
+    const mount_table_t *mounts = ctx->run.mounts;
+    const manifest_t *before = ctx->run.manifest;
+    const config_t *config = ctx->config;
+    output_t *out = ctx->out;
 
     /* Initialize all resources to NULL for safe cleanup */
     error_t *err = NULL;
@@ -836,8 +834,8 @@ static error_t *remove_files_from_profile(
 
     /* Resolve paths */
     err = resolve_paths_to_remove(
-        repo, opts->profile, opts->paths, opts->path_count, &storage_paths,
-        &filesystem_paths, opts, out, mounts, arena
+        ctx, opts->profile, opts->paths, opts->path_count, &storage_paths,
+        &filesystem_paths, opts
     );
     if (err) {
         goto cleanup;
@@ -846,11 +844,10 @@ static error_t *remove_files_from_profile(
     /* Analyze multi-profile conflicts (critical safety check) */
     bool has_deployed_from_other = false;
     err = analyze_multi_profile_conflicts(
-        repo,
+        ctx,
         storage_paths,
         filesystem_paths,
         opts->profile,
-        before,
         &other_profiles,
         &multi_profile_count,
         &has_deployed_from_other
@@ -1072,9 +1069,11 @@ static error_t *remove_files_from_profile(
             anchor_t *anchors = NULL;
             size_t anchor_count = 0;
 
-            manifest_err = manifest_build(repo, state, arena, &after);
+            manifest_err = manifest_build(repo, state, ctx->arena, &after);
             if (!manifest_err) {
-                manifest_err = state_get_all_anchors(state, arena, &anchors, &anchor_count);
+                manifest_err = state_get_all_anchors(
+                    state, ctx->arena, &anchors, &anchor_count
+                );
             }
             if (!manifest_err) {
                 anchor_index = hashmap_borrow(anchor_count > 0 ? anchor_count : 16);
@@ -1099,7 +1098,8 @@ static error_t *remove_files_from_profile(
                     mount_resolve_outcome_t outcome;
                     const char *fs_path = NULL;
                     manifest_err = mount_resolve(
-                        mounts, opts->profile, storage_path, arena, &outcome, &fs_path
+                        mounts, opts->profile, storage_path, ctx->arena,
+                        &outcome, &fs_path
                     );
                     if (manifest_err || outcome == MOUNT_RESOLVE_UNBOUND) continue;
 
@@ -1205,20 +1205,18 @@ cleanup:
  * Delete entire profile branch
  */
 static error_t *delete_profile_branch(
-    git_repository *repo,
-    state_t *state,
-    arena_t *arena,
-    const mount_table_t *mounts,
-    const config_t *config,
-    output_t *out,
-    const char *repo_path,
+    const dotta_ctx_t *ctx,
     const cmd_remove_options_t *opts
 ) {
-    CHECK_NULL(repo);
-    CHECK_NULL(state);
-    CHECK_NULL(arena);
-    CHECK_NULL(mounts);
+    CHECK_NULL(ctx);
     CHECK_NULL(opts);
+
+    git_repository *repo = ctx->run.repo;
+    const char *repo_path = ctx->run.repo_path;
+    state_t *state = ctx->run.state;
+    const mount_table_t *mounts = ctx->run.mounts;
+    const config_t *config = ctx->config;
+    output_t *out = ctx->out;
 
     /* Initialize all resources to NULL */
     error_t *err = NULL;
@@ -1299,7 +1297,7 @@ static error_t *delete_profile_branch(
      * for the deletion-push xfer further down (see line where
      * transfer_context_create is called). One resolve, two consumers. */
     err = gitops_resolve_default_remote(
-        repo, arena, &remote_name, &remote_url
+        repo, ctx->arena, &remote_name, &remote_url
     );
     if (!err && remote_name) {
         /* Remote exists - check upstream state */
@@ -1357,7 +1355,9 @@ static error_t *delete_profile_branch(
     {
         anchor_t *anchors = NULL;
         size_t anchor_count = 0;
-        error_t *count_err = state_get_all_anchors(state, arena, &anchors, &anchor_count);
+        error_t *count_err = state_get_all_anchors(
+            state, ctx->arena, &anchors, &anchor_count
+        );
         if (count_err) {
             error_free(count_err);
         } else {
@@ -1404,7 +1404,7 @@ static error_t *delete_profile_branch(
     /* Convert storage paths to filesystem paths for hook consistency. The file
      * removal path passes filesystem paths to hooks; do the same here.
      *
-     * Borrows the caller-supplied mount table. HOME and ROOT are always present,
+     * Borrows the run's mount table. HOME and ROOT are always present,
      * so home/ and root/ paths resolve unconditionally. CUSTOM paths resolve
      * only when the profile is enabled with a binding; otherwise
      * MOUNT_RESOLVE_UNBOUND fires and the loop substitutes the storage path as
@@ -1416,7 +1416,7 @@ static error_t *delete_profile_branch(
                 mount_resolve_outcome_t outcome;
                 const char *fs_path = NULL;
                 error_t *conv_err = mount_resolve(
-                    mounts, opts->profile, files->items[i], arena,
+                    mounts, opts->profile, files->items[i], ctx->arena,
                     &outcome, &fs_path
                 );
                 if (conv_err) {
@@ -1497,10 +1497,12 @@ static error_t *delete_profile_branch(
 
         /* The view that remains — the builder over the post-disable rows. */
         if (!delete_err) {
-            delete_err = manifest_build(repo, state, arena, &after);
+            delete_err = manifest_build(repo, state, ctx->arena, &after);
         }
         if (!delete_err) {
-            delete_err = state_get_all_anchors(state, arena, &anchors, &anchor_count);
+            delete_err = state_get_all_anchors(
+                state, ctx->arena, &anchors, &anchor_count
+            );
         }
 
         for (size_t i = 0; !delete_err && i < anchor_count; i++) {
@@ -1655,11 +1657,6 @@ error_t *cmd_remove(const dotta_ctx_t *ctx, const cmd_remove_options_t *opts) {
     CHECK_NULL(ctx);
     CHECK_NULL(opts);
 
-    git_repository *repo = ctx->run.repo;
-    state_t *state = ctx->run.state;
-    const config_t *config = ctx->config;
-    output_t *out = ctx->out;
-
     /* Validate options */
     error_t *err = validate_options(opts);
     if (err) {
@@ -1668,16 +1665,10 @@ error_t *cmd_remove(const dotta_ctx_t *ctx, const cmd_remove_options_t *opts) {
 
     /* Branch: Delete profile or remove files */
     if (opts->delete_profile) {
-        return delete_profile_branch(
-            repo, state, ctx->arena, ctx->run.mounts, config, out,
-            ctx->run.repo_path, opts
-        );
+        return delete_profile_branch(ctx, opts);
     }
 
-    return remove_files_from_profile(
-        repo, state, ctx->arena, ctx->run.mounts, ctx->run.manifest, config, out,
-        ctx->run.repo_path, opts
-    );
+    return remove_files_from_profile(ctx, opts);
 }
 
 /* ══════════════════════════════════════════════════════════════════

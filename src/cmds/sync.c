@@ -1346,6 +1346,7 @@ static error_t *salt_reconcile(
     const cmd_sync_options_t *opts
 ) {
     git_repository *repo = ctx->run.repo;
+    keymgr *keymgr = ctx->run.keymgr;
     output_t *out = ctx->out;
 
     salt_reconcile_t decision;
@@ -1457,7 +1458,7 @@ static error_t *salt_reconcile(
              * re-derives from the adopted salt. NULL-safe; the on-disk session
              * cache MAC-binds the salt and self-heals regardless, and sync itself
              * performs no decrypt. */
-            keymgr_clear(ctx->run.keymgr);
+            keymgr_clear(keymgr);
             return NULL;
         }
     }
@@ -1473,14 +1474,17 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
     CHECK_NULL(opts);
 
     git_repository *repo = ctx->run.repo;
+    const char *repo_path = ctx->run.repo_path;
     state_t *state = ctx->run.state;
+    const mount_table_t *mounts = ctx->run.mounts;
+    content_cache_t *content_cache = ctx->run.content_cache;
+    const manifest_t *before = ctx->run.manifest;  /* The view ahead of the Git phase: the dispatcher's */
     const config_t *config = ctx->config;
     output_t *out = ctx->out;
 
     /* Declare all resources, initialized to NULL. */
     error_t *err = NULL;
     workspace_t *ws = NULL;
-    const manifest_t *before = ctx->run.manifest;  /* The view ahead of the Git phase: the dispatcher's */
     manifest_t *after = NULL;                  /* The view after the Git phase (owned) */
     scope_t *scope = NULL;
     sync_results_t *results = NULL;
@@ -1526,7 +1530,7 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
         .profile_count = opts->profile_count,
     };
     err = scope_build(
-        repo, state, &scope_inputs, config, ctx->run.mounts, ctx->arena, &scope
+        repo, state, &scope_inputs, config, mounts, ctx->arena, &scope
     );
     if (err) goto cleanup;
 
@@ -1574,8 +1578,7 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
             .analyze_encryption  = false   /* Encryption is apply's concern */
         };
         err = workspace_load(
-            repo, state, config, ctx->run.content_cache, ctx->run.manifest, &ws_opts,
-            ctx->arena, &ws
+            repo, state, config, content_cache, before, &ws_opts, ctx->arena, &ws
         );
         if (err) {
             err = error_wrap(err, "Failed to load workspace");
@@ -1797,7 +1800,7 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
         .dry_run    = opts->dry_run,
     };
 
-    err = hook_fire_pre(config, out, ctx->run.repo_path, &hook_inv);
+    err = hook_fire_pre(config, out, repo_path, &hook_inv);
     if (err) goto cleanup;
 
     /* Create transfer context for progress reporting. URL was resolved alongside
@@ -2027,7 +2030,7 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
 
     /* Post-sync fires once the Git phase and the manifest block are done; a failed
      * build was warned above and is not a reason to skip it. */
-    hook_fire_post(config, out, ctx->run.repo_path, &hook_inv);
+    hook_fire_post(config, out, repo_path, &hook_inv);
 
     /* Final summary */
     sync_render_summary(results, xfer, manifest_changed, apply_pending, out);

@@ -91,22 +91,23 @@ static error_t *write_stdout(const buffer_t *content) {
  * content), and encrypted files (indicates decryption occurred).
  */
 static error_t *print_blob_content(
-    git_repository *repo,
+    const dotta_ctx_t *ctx,
     const git_oid *blob_oid,
     const char *storage_path,
     const char *profile,
     const metadata_t *metadata,
-    keymgr *keymgr,
     git_filemode_t filemode,
-    bool raw,
-    output_t *out
+    bool raw
 ) {
-    CHECK_NULL(repo);
+    CHECK_NULL(ctx);
     CHECK_NULL(blob_oid);
     CHECK_NULL(storage_path);
     CHECK_NULL(profile);
     CHECK_NULL(metadata);
-    CHECK_NULL(out);
+
+    git_repository *repo = ctx->run.repo;
+    keymgr *keymgr = ctx->run.keymgr;
+    output_t *out = ctx->out;
 
     /* Get plaintext content (handles encryption transparently — the content layer
      * classifies by bytes, no caller-supplied flag needed).
@@ -223,14 +224,15 @@ static error_t *print_blob_content(
  * Show file from a specific profile (optionally at specific commit)
  */
 static error_t *show_file(
-    git_repository *repo,
+    const dotta_ctx_t *ctx,
     const char *profile,
     const char *file_path,
     const char *commit_ref,
-    bool raw,
-    keymgr *keymgr,
-    output_t *out
+    bool raw
 ) {
+    git_repository *repo = ctx->run.repo;
+    output_t *out = ctx->out;
+
     error_t *err = NULL;
     git_tree *tree = NULL;
     git_tree_entry *entry = NULL;
@@ -331,10 +333,10 @@ static error_t *show_file(
          *
          * file_path is the storage_path (e.g., "home/.bashrc") profile is used
          * for key derivation metadata is used for encryption state validation
-         * keymgr will prompt for password only if file is encrypted
+         * ctx->run.keymgr will prompt for password only if file is encrypted
          */
         err = print_blob_content(
-            repo, entry_oid, file_path, profile, metadata, keymgr, filemode, raw, out
+            ctx, entry_oid, file_path, profile, metadata, filemode, raw
         );
     } else if (entry_type == GIT_OBJECT_TREE) {
         err = ERROR(ERR_INVALID_ARG, "'%s' is a directory", file_path);
@@ -578,6 +580,8 @@ error_t *cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
 
     git_repository *repo = ctx->run.repo;
     const state_t *state = ctx->run.state;  /* Borrowed from dispatcher; do not free */
+    /* Borrow the dispatcher's mount table over all enabled profiles. */
+    const mount_table_t *mounts = ctx->run.mounts;
     output_t *out = ctx->out;
 
     error_t *err = NULL;
@@ -658,9 +662,6 @@ error_t *cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
     /* Handle SHOW_FILE mode */
     CHECK_NULL(opts->file_path);
 
-    /* Borrow the dispatcher's mount table over all enabled profiles. */
-    const mount_table_t *mounts = ctx->run.mounts;
-
     /* Resolve file path to storage format (common to both explicit and implicit
      * paths). On resolution failure, fall back to the original input — it may
      * be a partial-match pattern that path_input_resolve rejects but the search
@@ -682,8 +683,7 @@ error_t *cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
         }
 
         err = show_file(
-            repo, opts->profile, search_path, opts->commit, opts->raw,
-            ctx->run.keymgr, out
+            ctx, opts->profile, search_path, opts->commit, opts->raw
         );
         goto cleanup;
     }
@@ -727,9 +727,7 @@ error_t *cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
             search_path
         );
     }
-    err = show_file(
-        repo, found_profile, search_path, NULL, opts->raw, ctx->run.keymgr, out
-    );
+    err = show_file(ctx, found_profile, search_path, NULL, opts->raw);
 
 cleanup:
     manifest_free(manifest);

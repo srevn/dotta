@@ -1019,11 +1019,26 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         const char *file_path = opts->files[i];
         char *absolute = NULL;
 
-        /* Storage-path input: the input itself is the display. */
+        /* Storage-path input: the input itself is the display. One that
+         * resolves to nothing on this machine contributes nothing, like a
+         * filesystem path that does not exist (below): the main loop's
+         * existence check is the surface for that error, and a sudo prompt
+         * for `root/x` typed from `/` as a relative path would stand in its
+         * way. A custom/ path with no target binds nowhere yet; the main
+         * loop's --target precondition speaks to that. */
         const mount_spec_t *spec = mount_spec_for_path(file_path);
         if (spec) {
             if (spec->tracks_ownership
                 && (!spec->per_profile || custom_needs_elevation)) {
+                mount_resolve_outcome_t bound;
+                const char *resolved = NULL;
+                err = mount_resolve(
+                    mounts, opts->profile, file_path, ctx->arena, &bound, &resolved
+                );
+                if (err) goto cleanup;
+                if (bound != MOUNT_RESOLVE_BOUND || !fs_lexists(resolved)) {
+                    continue;
+                }
                 err = string_array_push(&preflight_labels, file_path);
                 if (err) goto cleanup;
             }
@@ -1298,9 +1313,20 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
             goto cleanup;
         }
 
-        /* Check path exists (use lexists to allow broken symlinks) */
+        /* Check path exists (use lexists to allow broken symlinks). A storage
+         * path that resolves to nothing is as likely a relative path whose
+         * first component happens to be a label — `root/x` typed from `/` —
+         * so the message says where it looked and how to say the other. */
         if (!fs_lexists(fs_path)) {
-            err = ERROR(ERR_NOT_FOUND, "Path not found: %s", fs_path);
+            if (spec) {
+                err = ERROR(
+                    ERR_NOT_FOUND,
+                    "Path not found: %s (the storage path '%s')\n"
+                    "For a relative path, write ./%s", fs_path, file, file
+                );
+            } else {
+                err = ERROR(ERR_NOT_FOUND, "Path not found: %s", fs_path);
+            }
             goto cleanup;
         }
 

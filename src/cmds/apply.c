@@ -1949,7 +1949,7 @@ static const args_opt_t apply_opts[] = {
     ARGS_APPEND(
         "e exclude",        "<pattern>",
         cmd_apply_options_t,exclude_patterns, exclude_count,
-        "Skip matching paths (no deploy)"
+        "Skip paths matching a .dottaignore-style pattern (repeatable)"
     ),
     ARGS_FLAG(
         "f force",

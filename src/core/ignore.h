@@ -28,6 +28,14 @@
  * to `gitignore_is_ignored()` or `gitignore_eval()`. Per-profile rulesets are
  * memoised for the builder's lifetime.
  *
+ * The subject
+ * -----------
+ * A ruleset is evaluated against the mount-relative path — `mount_strip_label`
+ * of the storage path, what a `.gitignore` at `~`, at `/` or at the deployment
+ * target would see. Every consumer classifies what it found before it asks,
+ * and asks with the tail: `.cache/` means `~/.cache` for a `home/` path and
+ * `/.cache` for a `root/` one, and nothing above the mount root takes part.
+ *
  * Full .gitignore grammar is supported:
  *   - Glob patterns (*, ?, [abc]) and `**` recursive globs
  *   - Directory matching (trailing /)

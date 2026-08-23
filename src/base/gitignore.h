@@ -96,9 +96,14 @@ error_t *gitignore_ruleset_append_patterns(
 /**
  * Evaluate `path` against the ruleset.
  *
- * `path` is a relative path; leading and trailing slashes are stripped defensively,
- * and a trailing slash is treated as a directory hint. `is_dir` distinguishes
- * files from directories for directory-only rules.
+ * `path` is relative to the ruleset's root — the directory the rules were
+ * written for, as a `.gitignore`'s are relative to the directory it sits in.
+ * The walk-up below visits every ancestor of `path`, so an absolute path is
+ * evaluated against the filesystem root with the whole ancestry taking part,
+ * which is never what a caller wants. Leading and trailing slashes are
+ * stripped for gitignore parity, and a trailing slash is treated as a
+ * directory hint. `is_dir` distinguishes files from directories for
+ * directory-only rules.
  *
  * Semantics mirror gitignore exactly: rules are scanned in reverse insertion
  * order (last-match-wins). If no rule matches at the given path, the evaluator

@@ -43,6 +43,7 @@
 #include "core/policy.h"
 #include "infra/compare.h"
 #include "infra/content.h"
+#include "infra/mount.h"
 #include "sys/filesystem.h"
 #include "sys/gitops.h"
 #include "sys/source.h"
@@ -1729,9 +1730,14 @@ static error_t *scan_directory_for_untracked(
             continue;
         }
 
-        /* Build full path */
+        /* Build both names: the filesystem path, and the storage path beneath
+         * the row's — the tracked directory is the authority for what lies
+         * under it. */
         char *full_path = str_format("%s/%s", dir_path, entry->d_name);
-        if (!full_path) {
+        char *storage_path = str_format("%s/%s", storage_prefix, entry->d_name);
+        if (!full_path || !storage_path) {
+            free(full_path);
+            free(storage_path);
             closedir(dir);
             return ERROR(ERR_MEMORY, "Failed to allocate path");
         }
@@ -1741,13 +1747,16 @@ static error_t *scan_directory_for_untracked(
         if (lstat(full_path, &st) != 0) {
             /* Path might have been deleted (race condition) */
             free(full_path);
+            free(storage_path);
             errno = 0;
             continue;
         }
 
-        /* Check if ignored */
+        /* Check if ignored: the rules on the mount-relative path, the source
+         * tree's .gitignore on the filesystem path (its root is that repo's). */
         bool is_dir = S_ISDIR(st.st_mode);
-        bool ignored = rules && gitignore_is_ignored(rules, full_path, is_dir);
+        bool ignored = rules &&
+            gitignore_is_ignored(rules, mount_strip_label(storage_path), is_dir);
         if (!ignored && source_filter) {
             error_t *err = source_filter_is_excluded(
                 source_filter, full_path, is_dir, &ignored
@@ -1756,22 +1765,16 @@ static error_t *scan_directory_for_untracked(
         }
         if (ignored) {
             free(full_path);
+            free(storage_path);
             errno = 0;
             continue;
         }
 
         if (is_dir) {
             /* Recurse into subdirectory */
-            char *sub_storage_prefix = str_format("%s/%s", storage_prefix, entry->d_name);
-            if (!sub_storage_prefix) {
-                free(full_path);
-                closedir(dir);
-                return ERROR(ERR_MEMORY, "Failed to allocate storage prefix");
-            }
-
             error_t *err = scan_directory_for_untracked(
                 full_path,
-                sub_storage_prefix,
+                storage_path,
                 profile,
                 rules,
                 source_filter,
@@ -1779,7 +1782,7 @@ static error_t *scan_directory_for_untracked(
                 depth + 1
             );
 
-            free(sub_storage_prefix);
+            free(storage_path);
             free(full_path);
 
             if (err) {
@@ -1804,15 +1807,8 @@ static error_t *scan_directory_for_untracked(
                 (hashmap_get(ws->diverged_index, full_path) != NULL);
 
             if (!already_tracked) {
-                /* This is an untracked file! */
-                char *storage_path = str_format("%s/%s", storage_prefix, entry->d_name);
-                if (!storage_path) {
-                    free(full_path);
-                    closedir(dir);
-                    return ERROR(ERR_MEMORY, "Failed to allocate storage path");
-                }
-
-                /* Arena-copy heap strings — originals freed immediately after */
+                /* This is an untracked file! Arena-copy heap strings — originals
+                 * freed immediately after */
                 char *arena_fp = arena_strdup(ws->arena, full_path);
                 char *arena_sp = arena_strdup(ws->arena, storage_path);
                 free(storage_path);
@@ -1842,6 +1838,7 @@ static error_t *scan_directory_for_untracked(
                     return err;
                 }
             } else {
+                free(storage_path);
                 free(full_path);
             }
         }

@@ -78,8 +78,8 @@ static error_t *resolve_enabled_lenient(
  * Pre-compiling the ruleset (rather than storing raw strings) lets
  * scope_is_excluded reduce to a single gitignore_is_ignored call per query, with
  * full gitignore semantics: `!`-negation, directory walk-up, anchoring, and `**`
- * recursive globs. Matches the engine used for .dottaignore so the `-e` CLI flag
- * is consistent with all other exclusion surfaces.
+ * recursive globs. The engine and the subject are .dottaignore's — the
+ * mount-relative path — so `-e` means the same on add, apply and update.
  *
  * The ruleset is borrowed from `arena`; the caller's arena lifetime governs it.
  * Leaves *out_rules NULL when the input array is empty — the zero-excludes case
@@ -250,7 +250,8 @@ bool scope_is_excluded(
     const scope_t *s, const char *storage_path, path_kind_t kind
 ) {
     return gitignore_is_ignored(
-        s->excludes_ruleset, storage_path, kind == PATH_KIND_DIRECTORY
+        s->excludes_ruleset, mount_strip_label(storage_path),
+        kind == PATH_KIND_DIRECTORY
     );
 }
 

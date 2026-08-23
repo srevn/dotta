@@ -11,6 +11,7 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+#include "base/arena.h"
 #include "base/args.h"
 #include "base/array.h"
 #include "base/buffer.h"
@@ -21,6 +22,8 @@
 #include "cmds/completion.h"
 #include "core/ignore.h"
 #include "core/profiles.h"
+#include "infra/mount.h"
+#include "infra/path.h"
 #include "sys/editor.h"
 #include "sys/filesystem.h"
 #include "sys/gitops.h"
@@ -752,9 +755,8 @@ static error_t *modify_dottaignore(
 
 /**
  * Probe the source-tree .gitignore after the .dottaignore layers have returned
- * "not ignored". Requires an absolute path; a relative test target (typical when
- * the user types a non-existent relative path) silently short-circuits to "no
- * source verdict".
+ * "not ignored". Requires an absolute path; a NULL one (a custom/ storage path
+ * with no target bound here) silently short-circuits to "no source verdict".
  *
  * Errors from the underlying libgit2 query are surfaced at NORMAL verbosity so
  * a --test invocation that can't probe layer 5 makes the limitation visible,
@@ -783,6 +785,15 @@ static bool source_gitignore_matches(
 
 /**
  * Test if path is ignored across profiles
+ *
+ * The argument is resolved the way `add` resolves its arguments — a storage
+ * path is the subject as typed; a filesystem path (absolute, tilde, relative)
+ * is normalized and classified through the mount table — and the rules are
+ * evaluated on the mount-relative path, exactly as the walk would evaluate
+ * them. The path need not exist: a trailing slash on one that does not is
+ * the directory hint, so directory-only patterns (`cache/`) can be tested.
+ * The source tree's `.gitignore` is asked on the filesystem path, when the
+ * argument has one.
  */
 static error_t *test_path_ignore(
     const dotta_ctx_t *ctx,
@@ -794,38 +805,83 @@ static error_t *test_path_ignore(
 
     git_repository *repo = ctx->run.repo;
     const state_t *state = ctx->run.state;
+    const mount_table_t *mounts = ctx->run.mounts;
     const config_t *config = ctx->config;
     output_t *out = ctx->out;
 
-    /* Check if path exists and determine if it's a directory */
-    bool path_exists = fs_exists(test_path);
-    bool is_directory = false;
-
-    if (path_exists) {
-        is_directory = fs_is_directory(test_path);
-    } else {
-        /* For non-existent paths, treat trailing / as directory hint so
-         * directory-only patterns (e.g., "cache/") can be tested */
-        size_t len = strlen(test_path);
-        is_directory = (len > 0 && test_path[len - 1] == '/');
-    }
-
-    /* Resolve relative paths to absolute so the source-tree check below can
-     * discover the enclosing git repository. Non-existent paths are left as-is
-     * — there is no filesystem location to resolve — and the source check
-     * short-circuits on their relative form. */
-    char resolved_buf[4096];
-    const char *effective_path = test_path;
-
-    if (test_path[0] != '/' && path_exists) {
-        if (realpath(test_path, resolved_buf)) {
-            effective_path = resolved_buf;
+    /* The directory hint is read before resolution: the storage grammar refuses
+     * a trailing slash, and normalization drops it. */
+    size_t len = strlen(test_path);
+    bool trailing_slash = len > 1 && test_path[len - 1] == '/';
+    const char *input = test_path;
+    if (trailing_slash) {
+        input = arena_strndup(ctx->arena, test_path, len - 1);
+        if (!input) {
+            return ERROR(ERR_MEMORY, "Failed to allocate path");
         }
     }
+
+    error_t *err = NULL;
+    const char *storage_path = NULL;
+    const char *fs_path = NULL;   /* NULL when the argument has no location here */
+
+    if (mount_spec_for_path(input)) {
+        err = mount_validate_storage(input);
+        if (err) {
+            return error_wrap(err, "Invalid storage path '%s'", input);
+        }
+        storage_path = input;
+
+        /* Its location, for the source check and the kind: a custom/ path
+         * binds only through a profile with a target — without one, the hint
+         * stands in for the kind and the source tree is not asked. */
+        mount_resolve_outcome_t bound;
+        const char *resolved = NULL;
+        err = mount_resolve(
+            mounts, specific_profile, storage_path, ctx->arena, &bound, &resolved
+        );
+        if (err) return err;
+        if (bound == MOUNT_RESOLVE_BOUND) fs_path = resolved;
+    } else {
+        char *absolute = NULL;
+        err = path_input_normalize(input, NULL, &absolute);
+        if (err) {
+            return error_wrap(err, "Failed to resolve path '%s'", input);
+        }
+        fs_path = arena_strdup(ctx->arena, absolute);
+        free(absolute);
+        if (!fs_path) {
+            return ERROR(ERR_MEMORY, "Failed to allocate path");
+        }
+
+        mount_classify_outcome_t outcome;
+        err = mount_classify(
+            mounts, fs_path, ctx->arena, &outcome, &storage_path, NULL
+        );
+        if (err) return err;
+        if (outcome == MOUNT_CLASSIFY_ROOT) {
+            output_info(
+                out, OUTPUT_NORMAL,
+                "%s is a mount root: it has no name for a pattern to match",
+                test_path
+            );
+            return NULL;
+        }
+    }
+
+    /* What the patterns see. */
+    const char *subject = mount_strip_label(storage_path);
+
+    bool path_exists = fs_path && fs_exists(fs_path);
+    bool is_directory = path_exists ? fs_is_directory(fs_path) : trailing_slash;
 
     if (!path_exists) {
         output_info(out, OUTPUT_VERBOSE, "Path does not exist: %s", test_path);
     }
+    output_info(
+        out, OUTPUT_VERBOSE, "Matching '%s' as '%s'%s",
+        test_path, subject, is_directory ? " (a directory)" : ""
+    );
 
     /* Source .gitignore filter (opt-in via config). Built once for the whole
      * test invocation so the discovered repo handle is reused across the
@@ -841,7 +897,7 @@ static error_t *test_path_ignore(
     /* Layered-rules builder — loads baseline + config once, memoises each profile's
      * ruleset on first request. */
     ignore_rules_t *ignore_rules = NULL;
-    error_t *err = ignore_rules_create(
+    err = ignore_rules_create(
         repo, config, NULL, 0, ctx->arena, &ignore_rules
     );
     if (err) {
@@ -871,7 +927,7 @@ static error_t *test_path_ignore(
         }
 
         gitignore_match_t match;
-        gitignore_eval(rules, effective_path, is_directory, &match);
+        gitignore_eval(rules, subject, is_directory, &match);
 
         if (match.decided && match.ignored) {
             output_styled(
@@ -883,7 +939,7 @@ static error_t *test_path_ignore(
                 ignore_origin_describe((ignore_origin_t) match.origin)
             );
         } else if (source_gitignore_matches(
-            source_filter, effective_path, is_directory, out
+            source_filter, fs_path, is_directory, out
             )) {
             output_styled(
                 out, OUTPUT_NORMAL, "{red}✗{reset} IGNORED by profile '%s'\n",
@@ -932,7 +988,7 @@ static error_t *test_path_ignore(
         }
 
         gitignore_match_t match;
-        gitignore_eval(rules, effective_path, is_directory, &match);
+        gitignore_eval(rules, subject, is_directory, &match);
 
         if (match.decided && match.ignored) {
             output_styled(out, OUTPUT_NORMAL, "{red}✗{reset} IGNORED\n");
@@ -941,7 +997,7 @@ static error_t *test_path_ignore(
                 ignore_origin_describe((ignore_origin_t) match.origin)
             );
         } else if (source_gitignore_matches(
-            source_filter, effective_path, is_directory, out
+            source_filter, fs_path, is_directory, out
             )) {
             output_styled(out, OUTPUT_NORMAL, "{red}✗{reset} IGNORED\n");
             output_info(
@@ -973,13 +1029,13 @@ static error_t *test_path_ignore(
         }
 
         gitignore_match_t match;
-        gitignore_eval(rules, effective_path, is_directory, &match);
+        gitignore_eval(rules, subject, is_directory, &match);
 
         bool ignored_here = match.decided && match.ignored;
         bool by_source = false;
         if (!ignored_here) {
             by_source = source_gitignore_matches(
-                source_filter, effective_path, is_directory, out
+                source_filter, fs_path, is_directory, out
             );
             ignored_here = by_source;
         }
@@ -1195,19 +1251,25 @@ const args_command_t spec_ignore = {
         "operates on the machine-local baseline; with one, on that\n"
         "profile's .dottaignore which extends the baseline.\n",
     .notes       =
-        "Ignore Pattern Layers:\n"
+        "Ignore Pattern Layers (highest precedence first):\n"
         "  1. CLI --exclude patterns (per-operation)\n"
-        "  2. Combined .dottaignore ruleset:\n"
-        "     - Baseline .dottaignore (machine-local)\n"
+        "  2. Config file ignore patterns\n"
+        "  3. Combined .dottaignore ruleset:\n"
         "     - Profile .dottaignore (synced with the profile)\n"
-        "  3. Config file ignore patterns\n"
+        "     - Baseline .dottaignore (machine-local)\n"
         "  4. Source .gitignore (lowest precedence)\n"
+        "\n"
+        "Pattern Subject:\n"
+        "  A pattern is matched against the path relative to its mount root,\n"
+        "  as a .gitignore at ~, at / or at the deployment target would match\n"
+        "  it: write .config/Code/Cache/ for ~/.config/Code/Cache, never home/.\n"
         "\n"
         "Pattern Syntax:\n"
         "  *.log                # Match all .log files\n"
         "  node_modules/        # Match directory\n"
         "  !debug.log           # Negate a prior match\n"
         "  .cache/              # Match .cache directories\n"
+        "  /.cache/             # Match ~/.cache alone (anchored)\n"
         "\n"
         "Editor Selection:\n"
         "  $DOTTA_EDITOR, then $VISUAL, then $EDITOR, then vi\n",
@@ -1219,13 +1281,15 @@ const args_command_t spec_ignore = {
         "  %s ignore --add 'new' --remove 'old'      # Add + remove\n"
         "  %s ignore --list-defaults                 # Show compiled defaults\n"
         "  %s ignore --test ~/.config/nvim/node_modules  # Enabled profiles\n"
-        "  %s ignore global --test ~/.bashrc         # Single profile\n",
+        "  %s ignore global --test ~/.bashrc         # Single profile\n"
+        "  %s ignore --test home/.cache/x/           # A storage path, as a directory\n",
     .opts_size   = sizeof(cmd_ignore_options_t),
     .opts        = ignore_opts,
     .complete    = ignore_complete,
     .payload     = &(const dotta_needs_t){
         .repo    = true,
         .state   = DOTTA_STATE_READ,
+        .mounts  = true,
     },
     .dispatch    = ignore_dispatch,
 };

@@ -2405,7 +2405,7 @@ static const args_opt_t update_opts[] = {
     ARGS_APPEND(
         "e exclude",         "<pattern>",
         cmd_update_options_t,exclude_patterns, exclude_count,
-        "Skip matching files (glob, repeatable)"
+        "Skip paths matching a .dottaignore-style pattern (repeatable)"
     ),
     ARGS_FLAG(
         "n dry-run",

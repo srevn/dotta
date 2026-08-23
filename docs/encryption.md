@@ -63,11 +63,11 @@ auto_encrypt = [
 **Pattern syntax** (gitignore semantics):
 
 - Patterns without `/` match basename at any depth (`*.key` matches `dir/api.key`).
-- Patterns with `/` match the full path from the storage root (`.ssh/id_*` matches only `.ssh/id_rsa`, not `backup/.ssh/id_rsa`).
+- Patterns with `/` match the full path from the mount root (`.ssh/id_*` matches only `~/.ssh/id_rsa`, not `~/backup/.ssh/id_rsa`).
 - Wildcards: `*` (any chars), `?` (single char), `[abc]` (character class), `**` (recursive).
 - `!` negates a prior match.
 
-The storage prefix (`home/`, `root/`) is stripped before matching, so write `.ssh/id_*` rather than `home/.ssh/id_*`.
+Patterns are matched against the path relative to its mount root, the rule every dotta pattern follows (see [Ignore Patterns](configuration.md#ignore-patterns)): write `.ssh/id_*` rather than `home/.ssh/id_*`.
 
 ## Key Management
 

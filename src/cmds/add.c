@@ -94,40 +94,47 @@ static error_t *validate_options(const cmd_add_options_t *opts) {
 /**
  * Check if path should be ignored.
  *
- * Consults two independent mechanisms in order:
+ * Consults two independent mechanisms in order, each on the name it is
+ * written against:
  *   1. `rules` — the user's `.dottaignore` layers (baseline, profile, config,
- *      CLI) compiled into a single gitignore ruleset.
+ *      CLI) compiled into a single gitignore ruleset, evaluated on the
+ *      mount-relative path (mount_strip_label of `storage_path`): what a
+ *      `.gitignore` at the mount root would see.
  *   2. `source_filter` — the source tree's own `.gitignore`, if the caller opted
- *      in by building a filter (typically gated on `config.respect_gitignore`).
+ *      in by building a filter (typically gated on `config.respect_gitignore`),
+ *      evaluated on `fs_path`: that repository's root is the root its rules are
+ *      relative to.
  *
- * Either input may be NULL to skip that mechanism. Source-filter errors degrade
- * to a verbose warning and a "not excluded" verdict so an odd source repo never
- * blocks the user from adding a file they explicitly named. The gitignore evaluator
- * never fails — its verdict is applied directly.
+ * Either mechanism may be NULL to skip it. Source-filter errors degrade to a
+ * verbose warning and a "not excluded" verdict so an odd source repo never
+ * blocks the user from adding a file they explicitly named. The gitignore
+ * evaluator never fails — its verdict is applied directly.
  */
 static bool is_excluded(
-    const char *path,
+    const char *fs_path,
+    const char *storage_path,
     bool is_directory,
     const gitignore_ruleset_t *rules,
     source_filter_t *source_filter,
     output_t *out
 ) {
-    if (!path) return false;
+    if (!fs_path || !storage_path) return false;
 
-    if (rules && gitignore_is_ignored(rules, path, is_directory)) {
+    if (rules &&
+        gitignore_is_ignored(rules, mount_strip_label(storage_path), is_directory)) {
         return true;
     }
 
     if (source_filter) {
         bool excluded = false;
         error_t *err = source_filter_is_excluded(
-            source_filter, path, is_directory, &excluded
+            source_filter, fs_path, is_directory, &excluded
         );
         if (err) {
             output_warning(
                 out, OUTPUT_VERBOSE,
                 "Source .gitignore check failed for %s: %s",
-                path, error_message(err)
+                fs_path, error_message(err)
             );
             error_free(err);
             return false;
@@ -254,7 +261,10 @@ static error_t *collect_tree(
 
         /* Check exclude patterns */
         if (child_storage &&
-            is_excluded(child_fs, is_dir, walk->rules, walk->source_filter, out)) {
+            is_excluded(
+            child_fs, child_storage, is_dir,
+            walk->rules, walk->source_filter, out
+            )) {
             output_info(out, OUTPUT_VERBOSE, "Excluded: %s", child_fs);
             errno = 0;
             continue;
@@ -1329,7 +1339,9 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
             }
 
             /* Single file or symlink - check if excluded */
-            if (is_excluded(fs_path, false, profile_rules, source_filter, out)) {
+            if (is_excluded(
+                fs_path, storage_path, false, profile_rules, source_filter, out
+                )) {
                 output_info(out, OUTPUT_VERBOSE, "Excluded: %s", fs_path);
                 continue;
             }
@@ -1782,7 +1794,7 @@ static const args_opt_t add_opts[] = {
     ARGS_APPEND(
         "e exclude",          "<pattern>",
         cmd_add_options_t,    exclude_patterns, exclude_count,
-        "Skip matching files (glob, repeatable)"
+        "Skip paths matching a .dottaignore-style pattern (repeatable)"
     ),
     ARGS_FLAG(
         "f force",

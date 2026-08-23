@@ -233,8 +233,10 @@ bool scope_accepts_path(
  *
  * Uses gitignore semantics via base/gitignore: `!`-negation, directory walk-up
  * (so `-e 'build/'` matches files under `build/`), anchoring, and `**` recursive
- * globs. A directory-only pattern (`build/`) matches the directory itself only
- * for PATH_KIND_DIRECTORY — the kind is what makes `-e 'dir/'` mean "leave that
+ * globs, evaluated on the mount-relative path (`mount_strip_label`): `-e
+ * '.cache/x/'` names `~/.cache/x`, as it would in `.dottaignore`. A
+ * directory-only pattern (`build/`) matches the directory itself only for
+ * PATH_KIND_DIRECTORY — the kind is what makes `-e 'dir/'` mean "leave that
  * directory alone" for the directory as well as its contents. NULL storage_path
  * or no exclude patterns returns false.
  */

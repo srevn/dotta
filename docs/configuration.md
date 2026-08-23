@@ -131,10 +131,12 @@ See [`etc/hooks/README.md`](../etc/hooks/README.md) for hook samples and detaile
 Dotta uses a multi-layered ignore system (in precedence order):
 
 1. **CLI** -- `--exclude` flags (highest priority, per-operation)
-2. **Profile `.dottaignore`** -- per-profile overrides, can negate with `!`
-3. **Baseline `.dottaignore`** -- repository-wide, machine-local, version-controlled
-4. **Config patterns** -- `[ignore] patterns` in config.toml (user-specific)
+2. **Config patterns** -- `[ignore] patterns` in config.toml (user-specific)
+3. **Profile `.dottaignore`** -- per-profile overrides, can negate with `!`
+4. **Baseline `.dottaignore`** -- repository-wide, machine-local, version-controlled
 5. **Source `.gitignore`** -- from the directory being added (lowest priority)
+
+A pattern is matched against the path **relative to its mount root** — what a `.gitignore` sitting at `~` (for `home/` files), at `/` (for `root/` files) or at the deployment target (for `custom/` files) would see. Write `.config/Code/Cache/` for `~/.config/Code/Cache` and `etc/ssh/*_key` for `/etc/ssh/ssh_host_*_key`; the `home/` and `root/` labels never appear in a pattern, and nothing above the mount root takes part in a match (a `$HOME` under `/srv/build` is not caught by `build/`). `--exclude` on `add`, `apply` and `update` takes the same patterns with the same meaning.
 
 ```bash
 # Edit the baseline ignore file
@@ -150,11 +152,12 @@ dotta ignore darwin --add '*.tmp'         # to the darwin profile
 # See the compiled safety defaults
 dotta ignore --list-defaults
 
-# Test if a path would be ignored
+# Test if a path would be ignored (any form add accepts; a trailing / tests it as a directory)
 dotta ignore --test ~/.config/nvim/node_modules
+dotta ignore --test home/.cache/x/
 ```
 
-**Pattern syntax** follows `.gitignore` conventions: `*` (wildcard), `?` (single char), `[abc]` (class), `!` (negate).
+**Pattern syntax** follows `.gitignore` conventions: `*` (wildcard), `?` (single char), `[abc]` (class), `!` (negate), a trailing `/` for directories, a leading `/` to anchor at the mount root (`/.cache/` is `~/.cache` alone; `.cache/` is every `.cache` directory).
 
 Profile `.dottaignore` files start empty and inherit all baseline patterns. Use `!pattern` in a profile to override a baseline ignore.
 

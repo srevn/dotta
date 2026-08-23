@@ -122,14 +122,19 @@ error_t *mount_validate_storage(const char *storage_path);
 error_t *mount_validate_target(const char *target);
 
 /**
- * Return a pointer past the storage label of `storage_path`.
+ * Return the mount-relative path: a pointer past the storage label.
  *
- * Strips leading "home/", "root/", or "custom/" so callers can match the
- * user-facing tail against patterns written without the storage label (e.g.
- * ".ssh/id_*"). Zero allocation; the returned pointer aliases `storage_path`
- * and shares its lifetime.
+ * The subject every user-authored pattern is evaluated against. A pattern —
+ * in `.dottaignore`, `[ignore] patterns`, `--exclude`, `auto_encrypt` — is
+ * matched against the path relative to its mount root, what a `.gitignore` at
+ * `~`, at `/` or at the deployment target would see: `home/.ssh/id_rsa` is
+ * matched as `.ssh/id_rsa`, `root/etc/hosts` as `etc/hosts`. Labels are
+ * dotta's, never the pattern's, and nothing above the mount root takes part.
+ * Paths are resolved through the table; patterns are not.
  *
- * Returns `storage_path` unchanged when no label matches (or when input is NULL).
+ * Zero allocation; the returned pointer aliases `storage_path` and shares its
+ * lifetime. Returns `storage_path` unchanged when no label matches (or NULL
+ * when the input is NULL).
  *
  * @param storage_path Storage path (may be NULL)
  * @return Pointer past the label, or `storage_path` unchanged

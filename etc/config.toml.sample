@@ -119,10 +119,15 @@ confirm_new_files = true
 #
 # Multi-layered ignore system with the following precedence:
 #   1. CLI --exclude flags (highest priority - operation-specific)
-#   2. Baseline .dottaignore file (repository-wide, machine-local, version-controlled)
+#   2. Config ignore patterns (user-specific, below)
 #   3. Profile .dottaignore file (per-profile overrides, can negate with `!`)
-#   4. Config ignore patterns (user-specific, below)
+#   4. Baseline .dottaignore file (repository-wide, machine-local, version-controlled)
 #   5. Source .gitignore (when adding from git repos)
+#
+# A pattern is matched against the path relative to its mount root — what a
+# .gitignore at ~ (home/ files), at / (root/ files) or at the deployment target
+# (custom/ files) would see. Write `.config/Code/Cache/` for ~/.config/Code/Cache;
+# the home/ and root/ labels never appear in a pattern.
 #
 # Run `dotta ignore --list-defaults` to see the compiled safety patterns.
 #
@@ -144,7 +149,7 @@ confirm_new_files = true
 # Default: No personal patterns
 patterns = [
     # Personal IDE/editor files
-    ".vscode/settings.json",  # VSCode settings (use .vscode/*.json to ignore all)
+    ".config/Code/Cache/",    # VSCode cache under ~/.config (the baseline drops .vscode/ already)
     ".idea/workspace.xml",    # IntelliJ workspace
     "*.local",                # Any .local files
 

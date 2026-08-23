@@ -1337,8 +1337,12 @@ error_t *fs_expand_tilde(const char *path, char **out) {
     if (err) return err;
 
     const char *rest = path + 1;  /* skip ~ */
-    if (rest[0] == '/' || rest[0] == '\0') {
-        err = fs_path_join(home, rest[0] == '/' ? rest + 1 : "", out);
+    if (rest[0] == '\0' || (rest[0] == '/' && rest[1] == '\0')) {
+        /* `~` and `~/` are $HOME itself; fs_path_join refuses an empty tail. */
+        *out = home;
+        return NULL;
+    } else if (rest[0] == '/') {
+        err = fs_path_join(home, rest + 1, out);
     } else {
         free(home);
         return ERROR(

@@ -463,6 +463,7 @@ error_t *fs_get_home(char **out);
  * Examples:
  *   ~/.bashrc -> /home/user/.bashrc
  *   ~/foo/bar -> /home/user/foo/bar
+ *   ~         -> /home/user          (so does ~/)
  *
  * Inputs without a leading '~' are duplicated verbatim. ~user/foo (other-user
  * expansion) is rejected.

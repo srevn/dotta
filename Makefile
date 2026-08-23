@@ -22,8 +22,18 @@ else
     FEATURE_MACROS := -D_XOPEN_SOURCE=700 -D_DEFAULT_SOURCE
 endif
 
-CFLAGS := -std=c11 -Wall -Wextra -Wpedantic -Werror -O2 -flto $(FEATURE_MACROS)
-DEBUG_FLAGS := -g -O0 -fsanitize=address,undefined -fno-omit-frame-pointer -DDEBUG
+# Build type: release | debug. `make debug` = `make BUILD_TYPE=debug`
+BUILD_TYPE ?= $(if $(filter debug,$(MAKECMDGOALS)),debug,release)
+ifeq ($(filter $(BUILD_TYPE),release debug),)
+$(error BUILD_TYPE must be 'release' or 'debug' (got '$(BUILD_TYPE)'))
+endif
+
+CFLAGS := -std=c11 -Wall -Wextra -Wpedantic -Werror $(FEATURE_MACROS)
+ifeq ($(BUILD_TYPE),debug)
+CFLAGS += -g -O0 -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer
+else
+CFLAGS += -O2 -flto
+endif
 
 # Version information (captured at build time)
 GIT_COMMIT := $(shell git rev-parse --short=7 HEAD 2>/dev/null || echo "unknown")
@@ -31,9 +41,6 @@ GIT_DIRTY := $(shell git diff-index --quiet HEAD -- 2>/dev/null || echo "-dirty"
 GIT_BRANCH := $(shell git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
 BUILD_ARCH := $(shell uname -m)
 CC_VERSION := $(shell $(CC) --version 2>/dev/null | head -n1)
-
-# Build type is part of the version banner and varies per target
-BUILD_TYPE ?= release
 
 # Vendor libraries
 LIB_DIR := lib
@@ -45,12 +52,12 @@ LIB_INCLUDES := -I$(LIB_DIR)/cjson -I$(LIB_DIR)/tomlc17 -I$(LIB_DIR)/monocypher
 # Include paths
 INCLUDES := -Iinclude -Isrc $(LIB_INCLUDES)
 
-# Version build flags (recursive expansion so target-specific BUILD_TYPE wins)
-VERSION_FLAGS = -DDOTTA_BUILD_COMMIT="\"$(GIT_COMMIT)$(GIT_DIRTY)\"" \
-                -DDOTTA_BUILD_BRANCH="\"$(GIT_BRANCH)\"" \
-                -DDOTTA_BUILD_PLATFORM="\"$(BUILD_OS)/$(BUILD_ARCH)\"" \
-                -DDOTTA_BUILD_TYPE="\"$(BUILD_TYPE)\"" \
-                -DDOTTA_BUILD_CC="\"$(CC_VERSION)\""
+# Version build flags — the banner's compile-time constants
+VERSION_FLAGS := -DDOTTA_BUILD_COMMIT="\"$(GIT_COMMIT)$(GIT_DIRTY)\"" \
+                 -DDOTTA_BUILD_BRANCH="\"$(GIT_BRANCH)\"" \
+                 -DDOTTA_BUILD_PLATFORM="\"$(BUILD_OS)/$(BUILD_ARCH)\"" \
+                 -DDOTTA_BUILD_TYPE="\"$(BUILD_TYPE)\"" \
+                 -DDOTTA_BUILD_CC="\"$(CC_VERSION)\""
 
 # Dependencies
 PKG_CONFIG ?= pkg-config
@@ -64,9 +71,6 @@ LIBGIT2_VERSION := $(shell $(PKG_CONFIG) --modversion libgit2 2>/dev/null)
 LIBGIT2_OK := $(shell $(PKG_CONFIG) --atleast-version=$(LIBGIT2_MIN) libgit2 2>/dev/null && echo 1)
 LIBGIT2_CFLAGS := $(shell $(PKG_CONFIG) --cflags libgit2 2>/dev/null)
 LIBGIT2_LIBS := $(shell $(PKG_CONFIG) --libs libgit2 2>/dev/null)
-LIBGIT2_LIBDIR := $(shell $(PKG_CONFIG) --variable=libdir libgit2 2>/dev/null)
-LIBGIT2_STATIC_LIB := $(LIBGIT2_LIBDIR)/libgit2.a
-LIBGIT2_STATIC_DEPS := $(shell $(PKG_CONFIG) --libs --static libgit2 2>/dev/null | sed 's/-lgit2//')
 
 SQLITE3_VERSION := $(shell $(PKG_CONFIG) --modversion sqlite3 2>/dev/null)
 SQLITE3_OK := $(shell $(PKG_CONFIG) --atleast-version=$(SQLITE3_MIN) sqlite3 2>/dev/null && echo 1)
@@ -111,14 +115,6 @@ endif
 ifeq ($(SQLITE3_OK),)
 $(error sqlite3 $(SQLITE3_MIN)+ required, found $(SQLITE3_VERSION) — run 'make check-deps')
 endif
-endif
-
-# Check if static library exists
-ifneq ($(wildcard $(LIBGIT2_STATIC_LIB)),)
-    LIBGIT2_STATIC_LIBS := $(LIBGIT2_STATIC_LIB) $(LIBGIT2_STATIC_DEPS)
-    HAS_STATIC_LIBGIT2 := 1
-else
-    HAS_STATIC_LIBGIT2 := 0
 endif
 
 # Uncrustify config
@@ -179,25 +175,47 @@ BUILD_SUBDIRS := $(BUILD_LAYER_DIRS) $(BUILD_DIR)/lib $(BUILD_DIR)/completions
 $(BUILD_DIR) $(BIN_DIR) $(BUILD_SUBDIRS):
 	@mkdir -p $@
 
-# Build configuration sentinel: invalidates every .o when CFLAGS changes.
+# Build configuration sentinel: how this tree was produced, build type first
 BUILD_CONFIG := $(BUILD_DIR)/.build-config
+BUILD_STAMP := $(BUILD_TYPE) $(CC) $(CFLAGS) $(INCLUDES) \
+               $(LIBGIT2_CFLAGS) $(SQLITE3_CFLAGS) $(LIBGIT2_LIBS) $(SQLITE3_LIBS)
 
 .PHONY: FORCE
 FORCE:
 
 $(BUILD_CONFIG): FORCE | $(BUILD_DIR)
-	@NEW='$(CFLAGS)'; \
+	@NEW='$(BUILD_STAMP)'; \
 	 OLD=$$(cat $@ 2>/dev/null || true); \
-	 if [ "$$NEW" != "$$OLD" ]; then \
-	   [ -f $@ ] && echo "Build flags changed — rebuilding all objects"; \
-	   printf '%s\n' "$$NEW" > $@; \
-	 fi
+	 if [ "$$NEW" = "$$OLD" ]; then exit 0; fi; \
+	 if [ -n "$$OLD" ]; then \
+	   if [ "$${OLD%% *}" = "$(BUILD_TYPE)" ]; then \
+	     echo "Build config changed — rebuilding all objects"; \
+	   else \
+	     echo "Build type changed ($${OLD%% *} → $(BUILD_TYPE)) — rebuilding all objects"; \
+	   fi; \
+	 fi; \
+	 printf '%s\n' "$$NEW" > $@
+
+# Version sentinel: the banner's constants change with every commit and with
+# the first edit after one.
+VERSION_CONFIG := $(BUILD_DIR)/.version-config
+
+$(VERSION_CONFIG): FORCE | $(BUILD_DIR)
+	@NEW='$(VERSION_FLAGS)'; \
+	 OLD=$$(cat $@ 2>/dev/null || true); \
+	 [ "$$NEW" = "$$OLD" ] || printf '%s\n' "$$NEW" > $@
 
 # Header dependencies
 DEPFLAGS = -MMD -MP
 
 # Compile source files
 $(BUILD_DIR)/%.o: $(SRC_DIR)/%.c $(BUILD_CONFIG) | $(BUILD_LAYER_DIRS)
+	@echo "CC $<"
+	@$(CC) $(CFLAGS) $(DEPFLAGS) $(INCLUDES) $(LIBGIT2_CFLAGS) $(SQLITE3_CFLAGS) -c $< -o $@
+
+# The banner renderer: the one translation unit that reads VERSION_FLAGS, so
+# the one that carries them and follows the version sentinel.
+$(BUILD_DIR)/utils/version.o: $(SRC_DIR)/utils/version.c $(BUILD_CONFIG) $(VERSION_CONFIG) | $(BUILD_LAYER_DIRS)
 	@echo "CC $<"
 	@$(CC) $(CFLAGS) $(DEPFLAGS) $(INCLUDES) $(LIBGIT2_CFLAGS) $(SQLITE3_CFLAGS) $(VERSION_FLAGS) -c $< -o $@
 
@@ -216,37 +234,12 @@ $(BUILD_DIR)/lib/monocypher.o: $(MONOCYPHER_SRC) $(BUILD_CONFIG) | $(BUILD_DIR)/
 
 # Link main executable
 $(TARGET): $(LIB_OBJ) $(MAIN_OBJ) | $(BIN_DIR)
-	@echo "LD $@"
+	@echo "LD $@ ($(BUILD_TYPE))"
 	@$(CC) $(CFLAGS) $^ $(LIBGIT2_LIBS) $(SQLITE3_LIBS) -o $@
 
 # Debug build
 .PHONY: debug
-debug: CFLAGS := -std=c11 -Wall -Wextra -Wpedantic -Werror $(DEBUG_FLAGS) $(FEATURE_MACROS)
-debug: BUILD_TYPE := debug
-debug: $(TARGET)
-
-# Static build (with libgit2 statically linked for portability)
-.PHONY: static
-static:
-	@if [ "$(HAS_STATIC_LIBGIT2)" = "0" ]; then \
-		echo "Error: libgit2 static library not found at $(LIBGIT2_STATIC_LIB)"; \
-		echo ""; \
-		echo "To build a static binary, you need libgit2 compiled with static libraries."; \
-		echo ""; \
-		echo "On macOS with Homebrew:"; \
-		echo "  Static libraries are usually included in the libgit2 package"; \
-		echo ""; \
-		echo "On FreeBSD:"; \
-		echo "  pkg install libgit2 only provides shared libraries"; \
-		echo "  You may need to build libgit2 from source with -DBUILD_SHARED_LIBS=OFF"; \
-		echo ""; \
-		echo "On Debian/Ubuntu:"; \
-		echo "  sudo apt install libgit2-dev"; \
-		echo ""; \
-		exit 1; \
-	fi
-	@$(MAKE) clean
-	@$(MAKE) LIBGIT2_LIBS="$(LIBGIT2_STATIC_LIBS)" $(TARGET)
+debug: all
 
 # Tests
 TESTS_DIR := tests
@@ -260,20 +253,23 @@ JOBS ?= 4
 $(TESTS_BIN_DIR):
 	@mkdir -p $@
 
+# A unit binary compiles its suite and links the base objects under the
+# CFLAGS that produced them — under BUILD_TYPE=debug it is a sanitizer binary
+# too, and the sanitizer runtime comes in through the same flags on the link.
 $(TESTS_BIN_DIR)/%: $(TESTS_DIR)/%.c $(BASE_OBJ) | $(TESTS_BIN_DIR)
 	@echo "CC TEST $<"
-	@$(CC) $(CFLAGS) $(INCLUDES) $< $(BASE_OBJ) -o $@
+	@$(CC) $(CFLAGS) $(INCLUDES) $< $(BASE_OBJ) $(LIBGIT2_LIBS) -o $@
 
 .PHONY: test
 test: $(TESTS_BIN)
 	@$(TESTS_DIR)/run.sh --unit -j$(JOBS) $(SUITE)
 
 .PHONY: test-cli
-test-cli: $(BIN_DIR)/dotta
+test-cli: $(TARGET)
 	@$(TESTS_DIR)/run.sh --cli -j$(JOBS) $(SUITE)
 
 .PHONY: test-all
-test-all: $(TESTS_BIN) $(BIN_DIR)/dotta
+test-all: $(TESTS_BIN) $(TARGET)
 	@$(TESTS_DIR)/run.sh -j$(JOBS) $(SUITE)
 
 # Clean build artifacts
@@ -319,9 +315,7 @@ uninstall:
 	@echo "Note: User configurations in ~/.config/dotta were not removed"
 	@echo "To remove user configs: rm -rf ~/.config/dotta"
 
-# Fish completions: the whole script is generated from the binary's command
-# registry (flag and subcommand rules, condition helpers, the wrapper that
-# asks `dotta __complete` at runtime). Nothing is hand-maintained.
+# Fish completions: the whole script is generated from the binary's command registry
 COMPLETIONS_GEN := $(BUILD_DIR)/completions/dotta.fish
 
 $(COMPLETIONS_GEN): $(TARGET) | $(BUILD_DIR)/completions
@@ -461,8 +455,7 @@ check-deps:
 help:
 	@echo "dotta Makefile targets:"
 	@echo "  all                   - Build main executable (default)"
-	@echo "  debug                 - Build with debug symbols"
-	@echo "  static                - Build with libgit2 statically linked (portable)"
+	@echo "  debug                 - Build with debug symbols and sanitizers"
 	@echo "  test                  - Build and run unit tests"
 	@echo "  test-cli              - Run CLI suites (SUITE=\"ghosts export\" to filter, JOBS=1 for start order)"
 	@echo "  test-all              - Run unit tests and CLI suites"
@@ -481,6 +474,9 @@ help:
 	@echo "  compile-commands      - Regenerate compile_commands.json via bear"
 	@echo "  check-deps            - Check for required dependencies"
 	@echo "  help                  - Show this help message"
+	@echo ""
+	@echo "Build type: 'debug' as a goal or BUILD_TYPE=debug sets the whole invocation,"
+	@echo "so 'make debug test-all' runs the suites under ASan/UBSan."
 	@echo ""
 	@echo "Installation paths:"
 	@echo "  Binary:       $(BINDIR)/dotta"

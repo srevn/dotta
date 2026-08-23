@@ -1,32 +1,31 @@
 /**
- * completion.h - Shell completion: the candidates and their sources
+ * completion.h - Shell completion: the script, the candidates and their sources
  *
- * Hidden command answering the shell, and the library of sources every
- * command's `complete` hook draws on. Outputs newline-separated lines to
- * stdout, no stderr output.
+ * Two commands with opposite contracts, and the library of sources every
+ * command's `complete` hook draws on:
  *
- * Design principles:
- * - Silent failures: never print errors, output nothing on failure
- * - Cheap queries: one state read or one view build, never a workspace load
- * - One authority per source: a source reads the enabled set, the view, or Git,
- *   never a blend — a hook composes sources, the library names them
+ *   dotta completion <shell>
+ *       Prints the completion script for <shell> — fish is the one supported
+ *       — generated from this binary's command registry: the flag and
+ *       subcommand rules, the condition helpers and the wrapper that asks
+ *       `dotta __complete`. Build-time, no repository; a registry name the
+ *       script cannot carry as a shell word is an error, reported.
+ *       `make completions` writes it to build/completions/dotta.fish.
  *
- * Usage:
- *   dotta __complete candidates [--current=<token>] -- <tokens>... What can
- *       stand at the cursor of a command line: <tokens> are the complete ones
- *       after `dotta`, <token> the one being typed. The line is consumed as the
- *       parser would consume it and the command's hook answers
- *       (`args_complete_candidates`). The shell's wrapper, emitted with the
- *       spec, is the caller.
- *   dotta __complete spec fish The fish completion script for the root
- *       registry: the flag and subcommand rules, the condition helpers and the
- *       candidates wrapper. `make completions` writes it to
- *       build/completions/dotta.fish.
+ *   dotta __complete [--current=<token>] -- <tokens>...
+ *       Hidden. What can stand at the cursor of a command line: <tokens> are
+ *       the complete ones after `dotta`, <token> the one being typed. The line
+ *       is consumed as the parser would consume it and the command's hook
+ *       answers (`args_complete_candidates`). The script's wrapper is the
+ *       caller, and it reads silence as "no candidates": never an error
+ *       message, nothing on failure, exit 0 outside a repository — where every
+ *       source prints nothing, and only native path requests (ARGS_WANT_FILES
+ *       / ARGS_WANT_DIRS), which need none, come back.
  *
- * Outside a repository every source prints nothing and the command exits 0; the
- * shell reads silence as "no candidates". Native path completion is requested
- * through the engine (ARGS_WANT_FILES / ARGS_WANT_DIRS) and needs no
- * repository.
+ * The sources print newline-separated candidates to a stream, one authority
+ * each: a source reads the enabled set, the view, or Git, never a blend — a
+ * hook composes sources, the library names them. One state read or one view
+ * build, never a workspace load.
  */
 
 #ifndef DOTTA_CMD_COMPLETION_H
@@ -145,51 +144,57 @@ void completion_remotes(const dotta_ctx_t *ctx, FILE *out);
 bool completion_paths_under(FILE *out, const char *root, const char *current);
 
 /**
- * Completion mode.
- *
- * `candidates` depends on the user's repo state; `spec` emits the build-time
- * fish script derived from the root registry — no repo required, output
- * deterministic on a given binary.
- */
-typedef enum {
-    COMPLETE_CANDIDATES,      /* What can stand at the cursor of a command line */
-    COMPLETE_SPEC_FISH        /* Emit the fish completion script (build-time) */
-} completion_mode_t;
-
-/**
- * Completion options
- *
- * `mode` is derived by `completion_post_parse` from the first positional token
- * (candidates | spec); `candidates` takes the line's complete tokens as the
- * rest of the bucket, `spec` the dialect.
+ * `dotta __complete` options: the line, as the shell's wrapper passes it.
  */
 typedef struct {
-    completion_mode_t mode;   /* What to answer */
-    const char *current;      /* candidates: the token being typed (--current=) */
+    const char *current;      /* The token being typed (--current=); NULL when none */
 
-    /* Raw positional bucket (engine-populated; interpreted in post_parse). */
+    /* The complete tokens after the program, after `--`. */
     char **positional_args;
     size_t positional_count;
-} cmd_completion_options_t;
+} cmd_complete_options_t;
 
 /**
- * Run completion command
+ * Print what can stand at the cursor of the line in `opts` to stdout.
  *
- * Outputs completion results to stdout. Returns NULL on success (even if no
- * results). Never outputs to stderr - silent failure model.
+ * Returns NULL whatever happens — even nothing to offer is an answer, and the
+ * shell's wrapper must never see an error.
  *
  * @param ctx Dispatch context (ctx->repo is NULL outside a repository)
  * @param opts Command options (must not be NULL)
- * @return Error or NULL on success
  */
-error_t *cmd_completion(const dotta_ctx_t *ctx, const cmd_completion_options_t *opts);
+error_t *cmd_complete(const dotta_ctx_t *ctx, const cmd_complete_options_t *opts);
 
 /**
  * Spec-engine command specification for `dotta __complete`.
  *
- * Hidden from top-level help and from the fish completion export. Registered in
- * main.c's static `dotta_commands[]`; defined in completion.c beside the
- * post_parse and dispatch wrappers.
+ * Hidden from top-level help and from the completion export; silent on
+ * failure. Registered in main.c's static `dotta_commands[]`; defined in
+ * completion.c beside the dispatch wrapper.
+ */
+extern const args_command_t spec_complete;
+
+/**
+ * `dotta completion` options.
+ */
+typedef struct {
+    const char *shell;        /* The shell to print the script for: fish */
+} cmd_completion_options_t;
+
+/**
+ * Print the completion script for `opts->shell` to stdout.
+ *
+ * @param ctx Dispatch context (must not be NULL)
+ * @param opts Command options (must not be NULL; the shell admitted by post_parse)
+ * @return Error when the registry holds a name the script cannot carry, or NULL
+ */
+error_t *cmd_completion(const dotta_ctx_t *ctx, const cmd_completion_options_t *opts);
+
+/**
+ * Spec-engine command specification for `dotta completion`.
+ *
+ * Registered in main.c's static `dotta_commands[]`; defined in completion.c
+ * beside the post_parse and dispatch wrappers.
  */
 extern const args_command_t spec_completion;
 

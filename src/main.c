@@ -69,13 +69,14 @@
  * loops.
  */
 static const args_command_t *const dotta_commands[] = {
-    &spec_init,   &spec_clone,       &spec_add,
-    &spec_remove, &spec_update,      &spec_apply,
-    &spec_revert, &spec_status,      &spec_diff,
-    &spec_list,   &spec_show,        &spec_export,
-    &spec_sync,   &spec_profile,     &spec_remote,
-    &spec_ignore, &spec_bootstrap,   &spec_key,
-    &spec_git,    &spec_interactive, &spec_completion,
+    &spec_init,     &spec_clone,      &spec_add,
+    &spec_remove,   &spec_update,     &spec_apply,
+    &spec_revert,   &spec_status,     &spec_diff,
+    &spec_list,     &spec_show,       &spec_export,
+    &spec_sync,     &spec_profile,    &spec_remote,
+    &spec_ignore,   &spec_bootstrap,  &spec_key,
+    &spec_git,      &spec_completion, &spec_interactive,
+    &spec_complete,
     NULL
 };
 

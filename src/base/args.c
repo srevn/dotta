@@ -8,7 +8,8 @@
  *
  * Layout:
  *   1) internal cursor + token classifier,
- *   2) flag-name matcher (whitespace-aware linear scan),
+ *   2) names — the space-separated lists a spec is written in — and the
+ *      matchers over them,
  *   3) error collector helpers,
  *   4) typed-int parser,
  *   5) per-kind "apply" routines that write into the options struct,
@@ -119,13 +120,33 @@ static enum token_kind classify_token(const char *t, bool end_of_opts) {
 }
 
 /* ══════════════════════════════════════════════════════════════════
- * Name matching over space-separated `flags` strings
+ * Names: the space-separated lists a spec is written in
  * ══════════════════════════════════════════════════════════════════ */
 
 /**
- * Return true iff any whitespace-separated token in `flags` equals
- * `tok[0..tok_len)` and has the expected is_long length class (single-char =
- * short, multi-char = long).
+ * Step through a space-separated list of names — a row's `flags`, a command's
+ * `root_aliases`, a subcommand's alias list. `*cursor` starts at the list and
+ * is left after the name returned; `*name` and `*len` bound it, never empty.
+ * Returns false at the end of the list. NULL is the empty list.
+ */
+static bool next_name(const char **cursor, const char **name, size_t *len) {
+    const char *p = *cursor;
+    if (p == NULL) return false;
+    while (*p == ' ') p++;
+    if (*p == '\0') {
+        *cursor = p;
+        return false;
+    }
+    *name = p;
+    while (*p && *p != ' ') p++;
+    *len = (size_t) (p - *name);
+    *cursor = p;
+    return true;
+}
+
+/**
+ * Return true iff a name in `flags` equals `tok[0..tok_len)` and has the
+ * expected is_long length class (single-char = short, multi-char = long).
  *
  * Zero allocation, zero bookkeeping. For N ≤ 12 opts per command this scans the
  * whole table in a handful of memcmps per parse.
@@ -133,19 +154,11 @@ static enum token_kind classify_token(const char *t, bool end_of_opts) {
 static bool opt_matches(
     const char *flags, const char *tok, size_t tok_len, bool is_long
 ) {
-    if (flags == NULL) return false;
-
-    for (const char *p = flags; *p;) {
-        while (*p == ' ') p++;
-        if (*p == '\0') break;
-        const char *s = p;
-        while (*p && *p != ' ') p++;
-        size_t len = (size_t) (p - s);
-        if (len == 0) continue;
-
-        bool name_is_long = (len > 1);
-        if (name_is_long != is_long) continue;
-        if (len == tok_len && memcmp(s, tok, tok_len) == 0) return true;
+    const char *name;
+    size_t len;
+    for (const char *p = flags; next_name(&p, &name, &len);) {
+        if ((len > 1) != is_long) continue;
+        if (len == tok_len && memcmp(name, tok, tok_len) == 0) return true;
     }
     return false;
 }
@@ -169,20 +182,16 @@ static const args_opt_t *find_short(const args_opt_t *opts, char c) {
 }
 
 static const args_subcommand_t *find_subcommand(
-    const args_subcommand_t *subs, const char *name
+    const args_subcommand_t *subs, const char *word
 ) {
-
     if (subs == NULL) return NULL;
-    size_t name_len = strlen(name);
+    size_t word_len = strlen(word);
 
     for (const args_subcommand_t *s = subs; s->name != NULL; s++) {
-        for (const char *p = s->name; *p;) {
-            while (*p == ' ') p++;
-            if (*p == '\0') break;
-            const char *start = p;
-            while (*p && *p != ' ') p++;
-            size_t len = (size_t) (p - start);
-            if (len == name_len && memcmp(start, name, name_len) == 0) {
+        const char *alias;
+        size_t len;
+        for (const char *p = s->name; next_name(&p, &alias, &len);) {
+            if (len == word_len && memcmp(alias, word, word_len) == 0) {
                 return s;
             }
         }
@@ -512,24 +521,29 @@ static void apply_positional(
     args_class_t cls = 0;
     if (cmd->classify != NULL) cls = cmd->classify(tok);
 
-    /* Select the matching row:
-     *   - first POSITIONAL or POSITIONAL_ARG with matching class wins;
-     *   - else fall back to the first POSITIONAL_RAW bucket (if any).
+    /* Select the row:
+     *   - the first POSITIONAL or POSITIONAL_ARG of the token's class that can
+     *     still take it — an ARG row holds one value and is passed over once
+     *     it does, whoever wrote it (an earlier positional, or a flag writing
+     *     the same field), so ARG rows take positionals in declaration order;
+     *   - else the first POSITIONAL_RAW bucket (if any).
      */
     const args_opt_t *matched = NULL;
     const args_opt_t *raw = NULL;
 
     if (cmd->opts != NULL) {
         for (const args_opt_t *o = cmd->opts; o->kind != ARGS_KIND_END; o++) {
-            if ((o->kind == ARGS_KIND_POSITIONAL ||
-                o->kind == ARGS_KIND_POSITIONAL_ARG) &&
-                o->class_accept == cls) {
-                matched = o;
-                break;
+            if (o->kind == ARGS_KIND_POSITIONAL_RAW) {
+                if (raw == NULL) raw = o;
+                continue;
             }
-            if (o->kind == ARGS_KIND_POSITIONAL_RAW && raw == NULL) {
-                raw = o;
-            }
+            if (o->kind != ARGS_KIND_POSITIONAL &&
+                o->kind != ARGS_KIND_POSITIONAL_ARG) continue;
+            if (o->class_accept != cls) continue;
+            if (o->kind == ARGS_KIND_POSITIONAL_ARG &&
+                *string_field(opts, o) != NULL) continue;
+            matched = o;
+            break;
         }
     }
     if (matched == NULL) matched = raw;
@@ -570,8 +584,9 @@ static void apply_positional(
 }
 
 /**
- * Validate POSITIONAL_RAW count against declared `min`. The `max` bound is enforced
- * during parse (it's a cap, not a floor).
+ * Validate every positional row's count against its declared minimum — an
+ * array's or a RAW bucket's count, an ARG row's one value or none. The RAW
+ * `max` bound is enforced during parse (it's a cap, not a floor).
  */
 static void check_positional_counts(
     const args_command_t *cmd, void *opts,
@@ -580,9 +595,26 @@ static void check_positional_counts(
     if (cmd->opts == NULL) return;
 
     for (const args_opt_t *o = cmd->opts; o->kind != ARGS_KIND_END; o++) {
-        if (o->kind != ARGS_KIND_POSITIONAL_RAW) continue;
-        size_t cnt = *(size_t *) ((char *) opts + o->count_offset);
-        if (cnt < o->positional_min) {
+        size_t cnt;
+        switch (o->kind) {
+            case ARGS_KIND_POSITIONAL:
+            case ARGS_KIND_POSITIONAL_RAW:
+                cnt = *count_field(opts, o);
+                break;
+            case ARGS_KIND_POSITIONAL_ARG:
+                cnt = *string_field(opts, o) != NULL ? 1 : 0;
+                break;
+            default:
+                continue;
+        }
+        if (cnt >= o->positional_min) continue;
+
+        if (o->kind == ARGS_KIND_POSITIONAL_ARG && o->value_label != NULL) {
+            record_error(
+                errors, arena, -1, o,
+                "argument %s is required", o->value_label
+            );
+        } else {
             record_error(
                 errors, arena, -1, o,
                 "at least %zu positional argument(s) required",
@@ -737,25 +769,30 @@ static args_outcome_t consume_tokens(
             return ARGS_FAILED;
         }
 
+        /* The slot reads its token as the option loop does: `-h` is help; a
+         * flag name, or `--`, is the default subcommand's to read; a word —
+         * `-` and `-<digit>` included — names a subcommand. */
         const char *first = cur->argv[cur->index];
-
-        if (strcmp(first, "-h") == 0 || strcmp(first, "--help") == 0) {
-            return ARGS_HELP_REQUESTED;
-        }
-
-        if (first[0] == '-') {
-            if (command->default_subcommand != NULL) {
-                return consume_tokens(
-                    command->default_subcommand, cur, arena,
-                    opts, errors, leaf_out
+        switch (classify_token(first, false)) {
+            case TOK_HELP:
+                return ARGS_HELP_REQUESTED;
+            case TOK_END_OF_OPTS:
+            case TOK_LONG_OPT:
+            case TOK_SHORT_OPT:
+                if (command->default_subcommand != NULL) {
+                    return consume_tokens(
+                        command->default_subcommand, cur, arena,
+                        opts, errors, leaf_out
+                    );
+                }
+                record_error(
+                    errors, arena, cur->index, NULL,
+                    "command '%s' requires a subcommand (got '%s')",
+                    command->name ? command->name : "?", first
                 );
-            }
-            record_error(
-                errors, arena, cur->index, NULL,
-                "command '%s' requires a subcommand (got '%s')",
-                command->name ? command->name : "?", first
-            );
-            return ARGS_FAILED;
+                return ARGS_FAILED;
+            case TOK_POSITIONAL:
+                break;
         }
 
         const args_subcommand_t *sub = find_subcommand(
@@ -975,7 +1012,7 @@ static void render_with_prog(FILE *out, const char *text, const char *prog) {
 
 /**
  * Format a space-separated flags string ("force f") into a "--force, -f"-style
- * label in `buf`. Tokens are emitted in source order, single-char tokens as `-X`,
+ * label in `buf`. Names are emitted in source order, single-char names as `-X`,
  * multi-char as `--XXX`, joined
  * with `", "`. Returns bytes written (excluding the terminator);
  * truncates silently if `buf` is too small. Accepts NULL flags.
@@ -993,14 +1030,9 @@ static size_t format_flag_label(
     size_t pos = 0;
     bool first = true;
 
-    for (const char *p = (flags ? flags : ""); *p;) {
-        while (*p == ' ') p++;
-        if (*p == '\0') break;
-        const char *s = p;
-        while (*p && *p != ' ') p++;
-        size_t len = (size_t) (p - s);
-        if (len == 0) continue;
-
+    const char *name;
+    size_t len;
+    for (const char *p = flags; next_name(&p, &name, &len);) {
         if (!first) {
             int n = snprintf(buf + pos, buf_size - pos, ", ");
             if (n < 0) break;
@@ -1010,7 +1042,7 @@ static size_t format_flag_label(
 
         int n = snprintf(
             buf + pos, buf_size - pos, "%s%.*s",
-            len == 1 ? "-" : "--", (int) len, s
+            len == 1 ? "-" : "--", (int) len, name
         );
         if (n < 0) break;
         pos += (size_t) n;
@@ -1151,13 +1183,11 @@ static bool is_positional_kind(args_kind_t k) {
  * prose-in-description keep working unchanged).
  *
  * Called between `description` and the options table so the order mirrors the
- * natural reading of a usage line: positional args first, then flags. Returns
- * true iff the section was emitted; the caller uses that signal to manage the
- * inter-section blank line (the first ARGS_GROUP in options does NOT emit its
- * own leading blank, so the caller has to).
+ * natural reading of a usage line: positional args first, then flags. Opens
+ * with the section's blank line, like every section after the usage line.
  */
-static bool render_arguments(FILE *out, const args_opt_t *opts) {
-    if (opts == NULL) return false;
+static void render_arguments(FILE *out, const args_opt_t *opts) {
+    if (opts == NULL) return;
 
     /* Two-pass: only emit the header if at least one row qualifies. Avoids an
      * empty "Arguments:" block on commands with prose-only positional docs. */
@@ -1169,9 +1199,9 @@ static bool render_arguments(FILE *out, const args_opt_t *opts) {
         any = true;
         break;
     }
-    if (!any) return false;
+    if (!any) return;
 
-    fputs("Arguments:\n", out);
+    fputs("\nArguments:\n", out);
     for (const args_opt_t *o = opts; o->kind != ARGS_KIND_END; o++) {
         if (!is_positional_kind(o->kind)) continue;
         if (o->hidden) continue;
@@ -1180,11 +1210,10 @@ static bool render_arguments(FILE *out, const args_opt_t *opts) {
         const char *help = o->help ? o->help : "";
         fprintf(out, "  %-*s %s\n", HELP_OPT_COL, o->value_label, help);
     }
-    return true;
 }
 
 /**
- * Render the "Subcommands:" section, showing the first token of each sub's alias
+ * Render the "Subcommands:" section, showing the first name of each sub's alias
  * list as the canonical form and the child command's summary as its one-liner.
  */
 static void render_subcommands(FILE *out, const args_subcommand_t *subs) {
@@ -1193,16 +1222,15 @@ static void render_subcommands(FILE *out, const args_subcommand_t *subs) {
         if (s->hidden) continue;
 
         const char *p = s->name;
-        while (*p == ' ') p++;
-        const char *q = p;
-        while (*q && *q != ' ') q++;
-        size_t len = (size_t) (q - p);
+        const char *canonical = "";
+        size_t len = 0;
+        (void) next_name(&p, &canonical, &len);
 
         const char *sum =
             (s->command && s->command->summary) ? s->command->summary : "";
         fprintf(
             out, "  %-*.*s %s\n",
-            HELP_OPT_COL, (int) len, p, sum
+            HELP_OPT_COL, (int) len, canonical, sum
         );
     }
 }
@@ -1212,43 +1240,38 @@ void args_render_help(
     const args_command_t *command,
     const char *prog
 ) {
+    /* One blank line before every section, none after — a trailing blank would
+     * double with the next section's leading one, as notes → examples once
+     * did. The usage line is always first, so each section that follows opens
+     * with the blank that separates it from whatever came before — the same
+     * spacing for any subset of sections. A free-form block ends with its own
+     * `\n` for its last line to terminate. */
     args_render_usage_line(out, command, prog);
-    fputc('\n', out);
 
     if (command->summary != NULL) {
-        fprintf(out, "%s\n\n", command->summary);
+        fprintf(out, "\n%s\n", command->summary);
     }
 
     if (command->description != NULL) {
+        fputc('\n', out);
         render_with_prog(out, command->description, prog);
-        fputc('\n', out);   /* Blank-line separator before next section. */
     }
 
     /* Arguments — opt-in, rendered from rows that declare a value_label.
      * POSITIONAL_ARG / POSITIONAL_ANY_ARG declare both via their macro; POSITIONAL
      * and POSITIONAL_RAW can set them via struct literal for commands that want
-     * row-level argument docs.
-     *
-     * render_arguments itself emits NO leading or trailing blank line. The
-     * preceding section (description/summary) already ended with a blank; we
-     * add a trailing blank here ONLY when the section fired, so Options — which
-     * has no self-leading blank on its first group — gets the separator it
-     * needs. */
-    if (render_arguments(out, command->opts)) {
-        fputc('\n', out);
-    }
+     * row-level argument docs. */
+    render_arguments(out, command->opts);
 
-    /* Options — sectioned by ARGS_GROUP rows. */
-    bool any_shown = false;
+    /* Options — sectioned by ARGS_GROUP rows, a blank before each group; a
+     * table without a group opens the section before its first row. */
+    bool opened = false;
     if (command->opts != NULL) {
         for (const args_opt_t *o = command->opts;
             o->kind != ARGS_KIND_END; o++) {
             if (o->kind == ARGS_KIND_GROUP) {
-                fprintf(
-                    out, "%s%s\n", any_shown ? "\n" : "",
-                    o->help ? o->help : ""
-                );
-                any_shown = true;
+                fprintf(out, "\n%s\n", o->help ? o->help : "");
+                opened = true;
                 continue;
             }
             /* Positional rows are rendered separately (see render_arguments above)
@@ -1256,11 +1279,14 @@ void args_render_help(
              * render_option_row emits. */
             if (is_positional_kind(o->kind)) continue;
 
+            if (!opened) {
+                fputc('\n', out);
+                opened = true;
+            }
             render_option_row(out, o);
-            any_shown = true;
         }
 
-        if (any_shown) {
+        if (opened) {
             fprintf(
                 out, "  %-*s %s\n",
                 HELP_OPT_COL, "-h, --help",
@@ -1273,16 +1299,6 @@ void args_render_help(
         render_subcommands(out, command->subcommands);
     }
 
-    /* Section separation convention for `notes`, `examples`, `epilogue`: each
-     * block adds exactly one leading `\n` for the blank line before the section;
-     * the content itself must end with `\n` for the final line to terminate. We
-     * do NOT append a trailing `\n` here because the NEXT block (or the renderer's
-     * own end-of-output) handles its own separation. Adding one would double
-     * the blank line between consecutive blocks such as notes → examples.
-     *
-     * `description` is different: its next section (options) deliberately has
-     * no leading `\n` on the first ARGS_GROUP header, so the trailing `\n` there
-     * IS the separator. See render loop above. */
     if (command->notes != NULL) {
         fputc('\n', out);
         render_with_prog(out, command->notes, prog);
@@ -1329,12 +1345,96 @@ static void fputs_fish_escaped(FILE *out, const char *s) {
 }
 
 /**
+ * True when `s[0..len)` can stand as a fish word — a token fish reads as
+ * itself, unquoted: letters, digits, `_` and `-`, at least one. Descriptions
+ * are free text and are written quoted (`fputs_fish_escaped`); a name is
+ * written bare — as a candidate, an option name, a guard's argument, a fragment
+ * of a helper's function name — and fish would read a space as two of them, a
+ * `$` or a glob as an expansion, a quote or a `/` as a script that does not
+ * load. A wider grammar would need the dialect's quoting, which this exporter
+ * does not do: the check is the contract.
+ */
+static bool fish_word_ok(const char *s, size_t len) {
+    if (len == 0) return false;
+    for (size_t i = 0; i < len; i++) {
+        char c = s[i];
+        if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+            (c >= '0' && c <= '9') || c == '_' || c == '-') continue;
+        return false;
+    }
+    return true;
+}
+
+/**
+ * Check every name the script would carry as a word for `cmd` and the tree
+ * beneath it: its root aliases, its flags, each subcommand's aliases and, in
+ * turn, the subcommand's own — hidden ones too, since the grammar is the
+ * registry's, not the emission's. The command's own `name` is the caller's to
+ * check: a subcommand's is the qualified "parent sub", never written.
+ *
+ * @return NULL, or an error naming the first offender (caller frees).
+ */
+static error_t *check_command_names(const args_command_t *cmd) {
+    const char *owner = cmd->name ? cmd->name : "?";
+    const char *name;
+    size_t len;
+
+    for (const char *p = cmd->root_aliases; next_name(&p, &name, &len);) {
+        if (!fish_word_ok(name, len)) {
+            return ERROR(
+                ERR_INVALID_ARG,
+                "command '%s': root alias '%.*s' cannot stand as a fish word",
+                owner, (int) len, name
+            );
+        }
+    }
+
+    if (cmd->opts != NULL) {
+        for (const args_opt_t *o = cmd->opts; o->kind != ARGS_KIND_END; o++) {
+            for (const char *p = o->flags; next_name(&p, &name, &len);) {
+                if (!fish_word_ok(name, len)) {
+                    return ERROR(
+                        ERR_INVALID_ARG,
+                        "command '%s': flag name '%.*s' cannot stand as a fish word",
+                        owner, (int) len, name
+                    );
+                }
+            }
+        }
+    }
+
+    if (cmd->subcommands != NULL) {
+        for (const args_subcommand_t *s = cmd->subcommands;
+            s->name != NULL; s++) {
+            for (const char *p = s->name; next_name(&p, &name, &len);) {
+                if (!fish_word_ok(name, len)) {
+                    return ERROR(
+                        ERR_INVALID_ARG,
+                        "command '%s': subcommand alias '%.*s' cannot stand as "
+                        "a fish word", owner, (int) len, name
+                    );
+                }
+            }
+            if (s->command != NULL) {
+                error_t *err = check_command_names(s->command);
+                if (err != NULL) return err;
+            }
+        }
+    }
+    if (cmd->default_subcommand != NULL) {
+        error_t *err = check_command_names(cmd->default_subcommand);
+        if (err != NULL) return err;
+    }
+    return NULL;
+}
+
+/**
  * The `-n` guard a rule is emitted under: `__<prog>_<helper> <command> [<sub>]`.
  * Printed from its parts at every rule rather than formatted into a buffer once
  * per context — `using_command <cmd>` for a command's own rows, `needs_subcommand
- * <cmd>` for a tree's subcommand slot (the names, and the default sub's flags),
- * `using_subcommand <cmd> <aliases>` for one subcommand's rows, its alias list
- * verbatim so every spelling of the sub matches.
+ * <cmd>` for a tree's subcommand names, `using_default_subcommand <cmd>` for the
+ * default sub's flags, `using_subcommand <cmd> <aliases>` for one subcommand's
+ * rows, its alias list verbatim so every spelling of the sub matches.
  */
 typedef struct fish_guard {
     const char *helper;
@@ -1351,14 +1451,10 @@ static void emit_guard(FILE *out, const char *prog, const fish_guard_t *guard) {
 }
 
 /**
- * Emit a `complete -c <prog> ...` line for one opt row under `guard`.
- *
- * Every short-form token in the opt's `flags` becomes a `-o X`; every long-form
- * token becomes a `-l XXX`. Fish renders the aliases as a single completion entry
- * (that's the whole reason we can list them all on one `complete` line).
- * Value-taking kinds ask the binary for the value (`-xa`): fish then knows the
- * flag needs a parameter, consults only that rule at its value position — inline
- * `--name=text` included — and defers other suggestions until it's supplied.
+ * Emit the names of a flags list as the option they declare: every short name
+ * as `-o X`, every long one as `-l XXX`. Fish renders the names of one
+ * `complete` line as a single entry (that's the whole reason we can list them
+ * all on one line).
  *
  * `-o` — fish's "old-style option" — declares a single-dash option that is exactly
  * `-X`: never grouped, its value the next token. That is what the parser reads
@@ -1366,6 +1462,25 @@ static void emit_guard(FILE *out, const char *prog, const fish_guard_t *guard) {
  * POSIX short option, and fish would then offer the bundles `-fv`, `-fn`… and
  * probe a value flag for `-pVALUE` — forms the parser rejects. If short bundling
  * ever lands in the engine, this is the line that flips back to `-s`.
+ */
+static void emit_flag_names(FILE *out, const char *flags) {
+    const char *name;
+    size_t len;
+    for (const char *p = flags; next_name(&p, &name, &len);) {
+        if (len == 1) {
+            fprintf(out, " -o %c", name[0]);
+        } else {
+            fprintf(out, " -l %.*s", (int) len, name);
+        }
+    }
+}
+
+/**
+ * Emit a `complete -c <prog> ...` line for one opt row under `guard`.
+ *
+ * Value-taking kinds ask the binary for the value (`-xa`): fish then knows the
+ * flag needs a parameter, consults only that rule at its value position — inline
+ * `--name=text` included — and defers other suggestions until it's supplied.
  */
 static void emit_complete_line(
     FILE *out,
@@ -1381,22 +1496,7 @@ static void emit_complete_line(
 
     fprintf(out, "complete -c %s", prog);
     emit_guard(out, prog, guard);
-
-    /* Walk space-separated names in `flags`, emitting -o or -l. */
-    for (const char *p = opt->flags ? opt->flags : ""; *p;) {
-        while (*p == ' ') p++;
-        if (*p == '\0') break;
-        const char *s = p;
-        while (*p && *p != ' ') p++;
-        size_t len = (size_t) (p - s);
-        if (len == 0) continue;
-
-        if (len == 1) {
-            fprintf(out, " -o %c", s[0]);
-        } else {
-            fprintf(out, " -l %.*s", (int) len, s);
-        }
-    }
+    emit_flag_names(out, opt->flags);
 
     if (opt_takes_value(opt)) {
         fprintf(out, " -xa \"(__%s_candidates)\"", prog);
@@ -1413,11 +1513,8 @@ static void emit_complete_line(
 /**
  * Emit a root-level `complete -c <prog>` line for a command's flag aliases, guarded
  * by `__<prog>_needs_command`: the root resolver reads a flag form only as argv[1],
- * so once a command is typed the alias is no longer valid there. Each
- * space-separated token in `aliases` becomes a `-o X` (single-char; see
- * `emit_complete_line` for why not `-s`) or `-l XXX` (multi-char) entry; all
- * tokens share the single line so fish renders them as aliases of the same
- * completion.
+ * so once a command is typed the alias is no longer valid there. The aliases
+ * share the single line, so fish renders them as one completion.
  */
 static void emit_root_alias_complete(
     FILE *out, const char *prog,
@@ -1425,19 +1522,7 @@ static void emit_root_alias_complete(
 ) {
     if (aliases == NULL) return;
     fprintf(out, "complete -c %s -n __%s_needs_command", prog, prog);
-    for (const char *p = aliases; *p;) {
-        while (*p == ' ') p++;
-        if (*p == '\0') break;
-        const char *s = p;
-        while (*p && *p != ' ') p++;
-        size_t len = (size_t) (p - s);
-        if (len == 0) continue;
-        if (len == 1) {
-            fprintf(out, " -o %c", s[0]);
-        } else {
-            fprintf(out, " -l %.*s", (int) len, s);
-        }
-    }
+    emit_flag_names(out, aliases);
     if (summary != NULL && summary[0] != '\0') {
         fputs(" -d \"", out);
         fputs_fish_escaped(out, summary);
@@ -1457,17 +1542,16 @@ static void emit_sub_row(
     if (sub->hidden) return;
 
     const char *p = sub->name;
-    while (*p == ' ') p++;
-    const char *q = p;
-    while (*q && *q != ' ') q++;
-    size_t len = (size_t) (q - p);
+    const char *canonical = "";
+    size_t len = 0;
+    (void) next_name(&p, &canonical, &len);
 
     const char *summary =
         (sub->command && sub->command->summary) ? sub->command->summary : "";
 
     fprintf(out, "complete -c %s", prog);
     emit_guard(out, prog, guard);
-    fprintf(out, " -a %.*s -d \"", (int) len, p);
+    fprintf(out, " -a %.*s -d \"", (int) len, canonical);
     fputs_fish_escaped(out, summary);
     fputs("\"\n", out);
 }
@@ -1517,13 +1601,14 @@ static void emit_command(
 
         /* Parse accepts `<prog> <cmd> --flag` as a shorthand for `<prog> <cmd>
          * <default-sub> --flag` when a default_subcommand is set. Mirror that
-         * in completion: at the open slot, offer the default sub's flags so
-         * tab-complete matches the parser's behavior. */
+         * in completion: at the open slot, and after a flag there, offer the
+         * default sub's flags. */
         if (cmd->default_subcommand != NULL &&
             cmd->default_subcommand->opts != NULL) {
+            const fish_guard_t dflt = { "using_default_subcommand", cmd->name, NULL };
             for (const args_opt_t *o = cmd->default_subcommand->opts;
                 o->kind != ARGS_KIND_END; o++) {
-                emit_complete_line(out, prog, &slot, o);
+                emit_complete_line(out, prog, &dflt, o);
             }
         }
 
@@ -1546,9 +1631,9 @@ static void emit_command(
 /**
  * The condition helpers the rules are guarded by, and the wrapper that asks the
  * binary. `%s` is the program name; the line is read the way the engine reads
- * it — the command is the second token, a bare word or a root alias; in a tree,
- * a flag at the subcommand slot routes to the default subcommand, so the subcommand
- * is the third token exactly when it is one.
+ * it — the command is the second token, a bare word or a root alias; in a tree
+ * the third token is the subcommand when it names one, the default subcommand's
+ * when it is a flag name.
  *
  * The positional guard mirrors `classify_token` for the token being typed: fish
  * runs the positional rule's generator for a flag name too, and the binary would
@@ -1571,11 +1656,18 @@ static const char fish_helpers[] =
     "\n"
     "function __%s_needs_subcommand\n"
     "    # True while command $argv[1]'s subcommand slot is open: nothing after\n"
-    "    # the command yet, or a flag, which the parser hands to the default\n"
-    "    # subcommand.\n"
+    "    # the command yet.\n"
+    "    set -l tokens (commandline -opc)\n"
+    "    test (count $tokens) -eq 2; and test \"$tokens[2]\" = \"$argv[1]\"\n"
+    "end\n"
+    "\n"
+    "function __%s_using_default_subcommand\n"
+    "    # True when command $argv[1]'s line is its default subcommand's:\n"
+    "    # nothing after the command, or a flag name there, which the parser\n"
+    "    # hands to the default subcommand.\n"
     "    set -l tokens (commandline -opc)\n"
     "    test (count $tokens) -ge 2; and test \"$tokens[2]\" = \"$argv[1]\"; or return 1\n"
-    "    test (count $tokens) -eq 2; or string match -q -- '-*' $tokens[3]\n"
+    "    test (count $tokens) -eq 2; or string match -qr -- '^-[^0-9]' $tokens[3]\n"
     "end\n"
     "\n"
     "function __%s_using_subcommand\n"
@@ -1629,12 +1721,32 @@ static const char fish_candidates_tail[] =
     "end\n"
     "\n";
 
-void args_export_completion_fish(
+error_t *args_export_completion_fish(
     FILE *out,
     const args_command_t *const *commands,
     const char *prog,
     const char *candidates
 ) {
+    /* Every name the script carries as a word, before a line is written. */
+    if (!fish_word_ok(prog, strlen(prog))) {
+        return ERROR(
+            ERR_INVALID_ARG,
+            "program name '%s' cannot stand as a fish word", prog
+        );
+    }
+    for (size_t i = 0; commands[i] != NULL; i++) {
+        const args_command_t *c = commands[i];
+        const char *name = c->name ? c->name : "";
+        if (!fish_word_ok(name, strlen(name))) {
+            return ERROR(
+                ERR_INVALID_ARG,
+                "command name '%s' cannot stand as a fish word", name
+            );
+        }
+        error_t *err = check_command_names(c);
+        if (err != NULL) return err;
+    }
+
     fprintf(
         out, "# Fish completions for %s, generated from its command registry. "
         "Do not edit.\n\n", prog
@@ -1717,6 +1829,7 @@ void args_export_completion_fish(
         }
         free(block);
     }
+    return NULL;
 }
 
 void args_render_errors(

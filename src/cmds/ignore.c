@@ -1123,26 +1123,6 @@ error_t *cmd_ignore(const dotta_ctx_t *ctx, const cmd_ignore_options_t *opts) {
  * ══════════════════════════════════════════════════════════════════ */
 
 /**
- * Route the optional positional profile into `opts->profile`.
- *
- * POSITIONAL_RAW with max=1 gives us the "too many positionals" error for free.
- * When a positional is present, it wins over a preceding -p/--profile flag (matches
- * the legacy precedence — positional sets profile unconditionally when present).
- */
-static error_t *ignore_post_parse(
-    void *opts_v, arena_t *arena, const args_command_t *cmd
-) {
-    (void) arena;
-    (void) cmd;
-    cmd_ignore_options_t *o = opts_v;
-
-    if (o->positional_count == 1) {
-        o->profile = o->positional_args[0];
-    }
-    return NULL;
-}
-
-/**
  * What can stand at the cursor: a local profile, by -p or as the one
  * positional; for --test, a filesystem path. Patterns are typed.
  */
@@ -1163,7 +1143,7 @@ static args_want_t ignore_complete(
         return ARGS_WANT_NONE;   /* --add, --remove: a pattern */
     }
 
-    if (o->profile == NULL && o->positional_count == 0) {
+    if (o->profile == NULL) {
         completion_profiles(ctx, out, COMPLETION_LOCAL);
     }
     return ARGS_WANT_NONE;
@@ -1206,9 +1186,10 @@ static const args_opt_t ignore_opts[] = {
         cmd_ignore_options_t,verbose,
         "Verbose output (test mode: show matches)"
     ),
-    ARGS_POSITIONAL_RAW(
-        cmd_ignore_options_t,positional_args, positional_count,
-        0,                   1
+    ARGS_POSITIONAL_ANY_ARG(
+        "[profile]",
+        cmd_ignore_options_t,profile,         0,
+        "Profile whose .dottaignore to use (default: the baseline)"
     ),
     ARGS_END,
 };
@@ -1249,7 +1230,6 @@ const args_command_t spec_ignore = {
         "  %s ignore global --test ~/.bashrc         # Single profile\n",
     .opts_size   = sizeof(cmd_ignore_options_t),
     .opts        = ignore_opts,
-    .post_parse  = ignore_post_parse,
     .complete    = ignore_complete,
     .payload     = &dotta_ext_read,
     .dispatch    = ignore_dispatch,

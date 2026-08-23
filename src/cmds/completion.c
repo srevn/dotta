@@ -1,17 +1,17 @@
 /**
- * completion.c - Shell completion: the candidates and their sources
+ * completion.c - Shell completion: the script, the candidates and their sources
  *
- * `dotta __complete candidates` answers the shell's question — what can stand
- * at the cursor of a command line — through the spec engine: the line is
- * consumed as the parser would consume it, and the command's `complete` hook
- * prints what its grammar admits at that position. The sources the hooks draw
- * on live here, one authority each: the enabled set (state), the view (every
- * enabled profile at HEAD, precedence resolved), or Git (a branch's tree or
- * history). The hooks compose them per command; nothing here guesses which one
- * a command wants.
+ * `dotta __complete` answers the shell's question — what can stand at the
+ * cursor of a command line — through the spec engine: the line is consumed as
+ * the parser would consume it, and the command's `complete` hook prints what
+ * its grammar admits at that position. The sources the hooks draw on live
+ * here, one authority each: the enabled set (state), the view (every enabled
+ * profile at HEAD, precedence resolved), or Git (a branch's tree or history).
+ * The hooks compose them per command; nothing here guesses which one a command
+ * wants. `dotta completion <shell>` prints the script that asks.
  *
- * Silent-failure model throughout: errors result in no output rather than
- * messages to stderr, and outside a repository every source prints nothing.
+ * The sources fail silently: errors result in no output rather than messages
+ * to stderr, and outside a repository every source prints nothing.
  */
 
 #include "cmds/completion.h"
@@ -236,8 +236,8 @@ void completion_refspecs(
     }
 
     refspec_walk_ctx_t walk = {
-        .out = out,
-        .cap = COMPLETE_REFSPEC_FILES_MAX,
+        .out    = out,
+        .cap    = COMPLETE_REFSPEC_FILES_MAX,
         .prefix = (pinned == NULL)
     };
 
@@ -507,103 +507,110 @@ bool completion_paths_under(FILE *out, const char *root, const char *current) {
 }
 
 /**
- * Completion command implementation
+ * What can stand at the cursor of the line
+ */
+error_t *cmd_complete(const dotta_ctx_t *ctx, const cmd_complete_options_t *opts) {
+    /* The line as argv: the program, then the complete tokens after it. The
+     * engine resolves and consumes it and calls the command's hook; outside a
+     * repository the hooks' sources stay silent and only native-path requests
+     * come back. Nothing to offer is an answer: never an error. */
+    int argc = (int) opts->positional_count + 1;
+    char **argv = arena_calloc(ctx->arena, (size_t) argc, sizeof(*argv));
+    if (argv == NULL) return NULL;
+    argv[0] = ctx->argv[0];
+    for (int i = 1; i < argc; i++) {
+        argv[i] = opts->positional_args[i - 1];
+    }
+    args_complete_candidates(
+        dotta_registry(), argc, argv,
+        opts->current ? opts->current : "", ctx->arena, ctx, stdout
+    );
+    return NULL;
+}
+
+/**
+ * The completion script for the shell
  */
 error_t *cmd_completion(const dotta_ctx_t *ctx, const cmd_completion_options_t *opts) {
-    switch (opts->mode) {
-        case COMPLETE_SPEC_FISH:
-            /* Build-time emission: projects the root registry into the
-             * fish-completion dialect, the wrapper calling back into the
-             * `candidates` mode. Stable, repo-independent, invoked by `make
-             * completions`. The registry is borrowed from main.c via the typed
-             * accessor so the cmds/ layer never names the registry symbol. */
-            args_export_completion_fish(
-                stdout, dotta_registry(), "dotta", "__complete candidates"
-            );
-            break;
+    (void) ctx;
+    (void) opts;   /* fish — the one shell post_parse admits */
 
-        case COMPLETE_CANDIDATES: {
-            /* The line as argv: the program, then the tokens after the mode
-             * word. The engine resolves and consumes it and calls the command's
-             * hook; outside a repository the hooks' sources stay silent and
-             * only native-path requests come back. */
-            int argc = (int) opts->positional_count;
-            char **argv = arena_calloc(ctx->arena, (size_t) argc, sizeof(*argv));
-            if (argv == NULL) break;
-            argv[0] = ctx->argv[0];
-            for (int i = 1; i < argc; i++) {
-                argv[i] = opts->positional_args[i];
-            }
-            args_complete_candidates(
-                dotta_registry(), argc, argv,
-                opts->current ? opts->current : "", ctx->arena, ctx, stdout
-            );
-            break;
-        }
-    }
-
-    return NULL;
+    /* Projects the root registry into the fish dialect, the wrapper calling
+     * back into `__complete`. Repo-independent; deterministic on a given
+     * binary. The registry is borrowed from main.c via the typed accessor so
+     * the cmds/ layer never names the registry symbol. */
+    return args_export_completion_fish(
+        stdout, dotta_registry(), "dotta", "__complete"
+    );
 }
 
 /* ══════════════════════════════════════════════════════════════════
  * Spec-engine integration
  * ══════════════════════════════════════════════════════════════════ */
 
+static error_t *complete_dispatch(const void *ctx_v, void *opts_v) {
+    const dotta_ctx_t *ctx = ctx_v;
+    return cmd_complete(ctx, (const cmd_complete_options_t *) opts_v);
+}
+
+static const args_opt_t complete_opts[] = {
+    ARGS_STRING(
+        "current",              "<token>",
+        cmd_complete_options_t, current,
+        "The token being typed at the cursor"
+    ),
+    ARGS_POSITIONAL_RAW(
+        cmd_complete_options_t, positional_args,positional_count,
+        0,                      0
+    ),
+    ARGS_END,
+};
+
+const args_command_t spec_complete = {
+    .name           = "__complete",
+    .summary        = "Shell completion helper (hidden)",
+    .usage          = "%s __complete [--current=<token>] -- <tokens>...",
+    .opts_size      = sizeof(cmd_complete_options_t),
+    .opts           = complete_opts,
+    .payload        = &dotta_ext_read_silent,
+    .dispatch       = complete_dispatch,
+    .silent_failure = true,
+    .hidden         = true,
+};
+
 /**
- * Map the mandatory first positional into `mode`.
- *
- * Silent-failure semantics (suppressed by the dispatcher when `silent_failure =
- * true`): a missing or unknown mode returns exit 1 with no stderr output — this
- * preserves the shell-completion contract with the scripts that invoke `dotta
- * __complete ...`.
- *
- * `spec` takes a second positional naming the output dialect (currently only
- * `fish`) and nothing else; `candidates` takes the line's tokens, however many,
- * and is the only mode that reads `--current`.
+ * Admit the one shell the engine exports a script for.
  */
 static error_t *completion_post_parse(
     void *opts_v, arena_t *arena, const args_command_t *cmd
 ) {
     (void) arena;
     (void) cmd;
-    cmd_completion_options_t *o = opts_v;
+    const cmd_completion_options_t *o = opts_v;
 
-    if (o->positional_count == 0) {
-        return ERROR(ERR_INVALID_ARG, "completion mode is required");
+    if (strcmp(o->shell, "fish") != 0) {
+        return ERROR(
+            ERR_INVALID_ARG, "unknown shell '%s' (fish is the one supported)",
+            o->shell
+        );
     }
+    return NULL;
+}
 
-    const char *mode = o->positional_args[0];
+/**
+ * What can stand at the cursor: the shell.
+ */
+static args_want_t completion_complete(
+    const void *ctx, const void *opts_v, const args_completion_t *at, FILE *out
+) {
+    (void) ctx;
+    (void) at;
+    const cmd_completion_options_t *o = opts_v;
 
-    if (strcmp(mode, "candidates") == 0) {
-        o->mode = COMPLETE_CANDIDATES;
-        return NULL;
+    if (o->shell == NULL) {
+        fputs("fish\tFish shell\n", out);
     }
-
-    if (strcmp(mode, "spec") == 0) {
-        if (o->positional_count != 2) {
-            return ERROR(
-                ERR_INVALID_ARG,
-                "'spec' mode takes exactly one dialect (e.g. 'fish')"
-            );
-        }
-        const char *dialect = o->positional_args[1];
-        if (strcmp(dialect, "fish") != 0) {
-            return ERROR(
-                ERR_INVALID_ARG,
-                "unknown spec dialect '%s'", dialect
-            );
-        }
-        if (o->current != NULL) {
-            return ERROR(
-                ERR_INVALID_ARG,
-                "--current is only valid with 'candidates' mode"
-            );
-        }
-        o->mode = COMPLETE_SPEC_FISH;
-        return NULL;
-    }
-
-    return ERROR(ERR_INVALID_ARG, "unknown completion mode '%s'", mode);
+    return ARGS_WANT_NONE;
 }
 
 static error_t *completion_dispatch(const void *ctx_v, void *opts_v) {
@@ -612,29 +619,28 @@ static error_t *completion_dispatch(const void *ctx_v, void *opts_v) {
 }
 
 static const args_opt_t completion_opts[] = {
-    ARGS_STRING(
-        "current",                "<token>",
-        cmd_completion_options_t, current,
-        "Candidates: the token being typed at the cursor"
-    ),
-    ARGS_POSITIONAL_RAW(
-        cmd_completion_options_t, positional_args,positional_count,
-        1,                        0
+    ARGS_POSITIONAL_ANY_ARG(
+        "<shell>",
+        cmd_completion_options_t,shell,  1,
+        "The shell to print the script for (fish)"
     ),
     ARGS_END,
 };
 
 const args_command_t spec_completion = {
-    .name           = "__complete",
-    .summary        = "Shell completion helper (hidden)",
-    .usage          =
-        "%s __complete candidates [--current=<token>] -- <tokens>...\n"
-        "   or: %s __complete spec fish",
-    .opts_size      = sizeof(cmd_completion_options_t),
-    .opts           = completion_opts,
-    .post_parse     = completion_post_parse,
-    .payload        = &dotta_ext_read_silent,
-    .dispatch       = completion_dispatch,
-    .silent_failure = true,
-    .hidden         = true,
+    .name        = "completion",
+    .summary     = "Print the shell completion script",
+    .usage       = "%s completion <shell>",
+    .description =
+        "Writes the completion script for <shell> to stdout, generated from\n"
+        "this binary's command registry. fish is the one shell supported.\n",
+    .examples    =
+        "  %s completion fish > ~/.config/fish/completions/dotta.fish\n"
+        "  %s completion fish | source       # This session only\n",
+    .opts_size   = sizeof(cmd_completion_options_t),
+    .opts        = completion_opts,
+    .post_parse  = completion_post_parse,
+    .complete    = completion_complete,
+    .payload     = &dotta_ext_none,
+    .dispatch    = completion_dispatch,
 };

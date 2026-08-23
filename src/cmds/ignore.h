@@ -14,8 +14,8 @@
 /**
  * Command options
  *
- * `profile` can be set either via `-p/--profile` or via a single optional
- * positional (mapped by `ignore_post_parse`).
+ * `profile` is written by `-p/--profile` or by the one optional positional —
+ * the same field: once the flag has written it, a positional is unexpected.
  */
 typedef struct {
     /* User-facing (read by cmd_ignore). */
@@ -27,10 +27,6 @@ typedef struct {
     size_t add_count;           /* Number of patterns to add */
     char **remove_patterns;     /* Patterns to remove (NULL for none) */
     size_t remove_count;        /* Number of patterns to remove */
-
-    /* Raw positional bucket (engine-populated; interpreted in post_parse). */
-    char **positional_args;
-    size_t positional_count;
 } cmd_ignore_options_t;
 
 /**

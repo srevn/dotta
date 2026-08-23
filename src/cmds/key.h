@@ -25,17 +25,11 @@ typedef enum {
 /**
  * Key command options
  *
- * `action` is derived by `key_post_parse` from the first positional token (set
- * | clear | status).
+ * `action` is set by the subcommand's `init_defaults` (set | clear | status).
  */
 typedef struct {
-    /* User-facing (read by cmd_key). */
     key_action_t action;
     bool verbose;
-
-    /* Raw positional bucket (engine-populated; interpreted in post_parse). */
-    char **positional_args;
-    size_t positional_count;
 } cmd_key_options_t;
 
 /**
@@ -53,10 +47,11 @@ typedef struct {
 error_t *cmd_key(const dotta_ctx_t *ctx, const cmd_key_options_t *opts);
 
 /**
- * Spec-engine command specification for `dotta key`.
+ * Spec-engine command specification for `dotta key`: a tree of `set`,
+ * `clear` and `status`, `status` the default.
  *
- * Registered in cmds/registry.c. Defined in key.c beside the post_parse and
- * dispatch wrappers.
+ * Registered in main.c's static `dotta_commands[]`; defined in key.c beside
+ * the subcommand specs and the dispatch wrapper.
  */
 extern const args_command_t spec_key;
 

@@ -275,7 +275,7 @@ static const args_opt_t init_opts[] = {
     ),
     ARGS_POSITIONAL_ANY_ARG(
         "[path]",
-        cmd_init_options_t,repo_path,
+        cmd_init_options_t,repo_path, 0,
         "Repository location (default: system default)"
     ),
     ARGS_END

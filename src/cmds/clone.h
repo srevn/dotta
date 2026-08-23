@@ -25,11 +25,9 @@ typedef enum {
 /**
  * Clone options
  *
- * `url` and `path` are filled from the raw positional bucket by `clone_post_parse`.
- * Consumers read only the user-facing fields.
+ * `url` and `path` are the two positionals, in that order.
  */
 typedef struct {
-    /* User-facing (read by cmd_clone). */
     const char *url;          /* Remote URL (required) */
     const char *path;         /* Local path (NULL = auto-generate from URL) */
     bool quiet;               /* Suppress output */
@@ -38,10 +36,6 @@ typedef struct {
     bool fetch_all;           /* Fetch all remote profiles (hub mode) */
     char **profiles;          /* Explicit profiles to fetch (NULL = auto-detect) */
     size_t profile_count;     /* Number of explicit profiles */
-
-    /* Raw positional bucket (engine-populated; interpreted in post_parse). */
-    char **positional_args;
-    size_t positional_count;
 } cmd_clone_options_t;
 
 /**

@@ -887,26 +887,15 @@ cleanup:
  * ══════════════════════════════════════════════════════════════════ */
 
 /**
- * Interpret the 1-2 raw positionals: first is the URL, optional second is the
- * local path. Ordering matters (URL must precede path), so the engine's classifier
- * (position-agnostic by design) isn't expressive enough; a raw bucket plus this
- * post_parse hook keeps the logic local and linear.
- *
  * Mutual exclusion: `--all` and `-p/--profile` cannot both constrain the fetch
- * set. Everything else has already been validated by the engine's per-row rules.
+ * set. Everything else — the URL required, the path optional — is the rows'.
  */
 static error_t *clone_post_parse(
     void *opts_v, arena_t *arena, const args_command_t *cmd
 ) {
     (void) arena;
     (void) cmd;
-    cmd_clone_options_t *o = opts_v;
-
-    /* POSITIONAL_RAW enforces min=1, max=2 — count is 1 or 2 here. */
-    o->url = o->positional_args[0];
-    if (o->positional_count >= 2) {
-        o->path = o->positional_args[1];
-    }
+    const cmd_clone_options_t *o = opts_v;
 
     if (o->fetch_all && o->profile_count > 0) {
         return ERROR(
@@ -930,7 +919,7 @@ static args_want_t clone_complete(
     const cmd_clone_options_t *o = opts_v;
 
     if (at->value_of != NULL) return ARGS_WANT_NONE;
-    return o->positional_count == 1 ? ARGS_WANT_DIRS : ARGS_WANT_NONE;
+    return o->url != NULL && o->path == NULL ? ARGS_WANT_DIRS : ARGS_WANT_NONE;
 }
 
 static error_t *clone_dispatch(const void *ctx_v, void *opts_v) {
@@ -943,7 +932,7 @@ static const args_opt_t clone_opts[] = {
     /* ARGS_APPEND binds one value per occurrence: `-p a -p b`, never `-p a b`. */
     ARGS_APPEND(
         "p profile",          "<name>",
-        cmd_clone_options_t,  profiles,        profile_count,
+        cmd_clone_options_t,  profiles,       profile_count,
         "Fetch specific profile(s) (repeatable)"
     ),
     ARGS_FLAG(
@@ -959,7 +948,7 @@ static const args_opt_t clone_opts[] = {
     ),
     ARGS_FLAG_SET(
         "no-bootstrap",
-        cmd_clone_options_t,  bootstrap_mode,  CLONE_BOOTSTRAP_SKIP,
+        cmd_clone_options_t,  bootstrap_mode, CLONE_BOOTSTRAP_SKIP,
         "Skip bootstrap scripts entirely"
     ),
     ARGS_FLAG(
@@ -972,12 +961,15 @@ static const args_opt_t clone_opts[] = {
         cmd_clone_options_t,  verbose,
         "Verbose output"
     ),
-    /* <url> [<path>] — order-dependent. Classifier has no position awareness,
-     * so a raw bucket with post_parse assignment is cleaner than two POSITIONAL_ONE
-     * rows differentiated by ad-hoc classes. */
-    ARGS_POSITIONAL_RAW(
-        cmd_clone_options_t,  positional_args, positional_count,
-        1,                    2
+    ARGS_POSITIONAL_ANY_ARG(
+        "<url>",
+        cmd_clone_options_t,  url,            1,
+        "Repository to clone"
+    ),
+    ARGS_POSITIONAL_ANY_ARG(
+        "[path]",
+        cmd_clone_options_t,  path,           0,
+        "Local directory (default: the repository's name)"
     ),
     ARGS_END,
 };

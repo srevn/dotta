@@ -7,7 +7,6 @@
 #include <config.h>
 #include <git2.h>
 #include <stdio.h>
-#include <string.h>
 
 #include "base/args.h"
 #include "base/buffer.h"
@@ -433,107 +432,132 @@ error_t *cmd_key(const dotta_ctx_t *ctx, const cmd_key_options_t *opts) {
  * ══════════════════════════════════════════════════════════════════ */
 
 /**
- * Map the mandatory first positional into `action`.
+ * Single dispatch wrapper shared by every subcommand.
  *
- * Preserves the legacy error phrasing on unknown actions. The engine renders
- * the usage line after the post_parse error, so the message body doesn't need
- * to repeat it.
+ * Each sub's `init_defaults` already set the `action` discriminator, so
+ * `cmd_key`'s switch routes the call.
  */
-static error_t *key_post_parse(
-    void *opts_v, arena_t *arena, const args_command_t *cmd
-) {
-    (void) arena;
-    (void) cmd;
-    cmd_key_options_t *o = opts_v;
-
-    if (o->positional_count == 0) {
-        return ERROR(
-            ERR_INVALID_ARG, "key action is required (set, clear, or status)"
-        );
-    }
-
-    const char *action = o->positional_args[0];
-    if (strcmp(action, "set") == 0) {
-        o->action = KEY_ACTION_SET;
-    } else if (strcmp(action, "clear") == 0) {
-        o->action = KEY_ACTION_CLEAR;
-    } else if (strcmp(action, "status") == 0) {
-        o->action = KEY_ACTION_STATUS;
-    } else {
-        return ERROR(
-            ERR_INVALID_ARG,
-            "Unknown key action '%s'\nValid actions: set, clear, status",
-            action
-        );
-    }
-    return NULL;
-}
-
-/**
- * What can stand at the cursor: the action, as key_post_parse reads it.
- */
-static args_want_t key_complete(
-    const void *ctx, const void *opts_v, const args_completion_t *at, FILE *out
-) {
-    (void) ctx;
-    (void) at;
-    const cmd_key_options_t *o = opts_v;
-
-    if (o->positional_count == 0) {
-        fputs("set\tSet encryption passphrase\n", out);
-        fputs("clear\tClear cached passphrase\n", out);
-        fputs("status\tShow key status\n", out);
-    }
-    return ARGS_WANT_NONE;
-}
-
 static error_t *key_dispatch(const void *ctx_v, void *opts_v) {
     const dotta_ctx_t *ctx = ctx_v;
     return cmd_key(ctx, (const cmd_key_options_t *) opts_v);
 }
 
-static const args_opt_t key_opts[] = {
+/* --- set --- */
+
+static void key_set_defaults(void *o) {
+    ((cmd_key_options_t *) o)->action = KEY_ACTION_SET;
+}
+
+static const args_opt_t key_set_opts[] = {
     ARGS_GROUP("Options:"),
     ARGS_FLAG(
         "v verbose",
         cmd_key_options_t, verbose,
         "Verbose output"
     ),
-    ARGS_POSITIONAL_RAW(
-        cmd_key_options_t, positional_args, positional_count,
-        1,                 1
+    ARGS_END,
+};
+
+static const args_command_t spec_key_set = {
+    .name          = "key set",
+    .summary       = "Cache the passphrase for the session",
+    .usage         = "%s key set [-v]",
+    .description   =
+        "Prompts for the passphrase, derives the master key and caches it for\n"
+        "the session; a passphrase already cached is replaced.\n",
+    .opts_size     = sizeof(cmd_key_options_t),
+    .opts          = key_set_opts,
+    .init_defaults = key_set_defaults,
+    .payload       = &dotta_ext_read_crypto,
+    .dispatch      = key_dispatch,
+};
+
+/* --- clear --- */
+
+static void key_clear_defaults(void *o) {
+    ((cmd_key_options_t *) o)->action = KEY_ACTION_CLEAR;
+}
+
+static const args_opt_t key_clear_opts[] = {
+    ARGS_GROUP("Options:"),
+    ARGS_FLAG(
+        "v verbose",
+        cmd_key_options_t, verbose,
+        "Verbose output"
     ),
     ARGS_END,
 };
 
+static const args_command_t spec_key_clear = {
+    .name          = "key clear",
+    .summary       = "Clear the cached key from memory and disk",
+    .usage         = "%s key clear [-v]",
+    .opts_size     = sizeof(cmd_key_options_t),
+    .opts          = key_clear_opts,
+    .init_defaults = key_clear_defaults,
+    .payload       = &dotta_ext_read_crypto,
+    .dispatch      = key_dispatch,
+};
+
+/* --- status --- */
+
+static void key_status_defaults(void *o) {
+    ((cmd_key_options_t *) o)->action = KEY_ACTION_STATUS;
+}
+
+static const args_opt_t key_status_opts[] = {
+    ARGS_GROUP("Options:"),
+    ARGS_FLAG(
+        "v verbose",
+        cmd_key_options_t, verbose,
+        "Include the KDF parameters and the auto-encrypt patterns"
+    ),
+    ARGS_END,
+};
+
+static const args_command_t spec_key_status = {
+    .name          = "key status",
+    .summary       = "Show key status",
+    .usage         = "%s key [status] [-v]",
+    .opts_size     = sizeof(cmd_key_options_t),
+    .opts          = key_status_opts,
+    .init_defaults = key_status_defaults,
+    .payload       = &dotta_ext_read_crypto,
+    .dispatch      = key_dispatch,
+};
+
+/* --- parent: subcommand index + spec --- */
+
+static const args_subcommand_t key_subs[] = {
+    { "set",    &spec_key_set,    false },
+    { "clear",  &spec_key_clear,  false },
+    { "status", &spec_key_status, false },
+    { NULL,     NULL,             false }
+};
+
 const args_command_t spec_key = {
-    .name        = "key",
-    .summary     = "Manage encryption keys and passphrases",
-    .usage       = "%s key [options] <set|clear|status>",
-    .description =
-        "Subcommands:\n"
-        "  set       Cache the passphrase for the current session.\n"
-        "  clear     Clear the cached key from memory and disk.\n"
-        "  status    Show encryption config and cache state.\n",
-    .notes       =
+    .name               = "key",
+    .summary            = "Manage encryption keys and passphrases",
+    .usage              = "%s key [<subcommand>] [options]",
+    .description        =
+        "Manages the passphrase-derived master key and its session cache.\n"
+        "Without a subcommand, shows the status.\n",
+    .notes              =
         "Configuration:\n"
         "  [encryption]\n"
         "  enabled          = true\n"
         "  session_timeout  = 3600      # 1 hour\n"
         "  strength         = \"balanced\" # \"fast\", \"balanced\", or \"paranoid\"\n",
-    .examples    =
+    .examples           =
         "  %s key set               # Cache passphrase for the session\n"
-        "  %s key status            # Show cache state and config\n"
+        "  %s key                   # Show cache state and config\n"
         "  %s key status -v         # Include auto-encrypt patterns\n"
         "  %s key clear             # Drop cached key\n",
-    .epilogue    =
+    .epilogue           =
         "See also:\n"
         "  %s add --encrypt       # Encrypt a file on add\n"
         "  %s apply               # Decrypts on deployment\n",
-    .opts_size   = sizeof(cmd_key_options_t),
-    .opts        = key_opts,
-    .post_parse  = key_post_parse,
-    .complete    = key_complete,
-    .payload     = &dotta_ext_read_crypto,
-    .dispatch    = key_dispatch,
+    .opts_size          = sizeof(cmd_key_options_t),
+    .subcommands        = key_subs,
+    .default_subcommand = &spec_key_status,
 };

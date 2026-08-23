@@ -321,13 +321,13 @@ uninstall:
 
 # Fish completions: the whole script is generated from the binary's command
 # registry (flag and subcommand rules, condition helpers, the wrapper that
-# asks `dotta __complete candidates` at runtime). Nothing is hand-maintained.
+# asks `dotta __complete` at runtime). Nothing is hand-maintained.
 COMPLETIONS_GEN := $(BUILD_DIR)/completions/dotta.fish
 
 $(COMPLETIONS_GEN): $(TARGET) | $(BUILD_DIR)/completions
 	@echo "Generating shell completions..."
 	@echo ""
-	@$(TARGET) __complete spec fish > $@.tmp
+	@$(TARGET) completion fish > $@.tmp
 	@mv $@.tmp $@
 
 # Convenience alias for the generated script

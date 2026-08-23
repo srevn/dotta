@@ -20,19 +20,24 @@
  *
  * Key design points
  * -----------------
- *   `flags`                Space-separated list of names. Single-char tokens
+ *   `flags`                Space-separated list of names. Single-char names
  *                          are short forms (emitted with a single dash);
- *                          multi-char tokens are long forms (double dash). Display
+ *                          multi-char names are long forms (double dash). Display
  *                          order follows write order — no "canonical" vs "alias"
  *                          distinction in the renderer.
  *
  *   Positional model       Three shapes: classified (engine routes token
  *                          by `classify(token)` to the matching POSITIONAL /
- *                          POSITIONAL_ARG row), unclassified bucket (POSITIONAL_ANY
- *                          / POSITIONAL_ANY_ARG — all tokens land together, no
- *                          classify needed), and raw bucket (POSITIONAL_RAW —
- *                          commands interpret in post_parse). Anything that needs
- *                          order-sensitive interpretation uses POSITIONAL_RAW.
+ *                          POSITIONAL_ARG row), unclassified (POSITIONAL_ANY /
+ *                          POSITIONAL_ANY_ARG — no classify; every token is of
+ *                          the one class), and raw bucket (POSITIONAL_RAW —
+ *                          commands interpret in post_parse). An ARG row takes
+ *                          one token and is then passed over, so ARG rows take
+ *                          the positionals of their class in declaration order
+ *                          (`<url> [path]` is two rows) and may be required. A
+ *                          grammar the order of rows cannot state — a verb read
+ *                          from the first positional, a refspec whose shape
+ *                          decides the next — uses POSITIONAL_RAW.
  *
  *   Tri-state flags        Model as `int` fields with init_defaults seeding
  *                          a default value; use `ARGS_FLAG_SET` rows whose
@@ -41,7 +46,9 @@
  *   Subcommand trees       Parent has `subcommands`. Every subcommand in a
  *                          tree MUST share the parent's options struct type (so
  *                          `opts_size` allocates enough for any sub). Each sub's
- *                          `init_defaults` sets the discriminator.
+ *                          `init_defaults` sets the discriminator. At the slot,
+ *                          nothing or a flag name is the `default_subcommand`'s
+ *                          line.
  *
  *   Root-level dispatch    `args_resolve_root` classifies argv[1] into a
  *                          built-in flag (`-h`/`--help`, `-v`/`--version`), a
@@ -64,16 +71,19 @@
  * ----------------------------
  * Three patterns coexist because real CLIs vary. Pick by shape, not by taste:
  *
- *   Subcommand tree        Use when each sub has a DISJOINT option set
- *   (.subcommands)         and there's no shorthand to a default action.
- *                          Example: `dotta profile {list|enable|...}` — each
- *                          sub owns different flags.
+ *   Subcommand tree        Use when the first word is a verb: each sub is an
+ *   (.subcommands)         action with rows of its own. Subs may repeat a
+ *                          flag — `-v` on each of `key {set|clear|status}` is
+ *                          three rows, not a reason for a router. A bare
+ *                          `<prog> <cmd>` runs the `default_subcommand`.
+ *                          Example: `dotta profile {list|enable|...}`.
  *
- *   POSITIONAL_RAW         Use when subs SHARE options or when a bareword
- *   + post_parse switch    positional encodes the mode. Also required
- *                          for bareword-fallback forms like `dotta remote <name>`
- *                          → `remote show <name>`. Example: `dotta key
- *                          {set|clear|status}` — all three share `-v`.
+ *   POSITIONAL_RAW         Use when what a positional means is decided by
+ *   + post_parse           its shape or by what follows it — `[profile:]file
+ *                          [@commit]`, a `<file> <commit>` told from a
+ *                          `<profile> <file>` by the tokens themselves — which
+ *                          no order of rows can state. Example: `dotta show`,
+ *                          `dotta revert`.
  *
  *   Classify + POSITIONAL  Use for a SINGLE action whose positionals
  *   (multiple class rows)  are polymorphic by shape. The classifier
@@ -81,8 +91,9 @@
  *                          distinct fields. Example: `dotta apply
  *                          [profile|file]...` — both kinds can appear in any order.
  *
- * If two or more fit, prefer the tree: it gives per-sub `--help` for free, cleanest
- * fish completion, and no hand-rolled dispatch switch.
+ * If two or more fit, prefer the tree: it gives per-sub `--help` for free, the
+ * sub names and their summaries in the completion rules, and no hand-rolled
+ * dispatch switch.
  */
 
 #ifndef DOTTA_ARGS_H
@@ -196,7 +207,7 @@ typedef void (*args_defaults)(void *opts);
  * what the rows cannot express.
  *
  * Called after all tokens have been consumed without recorded parse errors and
- * after POSITIONAL_RAW min/max counts are validated. Use for refspec parsing,
+ * after the positional rows' counts are validated. Use for refspec parsing,
  * N-positional reinterpretation, mode inference, and cross-field invariants
  * (mutually exclusive flags, a value one mode requires and another forbids).
  * Allocations may use `arena`. Returning a non-NULL error aborts dispatch; the
@@ -288,7 +299,7 @@ struct args_opt {
     int set_value;              /* FLAG_SET: value assigned to the int field */
     long int_min;               /* INT: inclusive lower bound */
     long int_max;               /* INT: inclusive upper bound */
-    size_t positional_min;      /* POSITIONAL_RAW: minimum count */
+    size_t positional_min;      /* Positional rows: minimum count; an ARG row's 1 = required */
     size_t positional_max;      /* POSITIONAL_RAW: maximum count 0 = unlimited */
 
     /* Display */
@@ -334,7 +345,7 @@ struct args_command {
 
     /* Subcommand tree */
     const args_subcommand_t *subcommands;      /* Terminated by name NULL */
-    const args_command_t *default_subcommand;  /* Dispatched when the user passes no positional */
+    const args_command_t *default_subcommand;  /* Reached by no positional, or a flag at the slot */
 
     /* Behavior hooks (all optional) */
     args_classify classify;      /* Classify positional token into command-local class ID */
@@ -432,7 +443,8 @@ args_root_outcome_t args_resolve_root(
  * Behavior:
  *   - Seeds defaults via `init_defaults` if set.
  *   - For subcommand trees: recurses into the matching child, or into
- *     `default_subcommand` when the user passes no positional.
+ *     `default_subcommand` when the user passes no positional, or a flag at
+ *     the slot.
  *   - Otherwise walks the token stream applying opts, collecting parse errors
  *     up to ARGS_ERRORS_CAP.
  *   - Runs `post_parse` if no errors so far.
@@ -579,8 +591,8 @@ void args_render_errors(
  *
  *   - the condition helpers the rules are guarded by (`__<prog>_needs_command`,
  *     `__<prog>_using_command`, `__<prog>_needs_subcommand`,
- *     `__<prog>_using_subcommand`, `__<prog>_positional`), reading the line as
- *     the engine does;
+ *     `__<prog>_using_default_subcommand`, `__<prog>_using_subcommand`,
+ *     `__<prog>_positional`), reading the line as the engine does;
  *   - the wrapper `__<prog>_candidates`, which runs `<prog> <candidates>` with
  *     the line's tokens and reads the candidates protocol back
  *     (`args_complete_candidates`): the candidates pass through, a path request
@@ -594,22 +606,33 @@ void args_render_errors(
  *     asking the wrapper for its value; a single-char name is declared as fish's
  *     old-style option (`-o X`) — exactly `-X`, never bundled, its value the
  *     next token — which is how the parser reads it,
- *   - one subcommand row per non-hidden subcommand,
- *   - one option row per subcommand's own flags.
+ *   - one subcommand row per non-hidden subcommand, at the open slot,
+ *   - one option row per subcommand's own flags; the default subcommand's also
+ *     at the open slot and after a flag there, where the parser reads them.
  *
  * What can stand at a positional or as a value — profile names, file names, commit
  * SHAs, paths — is never in the script: it depends on the line and the
  * application's state, and the binary answers at runtime.
+ *
+ * Every name the script carries as a bare fish word — the program, each command
+ * name and root alias, each subcommand alias, each flag name, hidden ones too —
+ * must be one: letters, digits, `_` and `-`. A name outside that grammar is not
+ * quoted away but refused, before anything is written: fish would read a space
+ * as two candidates, `$` and globs as expansions, a quote or `/` as a script
+ * that does not load. Descriptions are free text and are escaped.
  *
  * @param out        Output stream (fully buffered writes are fine).
  * @param commands   NULL-terminated registry of top-level commands.
  * @param prog       Program name used for `complete -c <prog>` lines and the
  *                   `__<prog>_*` helper-function names.
  * @param candidates The arguments after `prog` that run the candidates driver,
- *                   e.g. "__complete candidates": the wrapper appends
- *                   `--current=<token> -- <tokens…>`.
+ *                   e.g. "__complete": the wrapper appends `--current=<token>
+ *                   -- <tokens…>`. Fish source, written verbatim.
+ * @return           NULL when the script was written; else, nothing written,
+ *                   an error naming the first name that cannot stand as a fish
+ *                   word (caller frees).
  */
-void args_export_completion_fish(
+error_t *args_export_completion_fish(
     FILE *out,
     const args_command_t *const *commands,
     const char *prog,
@@ -724,16 +747,19 @@ error_t *args_parse_long(const char *text, long min, long max, long *out);
 
 /**
  * Classified documented positional: single-value target with an inline label +
- * help string (rendered under "Arguments:"). The `cls` routes tokens from
- * classify() to this row; multiple matches silently overwrite, so pair with a
- * classifier that returns a unique class for single-value semantics.
+ * help string (rendered under "Arguments:"). The row takes the first token of
+ * class `cls` and is then passed over — a token whose class has no row left to
+ * take it falls to the RAW bucket, or is an "unexpected argument" — so several
+ * rows of one class take its tokens in declaration order. `min_c` 1 makes the
+ * row required, 0 optional.
  */
-#define ARGS_POSITIONAL_ARG(cls, label_s, type, field, help_s) \
-    { .kind         = ARGS_KIND_POSITIONAL_ARG, \
-      .class_accept = (cls), \
-      .value_label  = (label_s), \
-      .help         = (help_s), \
-      .offset       = offsetof(type, field) }
+#define ARGS_POSITIONAL_ARG(cls, label_s, type, field, min_c, help_s) \
+    { .kind           = ARGS_KIND_POSITIONAL_ARG, \
+      .class_accept   = (cls), \
+      .value_label    = (label_s), \
+      .help           = (help_s), \
+      .offset         = offsetof(type, field), \
+      .positional_min = (min_c) }
 
 /**
  * Unclassified positional bucket — all positionals append here. Use for commands
@@ -748,14 +774,18 @@ error_t *args_parse_long(const char *text, long min, long max, long *out);
 
 /**
  * Unclassified documented positional: single-value target with an inline label
- * + help (rendered under "Arguments:"). Companion to ANY for commands that take
- * at most one positional and want to document it.
+ * + help (rendered under "Arguments:"). Companion to ANY: the rows take the
+ * positionals in declaration order — `<url> [path]` is two rows — and `min_c`
+ * 1 makes a row required. A row whose field a flag has already written (a
+ * `-p <name>` beside a `[name]` positional) is passed over the same way, and
+ * the positional it would have taken is unexpected.
  */
-#define ARGS_POSITIONAL_ANY_ARG(label_s, type, field, help_s) \
-    { .kind        = ARGS_KIND_POSITIONAL_ARG, \
-      .value_label = (label_s), \
-      .help        = (help_s), \
-      .offset      = offsetof(type, field) }
+#define ARGS_POSITIONAL_ANY_ARG(label_s, type, field, min_c, help_s) \
+    { .kind           = ARGS_KIND_POSITIONAL_ARG, \
+      .value_label    = (label_s), \
+      .help           = (help_s), \
+      .offset         = offsetof(type, field), \
+      .positional_min = (min_c) }
 
 /**
  * Unclassified raw positional bucket: every positional that does not match a

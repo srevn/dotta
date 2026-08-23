@@ -57,6 +57,7 @@ typedef struct {
     size_t length;                    /* strlen(pattern) post-unescape */
     unsigned int flags;               /* GITIGNORE_FLAG_* bitmask */
     gitignore_origin_t origin;        /* caller-assigned tag */
+    const char *source;               /* the line as written, trimmed (arena-owned) */
 } gitignore_rule_t;
 
 struct gitignore_ruleset {
@@ -189,6 +190,7 @@ static error_t *parse_one_rule(
         out_rule->length = 1;
         out_rule->flags = GITIGNORE_FLAG_MATCH_ALL;
         out_rule->origin = origin;
+        out_rule->source = copy;
         *have_rule = true;
         return NULL;
     }
@@ -251,6 +253,13 @@ static error_t *parse_one_rule(
     if (length == 0)
         return NULL;
 
+    /* The rule as written — from the line's first byte (the `!` and the
+     * anchor slash included) to the end of the trimmed body — kept for the
+     * verdict's report. */
+    char *source = arena_strndup(arena, line, (size_t) (pattern + length - line));
+    if (!source)
+        return ERROR(ERR_MEMORY, "gitignore: arena exhausted");
+
     if (pattern[length - 1] == '/') {
         length--;
         flags |= GITIGNORE_FLAG_DIRECTORY;
@@ -271,6 +280,7 @@ static error_t *parse_one_rule(
     out_rule->length = final_length;
     out_rule->flags = flags;
     out_rule->origin = origin;
+    out_rule->source = source;
     *have_rule = true;
     return NULL;
 }
@@ -471,7 +481,7 @@ void gitignore_eval(
     out->decided = false;
     out->ignored = false;
     out->origin = 0;
-    out->rule_index = 0;
+    out->pattern = NULL;
 
     if (!set || !path)
         return;
@@ -536,7 +546,7 @@ void gitignore_eval(
                 out->decided = true;
                 out->ignored = !(r->flags & GITIGNORE_FLAG_NEGATIVE);
                 out->origin = r->origin;
-                out->rule_index = i - 1;
+                out->pattern = r->source;
                 goto cleanup;
             }
         }

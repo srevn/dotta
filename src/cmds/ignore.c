@@ -935,8 +935,9 @@ static error_t *test_path_ignore(
                 specific_profile
             );
             output_info(
-                out, OUTPUT_NORMAL, "  Reason: %s",
-                ignore_origin_describe((ignore_origin_t) match.origin)
+                out, OUTPUT_NORMAL, "  Reason: %s: '%s'",
+                ignore_origin_describe((ignore_origin_t) match.origin),
+                match.pattern
             );
         } else if (source_gitignore_matches(
             source_filter, fs_path, is_directory, out
@@ -993,8 +994,9 @@ static error_t *test_path_ignore(
         if (match.decided && match.ignored) {
             output_styled(out, OUTPUT_NORMAL, "{red}✗{reset} IGNORED\n");
             output_info(
-                out, OUTPUT_NORMAL, "  Reason: %s",
-                ignore_origin_describe((ignore_origin_t) match.origin)
+                out, OUTPUT_NORMAL, "  Reason: %s: '%s'",
+                ignore_origin_describe((ignore_origin_t) match.origin),
+                match.pattern
             );
         } else if (source_gitignore_matches(
             source_filter, fs_path, is_directory, out
@@ -1046,10 +1048,15 @@ static error_t *test_path_ignore(
                 profile
             );
             if (output_is_verbose(out)) {
-                const char *reason = by_source
-                    ? "source .gitignore"
-                    : ignore_origin_describe((ignore_origin_t) match.origin);
-                output_info(out, OUTPUT_NORMAL, "    Reason: %s", reason);
+                if (by_source) {
+                    output_info(out, OUTPUT_NORMAL, "    Reason: source .gitignore");
+                } else {
+                    output_info(
+                        out, OUTPUT_NORMAL, "    Reason: %s: '%s'",
+                        ignore_origin_describe((ignore_origin_t) match.origin),
+                        match.pattern
+                    );
+                }
             }
             any_ignored = true;
         } else {

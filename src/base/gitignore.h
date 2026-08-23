@@ -34,7 +34,7 @@ typedef struct {
     bool decided;                  /* true if any rule matched */
     bool ignored;                  /* winning rule's effect (negation-aware) */
     gitignore_origin_t origin;     /* origin of winning rule */
-    size_t rule_index;             /* index in the ruleset (diagnostic) */
+    const char *pattern;           /* winning rule as written (arena-owned); NULL when undecided */
 } gitignore_match_t;
 
 /**
@@ -111,7 +111,9 @@ error_t *gitignore_ruleset_append_patterns(
  * which is what makes `cache/` match `cache/file.txt`.
  *
  * Never fails. Always populates every field of *out; decided=false means no rule
- * matched (caller treats as not-ignored).
+ * matched (caller treats as not-ignored). `pattern` is the winning rule's source
+ * line, trimmed, as the user wrote it (`!build/`, `/.cache/`), so a verdict can
+ * be reported by the rule that gave it; it borrows the ruleset's arena.
  *
  * @param ruleset Ruleset (must not be NULL)
  * @param path    Relative path (must not be NULL)

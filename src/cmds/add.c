@@ -96,43 +96,44 @@ static error_t *validate_options(const cmd_add_options_t *opts) {
  *
  * Consults two independent mechanisms in order, each on the name it is
  * written against:
- *   1. `rules` — the user's `.dottaignore` layers (baseline, profile, config,
- *      CLI) compiled into a single gitignore ruleset, evaluated on the
- *      mount-relative path (mount_strip_label of `storage_path`): what a
- *      `.gitignore` at the mount root would see.
- *   2. `source_filter` — the source tree's own `.gitignore`, if the caller opted
- *      in by building a filter (typically gated on `config.respect_gitignore`),
- *      evaluated on `fs_path`: that repository's root is the root its rules are
- *      relative to.
+ *   1. The `.dottaignore` layers (baseline, profile, config, CLI) compiled
+ *      into a single gitignore ruleset, evaluated on the mount-relative path
+ *      (mount_strip_label of `storage_path`): what a `.gitignore` at the
+ *      mount root would see.
+ *   2. The source tree's own `.gitignore`, if the command built a filter
+ *      (gated on `config.respect_gitignore`), evaluated on `fs_path`: that
+ *      repository's root is the root its rules are relative to.
  *
- * Either mechanism may be NULL to skip it. Source-filter errors degrade to a
- * verbose warning and a "not excluded" verdict so an odd source repo never
- * blocks the user from adding a file they explicitly named. The gitignore
- * evaluator never fails — its verdict is applied directly.
+ * Either mechanism may be absent. `*out_match` is the rules' verdict — the
+ * layer and the rule as written when they decided, undecided when the source
+ * tree's .gitignore gave the verdict — so a caller can say who excluded the
+ * path. Source-filter errors degrade to a verbose warning and a "not
+ * excluded" verdict so an odd source repo never blocks the user from adding
+ * a file they explicitly named. The gitignore evaluator never fails — its
+ * verdict is applied directly.
  */
 static bool is_excluded(
+    const add_walk_t *walk,
     const char *fs_path,
     const char *storage_path,
     bool is_directory,
-    const gitignore_ruleset_t *rules,
-    source_filter_t *source_filter,
-    output_t *out
+    gitignore_match_t *out_match
 ) {
-    if (!fs_path || !storage_path) return false;
-
-    if (rules &&
-        gitignore_is_ignored(rules, mount_strip_label(storage_path), is_directory)) {
+    gitignore_eval(
+        walk->rules, mount_strip_label(storage_path), is_directory, out_match
+    );
+    if (out_match->decided && out_match->ignored) {
         return true;
     }
 
-    if (source_filter) {
+    if (walk->source_filter) {
         bool excluded = false;
         error_t *err = source_filter_is_excluded(
-            source_filter, fs_path, is_directory, &excluded
+            walk->source_filter, fs_path, is_directory, &excluded
         );
         if (err) {
             output_warning(
-                out, OUTPUT_VERBOSE,
+                walk->ctx->out, OUTPUT_VERBOSE,
                 "Source .gitignore check failed for %s: %s",
                 fs_path, error_message(err)
             );
@@ -260,12 +261,21 @@ static error_t *collect_tree(
         }
 
         /* Check exclude patterns */
+        gitignore_match_t match;
         if (child_storage &&
-            is_excluded(
-            child_fs, child_storage, is_dir,
-            walk->rules, walk->source_filter, out
-            )) {
-            output_info(out, OUTPUT_VERBOSE, "Excluded: %s", child_fs);
+            is_excluded(walk, child_fs, child_storage, is_dir, &match)) {
+            if (match.decided) {
+                output_info(
+                    out, OUTPUT_VERBOSE, "Excluded: %s (%s: '%s')", child_fs,
+                    ignore_origin_describe((ignore_origin_t) match.origin),
+                    match.pattern
+                );
+            } else {
+                output_info(
+                    out, OUTPUT_VERBOSE, "Excluded: %s (source .gitignore)",
+                    child_fs
+                );
+            }
             errno = 0;
             continue;
         }
@@ -1304,8 +1314,38 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
             goto cleanup;
         }
 
+        bool is_dir = !fs_is_symlink(fs_path) && fs_is_directory(fs_path);
+
+        /* A path named on the command line is subject to the rules like any
+         * the walk finds, but a verdict against it is an error, not a silent
+         * skip: the user asked for it by name, and the answer says which rule
+         * stands in the way and how to get past it. A mount root has no name
+         * for a pattern to match. */
+        gitignore_match_t match;
+        if (storage_path &&
+            is_excluded(&walk, fs_path, storage_path, is_dir, &match)) {
+            if (match.decided) {
+                err = ERROR(
+                    ERR_INVALID_ARG,
+                    "'%s' is ignored by %s: '%s'\n"
+                    "Add it anyway with -e '!%s', or edit the rule with "
+                    "'dotta ignore'",
+                    file, ignore_origin_describe((ignore_origin_t) match.origin),
+                    match.pattern, match.pattern
+                );
+            } else {
+                err = ERROR(
+                    ERR_INVALID_ARG,
+                    "'%s' is ignored by its source tree's .gitignore\n"
+                    "Set respect_gitignore = false in the config to add it",
+                    file
+                );
+            }
+            goto cleanup;
+        }
+
         /* Handle symlinks, directories, and files */
-        if (!fs_is_symlink(fs_path) && fs_is_directory(fs_path)) {
+        if (is_dir) {
             /* Remember counts so we can describe what the walk produced. */
             size_t files_before = walk.files.count;
             size_t dirs_before = walk.directories.count;
@@ -1338,14 +1378,6 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
                 goto cleanup;
             }
 
-            /* Single file or symlink - check if excluded */
-            if (is_excluded(
-                fs_path, storage_path, false, profile_rules, source_filter, out
-                )) {
-                output_info(out, OUTPUT_VERBOSE, "Excluded: %s", fs_path);
-                continue;
-            }
-
             /* List it, unless a walk already did. */
             if (hashmap_has(walk.seen, fs_path)) continue;
             err = hashmap_set(walk.seen, fs_path, (void *) 1);
@@ -1356,16 +1388,11 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         }
     }
 
-    /* Check if we have anything to add (files or directories). */
+    /* Check if we have anything to add (files or directories). A named path
+     * the rules refused was an error above, so this is a mount root with
+     * nothing listable beneath it. */
     if (walk.files.count == 0 && walk.directories.count == 0) {
-        if (opts->exclude_count > 0) {
-            err = ERROR(
-                ERR_INVALID_ARG,
-                "No files or directories to add (all excluded by patterns)"
-            );
-        } else {
-            err = ERROR(ERR_INVALID_ARG, "No files or directories to add");
-        }
+        err = ERROR(ERR_INVALID_ARG, "No files or directories to add");
         goto cleanup;
     }
 

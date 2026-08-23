@@ -454,12 +454,12 @@ static error_t *sync_analyze_phase(
  * NULL and prints informational message on successful rollback.
  */
 static error_t *attempt_rollback(
-    resolve_context_t *ctx,
+    resolve_context_t *resolve,
     const char *profile,
     const char *failure_reason,
     output_t *out
 ) {
-    error_t *err = resolve_rollback(ctx);
+    error_t *err = resolve_rollback(resolve);
     if (err) {
         output_styled(
             out, OUTPUT_NORMAL,
@@ -589,9 +589,9 @@ static error_t *resolve_and_push_divergence(
     );
 
     /* Initialize divergence context (saves current state for rollback) */
-    resolve_context_t ctx;
+    resolve_context_t resolve;
     error_t *err = resolve_init(
-        &ctx, repo, remote_name, result->profile, strategy
+        &resolve, repo, remote_name, result->profile, strategy
     );
     if (err) {
         output_styled(
@@ -604,7 +604,7 @@ static error_t *resolve_and_push_divergence(
     }
 
     /* Perform in-memory resolution (never modifies HEAD) */
-    err = resolve_execute(&ctx, NULL);
+    err = resolve_execute(&resolve, NULL);
     if (err) {
         output_styled(
             out, OUTPUT_NORMAL,
@@ -617,7 +617,7 @@ static error_t *resolve_and_push_divergence(
 
     /* Verify resolution */
     size_t ahead = 0;
-    err = resolve_verify(&ctx, &ahead, NULL);
+    err = resolve_verify(&resolve, &ahead, NULL);
     if (err) {
         output_styled(
             out, OUTPUT_NORMAL,
@@ -630,7 +630,7 @@ static error_t *resolve_and_push_divergence(
         snprintf(
             reason, sizeof(reason), "%s verification failure", strategy_name
         );
-        return attempt_rollback(&ctx, result->profile, reason, out);
+        return attempt_rollback(&resolve, result->profile, reason, out);
     }
 
     output_styled(
@@ -658,7 +658,7 @@ static error_t *resolve_and_push_divergence(
                 strategy_name
             );
             return attempt_rollback(
-                &ctx, result->profile, "push failure", out
+                &resolve, result->profile, "push failure", out
             );
         }
 
@@ -765,9 +765,9 @@ static error_t *handle_diverged_theirs(
     }
 
     /* Initialize divergence context (saves current state for rollback) */
-    resolve_context_t ctx;
+    resolve_context_t resolve;
     error_t *err = resolve_init(
-        &ctx, repo, remote_name, result->profile, RESOLVE_STRATEGY_THEIRS
+        &resolve, repo, remote_name, result->profile, RESOLVE_STRATEGY_THEIRS
     );
     if (err) {
         output_styled(
@@ -780,7 +780,7 @@ static error_t *handle_diverged_theirs(
     }
 
     /* Resolve divergence (resets local branch to remote) */
-    err = resolve_execute(&ctx, NULL);
+    err = resolve_execute(&resolve, NULL);
     if (err) {
         output_styled(
             out, OUTPUT_NORMAL,
@@ -796,7 +796,7 @@ static error_t *handle_diverged_theirs(
      * No rollback on failure — theirs strategy already reset the branch to the
      * desired state. Rolling back would undo what the user requested.
      */
-    err = resolve_verify(&ctx, NULL, NULL);
+    err = resolve_verify(&resolve, NULL, NULL);
     if (err) {
         output_styled(
             out, OUTPUT_NORMAL,

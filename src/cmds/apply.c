@@ -572,9 +572,9 @@ static void print_cleanup_results(
             );
         }
 
-        /* Nor here: a directory is skipped because something the run leaves
-         * is still in it, or because the workspace could not verify it, and
-         * the verbose listing names which. */
+        /* Nor here: a directory is skipped because something the run holds
+         * back is still in it, because the workspace could not verify it, or
+         * because the removal refused — the verbose listing names which. */
         if (skipped_dirs.count > 0) {
             output_info(
                 out, OUTPUT_NORMAL, "Skipped %zu orphaned director%s",
@@ -732,9 +732,11 @@ static void print_cleanup_preflight_results(
         /* Released directories are named here, inline, with the other two fates:
          * nothing is asked of the user about them (the arrow says "left alone"),
          * and a directory left behind is not the event a file left behind is,
-         * so no block of its own. A skipped directory keeps something the run
-         * leaves, or could not be verified (status tags it [unverified]); the
-         * slash says "left alone this run" for both. */
+         * so no block of its own — whether the workspace released it or it
+         * holds something this run will never remove (cleanup.h's classes). A
+         * skipped directory holds something the run holds back, or could not
+         * be verified (status tags it [unverified]); the slash says "left alone
+         * this run" for both. */
         print_path_list(out, &verdicts->prunable_dirs, OUTPUT_COLOR_CYAN, "•");
         print_path_list(out, &verdicts->released_dirs, OUTPUT_COLOR_CYAN, "→");
         print_path_list(out, &verdicts->skipped_dirs, OUTPUT_COLOR_YELLOW, "⊘");
@@ -1476,13 +1478,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     /* Decide cleanup's verdicts from the plan. An empty plan (--keep-orphans,
      * no orphans in scope) yields empty verdicts and a silent preview — no gate
      * needed anywhere. */
-    cleanup_options_t cleanup_opts = {
-        .force                 = opts->force,
-        .deploying_files       = manifest_rows_view(&deploy_plan->files.pending),
-        .deploying_directories = manifest_rows_view(&deploy_plan->directories.pending),
-    };
-
-    err = cleanup_preflight(cleanup_plan, &cleanup_opts, &cleanup_verdicts);
+    err = cleanup_preflight(ws, cleanup_plan, opts->force, &cleanup_verdicts);
     if (err) {
         err = error_wrap(err, "Cleanup preflight checks failed");
         goto cleanup;

@@ -624,8 +624,9 @@ static void display_workspace_status(
 
                             case CLEANUP_PRUNABLE:
                                 if (is_dir) {
-                                    hint = "apply prunes it — a directory once nothing "
-                                        "else is left in it";
+                                    hint = "apply prunes it; a directory still holding "
+                                        "something not dotta's to remove is released "
+                                        "instead";
                                 }
                                 break;
                         }

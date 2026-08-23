@@ -214,8 +214,8 @@ static bool beneath_squatted_directory(
         size_t len = strlen(dir);
 
         /* Strictly beneath: a prefix and then a separator, the same test cleanup's
-         * deploys_into makes (strncmp == 0 guarantees path has at least len bytes,
-         * so path[len] is in bounds). */
+         * managed_beneath makes (strncmp == 0 guarantees path has at least len
+         * bytes, so path[len] is in bounds). */
         if (strncmp(path, dir, len) != 0 || path[len] != '/') {
             continue;
         }
@@ -394,8 +394,9 @@ typedef enum {
  * the preview and the prompt describe. A directory holding anything else holds
  * *other* paths — untracked, unnamed, uncounted, and not restorable from Git —
  * so nothing on the apply command line authorizes removing them. core/cleanup
- * already refuses a non-empty orphaned directory under --force (cleanup_preflight's
- * directory verdicts); this is the same posture on deploy's side of the house.
+ * never removes an orphaned directory holding anything of the user's, --force
+ * included (cleanup_preflight's directory verdicts release it); this is the
+ * same posture on deploy's side of the house.
  *
  * "Holds something" is fs_is_directory_empty's negation, so a directory carrying
  * nothing but OS metadata is clearable and fs_remove_empty_dir removes exactly

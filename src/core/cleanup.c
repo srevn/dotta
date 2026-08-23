@@ -14,6 +14,7 @@
 
 #include "core/cleanup.h"
 
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -229,47 +230,104 @@ cleanup_verdict_t cleanup_verdict(const workspace_item_t *item, bool force) {
 }
 
 /**
- * Is this directory entry one the run is about to prune?
+ * What an entry met beneath an orphaned directory amounts to, for that
+ * directory's own verdict
  *
- * The hole in the verdict phase's emptiness walk. Membership is keyed by filesystem
- * path, which is why the entry arrives as a full path rather than a basename.
+ * A directory's fate is the strongest class left in it once this run has
+ * acted: nothing but gone entries and it is prunable; a held one and it is
+ * skipped, the same transient the held entry is; a permanent one and it is
+ * released, because nothing dotta will ever do empties it. Every present
+ * planned item records its class as its verdict is taken, so a directory's
+ * walk reads its children's fates off the set; FATE_UNPLANNED is hashmap_get's
+ * NULL — the entry is outside the plan — and the workspace item says which of
+ * the other two it is (vouch_entry).
  */
-static bool entry_is_prunable(const char *child, void *prunable) {
-    return hashmap_has((const hashmap_t *) prunable, child);
+typedef enum {
+    FATE_UNPLANNED = 0,
+    FATE_GONE,        /* This run prunes it — the hole the walk looks through */
+    FATE_HELD,        /* This run skips it — transient: update, --force, or the run that reaches it */
+    FATE_PERMANENT    /* This run releases it, or never touches it — nothing of dotta's comes back for it */
+} fate_t;
+
+/**
+ * The emptiness walk's context: the fate set, the workspace for an entry
+ * outside the plan, and whether a held entry was met on the way
+ */
+typedef struct {
+    const hashmap_t *fates;     /* filesystem path → fate_t, every present planned item */
+    const workspace_t *ws;
+    bool held;
+} walk_t;
+
+/**
+ * Look past this directory entry?
+ *
+ * The vouch predicate of the verdict phase's emptiness walk. Gone and held
+ * entries are looked past — a held one noted, because the directory then waits
+ * with it — and a permanent one stops the walk: the directory is occupied by
+ * something this run will not remove and no later run will either.
+ *
+ * An entry outside the plan is read off its workspace item. ORPHANED is held:
+ * the scope did not reach it this run (-e, -p, a path filter), an unfiltered
+ * run would decide it, and scope decides reach, never verdict — so a filtered
+ * run must not change its parent's fate. Everything else is permanent: a
+ * RELEASED orphan stays where it is; a managed path (the view has a row, and
+ * a row's item is never an orphan's) stands in an enabled profile's name; an
+ * entry with no item at all is the user's.
+ *
+ * Membership is keyed by filesystem path, which is why the entry arrives as a
+ * full path rather than a basename.
+ */
+static bool vouch_entry(const char *child, void *ctx) {
+    walk_t *walk = ctx;
+    fate_t fate = (fate_t) (uintptr_t) hashmap_get(walk->fates, child);
+
+    if (fate == FATE_UNPLANNED) {
+        const workspace_item_t *item = workspace_get_item(walk->ws, child);
+
+        fate = (item && item->state == WORKSPACE_STATE_ORPHANED) ? FATE_HELD
+                                                                 : FATE_PERMANENT;
+    }
+
+    if (fate == FATE_HELD) {
+        walk->held = true;
+    }
+
+    return fate != FATE_PERMANENT;
 }
 
 /**
- * Will this run's deployment put something inside this directory?
+ * Does the view claim a path beneath this directory?
  *
- * Deployment runs before cleanup, so a path the plan is about to materialize is
- * content that will be there when the prune looks — even though nothing of it
- * is on disk now, which is exactly why the disk cannot answer this and the plan
- * must.
+ * A managed path beneath an orphaned directory makes the directory the
+ * ancestor of an enabled row — one ensure_parents would make anyway — and
+ * nothing dotta does empties it: permanent, whether the row is on disk yet or
+ * not. The readdir meets the rows already deployed (an entry with no item is
+ * permanent); this answers for the ones deployment will put there — this run,
+ * or a later one that reaches them — which is exactly why the disk cannot
+ * answer it. Read from the view, not from the deployment plan, so the answer
+ * does not move with -p, -e or a path filter: scope decides reach, never
+ * verdict.
  *
- * Every directory above a deployed path is occupied by it, not just its immediate
+ * Every directory above a managed path is its ancestor, not just the immediate
  * parent: the ones deployment creates on the way count too.
  */
-static bool deploys_into(const cleanup_options_t *opts, const char *dir) {
+static bool managed_beneath(const workspace_t *ws, const char *dir) {
     size_t len = strlen(dir);
+    const manifest_rows_t slices[] = { workspace_files(ws), workspace_directories(ws) };
 
-    /* Strictly inside: a prefix and then a separator, so "/a/bc" is not inside
+    /* Strictly beneath: a prefix and then a separator, so "/a/bc" is not beneath
      * "/a/b" — and neither is "/a/b" itself. strncmp == 0 guarantees the candidate
      * has at least len bytes, so reading path[len] is in bounds: it is either
      * the terminator or a real character. Both sides are canonical filesystem
      * paths without a trailing separator. */
-    for (size_t i = 0; i < opts->deploying_files.count; i++) {
-        const char *path = opts->deploying_files.entries[i]->filesystem_path;
+    for (size_t s = 0; s < sizeof(slices) / sizeof(slices[0]); s++) {
+        for (size_t i = 0; i < slices[s].count; i++) {
+            const char *path = slices[s].entries[i]->filesystem_path;
 
-        if (strncmp(path, dir, len) == 0 && path[len] == '/') {
-            return true;
-        }
-    }
-
-    for (size_t i = 0; i < opts->deploying_directories.count; i++) {
-        const char *path = opts->deploying_directories.entries[i]->filesystem_path;
-
-        if (strncmp(path, dir, len) == 0 && path[len] == '/') {
-            return true;
+            if (strncmp(path, dir, len) == 0 && path[len] == '/') {
+                return true;
+            }
         }
     }
 
@@ -280,12 +338,13 @@ static bool deploys_into(const cleanup_options_t *opts, const char *dir) {
  * Decide the verdicts
  */
 error_t *cleanup_preflight(
+    const workspace_t *ws,
     const cleanup_plan_t *plan,
-    const cleanup_options_t *opts,
+    bool force,
     cleanup_preflight_result_t **out
 ) {
+    CHECK_NULL(ws);
     CHECK_NULL(plan);
-    CHECK_NULL(opts);
     CHECK_NULL(out);
 
     /* calloc zeroes the eight buckets — an empty answer needs no NULL guard
@@ -295,58 +354,61 @@ error_t *cleanup_preflight(
         return ERROR(ERR_MEMORY, "Failed to allocate cleanup verdicts");
     }
 
-    /* Everything this run prunes, in one set: the directory pass asks it about
-     * every entry it meets. Borrowed keys, all workspace-owned. */
-    hashmap_t *prunable = hashmap_borrow(plan->files.count + plan->directories.count);
-    if (!prunable) {
+    /* The fate of every present planned item, in one set: the directory pass
+     * asks it about every entry it meets. Borrowed keys, all workspace-owned;
+     * the values are fate_t, never NULL, so hashmap_get's NULL is "outside the
+     * plan". */
+    hashmap_t *fates = hashmap_borrow(plan->files.count + plan->directories.count);
+    if (!fates) {
         cleanup_preflight_result_free(verdicts);
-        return ERROR(ERR_MEMORY, "Failed to allocate prune set");
+        return ERROR(ERR_MEMORY, "Failed to allocate fate set");
     }
 
     error_t *err = NULL;
 
     /* One verdict per file, read straight off the item: no syscalls, no
-     * queries. */
+     * queries. An absent file joins neither the prune count nor the fate set:
+     * no filesystem effect to preview, and no walk meets it. */
     workspace_items_t files = workspace_items_view(&plan->files);
 
     for (size_t i = 0; i < files.count; i++) {
         const workspace_item_t *item = files.entries[i];
+        fate_t fate = FATE_UNPLANNED;
 
-        switch (cleanup_verdict(item, opts->force)) {
+        switch (cleanup_verdict(item, force)) {
             case CLEANUP_ABSENT:
-                /* No filesystem effect to preview, so it joins neither the
-                 * prune count nor the prune set. */
                 err = ptr_array_push(&verdicts->absent_files, item);
                 break;
 
             case CLEANUP_RELEASED:
                 err = ptr_array_push(&verdicts->released_files, item);
+                fate = FATE_PERMANENT;
                 break;
 
             case CLEANUP_SKIPPED:
                 err = ptr_array_push(&verdicts->skipped_files, item);
+                fate = FATE_HELD;
                 break;
 
             case CLEANUP_PRUNABLE:
                 err = ptr_array_push(&verdicts->prunable_files, item);
-                if (!err) {
-                    /* The hole the directory prediction looks through. */
-                    err = hashmap_set(prunable, item->filesystem_path, (void *) item);
-                }
+                fate = FATE_GONE;
                 break;
+        }
+        if (!err && fate != FATE_UNPLANNED) {
+            err = hashmap_set(fates, item->filesystem_path, (void *) (uintptr_t) fate);
         }
         if (err) goto cleanup;
     }
 
-    /* A directory is prunable iff everything in it is OS metadata, a file this
-     * run unlinks, or an orphaned directory beneath it that is itself prunable
-     * — and nothing this run deploys lands inside it. That is what the prune
-     * arrives at by acting, read off the plan here in one pass because the plan
-     * orders every child before its parent.
-     *
-     * `prunable` enters holding every prunable file and leaves holding every
-     * prunable directory as well, which is what lets a parent see its pruned
-     * children as gone.
+    /* A directory's verdict is the strongest class left in it once this run
+     * has acted (fate_t): prunable when everything in it is OS metadata or
+     * gone; skipped while something held is left; released once something
+     * permanent is. That is what the prune arrives at by acting, read off the
+     * plan here in one pass because the plan orders every child before its
+     * parent — a directory's own fate enters the set as it is decided, which
+     * is what lets a parent read its pruned children as gone, its skipped
+     * ones as held and its released ones as permanent.
      *
      * The buckets fill in walk order, which is prune order: deepest first. */
     workspace_items_t dirs = workspace_items_view(&plan->directories);
@@ -354,53 +416,71 @@ error_t *cleanup_preflight(
     for (size_t i = 0; i < dirs.count; i++) {
         const workspace_item_t *item = dirs.entries[i];
         const char *path = item->filesystem_path;
+        fate_t fate = FATE_UNPLANNED;
 
-        switch (cleanup_verdict(item, opts->force)) {
+        switch (cleanup_verdict(item, force)) {
             case CLEANUP_ABSENT:
-                /* A pure state reclaim: no filesystem effect to preview. */
+                /* A pure state reclaim: no filesystem effect to preview, and
+                 * no walk meets it. */
                 err = ptr_array_push(&verdicts->absent_dirs, item);
                 break;
 
             case CLEANUP_RELEASED:
                 /* Left alone — unprobed, because nothing about its contents
-                 * changes the answer — and the record retires. It is not in the
-                 * prune set, so a parent above it stays occupied by it. */
+                 * changes the answer — and the record retires. */
                 err = ptr_array_push(&verdicts->released_dirs, item);
+                fate = FATE_PERMANENT;
                 break;
 
             case CLEANUP_SKIPPED:
-                /* The workspace could not verify it; not in the prune set, so
-                 * its parent stays occupied by it. */
+                /* The workspace could not verify it; the directory above it
+                 * waits with it. */
                 err = ptr_array_push(&verdicts->skipped_dirs, item);
+                fate = FATE_HELD;
                 break;
 
             case CLEANUP_PRUNABLE:
                 /* A directory the workspace saw and can read (the occupant is
                  * DIRECTORY: anything else in its place was released above).
-                 * The readdir finishes the verdict. */
-                if (fs_directory_emptiness(path, entry_is_prunable, prunable) == FS_DIR_EMPTY &&
-                    !deploys_into(opts, path)) {
-                    err = ptr_array_push(&verdicts->prunable_dirs, item);
-
-                    /* Its parent must see it as gone when its own turn comes. */
-                    if (!err) {
-                        err = hashmap_set(prunable, path, (void *) item);
-                    }
+                 * What is left in it after this run finishes the verdict. A
+                 * managed path beneath it is known from the view before any
+                 * look at the disk; otherwise one readdir, which stops at the
+                 * first permanent entry and notes any held one it passed.
+                 * UNREADABLE is a directory that was readable at load and is
+                 * not now — the world moved, and it is held like a refusal on
+                 * removal, not released. */
+                if (managed_beneath(ws, path)) {
+                    fate = FATE_PERMANENT;
                 } else {
-                    err = ptr_array_push(&verdicts->skipped_dirs, item);
+                    walk_t walk = { .fates = fates, .ws = ws, .held = false };
+
+                    switch (fs_directory_emptiness(path, vouch_entry, &walk)) {
+                        case FS_DIR_OCCUPIED:   fate = FATE_PERMANENT; break;
+                        case FS_DIR_UNREADABLE: fate = FATE_HELD; break;
+                        case FS_DIR_EMPTY:      fate = walk.held ? FATE_HELD : FATE_GONE; break;
+                    }
                 }
+
+                ptr_array_t *bucket = (fate == FATE_GONE) ? &verdicts->prunable_dirs
+                                    : (fate == FATE_HELD) ? &verdicts->skipped_dirs
+                                                          : &verdicts->released_dirs;
+                err = ptr_array_push(bucket, item);
                 break;
+        }
+        if (!err && fate != FATE_UNPLANNED) {
+            /* Its parent must read it when its own turn comes. */
+            err = hashmap_set(fates, path, (void *) (uintptr_t) fate);
         }
         if (err) goto cleanup;
     }
 
-    hashmap_free(prunable, NULL);
+    hashmap_free(fates, NULL);
 
     *out = verdicts;
     return NULL;
 
 cleanup:
-    hashmap_free(prunable, NULL);
+    hashmap_free(fates, NULL);
     cleanup_preflight_result_free(verdicts);
     return error_wrap(err, "Failed to decide cleanup verdicts");
 }

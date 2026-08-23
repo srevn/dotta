@@ -12,26 +12,29 @@
  *
  * Why the verdicts are a phase of their own and not part of the plan: the plan
  * is read before apply's privilege check (the root/ labels come from it), and
- * the directory verdicts need a look at the disk — stat, opendir — taken with
- * the identity the run will act under. Plan → privileges → verdicts is the order
+ * the directory verdicts need a look at the disk — the readdir — taken with the
+ * identity the run will act under. Plan → privileges → verdicts is the order
  * the privilege boundary forces.
  *
- * The verdicts are a function of the workspace's load-time observation — presence,
- * divergence, Git authority — of the plan, and of --force. A confirmation prompt
- * may sit between preflight and execute; nothing here re-observes across it,
- * and nothing pretends to: execute reports what it finds (a path gone by then,
- * a directory that gained an entry) and re-decides nothing. The same stance as
- * core/deploy.
+ * The verdicts are a function of the workspace's load-time observation — the
+ * occupant, divergence, Git authority — of the plan, and of --force. A
+ * confirmation prompt may sit between preflight and execute; nothing here
+ * re-observes across it, and nothing pretends to: execute reports what it finds
+ * (a path gone by then, a directory that gained an entry) and re-decides
+ * nothing. The same stance as core/deploy.
  *
  * One producer per fact:
- * - what becomes of a present orphan, either kind: cleanup_preflight, from the
+ * - what stands at an orphan's path: the workspace's lstat, carried on the item
+ *   (workspace_item_t.occupant). Preflight reads it and probes nothing; status
+ *   reads the same item, so the two cannot disagree on whether a path is there.
+ *   Execute probes once more, only to report what it found
+ * - what becomes of a present orphan, either kind: cleanup_verdict, from the
  *   item — RELEASED ⇒ released (left on disk, record retires — never pruned,
  *   --force included: dotta removes what it deployed and Git still backs, and
- *   lets go of what Git lost or of what it never deployed); a file with a
- *   cleanup_skip_reason ⇒ skipped unless --force; else prunable, a directory's
- *   emptiness permitting
- * - what stands at an orphaned directory's path: one type probe, shared by
- *   preflight and execute so they cannot label it differently
+ *   lets go of what Git lost, of what it never deployed, and of a path another
+ *   kind of node stands at); a file with a cleanup_skip_reason ⇒ skipped unless
+ *   --force; a directory the workspace could not verify ⇒ skipped, --force
+ *   included; else prunable, a directory's emptiness permitting
  * - whether a directory ends up empty: fs_directory_emptiness with this run's
  *   own removals as the hole (preflight) and fs_remove_empty_dir, which
  *   removes exactly what that walk looks past and refuses anything else before
@@ -46,9 +49,9 @@
  * Free plan, verdicts and result BEFORE workspace_free.
  *
  * Integration:
- * - workspace.h: orphan detection, Git authority, divergence
+ * - workspace.h: orphan detection, the occupant, Git authority, divergence
  * - scope.h:     the three filter dimensions
- * - filesystem.h: the directory probe, the emptiness walk, the removals
+ * - filesystem.h: the emptiness walk, the removals, execute's probe
  */
 
 #ifndef DOTTA_CLEANUP_H
@@ -147,13 +150,15 @@ static inline size_t cleanup_plan_item_count(const cleanup_plan_t *plan) {
  *
  * Pure in the item's divergence bits. Values are listed in precedence order —
  * cleanup_skip_reason answers the first that applies. Files only: a directory
- * is skipped for one reason — something is left in it — and needs no table.
+ * is skipped for two reasons — the workspace could not verify it (the item's
+ * UNVERIFIED bit, read by cleanup_verdict), or something is left in it — and
+ * needs no table.
  */
 typedef enum {
     CLEANUP_SKIP_NONE = 0,       /* Not skipped — nothing stands in the way of the prune */
     CLEANUP_SKIP_UNVERIFIED,     /* The workspace could not settle it — see cleanup_skip_reason */
     CLEANUP_SKIP_MODIFIED,       /* Content differs from what dotta deployed */
-    CLEANUP_SKIP_TYPE_CHANGED,   /* File ↔ symlink ↔ directory */
+    CLEANUP_SKIP_TYPE_CHANGED,   /* File ↔ symlink ↔ device (a directory in its place is released) */
     CLEANUP_SKIP_MODE_CHANGED    /* Mode or ownership differs */
 } cleanup_skip_reason_t;
 
@@ -174,7 +179,10 @@ typedef enum {
  *   DIVERGENCE_CONTENT             MODIFIED     — disk differs from what dotta
  *                                  deployed (the record), not from the blob Git
  *                                  may have moved on to
- *   DIVERGENCE_TYPE                TYPE_CHANGED
+ *   DIVERGENCE_TYPE                TYPE_CHANGED — a one-node swap unlink can
+ *                                  undo under --force; a directory where the
+ *                                  file was is RELEASED by the workspace and
+ *                                  never reaches this table
  *   DIVERGENCE_MODE / OWNERSHIP    MODE_CHANGED
  *   ENCRYPTION / STALE only        NONE — a policy mismatch is not a user
  *                                  change; STALE is never emitted for an orphan
@@ -195,6 +203,51 @@ typedef enum {
  * @return The first reason that applies, or CLEANUP_SKIP_NONE
  */
 cleanup_skip_reason_t cleanup_skip_reason(const workspace_item_t *item);
+
+/**
+ * What becomes of a planned orphan, read off the item alone
+ *
+ * The four verdict buckets of cleanup_preflight_result_t, as a value: one
+ * producer, read by the verdict phase to fill them and by status to predict
+ * them, so the two cannot route one item two ways. In the order the tests are
+ * taken — the occupant, the state, the divergence bits:
+ *
+ *   occupant NONE                         ABSENT     record retires, no effect
+ *   state RELEASED                        RELEASED   left alone, record retires
+ *   a file with a cleanup_skip_reason     SKIPPED    unless --force
+ *   a directory with DIVERGENCE_UNVERIFIED
+ *                                         SKIPPED    --force included: no flag
+ *                                                    makes an unstattable or
+ *                                                    unreadable directory one
+ *                                                    the run can see into, and
+ *                                                    the receipt would only read
+ *                                                    [failed]
+ *   else                                  PRUNABLE   a file: removed. A
+ *                                                    directory: the candidate
+ *                                                    the readdir finishes —
+ *                                                    prunable once nothing else
+ *                                                    is left in it, released or
+ *                                                    skipped otherwise
+ *
+ * The one verdict status cannot finish is a directory's PRUNABLE, and it says
+ * so.
+ */
+typedef enum {
+    CLEANUP_ABSENT,      /* Not on disk at load → record retires, no filesystem effect */
+    CLEANUP_RELEASED,    /* Left on disk → record retires */
+    CLEANUP_SKIPPED,     /* Left on disk → record stays */
+    CLEANUP_PRUNABLE     /* Removed — a directory, once the readdir agrees */
+} cleanup_verdict_t;
+
+/**
+ * Decide a planned orphan's verdict from the item
+ *
+ * @param item Orphaned or released item, either kind (must not be NULL)
+ * @param force --force: lifts a file's skip reasons, never a release and never
+ *        a directory's UNVERIFIED
+ * @return The verdict (see cleanup_verdict_t)
+ */
+cleanup_verdict_t cleanup_verdict(const workspace_item_t *item, bool force);
 
 /**
  * Cleanup options — what the caller knows and the module cannot
@@ -258,20 +311,20 @@ typedef struct {
 
     /* Directories */
     ptr_array_t prunable_dirs;     /* Present, empty after the run's removals, nothing deploys in */
-    ptr_array_t skipped_dirs;      /* Present; keeps something the run leaves, or not a directory */
-    ptr_array_t released_dirs;     /* Git no longer backs it, or dotta never made it → left alone, record retires */
+    ptr_array_t skipped_dirs;      /* Present; keeps something the run leaves, or could not be verified */
+    ptr_array_t released_dirs;     /* Git no longer backs it, dotta never made it, or another kind of path stands there → left alone, record retires */
     ptr_array_t absent_dirs;       /* Not there → record retires */
 } cleanup_preflight_result_t;
 
 /**
  * Decide the verdicts
  *
- * Files from the items alone — one test per item, in the order presence → authority
- * → skip reason; O(n) in the file count, no syscalls, because those observations
- * were made at workspace load. Directories: authority from the item (a released
- * directory is left alone, unprobed), then one probe and one readdir each, against
- * the files above, the directories already decided beneath them, and
- * opts->deploying_*.
+ * Files from the items alone — cleanup_verdict, one test per item; O(n) in the
+ * file count, no syscalls, because every observation it reads was made at
+ * workspace load. Directories: cleanup_verdict from the item likewise (a
+ * released or unverified directory is left alone, unprobed), then one readdir
+ * for each candidate, against the files above, the directories already decided
+ * beneath them, and opts->deploying_*.
  *
  * READ-ONLY: modifies neither the filesystem, the state database nor Git.
  *
@@ -322,7 +375,7 @@ typedef struct {
     ptr_array_t pruned_dirs;       /* Removed */
     ptr_array_t reclaimed_dirs;    /* Absent; record retires */
     ptr_array_t released_dirs;     /* Left alone; record retires */
-    ptr_array_t skipped_dirs;      /* Predicted occupied, not a directory, or refused on removal */
+    ptr_array_t skipped_dirs;      /* Skipped at preflight, or no longer a directory / refused on removal */
     ptr_array_t failed_dirs;       /* The removal errored */
 } cleanup_result_t;
 

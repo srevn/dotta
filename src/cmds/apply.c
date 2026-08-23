@@ -440,7 +440,7 @@ static void print_cleanup_results(
     /* Each skipped file's reason was named by the preview's skipped-files block,
      * which always prints; the receipt only confirms the skip. */
     if (skipped_files.count > 0) {
-        output_section(out, OUTPUT_VERBOSE, "Skipped orphaned files (uncommitted changes)");
+        output_section(out, OUTPUT_VERBOSE, "Skipped orphaned files");
         for (size_t i = 0; i < skipped_files.count; i++) {
             output_styled(
                 out, OUTPUT_VERBOSE, "  {yellow}[skipped]{reset} %s\n",
@@ -490,7 +490,7 @@ static void print_cleanup_results(
     }
 
     if (skipped_dirs.count > 0) {
-        output_section(out, OUTPUT_VERBOSE, "Skipped orphaned directories (not empty)");
+        output_section(out, OUTPUT_VERBOSE, "Skipped orphaned directories");
         for (size_t i = 0; i < skipped_dirs.count; i++) {
             output_styled(
                 out, OUTPUT_VERBOSE, "  {yellow}[skipped]{reset} %s\n",
@@ -562,19 +562,22 @@ static void print_cleanup_results(
             );
         }
 
-        /* No hint here: the preview's skipped-files block named these files,
+        /* No reason here: the preview's skipped-files block named these files,
          * their reasons and the --force override, and it always prints — including
          * on the run that reports this line. */
         if (skipped_files.count > 0) {
             output_warning(
-                out, OUTPUT_NORMAL, "Skipped %zu orphaned file%s (uncommitted changes)",
+                out, OUTPUT_NORMAL, "Skipped %zu orphaned file%s",
                 skipped_files.count, skipped_files.count == 1 ? "" : "s"
             );
         }
 
+        /* Nor here: a directory is skipped because something the run leaves
+         * is still in it, or because the workspace could not verify it, and
+         * the verbose listing names which. */
         if (skipped_dirs.count > 0) {
             output_info(
-                out, OUTPUT_NORMAL, "Skipped %zu orphaned director%s (not empty)",
+                out, OUTPUT_NORMAL, "Skipped %zu orphaned director%s",
                 skipped_dirs.count, skipped_dirs.count == 1 ? "y" : "ies"
             );
             output_info(
@@ -687,7 +690,7 @@ static void print_cleanup_preflight_results(
         if (skipped.count > 0) {
             output_styled(
                 out, OUTPUT_NORMAL,
-                "  {yellow}%zu{reset} file%s will be skipped (uncommitted changes)\n",
+                "  {yellow}%zu{reset} file%s will be skipped\n",
                 skipped.count,
                 skipped.count == 1 ? "" : "s"
             );
@@ -720,7 +723,7 @@ static void print_cleanup_preflight_results(
 
         if (verdicts->skipped_dirs.count > 0) {
             output_styled(
-                out, OUTPUT_NORMAL, "  {yellow}%zu{reset} director%s will be skipped (not empty)\n",
+                out, OUTPUT_NORMAL, "  {yellow}%zu{reset} director%s will be skipped\n",
                 verdicts->skipped_dirs.count,
                 verdicts->skipped_dirs.count == 1 ? "y" : "ies"
             );
@@ -729,7 +732,9 @@ static void print_cleanup_preflight_results(
         /* Released directories are named here, inline, with the other two fates:
          * nothing is asked of the user about them (the arrow says "left alone"),
          * and a directory left behind is not the event a file left behind is,
-         * so no block of its own. */
+         * so no block of its own. A skipped directory keeps something the run
+         * leaves, or could not be verified (status tags it [unverified]); the
+         * slash says "left alone this run" for both. */
         print_path_list(out, &verdicts->prunable_dirs, OUTPUT_COLOR_CYAN, "•");
         print_path_list(out, &verdicts->released_dirs, OUTPUT_COLOR_CYAN, "→");
         print_path_list(out, &verdicts->skipped_dirs, OUTPUT_COLOR_YELLOW, "⊘");
@@ -813,8 +818,8 @@ static void print_cleanup_preflight_results(
         output_info(
             out, OUTPUT_NORMAL,
             "The following files are no longer backed by their profile's Git "
-            "branch, or were never deployed by dotta, and will be left on the "
-            "filesystem:"
+            "branch, were never deployed by dotta, or have another kind of path "
+            "in their place, and will be left on the filesystem:"
         );
 
         for (size_t i = 0; i < released.count; i++) {

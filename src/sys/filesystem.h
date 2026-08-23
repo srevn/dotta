@@ -326,7 +326,7 @@ bool fs_is_directory_empty(const char *path);
  * safe to call on a prediction.
  *
  * Absence is success: a caller that must tell "removed" from "was never there"
- * probes presence first (cleanup's directory probe does).
+ * probes presence first (cleanup_execute does, with fs_lstat_occupant).
  *
  * Never recurses. For a directory whose whole subtree is dotta's to delete, that
  * is fs_remove_dir(path, true).

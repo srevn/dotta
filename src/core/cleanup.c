@@ -5,10 +5,11 @@
  * are the workspace's; this module decides which orphans the run may touch, what
  * becomes of each, and carries that out.
  *
- * The file-side verdict re-verifies nothing and touches neither disk, Git nor
- * state — every input is a field of the workspace item, observed once at load.
- * Only the directory side looks, because emptiness is not a property any earlier
- * phase could have recorded.
+ * The verdict re-verifies nothing and touches neither disk, Git nor state —
+ * every input is a field of the workspace item, observed once at load. The
+ * one look the directory side takes is the readdir, because what is left in
+ * a directory after this run's removals is not a property any earlier phase
+ * could have recorded.
  */
 
 #include "core/cleanup.h"
@@ -190,40 +191,41 @@ cleanup_skip_reason_t cleanup_skip_reason(const workspace_item_t *item) {
 }
 
 /**
- * What stands at an orphaned directory's path, right now
+ * What becomes of a planned orphan, read off the item alone
  *
- * The one question the verdicts and the prune must answer identically, so one
- * function answers it for both.
- *
- * ABSENT is stat truth — a dangling symlink reads absent and its row is reclaimed,
- * which is what the prune's reclaim arm has always done. The workspace's own
- * lstat disagrees (a dangling link is present to it, either kind), so status
- * and apply can differ on such a path; making this lstat-based would change
- * behavior rather than counts, and belongs with the decision about what to do
- * with a foreign occupant.
- *
- * FOREIGN is anything rmdir(2) cannot remove and dotta does not own — a symlink,
- * a regular file. Both phases skip it, under the label the outcome already uses.
- *
- * Only a real directory earns an emptiness verdict, and that is the one thing
- * the two phases decide differently on purpose: the verdict against this run's
- * planned effects, the prune against the disk it has changed.
+ * The table and its rationale are in cleanup.h. Every input is a field the
+ * workspace observed once at load: no syscall, no query.
  */
-typedef enum {
-    DIR_PROBE_ABSENT,      /* Nothing there — reclaimed, no filesystem effect */
-    DIR_PROBE_FOREIGN,     /* A symlink or a non-directory — skipped */
-    DIR_PROBE_DIRECTORY    /* A directory — emptiness decides */
-} dir_probe_t;
-
-static dir_probe_t probe_orphan_directory(const char *path) {
-    if (!fs_exists(path)) {
-        return DIR_PROBE_ABSENT;
-    }
-    if (fs_is_symlink(path) || !fs_is_directory(path)) {
-        return DIR_PROBE_FOREIGN;
+cleanup_verdict_t cleanup_verdict(const workspace_item_t *item, bool force) {
+    if (item->occupant == FS_OCCUPANT_NONE) {
+        /* Already gone: nothing to protect, nothing to remove — a pure state
+         * reclaim whatever Git or the divergence bits say. */
+        return CLEANUP_ABSENT;
     }
 
-    return DIR_PROBE_DIRECTORY;
+    if (item->state == WORKSPACE_STATE_RELEASED) {
+        /* Git no longer backs the path — the branch was deleted, the path was
+         * removed from it — dotta never deployed it (the workspace's ownership
+         * gate), or another kind of node stands in its place; the workspace
+         * observed it either way. The path stays on disk to protect the user's
+         * data, and the record retires because dotta cannot manage what Git
+         * cannot restore, and does not remove what it did not put there: it
+         * is released from dotta's management, not pruned.
+         *
+         * Decided before --force is consulted: --force prunes what would be
+         * skipped, never what is released. */
+        return CLEANUP_RELEASED;
+    }
+
+    if (item->item_kind == PATH_KIND_DIRECTORY) {
+        /* A directory the workspace could not stat or read is held whatever
+         * --force says; otherwise the readdir finishes the verdict. */
+        return (item->divergence & DIVERGENCE_UNVERIFIED) ? CLEANUP_SKIPPED
+                                                          : CLEANUP_PRUNABLE;
+    }
+
+    return (!force && cleanup_skip_reason(item) != CLEANUP_SKIP_NONE)
+        ? CLEANUP_SKIPPED : CLEANUP_PRUNABLE;
 }
 
 /**
@@ -303,44 +305,35 @@ error_t *cleanup_preflight(
 
     error_t *err = NULL;
 
-    /* One test per file, in the order presence → authority → skip reason. The
-     * first two are the workspace's observations, read straight off the item;
-     * the third is cleanup_skip_reason. No syscalls, no queries. */
+    /* One verdict per file, read straight off the item: no syscalls, no
+     * queries. */
     workspace_items_t files = workspace_items_view(&plan->files);
 
     for (size_t i = 0; i < files.count; i++) {
         const workspace_item_t *item = files.entries[i];
 
-        if (item->occupant == FS_OCCUPANT_NONE) {
-            /* Already gone: nothing to protect, nothing to remove — a pure state
-             * reclaim whatever Git or the divergence bits say. It has no filesystem
-             * effect to preview, so it joins neither the prune count nor the
-             * prune set; the occupant was established by workspace orphan analysis
-             * and is trusted here. */
-            err = ptr_array_push(&verdicts->absent_files, item);
+        switch (cleanup_verdict(item, opts->force)) {
+            case CLEANUP_ABSENT:
+                /* No filesystem effect to preview, so it joins neither the
+                 * prune count nor the prune set. */
+                err = ptr_array_push(&verdicts->absent_files, item);
+                break;
 
-        } else if (item->state == WORKSPACE_STATE_RELEASED) {
-            /* Git no longer backs the file — the branch was deleted, the path
-             * was removed from it — or dotta never deployed it (the workspace's
-             * ownership gate); the workspace observed it either way. The file
-             * stays on disk to protect the user's data, and the record retires
-             * because dotta cannot manage what Git cannot restore, and does not
-             * remove what it did not put there: it is released from dotta's
-             * management, not pruned.
-             *
-             * Decided before --force is consulted: --force prunes what would be
-             * skipped, never what is released. */
-            err = ptr_array_push(&verdicts->released_files, item);
+            case CLEANUP_RELEASED:
+                err = ptr_array_push(&verdicts->released_files, item);
+                break;
 
-        } else if (!opts->force && cleanup_skip_reason(item) != CLEANUP_SKIP_NONE) {
-            err = ptr_array_push(&verdicts->skipped_files, item);
+            case CLEANUP_SKIPPED:
+                err = ptr_array_push(&verdicts->skipped_files, item);
+                break;
 
-        } else {
-            err = ptr_array_push(&verdicts->prunable_files, item);
-            if (!err) {
-                /* The hole the directory prediction looks through. */
-                err = hashmap_set(prunable, item->filesystem_path, (void *) item);
-            }
+            case CLEANUP_PRUNABLE:
+                err = ptr_array_push(&verdicts->prunable_files, item);
+                if (!err) {
+                    /* The hole the directory prediction looks through. */
+                    err = hashmap_set(prunable, item->filesystem_path, (void *) item);
+                }
+                break;
         }
         if (err) goto cleanup;
     }
@@ -362,30 +355,29 @@ error_t *cleanup_preflight(
         const workspace_item_t *item = dirs.entries[i];
         const char *path = item->filesystem_path;
 
-        if (item->state == WORKSPACE_STATE_RELEASED) {
-            /* The same verdict as a released file, for the same reasons: Git no
-             * longer claims the directory, or dotta never made it. Left alone —
-             * unprobed, because nothing about its contents changes the answer —
-             * and the record retires. It is not in the prune set, so a parent
-             * above it stays occupied by it. */
-            err = ptr_array_push(&verdicts->released_dirs, item);
-            if (err) goto cleanup;
-            continue;
-        }
-
-        switch (probe_orphan_directory(path)) {
-            case DIR_PROBE_ABSENT:
-                /* A pure state reclaim: no filesystem effect to preview. Not a
-                 * departure either — a dangling link reads absent here and still
-                 * occupies its parent, and nothing removes it. */
+        switch (cleanup_verdict(item, opts->force)) {
+            case CLEANUP_ABSENT:
+                /* A pure state reclaim: no filesystem effect to preview. */
                 err = ptr_array_push(&verdicts->absent_dirs, item);
                 break;
 
-            case DIR_PROBE_FOREIGN:
+            case CLEANUP_RELEASED:
+                /* Left alone — unprobed, because nothing about its contents
+                 * changes the answer — and the record retires. It is not in the
+                 * prune set, so a parent above it stays occupied by it. */
+                err = ptr_array_push(&verdicts->released_dirs, item);
+                break;
+
+            case CLEANUP_SKIPPED:
+                /* The workspace could not verify it; not in the prune set, so
+                 * its parent stays occupied by it. */
                 err = ptr_array_push(&verdicts->skipped_dirs, item);
                 break;
 
-            case DIR_PROBE_DIRECTORY:
+            case CLEANUP_PRUNABLE:
+                /* A directory the workspace saw and can read (the occupant is
+                 * DIRECTORY: anything else in its place was released above).
+                 * The readdir finishes the verdict. */
                 if (fs_directory_emptiness(path, entry_is_prunable, prunable) == FS_DIR_EMPTY &&
                     !deploys_into(opts, path)) {
                     err = ptr_array_push(&verdicts->prunable_dirs, item);
@@ -455,10 +447,12 @@ void cleanup_preflight_result_free(cleanup_preflight_result_t *verdicts) {
  * stops the removal instead of going with it. That refusal is the "not empty"
  * verdict by another route — ERR_CONFLICT — not a failure.
  *
- * The directory probe runs again here even though the verdict is taken, because
- * the mechanism cannot tell the receipt what it found: fs_remove_empty_dir treats
- * absence as success (an absent directory would read "pruned", not "reclaimed"),
- * and rmdir on a symlink fails with ENOTDIR ("failed", not "skipped").
+ * Both probes run again here even though the verdicts are taken, because the
+ * mechanisms cannot tell the receipt what they found: fs_remove_file and
+ * fs_remove_empty_dir treat absence as success (an absent path would read
+ * "pruned", not "reclaimed"), and rmdir on a symlink fails with ENOTDIR
+ * ("failed", not "skipped"). One fs_lstat_occupant each — the workspace's
+ * probe, so a path reads the same way at load and at removal.
  */
 error_t *cleanup_execute(
     const cleanup_preflight_result_t *verdicts,
@@ -486,12 +480,13 @@ error_t *cleanup_execute(
          * — the record retires. Reporting it as "pruned" would claim an effect
          * that never occurred.
          *
-         * lstat, matching both the workspace's occupant for a file orphan and
-         * unlink's own view of the path: a symlink row whose link now dangles
-         * is an object dotta deployed and is here to remove, not an absence to
-         * reclaim around. stat would follow the link, call it gone, retire the
-         * row and leave the link behind with nothing left that knows about it. */
-        if (!fs_lexists(path)) {
+         * The same probe the workspace took, so the two read one path one way:
+         * a symlink row whose link now dangles is an object dotta deployed and
+         * is here to remove, not an absence to reclaim around (stat would follow
+         * the link, call it gone, retire the row and leave the link behind with
+         * nothing left that knows about it); a path that cannot be stat'd is
+         * not gone either — the unlink is attempted and reports its errno. */
+        if (fs_lstat_occupant(path, NULL) == FS_OCCUPANT_NONE) {
             RETURN_IF_ERROR(ptr_array_push(&result->reclaimed_files, item));
             continue;
         }
@@ -513,20 +508,25 @@ error_t *cleanup_execute(
         const workspace_item_t *item = dirs.entries[i];
         const char *path = item->filesystem_path;
 
-        switch (probe_orphan_directory(path)) {
-            case DIR_PROBE_ABSENT:
+        switch (fs_lstat_occupant(path, NULL)) {
+            case FS_OCCUPANT_NONE:
                 /* No filesystem effect happened or was needed — the record retires,
                  * nothing is removed. */
                 RETURN_IF_ERROR(ptr_array_push(&result->reclaimed_dirs, item));
                 continue;
 
-            case DIR_PROBE_FOREIGN:
-                /* Replaced while the run waited: not ours to remove. */
+            case FS_OCCUPANT_DIRECTORY:
+                break;
+
+            case FS_OCCUPANT_REGULAR:
+            case FS_OCCUPANT_SYMLINK:
+            case FS_OCCUPANT_OTHER:
+            case FS_OCCUPANT_UNKNOWN:
+                /* Replaced, or made unreachable, while the run waited: not ours
+                 * to remove. The next load reads it as released [type], or as
+                 * unverified. */
                 RETURN_IF_ERROR(ptr_array_push(&result->skipped_dirs, item));
                 continue;
-
-            case DIR_PROBE_DIRECTORY:
-                break;
         }
 
         error_t *remove_err = fs_remove_empty_dir(path);

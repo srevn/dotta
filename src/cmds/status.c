@@ -550,12 +550,16 @@ static void display_workspace_status(
                 );
 
                 if (list) {
-                    /* The header promises a prune; a clean orphan gets one and
-                     * needs no more words. Every other hint is keyed below by
-                     * the exact tags its line shows, once per distinct tag string,
-                     * so the key reads back against the list it follows. The
-                     * hint is cleanup's — absent, then released, then the skip
-                     * reason, the plan's own order — this only names it. */
+                    /* The header promises a prune; a clean orphaned file gets
+                     * one and needs no more words. Every other hint is keyed
+                     * below by the exact tags its line shows, once per distinct
+                     * tag string, so the key reads back against the list it
+                     * follows. The verdict is cleanup's (cleanup_verdict, the
+                     * one producer the preview reads too) — this only names
+                     * it. A directory's PRUNABLE is the one verdict status
+                     * cannot finish, and its hint says so; it shares the bare
+                     * [orphaned] key with the files, so the sentence is written
+                     * to be true of both. */
                     struct { char tags[64]; const char *hint; } legend[16];
                     size_t legend_count = 0;
                     size_t legend_width = 0;
@@ -578,29 +582,52 @@ static void display_workspace_status(
                         );
 
                         const char *hint = NULL;
-                        if (orphaned[i]->occupant == FS_OCCUPANT_NONE) {
-                            hint = "already gone from disk; apply reclaims its entry";
-                        } else if (orphaned[i]->state == WORKSPACE_STATE_RELEASED) {
-                            hint = "no longer in Git, or dotta never deployed it; "
-                                "apply releases its entry, the file stays";
-                        } else {
-                            switch (cleanup_skip_reason(orphaned[i])) {
-                                case CLEANUP_SKIP_UNVERIFIED:
-                                    hint = "cannot be verified; "
-                                        "apply skips it, --force prunes it";
+                        bool is_dir = (orphaned[i]->item_kind == PATH_KIND_DIRECTORY);
+
+                        switch (cleanup_verdict(orphaned[i], false)) {
+                            case CLEANUP_ABSENT:
+                                hint = "already gone from disk; apply reclaims its entry";
+                                break;
+
+                            case CLEANUP_RELEASED:
+                                hint = (orphaned[i]->divergence & DIVERGENCE_TYPE)
+                                    ? "what dotta put there is gone, another kind of "
+                                    "path stands in its place; apply releases its "
+                                    "entry, the path stays"
+                                    : "no longer in Git, or dotta never deployed it; "
+                                    "apply releases its entry, the file stays";
+                                break;
+
+                            case CLEANUP_SKIPPED:
+                                if (is_dir) {
+                                    hint = "cannot be verified; apply skips it";
                                     break;
-                                case CLEANUP_SKIP_MODIFIED:
-                                case CLEANUP_SKIP_TYPE_CHANGED:
-                                    hint = "changed since deployment; "
-                                        "apply skips it, --force prunes it";
-                                    break;
-                                case CLEANUP_SKIP_MODE_CHANGED:
-                                    hint = "permissions changed; "
-                                        "apply skips it, --force prunes it";
-                                    break;
-                                case CLEANUP_SKIP_NONE:
-                                    break;
-                            }
+                                }
+                                switch (cleanup_skip_reason(orphaned[i])) {
+                                    case CLEANUP_SKIP_UNVERIFIED:
+                                        hint = "cannot be verified; "
+                                            "apply skips it, --force prunes it";
+                                        break;
+                                    case CLEANUP_SKIP_MODIFIED:
+                                    case CLEANUP_SKIP_TYPE_CHANGED:
+                                        hint = "changed since deployment; "
+                                            "apply skips it, --force prunes it";
+                                        break;
+                                    case CLEANUP_SKIP_MODE_CHANGED:
+                                        hint = "permissions changed; "
+                                            "apply skips it, --force prunes it";
+                                        break;
+                                    case CLEANUP_SKIP_NONE:
+                                        break;
+                                }
+                                break;
+
+                            case CLEANUP_PRUNABLE:
+                                if (is_dir) {
+                                    hint = "apply prunes it — a directory once nothing "
+                                        "else is left in it";
+                                }
+                                break;
                         }
                         if (!hint) continue;
 

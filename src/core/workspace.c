@@ -1427,11 +1427,22 @@ static error_t *compute_orphan_authority(
  * is here is stored anywhere. Both kinds walk one loop; the record's type says
  * which questions apply.
  *
- * Per orphan, in order — presence, the prune order, the ownership gate, then
- * Git authority:
+ * Per orphan, in order — presence, the occupant's kind, the prune order, the
+ * ownership gate, then Git authority:
  *   - presence (one lstat, either kind — a dangling link is present): an absent
  *     orphan is a reclaim whatever Git says, which keeps the planners' "absent
  *     ⇒ DIVERGENCE_NONE" rule;
+ *   - the occupant's kind: a directory where dotta's file was, or anything but
+ *     a directory where dotta's directory was, is a path dotta's copy has left
+ *     — what dotta put there is gone, the same sentence as LOST below — and the
+ *     node in its place is not dotta's to remove: unlink cannot take a
+ *     directory, rmdir cannot take a file, and nothing authorizes either.
+ *     Released, tagged [type]. Decided ahead of the prune order and the gate,
+ *     because an order to prune a copy that is no longer there is moot and no
+ *     tree needs asking. A file ↔ symlink ↔ device swap is not this: unlink
+ *     undoes a one-node swap under --force, and the divergence names it TYPE.
+ *     An occupant that could not be stat'd is not judged — it may be dotta's
+ *     own directory, unreachable;
  *   - the prune order (remove --delete-files): the user chose the fate of the
  *     deployed copy, and Git is not asked. Honoured only with a reference to
  *     measure the copy against — a directory (cleanup's emptiness rule decides)
@@ -1447,22 +1458,27 @@ static error_t *compute_orphan_authority(
  *     dotta discovers in Git — the branch deleted, rebased or git rm'd, a pulled
  *     removal, a dead enabled branch — is LOST, and the deployed copy is left
  *     alone (RELEASED); BACKED (a disabled profile, a moved target) is dotta's
- *     to prune, divergence permitting; UNVERIFIED holds a file until Git answers
- *     and is not surfaced on a directory — an empty directory Git cannot vouch
- *     for is still an empty directory, and the legend's "apply skips it" would
- *     be a lie for it.
+ *     to prune, divergence permitting; UNVERIFIED holds the orphan until Git
+ *     answers — either kind: LOST would retire the record, BACKED would remove
+ *     the copy, and neither is a guess to make about an empty directory any
+ *     more than about a file.
  * Divergence for a prunable file is disk against what dotta last deployed — the
- * record (compute_orphan_divergence); a directory's verdict is cleanup's emptiness
- * rule, so its divergence stays NONE.
+ * record (compute_orphan_divergence). A prunable directory's verdict is cleanup's
+ * emptiness rule, so there is nothing to measure, only whether it can be: a
+ * directory dotta cannot stat or cannot read — the path, or a component above
+ * it — is UNVERIFIED, the bit an unstattable file carries, and held until the
+ * user can say what is in it. That is one access(2) per present directory
+ * orphan; the readdir itself stays cleanup's, because what is left in a
+ * directory depends on the plan.
  *
- * This enables status to predict apply behavior (cleanup_skip_reason maps the
- * same bits to the skip):
+ * This enables status to predict apply behavior (cleanup_verdict reads the same
+ * item, and cleanup_skip_reason maps the same bits to the skip):
  * - DIVERGENCE_NONE -> Clean orphan, apply will prune
  * - DIVERGENCE_CONTENT/TYPE -> Modified, apply will skip
  * - DIVERGENCE_MODE/OWNERSHIP -> Metadata changed, apply will skip
  * - DIVERGENCE_UNVERIFIED -> Cannot verify, apply will skip
- * - WORKSPACE_STATE_RELEASED -> Git let go, or dotta never deployed it;
- *   apply releases
+ * - WORKSPACE_STATE_RELEASED -> Git let go, dotta never deployed it, or
+ *   (with DIVERGENCE_TYPE) another kind of path stands there; apply releases
  *
  * Presence comes first, so an absent record never reaches a RELEASED arm: whatever
  * Git would have said, it reads [orphaned] [absent] and apply reclaims it.
@@ -1522,18 +1538,33 @@ static error_t *analyze_orphans(workspace_t *ws) {
         bool measurable = (kind == PATH_KIND_DIRECTORY) ||
             !git_oid_is_zero(&anchor->blob_oid);
 
+        /* Whether another kind of path stands where dotta's copy was (see the
+         * doc above): a directory at a file record's path, anything but a
+         * directory at a directory record's. An occupant that could not be
+         * stat'd is not judged. */
+        bool displaced = (kind == PATH_KIND_FILE)
+            ? (occupant == FS_OCCUPANT_DIRECTORY)
+            : (occupant != FS_OCCUPANT_DIRECTORY && occupant != FS_OCCUPANT_UNKNOWN);
+
+        /* Set by the arms that find the copy dotta's to prune, divergence
+         * permitting; measured once, below. */
+        bool measure = false;
+        bool unvouched = false;     /* Git was asked and could not answer */
+
         if (occupant == FS_OCCUPANT_NONE) {
             /* Absent: ORPHANED with no divergence — a reclaim whatever Git says. */
+
+        } else if (displaced) {
+            /* What dotta put there is gone, and what stands there is not dotta's
+             * to remove. Released, [type]: the record retires, the path stays. */
+            item_state = WORKSPACE_STATE_RELEASED;
+            divergence = DIVERGENCE_TYPE;
 
         } else if (anchor->prune_ordered && measurable) {
             /* The user ordered the deployed copy pruned (remove --delete-files);
              * Git is not asked. Divergence still protects an edited copy —
              * cleanup's skip reasons read the same bits. */
-            if (kind == PATH_KIND_FILE) {
-                divergence = (occupant != FS_OCCUPANT_UNKNOWN)
-                    ? compute_orphan_divergence(ws, anchor, &orphan_stat)
-                    : DIVERGENCE_UNVERIFIED;
-            }
+            measure = true;
 
         } else if (anchor->deployed_at == 0) {
             /* The ownership gate: dotta never put this here. Released — the copy
@@ -1557,22 +1588,30 @@ static error_t *analyze_orphans(workspace_t *ws) {
                 /* Git cannot back the path. Left on disk, record retires — so
                  * there is nothing a content comparison would decide. */
                 item_state = WORKSPACE_STATE_RELEASED;
+            } else {
+                measure = true;
+                unvouched = (authority == ORPHAN_AUTHORITY_UNVERIFIED);
+            }
+        }
 
-            } else if (kind == PATH_KIND_FILE) {
-                /* Divergence for a prunable orphan: disk against what dotta last
-                 * deployed. */
+        if (measure) {
+            /* A file: disk against what dotta last deployed. A directory:
+             * nothing to measure — cleanup's emptiness rule decides — only
+             * whether it can be: one dotta cannot stat or cannot read is held,
+             * as an unstattable file is, until the user can say what is in it. */
+            if (kind == PATH_KIND_FILE) {
                 divergence = (occupant != FS_OCCUPANT_UNKNOWN)
                     ? compute_orphan_divergence(ws, anchor, &orphan_stat)
                     : DIVERGENCE_UNVERIFIED;
-
-                if (authority == ORPHAN_AUTHORITY_UNVERIFIED) {
-                    /* Git could not vouch for the path: skip the orphan until
-                     * it can. */
-                    divergence |= DIVERGENCE_UNVERIFIED;
-                }
+            } else if (occupant == FS_OCCUPANT_UNKNOWN || access(fs_path, R_OK) != 0) {
+                divergence = DIVERGENCE_UNVERIFIED;
             }
-            /* else a directory: cleanup's emptiness rule decides, and an unanswered
-             * probe is not surfaced (see the doc above). */
+
+            if (unvouched) {
+                /* Git could not vouch for the path: skip the orphan until it
+                 * can. */
+                divergence |= DIVERGENCE_UNVERIFIED;
+            }
         }
 
         err = workspace_add_diverged(
@@ -2860,9 +2899,19 @@ bool workspace_item_extract_display_info(
                 }
                 *color_out = OUTPUT_COLOR_MAGENTA;
 
-            } else if (item->divergence & (DIVERGENCE_CONTENT | DIVERGENCE_TYPE)) {
-                /* Content or type divergence - blocking issue Apply skips it
-                 * (cleanup_skip_reason: MODIFIED / TYPE_CHANGED). */
+            } else if (item->divergence & DIVERGENCE_TYPE) {
+                /* A file ↔ symlink ↔ device swap at the path (a directory in
+                 * a file's place is released, not orphaned). Apply skips it
+                 * (cleanup_skip_reason: TYPE_CHANGED); the DEPLOYED arm and
+                 * apply's preview use the same word. */
+                if (tag_count < WORKSPACE_ITEM_MAX_DISPLAY_TAGS) {
+                    tags_out[tag_count++] = "type";
+                }
+                *color_out = OUTPUT_COLOR_RED;
+
+            } else if (item->divergence & DIVERGENCE_CONTENT) {
+                /* Content divergence - blocking issue Apply skips it
+                 * (cleanup_skip_reason: MODIFIED). */
                 if (tag_count < WORKSPACE_ITEM_MAX_DISPLAY_TAGS) {
                     tags_out[tag_count++] = "modified";
                 }
@@ -2904,21 +2953,22 @@ bool workspace_item_extract_display_info(
             break;
 
         case WORKSPACE_STATE_RELEASED:
-            /* The path left its profile in Git — released from management. File
-             * left on filesystem, the record retires. */
+            /* Released from management — Git let the path go, dotta never
+             * deployed it, or another kind of path stands in its place. The
+             * path is left on disk, the record retires. Always present: the
+             * orphan analysis decides presence first, so an absent record never
+             * reaches this state. */
             if (tag_count < WORKSPACE_ITEM_MAX_DISPLAY_TAGS) {
                 tags_out[tag_count++] = "released";
             }
             *color_out = OUTPUT_COLOR_MAGENTA;
 
-            if (item->occupant == FS_OCCUPANT_NONE) {
-                /* Nothing is left to leave on disk: apply retires the row and
-                 * reports a reclaim, so the display says so too. The ORPHANED
-                 * arm reads the same flag for the same reason. */
+            if (item->divergence & DIVERGENCE_TYPE) {
+                /* The third reason, named: a directory where dotta's file was,
+                 * or a file, a link, a device where dotta's directory was. */
                 if (tag_count < WORKSPACE_ITEM_MAX_DISPLAY_TAGS) {
-                    tags_out[tag_count++] = "absent";
+                    tags_out[tag_count++] = "type";
                 }
-                *color_out = OUTPUT_COLOR_CYAN;
             }
 
             snprintf(metadata_buf, metadata_size, "from %s", item->profile);

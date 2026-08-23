@@ -32,12 +32,12 @@
  *   image.
  * - Terminating-signal forwarding (PROCESS_PGRP_NEW only): the primitive publishes
  *   the child's pgid into the volatile sig_atomic_t global `active_child_pgid`
- *   (defined in main.c) for the duration of the child's lifetime, and clears it
- *   on every exit path. The host program's SIGINT/SIGTERM handler must read this
- *   and forward via kill(-pgid, signum) before its own cleanup, so terminal Ctrl+C
- *   kills the parent and the spawned child group atomically. PROCESS_PGRP_SHARED
- *   children leave the global at zero — the kernel delivers terminal signals to
- *   the entire foreground process group directly.
+ *   (its own, defined in process.c) for the duration of the child's lifetime,
+ *   and clears it on every exit path. The host program's SIGINT/SIGTERM handler
+ *   must read this and forward via kill(-pgid, signum) before its own cleanup,
+ *   so terminal Ctrl+C kills the parent and the spawned child group atomically.
+ *   PROCESS_PGRP_SHARED children leave the global at zero — the kernel delivers
+ *   terminal signals to the entire foreground process group directly.
  */
 
 #ifndef DOTTA_PROCESS_H
@@ -50,10 +50,8 @@
 
 /**
  * Pgid of the currently running PROCESS_PGRP_NEW child, or 0 when no such child
- * is active. Defined in main.c and read by the host program's SIGINT/SIGTERM
+ * is active. Defined in process.c and read by the host program's SIGINT/SIGTERM
  * handler — see the "Threading and signal model" comment above for the contract.
- * Declared here so the cross-TU type contract is enforced at compile time rather
- * than tracked by hand in a bare `extern` inside process.c.
  *
  * Volatile sig_atomic_t for async-signal-safe access from a handler (POSIX
  * requirement).

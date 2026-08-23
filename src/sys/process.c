@@ -52,6 +52,15 @@
  * in this time, we abandon and let init reap. */
 #define PROCESS_GRACE_ORPHAN_SECONDS 1
 
+/* The pgid of the PROCESS_PGRP_NEW child process_run() is running, zero
+ * otherwise: published before the parent's own setpgid and cleared on every
+ * exit path below. The host program's SIGINT/SIGTERM handler reads it
+ * through the declaration in process.h and forwards the signal to the group,
+ * so a Ctrl+C kills dotta and the spawned hook atomically rather than
+ * orphaning the hook. PROCESS_PGRP_SHARED children leave it at zero — the
+ * kernel already delivers terminal signals to the whole foreground group. */
+volatile sig_atomic_t active_child_pgid = 0;
+
 /**
  * Write all `n` bytes of `buf` to `fd`, retrying on partial writes and EINTR.
  * Returns the number of bytes written, or -1 if no progress was made before a

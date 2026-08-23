@@ -328,23 +328,13 @@ static int run_spec(
     return exit_override;
 }
 
-/* Definition of the cross-TU symbol declared in sys/process.h. Published by
- * sys/process.c::process_run() while a PROCESS_PGRP_NEW child is alive; zero
- * otherwise. The signal handler below reads it to forward terminating signals
- * to the child's process group before dotta dies, so a Ctrl+C kills both atomically
- * rather than orphaning the spawned hook.
- *
- * PROCESS_PGRP_SHARED children leave this at zero — the kernel already delivers
- * terminal SIGINT/SIGTERM to the entire foreground group, so parent and child
- * receive it without forwarding. */
-volatile sig_atomic_t active_child_pgid = 0;
-
 /**
  * Signal handler for SIGINT/SIGTERM
  *
- * Forwards the signal to any active child process group (so a hook dies atomically
- * with dotta) and re-raises with the default disposition so the kernel can
- * terminate the process.
+ * Forwards the signal to any active child process group — sys/process.h's
+ * active_child_pgid, published by process_run() while a PROCESS_PGRP_NEW child
+ * is alive, so a hook dies atomically with dotta — and re-raises with the
+ * default disposition so the kernel can terminate the process.
  *
  * No resource cleanup runs here by design. Signal handlers must stay AS-safe
  * per POSIX SUSv4 §2.4.3 — which rules out malloc/free (needed by libgit2 teardown)

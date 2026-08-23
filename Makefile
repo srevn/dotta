@@ -22,7 +22,10 @@ else
     FEATURE_MACROS := -D_XOPEN_SOURCE=700 -D_DEFAULT_SOURCE
 endif
 
-# Build type: release | debug. `make debug` = `make BUILD_TYPE=debug`
+# Build type: release | debug. `make debug` = `make BUILD_TYPE=debug`. Each
+# type owns an object tree (build/<type>/) and a binary (bin/dotta,
+# bin/dotta-debug), so the two stand side by side: switching rebuilds nothing,
+# and a sanitizer run of the suites never displaces the release binary.
 BUILD_TYPE ?= $(if $(filter debug,$(MAKECMDGOALS)),debug,release)
 ifeq ($(filter $(BUILD_TYPE),release debug),)
 $(error BUILD_TYPE must be 'release' or 'debug' (got '$(BUILD_TYPE)'))
@@ -33,6 +36,16 @@ ifeq ($(BUILD_TYPE),debug)
 CFLAGS += -g -O0 -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer
 else
 CFLAGS += -O2 -flto
+endif
+
+# The archiver behind the unit binaries' library. A release object is LLVM
+# bitcode (-flto) and an archive's symbol table is read off its members: the
+# compiler's own llvm-ar reads bitcode, a system ar need not (Apple's does,
+# GNU ar only through a plugin). Ask the compiler, and fall back to the system
+# ar when it names none — the answer is a bare name rather than a path.
+AR := $(shell $(CC) -print-prog-name=llvm-ar 2>/dev/null)
+ifeq ($(filter /%,$(AR)),)
+AR := ar
 endif
 
 # Version information (captured at build time)
@@ -120,9 +133,10 @@ endif
 # Uncrustify config
 UNCRUSTIFY_CFG := .uncrustify.cfg
 
-# Directories
+# Directories — the object tree is the build type's
 SRC_DIR := src
-BUILD_DIR := build
+BUILD_ROOT := build
+BUILD_DIR := $(BUILD_ROOT)/$(BUILD_TYPE)
 BIN_DIR := bin
 ETC_DIR := etc
 
@@ -158,10 +172,14 @@ LIB_SRC := $(BASE_SRC) $(SYS_SRC) $(INFRA_SRC) $(CRYPTO_SRC) $(CORE_SRC) $(CMDS_
 LIB_OBJ := $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(LIB_SRC)) \
            $(CJSON_OBJ) $(TOML_OBJ) $(MONOCYPHER_OBJ)
 
-# Main executable
+# Main executable — the type's own name, so both can stand in bin/
 MAIN_SRC := $(SRC_DIR)/main.c
 MAIN_OBJ := $(BUILD_DIR)/main.o
+ifeq ($(BUILD_TYPE),debug)
+TARGET := $(BIN_DIR)/dotta-debug
+else
 TARGET := $(BIN_DIR)/dotta
+endif
 
 # Default target
 .PHONY: all
@@ -175,9 +193,10 @@ BUILD_SUBDIRS := $(BUILD_LAYER_DIRS) $(BUILD_DIR)/lib $(BUILD_DIR)/completions
 $(BUILD_DIR) $(BIN_DIR) $(BUILD_SUBDIRS):
 	@mkdir -p $@
 
-# Build configuration sentinel: how this tree was produced, build type first
+# Build configuration sentinel: how this tree's objects were produced. A tree
+# is one build type's for life, so the stamp is the flags alone.
 BUILD_CONFIG := $(BUILD_DIR)/.build-config
-BUILD_STAMP := $(BUILD_TYPE) $(CC) $(CFLAGS) $(INCLUDES) \
+BUILD_STAMP := $(CC) $(CFLAGS) $(INCLUDES) \
                $(LIBGIT2_CFLAGS) $(SQLITE3_CFLAGS) $(LIBGIT2_LIBS) $(SQLITE3_LIBS)
 
 .PHONY: FORCE
@@ -187,13 +206,7 @@ $(BUILD_CONFIG): FORCE | $(BUILD_DIR)
 	@NEW='$(BUILD_STAMP)'; \
 	 OLD=$$(cat $@ 2>/dev/null || true); \
 	 if [ "$$NEW" = "$$OLD" ]; then exit 0; fi; \
-	 if [ -n "$$OLD" ]; then \
-	   if [ "$${OLD%% *}" = "$(BUILD_TYPE)" ]; then \
-	     echo "Build config changed — rebuilding all objects"; \
-	   else \
-	     echo "Build type changed ($${OLD%% *} → $(BUILD_TYPE)) — rebuilding all objects"; \
-	   fi; \
-	 fi; \
+	 [ -z "$$OLD" ] || echo "Build config changed — rebuilding all objects"; \
 	 printf '%s\n' "$$NEW" > $@
 
 # Version sentinel: the banner's constants change with every commit and with
@@ -241,42 +254,59 @@ $(TARGET): $(LIB_OBJ) $(MAIN_OBJ) | $(BIN_DIR)
 .PHONY: debug
 debug: all
 
-# Tests
+# The library — every object but main's — archived for the unit binaries,
+# which link it and take the members they reference: a base suite pulls a
+# handful of objects, a core suite the layers beneath it, and neither pays
+# the whole program's link. Rebuilt from scratch: `ar r` replaces and adds,
+# it never drops the member of a source that is gone.
+LIBDOTTA := $(BUILD_DIR)/libdotta.a
+
+$(LIBDOTTA): $(LIB_OBJ)
+	@echo "AR $@"
+	@rm -f $@
+	@$(AR) rcs $@ $^
+
+# Tests — the unit binaries live in the build type's tree beside the objects
+# they were linked from; under BUILD_TYPE=debug they are sanitizer binaries,
+# the runtime coming in through the same flags on the link.
 TESTS_DIR := tests
-TESTS_BIN_DIR := $(TESTS_DIR)/bin
+TESTS_BIN_DIR := $(BUILD_DIR)/tests
 TESTS_SRC := $(wildcard $(TESTS_DIR)/test-*.c)
 TESTS_BIN := $(patsubst $(TESTS_DIR)/%.c,$(TESTS_BIN_DIR)/%,$(TESTS_SRC))
-
-# Suites are independent; run this many at a time (JOBS=1 keeps start order)
-JOBS ?= 4
 
 $(TESTS_BIN_DIR):
 	@mkdir -p $@
 
-# A unit binary compiles its suite and links the base objects under the
-# CFLAGS that produced them — under BUILD_TYPE=debug it is a sanitizer binary
-# too, and the sanitizer runtime comes in through the same flags on the link.
-$(TESTS_BIN_DIR)/%: $(TESTS_DIR)/%.c $(BASE_OBJ) | $(TESTS_BIN_DIR)
+$(TESTS_BIN_DIR)/%: $(TESTS_DIR)/%.c $(LIBDOTTA) | $(TESTS_BIN_DIR)
 	@echo "CC TEST $<"
-	@$(CC) $(CFLAGS) $(INCLUDES) $< $(BASE_OBJ) $(LIBGIT2_LIBS) -o $@
+	@$(CC) $(CFLAGS) $(DEPFLAGS) $(INCLUDES) $(LIBGIT2_CFLAGS) $(SQLITE3_CFLAGS) \
+	    $< $(LIBDOTTA) $(LIBGIT2_LIBS) $(SQLITE3_LIBS) -o $@
+
+# Suites are independent; run this many at a time (JOBS=1 keeps start order)
+JOBS ?= 4
+
+# The runner drives this build type's binary and unit binaries; run by hand
+# it defaults to the release ones (tests/run.sh).
+RUN_SUITES := DOTTA=$(CURDIR)/$(TARGET) DOTTA_TEST_UNIT_DIR=$(CURDIR)/$(TESTS_BIN_DIR) \
+              $(TESTS_DIR)/run.sh -j$(JOBS)
 
 .PHONY: test
 test: $(TESTS_BIN)
-	@$(TESTS_DIR)/run.sh --unit -j$(JOBS) $(SUITE)
+	@$(RUN_SUITES) --unit $(SUITE)
 
 .PHONY: test-cli
 test-cli: $(TARGET)
-	@$(TESTS_DIR)/run.sh --cli -j$(JOBS) $(SUITE)
+	@$(RUN_SUITES) --cli $(SUITE)
 
 .PHONY: test-all
 test-all: $(TESTS_BIN) $(TARGET)
-	@$(TESTS_DIR)/run.sh -j$(JOBS) $(SUITE)
+	@$(RUN_SUITES) $(SUITE)
 
-# Clean build artifacts
+# Clean build artifacts — both build types
 .PHONY: clean
 clean:
 	@echo "Cleaning..."
-	@rm -rf $(BUILD_DIR) $(BIN_DIR) $(TESTS_BIN_DIR)
+	@rm -rf $(BUILD_ROOT) $(BIN_DIR)
 
 # Install
 .PHONY: install
@@ -454,12 +484,12 @@ check-deps:
 .PHONY: help
 help:
 	@echo "dotta Makefile targets:"
-	@echo "  all                   - Build main executable (default)"
-	@echo "  debug                 - Build with debug symbols and sanitizers"
+	@echo "  all                   - Build main executable (default): bin/dotta"
+	@echo "  debug                 - Build with debug symbols and sanitizers: bin/dotta-debug"
 	@echo "  test                  - Build and run unit tests"
 	@echo "  test-cli              - Run CLI suites (SUITE=\"ghosts export\" to filter, JOBS=1 for start order)"
 	@echo "  test-all              - Run unit tests and CLI suites"
-	@echo "  clean                 - Remove build artifacts"
+	@echo "  clean                 - Remove build artifacts (both build types)"
 	@echo "  completions           - Generate the fish completion script from the binary"
 	@echo "  install               - Install binary, configs, and hooks to $(PREFIX)"
 	@echo "  install-completions   - Install fish shell completions"
@@ -476,7 +506,8 @@ help:
 	@echo "  help                  - Show this help message"
 	@echo ""
 	@echo "Build type: 'debug' as a goal or BUILD_TYPE=debug sets the whole invocation,"
-	@echo "so 'make debug test-all' runs the suites under ASan/UBSan."
+	@echo "so 'make debug test-all' runs the suites under ASan/UBSan. Each type has its"
+	@echo "own tree (build/<type>/) and binary, so the two coexist."
 	@echo ""
 	@echo "Installation paths:"
 	@echo "  Binary:       $(BINDIR)/dotta"
@@ -489,3 +520,4 @@ help:
 # Dependency tracking
 -include $(LIB_OBJ:.o=.d)
 -include $(MAIN_OBJ:.o=.d)
+-include $(TESTS_BIN:=.d)

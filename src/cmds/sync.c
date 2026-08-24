@@ -1594,8 +1594,7 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
         }
 
         /* Count all types of divergence */
-        size_t all_diverged_count = 0;
-        const workspace_item_t *all_diverged = workspace_get_all_diverged(ws, &all_diverged_count);
+        workspace_items_t all_diverged = workspace_get_all_diverged(ws);
 
         size_t modified_count = 0;    /* DEPLOYED with CONTENT divergence, git unmoved */
         size_t conflict_count = 0;    /* DEPLOYED with CONTENT and STALE — both sides moved */
@@ -1604,8 +1603,8 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
         size_t type_diff_count = 0;   /* DEPLOYED with TYPE divergence */
         size_t untracked_count = 0;   /* UNTRACKED state */
 
-        for (size_t i = 0; i < all_diverged_count; i++) {
-            const workspace_item_t *item = &all_diverged[i];
+        for (size_t i = 0; i < all_diverged.count; i++) {
+            const workspace_item_t *item = all_diverged.entries[i];
 
             switch (item->state) {
                 case WORKSPACE_STATE_DEPLOYED:

@@ -76,11 +76,10 @@ error_t *cleanup_plan_build(
     }
 
     error_t *err = NULL;
-    size_t count = 0;
-    const workspace_item_t *items = workspace_get_all_diverged(ws, &count);
+    workspace_items_t items = workspace_get_all_diverged(ws);
 
-    for (size_t i = 0; i < count; i++) {
-        const workspace_item_t *item = &items[i];
+    for (size_t i = 0; i < items.count; i++) {
+        const workspace_item_t *item = items.entries[i];
 
         /* Both kinds reach both states: the kind decides the bucket, the state
          * is a verdict's input. */

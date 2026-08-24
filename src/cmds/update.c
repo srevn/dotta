@@ -375,17 +375,16 @@ static error_t *filter_items_for_update(
     *out_items = (workspace_items_t){ 0 };
 
     /* Get all diverged items from workspace */
-    size_t all_count = 0;
-    const workspace_item_t *all = workspace_get_all_diverged(ws, &all_count);
+    workspace_items_t all = workspace_get_all_diverged(ws);
 
-    if (!all || all_count == 0) {
+    if (all.count == 0) {
         return NULL;  /* No items - not an error */
     }
 
     ptr_array_t matches PTR_ARRAY_AUTO = { 0 };
 
-    for (size_t i = 0; i < all_count; i++) {
-        const workspace_item_t *item = &all[i];
+    for (size_t i = 0; i < all.count; i++) {
+        const workspace_item_t *item = all.entries[i];
 
         if (!is_update_candidate(item, opts, config)) {
             continue;
@@ -1666,13 +1665,12 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
      * the filter refused (workspace_item_route — the same table), in the route
      * order, each naming its route's way out; a multi-bit divergence counts under
      * the route that refused it. */
-    size_t all_count = 0;
-    const workspace_item_t *all = workspace_get_all_diverged(ws, &all_count);
+    workspace_items_t all = workspace_get_all_diverged(ws);
     size_t unverified_skipped = 0; size_t retyped_skipped = 0;
     size_t stale_skipped = 0; size_t conflict_skipped = 0;
 
-    for (size_t i = 0; i < all_count; i++) {
-        const workspace_item_t *item = &all[i];
+    for (size_t i = 0; i < all.count; i++) {
+        const workspace_item_t *item = all.entries[i];
 
         if (item->state != WORKSPACE_STATE_DEPLOYED ||
             !scope_accepts_entry(scope, item->profile, item->storage_path, item->item_kind)) {

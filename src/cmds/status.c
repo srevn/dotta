@@ -220,8 +220,7 @@ static void display_workspace_status(
     workspace_status_t ws_status = workspace_get_status(ws);
 
     /* Get all diverged items (shared between pre-scan and categorization) */
-    size_t all_count = 0;
-    const workspace_item_t *all_items = workspace_get_all_diverged(ws, &all_count);
+    workspace_items_t all_items = workspace_get_all_diverged(ws);
 
     /* Managed paths the filter reaches, both kinds — what stands aligned at a
      * path is not a question about which kind stands there. With no filter every
@@ -251,10 +250,10 @@ static void display_workspace_status(
          * reads (compute_workspace_status), so one workspace cannot read Invalid
          * globally and merely Dirty under -p while the unverifiable item is in
          * the filtered set. */
-        for (size_t i = 0; i < all_count; i++) {
-            if (scope_accepts_profile(scope, all_items[i].profile)) {
+        for (size_t i = 0; i < all_items.count; i++) {
+            if (scope_accepts_profile(scope, all_items.entries[i]->profile)) {
                 filtered_diverged++;
-                if (all_items[i].divergence & DIVERGENCE_UNVERIFIED) {
+                if (all_items.entries[i]->divergence & DIVERGENCE_UNVERIFIED) {
                     filtered_unverified++;
                 }
             } else {
@@ -343,31 +342,31 @@ static void display_workspace_status(
     /* Show sectioned output for dirty/invalid workspace */
     if (ws_status != WORKSPACE_CLEAN) {
         /* When filter active and filtered profile is clean, skip detailed sections */
-        if ((!scope_has_filter(scope) || filtered_diverged > 0) && all_count > 0) {
+        if ((!scope_has_filter(scope) || filtered_diverged > 0) && all_items.count > 0) {
 
-            /* Single allocation for all category pointers (7 categories × all_count
-             * slots) Memory layout:
+            /* Single allocation for all category pointers (7 categories ×
+             * all_items.count slots) Memory layout:
              * [conflicts][unverifiable][uncommitted][undeployed][new_files]
              * [orphaned][reassigned] This provides cache-friendly contiguous
              * memory with single malloc/free. */
             const workspace_item_t **categorized =
-                malloc(all_count * 7 * sizeof(workspace_item_t *));
+                malloc(all_items.count * 7 * sizeof(workspace_item_t *));
             if (!categorized) {
                 output_error(
                     out, "Failed to allocate memory for status display (%zu items)",
-                    all_count
+                    all_items.count
                 );
                 return;
             }
 
             /* Category arrays (pointer arithmetic into single allocation) */
             const workspace_item_t **conflicts = categorized;
-            const workspace_item_t **unverifiable = categorized + all_count;
-            const workspace_item_t **uncommitted = categorized + all_count * 2;
-            const workspace_item_t **undeployed = categorized + all_count * 3;
-            const workspace_item_t **new_files = categorized + all_count * 4;
-            const workspace_item_t **orphaned = categorized + all_count * 5;
-            const workspace_item_t **reassigned = categorized + all_count * 6;
+            const workspace_item_t **unverifiable = categorized + all_items.count;
+            const workspace_item_t **uncommitted = categorized + all_items.count * 2;
+            const workspace_item_t **undeployed = categorized + all_items.count * 3;
+            const workspace_item_t **new_files = categorized + all_items.count * 4;
+            const workspace_item_t **orphaned = categorized + all_items.count * 5;
+            const workspace_item_t **reassigned = categorized + all_items.count * 6;
 
             size_t conflict_count = 0;
             size_t unverifiable_count = 0;
@@ -376,8 +375,8 @@ static void display_workspace_status(
             size_t new_count = 0;
             size_t orphaned_count = 0;
             size_t reassigned_count = 0;
-            for (size_t i = 0; i < all_count; i++) {
-                const workspace_item_t *item = &all_items[i];
+            for (size_t i = 0; i < all_items.count; i++) {
+                const workspace_item_t *item = all_items.entries[i];
 
                 /* Apply profile filter if specified (Coherent Scope)
                  *

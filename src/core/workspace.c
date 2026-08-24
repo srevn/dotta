@@ -33,6 +33,7 @@
 #include <unistd.h>
 
 #include "base/arena.h"
+#include "base/array.h"
 #include "base/error.h"
 #include "base/gitignore.h"
 #include "base/hashmap.h"
@@ -125,15 +126,12 @@ struct workspace {
 
     /* Divergence tracking.
      *
-     * The diverged array grows via realloc as workspace_add_diverged appends
-     * items during analysis, so pointers into it would dangle on growth.
-     * diverged_index stores (idx+1) cast to void* and decodes back to the array
-     * index at lookup time. The +1 disambiguates idx=0 from hashmap_get's "absent
-     * key" return value (which is also NULL). */
-    workspace_item_t *diverged;                  /* Diverged items (files + directories) */
-    size_t diverged_count;                       /* Number of diverged items */
-    size_t diverged_capacity;                    /* Allocated capacity of diverged array */
-    hashmap_t *diverged_index;                   /* Maps filesystem_path -> array index+1 (as void*) */
+     * Items are arena-allocated, one per divergence, so their addresses are stable
+     * for the workspace's lifetime — cleanup's buckets and apply's collections
+     * hold them across phases by construction. The spine owns only the pointer
+     * buffer; diverged_index maps a path straight to its item. */
+    ptr_array_t diverged;                        /* workspace_item_t * (files + directories) */
+    hashmap_t *diverged_index;                   /* filesystem_path → workspace_item_t * */
 
     /* Confirmations accumulated during divergence analysis */
     confirmation_t *confirmations;               /* Pending slow-path confirmations (owned) */
@@ -182,9 +180,7 @@ static error_t *workspace_create_empty(
         return ERROR(ERR_MEMORY, "Failed to create diverged index");
     }
 
-    ws->diverged = NULL;
-    ws->diverged_count = 0;
-    ws->diverged_capacity = 0;
+    ptr_array_init(&ws->diverged);
 
     ws->status = WORKSPACE_CLEAN;
 
@@ -321,23 +317,13 @@ static error_t *workspace_add_diverged(
     CHECK_NULL(filesystem_path);
     CHECK_NULL(profile);
 
-    /* Grow array if needed */
-    if (ws->diverged_count >= ws->diverged_capacity) {
-        size_t new_capacity = ws->diverged_capacity == 0 ? 32 : ws->diverged_capacity * 2;
-        workspace_item_t *new_diverged = realloc(
-            ws->diverged,
-            new_capacity * sizeof(workspace_item_t)
-        );
-        if (!new_diverged) {
-            return ERROR(ERR_MEMORY, "Failed to grow diverged array");
-        }
-        ws->diverged = new_diverged;
-        ws->diverged_capacity = new_capacity;
+    /* Arena-allocated: the item's address is stable for the workspace's lifetime,
+     * whatever the spine's growth does. */
+    workspace_item_t *entry = arena_alloc(ws->arena, sizeof(*entry));
+    if (!entry) {
+        return ERROR(ERR_MEMORY, "Failed to allocate diverged item");
     }
-
-    /* Add entry */
-    workspace_item_t *entry = &ws->diverged[ws->diverged_count];
-    memset(entry, 0, sizeof(workspace_item_t));
+    memset(entry, 0, sizeof(*entry));
 
     /* Borrow every string — callers pass workspace-lifetime pointers (see the
      * doc above); the casts discard the const the producers' read-only views
@@ -353,17 +339,15 @@ static error_t *workspace_add_diverged(
     entry->occupant = occupant;
     entry->profile_changed = profile_changed;
 
-    /* Store array index in hashmap for O(1) lookup */
-    error_t *err = hashmap_set(
-        ws->diverged_index,
-        entry->filesystem_path,
-        (void *) (uintptr_t) (ws->diverged_count + 1)
-    );
+    error_t *err = ptr_array_push(&ws->diverged, entry);
+    if (err) {
+        return error_wrap(err, "Failed to append diverged item");
+    }
+
+    err = hashmap_set(ws->diverged_index, entry->filesystem_path, entry);
     if (err) {
         return error_wrap(err, "Failed to index diverged entry");
     }
-
-    ws->diverged_count++;
 
     return NULL;
 }
@@ -1568,7 +1552,10 @@ static error_t *analyze_orphans(workspace_t *ws) {
         divergence_type_t divergence = DIVERGENCE_NONE;
 
         /* Whether the copy can be measured at all: a directory against cleanup's
-         * emptiness rule, a file against a confirmed blob. */
+         * emptiness rule, a file against a confirmed blob. The schema CHECK
+         * (state.c: ownership implies confirmation) guarantees an owned file
+         * record its blob, so for files this discriminates only when deployed_at
+         * == 0 — a prune-ordered record dotta never deployed. */
         bool measurable = (kind == PATH_KIND_DIRECTORY) ||
             !git_oid_is_zero(&anchor->blob_oid);
 
@@ -1710,8 +1697,8 @@ static workspace_status_t compute_workspace_status(const workspace_t *ws) {
     bool has_unverified = false;
     bool has_warnings = false;
 
-    for (size_t i = 0; i < ws->diverged_count; i++) {
-        const workspace_item_t *item = &ws->diverged[i];
+    for (size_t i = 0; i < ws->diverged.count; i++) {
+        const workspace_item_t *item = ws->diverged.items[i];
 
         if (item->divergence & DIVERGENCE_UNVERIFIED) {
             has_unverified = true;
@@ -2512,17 +2499,12 @@ workspace_status_t workspace_get_status(const workspace_t *ws) {
 /**
  * Get all diverged items
  */
-const workspace_item_t *workspace_get_all_diverged(
-    const workspace_t *ws,
-    size_t *count
-) {
-    if (!ws || !count) {
-        if (count) *count = 0;
-        return NULL;
+workspace_items_t workspace_get_all_diverged(const workspace_t *ws) {
+    if (!ws) {
+        return (workspace_items_t) { 0 };
     }
 
-    *count = ws->diverged_count;
-    return ws->diverged;
+    return workspace_items_view(&ws->diverged);
 }
 
 /**
@@ -2539,15 +2521,7 @@ const workspace_item_t *workspace_get_item(
         return NULL;
     }
 
-    /* O(1) lookup via index - returns NULL if not found or CLEAN */
-    void *idx_ptr = hashmap_get(ws->diverged_index, filesystem_path);
-    if (!idx_ptr) {
-        return NULL;
-    }
-
-    /* Convert stored index+1 back to actual array index */
-    size_t idx = (size_t) (uintptr_t) idx_ptr - 1;
-    return &ws->diverged[idx];
+    return hashmap_get(ws->diverged_index, filesystem_path);
 }
 
 /**
@@ -3174,8 +3148,8 @@ void workspace_free(workspace_t *ws) {
         return;
     }
 
-    /* Free diverged array (string fields are arena-borrowed, not freed individually) */
-    free(ws->diverged);
+    /* Free the diverged spine (the items and their strings are arena-backed) */
+    ptr_array_deinit(&ws->diverged);
 
     /* Free the observation and confirmation arrays (row pointers are borrowed
      * from the view) */

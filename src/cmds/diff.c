@@ -275,8 +275,7 @@ static error_t *show_file_diff_from_workspace(
  * metadata and content from workspace/caches.
  *
  * @param ws Workspace handle for active-row lookup (must not be NULL)
- * @param diverged Array of diverged items from workspace (must not be NULL)
- * @param diverged_count Number of diverged items
+ * @param diverged Diverged items from workspace (borrowed slice)
  * @param cache Content cache for blob access (must not be NULL)
  * @param direction Diff direction (UPSTREAM or DOWNSTREAM)
  * @param scope Operation scope (profile + path dimensions; diff has no excludes)
@@ -287,8 +286,7 @@ static error_t *show_file_diff_from_workspace(
  */
 static error_t *present_diffs_for_direction(
     const workspace_t *ws,
-    const workspace_item_t *diverged,
-    size_t diverged_count,
+    workspace_items_t diverged,
     content_cache_t *cache,
     diff_direction_t direction,
     const scope_t *scope,
@@ -307,12 +305,12 @@ static error_t *present_diffs_for_direction(
     error_t *err = NULL;
 
     /* Early return if no diverged items */
-    if (diverged_count == 0 || !diverged) {
+    if (diverged.count == 0) {
         return NULL;
     }
 
-    for (size_t i = 0; i < diverged_count; i++) {
-        const workspace_item_t *item = &diverged[i];
+    for (size_t i = 0; i < diverged.count; i++) {
+        const workspace_item_t *item = diverged.entries[i];
 
         /* Filter 1: Only process FILES (skip directories) */
         if (item->item_kind != PATH_KIND_FILE) {
@@ -1321,8 +1319,7 @@ static error_t *diff_workspace(
     }
 
     /* Step 2: Get pre-analyzed divergence from workspace */
-    size_t diverged_count = 0;
-    const workspace_item_t *diverged = workspace_get_all_diverged(ws, &diverged_count);
+    workspace_items_t diverged = workspace_get_all_diverged(ws);
 
     /* Step 3: Borrow the active state slice for filter validation */
     manifest_rows_t active = workspace_files(ws);
@@ -1352,7 +1349,7 @@ static error_t *diff_workspace(
         output_info(out, OUTPUT_NORMAL, "Shows what 'dotta apply' would change\n");
 
         err = present_diffs_for_direction(
-            ws, diverged, diverged_count, cache, DIFF_UPSTREAM,
+            ws, diverged, cache, DIFF_UPSTREAM,
             scope, opts, out, &upstream_count
         );
         if (err) goto cleanup;
@@ -1366,7 +1363,7 @@ static error_t *diff_workspace(
         output_info(out, OUTPUT_NORMAL, "Shows what 'dotta update' would commit\n");
 
         err = present_diffs_for_direction(
-            ws, diverged, diverged_count, cache, DIFF_DOWNSTREAM,
+            ws, diverged, cache, DIFF_DOWNSTREAM,
             scope, opts, out, &downstream_count
         );
         if (err) goto cleanup;
@@ -1380,7 +1377,7 @@ static error_t *diff_workspace(
     } else {
         /* Single direction */
         err = present_diffs_for_direction(
-            ws, diverged, diverged_count, cache, opts->direction,
+            ws, diverged, cache, opts->direction,
             scope, opts, out, &total_diff_count
         );
         if (err) goto cleanup;

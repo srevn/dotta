@@ -110,7 +110,9 @@ typedef struct {
  *
  * Pass by value. Lifetime is the producer's: cleanup's plan / verdict / result
  * buckets project through workspace_items_view and borrow for the bucket's life;
- * update's filters hand over heap buffers the caller frees.
+ * the workspace's own spine returns through workspace_get_all_diverged and borrows
+ * for the workspace's life; update's filters hand over heap buffers the caller
+ * frees.
  */
 typedef struct {
     const workspace_item_t *const *entries;
@@ -313,16 +315,22 @@ workspace_status_t workspace_get_status(const workspace_t *ws);
 /**
  * Get all diverged items
  *
- * Returns array of all items (files and directories) with any divergence.
+ * Returns the workspace's diverged spine — every item (file and directory) the
+ * analysis produced — as a borrowed slice. Pure value return — no allocation,
+ * no error path. Items are arena-allocated, so the slice and the item addresses
+ * it carries are valid for the workspace's lifetime.
  *
- * @param ws Workspace (must not be NULL)
- * @param count Output count (must not be NULL)
- * @return Array of items (borrowed reference, do not free)
+ * Iterate via:
+ *   workspace_items_t items = workspace_get_all_diverged(ws);
+ *   for (size_t i = 0; i < items.count; i++) {
+ *       const workspace_item_t *item = items.entries[i];
+ *       ...
+ *   }
+ *
+ * @param ws Workspace (NULL returns an empty slice)
+ * @return Borrowed slice over the diverged items
  */
-const workspace_item_t *workspace_get_all_diverged(
-    const workspace_t *ws,
-    size_t *count
-);
+workspace_items_t workspace_get_all_diverged(const workspace_t *ws);
 
 /**
  * Get workspace item by filesystem path

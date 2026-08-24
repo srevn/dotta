@@ -1,7 +1,11 @@
 /**
- * stats.h - Profile and file statistics
+ * stats.h - Git object and history statistics
  *
- * Provides efficient statistics gathering for profiles and files.
+ * Provides efficient statistics gathering over blobs and commit history. What a
+ * *profile* holds is a different question — which tree paths are content and
+ * which are dotta's own bookkeeping is knowledge this layer does not have — and
+ * is answered by profile_get_stats (core/profiles.h), which reads blob sizes
+ * through the primitive below.
  *
  * Design principles:
  * - Minimize expensive operations (commit walking deferred to verbose mode)
@@ -10,7 +14,7 @@
  * - Const-correct interfaces
  *
  * Performance characteristics:
- * - Profile stats: O(files) - single tree walk, metadata-only reads
+ * - Blob size: O(1) - one object-header read, no decompression
  * - File commit map: O(commits_needed × files_per_commit) - with early termination
  * - File history: O(total_commits) - walks entire history
  */
@@ -20,16 +24,6 @@
 
 #include <git2.h>
 #include <types.h>
-
-/**
- * Profile statistics
- *
- * Aggregate information about an entire profile (file count and total size).
- */
-typedef struct {
-    size_t file_count;
-    size_t total_size;   /* Total size in bytes */
-} profile_stats_t;
 
 /**
  * Commit information
@@ -64,29 +58,13 @@ typedef struct {
 } file_history_t;
 
 /**
- * Get profile statistics
- *
- * Walks profile tree once to compute file count and total size. Uses
- * git_odb_read_header for efficient metadata-only reads (no decompression).
- *
- * Performance: O(files) - single tree walk Memory: O(1) - constant space
- *
- * @param repo Repository (required)
- * @param tree Tree to analyze (required)
- * @param out Statistics (required, filled by function)
- * @return Error or NULL on success
- */
-error_t *stats_get_profile_stats(
-    git_repository *repo,
-    git_tree *tree,
-    profile_stats_t *out
-);
-
-/**
  * Get blob size efficiently
  *
  * Reads only object metadata using git_odb_read_header (no decompression). This
  * is 10-50x faster than git_blob_lookup for size-only queries.
+ *
+ * Acquires an ODB handle per call. A caller reading many sizes in one pass takes
+ * the handle itself and uses stats_get_blob_size_with_odb below.
  *
  * @param repo Repository (required)
  * @param blob_oid Blob OID (required)
@@ -95,6 +73,24 @@ error_t *stats_get_profile_stats(
  */
 error_t *stats_get_blob_size(
     git_repository *repo,
+    const git_oid *blob_oid,
+    size_t *out
+);
+
+/**
+ * Get blob size through a caller-held ODB handle
+ *
+ * The batch form of stats_get_blob_size: same metadata-only read, with the object
+ * database acquired once by the caller (git_repository_odb) and reused across
+ * the pass. The one place a blob's size is read without inflating it.
+ *
+ * @param odb Object database (required, borrowed)
+ * @param blob_oid Blob OID (required)
+ * @param out Size in bytes (required, filled by function)
+ * @return Error or NULL on success
+ */
+error_t *stats_get_blob_size_with_odb(
+    git_odb *odb,
     const git_oid *blob_oid,
     size_t *out
 );

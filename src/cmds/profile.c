@@ -27,34 +27,6 @@
 #include "sys/upstream.h"
 
 /**
- * Count files in profile
- *
- * @param repo Repository (must not be NULL)
- * @param profile Profile name (must not be NULL)
- * @param count Output file count (must not be NULL)
- * @return Error or NULL on success
- */
-static error_t *count_profile_files(
-    git_repository *repo,
-    const char *profile,
-    size_t *count
-) {
-    CHECK_NULL(repo);
-    CHECK_NULL(profile);
-    CHECK_NULL(count);
-
-    string_array_t *files = NULL;
-    error_t *err = profile_list_files(repo, profile, &files);
-    if (err) {
-        return error_wrap(err, "Failed to list files");
-    }
-
-    *count = files->count;
-    string_array_free(files);
-    return NULL;
-}
-
-/**
  * Print manifest enable statistics
  *
  * Reports gain-side attribution for one enabled profile from the diff of the
@@ -264,20 +236,25 @@ static error_t *profile_list(
         output_section(out, OUTPUT_NORMAL, "Enabled profiles (in layering order)");
         for (size_t i = 0; i < enabled_profiles->count; i++) {
             const char *profile = enabled_profiles->items[i];
-            size_t file_count = 0;
-            error_t *count_err = count_profile_files(repo, profile, &file_count);
+            profile_stats_t stats = { 0 };
+            error_t *stats_err = profile_get_stats(repo, profile, &stats);
 
-            /* Show file counts if available, otherwise indicate error */
-            if (count_err) {
+            /* Name what the branch holds if we could read it, otherwise say so */
+            if (stats_err) {
                 output_styled(
-                    out, OUTPUT_NORMAL, "  %zu. {cyan}%s{reset} (file count unavailable)\n",
+                    out, OUTPUT_NORMAL, "  %zu. {cyan}%s{reset} (counts unavailable)\n",
                     i + 1, profile
                 );
-                error_free(count_err);
+                error_free(stats_err);
             } else {
+                char counts[64];
+                output_format_counts(
+                    stats.file_count, stats.directory_count,
+                    counts, sizeof(counts)
+                );
                 output_styled(
-                    out, OUTPUT_NORMAL, "  %zu. {cyan}%s{reset} (%zu file%s)\n",
-                    i + 1, profile, file_count, file_count == 1 ? "" : "s"
+                    out, OUTPUT_NORMAL, "  %zu. {cyan}%s{reset} (%s)\n",
+                    i + 1, profile, counts
                 );
             }
         }
@@ -291,20 +268,25 @@ static error_t *profile_list(
         output_section(out, OUTPUT_NORMAL, "Available (disabled)");
         for (size_t i = 0; i < available->count; i++) {
             const char *profile = available->items[i];
-            size_t file_count = 0;
-            error_t *count_err = count_profile_files(repo, profile, &file_count);
+            profile_stats_t stats = { 0 };
+            error_t *stats_err = profile_get_stats(repo, profile, &stats);
 
-            /* Show file counts if available, otherwise indicate error */
-            if (count_err) {
+            /* Name what the branch holds if we could read it, otherwise say so */
+            if (stats_err) {
                 output_styled(
-                    out, OUTPUT_NORMAL, "  • {cyan}%s{reset} (file count unavailable)\n",
+                    out, OUTPUT_NORMAL, "  • {cyan}%s{reset} (counts unavailable)\n",
                     profile
                 );
-                error_free(count_err);
+                error_free(stats_err);
             } else {
+                char counts[64];
+                output_format_counts(
+                    stats.file_count, stats.directory_count,
+                    counts, sizeof(counts)
+                );
                 output_styled(
-                    out, OUTPUT_NORMAL, "  • {cyan}%s{reset} (%zu file%s)\n",
-                    profile, file_count, file_count == 1 ? "" : "s"
+                    out, OUTPUT_NORMAL, "  • {cyan}%s{reset} (%s)\n",
+                    profile, counts
                 );
             }
         }
@@ -652,10 +634,9 @@ cleanup:
 /**
  * Profile enable subcommand
  *
- * Four-phase flow over the view before — the dispatcher's, built over the
- * enabled set as it stands at dispatch (the spec declares it; a set that will
- * not build ends dispatch with the builder's message, and the enable never
- * runs):
+ * Four-phase flow over the view before — the dispatcher's, built over the enabled
+ * set as it stands at dispatch (the spec declares it; a set that will not build
+ * ends dispatch with the builder's message, and the enable never runs):
  *   1. Gather & validate — resolve --all/args to a request set, then filter out
  *      already-enabled, missing, and custom-without-target profiles. Emits
  *      per-profile warnings; produces to_enable_validated.
@@ -944,9 +925,9 @@ static error_t *profile_enable(
             }
         }
 
-        /* Phase 3: The view after, and the diff. The builder reads the rows
-         * as the loop above left them, any --target supplied for the new
-         * entries included. */
+        /* Phase 3: The view after, and the diff. The builder reads the rows as
+         * the loop above left them, any --target supplied for the new entries
+         * included. */
         err = manifest_build(repo, state, ctx->arena, &after);
         if (err) {
             err = error_wrap(err, "Failed to build manifest after enable");
@@ -1874,8 +1855,8 @@ static void profile_fetch_defaults(void *o) {
     ((cmd_profile_options_t *) o)->subcommand = PROFILE_FETCH;
 }
 
-/* What can stand at the cursor: a profile to download — a remote-tracking
- * branch not yet local, or a local one to refresh. */
+/* What can stand at the cursor: a profile to download — a remote-tracking branch
+ * not yet local, or a local one to refresh. */
 static args_want_t profile_fetch_complete(
     const void *ctx_v, const void *opts_v, const args_completion_t *at, FILE *out
 ) {
@@ -1920,8 +1901,8 @@ static void profile_enable_defaults(void *o) {
     ((cmd_profile_options_t *) o)->subcommand = PROFILE_ENABLE;
 }
 
-/* What can stand at the cursor: a local profile, marked when already
- * enabled; for --target, a directory. */
+/* What can stand at the cursor: a local profile, marked when already enabled;
+ * for --target, a directory. */
 static args_want_t profile_enable_complete(
     const void *ctx_v, const void *opts_v, const args_completion_t *at, FILE *out
 ) {
@@ -2053,8 +2034,7 @@ static void profile_reorder_defaults(void *o) {
     ((cmd_profile_options_t *) o)->subcommand = PROFILE_REORDER;
 }
 
-/* What can stand at the cursor: an enabled profile, every one in the new
- * order. */
+/* What can stand at the cursor: an enabled profile, every one in the new order. */
 static args_want_t profile_reorder_complete(
     const void *ctx_v, const void *opts_v, const args_completion_t *at, FILE *out
 ) {
@@ -2132,8 +2112,8 @@ static const args_command_t spec_profile_validate = {
 
 /* --- parent: subcommand index + spec --- */
 
-/* Every verb but `list` — `dotta list` is the list command — also stands at
- * the root: `dotta enable work` for `dotta profile enable work`. */
+/* Every verb but `list` — `dotta list` is the list command — also stands at the
+ * root: `dotta enable work` for `dotta profile enable work`. */
 static const args_subcommand_t profile_subs[] = {
     /* aliases     spec                    hidden shortcut */
     { "list",     &spec_profile_list,     false, false },

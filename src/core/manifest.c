@@ -30,7 +30,6 @@
 #include "base/arena.h"
 #include "base/error.h"
 #include "base/hashmap.h"
-#include "base/string.h"
 #include "core/metadata.h"
 #include "core/profiles.h"
 #include "core/state.h"
@@ -318,14 +317,9 @@ static int manifest_claim_blob(
         return -1;
     }
 
-    /* Skip repository metadata files */
-    if (strcmp(storage_path, ".dottaignore") == 0 ||
-        strcmp(storage_path, ".bootstrap") == 0 ||
-        strcmp(storage_path, ".gitignore") == 0 ||
-        strcmp(storage_path, "README.md") == 0 ||
-        strcmp(storage_path, "README") == 0 ||
-        str_starts_with(storage_path, ".git/") ||
-        str_starts_with(storage_path, ".dotta/")) {
+    /* Skip repository bookkeeping — nothing the branch keeps for dotta's own
+     * use is a managed path, and mount_resolve below would refuse it anyway */
+    if (profile_is_repo_metadata(storage_path)) {
         return 0;
     }
 
@@ -645,9 +639,9 @@ error_t *manifest_build(
         /* Does the branch exist? Asked separately because the tree loader maps
          * a missing ref to ERR_GIT like every other failure, and "gone" must
          * not be confused with "broken": gone is an observation — the profile
-         * contributes nothing, is not listed among the view's profiles, and
-         * the workspace reads its records as orphans — broken is an error that
-         * must propagate. */
+         * contributes nothing, is not listed among the view's profiles, and the
+         * workspace reads its records as orphans — broken is an error that must
+         * propagate. */
         bool exists = false;
         err = gitops_branch_exists(repo, profile, &exists);
         if (err) {

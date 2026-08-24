@@ -1,11 +1,10 @@
 /**
- * stats.c - Profile and file statistics implementation
+ * stats.c - Git object and history statistics implementation
  *
  * Implementation notes:
  * - Uses git_odb_read_header for size queries (10-50x faster than git_blob_lookup)
  * - Unified commit walker eliminates code duplication
  * - Early termination when all files found (major speedup)
- * - Overflow protection on size accumulation
  */
 
 #include "sys/stats.h"
@@ -59,66 +58,6 @@ typedef struct {
     size_t files_found;           /* Number of files found so far */
     size_t files_needed;          /* Total files in current tree */
 } walk_ctx_t;
-
-/**
- * Tree walk callback data (for profile stats)
- */
-struct tree_walk_data {
-    git_odb *odb;        /* Cached ODB handle (avoids repeated git_repository_odb calls) */
-    size_t file_count;
-    size_t total_size;
-    error_t *error;
-};
-
-/**
- * Get blob size from a pre-acquired ODB handle (metadata only, no decompression)
- */
-static error_t *get_blob_size_with_odb(
-    git_odb *odb,
-    const git_oid *blob_oid,
-    size_t *out_size
-) {
-    size_t size;
-    git_object_t type;
-    int git_err = git_odb_read_header(&size, &type, odb, blob_oid);
-    if (git_err < 0) {
-        return error_from_git(git_err);
-    }
-
-    if (type != GIT_OBJECT_BLOB) {
-        return ERROR(ERR_INVALID_ARG, "Object is not a blob");
-    }
-
-    *out_size = size;
-    return NULL;
-}
-
-/**
- * Get blob size efficiently (metadata only, no decompression)
- *
- * Acquires ODB handle per call. For batch operations, prefer
- * get_blob_size_with_odb() with a cached ODB handle.
- */
-static error_t *get_blob_size(
-    git_repository *repo,
-    const git_oid *blob_oid,
-    size_t *out_size
-) {
-    CHECK_NULL(repo);
-    CHECK_NULL(blob_oid);
-    CHECK_NULL(out_size);
-
-    /* Get object database */
-    git_odb *odb = NULL;
-    int git_err = git_repository_odb(&odb, repo);
-    if (git_err < 0) {
-        return error_from_git(git_err);
-    }
-
-    error_t *err = get_blob_size_with_odb(odb, blob_oid, out_size);
-    git_odb_free(odb);
-    return err;
-}
 
 /**
  * Extract first line of commit message
@@ -276,51 +215,6 @@ static error_t *populate_tree_paths(
 
     *out_count = data.file_count;
     return NULL;
-}
-
-/**
- * Tree walk callback for profile statistics
- */
-static int tree_walk_callback(
-    const char *root,
-    const git_tree_entry *entry,
-    void *payload
-) {
-    (void) root;  /* Unused */
-    struct tree_walk_data *data = (struct tree_walk_data *) payload;
-
-    /* Defensive check */
-    if (!data) {
-        return -1;
-    }
-
-    /* Only process blobs (files) */
-    if (git_tree_entry_type(entry) != GIT_OBJECT_BLOB) {
-        return 0;
-    }
-
-    /* Get blob size efficiently (metadata only, using cached ODB) */
-    const git_oid *oid = git_tree_entry_id(entry);
-    size_t size;
-    error_t *err = get_blob_size_with_odb(data->odb, oid, &size);
-    if (err) {
-        data->error = err;
-        return -1;
-    }
-
-    /* Overflow protection */
-    if (data->total_size > SIZE_MAX - size) {
-        data->error = ERROR(
-            ERR_INTERNAL, "Profile size exceeds maximum representable value"
-        );
-        return -1;
-    }
-
-    /* Accumulate statistics */
-    data->file_count++;
-    data->total_size += size;
-
-    return 0;
 }
 
 /**
@@ -604,53 +498,6 @@ cleanup:
 }
 
 /**
- * Get profile statistics
- */
-error_t *stats_get_profile_stats(
-    git_repository *repo,
-    git_tree *tree,
-    profile_stats_t *out
-) {
-    CHECK_NULL(repo);
-    CHECK_NULL(tree);
-    CHECK_NULL(out);
-
-    /* Acquire ODB once for all blob size reads */
-    git_odb *odb = NULL;
-    int git_err = git_repository_odb(&odb, repo);
-    if (git_err < 0) {
-        return error_from_git(git_err);
-    }
-
-    /* Initialize walk data */
-    struct tree_walk_data data = {
-        .odb        = odb,
-        .file_count = 0,
-        .total_size = 0,
-        .error      = NULL
-    };
-
-    /* Walk tree */
-    error_t *err = gitops_tree_walk(tree, tree_walk_callback, &data);
-    git_odb_free(odb);
-
-    if (err || data.error) {
-        /* Prefer callback error */
-        if (data.error) {
-            error_free(err);
-            return data.error;
-        }
-        return err;
-    }
-
-    /* Fill output */
-    out->file_count = data.file_count;
-    out->total_size = data.total_size;
-
-    return NULL;
-}
-
-/**
  * Get blob size
  */
 error_t *stats_get_blob_size(
@@ -658,7 +505,47 @@ error_t *stats_get_blob_size(
     const git_oid *blob_oid,
     size_t *out
 ) {
-    return get_blob_size(repo, blob_oid, out);
+    CHECK_NULL(repo);
+    CHECK_NULL(blob_oid);
+    CHECK_NULL(out);
+
+    /* Get object database */
+    git_odb *odb = NULL;
+    int git_err = git_repository_odb(&odb, repo);
+    if (git_err < 0) {
+        return error_from_git(git_err);
+    }
+
+    error_t *err = stats_get_blob_size_with_odb(odb, blob_oid, out);
+    git_odb_free(odb);
+    return err;
+}
+
+/**
+ * Get blob size through a caller-held ODB handle
+ */
+error_t *stats_get_blob_size_with_odb(
+    git_odb *odb,
+    const git_oid *blob_oid,
+    size_t *out
+) {
+    CHECK_NULL(odb);
+    CHECK_NULL(blob_oid);
+    CHECK_NULL(out);
+
+    size_t size;
+    git_object_t type;
+    int git_err = git_odb_read_header(&size, &type, odb, blob_oid);
+    if (git_err < 0) {
+        return error_from_git(git_err);
+    }
+
+    if (type != GIT_OBJECT_BLOB) {
+        return ERROR(ERR_INVALID_ARG, "Object is not a blob");
+    }
+
+    *out = size;
+    return NULL;
 }
 
 /**

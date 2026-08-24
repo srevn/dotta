@@ -16,9 +16,16 @@
 #include "base/error.h"
 #include "base/hashmap.h"
 #include "base/string.h"
+#include "core/metadata.h"
 #include "core/state.h"
 #include "infra/mount.h"
 #include "sys/gitops.h"
+#include "sys/stats.h"
+
+/* Storage paths composed during a tree walk. A profile path is a storage label
+ * plus what a mount-relative path can be, and every writer validated it long
+ * before it reached Git; the walks below treat an overrun as corruption. */
+#define PROFILE_TREE_PATH_MAX 1024
 
 /**
  * Check if profile exists
@@ -205,15 +212,15 @@ cleanup:
  * root sentinel) to mount_table_build. Single chokepoint for "what does the mount
  * table look like for this command?".
  *
- * Name and target are read from the state row cache for the call only — the
- * table copies every string it keeps — so the handle is a value: the topology
- * the rows described at the instant it was built, readable for the arena's
- * lifetime whatever enabled_profiles mutation follows.
+ * Name and target are read from the state row cache for the call only — the table
+ * copies every string it keeps — so the handle is a value: the topology the rows
+ * described at the instant it was built, readable for the arena's lifetime whatever
+ * enabled_profiles mutation follows.
  *
  * A state with no database has no rows and yields the bare table (HOME and the
  * root sentinel). A row read that fails on an opened database is an error and
- * propagates: a bare table in its place would classify every input as home/
- * or root/ and resolve no custom/ path, silently.
+ * propagates: a bare table in its place would classify every input as home/ or
+ * root/ and resolve no custom/ path, silently.
  */
 error_t *profile_build_mount_table(
     const state_t *state,
@@ -530,6 +537,73 @@ error_t *profile_list_all_local(
 }
 
 /**
+ * Is this path inside a profile branch dotta's own bookkeeping?
+ */
+bool profile_is_repo_metadata(const char *storage_path) {
+    if (!storage_path) {
+        return false;
+    }
+
+    return strcmp(storage_path, ".dottaignore") == 0 ||
+           strcmp(storage_path, ".bootstrap") == 0 ||
+           strcmp(storage_path, ".gitignore") == 0 ||
+           strcmp(storage_path, "README.md") == 0 ||
+           strcmp(storage_path, "README") == 0 ||
+           str_starts_with(storage_path, ".git/") ||
+           str_starts_with(storage_path, ".dotta/");
+}
+
+/**
+ * Compose a tree entry's storage path, and say whether the walk should see it
+ *
+ * Every walk over a profile tree below asks an entry the same three things: is
+ * it a blob, what is its path within the branch, and is that path tracked content
+ * rather than bookkeeping. Answered once here, so each walk differs only in what
+ * it does with a path it accepts.
+ *
+ * `out_err` receives the truncation error and nothing else — an entry that is
+ * simply not content leaves it untouched, which is what lets a caller read "false
+ * with no error" as "skip this entry, keep walking".
+ *
+ * @param root Walk root as libgit2 supplies it ("" or "dir/")
+ * @param entry Tree entry (must not be NULL)
+ * @param buf Receives the storage path when the entry is accepted
+ * @param size Size of buf
+ * @param out_err Receives a truncation error (must not be NULL)
+ * @return true when buf holds a content path the walk should process
+ */
+static bool tree_entry_content_path(
+    const char *root,
+    const git_tree_entry *entry,
+    char *buf,
+    size_t size,
+    error_t **out_err
+) {
+    if (git_tree_entry_type(entry) != GIT_OBJECT_BLOB) {
+        return false;
+    }
+
+    const char *name = git_tree_entry_name(entry);
+    int ret;
+
+    if (root && root[0] != '\0') {
+        ret = snprintf(buf, size, "%s%s", root, name);
+    } else {
+        ret = snprintf(buf, size, "%s", name);
+    }
+
+    if (ret < 0 || (size_t) ret >= size) {
+        *out_err = ERROR(
+            ERR_INTERNAL, "Path exceeds maximum length: %s%s",
+            root ? root : "", name
+        );
+        return false;
+    }
+
+    return !profile_is_repo_metadata(buf);
+}
+
+/**
  * Tree walk callback data
  */
 struct walk_data {
@@ -547,50 +621,15 @@ static int tree_walk_callback(
 ) {
     struct walk_data *data = (struct walk_data *) payload;
 
-    /* Only process blobs (files) */
-    if (git_tree_entry_type(entry) != GIT_OBJECT_BLOB) {
-        return 0;
-    }
-
-    /* Build full path */
-    const char *name = git_tree_entry_name(entry);
-    char full_path[1024];
-    int ret;
-
-    if (root && root[0] != '\0') {
-        ret = snprintf(
-            full_path, sizeof(full_path), "%s%s",
-            root, name
-        );
-    } else {
-        ret = snprintf(
-            full_path, sizeof(full_path), "%s",
-            name
-        );
-    }
-
-    /* Check for truncation */
-    if (ret < 0 || (size_t) ret >= sizeof(full_path)) {
-        data->error = ERROR(
-            ERR_INTERNAL, "Path exceeds maximum length: %s%s",
-            root ? root : "", name
-        );
-        return -1;
-    }
-
-    /* Skip repository metadata files */
-    if (strcmp(full_path, ".dottaignore") == 0 ||
-        strcmp(full_path, ".bootstrap") == 0 ||
-        strcmp(full_path, ".gitignore") == 0 ||
-        strcmp(full_path, "README.md") == 0 ||
-        strcmp(full_path, "README") == 0 ||
-        str_starts_with(full_path, ".git/") ||
-        str_starts_with(full_path, ".dotta/")) {
-        return 0;
+    char storage_path[PROFILE_TREE_PATH_MAX];
+    if (!tree_entry_content_path(
+        root, entry, storage_path, sizeof(storage_path), &data->error
+        )) {
+        return data->error ? -1 : 0;
     }
 
     /* Add to array */
-    error_t *err = string_array_push(data->paths, full_path);
+    error_t *err = string_array_push(data->paths, storage_path);
     if (err) {
         data->error = err;
         return -1;  /* Stop walk */
@@ -659,6 +698,149 @@ error_t *profile_list_files(
 }
 
 /**
+ * Tree walk data for the branch statistics
+ */
+struct stats_walk_data {
+    git_odb *odb;        /* Held for the walk: one handle, N header reads */
+    size_t file_count;
+    size_t total_size;
+    error_t *error;
+};
+
+/**
+ * Tree walk callback: count content blobs and accumulate their bytes
+ */
+static int stats_walk_callback(
+    const char *root,
+    const git_tree_entry *entry,
+    void *payload
+) {
+    struct stats_walk_data *data = (struct stats_walk_data *) payload;
+
+    char storage_path[PROFILE_TREE_PATH_MAX];
+    if (!tree_entry_content_path(
+        root, entry, storage_path, sizeof(storage_path), &data->error
+        )) {
+        return data->error ? -1 : 0;
+    }
+
+    size_t size = 0;
+    error_t *err = stats_get_blob_size_with_odb(
+        data->odb, git_tree_entry_id(entry), &size
+    );
+    if (err) {
+        data->error = err;
+        return -1;
+    }
+
+    if (data->total_size > SIZE_MAX - size) {
+        data->error = ERROR(
+            ERR_INTERNAL, "Profile size exceeds maximum representable value"
+        );
+        return -1;
+    }
+
+    data->file_count++;
+    data->total_size += size;
+
+    return 0;
+}
+
+/**
+ * Count what a profile branch holds
+ */
+error_t *profile_get_stats(
+    git_repository *repo,
+    const char *profile,
+    profile_stats_t *out
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(profile);
+    CHECK_NULL(out);
+
+    *out = (profile_stats_t){ 0 };
+
+    git_tree *tree = NULL;
+    error_t *err = gitops_load_branch_tree(repo, profile, &tree, NULL);
+    if (err) {
+        return error_wrap(
+            err, "Failed to load tree for profile '%s'", profile
+        );
+    }
+
+    /* The files: one walk, one ODB handle, sizes read from the object headers. */
+    git_odb *odb = NULL;
+    int git_err = git_repository_odb(&odb, repo);
+    if (git_err < 0) {
+        git_tree_free(tree);
+        return error_from_git(git_err);
+    }
+
+    struct stats_walk_data data = {
+        .odb        = odb,
+        .file_count = 0,
+        .total_size = 0,
+        .error      = NULL
+    };
+
+    err = gitops_tree_walk(tree, stats_walk_callback, &data);
+    git_odb_free(odb);
+
+    if (err || data.error) {
+        /* Prefer the callback's error — it names the entry that failed */
+        if (data.error) {
+            error_free(err);
+            err = data.error;
+        }
+        git_tree_free(tree);
+        return error_wrap(
+            err, "Failed to read statistics for profile '%s'", profile
+        );
+    }
+
+    out->file_count = data.file_count;
+    out->total_size = data.total_size;
+
+    /* The directories: the branch's own metadata, the same source the view's
+     * claim routine reads. No metadata.json is no claim, not a failure — every
+     * other load error is real and propagates. */
+    metadata_t *metadata = NULL;
+    err = metadata_load_from_tree(repo, tree, profile, &metadata);
+    if (err) {
+        git_tree_free(tree);
+        if (error_code(err) == ERR_NOT_FOUND) {
+            error_free(err);
+            return NULL;
+        }
+        return error_wrap(
+            err, "Failed to load metadata for profile '%s'", profile
+        );
+    }
+
+    size_t item_count = 0;
+    const metadata_item_t *items = metadata_get_all_items(metadata, &item_count);
+    for (size_t i = 0; i < item_count; i++) {
+        if (items[i].kind != METADATA_ITEM_DIRECTORY) continue;
+
+        /* A path is a tree or a blob: a DIRECTORY item where the tree holds a
+         * blob is stale metadata, and the tree is the content authority — the
+         * same rule manifest_claim_tree applies when the profile is enabled. */
+        git_tree_entry *held = NULL;
+        if (git_tree_entry_bypath(&held, tree, items[i].key) == 0) {
+            bool is_blob = git_tree_entry_type(held) == GIT_OBJECT_BLOB;
+            git_tree_entry_free(held);
+            if (is_blob) continue;
+        }
+
+        out->directory_count++;
+    }
+
+    metadata_free(metadata);
+    git_tree_free(tree);
+    return NULL;
+}
+
+/**
  * Check if profile contains any custom/ files
  *
  * Uses direct tree lookup instead of full tree walk for O(log k) performance
@@ -719,44 +901,15 @@ static int file_index_callback(
 ) {
     struct file_index_ctx *ctx = (struct file_index_ctx *) payload;
 
-    if (git_tree_entry_type(entry) != GIT_OBJECT_BLOB) {
-        return 0;
-    }
-
-    const char *name = git_tree_entry_name(entry);
-    char full_path[1024];
-    int ret;
-
-    if (root && root[0] != '\0') {
-        ret = snprintf(
-            full_path, sizeof(full_path), "%s%s", root, name
-        );
-    } else {
-        ret = snprintf(
-            full_path, sizeof(full_path), "%s", name
-        );
-    }
-
-    if (ret < 0 || (size_t) ret >= sizeof(full_path)) {
-        ctx->error = ERROR(
-            ERR_INTERNAL, "Path exceeds maximum length: %s%s",
-            root ? root : "", name
-        );
-        return -1;
-    }
-
-    if (strcmp(full_path, ".dottaignore") == 0 ||
-        strcmp(full_path, ".bootstrap") == 0 ||
-        strcmp(full_path, ".gitignore") == 0 ||
-        strcmp(full_path, "README.md") == 0 ||
-        strcmp(full_path, "README") == 0 ||
-        str_starts_with(full_path, ".git/") ||
-        str_starts_with(full_path, ".dotta/")) {
-        return 0;
+    char storage_path[PROFILE_TREE_PATH_MAX];
+    if (!tree_entry_content_path(
+        root, entry, storage_path, sizeof(storage_path), &ctx->error
+        )) {
+        return ctx->error ? -1 : 0;
     }
 
     /* Get or create profile list for this path */
-    string_array_t *profiles = hashmap_get(ctx->index, full_path);
+    string_array_t *profiles = hashmap_get(ctx->index, storage_path);
     if (!profiles) {
         profiles = string_array_new(0);
         if (!profiles) {
@@ -767,7 +920,7 @@ static int file_index_callback(
             return -1;
         }
 
-        error_t *err = hashmap_set(ctx->index, full_path, profiles);
+        error_t *err = hashmap_set(ctx->index, storage_path, profiles);
         if (err) {
             string_array_free(profiles);
             ctx->error = error_wrap(err, "Failed to index file");

@@ -195,6 +195,62 @@ error_t *profile_list_all_local(
 bool profile_exists(git_repository *repo, const char *profile);
 
 /**
+ * Is this path inside a profile branch dotta's own bookkeeping?
+ *
+ * A profile branch holds two kinds of thing: the paths it tracks, every one of
+ * them under a storage label (home/, root/, custom/), and dotta's own files beside
+ * them at the branch root — the ignore ruleset, the bootstrap script, the metadata
+ * sidecar, and what Git or a reader leaves there. Only the first kind deploys,
+ * is listed, is counted, or reaches the view.
+ *
+ * The one producer of that distinction: every walk over a profile tree — the
+ * file listing, the cross-profile index, the view's claim routine, the branch
+ * statistics — asks here rather than spelling the set again.
+ *
+ * @param storage_path Path within the branch ("home/.bashrc",
+ *                     ".dotta/metadata.json"); NULL reads as content
+ * @return true when the path is bookkeeping rather than tracked content
+ */
+bool profile_is_repo_metadata(const char *storage_path);
+
+/**
+ * What a profile branch holds
+ *
+ * Counted from the branch, not from the view: the listings that report these
+ * name available profiles too, and a profile nothing has enabled owns no rows.
+ * The two sources are the ones the view's claim routine reads when the profile
+ * *is* enabled (manifest_claim_tree) — the tree's content blobs and the branch
+ * metadata's tracked directories — so a profile that wins every path it claims
+ * counts the same here as its rows do there.
+ */
+typedef struct {
+    size_t file_count;       /* Content blobs in the tree (bookkeeping excluded) */
+    size_t directory_count;  /* Tracked directories the branch metadata claims */
+    size_t total_size;       /* Bytes of those blobs */
+} profile_stats_t;
+
+/**
+ * Count what a profile branch holds
+ *
+ * One walk of the branch tree — each content blob counted and its size taken
+ * from the object header, nothing inflated — then the branch metadata's DIRECTORY
+ * items. A branch with no metadata.json claims no directories; that absence is
+ * not a failure.
+ *
+ * Performance: O(files + directories), one tree walk and one metadata load.
+ *
+ * @param repo Repository (must not be NULL)
+ * @param profile Profile name (must not be NULL)
+ * @param out Statistics (must not be NULL; zeroed, then filled)
+ * @return Error or NULL on success
+ */
+error_t *profile_get_stats(
+    git_repository *repo,
+    const char *profile,
+    profile_stats_t *out
+);
+
+/**
  * List files in profile
  *
  * Loads the profile's Git tree internally and walks it to collect storage paths.

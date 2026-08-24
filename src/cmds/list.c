@@ -11,6 +11,7 @@
 
 #include <git2.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <time.h>
 
@@ -91,6 +92,21 @@ static void print_upstream_state(
 }
 
 /**
+ * One verbose profile line's measured facts
+ *
+ * Read from the branch before anything prints, because both fields set columns
+ * measured across every branch, the way the name column already is. An empty
+ * phrase is a branch whose statistics could not be read — its line still prints,
+ * without them.
+ *
+ * Buffer sizes are the minimums output_format_counts and output_format_size state.
+ */
+typedef struct {
+    char counts[64];
+    char size[32];
+} profile_line_t;
+
+/**
  * List profiles - Level 1
  *
  * Default: Just profile names Verbose: Add stats (file count, size, last commit)
@@ -160,6 +176,59 @@ static error_t *list_profiles(
         }
     }
 
+    /* Read what each branch holds, and measure the columns it needs. Both are
+     * as wide as the branches make them — the counts phrase names only the kinds
+     * a branch actually has, and a size runs from "0 B" to four digits and a
+     * unit — so neither is guessed. One profile_get_stats per branch, the expensive
+     * part of a verbose line, runs here rather than again at render time; a branch
+     * that cannot be read is warned about and left with an empty phrase. */
+    profile_line_t *lines = NULL;
+    size_t max_counts_len = 0;
+    size_t max_size_len = 0;
+    if (verbose) {
+        lines = calloc(branches->count, sizeof(*lines));
+        if (!lines) {
+            string_array_free(branches);
+            return ERROR(ERR_MEMORY, "Failed to allocate profile lines");
+        }
+
+        for (size_t i = 0; i < branches->count; i++) {
+            const char *bname = branches->items[i];
+            if (strcmp(bname, "dotta-worktree") == 0) {
+                continue;
+            }
+
+            profile_stats_t stats = { 0 };
+            err = profile_get_stats(repo, bname, &stats);
+            if (err) {
+                output_warning(
+                    out, OUTPUT_NORMAL, "Failed to load profile '%s': %s",
+                    bname, error_message(err)
+                );
+                error_free(err);
+                err = NULL;
+                continue;
+            }
+
+            output_format_counts(
+                stats.file_count, stats.directory_count,
+                lines[i].counts, sizeof(lines[i].counts)
+            );
+            output_format_size(
+                stats.total_size, lines[i].size, sizeof(lines[i].size)
+            );
+
+            size_t len = strlen(lines[i].counts);
+            if (len > max_counts_len) {
+                max_counts_len = len;
+            }
+            len = strlen(lines[i].size);
+            if (len > max_size_len) {
+                max_size_len = len;
+            }
+        }
+    }
+
     /* Print header */
     output_section(out, OUTPUT_NORMAL, "Available profiles");
 
@@ -184,41 +253,19 @@ static error_t *list_profiles(
             continue;
         }
 
-        /* Verbose: Load tree for stats */
-        git_tree *tree = NULL;
-        if (verbose) {
-            err = gitops_load_branch_tree(repo, profile, &tree, NULL);
-            if (err) {
-                output_warning(
-                    out, OUTPUT_NORMAL, "Failed to load profile '%s': %s",
-                    profile, error_message(err)
-                );
-                error_free(err);
-                err = NULL;
-                /* tree stays NULL - stats skipped, name still shown */
-            }
-        }
-
         /* Start line with indicator and name */
         output_styled(
             out, OUTPUT_NORMAL, "  %s{cyan}%-*s{reset}",
             indicator, (int) max_name_len, profile
         );
 
-        /* Verbose: Add stats (requires successfully loaded tree) */
-        if (verbose && tree) {
-            profile_stats_t stats = { 0 };
-            error_t *stats_err = stats_get_profile_stats(repo, tree, &stats);
-            if (!stats_err) {
-                char size_str[32];
-                output_format_size(stats.total_size, size_str, sizeof(size_str));
-                output_print(
-                    out, OUTPUT_VERBOSE, " %2zu file%s, %8s",
-                    stats.file_count,
-                    stats.file_count == 1 ? " " : "s", size_str
-                );
-            }
-            error_free(stats_err);
+        /* Verbose: what the branch holds, in the column measured for it */
+        if (lines && lines[i].counts[0] != '\0') {
+            output_print(
+                out, OUTPUT_VERBOSE, " %-*s %*s",
+                (int) max_counts_len, lines[i].counts,
+                (int) max_size_len, lines[i].size
+            );
         }
 
         /* Verbose: Add last commit info (uses branch name, not profile tree) */
@@ -272,7 +319,6 @@ static error_t *list_profiles(
         }
 
         output_newline(out, OUTPUT_NORMAL);
-        git_tree_free(tree);
     }
 
     /* Print remote legend if shown */
@@ -296,6 +342,7 @@ static error_t *list_profiles(
         );
     }
 
+    free(lines);
     string_array_free(branches);
 
     return NULL;
@@ -799,11 +846,11 @@ static error_t *list_post_parse(
 }
 
 /**
- * What can stand at the cursor, by the rule list_post_parse routes with:
- * under -p, a file of that profile's branch as the one positional; without,
- * a local profile or a file of the view first, then — under a profile — a
- * file of its branch, shadowed ones included. A path in the first slot was
- * the file: nothing follows it.
+ * What can stand at the cursor, by the rule list_post_parse routes with: under
+ * -p, a file of that profile's branch as the one positional; without, a local
+ * profile or a file of the view first, then — under a profile — a file of its
+ * branch, shadowed ones included. A path in the first slot was the file: nothing
+ * follows it.
  */
 static args_want_t list_complete(
     const void *ctx_v, const void *opts_v, const args_completion_t *at, FILE *out

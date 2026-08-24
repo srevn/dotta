@@ -771,6 +771,34 @@ void output_format_size(size_t bytes, char *buffer, size_t buffer_size) {
         );
 }
 
+void output_format_counts(
+    size_t files,
+    size_t directories,
+    char *buffer,
+    size_t buffer_size
+) {
+    if (!buffer || buffer_size == 0) return;
+
+    if (files > 0 && directories > 0)
+        snprintf(
+            buffer, buffer_size, "%zu file%s, %zu director%s",
+            files, files == 1 ? "" : "s",
+            directories, directories == 1 ? "y" : "ies"
+        );
+    else if (files > 0)
+        snprintf(
+            buffer, buffer_size, "%zu file%s",
+            files, files == 1 ? "" : "s"
+        );
+    else if (directories > 0)
+        snprintf(
+            buffer, buffer_size, "%zu director%s",
+            directories, directories == 1 ? "y" : "ies"
+        );
+    else
+        snprintf(buffer, buffer_size, "empty");
+}
+
 /* ═══════════════════════════════════════════════════════════════════
  * User Confirmation Prompts
  * ═══════════════════════════════════════════════════════════════════ */

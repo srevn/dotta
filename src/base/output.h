@@ -353,6 +353,30 @@ void output_print_diff(const output_t *ctx, const char *diff_text);
 void output_format_size(size_t bytes, char *buffer, size_t buffer_size);
 
 /**
+ * Format a count of files and directories in one phrase
+ *
+ * "3 files, 2 directories" — naming only the kinds that are actually there, so
+ * a set of two directories reads as "2 directories" rather than as "0 files"
+ * with a rider, and "empty" when there is nothing of either kind. Always writes
+ * a non-empty phrase.
+ *
+ * The phrase, not its frame: callers put it in parentheses after a name, in a
+ * padded column, or on a line of its own, and none of them has to agree about
+ * anything but the words. 64 bytes is enough for any pair of counts.
+ *
+ * @param files Number of files
+ * @param directories Number of directories
+ * @param buffer Output buffer for the phrase
+ * @param buffer_size Size of output buffer (minimum 64 bytes)
+ */
+void output_format_counts(
+    size_t files,
+    size_t directories,
+    char *buffer,
+    size_t buffer_size
+);
+
+/**
  * Prompt user for confirmation
  *
  * Displays a yes/no prompt and waits for user input. Handles input buffer clearing

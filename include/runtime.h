@@ -174,9 +174,9 @@ typedef enum dotta_state_mode {
  *
  * Who declares it: the commands whose subject is the view — the workspace
  * commands (status, diff, apply, sync, update — `workspace_load` borrows the
- * view rather than building one), `remove` (who owned a path a moment before
- * the commit is read off the view before it) and `profile enable` (its receipt
- * is the diff between the view before and the view after). A build that fails
+ * view rather than building one), `remove` (the multi-profile warning's
+ * deployed-from-another-profile bit is read off the view) and `profile enable`
+ * (its receipt is the diff between the view before and the view after). A build that fails
  * ends dispatch with the builder's message — a tree that will not load, a
  * custom/ path under a profile with no target — on every path of the command,
  * including the ones that would not have read the view; the enabled set is

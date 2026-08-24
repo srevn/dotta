@@ -610,12 +610,6 @@ static bool confirm_profile_deletion(
 
 /**
  * Remove files from profile
- *
- * `before` is the view ahead of the commit (the dispatcher's): who owns a path
- * a moment before this command removes it is a fact neither the post-commit view
- * nor the record can state — a path never seen here has no record, and a record
- * can be a higher profile's — so it serves both the conflict analysis and the
- * record update.
  */
 static error_t *remove_files_from_profile(
     const dotta_ctx_t *ctx,
@@ -628,7 +622,6 @@ static error_t *remove_files_from_profile(
     const char *repo_path = ctx->run.repo_path;
     state_t *state = ctx->run.state;
     const mount_table_t *mounts = ctx->run.mounts;
-    const manifest_t *before = ctx->run.manifest;
     const config_t *config = ctx->config;
     output_t *out = ctx->out;
 
@@ -645,7 +638,6 @@ static error_t *remove_files_from_profile(
     char *message = NULL;
     manifest_t *after = NULL;
     hashmap_t *anchor_index = NULL;
-    bool profile_enabled = false;
 
     /* CLI flags override config */
     if (opts->verbose) {
@@ -678,11 +670,6 @@ static error_t *remove_files_from_profile(
     if (err) {
         goto cleanup;
     }
-
-    /* Capture profile-enabled status. The record-update phase below promotes
-     * the borrowed read handle to a write transaction via state_begin; no reopen
-     * needed. */
-    profile_enabled = state_has_profile(state, opts->profile);
 
     /* Display multi-profile warnings BEFORE any operation */
     display_multi_profile_warnings(
@@ -940,102 +927,122 @@ static error_t *remove_files_from_profile(
      * of files still needed by higher-priority profiles).
      */
 
-    /* Write the record if the profile is enabled.
-     *
-     * profile_enabled==true implies state was successfully loaded with a live
-     * DB (state_has_profile returns false for NULL/empty state), so state_begin
-     * is safe without an additional guard. The handle is reused — no second
-     * state_open that would re-prepare statements and re-query enabled_profiles
-     * from scratch.
-     *
-     * Which paths this commit let go is read off the two views: `before` says
-     * which were this profile's a moment ago; `after` (the enabled set at its
-     * post-commit HEADs) says which a lower profile provides now — a fallback,
-     * whose record stays and reads [reassigned] until apply deploys it. A path
-     * that was ours and that nothing provides now gets the fate the user chose,
-     * if dotta has a record of it at all (never seen here: nothing to release
-     * or prune): --delete-files orders the deployed copy pruned at the next apply;
-     * the default retires the record — released from management now. The directory
-     * entries the metadata step pruned as redundant left the view by the same
-     * commit and take the same route: an owned directory is pruned under cleanup's
-     * emptiness rule, or released.
+    /* The record phase: the record answers to the record. The candidates are
+     * the paths this commit let go — the removed claims, and the directory
+     * entries the metadata step pruned as redundant, which left the view by the
+     * same commit. For each candidate the subject is its record: one naming
+     * another profile is not ours to settle; one naming this profile whose path
+     * the after-view still provides is a fallback — kept, it reads [reassigned]
+     * until apply hands it over; one the view no longer provides takes the fate
+     * the user chose — --delete-files orders the deployed copy pruned at the
+     * next apply, the default retires the record (released from management
+     * now). Enablement is not consulted: a record dotta holds under a disabled
+     * profile is still dotta's record — the rule delete_profile_branch runs
+     * over every record naming the profile, run here over the candidates.
      *
      * Non-fatal throughout: Git succeeded and stands. A record this block fails
      * to write is an orphan the next apply reads, asks Git about, finds let go,
      * and releases — the default outcome, minus the prune order under
      * --delete-files. */
-    size_t manifest_removed_count = 0, manifest_fallback_count = 0;
+    size_t settled_count = 0, fallback_count = 0;
+    error_t *record_err = NULL;
 
-    if (profile_enabled) {
-        /* Open transaction for the record update */
-        error_t *manifest_err = state_begin(state);
-        if (manifest_err) {
+    /* The candidates, as this profile deploys them. UNBOUND (custom/ under a
+     * profile with no target here) names nothing on this machine: nothing to
+     * settle. A genuine resolve error (malformed storage, OOM) skips the path
+     * the same way — the compaction's fallback stance above, spelled here. */
+    const char **candidates = arena_alloc(
+        ctx->arena,
+        (removed_paths->count + pruned_dirs.count) * sizeof(const char *)
+    );
+    size_t candidate_count = 0;
+    if (!candidates) {
+        record_err = ERROR(ERR_MEMORY, "Failed to allocate candidate paths");
+    }
+    const string_array_t *let_go[] = { removed_paths, &pruned_dirs };
+    for (size_t b = 0; !record_err && b < sizeof(let_go) / sizeof(let_go[0]); b++) {
+        for (size_t i = 0; i < let_go[b]->count; i++) {
+            mount_resolve_outcome_t outcome;
+            const char *fs_path = NULL;
+            error_t *resolve_err = mount_resolve(
+                mounts, opts->profile, let_go[b]->items[i], ctx->arena,
+                &outcome, &fs_path
+            );
+            if (resolve_err) {
+                error_free(resolve_err);
+                continue;
+            }
+            if (outcome == MOUNT_RESOLVE_UNBOUND) continue;
+            candidates[candidate_count++] = fs_path;
+        }
+    }
+
+    /* The record, once, on the READ handle — empty when the database does not
+     * exist. Read before the transaction: state_begin creates .git/dotta.db at
+     * first write intent (its contract, core/state.h), and a remove with no
+     * record to settle must not grow a never-enabled repository a database. */
+    anchor_t *anchors = NULL;
+    size_t anchor_count = 0;
+    if (!record_err) {
+        record_err = state_get_all_anchors(state, ctx->arena, &anchors, &anchor_count);
+    }
+    bool any_ours = false;
+    if (!record_err && anchor_count > 0 && candidate_count > 0) {
+        anchor_index = hashmap_borrow(anchor_count);
+        if (!anchor_index) {
+            record_err = ERROR(ERR_MEMORY, "Failed to create record index");
+        }
+        for (size_t i = 0; !record_err && i < anchor_count; i++) {
+            record_err = hashmap_set(
+                anchor_index, anchors[i].filesystem_path, &anchors[i]
+            );
+        }
+        for (size_t i = 0; !record_err && !any_ours && i < candidate_count; i++) {
+            const anchor_t *anchor = hashmap_get(anchor_index, candidates[i]);
+            any_ours = anchor != NULL &&
+                strcmp(anchor->profile, opts->profile) == 0;
+        }
+    }
+
+    if (record_err) {
+        output_warning(
+            out, OUTPUT_NORMAL, "Record update failed: %s",
+            error_message(record_err)
+        );
+        error_free(record_err);
+    } else if (any_ours) {
+        record_err = state_begin(state);
+        if (record_err) {
             output_warning(
                 out, OUTPUT_NORMAL, "Failed to open transaction for record update: %s",
-                error_message(manifest_err)
+                error_message(record_err)
             );
-            error_free(manifest_err);
+            error_free(record_err);
         } else {
-            anchor_t *anchors = NULL;
-            size_t anchor_count = 0;
+            /* The post-commit view — what still provides each candidate now. */
+            record_err = manifest_build(repo, state, ctx->arena, &after);
 
-            manifest_err = manifest_build(repo, state, ctx->arena, &after);
-            if (!manifest_err) {
-                manifest_err = state_get_all_anchors(
-                    state, ctx->arena, &anchors, &anchor_count
-                );
-            }
-            if (!manifest_err) {
-                anchor_index = hashmap_borrow(anchor_count > 0 ? anchor_count : 16);
-                if (!anchor_index) {
-                    manifest_err = ERROR(ERR_MEMORY, "Failed to create anchors index");
+            for (size_t i = 0; !record_err && i < candidate_count; i++) {
+                const anchor_t *anchor = hashmap_get(anchor_index, candidates[i]);
+                if (!anchor || strcmp(anchor->profile, opts->profile) != 0) continue;
+
+                if (manifest_lookup(after, candidates[i])) {
+                    fallback_count++;
+                    continue;
                 }
-            }
-            for (size_t i = 0; !manifest_err && i < anchor_count; i++) {
-                manifest_err = hashmap_set(
-                    anchor_index, anchors[i].filesystem_path, &anchors[i]
-                );
-            }
 
-            const string_array_t *let_go[] = { removed_paths, &pruned_dirs };
-            for (size_t b = 0; !manifest_err && b < sizeof(let_go) / sizeof(let_go[0]); b++) {
-                for (size_t i = 0; !manifest_err && i < let_go[b]->count; i++) {
-                    const char *storage_path = let_go[b]->items[i];
-
-                    /* The path as this profile deploys it. UNBOUND (custom/ under
-                     * a profile with no target here) names nothing on this machine:
-                     * nothing to release. */
-                    mount_resolve_outcome_t outcome;
-                    const char *fs_path = NULL;
-                    manifest_err = mount_resolve(
-                        mounts, opts->profile, storage_path, ctx->arena,
-                        &outcome, &fs_path
-                    );
-                    if (manifest_err || outcome == MOUNT_RESOLVE_UNBOUND) continue;
-
-                    const manifest_row_t *was = manifest_lookup(before, fs_path);
-                    if (!was || strcmp(was->profile, opts->profile) != 0) continue;
-
-                    if (manifest_lookup(after, fs_path)) {
-                        manifest_fallback_count++;
-                        continue;
-                    }
-
-                    if (!hashmap_has(anchor_index, fs_path)) continue;
-
-                    manifest_err = opts->delete_files
-                        ? state_order_prune(state, fs_path)
-                        : state_retire_anchor(state, fs_path);
-                    if (!manifest_err) manifest_removed_count++;
-                }
+                record_err = opts->delete_files
+                    ? state_order_prune(state, candidates[i])
+                    : state_retire_anchor(state, candidates[i]);
+                if (!record_err) settled_count++;
             }
 
-            if (manifest_err) {
+            if (record_err) {
                 output_warning(
                     out, OUTPUT_NORMAL, "Record update failed: %s",
-                    error_message(manifest_err)
+                    error_message(record_err)
                 );
-                error_free(manifest_err);
+                error_free(record_err);
                 state_rollback(state);
             } else {
                 /* Commit transaction */
@@ -1047,27 +1054,25 @@ static error_t *remove_files_from_profile(
                     );
                     error_free(commit_err);
                     state_rollback(state);
-                } else if (manifest_removed_count > 0 || manifest_fallback_count > 0) {
+                } else if (settled_count > 0 || fallback_count > 0) {
                     if (opts->delete_files) {
                         output_info(
                             out, OUTPUT_VERBOSE,
                             "Manifest: %zu staged for removal, %zu fallback%s",
-                            manifest_removed_count, manifest_fallback_count,
-                            manifest_fallback_count == 1 ? "" : "s"
+                            settled_count, fallback_count,
+                            fallback_count == 1 ? "" : "s"
                         );
                     } else {
                         output_info(
                             out, OUTPUT_VERBOSE,
                             "Manifest: %zu released, %zu fallback%s",
-                            manifest_removed_count, manifest_fallback_count,
-                            manifest_fallback_count == 1 ? "" : "s"
+                            settled_count, fallback_count,
+                            fallback_count == 1 ? "" : "s"
                         );
                     }
                 }
             }
         }
-    } else {
-        output_info(out, OUTPUT_VERBOSE, "Profile not enabled, Git updated only");
     }
 
     /* Execute post-remove hook */
@@ -1251,33 +1256,34 @@ static error_t *delete_profile_branch(
         );
     }
 
-    /* Informational queries and enabled check on the borrowed state. Under
+    /* Enabled check and the record, once, on the borrowed state. Under
      * spec-driven READ the handle is always non-NULL here (CHECK_NULL at entry),
      * and state_load for a missing DB still returns a usable handle (DB-less,
-     * reads degrade to empty) — no defensive fallback needed. */
+     * reads degrade to empty) — no defensive fallback needed. One read serves
+     * the informational count here and the post-deletion walk below: nothing
+     * between them touches the record (the branch deletion is Git-only).
+     * Failure is non-fatal — warn and decide over what was read; what this run
+     * cannot settle, the next apply reads as orphans and releases. */
     bool profile_was_enabled = state_has_profile(state, opts->profile);
-    size_t deployed_count = 0;
-
-    /* Count the records dotta owns under the profile for informational display.
-     * Failure is non-fatal: the count is purely cosmetic, so swallow any error
-     * and display 0. Read outside the transaction the record update below takes;
-     * that update reads the record again, inside it. */
+    anchor_t *anchors = NULL;
+    size_t anchor_count = 0;
+    size_t deployed_count = 0, record_count = 0;
     {
-        anchor_t *anchors = NULL;
-        size_t anchor_count = 0;
-        error_t *count_err = state_get_all_anchors(
+        error_t *read_err = state_get_all_anchors(
             state, ctx->arena, &anchors, &anchor_count
         );
-        if (count_err) {
-            error_free(count_err);
-        } else {
-            for (size_t i = 0; i < anchor_count; i++) {
-                if (anchors[i].deployed_at > 0 &&
-                    strcmp(anchors[i].profile, opts->profile) == 0) {
-                    deployed_count++;
-                }
-            }
+        if (read_err) {
+            output_warning(
+                out, OUTPUT_NORMAL, "Failed to read the record: %s",
+                error_message(read_err)
+            );
+            error_free(read_err);
         }
+    }
+    for (size_t i = 0; i < anchor_count; i++) {
+        if (strcmp(anchors[i].profile, opts->profile) != 0) continue;
+        record_count++;
+        if (anchors[i].deployed_at > 0) deployed_count++;
     }
 
     /* Inform about deployed paths (informational, not a warning) */
@@ -1374,7 +1380,12 @@ static error_t *delete_profile_branch(
 
     performed = true;
 
-    /* Post-deletion: the enabled set and the record, in one transaction.
+    /* Post-deletion: the enabled set and the record, in one transaction —
+     * opened only when there is something to write: the enabled row must drop,
+     * or a record names the profile (the up-front read). A repository with no
+     * database — never enabled, nothing recorded — is left without one:
+     * state_begin creates .git/dotta.db at first write intent, and a deletion
+     * with nothing to settle is not that.
      *
      * The order of the branch deletion and this block does not matter: the view
      * is computed, and prune_ordered is the one fact the workspace reads for
@@ -1391,77 +1402,72 @@ static error_t *delete_profile_branch(
      * Non-fatal: the branch is gone and stands. A record this block fails to
      * write is an orphan the next apply reads, asks Git about, finds the branch
      * gone, and releases. */
-    error_t *delete_err = state_begin(state);
-    if (!delete_err) {
-        manifest_t *after = NULL;
-        anchor_t *anchors = NULL;
-        size_t anchor_count = 0;
-        size_t removed = 0, fallbacks = 0;
-
-        if (profile_was_enabled) {
-            delete_err = state_disable_profile(state, opts->profile);
-        }
-
-        /* The view that remains — the builder over the post-disable rows. */
+    if (profile_was_enabled || record_count > 0) {
+        error_t *delete_err = state_begin(state);
         if (!delete_err) {
-            delete_err = manifest_build(repo, state, ctx->arena, &after);
-        }
-        if (!delete_err) {
-            delete_err = state_get_all_anchors(
-                state, ctx->arena, &anchors, &anchor_count
-            );
-        }
+            manifest_t *after = NULL;
+            size_t removed = 0, fallbacks = 0;
 
-        for (size_t i = 0; !delete_err && i < anchor_count; i++) {
-            const anchor_t *anchor = &anchors[i];
-            if (strcmp(anchor->profile, opts->profile) != 0) continue;
-
-            if (manifest_lookup(after, anchor->filesystem_path)) {
-                fallbacks++;
-                continue;
+            if (profile_was_enabled) {
+                delete_err = state_disable_profile(state, opts->profile);
             }
 
-            delete_err = opts->delete_files
-                ? state_order_prune(state, anchor->filesystem_path)
-                : state_retire_anchor(state, anchor->filesystem_path);
-            if (!delete_err) removed++;
-        }
+            /* The view that remains — the builder over the post-disable rows. */
+            if (!delete_err) {
+                delete_err = manifest_build(repo, state, ctx->arena, &after);
+            }
 
-        /* Commit transaction */
-        if (!delete_err) delete_err = state_commit(state);
+            for (size_t i = 0; !delete_err && i < anchor_count; i++) {
+                const anchor_t *anchor = &anchors[i];
+                if (strcmp(anchor->profile, opts->profile) != 0) continue;
 
-        if (delete_err) {
+                if (manifest_lookup(after, anchor->filesystem_path)) {
+                    fallbacks++;
+                    continue;
+                }
+
+                delete_err = opts->delete_files
+                    ? state_order_prune(state, anchor->filesystem_path)
+                    : state_retire_anchor(state, anchor->filesystem_path);
+                if (!delete_err) removed++;
+            }
+
+            /* Commit transaction */
+            if (!delete_err) delete_err = state_commit(state);
+
+            if (delete_err) {
+                output_warning(
+                    out, OUTPUT_NORMAL, "Failed to update state after branch deletion: %s",
+                    error_message(delete_err)
+                );
+                error_free(delete_err);
+                state_rollback(state);
+            } else if (removed > 0 || fallbacks > 0) {
+                if (opts->delete_files) {
+                    output_info(
+                        out, OUTPUT_VERBOSE, "%zu entr%s staged for removal, %zu fallback%s",
+                        removed, removed == 1 ? "y" : "ies",
+                        fallbacks, fallbacks == 1 ? "" : "s"
+                    );
+                } else {
+                    output_info(
+                        out, OUTPUT_VERBOSE, "%zu entr%s released from management, %zu fallback%s",
+                        removed, removed == 1 ? "y" : "ies",
+                        fallbacks, fallbacks == 1 ? "" : "s"
+                    );
+                }
+            }
+
+            manifest_free(after);
+        } else {
+            /* Non-fatal: the next workspace load observes the branch gone and releases
+             * these records conservatively */
             output_warning(
-                out, OUTPUT_NORMAL, "Failed to update state after branch deletion: %s",
+                out, OUTPUT_NORMAL, "Failed to begin transaction for post-deletion update: %s",
                 error_message(delete_err)
             );
             error_free(delete_err);
-            state_rollback(state);
-        } else if (removed > 0 || fallbacks > 0) {
-            if (opts->delete_files) {
-                output_info(
-                    out, OUTPUT_VERBOSE, "%zu entr%s staged for removal, %zu fallback%s",
-                    removed, removed == 1 ? "y" : "ies",
-                    fallbacks, fallbacks == 1 ? "" : "s"
-                );
-            } else {
-                output_info(
-                    out, OUTPUT_VERBOSE, "%zu entr%s released from management, %zu fallback%s",
-                    removed, removed == 1 ? "y" : "ies",
-                    fallbacks, fallbacks == 1 ? "" : "s"
-                );
-            }
         }
-
-        manifest_free(after);
-    } else {
-        /* Non-fatal: the next workspace load observes the branch gone and releases
-         * these records conservatively */
-        output_warning(
-            out, OUTPUT_NORMAL, "Failed to begin transaction for post-deletion update: %s",
-            error_message(delete_err)
-        );
-        error_free(delete_err);
     }
 
     /* Push deletion to remote if remote exists This is critical for sync to work -

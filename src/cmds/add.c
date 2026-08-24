@@ -43,12 +43,11 @@
  * One path the walk collected, under both its names
  *
  * The walk is where the mount boundary is crossed: each path it collects is
- * classified there, once, through the command's table, and everything after
- * reads the name it needs — the capture and the commit message the storage
- * path, the record loop the filesystem path. A file's stat is the capture's
- * (add_file_to_worktree's single lstat of the bytes it stored), so the record
- * binds the committed blob to it; a directory's stays unset, as apply records
- * them.
+ * classified there, once, through the command's table, and everything after reads
+ * the name it needs — the capture and the commit message the storage path, the
+ * record loop the filesystem path. A file's stat is the capture's
+ * (add_file_to_worktree's one look at the bytes it stored), so the record binds
+ * the committed blob to it; a directory's stays unset, as apply records them.
  */
 typedef struct {
     const char *fs_path;          /* Absolute, as walked (arena) */
@@ -59,10 +58,10 @@ typedef struct {
 /**
  * The walk: what every frame reads, and the two lists it fills
  *
- * `seen` holds every filesystem path the walk passed so far, so overlapping
- * CLI arguments (~/.config and ~/.config/fish) list each path once: a
- * directory already walked is skipped with its subtree, a file already listed
- * is not listed again. Keys borrow the arena strings the lists hold.
+ * `seen` holds every filesystem path the walk passed so far, so overlapping CLI
+ * arguments (~/.config and ~/.config/fish) list each path once: a directory already
+ * walked is skipped with its subtree, a file already listed is not listed again.
+ * Keys borrow the arena strings the lists hold.
  */
 typedef struct {
     const dotta_ctx_t *ctx;              /* The arena the paths live in, and the output */
@@ -94,25 +93,24 @@ static error_t *validate_options(const cmd_add_options_t *opts) {
 /**
  * Check if path should be ignored.
  *
- * Consults two independent mechanisms in order, each on the name it is
- * written against:
- *   1. The `.dottaignore` layers (baseline, profile, config, CLI) compiled
- *      into a single gitignore ruleset, evaluated on the mount-relative path
- *      (mount_strip_label of `storage_path`): what a `.gitignore` at the
- *      mount root would see.
- *   2. The source tree's own `.gitignore`, if the command built a filter
- *      (gated on `config.respect_gitignore`), evaluated on `fs_path`: that
- *      repository's root is the root its rules are relative to. The lowest
- *      layer: asked only when no `.dottaignore` layer decided, so a `!` rule
- *      in any of them overrides it.
+ * Consults two independent mechanisms in order, each on the name it is written
+ * against:
+ *   1. The `.dottaignore` layers (baseline, profile, config, CLI) compiled into
+ *      a single gitignore ruleset, evaluated on the mount-relative path
+ *      (mount_strip_label of `storage_path`): what a `.gitignore` at the mount
+ *      root would see.
+ *   2. The source tree's own `.gitignore`, if the command built a filter (gated
+ *      on `config.respect_gitignore`), evaluated on `fs_path`: that repository's
+ *      root is the root its rules are relative to. The lowest layer: asked only
+ *      when no `.dottaignore` layer decided, so a `!` rule in any of them overrides
+ *      it.
  *
- * Either mechanism may be absent. `*out_match` is the rules' verdict — the
- * layer and the rule as written when they decided, undecided when the source
- * tree's .gitignore gave the verdict — so a caller can say who excluded the
- * path. Source-filter errors degrade to a verbose warning and a "not
- * excluded" verdict so an odd source repo never blocks the user from adding
- * a file they explicitly named. The gitignore evaluator never fails — its
- * verdict is applied directly.
+ * Either mechanism may be absent. `*out_match` is the rules' verdict — the layer
+ * and the rule as written when they decided, undecided when the source tree's
+ * .gitignore gave the verdict — so a caller can say who excluded the path.
+ * Source-filter errors degrade to a verbose warning and a "not excluded" verdict
+ * so an odd source repo never blocks the user from adding a file they explicitly
+ * named. The gitignore evaluator never fails — its verdict is applied directly.
  */
 static bool is_excluded(
     const add_walk_t *walk,
@@ -175,13 +173,13 @@ static error_t *list_path(
  * root ($HOME, "/", a --target): a root has no name in the storage namespace
  * and is not listed; its descendants are. Every other directory walked into is
  * listed — the walk is the sole source of directory tracking — and so is every
- * non-excluded non-directory child. Symlinks are never followed: a symlink to
- * a directory is an entry like any other.
+ * non-excluded non-directory child. Symlinks are never followed: a symlink to a
+ * directory is an entry like any other.
  *
  * Each child is classified here, once; the recursion receives both names and
- * never classifies again. A child that is itself a mount root (a --target
- * nested in the tree being walked) is walked through unlisted when it is a
- * directory, and skipped otherwise: nothing in the namespace names it.
+ * never classifies again. A child that is itself a mount root (a --target nested
+ * in the tree being walked) is walked through unlisted when it is a directory,
+ * and skipped otherwise: nothing in the namespace names it.
  *
  * On error the lists keep what was collected; the caller's cleanup owns them.
  */
@@ -493,7 +491,8 @@ static error_t *add_file_to_worktree(
 
         /* Store file to worktree (handles read → encrypt → write) and capture
          * both stat data and the byte-derived content kind.
-         * SECURITY: Single stat() call eliminates a race condition.
+         * SECURITY: the stat is the fstat of the fd the store read — bytes and
+         * triple one inode by construction.
          * INVARIANT: written_kind is byte-truth for the bytes that hit the
          * worktree; metadata.encrypted is stamped from it below. */
         content_kind_t written_kind = CONTENT_PLAINTEXT;
@@ -716,8 +715,8 @@ static error_t *create_commit(
  *
  * Performance: one view build + O(N) point lookups, N = files added
  *
- * @param ctx Dispatch context (must not be NULL; reads the repository, the
- *            state and the command arena)
+ * @param ctx Dispatch context (must not be NULL; reads the repository, the state
+ *            and the command arena)
  * @param profile Profile that files were added to (must not be NULL)
  * @param target Deployment target for custom/ files (can be NULL)
  * @param profile_was_new This add created the profile's branch: enable it here
@@ -1019,13 +1018,13 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         const char *file_path = opts->files[i];
         char *absolute = NULL;
 
-        /* Storage-path input: the input itself is the display. One that
-         * resolves to nothing on this machine contributes nothing, like a
-         * filesystem path that does not exist (below): the main loop's
-         * existence check is the surface for that error, and a sudo prompt
-         * for `root/x` typed from `/` as a relative path would stand in its
-         * way. A custom/ path with no target binds nowhere yet; the main
-         * loop's --target precondition speaks to that. */
+        /* Storage-path input: the input itself is the display. One that resolves
+         * to nothing on this machine contributes nothing, like a filesystem path
+         * that does not exist (below): the main loop's existence check is the
+         * surface for that error, and a sudo prompt for `root/x` typed from `/`
+         * as a relative path would stand in its way. A custom/ path with no target
+         * binds nowhere yet; the main loop's --target precondition speaks to
+         * that. */
         const mount_spec_t *spec = mount_spec_for_path(file_path);
         if (spec) {
             if (spec->tracks_ownership
@@ -1070,9 +1069,9 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
 
         /* Classify the path. ROOT outcome means the input equals a mount root
          * exactly ($HOME, "/", or --target). The walk will still expand its
-         * descendants — what we need here is just the spec to answer "would
-         * this op touch a path needing elevation?". mount_classify writes the
-         * spec in both outcomes; only the storage-path materialization differs. */
+         * descendants — what we need here is just the spec to answer "would this
+         * op touch a path needing elevation?". mount_classify writes the spec
+         * in both outcomes; only the storage-path materialization differs. */
         mount_classify_outcome_t outcome;
         const char *storage_path = NULL;
         err = mount_classify(
@@ -1220,9 +1219,9 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         goto cleanup;
     }
 
-    /* Collect every path to add, expanding directories. The walk lists each
-     * path once, under both names: the CLI argument crosses the mount boundary
-     * here, and what the walk finds beneath it crosses in the walk. */
+    /* Collect every path to add, expanding directories. The walk lists each path
+     * once, under both names: the CLI argument crosses the mount boundary here,
+     * and what the walk finds beneath it crosses in the walk. */
     walk.mounts = mounts;
     walk.rules = profile_rules;
     walk.source_filter = source_filter;
@@ -1314,9 +1313,9 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         }
 
         /* Check path exists (use lexists to allow broken symlinks). A storage
-         * path that resolves to nothing is as likely a relative path whose
-         * first component happens to be a label — `root/x` typed from `/` —
-         * so the message says where it looked and how to say the other. */
+         * path that resolves to nothing is as likely a relative path whose first
+         * component happens to be a label — `root/x` typed from `/` — so the
+         * message says where it looked and how to say the other. */
         if (!fs_lexists(fs_path)) {
             if (spec) {
                 err = ERROR(
@@ -1344,11 +1343,11 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
 
         bool is_dir = !fs_is_symlink(fs_path) && fs_is_directory(fs_path);
 
-        /* A path named on the command line is subject to the rules like any
-         * the walk finds, but a verdict against it is an error, not a silent
-         * skip: the user asked for it by name, and the answer says which rule
-         * stands in the way and how to get past it. A mount root has no name
-         * for a pattern to match. */
+        /* A path named on the command line is subject to the rules like any the
+         * walk finds, but a verdict against it is an error, not a silent skip:
+         * the user asked for it by name, and the answer says which rule stands
+         * in the way and how to get past it. A mount root has no name for a pattern
+         * to match. */
         gitignore_match_t match;
         if (storage_path &&
             is_excluded(&walk, fs_path, storage_path, is_dir, &match)) {
@@ -1416,9 +1415,9 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         }
     }
 
-    /* Check if we have anything to add (files or directories). A named path
-     * the rules refused was an error above, so this is a mount root with
-     * nothing listable beneath it. */
+    /* Check if we have anything to add (files or directories). A named path the
+     * rules refused was an error above, so this is a mount root with nothing
+     * listable beneath it. */
     if (walk.files.count == 0 && walk.directories.count == 0) {
         err = ERROR(ERR_INVALID_ARG, "No files or directories to add");
         goto cleanup;
@@ -1760,8 +1759,8 @@ cleanup:
  *   1. -p/--profile was given: every positional is a file path.
  *   2. -p not given: first positional is the profile, rest are files.
  *
- * The count check lives here, after the routing, so the error message can
- * reference the effective invariant rather than a raw count.
+ * The count check lives here, after the routing, so the error message can reference
+ * the effective invariant rather than a raw count.
  */
 static error_t *add_post_parse(
     void *opts_v, arena_t *arena, const args_command_t *cmd
@@ -1794,10 +1793,10 @@ static error_t *add_post_parse(
 }
 
 /**
- * What can stand at the cursor, read off the buckets add_post_parse routes:
- * a local profile in the profile slot — the first positional, unless -p
- * took it — then filesystem paths, listed under --target when one re-roots
- * them. A new profile's name is typed, not offered.
+ * What can stand at the cursor, read off the buckets add_post_parse routes: a
+ * local profile in the profile slot — the first positional, unless -p took it —
+ * then filesystem paths, listed under --target when one re-roots them. A new
+ * profile's name is typed, not offered.
  */
 static args_want_t add_complete(
     const void *ctx_v, const void *opts_v, const args_completion_t *at, FILE *out

@@ -493,21 +493,40 @@ error_t *content_store_file_to_worktree(
     CHECK_NULL(storage_path);
     CHECK_NULL(profile);
 
-    /* Step 1: Validate file type (security: prevent symlink/special file confusion) */
+    /* Step 1: One look — open the descriptor whose bytes will be stored
+     *
+     * The reported stat is the fstat of that fd, so the stat and the bytes are
+     * one inode by construction; the old shape (lstat, then a path re-open inside
+     * the read) let a swap between the two looks bind one file's triple to another
+     * file's blob. O_NOFOLLOW refuses a symlink (callers route symlinks to their
+     * own capture before this call), O_NONBLOCK keeps a FIFO with no writer from
+     * wedging the open (harmless for a regular file), O_CLOEXEC is hygiene. */
+    int fd = open(
+        filesystem_path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC
+    );
     struct stat st;
-    if (lstat(filesystem_path, &st) < 0) {
+    if (fd < 0) {
+        /* A symlink refuses at the open (ELOOP), a socket refuses open outright
+         * — neither leaves an fd to fstat. One diagnostic lstat lets the refusal
+         * below name the type as before; it binds nothing. */
+        int open_errno = errno;
+        if (lstat(filesystem_path, &st) != 0 || S_ISREG(st.st_mode)) {
+            return ERROR(
+                ERR_FS, "Failed to open '%s': %s",
+                filesystem_path, strerror(open_errno)
+            );
+        }
+    } else if (fstat(fd, &st) < 0) {
+        int stat_errno = errno;
+        close(fd);
         return ERROR(
             ERR_FS, "Failed to stat '%s': %s",
-            filesystem_path, strerror(errno)
+            filesystem_path, strerror(stat_errno)
         );
     }
 
-    /* Return stat data to caller if requested (before error checks) */
-    if (out_stat) {
-        memcpy(out_stat, &st, sizeof(struct stat));
-    }
-
     if (!S_ISREG(st.st_mode)) {
+        if (fd >= 0) close(fd);
         const char *type = S_ISLNK(st.st_mode) ? "symlink" :
             S_ISDIR(st.st_mode) ? "directory" :
             S_ISFIFO(st.st_mode) ? "FIFO" :
@@ -524,20 +543,26 @@ error_t *content_store_file_to_worktree(
         );
     }
 
-    /* Step 2: Read file from filesystem
+    /* The capture's stat: the fd's own, taken beside the bytes read below */
+    if (out_stat) {
+        memcpy(out_stat, &st, sizeof(struct stat));
+    }
+
+    /* Step 2: Read the descriptor to EOF
      *
      * The 100 MiB content cap lives in crypto/cipher.c as the single enforcement
      * point; the encrypt path rejects oversize input after this read. For the
-     * plaintext path we rely on fs_read_file's own bounds and libgit2's blob
-     * handling rather than duplicating the policy here. */
+     * plaintext path we rely on fs_read_fd's own bounds and libgit2's blob handling
+     * rather than duplicating the policy here. */
     buffer_t content = BUFFER_INIT;
-    error_t *err = fs_read_file(filesystem_path, &content);
+    error_t *err = fs_read_fd(fd, &content);
+    close(fd);
     if (err) {
         return error_wrap(err, "Failed to read file '%s'", filesystem_path);
     }
 
     /* Step 3: Get source file's mode (preserve permissions in worktree -> git) */
-    mode_t mode = st.st_mode;  /* Reuse mode from stat() above */
+    mode_t mode = st.st_mode;  /* Reuse mode from the fstat above */
 
     /* Step 4: Encrypt if requested */
     buffer_t *data_to_write = &content;  /* Default: write plaintext */

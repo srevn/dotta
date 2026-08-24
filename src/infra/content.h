@@ -319,7 +319,8 @@ void content_cache_free(content_cache_t *cache);
  * worktree This encapsulates the common pattern used in add/update commands.
  *
  * Process:
- * 1. Read file from filesystem and capture stat data
+ * 1. Open the file, fstat the descriptor, read it to EOF — the captured stat
+ *    and the stored bytes are one inode by construction
  * 2. If should_encrypt=true: a. Get profile key from keymgr b. Encrypt content
  *    c. Write encrypted content to worktree path
  * 3. If should_encrypt=false: a. Write plaintext content to worktree path
@@ -347,7 +348,9 @@ void content_cache_free(content_cache_t *cache);
  * @param keymgr Key manager (can be NULL if should_encrypt=false)
  * @param should_encrypt Policy decision from caller (true = encrypt, false =
  *                       plaintext)
- * @param out_stat Output stat data from source file (optional, can be NULL)
+ * @param out_stat The capture's stat: the fstat of the descriptor whose bytes
+ *                 were stored (optional, can be NULL; filled only when the look
+ *                 reached a regular file's fd)
  * @param out_kind Output content kind of the bytes written (optional, can be
  *                 NULL; when non-NULL, this is the byte-derived truth callers
  *                 MUST use for metadata.encrypted)

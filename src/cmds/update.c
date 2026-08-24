@@ -163,9 +163,9 @@ static error_t *copy_file_to_worktree(
 
         /* Store file to worktree (handles read → encrypt → write) and capture
          * stat + byte-derived content kind atomically.
-         * ARCHITECTURE: Single lstat() inside content_store_file_to_worktree is
-         * captured and propagated to caller for metadata operations, eliminating
-         * a race condition.
+         * ARCHITECTURE: the store's fstat of the descriptor it read is captured
+         * and propagated to caller for metadata operations — bytes and stat one
+         * inode by construction.
          * INVARIANT: written_kind is byte-truth for the bytes that hit the
          * worktree; out_was_encrypted reflects byte truth, not policy. */
         struct stat file_stat;
@@ -229,10 +229,10 @@ typedef struct {
  * One path an update commit captured from disk
  *
  * A file's triple is the one the copy step took from the bytes it committed
- * (content_store_file_to_worktree's single lstat), so the record binds the blob
- * to the stat that matched it — not to a later lstat that could see an edit made
- * since. A directory's is unset: a directory has no content confirmation, and
- * its record carries none.
+ * (content_store_file_to_worktree's fstat of the fd it read), so the record binds
+ * the blob to the stat that matched it — not to a later lstat that could see an
+ * edit made since. A directory's is unset: a directory has no content confirmation,
+ * and its record carries none.
  */
 typedef struct {
     const workspace_item_t *item;   /* The captured item (borrowed, workspace lifetime) */

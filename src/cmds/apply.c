@@ -11,6 +11,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "base/arena.h"
 #include "base/args.h"
 #include "base/array.h"
 #include "base/error.h"
@@ -216,22 +217,37 @@ static void print_deploy_preview(
 }
 
 /**
+ * A pending profile reassignment, materialized at collect time
+ *
+ * Exactly what the preview prints: the path and the two profiles of the handover,
+ * captured off the item before the run's ownership events (the adoption loop's
+ * re-stamp, the deployment's anchor) rewrite the record the fact derives from.
+ * Strings are borrowed from the workspace arena (command lifetime).
+ */
+typedef struct {
+    const char *path;      /* Filesystem path */
+    const char *from;      /* The record's profile at load */
+    const char *to;        /* The row's profile — the new owner */
+} reassignment_t;
+
+/**
  * Print pending profile reassignments
  *
- * `reassigned` holds the items of the planned rows whose owning profile changed
- * (workspace_item_t *, borrowed; collected off the plan's clean and pending
- * buckets) — the exact set the run will acknowledge: a content-clean one by the
- * adoption loop's re-stamp, a stale one by its deployment.
+ * `reassigned` holds the planned rows whose owning profile changed (collected
+ * off the plan's clean and pending buckets) — the exact set the run will
+ * acknowledge: a content-clean one by the adoption loop's re-stamp, a stale one
+ * by its deployment.
  */
-static void print_reassignments(const output_t *out, const ptr_array_t *reassigned) {
-    if (reassigned->count == 0) return;
+static void print_reassignments(
+    const output_t *out, const reassignment_t *reassigned, size_t count
+) {
+    if (count == 0) return;
 
     output_section(out, OUTPUT_NORMAL, "Profile reassignments");
-    for (size_t i = 0; i < reassigned->count; i++) {
-        const workspace_item_t *item = reassigned->items[i];
+    for (size_t i = 0; i < count; i++) {
         output_styled(
             out, OUTPUT_NORMAL, "  {yellow}→{reset} %s: {cyan}%s{reset} → {cyan}%s{reset}\n",
-            item->filesystem_path, item->old_profile, item->profile
+            reassigned[i].path, reassigned[i].from, reassigned[i].to
         );
     }
     output_info(
@@ -1098,7 +1114,6 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     workspace_t *ws = NULL;
     deploy_plan_t *deploy_plan = NULL;                 /* Rows borrow from ws; free before ws */
     cleanup_plan_t *cleanup_plan = NULL;               /* Items borrow from ws; free before ws */
-    ptr_array_t reassigned = { 0 };                    /* The claimed rows' items with profile_changed (borrowed) */
     deploy_preflight_result_t *deploy_verdicts = NULL; /* Verdicts borrow rows from ws; free before ws */
     cleanup_preflight_result_t *cleanup_verdicts = NULL;
     char *profiles_str = NULL;
@@ -1378,6 +1393,66 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         }
     }
 
+    /* Collect the pending profile reassignments and count the stale files, off
+     * the plan.
+     *
+     * Both are facts the planner read from the item and did not carry — the plan
+     * says what the run does, the item says why — so the planned rows are walked
+     * once more, each paired with its item. The two file buckets are exactly
+     * the rows whose record this run's ownership events rewrite: the clean ones
+     * by the adoption loop below, the pending ones by the deployment — so what
+     * the preview names is what the receipt counts, and the collection runs first:
+     * it reads the present those writes rewrite, and materializes what the preview
+     * prints so no print moment re-reads it. A row the plan skips (-e,
+     * --skip-existing) is in neither bucket and is neither previewed nor counted:
+     * the run will not acknowledge it. The scope is not re-derived — the planner
+     * applied it once, and the buckets are its answer. Collected before the early
+     * exit so a reassignment-only workspace is reported and acknowledged there too.
+     *
+     * A reassignment is the workspace's reading of the record against the row —
+     * the record dotta owns names one profile, the row another — and one of the
+     * two reasons a deploy-clean row has an item at all (the other is the
+     * blob-family ENCRYPTION bit, which neither loop here reads). DIVERGENCE_STALE
+     * is the workspace's verdict that Git moved past the blob dotta last deployed
+     * (anchor.blob_oid ≠ row.blob_oid) — a persistent signal that survives
+     * status→apply sequences and counts the same however the branch moved; work
+     * by definition, so only a pending row carries it. */
+    size_t stale_count = 0;
+    size_t reassigned_count = 0;
+    reassignment_t *reassigned = NULL;
+    const manifest_rows_t claimed[] = {
+        manifest_rows_view(&deploy_plan->files.clean),
+        manifest_rows_view(&deploy_plan->files.pending),
+    };
+
+    if (claimed[0].count + claimed[1].count > 0) {
+        reassigned = arena_alloc(
+            ctx->arena, (claimed[0].count + claimed[1].count) * sizeof(*reassigned)
+        );
+        if (!reassigned) {
+            err = ERROR(ERR_MEMORY, "Failed to allocate reassignment collection");
+            goto cleanup;
+        }
+    }
+
+    for (size_t b = 0; b < sizeof(claimed) / sizeof(claimed[0]); b++) {
+        for (size_t i = 0; i < claimed[b].count; i++) {
+            const workspace_item_t *item = workspace_get_item(
+                ws, claimed[b].entries[i]->filesystem_path
+            );
+            if (!item) continue;   /* no item: nothing stale, no reassignment */
+
+            if (item->divergence & DIVERGENCE_STALE) stale_count++;
+            if (item->profile_changed) {
+                reassigned[reassigned_count++] = (reassignment_t){
+                    .path = item->filesystem_path,
+                    .from = item->old_profile,
+                    .to = item->profile,
+                };
+            }
+        }
+    }
+
     /* One moment for everything this run records — the adoption loop below and
      * the post-deploy record after the plan — so a run's ownership events carry
      * one timestamp. */
@@ -1475,52 +1550,6 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         );
     }
 
-    /* Collect the pending profile reassignments and count the stale files, off
-     * the plan.
-     *
-     * Both are facts the planner read from the item and did not carry — the plan
-     * says what the run does, the item says why — so the planned rows are walked
-     * once more, each paired with its item. The two file buckets are exactly
-     * the rows whose record this run's ownership events rewrite: the clean ones
-     * by the adoption loop above, the pending ones by the deployment — so what
-     * the preview names is what the receipt counts. A row the plan skips (-e,
-     * --skip-existing) is in neither bucket and is neither previewed nor counted:
-     * the run will not acknowledge it. The scope is not re-derived — the planner
-     * applied it once, and the buckets are its answer. Collected before the early
-     * exit so a reassignment-only workspace is reported and acknowledged there too.
-     *
-     * A reassignment is the workspace's reading of the record against the row —
-     * the record dotta owns names one profile, the row another — and one of the
-     * two reasons a deploy-clean row has an item at all (the other is the
-     * blob-family ENCRYPTION bit, which neither loop here reads). DIVERGENCE_STALE
-     * is the workspace's verdict that Git moved past the blob dotta last deployed
-     * (anchor.blob_oid ≠ row.blob_oid) — a persistent signal that survives
-     * status→apply sequences and counts the same however the branch moved; work
-     * by definition, so only a pending row carries it. */
-    size_t stale_count = 0;
-    const manifest_rows_t claimed[] = {
-        manifest_rows_view(&deploy_plan->files.clean),
-        manifest_rows_view(&deploy_plan->files.pending),
-    };
-
-    for (size_t b = 0; b < sizeof(claimed) / sizeof(claimed[0]); b++) {
-        for (size_t i = 0; i < claimed[b].count; i++) {
-            const workspace_item_t *item = workspace_get_item(
-                ws, claimed[b].entries[i]->filesystem_path
-            );
-            if (!item) continue;   /* no item: nothing stale, no reassignment */
-
-            if (item->divergence & DIVERGENCE_STALE) stale_count++;
-            if (item->profile_changed) {
-                err = ptr_array_push(&reassigned, item);
-                if (err) {
-                    err = error_wrap(err, "Failed to record profile reassignment");
-                    goto cleanup;
-                }
-            }
-        }
-    }
-
     /* How many in-scope files Git has moved since dotta deployed them. [stale]
      * alone the plan deploys like any other divergence; beside [modified] it is
      * a conflict preflight reports. Released files are covered by the orphan-prune
@@ -1570,13 +1599,13 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * disk — pure state bookkeeping skips them. Nothing is written past the
      * checkpoint, so there is nothing left to save. */
     if (deploy_plan_is_empty(deploy_plan) && cleanup_plan_is_empty(cleanup_plan)) {
-        if (reassigned.count > 0) {
-            print_reassignments(out, &reassigned);
+        if (reassigned_count > 0) {
+            print_reassignments(out, reassigned, reassigned_count);
             if (opts->dry_run) {
                 output_info(
                     out, OUTPUT_NORMAL,
                     "Would acknowledge %zu profile reassignment%s",
-                    reassigned.count, reassigned.count == 1 ? "" : "s"
+                    reassigned_count, reassigned_count == 1 ? "" : "s"
                 );
             } else if (acknowledged_count > 0) {
                 output_styled(
@@ -1646,7 +1675,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
 
     /* The previews: the reassignments the run acknowledges, then the verdicts —
      * what the run does — read the same way in a real run and a dry run. */
-    print_reassignments(out, &reassigned);
+    print_reassignments(out, reassigned, reassigned_count);
     print_deploy_preview(out, deploy_verdicts);
 
     /* Decide cleanup's verdicts from the plan. An empty plan (--keep-orphans,
@@ -1912,6 +1941,11 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
             for (size_t i = 0; i < deployed.count; i++) {
                 const manifest_row_t *file = deployed.entries[i];
 
+                /* Derived before anchoring: the write below rewrites the record
+                 * the reassignment fact is read against. */
+                const workspace_item_t *item = workspace_get_item(ws, file->filesystem_path);
+                bool acknowledges = item && item->profile_changed;
+
                 err = workspace_anchor(ws, file, NULL, now);
                 if (err) {
                     /* Non-fatal warning - deployment succeeded, just anchor update
@@ -1927,8 +1961,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
                     continue;
                 }
 
-                const workspace_item_t *item = workspace_get_item(ws, file->filesystem_path);
-                if (item && item->profile_changed) acknowledged_count++;
+                if (acknowledges) acknowledged_count++;
             }
 
             if (deployed.count > 0) {
@@ -1965,10 +1998,10 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * re-stamped and the stale ones the deployment rewrote. Dry-run previews
      * the in-scope set the preview named. */
     if (opts->dry_run) {
-        if (reassigned.count > 0) {
+        if (reassigned_count > 0) {
             output_info(
                 out, OUTPUT_NORMAL, "Would acknowledge %zu profile reassignment%s",
-                reassigned.count, reassigned.count == 1 ? "" : "s"
+                reassigned_count, reassigned_count == 1 ? "" : "s"
             );
         }
     } else if (acknowledged_count > 0) {
@@ -1996,10 +2029,9 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
 
 cleanup:
     /* Result and plan buckets borrow rows from the workspace arena — free them
-     * before workspace_free. reassigned borrows into the diverged array. */
+     * before workspace_free. */
     if (deploy_result) deploy_result_free(deploy_result);
     if (deploy_plan) deploy_plan_free(deploy_plan);
-    ptr_array_deinit(&reassigned);
     if (cleanup_verdicts) cleanup_preflight_result_free(cleanup_verdicts);
     if (cleanup_plan) cleanup_plan_free(cleanup_plan);
     if (deploy_verdicts) deploy_preflight_result_free(deploy_verdicts);

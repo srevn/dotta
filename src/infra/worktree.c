@@ -286,11 +286,11 @@ error_t *worktree_checkout_branch(
         return error_from_git(git_err);
     }
 
-    /* Checkout with FORCE: a temp worktree holds nothing but dotta's own
-     * staging — created fresh per run, written and committed by dotta alone —
-     * so anything dirty in it is a leftover of dotta's own failed or skipped
-     * step, and a checkout may always discard it. There are no local
-     * modifications to protect. */
+    /* Checkout with FORCE: a temp worktree holds nothing but dotta's own staging
+     * — created fresh per run, written and committed by dotta alone — so anything
+     * dirty in it is a leftover of dotta's own failed or skipped step, and a
+     * checkout may always discard it. There are no local modifications to
+     * protect. */
     git_checkout_options checkout_opts;
     git_checkout_options_init(&checkout_opts, GIT_CHECKOUT_OPTIONS_VERSION);
     checkout_opts.checkout_strategy = GIT_CHECKOUT_FORCE;

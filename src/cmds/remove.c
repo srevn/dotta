@@ -15,6 +15,7 @@
 #include "base/arena.h"
 #include "base/args.h"
 #include "base/array.h"
+#include "base/buffer.h"
 #include "base/error.h"
 #include "base/hashmap.h"
 #include "base/output.h"
@@ -26,8 +27,6 @@
 #include "core/state.h"
 #include "infra/mount.h"
 #include "infra/path.h"
-#include "infra/worktree.h"
-#include "sys/filesystem.h"
 #include "sys/gitops.h"
 #include "sys/transfer.h"
 #include "sys/upstream.h"
@@ -63,8 +62,8 @@ static error_t *validate_options(const cmd_remove_options_t *opts) {
         );
     }
 
-    /* Interactive mode requires a terminal for user prompts — refused at
-     * entry, before any hook fires or any work begins */
+    /* Interactive mode requires a terminal for user prompts — refused at entry,
+     * before any hook fires or any work begins */
     if (opts->interactive && !isatty(STDIN_FILENO)) {
         return ERROR(
             ERR_INVALID_ARG,
@@ -106,6 +105,10 @@ typedef struct {
  * — it is display and record plumbing, not resolution: when this machine cannot
  * project a claim, the storage path stands in and removal proceeds regardless.
  *
+ * The branch's metadata rides out through `metadata_out` for the commit's edit
+ * — loaded once, where the directory claims are enumerated. NULL when the branch
+ * has none; caller frees.
+ *
  * @param ctx Dispatch context (must not be NULL). ctx->run.mounts covers HOME,
  *            ROOT, and every enabled profile's binding. Unenabled-profile lookups
  *            (custom/X) surface MOUNT_RESOLVE_UNBOUND, which the compaction handles
@@ -120,7 +123,8 @@ static error_t *resolve_removal_claims(
     size_t path_count,
     const cmd_remove_options_t *opts,
     removal_claim_t **claims_out,
-    size_t *count_out
+    size_t *count_out,
+    metadata_t **metadata_out
 ) {
     CHECK_NULL(ctx);
     CHECK_NULL(profile);
@@ -128,6 +132,7 @@ static error_t *resolve_removal_claims(
     CHECK_NULL(opts);
     CHECK_NULL(claims_out);
     CHECK_NULL(count_out);
+    CHECK_NULL(metadata_out);
 
     git_repository *repo = ctx->run.repo;
     const mount_table_t *mounts = ctx->run.mounts;
@@ -304,9 +309,12 @@ static error_t *resolve_removal_claims(
         goto cleanup;
     }
 
-    /* Success - the claims are arena-backed, nothing transfers */
+    /* Success — the claims are arena-backed; the metadata rides out for the
+     * commit's edit */
     *claims_out = claims;
     *count_out = taken_count;
+    *metadata_out = metadata;
+    metadata = NULL;
 
 cleanup:
     /* Free all resources */
@@ -315,59 +323,6 @@ cleanup:
     if (profile_files) string_array_free(profile_files);
 
     return err;
-}
-
-/**
- * Remove file from worktree
- */
-static error_t *remove_file_from_worktree(
-    worktree_handle_t *wt,
-    const char *storage_path,
-    const cmd_remove_options_t *opts,
-    output_t *out
-) {
-    CHECK_NULL(wt);
-    CHECK_NULL(storage_path);
-    CHECK_NULL(opts);
-
-    const char *wt_path = worktree_get_path(wt);
-    char *file_path = str_format("%s/%s", wt_path, storage_path);
-    if (!file_path) {
-        return ERROR(ERR_MEMORY, "Failed to allocate file path");
-    }
-
-    /* Check if file exists */
-    if (!fs_exists(file_path)) {
-        free(file_path);
-        if (!opts->force) {
-            return ERROR(
-                ERR_NOT_FOUND, "File '%s' not found in worktree",
-                storage_path
-            );
-        }
-        /* With --force, skip silently */
-        return NULL;
-    }
-
-    /* Remove from filesystem */
-    error_t *err = fs_remove_file(file_path);
-    free(file_path);
-    if (err) {
-        return error_wrap(
-            err, "Failed to remove file '%s' from worktree",
-            storage_path
-        );
-    }
-
-    /* Stage deletion */
-    err = worktree_unstage_file(wt, storage_path);
-    if (err) {
-        return error_wrap(err, "Failed to unstage file");
-    }
-
-    output_info(out, OUTPUT_VERBOSE, "Removed: %s", storage_path);
-
-    return NULL;
 }
 
 /**
@@ -654,173 +609,6 @@ static bool confirm_profile_deletion(
 }
 
 /**
- * Create commit for removal
- */
-static error_t *create_removal_commit(
-    worktree_handle_t *wt,
-    const cmd_remove_options_t *opts,
-    const string_array_t *removed_paths,
-    const config_t *config
-) {
-    CHECK_NULL(wt);
-    CHECK_NULL(opts);
-    CHECK_NULL(removed_paths);
-
-    /* Build commit message context */
-    commit_message_context_t ctx = {
-        .action        = COMMIT_ACTION_REMOVE,
-        .profile       = opts->profile,
-        .files         = removed_paths->items,
-        .file_count    = removed_paths->count,
-        .custom_msg    = opts->message,
-        .target_commit = NULL
-    };
-
-    char *message = build_commit_message(config, &ctx);
-    if (!message) {
-        return ERROR(ERR_MEMORY, "Failed to build commit message");
-    }
-
-    /* Create commit */
-    error_t *err = worktree_commit(wt, opts->profile, message, NULL);
-    free(message);
-
-    if (err) {
-        return error_wrap(err, "Failed to create commit");
-    }
-
-    return NULL;
-}
-
-/**
- * Remove metadata entries for removed files
- *
- * Loads existing metadata from worktree, removes entries for deleted files, and
- * saves the updated metadata back. The metadata.json file is then staged. The
- * directory entries pruned as redundant on the way are appended to `pruned`
- * (storage paths): they leave the view by this commit too, and the record loop
- * after it retires them beside the removed files.
- */
-static error_t *cleanup_metadata(
-    worktree_handle_t *wt,
-    const string_array_t *removed_paths,
-    string_array_t *pruned,
-    output_t *out
-) {
-    CHECK_NULL(wt);
-    CHECK_NULL(removed_paths);
-    CHECK_NULL(pruned);
-
-    const char *worktree_path = worktree_get_path(wt);
-    if (!worktree_path) {
-        return ERROR(ERR_INTERNAL, "Worktree path is NULL");
-    }
-
-    /* Load existing metadata from worktree (if it exists) */
-    metadata_t *metadata = NULL;
-    char *metadata_file_path = str_format("%s/%s", worktree_path, METADATA_FILE_PATH);
-    if (!metadata_file_path) {
-        return ERROR(ERR_MEMORY, "Failed to allocate metadata file path");
-    }
-
-    error_t *err = metadata_load_from_file(metadata_file_path, &metadata);
-    free(metadata_file_path);
-
-    if (err) {
-        if (err->code == ERR_NOT_FOUND) {
-            /* No existing metadata - nothing to clean up */
-            error_free(err);
-            return NULL;
-        } else {
-            /* Real error - propagate */
-            return error_wrap(err, "Failed to load existing metadata");
-        }
-    }
-
-    /* Remove metadata entries for each removed file */
-    size_t removed_count = 0;
-    for (size_t i = 0; i < removed_paths->count; i++) {
-        const char *storage_path = removed_paths->items[i];
-
-        /* Check if metadata item exists */
-        if (metadata_has_item(metadata, storage_path)) {
-            err = metadata_remove_item(metadata, storage_path);
-            if (err) {
-                metadata_free(metadata);
-                return error_wrap(
-                    err, "Failed to remove metadata item: %s",
-                    storage_path
-                );
-            }
-
-            removed_count++;
-
-            output_info(out, OUTPUT_VERBOSE, "Removed metadata: %s", storage_path);
-        }
-    }
-
-    /* Prune redundant directory entries.
-     *
-     * Removing a file may leave its parent directory metadata entry with no
-     * anchoring descendants. Anchoring is judged against the post-edit worktree
-     * index (removals already unstaged by the caller) — never against metadata
-     * items, which omit unelevated symlinks. Only entries that carry no actionable
-     * information are
-     * dropped (default mode, no ownership, no tracked descendants);
-     * custom-attribute entries are preserved as potential empty-dir intent. */
-    git_index *index = NULL;
-    err = worktree_get_index(wt, &index);
-    if (err) {
-        metadata_free(metadata);
-        return error_wrap(err, "Failed to get worktree index");
-    }
-
-    err = metadata_prune_directories(metadata, index, pruned);
-    git_index_free(index);
-    if (err) {
-        metadata_free(metadata);
-        return error_wrap(err, "Failed to prune redundant directories");
-    }
-
-    if (pruned->count > 0) {
-        removed_count += pruned->count;
-        output_info(
-            out, OUTPUT_VERBOSE, "Pruned %zu redundant directory entr%s",
-            pruned->count, pruned->count == 1 ? "y" : "ies"
-        );
-    }
-
-    /* Skip rewrite if nothing was actually removed from metadata */
-    if (removed_count == 0) {
-        metadata_free(metadata);
-        return NULL;
-    }
-
-    /* Save updated metadata to worktree */
-    err = metadata_save_to_worktree(worktree_path, metadata);
-    metadata_free(metadata);
-
-    if (err) {
-        return error_wrap(err, "Failed to save metadata");
-    }
-
-    /* Stage metadata.json file */
-    err = worktree_stage_file(wt, METADATA_FILE_PATH);
-    if (err) {
-        return error_wrap(err, "Failed to stage metadata");
-    }
-
-    if (removed_count > 0) {
-        output_info(
-            out, OUTPUT_VERBOSE, "Cleaned up %zu metadata entr%s",
-            removed_count, removed_count == 1 ? "y" : "ies"
-        );
-    }
-
-    return NULL;
-}
-
-/**
  * Remove files from profile
  *
  * `before` is the view ahead of the commit (the dispatcher's): who owns a path
@@ -848,11 +636,13 @@ static error_t *remove_files_from_profile(
     error_t *err = NULL;
     removal_claim_t *claims = NULL;        /* arena — the resolver's */
     size_t claim_count = 0;
+    metadata_t *metadata = NULL;           /* the branch's, from the resolver (owned) */
     hashmap_t *profile_index = NULL;       /* storage_path → the other profiles claiming it (owned) */
     size_t multi_profile_count = 0;
-    worktree_handle_t *wt = NULL;
     string_array_t *removed_paths = NULL;
     string_array_t pruned_dirs = { 0 };    /* Directory entries the metadata step pruned (storage paths) */
+    buffer_t metadata_json = BUFFER_INIT;
+    char *message = NULL;
     manifest_t *after = NULL;
     hashmap_t *anchor_index = NULL;
     bool profile_enabled = false;
@@ -867,7 +657,7 @@ static error_t *remove_files_from_profile(
     /* Resolve the arguments to the claims they remove */
     err = resolve_removal_claims(
         ctx, opts->profile, opts->paths, opts->path_count, opts,
-        &claims, &claim_count
+        &claims, &claim_count, &metadata
     );
     if (err) {
         goto cleanup;
@@ -949,6 +739,31 @@ static error_t *remove_files_from_profile(
     hashmap_free(profile_index, string_array_free_cb);
     profile_index = NULL;
 
+    /* Selection: the accepted claims, before anything fires. In interactive mode
+     * each claim is confirmed here, so the hooks and the plan below see exactly
+     * what will happen — a declined claim is out before the pre-hook names the
+     * set. */
+    if (opts->interactive) {
+        size_t kept = 0;
+        for (size_t i = 0; i < claim_count; i++) {
+            char prompt[PATH_MAX + 16];
+            snprintf(
+                prompt, sizeof(prompt), "Remove %s%s?",
+                claims[i].storage_path, path_kind_suffix(claims[i].kind)
+            );
+            if (!output_confirm(out, prompt, false)) {
+                output_info(out, OUTPUT_VERBOSE, "Skipped: %s", claims[i].storage_path);
+                continue;
+            }
+            claims[kept++] = claims[i];
+        }
+        claim_count = kept;
+    }
+    if (claim_count == 0) {
+        output_info(out, OUTPUT_NORMAL, "Nothing removed");
+        goto cleanup;
+    }
+
     /* Build hook invocation with the claims' filesystem paths (resolved by
      * resolve_removal_claims). Reached only on non-dry-run: the dry-run branch
      * above early-cleanups before this point, so dry_run is always false here
@@ -975,63 +790,42 @@ static error_t *remove_files_from_profile(
     err = hook_fire_pre(config, out, repo_path, &hook_inv);
     if (err) goto cleanup;
 
-    /* Create temporary worktree */
-    err = worktree_create_temp(repo, &wt);
-    if (err) {
-        err = error_wrap(err, "Failed to create temporary worktree");
-        goto cleanup;
-    }
-
-    /* Checkout profile branch */
-    err = worktree_checkout_branch(wt, opts->profile);
-    if (err) {
-        err = error_wrap(
-            err, "Failed to checkout profile '%s'",
-            opts->profile
-        );
-        goto cleanup;
-    }
-
-    /* Remove each claim, tracking which are actually removed. A FILE claim leaves
-     * the worktree checkout and its index entry; a DIRECTORY claim has no tree
-     * entry and no checkout presence — its whole Git footprint is the metadata
-     * item, which the metadata step below removes. */
+    /* The plan, all in memory: which tree entries leave, and the metadata edit
+     * riding the same commit. A FILE claim is a tree entry; a DIRECTORY claim
+     * has no tree entry — its whole Git footprint is its metadata item. Every
+     * FILE claim is in the branch tree (the resolver's universe is
+     * profile_list_files over this branch, and the branch cannot move between
+     * resolve and commit — one process, one command), so the primitive's
+     * missing-entry error cannot fire. */
     size_t removed_files = 0, removed_dirs = 0;
+    size_t removal_count = 0, meta_edits = 0;
     removed_paths = string_array_new(0);
-    if (!removed_paths) {
-        err = ERROR(ERR_MEMORY, "Failed to allocate removed paths array");
+    const char **removals = arena_alloc(ctx->arena, claim_count * sizeof(const char *));
+    if (!removed_paths || !removals) {
+        err = ERROR(ERR_MEMORY, "Failed to allocate removal plan");
         goto cleanup;
     }
 
     for (size_t i = 0; i < claim_count; i++) {
         const removal_claim_t *claim = &claims[i];
 
-        /* Interactive mode: prompt for each claim */
-        if (opts->interactive) {
-            char prompt[PATH_MAX + 16];
-            snprintf(
-                prompt, sizeof(prompt), "Remove %s%s?",
-                claim->storage_path, path_kind_suffix(claim->kind)
-            );
-            if (!output_confirm(out, prompt, false)) {
-                output_info(out, OUTPUT_VERBOSE, "Skipped: %s", claim->storage_path);
-                continue;
-            }
+        if (claim->kind == PATH_KIND_FILE) {
+            removals[removal_count++] = claim->storage_path;
+            removed_files++;
+        } else {
+            removed_dirs++;
         }
 
-        if (claim->kind == PATH_KIND_FILE) {
-            err = remove_file_from_worktree(wt, claim->storage_path, opts, out);
+        if (metadata && metadata_has_item(metadata, claim->storage_path)) {
+            err = metadata_remove_item(metadata, claim->storage_path);
             if (err) {
-                /* If interactive or force, continue on error */
-                if (opts->interactive || opts->force) {
-                    output_warning(out, OUTPUT_NORMAL, "%s", error_message(err));
-                    error_free(err);
-                    err = NULL;
-                    continue;
-                }
-                /* Otherwise, abort */
+                err = error_wrap(
+                    err, "Failed to remove metadata item: %s",
+                    claim->storage_path
+                );
                 goto cleanup;
             }
+            meta_edits++;
         }
 
         err = string_array_push(removed_paths, claim->storage_path);
@@ -1039,31 +833,101 @@ static error_t *remove_files_from_profile(
             err = error_wrap(err, "Failed to track removed path");
             goto cleanup;
         }
-        if (claim->kind == PATH_KIND_DIRECTORY) removed_dirs++;
-        else removed_files++;
+        output_info(out, OUTPUT_VERBOSE, "Removed: %s", claim->storage_path);
     }
 
-    /* Nothing was removed (e.g., all declined in interactive mode) */
-    if (removed_files + removed_dirs == 0) {
-        output_info(out, OUTPUT_NORMAL, "Nothing removed");
+    /* Prune redundant directory entries against the post-edit index — the branch
+     * tree minus the removed file claims, the tree the impending commit will
+     * record (the judge's own contract, metadata.h). Removing a file may leave
+     * its parent directory metadata entry with no anchoring descendants. Anchoring
+     * is judged against the index — never against metadata items, which omit
+     * unelevated symlinks. Only entries that carry no actionable information
+     * are dropped (default mode, no ownership, no tracked descendants);
+     * custom-attribute entries are preserved as potential empty-dir intent. */
+    if (metadata) {
+        git_tree *branch_tree = NULL;
+        git_index *judge = NULL;
+        err = gitops_load_branch_tree(repo, opts->profile, &branch_tree, NULL);
+        if (err) {
+            err = error_wrap(
+                err, "Failed to load tree of profile '%s'", opts->profile
+            );
+            goto cleanup;
+        }
+        int git_err = git_index_new(&judge);
+        if (git_err == 0) git_err = git_index_read_tree(judge, branch_tree);
+        for (size_t i = 0; git_err == 0 && i < removal_count; i++) {
+            git_err = git_index_remove(judge, removals[i], 0);
+        }
+        if (git_err < 0) {
+            git_index_free(judge);
+            git_tree_free(branch_tree);
+            err = error_from_git(git_err);
+            goto cleanup;
+        }
+        err = metadata_prune_directories(metadata, judge, &pruned_dirs);
+        git_index_free(judge);
+        git_tree_free(branch_tree);
+        if (err) {
+            err = error_wrap(err, "Failed to prune redundant directories");
+            goto cleanup;
+        }
+        if (pruned_dirs.count > 0) {
+            output_info(
+                out, OUTPUT_VERBOSE, "Pruned %zu redundant directory entr%s",
+                pruned_dirs.count, pruned_dirs.count == 1 ? "y" : "ies"
+            );
+        }
+    }
+
+    /* The metadata blob, only when the collection actually changed — a removal
+     * that touched no items and pruned nothing keeps the branch's metadata.json
+     * byte-identical, so no rewrite is committed. */
+    gitops_tree_update_t meta_update;
+    size_t update_count = 0;
+    if (meta_edits + pruned_dirs.count > 0) {
+        err = metadata_to_json(metadata, &metadata_json);
+        if (err) {
+            err = error_wrap(err, "Failed to serialize metadata");
+            goto cleanup;
+        }
+        int git_err = git_blob_create_from_buffer(
+            &meta_update.blob_oid, repo, metadata_json.data, metadata_json.size
+        );
+        if (git_err < 0) {
+            err = error_from_git(git_err);
+            goto cleanup;
+        }
+        meta_update.path = METADATA_FILE_PATH;
+        meta_update.mode = GIT_FILEMODE_BLOB;
+        update_count = 1;
+    }
+
+    /* One atomic commit: the file claims leave the tree, metadata.json follows
+     * in the same tree write. HEAD-safe and all-or-nothing — any failure up to
+     * here leaves the repository byte-identical. */
+    commit_message_context_t msg_ctx = {
+        .action        = COMMIT_ACTION_REMOVE,
+        .profile       = opts->profile,
+        .files         = removed_paths->items,
+        .file_count    = removed_paths->count,
+        .custom_msg    = opts->message,
+        .target_commit = NULL
+    };
+    message = build_commit_message(config, &msg_ctx);
+    if (!message) {
+        err = ERROR(ERR_MEMORY, "Failed to build commit message");
         goto cleanup;
     }
-
-    /* Clean up metadata for actually-removed files only */
-    err = cleanup_metadata(wt, removed_paths, &pruned_dirs, out);
+    err = gitops_commit_tree_updates_safe(
+        repo, opts->profile,
+        update_count > 0 ? &meta_update : NULL, update_count,
+        removals, removal_count, message, NULL
+    );
     if (err) {
-        err = error_wrap(err, "Failed to clean up metadata");
+        err = error_wrap(err, "Failed to create commit");
         goto cleanup;
     }
-
-    /* Create commit */
-    err = create_removal_commit(wt, opts, removed_paths, config);
-    if (err) {
-        goto cleanup;
-    }
-
-    /* Cleanup worktree */
-    worktree_cleanup(&wt);
 
     /*
      * Architectural note: We do NOT delete files from the filesystem here. This
@@ -1237,10 +1101,12 @@ cleanup:
     state_rollback(state);
     if (anchor_index) hashmap_free(anchor_index, NULL);
     manifest_free(after);
+    free(message);
+    buffer_free(&metadata_json);
     string_array_deinit(&pruned_dirs);
     if (removed_paths) string_array_free(removed_paths);
-    if (wt) worktree_cleanup(&wt);
     if (profile_index) hashmap_free(profile_index, string_array_free_cb);
+    if (metadata) metadata_free(metadata);
 
     return err;
 }

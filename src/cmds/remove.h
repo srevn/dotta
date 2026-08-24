@@ -8,7 +8,9 @@
  * Architectural principle: This command modifies the Git repository only.
  * Filesystem synchronization is handled by 'dotta apply'.
  *
- * Uses temporary worktrees to safely modify profile branches.
+ * Removal is pure tree surgery — no content is captured, nothing needs a working
+ * copy — so the Git phase is one atomic, HEAD-safe tree commit
+ * (gitops_commit_tree_updates_safe); no worktree, no per-file filesystem IO.
  */
 
 #ifndef DOTTA_CMD_REMOVE_H
@@ -62,10 +64,9 @@ typedef struct {
  * released from management and remain on the filesystem. With delete_files=true,
  * they are staged for removal and deleted when 'dotta apply' is run.
  *
- * Uses temporary worktree to safely modify profile branches. Executes hooks;
- * never touches deployed files. Writes the record for what the commit let go
- * (retire, or prune-order under --delete-files) — the record phase is
- * non-fatal: Git stands even when the record write fails.
+ * Executes hooks; never touches deployed files. Writes the record for what the
+ * commit let go (retire, or prune-order under --delete-files) — the record phase
+ * is non-fatal: Git stands even when the record write fails.
  *
  * @param ctx Dispatch context (must not be NULL)
  * @param opts Command options (must not be NULL)

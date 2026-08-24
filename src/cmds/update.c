@@ -102,8 +102,20 @@ static error_t *copy_file_to_worktree(
         }
     }
 
-    /* Copy file (with optional encryption) */
-    if (fs_is_symlink(filesystem_path)) {
+    /* Copy file (with optional encryption). One lstat decides the kind and is
+     * the stat a symlink capture keeps, so the kind and the triple come from
+     * the same observation. A regular file's authoritative stat is taken inside
+     * content_store_file_to_worktree, beside the bytes it reads. */
+    struct stat src_stat;
+    if (lstat(filesystem_path, &src_stat) != 0) {
+        err = ERROR(
+            ERR_FS, "Failed to stat '%s': %s",
+            filesystem_path, strerror(errno)
+        );
+        goto cleanup;
+    }
+
+    if (S_ISLNK(src_stat.st_mode)) {
         /* Handle symlink - no encryption for symlinks */
         err = fs_read_symlink(filesystem_path, &target);
         if (err) {
@@ -117,15 +129,10 @@ static error_t *copy_file_to_worktree(
             goto cleanup;
         }
 
-        /* Capture symlink stat so metadata_capture_from_file detects S_ISLNK */
+        /* The lstat above is the capture: metadata_capture_from_file detects
+         * S_ISLNK from it. */
         if (out_stat) {
-            if (lstat(filesystem_path, out_stat) != 0) {
-                err = ERROR(
-                    ERR_INTERNAL, "Failed to stat symlink '%s': %s",
-                    filesystem_path, strerror(errno)
-                );
-                goto cleanup;
-            }
+            *out_stat = src_stat;
         }
 
         /* Symlinks are never encrypted */
@@ -220,14 +227,13 @@ typedef enum {
  *
  * Tracks results from copy_file_to_worktree() for each workspace item. Indexed
  * by item position (not file-only position) to prevent index misalignment between
- * update_profile() and update_metadata_for_profile().
- *
- * Memory: calloc-initialized, so unprocessed items have copied=false.
+ * update_profile() and update_metadata_for_profile(). A slot is valid exactly
+ * for the non-deleted FILE items: the copy step either filled it or aborted the
+ * profile.
  */
 typedef struct {
-    bool copied;          /* File was successfully copied to worktree */
     bool encrypted;       /* File was encrypted during copy */
-    struct stat stat;     /* Captured stat data (valid only if copied=true) */
+    struct stat stat;     /* Captured stat data */
 } file_copy_result_t;
 
 /**
@@ -373,14 +379,6 @@ static bool is_update_candidate(
  * - opts->only_new: Only untracked files (excludes modified)
  * - operation_profiles: Only items from specified profiles (CLI -p filter)
  *
- * CRITICAL CORRECTNESS REQUIREMENTS:
- * 1. UNTRACKED state: Include when flags OR auto_detect is enabled Flags
- *    (--include-new, --only-new) bypass confirmation Auto-detect includes them
- *    for later confirmation prompt
- *
- * 2. MODE/OWNERSHIP divergence: Apply to BOTH files AND directories Files can
- *    have metadata-only changes (e.g., chmod without content change)
- *
  * @param ws Workspace (must not be NULL)
  * @param opts Update options (must not be NULL)
  * @param scope Operation scope (must not be NULL)
@@ -517,18 +515,18 @@ static error_t *group_items_by_profile(
 /**
  * Update metadata for items (unified for files and directories)
  *
- * copy_results is indexed by item position (same index as items array). Only
- * items with copy_results[i].copied == true have valid stat/encryption data.
+ * copy_results is indexed by item position (same index as items array); a
+ * non-deleted FILE item's slot holds its copy's stat and encryption flag.
  *
  * @param wt Worktree handle (must not be NULL)
  * @param index Post-edit worktree index: deletions removed, updates staged (must
  *              not be NULL; anchors the directory prune)
  * @param items Array of workspace items to update (must not be NULL)
  * @param item_count Number of items
- * @param copy_results Per-item copy results indexed by item position (can be NULL)
+ * @param copy_results Per-item copy results indexed by item position (must not
+ *                     be NULL)
  * @param commit The commit's bookkeeping: receives the directory claims captured
  *               and the entries pruned (must not be NULL)
- * @param opts Update options (must not be NULL)
  * @param out Output context (can be NULL)
  * @return Error or NULL on success
  */
@@ -539,14 +537,12 @@ static error_t *update_metadata_for_profile(
     size_t item_count,
     const file_copy_result_t *copy_results,
     update_commit_t *commit,
-    const cmd_update_options_t *opts,
     output_t *out
 ) {
     CHECK_NULL(wt);
     CHECK_NULL(index);
     CHECK_NULL(items);
     CHECK_NULL(commit);
-    CHECK_NULL(opts);
 
     /* Early exit if nothing to update */
     if (item_count == 0) {
@@ -615,12 +611,6 @@ static error_t *update_metadata_for_profile(
                     continue;
                 }
 
-                /* Skip files not copied to worktree (e.g., encryption-divergence
-                 * on files missing from filesystem). Indexed by item position. */
-                if (!copy_results || !copy_results[i].copied) {
-                    continue;
-                }
-
                 const struct stat *file_stat = &copy_results[i].stat;
 
                 /* Capture metadata from pre-captured stat data */
@@ -649,42 +639,38 @@ static error_t *update_metadata_for_profile(
                         meta_item->file.encrypted = copy_results[i].encrypted;
                     }
 
-                    /* Save metadata before adding (for verbose output) */
-                    mode_t mode = meta_item->mode;
-                    char *owner = meta_item->owner ? strdup(meta_item->owner) : NULL;
-                    char *group = meta_item->group ? strdup(meta_item->group) : NULL;
+                    /* Say what the capture took before metadata_add_item copies
+                     * and frees it */
                     bool is_encrypted = (meta_item->kind == METADATA_ITEM_FILE)
                                       ? meta_item->file.encrypted : false;
+                    if (meta_item->owner || meta_item->group) {
+                        output_info(
+                            out, OUTPUT_VERBOSE,
+                            "  Captured metadata: %s (mode: %04o, owner: %s:%s%s)",
+                            item->filesystem_path, meta_item->mode,
+                            meta_item->owner ? meta_item->owner : "?",
+                            meta_item->group ? meta_item->group : "?",
+                            is_encrypted ? ", encrypted" : ""
+                        );
+                    } else {
+                        output_info(
+                            out, OUTPUT_VERBOSE,
+                            "  Captured metadata: %s (mode: %04o%s)",
+                            item->filesystem_path, meta_item->mode,
+                            is_encrypted ? ", encrypted" : ""
+                        );
+                    }
 
                     /* Add to metadata collection */
                     err = metadata_add_item(metadata, meta_item);
                     metadata_item_free(meta_item);
 
                     if (err) {
-                        free(owner);
-                        free(group);
                         metadata_free(metadata);
                         return error_wrap(err, "Failed to add metadata entry");
                     }
 
                     captured_file_count++;
-
-                    if (owner || group) {
-                        output_info(
-                            out, OUTPUT_VERBOSE,
-                            "  Captured metadata: %s (mode: %04o, owner: %s:%s%s)",
-                            item->filesystem_path, mode, owner ? owner : "?",
-                            group ? group : "?", is_encrypted ? ", encrypted" : ""
-                        );
-                    } else {
-                        output_info(
-                            out, OUTPUT_VERBOSE,
-                            "  Captured metadata: %s (mode: %04o%s)",
-                            item->filesystem_path, mode, is_encrypted ? ", encrypted" : ""
-                        );
-                    }
-                    free(owner);
-                    free(group);
                 }
 
                 break;
@@ -757,18 +743,29 @@ static error_t *update_metadata_for_profile(
                     continue;
                 }
 
-                /* Save metadata for verbose output before adding */
-                mode_t mode = meta_item->mode;
-                char *owner = meta_item->owner ? strdup(meta_item->owner) : NULL;
-                char *group = meta_item->group ? strdup(meta_item->group) : NULL;
+                /* Say what the capture took before metadata_add_item copies
+                 * and frees it */
+                if (meta_item->owner || meta_item->group) {
+                    output_info(
+                        out, OUTPUT_VERBOSE,
+                        "  Updated directory metadata: %s (mode: %04o, owner: %s:%s)",
+                        item->filesystem_path, meta_item->mode,
+                        meta_item->owner ? meta_item->owner : "?",
+                        meta_item->group ? meta_item->group : "?"
+                    );
+                } else {
+                    output_info(
+                        out, OUTPUT_VERBOSE,
+                        "  Updated directory metadata: %s (mode: %04o)",
+                        item->filesystem_path, meta_item->mode
+                    );
+                }
 
                 /* Add to metadata collection (upsert - updates if exists) */
                 err = metadata_add_item(metadata, meta_item);
                 metadata_item_free(meta_item);
 
                 if (err) {
-                    free(owner);
-                    free(group);
                     metadata_free(metadata);
                     return error_wrap(
                         err, "Failed to update directory metadata for '%s'",
@@ -781,23 +778,6 @@ static error_t *update_metadata_for_profile(
                     .item = item,
                     .stat = STAT_CACHE_UNSET
                 };
-
-                if (owner || group) {
-                    output_info(
-                        out, OUTPUT_VERBOSE,
-                        "  Updated directory metadata: %s (mode: %04o, owner: %s:%s)",
-                        item->filesystem_path, mode, owner ? owner : "?", group ? group : "?"
-                    );
-                } else {
-                    output_info(
-                        out, OUTPUT_VERBOSE,
-                        "  Updated directory metadata: %s (mode: %04o)",
-                        item->filesystem_path, mode
-                    );
-                }
-
-                free(owner);
-                free(group);
                 break;
             }
         }
@@ -939,9 +919,8 @@ static error_t *update_profile(
     owns_metadata = true;
 
     /* Allocate per-item result tracking (indexed by item position, not file-only
-     * position). This prevents index misalignment between update_profile and
-     * update_metadata_for_profile when files are skipped (e.g.,
-     * encryption-divergence on missing files). */
+     * position, so the metadata step reads each file's slot by the shared item
+     * index — directories and deletions occupy slots without copy data). */
     copy_results = calloc(item_count, sizeof(file_copy_result_t));
     if (!copy_results) {
         err = ERROR(ERR_MEMORY, "Failed to allocate copy results array");
@@ -988,44 +967,6 @@ static error_t *update_profile(
                     continue;
                 }
 
-                /* Handle encryption divergence for files missing from filesystem
-                 *
-                 * EDGE CASE: File has DIVERGENCE_ENCRYPTION but doesn't exist
-                 * on filesystem. This occurs when:
-                 *   1. File exists in Git (detected via profile scan)
-                 *   2. File matches auto_encrypt_patterns (policy violation
-                 *      detected)
-                 *   3. File is NOT on filesystem (deleted locally, or never
-                 *      deployed)
-                 *
-                 * DEFENSIVE: Cannot re-encrypt a file that doesn't exist. Skip
-                 * gracefully to prevent errors from copy_file_to_worktree() trying
-                 * to read missing file.
-                 *
-                 * RESOLUTION PATHS:
-                 *   - User can re-create the file and run update again to fix
-                 *     encryption
-                 *   - User can remove file from profile with 'dotta remove'
-                 *   - If file is BOTH deleted AND has encryption divergence,
-                 *     deletion divergence takes precedence (already handled above)
-                 */
-                if ((item->divergence & DIVERGENCE_ENCRYPTION) &&
-                    item->occupant == FS_OCCUPANT_NONE) {
-                    output_warning(
-                        out, OUTPUT_VERBOSE,
-                        "Skipping encryption fix for missing file: %s", item->filesystem_path
-                    );
-                    output_info(
-                        out, OUTPUT_VERBOSE,
-                        "  File violates encryption policy but doesn't exist on filesystem."
-                    );
-                    output_info(
-                        out, OUTPUT_VERBOSE,
-                        "  To resolve: re-create file and run update, or remove from profile."
-                    );
-                    continue;
-                }
-
                 /* Copy to worktree and capture stat atomically */
                 err = copy_file_to_worktree(
                     ctx,
@@ -1042,7 +983,6 @@ static error_t *update_profile(
                     goto cleanup;
                 }
 
-                copy_results[i].copied = true;
                 commit->captured[commit->captured_count++] = (update_capture_t){
                     .item = item,
                     .stat = stat_cache_from_stat(&copy_results[i].stat)
@@ -1068,7 +1008,7 @@ static error_t *update_profile(
 
     /* Update metadata for both files and directories */
     err = update_metadata_for_profile(
-        wt, index, items, item_count, copy_results, commit, opts, out
+        wt, index, items, item_count, copy_results, commit, out
     );
     if (err) {
         err = error_wrap(err, "Failed to update metadata");
@@ -1279,6 +1219,10 @@ static error_t *update_manifest_after_update(
                 &outcome, &fs_path
             );
             if (err) goto cleanup;
+            /* UNBOUND is mount_resolve's batch contract, honoured; it cannot
+             * fire today — manifest_build hard-errors on an unbound custom
+             * directory claim at dispatch, so a run that could prune one never
+             * starts. */
             if (outcome == MOUNT_RESOLVE_UNBOUND) continue;
 
             const manifest_row_t *row = manifest_lookup(manifest, fs_path);
@@ -1407,10 +1351,6 @@ static error_t *update_execute_for_all_profiles(
 
     while (hashmap_iter_next(&iter, &profile, &value)) {
         ptr_array_t *array = value;
-
-        if (array->count == 0) {
-            continue;
-        }
 
         /* Display profile header */
         output_section(
@@ -1760,19 +1700,19 @@ static error_t *update_display_summary(
             for (size_t i = 0; i < item_count; i++) {
                 const workspace_item_t *item = items[i];
 
+                /* DEPLOYED violators only — the set the section's count gated
+                 * on: a deleted violator is in the deleted section, and its
+                 * commit resolves the violation by removing the plaintext. */
                 if (item->item_kind != PATH_KIND_FILE ||
+                    item->state != WORKSPACE_STATE_DEPLOYED ||
                     !(item->divergence & DIVERGENCE_ENCRYPTION)) {
                     continue;
                 }
 
-                /* Build metadata with profile and resolution status */
                 char metadata[512];
-                const char *status = (item->occupant != FS_OCCUPANT_NONE)
-                    ? "will be encrypted" : "file missing - cannot fix";
-
                 snprintf(
-                    metadata, sizeof(metadata), "from %s, %s",
-                    item->profile, status
+                    metadata, sizeof(metadata), "from %s, will be encrypted",
+                    item->profile
                 );
 
                 /* Single tag for policy violation */
@@ -2416,7 +2356,7 @@ static const args_opt_t update_opts[] = {
     ARGS_FLAG(
         "i interactive",
         cmd_update_options_t,interactive,
-        "Prompt per file before committing"
+        "Prompt for confirmation before committing"
     ),
     ARGS_FLAG(
         "v verbose",

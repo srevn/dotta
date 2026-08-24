@@ -129,15 +129,21 @@ error_t *path_input_resolve(
         return ERROR(ERR_INVALID_ARG, "Path cannot be empty");
     }
 
-    /* Case 1: Storage path — validate and arena-copy. */
+    /* Case 1: Storage path — shed the directory spelling, validate, arena-copy.
+     * A trailing '/' is the same path spelled as a directory — the UI's own
+     * listings print directory claims slash-marked — and the filesystem cases
+     * below shed theirs inside fs_normalize_path; shedding here keeps the two
+     * surface forms resolving alike. */
     if (mount_spec_for_path(input)) {
-        err = mount_validate_storage(input);
-        if (err) {
-            return error_wrap(err, "Invalid storage path '%s'", input);
-        }
-        const char *copy = arena_strdup(arena, input);
+        size_t len = strlen(input);
+        while (len > 0 && input[len - 1] == '/') len--;
+        const char *copy = arena_strndup(arena, input, len);
         if (!copy) {
             return ERROR(ERR_MEMORY, "Failed to allocate storage path");
+        }
+        err = mount_validate_storage(copy);
+        if (err) {
+            return error_wrap(err, "Invalid storage path '%s'", input);
         }
         *out_storage = copy;
         return NULL;

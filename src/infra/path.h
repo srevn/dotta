@@ -49,6 +49,7 @@
  *   .bashrc (in $HOME)          -> home/.bashrc
  *   ../file (in $HOME/project)  -> home/file
  *   home/.bashrc                -> validated and returned as-is
+ *   home/.config/nvim/          -> home/.config/nvim (directory spelling shed)
  *   /etc/hosts                  -> root/etc/hosts
  *   /mnt/jail/etc/nginx.conf    -> custom/etc/nginx.conf (when /mnt/jail in table)
  *   config (no slash)           -> ERROR: ambiguous (use ./config)

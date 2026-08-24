@@ -109,7 +109,7 @@ endif
 export INSTALL_HINT
 
 # Goals that need no compiler and no libraries
-BUILDLESS_GOALS := clean help check-deps format format-check uninstall uninstall-completions
+BUILDLESS_GOALS := clean help check-deps format format-check reflow reflow-check uninstall uninstall-completions
 
 # Fail at the point of misconfiguration
 ifneq ($(filter-out $(BUILDLESS_GOALS),$(or $(MAKECMDGOALS),all)),)
@@ -398,6 +398,35 @@ format-check:
 	  || { echo "Formatting issues found. Run 'make format' to fix."; exit 1; }
 	@echo "All files formatted correctly."
 
+# Reflow block comments (requires python3). Runs after uncrustify, never before:
+# the fill column is measured from the comment's own indent, so the reindent has
+# to land first or the column it just produced is gone.
+REFLOW := scripts/reflow_comments.py
+REFLOW_WIDTH ?= 80
+REFLOW_SLACK ?= 4
+# Scope is what git says changed. Override with REFLOW_FILES="src/a.c include/b.h".
+REFLOW_FILES ?= $(shell git diff --name-only HEAD -- 'src/*.c' 'src/*.h' 'include/*.h')
+
+.PHONY: reflow
+reflow:
+	@command -v python3 >/dev/null 2>&1 || \
+	  { echo "Error: python3 not installed."; exit 1; }
+	@if [ -z "$(REFLOW_FILES)" ]; then \
+	  echo "No modified .c/.h files to reflow."; \
+	else \
+	  echo "Reflowing comments..."; \
+	  python3 $(REFLOW) --width $(REFLOW_WIDTH) --slack $(REFLOW_SLACK) --apply $(REFLOW_FILES); \
+	fi
+
+# Show what reflow would change without writing; non-zero if anything would
+.PHONY: reflow-check
+reflow-check:
+	@if [ -n "$(REFLOW_FILES)" ]; then \
+	  python3 $(REFLOW) --width $(REFLOW_WIDTH) --slack $(REFLOW_SLACK) $(REFLOW_FILES) \
+	    || { echo "Comment reflow pending. Run 'make reflow' to fix."; exit 1; }; \
+	fi
+	@echo "All comments reflowed correctly."
+
 # Static analysis with clang-tidy (requires compile_commands.json)
 TIDY ?= clang-tidy
 RUN_TIDY ?= run-clang-tidy
@@ -498,6 +527,8 @@ help:
 	@echo "  uninstall-completions - Remove shell completions only"
 	@echo "  format                - Format code with uncrustify"
 	@echo "  format-check          - Check formatting without modifying files"
+	@echo "  reflow                - Reflow comments in git-modified .c/.h files"
+	@echo "  reflow-check          - Show pending comment reflow without writing"
 	@echo "  tidy                  - Run clang-tidy static analysis (parallel)"
 	@echo "  tidy-fix              - Run clang-tidy and apply safe fixes (parallel)"
 	@echo "  tidy-file FILE=...    - Run clang-tidy on a single file"

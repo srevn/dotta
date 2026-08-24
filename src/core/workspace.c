@@ -824,11 +824,39 @@ static error_t *analyze_file_divergence(
 
             case CMP_TYPE_DIFF:
                 /* The occupant is not the row's kind (file ↔ symlink, or a
-                 * directory, FIFO, socket or device standing on the row) — a
-                 * blocking condition: return immediately with TYPE divergence.
-                 * The derived reassignment pair rides along, the same shape as
-                 * every early return, so a pending handover does not vanish behind
-                 * a type change. */
+                 * directory, FIFO, socket or device standing on the row). When
+                 * Git moved the kind out from under an untouched deployment,
+                 * the second question — asked against the record, routed by the
+                 * anchor's own kind — answers it: an occupant that is exactly
+                 * what dotta confirmed, kind and content, diverges by Git's move
+                 * alone. STALE, the fast path's answer for the same state when
+                 * the triple vouches for it; the verdict must not depend on which
+                 * path looked. */
+                if (git_moved) {
+                    compare_result_t at_anchor = CMP_UNVERIFIED;
+                    error_t *verify_err = content_compare_blob_to_disk(
+                        ws->repo,
+                        &anchor->blob_oid,
+                        fs_path,
+                        path_type_to_git_filemode(anchor->type),
+                        &initial_stat,
+                        storage_path,
+                        profile,
+                        ws->content_cache,
+                        &at_anchor,
+                        NULL
+                    );
+                    if (verify_err) error_free(verify_err);
+                    if (at_anchor == CMP_EQUAL) {
+                        divergence |= DIVERGENCE_STALE;
+                        break;
+                    }
+                }
+
+                /* Anything else is a blocking condition: return immediately with
+                 * TYPE divergence. The derived reassignment pair rides along,
+                 * the same shape as every early return, so a pending handover
+                 * does not vanish behind a type change. */
                 return workspace_add_diverged(
                     ws, fs_path, storage_path, profile, old_profile, WORKSPACE_STATE_DEPLOYED,
                     DIVERGENCE_TYPE | policy, PATH_KIND_FILE, occupant, profile_changed

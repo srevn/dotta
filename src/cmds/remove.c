@@ -334,6 +334,11 @@ cleanup:
  *   precedence gives the path to a profile other than the one the user is removing
  *   from, so the removal changes nothing on disk
  *
+ * The view is built here, tolerantly: remove must run on an enabled set the
+ * builder refuses (that is how an offending claim gets untracked), so a failed
+ * build leaves the deployed bit false and the warning keeps its neutral
+ * closing lines.
+ *
  * Directory claims are not in the file index and get no cross-profile warning:
  * the record step's fallback detection covers the semantic half (a lower enabled
  * profile still claiming the path keeps the record, which reads [reassigned]
@@ -363,7 +368,7 @@ static error_t *analyze_multi_profile_conflicts(
     CHECK_NULL(has_deployed_from_other_out);
 
     git_repository *repo = ctx->run.repo;
-    const manifest_t *view = ctx->run.manifest;
+    const state_t *state = ctx->run.state;
 
     /* Build profile file index once (O(M×P) - loads all profiles) Uses centralized
      * function from core/profiles.c */
@@ -371,6 +376,14 @@ static error_t *analyze_multi_profile_conflicts(
     error_t *err = profile_build_file_index(repo, current_profile, &profile_index);
     if (err) {
         return error_wrap(err, "Failed to build profile index");
+    }
+
+    /* The view, for the deployed bit alone — NULL on a set the builder refuses
+     * (see the tolerance note above). */
+    manifest_t *view = NULL;
+    error_t *view_err = manifest_build(repo, state, ctx->arena, &view);
+    if (view_err) {
+        error_free(view_err);
     }
 
     size_t multi_profile_count = 0;
@@ -392,13 +405,15 @@ static error_t *analyze_multi_profile_conflicts(
         /* Check if another profile owns the path in the view. Only valid with
          * actual filesystem paths (absolute), not storage path fallbacks (relative,
          * e.g., "home/.bashrc"). */
-        if (claim->filesystem_path[0] == '/') {
+        if (view && claim->filesystem_path[0] == '/') {
             const manifest_row_t *row = manifest_lookup(view, claim->filesystem_path);
             if (row && strcmp(row->profile, current_profile) != 0) {
                 has_deployed_from_other = true;
             }
         }
     }
+
+    manifest_free(view);
 
     *profile_index_out = profile_index;
     *multi_profile_count_out = multi_profile_count;
@@ -1766,7 +1781,6 @@ const args_command_t spec_remove = {
         .repo     = true,
         .state    = DOTTA_STATE_READ,
         .mounts   = true,
-        .manifest = true,
     },
     .dispatch     = remove_dispatch,
 };

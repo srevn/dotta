@@ -76,6 +76,10 @@ typedef struct {
  * This eliminates redundant stat calls when integrated with metadata checking,
  * reducing filesystem syscalls by ~5x in hot paths.
  *
+ * CMP_MISSING means the look itself met ENOENT/ENOTDIR — the path was absent at
+ * the look's own moment. Returned with or without in_stat; a caller that supplied
+ * a stat learns its stat is one moment stale.
+ *
  * @param content Buffer containing expected content (must not be NULL)
  * @param disk_path Path to file on disk (must not be NULL)
  * @param expected_mode Expected git filemode (for type/mode checking)
@@ -115,6 +119,10 @@ error_t *compare_buffer_to_disk(
  * - If in_stat == NULL: Performs lstat() internally
  * - If out_stat != NULL: Returns stat data for caller reuse
  * - Single stat used for all checks (type, size, mode)
+ *
+ * CMP_MISSING means the look itself met ENOENT/ENOTDIR — the path was absent at
+ * the look's own moment. Returned with or without in_stat; a caller that supplied
+ * a stat learns its stat is one moment stale.
  *
  * @param blob_oid Expected blob OID from manifest (must not be NULL)
  * @param disk_path Path to file on disk (must not be NULL)

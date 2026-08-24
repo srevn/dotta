@@ -59,8 +59,9 @@ error_t *compare_buffer_to_disk(
     } else {
         /* Need to stat - use lstat to detect symlinks correctly */
         if (lstat(disk_path, &st) != 0) {
-            if (errno == ENOENT) {
-                /* File doesn't exist - not an error, just report it */
+            if (errno == ENOENT || errno == ENOTDIR) {
+                /* File doesn't exist - not an error, just report it (ENOTDIR: a
+                 * component above is no longer a directory — same absence) */
                 *result = CMP_MISSING;
                 if (out_stat) {
                     memset(out_stat, 0, sizeof(*out_stat));
@@ -89,6 +90,18 @@ error_t *compare_buffer_to_disk(
         char *disk_target = NULL;
         error_t *err = fs_read_symlink(disk_path, &disk_target);
         if (err) {
+            /* readlink's errno is folded into the error's prose. One classifying
+             * lstat re-derives the verdict-grade cause — the link vanished mid-look
+             * (ENOENT/ENOTDIR, the caller's own absence rule) is CMP_MISSING;
+             * anything else keeps the original error. It classifies a failure;
+             * it binds nothing. */
+            struct stat gone;
+            if (lstat(disk_path, &gone) != 0
+                && (errno == ENOENT || errno == ENOTDIR)) {
+                error_free(err);
+                *result = CMP_MISSING;
+                return NULL;
+            }
             return error_wrap(
                 err, "Failed to read symlink '%s'", disk_path
             );
@@ -126,17 +139,24 @@ error_t *compare_buffer_to_disk(
 
         /* Sizes match - need content comparison for non-empty files */
         if (stat_ptr->st_size > 0) {
-            /* One look: open a descriptor and read it to EOF — the bytes
-             * compared are one inode's. O_NOFOLLOW refuses a symlink swapped
-             * in since the caller's lstat (ELOOP); O_NONBLOCK keeps a
-             * swapped-in FIFO from wedging the open (fs_read_fd then refuses
-             * it as not a regular file). read(2) cannot fault on a concurrent
-             * truncation the way a stat-sized mmap could — it returns short,
-             * and short-or-different is CMP_DIFFERENT below. */
+            /* One look: open a descriptor and read it to EOF — the bytes compared
+             * are one inode's. O_NOFOLLOW refuses a symlink swapped in since
+             * the caller's lstat (ELOOP); O_NONBLOCK keeps a swapped-in FIFO
+             * from wedging the open (fs_read_fd then refuses it as not a regular
+             * file). read(2) cannot fault on a concurrent truncation the way a
+             * stat-sized mmap could — it returns short, and short-or-different
+             * is CMP_DIFFERENT below. */
             int fd = open(
                 disk_path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC
             );
             if (fd < 0) {
+                if (errno == ENOENT || errno == ENOTDIR) {
+                    /* The look itself found nothing standing: the file vanished
+                     * between the caller's stat and this open. A verdict, not a
+                     * failed look. */
+                    *result = CMP_MISSING;
+                    return NULL;
+                }
                 return ERROR(
                     ERR_FS, "Failed to open '%s': %s",
                     disk_path, strerror(errno)
@@ -226,8 +246,9 @@ error_t *compare_oid_to_disk(
          * follow symlinks.
          */
         if (lstat(disk_path, &st) != 0) {
-            if (errno == ENOENT) {
-                /* File doesn't exist */
+            if (errno == ENOENT || errno == ENOTDIR) {
+                /* File doesn't exist (ENOTDIR: a component above is no longer a
+                 * directory — same absence) */
                 *result = CMP_MISSING;
                 if (out_stat) {
                     memset(out_stat, 0, sizeof(*out_stat));
@@ -263,6 +284,18 @@ error_t *compare_oid_to_disk(
         char *target = NULL;
         error_t *err = fs_read_symlink(disk_path, &target);
         if (err) {
+            /* readlink's errno is folded into the error's prose. One classifying
+             * lstat re-derives the verdict-grade cause — the link vanished mid-look
+             * (ENOENT/ENOTDIR, the caller's own absence rule) is CMP_MISSING;
+             * anything else keeps the original error. It classifies a failure;
+             * it binds nothing. */
+            struct stat gone;
+            if (lstat(disk_path, &gone) != 0
+                && (errno == ENOENT || errno == ENOTDIR)) {
+                error_free(err);
+                *result = CMP_MISSING;
+                return NULL;
+            }
             return error_wrap(err, "Failed to read symlink '%s'", disk_path);
         }
 
@@ -297,6 +330,18 @@ error_t *compare_oid_to_disk(
          */
         int ret = git_odb_hashfile(&computed, disk_path, GIT_OBJECT_BLOB);
         if (ret != 0) {
+            /* libgit2 collapses every cause into git_error_last() prose; the
+             * errno is gone at that boundary. One classifying lstat re-derives
+             * the verdict-grade cause — the file vanished mid-look (ENOENT/
+             * ENOTDIR, the caller's own absence rule) is CMP_MISSING; anything
+             * else keeps the libgit2 error. It classifies a failure; it binds
+             * nothing. */
+            struct stat gone;
+            if (lstat(disk_path, &gone) != 0
+                && (errno == ENOENT || errno == ENOTDIR)) {
+                *result = CMP_MISSING;
+                return NULL;
+            }
             const git_error *git_err = git_error_last();
             return ERROR(
                 ERR_GIT, "Failed to hash file '%s': %s", disk_path,

@@ -835,10 +835,18 @@ static error_t *analyze_file_divergence(
                 );
 
             case CMP_MISSING:
-                /* File was deleted during analysis (rare edge case). With stat
-                 * propagation this case is unlikely but kept for robustness.
-                 * The observation is the compare's now: absent. Skip the permission
-                 * checks below. */
+                /* The look itself met ENOENT/ENOTDIR: the path vanished between
+                 * the lstat above and the content read. The verdict is absence,
+                 * so the sighting that lstat queued is retracted — asked of the
+                 * queue itself: its last entry is this row's iff this row queued
+                 * one (nothing queues observations between the lstat and here;
+                 * an OOM-dropped sighting simply is not there to retract). The
+                 * record follows the run's verdict, never a moment the run itself
+                 * outlived. Skip the permission checks below. */
+                if (!anchor && ws->observation_count > 0 &&
+                    ws->observations[ws->observation_count - 1] == row) {
+                    ws->observation_count--;
+                }
                 occupant = FS_OCCUPANT_NONE;
                 break;
 
@@ -1128,14 +1136,13 @@ static divergence_type_t compute_orphan_divergence(
             break;
 
         case CMP_MISSING:
-            /* File deleted between caller's stat and content read (rare race)
-             *
-             * With stat propagation, CMP_MISSING can only occur if the file was
-             * removed after the caller's single lstat but before the comparison
-             * function read its contents. This is rare but handled gracefully.
+            /* The look itself met ENOENT/ENOTDIR: the file was removed after
+             * the caller's single lstat but before the comparison function read
+             * its contents.
              *
              * Report as DIVERGENCE_NONE - the orphan was already removed manually.
-             * Apply will skip it (nothing to remove), state will be pruned.
+             * Apply will skip it (nothing to remove; cleanup's execute re-probes
+             * presence), state will be pruned.
              */
             file_exists = false;
             break;

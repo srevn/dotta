@@ -8,7 +8,6 @@
 #include <fcntl.h>
 #include <git2.h>
 #include <string.h>
-#include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -127,8 +126,16 @@ error_t *compare_buffer_to_disk(
 
         /* Sizes match - need content comparison for non-empty files */
         if (stat_ptr->st_size > 0) {
-            /* Open file for content comparison */
-            int fd = open(disk_path, O_RDONLY);
+            /* One look: open a descriptor and read it to EOF — the bytes
+             * compared are one inode's. O_NOFOLLOW refuses a symlink swapped
+             * in since the caller's lstat (ELOOP); O_NONBLOCK keeps a
+             * swapped-in FIFO from wedging the open (fs_read_fd then refuses
+             * it as not a regular file). read(2) cannot fault on a concurrent
+             * truncation the way a stat-sized mmap could — it returns short,
+             * and short-or-different is CMP_DIFFERENT below. */
+            int fd = open(
+                disk_path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC
+            );
             if (fd < 0) {
                 return ERROR(
                     ERR_FS, "Failed to open '%s': %s",
@@ -136,43 +143,23 @@ error_t *compare_buffer_to_disk(
                 );
             }
 
-            /* Memory-map for efficient comparison */
-            void *disk_data = mmap(
-                NULL, stat_ptr->st_size, PROT_READ, MAP_PRIVATE, fd, 0
-            );
-            if (disk_data == MAP_FAILED) {
-                /* mmap failed - fall back to buffered reading */
-                close(fd);
+            buffer_t disk_content = BUFFER_INIT;
+            error_t *err = fs_read_fd(fd, &disk_content);
+            close(fd);
+            if (err) {
+                return error_wrap(err, "Failed to read '%s'", disk_path);
+            }
 
-                buffer_t disk_content = BUFFER_INIT;
-                error_t *err = fs_read_file(disk_path, &disk_content);
-                if (err) {
-                    return error_wrap(err, "Failed to read '%s'", disk_path);
-                }
+            /* Re-check size: file may have changed between stat and read */
+            bool equal = (disk_content.size == content->size) &&
+                (memcmp(
+                content->data, disk_content.data, content->size
+                ) == 0);
+            buffer_free(&disk_content);
 
-                /* Re-check size: file may have changed between stat and read */
-                bool equal = (disk_content.size == content->size) &&
-                    (memcmp(
-                    content->data, disk_content.data, content->size
-                    ) == 0);
-                buffer_free(&disk_content);
-
-                if (!equal) {
-                    *result = CMP_DIFFERENT;
-                    return NULL;
-                }
-            } else {
-                /* Compare using memory-mapped data */
-                int cmp = memcmp(content->data, disk_data, content->size);
-
-                /* Cleanup */
-                munmap(disk_data, stat_ptr->st_size);
-                close(fd);
-
-                if (cmp != 0) {
-                    *result = CMP_DIFFERENT;
-                    return NULL;
-                }
+            if (!equal) {
+                *result = CMP_DIFFERENT;
+                return NULL;
             }
         }
 

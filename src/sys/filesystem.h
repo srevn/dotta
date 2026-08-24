@@ -26,11 +26,35 @@
 /**
  * Read entire file into buffer
  *
+ * Opens the path and delegates to fs_read_fd: follows symlinks (the fd's fstat
+ * sees the resolved target), refuses non-regular files through the primitive's
+ * own gate.
+ *
  * @param path File path (must not be NULL)
  * @param out Output buffer (must not be NULL)
  * @return Error or NULL on success
  */
 error_t *fs_read_file(const char *path, buffer_t *out);
+
+/**
+ * Read a file descriptor to EOF into buffer
+ *
+ * The primitive beneath fs_read_file, for callers that must bind the bytes
+ * they read to the descriptor they hold: an fd's fstat and its content are one
+ * inode by construction, where a path-based re-open is a second look that can
+ * land on a different file.
+ *
+ * Refuses descriptors that are not regular files — "the entire file" is
+ * defined only for a file with an extent; a FIFO or device would drain without
+ * bound. Reads from the descriptor's current offset to EOF; never closes it.
+ * Errors carry no path (an fd has none): callers wrap with the name they
+ * opened.
+ *
+ * @param fd Readable file descriptor
+ * @param out Output buffer (must not be NULL)
+ * @return Error or NULL on success
+ */
+error_t *fs_read_fd(int fd, buffer_t *out);
 
 /**
  * Write raw bytes to file (overwrites if exists)

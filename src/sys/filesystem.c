@@ -93,40 +93,31 @@ bool fs_is_os_metadata_file(const char *filename) {
 /**
  * File operations
  */
-error_t *fs_read_file(const char *path, buffer_t *out) {
-    RETURN_IF_ERROR(validate_path(path));
+error_t *fs_read_fd(int fd, buffer_t *out) {
     CHECK_NULL(out);
 
     *out = (buffer_t){ 0 };
 
-    /* Open file */
-    int fd = open(path, O_RDONLY);
-    if (fd < 0) {
-        return ERROR(
-            ERR_FS, "Failed to open '%s': %s",
-            path, strerror(errno)
-        );
-    }
-
     /* Get file size */
     struct stat st;
     if (fstat(fd, &st) < 0) {
-        int saved_errno = errno;
-        close(fd);
-        return ERROR(
-            ERR_FS, "Failed to stat '%s': %s",
-            path, strerror(saved_errno)
-        );
+        return ERROR(ERR_FS, "Failed to stat: %s", strerror(errno));
+    }
+
+    /* "The entire file" is defined only for a regular file: a FIFO or device
+     * has no extent — st_size tells the size guard below nothing and the loop
+     * would drain without bound. */
+    if (!S_ISREG(st.st_mode)) {
+        return ERROR(ERR_FS, "Not a regular file");
     }
 
     /* Guard against unreasonably large files. st_size is signed (off_t); reject
      * negatives (pathological) before the unsigned comparison so we never widen
      * a negative into a huge size_t. */
     if (st.st_size < 0 || (size_t) st.st_size > FS_MAX_READ_SIZE) {
-        close(fd);
         return ERROR(
-            ERR_FS, "File '%s' too large (%lld bytes, max %zu)",
-            path, (long long) st.st_size, (size_t) FS_MAX_READ_SIZE
+            ERR_FS, "File too large (%lld bytes, max %zu)",
+            (long long) st.st_size, (size_t) FS_MAX_READ_SIZE
         );
     }
 
@@ -135,11 +126,10 @@ error_t *fs_read_file(const char *path, buffer_t *out) {
         out, st.st_size > 0 ? (size_t) st.st_size : IO_BUFFER_SIZE
     );
     if (err) {
-        close(fd);
         return err;
     }
 
-    /* Read file in chunks */
+    /* Read in chunks from the descriptor's current offset */
     char chunk[IO_BUFFER_SIZE];
     ssize_t bytes_read;
 
@@ -151,12 +141,8 @@ error_t *fs_read_file(const char *path, buffer_t *out) {
                 continue;  /* Interrupted by signal, retry */
             }
             int saved_errno = errno;
-            close(fd);
             buffer_free(out);
-            return ERROR(
-                ERR_FS, "Read error on '%s': %s",
-                path, strerror(saved_errno)
-            );
+            return ERROR(ERR_FS, "Read error: %s", strerror(saved_errno));
         }
 
         if (bytes_read == 0) {
@@ -165,13 +151,33 @@ error_t *fs_read_file(const char *path, buffer_t *out) {
 
         err = buffer_append(out, chunk, bytes_read);
         if (err) {
-            close(fd);
             buffer_free(out);
-            return error_wrap(err, "Failed to read '%s'", path);
+            return err;
         }
     }
 
+    return NULL;
+}
+
+error_t *fs_read_file(const char *path, buffer_t *out) {
+    RETURN_IF_ERROR(validate_path(path));
+    CHECK_NULL(out);
+
+    /* Open file */
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) {
+        return ERROR(
+            ERR_FS, "Failed to open '%s': %s",
+            path, strerror(errno)
+        );
+    }
+
+    error_t *err = fs_read_fd(fd, out);
     close(fd);
+    if (err) {
+        return error_wrap(err, "Failed to read '%s'", path);
+    }
+
     return NULL;
 }
 

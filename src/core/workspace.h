@@ -466,6 +466,9 @@ const anchor_t *workspace_get_anchor(
  * The function handles special cases:
  *   - TYPE divergence suppresses MODE tag (type change makes mode irrelevant)
  *   - ENCRYPTION divergence upgrades color to MAGENTA if still the default
+ *   - ENCRYPTION is the one divergence an UNDEPLOYED row also carries: the copy
+ *     is not on disk to have diverged from, but the blob apply is about to write
+ *     violates the policy, and that is worth saying before it lands
  *
  * Metadata Format:
  *   - "from {profile}" - Standard source profile

@@ -2742,6 +2742,21 @@ bool workspace_item_extract_display_info(
                 tags_out[tag_count++] = "undeployed";
             }
             *color_out = OUTPUT_COLOR_CYAN;
+
+            /* An encryption-policy violation is the one divergence bit that still
+             * means something with nothing on disk: the blob apply is about to
+             * write is plaintext the policy says to encrypt, and this is the
+             * last screen before it lands. Magenta outright — cyan is the colour
+             * for work that costs the user nothing, and this does. The DELETED
+             * arm stays bare: a deletion resolves the violation rather than
+             * carrying it out. */
+            if (item->divergence & DIVERGENCE_ENCRYPTION) {
+                if (tag_count < WORKSPACE_ITEM_MAX_DISPLAY_TAGS) {
+                    tags_out[tag_count++] = "unencrypted";
+                }
+                *color_out = OUTPUT_COLOR_MAGENTA;
+            }
+
             snprintf(metadata_buf, metadata_size, "from %s", item->profile);
             break;
 

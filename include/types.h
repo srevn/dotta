@@ -143,4 +143,21 @@ static inline path_kind_t path_type_kind(path_type_t type) {
     return type == PATH_TYPE_DIRECTORY ? PATH_KIND_DIRECTORY : PATH_KIND_FILE;
 }
 
+/**
+ * The suffix a path's kind adds when the path is written out
+ *
+ * A directory reads as one: `~/.config/nvim/`. The trailing slash is the marker
+ * dotta already spells on the pattern side — gitignore's directory-only rules
+ * (base/gitignore.h), the globs infra/pathspec compiles from them — now given
+ * to the paths those rules match, so a screen whose tags name the divergence
+ * rather than the kind still says which lines are directories. A file adds nothing.
+ *
+ * The kind is the claim's, never the occupant's: a tracked directory currently
+ * squatted by a regular file keeps its slash, and the tag beside it is what names
+ * the squatter.
+ */
+static inline const char *path_kind_suffix(path_kind_t kind) {
+    return kind == PATH_KIND_DIRECTORY ? "/" : "";
+}
+
 #endif /* DOTTA_TYPES_H */

@@ -1404,15 +1404,15 @@ static error_t *update_display_preview(
                     continue;
                 }
 
-                if (item->item_kind == PATH_KIND_DIRECTORY) {
-                    /* Directory rows read as directories: trailing slash, kind
-                     * named — the same shape the claims section uses */
-                    char path_with_slash[PATH_MAX + 2];
-                    snprintf(
-                        path_with_slash, sizeof(path_with_slash), "%s/",
-                        item->filesystem_path
-                    );
+                /* Directory rows read as directories: trailing slash, kind named
+                 * — the same shape the claims section uses */
+                char path[PATH_MAX + 2];
+                snprintf(
+                    path, sizeof(path), "%s%s", item->filesystem_path,
+                    path_kind_suffix(item->item_kind)
+                );
 
+                if (item->item_kind == PATH_KIND_DIRECTORY) {
                     char metadata[256];
                     snprintf(
                         metadata, sizeof(metadata), "directory %s",
@@ -1421,12 +1421,12 @@ static error_t *update_display_preview(
 
                     output_list_add(
                         list, tags, tag_count, color,
-                        path_with_slash, metadata
+                        path, metadata
                     );
                 } else {
                     output_list_add(
                         list, tags, tag_count, color,
-                        item->filesystem_path, base_metadata
+                        path, base_metadata
                     );
                 }
             }
@@ -1463,10 +1463,10 @@ static error_t *update_display_preview(
                     base_metadata, sizeof(base_metadata)
                     )) {
                     /* Build custom content with trailing slash for directories */
-                    char path_with_slash[PATH_MAX + 2];
+                    char path[PATH_MAX + 2];
                     snprintf(
-                        path_with_slash, sizeof(path_with_slash), "%s/",
-                        item->filesystem_path
+                        path, sizeof(path), "%s%s", item->filesystem_path,
+                        path_kind_suffix(item->item_kind)
                     );
 
                     /* Build custom metadata with explicit "directory" indicator */
@@ -1478,7 +1478,7 @@ static error_t *update_display_preview(
 
                     output_list_add(
                         list, tags, tag_count, color,
-                        path_with_slash, metadata
+                        path, metadata
                     );
                 }
             }

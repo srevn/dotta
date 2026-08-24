@@ -6,6 +6,7 @@
 
 #include <config.h>
 #include <git2.h>
+#include <limits.h>
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
@@ -166,9 +167,16 @@ static void display_manifest(
             snprintf(metadata, sizeof(metadata), "from %s", row->profile);
         }
 
-        output_list_add(
-            list, tags, tag_count, color, row->filesystem_path, metadata
+        /* The window is onto rows, so the row's type is what says the kind —
+         * the item at a path, when there is one, was analyzed from that row and
+         * carries the same */
+        char path[PATH_MAX + 2];
+        snprintf(
+            path, sizeof(path), "%s%s", row->filesystem_path,
+            path_kind_suffix(path_type_kind(row->type))
         );
+
+        output_list_add(list, tags, tag_count, color, path, metadata);
     }
 
     output_list_render(list);
@@ -440,14 +448,18 @@ static void display_workspace_status(
                         size_t tag_count;
                         output_color_t color;
                         char metadata[256];
+                        char path[PATH_MAX + 2];
 
                         if (workspace_item_extract_display_info(
                             conflicts[i], tags, &tag_count,
                             &color, metadata, sizeof(metadata)
                             )) {
+                            snprintf(
+                                path, sizeof(path), "%s%s", conflicts[i]->filesystem_path,
+                                path_kind_suffix(conflicts[i]->item_kind)
+                            );
                             output_list_add(
-                                list, tags, tag_count, color,
-                                conflicts[i]->filesystem_path, metadata
+                                list, tags, tag_count, color, path, metadata
                             );
                         }
                     }
@@ -473,14 +485,18 @@ static void display_workspace_status(
                         size_t tag_count;
                         output_color_t color;
                         char metadata[256];
+                        char path[PATH_MAX + 2];
 
                         if (workspace_item_extract_display_info(
                             unverifiable[i], tags, &tag_count,
                             &color, metadata, sizeof(metadata)
                             )) {
+                            snprintf(
+                                path, sizeof(path), "%s%s", unverifiable[i]->filesystem_path,
+                                path_kind_suffix(unverifiable[i]->item_kind)
+                            );
                             output_list_add(
-                                list, tags, tag_count, color,
-                                unverifiable[i]->filesystem_path, metadata
+                                list, tags, tag_count, color, path, metadata
                             );
                         }
                     }
@@ -503,14 +519,18 @@ static void display_workspace_status(
                         size_t tag_count;
                         output_color_t color;
                         char metadata[256];
+                        char path[PATH_MAX + 2];
 
                         if (workspace_item_extract_display_info(
                             uncommitted[i], tags, &tag_count,
                             &color, metadata, sizeof(metadata)
                             )) {
+                            snprintf(
+                                path, sizeof(path), "%s%s", uncommitted[i]->filesystem_path,
+                                path_kind_suffix(uncommitted[i]->item_kind)
+                            );
                             output_list_add(
-                                list, tags, tag_count, color,
-                                uncommitted[i]->filesystem_path, metadata
+                                list, tags, tag_count, color, path, metadata
                             );
                         }
                     }
@@ -533,14 +553,18 @@ static void display_workspace_status(
                         size_t tag_count;
                         output_color_t color;
                         char metadata[256];
+                        char path[PATH_MAX + 2];
 
                         if (workspace_item_extract_display_info(
                             reassigned[i], tags, &tag_count,
                             &color, metadata, sizeof(metadata)
                             )) {
+                            snprintf(
+                                path, sizeof(path), "%s%s", reassigned[i]->filesystem_path,
+                                path_kind_suffix(reassigned[i]->item_kind)
+                            );
                             output_list_add(
-                                list, tags, tag_count, color,
-                                reassigned[i]->filesystem_path, metadata
+                                list, tags, tag_count, color, path, metadata
                             );
                         }
                     }
@@ -563,14 +587,18 @@ static void display_workspace_status(
                         size_t tag_count;
                         output_color_t color;
                         char metadata[256];
+                        char path[PATH_MAX + 2];
 
                         if (workspace_item_extract_display_info(
                             undeployed[i], tags, &tag_count,
                             &color, metadata, sizeof(metadata)
                             )) {
+                            snprintf(
+                                path, sizeof(path), "%s%s", undeployed[i]->filesystem_path,
+                                path_kind_suffix(undeployed[i]->item_kind)
+                            );
                             output_list_add(
-                                list, tags, tag_count, color,
-                                undeployed[i]->filesystem_path, metadata
+                                list, tags, tag_count, color, path, metadata
                             );
                         }
                     }
@@ -593,14 +621,18 @@ static void display_workspace_status(
                         size_t tag_count;
                         output_color_t color;
                         char metadata[256];
+                        char path[PATH_MAX + 2];
 
                         if (workspace_item_extract_display_info(
                             new_files[i], tags, &tag_count,
                             &color, metadata, sizeof(metadata)
                             )) {
+                            snprintf(
+                                path, sizeof(path), "%s%s", new_files[i]->filesystem_path,
+                                path_kind_suffix(new_files[i]->item_kind)
+                            );
                             output_list_add(
-                                list, tags, tag_count, color,
-                                new_files[i]->filesystem_path, metadata
+                                list, tags, tag_count, color, path, metadata
                             );
                         }
                     }
@@ -614,7 +646,7 @@ static void display_workspace_status(
             if (orphaned_count > 0) {
                 output_list_t *list = output_list_create(
                     out, "Issues",
-                    "run \"dotta apply\" to prune orphaned files"
+                    "run \"dotta apply\" to prune orphaned paths"
                 );
 
                 if (list) {
@@ -637,6 +669,7 @@ static void display_workspace_status(
                         size_t tag_count;
                         output_color_t color;
                         char metadata[256];
+                        char path[PATH_MAX + 2];
 
                         if (!workspace_item_extract_display_info(
                             orphaned[i], tags, &tag_count,
@@ -644,9 +677,12 @@ static void display_workspace_status(
                             )) {
                             continue;
                         }
+                        snprintf(
+                            path, sizeof(path), "%s%s", orphaned[i]->filesystem_path,
+                            path_kind_suffix(orphaned[i]->item_kind)
+                        );
                         output_list_add(
-                            list, tags, tag_count, color,
-                            orphaned[i]->filesystem_path, metadata
+                            list, tags, tag_count, color, path, metadata
                         );
 
                         const char *hint = NULL;

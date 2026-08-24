@@ -48,6 +48,16 @@ typedef struct manifest_row manifest_row_t;
  * Sentinel: All-zero state means unset — forces the slow path (safe default).
  * mtime == 0 acts as validity gate: a file with genuine mtime=0 (epoch) simply
  * never benefits from the fast path — correct, just not optimized.
+ *
+ * Lineage: this is Git's cache_entry stat data serving ce_match_stat, with the
+ * same blind spot and the same cure. A triple whose mtime second had not closed
+ * when the stat was taken cannot distinguish the bytes the caller verified from
+ * a same-second, same-size, in-place rewrite — so the constructor refuses to
+ * build that proof (mtime >= now ⇒ UNSET, Git's "racily clean" smudge,
+ * write-side). The record then advances blob-only and the next load's slow path
+ * confirms once, in a closed second. Consequence, deliberate: a deploy can never
+ * bind a usable triple (its file's second is its own), and a capture of a file
+ * edited this second defers its fast path one load.
  */
 typedef struct {
     int64_t mtime;    /* st_mtime seconds at last known-good state (0 = unset) */
@@ -66,8 +76,19 @@ typedef struct {
  * the caller verified describe the same moment. There is deliberately no
  * from-path variant: a fresh look taken at record-write time would bind
  * whatever stands at the path then to a verdict from earlier.
+ *
+ * A stat whose mtime second has not closed (mtime >= now: written this very
+ * second, or carrying a future mtime) demotes to UNSET — no proof is built
+ * where a same-second, same-size, in-place rewrite could stand behind it (the
+ * Lineage note above). Residue, accepted: a rewrite landing between the
+ * caller's look and this call, with the call crossing the second boundary in
+ * that sub-millisecond gap — the same order of window Git accepts between
+ * hashing a file and writing its index entry.
  */
 static inline stat_cache_t stat_cache_from_stat(const struct stat *st) {
+    if ((int64_t) st->st_mtime >= (int64_t) time(NULL)) {
+        return STAT_CACHE_UNSET;
+    }
     return (stat_cache_t){
         .mtime = (int64_t) st->st_mtime,
         .size = (int64_t) st->st_size,

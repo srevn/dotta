@@ -59,7 +59,7 @@ static bool should_show_item_for_direction(
                (item->state == WORKSPACE_STATE_DEPLOYED &&
                ((item->divergence & (DIVERGENCE_CONTENT | DIVERGENCE_STALE |
                DIVERGENCE_MODE | DIVERGENCE_OWNERSHIP)) ||
-               item->profile_changed));
+               workspace_item_reassigned(item)));
     }
 
     if (direction == DIFF_DOWNSTREAM) {
@@ -135,7 +135,7 @@ static const char *get_status_message_from_item(
 
     /* Profile reassignment with no content/metadata divergence. Only reachable
      * via UPSTREAM (DOWNSTREAM filtered by should_show_item). */
-    if (item->profile_changed) {
+    if (workspace_item_reassigned(item)) {
         return "profile reassigned (acknowledged by apply)";
     }
 
@@ -146,10 +146,12 @@ static const char *get_status_message_from_item(
  * Show diff for a single file using workspace data
  *
  * Simplified version of show_file_diff() that uses pre-computed divergence from
- * workspace analysis. Doesn't re-analyze - just formats and displays.
+ * workspace analysis. Doesn't re-analyze - just formats and displays. The item's
+ * row is the path's view row — blob, storage path, profile; non-NULL for every
+ * state the direction filter passes (untracked and orphaned items were filtered
+ * there).
  *
  * @param item Workspace item with divergence info (must not be NULL)
- * @param file The path's view row — blob, storage path, profile (must not be NULL)
  * @param cache Content cache (must not be NULL)
  * @param direction Diff direction
  * @param opts Command options (must not be NULL)
@@ -158,17 +160,17 @@ static const char *get_status_message_from_item(
  */
 static error_t *show_file_diff_from_workspace(
     const workspace_item_t *item,
-    const manifest_row_t *file,
     content_cache_t *cache,
     diff_direction_t direction,
     const cmd_diff_options_t *opts,
     output_t *out
 ) {
     CHECK_NULL(item);
-    CHECK_NULL(file);
     CHECK_NULL(cache);
     CHECK_NULL(opts);
     CHECK_NULL(out);
+
+    const manifest_row_t *file = item->row;
 
     /* Name-only output */
     if (opts->name_only) {
@@ -196,7 +198,7 @@ static error_t *show_file_diff_from_workspace(
         status_color = OUTPUT_COLOR_RED;
     } else if (item->divergence & DIVERGENCE_TYPE) {
         status_color = OUTPUT_COLOR_RED;
-    } else if (item->profile_changed &&
+    } else if (workspace_item_reassigned(item) &&
         (item->divergence & ~DIVERGENCE_ENCRYPTION) == DIVERGENCE_NONE) {
         status_color = OUTPUT_COLOR_CYAN;
     }
@@ -223,7 +225,7 @@ static error_t *show_file_diff_from_workspace(
      * blob-family ENCRYPTION bit does not demote a pure handover: it is about
      * how Git stores the blob, not a difference between Git and disk, so it neither
      * costs the handover its colour above nor leaves any bytes to render here. */
-    if (item->profile_changed &&
+    if (workspace_item_reassigned(item) &&
         (item->divergence & ~DIVERGENCE_ENCRYPTION) == DIVERGENCE_NONE) {
         return NULL;
     }
@@ -274,7 +276,6 @@ static error_t *show_file_diff_from_workspace(
  * Filters pre-analyzed divergence and generates diffs for display. Uses cached
  * metadata and content from workspace/caches.
  *
- * @param ws Workspace handle for active-row lookup (must not be NULL)
  * @param diverged Diverged items from workspace (borrowed slice)
  * @param cache Content cache for blob access (must not be NULL)
  * @param direction Diff direction (UPSTREAM or DOWNSTREAM)
@@ -285,7 +286,6 @@ static error_t *show_file_diff_from_workspace(
  * @return Error or NULL on success
  */
 static error_t *present_diffs_for_direction(
-    const workspace_t *ws,
     workspace_items_t diverged,
     content_cache_t *cache,
     diff_direction_t direction,
@@ -294,7 +294,6 @@ static error_t *present_diffs_for_direction(
     output_t *out,
     size_t *diff_count
 ) {
-    CHECK_NULL(ws);
     CHECK_NULL(cache);
     CHECK_NULL(scope);
     CHECK_NULL(opts);
@@ -332,15 +331,6 @@ static error_t *present_diffs_for_direction(
             continue;
         }
 
-        /* Resolve to the active row via the workspace's active index (O(1)).
-         * Untracked or orphaned items have no active row — skip them. The item
-         * is a file item (Filter 1), so the row is a file row. */
-        const manifest_row_t *file =
-            workspace_lookup(ws, item->filesystem_path);
-        if (!file) {
-            continue;
-        }
-
         /* Blank line between entries for readability */
         if (*diff_count > 0 && !opts->name_only) {
             output_newline(out, OUTPUT_NORMAL);
@@ -348,7 +338,7 @@ static error_t *present_diffs_for_direction(
 
         /* Show the diff (content already analyzed by workspace) */
         err = show_file_diff_from_workspace(
-            item, file, cache, direction, opts, out
+            item, cache, direction, opts, out
         );
         if (err) {
             return err;
@@ -1349,7 +1339,7 @@ static error_t *diff_workspace(
         output_info(out, OUTPUT_NORMAL, "Shows what 'dotta apply' would change\n");
 
         err = present_diffs_for_direction(
-            ws, diverged, cache, DIFF_UPSTREAM,
+            diverged, cache, DIFF_UPSTREAM,
             scope, opts, out, &upstream_count
         );
         if (err) goto cleanup;
@@ -1363,7 +1353,7 @@ static error_t *diff_workspace(
         output_info(out, OUTPUT_NORMAL, "Shows what 'dotta update' would commit\n");
 
         err = present_diffs_for_direction(
-            ws, diverged, cache, DIFF_DOWNSTREAM,
+            diverged, cache, DIFF_DOWNSTREAM,
             scope, opts, out, &downstream_count
         );
         if (err) goto cleanup;
@@ -1377,7 +1367,7 @@ static error_t *diff_workspace(
     } else {
         /* Single direction */
         err = present_diffs_for_direction(
-            ws, diverged, cache, opts->direction,
+            diverged, cache, opts->direction,
             scope, opts, out, &total_diff_count
         );
         if (err) goto cleanup;

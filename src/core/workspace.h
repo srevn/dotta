@@ -44,6 +44,7 @@
 #define DOTTA_WORKSPACE_H
 
 #include <git2.h>
+#include <string.h>
 #include <types.h>
 
 #include "base/output.h"
@@ -68,13 +69,6 @@
  *   on apply's behalf
  * - Use item_kind to distinguish between files and directories.
  *
- * Lifetime notes — every string is borrowed for the workspace's lifetime:
- * - filesystem_path, storage_path: a view row's or a record's (arena), or the
- *   untracked scan's arena copies
- * - profile: a view row's or a record's (arena), or — an untracked item's — the
- *   view's profile list's (arena)
- * - old_profile: the record's profile (arena; can be NULL)
- *
  * The occupant is the analysis's one observation of the disk, carried as the
  * sys layer names it rather than folded to a presence bit: what the analyzer's
  * lstat found at the path — the link itself, never its target. FS_OCCUPANT_NONE
@@ -85,22 +79,64 @@
  * (DIVERGENCE_TYPE: the occupant is not the row's or the record's kind); every
  * consumer that once re-probed the path to learn its type reads this field instead,
  * so status, deploy and cleanup cannot see three different occupants at one path.
+ *
+ * Lifetime — every borrowed pointer on the item is arena-backed and valid for
+ * the workspace's lifetime (the arena outlives it): the view's rows, the anchors
+ * snapshot, the untracked scan's copies. Item addresses are stable too, which
+ * is what lets cleanup's buckets and apply's collections hold them across phases
+ * by construction.
  */
 typedef struct {
-    char *filesystem_path;      /* Target path on filesystem (borrowed) */
-    char *storage_path;         /* Path in profile, e.g., home/.bashrc (borrowed) */
-    char *profile;              /* Winning profile name (borrowed) */
-    char *old_profile;          /* Profile that deployed the disk content when it differs from profile, else NULL (borrowed) */
+    /* The join's sources — borrowed for the workspace's lifetime; at least one
+     * is set except for UNTRACKED items.
+     *   row     the view's claim. NULL for an orphan (the view lacks the path)
+     *           and for UNTRACKED.
+     *   anchor  the record — always the live snapshot record, the same pointer
+     *           workspace_get_anchor returns: the writers patch it in place
+     *           (workspace_anchor) or create it and backfill this field
+     *           (workspace_observe, workspace_anchor), so a read here is never
+     *           stale. NULL only while the path truly has no record (UNTRACKED,
+     *           and active rows dotta has never observed, until the flush observes
+     *           them). */
+    const manifest_row_t *row;
+    const anchor_t *anchor;
 
-    /* Item classification */
+    /* Identity — the join key and the claim's coordinates, one uniform read for
+     * every state. Aliases of the identity source's strings — the row's for active
+     * items, the record's for orphans (the state names the source:
+     * ORPHANED/RELEASED are record-defined), the scan's arena copies for untracked
+     * (profile: the view's profile list's) — assigned once by the producer, never
+     * a second copy. */
+    char *filesystem_path;      /* Target path on filesystem */
+    char *storage_path;         /* Path in profile, e.g., home/.bashrc */
+    char *profile;              /* Winning profile name */
+
+    /* The analysis's verdicts */
     workspace_state_t state;      /* Where the item exists (deployed/undeployed/etc.) */
     divergence_type_t divergence; /* What's wrong with it (bit flags, can combine) */
-    path_kind_t item_kind;        /* PATH_KIND_FILE or PATH_KIND_DIRECTORY */
+    path_kind_t item_kind;        /* The identity source's kind (scan: FILE) */
 
-    /* The observation and its label */
+    /* The observation */
     fs_occupant_t occupant;     /* What the analysis's lstat found at the path (see above) */
-    bool profile_changed;       /* Profile differs from the record's (reassigned) */
 } workspace_item_t;
+
+/**
+ * A pending handover: the record dotta owns names a different profile than the
+ * row's
+ *
+ * Reads the LIVE record — after apply acknowledges (workspace_anchor rewrites
+ * the record under the row's profile) the same read honestly answers false, so
+ * a consumer that wants the load-time fact reads before the run's ownership events
+ * rewrite it (apply's collection does). Kind-blind: one rule for both kinds.
+ * Orphans: false by construction — an orphan item carries no row. Only an owned
+ * record qualifies: an observed or confirmed record dotta never deployed names
+ * the row the path was first seen under, not a deployer, and apply adopts such
+ * a path rather than acknowledging it.
+ */
+static inline bool workspace_item_reassigned(const workspace_item_t *item) {
+    return item->row && item->anchor && item->anchor->deployed_at > 0 &&
+           strcmp(item->anchor->profile, item->row->profile) != 0;
+}
 
 /**
  * Bound carrier for a borrowed slice of workspace items
@@ -338,9 +374,9 @@ workspace_items_t workspace_get_all_diverged(const workspace_t *ws);
  * Returns the divergence information for a specific file or directory via O(1)
  * hashmap lookup. Every item the analysis produced is indexed — a row with a
  * state other than DEPLOYED, a divergence bit, or a reassignment (a clean row
- * whose owned record names another profile has an item carrying only
- * profile_changed); a row with none of the three has no item, and this returns
- * NULL.
+ * whose owned record names another profile has an item whose sources derive it
+ * — workspace_item_reassigned); a row with none of the three has no item, and
+ * this returns NULL.
  *
  * This function enables preflight to efficiently query workspace data instead
  * of re-analyzing files, eliminating redundant comparisons.
@@ -509,10 +545,11 @@ bool workspace_item_extract_display_info(
  * Workspace-scope side of state_observe (see state.h): records the path's first
  * sighting on disk — presence only, no blob, no stat — and creates the matching
  * record in the workspace's anchors snapshot so every later reader in the run
- * (workspace_get_anchor, the adoption loop's ownership test) sees it. A path
- * that already has a record, in the snapshot or created earlier in this run, is
- * left exactly as it is and no statement runs: observation is idempotent on both
- * sides.
+ * (workspace_get_anchor, the adoption loop's ownership test) sees it, backfilling
+ * the path's item, if analysis produced one, so item->anchor is the live record
+ * from the record's creation on. A path that already has a record, in the snapshot
+ * or created earlier in this run, is left exactly as it is and no statement runs:
+ * observation is idempotent on both sides.
  *
  * Single entry point for every workspace-scope observation: the flush
  * (workspace_flush_updates — rows found on disk with no record during analysis,
@@ -543,8 +580,10 @@ error_t *workspace_observe(
  * state.h): persists via state_anchor and assigns the canonical post-write record
  * (the inputs plus the one column SQL RETURNING decided) into the workspace's
  * anchors snapshot — patching the path's record in place, or creating it when
- * the path had none at load. The SQL UPSERT is the single specification of the
- * observed_at INSERT-arm rule; this function holds none of that logic.
+ * the path had none at load and backfilling the path's item, so item->anchor
+ * reads the post-write record either way. The SQL UPSERT is the single
+ * specification of the observed_at INSERT-arm rule; this function holds none of
+ * that logic.
  *
  * Single entry point for every workspace-scope ownership event:
  *   - apply's adoption loop (ownership event on first claim, and the

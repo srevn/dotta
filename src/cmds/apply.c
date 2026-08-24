@@ -1443,10 +1443,10 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
             if (!item) continue;   /* no item: nothing stale, no reassignment */
 
             if (item->divergence & DIVERGENCE_STALE) stale_count++;
-            if (item->profile_changed) {
+            if (workspace_item_reassigned(item)) {
                 reassigned[reassigned_count++] = (reassignment_t){
                     .path = item->filesystem_path,
-                    .from = item->old_profile,
+                    .from = item->anchor->profile,
                     .to = item->profile,
                 };
             }
@@ -1944,7 +1944,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
                 /* Derived before anchoring: the write below rewrites the record
                  * the reassignment fact is read against. */
                 const workspace_item_t *item = workspace_get_item(ws, file->filesystem_path);
-                bool acknowledges = item && item->profile_changed;
+                bool acknowledges = item && workspace_item_reassigned(item);
 
                 err = workspace_anchor(ws, file, NULL, now);
                 if (err) {

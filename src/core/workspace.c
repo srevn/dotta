@@ -279,43 +279,31 @@ error_t *check_item_metadata_divergence(
 }
 
 /**
- * Add diverged item to workspace
+ * Add a diverged item from the join's sources
  *
- * Adds a file or directory with divergence to the workspace tracking list.
- *
- * Every string is borrowed for the workspace's lifetime: a row's (the view, arena),
- * a record's (the anchors snapshot, arena), the untracked scan's arena copies,
- * or — the profile of an untracked item — the view's profile list (arena). Nothing
- * is copied here.
+ * The three join analyzers produce through here: at least one source is non-NULL,
+ * and identity — the join key and the claim's coordinates — is aliased from the
+ * source's strings, never a second copy (workspace.h has the per-state source
+ * table). item_kind is likewise the identity source's, which is exactly each
+ * producer's own: the file analyzer's rows are blob types, the directory analyzer's
+ * DIRECTORY, the orphan loop's the record's.
  *
  * @param ws Workspace context (must not be NULL)
- * @param filesystem_path Target path on filesystem (must not be NULL)
- * @param storage_path Path in profile (can be NULL for directories)
- * @param profile Source profile name — every producer passes one (a row's, a
- *                record's, or the view's profile list's)
- * @param old_profile The record's profile when it differs from the row's (can
- *                    be NULL)
+ * @param row The view's claim (NULL for orphans)
+ * @param anchor The record (NULL when the path has no record)
  * @param state Where the item exists (deployed/undeployed/etc.)
  * @param divergence What's wrong with it (bit flags, can combine)
- * @param item_kind FILE or DIRECTORY (explicit type)
  * @param occupant What the producer's lstat found at the path (workspace.h)
- * @param profile_changed Has owning profile changed vs the record?
  */
 static error_t *workspace_add_diverged(
     workspace_t *ws,
-    const char *filesystem_path,
-    const char *storage_path,
-    const char *profile,
-    const char *old_profile,
+    const manifest_row_t *row,
+    const anchor_t *anchor,
     workspace_state_t state,
     divergence_type_t divergence,
-    path_kind_t item_kind,
-    fs_occupant_t occupant,
-    bool profile_changed
+    fs_occupant_t occupant
 ) {
     CHECK_NULL(ws);
-    CHECK_NULL(filesystem_path);
-    CHECK_NULL(profile);
 
     /* Arena-allocated: the item's address is stable for the workspace's lifetime,
      * whatever the spine's growth does. */
@@ -325,19 +313,28 @@ static error_t *workspace_add_diverged(
     }
     memset(entry, 0, sizeof(*entry));
 
-    /* Borrow every string — callers pass workspace-lifetime pointers (see the
-     * doc above); the casts discard the const the producers' read-only views
-     * carry. */
-    entry->filesystem_path = (char *) filesystem_path;
-    entry->storage_path = (char *) storage_path;
-    entry->profile = (char *) profile;
-    entry->old_profile = (char *) old_profile;
+    entry->row = row;
+    entry->anchor = anchor;
+
+    /* The state names the identity source: ORPHANED/RELEASED are record-defined
+     * — the view lacks the path — and every other state here is a row's. */
+    if (state == WORKSPACE_STATE_ORPHANED || state == WORKSPACE_STATE_RELEASED) {
+        CHECK_NULL(anchor);
+        entry->filesystem_path = anchor->filesystem_path;
+        entry->storage_path = anchor->storage_path;
+        entry->profile = anchor->profile;
+        entry->item_kind = path_type_kind(anchor->type);
+    } else {
+        CHECK_NULL(row);
+        entry->filesystem_path = row->filesystem_path;
+        entry->storage_path = row->storage_path;
+        entry->profile = row->profile;
+        entry->item_kind = path_type_kind(row->type);
+    }
 
     entry->state = state;
     entry->divergence = divergence;
-    entry->item_kind = item_kind;
     entry->occupant = occupant;
-    entry->profile_changed = profile_changed;
 
     error_t *err = ptr_array_push(&ws->diverged, entry);
     if (err) {
@@ -347,6 +344,62 @@ static error_t *workspace_add_diverged(
     err = hashmap_set(ws->diverged_index, entry->filesystem_path, entry);
     if (err) {
         return error_wrap(err, "Failed to index diverged entry");
+    }
+
+    return NULL;
+}
+
+/**
+ * Add an untracked item — the one producer with neither source
+ *
+ * The untracked scan found a new file inside a tracked directory: no row (the
+ * view does not claim the path), no record (dotta never observed it while managed).
+ * Identity aliases the scan's arena copies; the profile is the view's profile
+ * list's — the profile whose tracked directory the scan walked. State, divergence
+ * and kind are the constants of the state.
+ *
+ * @param ws Workspace context (must not be NULL)
+ * @param filesystem_path The scan's arena copy (must not be NULL)
+ * @param storage_path The scan's arena copy (must not be NULL)
+ * @param profile The view's profile list's (must not be NULL)
+ * @param occupant What the scan's lstat found at the path (workspace.h)
+ */
+static error_t *workspace_add_untracked(
+    workspace_t *ws,
+    const char *filesystem_path,
+    const char *storage_path,
+    const char *profile,
+    fs_occupant_t occupant
+) {
+    CHECK_NULL(ws);
+    CHECK_NULL(filesystem_path);
+    CHECK_NULL(storage_path);
+    CHECK_NULL(profile);
+
+    workspace_item_t *entry = arena_alloc(ws->arena, sizeof(*entry));
+    if (!entry) {
+        return ERROR(ERR_MEMORY, "Failed to allocate untracked item");
+    }
+    memset(entry, 0, sizeof(*entry));
+
+    /* The casts discard the const the scan's read-only views carry. */
+    entry->filesystem_path = (char *) filesystem_path;
+    entry->storage_path = (char *) storage_path;
+    entry->profile = (char *) profile;
+
+    entry->state = WORKSPACE_STATE_UNTRACKED;
+    entry->divergence = DIVERGENCE_NONE;
+    entry->item_kind = PATH_KIND_FILE;
+    entry->occupant = occupant;
+
+    error_t *err = ptr_array_push(&ws->diverged, entry);
+    if (err) {
+        return error_wrap(err, "Failed to append untracked item");
+    }
+
+    err = hashmap_set(ws->diverged_index, entry->filesystem_path, entry);
+    if (err) {
+        return error_wrap(err, "Failed to index untracked entry");
     }
 
     return NULL;
@@ -511,12 +564,11 @@ static error_t *analyze_file_divergence(
      * fast path, and absence reads UNDEPLOYED. */
     const anchor_t *anchor = workspace_get_anchor(ws, fs_path);
 
-    /* Reassignment, derived (see the doc above): an owned record under a profile
-     * other than the row's. old_profile borrows the record's string for the item
-     * (workspace lifetime). */
+    /* Reassignment, for the add-or-not decision below (see the doc above): an
+     * owned record under a profile other than the row's — the same expression
+     * as workspace_item_reassigned, its inputs in hand. */
     bool profile_changed = anchor && anchor->deployed_at > 0 &&
         strcmp(anchor->profile, profile) != 0;
-    const char *old_profile = profile_changed ? anchor->profile : NULL;
 
     /* The blob-family verdict (see the doc above): is the blob Git holds for
      * this row stored plaintext where the auto-encrypt policy claims the path?
@@ -551,11 +603,9 @@ static error_t *analyze_file_divergence(
          *
          * Returns here because every phase below needs a valid stat. */
         return workspace_add_diverged(
-            ws, fs_path, storage_path, profile, old_profile,
-            WORKSPACE_STATE_DEPLOYED, DIVERGENCE_UNVERIFIED | policy,
-            PATH_KIND_FILE,
-            occupant,                    /* assumed present */
-            profile_changed
+            ws, row, anchor, WORKSPACE_STATE_DEPLOYED,
+            DIVERGENCE_UNVERIFIED | policy,
+            occupant                     /* assumed present */
         );
     }
 
@@ -838,12 +888,12 @@ static error_t *analyze_file_divergence(
                 }
 
                 /* Anything else is a blocking condition: return immediately with
-                 * TYPE divergence. The derived reassignment pair rides along,
-                 * the same shape as every early return, so a pending handover
-                 * does not vanish behind a type change. */
+                 * TYPE divergence. The sources ride along, the same shape as
+                 * every early return, so a pending handover does not vanish behind
+                 * a type change. */
                 return workspace_add_diverged(
-                    ws, fs_path, storage_path, profile, old_profile, WORKSPACE_STATE_DEPLOYED,
-                    DIVERGENCE_TYPE | policy, PATH_KIND_FILE, occupant, profile_changed
+                    ws, row, anchor, WORKSPACE_STATE_DEPLOYED,
+                    DIVERGENCE_TYPE | policy, occupant
                 );
 
             case CMP_MISSING:
@@ -870,9 +920,8 @@ static error_t *analyze_file_divergence(
                  * path bits would change nothing; the orphan slice already answers
                  * a failed look this way, and one policy beats two. */
                 return workspace_add_diverged(
-                    ws, fs_path, storage_path, profile, old_profile,
-                    WORKSPACE_STATE_DEPLOYED, DIVERGENCE_UNVERIFIED | policy,
-                    PATH_KIND_FILE, occupant, profile_changed
+                    ws, row, anchor, WORKSPACE_STATE_DEPLOYED,
+                    DIVERGENCE_UNVERIFIED | policy, occupant
                 );
         }
 
@@ -987,8 +1036,7 @@ static error_t *analyze_file_divergence(
      * (derived at the top, beside the record pairing). */
     if (state != WORKSPACE_STATE_DEPLOYED || divergence != DIVERGENCE_NONE || profile_changed) {
         error_t *err = workspace_add_diverged(
-            ws, fs_path, storage_path, profile, old_profile, state,
-            divergence, PATH_KIND_FILE, occupant, profile_changed
+            ws, row, anchor, state, divergence, occupant
         );
         if (err) return err;
     }
@@ -1637,15 +1685,11 @@ static error_t *analyze_orphans(workspace_t *ws) {
 
         err = workspace_add_diverged(
             ws,
-            fs_path,
-            storage_path,
-            profile,
-            NULL,               /* No old_profile for orphans */
+            NULL,               /* No row — the view lacks the path; identity is the record's */
+            anchor,
             item_state,
             divergence,
-            kind,
-            occupant,
-            false               /* No profile change for orphans */
+            occupant
         );
         if (err) {
             err = error_wrap(err, "Failed to add orphaned/released path");
@@ -1714,7 +1758,8 @@ static workspace_status_t compute_workspace_status(const workspace_t *ws) {
                 break;
 
             case WORKSPACE_STATE_DEPLOYED:
-                if (item->divergence != DIVERGENCE_NONE || item->profile_changed) {
+                if (item->divergence != DIVERGENCE_NONE ||
+                    workspace_item_reassigned(item)) {
                     has_warnings = true;
                 }
                 break;
@@ -1862,17 +1907,8 @@ static error_t *scan_directory_for_untracked(
                     return ERROR(ERR_MEMORY, "Failed to arena-copy untracked paths");
                 }
 
-                error_t *err = workspace_add_diverged(
-                    ws,
-                    arena_fp,
-                    arena_sp,
-                    profile,
-                    NULL,                       /* No old_profile for untracked */
-                    WORKSPACE_STATE_UNTRACKED,  /* State: on filesystem in tracked dir */
-                    DIVERGENCE_NONE,            /* Divergence: none */
-                    PATH_KIND_FILE,
-                    occupant,
-                    false                       /* No profile change */
+                error_t *err = workspace_add_untracked(
+                    ws, arena_fp, arena_sp, profile, occupant
                 );
 
                 if (err) {
@@ -2085,8 +2121,6 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
          *
          * All strings are arena-allocated — no explicit free needed. */
         const char *filesystem_path = row->filesystem_path;
-        const char *storage_path = row->storage_path;
-        const char *profile = row->profile;
 
         /* The record dotta keeps of this path, if any — the same pairing the
          * file analyzer makes. */
@@ -2111,15 +2145,11 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
              * never to commit a phantom deletion. */
             err = workspace_add_diverged(
                 ws,
-                filesystem_path,
-                storage_path,
-                profile,
-                NULL,                     /* No old_profile for directories */
+                row,
+                anchor,
                 classify_absent(anchor),
                 DIVERGENCE_NONE,          /* Divergence: none (path is absent) */
-                PATH_KIND_DIRECTORY,
-                occupant,
-                false                     /* No profile change */
+                occupant
             );
 
             if (err) {
@@ -2138,15 +2168,11 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
              * rows. */
             err = workspace_add_diverged(
                 ws,
-                filesystem_path,
-                storage_path,
-                profile,
-                NULL,                     /* No old_profile for directories */
+                row,
+                anchor,
                 WORKSPACE_STATE_DEPLOYED,
                 DIVERGENCE_UNVERIFIED,    /* Divergence: state undeterminable */
-                PATH_KIND_DIRECTORY,
-                occupant,                 /* assumed present */
-                false                     /* No profile change */
+                occupant                  /* assumed present */
             );
 
             if (err) {
@@ -2180,15 +2206,11 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
         if (occupant != FS_OCCUPANT_DIRECTORY) {
             err = workspace_add_diverged(
                 ws,
-                filesystem_path,
-                storage_path,
-                profile,
-                NULL,                      /* No old_profile for directories */
+                row,
+                anchor,
                 WORKSPACE_STATE_DEPLOYED,  /* Path exists, just wrong type */
                 DIVERGENCE_TYPE,           /* Type changed (dir -> file/symlink) */
-                PATH_KIND_DIRECTORY,
-                occupant,                  /* path exists, wrong type */
-                false                      /* No profile change */
+                occupant                   /* path exists, wrong type */
             );
 
             if (err) {
@@ -2229,15 +2251,11 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
 
             err = workspace_add_diverged(
                 ws,
-                filesystem_path,
-                storage_path,
-                profile,
-                NULL,                      /* No old_profile for directories */
+                row,
+                anchor,
                 WORKSPACE_STATE_DEPLOYED,  /* State: directory exists as expected */
                 divergence,                /* Divergence: mode/ownership flags */
-                PATH_KIND_DIRECTORY,
-                occupant,
-                false                      /* No profile change */
+                occupant
             );
 
             if (err) {
@@ -2611,8 +2629,8 @@ workspace_route_t workspace_item_route(const workspace_item_t *item) {
         return WORKSPACE_ROUTE_CAPTURE;
     }
 
-    return item->profile_changed ? WORKSPACE_ROUTE_REASSIGNED
-                                 : WORKSPACE_ROUTE_CLEAN;
+    return workspace_item_reassigned(item) ? WORKSPACE_ROUTE_REASSIGNED
+                                           : WORKSPACE_ROUTE_CLEAN;
 }
 
 /**
@@ -2685,16 +2703,13 @@ bool workspace_item_extract_display_info(
              * still names the profile that deployed the copy, and apply's redeploy
              * from the new owner is what acknowledges it — the same pair the
              * DEPLOYED arm prints. */
-            if (item->profile_changed) {
+            if (workspace_item_reassigned(item)) {
                 if (tag_count < WORKSPACE_ITEM_MAX_DISPLAY_TAGS) {
                     tags_out[tag_count++] = "reassigned";
                 }
-            }
-
-            if (item->profile_changed && item->old_profile) {
                 snprintf(
                     metadata_buf, metadata_size, "%s → %s",
-                    item->old_profile, item->profile
+                    item->anchor->profile, item->profile
                 );
             } else {
                 snprintf(metadata_buf, metadata_size, "from %s", item->profile);
@@ -2785,20 +2800,17 @@ bool workspace_item_extract_display_info(
              * Added after divergence tags as secondary information. Color only
              * set for pure reassignment (sole tag) to avoid overriding
              * severity-based colors from divergence. */
-            if (item->profile_changed) {
+            if (workspace_item_reassigned(item)) {
                 if (tag_count < WORKSPACE_ITEM_MAX_DISPLAY_TAGS) {
                     tags_out[tag_count++] = "reassigned";
                 }
                 if (tag_count == 1) {
                     *color_out = OUTPUT_COLOR_CYAN;
                 }
-            }
 
-            /* Format metadata string */
-            if (item->profile_changed && item->old_profile) {
                 snprintf(
                     metadata_buf, metadata_size, "%s → %s",
-                    item->old_profile, item->profile
+                    item->anchor->profile, item->profile
                 );
             } else {
                 snprintf(
@@ -2942,6 +2954,10 @@ bool workspace_item_extract_display_info(
  * The in-memory test mirrors the statement's INSERT OR IGNORE: both sides leave
  * an existing record untouched, so the snapshot and the database agree whichever
  * of them answered.
+ *
+ * A record created here backfills the path's item, if analysis produced one:
+ * item->anchor is the live record, always — the invariant every derivation reads
+ * through (workspace.h).
  */
 error_t *workspace_observe(
     workspace_t *ws,
@@ -2983,6 +2999,11 @@ error_t *workspace_observe(
         return error_wrap(err, "Failed to index observation record");
     }
 
+    workspace_item_t *item = hashmap_get(ws->diverged_index, anchor->filesystem_path);
+    if (item) {
+        item->anchor = anchor;
+    }
+
     return NULL;
 }
 
@@ -2998,6 +3019,10 @@ error_t *workspace_observe(
  *
  * The map's value is the mutable record pointer; workspace_get_anchor narrows
  * it to const for every reader.
+ *
+ * Either arm keeps item->anchor the live record: patching in place rewrites the
+ * object the path's item already borrows, and a record created here backfills
+ * the item, if analysis produced one.
  */
 error_t *workspace_anchor(
     workspace_t *ws,
@@ -3027,6 +3052,11 @@ error_t *workspace_anchor(
     err = hashmap_set(ws->anchor_index, anchor->filesystem_path, anchor);
     if (err) {
         return error_wrap(err, "Failed to index anchor record");
+    }
+
+    workspace_item_t *item = hashmap_get(ws->diverged_index, anchor->filesystem_path);
+    if (item) {
+        item->anchor = anchor;
     }
 
     return NULL;

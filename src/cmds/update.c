@@ -433,8 +433,6 @@ static error_t *filter_items_for_update(
  *
  * @param ctx Dispatch context (must not be NULL; the copy step reads the key
  *            and the encryption policy off it)
- * @param ws Workspace (must not be NULL; the walk reads previously_encrypted
- *           off the load's view rows)
  * @param wt Worktree handle (must not be NULL, already checked out to profile
  *           branch)
  * @param profile Profile to update (must not be NULL)
@@ -448,7 +446,6 @@ static error_t *filter_items_for_update(
  */
 static error_t *update_profile(
     const dotta_ctx_t *ctx,
-    const workspace_t *ws,
     worktree_handle_t *wt,
     const char *profile,
     const workspace_item_t **items,
@@ -458,7 +455,6 @@ static error_t *update_profile(
     size_t *out_processed
 ) {
     CHECK_NULL(ctx);
-    CHECK_NULL(ws);
     CHECK_NULL(wt);
     CHECK_NULL(profile);
     CHECK_NULL(items);
@@ -562,7 +558,7 @@ static error_t *update_profile(
 
                 output_info(out, OUTPUT_VERBOSE, "  %s", item->filesystem_path);
 
-                /* Source of previously_encrypted: the load's view row —
+                /* Source of previously_encrypted: the item's view row —
                  * row->encrypted is projected at build from the same metadata.json
                  * this branch carries, so this is the branch's flag read off
                  * the frozen view instead of a second metadata load (an untracked
@@ -570,8 +566,7 @@ static error_t *update_profile(
                  * write-time invariant the flag is byte-truth for the HEAD blob
                  * — reading it is equivalent to classifying the existing bytes,
                  * but cheaper (no fs read). */
-                const manifest_row_t *row = workspace_lookup(ws, item->filesystem_path);
-                bool previously_encrypted = row ? row->encrypted : false;
+                bool previously_encrypted = item->row ? item->row->encrypted : false;
 
                 /* Copy to worktree and capture stat atomically */
                 struct stat copy_stat;
@@ -1091,7 +1086,6 @@ cleanup:
  * @param ctx Dispatch context (must not be NULL; the run's repository carries
  *            the shared worktree, the copy step reads the key and the encryption
  *            policy)
- * @param ws Workspace (must not be NULL; threaded to the walk for view-row reads)
  * @param enabled The enabled set, in order (must not be NULL)
  * @param update_items Pre-filtered items to update (must not be NULL)
  * @param update_count Number of items
@@ -1107,7 +1101,6 @@ cleanup:
  */
 static error_t *update_execute_for_all_profiles(
     const dotta_ctx_t *ctx,
-    const workspace_t *ws,
     const string_array_t *enabled,
     const workspace_item_t **update_items,
     size_t update_count,
@@ -1117,7 +1110,6 @@ static error_t *update_execute_for_all_profiles(
     size_t *out_commit_count
 ) {
     CHECK_NULL(ctx);
-    CHECK_NULL(ws);
     CHECK_NULL(enabled);
     CHECK_NULL(update_items);
     CHECK_NULL(opts);
@@ -1192,7 +1184,7 @@ static error_t *update_execute_for_all_profiles(
         update_commit_t bookkeeping = { 0 };
         size_t processed = 0;
         err = update_profile(
-            ctx, ws, wt, profile, (const workspace_item_t **) group.items,
+            ctx, wt, profile, (const workspace_item_t **) group.items,
             group.count, opts, &bookkeeping, &processed
         );
 
@@ -1901,7 +1893,7 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
     bool manifest_updated = false;
     if (!opts->dry_run) {
         err = update_execute_for_all_profiles(
-            ctx, ws, scope_enabled(scope),
+            ctx, scope_enabled(scope),
             (const workspace_item_t **) update_items.entries,
             update_items.count, opts,
             &total_updated, &commits, &commit_count

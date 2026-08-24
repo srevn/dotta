@@ -206,14 +206,22 @@ cleanup:
 }
 
 /**
- * Confirmation result codes
+ * The plan's shape, counted once
+ *
+ * Filled by one walk over the filtered candidates; the preview gates its
+ * sections on these and the new-files prompt binds on new_files. Buckets
+ * follow the preview's sections: the modified fate splits by kind (a
+ * directory's modification is a claim recapture, not a content commit),
+ * deleted deliberately does not (a deleted directory is a deletion), and
+ * encryption is the subset of modified_files that also violates policy.
  */
-typedef enum {
-    CONFIRM_PROCEED,        /* Proceed with operation */
-    CONFIRM_CANCELLED,      /* User cancelled */
-    CONFIRM_DRY_RUN,        /* Dry run mode */
-    CONFIRM_SKIP_NEW_FILES  /* Skip new files but continue */
-} confirm_result_t;
+typedef struct {
+    size_t modified_files;  /* DEPLOYED files: divergent content or metadata */
+    size_t new_files;       /* UNTRACKED files from tracked directories */
+    size_t deleted;         /* DELETED paths, both kinds */
+    size_t modified_dirs;   /* DEPLOYED directories: claim capture */
+    size_t encryption;      /* Subset of modified_files: policy violators */
+} update_counts_t;
 
 /**
  * One path an update commit captured from disk
@@ -553,10 +561,12 @@ static error_t *update_profile(
 
         switch (item->item_kind) {
             case PATH_KIND_FILE: {
-                output_info(out, OUTPUT_VERBOSE, "  %s", item->filesystem_path);
-
                 /* Handle deleted files */
                 if (item->state == WORKSPACE_STATE_DELETED) {
+                    output_info(
+                        out, OUTPUT_VERBOSE, "  Removed: %s",
+                        item->filesystem_path
+                    );
                     /* Remove from index (stage deletion) */
                     int git_err = git_index_remove_bypath(index, item->storage_path);
                     if (git_err < 0) {
@@ -570,10 +580,6 @@ static error_t *update_profile(
                             err = error_wrap(err, "Failed to remove metadata entry");
                             goto cleanup;
                         }
-                        output_info(
-                            out, OUTPUT_VERBOSE, "  Removed metadata: %s",
-                            item->filesystem_path
-                        );
                     }
                     err = ptr_array_push(&commit->deleted, item);
                     if (err) {
@@ -581,6 +587,8 @@ static error_t *update_profile(
                     }
                     continue;
                 }
+
+                output_info(out, OUTPUT_VERBOSE, "  %s", item->filesystem_path);
 
                 /* Source of previously_encrypted: the load's view row —
                  * row->encrypted is projected at build from the same
@@ -1257,136 +1265,83 @@ cleanup:
 }
 
 /**
- * Display summary of items to be updated
+ * Render the preview: the run's work, grouped by fate
+ *
+ * One section per fate — modified, new, deleted (both kinds), directory
+ * claims, encryption violations — each gated on the plan's counts, every
+ * hint speaking update's own voice: what this run will do. A dry run
+ * renders identically; whether anything was written is the summary's one
+ * line at the end of the run, not the preview's.
  *
  * @param out Output context (must not be NULL)
- * @param items Items to display (must not be NULL)
+ * @param items Filtered candidates (must not be NULL)
  * @param item_count Number of items
- * @param opts Update options (can be NULL)
+ * @param opts Update options (must not be NULL)
+ * @param counts The candidates counted by fate (must not be NULL)
  * @return Error or NULL on success
  */
-static error_t *update_display_summary(
+static error_t *update_display_preview(
     output_t *out,
     const workspace_item_t **items,
     size_t item_count,
-    const cmd_update_options_t *opts
+    const cmd_update_options_t *opts,
+    const update_counts_t *counts
 ) {
     CHECK_NULL(out);
     CHECK_NULL(items);
-
-    /* Early exit for empty data - not an error */
-    if (item_count == 0) {
-        return NULL;
-    }
-
-    /* Show dry-run banner if applicable */
-    if (opts && opts->dry_run) {
-        output_styled(
-            out, OUTPUT_NORMAL, "{bold}Dry Run{reset} - No changes will be committed\n\n"
-        );
-    }
+    CHECK_NULL(opts);
+    CHECK_NULL(counts);
 
     /* Show filter context if any filters are active */
-    if (opts) {
-        bool has_filters = false;
+    bool has_filters = false;
 
-        if (opts->only_new) {
-            output_info(
-                out, OUTPUT_NORMAL,
-                "Filter: Showing only new files (--only-new)"
-            );
-            has_filters = true;
-        } else if (opts->include_new) {
-            output_info(
-                out, OUTPUT_NORMAL,
-                "Filter: Including new files from tracked directories (--include-new)"
-            );
-            has_filters = true;
-        }
-
-        if (opts->file_count > 0) {
-            output_info(
-                out, OUTPUT_NORMAL, "Filter: Limiting to %zu specified file%s",
-                opts->file_count, opts->file_count == 1 ? "" : "s"
-            );
-            has_filters = true;
-        }
-
-        if (opts->exclude_count > 0) {
-            output_info(
-                out, OUTPUT_NORMAL, "Filter: Excluding %zu pattern%s",
-                opts->exclude_count, opts->exclude_count == 1 ? "" : "s"
-            );
-            has_filters = true;
-        }
-
-        if (has_filters) {
-            output_newline(out, OUTPUT_NORMAL);
-        }
+    if (opts->only_new) {
+        output_info(
+            out, OUTPUT_NORMAL,
+            "Filter: Showing only new files (--only-new)"
+        );
+        has_filters = true;
+    } else if (opts->include_new) {
+        output_info(
+            out, OUTPUT_NORMAL,
+            "Filter: Including new files from tracked directories (--include-new)"
+        );
+        has_filters = true;
     }
 
-    /* Categorize items for display */
-    size_t modified_count = 0;
-    size_t new_count = 0;
-    size_t deleted_count = 0;
-    size_t dir_count = 0;
-    size_t encryption_count = 0;
+    if (opts->file_count > 0) {
+        output_info(
+            out, OUTPUT_NORMAL, "Filter: Limiting to %zu specified file%s",
+            opts->file_count, opts->file_count == 1 ? "" : "s"
+        );
+        has_filters = true;
+    }
 
-    for (size_t i = 0; i < item_count; i++) {
-        const workspace_item_t *item = items[i];
+    if (opts->exclude_count > 0) {
+        output_info(
+            out, OUTPUT_NORMAL, "Filter: Excluding %zu pattern%s",
+            opts->exclude_count, opts->exclude_count == 1 ? "" : "s"
+        );
+        has_filters = true;
+    }
 
-        if (item->item_kind == PATH_KIND_FILE) {
-            /* Count by state */
-            switch (item->state) {
-                case WORKSPACE_STATE_DEPLOYED:
-                    /* Has some divergence (filtered items always have divergence) */
-                    modified_count++;
-                    /* Also count encryption divergence separately for informational display */
-                    if (item->divergence & DIVERGENCE_ENCRYPTION) {
-                        encryption_count++;
-                    }
-                    break;
-
-                case WORKSPACE_STATE_DELETED:
-                    deleted_count++;
-                    break;
-
-                case WORKSPACE_STATE_UNTRACKED:
-                    new_count++;
-                    break;
-
-                case WORKSPACE_STATE_UNDEPLOYED:
-                case WORKSPACE_STATE_ORPHANED:
-                case WORKSPACE_STATE_RELEASED:
-                    /* Should not appear in filtered results, but be defensive */
-                    break;
-            }
-        } else if (item->item_kind == PATH_KIND_DIRECTORY) {
-            dir_count++;
-        }
+    if (has_filters) {
+        output_newline(out, OUTPUT_NORMAL);
     }
 
     /* Display modified files section */
-    if (modified_count > 0) {
+    if (counts->modified_files > 0) {
         output_list_t *list = output_list_create(
             out, "Modified files",
-            "use \"dotta update\" to commit these changes"
+            "will be committed to their profiles"
         );
 
         if (list) {
             for (size_t i = 0; i < item_count; i++) {
                 const workspace_item_t *item = items[i];
 
-                if (item->item_kind != PATH_KIND_FILE) {
-                    continue;
-                }
-
-                /* Check if file is deployed and has divergence (filtered items
-                 * never carry STALE) */
-                bool is_modified = (item->state == WORKSPACE_STATE_DEPLOYED &&
-                    item->divergence != DIVERGENCE_NONE);
-
-                if (!is_modified) {
+                if (item->item_kind != PATH_KIND_FILE ||
+                    item->state != WORKSPACE_STATE_DEPLOYED) {
                     continue;
                 }
 
@@ -1415,10 +1370,10 @@ static error_t *update_display_summary(
     }
 
     /* Display new files section */
-    if (new_count > 0) {
+    if (counts->new_files > 0) {
         output_list_t *list = output_list_create(
             out, "New files",
-            "use \"dotta update --include-new\" to track these files"
+            "will be added to their profiles"
         );
 
         if (list) {
@@ -1450,34 +1405,59 @@ static error_t *update_display_summary(
         }
     }
 
-    /* Display deleted files section (if any - rare in update context) */
-    if (deleted_count > 0) {
+    /* Display deleted paths section — one fate, both kinds: a deleted
+     * directory is a deletion, so it lists beside the deleted files rather
+     * than under a section that promises a metadata update */
+    if (counts->deleted > 0) {
         output_list_t *list = output_list_create(
-            out, "Deleted files",
-            "these files will be removed from the profile"
+            out, "Deleted paths",
+            "will be removed from their profiles"
         );
 
         if (list) {
             for (size_t i = 0; i < item_count; i++) {
                 const workspace_item_t *item = items[i];
 
-                if (item->item_kind == PATH_KIND_FILE &&
-                    item->state == WORKSPACE_STATE_DELETED
-                ) {
-                    const char *tags[WORKSPACE_ITEM_MAX_DISPLAY_TAGS];
-                    size_t tag_count;
-                    output_color_t color;
-                    char metadata[256];
+                if (item->state != WORKSPACE_STATE_DELETED) {
+                    continue;
+                }
 
-                    if (workspace_item_extract_display_info(
-                        item, tags, &tag_count, &color,
-                        metadata, sizeof(metadata)
-                        )) {
-                        output_list_add(
-                            list, tags, tag_count, color,
-                            item->filesystem_path, metadata
-                        );
-                    }
+                const char *tags[WORKSPACE_ITEM_MAX_DISPLAY_TAGS];
+                size_t tag_count;
+                output_color_t color;
+                char base_metadata[256];
+
+                if (!workspace_item_extract_display_info(
+                    item, tags, &tag_count, &color,
+                    base_metadata, sizeof(base_metadata)
+                    )) {
+                    continue;
+                }
+
+                if (item->item_kind == PATH_KIND_DIRECTORY) {
+                    /* Directory rows read as directories: trailing slash,
+                     * kind named — the same shape the claims section uses */
+                    char path_with_slash[PATH_MAX + 2];
+                    snprintf(
+                        path_with_slash, sizeof(path_with_slash), "%s/",
+                        item->filesystem_path
+                    );
+
+                    char metadata[256];
+                    snprintf(
+                        metadata, sizeof(metadata), "directory %s",
+                        base_metadata
+                    );
+
+                    output_list_add(
+                        list, tags, tag_count, color,
+                        path_with_slash, metadata
+                    );
+                } else {
+                    output_list_add(
+                        list, tags, tag_count, color,
+                        item->filesystem_path, base_metadata
+                    );
                 }
             }
 
@@ -1487,7 +1467,7 @@ static error_t *update_display_summary(
     }
 
     /* Display modified directories section */
-    if (dir_count > 0) {
+    if (counts->modified_dirs > 0) {
         output_list_t *list = output_list_create(
             out, "Modified directories",
             "directory metadata will be updated"
@@ -1497,7 +1477,8 @@ static error_t *update_display_summary(
             for (size_t i = 0; i < item_count; i++) {
                 const workspace_item_t *item = items[i];
 
-                if (item->item_kind != PATH_KIND_DIRECTORY) {
+                if (item->item_kind != PATH_KIND_DIRECTORY ||
+                    item->state == WORKSPACE_STATE_DELETED) {
                     continue;
                 }
 
@@ -1538,7 +1519,7 @@ static error_t *update_display_summary(
     }
 
     /* Display encryption policy violations section */
-    if (encryption_count > 0) {
+    if (counts->encryption > 0) {
         output_list_t *list = output_list_create(
             out, "Encryption policy violations",
             "match auto-encrypt patterns but are stored as plaintext"
@@ -1585,110 +1566,6 @@ static error_t *update_display_summary(
             "narrow the pattern that matches it."
         );
     }
-
-    return NULL;
-}
-
-/**
- * Handle user confirmations for update operation
- *
- * @param out Output context (must not be NULL)
- * @param opts Update options (must not be NULL)
- * @param items Items to update (must not be NULL)
- * @param item_count Number of items
- * @param config Configuration (can be NULL)
- * @param result Output parameter for confirmation result (must not be NULL)
- * @return Error or NULL on success
- */
-static error_t *update_confirm_operation(
-    output_t *out,
-    const cmd_update_options_t *opts,
-    const workspace_item_t **items,
-    size_t item_count,
-    const config_t *config,
-    confirm_result_t *result
-) {
-    CHECK_NULL(out);
-    CHECK_NULL(opts);
-    CHECK_NULL(items);
-    CHECK_NULL(result);
-
-    *result = CONFIRM_PROCEED;
-
-    /* Count items by category */
-    size_t modified_count = 0;
-    size_t deleted_count = 0;
-    size_t new_count = 0;
-    size_t dir_count = 0;
-
-    for (size_t i = 0; i < item_count; i++) {
-        const workspace_item_t *item = items[i];
-
-        if (item->item_kind == PATH_KIND_FILE) {
-            if (item->state == WORKSPACE_STATE_UNTRACKED) {
-                new_count++;
-            } else if (item->state == WORKSPACE_STATE_DELETED) {
-                deleted_count++;
-            } else {
-                modified_count++;
-            }
-        } else if (item->item_kind == PATH_KIND_DIRECTORY) {
-            dir_count++;
-        }
-    }
-
-    /* Dry run - show breakdown and exit */
-    if (opts->dry_run) {
-        output_info(out, OUTPUT_NORMAL, "Dry run: no changes will be committed");
-        if (modified_count > 0)
-            output_info(
-                out, OUTPUT_NORMAL, "  %zu modified file%s to update",
-                modified_count, modified_count == 1 ? "" : "s"
-            );
-        if (deleted_count > 0)
-            output_info(
-                out, OUTPUT_NORMAL, "  %zu deleted file%s to remove",
-                deleted_count, deleted_count == 1 ? "" : "s"
-            );
-        if (new_count > 0)
-            output_info(
-                out, OUTPUT_NORMAL, "  %zu new file%s to add",
-                new_count, new_count == 1 ? "" : "s"
-            );
-        if (dir_count > 0)
-            output_info(
-                out, OUTPUT_NORMAL, "  %zu director%s to update metadata",
-                dir_count, dir_count == 1 ? "y" : "ies"
-            );
-        *result = CONFIRM_DRY_RUN;
-        return NULL;
-    }
-
-    /* Interactive confirmation */
-    if (opts->interactive) {
-        if (!output_confirm(out, "Update these items?", false)) {
-            output_info(out, OUTPUT_NORMAL, "Cancelled");
-            *result = CONFIRM_CANCELLED;
-            return NULL;
-        }
-    }
-
-    /* Confirmation for new files (if auto-detected, not explicit flag) */
-    if (new_count > 0 && config && config->confirm_new_files &&
-        !opts->include_new && !opts->only_new && config->auto_detect_new_files) {
-
-        char confirm_msg[128];
-        snprintf(
-            confirm_msg, sizeof(confirm_msg), "Found %zu new file%s. Add %s to profiles?",
-            new_count, new_count == 1 ? "" : "s", new_count == 1 ? "it" : "them"
-        );
-        if (!output_confirm(out, confirm_msg, false)) {
-            *result = CONFIRM_SKIP_NEW_FILES;
-            return NULL;
-        }
-    }
-
-    *result = CONFIRM_PROCEED;
 
     return NULL;
 }
@@ -1748,24 +1625,6 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
         );
         goto cleanup;
     }
-
-    /* Build hook invocation using active profile names for context */
-    profiles_str = string_array_join(scope_active(scope), " ");
-    if (!profiles_str) {
-        err = ERROR(ERR_MEMORY, "Failed to join profile names for hook");
-        goto cleanup;
-    }
-    const hook_invocation_t hook_inv = {
-        .cmd        = HOOK_CMD_UPDATE,
-        .profile    = profiles_str,
-        .files      = opts->files,
-        .file_count = opts->file_count,
-        .dry_run    = opts->dry_run,
-    };
-
-    /* Execute pre-update hook */
-    err = hook_fire_pre(config, out, repo_path, &hook_inv);
-    if (err) goto cleanup;
 
     /* Load workspace for update analysis
      *
@@ -1912,9 +1771,6 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
      * operations begin. If elevation is needed, the process will re-exec with
      * sudo, and all operations will restart cleanly from main().
      *
-     * NOTE: Pre-update hook may run twice on re-exec (once before privilege check,
-     * once after). Hooks should be idempotent to handle this correctly.
-     *
      * If re-exec succeeds, this function DOES NOT RETURN.
      */
     {
@@ -1955,143 +1811,194 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
         /* If we reach here, privileges are OK - proceed with operation */
     }
 
-    /* Display summary of items to update */
-    err = update_display_summary(
-        out, (const workspace_item_t **) update_items.entries,
-        update_items.count, opts
-    );
-    if (err) {
-        goto cleanup;
-    }
+    /* The plan's shape, counted once: the preview gates its sections on
+     * these and the new-files prompt binds on new_files */
+    update_counts_t counts = { 0 };
+    for (size_t i = 0; i < update_items.count; i++) {
+        const workspace_item_t *item = update_items.entries[i];
 
-    /* Handle user confirmations */
-    confirm_result_t confirm_result;
-    err = update_confirm_operation(
-        out, opts, (const workspace_item_t **) update_items.entries,
-        update_items.count, config, &confirm_result
-    );
-    if (err) {
-        goto cleanup;
-    }
-
-    /* Handle confirmation result */
-    switch (confirm_result) {
-        case CONFIRM_CANCELLED:
-        case CONFIRM_DRY_RUN:
-            /* User cancelled or dry run - clean exit (not an error) */
-            goto cleanup;
-
-        case CONFIRM_SKIP_NEW_FILES: {
-            /* User declined new files - filter them out, keep modified/deleted */
-            const workspace_item_t **writable =
-                (const workspace_item_t **) update_items.entries;
-            size_t filtered = 0;
-            for (size_t i = 0; i < update_items.count; i++) {
-                if (writable[i]->state != WORKSPACE_STATE_UNTRACKED) {
-                    writable[filtered++] = writable[i];
-                }
+        if (item->state == WORKSPACE_STATE_DELETED) {
+            counts.deleted++;
+        } else if (item->item_kind == PATH_KIND_DIRECTORY) {
+            counts.modified_dirs++;
+        } else if (item->state == WORKSPACE_STATE_UNTRACKED) {
+            counts.new_files++;
+        } else {
+            counts.modified_files++;
+            if (item->divergence & DIVERGENCE_ENCRYPTION) {
+                counts.encryption++;
             }
-            update_items.count = filtered;
+        }
+    }
 
-            if (update_items.count == 0) {
-                output_info(
-                    out, OUTPUT_NORMAL,
-                    "No modified files remaining after skipping new files"
-                );
+    /* Preview: what this run will do, grouped by fate */
+    err = update_display_preview(
+        out, (const workspace_item_t **) update_items.entries,
+        update_items.count, opts, &counts
+    );
+    if (err) {
+        goto cleanup;
+    }
+
+    /* The hooks fire around the work — after the nothing-exit and the
+     * privilege gate (a no-op run fires nothing, a sudo re-exec cannot fire
+     * the pair twice), before the prompt: apply's order. The preview's
+     * verdicts predate the pre-hook, but the capture stores execute-time
+     * bytes — a pre-hook that edits a candidate still commits what it
+     * wrote. */
+    profiles_str = string_array_join(scope_active(scope), " ");
+    if (!profiles_str) {
+        err = ERROR(ERR_MEMORY, "Failed to join profile names for hook");
+        goto cleanup;
+    }
+    const hook_invocation_t hook_inv = {
+        .cmd        = HOOK_CMD_UPDATE,
+        .profile    = profiles_str,
+        .files      = opts->files,
+        .file_count = opts->file_count,
+        .dry_run    = opts->dry_run,
+    };
+
+    err = hook_fire_pre(config, out, repo_path, &hook_inv);
+    if (err) goto cleanup;
+
+    /* The prompts — none bind a dry run: it executes nothing, so there is
+     * nothing to consent to */
+    if (!opts->dry_run) {
+        if (opts->interactive) {
+            if (!output_confirm(out, "Update these items?", false)) {
+                output_info(out, OUTPUT_NORMAL, "Cancelled");
                 goto cleanup;
             }
-            break;
         }
 
-        case CONFIRM_PROCEED:
-            /* Continue with operation */
-            break;
+        /* New files the scan found (not asked for by flag) are added only
+         * with consent. Declining keeps the rest of the run: the re-filter
+         * compacts the candidate array in place — the preview named the new
+         * files separately, and the receipt reports what actually happens. */
+        if (counts.new_files > 0 && config->confirm_new_files &&
+            !opts->include_new && !opts->only_new && config->auto_detect_new_files) {
+
+            char confirm_msg[128];
+            snprintf(
+                confirm_msg, sizeof(confirm_msg), "Found %zu new file%s. Add %s to profiles?",
+                counts.new_files, counts.new_files == 1 ? "" : "s",
+                counts.new_files == 1 ? "it" : "them"
+            );
+            if (!output_confirm(out, confirm_msg, false)) {
+                const workspace_item_t **writable =
+                    (const workspace_item_t **) update_items.entries;
+                size_t kept = 0;
+                for (size_t i = 0; i < update_items.count; i++) {
+                    if (writable[i]->state != WORKSPACE_STATE_UNTRACKED) {
+                        writable[kept++] = writable[i];
+                    }
+                }
+                update_items.count = kept;
+
+                if (update_items.count == 0) {
+                    output_info(
+                        out, OUTPUT_NORMAL,
+                        "No modified files remaining after skipping new files"
+                    );
+                    goto cleanup;
+                }
+            }
+        }
     }
 
     /* Execute profile updates, in enabled-set order. Filtered to operation
      * scope. ctx->run.keymgr is borrowed by the copy step inside per-profile
-     * iteration. */
+     * iteration. A dry run executes nothing: the sections above are its
+     * preview, and the summary below is its one sentence. */
     update_commit_t *commits = NULL;
     size_t commit_count = 0;
-    err = update_execute_for_all_profiles(
-        ctx, ws, scope_enabled(scope),
-        (const workspace_item_t **) update_items.entries,
-        update_items.count, opts,
-        &total_updated, &commits, &commit_count
-    );
-
-    /* Write the record — for the commits that landed, error or no
-     *
-     * Captured files get their record advanced because UPDATE captures them FROM
-     * the filesystem (already at target locations); the view itself is computed
-     * at every load and needs no update. A mid-sequence stop above changes
-     * nothing here: the landed commits are Git truth and the record follows
-     * them; the profiles that never committed have nothing to write.
-     *
-     * Non-fatal: if the record write fails, Git commits still succeeded; the
-     * next status re-confirms the captured files on its slow path.
-     */
     bool manifest_updated = false;
-    error_t *manifest_err = update_write_record(
-        ctx, commits, commit_count, &manifest_updated
-    );
-
-    /* The bookkeeping has served the record */
-    update_commits_free(commits, commit_count);
-
-    if (manifest_err) {
-        /* Non-fatal: commits succeeded but the record write failed. The next
-         * load reads the committed blobs from Git and re-confirms the captured
-         * files against disk. */
-        output_warning(
-            out, OUTPUT_NORMAL, "Failed to update the record: %s",
-            error_message(manifest_err)
+    if (!opts->dry_run) {
+        err = update_execute_for_all_profiles(
+            ctx, ws, scope_enabled(scope),
+            (const workspace_item_t **) update_items.entries,
+            update_items.count, opts,
+            &total_updated, &commits, &commit_count
         );
 
-        output_info(
-            out, OUTPUT_NORMAL, "Files committed to Git successfully"
+        /* Write the record — for the commits that landed, error or no
+         *
+         * Captured files get their record advanced because UPDATE captures
+         * them FROM the filesystem (already at target locations); the view
+         * itself is computed at every load and needs no update. A mid-sequence
+         * stop above changes nothing here: the landed commits are Git truth
+         * and the record follows them; the profiles that never committed have
+         * nothing to write.
+         *
+         * Non-fatal: if the record write fails, Git commits still succeeded;
+         * the next status re-confirms the captured files on its slow path.
+         */
+        error_t *manifest_err = update_write_record(
+            ctx, commits, commit_count, &manifest_updated
         );
-        error_free(manifest_err);
-        /* Continue to post-update hook and success output */
-    }
 
-    if (err) {
-        /* The executor stopped mid-sequence. The commits that landed are
-         * recorded (just above); say so before reporting the stop, so the
-         * ✓ lines above are accounted for. */
-        if (manifest_updated && commit_count > 0) {
+        /* The bookkeeping has served the record */
+        update_commits_free(commits, commit_count);
+
+        if (manifest_err) {
+            /* Non-fatal: the landed commits are Git truth and the record write
+             * failed behind them. The next load reads the committed blobs from
+             * Git and re-confirms the captured files against disk. Said in
+             * landed terms — after a mid-sequence stop only some profiles
+             * committed, and this line must not claim more. */
+            output_warning(
+                out, OUTPUT_NORMAL, "Failed to update the record: %s",
+                error_message(manifest_err)
+            );
+
             output_info(
                 out, OUTPUT_NORMAL,
-                "Manifest updated (%zu item%s synced)",
-                total_updated, total_updated == 1 ? "" : "s"
+                "The commits that landed are in Git; the record follows on the next status"
             );
+            error_free(manifest_err);
+            /* Continue to post-update hook and success output */
         }
-        goto cleanup;
+
+        if (err) {
+            /* The executor stopped mid-sequence. The commits that landed are
+             * recorded (just above); say so before reporting the stop, so the
+             * ✓ lines above are accounted for. */
+            if (manifest_updated && commit_count > 0) {
+                output_info(out, OUTPUT_NORMAL, "Manifest updated");
+            }
+            goto cleanup;
+        }
     }
 
-    /* Execute post-update hook */
+    /* Execute post-update hook (the hooks layer suppresses it on a dry run) */
     hook_fire_post(config, out, repo_path, &hook_inv);
 
-    /* Summary (report landed commits) */
+    /* Summary — one truthful line */
     output_newline(out, OUTPUT_NORMAL);
-    output_success(
-        out, OUTPUT_NORMAL, "Updated %zu item%s across %zu profile%s",
-        total_updated, total_updated == 1 ? "" : "s",
-        commit_count, commit_count == 1 ? "" : "s"
-    );
+    if (opts->dry_run) {
+        output_info(out, OUTPUT_NORMAL, "Dry run: nothing was committed");
+    } else if (commit_count == 0) {
+        /* Every profile committed nothing (the walk's race guard refused what
+         * the plan admitted): say so instead of counting zero */
+        output_info(out, OUTPUT_NORMAL, "Nothing was committed");
+    } else {
+        output_success(
+            out, OUTPUT_NORMAL, "Updated %zu item%s across %zu profile%s",
+            total_updated, total_updated == 1 ? "" : "s",
+            commit_count, commit_count == 1 ? "" : "s"
+        );
 
-    /* Record feedback. The failure case already said what happened (warning
-     * above). */
-    if (manifest_updated) {
-        output_info(
-            out, OUTPUT_NORMAL,
-            "Manifest updated (%zu item%s synced)",
-            total_updated, total_updated == 1 ? "" : "s"
-        );
-        output_hint(
-            out, OUTPUT_NORMAL,
-            "Run 'dotta status' to verify state"
-        );
+        /* Record feedback, plain: the per-path split is the verbose "Manifest
+         * synced" line, and the failure case already said what happened
+         * (warning above) */
+        if (manifest_updated) {
+            output_info(out, OUTPUT_NORMAL, "Manifest updated");
+            output_hint(
+                out, OUTPUT_NORMAL,
+                "Run 'dotta status' to verify state"
+            );
+        }
     }
 
 cleanup:

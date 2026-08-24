@@ -32,15 +32,14 @@
  *
  * @param out Output context (must not be NULL)
  * @param profiles Enabled profile names (must not be NULL)
- * @param files Active file slice: the per-profile last-deployed timestamp and
- *              the verbose per-profile count are both folded from it
- * @param ws Workspace the slice came from, for each row's record (NULL when no
- *           workspace was loaded; the slice is empty then too)
+ * @param ws Workspace the view and the record come from: the per-profile
+ *           last-deployed timestamp and the verbose per-profile counts are folded
+ *           from its rows (NULL when no workspace was loaded — the slices are
+ *           empty then, and the header is names alone)
  */
 static void display_enabled_profiles(
     output_t *out,
     const string_array_t *profiles,
-    manifest_rows_t files,
     const workspace_t *ws
 ) {
     if (!out || !profiles) return;
@@ -48,26 +47,38 @@ static void display_enabled_profiles(
     /* Show enabled profiles */
     output_section(out, OUTPUT_NORMAL, "Enabled profiles");
 
+    /* What a profile contributes to this machine is its rows of both kinds; the
+     * slices are only how the view is reached, and each row's own type is what
+     * says which kind it is. */
+    const manifest_rows_t slices[] = {
+        workspace_files(ws), workspace_directories(ws)
+    };
+
     for (size_t i = 0; i < profiles->count; i++) {
         const char *profile = profiles->items[i];
 
         /* Format profile name */
         output_styled(out, OUTPUT_NORMAL, "  {cyan}%s{reset}", profile);
 
-        /* One walk of the active slice per profile: the latest ownership event
-         * among the rows the profile owns now — the honest set for an
-         * enabled-profiles header — and the verbose file count. */
+        /* One walk of the view per profile: the latest ownership event among
+         * the rows the profile owns now — the honest set for an enabled-profiles
+         * header — and the verbose per-kind counts. */
         time_t profile_deploy_time = 0;
-        size_t profile_file_count = 0;
-        for (size_t j = 0; j < files.count; j++) {
-            const manifest_row_t *file = files.entries[j];
-            if (strcmp(file->profile, profile) != 0) continue;
+        size_t file_count = 0;
+        size_t dir_count = 0;
+        for (size_t s = 0; s < sizeof(slices) / sizeof(slices[0]); s++) {
+            for (size_t j = 0; j < slices[s].count; j++) {
+                const manifest_row_t *row = slices[s].entries[j];
+                if (strcmp(row->profile, profile) != 0) continue;
 
-            profile_file_count++;
+                if (row->type == PATH_TYPE_DIRECTORY) dir_count++;
+                else file_count++;
 
-            const anchor_t *anchor = workspace_get_anchor(ws, file->filesystem_path);
-            if (anchor && anchor->deployed_at > profile_deploy_time) {
-                profile_deploy_time = anchor->deployed_at;
+                const anchor_t *anchor =
+                    workspace_get_anchor(ws, row->filesystem_path);
+                if (anchor && anchor->deployed_at > profile_deploy_time) {
+                    profile_deploy_time = anchor->deployed_at;
+                }
             }
         }
 
@@ -85,12 +96,11 @@ static void display_enabled_profiles(
             );
         }
 
-        /* In verbose mode, show file count for this profile */
+        /* In verbose mode, name what this profile contributes */
         if (output_is_verbose(out)) {
-            output_print(
-                out, OUTPUT_NORMAL, "\n    %zu file%s",
-                profile_file_count, profile_file_count == 1 ? "" : "s"
-            );
+            char counts[64];
+            output_format_counts(file_count, dir_count, counts, sizeof(counts));
+            output_print(out, OUTPUT_NORMAL, "\n    %s", counts);
         }
 
         output_newline(out, OUTPUT_NORMAL);
@@ -190,20 +200,18 @@ static void display_manifest(
  * into actionable sections (git-like structure).
  *
  * When a profile filter is active, the status line is scoped to the filtered
- * profile(s), showing file counts and per-profile divergence instead of global
+ * profile(s), showing path counts and per-profile divergence instead of global
  * workspace status. This prevents misleading "Dirty" messages when the filtered
  * profile is clean but other enabled profiles have divergence.
  *
  * @param ws Workspace (must not be NULL, borrowed from caller)
  * @param scope Operation scope (must not be NULL; its filter dimension drives
  *              display)
- * @param files Active state slice (used for profile-scoped file counts)
  * @param out Output context (must not be NULL)
  */
 static void display_workspace_status(
     workspace_t *ws,
     const scope_t *scope,
-    manifest_rows_t files,
     output_t *out
 ) {
     if (!ws || !out) return;
@@ -215,21 +223,29 @@ static void display_workspace_status(
     size_t all_count = 0;
     const workspace_item_t *all_items = workspace_get_all_diverged(ws, &all_count);
 
-    /* Pre-scan: count files and diverged items scoped to profile filter. Needed
-     * before the status line to determine filtered workspace state. */
-    size_t profile_file_count = 0;
+    /* Managed paths the filter reaches, both kinds — what stands aligned at a
+     * path is not a question about which kind stands there. With no filter every
+     * row is accepted, so this is the whole view and the same count serves the
+     * global line. */
+    const manifest_rows_t slices[] = {
+        workspace_files(ws), workspace_directories(ws)
+    };
+    size_t scoped_paths = 0;
+    for (size_t s = 0; s < sizeof(slices) / sizeof(slices[0]); s++) {
+        for (size_t i = 0; i < slices[s].count; i++) {
+            if (scope_accepts_profile(scope, slices[s].entries[i]->profile)) {
+                scoped_paths++;
+            }
+        }
+    }
+
+    /* Pre-scan: partition the diverged items by the filter. Needed before the
+     * status line to determine filtered workspace state. */
     size_t filtered_diverged = 0;
     size_t filtered_unverified = 0;
     size_t hidden_count = 0;
 
     if (scope_has_filter(scope)) {
-        /* Count managed files in scope for the filtered profile(s) */
-        for (size_t i = 0; i < files.count; i++) {
-            if (scope_accepts_profile(scope, files.entries[i]->profile)) {
-                profile_file_count++;
-            }
-        }
-
         /* Partition diverged items into filtered vs hidden. The unverified count
          * gives the filtered line its Invalid arm — the same bit the global verdict
          * reads (compute_workspace_status), so one workspace cannot read Invalid
@@ -265,16 +281,16 @@ static void display_workspace_status(
     if (scope_has_filter(scope)) {
         /* Profile-scoped status: reflects the filtered profile */
         if (filtered_diverged == 0) {
-            if (profile_file_count > 0) {
+            if (scoped_paths > 0) {
                 output_colored(
                     out, OUTPUT_NORMAL, OUTPUT_COLOR_GREEN,
-                    "  Clean - %zu file%s aligned\n",
-                    profile_file_count, profile_file_count == 1 ? "" : "s"
+                    "  Clean - %zu path%s aligned\n",
+                    scoped_paths, scoped_paths == 1 ? "" : "s"
                 );
             } else {
                 output_colored(
                     out, OUTPUT_NORMAL, OUTPUT_COLOR_GREEN,
-                    "  Clean - no files in profile\n"
+                    "  Clean - no paths in profile\n"
                 );
             }
         } else if (filtered_unverified > 0) {
@@ -294,11 +310,11 @@ static void display_workspace_status(
         /* Global status */
         switch (ws_status) {
             case WORKSPACE_CLEAN:
-                if (files.count > 0) {
+                if (scoped_paths > 0) {
                     output_colored(
                         out, OUTPUT_NORMAL, OUTPUT_COLOR_GREEN,
-                        "  Clean - %zu file%s aligned\n",
-                        files.count, files.count == 1 ? "" : "s"
+                        "  Clean - %zu path%s aligned\n",
+                        scoped_paths, scoped_paths == 1 ? "" : "s"
                     );
                 } else {
                     output_colored(
@@ -1103,7 +1119,6 @@ error_t *cmd_status(const dotta_ctx_t *ctx, const cmd_status_options_t *opts) {
     /* Declare all resources at top and initialize to NULL/zero */
     error_t *err = NULL;
     workspace_t *ws = NULL;
-    manifest_rows_t active = { 0 }; /* Borrowed slice when workspace is loaded */
     scope_t *scope = NULL;
 
     /* CLI flags override config */
@@ -1159,20 +1174,31 @@ error_t *cmd_status(const dotta_ctx_t *ctx, const cmd_status_options_t *opts) {
             error_free(flush_err);
         }
 
-        /* Borrow the active in-scope slice (no allocation, no free contract) */
-        active = workspace_files(ws);
+        /* Check privileges for complete status (may re-exec with sudo)
+         *
+         * Both kinds: a root/ directory carries owner and group exactly as a
+         * root/ file does, so reading what stands there needs the same elevation.
+         * The label predicate is the privilege module's — the loops only hand
+         * it every managed path. */
+        if (!opts->no_sudo) {
+            manifest_rows_t files = workspace_files(ws);
+            manifest_rows_t dirs = workspace_directories(ws);
 
-        /* Check privileges for complete status (may re-exec with sudo) */
-        if (!opts->no_sudo && active.count > 0) {
             string_array_t labels STRING_ARRAY_AUTO = { 0 };
             error_t *extract_err = NULL;
-            for (size_t i = 0; i < active.count; i++) {
+            for (size_t i = 0; i < files.count && !extract_err; i++) {
                 extract_err = privilege_collect_label(
                     &labels,
-                    active.entries[i]->storage_path,
-                    active.entries[i]->filesystem_path
+                    files.entries[i]->storage_path,
+                    files.entries[i]->filesystem_path
                 );
-                if (extract_err) break;
+            }
+            for (size_t i = 0; i < dirs.count && !extract_err; i++) {
+                extract_err = privilege_collect_label(
+                    &labels,
+                    dirs.entries[i]->storage_path,
+                    dirs.entries[i]->filesystem_path
+                );
             }
 
             if (!extract_err && labels.count > 0) {
@@ -1216,7 +1242,7 @@ error_t *cmd_status(const dotta_ctx_t *ctx, const cmd_status_options_t *opts) {
     }
 
     /* Display enabled profiles and last deployment info */
-    display_enabled_profiles(out, scope_active(scope), active, ws);
+    display_enabled_profiles(out, scope_active(scope), ws);
 
     /* The whole view, on request — before the verdict and the sections that name
      * only what diverged from it */
@@ -1232,7 +1258,7 @@ error_t *cmd_status(const dotta_ctx_t *ctx, const cmd_status_options_t *opts) {
      * matches `dotta apply -p work` behavior.
      */
     if (opts->show_local) {
-        display_workspace_status(ws, scope, active, out);
+        display_workspace_status(ws, scope, out);
     }
 
     /* Show remote sync status (if requested) */

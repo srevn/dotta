@@ -87,19 +87,19 @@ static void print_deploy_preflight_results(
  * Print the deployment preview
  *
  * What deploy will do BEFORE user confirmation, read off the verdicts: every
- * number is a verdict count, and the preview, the prompt below it and the
- * receipt after it are three sentences about the same work — "will be deployed"
- * / "Deploy N files?" / "Deployed" — differing only in tense. In a dry run this
- * is the whole of deploy's output: the verdicts are the run's decisions, and
- * nothing else is asked or done.
+ * number is a verdict count, and the preview, the prompt below it and the receipt
+ * after it are three sentences about the same work — "will be deployed" / "Deploy
+ * N files?" / "Deployed" — differing only in tense. In a dry run this is the
+ * whole of deploy's output: the verdicts are the run's decisions, and nothing
+ * else is asked or done.
  *
  * A directory's verb is its verdict's occupant (deploy_verdict_t): created where
  * nothing stood, fixed where a directory did, replaced where a squatter did —
  * the replace is the one destructive deploy verb, counted on its own line and
  * coloured the way cleanup colours a removal. At verbose the paths are listed
  * under their count, capped the way every preview list is. The ancestors the
- * run may make on the way are not here: they are the mechanics of landing a
- * planned path, and the receipt names the ones it made.
+ * run may make on the way are not here: they are the mechanics of landing a planned
+ * path, and the receipt names the ones it made.
  *
  * Empty verdicts have nothing to say, and say nothing.
  */
@@ -220,8 +220,8 @@ static void print_deploy_preview(
  *
  * `reassigned` holds the items of the planned rows whose owning profile changed
  * (workspace_item_t *, borrowed; collected off the plan's clean and pending
- * buckets) — the exact set the run will acknowledge: a content-clean one by
- * the adoption loop's re-stamp, a stale one by its deployment.
+ * buckets) — the exact set the run will acknowledge: a content-clean one by the
+ * adoption loop's re-stamp, a stale one by its deployment.
  */
 static void print_reassignments(const output_t *out, const ptr_array_t *reassigned) {
     if (reassigned->count == 0) return;
@@ -343,23 +343,23 @@ static void print_skipped(
  * Categories (each semantically distinct):
  * - deployed: Files written to disk (green)
  * - created / fixed / replaced: Tracked directories, by what the verdict said
- *   stood at the path — one line each, so the squatter --force displaced is
- *   named at every verbosity (green; the replaced count yellow, as cleanup
- *   colours a removal)
+ *   stood at the path — one line each, so the squatter --force displaced is named
+ *   at every verbosity (green; the replaced count yellow, as cleanup colours a
+ *   removal)
  * - ancestors: Tracked directories the run made on the way to a planned path,
  *   outside the plan. Verbose only — the preview never counted them, and the
  *   summary says what the preview said; the verbose listing accounts for every
  *   owned record the run wrote
  *
- * The verb is the verdict's; the tags are plan truth. A fixed row is tagged
- * [mode] / [ownership] from the workspace's divergence index — why the planner
- * chose it — never from a fresh stat: the run has just converged the directory,
- * so disk would say nothing. A pending row the planner chose on its own verdict
+ * The verb is the verdict's; the tags are plan truth. A fixed row is tagged [mode]
+ * / [ownership] from the workspace's divergence index — why the planner chose
+ * it — never from a fresh stat: the run has just converged the directory, so
+ * disk would say nothing. A pending row the planner chose on its own verdict
  * has an indexed item (deploy_needs_work(NULL) is false); one planned as absent
  * beneath a squatted directory may have none, and is created rather than fixed.
  * A fixed row whose item carries neither bit, or no item, prints no tag, and
- * the other buckets never carry one, since the verb already says what the
- * path held.
+ * the other buckets never carry one, since the verb already says what the path
+ * held.
  *
  * Mode and ownership print as recorded on the row, corruption included: a mode-0
  * row shows (mode: 0000) under the preflight warning that named the substitution.
@@ -717,9 +717,9 @@ static void print_cleanup_results(
             );
         }
 
-        /* Nor here: a directory is skipped because something the run holds
-         * back is still in it, because the workspace could not verify it, or
-         * because the removal refused — the verbose listing names which. */
+        /* Nor here: a directory is skipped because something the run holds back
+         * is still in it, because the workspace could not verify it, or because
+         * the removal refused — the verbose listing names which. */
         if (skipped_dirs.count > 0) {
             output_info(
                 out, OUTPUT_NORMAL, "Skipped %zu orphaned director%s",
@@ -877,11 +877,11 @@ static void print_cleanup_preflight_results(
         /* Released directories are named here, inline, with the other two fates:
          * nothing is asked of the user about them (the arrow says "left alone"),
          * and a directory left behind is not the event a file left behind is,
-         * so no block of its own — whether the workspace released it or it
-         * holds something this run will never remove (cleanup.h's classes). A
-         * skipped directory holds something the run holds back, or could not
-         * be verified (status tags it [unverified]); the slash says "left alone
-         * this run" for both. */
+         * so no block of its own — whether the workspace released it or it holds
+         * something this run will never remove (cleanup.h's classes). A skipped
+         * directory holds something the run holds back, or could not be verified
+         * (status tags it [unverified]); the slash says "left alone this run"
+         * for both. */
         print_path_list(out, &verdicts->prunable_dirs, OUTPUT_COLOR_CYAN, "•");
         print_path_list(out, &verdicts->released_dirs, OUTPUT_COLOR_CYAN, "→");
         print_path_list(out, &verdicts->skipped_dirs, OUTPUT_COLOR_YELLOW, "⊘");
@@ -991,9 +991,9 @@ static void print_cleanup_preflight_results(
  * own label already covers them.
  *
  * Called before the first write of the run — the adoption loop's — so a re-exec
- * restarts a process that has recorded nothing and printed no receipt line
- * twice. With both plans empty it collects no label and returns at once, so
- * the nothing-to-do exit below it never prompts for privileges it will not use.
+ * restarts a process that has recorded nothing and printed no receipt line twice.
+ * With both plans empty it collects no label and returns at once, so the
+ * nothing-to-do exit below it never prompts for privileges it will not use.
  *
  * @param ctx Dispatch context (must not be NULL; argv for the re-exec, out)
  * @param deploy_plan Deployment plan (must not be NULL)
@@ -1111,9 +1111,9 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
 
     /* Build operation scope
      *
-     *   scope_enabled — the persistent enabled set, the CLI filter's bound.
-     *                   Empty is a valid convergence target: every record becomes
-     *                   an orphan and apply cleans them up. Enables the "disable
+     *   scope_enabled — the persistent enabled set, the CLI filter's bound. Empty
+     *                   is a valid convergence target: every record becomes an
+     *                   orphan and apply cleans them up. Enables the "disable
      *                   last profile, then apply" workflow.
      *   scope_active  — operation face (the verbose listing, hook context).
      *   scope_has_filter / scope_has_paths / scope_paths — the build's shape,
@@ -1203,10 +1203,14 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         goto cleanup;
     }
 
-    output_print(
-        out, OUTPUT_VERBOSE, "Workspace loaded: %zu active file%s in scope\n",
-        workspace_files(ws).count, workspace_files(ws).count == 1 ? "" : "s"
+    /* Both kinds: a scope of tracked directories alone is a workspace, not an
+     * empty one. */
+    char loaded[64];
+    output_format_counts(
+        workspace_files(ws).count, workspace_directories(ws).count,
+        loaded, sizeof(loaded)
     );
+    output_print(out, OUTPUT_VERBOSE, "Workspace loaded: %s\n", loaded);
 
     /* PLAN: decide once what deploy will do, from (workspace, scope).
      *
@@ -1283,8 +1287,8 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      *
      * Coherent Scope — the same operation-scope triplet the deployment planner
      * applies: orphans outside the profile / path dimensions are invisible; orphans
-     * an -e pattern names are skipped and reported. The filter shapes that
-     * reach the planner:
+     * an -e pattern names are skipped and reported. The filter shapes that reach
+     * the planner:
      *
      *   full sync (no filter)   every orphan converges — a disabled
      *                           profile's files, and files deleted from Git under
@@ -1358,11 +1362,11 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     /* Check privileges for root/ files AND directories BEFORE the first write
      *
      * Both plans are known, so every path the run will touch is known; nothing
-     * has been written yet — the adoption loop below is the run's first write
-     * — so a re-exec with sudo restarts the whole process from main() cleanly
-     * (the state lock is released before execvp() replaces the process) and no
-     * receipt line prints twice across it. Cryptic mid-operation failures and
-     * partial deployments are prevented the same way.
+     * has been written yet — the adoption loop below is the run's first write —
+     * so a re-exec with sudo restarts the whole process from main() cleanly (the
+     * state lock is released before execvp() replaces the process) and no receipt
+     * line prints twice across it. Cryptic mid-operation failures and partial
+     * deployments are prevented the same way.
      *
      * Skipped in dry-run: a read-only operation needs no privileges. */
     if (!opts->dry_run) {
@@ -1461,25 +1465,24 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     /* Collect the pending profile reassignments and count the stale files, off
      * the plan.
      *
-     * Both are facts the planner read from the item and did not carry — the
-     * plan says what the run does, the item says why — so the planned rows are
-     * walked once more, each paired with its item. The two file buckets are
-     * exactly the rows whose record this run's ownership events rewrite: the
-     * clean ones by the adoption loop above, the pending ones by the deployment
-     * — so what the preview names is what the receipt counts. A row the plan
-     * skips (-e, --skip-existing) is in neither bucket and is neither previewed
-     * nor counted: the run will not acknowledge it. The scope is not re-derived
-     * — the planner applied it once, and the buckets are its answer. Collected
-     * before the early exit so a reassignment-only workspace is reported and
-     * acknowledged there too.
+     * Both are facts the planner read from the item and did not carry — the plan
+     * says what the run does, the item says why — so the planned rows are walked
+     * once more, each paired with its item. The two file buckets are exactly
+     * the rows whose record this run's ownership events rewrite: the clean ones
+     * by the adoption loop above, the pending ones by the deployment — so what
+     * the preview names is what the receipt counts. A row the plan skips (-e,
+     * --skip-existing) is in neither bucket and is neither previewed nor counted:
+     * the run will not acknowledge it. The scope is not re-derived — the planner
+     * applied it once, and the buckets are its answer. Collected before the early
+     * exit so a reassignment-only workspace is reported and acknowledged there too.
      *
      * A reassignment is the workspace's reading of the record against the row —
      * the record dotta owns names one profile, the row another — and the one
      * reason a clean row has an item at all (workspace_get_item). DIVERGENCE_STALE
      * is the workspace's verdict that Git moved past the blob dotta last deployed
      * (anchor.blob_oid ≠ row.blob_oid) — a persistent signal that survives
-     * status→apply sequences and counts the same however the branch moved;
-     * work by definition, so only a pending row carries it. */
+     * status→apply sequences and counts the same however the branch moved; work
+     * by definition, so only a pending row carries it. */
     size_t stale_count = 0;
     const manifest_rows_t claimed[] = {
         manifest_rows_view(&deploy_plan->files.clean),
@@ -1527,21 +1530,21 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
 
     /* Checkpoint: the run's reading of the present is complete, and recorded
      *
-     * Everything written so far is a fact about the load — the flush's
-     * observations and confirmations, and the ownership events above, which
-     * claim rows the analysis found clean — and it stays a fact whatever the
-     * rest of the run does. What follows can end without writing anything
-     * else: the nothing-to-do exit below, a blocking finding, a strict-mode
-     * ownership error, a hook that refuses, a declined prompt. The dispatch
-     * transaction is committed here so that none of those exits rolls the
-     * present back — "Adopted N files" has already been said, and the record
-     * must say it too, or the next run adopts them again and the next status
-     * reads a path the load observed as never seen. Dry run included: its
-     * flush is as true as a real run's, and status persists the same writes.
+     * Everything written so far is a fact about the load — the flush's observations
+     * and confirmations, and the ownership events above, which claim rows the
+     * analysis found clean — and it stays a fact whatever the rest of the run
+     * does. What follows can end without writing anything else: the nothing-to-do
+     * exit below, a blocking finding, a strict-mode ownership error, a hook that
+     * refuses, a declined prompt. The dispatch transaction is committed here so
+     * that none of those exits rolls the present back — "Adopted N files" has
+     * already been said, and the record must say it too, or the next run adopts
+     * them again and the next status reads a path the load observed as never
+     * seen. Dry run included: its flush is as true as a real run's, and status
+     * persists the same writes.
      *
      * The record of the run's own effects — the anchors the deployment writes,
-     * the records cleanup retires — is the run's second transaction, begun
-     * past the early exit and committed at the end. */
+     * the records cleanup retires — is the run's second transaction, begun past
+     * the early exit and committed at the end. */
     err = state_save(state);
     if (err) {
         err = error_wrap(err, "Failed to commit state changes");
@@ -1618,17 +1621,17 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     print_deploy_preflight_results(out, deploy_verdicts);
 
     /* Check for blocking findings (conflicts, blocked paths, permissions). A
-     * blocked run previews nothing: the findings and their remedy are the
-     * whole of what it has to say, and the remedy stays the last line before
-     * the error. */
+     * blocked run previews nothing: the findings and their remedy are the whole
+     * of what it has to say, and the remedy stays the last line before the
+     * error. */
     if (deploy_verdicts->conflicts->count > 0 || deploy_verdicts->blocked->count > 0 ||
         deploy_verdicts->permission_errors->count > 0) {
         err = ERROR(ERR_CONFLICT, "Pre-flight checks failed");
         goto cleanup;
     }
 
-    /* The previews: the reassignments the run acknowledges, then the verdicts
-     * — what the run does — read the same way in a real run and a dry run. */
+    /* The previews: the reassignments the run acknowledges, then the verdicts —
+     * what the run does — read the same way in a real run and a dry run. */
     print_reassignments(out, &reassigned);
     print_deploy_preview(out, deploy_verdicts);
 
@@ -1681,8 +1684,8 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
          * 1 tracked directory and prune 3 orphaned files?". No part means every
          * pending action is state-only reclamation (e.g. an all-absent orphan
          * set) — non-destructive, no consent needed. The one destructive deploy
-         * verb, a replace, never reaches this prompt: it needs --force, and
-         * --force is the consent. */
+         * verb, a replace, never reaches this prompt: it needs --force, and --force
+         * is the consent. */
         size_t deploy_count = deploy_verdicts->files.count;
         size_t converge_count = deploy_verdicts->directories.count;
 
@@ -1740,9 +1743,9 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     }
 
     /* A dry run ends here. Both previews have printed, and neither engine is
-     * called: the verdicts are the run's decisions, and executing would teach
-     * a dry run nothing it does not already know. Everything below is for the
-     * run that writes — the two engines, then the record of what they did. */
+     * called: the verdicts are the run's decisions, and executing would teach a
+     * dry run nothing it does not already know. Everything below is for the run
+     * that writes — the two engines, then the record of what they did. */
     if (opts->dry_run) {
         output_print(out, OUTPUT_VERBOSE, "\nDry-run mode - no files will be modified\n");
     } else {
@@ -1967,8 +1970,8 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
 
     /* Commit the run's transaction: the anchors the deployment wrote and the
      * records cleanup retired (partial success model — a cleanup failure leaves
-     * the record's writes to commit). The present was committed at the
-     * checkpoint; a dry run's transaction is empty and the save only closes it. */
+     * the record's writes to commit). The present was committed at the checkpoint;
+     * a dry run's transaction is empty and the save only closes it. */
     err = state_save(state);
     if (err) {
         err = error_wrap(err, "Failed to commit state changes");
@@ -2016,9 +2019,9 @@ static args_class_t apply_classify(const char *tok) {
 
 /**
  * What can stand at the cursor: an enabled profile or a file of the view, in
- * any order, as apply_classify routes them — the view narrowed to what the
- * profiles named so far win, by -p or bare, which is the filter the run will
- * apply — or a filesystem path.
+ * any order, as apply_classify routes them — the view narrowed to what the profiles
+ * named so far win, by -p or bare, which is the filter the run will apply — or
+ * a filesystem path.
  */
 static args_want_t apply_complete(
     const void *ctx_v, const void *opts_v, const args_completion_t *at, FILE *out

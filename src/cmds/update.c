@@ -288,40 +288,14 @@ static bool is_update_candidate(
     /* Determine if item should be included based on state + divergence */
     switch (item->state) {
         case WORKSPACE_STATE_DEPLOYED:
-            /* Deployed files/dirs with divergence - check what kind.
-             *
-             * An [unverified] path could not be read at load (EACCES, ELOOP,
-             * EIO — both kinds): known-unactionable, so the filter refuses it
-             * and cmd_update counts it, instead of admitting it for the copy to
-             * crash on the same errno. */
-            if (item->divergence & DIVERGENCE_UNVERIFIED) {
-                return false;
-            }
-            /* Any STALE item is skipped: Git moved past the blob dotta deployed,
-             * and update stores bytes — the bytes on disk are old whether or
-             * not a mode bit also differs. [stale] alone is apply's to resolve;
-             * [modified] [stale] is the user's. */
-            if (item->divergence & DIVERGENCE_STALE) {
-                return false;
-            }
-            /* A type change is captured only through the one pair the copy can
-             * commit: file ↔ symlink on a file row. A tracked directory is never
-             * captured through its type change (the walk's race guard refuses
-             * it: a symlink would stat as its target and launder the target's
-             * attributes into metadata), and a file row whose occupant the copy
-             * cannot commit — a directory, FIFO, socket, or device — is refused
-             * by the same rule. Resolution is explicit — apply --force replaces
-             * it, remove untracks it — so neither is a candidate, and the preview
-             * does not promise an update the executor would refuse. */
-            if (item->divergence & DIVERGENCE_TYPE) {
-                if (item->item_kind == PATH_KIND_DIRECTORY ||
-                    (item->occupant != FS_OCCUPANT_REGULAR &&
-                    item->occupant != FS_OCCUPANT_SYMLINK)) {
-                    return false;
-                }
-            }
-            /* DEPLOYED + NONE = clean, exclude */
-            return item->divergence != DIVERGENCE_NONE && !opts->only_new;
+            /* Deployed items partition by the route table — the same producer
+             * status's sections and the skip counter below read
+             * (workspace_item_route; workspace.h carries each arm's why). Only
+             * ROUTE_CAPTURE is update's to commit: unverifiable, stale, conflict
+             * and kind are refused, and cmd_update counts them, so the preview
+             * never promises an update the executor would refuse. */
+            return workspace_item_route(item) == WORKSPACE_ROUTE_CAPTURE &&
+                   !opts->only_new;
 
         case WORKSPACE_STATE_DELETED:
             /* File removed from filesystem - include unless --only-new */
@@ -355,23 +329,17 @@ static bool is_update_candidate(
  * and divergence.
  *
  * INCLUDED ITEMS (STATE + DIVERGENCE):
- * - DEPLOYED + divergence (content/mode/ownership/encryption; a type change only
- *   as the file ↔ symlink pair, captured as the new kind)
+ * - DEPLOYED on the capture route (content/mode/ownership/encryption divergence;
+ *   a type change only as the file ↔ symlink pair, captured as the new kind)
  * - DELETED state (removed from filesystem)
  * - UNTRACKED state (new files, if flags OR config->auto_detect_new_files)
  *
  * EXCLUDED ITEMS:
  * - UNDEPLOYED state (not modified, just not deployed yet - handled by apply)
  * - ORPHANED state (apply's: cleanup prunes or holds it)
- * - DEPLOYED + NONE divergence (clean, nothing to update)
- * - DEPLOYED + UNVERIFIED (a path that could not be read at load, either kind:
- *   nothing can be captured from it; cmd_update counts these and says so)
- * - DEPLOYED + STALE (Git moved since deployment: apply's work when alone, the
- *   user's conflict next to CONTENT — never committed; counted and said the same
- *   way)
- * - DEPLOYED + TYPE the copy cannot commit (a directory's type change, or a file
- *   row occupied by a directory, FIFO, socket, or device: apply --force's or
- *   remove's to resolve; counted and said the same way)
+ * - DEPLOYED off the capture route (workspace_item_route): clean, unverifiable,
+ *   stale, conflict, or a kind the copy cannot commit — cmd_update counts the
+ *   refused routes and says so
  *
  * CLI FILTERS APPLIED:
  * - opts->files: Only specific files (if provided)
@@ -1689,17 +1657,10 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
 
     /* What the filter left out on purpose, said once — above the exit below, so
      * a workspace whose only divergence is stale explains itself, and above the
-     * prompt. Same scope triplet as the filter. An [unverified] path could not
-     * be read; its line names the remedies without claiming an errno (EACCES,
-     * ELOOP and EIO all read the same). [stale] alone is apply's to resolve;
-     * [modified] [stale] is a conflict no dotta verb resolves toward disk, so
-     * its line must not send the user to a plain apply that preflight will refuse.
-     * A [type] path the copy cannot commit — a directory's type change, or a
-     * file row occupied by a directory, FIFO, socket, or device (file ↔ symlink
-     * is captured and stays a candidate) — is not captured through the change
-     * (is_update_candidate); its line names the two verbs that resolve it. The
-     * chain tests in the filter's refusal order, so a multi-bit divergence counts
-     * under the reason that refused it. */
+     * prompt. Same scope triplet as the filter. The skip lines name the routes
+     * the filter refused (workspace_item_route — the same table), in the route
+     * order, each naming its route's way out; a multi-bit divergence counts under
+     * the route that refused it. */
     size_t all_count = 0;
     const workspace_item_t *all = workspace_get_all_diverged(ws, &all_count);
     size_t unverified_skipped = 0; size_t retyped_skipped = 0;
@@ -1712,19 +1673,27 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
             !scope_accepts_entry(scope, item->profile, item->storage_path, item->item_kind)) {
             continue;
         }
-        if (item->divergence & DIVERGENCE_UNVERIFIED) {
-            unverified_skipped++;
-        } else if (item->divergence & DIVERGENCE_STALE) {
-            if (item->divergence & DIVERGENCE_CONTENT) {
+        switch (workspace_item_route(item)) {
+            case WORKSPACE_ROUTE_UNVERIFIABLE:
+                unverified_skipped++;
+                break;
+
+            case WORKSPACE_ROUTE_CONFLICT:
                 conflict_skipped++;
-            } else {
+                break;
+
+            case WORKSPACE_ROUTE_STALE:
                 stale_skipped++;
-            }
-        } else if ((item->divergence & DIVERGENCE_TYPE) &&
-            (item->item_kind == PATH_KIND_DIRECTORY ||
-            (item->occupant != FS_OCCUPANT_REGULAR &&
-            item->occupant != FS_OCCUPANT_SYMLINK))) {
-            retyped_skipped++;
+                break;
+
+            case WORKSPACE_ROUTE_KIND:
+                retyped_skipped++;
+                break;
+
+            case WORKSPACE_ROUTE_CLEAN:
+            case WORKSPACE_ROUTE_CAPTURE:
+            case WORKSPACE_ROUTE_REASSIGNED:
+                break;
         }
     }
 

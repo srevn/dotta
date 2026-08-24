@@ -2663,6 +2663,44 @@ const anchor_t *workspace_get_anchor(
 }
 
 /**
+ * Decide which verb's work a deployed item is
+ *
+ * The table and its rationale are in workspace.h — kept in one place, where a
+ * caller reading the enum finds them.
+ */
+workspace_route_t workspace_item_route(const workspace_item_t *item) {
+    divergence_type_t divergence = item->divergence;
+
+    /* A bit the analysis could not settle outranks the ones it could */
+    if (divergence & DIVERGENCE_UNVERIFIED) {
+        return WORKSPACE_ROUTE_UNVERIFIABLE;
+    }
+
+    /* Git moved past the deployed blob: a real edit beside it means both sides
+     * moved; alone — mode riders included — the bytes are apply's */
+    if (divergence & DIVERGENCE_STALE) {
+        return (divergence & DIVERGENCE_CONTENT) ? WORKSPACE_ROUTE_CONFLICT
+                                                 : WORKSPACE_ROUTE_STALE;
+    }
+
+    /* A kind mismatch is a capture only through the one pair the copy can commit:
+     * file ↔ symlink on a file row. Every other occupant is no verb's default. */
+    if ((divergence & DIVERGENCE_TYPE) &&
+        (item->item_kind == PATH_KIND_DIRECTORY ||
+        (item->occupant != FS_OCCUPANT_REGULAR &&
+        item->occupant != FS_OCCUPANT_SYMLINK))) {
+        return WORKSPACE_ROUTE_KIND;
+    }
+
+    if (divergence != DIVERGENCE_NONE) {
+        return WORKSPACE_ROUTE_CAPTURE;
+    }
+
+    return item->profile_changed ? WORKSPACE_ROUTE_REASSIGNED
+                                 : WORKSPACE_ROUTE_CLEAN;
+}
+
+/**
  * Extract display tags and metadata from workspace item
  */
 bool workspace_item_extract_display_info(

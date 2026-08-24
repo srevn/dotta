@@ -132,6 +132,76 @@ static inline workspace_items_t workspace_items_view(const ptr_array_t *bucket) 
 }
 
 /**
+ * Which verb resolves a deployed item — the one route table
+ *
+ * The partition of WORKSPACE_STATE_DEPLOYED items that status's sections, update's
+ * filter and update's skip counter all read. One producer (workspace_item_route)
+ * so the three surfaces cannot route one item two ways — the shape cleanup_verdict
+ * gives the orphan side. Values are listed in precedence order: the route is
+ * the first that applies, so a multi-bit divergence routes under the reason that
+ * outranks the rest.
+ *
+ * Deployed items only. Every other state routes trivially by the state itself
+ * (DELETED → update's, UNDEPLOYED → apply's, UNTRACKED → update --include-new's,
+ * ORPHANED / RELEASED → cleanup_verdict's) and is not drift-prone; callers keep
+ * their state switch and read this table for the DEPLOYED arm alone.
+ */
+typedef enum {
+    WORKSPACE_ROUTE_CLEAN,        /* No divergence, no reassignment */
+    WORKSPACE_ROUTE_UNVERIFIABLE, /* DIVERGENCE_UNVERIFIED — dotta could not look */
+    WORKSPACE_ROUTE_CONFLICT,     /* STALE ∧ CONTENT — both sides moved  */
+    WORKSPACE_ROUTE_STALE,        /* STALE alone — Git moved, disk did not */
+    WORKSPACE_ROUTE_KIND,         /* TYPE the copy cannot commit */
+    WORKSPACE_ROUTE_CAPTURE,      /* Any other divergence — update's to commit */
+    WORKSPACE_ROUTE_REASSIGNED    /* No divergence; the record names another profile */
+} workspace_route_t;
+
+/**
+ * Decide which verb's work a deployed item is, from the item alone
+ *
+ * Pure in the fields the analysis observed once at load — divergence, kind,
+ * occupant, reassignment. No syscall, no options; first match wins:
+ *
+ *   DIVERGENCE_UNVERIFIED    UNVERIFIABLE — a bit the analysis could not
+ *                            settle outranks the ones it could (the precedence
+ *                            cleanup_skip_reason gives orphans): the path could
+ *                            not be read (EACCES, ELOOP, EIO — both kinds), or
+ *                            its content could not be loaded, decrypted, or
+ *                            compared. Known-unactionable: update's copy would
+ *                            fail on the same errno and apply refuses to write
+ *                            what it cannot read, so no verb is promised — and
+ *                            an ENCRYPTION bit beside it changes nothing the
+ *                            user can act on while the path cannot be read.
+ *   STALE ∧ CONTENT          CONFLICT — both sides moved since dotta last
+ *                            deployed: the edit is real, but update will not
+ *                            commit bytes Git has moved past, and apply refuses
+ *                            to overwrite the edit without --force. Neither verb's
+ *                            by default; the user decides.
+ *   STALE alone              STALE — Git advanced past the deployed blob and
+ *                            disk did not move: overwriting loses nothing, so
+ *                            the bytes are apply's to bring whether or not a
+ *                            mode bit rides along (update stores bytes; the bytes
+ *                            on disk are old either way).
+ *   TYPE, non-capturable     KIND — a kind mismatch the copy cannot commit: a
+ *                            tracked directory's type change (the walk's race
+ *                            guard refuses it — a symlink would stat as its target
+ *                            and launder the target's attributes into metadata),
+ *                            or a file row occupied by a directory, FIFO, socket,
+ *                            or device. Resolution is explicit: apply --force
+ *                            replaces it, remove untracks it.
+ *   any other divergence     CAPTURE — update's work. file ↔ symlink on a
+ *                            file row stays here: the copy commits it as the
+ *                            new kind.
+ *   none, record disagrees   REASSIGNED — a pending handover apply
+ *                            acknowledges.
+ *   none                     CLEAN.
+ *
+ * @param item Deployed workspace item (must not be NULL)
+ * @return The first route that applies
+ */
+workspace_route_t workspace_item_route(const workspace_item_t *item);
+
+/**
  * Workspace structure (opaque)
  *
  * Holds the view, the record and the divergence analysis over both.

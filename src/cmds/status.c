@@ -211,6 +211,7 @@ static void display_workspace_status(
      * before the status line to determine filtered workspace state. */
     size_t profile_file_count = 0;
     size_t filtered_diverged = 0;
+    size_t filtered_unverified = 0;
     size_t hidden_count = 0;
 
     if (scope_has_filter(scope)) {
@@ -221,10 +222,17 @@ static void display_workspace_status(
             }
         }
 
-        /* Partition diverged items into filtered vs hidden */
+        /* Partition diverged items into filtered vs hidden. The unverified count
+         * gives the filtered line its Invalid arm — the same bit the global verdict
+         * reads (compute_workspace_status), so one workspace cannot read Invalid
+         * globally and merely Dirty under -p while the unverifiable item is in
+         * the filtered set. */
         for (size_t i = 0; i < all_count; i++) {
             if (scope_accepts_profile(scope, all_items[i].profile)) {
                 filtered_diverged++;
+                if (all_items[i].divergence & DIVERGENCE_UNVERIFIED) {
+                    filtered_unverified++;
+                }
             } else {
                 hidden_count++;
             }
@@ -261,6 +269,12 @@ static void display_workspace_status(
                     "  Clean - no files in profile\n"
                 );
             }
+        } else if (filtered_unverified > 0) {
+            output_colored(
+                out, OUTPUT_NORMAL, OUTPUT_COLOR_RED,
+                "  Invalid - %zu item%s dotta could not verify\n",
+                filtered_unverified, filtered_unverified == 1 ? "" : "s"
+            );
         } else {
             output_colored(
                 out, OUTPUT_NORMAL, OUTPUT_COLOR_YELLOW,
@@ -307,13 +321,13 @@ static void display_workspace_status(
         /* When filter active and filtered profile is clean, skip detailed sections */
         if ((!scope_has_filter(scope) || filtered_diverged > 0) && all_count > 0) {
 
-            /* Single allocation for all category pointers (6 categories × all_count
+            /* Single allocation for all category pointers (7 categories × all_count
              * slots) Memory layout:
-             * [conflicts][uncommitted][undeployed][new_files][orphaned][reassigned]
-             * This provides cache-friendly contiguous memory with single
-             * malloc/free. */
+             * [conflicts][unverifiable][uncommitted][undeployed][new_files]
+             * [orphaned][reassigned] This provides cache-friendly contiguous
+             * memory with single malloc/free. */
             const workspace_item_t **categorized =
-                malloc(all_count * 6 * sizeof(workspace_item_t *));
+                malloc(all_count * 7 * sizeof(workspace_item_t *));
             if (!categorized) {
                 output_error(
                     out, "Failed to allocate memory for status display (%zu items)",
@@ -324,13 +338,15 @@ static void display_workspace_status(
 
             /* Category arrays (pointer arithmetic into single allocation) */
             const workspace_item_t **conflicts = categorized;
-            const workspace_item_t **uncommitted = categorized + all_count;
-            const workspace_item_t **undeployed = categorized + all_count * 2;
-            const workspace_item_t **new_files = categorized + all_count * 3;
-            const workspace_item_t **orphaned = categorized + all_count * 4;
-            const workspace_item_t **reassigned = categorized + all_count * 5;
+            const workspace_item_t **unverifiable = categorized + all_count;
+            const workspace_item_t **uncommitted = categorized + all_count * 2;
+            const workspace_item_t **undeployed = categorized + all_count * 3;
+            const workspace_item_t **new_files = categorized + all_count * 4;
+            const workspace_item_t **orphaned = categorized + all_count * 5;
+            const workspace_item_t **reassigned = categorized + all_count * 6;
 
             size_t conflict_count = 0;
+            size_t unverifiable_count = 0;
             size_t uncommitted_count = 0;
             size_t undeployed_count = 0;
             size_t new_count = 0;
@@ -350,23 +366,40 @@ static void display_workspace_status(
 
                 switch (item->state) {
                     case WORKSPACE_STATE_DEPLOYED:
-                        if ((item->divergence & DIVERGENCE_STALE) &&
-                            !(item->divergence & DIVERGENCE_CONTENT)) {
-                            /* Git moved, disk did not → apply's work, the same
-                             * bucket as a file never deployed; the [stale] tag
-                             * says which */
-                            undeployed[undeployed_count++] = item;
-                        } else if (item->divergence & DIVERGENCE_STALE) {
-                            /* Both sides moved: update skips it and apply refuses
-                             * it without --force, so it belongs to neither verb's
-                             * section — its own header names the way out */
-                            conflicts[conflict_count++] = item;
-                        } else if (item->divergence != DIVERGENCE_NONE) {
-                            /* Real divergence → uncommitted changes */
-                            uncommitted[uncommitted_count++] = item;
-                        } else if (item->profile_changed) {
-                            /* Pure profile reassignment (no filesystem divergence) */
-                            reassigned[reassigned_count++] = item;
+                        /* One bucket per route — the same table update's filter
+                         * and skip counter read (workspace_item_route), so no
+                         * section promises a verb the verb refuses */
+                        switch (workspace_item_route(item)) {
+                            case WORKSPACE_ROUTE_CONFLICT:
+                            case WORKSPACE_ROUTE_KIND:
+                                /* Neither verb's by default — its own header
+                                 * names the way out */
+                                conflicts[conflict_count++] = item;
+                                break;
+
+                            case WORKSPACE_ROUTE_UNVERIFIABLE:
+                                unverifiable[unverifiable_count++] = item;
+                                break;
+
+                            case WORKSPACE_ROUTE_STALE:
+                                /* Apply's work, the same bucket as a file never
+                                 * deployed; the [stale] tag says which */
+                                undeployed[undeployed_count++] = item;
+                                break;
+
+                            case WORKSPACE_ROUTE_CAPTURE:
+                                /* Real divergence → uncommitted changes */
+                                uncommitted[uncommitted_count++] = item;
+                                break;
+
+                            case WORKSPACE_ROUTE_REASSIGNED:
+                                /* Pure profile reassignment (no filesystem
+                                 * divergence) */
+                                reassigned[reassigned_count++] = item;
+                                break;
+
+                            case WORKSPACE_ROUTE_CLEAN:
+                                break;
                         }
                         break;
 
@@ -390,13 +423,15 @@ static void display_workspace_status(
                 }
             }
 
-            /* Section 1: Conflicts — the one bucket no default verb resolves,
-             * so it leads and its header carries the remedy */
+            /* Section 1: Conflicts — the buckets no default verb resolves lead;
+             * this one's header carries the remedy, true of both its members
+             * (content moved on both sides, or a kind the copy cannot commit) */
             if (conflict_count > 0) {
                 output_list_t *list = output_list_create(
                     out, "Conflicts",
-                    "changed in Git and on disk; \"dotta diff\" to compare, "
-                    "\"dotta apply --force\" to keep Git's"
+                    "changed on both sides or a different kind on disk; "
+                    "\"dotta diff\" to compare, \"dotta apply --force\" to "
+                    "keep Git's, \"dotta remove\" to untrack"
                 );
 
                 if (list) {
@@ -422,7 +457,40 @@ static void display_workspace_status(
                 }
             }
 
-            /* Section 2: Uncommitted Changes */
+            /* Section 2: Unverifiable paths — the other no-verb bucket: dotta
+             * could not look, so no verb is promised; the way out is the user's,
+             * in the words update's counted line already uses */
+            if (unverifiable_count > 0) {
+                output_list_t *list = output_list_create(
+                    out, "Unverifiable paths",
+                    "dotta cannot read these paths; fix permissions, or "
+                    "exclude with -e"
+                );
+
+                if (list) {
+                    for (size_t i = 0; i < unverifiable_count; i++) {
+                        const char *tags[WORKSPACE_ITEM_MAX_DISPLAY_TAGS];
+                        size_t tag_count;
+                        output_color_t color;
+                        char metadata[256];
+
+                        if (workspace_item_extract_display_info(
+                            unverifiable[i], tags, &tag_count,
+                            &color, metadata, sizeof(metadata)
+                            )) {
+                            output_list_add(
+                                list, tags, tag_count, color,
+                                unverifiable[i]->filesystem_path, metadata
+                            );
+                        }
+                    }
+
+                    output_list_render(list);
+                    output_list_free(list);
+                }
+            }
+
+            /* Section 3: Uncommitted Changes */
             if (uncommitted_count > 0) {
                 output_list_t *list = output_list_create(
                     out, "Uncommitted changes",
@@ -452,7 +520,7 @@ static void display_workspace_status(
                 }
             }
 
-            /* Section 3: Profile Reassignments */
+            /* Section 4: Profile Reassignments */
             if (reassigned_count > 0) {
                 output_list_t *list = output_list_create(
                     out, "Profile reassignments",
@@ -482,7 +550,7 @@ static void display_workspace_status(
                 }
             }
 
-            /* Section 4: Undeployed Files */
+            /* Section 5: Undeployed Files */
             if (undeployed_count > 0) {
                 output_list_t *list = output_list_create(
                     out, "Undeployed files",
@@ -512,7 +580,7 @@ static void display_workspace_status(
                 }
             }
 
-            /* Section 5: New Files */
+            /* Section 6: New Files */
             if (new_count > 0) {
                 output_list_t *list = output_list_create(
                     out, "New files",
@@ -542,7 +610,7 @@ static void display_workspace_status(
                 }
             }
 
-            /* Section 6: Issues (orphaned) */
+            /* Section 7: Issues (orphaned) */
             if (orphaned_count > 0) {
                 output_list_t *list = output_list_create(
                     out, "Issues",
@@ -555,11 +623,11 @@ static void display_workspace_status(
                      * below by the exact tags its line shows, once per distinct
                      * tag string, so the key reads back against the list it
                      * follows. The verdict is cleanup's (cleanup_verdict, the
-                     * one producer the preview reads too) — this only names
-                     * it. A directory's PRUNABLE is the one verdict status
-                     * cannot finish, and its hint says so; it shares the bare
-                     * [orphaned] key with the files, so the sentence is written
-                     * to be true of both. */
+                     * one producer the preview reads too) — this only names it.
+                     * A directory's PRUNABLE is the one verdict status cannot
+                     * finish, and its hint says so; it shares the bare [orphaned]
+                     * key with the files, so the sentence is written to be true
+                     * of both. */
                     struct { char tags[64]; const char *hint; } legend[16];
                     size_t legend_count = 0;
                     size_t legend_width = 0;
@@ -1122,10 +1190,10 @@ error_t *cmd_status(const dotta_ctx_t *ctx, const cmd_status_options_t *opts) {
 
     /* Display workspace status (with profile filtering for Coherent Scope)
      *
-     * The workspace was loaded over the persistent enabled set (the view's)
-     * for accurate divergence analysis. display_workspace_status then applies
-     * the CLI filter dimension via scope_accepts_profile so `dotta status -p
-     * work` matches `dotta apply -p work` behavior.
+     * The workspace was loaded over the persistent enabled set (the view's) for
+     * accurate divergence analysis. display_workspace_status then applies the
+     * CLI filter dimension via scope_accepts_profile so `dotta status -p work`
+     * matches `dotta apply -p work` behavior.
      */
     if (opts->show_local) {
         display_workspace_status(ws, scope, active, out);

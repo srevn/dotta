@@ -682,7 +682,11 @@ static error_t *update_metadata_for_profile(
                 /* Handle deleted directories (symmetric with the file branch
                  * above). Without this, the stat() below would fail with ENOENT
                  * and the metadata entry would survive, letting the view keep
-                 * claiming a directory the user just deleted. */
+                 * claiming a directory the user just deleted. A deleted
+                 * directory is a deletion: the entry's removal goes on the
+                 * commit's bookkeeping like a deleted file, so the commit gate
+                 * counts it, the message names it, and the record loop retires
+                 * it. */
                 if (item->state == WORKSPACE_STATE_DELETED) {
                     if (metadata_has_item(metadata, item->storage_path)) {
                         err = metadata_remove_item(metadata, item->storage_path);
@@ -695,6 +699,11 @@ static error_t *update_metadata_for_profile(
                         if (err) {
                             error_free(err);
                             err = NULL;
+                        }
+                        err = ptr_array_push(&commit->deleted, item);
+                        if (err) {
+                            metadata_free(metadata);
+                            return err;
                         }
                         output_info(
                             out, OUTPUT_VERBOSE, "  Removed directory metadata: %s",
@@ -787,6 +796,16 @@ static error_t *update_metadata_for_profile(
             metadata_free(metadata);
             return err;
         }
+    }
+
+    /* A profile whose walk captured nothing and deleted nothing has nothing to
+     * commit, and a no-commit profile leaves the worktree exactly as checked
+     * out: nothing saved, nothing staged. The prune is skipped with the save —
+     * imported redundancy rides whatever commit triggers the metadata rewrite,
+     * never drives one. */
+    if (commit->captured_count == 0 && commit->deleted.count == 0) {
+        metadata_free(metadata);
+        return NULL;
     }
 
     /* Prune redundant directory entries.
@@ -1017,8 +1036,10 @@ static error_t *update_profile(
 
     /* Note: metadata function already wrote the index */
 
-    /* Skip commit if nothing was processed. The pruned entries are the metadata
-     * step's housekeeping and ride along with what did land. */
+    /* Skip commit if nothing was processed (the metadata step saved and staged
+     * nothing on the same condition — the worktree is exactly as checked out).
+     * The pruned entries are the metadata step's housekeeping and ride along
+     * with what did land. */
     size_t path_count = commit->captured_count + commit->deleted.count;
     if (path_count == 0) {
         goto cleanup;

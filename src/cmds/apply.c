@@ -2195,10 +2195,11 @@ static args_class_t apply_classify(const char *tok) {
 }
 
 /**
- * What can stand at the cursor: an enabled profile or a file of the view, in
- * any order, as apply_classify routes them — the view narrowed to what the profiles
- * named so far win, by -p or bare, which is the filter the run will apply — or
- * a filesystem path.
+ * What can stand at the cursor: an enabled profile or a path of the view
+ * (files, and directory claims as subtree filters), in any order, as
+ * apply_classify routes them — the view narrowed to what the profiles named
+ * so far win, by -p or bare, which is the filter the run will apply — or a
+ * filesystem path.
  */
 static args_want_t apply_complete(
     const void *ctx_v, const void *opts_v, const args_completion_t *at, FILE *out
@@ -2215,7 +2216,7 @@ static args_want_t apply_complete(
     }
 
     completion_profiles(ctx, out, COMPLETION_ENABLED);
-    completion_files(ctx, out, o->profiles, o->profile_count);
+    completion_files(ctx, out, o->profiles, o->profile_count, true);
     return ARGS_WANT_FILES;
 }
 

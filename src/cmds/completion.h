@@ -61,13 +61,28 @@ void completion_profiles(
  * A winner filter keeps the rows those profiles win — exactly the rows a
  * workspace verb with that filter acts on; a path a filtered profile holds but
  * does not win is not offered because the verb would skip it. Directory rows
- * are metadata claims, not paths the file-taking verbs complete to.
+ * ride along slash-marked when asked for — a directory claim is a subtree
+ * filter with prefix semantics for the verbs that act on it (apply, update,
+ * diff); the file-only form serves the slots with nothing to show for one
+ * (list's history).
  *
- * @param winners Optional winner filter (NULL/0 for every row)
+ * @param winners     Optional winner filter (NULL/0 for every row)
+ * @param directories Offer the view's directory claims too, slash-marked
  */
 void completion_files(
     const dotta_ctx_t *ctx, FILE *out,
-    char *const *winners, size_t winner_count
+    char *const *winners, size_t winner_count, bool directories
+);
+
+/**
+ * A branch's directory claims, from its metadata rather than the view — the
+ * companion of completion_refspecs' pinned form for the verbs that act on a
+ * branch's claims (remove untracks them, export materializes them): bare
+ * slash-marked paths, the branch as description. An empty tracked directory
+ * (no tree entry) is exactly as offerable as the rest.
+ */
+void completion_directories(
+    const dotta_ctx_t *ctx, FILE *out, const char *branch
 );
 
 /**

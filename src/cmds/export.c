@@ -5,9 +5,9 @@
  * ownership, and dotta makes no ongoing claim over the destination. One profile
  * branch's subtree is copied verbatim: no layer composition, no mount mapping,
  * plaintext bytes with stored permission modes. Single files are the degenerate
- * case of the tree walk. A directory claim without a tree entry (an empty
- * tracked directory — its whole Git footprint is its metadata item) is content
- * too: materialized with its stored mode, beside what the walk collects.
+ * case of the tree walk. A directory claim without a tree entry (an empty tracked
+ * directory — its whole Git footprint is its metadata item) is content too:
+ * materialized with its stored mode, beside what the walk collects.
  *
  * Two-phase execution model:
  *
@@ -345,9 +345,9 @@ static int collect_tree_callback(
 /**
  * Order export entries by storage path.
  *
- * Applied to the appended claims batch alone: parents sort before children
- * (a prefix compares less), keeping creation order and the deepest-first
- * chmod coherent with the walk's pre-order.
+ * Applied to the appended claims batch alone: parents sort before children (a
+ * prefix compares less), keeping creation order and the deepest-first chmod
+ * coherent with the walk's pre-order.
  */
 static int export_entry_cmp(const void *a, const void *b) {
     const export_entry_t *ea = a;
@@ -562,10 +562,10 @@ static error_t *materialize_entries(
         switch (e->kind) {
             case EXPORT_ENTRY_DIRECTORY:
                 if (e->dest_existed) break;
-                /* Parents allowed: a claims-batch entry may sit under an
-                 * unclaimed, blob-less ancestor no walk entry created —
-                 * intermediates land at the default mode, deploy's own
-                 * ancestor rule. Walk entries' parents always exist. */
+                /* Parents allowed: a claims-batch entry may sit under an unclaimed,
+                 * blob-less ancestor no walk entry created — intermediates land
+                 * at the default mode, deploy's own ancestor rule. Walk entries'
+                 * parents always exist. */
                 err = fs_create_dir_with_mode(
                     e->dest_path, e->mode | S_IRWXU, true
                 );
@@ -674,8 +674,8 @@ static error_t *materialize_entries(
 }
 
 /**
- * Print the --dry-run plan: header plus one line per file entry and per
- * directory claim (slash-marked; scaffolding directories are not listed).
+ * Print the --dry-run plan: header plus one line per file entry and per directory
+ * claim (slash-marked; scaffolding directories are not listed).
  */
 static void print_dry_run(
     output_t *out,
@@ -697,7 +697,7 @@ static void print_dry_run(
         const export_entry_t *e = &list->items[i];
         if (e->kind == EXPORT_ENTRY_DIRECTORY && !e->claimed) continue;
         int len = (int) strlen(e->rel_path) +
-                  (e->kind == EXPORT_ENTRY_DIRECTORY ? 1 : 0);
+            (e->kind == EXPORT_ENTRY_DIRECTORY ? 1 : 0);
         if (len > width) width = len;
     }
     if (width > 48) width = 48;
@@ -888,8 +888,8 @@ error_t *cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
             if (err->code != ERR_NOT_FOUND) goto cleanup;
 
             /* Not in the tree. An empty tracked directory has no tree entry —
-             * its claim lives only in the metadata, and the export is then
-             * the claim itself: the directory, at its stored mode. */
+             * its claim lives only in the metadata, and the export is then the
+             * claim itself: the directory, at its stored mode. */
             const metadata_item_t *claim_item = NULL;
             error_t *item_err = metadata_get_item(metadata, storage, &claim_item);
             if (item_err) {
@@ -910,9 +910,9 @@ error_t *cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
 
         bool claim_target = target == NULL;
         if (claim_target || git_tree_entry_type(target) == GIT_OBJECT_TREE) {
-            /* Directory export: walk the subtree — or, for a metadata-only
-             * claim, no subtree to walk: any children are claims themselves,
-             * collected by the append below. */
+            /* Directory export: walk the subtree — or, for a metadata-only claim,
+             * no subtree to walk: any children are claims themselves, collected
+             * by the append below. */
             if (to_stdout) {
                 err = ERROR(
                     ERR_INVALID_ARG,
@@ -1025,11 +1025,11 @@ error_t *cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
         if (err) goto cleanup;
     }
 
-    /* The branch's directory claims with no tree entry — an empty tracked
-     * directory holds no blobs, so the walk cannot see it; the metadata item
-     * is its whole footprint. Appended after the walk (nothing tree-backed can
-     * live beneath a blob-less claim, so parents still precede children) and
-     * sorted so creation order and the deepest-first chmod stay coherent. */
+    /* The branch's directory claims with no tree entry — an empty tracked directory
+     * holds no blobs, so the walk cannot see it; the metadata item is its whole
+     * footprint. Appended after the walk (nothing tree-backed can live beneath
+     * a blob-less claim, so parents still precede children) and sorted so creation
+     * order and the deepest-first chmod stay coherent. */
     if (tree_export) {
         size_t appended_from = list.count;
         size_t base_len = claims_base ? strlen(claims_base) : 0;
@@ -1041,8 +1041,8 @@ error_t *cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
 
             const char *rel = key;
             if (base_len > 0) {
-                /* Inside the exported subtree only; the base itself is the
-                 * export root, not a list entry. */
+                /* Inside the exported subtree only; the base itself is the export
+                 * root, not a list entry. */
                 if (strncmp(key, claims_base, base_len) != 0 ||
                     key[base_len] != '/') {
                     continue;
@@ -1139,10 +1139,10 @@ error_t *cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
 
     /* ── Reporting / phase 2 ── */
 
-    /* The counts phrase: files (symlinks included) and the directory claims
-     * this export materializes — the walk's claimed entries, the appended
-     * batch, and (for a subtree export) the root when it is itself a claim.
-     * Scaffolding directories are plumbing, not content: uncounted. */
+    /* The counts phrase: files (symlinks included) and the directory claims this
+     * export materializes — the walk's claimed entries, the appended batch, and
+     * (for a subtree export) the root when it is itself a claim. Scaffolding
+     * directories are plumbing, not content: uncounted. */
     size_t file_count = 0;
     size_t dir_claims = 0;
     for (size_t i = 0; i < list.count; i++) {
@@ -1238,8 +1238,8 @@ cleanup:
  *   <profile> <path> <commit>          three positionals
  *
  * Allocation model mirrors show: refspec strings live in `arena`, pure positionals
- * borrow argv. The destination is settled last: every shape must have named
- * one, and '-' can only stream a single file.
+ * borrow argv. The destination is settled last: every shape must have named one,
+ * and '-' can only stream a single file.
  */
 static error_t *export_post_parse(
     void *opts_v, arena_t *arena, const args_command_t *cmd
@@ -1282,11 +1282,11 @@ static error_t *export_post_parse(
         }
     } else if (strchr(args[0], ':') != NULL) {
         /* Colon-packed refspec first: ':' is never legal in a branch name, so
-         * the token is self-contained and the next positional is the
-         * destination (cp-style; '-o' stays valid as the explicit form). Only
-         * the colon form earns this — every other shape would need a heuristic
-         * on the destination token to distinguish it from a path or commit,
-         * and heuristics on user paths are how silent misroutes happen. */
+         * the token is self-contained and the next positional is the destination
+         * (cp-style; '-o' stays valid as the explicit form). Only the colon form
+         * earns this — every other shape would need a heuristic on the destination
+         * token to distinguish it from a path or commit, and heuristics on user
+         * paths are how silent misroutes happen. */
         refspec_t rs = { 0 };
         error_t *err = parse_refspec(arena, args[0], &rs);
         if (err != NULL) {
@@ -1360,11 +1360,11 @@ static error_t *export_post_parse(
 }
 
 /**
- * What can stand at the cursor, by the shapes export_post_parse reads: a
- * local profile or a refspec first. After `profile:path` the destination, a
- * filesystem path; after a bare profile a file of its branch or a commit;
- * then the commit. An `@` in the token being typed completes its commit
- * part from the profile's history; -o takes a path.
+ * What can stand at the cursor, by the shapes export_post_parse reads: a local
+ * profile or a refspec first. After `profile:path` the destination, a filesystem
+ * path; after a bare profile a file or directory claim of its branch, or a commit;
+ * then the commit. An `@` in the token being typed completes its commit part
+ * from the profile's history; -o takes a path.
  */
 static args_want_t export_complete(
     const void *ctx_v, const void *opts_v, const args_completion_t *at, FILE *out
@@ -1392,6 +1392,7 @@ static args_want_t export_complete(
     const char *profile = completion_profile_of(ctx, o->positional_args[0]);
     if (o->positional_count == 1) {
         completion_refspecs(ctx, out, profile);
+        completion_directories(ctx, out, profile);
         completion_history(ctx, out, profile);
     } else if (o->positional_count == 2) {
         completion_history(ctx, out, profile);

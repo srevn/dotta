@@ -2052,8 +2052,9 @@ static error_t *update_post_parse(
 /**
  * What can stand at the cursor, by the rule update_post_parse routes with: an
  * enabled profile while the first positional is still open and -p has not taken
- * it; at every position a file of the view — narrowed to what the profiles named
- * so far win — or a filesystem path.
+ * it; at every position a path of the view (files, and directory claims as
+ * subtree filters) — narrowed to what the profiles named so far win — or a
+ * filesystem path.
  */
 static args_want_t update_complete(
     const void *ctx_v, const void *opts_v, const args_completion_t *at, FILE *out
@@ -2079,7 +2080,7 @@ static args_want_t update_complete(
             winner_count = 1;
         }
     }
-    completion_files(ctx, out, winners, winner_count);
+    completion_files(ctx, out, winners, winner_count, true);
     return ARGS_WANT_FILES;
 }
 

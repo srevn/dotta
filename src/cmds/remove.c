@@ -1132,8 +1132,8 @@ static error_t *remove_files_from_profile(
 cleanup:
     /* Free all resources in reverse order of allocation. state is borrowed from
      * the dispatcher — do not free it. state_rollback is a no-op if no transaction
-     * is active (state.c:2898-2906), so it safely closes any partially-begun
-     * record-update transaction on error paths. */
+     * is active, so it safely closes any partially-begun record-update transaction
+     * on error paths. */
     state_rollback(state);
     if (anchor_index) hashmap_free(anchor_index, NULL);
     manifest_free(after);
@@ -1732,8 +1732,9 @@ static error_t *remove_post_parse(
 /**
  * What can stand at the cursor, read off the buckets remove_post_parse routes:
  * a local profile in the profile slot — the first positional, unless -p took it
- * — then the files of that profile's branch, shadowed and disabled ones included;
- * nothing after --delete-profile, which takes no path.
+ * — then the claims of that profile's branch, shadowed and disabled ones included:
+ * its files, and its directory claims slash-marked; nothing after --delete-profile,
+ * which takes no path.
  */
 static args_want_t remove_complete(
     const void *ctx_v, const void *opts_v, const args_completion_t *at, FILE *out
@@ -1757,6 +1758,9 @@ static args_want_t remove_complete(
         return ARGS_WANT_NONE;
     }
     completion_refspecs(
+        ctx, out, o->profile ? o->profile : o->positional_args[0]
+    );
+    completion_directories(
         ctx, out, o->profile ? o->profile : o->positional_args[0]
     );
     return ARGS_WANT_NONE;

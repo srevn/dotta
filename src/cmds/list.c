@@ -906,7 +906,7 @@ static args_want_t list_complete(
     }
     if (o->positional_count == 0) {
         completion_profiles(ctx, out, COMPLETION_LOCAL);
-        completion_files(ctx, out, NULL, 0);
+        completion_files(ctx, out, NULL, 0, false);
     } else if (o->positional_count == 1 &&
         !str_looks_like_file_path(o->positional_args[0])) {
         completion_refspecs(ctx, out, o->positional_args[0]);

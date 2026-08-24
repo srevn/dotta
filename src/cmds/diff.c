@@ -1567,9 +1567,10 @@ static error_t *diff_post_parse(
 }
 
 /**
- * What can stand at the cursor: an enabled profile, a file of the view or a commit,
- * in any order, as diff_classify routes them — the view and the histories narrowed
- * to the profiles named so far — or a filesystem path.
+ * What can stand at the cursor: an enabled profile, a path of the view (files,
+ * and directory claims as subtree filters) or a commit, in any order, as
+ * diff_classify routes them — the view and the histories narrowed to the
+ * profiles named so far — or a filesystem path.
  */
 static args_want_t diff_complete(
     const void *ctx_v, const void *opts_v, const args_completion_t *at, FILE *out
@@ -1583,7 +1584,7 @@ static args_want_t diff_complete(
     }
 
     completion_profiles(ctx, out, COMPLETION_ENABLED);
-    completion_files(ctx, out, o->profiles, o->profile_count);
+    completion_files(ctx, out, o->profiles, o->profile_count, true);
     completion_commits(ctx, out, o->profiles, o->profile_count);
     return ARGS_WANT_FILES;
 }

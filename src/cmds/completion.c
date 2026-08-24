@@ -27,6 +27,7 @@
 #include "base/refspec.h"
 #include "base/string.h"
 #include "core/manifest.h"
+#include "core/metadata.h"
 #include "core/profiles.h"
 #include "core/state.h"
 #include "infra/mount.h"
@@ -125,11 +126,12 @@ void completion_remotes(const dotta_ctx_t *ctx, FILE *out) {
 }
 
 /**
- * The view's files, narrowed to the winners named
+ * The view's files, narrowed to the winners named — and, when asked, its
+ * directory claims, slash-marked
  */
 void completion_files(
     const dotta_ctx_t *ctx, FILE *out,
-    char *const *winners, size_t winner_count
+    char *const *winners, size_t winner_count, bool directories
 ) {
     git_repository *repo = ctx->run.repo;
     state_t *state = ctx->run.state;
@@ -146,7 +148,7 @@ void completion_files(
     for (size_t i = 0; i < rows.count; i++) {
         const manifest_row_t *row = rows.entries[i];
 
-        if (row->type == PATH_TYPE_DIRECTORY) {
+        if (row->type == PATH_TYPE_DIRECTORY && !directories) {
             continue;
         }
         /* Winner filter, applied here rather than at the build: one view, one
@@ -158,10 +160,39 @@ void completion_files(
             }
             if (!wanted) continue;
         }
-        fprintf(out, "%s\t%s\n", row->storage_path, row->profile);
+        fprintf(
+            out, "%s%s\t%s\n", row->storage_path,
+            path_kind_suffix(path_type_kind(row->type)), row->profile
+        );
     }
 
     manifest_free(manifest);
+}
+
+/**
+ * A branch's directory claims, read from its metadata rather than the view
+ */
+void completion_directories(
+    const dotta_ctx_t *ctx, FILE *out, const char *branch
+) {
+    git_repository *repo = ctx->run.repo;
+    if (repo == NULL || branch == NULL) return;
+
+    metadata_t *metadata = NULL;
+    error_t *err = metadata_load_from_branch(repo, branch, &metadata);
+    if (err) {
+        error_free(err);  /* not a branch, or no metadata: nothing to offer */
+        return;
+    }
+
+    size_t count = 0;
+    const metadata_item_t *items = metadata_get_all_items(metadata, &count);
+    for (size_t i = 0; i < count; i++) {
+        if (items[i].kind != METADATA_ITEM_DIRECTORY) continue;
+        fprintf(out, "%s/\t%s\n", items[i].key, branch);
+    }
+
+    metadata_free(metadata);
 }
 
 /* Tree-walk state for completion_refspecs. */

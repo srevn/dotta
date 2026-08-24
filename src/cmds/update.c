@@ -19,7 +19,6 @@
 #include "base/args.h"
 #include "base/array.h"
 #include "base/error.h"
-#include "base/hashmap.h"
 #include "base/output.h"
 #include "base/string.h"
 #include "cmds/completion.h"
@@ -237,7 +236,7 @@ typedef struct {
  * capture for a file, the claim capture for a directory, the entry removal
  * for a deletion, the prune for the directory entries dropped as redundant —
  * and read back by the commit message and by the record loop
- * (update_manifest_after_update), so both follow the commit and nothing else:
+ * (update_write_record), so both follow the commit and nothing else:
  * an item the walk skipped (a directory the race guard refused) lands in no
  * list, is not named, and gets no record write.
  *
@@ -300,8 +299,8 @@ static bool is_update_candidate(
                 return false;
             }
             /* A tracked directory whose path is now a file or a symlink is never
-             * captured through the type change (the metadata step refuses it: a
-             * symlink would stat as its target and launder the target's attributes
+             * captured through the type change (the walk's race guard refuses it:
+             * a symlink would stat as its target and launder the target's attributes
              * into metadata). Resolution is explicit — apply --force replaces
              * it, remove untracks it — so it is not a candidate, and the preview
              * does not promise an update the executor would refuse. A file's
@@ -431,73 +430,6 @@ static error_t *filter_items_for_update(
 
     out_items->entries = (const workspace_item_t *const *)
         ptr_array_steal(&matches, &out_items->count);
-
-    return NULL;
-}
-
-/**
- * Group workspace items by profile
- *
- * Creates a hashmap: profile -> ptr_array_t*
- * Each profile gets an array of borrowed item pointers.
- *
- * Uses item->profile string for grouping.
- *
- * @param items Array of workspace item pointers (must not be NULL)
- * @param count Number of items
- * @param out_groups Output hashmap (must not be NULL, caller must free with
- *                   ptr_array_free_cb)
- * @return Error or NULL on success
- */
-static error_t *group_items_by_profile(
-    const workspace_item_t **items,
-    size_t count,
-    hashmap_t **out_groups
-) {
-    CHECK_NULL(items);
-    CHECK_NULL(out_groups);
-
-    hashmap_t *groups = hashmap_borrow(32);
-    if (!groups) {
-        return ERROR(ERR_MEMORY, "Failed to create profile groups hashmap");
-    }
-
-    for (size_t i = 0; i < count; i++) {
-        const workspace_item_t *item = items[i];
-        const char *profile = item->profile;
-
-        if (!profile) {
-            /* Defensive: skip items with no profile name */
-            continue;
-        }
-
-        /* Get or create array for this profile */
-        ptr_array_t *array = hashmap_get(groups, profile);
-
-        if (!array) {
-            /* Create new array for this profile */
-            array = ptr_array_new(0);
-            if (!array) {
-                hashmap_free(groups, ptr_array_free_cb);
-                return ERROR(ERR_MEMORY, "Failed to allocate item array");
-            }
-
-            error_t *err = hashmap_set(groups, profile, array);
-            if (err) {
-                ptr_array_free(array);
-                hashmap_free(groups, ptr_array_free_cb);
-                return error_wrap(err, "Failed to add profile group to hashmap");
-            }
-        }
-
-        error_t *err = ptr_array_push(array, item);
-        if (err) {
-            hashmap_free(groups, ptr_array_free_cb);
-            return error_wrap(err, "Failed to grow item array");
-        }
-    }
-
-    *out_groups = groups;
 
     return NULL;
 }
@@ -968,16 +900,18 @@ cleanup:
 }
 
 /**
- * Write the record after a successful update operation
+ * Write the record for the commits that landed
  *
- * Called after ALL profile updates succeed. The view is computed, so nothing
+ * Called over the commits that landed — error or no: a later profile's failure
+ * invalidates nothing about an earlier profile's landed commit, so the record
+ * follows each one. The view is computed, so nothing
  * projects; what update writes is the one thing only it knows about the paths
  * it committed — read off each commit's own bookkeeping (update_commit_t), so a
- * path a step skipped gets no record write. A modified or new file was captured
+ * path the walk skipped gets no record write. A modified or new file was captured
  * FROM disk, so for the row its profile won in the post-commit view the record
  * advances to the just-committed blob with the stat the copy took (the next status
  * takes the fast path). A path the commit let go — a deleted item, or a directory
- * entry the metadata step pruned as redundant — left Git by this commit: with
+ * entry the walk's prune dropped as redundant — left Git by this commit: with
  * no row left at the path its record retires (nothing backs it now); with a lower
  * profile's row at the path it is a fallback — the record stays and reads
  * [reassigned] until apply deploys it. The rule "anchor only the rows this profile
@@ -994,7 +928,7 @@ cleanup:
  *   4. Set *out_updated = true
  *
  * Preconditions:
- *   - All profile updates already succeeded (Git commits done)
+ *   - Every entry in commits is a landed Git commit
  *   - the run's state is a live handle (DB open), borrowed from the dispatcher
  *   - commits is what update_execute_for_all_profiles returned
  *
@@ -1014,12 +948,13 @@ cleanup:
  * @param ctx Dispatch context (must not be NULL; the repository, the state
  *            handle and the mount table come off the run, the view is built
  *            into ctx->arena)
- * @param commits One commit's bookkeeping per profile (may be NULL when count is 0)
+ * @param commits One commit's bookkeeping per landed commit (may be NULL when
+ *                count is 0)
  * @param commit_count Number of commits
  * @param out_updated Output flag: true if the record was written (must not be NULL)
  * @return Error or NULL on success
  */
-static error_t *update_manifest_after_update(
+static error_t *update_write_record(
     const dotta_ctx_t *ctx,
     const update_commit_t *commits,
     size_t commit_count,
@@ -1156,24 +1091,38 @@ cleanup:
 }
 
 /**
- * Execute profile updates for all profiles
+ * Execute profile updates, in enabled-set order
  *
- * PERFORMANCE NOTE: This function creates a single shared worktree and reuses
- * it for all profile updates, eliminating expensive worktree creation/destruction
- * overhead. Each profile is checked out into the same worktree before updating.
+ * Creates a single shared worktree and reuses it for every profile update,
+ * eliminating expensive worktree creation/destruction overhead. Each profile
+ * is checked out into the same worktree before updating.
+ *
+ * Profiles are walked in enabled-set order — the model's one canonical
+ * profile order — so multi-profile runs commit, report, and (on a stop)
+ * strand in one predictable sequence; within a profile, items keep filter
+ * order. Every item's profile is in the enabled set by construction (the
+ * view is built from it), so the per-profile gather drops nothing.
+ *
+ * The commits that landed cross the error boundary: out_commits receives one
+ * bookkeeping entry per landed commit, handed to the caller even when a later
+ * profile fails, so the record write follows what Git shows. A profile that
+ * committed nothing — a walk that touched nothing, or a failure before its
+ * commit — contributes no entry.
  *
  * @param ctx Dispatch context (must not be NULL; the run's repository carries
  *            the shared worktree, the copy step reads the key and the
  *            encryption policy)
  * @param ws Workspace (must not be NULL; threaded to the walk for view-row
  *           reads)
+ * @param enabled The enabled set, in order (must not be NULL)
  * @param update_items Pre-filtered items to update (must not be NULL)
  * @param update_count Number of items
  * @param opts Update options (must not be NULL)
- * @param total_updated Output: total items updated across all profiles (must
+ * @param total_updated Output: total items committed across all profiles (must
  *                      not be NULL)
- * @param out_commits Output: one commit's bookkeeping per profile group (must
- *                    not be NULL; caller frees with update_commits_free)
+ * @param out_commits Output: one commit's bookkeeping per landed commit; set
+ *                    even on error (must not be NULL; caller frees with
+ *                    update_commits_free)
  * @param out_commit_count Output: number of entries in out_commits (must not be
  *                         NULL)
  * @return Error or NULL on success
@@ -1181,6 +1130,7 @@ cleanup:
 static error_t *update_execute_for_all_profiles(
     const dotta_ctx_t *ctx,
     const workspace_t *ws,
+    const string_array_t *enabled,
     const workspace_item_t **update_items,
     size_t update_count,
     const cmd_update_options_t *opts,
@@ -1190,6 +1140,7 @@ static error_t *update_execute_for_all_profiles(
 ) {
     CHECK_NULL(ctx);
     CHECK_NULL(ws);
+    CHECK_NULL(enabled);
     CHECK_NULL(update_items);
     CHECK_NULL(opts);
     CHECK_NULL(total_updated);
@@ -1207,9 +1158,7 @@ static error_t *update_execute_for_all_profiles(
         return NULL;
     }
 
-    /* Initialize all resources to NULL for goto cleanup */
     worktree_handle_t *wt = NULL;
-    hashmap_t *by_profile = NULL;
     update_commit_t *commits = NULL;
     size_t commit_count = 0;
     error_t *err = NULL;
@@ -1220,30 +1169,30 @@ static error_t *update_execute_for_all_profiles(
         return error_wrap(err, "Failed to create temporary worktree");
     }
 
-    /* Group items by profile */
-    err = group_items_by_profile(update_items, update_count, &by_profile);
-    if (err) {
-        err = error_wrap(err, "Failed to group items by profile");
-        goto cleanup;
-    }
-
-    /* One commit's bookkeeping per group, zero-filled for update_profile */
-    commits = calloc(hashmap_size(by_profile), sizeof(update_commit_t));
+    /* One bookkeeping slot per enabled profile — an upper bound; only landed
+     * commits fill one. */
+    commits = calloc(enabled->count, sizeof(update_commit_t));
     if (!commits) {
         err = ERROR(ERR_MEMORY, "Failed to allocate commit bookkeeping");
         goto cleanup;
     }
 
-    /* Update each profile using iterator. Profile names come from workspace items
-     * which are already validated against the enabled profile set during
-     * workspace_load. */
-    hashmap_iter_t iter;
-    hashmap_iter_init(&iter, by_profile);
-    const char *profile;
-    void *value;
+    for (size_t p = 0; p < enabled->count; p++) {
+        const char *profile = enabled->items[p];
 
-    while (hashmap_iter_next(&iter, &profile, &value)) {
-        ptr_array_t *array = value;
+        /* This profile's items, in filter order */
+        ptr_array_t group PTR_ARRAY_AUTO = { 0 };
+        for (size_t i = 0; i < update_count; i++) {
+            if (strcmp(update_items[i]->profile, profile) == 0) {
+                err = ptr_array_push(&group, update_items[i]);
+                if (err) {
+                    goto cleanup;
+                }
+            }
+        }
+        if (group.count == 0) {
+            continue;
+        }
 
         /* Display profile header */
         output_section(
@@ -1258,44 +1207,50 @@ static error_t *update_execute_for_all_profiles(
                 err, "Failed to checkout profile '%s'",
                 profile
             );
-            break;
+            goto cleanup;
         }
 
         /* Update this profile using shared worktree */
+        update_commit_t bookkeeping = { 0 };
         size_t processed = 0;
         err = update_profile(
-            ctx, ws, wt, profile, (const workspace_item_t **) array->items,
-            array->count, opts, &commits[commit_count], &processed
+            ctx, ws, wt, profile, (const workspace_item_t **) group.items,
+            group.count, opts, &bookkeeping, &processed
         );
-        commit_count++;
+
+        if (!err && processed > 0) {
+            /* The commit landed: its bookkeeping is the record write's now */
+            commits[commit_count++] = bookkeeping;
+            *total_updated += processed;
+
+            if (!output_is_verbose(out)) {
+                output_styled(
+                    out, OUTPUT_NORMAL, "  {green}✓{reset} Updated %zu item%s\n",
+                    processed, processed == 1 ? "" : "s"
+                );
+            }
+        } else {
+            /* No commit landed — a walk that touched nothing, or a failure
+             * before the commit: the bookkeeping describes nothing */
+            free(bookkeeping.captured);
+            ptr_array_deinit(&bookkeeping.deleted);
+            string_array_deinit(&bookkeeping.pruned);
+        }
 
         if (err) {
             err = error_wrap(
                 err, "Failed to update profile '%s'",
                 profile
             );
-            break;
-        }
-
-        *total_updated += processed;
-
-        if (!output_is_verbose(out) && processed > 0) {
-            output_styled(
-                out, OUTPUT_NORMAL, "  {green}✓{reset} Updated %zu item%s\n",
-                processed, processed == 1 ? "" : "s"
-            );
+            goto cleanup;
         }
     }
 
 cleanup:
-    /* Pass the commits to the caller (for the record), or free on error */
-    if (err) {
-        update_commits_free(commits, commit_count);
-    } else {
-        *out_commits = commits;
-        *out_commit_count = commit_count;
-    }
-    if (by_profile) hashmap_free(by_profile, ptr_array_free_cb);
+    /* The commits that landed cross the error boundary: the caller writes the
+     * record for them either way */
+    *out_commits = commits;
+    *out_commit_count = commit_count;
     if (wt) worktree_cleanup(&wt);
 
     return err;
@@ -1830,7 +1785,7 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
      *
      * State is borrowed from the dispatcher (ctx->run.state). Read-only analysis.
      * The transaction for the record write opens later in
-     * update_manifest_after_update().
+     * update_write_record().
      */
     workspace_load_t ws_opts = {
         .analyze_files       = true,                    /* Detect content and metadata changes */
@@ -1855,7 +1810,7 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
      * seed the fast path.
      *
      * Files actually updated by this command get their anchor advanced separately
-     * inside update_manifest_after_update(); this flush covers the clean files
+     * inside update_write_record(); this flush covers the clean files
      * the analysis verified but didn't modify. */
     error_t *flush_err = workspace_flush_updates(ws);
     if (flush_err) {
@@ -2053,35 +2008,36 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
             break;
     }
 
-    /* Execute profile updates. Filtered to operation scope. ctx->run.keymgr is borrowed
-     * by the copy step inside per-profile iteration. */
+    /* Execute profile updates, in enabled-set order. Filtered to operation
+     * scope. ctx->run.keymgr is borrowed by the copy step inside per-profile
+     * iteration. */
     update_commit_t *commits = NULL;
-    size_t updated_profile_count = 0;
+    size_t commit_count = 0;
     err = update_execute_for_all_profiles(
-        ctx, ws, (const workspace_item_t **) update_items.entries,
+        ctx, ws, scope_enabled(scope),
+        (const workspace_item_t **) update_items.entries,
         update_items.count, opts,
-        &total_updated, &commits, &updated_profile_count
+        &total_updated, &commits, &commit_count
     );
-    if (err) {
-        goto cleanup;
-    }
 
-    /* Write the record
+    /* Write the record — for the commits that landed, error or no
      *
      * Captured files get their record advanced because UPDATE captures them FROM
      * the filesystem (already at target locations); the view itself is computed
-     * at every load and needs no update.
+     * at every load and needs no update. A mid-sequence stop above changes
+     * nothing here: the landed commits are Git truth and the record follows
+     * them; the profiles that never committed have nothing to write.
      *
      * Non-fatal: if the record write fails, Git commits still succeeded; the
      * next status re-confirms the captured files on its slow path.
      */
     bool manifest_updated = false;
-    error_t *manifest_err = update_manifest_after_update(
-        ctx, commits, updated_profile_count, &manifest_updated
+    error_t *manifest_err = update_write_record(
+        ctx, commits, commit_count, &manifest_updated
     );
 
     /* The bookkeeping has served the record */
-    update_commits_free(commits, updated_profile_count);
+    update_commits_free(commits, commit_count);
 
     if (manifest_err) {
         /* Non-fatal: commits succeeded but the record write failed. The next
@@ -2099,15 +2055,29 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
         /* Continue to post-update hook and success output */
     }
 
+    if (err) {
+        /* The executor stopped mid-sequence. The commits that landed are
+         * recorded (just above); say so before reporting the stop, so the
+         * ✓ lines above are accounted for. */
+        if (manifest_updated && commit_count > 0) {
+            output_info(
+                out, OUTPUT_NORMAL,
+                "Manifest updated (%zu item%s synced)",
+                total_updated, total_updated == 1 ? "" : "s"
+            );
+        }
+        goto cleanup;
+    }
+
     /* Execute post-update hook */
     hook_fire_post(config, out, repo_path, &hook_inv);
 
-    /* Summary (report updated profile count) */
+    /* Summary (report landed commits) */
     output_newline(out, OUTPUT_NORMAL);
     output_success(
         out, OUTPUT_NORMAL, "Updated %zu item%s across %zu profile%s",
         total_updated, total_updated == 1 ? "" : "s",
-        updated_profile_count, updated_profile_count == 1 ? "" : "s"
+        commit_count, commit_count == 1 ? "" : "s"
     );
 
     /* Record feedback. The failure case already said what happened (warning

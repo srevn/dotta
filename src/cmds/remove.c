@@ -1,5 +1,5 @@
 /**
- * remove.c - Remove files from profiles or delete profiles
+ * remove.c - Remove paths from profiles or delete profiles
  */
 
 #include "cmds/remove.h"
@@ -12,6 +12,7 @@
 #include <string.h>
 #include <unistd.h>
 
+#include "base/arena.h"
 #include "base/args.h"
 #include "base/array.h"
 #include "base/error.h"
@@ -66,34 +67,58 @@ static error_t *validate_options(const cmd_remove_options_t *opts) {
 }
 
 /**
- * Resolve input paths to storage paths
+ * One claim of the profile branch: a tracked path in storage terms, either kind
+ * — a tree blob (FILE) or a metadata directory item (DIRECTORY).
  *
- * Accepts both filesystem paths and storage paths as input. Uses hashmap for
- * O(M+N) performance instead of O(N×M) nested loops.
+ * The branch's claims are the argument universe of a removal — never the view:
+ * a disabled profile's paths must stay removable (the view holds only enabled
+ * profiles), an unbound custom claim too (the view refuses it), and a shadowed
+ * claim is still the branch's to remove (the view is precedence-resolved).
+ */
+typedef struct {
+    const char *storage_path;      /* arena */
+    const char *filesystem_path;   /* arena; the storage path itself when this
+                                    * machine cannot project the claim */
+    path_kind_t kind;
+} removal_claim_t;
+
+/**
+ * Resolve the arguments to the claims they remove
  *
- * Complexity: O(M) to build index + O(N) to process inputs = O(M+N) Old
- * implementation: O(N×M) with nested loops
+ * Accepts both filesystem paths and storage paths as input. Each argument matches
+ * claims of either kind: the exact claim and — at a '/' boundary, never a false
+ * prefix like home/dir2 for home/dir — every claim beneath it (naming a directory
+ * means untracking it whole). A claim is removed once, however many arguments
+ * match it.
+ *
+ * The claims array starts as everything the branch holds, in branch order (the
+ * tree's blobs, then the directory items); the arguments mark what they take,
+ * and the array compacts to just that. The filesystem path is filled at compaction
+ * — it is display and record plumbing, not resolution: when this machine cannot
+ * project a claim, the storage path stands in and removal proceeds regardless.
  *
  * @param ctx Dispatch context (must not be NULL). ctx->run.mounts covers HOME,
  *            ROOT, and every enabled profile's binding. Unenabled-profile lookups
- *            (custom/X) surface MOUNT_RESOLVE_UNBOUND, which the caller handles
+ *            (custom/X) surface MOUNT_RESOLVE_UNBOUND, which the compaction handles
  *            as "no filesystem path on this machine".
+ * @param claims_out The claims the arguments took, borrowed from ctx->arena (do
+ *            not free)
  */
-static error_t *resolve_paths_to_remove(
+static error_t *resolve_removal_claims(
     const dotta_ctx_t *ctx,
     const char *profile,
     char **input_paths,
     size_t path_count,
-    string_array_t **storage_paths_out,
-    string_array_t **filesystem_paths_out,
-    const cmd_remove_options_t *opts
+    const cmd_remove_options_t *opts,
+    removal_claim_t **claims_out,
+    size_t *count_out
 ) {
     CHECK_NULL(ctx);
     CHECK_NULL(profile);
     CHECK_NULL(input_paths);
-    CHECK_NULL(storage_paths_out);
-    CHECK_NULL(filesystem_paths_out);
     CHECK_NULL(opts);
+    CHECK_NULL(claims_out);
+    CHECK_NULL(count_out);
 
     git_repository *repo = ctx->run.repo;
     const mount_table_t *mounts = ctx->run.mounts;
@@ -101,43 +126,89 @@ static error_t *resolve_paths_to_remove(
 
     /* Initialize all resources to NULL for safe cleanup */
     error_t *err = NULL;
-    string_array_t *storage_paths = NULL;
-    string_array_t *filesystem_paths = NULL;
     string_array_t *profile_files = NULL;
-    hashmap_t *profile_files_map = NULL;
+    metadata_t *metadata = NULL;
+    const metadata_item_t **dir_items = NULL;
 
-    /* Allocate arrays */
-    storage_paths = string_array_new(0);
-    filesystem_paths = string_array_new(0);
-    if (!storage_paths || !filesystem_paths) {
-        err = ERROR(ERR_MEMORY, "Failed to allocate path arrays");
-        goto cleanup;
-    }
-
-    /* Get list of files in profile */
+    /* The branch's claims: the tree's blobs, then the metadata's directory
+     * claims. */
     err = profile_list_files(repo, profile, &profile_files);
     if (err) {
-        err = error_wrap(err, "Failed to list files in profile");
-        goto cleanup;
+        return error_wrap(err, "Failed to list files in profile");
     }
 
-    /* Build hashmap index for O(1) lookups */
-    profile_files_map = hashmap_borrow(profile_files->count);
-    if (!profile_files_map) {
-        err = ERROR(ERR_MEMORY, "Failed to create profile files index");
-        goto cleanup;
+    err = metadata_load_from_branch(repo, profile, &metadata);
+    if (err) {
+        if (err->code != ERR_NOT_FOUND) {
+            err = error_wrap(
+                err, "Failed to load metadata for profile '%s'", profile
+            );
+            goto cleanup;
+        }
+        /* No metadata file: no directory claims */
+        error_free(err);
+        err = NULL;
     }
 
-    for (size_t i = 0; i < profile_files->count; i++) {
-        const char *file = profile_files->items[i];
-        err = hashmap_set(profile_files_map, file, (void *) 1);  /* Dummy value */
-        if (err) {
-            err = error_wrap(err, "Failed to index profile files");
+    size_t dir_count = 0;
+    if (metadata) {
+        dir_items = metadata_get_items_by_kind(
+            metadata, METADATA_ITEM_DIRECTORY, &dir_count
+        );
+    }
+
+    removal_claim_t *claims = NULL;
+    bool *taken = NULL;            /* beside claims[j]: an argument took it */
+    size_t claim_count = 0;
+    if (profile_files->count + dir_count > 0) {
+        claims = arena_alloc(
+            ctx->arena,
+            (profile_files->count + dir_count) * sizeof(removal_claim_t)
+        );
+        taken = arena_calloc(
+            ctx->arena, profile_files->count + dir_count, sizeof(bool)
+        );
+        if (!claims || !taken) {
+            err = ERROR(ERR_MEMORY, "Failed to allocate claims array");
             goto cleanup;
         }
     }
 
-    /* Process each input path */
+    for (size_t i = 0; i < profile_files->count; i++) {
+        const char *copy = arena_strdup(ctx->arena, profile_files->items[i]);
+        if (!copy) {
+            err = ERROR(ERR_MEMORY, "Failed to copy claim path");
+            goto cleanup;
+        }
+        claims[claim_count++] = (removal_claim_t) {
+            .storage_path = copy, .kind = PATH_KIND_FILE
+        };
+    }
+
+    for (size_t i = 0; i < dir_count; i++) {
+        const char *key = dir_items[i]->key;
+
+        /* Same-profile rule as the view's claim routine (manifest.c): a key the
+         * tree holds as a blob cannot also stand as a directory claim — the tree's
+         * blob outranks the stale item. Keeps every claim path unique, so one
+         * argument takes one claim. */
+        bool held_as_blob = false;
+        for (size_t j = 0; j < profile_files->count && !held_as_blob; j++) {
+            held_as_blob = strcmp(profile_files->items[j], key) == 0;
+        }
+        if (held_as_blob) continue;
+
+        const char *copy = arena_strdup(ctx->arena, key);
+        if (!copy) {
+            err = ERROR(ERR_MEMORY, "Failed to copy claim path");
+            goto cleanup;
+        }
+        claims[claim_count++] = (removal_claim_t) {
+            .storage_path = copy, .kind = PATH_KIND_DIRECTORY
+        };
+    }
+
+    /* Match each argument, marking the claims it takes */
     for (size_t i = 0; i < path_count; i++) {
         const char *input_path = input_paths[i];
         const char *storage_path = NULL;
@@ -158,138 +229,81 @@ static error_t *resolve_paths_to_remove(
             continue;
         }
 
-        /* Try to get filesystem path for output. UNBOUND fires when the profile
-         * has no --target on this machine; the storage path serves as fallback.
-         * Genuine resolve errors (malformed input, OOM) are also non-fatal here
-         * — same fallback. */
-        mount_resolve_outcome_t canonical_outcome;
-        const char *canonical = NULL;
-        error_t *convert_err = mount_resolve(
-            mounts, profile, storage_path, ctx->arena,
-            &canonical_outcome, &canonical
-        );
-        if (convert_err) {
-            error_free(convert_err);
-            canonical = NULL;
-        } else if (canonical_outcome == MOUNT_RESOLVE_UNBOUND) {
-            canonical = NULL;
-        }
-
-        /* Find all files that match this path (exact match or directory prefix) */
-        size_t matches_found = 0;
         size_t storage_path_len = strlen(storage_path);
+        size_t matches_found = 0;
 
-        /* Check exact match first - O(1) with hashmap */
-        if (hashmap_has(profile_files_map, storage_path)) {
-            err = string_array_push(storage_paths, storage_path);
-            if (!err) {
-                /* If filesystem path unavailable (custom/ without prefix context),
-                 * fall back to storage path. Downstream consumers handle
-                 * gracefully: state lookups return "not found", display shows
-                 * storage format. */
-                err = string_array_push(filesystem_paths, canonical ? canonical : storage_path);
-            }
-
-            if (err) {
-                err = error_wrap(err, "Failed to track path for removal");
-                goto cleanup;
-            }
+        for (size_t j = 0; j < claim_count; j++) {
+            /* The exact claim, or one beneath it at a directory boundary */
+            if (!str_starts_with(claims[j].storage_path, storage_path)) continue;
+            char boundary = claims[j].storage_path[storage_path_len];
+            if (boundary != '\0' && boundary != '/') continue;
 
             matches_found++;
-        }
-
-        /* Check for directory prefix matches - requires iteration */
-        for (size_t j = 0; j < profile_files->count; j++) {
-            const char *profile_file = profile_files->items[j];
-
-            /* Skip if already matched as exact */
-            if (strcmp(profile_file, storage_path) == 0) {
-                continue;
-            }
-
-            /* Directory prefix match */
-            if (str_starts_with(profile_file, storage_path)) {
-                /* Ensure it's a directory boundary */
-                if (profile_file[storage_path_len] == '/') {
-                    /* Reconstruct filesystem path for this file. UNBOUND fires
-                     * when the profile has no --target on this machine — fall
-                     * back to the storage path so the hook context still names
-                     * the file. */
-                    mount_resolve_outcome_t file_outcome;
-                    const char *file_fs_path = NULL;
-                    err = mount_resolve(
-                        mounts, profile, profile_file, ctx->arena,
-                        &file_outcome, &file_fs_path
-                    );
-                    if (err) {
-                        if (opts->verbose || !opts->force) {
-                            output_warning(
-                                out, OUTPUT_NORMAL,
-                                "Failed to resolve filesystem path for '%s': %s",
-                                profile_file, error_message(err)
-                            );
-                        }
-                        error_free(err);
-                        err = NULL;
-                        continue;
-                    }
-                    bool bound = (file_outcome == MOUNT_RESOLVE_BOUND);
-
-                    err = string_array_push(storage_paths, profile_file);
-                    if (!err) {
-                        err = string_array_push(
-                            filesystem_paths,
-                            bound ? file_fs_path : profile_file
-                        );
-                    }
-
-                    if (err) {
-                        err = error_wrap(err, "Failed to track path for removal");
-                        goto cleanup;
-                    }
-                    matches_found++;
-                }
-            }
+            taken[j] = true;
         }
 
         if (matches_found == 0) {
             if (!opts->force) {
                 err = ERROR(
-                    ERR_NOT_FOUND, "File '%s' not found in profile '%s'\n"
-                    "Hint: Use 'dotta list --profile %s' to see tracked files",
+                    ERR_NOT_FOUND, "Path '%s' not found in profile '%s'\n"
+                    "Hint: Use 'dotta list --profile %s' to see tracked paths",
                     storage_path, profile, profile
                 );
                 goto cleanup;
             }
             /* With --force, warn and skip */
             output_warning(
-                out, OUTPUT_VERBOSE, "File '%s' not found in profile, skipping",
+                out, OUTPUT_VERBOSE, "Path '%s' not found in profile, skipping",
                 storage_path
             );
         }
     }
 
-    /* Check if we found any files */
-    if (storage_paths->count == 0) {
+    /* Compact to the taken claims and fill their filesystem paths — the path as
+     * this profile deploys the claim, for display and the hook context. UNBOUND
+     * fires when the profile has no --target on this machine; genuine resolve
+     * errors (malformed storage, OOM) are non-fatal here too — the storage path
+     * serves as fallback either way, and downstream consumers handle it gracefully:
+     * state lookups return "not found", display shows storage format. */
+    size_t taken_count = 0;
+    for (size_t j = 0; j < claim_count; j++) {
+        if (!taken[j]) continue;
+
+        mount_resolve_outcome_t outcome;
+        const char *fs_path = NULL;
+        error_t *resolve_err = mount_resolve(
+            mounts, profile, claims[j].storage_path, ctx->arena,
+            &outcome, &fs_path
+        );
+        if (resolve_err) {
+            error_free(resolve_err);
+            fs_path = NULL;
+        } else if (outcome == MOUNT_RESOLVE_UNBOUND) {
+            fs_path = NULL;
+        }
+
+        claims[j].filesystem_path = fs_path ? fs_path : claims[j].storage_path;
+        claims[taken_count++] = claims[j];
+    }
+
+    /* Check if the arguments took any claims */
+    if (taken_count == 0) {
         err = ERROR(
-            ERR_NOT_FOUND, "No files found to remove from profile '%s'",
+            ERR_NOT_FOUND, "No paths found to remove from profile '%s'",
             profile
         );
         goto cleanup;
     }
 
-    /* Success - transfer ownership to caller */
-    *storage_paths_out = storage_paths;
-    *filesystem_paths_out = filesystem_paths;
-    storage_paths = NULL;      /* Prevent cleanup */
-    filesystem_paths = NULL;   /* Prevent cleanup */
+    /* Success - the claims are arena-backed, nothing transfers */
+    *claims_out = claims;
+    *count_out = taken_count;
 
 cleanup:
     /* Free all resources */
-    if (profile_files_map) hashmap_free(profile_files_map, NULL);
+    free(dir_items);
+    if (metadata) metadata_free(metadata);
     if (profile_files) string_array_free(profile_files);
-    if (storage_paths) string_array_free(storage_paths);
-    if (filesystem_paths) string_array_free(filesystem_paths);
 
     return err;
 }
@@ -348,15 +362,20 @@ static error_t *remove_file_from_worktree(
 }
 
 /**
- * Analyze multi-profile conflicts for files to be removed
+ * Analyze multi-profile conflicts for claims to be removed
  *
- * Checks each file against all other profiles and determines:
+ * Checks each file claim against all other profiles and determines:
  * - Which other profiles contain the file
  * - Whether the file is owned by another profile in the view — the enabled set's
  *   precedence gives the path to a profile other than the one the user is removing
  *   from, so the removal changes nothing on disk
  *
- * Performance: O(M×P + N) where M=profiles, P=avg files/profile, N=files checked
+ * Directory claims are not in the file index and get no cross-profile warning:
+ * the record step's fallback detection covers the semantic half (a lower enabled
+ * profile still claiming the path keeps the record, which reads [reassigned]
+ * until apply).
+ *
+ * Performance: O(M×P + N) where M=profiles, P=avg files/profile, N=claims checked
  * Uses centralized profile_build_file_index() for optimal performance.
  *
  * Hands the profile file index (storage_path → the other profiles claiming it)
@@ -365,16 +384,15 @@ static error_t *remove_file_from_worktree(
  */
 static error_t *analyze_multi_profile_conflicts(
     const dotta_ctx_t *ctx,
-    const string_array_t *storage_paths,
-    const string_array_t *filesystem_paths,
+    const removal_claim_t *claims,
+    size_t claim_count,
     const char *current_profile,
     hashmap_t **profile_index_out,
     size_t *multi_profile_count_out,
     bool *has_deployed_from_other_out
 ) {
     CHECK_NULL(ctx);
-    CHECK_NULL(storage_paths);
-    CHECK_NULL(filesystem_paths);
+    CHECK_NULL(claims);
     CHECK_NULL(current_profile);
     CHECK_NULL(profile_index_out);
     CHECK_NULL(multi_profile_count_out);
@@ -394,13 +412,13 @@ static error_t *analyze_multi_profile_conflicts(
     size_t multi_profile_count = 0;
     bool has_deployed_from_other = false;
 
-    /* Check each file using O(1) index lookups */
-    for (size_t i = 0; i < storage_paths->count; i++) {
-        const char *filesystem_path = filesystem_paths->items[i];
+    /* Check each claim using O(1) index lookups */
+    for (size_t i = 0; i < claim_count; i++) {
+        const removal_claim_t *claim = &claims[i];
 
         /* Lookup profiles containing this file - O(1) */
         string_array_t *indexed_profiles = hashmap_get(
-            profile_index, storage_paths->items[i]
+            profile_index, claim->storage_path
         );
         if (!indexed_profiles || indexed_profiles->count == 0) {
             continue;
@@ -410,8 +428,8 @@ static error_t *analyze_multi_profile_conflicts(
         /* Check if another profile owns the path in the view. Only valid with
          * actual filesystem paths (absolute), not storage path fallbacks (relative,
          * e.g., "home/.bashrc"). */
-        if (filesystem_path[0] == '/') {
-            const manifest_row_t *row = manifest_lookup(view, filesystem_path);
+        if (claim->filesystem_path[0] == '/') {
+            const manifest_row_t *row = manifest_lookup(view, claim->filesystem_path);
             if (row && strcmp(row->profile, current_profile) != 0) {
                 has_deployed_from_other = true;
             }
@@ -433,8 +451,8 @@ static error_t *analyze_multi_profile_conflicts(
  */
 static void display_multi_profile_warnings(
     output_t *out,
-    const string_array_t *storage_paths,
-    const string_array_t *filesystem_paths,
+    const removal_claim_t *claims,
+    size_t claim_count,
     const hashmap_t *profile_index,
     size_t multi_profile_count,
     bool has_deployed_from_other,
@@ -449,18 +467,17 @@ static void display_multi_profile_warnings(
     );
 
     /* Display each multi-profile file */
-    for (size_t i = 0; i < storage_paths->count; i++) {
+    for (size_t i = 0; i < claim_count; i++) {
         const string_array_t *others = hashmap_get(
-            profile_index, storage_paths->items[i]
+            profile_index, claims[i].storage_path
         );
         if (!others || others->count == 0) {
             continue;
         }
 
-        const char *fs_path = filesystem_paths->items[i];
         output_styled(
             out, OUTPUT_NORMAL, "  {yellow}%s{reset} also in:",
-            fs_path
+            claims[i].filesystem_path
         );
 
         for (size_t j = 0; j < others->count; j++) {
@@ -500,15 +517,38 @@ static void display_multi_profile_warnings(
 }
 
 /**
+ * Format a claim count for display: "2 files", "1 directory", or "2 files and 1
+ * directory". The directory half appears only when dirs is non-zero, so file-only
+ * wordings stay exactly what they were. Three distant sites print the phrase
+ * (the dry-run total, the confirmation prompt, the receipt) and tests pin the
+ * wording — one spelling.
+ */
+static void format_claim_counts(
+    char *buf, size_t size, size_t files, size_t dirs
+) {
+    if (dirs == 0) {
+        snprintf(buf, size, "%zu file%s", files, files == 1 ? "" : "s");
+    } else if (files == 0) {
+        snprintf(buf, size, "%zu director%s", dirs, dirs == 1 ? "y" : "ies");
+    } else {
+        snprintf(
+            buf, size, "%zu file%s and %zu director%s",
+            files, files == 1 ? "" : "s", dirs, dirs == 1 ? "y" : "ies"
+        );
+    }
+}
+
+/**
  * Confirm removal operation
  */
 static bool confirm_removal(
-    const string_array_t *storage_paths,
+    const removal_claim_t *claims,
+    size_t claim_count,
     const cmd_remove_options_t *opts,
     const config_t *config,
     output_t *out
 ) {
-    if (!storage_paths || !opts || !out) {
+    if (!claims || !opts || !out) {
         return false;
     }
 
@@ -522,8 +562,6 @@ static bool confirm_removal(
         return true;
     }
 
-    size_t count = storage_paths->count;
-
     /* Check config threshold */
     size_t threshold = 5; /* Default threshold */
     if (config->confirm_destructive) {
@@ -531,23 +569,31 @@ static bool confirm_removal(
     }
 
     /* No confirmation needed for small operations below threshold */
-    if (count < threshold) {
+    if (claim_count < threshold) {
         return true;
     }
+
+    size_t files = 0, dirs = 0;
+    for (size_t i = 0; i < claim_count; i++) {
+        if (claims[i].kind == PATH_KIND_DIRECTORY) dirs++;
+        else files++;
+    }
+    char counts[64];
+    format_claim_counts(counts, sizeof(counts), files, dirs);
 
     /* Prompt user */
     char prompt[512];
     if (opts->delete_files) {
         snprintf(
-            prompt, sizeof(prompt), "Remove %zu file%s from profile '%s'?\n"
+            prompt, sizeof(prompt), "Remove %s from profile '%s'?\n"
             "(Deployed files will be pruned on 'dotta apply')",
-            count, count == 1 ? "" : "s", opts->profile
+            counts, opts->profile
         );
     } else {
         snprintf(
-            prompt, sizeof(prompt), "Remove %zu file%s from profile '%s'?\n"
+            prompt, sizeof(prompt), "Remove %s from profile '%s'?\n"
             "(Deployed files will be released from management)",
-            count, count == 1 ? "" : "s", opts->profile
+            counts, opts->profile
         );
     }
 
@@ -791,8 +837,8 @@ static error_t *remove_files_from_profile(
 
     /* Initialize all resources to NULL for safe cleanup */
     error_t *err = NULL;
-    string_array_t *storage_paths = NULL;
-    string_array_t *filesystem_paths = NULL;
+    removal_claim_t *claims = NULL;        /* arena — the resolver's */
+    size_t claim_count = 0;
     hashmap_t *profile_index = NULL;       /* storage_path → the other profiles claiming it (owned) */
     size_t multi_profile_count = 0;
     worktree_handle_t *wt = NULL;
@@ -809,10 +855,10 @@ static error_t *remove_files_from_profile(
         output_set_verbosity(out, OUTPUT_QUIET);
     }
 
-    /* Resolve paths */
-    err = resolve_paths_to_remove(
-        ctx, opts->profile, opts->paths, opts->path_count, &storage_paths,
-        &filesystem_paths, opts
+    /* Resolve the arguments to the claims they remove */
+    err = resolve_removal_claims(
+        ctx, opts->profile, opts->paths, opts->path_count, opts,
+        &claims, &claim_count
     );
     if (err) {
         goto cleanup;
@@ -822,8 +868,8 @@ static error_t *remove_files_from_profile(
     bool has_deployed_from_other = false;
     err = analyze_multi_profile_conflicts(
         ctx,
-        storage_paths,
-        filesystem_paths,
+        claims,
+        claim_count,
         opts->profile,
         &profile_index,
         &multi_profile_count,
@@ -842,8 +888,8 @@ static error_t *remove_files_from_profile(
     /* Display multi-profile warnings BEFORE any operation */
     display_multi_profile_warnings(
         out,
-        storage_paths,
-        filesystem_paths,
+        claims,
+        claim_count,
         profile_index,
         multi_profile_count,
         has_deployed_from_other,
@@ -852,20 +898,24 @@ static error_t *remove_files_from_profile(
 
     /* Dry run - just show what would be removed */
     if (opts->dry_run) {
+        size_t dry_files = 0, dry_dirs = 0;
         output_print(
             out, OUTPUT_NORMAL, "Would remove from profile '%s':\n",
             opts->profile
         );
-        for (size_t i = 0; i < storage_paths->count; i++) {
+        for (size_t i = 0; i < claim_count; i++) {
             output_print(
-                out, OUTPUT_NORMAL, "  - %s\n",
-                storage_paths->items[i]
+                out, OUTPUT_NORMAL, "  - %s%s\n",
+                claims[i].storage_path, path_kind_suffix(claims[i].kind)
             );
+            if (claims[i].kind == PATH_KIND_DIRECTORY) dry_dirs++;
+            else dry_files++;
         }
+        char counts[64];
+        format_claim_counts(counts, sizeof(counts), dry_files, dry_dirs);
         output_print(
-            out, OUTPUT_NORMAL, "\nTotal: %zu file%s would be removed from profile\n",
-            storage_paths->count,
-            storage_paths->count == 1 ? "" : "s"
+            out, OUTPUT_NORMAL, "\nTotal: %s would be removed from profile\n",
+            counts
         );
         if (opts->delete_files) {
             output_print(
@@ -881,7 +931,7 @@ static error_t *remove_files_from_profile(
     }
 
     /* Confirm operation */
-    if (!confirm_removal(storage_paths, opts, config, out)) {
+    if (!confirm_removal(claims, claim_count, opts, config, out)) {
         output_print(out, OUTPUT_NORMAL, "Cancelled\n");
         goto cleanup;  /* err is NULL, will return success */
     }
@@ -890,15 +940,25 @@ static error_t *remove_files_from_profile(
     hashmap_free(profile_index, string_array_free_cb);
     profile_index = NULL;
 
-    /* Build hook invocation with filesystem paths (resolved by
-     * resolve_paths_to_remove). Reached only on non-dry-run: the dry-run branch
+    /* Build hook invocation with the claims' filesystem paths (resolved by
+     * resolve_removal_claims). Reached only on non-dry-run: the dry-run branch
      * above early-cleanups before this point, so dry_run is always false here
      * in practice — still passed for honesty. */
+    char **hook_paths = arena_alloc(ctx->arena, claim_count * sizeof(char *));
+    if (!hook_paths) {
+        err = ERROR(ERR_MEMORY, "Failed to allocate hook path array");
+        goto cleanup;
+    }
+    for (size_t i = 0; i < claim_count; i++) {
+        /* Arena-backed and never written through; the cast bridges the hook
+         * contract's char *const *. */
+        hook_paths[i] = (char *) claims[i].filesystem_path;
+    }
     const hook_invocation_t hook_inv = {
         .cmd        = HOOK_CMD_REMOVE,
         .profile    = opts->profile,
-        .files      = filesystem_paths->items,
-        .file_count = filesystem_paths->count,
+        .files      = hook_paths,
+        .file_count = claim_count,
         .dry_run    = opts->dry_run,
     };
 
@@ -932,51 +992,60 @@ static error_t *remove_files_from_profile(
         goto cleanup;
     }
 
-    /* Remove each file from worktree, tracking which files are actually removed */
-    size_t removed_count = 0;
+    /* Remove each claim, tracking which are actually removed. A FILE claim leaves
+     * the worktree checkout and its index entry; a DIRECTORY claim has no tree
+     * entry and no checkout presence — its whole Git footprint is the metadata
+     * item, which the metadata step below removes. */
+    size_t removed_files = 0, removed_dirs = 0;
     removed_paths = string_array_new(0);
     if (!removed_paths) {
         err = ERROR(ERR_MEMORY, "Failed to allocate removed paths array");
         goto cleanup;
     }
 
-    for (size_t i = 0; i < storage_paths->count; i++) {
-        const char *storage_path = storage_paths->items[i];
+    for (size_t i = 0; i < claim_count; i++) {
+        const removal_claim_t *claim = &claims[i];
 
-        /* Interactive mode: prompt for each file */
+        /* Interactive mode: prompt for each claim */
         if (opts->interactive) {
             char prompt[PATH_MAX + 16];
-            snprintf(prompt, sizeof(prompt), "Remove %s?", storage_path);
+            snprintf(
+                prompt, sizeof(prompt), "Remove %s%s?",
+                claim->storage_path, path_kind_suffix(claim->kind)
+            );
             if (!output_confirm(out, prompt, false)) {
-                output_info(out, OUTPUT_VERBOSE, "Skipped: %s", storage_path);
+                output_info(out, OUTPUT_VERBOSE, "Skipped: %s", claim->storage_path);
                 continue;
             }
         }
 
-        err = remove_file_from_worktree(wt, storage_path, opts, out);
-        if (err) {
-            /* If interactive or force, continue on error */
-            if (opts->interactive || opts->force) {
-                output_warning(out, OUTPUT_NORMAL, "%s", error_message(err));
-                error_free(err);
-                err = NULL;
-                continue;
+        if (claim->kind == PATH_KIND_FILE) {
+            err = remove_file_from_worktree(wt, claim->storage_path, opts, out);
+            if (err) {
+                /* If interactive or force, continue on error */
+                if (opts->interactive || opts->force) {
+                    output_warning(out, OUTPUT_NORMAL, "%s", error_message(err));
+                    error_free(err);
+                    err = NULL;
+                    continue;
+                }
+                /* Otherwise, abort */
+                goto cleanup;
             }
-            /* Otherwise, abort */
-            goto cleanup;
         }
 
-        err = string_array_push(removed_paths, storage_path);
+        err = string_array_push(removed_paths, claim->storage_path);
         if (err) {
             err = error_wrap(err, "Failed to track removed path");
             goto cleanup;
         }
-        removed_count++;
+        if (claim->kind == PATH_KIND_DIRECTORY) removed_dirs++;
+        else removed_files++;
     }
 
     /* Nothing was removed (e.g., all declined in interactive mode) */
-    if (removed_count == 0) {
-        output_info(out, OUTPUT_NORMAL, "No files removed");
+    if (removed_files + removed_dirs == 0) {
+        output_info(out, OUTPUT_NORMAL, "Nothing removed");
         goto cleanup;
     }
 
@@ -1142,9 +1211,11 @@ static error_t *remove_files_from_profile(
 
     /* Success */
     if (!opts->quiet) {
+        char counts[64];
+        format_claim_counts(counts, sizeof(counts), removed_files, removed_dirs);
         output_success(
-            out, OUTPUT_NORMAL, "Removed %zu file%s from profile '%s'",
-            removed_count, removed_count == 1 ? "" : "s", opts->profile
+            out, OUTPUT_NORMAL, "Removed %s from profile '%s'",
+            counts, opts->profile
         );
         if (opts->delete_files) {
             output_info(
@@ -1170,8 +1241,6 @@ cleanup:
     if (removed_paths) string_array_free(removed_paths);
     if (wt) worktree_cleanup(&wt);
     if (profile_index) hashmap_free(profile_index, string_array_free_cb);
-    if (filesystem_paths) string_array_free(filesystem_paths);
-    if (storage_paths) string_array_free(storage_paths);
 
     return err;
 }
@@ -1788,17 +1857,18 @@ static const args_opt_t remove_opts[] = {
 
 const args_command_t spec_remove = {
     .name         = "remove",
-    .summary      = "Remove files from a profile or delete profile",
+    .summary      = "Remove paths from a profile or delete profile",
     .usage        =
         "%s remove [options] <profile> <path>...\n"
         "   or: %s remove [options] <profile> --delete-profile\n"
         "   or: %s remove [options] --profile <name> <path>...",
     .description  =
-        "Untrack files from a profile, optionally scheduling removal of\n"
-        "the deployed copies, or delete the profile branch outright.\n",
+        "Untrack paths — files and tracked directories — from a profile,\n"
+        "optionally scheduling removal of the deployed copies, or delete\n"
+        "the profile branch outright.\n",
     .notes        =
         "Operation Modes:\n"
-        "  (default)           Remove files from the profile branch. Deployed\n"
+        "  (default)           Remove paths from the profile branch. Deployed\n"
         "                      items are released from management and stay\n"
         "                      on the filesystem untouched.\n"
         "  --delete-files      Same as default, plus stage the deployed\n"

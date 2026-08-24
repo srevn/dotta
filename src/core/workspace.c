@@ -83,8 +83,8 @@ struct workspace {
     arena_t *arena;                              /* Borrowed; backs every workspace-lifetime string */
 
     /* The view: every enabled profile at HEAD, built by the dispatcher at the
-     * start of the command and borrowed here (ctx->run.manifest — its rows are the
-     * command arena's, its index the dispatcher's to release). Rows are
+     * start of the command and borrowed here (ctx->run.manifest — its rows are
+     * the command arena's, its index the dispatcher's to release). Rows are
      * read-only for the whole run — the record a writer patches lives in the
      * anchors snapshot below, never in a row. The view's own index answers
      * workspace_lookup: a path is one managed thing, and every lookup tests
@@ -289,8 +289,8 @@ error_t *check_item_metadata_divergence(
  *
  * Every string is borrowed for the workspace's lifetime: a row's (the view, arena),
  * a record's (the anchors snapshot, arena), the untracked scan's arena copies,
- * or — the profile of an untracked item — the view's profile list (arena).
- * Nothing is copied here.
+ * or — the profile of an untracked item — the view's profile list (arena). Nothing
+ * is copied here.
  *
  * @param ws Workspace context (must not be NULL)
  * @param filesystem_path Target path on filesystem (must not be NULL)
@@ -538,15 +538,16 @@ static error_t *analyze_file_divergence(
     if (occupant == FS_OCCUPANT_UNKNOWN) {
         /* Inaccessible, not absent (EACCES, ELOOP, EIO; ENOTDIR is absence —
          * fs_lstat_occupant reads it so). Same policy as the orphan path below:
-         * assume the path is there and record the uncertainty, rather than
-         * failing the load and taking every other managed path down with one
-         * unreadable one.
+         * assume the path is there and record the uncertainty, rather than failing
+         * the load and taking every other managed path down with one unreadable
+         * one. The content phase honours the same policy for the look it makes:
+         * a blob it cannot load, decrypt, or compare maps to CMP_UNVERIFIED at
+         * the call, never out of the load.
          *
          * DEPLOYED is the load-bearing half — absence must never be inferred
-         * from a failure to look, or update commits a deletion that never
-         * happened. UNVERIFIED keeps consumers conservative: apply retries
-         * the write and surfaces the real errno, cleanup's UNVERIFIED skip
-         * blocks removal.
+         * from a failure to look, or update commits a deletion that never happened.
+         * UNVERIFIED keeps consumers conservative: apply retries the write and
+         * surfaces the real errno, cleanup's UNVERIFIED skip blocks removal.
          *
          * Returns here because every phase below needs a valid stat. */
         return workspace_add_diverged(
@@ -730,7 +731,15 @@ static error_t *analyze_file_divergence(
             }
 
             if (err) {
-                return error_wrap(err, "Failed to verify '%s'", fs_path);
+                /* A failed look, not a verdict — the orphan analyzer's cause
+                 * list (missing key, wrong passphrase, cipher-version skew, I/O
+                 * error, missing blob) and the same word. The path is there (the
+                 * lstat said so); only the look at its content failed, and a
+                 * failed look is never fatal to the load. The CMP_UNVERIFIED
+                 * arm below routes it; the confirmation and base-question gates
+                 * between read EQUAL and DIFFERENT, so they skip themselves. */
+                error_free(err);
+                cmp_result = CMP_UNVERIFIED;
             }
 
             /* Slow path confirmed disk == expected blob — confirm the record
@@ -797,30 +806,37 @@ static error_t *analyze_file_divergence(
                 break;
 
             case CMP_TYPE_DIFF:
-                /* Type differs (file vs symlink) - this is a blocking condition.
-                 * Return immediately with TYPE divergence. */
+                /* The occupant is not the row's kind (file ↔ symlink, or a
+                 * directory, FIFO, socket or device standing on the row) — a
+                 * blocking condition: return immediately with TYPE divergence.
+                 * The derived reassignment pair rides along, the same shape as
+                 * every early return, so a pending handover does not vanish behind
+                 * a type change. */
                 return workspace_add_diverged(
-                    ws, fs_path, storage_path, profile, NULL, WORKSPACE_STATE_DEPLOYED,
-                    DIVERGENCE_TYPE, PATH_KIND_FILE, occupant, false
+                    ws, fs_path, storage_path, profile, old_profile, WORKSPACE_STATE_DEPLOYED,
+                    DIVERGENCE_TYPE, PATH_KIND_FILE, occupant, profile_changed
                 );
 
             case CMP_MISSING:
                 /* File was deleted during analysis (rare edge case). With stat
                  * propagation this case is unlikely but kept for robustness.
-                 * The observation is the compare's now: absent. Skip the
-                 * permission checks below. */
+                 * The observation is the compare's now: absent. Skip the permission
+                 * checks below. */
                 occupant = FS_OCCUPANT_NONE;
                 break;
 
             case CMP_UNVERIFIED:
-                /* Verification could not be completed.
-                 *
-                 * This is a defensive fallback for rare edge cases where comparison
-                 * could not determine file state. Accumulate UNVERIFIED flag
-                 * and continue to permission checks.
-                 */
-                divergence |= DIVERGENCE_UNVERIFIED;
-                break;
+                /* The failed look, mapped above — no compare path returns this
+                 * verdict itself. UNVERIFIED alone, the unstattable arm's shape:
+                 * the stat is valid so the mode checks below could run, but every
+                 * consumer reads UNVERIFIED first, so accumulated bits would
+                 * change nothing; the orphan slice already answers a failed look
+                 * this way, and one policy beats two. */
+                return workspace_add_diverged(
+                    ws, fs_path, storage_path, profile, old_profile,
+                    WORKSPACE_STATE_DEPLOYED, DIVERGENCE_UNVERIFIED,
+                    PATH_KIND_FILE, occupant, profile_changed
+                );
         }
 
         /* PERMISSION CHECKING: Two-phase approach
@@ -1056,11 +1072,11 @@ static divergence_type_t compute_orphan_divergence(
              * - I/O error reading blob from git
              * - Blob missing from repository (corruption)
              *
-             * Conservative approach: return UNVERIFIED so the user sees [orphaned,
-             * unverified] and can investigate, rather than a false [orphaned,
-             * clean] or noisy [orphaned, modified]. */
+             * The active analyzer maps its content-phase errors the same way
+             * (analyze_file_divergence): same causes, same word. The CMP_UNVERIFIED
+             * arm below routes it. */
             error_free(err);
-            return DIVERGENCE_UNVERIFIED;
+            cmp_result = CMP_UNVERIFIED;
         }
     }
 
@@ -1105,14 +1121,12 @@ static divergence_type_t compute_orphan_divergence(
             break;
 
         case CMP_UNVERIFIED:
-            /* Verification could not be completed.
-             *
-             * This is a defensive fallback for rare edge cases where comparison
-             * could not determine file state. Accumulate UNVERIFIED flag and
-             * continue to permission checks.
-             */
-            divergence |= DIVERGENCE_UNVERIFIED;
-            break;
+            /* The failed look, mapped above — no compare path returns this verdict
+             * itself. Conservative: the user sees [orphaned, unverified] and
+             * investigates, rather than a false [orphaned, clean] or noisy
+             * [orphaned, modified]; metadata checks on content dotta could not
+             * read would say nothing more. */
+            return DIVERGENCE_UNVERIFIED;
     }
 
     /* Step 5: Permission checking (two-phase, if file still exists)
@@ -1409,14 +1423,13 @@ static error_t *compute_orphan_authority(
  *   - the occupant's kind: a directory where dotta's file was, or anything but
  *     a directory where dotta's directory was, is a path dotta's copy has left
  *     — what dotta put there is gone, the same sentence as LOST below — and the
- *     node in its place is not dotta's to remove: unlink cannot take a
- *     directory, rmdir cannot take a file, and nothing authorizes either.
- *     Released, tagged [type]. Decided ahead of the prune order and the gate,
- *     because an order to prune a copy that is no longer there is moot and no
- *     tree needs asking. A file ↔ symlink ↔ device swap is not this: unlink
- *     undoes a one-node swap under --force, and the divergence names it TYPE.
- *     An occupant that could not be stat'd is not judged — it may be dotta's
- *     own directory, unreachable;
+ *     node in its place is not dotta's to remove: unlink cannot take a directory,
+ *     rmdir cannot take a file, and nothing authorizes either. Released, tagged
+ *     [type]. Decided ahead of the prune order and the gate, because an order
+ *     to prune a copy that is no longer there is moot and no tree needs asking.
+ *     A file ↔ symlink ↔ device swap is not this: unlink undoes a one-node swap
+ *     under --force, and the divergence names it TYPE. An occupant that could
+ *     not be stat'd is not judged — it may be dotta's own directory, unreachable;
  *   - the prune order (remove --delete-files): the user chose the fate of the
  *     deployed copy, and Git is not asked. Honoured only with a reference to
  *     measure the copy against — a directory (cleanup's emptiness rule decides)
@@ -1434,16 +1447,16 @@ static error_t *compute_orphan_authority(
  *     alone (RELEASED); BACKED (a disabled profile, a moved target) is dotta's
  *     to prune, divergence permitting; UNVERIFIED holds the orphan until Git
  *     answers — either kind: LOST would retire the record, BACKED would remove
- *     the copy, and neither is a guess to make about an empty directory any
- *     more than about a file.
+ *     the copy, and neither is a guess to make about an empty directory any more
+ *     than about a file.
  * Divergence for a prunable file is disk against what dotta last deployed — the
  * record (compute_orphan_divergence). A prunable directory's verdict is cleanup's
  * emptiness rule, so there is nothing to measure, only whether it can be: a
  * directory dotta cannot stat or cannot read — the path, or a component above
  * it — is UNVERIFIED, the bit an unstattable file carries, and held until the
- * user can say what is in it. That is one access(2) per present directory
- * orphan; the readdir itself stays cleanup's, because what is left in a
- * directory depends on the plan.
+ * user can say what is in it. That is one access(2) per present directory orphan;
+ * the readdir itself stays cleanup's, because what is left in a directory depends
+ * on the plan.
  *
  * This enables status to predict apply behavior (cleanup_verdict reads the same
  * item, and cleanup_skip_reason maps the same bits to the skip):
@@ -1455,9 +1468,9 @@ static error_t *compute_orphan_authority(
  *   (with DIVERGENCE_TYPE) another kind of path stands there; apply releases
  *
  * Presence comes first, so an absent record never reaches a RELEASED arm: whatever
- * Git would have said, it reads [orphaned] [absent] and apply reclaims it.
- * The occupant travels with the item for cleanup's verdict phase, which reads
- * the same observation.
+ * Git would have said, it reads [orphaned] [absent] and apply reclaims it. The
+ * occupant travels with the item for cleanup's verdict phase, which reads the
+ * same observation.
  */
 static error_t *analyze_orphans(workspace_t *ws) {
     CHECK_NULL(ws);
@@ -1486,10 +1499,10 @@ static error_t *analyze_orphans(workspace_t *ws) {
         /* Single stat capture, reused for type verification, content comparison,
          * and metadata checks — eliminates redundant lstat syscalls. One rule
          * for every orphan, whatever its kind: FS_OCCUPANT_NONE is the orphan
-         * already removed by hand (or a component above it no longer a
-         * directory) — a reclaim; FS_OCCUPANT_UNKNOWN (EACCES, EIO, ELOOP, …)
-         * is assumed present but leaves no usable stat, so a file's divergence
-         * cannot be computed and becomes UNVERIFIED below:
+         * already removed by hand (or a component above it no longer a directory)
+         * — a reclaim; FS_OCCUPANT_UNKNOWN (EACCES, EIO, ELOOP, …) is assumed
+         * present but leaves no usable stat, so a file's divergence cannot be
+         * computed and becomes UNVERIFIED below:
          * - Status shows [orphaned, unverified] (user visibility)
          * - Apply skips removal (can't verify what we can't stat)
          */
@@ -1505,9 +1518,9 @@ static error_t *analyze_orphans(workspace_t *ws) {
             !git_oid_is_zero(&anchor->blob_oid);
 
         /* Whether another kind of path stands where dotta's copy was (see the
-         * doc above): a directory at a file record's path, anything but a
-         * directory at a directory record's. An occupant that could not be
-         * stat'd is not judged. */
+         * doc above): a directory at a file record's path, anything but a directory
+         * at a directory record's. An occupant that could not be stat'd is not
+         * judged. */
         bool displaced = (kind == PATH_KIND_FILE)
             ? (occupant == FS_OCCUPANT_DIRECTORY)
             : (occupant != FS_OCCUPANT_DIRECTORY && occupant != FS_OCCUPANT_UNKNOWN);
@@ -1561,10 +1574,10 @@ static error_t *analyze_orphans(workspace_t *ws) {
         }
 
         if (measure) {
-            /* A file: disk against what dotta last deployed. A directory:
-             * nothing to measure — cleanup's emptiness rule decides — only
-             * whether it can be: one dotta cannot stat or cannot read is held,
-             * as an unstattable file is, until the user can say what is in it. */
+            /* A file: disk against what dotta last deployed. A directory: nothing
+             * to measure — cleanup's emptiness rule decides — only whether it
+             * can be: one dotta cannot stat or cannot read is held, as an
+             * unstattable file is, until the user can say what is in it. */
             if (kind == PATH_KIND_FILE) {
                 divergence = (occupant != FS_OCCUPANT_UNKNOWN)
                     ? compute_orphan_divergence(ws, anchor, &orphan_stat)
@@ -1716,8 +1729,8 @@ static error_t *scan_directory_for_untracked(
         }
 
         /* Build both names: the filesystem path, and the storage path beneath
-         * the row's — the tracked directory is the authority for what lies
-         * under it. */
+         * the row's — the tracked directory is the authority for what lies under
+         * it. */
         char *full_path = str_format("%s/%s", dir_path, entry->d_name);
         char *storage_path = str_format("%s/%s", storage_prefix, entry->d_name);
         if (!full_path || !storage_path) {
@@ -1738,10 +1751,9 @@ static error_t *scan_directory_for_untracked(
             continue;
         }
 
-        /* Check if ignored: the rules on the mount-relative path; where no
-         * layer decided, the source tree's .gitignore on the filesystem path
-         * (its root is that repo's) — the lowest layer, so a `!` rule above
-         * it wins. */
+        /* Check if ignored: the rules on the mount-relative path; where no layer
+         * decided, the source tree's .gitignore on the filesystem path (its root
+         * is that repo's) — the lowest layer, so a `!` rule above it wins. */
         bool is_dir = (occupant == FS_OCCUPANT_DIRECTORY);
         gitignore_match_t match;
         gitignore_eval(rules, mount_strip_label(storage_path), is_dir, &match);
@@ -2044,8 +2056,8 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
          * - NONE: Directory truly deleted, or a component above it is not a
          *   directory — nothing can be at the path either
          * - UNKNOWN: Inaccessible — state undeterminable, not absent
-         * - Anything but DIRECTORY: Type changed (file, symlink - including
-         *   broken ones)
+         * - Anything but DIRECTORY: Type changed (file, symlink - including broken
+         *   ones)
          * - DIRECTORY: Actual directory, check metadata */
         struct stat dir_stat;
         fs_occupant_t occupant = fs_lstat_occupant(filesystem_path, &dir_stat);
@@ -2053,8 +2065,8 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
         if (occupant == FS_OCCUPANT_NONE) {
             /* Absent path: record-gated classification. An observed directory
              * was deleted by the user (update propagates the removal); a
-             * never-observed one was never there — apply's job is to create
-             * it, never to commit a phantom deletion. */
+             * never-observed one was never there — apply's job is to create it,
+             * never to commit a phantom deletion. */
             err = workspace_add_diverged(
                 ws,
                 filesystem_path,
@@ -2320,14 +2332,14 @@ static int compare_rows_by_path(const void *a, const void *b) {
 /**
  * Slice the view by kind, snapshot the record, and set the orphans aside
  *
- * The join at the centre of every load. The expected side — every enabled
- * profile at HEAD, both kinds, one row per path — is ws->manifest, the
- * dispatcher's view; its rows are split into ws->active_files / ws->active_dirs
- * (+ counts) and each slice is sorted by filesystem_path. Then the anchors
- * snapshot (state_get_all_anchors) is indexed by path as ws->anchor_index — the
- * analyses pair each row with its record through workspace_get_anchor, and the
- * two writers patch the index's values — and every record whose path the view
- * lacks is collected into ws->orphans, in the snapshot's path order.
+ * The join at the centre of every load. The expected side — every enabled profile
+ * at HEAD, both kinds, one row per path — is ws->manifest, the dispatcher's view;
+ * its rows are split into ws->active_files / ws->active_dirs (+ counts) and each
+ * slice is sorted by filesystem_path. Then the anchors snapshot
+ * (state_get_all_anchors) is indexed by path as ws->anchor_index — the analyses
+ * pair each row with its record through workspace_get_anchor, and the two writers
+ * patch the index's values — and every record whose path the view lacks is
+ * collected into ws->orphans, in the snapshot's path order.
  *
  * The partition is the single source of truth for "is this row in scope?": a
  * path is managed iff the view has a row for it, and a record is an orphan iff
@@ -2461,29 +2473,30 @@ error_t *workspace_load(
     error_t *err = NULL;
 
     /* The workspace's profile set is the view's — the persistent enabled set
-     * the view was built over, never a CLI filter: `dotta status -p global`
-     * loads the whole workspace and filters at display time. */
+     * the view was built over, never a CLI filter: `dotta status -p global` loads
+     * the whole workspace and filters at display time. */
     err = workspace_create_empty(repo, manifest, &ws);
     if (err) {
         return err;
     }
 
     /* Borrow caller-owned resources. Lifetime guarantees: state comes from
-     * ctx->run.state (command-scoped); content_cache comes from ctx->run.content_cache
-     * (command-scoped, wraps ctx->run.keymgr); manifest is ctx->run.manifest (the view
-     * the dispatcher built over the enabled set, command-scoped); arena is
-     * ctx->arena (command-scoped). All four must outlive workspace_free. */
+     * ctx->run.state (command-scoped); content_cache comes from
+     * ctx->run.content_cache (command-scoped, wraps ctx->run.keymgr); manifest
+     * is ctx->run.manifest (the view the dispatcher built over the enabled set,
+     * command-scoped); arena is ctx->arena (command-scoped). All four must outlive
+     * workspace_free. */
     ws->state = state;
     ws->content_cache = content_cache;
     ws->manifest = manifest;
     ws->arena = arena;
 
-    /* Slice the view, snapshot the record and set the orphans aside. The
-     * partition populates workspace fields directly; consumers read via
-     * workspace_files() / workspace_directories() / workspace_lookup() and pair
-     * rows with their records through workspace_get_anchor(). The view was
-     * computed from Git at dispatch, so it is current by construction — nothing
-     * upstream repairs anything. */
+    /* Slice the view, snapshot the record and set the orphans aside. The partition
+     * populates workspace fields directly; consumers read via workspace_files()
+     * / workspace_directories() / workspace_lookup() and pair rows with their
+     * records through workspace_get_anchor(). The view was computed from Git at
+     * dispatch, so it is current by construction — nothing upstream repairs
+     * anything. */
     err = workspace_partition(ws);
     if (err) {
         workspace_free(ws);
@@ -2786,11 +2799,10 @@ bool workspace_item_extract_display_info(
             }
 
             if (item->divergence & DIVERGENCE_UNVERIFIED) {
-                /* Verification could not be completed (rare edge case).
-                 *
-                 * Cannot verify content match, so marked for conservative handling
-                 * (redeployment on apply, skipped removal for orphans).
-                 */
+                /* The failed look: an unstattable path, or content that could
+                 * not be loaded, decrypted, or compared. Conservative handling
+                 * downstream (update refuses it, apply surfaces the real error,
+                 * cleanup skips the orphan). */
                 if (tag_count < WORKSPACE_ITEM_MAX_DISPLAY_TAGS) {
                     tags_out[tag_count++] = "unverified";
                 }
@@ -2859,10 +2871,10 @@ bool workspace_item_extract_display_info(
                 *color_out = OUTPUT_COLOR_MAGENTA;
 
             } else if (item->divergence & DIVERGENCE_TYPE) {
-                /* A file ↔ symlink ↔ device swap at the path (a directory in
-                 * a file's place is released, not orphaned). Apply skips it
-                 * (cleanup_skip_reason: TYPE_CHANGED); the DEPLOYED arm and
-                 * apply's preview use the same word. */
+                /* A file ↔ symlink ↔ device swap at the path (a directory in a
+                 * file's place is released, not orphaned). Apply skips it
+                 * (cleanup_skip_reason: TYPE_CHANGED); the DEPLOYED arm and apply's
+                 * preview use the same word. */
                 if (tag_count < WORKSPACE_ITEM_MAX_DISPLAY_TAGS) {
                     tags_out[tag_count++] = "type";
                 }
@@ -2912,11 +2924,11 @@ bool workspace_item_extract_display_info(
             break;
 
         case WORKSPACE_STATE_RELEASED:
-            /* Released from management — Git let the path go, dotta never
-             * deployed it, or another kind of path stands in its place. The
-             * path is left on disk, the record retires. Always present: the
-             * orphan analysis decides presence first, so an absent record never
-             * reaches this state. */
+            /* Released from management — Git let the path go, dotta never deployed
+             * it, or another kind of path stands in its place. The path is left
+             * on disk, the record retires. Always present: the orphan analysis
+             * decides presence first, so an absent record never reaches this
+             * state. */
             if (tag_count < WORKSPACE_ITEM_MAX_DISPLAY_TAGS) {
                 tags_out[tag_count++] = "released";
             }

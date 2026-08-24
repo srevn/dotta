@@ -20,25 +20,24 @@
  *   accessors (workspace_files, workspace_directories, workspace_lookup,
  *   workspace_get_anchor) rather than building a view or calling
  *   state_get_all_anchors themselves. The view has no writer: it is current by
- *   construction and nothing invalidates it. The record has two writers while
- *   a workspace is live, workspace_observe and workspace_anchor, each of which
+ *   construction and nothing invalidates it. The record has two writers while a
+ *   workspace is live, workspace_observe and workspace_anchor, each of which
  *   patches the snapshot it persists through (the flush's confirmations patch
- *   inline, in this file); retirements (state_retire_anchor, from apply's
- *   record step and the verbs) go to the database directly — no later reader
- *   in the run consults a retired path.
+ *   inline, in this file); retirements (state_retire_anchor, from apply's record
+ *   step and the verbs) go to the database directly — no later reader in the
+ *   run consults a retired path.
  *
  *   Exception: paths that load no workspace (the verbs — add, update, remove —
- *   profile enable / disable, sync's --force arm, completion) read the
- *   dispatcher's view or build their own with manifest_build, and write the
- *   record through state.h directly; no snapshot exists for them to desync.
+ *   profile enable / disable, sync's --force arm, completion) read the dispatcher's
+ *   view or build their own with manifest_build, and write the record through
+ *   state.h directly; no snapshot exists for them to desync.
  *
  *   The workspace's products (rows, records, verdicts) are read through the
- *   workspace; the run's resources (the repository, the content cache) are
- *   read through the dispatch context, at every layer — the workspace borrows
- *   them for its own reads and lends none of them (include/runtime.h, "Members
- *   not welcome" #3). A core step that acts on the workspace's plan and reads
- *   Git or content takes those handles by name beside the workspace
- *   (deploy_execute).
+ *   workspace; the run's resources (the repository, the content cache) are read
+ *   through the dispatch context, at every layer — the workspace borrows them
+ *   for its own reads and lends none of them (include/runtime.h, "Members not
+ *   welcome" #3). A core step that acts on the workspace's plan and reads Git
+ *   or content takes those handles by name beside the workspace (deploy_execute).
  */
 
 #ifndef DOTTA_WORKSPACE_H
@@ -79,14 +78,13 @@
  * The occupant is the analysis's one observation of the disk, carried as the
  * sys layer names it rather than folded to a presence bit: what the analyzer's
  * lstat found at the path — the link itself, never its target. FS_OCCUPANT_NONE
- * is absence; FS_OCCUPANT_UNKNOWN is a path the analyzer could not stat and
- * assumes present (absence is never inferred from a failure to look; the item
- * carries DIVERGENCE_UNVERIFIED beside it). Presence is therefore
- * `occupant != FS_OCCUPANT_NONE`. The divergence bits are the verdict over
- * that observation (DIVERGENCE_TYPE: the occupant is not the row's or the
- * record's kind); every consumer that once re-probed the path to learn its
- * type reads this field instead, so status, deploy and cleanup cannot see three
- * different occupants at one path.
+ * is absence; FS_OCCUPANT_UNKNOWN is a path the analyzer could not stat and assumes
+ * present (absence is never inferred from a failure to look; the item carries
+ * DIVERGENCE_UNVERIFIED beside it). Presence is therefore `occupant !=
+ * FS_OCCUPANT_NONE`. The divergence bits are the verdict over that observation
+ * (DIVERGENCE_TYPE: the occupant is not the row's or the record's kind); every
+ * consumer that once re-probed the path to learn its type reads this field instead,
+ * so status, deploy and cleanup cannot see three different occupants at one path.
  */
 typedef struct {
     char *filesystem_path;      /* Target path on filesystem (borrowed) */
@@ -184,18 +182,18 @@ typedef struct {
  * appeared in directories previously added via 'dotta add').
  *
  * The workspace is scoped to the persistent enabled profile set — the view is
- * built over exactly those profiles, and a record under any other profile is
- * an orphan. This enforces the invariant that workspace loading uses the
- * persistent enabled set rather than any CLI filter (operations like `dotta
- * status -p global` still load the full workspace and apply the filter at
- * display time via scope_accepts_profile).
+ * built over exactly those profiles, and a record under any other profile is an
+ * orphan. This enforces the invariant that workspace loading uses the persistent
+ * enabled set rather than any CLI filter (operations like `dotta status -p global`
+ * still load the full workspace and apply the filter at display time via
+ * scope_accepts_profile).
  *
- * Profile set: the view's (manifest_profiles — the enabled profiles whose
- * branch existed at build, in precedence order), read for the orphan label's
- * membership set and the untracked scan's order. The view itself is the
- * dispatcher's, built over the enabled set at the start of the command and
- * borrowed here — one tree walk per enabled profile, once per command — so
- * the workspace borrows nothing a caller must keep alive beside it.
+ * Profile set: the view's (manifest_profiles — the enabled profiles whose branch
+ * existed at build, in precedence order), read for the orphan label's membership
+ * set and the untracked scan's order. The view itself is the dispatcher's, built
+ * over the enabled set at the start of the command and borrowed here — one tree
+ * walk per enabled profile, once per command — so the workspace borrows nothing
+ * a caller must keep alive beside it.
  *
  * @param repo Git repository (must not be NULL)
  * @param state State handle (must not be NULL, borrowed from caller;
@@ -206,8 +204,8 @@ typedef struct {
  *              `ctx->run.content_cache` under a spec that declares crypto)
  * @param manifest The view over the enabled set (must not be NULL; borrowed —
  *                 lifetime must extend past workspace_free. `ctx->run.manifest`,
- *                 which the command's spec declares with `.manifest`; no
- *                 command mutates Git or the enabled set between dispatch and
+ *                 which the command's spec declares with `.manifest`; no command
+ *                 mutates Git or the enabled set between dispatch and
  *                 workspace_load, so it is current)
  * @param options Analysis options (must not be NULL)
  * @param arena Borrowed allocator backing every workspace-lifetime string (the
@@ -236,7 +234,7 @@ error_t *workspace_load(
  * - WORKSPACE_DIRTY: Has work for apply (undeployed, modified, deleted, stale,
  *   reassigned, orphaned, released, untracked items)
  * - WORKSPACE_INVALID: Has an item the analysis could not verify
- *   (DIVERGENCE_UNVERIFIED) — apply skips it; the user must look
+ *   (DIVERGENCE_UNVERIFIED) — no verb resolves it; the user must look
  *
  * @param ws Workspace (must not be NULL)
  * @return Status enum
@@ -439,9 +437,9 @@ bool workspace_item_extract_display_info(
  * Single entry point for every workspace-scope observation: the flush
  * (workspace_flush_updates — rows found on disk with no record during analysis,
  * either kind). That is the one producer of observations, because the analysis
- * is where presence is established: every active path present at load has a
- * record once the flush has run, and a path the run makes afterwards is an
- * ownership event (workspace_anchor), not an observation.
+ * is where presence is established: every active path present at load has a record
+ * once the flush has run, and a path the run makes afterwards is an ownership
+ * event (workspace_anchor), not an observation.
  *
  * The row pointer is borrowed from the workspace's active partition; the record
  * created here borrows its strings from that row for the workspace's lifetime.

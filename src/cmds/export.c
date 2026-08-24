@@ -5,7 +5,9 @@
  * ownership, and dotta makes no ongoing claim over the destination. One profile
  * branch's subtree is copied verbatim: no layer composition, no mount mapping,
  * plaintext bytes with stored permission modes. Single files are the degenerate
- * case of the tree walk.
+ * case of the tree walk. A directory claim without a tree entry (an empty
+ * tracked directory — its whole Git footprint is its metadata item) is content
+ * too: materialized with its stored mode, beside what the walk collects.
  *
  * Two-phase execution model:
  *
@@ -31,6 +33,7 @@
 #include <errno.h>
 #include <git2.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 
@@ -73,6 +76,7 @@ typedef struct {
     git_oid blob_oid;          /* FILE / SYMLINK only */
     mode_t mode;               /* Resolved final mode (FILE / DIRECTORY) */
     bool encrypted;            /* FILE: byte-classified in phase 1 */
+    bool claimed;              /* DIRECTORY: a metadata DIRECTORY at this storage path */
     bool dest_existed;         /* DIRECTORY: phase-1 lstat fact */
     bool content_held;         /* `content` carries bytes from phase 1 */
     buffer_t content;
@@ -291,13 +295,20 @@ static int collect_tree_callback(
     }
 
     switch (git_tree_entry_type(entry)) {
-        case GIT_OBJECT_TREE:
+        case GIT_OBJECT_TREE: {
             e.kind = EXPORT_ENTRY_DIRECTORY;
             e.mode = export_entry_mode(
                 ctx->metadata, e.storage_path, METADATA_ITEM_DIRECTORY,
                 GIT_FILEMODE_TREE
             );
+            const metadata_item_t *item = NULL;
+            error_t *item_err = metadata_get_item(
+                ctx->metadata, e.storage_path, &item
+            );
+            if (item_err) error_free(item_err);
+            e.claimed = item && item->kind == METADATA_ITEM_DIRECTORY;
             break;
+        }
 
         case GIT_OBJECT_BLOB: {
             git_filemode_t filemode = git_tree_entry_filemode(entry);
@@ -329,6 +340,19 @@ static int collect_tree_callback(
         return -1;
     }
     return 0;
+}
+
+/**
+ * Order export entries by storage path.
+ *
+ * Applied to the appended claims batch alone: parents sort before children
+ * (a prefix compares less), keeping creation order and the deepest-first
+ * chmod coherent with the walk's pre-order.
+ */
+static int export_entry_cmp(const void *a, const void *b) {
+    const export_entry_t *ea = a;
+    const export_entry_t *eb = b;
+    return strcmp(ea->storage_path, eb->storage_path);
 }
 
 /**
@@ -538,8 +562,12 @@ static error_t *materialize_entries(
         switch (e->kind) {
             case EXPORT_ENTRY_DIRECTORY:
                 if (e->dest_existed) break;
+                /* Parents allowed: a claims-batch entry may sit under an
+                 * unclaimed, blob-less ancestor no walk entry created —
+                 * intermediates land at the default mode, deploy's own
+                 * ancestor rule. Walk entries' parents always exist. */
                 err = fs_create_dir_with_mode(
-                    e->dest_path, e->mode | S_IRWXU, false
+                    e->dest_path, e->mode | S_IRWXU, true
                 );
                 if (err) {
                     return error_wrap(
@@ -646,39 +674,30 @@ static error_t *materialize_entries(
 }
 
 /**
- * Count entries that materialize as files (files + symlinks).
- */
-static size_t count_files(const export_entry_list_t *list) {
-    size_t n = 0;
-    for (size_t i = 0; i < list->count; i++) {
-        if (list->items[i].kind != EXPORT_ENTRY_DIRECTORY) n++;
-    }
-    return n;
-}
-
-/**
- * Print the --dry-run plan: header plus one line per file entry.
+ * Print the --dry-run plan: header plus one line per file entry and per
+ * directory claim (slash-marked; scaffolding directories are not listed).
  */
 static void print_dry_run(
     output_t *out,
     const export_entry_list_t *list,
+    const char *counts,
     const char *dest_display,
     const char *profile,
     const char *commit_suffix
 ) {
-    size_t files = count_files(list);
     output_styled(
         out, OUTPUT_NORMAL,
-        "Would export %zu file%s to {cyan}%s{reset} "
+        "Would export %s to {cyan}%s{reset} "
         "(from {magenta}%s{reset}%s):\n",
-        files, files == 1 ? "" : "s", dest_display, profile, commit_suffix
+        counts, dest_display, profile, commit_suffix
     );
 
     int width = 0;
     for (size_t i = 0; i < list->count; i++) {
         const export_entry_t *e = &list->items[i];
-        if (e->kind == EXPORT_ENTRY_DIRECTORY) continue;
-        int len = (int) strlen(e->rel_path);
+        if (e->kind == EXPORT_ENTRY_DIRECTORY && !e->claimed) continue;
+        int len = (int) strlen(e->rel_path) +
+                  (e->kind == EXPORT_ENTRY_DIRECTORY ? 1 : 0);
         if (len > width) width = len;
     }
     if (width > 48) width = 48;
@@ -686,8 +705,16 @@ static void print_dry_run(
     for (size_t i = 0; i < list->count; i++) {
         const export_entry_t *e = &list->items[i];
         switch (e->kind) {
-            case EXPORT_ENTRY_DIRECTORY:
+            case EXPORT_ENTRY_DIRECTORY: {
+                if (!e->claimed) break;
+                int len = (int) strlen(e->rel_path) + 1;
+                int pad = width > len ? width - len : 0;
+                output_print(
+                    out, OUTPUT_NORMAL, "  %s/%*s (mode %04o)\n",
+                    e->rel_path, pad, "", (unsigned) e->mode
+                );
                 break;
+            }
             case EXPORT_ENTRY_FILE:
                 output_print(
                     out, OUTPUT_NORMAL, "  %-*s (mode %04o%s)\n",
@@ -751,6 +778,8 @@ error_t *cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
     bool root_existed = false;
     mode_t root_mode = DIR_MODE_DEFAULT;
     bool tree_export = false;
+    const char *claims_base = NULL;  /* Claims-append scope (NULL = whole profile) */
+    bool claim_only = false;         /* Target is a metadata-only directory claim */
     char commit_suffix[16] = "";
 
     /* Export is local-only: no network IO, ever. The explicit porcelain for making
@@ -856,33 +885,40 @@ error_t *cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
 
         err = gitops_find_file_in_tree(tree, storage, &target);
         if (err) {
-            if (err->code == ERR_NOT_FOUND) {
+            if (err->code != ERR_NOT_FOUND) goto cleanup;
+
+            /* Not in the tree. An empty tracked directory has no tree entry —
+             * its claim lives only in the metadata, and the export is then
+             * the claim itself: the directory, at its stored mode. */
+            const metadata_item_t *claim_item = NULL;
+            error_t *item_err = metadata_get_item(metadata, storage, &claim_item);
+            if (item_err) {
+                error_free(item_err);
+                claim_item = NULL;
+            }
+            if (!claim_item || claim_item->kind != METADATA_ITEM_DIRECTORY) {
                 error_free(err);
                 err = ERROR(
                     ERR_NOT_FOUND, "'%s' not found in profile '%s'%s",
                     storage, opts->profile, commit_suffix
                 );
+                goto cleanup;
             }
-            goto cleanup;
+            error_free(err);
+            err = NULL;
         }
 
-        git_object_t target_type = git_tree_entry_type(target);
-        if (target_type == GIT_OBJECT_TREE) {
-            /* Directory export: walk the subtree. */
+        bool claim_target = target == NULL;
+        if (claim_target || git_tree_entry_type(target) == GIT_OBJECT_TREE) {
+            /* Directory export: walk the subtree — or, for a metadata-only
+             * claim, no subtree to walk: any children are claims themselves,
+             * collected by the append below. */
             if (to_stdout) {
                 err = ERROR(
                     ERR_INVALID_ARG,
                     "'-' streams a single file's bytes; '%s' is a "
                     "directory and needs a path destination", storage
                 );
-                goto cleanup;
-            }
-
-            int git_ret = git_tree_lookup(
-                &subtree, repo, git_tree_entry_id(target)
-            );
-            if (git_ret < 0) {
-                err = error_from_git(git_ret);
                 goto cleanup;
             }
 
@@ -896,25 +932,37 @@ error_t *cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
                 GIT_FILEMODE_TREE
             );
             tree_export = true;
+            claims_base = storage;
+            claim_only = claim_target;
 
-            struct collect_ctx cctx = {
-                .metadata      = metadata,
-                .storage_base  = storage,
-                .dest_root     = root_path,
-                .whole_profile = false,
-                .list          = &list,
-                .arena         = arena,
-                .error         = NULL
-            };
-            err = gitops_tree_walk(subtree, collect_tree_callback, &cctx);
-            if (cctx.error) {
-                /* The callback error is the cause; the walk's generic user-abort
-                 * wrapper is noise. */
-                error_free(err);
-                err = cctx.error;
+            if (!claim_target) {
+                int git_ret = git_tree_lookup(
+                    &subtree, repo, git_tree_entry_id(target)
+                );
+                if (git_ret < 0) {
+                    err = error_from_git(git_ret);
+                    goto cleanup;
+                }
+
+                struct collect_ctx cctx = {
+                    .metadata      = metadata,
+                    .storage_base  = storage,
+                    .dest_root     = root_path,
+                    .whole_profile = false,
+                    .list          = &list,
+                    .arena         = arena,
+                    .error         = NULL
+                };
+                err = gitops_tree_walk(subtree, collect_tree_callback, &cctx);
+                if (cctx.error) {
+                    /* The callback error is the cause; the walk's generic
+                     * user-abort wrapper is noise. */
+                    error_free(err);
+                    err = cctx.error;
+                }
+                if (err) goto cleanup;
             }
-            if (err) goto cleanup;
-        } else if (target_type == GIT_OBJECT_BLOB) {
+        } else if (git_tree_entry_type(target) == GIT_OBJECT_BLOB) {
             /* Single-entry export: degenerate case of the walk. */
             git_filemode_t filemode = git_tree_entry_filemode(target);
 
@@ -977,7 +1025,66 @@ error_t *cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
         if (err) goto cleanup;
     }
 
-    if (count_files(&list) == 0) {
+    /* The branch's directory claims with no tree entry — an empty tracked
+     * directory holds no blobs, so the walk cannot see it; the metadata item
+     * is its whole footprint. Appended after the walk (nothing tree-backed can
+     * live beneath a blob-less claim, so parents still precede children) and
+     * sorted so creation order and the deepest-first chmod stay coherent. */
+    if (tree_export) {
+        size_t appended_from = list.count;
+        size_t base_len = claims_base ? strlen(claims_base) : 0;
+        size_t item_count = 0;
+        const metadata_item_t *items = metadata_get_all_items(metadata, &item_count);
+        for (size_t i = 0; i < item_count; i++) {
+            if (items[i].kind != METADATA_ITEM_DIRECTORY) continue;
+            const char *key = items[i].key;
+
+            const char *rel = key;
+            if (base_len > 0) {
+                /* Inside the exported subtree only; the base itself is the
+                 * export root, not a list entry. */
+                if (strncmp(key, claims_base, base_len) != 0 ||
+                    key[base_len] != '/') {
+                    continue;
+                }
+                rel = key + base_len + 1;
+            }
+
+            git_tree_entry *probe = NULL;
+            if (git_tree_entry_bypath(&probe, tree, key) == 0) {
+                git_tree_entry_free(probe);
+                continue;   /* Tree-backed: the walk collected it */
+            }
+
+            export_entry_t e;
+            memset(&e, 0, sizeof(e));
+            e.kind = EXPORT_ENTRY_DIRECTORY;
+            e.claimed = true;
+            e.storage_path = arena_strdup(arena, key);
+            if (!e.storage_path) {
+                err = ERROR(ERR_MEMORY, "Failed to allocate export entry");
+                goto cleanup;
+            }
+            e.rel_path = e.storage_path + (rel - key);
+            e.dest_path = arena_join_path(arena, root_path, e.rel_path);
+            if (!e.dest_path) {
+                err = ERROR(ERR_MEMORY, "Failed to allocate export entry");
+                goto cleanup;
+            }
+            e.mode = items[i].mode != 0 ? items[i].mode : DIR_MODE_DEFAULT;
+
+            err = entry_list_append(&list, arena, &e);
+            if (err) goto cleanup;
+        }
+        if (list.count > appended_from + 1) {
+            qsort(
+                list.items + appended_from, list.count - appended_from,
+                sizeof(*list.items), export_entry_cmp
+            );
+        }
+    }
+
+    if (list.count == 0 && !claim_only) {
         err = ERROR(
             ERR_NOT_FOUND, "Profile '%s'%s has no exportable content",
             opts->profile, commit_suffix
@@ -1032,12 +1139,39 @@ error_t *cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
 
     /* ── Reporting / phase 2 ── */
 
+    /* The counts phrase: files (symlinks included) and the directory claims
+     * this export materializes — the walk's claimed entries, the appended
+     * batch, and (for a subtree export) the root when it is itself a claim.
+     * Scaffolding directories are plumbing, not content: uncounted. */
+    size_t file_count = 0;
+    size_t dir_claims = 0;
+    for (size_t i = 0; i < list.count; i++) {
+        if (list.items[i].kind == EXPORT_ENTRY_DIRECTORY) {
+            if (list.items[i].claimed) dir_claims++;
+        } else {
+            file_count++;
+        }
+    }
+    if (claims_base) {
+        const metadata_item_t *root_item = NULL;
+        error_t *root_err = metadata_get_item(metadata, claims_base, &root_item);
+        if (root_err) {
+            error_free(root_err);
+            root_item = NULL;
+        }
+        if (root_item && root_item->kind == METADATA_ITEM_DIRECTORY) {
+            dir_claims++;
+        }
+    }
+    char counts[64];
+    output_format_counts(file_count, dir_claims, counts, sizeof(counts));
+
     const char *dest_display = to_stdout ? "stdout"
         : (root_path ? root_path : list.items[0].dest_path);
 
     if (opts->dry_run) {
         print_dry_run(
-            out, &list, dest_display, opts->profile, commit_suffix
+            out, &list, counts, dest_display, opts->profile, commit_suffix
         );
         goto cleanup;
     }
@@ -1065,12 +1199,11 @@ error_t *cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
     );
     if (err) goto cleanup;
 
-    size_t files = count_files(&list);
     output_styled(
         out, OUTPUT_NORMAL,
-        "Exported %zu file%s to {cyan}%s{reset} "
+        "Exported %s to {cyan}%s{reset} "
         "(from {magenta}%s{reset}%s)\n",
-        files, files == 1 ? "" : "s", dest_display, opts->profile,
+        counts, dest_display, opts->profile,
         commit_suffix
     );
 
@@ -1303,7 +1436,7 @@ const args_command_t spec_export = {
         "   or: %s export <profile> [<path>] -o <dest>\n"
         "   or: %s export <profile>[@commit] [<path>] [<commit>] -o <dest>",
     .description =
-        "Copy files out of a profile branch without deploying them:\n"
+        "Copy content out of a profile branch without deploying it:\n"
         "nothing registers in state, ownership is never applied, and\n"
         "dotta makes no ongoing claim over the destination. Content is\n"
         "decrypted, stored permission modes are applied, and profile\n"

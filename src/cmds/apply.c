@@ -919,9 +919,10 @@ static void print_cleanup_preflight_results(
          * and a directory left behind is not the event a file left behind is,
          * so no block of its own — whether the workspace released it or it holds
          * something this run will never remove (cleanup.h's classes). A skipped
-         * directory holds something the run holds back, or could not be verified
-         * (status tags it [unverified]); the slash says "left alone this run"
-         * for both. */
+         * directory holds something the run holds back, could not be verified
+         * (status tags it [unverified]), or sits under a moved home ([relocated]
+         * — the hold --force lifts); the slash says "left alone this run" for
+         * each. */
         print_path_list(out, &verdicts->prunable_dirs, OUTPUT_COLOR_CYAN, "•");
         print_path_list(out, &verdicts->released_dirs, OUTPUT_COLOR_CYAN, "→");
         print_path_list(out, &verdicts->skipped_dirs, OUTPUT_COLOR_YELLOW, "⊘");
@@ -943,11 +944,15 @@ static void print_cleanup_preflight_results(
 
     /* Skipped files: each is named with its reason, then the one line the
      * deploy-side conflict block also ends with — --force overrides the hold.
-     * The ways to keep a held file are the inverse of the command that orphaned
-     * it (profile enable, add) or a move aside, and every line names the profile;
-     * they are not spelled out. */
+     * The header names the fate (the preview's word, "Released files"'s
+     * sibling); the labels name the reasons, because no one reason covers the
+     * block — a held relocation is byte-clean and an unverifiable copy may be
+     * — and the closing line names the cost the same way: what stands there,
+     * whatever its state. The ways to keep a held file are the inverse of the
+     * command that orphaned it (profile enable, add) or a move aside, and every
+     * line names the profile; they are not spelled out. */
     if (skipped.count > 0) {
-        output_section(out, OUTPUT_NORMAL, "Modified orphaned files detected");
+        output_section(out, OUTPUT_NORMAL, "Skipped files");
         output_warning(
             out, OUTPUT_NORMAL, "The following files cannot be safely removed:"
         );
@@ -999,7 +1004,10 @@ static void print_cleanup_preflight_results(
         }
 
         output_newline(out, OUTPUT_NORMAL);
-        output_info(out, OUTPUT_NORMAL, "Use --force to prune them anyway (discards changes)");
+        output_info(
+            out, OUTPUT_NORMAL,
+            "Use --force to prune them anyway (discards what stands there)"
+        );
     }
 
     /* Released files are informational: nothing is asked of the user, and --force

@@ -844,10 +844,10 @@ error_t *manifest_diff(
     hashmap_t *stats_map = NULL;
     hashmap_t *anchor_index = NULL;
 
-    /* Stats attribution index. Maps profile name → (array index + 1). The +1
-     * offset distinguishes "found at index 0" from "not found" in hashmap_get
-     * (which returns NULL when a key is absent). Keys are borrowed from profiles;
-     * the caller keeps it alive for the duration of this call. */
+    /* Stats attribution index. Maps profile name → its out_stats slot (the caller's
+     * array, sized before the map is built — the pointers are stable). Keys are
+     * borrowed from profiles; the caller keeps it alive for the duration of this
+     * call. */
     stats_map = hashmap_borrow(profiles->count > 0 ? profiles->count * 2 : 16);
     if (!stats_map) {
         return ERROR(ERR_MEMORY, "Failed to create stats attribution map");
@@ -870,7 +870,7 @@ error_t *manifest_diff(
 
         memset(&out_stats[i], 0, sizeof(out_stats[i]));
         out_stats[i].profile = name;
-        err = hashmap_set(stats_map, name, (void *) (uintptr_t) (i + 1));
+        err = hashmap_set(stats_map, name, &out_stats[i]);
         if (err) {
             err = error_wrap(err, "Failed to populate stats attribution map");
             goto cleanup;
@@ -901,9 +901,8 @@ error_t *manifest_diff(
     for (size_t i = 0; i < rows.count; i++) {
         const manifest_row_t *row = rows.entries[i];
 
-        void *p = hashmap_get(stats_map, row->profile);
-        if (!p) continue;
-        manifest_diff_stats_t *slot = &out_stats[(size_t) (uintptr_t) p - 1];
+        manifest_diff_stats_t *slot = hashmap_get(stats_map, row->profile);
+        if (!slot) continue;
 
         slot->claimed++;
 
@@ -924,9 +923,8 @@ error_t *manifest_diff(
     for (size_t i = 0; i < rows.count; i++) {
         const manifest_row_t *old = rows.entries[i];
 
-        void *p = hashmap_get(stats_map, old->profile);
-        if (!p) continue;
-        manifest_diff_stats_t *slot = &out_stats[(size_t) (uintptr_t) p - 1];
+        manifest_diff_stats_t *slot = hashmap_get(stats_map, old->profile);
+        if (!slot) continue;
 
         const manifest_row_t *row = manifest_lookup(after, old->filesystem_path);
         if (row) {

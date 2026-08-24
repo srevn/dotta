@@ -86,19 +86,30 @@ typedef enum {
 /**
  * Divergence type - what is wrong with an item
  *
- * Bit flags representing types of divergence between expected and actual state.
- * Multiple flags can be set simultaneously (e.g., content changed AND mode
- * changed).
+ * Bit flags; multiple can be set simultaneously (e.g., content changed AND mode
+ * changed). This enum captures WHAT is wrong, separate from WHERE the item exists
+ * (see workspace_state_t).
  *
- * This enum captures WHAT is wrong, separate from WHERE the item exists (see
- * workspace_state_t). Flags can be combined with bitwise OR.
+ * Two families, by what the operands are:
+ *
+ * The path family — CONTENT, MODE, OWNERSHIP, TYPE, STALE, UNVERIFIED — measures
+ * the managed path against the view: what stands on disk versus the row's claim
+ * (STALE through the record: the blob dotta last deployed versus the row's),
+ * UNVERIFIED when the measurement itself could not run. No path bit survives
+ * absence — properties of what is not there cannot be compared.
+ *
+ * The blob family — ENCRYPTION alone — measures the blob Git holds against the
+ * config's auto-encrypt policy (core/policy.h). The filesystem is not a party,
+ * so it is the one bit a row in any state can carry, absence included; and because
+ * no write to the path can change how a blob is stored, it is never deploy's
+ * work — update re-stores the blob, status reports it.
  */
 typedef enum {
     DIVERGENCE_NONE       = 0,       /* No divergence detected */
     DIVERGENCE_CONTENT    = 1 << 0,  /* Disk content is not the blob it was measured */
     DIVERGENCE_MODE       = 1 << 1,  /* Permissions/mode changed */
     DIVERGENCE_OWNERSHIP  = 1 << 2,  /* Owner/group changed (requires root) */
-    DIVERGENCE_ENCRYPTION = 1 << 3,  /* File violates encryption policy */
+    DIVERGENCE_ENCRYPTION = 1 << 3,  /* Blob stored plaintext where the auto-encrypt policy claims the path */
     DIVERGENCE_TYPE       = 1 << 4,  /* Type changed (file/symlink/dir) */
     DIVERGENCE_UNVERIFIED = 1 << 5,  /* Cannot verify (missing key, error, large file) */
     DIVERGENCE_STALE      = 1 << 6   /* Git advanced past the blob dotta last deployed */

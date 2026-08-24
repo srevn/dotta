@@ -40,13 +40,14 @@
  *
  * Two dimensions, in order: state (where does the path exist — Git, state database,
  * filesystem?) sets the baseline, divergence (what is wrong with it?) refines
- * it. A missing path is always work and always carries DIVERGENCE_NONE — properties
- * of something that is not there cannot be compared, so the two missing states
- * answer from state alone.
+ * it. A missing path is always work, and the only bit it can carry is the
+ * blob-family ENCRYPTION verdict (types.h) — no path bit survives absence, so
+ * the two missing states answer from state alone.
  *
- * Kind-agnostic: directory analysis tags only MODE / OWNERSHIP / TYPE / UNVERIFIED
- * (never content, encryption or stale), so the DEPLOYED arm's test already covers
- * every directory verdict — no kind-specific arm.
+ * Kind-agnostic: directory analysis tags only MODE / OWNERSHIP / TYPE / UNVERIFIED,
+ * so the DEPLOYED arm's test already covers every directory verdict — no
+ * kind-specific arm. A file row can carry ENCRYPTION beside any of those; the
+ * arm masks it either way.
  *
  * The planner iterates the active slices, so the three non-active states never
  * reach this; their arms name the owner that does handle them and keep -Wswitch
@@ -67,27 +68,35 @@ static bool deploy_needs_work(const workspace_item_t *item) {
             /* File exists in Git but has never been deployed to filesystem. Needs
              * initial deployment.
              *
-             * Note: divergence is always NONE for missing files (can't compare
-             * properties of non-existent files). */
+             * No path bit survives absence (properties of non-existent files
+             * cannot be compared); the blob-family ENCRYPTION bit can ride on a
+             * missing row — [undeployed] [unencrypted] — and changes nothing
+             * here: the row is work by state alone. */
             return true;
 
         case WORKSPACE_STATE_DELETED:
             /* File exists in Git and was previously deployed (deployed_at > 0),
-             * but has been removed from filesystem. Needs restoration.
-             *
-             * Note: divergence is always NONE for missing files. */
+             * but has been removed from filesystem. Needs restoration. Absence
+             * and the blob-family bit read as in the UNDEPLOYED arm: work by
+             * state alone. */
             return true;
 
         case WORKSPACE_STATE_DEPLOYED:
             /* File exists on filesystem and is tracked in Git. Needs deployment
              * only if properties diverged (content, mode, ownership, etc.).
              *
-             * If divergence == NONE: file is clean, matches Git perfectly. If
-             * divergence != NONE: file has property mismatches, needs redeployment.
-             *
              * DIVERGENCE_STALE is a deploy reason like any other: Git moved past
-             * the blob dotta deployed and disk did not follow. */
-            return item->divergence != DIVERGENCE_NONE;
+             * the blob dotta deployed and disk did not follow.
+             *
+             * DIVERGENCE_ENCRYPTION is the one bit that is never deploy's work:
+             * it says the blob is stored plaintext in Git where the auto-encrypt
+             * policy claims the path — a fact about the profile's tree, not about
+             * what stands at the path. No write deploy makes can change how a
+             * blob is stored; update is the verb that re-stores it, and
+             * content_conflicts below states the same rule for overwrites. A
+             * deny-mask rather than an allow-list, so a bit added later inherits
+             * the arm's default: any divergence of the path is work. */
+            return (item->divergence & ~DIVERGENCE_ENCRYPTION) != DIVERGENCE_NONE;
 
         case WORKSPACE_STATE_ORPHANED:
             /* A record whose path the view lacks.
@@ -182,24 +191,23 @@ static error_t *partition_push(
  *
  * A non-directory at a tracked directory's path is what every probe of the paths
  * beneath it went through — the workspace's lstat, and so its verdicts and the
- * occupant preflight reads off the item; preflight's landing probes. With a
- * symlink to a directory squatting, those probes reach the link's target and
- * come back with answers about *its* tree: a child reads clean, a parent reads
- * present. The directory pass replaces the squatter before anything beneath it
- * is touched (prefix order), so the observations describe a tree the run itself
- * dismantles: after the replace, nothing stands at any path beneath it. Such a
- * path is planned and predicted as absent — work, not occupied, nothing to ask
- * of it — whatever the index says. A file or dangling-link squatter changes
- * nothing: beneath it every probe already failed (ENOTDIR), and absent was the
- * verdict anyway.
+ * occupant preflight reads off the item; preflight's landing probes. With a symlink
+ * to a directory squatting, those probes reach the link's target and come back
+ * with answers about *its* tree: a child reads clean, a parent reads present.
+ * The directory pass replaces the squatter before anything beneath it is touched
+ * (prefix order), so the observations describe a tree the run itself dismantles:
+ * after the replace, nothing stands at any path beneath it. Such a path is planned
+ * and predicted as absent — work, not occupied, nothing to ask of it — whatever
+ * the index says. A file or dangling-link squatter changes nothing: beneath it
+ * every probe already failed (ENOTDIR), and absent was the verdict anyway.
  *
  * Squatted is the workspace's TYPE verdict on the row, and only a *pending* row
- * counts: one -e skips is not replaced this run, so what was observed
- * through it stands. Walks directories.pending, which is in prefix order, so
- * the planner can ask this of a directory row while the bucket is still filling
- * and find the row's ancestors already there. Preflight asks it once more per
- * row and writes the answer into the verdict's occupant, which is where the
- * executors read it.
+ * counts: one -e skips is not replaced this run, so what was observed through
+ * it stands. Walks directories.pending, which is in prefix order, so the planner
+ * can ask this of a directory row while the bucket is still filling and find
+ * the row's ancestors already there. Preflight asks it once more per row and
+ * writes the answer into the verdict's occupant, which is where the executors
+ * read it.
  *
  * @param ws Workspace, for the ancestor's verdict (must not be NULL)
  * @param plan Plan whose pending directories are the candidates (must not be NULL)
@@ -343,8 +351,8 @@ void deploy_plan_free(deploy_plan_t *plan) {
  * What a file row materializes at its path
  *
  * The occupant vocabulary is sys/filesystem's (fs_occupant_t): the link itself,
- * never its target. Deploy unlinks the link and never follows it, so the
- * target's type and permissions are none of its business.
+ * never its target. Deploy unlinks the link and never follows it, so the target's
+ * type and permissions are none of its business.
  */
 static fs_occupant_t file_row_occupant(const manifest_row_t *file) {
 
@@ -354,8 +362,8 @@ static fs_occupant_t file_row_occupant(const manifest_row_t *file) {
 /**
  * Is something known to be standing at the path?
  *
- * FS_OCCUPANT_UNKNOWN deliberately answers no. Deploy judges nothing it could not
- * see: the mutation goes ahead and surfaces the real errno, rather than acting
+ * FS_OCCUPANT_UNKNOWN deliberately answers no. Deploy judges nothing it could
+ * not see: the mutation goes ahead and surfaces the real errno, rather than acting
  * on a guess about what it failed to stat.
  */
 static bool occupant_present(fs_occupant_t occ) {
@@ -396,8 +404,8 @@ typedef enum {
  * *other* paths — untracked, unnamed, uncounted, and not restorable from Git —
  * so nothing on the apply command line authorizes removing them. core/cleanup
  * never removes an orphaned directory holding anything of the user's, --force
- * included (cleanup_preflight's directory verdicts release it); this is the
- * same posture on deploy's side of the house.
+ * included (cleanup_preflight's directory verdicts release it); this is the same
+ * posture on deploy's side of the house.
  *
  * "Holds something" is fs_is_directory_empty's negation, so a directory carrying
  * nothing but OS metadata is clearable and fs_remove_empty_dir removes exactly
@@ -406,8 +414,8 @@ typedef enum {
  * one look preflight takes at a planned path itself; the occupant is the
  * workspace's.
  *
- * Asked only of a present occupant that conflicts (occupant_conflicts): an
- * absent path needs no clearing, and the answer is undefined for one.
+ * Asked only of a present occupant that conflicts (occupant_conflicts): an absent
+ * path needs no clearing, and the answer is undefined for one.
  *
  * @param path Planned path (must not be NULL)
  * @param occ Its occupant, as the workspace observed it
@@ -576,8 +584,8 @@ static bool directory_is_pending(const deploy_plan_t *plan, const char *path) {
  * Is this row's content not dotta's to overwrite unasked?
  *
  * The counterpart of occupant_conflicts, answered from the workspace's divergence
- * verdict: content is compared against a blob that is not on disk, so the
- * load-time verdict is the only authority there is — no lstat can improve on it.
+ * verdict: content is compared against a blob that is not on disk, so the load-time
+ * verdict is the only authority there is — no lstat can improve on it.
  *
  * A TYPE verdict counts, because it means the compare never produced a content
  * verdict at all: whatever stood at the path was never measured against the row.
@@ -593,10 +601,9 @@ static bool content_conflicts(const workspace_item_t *item) {
 }
 
 /**
- * Record a formatted entry in one of the preflight arrays — a finding that
- * carries its own reason (a blocked path, a landing directory that refuses us),
- * or a warning. Takes ownership of `entry`; NULL means the formatting itself
- * failed.
+ * Record a formatted entry in one of the preflight arrays — a finding that carries
+ * its own reason (a blocked path, a landing directory that refuses us), or a
+ * warning. Takes ownership of `entry`; NULL means the formatting itself failed.
  */
 static error_t *push_entry(string_array_t *entries, char *entry) {
     if (!entry) {
@@ -726,10 +733,10 @@ cleanup:
  * - ERR_PERMISSION (not root): Silent (can't chown anyway; see below)
  *
  * Pure decision, taken at preflight — no filesystem mutation — so the strict-mode
- * abort is met before the prompt and never mid-run. A warning is an anomaly
- * report and travels in the preflight result for the caller to print; nothing
- * here reads a verbosity flag, because the warning's visibility is not this
- * module's output policy to set.
+ * abort is met before the prompt and never mid-run. A warning is an anomaly report
+ * and travels in the preflight result for the caller to print; nothing here reads
+ * a verbosity flag, because the warning's visibility is not this module's output
+ * policy to set.
  *
  * @param storage_path Path in profile (e.g., "home/.bashrc", "root/etc/hosts")
  * @param filesystem_path Resolved deployment path for home detection
@@ -845,15 +852,15 @@ static error_t *resolve_deployment_ownership(
  * order, so a corrupt row is named even when a strict-mode ownership failure
  * ends preflight there.
  *
- * A row's mode is its metadata item's — a blob row's the filemode default
- * (0644 / 0755) unless the profile's metadata claims otherwise, a directory
- * row's the claim alone — and 0 is the one value the item can carry that is
- * no claim at all: a "0000" in the profile's metadata.json. The workspace reads
- * that zero as "no claim" (check_item_metadata_divergence skips the mode
- * check), so preflight reads it the same way — the default keyed on the row's
- * type — and says so, because the recorded value is the user's and they may
- * want to know it is not being honoured. One decision for both kinds; the
- * default is the only thing the kind changes.
+ * A row's mode is its metadata item's — a blob row's the filemode default (0644
+ * / 0755) unless the profile's metadata claims otherwise, a directory row's the
+ * claim alone — and 0 is the one value the item can carry that is no claim at
+ * all: a "0000" in the profile's metadata.json. The workspace reads that zero
+ * as "no claim" (check_item_metadata_divergence skips the mode check), so preflight
+ * reads it the same way — the default keyed on the row's type — and says so,
+ * because the recorded value is the user's and they may want to know it is not
+ * being honoured. One decision for both kinds; the default is the only thing
+ * the kind changes.
  *
  * A symlink row is the one honest zero: the view carries mode 0 for
  * GIT_FILEMODE_LINK and metadata keeps it there, symlink(2) takes no mode and
@@ -861,8 +868,8 @@ static error_t *resolve_deployment_ownership(
  * so the question is asked only of the kinds that carry a mode.
  *
  * Ownership is resolved ahead of the write so the write applies it atomically
- * through the descriptor (fchown on the file or directory fd, lchown on a
- * link): there is never a moment when the path exists with the wrong owner.
+ * through the descriptor (fchown on the file or directory fd, lchown on a link):
+ * there is never a moment when the path exists with the wrong owner.
  *
  * @param row View row (must not be NULL; borrowed, read-only)
  * @param opts Deployment options (must not be NULL)
@@ -956,8 +963,8 @@ static bool above_pending_row(const deploy_plan_t *plan, const char *dir) {
  * Every pending row gets a verdict, findings or not: the arrays are the plan's
  * pending buckets in order, and a caller that meets a finding reads the counts
  * and never the verdicts. A row planned beneath a squatter this run replaces
- * gets its verdict too — absent, nothing asked — so the executors read one
- * shape for every row.
+ * gets its verdict too — absent, nothing asked — so the executors read one shape
+ * for every row.
  */
 error_t *deploy_preflight(
     const workspace_t *ws,
@@ -1063,8 +1070,8 @@ error_t *deploy_preflight(
         err = check_landing(ws, plan, path, result);
         if (err) goto cleanup;
 
-        /* An occupant the workspace could not examine is no verdict: nothing can
-         * say what the run will find there, and nothing is written on a guess
+        /* An occupant the workspace could not examine is no verdict: nothing
+         * can say what the run will find there, and nothing is written on a guess
          * (neither question above is asked of it — UNKNOWN is not present). The
          * ancestry that refused the lstat is what refuses the write, and the
          * landing has just named it when it could (EACCES on the way up); the
@@ -1116,8 +1123,8 @@ error_t *deploy_preflight(
 
         /* A directory already there is converged in place: fchmod and fchown
          * ask for ownership, not for a writable parent. Only a create or a replace
-         * lands a new entry. An unexaminable occupant is asked too, and named on
-         * its own when the landing had nothing to say — as for a file. */
+         * lands a new entry. An unexaminable occupant is asked too, and named
+         * on its own when the landing had nothing to say — as for a file. */
         size_t findings = result->permission_errors->count + result->blocked->count;
 
         if (v->occupant != FS_OCCUPANT_DIRECTORY) {
@@ -1140,11 +1147,11 @@ error_t *deploy_preflight(
 
     /* The ancestors: every directory row the plan does not act on, absent as
      * the plan reads it, that stands above a pending row. Absent as the plan
-     * reads it is the planner's own reading — beneath a squatter this run
-     * replaces, or the workspace's occupant (a row without an item is present
-     * and converged). ensure_parents creates exactly these on the way down to
-     * a planned path, with the metadata decided here; a candidate the world
-     * makes present before then is simply not created, and costs nothing. */
+     * reads it is the planner's own reading — beneath a squatter this run replaces,
+     * or the workspace's occupant (a row without an item is present and converged).
+     * ensure_parents creates exactly these on the way down to a planned path,
+     * with the metadata decided here; a candidate the world makes present before
+     * then is simply not created, and costs nothing. */
     for (size_t i = 0; i < all_dirs.count; i++) {
         const manifest_row_t *row = all_dirs.entries[i];
         const char *path = row->filesystem_path;
@@ -1327,14 +1334,13 @@ static error_t *materialize_tracked_directory(
  * (any profile, in scope or not) with the metadata its ancestor verdict carries,
  * anything else 0755 owned like the planned path beneath it. The 0755 is exact
  * (fchmod), not umask-masked — dotta reproduces modes, it does not negotiate
- * them — and already carries the owner triad, so an untracked parent is never
- * held.
+ * them — and already carries the owner triad, so an untracked parent is never held.
  *
- * The verdicts are the authority for what is tracked here, not the view: a
- * tracked directory preflight did not foresee as absent (present then, gone
- * since) has no metadata decided for it, is made like an untracked parent, and
- * is left for the next load to read — which sees its record and its row, and
- * says [mode] if the two disagree.
+ * The verdicts are the authority for what is tracked here, not the view: a tracked
+ * directory preflight did not foresee as absent (present then, gone since) has
+ * no metadata decided for it, is made like an untracked parent, and is left for
+ * the next load to read — which sees its record and its row, and says [mode] if
+ * the two disagree.
  *
  * @param run Run context (must not be NULL)
  * @param path Absent ancestor to create (must not be NULL)
@@ -1424,8 +1430,8 @@ static error_t *open_landing_directory(
  * Mutation, not decision. Whether the path can land was preflight's question,
  * and the directory pass has already replaced any planned squatter above it; a
  * non-directory ancestor met here (a prompt sat in between) is a named error
- * rather than a mkdir errno. A dangling symlink is one: mkdir would report
- * EEXIST for a path that leads nowhere.
+ * rather than a mkdir errno. A dangling symlink is one: mkdir would report EEXIST
+ * for a path that leads nowhere.
  *
  * @param run Run context (must not be NULL)
  * @param path Planned path whose parents must exist (must not be NULL)
@@ -1497,8 +1503,8 @@ cleanup:
  * applies, and this lands it — missing parents first, then the one arm the row's
  * type calls for. Nothing here looks at the disk to decide anything; a path the
  * world has moved under since preflight meets the mechanism's refusal (rename
- * over a directory is EISDIR, symlink over anything is EEXIST, rmdir of a
- * directory that filled up is ENOTEMPTY) and the run fail-stops there.
+ * over a directory is EISDIR, symlink over anything is EEXIST, rmdir of a directory
+ * that filled up is ENOTEMPTY) and the run fail-stops there.
  *
  * The row:
  * - file->type: which arm — a symlink is re-linked from its blob, anything else
@@ -1646,8 +1652,8 @@ cleanup:
  * Mechanism only, by the verdict's occupant: a squatter is cleared (one node,
  * the one the verdict named), an absent path gets its missing parents, and then
  * the create-or-fix, which is idempotent — a planned directory whose reality
- * healed meanwhile is simply confirmed, and one a prompt-window race turned
- * into a symlink is refused by O_NOFOLLOW rather than chmod'd through.
+ * healed meanwhile is simply confirmed, and one a prompt-window race turned into
+ * a symlink is refused by O_NOFOLLOW rather than chmod'd through.
  *
  * The directory lands at its working mode and is released to its exact recorded
  * mode once the run is over (working_mode, release_directories), so a recorded
@@ -1745,8 +1751,8 @@ error_t *deploy_execute(
      * a squatting symlink is gone before anything is written through it. Verdict
      * order is the plan's prefix order = parents before children, which is also
      * what lets a replace settle everything beneath it: a planned path under a
-     * replaced directory carries an absent occupant, and by the time it is
-     * reached the replace has made that true. */
+     * replaced directory carries an absent occupant, and by the time it is reached
+     * the replace has made that true. */
     for (size_t i = 0; i < verdicts->directories.count; i++) {
         const deploy_verdict_t *v = &verdicts->directories.entries[i];
 
@@ -1780,11 +1786,11 @@ error_t *deploy_execute(
         }
     }
 
-    /* Every verdict is work the plan chose, by construction: the planner
-     * routed the row through deploy_needs_work and past every reason to skip
-     * it, so this loop applies no filter of its own. Clean in-scope rows with
-     * deployed_at == 0 are apply's adoption step, which stamps the anchor
-     * without deploy_file. */
+    /* Every verdict is work the plan chose, by construction: the planner routed
+     * the row through deploy_needs_work and past every reason to skip it, so
+     * this loop applies no filter of its own. Clean in-scope rows with deployed_at
+     * == 0 are apply's adoption step, which stamps the anchor without
+     * deploy_file. */
     for (size_t i = 0; i < verdicts->files.count; i++) {
         const deploy_verdict_t *v = &verdicts->files.entries[i];
 

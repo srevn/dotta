@@ -5,11 +5,11 @@
  * are the workspace's; this module decides which orphans the run may touch, what
  * becomes of each, and carries that out.
  *
- * The verdict re-verifies nothing and touches neither disk, Git nor state —
- * every input is a field of the workspace item, observed once at load. The
- * one look the directory side takes is the readdir, because what is left in
- * a directory after this run's removals is not a property any earlier phase
- * could have recorded.
+ * The verdict re-verifies nothing and touches neither disk, Git nor state — every
+ * input is a field of the workspace item, observed once at load. The one look
+ * the directory side takes is the readdir, because what is left in a directory
+ * after this run's removals is not a property any earlier phase could have
+ * recorded.
  */
 
 #include "core/cleanup.h"
@@ -179,7 +179,9 @@ cleanup_skip_reason_t cleanup_skip_reason(const workspace_item_t *item) {
     }
 
     /* All priority flags handled above. Remaining flags:
-     * - ENCRYPTION: Policy mismatch (not user modification) — safe
+     * - ENCRYPTION: never emitted for an orphan (the blob-family bit is computed
+     *   over the view's rows, and an orphan is exactly a record the view lacks)
+     *   — listed so it cannot block
      * - STALE: never emitted for an orphan (compute_orphan_divergence asks one
      *   question, of disk alone) — listed so it cannot block
      * Unknown flags: block removal until explicitly handled above. */
@@ -209,9 +211,9 @@ cleanup_verdict_t cleanup_verdict(const workspace_item_t *item, bool force) {
          * removed from it — dotta never deployed it (the workspace's ownership
          * gate), or another kind of node stands in its place; the workspace
          * observed it either way. The path stays on disk to protect the user's
-         * data, and the record retires because dotta cannot manage what Git
-         * cannot restore, and does not remove what it did not put there: it
-         * is released from dotta's management, not pruned.
+         * data, and the record retires because dotta cannot manage what Git cannot
+         * restore, and does not remove what it did not put there: it is released
+         * from dotta's management, not pruned.
          *
          * Decided before --force is consulted: --force prunes what would be
          * skipped, never what is released. */
@@ -219,8 +221,8 @@ cleanup_verdict_t cleanup_verdict(const workspace_item_t *item, bool force) {
     }
 
     if (item->item_kind == PATH_KIND_DIRECTORY) {
-        /* A directory the workspace could not stat or read is held whatever
-         * --force says; otherwise the readdir finishes the verdict. */
+        /* A directory the workspace could not stat or read is held whatever --force
+         * says; otherwise the readdir finishes the verdict. */
         return (item->divergence & DIVERGENCE_UNVERIFIED) ? CLEANUP_SKIPPED
                                                           : CLEANUP_PRUNABLE;
     }
@@ -230,17 +232,16 @@ cleanup_verdict_t cleanup_verdict(const workspace_item_t *item, bool force) {
 }
 
 /**
- * What an entry met beneath an orphaned directory amounts to, for that
- * directory's own verdict
+ * What an entry met beneath an orphaned directory amounts to, for that directory's
+ * own verdict
  *
- * A directory's fate is the strongest class left in it once this run has
- * acted: nothing but gone entries and it is prunable; a held one and it is
- * skipped, the same transient the held entry is; a permanent one and it is
- * released, because nothing dotta will ever do empties it. Every present
- * planned item records its class as its verdict is taken, so a directory's
- * walk reads its children's fates off the set; FATE_UNPLANNED is hashmap_get's
- * NULL — the entry is outside the plan — and the workspace item says which of
- * the other two it is (vouch_entry).
+ * A directory's fate is the strongest class left in it once this run has acted:
+ * nothing but gone entries and it is prunable; a held one and it is skipped,
+ * the same transient the held entry is; a permanent one and it is released, because
+ * nothing dotta will ever do empties it. Every present planned item records its
+ * class as its verdict is taken, so a directory's walk reads its children's fates
+ * off the set; FATE_UNPLANNED is hashmap_get's NULL — the entry is outside the
+ * plan — and the workspace item says which of the other two it is (vouch_entry).
  */
 typedef enum {
     FATE_UNPLANNED = 0,
@@ -250,8 +251,8 @@ typedef enum {
 } fate_t;
 
 /**
- * The emptiness walk's context: the fate set, the workspace for an entry
- * outside the plan, and whether a held entry was met on the way
+ * The emptiness walk's context: the fate set, the workspace for an entry outside
+ * the plan, and whether a held entry was met on the way
  */
 typedef struct {
     const hashmap_t *fates;     /* filesystem path → fate_t, every present planned item */
@@ -262,18 +263,18 @@ typedef struct {
 /**
  * Look past this directory entry?
  *
- * The vouch predicate of the verdict phase's emptiness walk. Gone and held
- * entries are looked past — a held one noted, because the directory then waits
- * with it — and a permanent one stops the walk: the directory is occupied by
- * something this run will not remove and no later run will either.
+ * The vouch predicate of the verdict phase's emptiness walk. Gone and held entries
+ * are looked past — a held one noted, because the directory then waits with it
+ * — and a permanent one stops the walk: the directory is occupied by something
+ * this run will not remove and no later run will either.
  *
  * An entry outside the plan is read off its workspace item. ORPHANED is held:
  * the scope did not reach it this run (-e, -p, a path filter), an unfiltered
  * run would decide it, and scope decides reach, never verdict — so a filtered
- * run must not change its parent's fate. Everything else is permanent: a
- * RELEASED orphan stays where it is; a managed path (the view has a row, and
- * a row's item is never an orphan's) stands in an enabled profile's name; an
- * entry with no item at all is the user's.
+ * run must not change its parent's fate. Everything else is permanent: a RELEASED
+ * orphan stays where it is; a managed path (the view has a row, and a row's item
+ * is never an orphan's) stands in an enabled profile's name; an entry with no
+ * item at all is the user's.
  *
  * Membership is keyed by filesystem path, which is why the entry arrives as a
  * full path rather than a basename.
@@ -299,15 +300,14 @@ static bool vouch_entry(const char *child, void *ctx) {
 /**
  * Does the view claim a path beneath this directory?
  *
- * A managed path beneath an orphaned directory makes the directory the
- * ancestor of an enabled row — one ensure_parents would make anyway — and
- * nothing dotta does empties it: permanent, whether the row is on disk yet or
- * not. The readdir meets the rows already deployed (an entry with no item is
- * permanent); this answers for the ones deployment will put there — this run,
- * or a later one that reaches them — which is exactly why the disk cannot
- * answer it. Read from the view, not from the deployment plan, so the answer
- * does not move with -p, -e or a path filter: scope decides reach, never
- * verdict.
+ * A managed path beneath an orphaned directory makes the directory the ancestor
+ * of an enabled row — one ensure_parents would make anyway — and nothing dotta
+ * does empties it: permanent, whether the row is on disk yet or not. The readdir
+ * meets the rows already deployed (an entry with no item is permanent); this
+ * answers for the ones deployment will put there — this run, or a later one that
+ * reaches them — which is exactly why the disk cannot answer it. Read from the
+ * view, not from the deployment plan, so the answer does not move with -p, -e
+ * or a path filter: scope decides reach, never verdict.
  *
  * Every directory above a managed path is its ancestor, not just the immediate
  * parent: the ones deployment creates on the way count too.
@@ -366,9 +366,9 @@ error_t *cleanup_preflight(
 
     error_t *err = NULL;
 
-    /* One verdict per file, read straight off the item: no syscalls, no
-     * queries. An absent file joins neither the prune count nor the fate set:
-     * no filesystem effect to preview, and no walk meets it. */
+    /* One verdict per file, read straight off the item: no syscalls, no queries.
+     * An absent file joins neither the prune count nor the fate set: no filesystem
+     * effect to preview, and no walk meets it. */
     workspace_items_t files = workspace_items_view(&plan->files);
 
     for (size_t i = 0; i < files.count; i++) {
@@ -401,14 +401,14 @@ error_t *cleanup_preflight(
         if (err) goto cleanup;
     }
 
-    /* A directory's verdict is the strongest class left in it once this run
-     * has acted (fate_t): prunable when everything in it is OS metadata or
-     * gone; skipped while something held is left; released once something
-     * permanent is. That is what the prune arrives at by acting, read off the
-     * plan here in one pass because the plan orders every child before its
-     * parent — a directory's own fate enters the set as it is decided, which
-     * is what lets a parent read its pruned children as gone, its skipped
-     * ones as held and its released ones as permanent.
+    /* A directory's verdict is the strongest class left in it once this run has
+     * acted (fate_t): prunable when everything in it is OS metadata or gone;
+     * skipped while something held is left; released once something permanent
+     * is. That is what the prune arrives at by acting, read off the plan here
+     * in one pass because the plan orders every child before its parent — a
+     * directory's own fate enters the set as it is decided, which is what lets
+     * a parent read its pruned children as gone, its skipped ones as held and
+     * its released ones as permanent.
      *
      * The buckets fill in walk order, which is prune order: deepest first. */
     workspace_items_t dirs = workspace_items_view(&plan->directories);
@@ -420,21 +420,21 @@ error_t *cleanup_preflight(
 
         switch (cleanup_verdict(item, force)) {
             case CLEANUP_ABSENT:
-                /* A pure state reclaim: no filesystem effect to preview, and
-                 * no walk meets it. */
+                /* A pure state reclaim: no filesystem effect to preview, and no
+                 * walk meets it. */
                 err = ptr_array_push(&verdicts->absent_dirs, item);
                 break;
 
             case CLEANUP_RELEASED:
-                /* Left alone — unprobed, because nothing about its contents
-                 * changes the answer — and the record retires. */
+                /* Left alone — unprobed, because nothing about its contents changes
+                 * the answer — and the record retires. */
                 err = ptr_array_push(&verdicts->released_dirs, item);
                 fate = FATE_PERMANENT;
                 break;
 
             case CLEANUP_SKIPPED:
-                /* The workspace could not verify it; the directory above it
-                 * waits with it. */
+                /* The workspace could not verify it; the directory above it waits
+                 * with it. */
                 err = ptr_array_push(&verdicts->skipped_dirs, item);
                 fate = FATE_HELD;
                 break;
@@ -442,13 +442,12 @@ error_t *cleanup_preflight(
             case CLEANUP_PRUNABLE:
                 /* A directory the workspace saw and can read (the occupant is
                  * DIRECTORY: anything else in its place was released above).
-                 * What is left in it after this run finishes the verdict. A
-                 * managed path beneath it is known from the view before any
-                 * look at the disk; otherwise one readdir, which stops at the
-                 * first permanent entry and notes any held one it passed.
-                 * UNREADABLE is a directory that was readable at load and is
-                 * not now — the world moved, and it is held like a refusal on
-                 * removal, not released. */
+                 * What is left in it after this run finishes the verdict. A managed
+                 * path beneath it is known from the view before any look at the
+                 * disk; otherwise one readdir, which stops at the first permanent
+                 * entry and notes any held one it passed. UNREADABLE is a directory
+                 * that was readable at load and is not now — the world moved,
+                 * and it is held like a refusal on removal, not released. */
                 if (managed_beneath(ws, path)) {
                     fate = FATE_PERMANENT;
                 } else {
@@ -529,10 +528,10 @@ void cleanup_preflight_result_free(cleanup_preflight_result_t *verdicts) {
  *
  * Both probes run again here even though the verdicts are taken, because the
  * mechanisms cannot tell the receipt what they found: fs_remove_file and
- * fs_remove_empty_dir treat absence as success (an absent path would read
- * "pruned", not "reclaimed"), and rmdir on a symlink fails with ENOTDIR
- * ("failed", not "skipped"). One fs_lstat_occupant each — the workspace's
- * probe, so a path reads the same way at load and at removal.
+ * fs_remove_empty_dir treat absence as success (an absent path would read "pruned",
+ * not "reclaimed"), and rmdir on a symlink fails with ENOTDIR ("failed", not
+ * "skipped"). One fs_lstat_occupant each — the workspace's probe, so a path reads
+ * the same way at load and at removal.
  */
 error_t *cleanup_execute(
     const cleanup_preflight_result_t *verdicts,

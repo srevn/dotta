@@ -555,8 +555,14 @@ error_t *workspace_observe(
  * @param ws Workspace (must not be NULL, state must be open)
  * @param row Active row the path is anchored to (must not be NULL, borrowed from
  *            workspace's active partition; non-zero blob for a file row)
- * @param stat Stat triple captured after the confirmation (may be NULL:
- *             a directory, or lstat failed after the write)
+ * @param stat The stat of the moment this row's content was established on disk,
+ *             taken by the code that established it: the analysis's own triple
+ *             for an adoption or acknowledgement (the snapshot pair, when its
+ *             blob is this row's), NULL for a deployment (a freshly written file's
+ *             mtime second is still open — no stat taken now can prove anything
+ *             about it; the next load's look confirms) and for a directory. Never
+ *             a fresh lstat: a look taken here binds whatever stands at the path
+ *             now to a verdict from earlier.
  * @param now Timestamp of the write (must be > 0)
  * @return Error from state_anchor, or NULL on success
  */

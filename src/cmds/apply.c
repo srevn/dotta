@@ -1394,7 +1394,10 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * running it is how the user claims the in-scope set. Stamping here collapses
      * the "enable → apply on a pre-existing matching file" flow to a coherent
      * (blob, now, stat), so a later `rm file` is classified as [deleted] and
-     * `update` commits the deletion.
+     * `update` commits the deletion. The stat is the analysis's own — the snapshot
+     * pair, when it vouches for this row's blob — never a fresh lstat, which
+     * would bind whatever stands at the path now to a verdict from two phases
+     * earlier.
      *
      * A clean row whose record dotta owns under another profile is a reassignment:
      * disk holds what A deployed, B owns the path now, and the content is the
@@ -1403,12 +1406,14 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * Same write, same stat, one more counter; a stale reassignment is acknowledged
      * by its deployment and counted after the record step below.
      *
-     * Independence from the earlier flush: workspace_flush_updates above persists
-     * slow-path confirmations for the *next* run's fast path. It is not what
-     * proves this run's match — that proof comes from analyze_file_divergence
-     * leaving the entry out of ws->diverged. A confirmation rewrites neither
-     * deployed_at nor the record's profile, so both remain valid probes here;
-     * DB and in-memory views are kept coherent by workspace_anchor.
+     * Division of labor with the earlier flush: the proof of this run's match
+     * comes from analyze_file_divergence leaving the entry out of ws->diverged,
+     * and workspace_flush_updates above put the pair that proof rests on where
+     * this loop can read it — a slow-path CMP_EQUAL patched onto the snapshot
+     * record, a recordless clean row's record created by the observation and
+     * confirmed in the same flush. A confirmation rewrites neither deployed_at
+     * nor the record's profile, so both remain valid probes here; DB and in-memory
+     * views are kept coherent by workspace_anchor.
      *
      * Placement rationale: MUST run before the nothing-to-do early exit below,
      * otherwise the canonical case (clean manifest, no orphans) never reaches
@@ -1435,8 +1440,17 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         if (!adopt && !acknowledge) continue;
 
         if (!opts->dry_run) {
-            stat_cache_t stat = stat_cache_from_path(file->filesystem_path);
-            error_t *anchor_err = workspace_anchor(ws, file, &stat, now);
+            /* The snapshot pair vouches for this row's blob on every route a
+             * clean row can arrive by — fast-path hit, slow-path confirmation,
+             * record created and confirmed by the flush — except a confirmation
+             * dropped under memory pressure, whose anchor still carries an older
+             * pair. The gate asks the snapshot itself; NULL advances the record
+             * blob-only, and the next load's slow path confirms. */
+            const stat_cache_t *stat =
+                (anchor && git_oid_equal(&anchor->blob_oid, &file->blob_oid))
+                ? &anchor->stat : NULL;
+
+            error_t *anchor_err = workspace_anchor(ws, file, stat, now);
             if (anchor_err) {
                 /* Non-fatal: file is correct on disk; next status's slow-path
                  * CMP_EQUAL re-confirms the record, and the row will be re-adopted
@@ -1865,8 +1879,11 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
          *
          * The receipt's buckets split by what dotta did, and the record follows
          * the split — the receipt is the whole of it:
-         *   deployed              files written or linked — an owned anchor
-         *                         with a fresh stat
+         *   deployed              files written or linked — an owned anchor,
+         *                         blob only: the write's own mtime second is
+         *                         still open, so no stat taken now can prove
+         *                         anything about what stands there; the next
+         *                         load's look confirms one, in a closed second
          *   created ∪ replaced    directories dotta made (where nothing stood,
          *   ∪ ancestors           or in a squatter's place, or as the parent of
          *                         a planned path) — an owned anchor; a directory
@@ -1895,14 +1912,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
             for (size_t i = 0; i < deployed.count; i++) {
                 const manifest_row_t *file = deployed.entries[i];
 
-                /* Snapshot disk state (mtime/size/ino) for the fast path. The
-                 * file was just written and fsynced by deploy_file(); lstat()
-                 * is a cheap inode-cache read. If lstat fails, the anchor is
-                 * still advanced with a zero stat (slow-path fallback on next
-                 * run). */
-                stat_cache_t stat = stat_cache_from_path(file->filesystem_path);
-
-                err = workspace_anchor(ws, file, &stat, now);
+                err = workspace_anchor(ws, file, NULL, now);
                 if (err) {
                     /* Non-fatal warning - deployment succeeded, just anchor update
                      * failed. The file is already on the filesystem with correct

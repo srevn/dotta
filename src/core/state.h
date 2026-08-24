@@ -60,10 +60,12 @@ typedef struct {
 /**
  * Populate stat cache from a struct stat
  *
- * Captures the three fields used for fast-path validation. Call this immediately
- * after a deploy, adoption, post-commit capture, or slow-path CMP_EQUAL
- * confirmation — the stat returned must correspond to the blob the caller just
- * confirmed disk matches.
+ * The one constructor: a triple is born only from a struct stat the caller
+ * already holds at the moment of its look — a post-commit capture's fstat, or
+ * the slow-path CMP_EQUAL confirmation's lstat — so the triple and the bytes
+ * the caller verified describe the same moment. There is deliberately no
+ * from-path variant: a fresh look taken at record-write time would bind
+ * whatever stands at the path then to a verdict from earlier.
  */
 static inline stat_cache_t stat_cache_from_stat(const struct stat *st) {
     return (stat_cache_t){
@@ -71,26 +73,6 @@ static inline stat_cache_t stat_cache_from_stat(const struct stat *st) {
         .size = (int64_t) st->st_size,
         .ino = (uint64_t) st->st_ino,
     };
-}
-
-/**
- * Capture a stat triple from disk
- *
- * lstat() + stat_cache_from_stat(). Callers invoke this only after they have
- * verified the file on disk matches the blob they are about to anchor — this
- * feeds an anchor write, not a probe.
- *
- * If lstat fails (rare: file removed in the small window between content
- * confirmation and anchor recording), the triple is left zeroed. The anchor still
- * advances to the blob; the fast path just can't short-circuit on next read and
- * will fall through to the slow path.
- */
-static inline stat_cache_t stat_cache_from_path(const char *filesystem_path) {
-    struct stat st;
-    if (lstat(filesystem_path, &st) != 0) {
-        return STAT_CACHE_UNSET;
-    }
-    return stat_cache_from_stat(&st);
 }
 
 /**
@@ -561,8 +543,9 @@ error_t *state_confirm(
  *     state_confirm's.
  *   - observed_at is the INSERT arm's alone: now for a new row, untouched for
  *     an existing one.
- *   - stat may be NULL (a directory, or lstat failed after the write): the triple
- *     is written as zeros and the next read takes the slow path.
+ *   - stat may be NULL (a directory; a deployed file — no triple survives the
+ *     write's own open second; or the caller's establishment did not reach it):
+ *     the triple is written as zeros and the next read takes the slow path.
  *   - prune_ordered resets to 0: the path is back under a live row.
  *
  * resolved_out semantics:
@@ -577,7 +560,8 @@ error_t *state_confirm(
  * @param state State (must not be NULL, must have open database)
  * @param row Row the path is anchored to (must not be NULL; non-zero blob for a
  *            file row)
- * @param stat Stat triple captured after the confirmation (may be NULL)
+ * @param stat Stat triple of the caller's establishing look (may be NULL; see
+ *             semantics above)
  * @param now Timestamp of the write (must be > 0)
  * @param resolved_out Optional out-param for the post-write record (may be NULL;
  *                     see semantics above)

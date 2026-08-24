@@ -62,8 +62,10 @@ typedef struct {
  * released from management and remain on the filesystem. With delete_files=true,
  * they are staged for removal and deleted when 'dotta apply' is run.
  *
- * Uses temporary worktree to safely modify profile branches. Executes hooks but
- * does not modify deployed files or state file entries.
+ * Uses temporary worktree to safely modify profile branches. Executes hooks;
+ * never touches deployed files. Writes the record for what the commit let go
+ * (retire, or prune-order under --delete-files) — the record phase is
+ * non-fatal: Git stands even when the record write fails.
  *
  * @param ctx Dispatch context (must not be NULL)
  * @param opts Command options (must not be NULL)

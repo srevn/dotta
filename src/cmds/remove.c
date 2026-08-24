@@ -63,6 +63,15 @@ static error_t *validate_options(const cmd_remove_options_t *opts) {
         );
     }
 
+    /* Interactive mode requires a terminal for user prompts — refused at
+     * entry, before any hook fires or any work begins */
+    if (opts->interactive && !isatty(STDIN_FILENO)) {
+        return ERROR(
+            ERR_INVALID_ARG,
+            "Interactive mode requires a terminal (stdin is not a TTY)"
+        );
+    }
+
     return NULL;
 }
 
@@ -979,15 +988,6 @@ static error_t *remove_files_from_profile(
         err = error_wrap(
             err, "Failed to checkout profile '%s'",
             opts->profile
-        );
-        goto cleanup;
-    }
-
-    /* Interactive mode requires a terminal for user prompts */
-    if (opts->interactive && !isatty(STDIN_FILENO)) {
-        err = ERROR(
-            ERR_INVALID_ARG,
-            "Interactive mode requires a terminal (stdin is not a TTY)"
         );
         goto cleanup;
     }

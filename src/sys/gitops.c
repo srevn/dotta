@@ -1328,10 +1328,12 @@ error_t *gitops_commit_tree_updates_safe(
         }
     }
 
-    /* Apply removals. Missing entries are an error so the caller notices bugs
-     * rather than silently no-op'ing. */
+    /* Apply removals. A missing entry is an error so the caller notices bugs
+     * rather than silently no-op'ing — git_index_remove_bypath would swallow
+     * GIT_ENOTFOUND ("ensure gone" semantics), so the removal goes through
+     * git_index_remove at stage 0, which reports it. */
     for (size_t i = 0; i < removal_count; i++) {
-        git_err = git_index_remove_bypath(index, removals[i]);
+        git_err = git_index_remove(index, removals[i], 0);
         if (git_err < 0) {
             err = error_wrap(
                 error_from_git(git_err),

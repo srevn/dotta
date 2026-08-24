@@ -471,6 +471,10 @@ typedef struct {
  * git_index_add replaces entries at the same path, so updates that overlap existing
  * paths are "upserts" without needing an explicit remove-before-add.
  *
+ * A removal naming a path the branch tree lacks is a hard error (nothing is
+ * committed): the caller's model of the tree is wrong, and the mismatch
+ * surfaces instead of silently no-op'ing.
+ *
  * At least one update or removal is required. Supported modes are
  * GIT_FILEMODE_BLOB, GIT_FILEMODE_BLOB_EXECUTABLE, and GIT_FILEMODE_LINK
  * (symlinks).

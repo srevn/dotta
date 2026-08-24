@@ -48,6 +48,9 @@ error_t *worktree_create_temp(
 /**
  * Checkout existing branch in worktree
  *
+ * The checkout is forced: a temp worktree is dotta's own staging, so whatever
+ * a previous step left in it is discarded, never protected.
+ *
  * @param wt Worktree handle (must not be NULL)
  * @param branch_name Branch name (must not be NULL, must exist)
  * @return Error or NULL on success

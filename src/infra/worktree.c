@@ -286,27 +286,19 @@ error_t *worktree_checkout_branch(
         return error_from_git(git_err);
     }
 
-    /* Checkout tree with SAFE strategy
-     *
-     * With GIT_CHECKOUT_SAFE:
-     * - Clean working directory: transition allowed, files updated
-     * - Modified files: checkout blocked with GIT_ECONFLICT
-     */
+    /* Checkout with FORCE: a temp worktree holds nothing but dotta's own
+     * staging — created fresh per run, written and committed by dotta alone —
+     * so anything dirty in it is a leftover of dotta's own failed or skipped
+     * step, and a checkout may always discard it. There are no local
+     * modifications to protect. */
     git_checkout_options checkout_opts;
     git_checkout_options_init(&checkout_opts, GIT_CHECKOUT_OPTIONS_VERSION);
-    checkout_opts.checkout_strategy = GIT_CHECKOUT_SAFE;
+    checkout_opts.checkout_strategy = GIT_CHECKOUT_FORCE;
 
     git_err = git_checkout_tree(wt->repo, commit, &checkout_opts);
     git_object_free(commit);
 
     if (git_err < 0) {
-        if (git_err == GIT_ECONFLICT) {
-            return ERROR(
-                ERR_CONFLICT,
-                "Cannot checkout '%s': local modifications would be overwritten",
-                branch_name
-            );
-        }
         return error_from_git(git_err);
     }
 

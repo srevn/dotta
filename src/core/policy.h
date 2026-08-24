@@ -30,8 +30,6 @@
 #include <stdbool.h>
 #include <types.h>
 
-#include "infra/content.h"
-
 /**
  * Report whether auto-encrypt policy applies to this config.
  *
@@ -115,72 +113,36 @@ error_t *encryption_policy_should_encrypt(
 );
 
 /**
- * Check if file path matches auto-encrypt patterns
- *
- * Tests storage path against the config's compiled auto-encrypt ruleset. Returns
- * true iff the last-match-wins verdict is "ignored" (i.e. the path matches a
- * positive rule that no later negation un-matches).
- *
- * This helper is used by encryption_policy_should_encrypt() and also exposed
- * publicly for validation/diagnostic purposes (e.g. workspace divergence analysis).
- *
- * Pattern matching:
- * - Full gitignore semantics (including `!` negation, directory-only, anchoring,
- *   `**` recursive globs) via base/gitignore.
- * - Storage-path prefix (`home/`, `root/`, `custom/`) is stripped before matching,
- *   so users can write `.ssh/id_*` instead of `home/.ssh/id_*`.
- *
- * Pattern examples:
- *   Pattern: ".ssh/id_*" Matches: "home/.ssh/id_rsa", "root/.ssh/id_ed25519" No
- *   match: "home/backup/.ssh/id_rsa" (pattern is anchored)
- *
- *   Pattern: "*.key" Matches: "home/api.key", "home/dir/secret.key" (basename
- *   match)
- *
- *   Pattern: "secrets/" Matches: "home/secrets/api.key" (directory walk-up)
- *
- * Never fails. Returns false when:
- * - config is NULL or auto-encrypt is inactive
- * - storage_path is NULL
- * - No rule matches, or the winning rule is a negation
- *
- * @param config Configuration (can be NULL)
- * @param storage_path File path in profile (e.g., "home/.bashrc")
- * @return true if path matches an auto-encrypt rule, false otherwise
- */
-bool encryption_policy_matches_auto_patterns(
-    const config_t *config,
-    const char *storage_path
-);
-
-/**
  * Check whether a file is in violation of the auto-encrypt policy.
  *
- * Returns true iff:
- *   - The blob's classified kind is `CONTENT_PLAINTEXT`, AND
- *   - The path matches an active auto-encrypt rule.
+ * Returns true iff the blob is stored plaintext AND the path matches an active
+ * auto-encrypt rule.
  *
- * Used by workspace audit to flag DIVERGENCE_ENCRYPTION when a managed file matches
- * an auto-encrypt pattern but is stored plaintext in Git.
+ * Used by workspace analysis to flag DIVERGENCE_ENCRYPTION when a managed file
+ * matches an auto-encrypt pattern but is stored plaintext in Git.
  *
- * Why kind, not bool: a blob whose first bytes match cipher magic but with a
- * non-current version byte (CONTENT_UNSUPPORTED_VERSION) carries encryption intent
- * at a version this build does not understand. Flagging it as "missing encryption"
- * would be misleading; a version-skew error surfaces from the content read path
- * when a caller actually tries to decrypt. The audit treats UNSUPPORTED_VERSION
- * as not-a-violation.
+ * Why a bool is exact: the caller holds the view's cached `encrypted` — byte
+ * truth by the write-boundary invariant (stamped from the blob's bytes in
+ * cmds/add.c and cmds/update.c, projected onto the view row at build). That bool
+ * collapses ENCRYPTED and UNSUPPORTED_VERSION onto true, and the collapse is
+ * exactly right here: a blob at a cipher version this build does not understand
+ * still carries encryption intent, and flagging it as "missing encryption" would
+ * be misleading — the version skew surfaces from the content read path when a
+ * caller actually tries to decrypt.
  *
- * NULL-safe (returns false if config is NULL or storage_path is NULL).
+ * Pure — no I/O, no allocation. NULL-safe (returns false if config or storage_path
+ * is NULL); an inactive policy (no compiled ruleset) never matches.
  *
  * @param config Configuration (can be NULL)
  * @param storage_path File path in profile (can be NULL)
- * @param kind Classified content kind of the blob in question
+ * @param encrypted Whether the blob's bytes carry encryption intent (the view's
+ *                  cache)
  * @return true iff the blob/path combination violates auto-encrypt policy
  */
 bool encryption_policy_violation(
     const config_t *config,
     const char *storage_path,
-    content_kind_t kind
+    bool encrypted
 );
 
 #endif /* DOTTA_POLICY_H */

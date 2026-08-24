@@ -62,6 +62,47 @@ static bool is_protected_meta_file(const char *storage_path) {
     return false;
 }
 
+/**
+ * Check if file path matches auto-encrypt patterns
+ *
+ * Tests storage path against the config's compiled auto-encrypt ruleset. Returns
+ * true iff the last-match-wins verdict is "ignored" (i.e. the path matches a
+ * positive rule that no later negation un-matches).
+ *
+ * Full gitignore semantics (`!` negation, directory-only, anchoring, `**` recursive
+ * globs) via base/gitignore. The storage-path prefix (`home/`, `root/`, `custom/`)
+ * is stripped before matching, so users write `.ssh/id_*` rather than
+ * `home/.ssh/id_*`; `.ssh/id_*` is anchored (no match under `backup/`), `*.key`
+ * matches by basename, `secrets/` matches by directory walk-up.
+ *
+ * Never fails. Returns false when config is NULL, auto-encrypt is inactive,
+ * storage_path is NULL, no rule matches, or the winning rule is a negation.
+ *
+ * @param config Configuration (can be NULL)
+ * @param storage_path File path in profile (e.g., "home/.bashrc")
+ * @return true if path matches an auto-encrypt rule, false otherwise
+ */
+static bool encryption_policy_matches_auto_patterns(
+    const config_t *config,
+    const char *storage_path
+) {
+    if (!config || !config->auto_encrypt.rules || !storage_path) {
+        return false;
+    }
+
+    /* Strip storage prefix so patterns like ".ssh/id_*" match "home/.ssh/id_rsa"
+     * without forcing users to write "home/" in config. */
+    const char *path_for_matching = mount_strip_label(storage_path);
+
+    /* Encryption applies to files, not directories — is_dir is always false.
+     * Gitignore's last-match-wins with negation support is what the user actually
+     * wants: `*.key` + `!public.key` correctly excludes `public.key` from
+     * auto-encryption. */
+    return gitignore_is_ignored(
+        config->auto_encrypt.rules, path_for_matching, false
+    );
+}
+
 bool encryption_policy_is_active(const config_t *config) {
     return config && config->auto_encrypt.rules != NULL;
 }
@@ -154,40 +195,16 @@ error_t *encryption_policy_should_encrypt(
     return NULL;
 }
 
-bool encryption_policy_matches_auto_patterns(
-    const config_t *config,
-    const char *storage_path
-) {
-    if (!config || !config->auto_encrypt.rules || !storage_path) {
-        return false;
-    }
-
-    /* Strip storage prefix so patterns like ".ssh/id_*" match "home/.ssh/id_rsa"
-     * without forcing users to write "home/" in config. */
-    const char *path_for_matching = mount_strip_label(storage_path);
-
-    /* Encryption applies to files, not directories — is_dir is always false.
-     * Gitignore's last-match-wins with negation support is what the user actually
-     * wants: `*.key` + `!public.key` correctly excludes `public.key` from
-     * auto-encryption. */
-    return gitignore_is_ignored(
-        config->auto_encrypt.rules, path_for_matching, false
-    );
-}
-
 bool encryption_policy_violation(
     const config_t *config,
     const char *storage_path,
-    content_kind_t kind
+    bool encrypted
 ) {
-    /* Only plaintext blobs can violate the auto-encrypt policy.
-     *
-     * ENCRYPTED blobs satisfy the intent. UNSUPPORTED_VERSION blobs also carry
-     * encryption intent (just at a version this build does not understand) —
-     * flagging them as "missing encryption" would be misleading; the version-skew
-     * surfaces from the content read path when callers actually attempt to
-     * decrypt. */
-    if (kind != CONTENT_PLAINTEXT) {
+    /* Only plaintext blobs can violate the auto-encrypt policy: an encrypted
+     * blob satisfies the intent whatever its cipher version — the caller's bool
+     * collapses ENCRYPTED and UNSUPPORTED_VERSION onto true, and both carry intent
+     * (see the header). */
+    if (encrypted) {
         return false;
     }
 

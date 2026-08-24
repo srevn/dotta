@@ -2250,17 +2250,7 @@ static error_t *analyze_encryption_policy_mismatch(
         const char *storage_path = row->storage_path;
         const char *profile = row->profile;
 
-        /* Project the cached bool to a content_kind_t for the policy predicate.
-         * The 3-valued enum's UNSUPPORTED_VERSION case is unreachable here -
-         * row->encrypted is a bool and collapses ENCRYPTED + UNSUPPORTED_VERSION
-         * onto true. That collapse is exhaustive for encryption_policy_violation:
-         * any non-PLAINTEXT kind carries encryption intent and is treated as
-         * not-a-violation. The version-skew distinction surfaces ia the content
-         * read path, not here. */
-        content_kind_t kind = row->encrypted ? CONTENT_ENCRYPTED
-                                             : CONTENT_PLAINTEXT;
-
-        if (!encryption_policy_violation(config, storage_path, kind)) {
+        if (!encryption_policy_violation(config, storage_path, row->encrypted)) {
             continue;
         }
 

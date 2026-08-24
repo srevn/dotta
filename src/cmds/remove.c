@@ -359,14 +359,16 @@ static error_t *remove_file_from_worktree(
  * Performance: O(M×P + N) where M=profiles, P=avg files/profile, N=files checked
  * Uses centralized profile_build_file_index() for optimal performance.
  *
- * Returns arrays of other profiles per file (caller must free).
+ * Hands the profile file index (storage_path → the other profiles claiming it)
+ * to the caller so the display can borrow from it; free with hashmap_free(...,
+ * string_array_free_cb).
  */
 static error_t *analyze_multi_profile_conflicts(
     const dotta_ctx_t *ctx,
     const string_array_t *storage_paths,
     const string_array_t *filesystem_paths,
     const char *current_profile,
-    string_array_t ***other_profiles_out,
+    hashmap_t **profile_index_out,
     size_t *multi_profile_count_out,
     bool *has_deployed_from_other_out
 ) {
@@ -374,28 +376,18 @@ static error_t *analyze_multi_profile_conflicts(
     CHECK_NULL(storage_paths);
     CHECK_NULL(filesystem_paths);
     CHECK_NULL(current_profile);
-    CHECK_NULL(other_profiles_out);
+    CHECK_NULL(profile_index_out);
     CHECK_NULL(multi_profile_count_out);
     CHECK_NULL(has_deployed_from_other_out);
 
     git_repository *repo = ctx->run.repo;
     const manifest_t *view = ctx->run.manifest;
 
-    error_t *err = NULL;
-    size_t file_count = storage_paths->count;
-
-    /* Allocate array to hold other_profiles for each file */
-    string_array_t **other_profiles = calloc(file_count, sizeof(string_array_t *));
-    if (!other_profiles) {
-        return ERROR(ERR_MEMORY, "Failed to allocate multi-profile tracking");
-    }
-
     /* Build profile file index once (O(M×P) - loads all profiles) Uses centralized
      * function from core/profiles.c */
     hashmap_t *profile_index = NULL;
-    err = profile_build_file_index(repo, current_profile, &profile_index);
+    error_t *err = profile_build_file_index(repo, current_profile, &profile_index);
     if (err) {
-        free(other_profiles);
         return error_wrap(err, "Failed to build profile index");
     }
 
@@ -403,39 +395,30 @@ static error_t *analyze_multi_profile_conflicts(
     bool has_deployed_from_other = false;
 
     /* Check each file using O(1) index lookups */
-    for (size_t i = 0; i < file_count; i++) {
-        const char *storage_path = storage_paths->items[i];
+    for (size_t i = 0; i < storage_paths->count; i++) {
         const char *filesystem_path = filesystem_paths->items[i];
 
         /* Lookup profiles containing this file - O(1) */
-        string_array_t *indexed_profiles = hashmap_get(profile_index, storage_path);
+        string_array_t *indexed_profiles = hashmap_get(
+            profile_index, storage_paths->items[i]
+        );
+        if (!indexed_profiles || indexed_profiles->count == 0) {
+            continue;
+        }
+        multi_profile_count++;
 
-        if (indexed_profiles && indexed_profiles->count > 0) {
-            /* Create a copy for the output (index owns the original) */
-            other_profiles[i] = string_array_new(0);
-            if (other_profiles[i]) {
-                for (size_t j = 0; j < indexed_profiles->count; j++) {
-                    string_array_push(other_profiles[i], indexed_profiles->items[j]);
-                }
-                multi_profile_count++;
-
-                /* Check if another profile owns the path in the view. Only valid
-                 * with actual filesystem paths (absolute), not storage path
-                 * fallbacks (relative, e.g., "home/.bashrc"). */
-                if (filesystem_path[0] == '/') {
-                    const manifest_row_t *row = manifest_lookup(view, filesystem_path);
-                    if (row && strcmp(row->profile, current_profile) != 0) {
-                        has_deployed_from_other = true;
-                    }
-                }
+        /* Check if another profile owns the path in the view. Only valid with
+         * actual filesystem paths (absolute), not storage path fallbacks (relative,
+         * e.g., "home/.bashrc"). */
+        if (filesystem_path[0] == '/') {
+            const manifest_row_t *row = manifest_lookup(view, filesystem_path);
+            if (row && strcmp(row->profile, current_profile) != 0) {
+                has_deployed_from_other = true;
             }
         }
     }
 
-    /* Free the index (and all its string arrays) */
-    hashmap_free(profile_index, string_array_free_cb);
-
-    *other_profiles_out = other_profiles;
+    *profile_index_out = profile_index;
     *multi_profile_count_out = multi_profile_count;
     *has_deployed_from_other_out = has_deployed_from_other;
 
@@ -446,12 +429,13 @@ static error_t *analyze_multi_profile_conflicts(
  * Display multi-profile warnings to the user
  *
  * Shows which files exist in multiple profiles and explains the implications.
+ * Borrows the analysis's profile index for each file's "also in" list.
  */
 static void display_multi_profile_warnings(
     output_t *out,
+    const string_array_t *storage_paths,
     const string_array_t *filesystem_paths,
-    string_array_t **other_profiles,
-    size_t file_count,
+    const hashmap_t *profile_index,
     size_t multi_profile_count,
     bool has_deployed_from_other,
     const char *current_profile
@@ -465,8 +449,11 @@ static void display_multi_profile_warnings(
     );
 
     /* Display each multi-profile file */
-    for (size_t i = 0; i < file_count; i++) {
-        if (!other_profiles[i] || other_profiles[i]->count == 0) {
+    for (size_t i = 0; i < storage_paths->count; i++) {
+        const string_array_t *others = hashmap_get(
+            profile_index, storage_paths->items[i]
+        );
+        if (!others || others->count == 0) {
             continue;
         }
 
@@ -476,10 +463,10 @@ static void display_multi_profile_warnings(
             fs_path
         );
 
-        for (size_t j = 0; j < other_profiles[i]->count; j++) {
+        for (size_t j = 0; j < others->count; j++) {
             output_styled(
                 out, OUTPUT_NORMAL, " {cyan}%s{reset}",
-                other_profiles[i]->items[j]
+                others->items[j]
             );
         }
         output_newline(out, OUTPUT_NORMAL);
@@ -488,38 +475,28 @@ static void display_multi_profile_warnings(
     /* Explain implications */
     output_newline(out, OUTPUT_NORMAL);
     output_info(
-        out, OUTPUT_NORMAL, "These files will be removed only from profile '%s'.",
+        out, OUTPUT_NORMAL,
+        "These files will be removed only from profile '%s'.",
         current_profile
     );
 
     if (has_deployed_from_other) {
         output_warning(
-            out, OUTPUT_NORMAL, "Some files are currently deployed from other profiles."
+            out, OUTPUT_NORMAL,
+            "Some files are currently deployed from other profiles."
         );
         output_info(
-            out, OUTPUT_NORMAL, "Those files will remain on the filesystem."
+            out, OUTPUT_NORMAL,
+            "Those files will remain on the filesystem."
         );
     } else {
         output_info(
-            out, OUTPUT_NORMAL, "Files deployed from '%s' will remain until 'dotta apply'.",
+            out, OUTPUT_NORMAL,
+            "Files deployed from '%s' will remain until 'dotta apply'.",
             current_profile
         );
     }
     output_newline(out, OUTPUT_NORMAL);
-}
-
-/**
- * Free multi-profile tracking arrays
- */
-static void free_multi_profile_tracking(string_array_t **other_profiles, size_t count) {
-    if (!other_profiles) {
-        return;
-    }
-
-    for (size_t i = 0; i < count; i++) {
-        string_array_free(other_profiles[i]);
-    }
-    free(other_profiles);
 }
 
 /**
@@ -792,10 +769,10 @@ static error_t *cleanup_metadata(
  * Remove files from profile
  *
  * `before` is the view ahead of the commit (the dispatcher's): who owns a path
- * a moment before this command removes it is a fact neither the post-commit
- * view nor the record can state — a path never seen here has no record, and
- * a record can be a higher profile's — so it serves both the conflict analysis
- * and the record update.
+ * a moment before this command removes it is a fact neither the post-commit view
+ * nor the record can state — a path never seen here has no record, and a record
+ * can be a higher profile's — so it serves both the conflict analysis and the
+ * record update.
  */
 static error_t *remove_files_from_profile(
     const dotta_ctx_t *ctx,
@@ -816,7 +793,7 @@ static error_t *remove_files_from_profile(
     error_t *err = NULL;
     string_array_t *storage_paths = NULL;
     string_array_t *filesystem_paths = NULL;
-    string_array_t **other_profiles = NULL;
+    hashmap_t *profile_index = NULL;       /* storage_path → the other profiles claiming it (owned) */
     size_t multi_profile_count = 0;
     worktree_handle_t *wt = NULL;
     string_array_t *removed_paths = NULL;
@@ -848,7 +825,7 @@ static error_t *remove_files_from_profile(
         storage_paths,
         filesystem_paths,
         opts->profile,
-        &other_profiles,
+        &profile_index,
         &multi_profile_count,
         &has_deployed_from_other
     );
@@ -865,9 +842,9 @@ static error_t *remove_files_from_profile(
     /* Display multi-profile warnings BEFORE any operation */
     display_multi_profile_warnings(
         out,
+        storage_paths,
         filesystem_paths,
-        other_profiles,
-        storage_paths->count,
+        profile_index,
         multi_profile_count,
         has_deployed_from_other,
         opts->profile
@@ -909,9 +886,9 @@ static error_t *remove_files_from_profile(
         goto cleanup;  /* err is NULL, will return success */
     }
 
-    /* Cleanup multi-profile tracking - done with it */
-    free_multi_profile_tracking(other_profiles, storage_paths->count);
-    other_profiles = NULL;
+    /* Done with the profile index — the display was its last reader */
+    hashmap_free(profile_index, string_array_free_cb);
+    profile_index = NULL;
 
     /* Build hook invocation with filesystem paths (resolved by
      * resolve_paths_to_remove). Reached only on non-dry-run: the dry-run branch
@@ -1192,9 +1169,7 @@ cleanup:
     string_array_deinit(&pruned_dirs);
     if (removed_paths) string_array_free(removed_paths);
     if (wt) worktree_cleanup(&wt);
-    if (other_profiles) free_multi_profile_tracking(
-        other_profiles, storage_paths->count
-    );
+    if (profile_index) hashmap_free(profile_index, string_array_free_cb);
     if (filesystem_paths) string_array_free(filesystem_paths);
     if (storage_paths) string_array_free(storage_paths);
 
@@ -1404,11 +1379,11 @@ static error_t *delete_profile_branch(
     /* Convert storage paths to filesystem paths for hook consistency. The file
      * removal path passes filesystem paths to hooks; do the same here.
      *
-     * Borrows the run's mount table. HOME and ROOT are always present,
-     * so home/ and root/ paths resolve unconditionally. CUSTOM paths resolve
-     * only when the profile is enabled with a binding; otherwise
-     * MOUNT_RESOLVE_UNBOUND fires and the loop substitutes the storage path as
-     * the user-visible fallback. */
+     * Borrows the run's mount table. HOME and ROOT are always present, so home/
+     * and root/ paths resolve unconditionally. CUSTOM paths resolve only when
+     * the profile is enabled with a binding; otherwise MOUNT_RESOLVE_UNBOUND
+     * fires and the loop substitutes the storage path as the user-visible
+     * fallback. */
     if (files) {
         hook_fs_paths = string_array_new(0);
         if (hook_fs_paths) {
@@ -1452,11 +1427,8 @@ static error_t *delete_profile_branch(
     err = hook_fire_pre(config, out, repo_path, &hook_inv);
     if (err) goto cleanup;
 
-    /*
-     * Architectural note: We do NOT delete files from the filesystem here. This
-     * maintains separation of concerns - `apply` handles filesystem cleanup.
-     * This ensures proper global context when determining file removal.
-     */
+    /* No filesystem deletion here either — see the Architectural note in
+     * remove_files_from_profile: apply owns deferred filesystem cleanup. */
 
     /* Delete local branch */
     err = gitops_delete_branch(repo, opts->profile);
@@ -1722,11 +1694,10 @@ static error_t *remove_post_parse(
 }
 
 /**
- * What can stand at the cursor, read off the buckets remove_post_parse
- * routes: a local profile in the profile slot — the first positional, unless
- * -p took it — then the files of that profile's branch, shadowed and
- * disabled ones included; nothing after --delete-profile, which takes no
- * path.
+ * What can stand at the cursor, read off the buckets remove_post_parse routes:
+ * a local profile in the profile slot — the first positional, unless -p took it
+ * — then the files of that profile's branch, shadowed and disabled ones included;
+ * nothing after --delete-profile, which takes no path.
  */
 static args_want_t remove_complete(
     const void *ctx_v, const void *opts_v, const args_completion_t *at, FILE *out
@@ -1833,13 +1804,14 @@ const args_command_t spec_remove = {
         "  --delete-files      Same as default, plus stage the deployed\n"
         "                      items for removal on the next '%s apply'.\n"
         "  --delete-profile    Delete the entire profile branch. No paths\n"
-        "                      may be given; cannot be combined with\n"
-        "                      --delete-files.\n",
+        "                      may be given; with --delete-files the deployed\n"
+        "                      items are staged for removal as well.\n",
     .examples     =
         "  %s remove global ~/.bashrc                  # Untrack, keep on disk\n"
         "  %s remove darwin ~/.config/nvim -n          # Preview removal\n"
         "  %s remove darwin ~/.config/nvim --delete-files  # Remove on apply\n"
-        "  %s remove staging --delete-profile          # Delete whole profile\n",
+        "  %s remove staging --delete-profile          # Delete whole profile\n"
+        "  %s remove staging --delete-profile --delete-files  # ...and its copies\n",
     .epilogue     =
         "See also:\n"
         "  %s profile disable <name>  # Stop deploying without deleting\n"

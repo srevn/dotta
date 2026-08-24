@@ -41,9 +41,8 @@
  *
  * @param ctx Dispatch context (must not be NULL; supplies the key and the
  *            encryption policy)
- * @param previously_encrypted Whether the file's prior bytes (the branch's
- *                             HEAD blob) were encrypted — the caller's to
- *                             source
+ * @param previously_encrypted Whether the file's prior bytes (the branch's HEAD
+ *                             blob) were encrypted — the caller's to source
  * @param out_was_encrypted Optional output - set to true if file was encrypted
  *                          (can be NULL)
  * @param out_stat Optional output - filled with stat data from source file (can
@@ -208,12 +207,12 @@ cleanup:
 /**
  * The plan's shape, counted once
  *
- * Filled by one walk over the filtered candidates; the preview gates its
- * sections on these and the new-files prompt binds on new_files. Buckets
- * follow the preview's sections: the modified fate splits by kind (a
- * directory's modification is a claim recapture, not a content commit),
- * deleted deliberately does not (a deleted directory is a deletion), and
- * encryption is the subset of modified_files that also violates policy.
+ * Filled by one walk over the filtered candidates; the preview gates its sections
+ * on these and the new-files prompt binds on new_files. Buckets follow the
+ * preview's sections: the modified fate splits by kind (a directory's modification
+ * is a claim recapture, not a content commit), deleted deliberately does not (a
+ * deleted directory is a deletion), and encryption is the subset of modified_files
+ * that also violates policy.
  */
 typedef struct {
     size_t modified_files;  /* DEPLOYED files: divergent content or metadata */
@@ -240,17 +239,16 @@ typedef struct {
 /**
  * What one profile's update commit did, path by path
  *
- * Filled by the walk that does the work — one writer per item: the copy +
- * capture for a file, the claim capture for a directory, the entry removal
- * for a deletion, the prune for the directory entries dropped as redundant —
- * and read back by the commit message and by the record loop
- * (update_write_record), so both follow the commit and nothing else:
- * an item the walk skipped (a directory the race guard refused) lands in no
- * list, is not named, and gets no record write.
+ * Filled by the walk that does the work — one writer per item: the copy + capture
+ * for a file, the claim capture for a directory, the entry removal for a deletion,
+ * the prune for the directory entries dropped as redundant — and read back by
+ * the commit message and by the record loop (update_write_record), so both follow
+ * the commit and nothing else: an item the walk skipped (a directory the race
+ * guard refused) lands in no list, is not named, and gets no record write.
  *
  * Items are borrowed (workspace lifetime); the pruned keys are storage paths
- * the prune copies out, resolved through the mount table by the record
- * loop — the same route remove's record loop takes.
+ * the prune copies out, resolved through the mount table by the record loop —
+ * the same route remove's record loop takes.
  *
  * Memory: the caller zero-fills the struct; update_profile allocates `captured`
  * (sized to its item count, an upper bound); release with update_commits_free.
@@ -294,8 +292,8 @@ static bool is_update_candidate(
              *
              * An [unverified] path could not be read at load (EACCES, ELOOP,
              * EIO — both kinds): known-unactionable, so the filter refuses it
-             * and cmd_update counts it, instead of admitting it for the copy
-             * to crash on the same errno. */
+             * and cmd_update counts it, instead of admitting it for the copy to
+             * crash on the same errno. */
             if (item->divergence & DIVERGENCE_UNVERIFIED) {
                 return false;
             }
@@ -306,16 +304,21 @@ static bool is_update_candidate(
             if (item->divergence & DIVERGENCE_STALE) {
                 return false;
             }
-            /* A tracked directory whose path is now a file or a symlink is never
-             * captured through the type change (the walk's race guard refuses it:
-             * a symlink would stat as its target and launder the target's attributes
-             * into metadata). Resolution is explicit — apply --force replaces
-             * it, remove untracks it — so it is not a candidate, and the preview
-             * does not promise an update the executor would refuse. A file's
-             * type change (file ↔ symlink) is captured as the new kind and stays
-             * a candidate. */
-            if (item->item_kind == PATH_KIND_DIRECTORY && (item->divergence & DIVERGENCE_TYPE)) {
-                return false;
+            /* A type change is captured only through the one pair the copy can
+             * commit: file ↔ symlink on a file row. A tracked directory is never
+             * captured through its type change (the walk's race guard refuses
+             * it: a symlink would stat as its target and launder the target's
+             * attributes into metadata), and a file row whose occupant the copy
+             * cannot commit — a directory, FIFO, socket, or device — is refused
+             * by the same rule. Resolution is explicit — apply --force replaces
+             * it, remove untracks it — so neither is a candidate, and the preview
+             * does not promise an update the executor would refuse. */
+            if (item->divergence & DIVERGENCE_TYPE) {
+                if (item->item_kind == PATH_KIND_DIRECTORY ||
+                    (item->occupant != FS_OCCUPANT_REGULAR &&
+                    item->occupant != FS_OCCUPANT_SYMLINK)) {
+                    return false;
+                }
             }
             /* DEPLOYED + NONE = clean, exclude */
             return item->divergence != DIVERGENCE_NONE && !opts->only_new;
@@ -352,8 +355,8 @@ static bool is_update_candidate(
  * and divergence.
  *
  * INCLUDED ITEMS (STATE + DIVERGENCE):
- * - DEPLOYED + any divergence but STALE (content/mode/ownership/encryption/type
- *   changed)
+ * - DEPLOYED + divergence (content/mode/ownership/encryption; a type change only
+ *   as the file ↔ symlink pair, captured as the new kind)
  * - DELETED state (removed from filesystem)
  * - UNTRACKED state (new files, if flags OR config->auto_detect_new_files)
  *
@@ -364,11 +367,11 @@ static bool is_update_candidate(
  * - DEPLOYED + UNVERIFIED (a path that could not be read at load, either kind:
  *   nothing can be captured from it; cmd_update counts these and says so)
  * - DEPLOYED + STALE (Git moved since deployment: apply's work when alone, the
- *   user's conflict next to CONTENT — never committed; counted and said the
- *   same way)
- * - DEPLOYED + TYPE on a directory (a file or symlink where a tracked directory
- *   should be: apply --force's or remove's to resolve; counted and said the same
+ *   user's conflict next to CONTENT — never committed; counted and said the same
  *   way)
+ * - DEPLOYED + TYPE the copy cannot commit (a directory's type change, or a file
+ *   row occupied by a directory, FIFO, socket, or device: apply --force's or
+ *   remove's to resolve; counted and said the same way)
  *
  * CLI FILTERS APPLIED:
  * - opts->files: Only specific files (if provided)
@@ -445,19 +448,18 @@ static error_t *filter_items_for_update(
 /**
  * Update a single profile with workspace items
  *
- * One walk, one writer per item, over one metadata load (the worktree file
- * the checkout materialized — the branch's own bytes). Each arm does its
- * item's work and fills the commit's bookkeeping beside it: copy + capture +
- * stage for a file, the claim capture for a directory, the entry removal for
- * a deletion. The walk ends with the redundancy prune, one metadata save,
- * and the commit.
+ * One walk, one writer per item, over one metadata load (the worktree file the
+ * checkout materialized — the branch's own bytes). Each arm does its item's work
+ * and fills the commit's bookkeeping beside it: copy + capture + stage for a
+ * file, the claim capture for a directory, the entry removal for a deletion.
+ * The walk ends with the redundancy prune, one metadata save, and the commit.
  *
- * Success means committed or untouched: a walk that captured nothing and
- * deleted nothing saves nothing, stages nothing, commits nothing — the
- * worktree stays exactly as checked out. A mid-walk failure returns with the
- * worktree dirty: the executor stops the run there, and the temp worktree's
- * checkout contract (a scratch tree may always be discarded) keeps any later
- * checkout safe regardless.
+ * Success means committed or untouched: a walk that captured nothing and deleted
+ * nothing saves nothing, stages nothing, commits nothing — the worktree stays
+ * exactly as checked out. A mid-walk failure returns with the worktree dirty:
+ * the executor stops the run there, and the temp worktree's checkout contract
+ * (a scratch tree may always be discarded) keeps any later checkout safe
+ * regardless.
  *
  * @param ctx Dispatch context (must not be NULL; the copy step reads the key
  *            and the encryption policy off it)
@@ -515,8 +517,8 @@ static error_t *update_profile(
     char *message = NULL;
     error_t *err = NULL;
 
-    /* The one metadata load: the worktree file the checkout materialized —
-     * the branch's own bytes — mutated as the walk goes, saved once. */
+    /* The one metadata load: the worktree file the checkout materialized — the
+     * branch's own bytes — mutated as the walk goes, saved once. */
     char *metadata_file_path = str_format("%s/%s", worktree_path, METADATA_FILE_PATH);
     if (!metadata_file_path) {
         return ERROR(ERR_MEMORY, "Failed to allocate metadata file path");
@@ -536,8 +538,8 @@ static error_t *update_profile(
         }
     }
 
-    /* The capture list can hold every item; the walk fills it with the ones
-     * that landed. */
+    /* The capture list can hold every item; the walk fills it with the ones that
+     * landed. */
     commit->captured = calloc(item_count, sizeof(update_capture_t));
     if (!commit->captured) {
         err = ERROR(ERR_MEMORY, "Failed to allocate capture list");
@@ -591,15 +593,14 @@ static error_t *update_profile(
                 output_info(out, OUTPUT_VERBOSE, "  %s", item->filesystem_path);
 
                 /* Source of previously_encrypted: the load's view row —
-                 * row->encrypted is projected at build from the same
-                 * metadata.json this branch carries, so this is the branch's
-                 * flag read off the frozen view instead of a second metadata
-                 * load (an untracked file has no row: never previously
-                 * encrypted). Under the write-time invariant the flag is
-                 * byte-truth for the HEAD blob — reading it is equivalent to
-                 * classifying the existing bytes, but cheaper (no fs read). */
-                const manifest_row_t *row =
-                    workspace_lookup(ws, item->filesystem_path);
+                 * row->encrypted is projected at build from the same metadata.json
+                 * this branch carries, so this is the branch's flag read off
+                 * the frozen view instead of a second metadata load (an untracked
+                 * file has no row: never previously encrypted). Under the
+                 * write-time invariant the flag is byte-truth for the HEAD blob
+                 * — reading it is equivalent to classifying the existing bytes,
+                 * but cheaper (no fs read). */
+                const manifest_row_t *row = workspace_lookup(ws, item->filesystem_path);
                 bool previously_encrypted = row ? row->encrypted : false;
 
                 /* Copy to worktree and capture stat atomically */
@@ -691,11 +692,10 @@ static error_t *update_profile(
                 /* Handle deleted directories (symmetric with the file branch
                  * above). Without this, the stat() below would fail with ENOENT
                  * and the metadata entry would survive, letting the view keep
-                 * claiming a directory the user just deleted. A deleted
-                 * directory is a deletion: the entry's removal goes on the
-                 * commit's bookkeeping like a deleted file, so the commit gate
-                 * counts it, the message names it, and the record loop retires
-                 * it. */
+                 * claiming a directory the user just deleted. A deleted directory
+                 * is a deletion: the entry's removal goes on the commit's
+                 * bookkeeping like a deleted file, so the commit gate counts
+                 * it, the message names it, and the record loop retires it. */
                 if (item->state == WORKSPACE_STATE_DELETED) {
                     if (metadata_has_item(metadata, item->storage_path)) {
                         err = metadata_remove_item(metadata, item->storage_path);
@@ -719,14 +719,15 @@ static error_t *update_profile(
 
                 /* lstat + S_ISDIR: the race guard. The filter refused load-time
                  * [type] and [unverified]; this refuses a change since load — a
-                 * path that vanished, or a tracked directory replaced by a
-                 * symlink, which would stat() as its target and launder the
-                 * target's attributes into metadata. Skip; the next load
-                 * classifies what now stands there. */
+                 * path that vanished, or a tracked directory replaced by a symlink,
+                 * which would stat() as its target and launder the target's
+                 * attributes into metadata. Skip; the next load classifies what
+                 * now stands there. */
                 struct stat dir_stat;
                 if (lstat(item->filesystem_path, &dir_stat) != 0) {
                     output_warning(
-                        out, OUTPUT_VERBOSE, "Failed to stat directory '%s': %s",
+                        out, OUTPUT_VERBOSE,
+                        "Failed to stat directory '%s': %s",
                         item->filesystem_path, strerror(errno)
                     );
                     continue;
@@ -757,8 +758,8 @@ static error_t *update_profile(
                     continue;
                 }
 
-                /* Say what the capture took before metadata_add_item copies
-                 * and frees it */
+                /* Say what the capture took before metadata_add_item copies and
+                 * frees it */
                 if (meta_item->owner || meta_item->group) {
                     output_info(
                         out, OUTPUT_VERBOSE,
@@ -912,15 +913,15 @@ cleanup:
  *
  * Called over the commits that landed — error or no: a later profile's failure
  * invalidates nothing about an earlier profile's landed commit, so the record
- * follows each one. The view is computed, so nothing
- * projects; what update writes is the one thing only it knows about the paths
- * it committed — read off each commit's own bookkeeping (update_commit_t), so a
- * path the walk skipped gets no record write. A modified or new file was captured
- * FROM disk, so for the row its profile won in the post-commit view the record
- * advances to the just-committed blob with the stat the copy took (the next status
- * takes the fast path). A path the commit let go — a deleted item, or a directory
- * entry the walk's prune dropped as redundant — left Git by this commit: with
- * no row left at the path its record retires (nothing backs it now); with a lower
+ * follows each one. The view is computed, so nothing projects; what update writes
+ * is the one thing only it knows about the paths it committed — read off each
+ * commit's own bookkeeping (update_commit_t), so a path the walk skipped gets
+ * no record write. A modified or new file was captured FROM disk, so for the
+ * row its profile won in the post-commit view the record advances to the
+ * just-committed blob with the stat the copy took (the next status takes the
+ * fast path). A path the commit let go — a deleted item, or a directory entry
+ * the walk's prune dropped as redundant — left Git by this commit: with no row
+ * left at the path its record retires (nothing backs it now); with a lower
  * profile's row at the path it is a fallback — the record stays and reads
  * [reassigned] until apply deploys it. The rule "anchor only the rows this profile
  * won" is the same one add applies: a higher profile's row is its own, and its
@@ -953,9 +954,9 @@ cleanup:
  *
  * Performance: one view build + O(N) point lookups, N = committed paths
  *
- * @param ctx Dispatch context (must not be NULL; the repository, the state
- *            handle and the mount table come off the run, the view is built
- *            into ctx->arena)
+ * @param ctx Dispatch context (must not be NULL; the repository, the state handle
+ *            and the mount table come off the run, the view is built into
+ *            ctx->arena)
  * @param commits One commit's bookkeeping per landed commit (may be NULL when
  *                count is 0)
  * @param commit_count Number of commits
@@ -1102,26 +1103,25 @@ cleanup:
  * Execute profile updates, in enabled-set order
  *
  * Creates a single shared worktree and reuses it for every profile update,
- * eliminating expensive worktree creation/destruction overhead. Each profile
- * is checked out into the same worktree before updating.
+ * eliminating expensive worktree creation/destruction overhead. Each profile is
+ * checked out into the same worktree before updating.
  *
- * Profiles are walked in enabled-set order — the model's one canonical
- * profile order — so multi-profile runs commit, report, and (on a stop)
- * strand in one predictable sequence; within a profile, items keep filter
- * order. Every item's profile is in the enabled set by construction (the
- * view is built from it), so the per-profile gather drops nothing.
+ * Profiles are walked in enabled-set order — the model's one canonical profile
+ * order — so multi-profile runs commit, report, and (on a stop) strand in one
+ * predictable sequence; within a profile, items keep filter order. Every item's
+ * profile is in the enabled set by construction (the view is built from it), so
+ * the per-profile gather drops nothing.
  *
  * The commits that landed cross the error boundary: out_commits receives one
  * bookkeeping entry per landed commit, handed to the caller even when a later
  * profile fails, so the record write follows what Git shows. A profile that
- * committed nothing — a walk that touched nothing, or a failure before its
- * commit — contributes no entry.
+ * committed nothing — a walk that touched nothing, or a failure before its commit
+ * — contributes no entry.
  *
  * @param ctx Dispatch context (must not be NULL; the run's repository carries
- *            the shared worktree, the copy step reads the key and the
- *            encryption policy)
- * @param ws Workspace (must not be NULL; threaded to the walk for view-row
- *           reads)
+ *            the shared worktree, the copy step reads the key and the encryption
+ *            policy)
+ * @param ws Workspace (must not be NULL; threaded to the walk for view-row reads)
  * @param enabled The enabled set, in order (must not be NULL)
  * @param update_items Pre-filtered items to update (must not be NULL)
  * @param update_count Number of items
@@ -1238,8 +1238,8 @@ static error_t *update_execute_for_all_profiles(
                 );
             }
         } else {
-            /* No commit landed — a walk that touched nothing, or a failure
-             * before the commit: the bookkeeping describes nothing */
+            /* No commit landed — a walk that touched nothing, or a failure before
+             * the commit: the bookkeeping describes nothing */
             free(bookkeeping.captured);
             ptr_array_deinit(&bookkeeping.deleted);
             string_array_deinit(&bookkeeping.pruned);
@@ -1267,11 +1267,11 @@ cleanup:
 /**
  * Render the preview: the run's work, grouped by fate
  *
- * One section per fate — modified, new, deleted (both kinds), directory
- * claims, encryption violations — each gated on the plan's counts, every
- * hint speaking update's own voice: what this run will do. A dry run
- * renders identically; whether anything was written is the summary's one
- * line at the end of the run, not the preview's.
+ * One section per fate — modified, new, deleted (both kinds), directory claims,
+ * encryption violations — each gated on the plan's counts, every hint speaking
+ * update's own voice: what this run will do. A dry run renders identically; whether
+ * anything was written is the summary's one line at the end of the run, not the
+ * preview's.
  *
  * @param out Output context (must not be NULL)
  * @param items Filtered candidates (must not be NULL)
@@ -1311,7 +1311,8 @@ static error_t *update_display_preview(
 
     if (opts->file_count > 0) {
         output_info(
-            out, OUTPUT_NORMAL, "Filter: Limiting to %zu specified file%s",
+            out, OUTPUT_NORMAL,
+            "Filter: Limiting to %zu specified file%s",
             opts->file_count, opts->file_count == 1 ? "" : "s"
         );
         has_filters = true;
@@ -1319,7 +1320,8 @@ static error_t *update_display_preview(
 
     if (opts->exclude_count > 0) {
         output_info(
-            out, OUTPUT_NORMAL, "Filter: Excluding %zu pattern%s",
+            out, OUTPUT_NORMAL,
+            "Filter: Excluding %zu pattern%s",
             opts->exclude_count, opts->exclude_count == 1 ? "" : "s"
         );
         has_filters = true;
@@ -1405,9 +1407,9 @@ static error_t *update_display_preview(
         }
     }
 
-    /* Display deleted paths section — one fate, both kinds: a deleted
-     * directory is a deletion, so it lists beside the deleted files rather
-     * than under a section that promises a metadata update */
+    /* Display deleted paths section — one fate, both kinds: a deleted directory
+     * is a deletion, so it lists beside the deleted files rather than under a
+     * section that promises a metadata update */
     if (counts->deleted > 0) {
         output_list_t *list = output_list_create(
             out, "Deleted paths",
@@ -1435,8 +1437,8 @@ static error_t *update_display_preview(
                 }
 
                 if (item->item_kind == PATH_KIND_DIRECTORY) {
-                    /* Directory rows read as directories: trailing slash,
-                     * kind named — the same shape the claims section uses */
+                    /* Directory rows read as directories: trailing slash, kind
+                     * named — the same shape the claims section uses */
                     char path_with_slash[PATH_MAX + 2];
                     snprintf(
                         path_with_slash, sizeof(path_with_slash), "%s/",
@@ -1530,8 +1532,8 @@ static error_t *update_display_preview(
                 const workspace_item_t *item = items[i];
 
                 /* DEPLOYED violators only — the set the section's count gated
-                 * on: a deleted violator is in the deleted section, and its
-                 * commit resolves the violation by removing the plaintext. */
+                 * on: a deleted violator is in the deleted section, and its commit
+                 * resolves the violation by removing the plaintext. */
                 if (item->item_kind != PATH_KIND_FILE ||
                     item->state != WORKSPACE_STATE_DEPLOYED ||
                     !(item->divergence & DIVERGENCE_ENCRYPTION)) {
@@ -1643,8 +1645,7 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
      * enabled profile) are out of scope for update operations.
      *
      * State is borrowed from the dispatcher (ctx->run.state). Read-only analysis.
-     * The transaction for the record write opens later in
-     * update_write_record().
+     * The transaction for the record write opens later in update_write_record().
      */
     workspace_load_t ws_opts = {
         .analyze_files       = true,                    /* Detect content and metadata changes */
@@ -1669,8 +1670,8 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
      * seed the fast path.
      *
      * Files actually updated by this command get their anchor advanced separately
-     * inside update_write_record(); this flush covers the clean files
-     * the analysis verified but didn't modify. */
+     * inside update_write_record(); this flush covers the clean files the analysis
+     * verified but didn't modify. */
     error_t *flush_err = workspace_flush_updates(ws);
     if (flush_err) {
         error_free(flush_err);
@@ -1690,11 +1691,15 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
      * a workspace whose only divergence is stale explains itself, and above the
      * prompt. Same scope triplet as the filter. An [unverified] path could not
      * be read; its line names the remedies without claiming an errno (EACCES,
-     * ELOOP and EIO all read the same). [stale] alone is apply's to
-     * resolve; [modified] [stale] is a conflict no dotta verb resolves toward
-     * disk, so its line must not send the user to a plain apply that preflight
-     * will refuse. A directory with [type] is not captured through the change
-     * (is_update_candidate); its line names the two verbs that resolve it. */
+     * ELOOP and EIO all read the same). [stale] alone is apply's to resolve;
+     * [modified] [stale] is a conflict no dotta verb resolves toward disk, so
+     * its line must not send the user to a plain apply that preflight will refuse.
+     * A [type] path the copy cannot commit — a directory's type change, or a
+     * file row occupied by a directory, FIFO, socket, or device (file ↔ symlink
+     * is captured and stays a candidate) — is not captured through the change
+     * (is_update_candidate); its line names the two verbs that resolve it. The
+     * chain tests in the filter's refusal order, so a multi-bit divergence counts
+     * under the reason that refused it. */
     size_t all_count = 0;
     const workspace_item_t *all = workspace_get_all_diverged(ws, &all_count);
     size_t unverified_skipped = 0; size_t retyped_skipped = 0;
@@ -1709,14 +1714,17 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
         }
         if (item->divergence & DIVERGENCE_UNVERIFIED) {
             unverified_skipped++;
-        } else if (item->item_kind == PATH_KIND_DIRECTORY && (item->divergence & DIVERGENCE_TYPE)) {
+        } else if (item->divergence & DIVERGENCE_STALE) {
+            if (item->divergence & DIVERGENCE_CONTENT) {
+                conflict_skipped++;
+            } else {
+                stale_skipped++;
+            }
+        } else if ((item->divergence & DIVERGENCE_TYPE) &&
+            (item->item_kind == PATH_KIND_DIRECTORY ||
+            (item->occupant != FS_OCCUPANT_REGULAR &&
+            item->occupant != FS_OCCUPANT_SYMLINK))) {
             retyped_skipped++;
-        } else if (!(item->divergence & DIVERGENCE_STALE)) {
-            continue;
-        } else if (item->divergence & DIVERGENCE_CONTENT) {
-            conflict_skipped++;
-        } else {
-            stale_skipped++;
         }
     }
 
@@ -1730,9 +1738,9 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
     if (retyped_skipped > 0) {
         output_info(
             out, OUTPUT_NORMAL,
-            "%zu director%s skipped: tracked as directory but type changed on disk — "
+            "%zu path%s skipped: a different kind stands on disk — "
             "'dotta apply --force' replaces %s, 'dotta remove' untracks %s",
-            retyped_skipped, retyped_skipped == 1 ? "y" : "ies",
+            retyped_skipped, retyped_skipped == 1 ? "" : "s",
             retyped_skipped == 1 ? "it" : "them", retyped_skipped == 1 ? "it" : "them"
         );
     }
@@ -1811,8 +1819,8 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
         /* If we reach here, privileges are OK - proceed with operation */
     }
 
-    /* The plan's shape, counted once: the preview gates its sections on
-     * these and the new-files prompt binds on new_files */
+    /* The plan's shape, counted once: the preview gates its sections on these
+     * and the new-files prompt binds on new_files */
     update_counts_t counts = { 0 };
     for (size_t i = 0; i < update_items.count; i++) {
         const workspace_item_t *item = update_items.entries[i];
@@ -1840,12 +1848,11 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
         goto cleanup;
     }
 
-    /* The hooks fire around the work — after the nothing-exit and the
-     * privilege gate (a no-op run fires nothing, a sudo re-exec cannot fire
-     * the pair twice), before the prompt: apply's order. The preview's
-     * verdicts predate the pre-hook, but the capture stores execute-time
-     * bytes — a pre-hook that edits a candidate still commits what it
-     * wrote. */
+    /* The hooks fire around the work — after the nothing-exit and the privilege
+     * gate (a no-op run fires nothing, a sudo re-exec cannot fire the pair twice),
+     * before the prompt: apply's order. The preview's verdicts predate the
+     * pre-hook, but the capture stores execute-time bytes — a pre-hook that edits
+     * a candidate still commits what it wrote. */
     profiles_str = string_array_join(scope_active(scope), " ");
     if (!profiles_str) {
         err = ERROR(ERR_MEMORY, "Failed to join profile names for hook");
@@ -1862,8 +1869,8 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
     err = hook_fire_pre(config, out, repo_path, &hook_inv);
     if (err) goto cleanup;
 
-    /* The prompts — none bind a dry run: it executes nothing, so there is
-     * nothing to consent to */
+    /* The prompts — none bind a dry run: it executes nothing, so there is nothing
+     * to consent to */
     if (!opts->dry_run) {
         if (opts->interactive) {
             if (!output_confirm(out, "Update these items?", false)) {
@@ -1872,10 +1879,10 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
             }
         }
 
-        /* New files the scan found (not asked for by flag) are added only
-         * with consent. Declining keeps the rest of the run: the re-filter
-         * compacts the candidate array in place — the preview named the new
-         * files separately, and the receipt reports what actually happens. */
+        /* New files the scan found (not asked for by flag) are added only with
+         * consent. Declining keeps the rest of the run: the re-filter compacts
+         * the candidate array in place — the preview named the new files
+         * separately, and the receipt reports what actually happens. */
         if (counts.new_files > 0 && config->confirm_new_files &&
             !opts->include_new && !opts->only_new && config->auto_detect_new_files) {
 
@@ -1907,10 +1914,10 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
         }
     }
 
-    /* Execute profile updates, in enabled-set order. Filtered to operation
-     * scope. ctx->run.keymgr is borrowed by the copy step inside per-profile
-     * iteration. A dry run executes nothing: the sections above are its
-     * preview, and the summary below is its one sentence. */
+    /* Execute profile updates, in enabled-set order. Filtered to operation scope.
+     * ctx->run.keymgr is borrowed by the copy step inside per-profile iteration.
+     * A dry run executes nothing: the sections above are its preview, and the
+     * summary below is its one sentence. */
     update_commit_t *commits = NULL;
     size_t commit_count = 0;
     bool manifest_updated = false;
@@ -1924,12 +1931,11 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
 
         /* Write the record — for the commits that landed, error or no
          *
-         * Captured files get their record advanced because UPDATE captures
-         * them FROM the filesystem (already at target locations); the view
-         * itself is computed at every load and needs no update. A mid-sequence
-         * stop above changes nothing here: the landed commits are Git truth
-         * and the record follows them; the profiles that never committed have
-         * nothing to write.
+         * Captured files get their record advanced because UPDATE captures them
+         * FROM the filesystem (already at target locations); the view itself is
+         * computed at every load and needs no update. A mid-sequence stop above
+         * changes nothing here: the landed commits are Git truth and the record
+         * follows them; the profiles that never committed have nothing to write.
          *
          * Non-fatal: if the record write fails, Git commits still succeeded;
          * the next status re-confirms the captured files on its slow path.
@@ -1944,9 +1950,9 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
         if (manifest_err) {
             /* Non-fatal: the landed commits are Git truth and the record write
              * failed behind them. The next load reads the committed blobs from
-             * Git and re-confirms the captured files against disk. Said in
-             * landed terms — after a mid-sequence stop only some profiles
-             * committed, and this line must not claim more. */
+             * Git and re-confirms the captured files against disk. Said in landed
+             * terms — after a mid-sequence stop only some profiles committed,
+             * and this line must not claim more. */
             output_warning(
                 out, OUTPUT_NORMAL, "Failed to update the record: %s",
                 error_message(manifest_err)
@@ -1962,8 +1968,8 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
 
         if (err) {
             /* The executor stopped mid-sequence. The commits that landed are
-             * recorded (just above); say so before reporting the stop, so the
-             * ✓ lines above are accounted for. */
+             * recorded (just above); say so before reporting the stop, so the ✓
+             * lines above are accounted for. */
             if (manifest_updated && commit_count > 0) {
                 output_info(out, OUTPUT_NORMAL, "Manifest updated");
             }
@@ -1990,13 +1996,12 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
         );
 
         /* Record feedback, plain: the per-path split is the verbose "Manifest
-         * synced" line, and the failure case already said what happened
-         * (warning above) */
+         * synced" line, and the failure case already said what happened (warning
+         * above) */
         if (manifest_updated) {
             output_info(out, OUTPUT_NORMAL, "Manifest updated");
             output_hint(
-                out, OUTPUT_NORMAL,
-                "Run 'dotta status' to verify state"
+                out, OUTPUT_NORMAL, "Run 'dotta status' to verify state"
             );
         }
     }
@@ -2075,10 +2080,10 @@ static error_t *update_post_parse(
 }
 
 /**
- * What can stand at the cursor, by the rule update_post_parse routes with:
- * an enabled profile while the first positional is still open and -p has
- * not taken it; at every position a file of the view — narrowed to what the
- * profiles named so far win — or a filesystem path.
+ * What can stand at the cursor, by the rule update_post_parse routes with: an
+ * enabled profile while the first positional is still open and -p has not taken
+ * it; at every position a file of the view — narrowed to what the profiles named
+ * so far win — or a filesystem path.
  */
 static args_want_t update_complete(
     const void *ctx_v, const void *opts_v, const args_completion_t *at, FILE *out

@@ -304,7 +304,14 @@ static bool is_update_candidate(
         case WORKSPACE_STATE_DEPLOYED:
             /* Deployed files/dirs with divergence - check what kind.
              *
-             * Any STALE item is skipped: Git moved past the blob dotta deployed,
+             * An [unverified] path could not be read at load (EACCES, ELOOP,
+             * EIO — both kinds): known-unactionable, so the filter refuses it
+             * and cmd_update counts it, instead of admitting it for the copy
+             * to crash on the same errno. */
+            if (item->divergence & DIVERGENCE_UNVERIFIED) {
+                return false;
+            }
+            /* Any STALE item is skipped: Git moved past the blob dotta deployed,
              * and update stores bytes — the bytes on disk are old whether or
              * not a mode bit also differs. [stale] alone is apply's to resolve;
              * [modified] [stale] is the user's. */
@@ -366,9 +373,11 @@ static bool is_update_candidate(
  * - UNDEPLOYED state (not modified, just not deployed yet - handled by apply)
  * - ORPHANED state (apply's: cleanup prunes or holds it)
  * - DEPLOYED + NONE divergence (clean, nothing to update)
+ * - DEPLOYED + UNVERIFIED (a path that could not be read at load, either kind:
+ *   nothing can be captured from it; cmd_update counts these and says so)
  * - DEPLOYED + STALE (Git moved since deployment: apply's work when alone, the
- *   user's conflict next to CONTENT — never committed; cmd_update counts these
- *   and says so)
+ *   user's conflict next to CONTENT — never committed; counted and said the
+ *   same way)
  * - DEPLOYED + TYPE on a directory (a file or symlink where a tracked directory
  *   should be: apply --force's or remove's to resolve; counted and said the same
  *   way)
@@ -713,11 +722,12 @@ static error_t *update_metadata_for_profile(
                     continue;
                 }
 
-                /* lstat + S_ISDIR: never capture through a type change. A tracked
-                 * directory replaced by a symlink would stat() as its target,
-                 * laundering the target's attributes into metadata while workspace
-                 * still reports DIVERGENCE_TYPE. Skip; resolution is explicit
-                 * (apply --force / remove). */
+                /* lstat + S_ISDIR: the race guard. The filter refused load-time
+                 * [type] and [unverified]; this refuses a change since load — a
+                 * path that vanished, or a tracked directory replaced by a
+                 * symlink, which would stat() as its target and launder the
+                 * target's attributes into metadata. Skip; the next load
+                 * classifies what now stands there. */
                 struct stat dir_stat;
                 if (lstat(item->filesystem_path, &dir_stat) != 0) {
                     output_warning(
@@ -2002,14 +2012,17 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
 
     /* What the filter left out on purpose, said once — above the exit below, so
      * a workspace whose only divergence is stale explains itself, and above the
-     * prompt. Same scope triplet as the filter. [stale] alone is apply's to
+     * prompt. Same scope triplet as the filter. An [unverified] path could not
+     * be read; its line names the remedies without claiming an errno (EACCES,
+     * ELOOP and EIO all read the same). [stale] alone is apply's to
      * resolve; [modified] [stale] is a conflict no dotta verb resolves toward
      * disk, so its line must not send the user to a plain apply that preflight
      * will refuse. A directory with [type] is not captured through the change
      * (is_update_candidate); its line names the two verbs that resolve it. */
     size_t all_count = 0;
     const workspace_item_t *all = workspace_get_all_diverged(ws, &all_count);
-    size_t stale_skipped = 0; size_t conflict_skipped = 0; size_t retyped_skipped = 0;
+    size_t unverified_skipped = 0; size_t retyped_skipped = 0;
+    size_t stale_skipped = 0; size_t conflict_skipped = 0;
 
     for (size_t i = 0; i < all_count; i++) {
         const workspace_item_t *item = &all[i];
@@ -2018,7 +2031,9 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
             !scope_accepts_entry(scope, item->profile, item->storage_path, item->item_kind)) {
             continue;
         }
-        if (item->item_kind == PATH_KIND_DIRECTORY && (item->divergence & DIVERGENCE_TYPE)) {
+        if (item->divergence & DIVERGENCE_UNVERIFIED) {
+            unverified_skipped++;
+        } else if (item->item_kind == PATH_KIND_DIRECTORY && (item->divergence & DIVERGENCE_TYPE)) {
             retyped_skipped++;
         } else if (!(item->divergence & DIVERGENCE_STALE)) {
             continue;
@@ -2029,6 +2044,13 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
         }
     }
 
+    if (unverified_skipped > 0) {
+        output_info(
+            out, OUTPUT_NORMAL,
+            "%zu path%s skipped: cannot be read — fix permissions, or exclude with -e",
+            unverified_skipped, unverified_skipped == 1 ? "" : "s"
+        );
+    }
     if (retyped_skipped > 0) {
         output_info(
             out, OUTPUT_NORMAL,

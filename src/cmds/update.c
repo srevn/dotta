@@ -42,6 +42,9 @@
  *
  * @param ctx Dispatch context (must not be NULL; supplies the key and the
  *            encryption policy)
+ * @param previously_encrypted Whether the file's prior bytes (the branch's
+ *                             HEAD blob) were encrypted — the caller's to
+ *                             source
  * @param out_was_encrypted Optional output - set to true if file was encrypted
  *                          (can be NULL)
  * @param out_stat Optional output - filled with stat data from source file (can
@@ -53,7 +56,7 @@ static error_t *copy_file_to_worktree(
     const char *filesystem_path,
     const char *storage_path,
     const char *profile,
-    const metadata_t *metadata,
+    bool previously_encrypted,
     bool *out_was_encrypted,
     struct stat *out_stat
 ) {
@@ -141,17 +144,8 @@ static error_t *copy_file_to_worktree(
         }
     } else {
         /* Handle regular file - determine encryption policy using centralized
-         * logic.
-         *
-         * Source of `previously_encrypted`: the existing metadata's encrypted
-         * flag for this path. Update.c always operates on a file already in the
-         * manifest, so metadata is loaded for permission preservation. After
-         * Phase 2's write-time invariant (this commit), metadata.encrypted is
-         * byte-truth — reading it here is equivalent to classifying the existing
-         * worktree blob, but cheaper (no fs read). */
-        bool previously_encrypted =
-            metadata_get_file_encrypted(metadata, storage_path);
-
+         * logic. previously_encrypted is the branch's flag for this path, the
+         * caller's to source (the walk reads it off the view row). */
         bool should_encrypt = false;
         err = encryption_policy_should_encrypt(
             ctx->config,
@@ -223,20 +217,6 @@ typedef enum {
 } confirm_result_t;
 
 /**
- * Per-item result from file copy operations
- *
- * Tracks results from copy_file_to_worktree() for each workspace item. Indexed
- * by item position (not file-only position) to prevent index misalignment between
- * update_profile() and update_metadata_for_profile(). A slot is valid exactly
- * for the non-deleted FILE items: the copy step either filled it or aborted the
- * profile.
- */
-typedef struct {
-    bool encrypted;       /* File was encrypted during copy */
-    struct stat stat;     /* Captured stat data */
-} file_copy_result_t;
-
-/**
  * One path an update commit captured from disk
  *
  * A file's triple is the one the copy step took from the bytes it committed
@@ -253,15 +233,16 @@ typedef struct {
 /**
  * What one profile's update commit did, path by path
  *
- * Filled by the steps that do the work — the copy step for files, the metadata
- * step for directories and for the directory entries it prunes as redundant —
+ * Filled by the walk that does the work — one writer per item: the copy +
+ * capture for a file, the claim capture for a directory, the entry removal
+ * for a deletion, the prune for the directory entries dropped as redundant —
  * and read back by the commit message and by the record loop
  * (update_manifest_after_update), so both follow the commit and nothing else:
- * an item a step skipped (a file missing from disk, a directory that changed
- * type) lands in no list, is not named, and gets no record write.
+ * an item the walk skipped (a directory the race guard refused) lands in no
+ * list, is not named, and gets no record write.
  *
  * Items are borrowed (workspace lifetime); the pruned keys are storage paths
- * the metadata step copies out, resolved through the mount table by the record
+ * the prune copies out, resolved through the mount table by the record
  * loop — the same route remove's record loop takes.
  *
  * Memory: the caller zero-fills the struct; update_profile allocates `captured`
@@ -522,38 +503,62 @@ static error_t *group_items_by_profile(
 }
 
 /**
- * Update metadata for items (unified for files and directories)
+ * Update a single profile with workspace items
  *
- * copy_results is indexed by item position (same index as items array); a
- * non-deleted FILE item's slot holds its copy's stat and encryption flag.
+ * One walk, one writer per item, over one metadata load (the worktree file
+ * the checkout materialized — the branch's own bytes). Each arm does its
+ * item's work and fills the commit's bookkeeping beside it: copy + capture +
+ * stage for a file, the claim capture for a directory, the entry removal for
+ * a deletion. The walk ends with the redundancy prune, one metadata save,
+ * and the commit.
  *
- * @param wt Worktree handle (must not be NULL)
- * @param index Post-edit worktree index: deletions removed, updates staged (must
- *              not be NULL; anchors the directory prune)
+ * Success means committed or untouched: a walk that captured nothing and
+ * deleted nothing saves nothing, stages nothing, commits nothing — the
+ * worktree stays exactly as checked out. A mid-walk failure returns with the
+ * worktree dirty: the executor stops the run there, and the temp worktree's
+ * checkout contract (a scratch tree may always be discarded) keeps any later
+ * checkout safe regardless.
+ *
+ * @param ctx Dispatch context (must not be NULL; the copy step reads the key
+ *            and the encryption policy off it)
+ * @param ws Workspace (must not be NULL; the walk reads previously_encrypted
+ *           off the load's view rows)
+ * @param wt Worktree handle (must not be NULL, already checked out to profile
+ *           branch)
+ * @param profile Profile to update (must not be NULL)
  * @param items Array of workspace items to update (must not be NULL)
  * @param item_count Number of items
- * @param copy_results Per-item copy results indexed by item position (must not
- *                     be NULL)
- * @param commit The commit's bookkeeping: receives the directory claims captured
- *               and the entries pruned (must not be NULL)
- * @param out Output context (can be NULL)
+ * @param opts Update options (must not be NULL)
+ * @param commit The commit's bookkeeping, zero-filled by the caller; the walk
+ *               fills it (must not be NULL)
+ * @param out_processed Output: number of items committed (must not be NULL)
  * @return Error or NULL on success
  */
-static error_t *update_metadata_for_profile(
+static error_t *update_profile(
+    const dotta_ctx_t *ctx,
+    const workspace_t *ws,
     worktree_handle_t *wt,
-    git_index *index,
+    const char *profile,
     const workspace_item_t **items,
     size_t item_count,
-    const file_copy_result_t *copy_results,
+    const cmd_update_options_t *opts,
     update_commit_t *commit,
-    output_t *out
+    size_t *out_processed
 ) {
+    CHECK_NULL(ctx);
+    CHECK_NULL(ws);
     CHECK_NULL(wt);
-    CHECK_NULL(index);
+    CHECK_NULL(profile);
     CHECK_NULL(items);
+    CHECK_NULL(opts);
     CHECK_NULL(commit);
+    CHECK_NULL(out_processed);
 
-    /* Early exit if nothing to update */
+    output_t *out = ctx->out;
+
+    *out_processed = 0;
+    commit->profile = profile;
+
     if (item_count == 0) {
         return NULL;
     }
@@ -563,16 +568,21 @@ static error_t *update_metadata_for_profile(
         return ERROR(ERR_INTERNAL, "Worktree path is NULL");
     }
 
-    /* Load existing metadata from worktree (if it exists) */
+    /* Initialize all resources to NULL for goto cleanup */
+    git_index *index = NULL;
     metadata_t *metadata = NULL;
+    char **storage_paths = NULL;
+    char *message = NULL;
+    error_t *err = NULL;
+
+    /* The one metadata load: the worktree file the checkout materialized —
+     * the branch's own bytes — mutated as the walk goes, saved once. */
     char *metadata_file_path = str_format("%s/%s", worktree_path, METADATA_FILE_PATH);
     if (!metadata_file_path) {
         return ERROR(ERR_MEMORY, "Failed to allocate metadata file path");
     }
-
-    error_t *err = metadata_load_from_file(metadata_file_path, &metadata);
+    err = metadata_load_from_file(metadata_file_path, &metadata);
     free(metadata_file_path);
-
     if (err) {
         if (err->code == ERR_NOT_FOUND) {
             /* No existing metadata - create new */
@@ -582,61 +592,102 @@ static error_t *update_metadata_for_profile(
                 return err;
             }
         } else {
-            /* Real error - propagate */
             return error_wrap(err, "Failed to load existing metadata");
         }
+    }
+
+    /* The capture list can hold every item; the walk fills it with the ones
+     * that landed. */
+    commit->captured = calloc(item_count, sizeof(update_capture_t));
+    if (!commit->captured) {
+        err = ERROR(ERR_MEMORY, "Failed to allocate capture list");
+        goto cleanup;
+    }
+
+    /* Get worktree index for staging */
+    err = worktree_get_index(wt, &index);
+    if (err) {
+        err = error_wrap(err, "Failed to get worktree index");
+        goto cleanup;
     }
 
     size_t captured_file_count = 0;
     size_t updated_dir_count = 0;
 
-    /* Process all items (files and directories) in a unified loop */
+    /* One walk, one writer per item: each arm does its item's work and fills
+     * the commit's bookkeeping beside it. */
     for (size_t i = 0; i < item_count; i++) {
         const workspace_item_t *item = items[i];
 
-        /* Dispatch by item kind */
         switch (item->item_kind) {
             case PATH_KIND_FILE: {
-                /* Handle file metadata */
+                output_info(out, OUTPUT_VERBOSE, "  %s", item->filesystem_path);
 
                 /* Handle deleted files */
                 if (item->state == WORKSPACE_STATE_DELETED) {
+                    /* Remove from index (stage deletion) */
+                    int git_err = git_index_remove_bypath(index, item->storage_path);
+                    if (git_err < 0) {
+                        err = error_from_git(git_err);
+                        goto cleanup;
+                    }
                     /* Remove metadata entry if it exists */
                     if (metadata_has_item(metadata, item->storage_path)) {
                         err = metadata_remove_item(metadata, item->storage_path);
-                        if (err && err->code != ERR_NOT_FOUND) {
-                            metadata_free(metadata);
-                            return error_wrap(err, "Failed to remove metadata entry");
-                        }
                         if (err) {
-                            error_free(err);
-                            err = NULL;
+                            err = error_wrap(err, "Failed to remove metadata entry");
+                            goto cleanup;
                         }
                         output_info(
                             out, OUTPUT_VERBOSE, "  Removed metadata: %s",
                             item->filesystem_path
                         );
                     }
+                    err = ptr_array_push(&commit->deleted, item);
+                    if (err) {
+                        goto cleanup;
+                    }
                     continue;
                 }
 
-                const struct stat *file_stat = &copy_results[i].stat;
+                /* Source of previously_encrypted: the load's view row —
+                 * row->encrypted is projected at build from the same
+                 * metadata.json this branch carries, so this is the branch's
+                 * flag read off the frozen view instead of a second metadata
+                 * load (an untracked file has no row: never previously
+                 * encrypted). Under the write-time invariant the flag is
+                 * byte-truth for the HEAD blob — reading it is equivalent to
+                 * classifying the existing bytes, but cheaper (no fs read). */
+                const manifest_row_t *row =
+                    workspace_lookup(ws, item->filesystem_path);
+                bool previously_encrypted = row ? row->encrypted : false;
 
-                /* Capture metadata from pre-captured stat data */
+                /* Copy to worktree and capture stat atomically */
+                struct stat copy_stat;
+                bool copy_encrypted = false;
+                err = copy_file_to_worktree(
+                    ctx, wt, item->filesystem_path, item->storage_path,
+                    profile, previously_encrypted, &copy_encrypted, &copy_stat
+                );
+                if (err) {
+                    err = error_wrap(err, "Failed to copy '%s'", item->filesystem_path);
+                    goto cleanup;
+                }
+
+                /* Capture metadata from the copy's stat */
                 metadata_item_t *meta_item = NULL;
                 err = metadata_capture_from_file(
                     item->filesystem_path,
                     item->storage_path,
-                    file_stat,
+                    &copy_stat,
                     &meta_item
                 );
-
                 if (err) {
-                    metadata_free(metadata);
-                    return error_wrap(
+                    err = error_wrap(
                         err, "Failed to capture metadata for: %s",
                         item->filesystem_path
                     );
+                    goto cleanup;
                 }
 
                 /* meta_item is NULL for home/ prefix symlinks (no metadata needed).
@@ -645,7 +696,7 @@ static error_t *update_metadata_for_profile(
                 if (meta_item) {
                     /* Only set encrypted flag for FILE kind (symlinks are never encrypted) */
                     if (meta_item->kind == METADATA_ITEM_FILE) {
-                        meta_item->file.encrypted = copy_results[i].encrypted;
+                        meta_item->file.encrypted = copy_encrypted;
                     }
 
                     /* Say what the capture took before metadata_add_item copies
@@ -675,19 +726,28 @@ static error_t *update_metadata_for_profile(
                     metadata_item_free(meta_item);
 
                     if (err) {
-                        metadata_free(metadata);
-                        return error_wrap(err, "Failed to add metadata entry");
+                        err = error_wrap(err, "Failed to add metadata entry");
+                        goto cleanup;
                     }
 
                     captured_file_count++;
                 }
 
+                /* Stage file */
+                int git_err = git_index_add_bypath(index, item->storage_path);
+                if (git_err < 0) {
+                    err = error_from_git(git_err);
+                    goto cleanup;
+                }
+
+                commit->captured[commit->captured_count++] = (update_capture_t){
+                    .item = item,
+                    .stat = stat_cache_from_stat(&copy_stat)
+                };
                 break;
             }
 
             case PATH_KIND_DIRECTORY: {
-                /* Handle directory metadata */
-
                 /* Handle deleted directories (symmetric with the file branch
                  * above). Without this, the stat() below would fail with ENOENT
                  * and the metadata entry would survive, letting the view keep
@@ -699,25 +759,20 @@ static error_t *update_metadata_for_profile(
                 if (item->state == WORKSPACE_STATE_DELETED) {
                     if (metadata_has_item(metadata, item->storage_path)) {
                         err = metadata_remove_item(metadata, item->storage_path);
-                        if (err && err->code != ERR_NOT_FOUND) {
-                            metadata_free(metadata);
-                            return error_wrap(
+                        if (err) {
+                            err = error_wrap(
                                 err, "Failed to remove directory metadata entry"
                             );
-                        }
-                        if (err) {
-                            error_free(err);
-                            err = NULL;
-                        }
-                        err = ptr_array_push(&commit->deleted, item);
-                        if (err) {
-                            metadata_free(metadata);
-                            return err;
+                            goto cleanup;
                         }
                         output_info(
                             out, OUTPUT_VERBOSE, "  Removed directory metadata: %s",
                             item->filesystem_path
                         );
+                        err = ptr_array_push(&commit->deleted, item);
+                        if (err) {
+                            goto cleanup;
+                        }
                     }
                     continue;
                 }
@@ -785,11 +840,11 @@ static error_t *update_metadata_for_profile(
                 metadata_item_free(meta_item);
 
                 if (err) {
-                    metadata_free(metadata);
-                    return error_wrap(
+                    err = error_wrap(
                         err, "Failed to update directory metadata for '%s'",
                         item->filesystem_path
                     );
+                    goto cleanup;
                 }
 
                 updated_dir_count++;
@@ -800,12 +855,6 @@ static error_t *update_metadata_for_profile(
                 break;
             }
         }
-
-        /* Check for error after each item */
-        if (err) {
-            metadata_free(metadata);
-            return err;
-        }
     }
 
     /* A profile whose walk captured nothing and deleted nothing has nothing to
@@ -813,9 +862,9 @@ static error_t *update_metadata_for_profile(
      * out: nothing saved, nothing staged. The prune is skipped with the save —
      * imported redundancy rides whatever commit triggers the metadata rewrite,
      * never drives one. */
-    if (commit->captured_count == 0 && commit->deleted.count == 0) {
-        metadata_free(metadata);
-        return NULL;
+    size_t path_count = commit->captured_count + commit->deleted.count;
+    if (path_count == 0) {
+        goto cleanup;
     }
 
     /* Prune redundant directory entries.
@@ -823,7 +872,7 @@ static error_t *update_metadata_for_profile(
      * Catches the implicit-orphaning case (the DELETED branch above handles
      * explicit removals): file removals can leave a parent directory's metadata
      * entry with no anchoring descendants. Anchoring is judged against the
-     * post-edit index (deletions removed, updates staged by the caller) — never
+     * post-edit index (deletions removed, updates staged by the walk) — never
      * against metadata items, which omit unelevated symlinks. Only entries that
      * carry no actionable information are pruned — custom-attribute entries survive
      * as potential empty-dir intent. Without this, the view would keep claiming
@@ -832,8 +881,8 @@ static error_t *update_metadata_for_profile(
      * retire. */
     err = metadata_prune_directories(metadata, index, &commit->pruned);
     if (err) {
-        metadata_free(metadata);
-        return error_wrap(err, "Failed to prune redundant directories");
+        err = error_wrap(err, "Failed to prune redundant directories");
+        goto cleanup;
     }
 
     if (commit->pruned.count > 0) {
@@ -845,16 +894,16 @@ static error_t *update_metadata_for_profile(
 
     /* Save metadata to worktree (single save for both files and directories) */
     err = metadata_save_to_worktree(worktree_path, metadata);
-    metadata_free(metadata);
-
     if (err) {
-        return error_wrap(err, "Failed to save metadata");
+        err = error_wrap(err, "Failed to save metadata");
+        goto cleanup;
     }
 
     /* Stage metadata.json file (single stage operation) */
     err = worktree_stage_file(wt, METADATA_FILE_PATH);
     if (err) {
-        return error_wrap(err, "Failed to stage metadata");
+        err = error_wrap(err, "Failed to stage metadata");
+        goto cleanup;
     }
 
     if (captured_file_count > 0 || updated_dir_count > 0) {
@@ -865,198 +914,8 @@ static error_t *update_metadata_for_profile(
         );
     }
 
-    return NULL;
-}
-
-/**
- * Update a single profile with workspace items
- *
- * ARCHITECTURE NOTE: This function now receives a pre-created worktree that has
- * been checked out to the target profile branch.
- *
- * @param ctx Dispatch context (must not be NULL; the copy step reads the key
- *            and the encryption policy off it)
- * @param wt Worktree handle (must not be NULL, already checked out to profile
- *           branch)
- * @param profile Profile to update (must not be NULL)
- * @param items Array of workspace items to update (must not be NULL)
- * @param item_count Number of items
- * @param opts Update options (must not be NULL)
- * @param commit The commit's bookkeeping, zero-filled by the caller; filled here
- *               and by the metadata step (must not be NULL)
- * @param out_processed Output: number of items committed (must not be NULL)
- * @return Error or NULL on success
- */
-static error_t *update_profile(
-    const dotta_ctx_t *ctx,
-    worktree_handle_t *wt,
-    const char *profile,
-    const workspace_item_t **items,
-    size_t item_count,
-    const cmd_update_options_t *opts,
-    update_commit_t *commit,
-    size_t *out_processed
-) {
-    CHECK_NULL(ctx);
-    CHECK_NULL(wt);
-    CHECK_NULL(profile);
-    CHECK_NULL(items);
-    CHECK_NULL(opts);
-    CHECK_NULL(commit);
-    CHECK_NULL(out_processed);
-
-    output_t *out = ctx->out;
-
-    *out_processed = 0;
-    commit->profile = profile;
-
-    if (item_count == 0) {
-        return NULL;
-    }
-
-    /* Get repository from worktree (shared object DB and refs) */
-    git_repository *wt_repo = worktree_get_repo(wt);
-    if (!wt_repo) {
-        return ERROR(ERR_INTERNAL, "Failed to get repository from worktree");
-    }
-
-    /* Initialize all resources to NULL for goto cleanup */
-    git_index *index = NULL;
-    char **storage_paths = NULL;
-    char *message = NULL;
-    error_t *err = NULL;
-    metadata_t *existing_metadata = NULL;
-    bool owns_metadata = false;
-    file_copy_result_t *copy_results = NULL;
-
-    /* Load metadata from Git branch */
-    err = metadata_load_from_branch(wt_repo, profile, &existing_metadata);
-    if (err) {
-        if (err->code == ERR_NOT_FOUND) {
-            error_free(err);
-            err = metadata_create_empty(&existing_metadata);
-            if (err) {
-                return error_wrap(err, "Failed to create empty metadata");
-            }
-        } else {
-            return error_wrap(
-                err, "Failed to load metadata from profile '%s'",
-                profile
-            );
-        }
-    }
-    owns_metadata = true;
-
-    /* Allocate per-item result tracking (indexed by item position, not file-only
-     * position, so the metadata step reads each file's slot by the shared item
-     * index — directories and deletions occupy slots without copy data). */
-    copy_results = calloc(item_count, sizeof(file_copy_result_t));
-    if (!copy_results) {
-        err = ERROR(ERR_MEMORY, "Failed to allocate copy results array");
-        goto cleanup;
-    }
-
-    /* The capture list can hold every item; the steps below fill it with the
-     * ones that landed. */
-    commit->captured = calloc(item_count, sizeof(update_capture_t));
-    if (!commit->captured) {
-        err = ERROR(ERR_MEMORY, "Failed to allocate capture list");
-        goto cleanup;
-    }
-
-    /* Get worktree index for staging */
-    err = worktree_get_index(wt, &index);
-    if (err) {
-        err = error_wrap(err, "Failed to get worktree index");
-        goto cleanup;
-    }
-
-    /* Process all items in a single unified loop */
-    for (size_t i = 0; i < item_count; i++) {
-        const workspace_item_t *item = items[i];
-
-        /* Dispatch by item kind */
-        switch (item->item_kind) {
-            case PATH_KIND_FILE: {
-                /* Handle file operations */
-                output_info(out, OUTPUT_VERBOSE, "  %s", item->filesystem_path);
-
-                /* Handle deleted files */
-                if (item->state == WORKSPACE_STATE_DELETED) {
-                    /* Remove from index (stage deletion) */
-                    int git_err = git_index_remove_bypath(index, item->storage_path);
-                    if (git_err < 0) {
-                        err = error_from_git(git_err);
-                        goto cleanup;
-                    }
-                    err = ptr_array_push(&commit->deleted, item);
-                    if (err) {
-                        goto cleanup;
-                    }
-                    continue;
-                }
-
-                /* Copy to worktree and capture stat atomically */
-                err = copy_file_to_worktree(
-                    ctx,
-                    wt,
-                    item->filesystem_path,
-                    item->storage_path,
-                    profile,
-                    existing_metadata,
-                    &copy_results[i].encrypted,
-                    &copy_results[i].stat
-                );
-                if (err) {
-                    err = error_wrap(err, "Failed to copy '%s'", item->filesystem_path);
-                    goto cleanup;
-                }
-
-                commit->captured[commit->captured_count++] = (update_capture_t){
-                    .item = item,
-                    .stat = stat_cache_from_stat(&copy_results[i].stat)
-                };
-
-                /* Stage file */
-                int git_err = git_index_add_bypath(index, item->storage_path);
-                if (git_err < 0) {
-                    err = error_from_git(git_err);
-                    goto cleanup;
-                }
-
-                break;
-            }
-
-            case PATH_KIND_DIRECTORY: {
-                /* Directories are handled purely in metadata - no file operations needed */
-                /* Metadata update happens in update_metadata_for_profile() call below */
-                break;
-            }
-        }
-    }
-
-    /* Update metadata for both files and directories */
-    err = update_metadata_for_profile(
-        wt, index, items, item_count, copy_results, commit, out
-    );
-    if (err) {
-        err = error_wrap(err, "Failed to update metadata");
-        goto cleanup;
-    }
-
-    /* Note: metadata function already wrote the index */
-
-    /* Skip commit if nothing was processed (the metadata step saved and staged
-     * nothing on the same condition — the worktree is exactly as checked out).
-     * The pruned entries are the metadata step's housekeeping and ride along
-     * with what did land. */
-    size_t path_count = commit->captured_count + commit->deleted.count;
-    if (path_count == 0) {
-        goto cleanup;
-    }
-
     /* Build array of storage paths for commit message: what the commit captured
-     * and what it let go — the bookkeeping, so an item a step skipped is not
+     * and what it let go — the bookkeeping, so an item the walk skipped is not
      * named. */
     storage_paths = malloc(path_count * sizeof(char *));
     if (!storage_paths) {
@@ -1103,8 +962,7 @@ cleanup:
     if (message) free(message);
     if (storage_paths) free(storage_paths);
     if (index) git_index_free(index);
-    if (owns_metadata && existing_metadata) metadata_free(existing_metadata);
-    if (copy_results) free(copy_results);
+    if (metadata) metadata_free(metadata);
 
     return err;
 }
@@ -1307,6 +1165,8 @@ cleanup:
  * @param ctx Dispatch context (must not be NULL; the run's repository carries
  *            the shared worktree, the copy step reads the key and the
  *            encryption policy)
+ * @param ws Workspace (must not be NULL; threaded to the walk for view-row
+ *           reads)
  * @param update_items Pre-filtered items to update (must not be NULL)
  * @param update_count Number of items
  * @param opts Update options (must not be NULL)
@@ -1320,6 +1180,7 @@ cleanup:
  */
 static error_t *update_execute_for_all_profiles(
     const dotta_ctx_t *ctx,
+    const workspace_t *ws,
     const workspace_item_t **update_items,
     size_t update_count,
     const cmd_update_options_t *opts,
@@ -1328,6 +1189,7 @@ static error_t *update_execute_for_all_profiles(
     size_t *out_commit_count
 ) {
     CHECK_NULL(ctx);
+    CHECK_NULL(ws);
     CHECK_NULL(update_items);
     CHECK_NULL(opts);
     CHECK_NULL(total_updated);
@@ -1402,7 +1264,7 @@ static error_t *update_execute_for_all_profiles(
         /* Update this profile using shared worktree */
         size_t processed = 0;
         err = update_profile(
-            ctx, wt, profile, (const workspace_item_t **) array->items,
+            ctx, ws, wt, profile, (const workspace_item_t **) array->items,
             array->count, opts, &commits[commit_count], &processed
         );
         commit_count++;
@@ -2196,7 +2058,7 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
     update_commit_t *commits = NULL;
     size_t updated_profile_count = 0;
     err = update_execute_for_all_profiles(
-        ctx, (const workspace_item_t **) update_items.entries,
+        ctx, ws, (const workspace_item_t **) update_items.entries,
         update_items.count, opts,
         &total_updated, &commits, &updated_profile_count
     );

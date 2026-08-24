@@ -498,13 +498,22 @@ static workspace_state_t classify_absent(const anchor_t *anchor) {
  * the row the path was first seen under, not a deployer, and apply adopts such
  * a path rather than acknowledging it.
  *
+ * The blob-family ENCRYPTION verdict (types.h) is settled here too, once per
+ * row, from the row and the config alone: row->encrypted is byte truth by the
+ * write-boundary invariant (stamped from the blob's bytes in cmds/add.c and
+ * cmds/update.c, projected onto the row at build), so the audit costs one pattern
+ * match and inflates nothing. The filesystem is not one of its operands, so every
+ * arm carries it — it survives absence and rides beside TYPE and UNVERIFIED alike.
+ *
  * @param ws Workspace (must not be NULL)
  * @param row Active view row (must not be NULL)
+ * @param config Configuration for the auto-encrypt ruleset (can be NULL)
  * @return Error or NULL on success
  */
 static error_t *analyze_file_divergence(
     workspace_t *ws,
-    const manifest_row_t *row
+    const manifest_row_t *row,
+    const config_t *config
 ) {
     CHECK_NULL(ws);
     CHECK_NULL(row);
@@ -524,6 +533,13 @@ static error_t *analyze_file_divergence(
     bool profile_changed = anchor && anchor->deployed_at > 0 &&
         strcmp(anchor->profile, profile) != 0;
     const char *old_profile = profile_changed ? anchor->profile : NULL;
+
+    /* The blob-family verdict (see the doc above): is the blob Git holds for
+     * this row stored plaintext where the auto-encrypt policy claims the path?
+     * DIVERGENCE_NONE or DIVERGENCE_ENCRYPTION, carried by every return below. */
+    divergence_type_t policy =
+        encryption_policy_violation(config, storage_path, row->encrypted)
+        ? DIVERGENCE_ENCRYPTION : DIVERGENCE_NONE;
 
     /* Single stat capture for the entire analysis
      *
@@ -552,7 +568,7 @@ static error_t *analyze_file_divergence(
          * Returns here because every phase below needs a valid stat. */
         return workspace_add_diverged(
             ws, fs_path, storage_path, profile, old_profile,
-            WORKSPACE_STATE_DEPLOYED, DIVERGENCE_UNVERIFIED,
+            WORKSPACE_STATE_DEPLOYED, DIVERGENCE_UNVERIFIED | policy,
             PATH_KIND_FILE,
             occupant,                    /* assumed present */
             profile_changed
@@ -572,8 +588,9 @@ static error_t *analyze_file_divergence(
         }
     }
 
-    /* Divergence accumulator (bit flags, can combine) */
-    divergence_type_t divergence = DIVERGENCE_NONE;
+    /* Divergence accumulator (bit flags, can combine), opened with the blob-family
+     * verdict; the path-family bits accumulate below. */
+    divergence_type_t divergence = policy;
 
     /* State will be determined in PHASE 2 based on deployment status */
     workspace_state_t state = WORKSPACE_STATE_DEPLOYED;
@@ -814,7 +831,7 @@ static error_t *analyze_file_divergence(
                  * a type change. */
                 return workspace_add_diverged(
                     ws, fs_path, storage_path, profile, old_profile, WORKSPACE_STATE_DEPLOYED,
-                    DIVERGENCE_TYPE, PATH_KIND_FILE, occupant, profile_changed
+                    DIVERGENCE_TYPE | policy, PATH_KIND_FILE, occupant, profile_changed
                 );
 
             case CMP_MISSING:
@@ -827,14 +844,14 @@ static error_t *analyze_file_divergence(
 
             case CMP_UNVERIFIED:
                 /* The failed look, mapped above — no compare path returns this
-                 * verdict itself. UNVERIFIED alone, the unstattable arm's shape:
-                 * the stat is valid so the mode checks below could run, but every
-                 * consumer reads UNVERIFIED first, so accumulated bits would
-                 * change nothing; the orphan slice already answers a failed look
-                 * this way, and one policy beats two. */
+                 * verdict itself. UNVERIFIED beside the blob bit, the unstattable
+                 * arm's shape: the stat is valid so the mode checks below could
+                 * run, but every consumer reads UNVERIFIED first, so accumulated
+                 * path bits would change nothing; the orphan slice already answers
+                 * a failed look this way, and one policy beats two. */
                 return workspace_add_diverged(
                     ws, fs_path, storage_path, profile, old_profile,
-                    WORKSPACE_STATE_DEPLOYED, DIVERGENCE_UNVERIFIED,
+                    WORKSPACE_STATE_DEPLOYED, DIVERGENCE_UNVERIFIED | policy,
                     PATH_KIND_FILE, occupant, profile_changed
                 );
         }
@@ -935,8 +952,11 @@ static error_t *analyze_file_divergence(
          * gates on the record (see the classification table above). */
         state = classify_absent(anchor);
 
-        /* Clear divergence flags - can't detect divergence on missing files */
-        divergence = DIVERGENCE_NONE;
+        /* Absence clears the path-family bits — properties of what is not there
+         * cannot be compared. The blob-family verdict stands: the blob and the
+         * policy are both still here to disagree ([undeployed] [unencrypted] is
+         * exactly this row). */
+        divergence = policy;
     } else {
         /* File in manifest and on filesystem */
         state = WORKSPACE_STATE_DEPLOYED;
@@ -1624,11 +1644,11 @@ static error_t *analyze_orphans(workspace_t *ws) {
  * Performance: O(N) where N = active row count. The row (blob_oid, type, mode,
  * etc.) and the indexed record eliminate N+1 database queries.
  */
-static error_t *analyze_files_divergence(workspace_t *ws) {
+static error_t *analyze_files_divergence(workspace_t *ws, const config_t *config) {
     CHECK_NULL(ws);
 
     for (size_t i = 0; i < ws->active_file_count; i++) {
-        error_t *err = analyze_file_divergence(ws, ws->active_files[i]);
+        error_t *err = analyze_file_divergence(ws, ws->active_files[i], config);
         if (err) {
             return err;
         }
@@ -2211,101 +2231,6 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
 }
 
 /**
- * Analyze encryption policy mismatches
- *
- * Detects files that should be encrypted (per auto-encrypt patterns) but are
- * stored as plaintext in the profile.
- *
- * Trusts the cache. After the write-time invariant established in cmds/add.c
- * and cmds/update.c, row->encrypted is byte-truth (metadata.json:encrypted is
- * stamped from content_classify_bytes at the write boundary, then projected onto
- * the view row at build). The audit reads the cached bool and defers to
- * encryption_policy_violation. Zero blob inflations.
- *
- * Per-blob byte-classification was the previous implementation's regression:
- * O(N) inflations per workspace_load against libgit2's pack backend, on a hot
- * path. The cache discipline makes the cached answer authoritative.
- *
- * Only fires when encryption is active — i.e. the config has a compiled
- * auto-encrypt ruleset (see encryption_policy_is_active). Nothing to check without
- * one.
- *
- * This is a security-focused check: files matching sensitive patterns (e.g.,
- * "*.key", ".ssh/id_*") should be encrypted.
- */
-static error_t *analyze_encryption_policy_mismatch(
-    workspace_t *ws,
-    const config_t *config
-) {
-    CHECK_NULL(ws);
-
-    /* Fast-path: no auto-encrypt ruleset means nothing to validate. */
-    if (!encryption_policy_is_active(config)) return NULL;
-
-    error_t *err = NULL;
-
-    /* Check each active row */
-    for (size_t i = 0; i < ws->active_file_count; i++) {
-        const manifest_row_t *row = ws->active_files[i];
-        const char *storage_path = row->storage_path;
-        const char *profile = row->profile;
-
-        if (!encryption_policy_violation(config, storage_path, row->encrypted)) {
-            continue;
-        }
-
-        /* Merge the violation into the existing divergence index — the file may
-         * already have CONTENT/MODE/etc. divergence, in which case we OR the
-         * ENCRYPTION flag in alongside. The O(1) index lookup prevents
-         * last-write-wins between analysis passes. */
-        void *idx_ptr = hashmap_get(ws->diverged_index, row->filesystem_path);
-        workspace_item_t *existing = NULL;
-        if (idx_ptr) {
-            size_t idx = (size_t) (uintptr_t) idx_ptr - 1;  /* Convert index+1 back to index */
-            existing = &ws->diverged[idx];
-        }
-
-        if (existing) {
-            /* File already diverged - accumulate encryption flag
-             *
-             * Example: File is DEPLOYED with CONTENT divergence AND violates
-             * encryption policy. We accumulate: divergence |=
-             * DIVERGENCE_ENCRYPTION. Result: User sees both flags: "modified
-             * [encryption]" in status. */
-            existing->divergence |= DIVERGENCE_ENCRYPTION;
-        } else {
-            /* No existing divergence row for this file — encryption policy is
-             * the only issue. Classify the workspace state from presence + the
-             * record, mirroring analyze_file_divergence Phase 2. */
-            fs_occupant_t occupant = fs_lstat_occupant(row->filesystem_path, NULL);
-
-            workspace_state_t item_state = (occupant != FS_OCCUPANT_NONE)
-                ? WORKSPACE_STATE_DEPLOYED
-                : classify_absent(workspace_get_anchor(ws, row->filesystem_path));
-
-            err = workspace_add_diverged(
-                ws,
-                row->filesystem_path,
-                storage_path,
-                profile,
-                NULL,
-                item_state,
-                DIVERGENCE_ENCRYPTION, /* Divergence: encryption policy violated */
-                PATH_KIND_FILE,
-                occupant,
-                false                  /* No profile change */
-            );
-
-            if (err) {
-                return err;
-            }
-        }
-    }
-
-    return NULL;
-}
-
-/**
  * Order two rows by filesystem path (qsort callback)
  *
  * strcmp order is SQLite's BINARY order, which the slices carried when they were
@@ -2498,7 +2423,7 @@ error_t *workspace_load(
 
     /* Analyze file divergence (most common requirement) */
     if (options->analyze_files) {
-        err = analyze_files_divergence(ws);
+        err = analyze_files_divergence(ws, config);
         if (err) {
             workspace_free(ws);
             return error_wrap(err, "Failed to analyze file divergence");
@@ -2529,15 +2454,6 @@ error_t *workspace_load(
         if (err) {
             workspace_free(ws);
             return error_wrap(err, "Failed to analyze directory metadata");
-        }
-    }
-
-    /* Analyze encryption policy mismatches */
-    if (options->analyze_encryption) {
-        err = analyze_encryption_policy_mismatch(ws, config);
-        if (err) {
-            workspace_free(ws);
-            return error_wrap(err, "Failed to analyze encryption policy");
         }
     }
 

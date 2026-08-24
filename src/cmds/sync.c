@@ -111,8 +111,8 @@ static void mark_result_failed(
 }
 
 /**
- * The divergence strategies by the word `--diverged` and the config take —
- * the one spelling the parser, the receipts and completion share.
+ * The divergence strategies by the word `--diverged` and the config take — the
+ * one spelling the parser, the receipts and completion share.
  */
 static const struct {
     const char *name;
@@ -1574,8 +1574,7 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
             .analyze_files       = true,   /* Validate file state for uncommitted changes */
             .analyze_orphans     = false,  /* Orphans are apply's concern, not sync's */
             .analyze_untracked   = config->auto_detect_new_files, /* Respect config */
-            .analyze_directories = false,  /* Directory metadata is apply's concern */
-            .analyze_encryption  = false   /* Encryption is apply's concern */
+            .analyze_directories = false   /* Directory metadata is apply's concern */
         };
         err = workspace_load(
             repo, state, config, content_cache, before, &ws_opts, ctx->arena, &ws
@@ -1907,9 +1906,9 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
      * scope_active: precedence runs across the whole enabled set, which is what
      * both views are built over (the state's rows, untouched since dispatch —
      * nothing in sync mutates enabled_profiles; a missing branch contributes
-     * nothing to either and was warned about at scope_build time). A path p
-     * lost to q is p's reassignment and q's claim; a path that moved between
-     * two pulled profiles is one reassignment, never a transient release.
+     * nothing to either and was warned about at scope_build time). A path p lost
+     * to q is p's reassignment and q's claim; a path that moved between two pulled
+     * profiles is one reassignment, never a transient release.
      *
      * Sync does not deploy. Apply's divergence analysis does that, which is what
      * the summary's hint points at.
@@ -2060,8 +2059,8 @@ cleanup:
  * ══════════════════════════════════════════════════════════════════ */
 
 /**
- * What can stand at the cursor: an enabled profile, by -p or bare; for
- * --diverged, a strategy.
+ * What can stand at the cursor: an enabled profile, by -p or bare; for --diverged,
+ * a strategy.
  */
 static args_want_t sync_complete(
     const void *ctx_v, const void *opts_v, const args_completion_t *at, FILE *out

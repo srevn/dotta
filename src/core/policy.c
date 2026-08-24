@@ -103,10 +103,6 @@ static bool encryption_policy_matches_auto_patterns(
     );
 }
 
-bool encryption_policy_is_active(const config_t *config) {
-    return config && config->auto_encrypt.rules != NULL;
-}
-
 error_t *encryption_policy_should_encrypt(
     const config_t *config,
     const char *storage_path,

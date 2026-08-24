@@ -196,7 +196,8 @@ static error_t *show_file_diff_from_workspace(
         status_color = OUTPUT_COLOR_RED;
     } else if (item->divergence & DIVERGENCE_TYPE) {
         status_color = OUTPUT_COLOR_RED;
-    } else if (item->profile_changed && item->divergence == DIVERGENCE_NONE) {
+    } else if (item->profile_changed &&
+        (item->divergence & ~DIVERGENCE_ENCRYPTION) == DIVERGENCE_NONE) {
         status_color = OUTPUT_COLOR_CYAN;
     }
 
@@ -218,8 +219,12 @@ static error_t *show_file_diff_from_workspace(
         return NULL;
     }
 
-    /* For profile reassignment only (content matches), no content diff */
-    if (item->profile_changed && item->divergence == DIVERGENCE_NONE) {
+    /* For profile reassignment only (content matches), no content diff. The
+     * blob-family ENCRYPTION bit does not demote a pure handover: it is about
+     * how Git stores the blob, not a difference between Git and disk, so it neither
+     * costs the handover its colour above nor leaves any bytes to render here. */
+    if (item->profile_changed &&
+        (item->divergence & ~DIVERGENCE_ENCRYPTION) == DIVERGENCE_NONE) {
         return NULL;
     }
 
@@ -1264,9 +1269,9 @@ cleanup:
  *
  * Performance: O(P) metadata loads + O(F) file analysis (where P=profiles, F=files)
  *
- * @param ctx Dispatch context (must not be NULL; reads the repository, the
- *            borrowed state handle, the shared blob-content cache, and the view
- *            over the enabled set)
+ * @param ctx Dispatch context (must not be NULL; reads the repository, the borrowed
+ *            state handle, the shared blob-content cache, and the view over the
+ *            enabled set)
  * @param scope Operation scope — profile and path filters (must not be NULL)
  * @param opts Command options (must not be NULL)
  * @return Error or NULL on success
@@ -1296,8 +1301,7 @@ static error_t *diff_workspace(
         .analyze_files       = true,  /* File content divergence detection */
         .analyze_orphans     = false, /* Orphaned state entries not needed */
         .analyze_untracked   = false, /* Not needed for diff (expensive) */
-        .analyze_directories = false, /* Not needed for diff */
-        .analyze_encryption  = false  /* Not needed for diff */
+        .analyze_directories = false  /* Not needed for diff */
     };
 
     err = workspace_load(
@@ -1540,9 +1544,9 @@ static error_t *diff_post_parse(
 }
 
 /**
- * What can stand at the cursor: an enabled profile, a file of the view or a
- * commit, in any order, as diff_classify routes them — the view and the
- * histories narrowed to the profiles named so far — or a filesystem path.
+ * What can stand at the cursor: an enabled profile, a file of the view or a commit,
+ * in any order, as diff_classify routes them — the view and the histories narrowed
+ * to the profiles named so far — or a filesystem path.
  */
 static args_want_t diff_complete(
     const void *ctx_v, const void *opts_v, const args_completion_t *at, FILE *out

@@ -236,7 +236,6 @@ typedef struct {
     bool analyze_orphans;
     bool analyze_untracked;    /* Directory scanning for new files (EXPENSIVE!) */
     bool analyze_directories;  /* Directory metadata checks */
-    bool analyze_encryption;   /* Encryption policy validation */
 } workspace_load_t;
 
 /**
@@ -301,8 +300,8 @@ error_t *workspace_load(
  *
  * Returns overall cleanliness assessment:
  * - WORKSPACE_CLEAN: No divergence detected
- * - WORKSPACE_DIRTY: Has work for apply (undeployed, modified, deleted, stale,
- *   reassigned, orphaned, released, untracked items)
+ * - WORKSPACE_DIRTY: Has work for a verb (undeployed, modified, deleted, stale,
+ *   reassigned, orphaned, released, untracked or policy-violating items)
  * - WORKSPACE_INVALID: Has an item the analysis could not verify
  *   (DIVERGENCE_UNVERIFIED) — no verb resolves it; the user must look
  *

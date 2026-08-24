@@ -1180,8 +1180,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         .analyze_files       = true,
         .analyze_orphans     = true,
         .analyze_untracked   = false,            /* Skip expensive directory scan */
-        .analyze_directories = true,             /* Directory metadata convergence */
-        .analyze_encryption  = false             /* Not needed for deployment */
+        .analyze_directories = true              /* Directory metadata convergence */
     };
     err = workspace_load(
         repo, state, config, content_cache, manifest, &ws_opts, ctx->arena, &ws
@@ -1390,12 +1389,12 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * A clean in-scope row whose record has deployed_at == 0 — or no record at
      * all — represents a file the user declared scope over (via profile enable
      * or add/update) AND that analyze_file_divergence just classified as clean
-     * — i.e., workspace_get_item returns NULL because neither the Phase 1 fast-path
-     * nor the Phase 3 slow-path produced a divergence verdict. Apply is the
-     * ownership moment: running it is how the user claims the in-scope set.
-     * Stamping here collapses the "enable → apply on a pre-existing matching
-     * file" flow to a coherent (blob, now, stat), so a later `rm file` is
-     * classified as [deleted] and `update` commits the deletion.
+     * for deploy's purposes: no item, or one carrying only the blob-family
+     * ENCRYPTION bit deploy_needs_work masks out. Apply is the ownership moment:
+     * running it is how the user claims the in-scope set. Stamping here collapses
+     * the "enable → apply on a pre-existing matching file" flow to a coherent
+     * (blob, now, stat), so a later `rm file` is classified as [deleted] and
+     * `update` commits the deletion.
      *
      * A clean row whose record dotta owns under another profile is a reassignment:
      * disk holds what A deployed, B owns the path now, and the content is the
@@ -1477,8 +1476,9 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * exit so a reassignment-only workspace is reported and acknowledged there too.
      *
      * A reassignment is the workspace's reading of the record against the row —
-     * the record dotta owns names one profile, the row another — and the one
-     * reason a clean row has an item at all (workspace_get_item). DIVERGENCE_STALE
+     * the record dotta owns names one profile, the row another — and one of the
+     * two reasons a deploy-clean row has an item at all (the other is the
+     * blob-family ENCRYPTION bit, which neither loop here reads). DIVERGENCE_STALE
      * is the workspace's verdict that Git moved past the blob dotta last deployed
      * (anchor.blob_oid ≠ row.blob_oid) — a persistent signal that survives
      * status→apply sequences and counts the same however the branch moved; work

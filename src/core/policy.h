@@ -31,20 +31,6 @@
 #include <types.h>
 
 /**
- * Report whether auto-encrypt policy applies to this config.
- *
- * True iff the config has a compiled auto-encrypt ruleset — i.e. encryption is
- * enabled AND at least one pattern was configured AND the patterns compiled
- * successfully at config_load.
- *
- * Used by workspace analysis to short-circuit the auto-encrypt divergence scan
- * when no pattern could possibly match.
- *
- * NULL-safe (returns false).
- */
-bool encryption_policy_is_active(const config_t *config);
-
-/**
  * Determine if file should be encrypted based on policy
  *
  * This is the SINGLE SOURCE OF TRUTH for encryption decisions across all commands

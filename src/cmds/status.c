@@ -1154,8 +1154,7 @@ error_t *cmd_status(const dotta_ctx_t *ctx, const cmd_status_options_t *opts) {
             .analyze_files       = true,
             .analyze_orphans     = true,
             .analyze_untracked   = config->auto_detect_new_files,
-            .analyze_directories = true,
-            .analyze_encryption  = true
+            .analyze_directories = true
         };
         err = workspace_load(
             repo, state, config, content_cache, manifest, &ws_opts, ctx->arena, &ws

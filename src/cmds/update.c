@@ -1602,11 +1602,11 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
      * or new files) and commits them to Git profiles. Analysis configuration:
      *
      * - analyze_files: Detects content and metadata changes in tracked files
+     *   (the encryption-policy audit rides on this pass)
      * - analyze_orphans: Disabled - update doesn't process orphaned records
      * - analyze_untracked: Discovers new files in tracked directories (when
      *   enabled)
      * - analyze_directories: Detects directory metadata changes for update
-     * - analyze_encryption: Validates encryption policy for files being updated
      *
      * Orphan detection is unnecessary because update operates on view rows (files
      * from enabled profiles) and new files. Orphans (recorded but not in any
@@ -1620,8 +1620,7 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
         .analyze_orphans     = false,                   /* Update doesn't process orphaned files */
         .analyze_untracked   = (opts->include_new || opts->only_new ||
             config->auto_detect_new_files), /* Explicit flags or config auto-detect */
-        .analyze_directories = true,                    /* Directory metadata change detection */
-        .analyze_encryption  = true                     /* Encryption policy validation */
+        .analyze_directories = true                     /* Directory metadata change detection */
     };
     err = workspace_load(
         repo, state, config, content_cache, manifest, &ws_opts, ctx->arena, &ws

@@ -2097,6 +2097,8 @@ static error_t *analyze_untracked_files(
  * - DIVERGENCE_MODE: Directory permissions changed
  * - DIVERGENCE_OWNERSHIP: Directory owner/group changed (requires root)
  * - DIVERGENCE_UNVERIFIED: Directory could not be stat'd (inaccessible)
+ * - A pending handover on a clean row: an item with no divergence, emitted so
+ *   the reassignment is visible (the tail analyze_file_divergence has)
  *
  * ARCHITECTURE: Reads the view's directory rows, not metadata (Git) directly. A
  * row carries filesystem_path already resolved with target, enabling correct
@@ -2125,6 +2127,14 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
         /* The record dotta keeps of this path, if any — the same pairing the
          * file analyzer makes. */
         const anchor_t *anchor = workspace_get_anchor(ws, filesystem_path);
+
+        /* Reassignment, for the add-or-not decision at the bottom: an owned
+         * record under a profile other than the row's — the same expression as
+         * workspace_item_reassigned, its inputs in hand, the derivation the file
+         * analyzer makes at its own pairing. One rule, both kinds: a pending
+         * handover is apply's to acknowledge whatever the row's kind. */
+        bool profile_changed = anchor && anchor->deployed_at > 0 &&
+            strcmp(anchor->profile, row->profile) != 0;
 
         /* Stat directory to get current metadata
          *
@@ -2242,8 +2252,12 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
             );
         }
 
-        /* Record divergence if any metadata differs */
-        if (mode_differs || ownership_differs) {
+        /* Record divergence if any metadata differs, or a pending handover
+         * stands (derived at the top, beside the record pairing) — the tail the
+         * file analyzer has: a clean reassigned row emits an item, state
+         * DEPLOYED, divergence NONE, so status's Reassigned section and apply's
+         * collection see both kinds. */
+        if (mode_differs || ownership_differs || profile_changed) {
             /* Accumulate divergence flags */
             divergence_type_t divergence = DIVERGENCE_NONE;
             if (mode_differs) divergence |= DIVERGENCE_MODE;

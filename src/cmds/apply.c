@@ -219,24 +219,26 @@ static void print_deploy_preview(
 /**
  * A pending profile reassignment, materialized at collect time
  *
- * Exactly what the preview prints: the path and the two profiles of the handover,
- * captured off the item before the run's ownership events (the adoption loop's
- * re-stamp, the deployment's anchor) rewrite the record the fact derives from.
- * Strings are borrowed from the workspace arena (command lifetime).
+ * Exactly what the preview prints: the path (with its kind, for the directory
+ * marker) and the two profiles of the handover, captured off the item before
+ * the run's ownership events (the adoption and acknowledgement loops' re-stamp,
+ * the deployment's anchor) rewrite the record the fact derives from. Strings
+ * are borrowed from the workspace arena (command lifetime).
  */
 typedef struct {
     const char *path;      /* Filesystem path */
     const char *from;      /* The record's profile at load */
     const char *to;        /* The row's profile — the new owner */
+    path_kind_t kind;      /* The item's kind — the slash after a directory path */
 } reassignment_t;
 
 /**
  * Print pending profile reassignments
  *
  * `reassigned` holds the planned rows whose owning profile changed (collected
- * off the plan's clean and pending buckets) — the exact set the run will
- * acknowledge: a content-clean one by the adoption loop's re-stamp, a stale one
- * by its deployment.
+ * off the plan's clean and pending buckets, both kinds) — the exact set the run
+ * will acknowledge: a clean one by its re-stamp, a pending one by the record
+ * step behind its deployment, creation, replacement or convergence.
  */
 static void print_reassignments(
     const output_t *out, const reassignment_t *reassigned, size_t count
@@ -246,13 +248,14 @@ static void print_reassignments(
     output_section(out, OUTPUT_NORMAL, "Profile reassignments");
     for (size_t i = 0; i < count; i++) {
         output_styled(
-            out, OUTPUT_NORMAL, "  {yellow}→{reset} %s: {cyan}%s{reset} → {cyan}%s{reset}\n",
-            reassigned[i].path, reassigned[i].from, reassigned[i].to
+            out, OUTPUT_NORMAL, "  {yellow}→{reset} %s%s: {cyan}%s{reset} → {cyan}%s{reset}\n",
+            reassigned[i].path, path_kind_suffix(reassigned[i].kind),
+            reassigned[i].from, reassigned[i].to
         );
     }
     output_info(
         out, OUTPUT_NORMAL,
-        "  These files will now be managed by a different profile."
+        "  These paths will now be managed by a different profile."
     );
 }
 
@@ -1398,16 +1401,17 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      *
      * Both are facts the planner read from the item and did not carry — the plan
      * says what the run does, the item says why — so the planned rows are walked
-     * once more, each paired with its item. The two file buckets are exactly
-     * the rows whose record this run's ownership events rewrite: the clean ones
-     * by the adoption loop below, the pending ones by the deployment — so what
-     * the preview names is what the receipt counts, and the collection runs first:
-     * it reads the present those writes rewrite, and materializes what the preview
-     * prints so no print moment re-reads it. A row the plan skips (-e,
-     * --skip-existing) is in neither bucket and is neither previewed nor counted:
-     * the run will not acknowledge it. The scope is not re-derived — the planner
-     * applied it once, and the buckets are its answer. Collected before the early
-     * exit so a reassignment-only workspace is reported and acknowledged there too.
+     * once more, each paired with its item. The four buckets, both kinds, are
+     * exactly the rows whose record this run's ownership events rewrite: the
+     * clean ones by the adoption and acknowledgement loops below, the pending
+     * ones by the record step behind the deployment — so what the preview names
+     * is what the receipt counts, and the collection runs first: it reads the
+     * present those writes rewrite, and materializes what the preview prints so
+     * no print moment re-reads it. A row the plan skips (-e, --skip-existing)
+     * is in no bucket and is neither previewed nor counted: the run will not
+     * acknowledge it. The scope is not re-derived — the planner applied it once,
+     * and the buckets are its answer. Collected before the early exit so a
+     * reassignment-only workspace is reported and acknowledged there too.
      *
      * A reassignment is the workspace's reading of the record against the row —
      * the record dotta owns names one profile, the row another — and one of the
@@ -1416,19 +1420,25 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * is the workspace's verdict that Git moved past the blob dotta last deployed
      * (anchor.blob_oid ≠ row.blob_oid) — a persistent signal that survives
      * status→apply sequences and counts the same however the branch moved; work
-     * by definition, so only a pending row carries it. */
+     * by definition, so only a pending row carries it, and only a file: a
+     * directory has no blob for Git to move, so the kind-blind read below never
+     * counts one. */
     size_t stale_count = 0;
     size_t reassigned_count = 0;
     reassignment_t *reassigned = NULL;
     const manifest_rows_t claimed[] = {
         manifest_rows_view(&deploy_plan->files.clean),
         manifest_rows_view(&deploy_plan->files.pending),
+        manifest_rows_view(&deploy_plan->directories.clean),
+        manifest_rows_view(&deploy_plan->directories.pending),
     };
 
-    if (claimed[0].count + claimed[1].count > 0) {
-        reassigned = arena_alloc(
-            ctx->arena, (claimed[0].count + claimed[1].count) * sizeof(*reassigned)
-        );
+    size_t claimed_total = 0;
+    for (size_t b = 0; b < sizeof(claimed) / sizeof(claimed[0]); b++) {
+        claimed_total += claimed[b].count;
+    }
+    if (claimed_total > 0) {
+        reassigned = arena_alloc(ctx->arena, claimed_total * sizeof(*reassigned));
         if (!reassigned) {
             err = ERROR(ERR_MEMORY, "Failed to allocate reassignment collection");
             goto cleanup;
@@ -1448,6 +1458,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
                     .path = item->filesystem_path,
                     .from = item->anchor->profile,
                     .to = item->profile,
+                    .kind = item->item_kind,
                 };
             }
         }
@@ -1548,6 +1559,42 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
                           : "Adopted {yellow}%zu{reset} file%s (now tracked)\n",
             adopted_count, adopted_count == 1 ? "" : "s"
         );
+    }
+
+    /* The directory half of the acknowledgement — and only that half. A clean
+     * in-scope directory row whose owned record names another profile is the
+     * same pending handover a file row is, and this loop is the one place its
+     * record is re-stamped under the row's profile (same derivation as the file
+     * loop's, its inputs in hand; NULL stat — a directory has none). The adopt
+     * half is deliberately not taken: capture (add, update) is the ownership
+     * event for a directory, apply's observation is not — an apply that adopted
+     * every pre-existing clean parent would own it and prune it at scope exit.
+     * A recordless clean directory stays the flush's observation, exactly as
+     * before. */
+    manifest_rows_t ackable = manifest_rows_view(&deploy_plan->directories.clean);
+
+    for (size_t i = 0; i < ackable.count; i++) {
+        const manifest_row_t *dir = ackable.entries[i];
+
+        const anchor_t *anchor = workspace_get_anchor(ws, dir->filesystem_path);
+        bool acknowledge = anchor && anchor->deployed_at > 0 &&
+            strcmp(anchor->profile, dir->profile) != 0;
+        if (!acknowledge) continue;
+
+        if (!opts->dry_run) {
+            error_t *anchor_err = workspace_anchor(ws, dir, NULL, now);
+            if (anchor_err) {
+                /* Non-fatal, the file loop's stance: the reassignment is
+                 * re-acknowledged on the next apply. */
+                output_warning(
+                    out, OUTPUT_NORMAL, "Failed to anchor %s: %s",
+                    dir->filesystem_path, error_message(anchor_err)
+                );
+                error_free(anchor_err);
+                continue;  /* Failed writes don't count — preview still accurate */
+            }
+        }
+        acknowledged_count++;
     }
 
     /* How many in-scope files Git has moved since dotta deployed them. [stale]
@@ -1920,16 +1967,24 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
          *   fixed                 directories converged in place — dotta did not
          *                         make them, and they were present at load, so
          *                         the flush has already observed any that had
-         *                         no record: nothing to write
+         *                         no record: nothing to write, with one
+         *                         exception — a pending handover must not
+         *                         outlive the run that converged the directory,
+         *                         so a reassigned fixed row takes the one anchor
+         *                         that acknowledges it
          * Every other active directory present on disk was present at load too,
          * and has its record from the flush by the same argument; the load
          * established presence at the boundary, and nothing here walks the disk
          * to establish it again.
          *
-         * A deployed file whose item read [reassigned] had its record rewritten
-         * under the row's profile by the write just made — the deployment is
-         * the acknowledgement — and is counted with the clean ones the adoption
-         * loop re-stamped.
+         * A deployed file — or a created, replaced or fixed directory — whose
+         * item read [reassigned] had its record rewritten under the row's
+         * profile by the write just made; each is derived before its anchor
+         * (the write rewrites the record the fact is read against) and counted
+         * with the clean ones the adoption and acknowledgement loops re-stamped.
+         * Ancestors' anchors stay uncounted: they are outside the plan, so the
+         * collection never previewed them, and an acknowledgement that rides
+         * one heals the record silently.
          */
         if (deploy_result) {
             manifest_rows_t deployed = manifest_rows_view(&deploy_result->deployed);
@@ -1974,11 +2029,14 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
             const manifest_rows_t made[] = {
                 manifest_rows_view(&deploy_result->created),
                 manifest_rows_view(&deploy_result->replaced),
-                manifest_rows_view(&deploy_result->ancestors),
             };
             for (size_t b = 0; b < sizeof(made) / sizeof(made[0]); b++) {
                 for (size_t i = 0; i < made[b].count; i++) {
                     const manifest_row_t *dir = made[b].entries[i];
+
+                    const workspace_item_t *item =
+                        workspace_get_item(ws, dir->filesystem_path);
+                    bool acknowledges = item && workspace_item_reassigned(item);
 
                     err = workspace_anchor(ws, dir, NULL, now);
                     if (err) {
@@ -1988,15 +2046,59 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
                         );
                         error_free(err);
                         err = NULL;
+                        continue;
                     }
+
+                    if (acknowledges) acknowledged_count++;
                 }
+            }
+
+            manifest_rows_t grown = manifest_rows_view(&deploy_result->ancestors);
+            for (size_t i = 0; i < grown.count; i++) {
+                const manifest_row_t *dir = grown.entries[i];
+
+                err = workspace_anchor(ws, dir, NULL, now);
+                if (err) {
+                    output_warning(
+                        out, OUTPUT_NORMAL, "Failed to update anchor for %s: %s",
+                        dir->filesystem_path, error_message(err)
+                    );
+                    error_free(err);
+                    err = NULL;
+                }
+            }
+
+            /* The fixed bucket's one write (see the table above): anchor only
+             * where the item read a pending handover. */
+            manifest_rows_t converged = manifest_rows_view(&deploy_result->fixed);
+            for (size_t i = 0; i < converged.count; i++) {
+                const manifest_row_t *dir = converged.entries[i];
+
+                const workspace_item_t *item =
+                    workspace_get_item(ws, dir->filesystem_path);
+                if (!(item && workspace_item_reassigned(item))) continue;
+
+                err = workspace_anchor(ws, dir, NULL, now);
+                if (err) {
+                    output_warning(
+                        out, OUTPUT_NORMAL, "Failed to update anchor for %s: %s",
+                        dir->filesystem_path, error_message(err)
+                    );
+                    error_free(err);
+                    err = NULL;
+                    continue;
+                }
+
+                acknowledged_count++;
             }
         }
     }
 
-    /* The reassignments this run acknowledged: the clean ones the adoption loop
-     * re-stamped and the stale ones the deployment rewrote. Dry-run previews
-     * the in-scope set the preview named. */
+    /* The reassignments this run acknowledged, both kinds: the clean ones the
+     * adoption and acknowledgement loops re-stamped, the pending ones the record
+     * step rewrote behind the run's own writes (deployed files; created, replaced
+     * and fixed directories). Dry-run previews the in-scope set the preview
+     * named. */
     if (opts->dry_run) {
         if (reassigned_count > 0) {
             output_info(

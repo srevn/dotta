@@ -314,19 +314,25 @@ const manifest_row_t *manifest_lookup(
 /**
  * Look up a row by storage path
  *
- * Linear scan — the callers (list, show) ask once per command. Since precedence
- * is resolved, each storage path under home/ and root/ maps to exactly one row;
- * under custom/ two profiles with distinct targets may share a storage path,
- * and the first match is returned.
+ * Linear scan — the callers ask once per command (list, show) or once per
+ * BACKED orphan (the workspace's relocation read, each of which already cost
+ * a Git tree probe; a lazy per-profile storage index inside the orphan pass's
+ * authority cache is the upgrade if a profile-wide re-target ever makes the
+ * scan show up). Since precedence is resolved, each storage path under home/
+ * and root/ maps to exactly one row; under custom/ two profiles with distinct
+ * targets may share a storage path, and the first match is returned — the
+ * profile filter is how a caller that means one claim names it.
  *
  * @param manifest Manifest (NULL returns NULL)
  * @param storage_path Storage path to look up, e.g. "home/.bashrc" (NULL returns
  *                     NULL)
+ * @param profile Only rows of this profile match; NULL matches any
  * @return Borrowed row pointer, or NULL if no row has the storage path
  */
 const manifest_row_t *manifest_lookup_storage(
     const manifest_t *manifest,
-    const char *storage_path
+    const char *storage_path,
+    const char *profile
 );
 
 /**

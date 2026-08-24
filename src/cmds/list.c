@@ -622,7 +622,7 @@ static error_t *list_file_history(
         err = manifest_build(repo, state, ctx->arena, &manifest);
         if (err) return err;
 
-        const manifest_row_t *row = manifest_lookup_storage(manifest, storage_path);
+        const manifest_row_t *row = manifest_lookup_storage(manifest, storage_path, NULL);
         manifest_free(manifest);
         if (!row) {
             return ERROR(

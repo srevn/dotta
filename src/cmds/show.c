@@ -705,7 +705,7 @@ error_t *cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
     err = manifest_build(repo, state, ctx->arena, &manifest);
     if (err) goto cleanup;
 
-    const manifest_row_t *row = manifest_lookup_storage(manifest, search_path);
+    const manifest_row_t *row = manifest_lookup_storage(manifest, search_path, NULL);
     if (!row) {
         err = ERROR(
             ERR_NOT_FOUND, "File '%s' not found in enabled profiles",

@@ -833,12 +833,33 @@ static void print_cleanup_preflight_results(
     if (present_files > 0) {
         output_section(out, OUTPUT_NORMAL, "Orphaned files");
 
-        if (verdicts->prunable_files.count > 0) {
+        /* The prunable summary splits by the relocation the item carries
+         * (item->row) — a naming, not a verdict: both halves are cleanup's one
+         * prunable bucket, named together in the list below, and the split only
+         * keeps each parenthetical true. A relocated prunable copy is not
+         * inactive — its claim deploys at a new filesystem path — so "(no
+         * longer active)" would lie about it. */
+        workspace_items_t prunable = workspace_items_view(&verdicts->prunable_files);
+        size_t moved = 0;
+        for (size_t i = 0; i < prunable.count; i++) {
+            if (prunable.entries[i]->row) moved++;
+        }
+
+        if (prunable.count - moved > 0) {
             output_styled(
                 out, OUTPUT_NORMAL,
                 "  {yellow}%zu{reset} file%s will be pruned (no longer active)\n",
-                verdicts->prunable_files.count,
-                verdicts->prunable_files.count == 1 ? "" : "s"
+                prunable.count - moved,
+                prunable.count - moved == 1 ? "" : "s"
+            );
+        }
+
+        if (moved > 0) {
+            output_styled(
+                out, OUTPUT_NORMAL,
+                "  {yellow}%zu{reset} file%s will be pruned "
+                "(relocated: the claim deploys at its new location)\n",
+                moved, moved == 1 ? "" : "s"
             );
         }
 
@@ -937,7 +958,7 @@ static void print_cleanup_preflight_results(
             /* How the reason reads on screen. The reason itself is cleanup's
              * (cleanup_skip_reason); this only names it — red where the file's
              * own content or type has moved away from what dotta deployed, yellow
-             * where dotta simply cannot vouch for it. */
+             * where dotta simply cannot vouch for it or deliberately holds it. */
             const char *glyph = "•";
             const char *label = "skipped";
             output_color_t color = OUTPUT_COLOR_YELLOW;
@@ -952,6 +973,10 @@ static void print_cleanup_preflight_results(
                     glyph = "⚠";
                     label = "type changed";
                     color = OUTPUT_COLOR_RED;
+                    break;
+                case CLEANUP_SKIP_RELOCATED:
+                    glyph = "⚠";
+                    label = "home changed";
                     break;
                 case CLEANUP_SKIP_MODE_CHANGED:
                     glyph = "⚠";

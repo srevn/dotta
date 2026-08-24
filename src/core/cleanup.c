@@ -23,6 +23,7 @@
 #include "base/hashmap.h"
 #include "core/scope.h"
 #include "core/state.h"
+#include "infra/mount.h"
 #include "sys/filesystem.h"
 
 /* ══════════════════════════════════════════════════════════════════
@@ -162,6 +163,17 @@ cleanup_skip_reason_t cleanup_skip_reason(const workspace_item_t *item) {
         return CLEANUP_SKIP_UNVERIFIED;
     }
 
+    /* A held relocation: the claim's row rides the item and the label is not
+     * the user's to re-target — the copy here is the claim's old home. The
+     * same test as cleanup_verdict's hold arm, its inputs in hand; guarded by
+     * the label so a re-targeted custom/ copy never trips it. */
+    if (item->row) {
+        const mount_spec_t *label = mount_spec_for_path(item->storage_path);
+        if (label && !label->per_profile) {
+            return CLEANUP_SKIP_RELOCATED;
+        }
+    }
+
     /* DIVERGENCE_CONTENT: disk differs from what dotta deployed */
     if (divergence & DIVERGENCE_CONTENT) {
         return CLEANUP_SKIP_MODIFIED;
@@ -217,6 +229,18 @@ cleanup_verdict_t cleanup_verdict(const workspace_item_t *item, bool force) {
          * Decided before --force is consulted: --force prunes what would be
          * skipped, never what is released. */
         return CLEANUP_RELEASED;
+    }
+
+    /* The relocation hold, both kinds (the table in cleanup.h): the claim's
+     * row rides the item, and a label the user cannot re-target (!per_profile
+     * — home/; root/'s projection is fixed and never gets here) means $HOME
+     * itself differs, so the copy is real dotfiles under the claim's real
+     * home. --force lifts it — the escape for a deliberate home migration. */
+    if (item->row && !force) {
+        const mount_spec_t *label = mount_spec_for_path(item->storage_path);
+        if (label && !label->per_profile) {
+            return CLEANUP_SKIPPED;
+        }
     }
 
     if (item->item_kind == PATH_KIND_DIRECTORY) {

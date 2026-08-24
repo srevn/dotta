@@ -289,7 +289,8 @@ error_t *check_item_metadata_divergence(
  * DIRECTORY, the orphan loop's the record's.
  *
  * @param ws Workspace context (must not be NULL)
- * @param row The view's claim (NULL for orphans)
+ * @param row The view's claim (NULL for orphans — except a relocated one, whose
+ *            row is the same claim's at its new filesystem path)
  * @param anchor The record (NULL when the path has no record)
  * @param state Where the item exists (deployed/undeployed/etc.)
  * @param divergence What's wrong with it (bit flags, can combine)
@@ -1532,10 +1533,19 @@ static error_t *compute_orphan_authority(
  *     dotta discovers in Git — the branch deleted, rebased or git rm'd, a pulled
  *     removal, a dead enabled branch — is LOST, and the deployed copy is left
  *     alone (RELEASED); BACKED (a disabled profile, a moved target) is dotta's
- *     to prune, divergence permitting; UNVERIFIED holds the orphan until Git
- *     answers — either kind: LOST would retire the record, BACKED would remove
- *     the copy, and neither is a guess to make about an empty directory any more
- *     than about a file.
+ *     to prune, divergence permitting — and carries the relocation read: a BACKED
+ *     orphan whose claim still has a row elsewhere in the view rides that row
+ *     on the item, and the storage label picks the fate (cleanup_verdict);
+ *     UNVERIFIED holds the orphan until Git answers — either kind: LOST would
+ *     retire the record, BACKED would remove the copy, and neither is a guess
+ *     to make about an empty directory any more than about a file.
+ *
+ * A released record carries a true fact.** Today a release retires the record.
+ * If the path is later re-added under another profile, the workspace reads it
+ * as `[modified]` (no base) instead of `[stale]` (base = the blob dotta deployed).
+ * Keeping the record would make it a perpetual orphan (no view row → probed every
+ * load), so it needs a word.
+ *
  * Divergence for a prunable file is disk against what dotta last deployed — the
  * record (compute_orphan_divergence). A prunable directory's verdict is cleanup's
  * emptiness rule, so there is nothing to measure, only whether it can be: a
@@ -1599,6 +1609,11 @@ static error_t *analyze_orphans(workspace_t *ws) {
         workspace_state_t item_state = WORKSPACE_STATE_ORPHANED;
         divergence_type_t divergence = DIVERGENCE_NONE;
 
+        /* The relocated claim's row, set only where the probe answers BACKED:
+         * the record's own (profile, storage path) claim, still in the view,
+         * projected at a different filesystem path. See the read below. */
+        const manifest_row_t *row = NULL;
+
         /* Whether the copy can be measured at all: a directory against cleanup's
          * emptiness rule, a file against a confirmed blob. The schema CHECK
          * (state.c: ownership implies confirmation) guarantees an owned file
@@ -1661,6 +1676,26 @@ static error_t *analyze_orphans(workspace_t *ws) {
                 measure = true;
                 unvouched = (authority == ORPHAN_AUTHORITY_UNVERIFIED);
             }
+
+            /* The relocation read — BACKED only: a relocated orphan is an orphan
+             * whose claim still has a row. The record's own (profile, storage
+             * path) pair is asked of the view; a row found here always projects
+             * elsewhere — the partition orphaned this record precisely because
+             * no view row stands at its filesystem path, this row included — so
+             * the claim deploys at a new location now: a moved custom/ target,
+             * a different $HOME. The item carries it (item->row non-NULL on an
+             * ORPHANED item IS the relocation; the label picks the fate at
+             * cleanup_verdict, and root/ never gets here — its projection is
+             * fixed). Strictly the record's own profile: a claim shadowed by
+             * another profile at its new home is not "relocated" — the copy here
+             * is simply no longer active — and the same-profile rule is what
+             * keeps workspace_item_reassigned false by construction on every
+             * orphan (the profiles are equal). A LOST or UNVERIFIED probe carries
+             * nothing: the first releases, the second holds, and neither fate
+             * reads the row. */
+            if (authority == ORPHAN_AUTHORITY_BACKED) {
+                row = manifest_lookup_storage(ws->manifest, storage_path, profile);
+            }
         }
 
         if (measure) {
@@ -1684,12 +1719,8 @@ static error_t *analyze_orphans(workspace_t *ws) {
         }
 
         err = workspace_add_diverged(
-            ws,
-            NULL,               /* No row — the view lacks the path; identity is the record's */
-            anchor,
-            item_state,
-            divergence,
-            occupant
+            ws, row,  /* The relocated claim's row, or NULL; identity is the record's */
+            anchor, item_state, divergence, occupant
         );
         if (err) {
             err = error_wrap(err, "Failed to add orphaned/released path");
@@ -2128,8 +2159,8 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
          * file analyzer makes. */
         const anchor_t *anchor = workspace_get_anchor(ws, filesystem_path);
 
-        /* Reassignment, for the add-or-not decision at the bottom: an owned
-         * record under a profile other than the row's — the same expression as
+        /* Reassignment, for the add-or-not decision at the bottom: an owned record
+         * under a profile other than the row's — the same expression as
          * workspace_item_reassigned, its inputs in hand, the derivation the file
          * analyzer makes at its own pairing. One rule, both kinds: a pending
          * handover is apply's to acknowledge whatever the row's kind. */
@@ -2252,11 +2283,11 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
             );
         }
 
-        /* Record divergence if any metadata differs, or a pending handover
-         * stands (derived at the top, beside the record pairing) — the tail the
-         * file analyzer has: a clean reassigned row emits an item, state
-         * DEPLOYED, divergence NONE, so status's Reassigned section and apply's
-         * collection see both kinds. */
+        /* Record divergence if any metadata differs, or a pending handover stands
+         * (derived at the top, beside the record pairing) — the tail the file
+         * analyzer has: a clean reassigned row emits an item, state DEPLOYED,
+         * divergence NONE, so status's Reassigned section and apply's collection
+         * see both kinds. */
         if (mode_differs || ownership_differs || profile_changed) {
             /* Accumulate divergence flags */
             divergence_type_t divergence = DIVERGENCE_NONE;
@@ -2905,6 +2936,18 @@ bool workspace_item_extract_display_info(
                 *color_out = OUTPUT_COLOR_RED;
             }
 
+            /* The relocation, ridden as a secondary tag beside the divergence
+             * tags (the way [reassigned] rides on DEPLOYED): the record's claim
+             * still has a row, projected elsewhere — item->row IS the fact
+             * (workspace.h). The fate stays cleanup's (a re-targeted custom/
+             * copy prunes, a moved home holds behind --force); this only names
+             * what the copy is. */
+            if (item->row) {
+                if (tag_count < WORKSPACE_ITEM_MAX_DISPLAY_TAGS) {
+                    tags_out[tag_count++] = "relocated";
+                }
+            }
+
             snprintf(metadata_buf, metadata_size, "from %s", item->profile);
             break;
         }
@@ -3013,7 +3056,9 @@ error_t *workspace_observe(
         return error_wrap(err, "Failed to index observation record");
     }
 
-    workspace_item_t *item = hashmap_get(ws->diverged_index, anchor->filesystem_path);
+    workspace_item_t *item = hashmap_get(
+        ws->diverged_index, anchor->filesystem_path
+    );
     if (item) {
         item->anchor = anchor;
     }
@@ -3068,7 +3113,9 @@ error_t *workspace_anchor(
         return error_wrap(err, "Failed to index anchor record");
     }
 
-    workspace_item_t *item = hashmap_get(ws->diverged_index, anchor->filesystem_path);
+    workspace_item_t *item = hashmap_get(
+        ws->diverged_index, anchor->filesystem_path
+    );
     if (item) {
         item->anchor = anchor;
     }

@@ -679,6 +679,16 @@ static void display_workspace_status(
                     size_t legend_count = 0;
                     size_t legend_width = 0;
 
+                    /* One sentence for every [relocated] key, wherever the
+                     * verdict put the item — a pruned custom/ re-target and a
+                     * held home move share the tag string across kinds and
+                     * fates, so the sentence is written to be true of all of
+                     * them, the way the bare [orphaned] key's is. */
+                    static const char relocated_hint[] =
+                        "the claim deploys elsewhere now (target or home moved); "
+                        "apply prunes the old copy — a moved home holds it "
+                        "behind --force";
+
                     for (size_t i = 0; i < orphaned_count; i++) {
                         const char *tags[WORKSPACE_ITEM_MAX_DISPLAY_TAGS];
                         size_t tag_count;
@@ -719,13 +729,23 @@ static void display_workspace_status(
 
                             case CLEANUP_SKIPPED:
                                 if (is_dir) {
-                                    hint = "cannot be verified; apply skips it";
+                                    /* The two ways a directory reaches SKIPPED
+                                     * here (force=false): the workspace could
+                                     * not verify it — which outranks the hold,
+                                     * as it does in the file table — or the
+                                     * relocation hold. */
+                                    hint = (orphaned[i]->divergence & DIVERGENCE_UNVERIFIED)
+                                        ? "cannot be verified; apply skips it"
+                                        : relocated_hint;
                                     break;
                                 }
                                 switch (cleanup_skip_reason(orphaned[i])) {
                                     case CLEANUP_SKIP_UNVERIFIED:
                                         hint = "cannot be verified; "
                                             "apply skips it, --force prunes it";
+                                        break;
+                                    case CLEANUP_SKIP_RELOCATED:
+                                        hint = relocated_hint;
                                         break;
                                     case CLEANUP_SKIP_MODIFIED:
                                     case CLEANUP_SKIP_TYPE_CHANGED:
@@ -742,7 +762,9 @@ static void display_workspace_status(
                                 break;
 
                             case CLEANUP_PRUNABLE:
-                                if (is_dir) {
+                                if (orphaned[i]->row) {
+                                    hint = relocated_hint;
+                                } else if (is_dir) {
                                     hint = "apply prunes it; a directory still holding "
                                         "something not dotta's to remove is released "
                                         "instead";

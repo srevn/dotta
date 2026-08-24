@@ -90,7 +90,10 @@ typedef struct {
     /* The join's sources — borrowed for the workspace's lifetime; at least one
      * is set except for UNTRACKED items.
      *   row     the view's claim. NULL for an orphan (the view lacks the path)
-     *           and for UNTRACKED.
+     *           and for UNTRACKED — except a relocated orphan, where it is the
+     *           record's own claim's row at its new filesystem path (the orphan
+     *           analysis carried it: non-NULL on an ORPHANED item IS the
+     *           relocation, and the new location is printable from it).
      *   anchor  the record — always the live snapshot record, the same pointer
      *           workspace_get_anchor returns: the writers patch it in place
      *           (workspace_anchor) or create it and backfill this field
@@ -128,10 +131,12 @@ typedef struct {
  * the record under the row's profile) the same read honestly answers false, so
  * a consumer that wants the load-time fact reads before the run's ownership events
  * rewrite it (apply's collection does). Kind-blind: one rule for both kinds.
- * Orphans: false by construction — an orphan item carries no row. Only an owned
- * record qualifies: an observed or confirmed record dotta never deployed names
- * the row the path was first seen under, not a deployer, and apply adopts such
- * a path rather than acknowledging it.
+ * Orphans: false by construction — a relocated orphan's row is carried only when
+ * its profile equals the record's (the strict same-profile rule of the relocation
+ * read), so no reader needs an orphan guard. Only an owned record qualifies: an
+ * observed or confirmed record dotta never deployed names the row the path was
+ * first seen under, not a deployer, and apply adopts such a path rather than
+ * acknowledging it.
  */
 static inline bool workspace_item_reassigned(const workspace_item_t *item) {
     return item->row && item->anchor && item->anchor->deployed_at > 0 &&

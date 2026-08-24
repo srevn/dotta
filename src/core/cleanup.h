@@ -32,9 +32,11 @@
  *   item — RELEASED ⇒ released (left on disk, record retires — never pruned,
  *   --force included: dotta removes what it deployed and Git still backs, and
  *   lets go of what Git lost, of what it never deployed, and of a path another
- *   kind of node stands at); a file with a cleanup_skip_reason ⇒ skipped unless
- *   --force; a directory the workspace could not verify ⇒ skipped, --force
- *   included; else prunable, a directory's remainder permitting
+ *   kind of node stands at); a relocated home/ claim ⇒ skipped unless --force,
+ *   either kind (the copy is the claim's old home — see the verdict table);
+ *   a file with a cleanup_skip_reason ⇒ skipped unless --force; a directory
+ *   the workspace could not verify ⇒ skipped, --force included; else prunable,
+ *   a directory's remainder permitting
  * - what is left in a directory after this run: fs_directory_emptiness,
  *   vouching for what this run prunes and for what it merely holds (preflight;
  *   cleanup_preflight_result_t has the classes), and fs_remove_empty_dir, which
@@ -157,6 +159,7 @@ static inline size_t cleanup_plan_item_count(const cleanup_plan_t *plan) {
 typedef enum {
     CLEANUP_SKIP_NONE = 0,       /* Not skipped — nothing stands in the way of the prune */
     CLEANUP_SKIP_UNVERIFIED,     /* The workspace could not settle it — see cleanup_skip_reason */
+    CLEANUP_SKIP_RELOCATED,      /* The claim's home moved — held behind --force */
     CLEANUP_SKIP_MODIFIED,       /* Content differs from what dotta deployed */
     CLEANUP_SKIP_TYPE_CHANGED,   /* File ↔ symlink ↔ device (a directory in its place is released) */
     CLEANUP_SKIP_MODE_CHANGED    /* Mode or ownership differs */
@@ -176,6 +179,16 @@ typedef enum {
  *                                  EIO). status ranks its [unverified] tag the
  *                                  same way, so one item has one name in both
  *                                  places.
+ *   a held relocation              RELOCATED    — the item carries the claim's
+ *                                  row (item->row, the relocation) under a
+ *                                  label whose projection is not the user's to
+ *                                  move (home/ — !per_profile): the copy here
+ *                                  is the claim's old home, held even when
+ *                                  byte-clean, so the hold outranks the
+ *                                  user-change reasons below it. Guarded by
+ *                                  the label, so a re-targeted custom/ copy
+ *                                  never trips it and keeps the prune (or its
+ *                                  own divergence reason)
  *   DIVERGENCE_CONTENT             MODIFIED     — disk differs from what dotta
  *                                  deployed (the record), not from the blob Git
  *                                  may have moved on to
@@ -214,6 +227,31 @@ cleanup_skip_reason_t cleanup_skip_reason(const workspace_item_t *item);
  *
  *   occupant NONE                         ABSENT     record retires, no effect
  *   state RELEASED                        RELEASED   left alone, record retires
+ *   a relocated home/ claim, unforced     SKIPPED    both kinds. The claim's row
+ *                                                    (item->row — the relocation)
+ *                                                    projects at a different
+ *                                                    filesystem path under a
+ *                                                    label the user cannot
+ *                                                    re-target (!per_profile:
+ *                                                    home/, since root/'s
+ *                                                    projection is fixed), which
+ *                                                    means $HOME itself differs
+ *                                                    — and fs_get_home is
+ *                                                    sudo-aware (SUDO_UID
+ *                                                    bypasses `sudo -H`'s
+ *                                                    rewrite), so that is a test
+ *                                                    HOME, a second account, a
+ *                                                    migrated home directory,
+ *                                                    and the copy here is real
+ *                                                    dotfiles under the real
+ *                                                    home. --force lifts the
+ *                                                    hold — the designed escape
+ *                                                    for a deliberate home
+ *                                                    migration. A re-targeted
+ *                                                    custom/ claim is the user's
+ *                                                    own move and prunes as
+ *                                                    before, its preview naming
+ *                                                    the move
  *   a file with a cleanup_skip_reason     SKIPPED    unless --force
  *   a directory with DIVERGENCE_UNVERIFIED
  *                                         SKIPPED    --force included: no flag
@@ -246,8 +284,8 @@ typedef enum {
  * Decide a planned orphan's verdict from the item
  *
  * @param item Orphaned or released item, either kind (must not be NULL)
- * @param force --force: lifts a file's skip reasons, never a release and never
- *        a directory's UNVERIFIED
+ * @param force --force: lifts a file's skip reasons and the relocation hold
+ *        (either kind), never a release and never a directory's UNVERIFIED
  * @return The verdict (see cleanup_verdict_t)
  */
 cleanup_verdict_t cleanup_verdict(const workspace_item_t *item, bool force);
@@ -319,7 +357,7 @@ typedef struct {
 
     /* Directories */
     ptr_array_t prunable_dirs;     /* Present; nothing but gone entries left → removed */
-    ptr_array_t skipped_dirs;      /* Present; a held entry left, or could not be verified → left alone, record stays */
+    ptr_array_t skipped_dirs;      /* Present; a held entry left, could not be verified, or its home moved → left alone, record stays */
     ptr_array_t released_dirs;     /* Released by the workspace, or a permanent entry left → left alone, record retires */
     ptr_array_t absent_dirs;       /* Not there → record retires */
 } cleanup_preflight_result_t;

@@ -795,11 +795,15 @@ const manifest_row_t *manifest_lookup(
  */
 const manifest_row_t *manifest_lookup_storage(
     const manifest_t *manifest,
-    const char *storage_path
+    const char *storage_path,
+    const char *profile
 ) {
     if (!manifest || !storage_path) return NULL;
 
     for (size_t i = 0; i < manifest->count; i++) {
+        if (profile && strcmp(manifest->rows[i]->profile, profile) != 0) {
+            continue;
+        }
         if (strcmp(manifest->rows[i]->storage_path, storage_path) == 0) {
             return manifest->rows[i];
         }

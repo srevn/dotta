@@ -334,10 +334,9 @@ cleanup:
  *   precedence gives the path to a profile other than the one the user is removing
  *   from, so the removal changes nothing on disk
  *
- * The view is built here, tolerantly: remove must run on an enabled set the
- * builder refuses (that is how an offending claim gets untracked), so a failed
- * build leaves the deployed bit false and the warning keeps its neutral
- * closing lines.
+ * The view is built here, tolerantly: remove must run on an enabled set the builder
+ * refuses (that is how an offending claim gets untracked), so a failed build
+ * leaves the deployed bit false and the warning keeps its neutral closing lines.
  *
  * Directory claims are not in the file index and get no cross-profile warning:
  * the record step's fallback detection covers the semantic half (a lower enabled
@@ -425,8 +424,9 @@ static error_t *analyze_multi_profile_conflicts(
 /**
  * Display multi-profile warnings to the user
  *
- * Shows which files exist in multiple profiles and explains the implications.
- * Borrows the analysis's profile index for each file's "also in" list.
+ * Shows which files exist in multiple profiles and explains the implications;
+ * the closing line names the fate `delete_files` chose. Borrows the analysis's
+ * profile index for each file's "also in" list.
  */
 static void display_multi_profile_warnings(
     output_t *out,
@@ -435,7 +435,8 @@ static void display_multi_profile_warnings(
     const hashmap_t *profile_index,
     size_t multi_profile_count,
     bool has_deployed_from_other,
-    const char *current_profile
+    const char *current_profile,
+    bool delete_files
 ) {
     if (!out || multi_profile_count == 0) return;
 
@@ -485,10 +486,20 @@ static void display_multi_profile_warnings(
             out, OUTPUT_NORMAL,
             "Those files will remain on the filesystem."
         );
+    } else if (delete_files) {
+        /* The record rule in one clause: the fate applies only where nothing
+         * still provides the path — a remaining claimant makes it a fallback,
+         * handed over on apply, not pruned. */
+        output_info(
+            out, OUTPUT_NORMAL,
+            "Files deployed from '%s' will be pruned on the next 'dotta apply' "
+            "unless another enabled profile still provides them.",
+            current_profile
+        );
     } else {
         output_info(
             out, OUTPUT_NORMAL,
-            "Files deployed from '%s' will remain until 'dotta apply'.",
+            "Files deployed from '%s' stay on the filesystem.",
             current_profile
         );
     }
@@ -581,10 +592,13 @@ static bool confirm_removal(
 
 /**
  * Confirm profile deletion
+ *
+ * `counts` is the branch-holdings phrase from the count family
+ * (output_format_counts, or its "counts unavailable" stand-in).
  */
 static bool confirm_profile_deletion(
     const char *profile,
-    size_t file_count,
+    const char *counts,
     const cmd_remove_options_t *opts,
     const config_t *config,
     output_t *out
@@ -600,8 +614,8 @@ static bool confirm_profile_deletion(
 
     output_newline(out, OUTPUT_NORMAL);
     output_warning(
-        out, OUTPUT_NORMAL, "This will delete profile '%s' (%zu file%s)",
-        profile, file_count, file_count == 1 ? "" : "s"
+        out, OUTPUT_NORMAL, "This will delete profile '%s' (%s)",
+        profile, counts
     );
     if (opts->delete_files) {
         output_info(
@@ -673,13 +687,8 @@ static error_t *remove_files_from_profile(
     /* Analyze multi-profile conflicts (critical safety check) */
     bool has_deployed_from_other = false;
     err = analyze_multi_profile_conflicts(
-        ctx,
-        claims,
-        claim_count,
-        opts->profile,
-        &profile_index,
-        &multi_profile_count,
-        &has_deployed_from_other
+        ctx, claims, claim_count, opts->profile, &profile_index,
+        &multi_profile_count, &has_deployed_from_other
     );
 
     if (err) {
@@ -688,13 +697,8 @@ static error_t *remove_files_from_profile(
 
     /* Display multi-profile warnings BEFORE any operation */
     display_multi_profile_warnings(
-        out,
-        claims,
-        claim_count,
-        profile_index,
-        multi_profile_count,
-        has_deployed_from_other,
-        opts->profile
+        out, claims, claim_count, profile_index, multi_profile_count,
+        has_deployed_from_other, opts->profile, opts->delete_files
     );
 
     /* Dry run - just show what would be removed */
@@ -715,16 +719,19 @@ static error_t *remove_files_from_profile(
         char counts[64];
         format_claim_counts(counts, sizeof(counts), dry_files, dry_dirs);
         output_print(
-            out, OUTPUT_NORMAL, "\nTotal: %s would be removed from profile\n",
+            out, OUTPUT_NORMAL,
+            "\nTotal: %s would be removed from profile\n",
             counts
         );
         if (opts->delete_files) {
             output_print(
-                out, OUTPUT_NORMAL, "(Deployed files would be removed on 'dotta apply')\n"
+                out, OUTPUT_NORMAL,
+                "(Deployed files would be removed on 'dotta apply')\n"
             );
         } else {
             output_print(
-                out, OUTPUT_NORMAL, "(Deployed files would be released from management)\n"
+                out, OUTPUT_NORMAL,
+                "(Deployed files would be released from management)\n"
             );
         }
 
@@ -943,17 +950,17 @@ static error_t *remove_files_from_profile(
      */
 
     /* The record phase: the record answers to the record. The candidates are
-     * the paths this commit let go — the removed claims, and the directory
-     * entries the metadata step pruned as redundant, which left the view by the
-     * same commit. For each candidate the subject is its record: one naming
-     * another profile is not ours to settle; one naming this profile whose path
-     * the after-view still provides is a fallback — kept, it reads [reassigned]
-     * until apply hands it over; one the view no longer provides takes the fate
-     * the user chose — --delete-files orders the deployed copy pruned at the
-     * next apply, the default retires the record (released from management
-     * now). Enablement is not consulted: a record dotta holds under a disabled
-     * profile is still dotta's record — the rule delete_profile_branch runs
-     * over every record naming the profile, run here over the candidates.
+     * the paths this commit let go — the removed claims, and the directory entries
+     * the metadata step pruned as redundant, which left the view by the same
+     * commit. For each candidate the subject is its record: one naming another
+     * profile is not ours to settle; one naming this profile whose path the
+     * after-view still provides is a fallback — kept, it reads [reassigned] until
+     * apply hands it over; one the view no longer provides takes the fate the
+     * user chose — --delete-files orders the deployed copy pruned at the next
+     * apply, the default retires the record (released from management now).
+     * Enablement is not consulted: a record dotta holds under a disabled profile
+     * is still dotta's record — the rule delete_profile_branch runs over every
+     * record naming the profile, run here over the candidates.
      *
      * Non-fatal throughout: Git succeeded and stands. A record this block fails
      * to write is an orphan the next apply reads, asks Git about, finds let go,
@@ -994,8 +1001,8 @@ static error_t *remove_files_from_profile(
 
     /* The record, once, on the READ handle — empty when the database does not
      * exist. Read before the transaction: state_begin creates .git/dotta.db at
-     * first write intent (its contract, core/state.h), and a remove with no
-     * record to settle must not grow a never-enabled repository a database. */
+     * first write intent (its contract, core/state.h), and a remove with no record
+     * to settle must not grow a never-enabled repository a database. */
     anchor_t *anchors = NULL;
     size_t anchor_count = 0;
     if (!record_err) {
@@ -1059,6 +1066,7 @@ static error_t *remove_files_from_profile(
                 );
                 error_free(record_err);
                 state_rollback(state);
+                settled_count = 0;   /* the rollback took the writes with it */
             } else {
                 /* Commit transaction */
                 error_t *commit_err = state_commit(state);
@@ -1069,6 +1077,7 @@ static error_t *remove_files_from_profile(
                     );
                     error_free(commit_err);
                     state_rollback(state);
+                    settled_count = 0;   /* the rollback took the writes with it */
                 } else if (settled_count > 0 || fallback_count > 0) {
                     if (opts->delete_files) {
                         output_info(
@@ -1101,14 +1110,21 @@ static error_t *remove_files_from_profile(
             out, OUTPUT_NORMAL, "Removed %s from profile '%s'",
             counts, opts->profile
         );
-        if (opts->delete_files) {
-            output_info(
-                out, OUTPUT_NORMAL, "Run 'dotta apply' to remove files from filesystem"
-            );
-        } else {
-            output_info(
-                out, OUTPUT_NORMAL, "Files released from management (no apply needed)"
-            );
+        /* The hint speaks only for records actually settled: nothing recorded —
+         * or a record phase that failed with its warning — leaves the success
+         * line to stand alone. */
+        if (settled_count > 0) {
+            if (opts->delete_files) {
+                output_info(
+                    out, OUTPUT_NORMAL,
+                    "Run 'dotta apply' to remove files from filesystem"
+                );
+            } else {
+                output_info(
+                    out, OUTPUT_NORMAL,
+                    "Files released from management (no apply needed)"
+                );
+            }
         }
         output_newline(out, OUTPUT_NORMAL);
     }
@@ -1154,6 +1170,7 @@ static error_t *delete_profile_branch(
     const char *remote_url = NULL;
     string_array_t *all_profiles = NULL;
     string_array_t *files = NULL;
+    string_array_t *hook_storage = NULL;
     string_array_t *hook_fs_paths = NULL;
     bool performed = false;
 
@@ -1199,20 +1216,35 @@ static error_t *delete_profile_branch(
     string_array_free(all_profiles);
     all_profiles = NULL;
 
-    /* Load profile to count files */
+    /* The file list rides to the hook universe below; the preview and the
+     * confirmation count through the count family instead — what the branch holds,
+     * both kinds, one truth with `dotta list`. A stats failure is display-only:
+     * the deletion must not refuse over a count. */
     err = profile_list_files(repo, opts->profile, &files);
     if (err) {
         err = error_wrap(err, "Failed to list files in profile '%s'", opts->profile);
         goto cleanup;
     }
 
-    size_t file_count = files->count;
+    char counts[64];
+    {
+        profile_stats_t stats = { 0 };
+        error_t *stats_err = profile_get_stats(repo, opts->profile, &stats);
+        if (stats_err) {
+            error_free(stats_err);
+            snprintf(counts, sizeof(counts), "counts unavailable");
+        } else {
+            output_format_counts(
+                stats.file_count, stats.directory_count, counts, sizeof(counts)
+            );
+        }
+    }
 
     /* Dry run */
     if (opts->dry_run) {
         output_print(
-            out, OUTPUT_NORMAL, "Would delete profile '%s' (%zu file%s)\n",
-            opts->profile, file_count, file_count == 1 ? "" : "s"
+            out, OUTPUT_NORMAL, "Would delete profile '%s' (%s)\n",
+            opts->profile, counts
         );
         goto cleanup;  /* err is NULL, will return success */
     }
@@ -1271,18 +1303,19 @@ static error_t *delete_profile_branch(
         );
     }
 
-    /* Enabled check and the record, once, on the borrowed state. Under
-     * spec-driven READ the handle is always non-NULL here (CHECK_NULL at entry),
-     * and state_load for a missing DB still returns a usable handle (DB-less,
-     * reads degrade to empty) — no defensive fallback needed. One read serves
-     * the informational count here and the post-deletion walk below: nothing
-     * between them touches the record (the branch deletion is Git-only).
-     * Failure is non-fatal — warn and decide over what was read; what this run
-     * cannot settle, the next apply reads as orphans and releases. */
+    /* Enabled check and the record, once, on the borrowed state. Under spec-driven
+     * READ the handle is always non-NULL here (CHECK_NULL at entry), and state_load
+     * for a missing DB still returns a usable handle (DB-less, reads degrade to
+     * empty) — no defensive fallback needed. One read serves the informational
+     * count here and the post-deletion walk below: nothing between them touches
+     * the record (the branch deletion is Git-only). Failure is non-fatal — warn
+     * and decide over what was read; what this run cannot settle, the next apply
+     * reads as orphans and releases. */
     bool profile_was_enabled = state_has_profile(state, opts->profile);
     anchor_t *anchors = NULL;
     size_t anchor_count = 0;
     size_t deployed_count = 0, record_count = 0;
+    size_t settled = 0;   /* records the post-deletion walk actually settled */
     {
         error_t *read_err = state_get_all_anchors(
             state, ctx->arena, &anchors, &anchor_count
@@ -1326,10 +1359,47 @@ static error_t *delete_profile_branch(
 
     /* Confirm deletion */
     if (!confirm_profile_deletion(
-        opts->profile, file_count, opts, config, out
+        opts->profile, counts, opts, config, out
         )) {
         output_print(out, OUTPUT_NORMAL, "Cancelled\n");
         goto cleanup;  /* err is NULL, will return success */
+    }
+
+    /* The hook universe: the tree's blobs, then the branch metadata's directory
+     * claims — the same both-kind universe the file-removal subcommand passes
+     * to its hooks. Same-profile rule as the claims universe: a key the tree
+     * holds as a blob is the blob's, the stale item is skipped. Metadata that
+     * will not load (or does not exist) degrades to the files-only universe —
+     * the deletion does not refuse over it. */
+    hook_storage = string_array_new(0);
+    if (hook_storage) {
+        for (size_t i = 0; i < files->count; i++) {
+            string_array_push(hook_storage, files->items[i]);
+        }
+
+        metadata_t *branch_metadata = NULL;
+        error_t *meta_err = metadata_load_from_branch(
+            repo, opts->profile, &branch_metadata
+        );
+        if (meta_err) {
+            error_free(meta_err);
+        } else {
+            size_t dir_count = 0;
+            const metadata_item_t **dir_items = metadata_get_items_by_kind(
+                branch_metadata, METADATA_ITEM_DIRECTORY, &dir_count
+            );
+            for (size_t i = 0; i < dir_count; i++) {
+                bool held_as_blob = false;
+                for (size_t j = 0; j < files->count && !held_as_blob; j++) {
+                    held_as_blob = strcmp(files->items[j], dir_items[i]->key) == 0;
+                }
+                if (!held_as_blob) {
+                    string_array_push(hook_storage, dir_items[i]->key);
+                }
+            }
+            free(dir_items);
+            metadata_free(branch_metadata);
+        }
     }
 
     /* Convert storage paths to filesystem paths for hook consistency. The file
@@ -1340,37 +1410,40 @@ static error_t *delete_profile_branch(
      * the profile is enabled with a binding; otherwise MOUNT_RESOLVE_UNBOUND
      * fires and the loop substitutes the storage path as the user-visible
      * fallback. */
-    if (files) {
+    if (hook_storage) {
         hook_fs_paths = string_array_new(0);
         if (hook_fs_paths) {
-            for (size_t i = 0; i < files->count; i++) {
+            for (size_t i = 0; i < hook_storage->count; i++) {
                 mount_resolve_outcome_t outcome;
                 const char *fs_path = NULL;
                 error_t *conv_err = mount_resolve(
-                    mounts, opts->profile, files->items[i], ctx->arena,
+                    mounts, opts->profile, hook_storage->items[i], ctx->arena,
                     &outcome, &fs_path
                 );
                 if (conv_err) {
                     error_free(conv_err);
                     /* Fall back to storage path (allocation failure or malformed
                      * input — non-fatal here). */
-                    string_array_push(hook_fs_paths, files->items[i]);
+                    string_array_push(hook_fs_paths, hook_storage->items[i]);
                 } else if (outcome == MOUNT_RESOLVE_BOUND) {
                     string_array_push(hook_fs_paths, fs_path);
                 } else {
                     /* UNBOUND: custom/ profile without binding on this host.
                      * Fall back to storage path so the hook sees a meaningful
                      * name. */
-                    string_array_push(hook_fs_paths, files->items[i]);
+                    string_array_push(hook_fs_paths, hook_storage->items[i]);
                 }
             }
         }
     }
 
     /* Build hook invocation. Prefer filesystem paths (consistent with the
-     * file-removal subcommand); fall back to storage paths if synthesis was
-     * skipped. Both arrays live until cleanup. */
-    const string_array_t *hook_files = hook_fs_paths ? hook_fs_paths : files;
+     * file-removal subcommand); fall back to the storage-path universe — or,
+     * failing that too, the file list — if synthesis was skipped. The arrays
+     * live until cleanup. */
+    const string_array_t *hook_files = hook_fs_paths ? hook_fs_paths
+                                     : hook_storage ? hook_storage
+                                     : files;
     const hook_invocation_t hook_inv = {
         .cmd        = HOOK_CMD_REMOVE,
         .profile    = opts->profile,
@@ -1395,12 +1468,12 @@ static error_t *delete_profile_branch(
 
     performed = true;
 
-    /* Post-deletion: the enabled set and the record, in one transaction —
-     * opened only when there is something to write: the enabled row must drop,
-     * or a record names the profile (the up-front read). A repository with no
-     * database — never enabled, nothing recorded — is left without one:
-     * state_begin creates .git/dotta.db at first write intent, and a deletion
-     * with nothing to settle is not that.
+    /* Post-deletion: the enabled set and the record, in one transaction — opened
+     * only when there is something to write: the enabled row must drop, or a
+     * record names the profile (the up-front read). A repository with no database
+     * — never enabled, nothing recorded — is left without one: state_begin creates
+     * .git/dotta.db at first write intent, and a deletion with nothing to settle
+     * is not that.
      *
      * The order of the branch deletion and this block does not matter: the view
      * is computed, and prune_ordered is the one fact the workspace reads for
@@ -1421,7 +1494,7 @@ static error_t *delete_profile_branch(
         error_t *delete_err = state_begin(state);
         if (!delete_err) {
             manifest_t *after = NULL;
-            size_t removed = 0, fallbacks = 0;
+            size_t fallbacks = 0;
 
             if (profile_was_enabled) {
                 delete_err = state_disable_profile(state, opts->profile);
@@ -1444,7 +1517,7 @@ static error_t *delete_profile_branch(
                 delete_err = opts->delete_files
                     ? state_order_prune(state, anchor->filesystem_path)
                     : state_retire_anchor(state, anchor->filesystem_path);
-                if (!delete_err) removed++;
+                if (!delete_err) settled++;
             }
 
             /* Commit transaction */
@@ -1457,17 +1530,18 @@ static error_t *delete_profile_branch(
                 );
                 error_free(delete_err);
                 state_rollback(state);
-            } else if (removed > 0 || fallbacks > 0) {
+                settled = 0;   /* the rollback took the writes with it */
+            } else if (settled > 0 || fallbacks > 0) {
                 if (opts->delete_files) {
                     output_info(
                         out, OUTPUT_VERBOSE, "%zu entr%s staged for removal, %zu fallback%s",
-                        removed, removed == 1 ? "y" : "ies",
+                        settled, settled == 1 ? "y" : "ies",
                         fallbacks, fallbacks == 1 ? "" : "s"
                     );
                 } else {
                     output_info(
                         out, OUTPUT_VERBOSE, "%zu entr%s released from management, %zu fallback%s",
-                        removed, removed == 1 ? "y" : "ies",
+                        settled, settled == 1 ? "y" : "ies",
                         fallbacks, fallbacks == 1 ? "" : "s"
                     );
                 }
@@ -1475,8 +1549,8 @@ static error_t *delete_profile_branch(
 
             manifest_free(after);
         } else {
-            /* Non-fatal: the next workspace load observes the branch gone and releases
-             * these records conservatively */
+            /* Non-fatal: the next workspace load observes the branch gone and
+             * releases these records conservatively */
             output_warning(
                 out, OUTPUT_NORMAL, "Failed to begin transaction for post-deletion update: %s",
                 error_message(delete_err)
@@ -1550,16 +1624,21 @@ static error_t *delete_profile_branch(
     if (performed && !opts->quiet) {
         output_success(out, OUTPUT_NORMAL, "Profile '%s' deleted", opts->profile);
 
-        if (opts->delete_files) {
-            output_info(
-                out, OUTPUT_NORMAL,
-                "Run 'dotta apply' to remove deployed files from filesystem"
-            );
-        } else {
-            output_info(
-                out, OUTPUT_NORMAL,
-                "Files released from management (no apply needed)"
-            );
+        /* The hint speaks only for records actually settled: nothing recorded —
+         * or a walk that failed with its warning — leaves the success line to
+         * stand alone. */
+        if (settled > 0) {
+            if (opts->delete_files) {
+                output_info(
+                    out, OUTPUT_NORMAL,
+                    "Run 'dotta apply' to remove deployed files from filesystem"
+                );
+            } else {
+                output_info(
+                    out, OUTPUT_NORMAL,
+                    "Files released from management (no apply needed)"
+                );
+            }
         }
         output_newline(out, OUTPUT_NORMAL);
     }
@@ -1572,6 +1651,7 @@ cleanup:
     state_rollback(state);
 
     if (hook_fs_paths) string_array_free(hook_fs_paths);
+    if (hook_storage) string_array_free(hook_storage);
     if (files) string_array_free(files);
     if (all_profiles) string_array_free(all_profiles);
 
@@ -1743,17 +1823,17 @@ static const args_opt_t remove_opts[] = {
 };
 
 const args_command_t spec_remove = {
-    .name         = "remove",
-    .summary      = "Remove paths from a profile or delete profile",
-    .usage        =
+    .name        = "remove",
+    .summary     = "Remove paths from a profile or delete profile",
+    .usage       =
         "%s remove [options] <profile> <path>...\n"
         "   or: %s remove [options] <profile> --delete-profile\n"
         "   or: %s remove [options] --profile <name> <path>...",
-    .description  =
+    .description =
         "Untrack paths — files and tracked directories — from a profile,\n"
         "optionally scheduling removal of the deployed copies, or delete\n"
         "the profile branch outright.\n",
-    .notes        =
+    .notes       =
         "Operation Modes:\n"
         "  (default)           Remove paths from the profile branch. Deployed\n"
         "                      items are released from management and stay\n"
@@ -1763,24 +1843,24 @@ const args_command_t spec_remove = {
         "  --delete-profile    Delete the entire profile branch. No paths\n"
         "                      may be given; with --delete-files the deployed\n"
         "                      items are staged for removal as well.\n",
-    .examples     =
+    .examples    =
         "  %s remove global ~/.bashrc                  # Untrack, keep on disk\n"
         "  %s remove darwin ~/.config/nvim -n          # Preview removal\n"
         "  %s remove darwin ~/.config/nvim --delete-files  # Remove on apply\n"
         "  %s remove staging --delete-profile          # Delete whole profile\n"
         "  %s remove staging --delete-profile --delete-files  # ...and its copies\n",
-    .epilogue     =
+    .epilogue    =
         "See also:\n"
         "  %s profile disable <name>  # Stop deploying without deleting\n"
         "  %s apply                   # Carry out staged file removals\n",
-    .opts_size    = sizeof(cmd_remove_options_t),
-    .opts         = remove_opts,
-    .post_parse   = remove_post_parse,
-    .complete     = remove_complete,
-    .payload      = &(const dotta_needs_t){
-        .repo     = true,
-        .state    = DOTTA_STATE_READ,
-        .mounts   = true,
+    .opts_size   = sizeof(cmd_remove_options_t),
+    .opts        = remove_opts,
+    .post_parse  = remove_post_parse,
+    .complete    = remove_complete,
+    .payload     = &(const dotta_needs_t){
+        .repo    = true,
+        .state   = DOTTA_STATE_READ,
+        .mounts  = true,
     },
-    .dispatch     = remove_dispatch,
+    .dispatch    = remove_dispatch,
 };

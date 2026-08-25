@@ -14,9 +14,9 @@
  *     — the historical-diff path (cmd_diff) — and is the same per-profile step
  *     applied once. Both produce manifest_row_t rows directly, the one row shape
  *     every consumer reads, so there is no bridge between the build step and
- *     its readers. The dispatcher builds the view once per command for the
- *     commands that declare it (ctx->run.manifest, include/runtime.h); a command
- *     that moves Git or the enabled set builds the post-mutation view itself.
+ *     its readers. The dispatcher builds the view once per command for the commands
+ *     that declare it (ctx->run.manifest, include/runtime.h); a command that
+ *     moves Git or the enabled set builds the post-mutation view itself.
  *
  *   - Readers: manifest_rows (both kinds, unordered), manifest_profiles (the
  *     profiles the rows came from, in precedence order), manifest_lookup (by
@@ -25,8 +25,8 @@
  *     scope-changing verbs and sync print their receipts from.
  *
  * Core Principles:
- *   - Pure: the view is a function of Git, the state's rows and $HOME — the
- *     same inputs give the same rows on every machine
+ *   - Pure: the view is a function of Git, the state's rows and $HOME — the same
+ *     inputs give the same rows on every machine
  *   - Computed, never stored: every load builds it; nothing invalidates it because
  *     nothing is held past its lifetime
  *   - Precedence-aware: one row per path, the winner's kind
@@ -155,8 +155,8 @@ static inline git_filemode_t path_type_to_git_filemode(path_type_t type) {
  *
  * Rows and their strings live in the arena the builder was given; the path index
  * is heap-allocated and released by manifest_free. A view borrows nothing else
- * — not the state's row cache it was read from — so it stands across the
- * mutations that invalidate the cache, for the arena's lifetime.
+ * — not the state's row cache it was read from — so it stands across the mutations
+ * that invalidate the cache, for the arena's lifetime.
  */
 typedef struct manifest manifest_t;
 
@@ -171,18 +171,21 @@ typedef struct manifest manifest_t;
  * Performance: O(N) where N is total files across all profiles. One Git tree
  * alive per iteration (loaded, walked, freed).
  *
- * The mount table custom/ paths resolve under is built here, from the same
- * rows (profile_build_mount_table): a re-target is in the next build because
- * the next build reads the rows. A custom/ entry whose profile has no target
- * binding is a hard error from the callback (ERR_STATE_INVALID with a repair
- * hint) — every enabling command guarantees the binding, so reaching that
- * branch means corruption, not a machine that lacks a --target.
+ * The mount table custom/ paths resolve under is built here, from the same rows
+ * (profile_build_mount_table): a re-target is in the next build because the next
+ * build reads the rows. A custom/ claim whose profile has no target binding on
+ * this machine — a normal lifecycle stage in a shared repository — contributes
+ * no row and is recorded on the view (manifest_unbound); the health consumers
+ * surface it, and the build stays total over importable content.
  *
  * A profile whose branch does not exist contributes no rows; the scope layer
  * already warns about the dead branch on every run, and the workspace reads that
- * profile's records as orphans. Only the existence question is tolerant: a branch
- * that exists but cannot be loaded (corrupt object, I/O) still fails the build,
- * as does a failed lookup — both stay retryable errors, never silent omissions.
+ * profile's records as orphans. The unbound claim is that observation's sibling
+ * at claim scale: this machine cannot place it, and the build says so as data,
+ * not failure. Only those two questions are tolerant: a branch that exists but
+ * cannot be loaded (corrupt object, I/O) still fails the build, as do a failed
+ * lookup and metadata that will not parse — those stay retryable errors, never
+ * silent omissions.
  *
  * Per profile, in order: the tree's blobs are claimed first, then the DIRECTORY
  * items of its metadata.json. A blob and a DIRECTORY item of the same profile
@@ -197,18 +200,18 @@ typedef struct manifest manifest_t;
  *
  * Memory:
  *   - rows, per-row strings, the profile names (duplicated once per profile)
- *     and the mount table: arena-allocated; the caller's arena reclaims them
- *     at arena_destroy. The view borrows nothing from the row cache, so it
- *     stands across the enabled_profiles mutations that invalidate the cache —
- *     a `before` built ahead of a profile enable reads the same after it, and
- *     the view after is the builder called again.
+ *     and the mount table: arena-allocated; the caller's arena reclaims them at
+ *     arena_destroy. The view borrows nothing from the row cache, so it stands
+ *     across the enabled_profiles mutations that invalidate the cache — a `before`
+ *     built ahead of a profile enable reads the same after it, and the view after
+ *     is the builder called again.
  *   - index hashmap: heap-allocated; on success the caller releases it with
  *     manifest_free. On error, the hashmap (if allocated) is freed here and *out
  *     is NULL.
  *
  * @param repo Git repository (must not be NULL)
- * @param state State handle the enabled set and targets are read from (must
- *              not be NULL; borrowed, only the row cache is consulted)
+ * @param state State handle the enabled set and targets are read from (must not
+ *              be NULL; borrowed, only the row cache is consulted)
  * @param arena Arena backing every allocation produced by the call (must not be
  *              NULL)
  * @param out Manifest (must not be NULL; caller frees with manifest_free)
@@ -226,12 +229,11 @@ error_t *manifest_build(
  *
  * Used by the historical-diff path (cmd_diff): given a tree, profile, mount table
  * — explicit here, since there is no state to derive one from and a past tree
- * is deliberately resolved under today's topology — and optional per-tree
- * metadata, produces a manifest_row_t row for every blob
- * the tree exposes (sans repository metadata files — .dottaignore, .bootstrap,
- * .git/, .dotta/) and, when metadata is supplied, for every DIRECTORY item it
- * claims — the same per-profile step manifest_build runs, applied once. Readers
- * that want files only test row->type.
+ * is deliberately resolved under today's topology — and optional per-tree metadata,
+ * produces a manifest_row_t row for every blob the tree exposes (sans repository
+ * metadata files — .dottaignore, .bootstrap, .git/, .dotta/) and, when metadata
+ * is supplied, for every DIRECTORY item it claims — the same per-profile step
+ * manifest_build runs, applied once. Readers that want files only test row->type.
  *
  * Metadata, when supplied, is applied row-by-row in lockstep with the tree walk
  * — mode, owner, group, and encrypted are filled from the tree's own metadata.json.
@@ -239,11 +241,12 @@ error_t *manifest_build(
  * no directories are claimed). Callers that have already loaded the tree's metadata
  * for their own purposes should pass it here.
  *
- * Custom-prefix resolution is delegated to `mounts`. The handle MUST record a
- * binding for `profile` (with target set) when the tree contains custom/ entries;
- * a missing binding is a hard error from the build callback (ERR_STATE_INVALID
- * with a repair hint). Trees without custom/ entries can pass any mount table,
- * including one with no binding for `profile`.
+ * Custom-prefix resolution is delegated to `mounts`. A custom/ claim the handle
+ * records no binding for contributes no row and is recorded on the view
+ * (manifest_unbound) — the same degrade contract as manifest_build, which lets
+ * the historical-diff path resolve old trees whose labels today's topology cannot
+ * place. Any mount table is acceptable, including one with no binding for
+ * `profile`.
  *
  * Memory: same contract as manifest_build — every allocation produced by the
  * call lives in the caller's arena; the index is manifest_free's.
@@ -282,10 +285,10 @@ manifest_rows_t manifest_rows(const manifest_t *manifest);
  * The profiles the view was built from, in precedence order
  *
  * Every enabled profile whose branch existed at build, lowest precedence first
- * — the set the rows came from, as the enabled set reads once the branches
- * that are gone (and contributed nothing) are left out; for a tree view, the
- * one profile. The workspace reads its profile set here: the untracked scan's
- * order and the orphan label's membership are the view's, by construction.
+ * — the set the rows came from, as the enabled set reads once the branches that
+ * are gone (and contributed nothing) are left out; for a tree view, the one
+ * profile. The workspace reads its profile set here: the untracked scan's order
+ * and the orphan label's membership are the view's, by construction.
  *
  * Pure value return — no allocation, no error path. The names are the arena's,
  * the same pointers the rows carry, valid for the arena's lifetime.
@@ -295,6 +298,42 @@ manifest_rows_t manifest_rows(const manifest_t *manifest);
  * @return Borrowed array of profile names, or NULL when count is 0
  */
 const char *const *manifest_profiles(const manifest_t *manifest, size_t *count);
+
+/**
+ * One claim the build could not place: its profile has no deployment target on
+ * this machine. Recorded, never dropped in silence — the health consumers (status,
+ * apply, sync) surface these; the repair is one command (`profile enable <p>
+ * --target /path`), the untracking another (`remove`). Strings are the build
+ * arena's, same lifetime as the rows.
+ */
+typedef struct {
+    const char *profile;
+    const char *storage_path;
+    path_kind_t kind;             /* FILE for tree blobs, DIRECTORY for metadata items */
+} manifest_unbound_claim_t;
+
+/**
+ * Bound carrier for the view's health slice, the manifest_rows_t idiom.
+ */
+typedef struct {
+    const manifest_unbound_claim_t *entries;
+    size_t count;
+} manifest_unbound_t;
+
+/**
+ * The claims the build could not place, grouped by profile
+ *
+ * Pure value return — no allocation, no error path. Entries arrive in build order,
+ * so one profile's claims are contiguous and consumers aggregate in a single
+ * pass without sorting. Each (profile, storage path) is recorded once: a stale
+ * DIRECTORY item at an unbound blob's storage path contributes no second entry,
+ * mirroring the bound path's content-authority rule. Empty on every build whose
+ * claims all placed — the common case, costing nothing.
+ *
+ * @param manifest Manifest (NULL returns an empty slice)
+ * @return Borrowed slice over the recorded claims, valid for the arena's lifetime
+ */
+manifest_unbound_t manifest_unbound(const manifest_t *manifest);
 
 /**
  * Look up a row by filesystem path
@@ -314,14 +353,14 @@ const manifest_row_t *manifest_lookup(
 /**
  * Look up a row by storage path
  *
- * Linear scan — the callers ask once per command (list, show) or once per
- * BACKED orphan (the workspace's relocation read, each of which already cost
- * a Git tree probe; a lazy per-profile storage index inside the orphan pass's
- * authority cache is the upgrade if a profile-wide re-target ever makes the
- * scan show up). Since precedence is resolved, each storage path under home/
- * and root/ maps to exactly one row; under custom/ two profiles with distinct
- * targets may share a storage path, and the first match is returned — the
- * profile filter is how a caller that means one claim names it.
+ * Linear scan — the callers ask once per command (list, show) or once per BACKED
+ * orphan (the workspace's relocation read, each of which already cost a Git tree
+ * probe; a lazy per-profile storage index inside the orphan pass's authority
+ * cache is the upgrade if a profile-wide re-target ever makes the scan show up).
+ * Since precedence is resolved, each storage path under home/ and root/ maps to
+ * exactly one row; under custom/ two profiles with distinct targets may share a
+ * storage path, and the first match is returned — the profile filter is how a
+ * caller that means one claim names it.
  *
  * @param manifest Manifest (NULL returns NULL)
  * @param storage_path Storage path to look up, e.g. "home/.bashrc" (NULL returns

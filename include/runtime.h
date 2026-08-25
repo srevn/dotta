@@ -175,22 +175,24 @@ typedef enum dotta_state_mode {
  * (status, diff, apply, sync, update — `workspace_load` borrows the view rather
  * than building one) and `profile enable` (its receipt is the diff between the
  * view before and the view after). A build that fails ends dispatch with the
- * builder's message — a tree that will not load, a custom/ path under a profile
- * with no target — on every path of the command, including the ones that would
- * not have read the view; the enabled set is broken as a whole, and `profile
- * disable` (or `remove`) is the way out.
+ * builder's message — a tree that will not load, metadata that will not parse —
+ * on every path of the command, including the ones that would not have read the
+ * view; such a set is broken as a whole, and `profile disable` (or `remove`) is
+ * the way out. A custom/ claim under a profile with no target is not such a
+ * failure: the build is total over it — no row, recorded on the view
+ * (`manifest_unbound`) — and the health consumers (status, apply, sync) surface
+ * the held claims.
  *
  * Who does not: a command for which the view is incidental (one lookup or one
  * count on one of its paths — `show`, `list`, `key status`, `completion`) or
- * that must run on a set the build refuses (`profile disable`; `remove`, whose
- * job includes untracking the claim that broke the set — its warning bit and
- * its record phase each build a view where needed and degrade when the build
- * fails) builds its own with `manifest_build` where it needs it, with the failure
- * handling that path wants. A command that moves Git or the enabled set (add,
- * update, remove, sync, profile enable / disable, clone, interactive) builds
- * the post-mutation view itself — the builder called again over the rows as they
- * now stand: `run.manifest` is the view at dispatch and is never rebuilt — see
- * "Members not welcome" #1 on the run.
+ * that must run on a set the build refuses (`profile disable`; `remove` — its
+ * warning bit and its record phase each build a view where needed and degrade
+ * when the build fails) builds its own with `manifest_build` where it needs it,
+ * with the failure handling that path wants. A command that moves Git or the
+ * enabled set (add, update, remove, sync, profile enable / disable, clone,
+ * interactive) builds the post-mutation view itself — the builder called again
+ * over the rows as they now stand: `run.manifest` is the view at dispatch and
+ * is never rebuilt — see "Members not welcome" #1 on the run.
  *
  * tolerant
  * --------

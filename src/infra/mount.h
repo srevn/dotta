@@ -17,9 +17,9 @@
  * Mount table
  * -----------
  * Per-machine topology that maps storage labels to filesystem paths and back.
- * Built at the boundary where the binding source is in scope (CLI options,
- * state row cache), then consulted many times; a value — the topology at the
- * instant it was built — for the arena's lifetime.
+ * Built at the boundary where the binding source is in scope (CLI options, state
+ * row cache), then consulted many times; a value — the topology at the instant
+ * it was built — for the arena's lifetime.
  *
  * Two views over the same data:
  *   - Forward (filesystem -> storage): mount_classify picks the
@@ -124,17 +124,17 @@ error_t *mount_validate_target(const char *target);
 /**
  * Return the mount-relative path: a pointer past the storage label.
  *
- * The subject every user-authored pattern is evaluated against. A pattern —
- * in `.dottaignore`, `[ignore] patterns`, `--exclude`, `auto_encrypt` — is
- * matched against the path relative to its mount root, what a `.gitignore` at
- * `~`, at `/` or at the deployment target would see: `home/.ssh/id_rsa` is
- * matched as `.ssh/id_rsa`, `root/etc/hosts` as `etc/hosts`. Labels are
- * dotta's, never the pattern's, and nothing above the mount root takes part.
- * Paths are resolved through the table; patterns are not.
+ * The subject every user-authored pattern is evaluated against. A pattern — in
+ * `.dottaignore`, `[ignore] patterns`, `--exclude`, `auto_encrypt` — is matched
+ * against the path relative to its mount root, what a `.gitignore` at `~`, at
+ * `/` or at the deployment target would see: `home/.ssh/id_rsa` is matched as
+ * `.ssh/id_rsa`, `root/etc/hosts` as `etc/hosts`. Labels are dotta's, never the
+ * pattern's, and nothing above the mount root takes part. Paths are resolved
+ * through the table; patterns are not.
  *
  * Zero allocation; the returned pointer aliases `storage_path` and shares its
- * lifetime. Returns `storage_path` unchanged when no label matches (or NULL
- * when the input is NULL).
+ * lifetime. Returns `storage_path` unchanged when no label matches (or NULL when
+ * the input is NULL).
  *
  * @param storage_path Storage path (may be NULL)
  * @return Pointer past the label, or `storage_path` unchanged
@@ -151,8 +151,8 @@ typedef struct mount_table mount_table_t;
 /**
  * A single mount: profile <-> deployment-target pairing.
  *
- * POD value type passed by callers to `mount_table_build`. Both fields are
- * borrowed for the call only — the table copies what it keeps.
+ * POD value type passed by callers to `mount_table_build`. Both fields are borrowed
+ * for the call only — the table copies what it keeps.
  *
  * - profile: Profile name (NULL for callers that have only target strings, no
  *   profile names — e.g. one-shot internal scratch use).
@@ -187,9 +187,9 @@ typedef struct {
  * entries were dead.)
  *
  * Lifetime:
- *   - Output is allocated entirely from `arena`, every string included: the
- *     table borrows nothing from `mounts`, so it is a value for the arena's
- *     lifetime — readable after the rows it was built from have moved.
+ *   - Output is allocated entirely from `arena`, every string included: the table
+ *     borrows nothing from `mounts`, so it is a value for the arena's lifetime
+ *     — readable after the rows it was built from have moved.
  *   - $HOME is captured into the arena at build time, immune to later setenv
  *     mutations.
  *
@@ -300,8 +300,9 @@ typedef enum {
  *   - MOUNT_RESOLVE_BOUND: `*out_fs` is set to an arena-borrowed filesystem path.
  *     The pointer's lifetime tracks `arena`; callers do not free it.
  *   - MOUNT_RESOLVE_UNBOUND: `*out_fs` is unspecified. Callers branch on the
- *     outcome — silent skip in batch contexts (manifest tree-walks, state directory
- *     entry creation), display fallback in user-facing contexts (remove.c).
+ *     outcome — the manifest's claim routine skips the claim and records it on
+ *     the view (manifest_unbound, the health channel); user-facing contexts fall
+ *     back to a display spelling (remove.c) or let a hint stand in (ignore.c).
  *   - ERR_INTERNAL when `storage_path` lacks a known label (the input boundary
  *     is supposed to validate before reaching here; this guards against contract
  *     drift).

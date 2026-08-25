@@ -56,6 +56,14 @@ struct manifest {
     hashmap_t *index;              /* fs_path → manifest_row_t *, heap-allocated */
     const char **profiles;         /* The profiles the rows came from, in precedence order (arena) */
     size_t profile_count;          /* Profiles listed */
+
+    /* The health slice: claims the build could not place (no target binding),
+     * grouped by profile in build order. Flat arena array, abandon-and-realloc
+     * growth like the spine; empty on the common all-bound build (no allocation
+     * until the first note). */
+    manifest_unbound_claim_t *unbound;
+    size_t unbound_count;
+    size_t unbound_capacity;
 };
 
 /**
@@ -69,8 +77,8 @@ struct manifest {
  * - manifest: borrowed, caller retains ownership
  * - profile: arena-backed name every row of this profile borrows
  * - mounts: borrowed, must not be NULL — keyed by ctx->profile to resolve custom/
- *          entries; a missing binding (MOUNT_RESOLVE_UNBOUND) is a hard error
- *          naming the profile and the repair command
+ *          entries; a missing binding (MOUNT_RESOLVE_UNBOUND) contributes no
+ *          row and is recorded on the view (manifest_note_unbound)
  * - metadata: borrowed (per-profile, reloaded for each profile in the outer build
  *             loop), can be NULL (profile lacks metadata.json)
  * - arena: borrowed, must not be NULL; per-row strings + spine growth allocations
@@ -257,6 +265,67 @@ static error_t *manifest_claim(
 }
 
 /**
+ * Record one claim the build could not place, once
+ *
+ * The health primitive both claim sites share: appends (profile, storage_path,
+ * kind) to the view's health slice unless the pair is already recorded — the
+ * one duplicate source is a stale DIRECTORY item at an unbound blob's storage
+ * path, and recording it twice would count one path as two; the blob walked first,
+ * so the first writer is the content authority, mirroring the bound path's
+ * same-profile rule. The scan is linear over the slice, which holds only the
+ * unplaced claims — empty on the common build.
+ *
+ * Growth is the spine's abandon-and-realloc idiom. Both strings must be
+ * arena-backed by the caller; the entry borrows them for the view's lifetime.
+ *
+ * @param manifest Target view (must not be NULL)
+ * @param profile Arena-backed profile name (must not be NULL)
+ * @param storage_path Arena-backed storage path (must not be NULL)
+ * @param kind The claim's kind (FILE for tree blobs, DIRECTORY for metadata items)
+ * @param arena Arena for the array growth (must not be NULL)
+ * @return Error or NULL on success
+ */
+static error_t *manifest_note_unbound(
+    manifest_t *manifest,
+    const char *profile,
+    const char *storage_path,
+    path_kind_t kind,
+    arena_t *arena
+) {
+    for (size_t i = 0; i < manifest->unbound_count; i++) {
+        if (strcmp(manifest->unbound[i].profile, profile) == 0 &&
+            strcmp(manifest->unbound[i].storage_path, storage_path) == 0) {
+            return NULL;
+        }
+    }
+
+    if (manifest->unbound_count >= manifest->unbound_capacity) {
+        size_t new_capacity =
+            manifest->unbound_capacity > 0 ? manifest->unbound_capacity * 2 : 8;
+
+        manifest_unbound_claim_t *grown = arena_calloc(
+            arena, new_capacity, sizeof(*grown)
+        );
+        if (!grown) {
+            return ERROR(ERR_MEMORY, "Failed to grow unbound claim list");
+        }
+        memcpy(
+            grown, manifest->unbound,
+            manifest->unbound_count * sizeof(*grown)
+        );
+        manifest->unbound = grown;
+        manifest->unbound_capacity = new_capacity;
+    }
+
+    manifest->unbound[manifest->unbound_count++] = (manifest_unbound_claim_t){
+        .profile = profile,
+        .storage_path = storage_path,
+        .kind = kind,
+    };
+    return NULL;
+}
+
+/**
  * Tree-walk callback that claims the tree's blobs into the manifest
  *
  * Performance optimization: Instead of collecting paths in pass 1 then
@@ -291,31 +360,20 @@ static int manifest_claim_blob(
         return 0;
     }
 
-    /* Build full storage path from root + entry name */
+    /* Build the full storage path from root + entry name, straight into the arena
+     * — the row keeps it, so the join is the allocation, and Git's only bound
+     * on a path's length is memory. A skipped entry abandons its string to the
+     * arena, the module's idiom. */
     const char *name = git_tree_entry_name(entry);
-    char storage_path[1024];
-    int ret;
-
-    if (root && root[0] != '\0') {
-        ret = snprintf(
-            storage_path, sizeof(storage_path), "%s%s",
-            root, name
-        );
-    } else {
-        ret = snprintf(
-            storage_path, sizeof(storage_path), "%s",
-            name
-        );
-    }
-
-    /* Check for path truncation */
-    if (ret < 0 || (size_t) ret >= sizeof(storage_path)) {
-        ctx->error = ERROR(
-            ERR_INTERNAL, "Path exceeds maximum length: %s%s",
-            root ? root : "", name
-        );
+    size_t root_len = root ? strlen(root) : 0;
+    size_t name_len = strlen(name);
+    char *storage_path = arena_alloc(ctx->arena, root_len + name_len + 1);
+    if (!storage_path) {
+        ctx->error = ERROR(ERR_MEMORY, "Failed to allocate storage path");
         return -1;
     }
+    if (root_len > 0) memcpy(storage_path, root, root_len);
+    memcpy(storage_path + root_len, name, name_len + 1);
 
     /* Skip repository bookkeeping — nothing the branch keeps for dotta's own
      * use is a managed path, and mount_resolve below would refuse it anyway */
@@ -325,19 +383,17 @@ static int manifest_claim_blob(
 
     /* Convert storage path to filesystem path against the mount table.
      *
-     * MOUNT_RESOLVE_UNBOUND fires only when storage_path is custom/... and
-     * ctx->profile has no target binding in mounts. Under the tightened
-     * reorder-only contract on state_reorder_profiles plus the custom-target
-     * preconditions enforced by every command that can enable a profile (cmd
-     * profile enable, cmd add, cmd clone, interactive save), this state is
-     * unreachable through documented paths — a row in enabled_profiles is now
-     * guaranteed to carry a target whenever its profile has custom/ files.
-     *
-     * Reaching UNBOUND here therefore means external DB tampering or a code bug.
-     * Surface it as a hard error naming the profile and the repair command instead
-     * of silently dropping the row (which used to leave the user with a profile
-     * enabled in the DB whose files never deploy). Genuine errors (malformed
-     * path, OOM) propagate via the err branch above. */
+     * MOUNT_RESOLVE_UNBOUND fires when storage_path is custom/... and ctx->profile
+     * has no target binding on this machine — a normal lifecycle stage in a shared
+     * repository (a clone before the target is chosen, a sync that pulled another
+     * machine's custom/ claims, a revert that recommitted one), not corruption:
+     * no local precondition can bind what another machine adds to the branch.
+     * The claim contributes no row — nothing on this machine can place it — and
+     * is recorded on the view (manifest_unbound) so the health consumers surface
+     * it; it is never dropped in silence. Record-safe by construction: a record
+     * can only exist where a binding existed at write time, so no anchor ever
+     * joins a skipped claim and no orphan can be manufactured here. Genuine errors
+     * (malformed path, OOM) propagate via the err branch. */
     mount_resolve_outcome_t outcome;
     const char *filesystem_path = NULL;
     error_t *err = mount_resolve(
@@ -352,21 +408,10 @@ static int manifest_claim_blob(
         return -1;
     }
     if (outcome == MOUNT_RESOLVE_UNBOUND) {
-        ctx->error = ERROR(
-            ERR_STATE_INVALID,
-            "Profile '%s' has files under custom/ but no deployment "
-            "target binding.\nHint: Run 'dotta profile disable %s && "
-            "dotta profile enable %s --target /path'",
-            ctx->profile, ctx->profile, ctx->profile
+        ctx->error = manifest_note_unbound(
+            ctx->manifest, ctx->profile, storage_path, PATH_KIND_FILE, ctx->arena
         );
-        return -1;
-    }
-
-    /* Duplicate storage path */
-    char *dup_storage_path = arena_strdup(ctx->arena, storage_path);
-    if (!dup_storage_path) {
-        ctx->error = ERROR(ERR_MEMORY, "Failed to duplicate storage path");
-        return -1;
+        return ctx->error ? -1 : 0;
     }
 
     /* Claim the path: a fresh row, or the lower-precedence profile's slot reset
@@ -381,7 +426,7 @@ static int manifest_claim_blob(
 
     /* ctx->profile is the arena-backed name the builder duplicated; the cast
      * discards its const decoration to fit the row's `char *profile` slot. */
-    row->storage_path = dup_storage_path;
+    row->storage_path = storage_path;
     row->profile = (char *) ctx->profile;
 
     /* Extract identity from borrowed tree entry (blob_oid, type, mode). The
@@ -430,9 +475,9 @@ static int manifest_claim_blob(
  * unless this profile already holds the path with a blob: a path is a tree or a
  * blob, so a DIRECTORY item at a blob's storage_path is stale metadata, and the
  * tree is the content authority. A DIRECTORY item under a profile lacking a target
- * binding on this host is the same UNBOUND corruption the file side treats as a
- * hard error with a repair hint, matching the precedence-builder's symmetric
- * treatment for files.
+ * binding on this host degrades exactly as the file side does — no row, recorded
+ * on the view (manifest_note_unbound) — so both kinds hold under one UNBOUND
+ * policy.
  *
  * `profile` is the arena-backed name every row borrows; `metadata` may be NULL
  * (no metadata.json: Git-derived defaults stand, no directories).
@@ -499,14 +544,20 @@ static error_t *manifest_claim_tree(
             break;
         }
         if (outcome == MOUNT_RESOLVE_UNBOUND) {
-            err = ERROR(
-                ERR_STATE_INVALID,
-                "Profile '%s' has directory '%s' under custom/ but no "
-                "deployment target binding.\nHint: Run 'dotta profile "
-                "disable %s && dotta profile enable %s --target /path'",
-                profile, item->key, profile, profile
+            /* The blob side's degrade contract, DIRECTORY kind: recorded, not
+             * placed. The item's key is the metadata's, freed with it — the note
+             * keeps an arena copy. The note itself dedups the stale-item case
+             * (a DIRECTORY item at an unbound blob's storage path). */
+            char *key = arena_strdup(arena, item->key);
+            if (!key) {
+                err = ERROR(ERR_MEMORY, "Failed to duplicate storage path");
+                break;
+            }
+            err = manifest_note_unbound(
+                manifest, profile, key, PATH_KIND_DIRECTORY, arena
             );
-            break;
+            if (err) break;
+            continue;
         }
 
         /* Same-profile rule: the tree's blob outranks the stale item. */
@@ -777,6 +828,17 @@ const char *const *manifest_profiles(const manifest_t *manifest, size_t *count) 
     }
     *count = manifest->profile_count;
     return manifest->profiles;
+}
+
+/**
+ * The claims the build could not place, grouped by profile
+ */
+manifest_unbound_t manifest_unbound(const manifest_t *manifest) {
+    if (!manifest) return (manifest_unbound_t){ 0 };
+    return (manifest_unbound_t){
+        .entries = manifest->unbound,
+        .count = manifest->unbound_count,
+    };
 }
 
 /**

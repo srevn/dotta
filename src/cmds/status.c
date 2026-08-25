@@ -18,6 +18,7 @@
 #include "base/timeutil.h"
 #include "cmds/completion.h"
 #include "core/cleanup.h"
+#include "core/manifest.h"
 #include "core/profiles.h"
 #include "core/scope.h"
 #include "core/state.h"
@@ -36,11 +37,15 @@
  *           last-deployed timestamp and the verbose per-profile counts are folded
  *           from its rows (NULL when no workspace was loaded — the slices are
  *           empty then, and the header is names alone)
+ * @param unbound The view's health slice: the claims the build could not place,
+ *                annotated onto their profile's line (a count, the paths under
+ *                -v) with one hint naming the repairs after the section
  */
 static void display_enabled_profiles(
     output_t *out,
     const string_array_t *profiles,
-    const workspace_t *ws
+    const workspace_t *ws,
+    manifest_unbound_t unbound
 ) {
     if (!out || !profiles) return;
 
@@ -53,6 +58,9 @@ static void display_enabled_profiles(
     const manifest_rows_t slices[] = {
         workspace_files(ws), workspace_directories(ws)
     };
+
+    /* The first profile with unbound claims names the hint's example. */
+    const char *unbound_profile = NULL;
 
     for (size_t i = 0; i < profiles->count; i++) {
         const char *profile = profiles->items[i];
@@ -82,6 +90,14 @@ static void display_enabled_profiles(
             }
         }
 
+        /* Unbound claims are not rows — the counts above never see them; the
+         * annotation is what says the profile carries more than it projects. */
+        size_t unplaced = 0;
+        for (size_t j = 0; j < unbound.count; j++) {
+            if (strcmp(unbound.entries[j].profile, profile) == 0) unplaced++;
+        }
+        if (unplaced > 0 && !unbound_profile) unbound_profile = profile;
+
         /* Show per-profile last deployed timestamp */
         if (profile_deploy_time > 0) {
             char relative_buf[64];
@@ -96,14 +112,40 @@ static void display_enabled_profiles(
             );
         }
 
+        if (unplaced > 0) {
+            output_styled(
+                out, OUTPUT_NORMAL,
+                "  {yellow}(%zu custom/ path%s need%s a deployment target){reset}",
+                unplaced, unplaced == 1 ? "" : "s", unplaced == 1 ? "s" : ""
+            );
+        }
+
         /* In verbose mode, name what this profile contributes */
         if (output_is_verbose(out)) {
             char counts[64];
             output_format_counts(file_count, dir_count, counts, sizeof(counts));
             output_print(out, OUTPUT_NORMAL, "\n    %s", counts);
+
+            for (size_t j = 0; j < unbound.count; j++) {
+                if (strcmp(unbound.entries[j].profile, profile) != 0) continue;
+                output_print(
+                    out, OUTPUT_NORMAL, "\n    no target: %s%s",
+                    unbound.entries[j].storage_path,
+                    path_kind_suffix(unbound.entries[j].kind)
+                );
+            }
         }
 
         output_newline(out, OUTPUT_NORMAL);
+    }
+
+    if (unbound_profile) {
+        output_hint(
+            out, OUTPUT_NORMAL,
+            "Run 'dotta profile enable %s --target /path' to set the target, "
+            "or 'dotta remove %s <path>' to untrack",
+            unbound_profile, unbound_profile
+        );
     }
 }
 
@@ -679,11 +721,11 @@ static void display_workspace_status(
                     size_t legend_count = 0;
                     size_t legend_width = 0;
 
-                    /* One sentence for every [relocated] key, wherever the
-                     * verdict put the item — a pruned custom/ re-target and a
-                     * held home move share the tag string across kinds and
-                     * fates, so the sentence is written to be true of all of
-                     * them, the way the bare [orphaned] key's is. */
+                    /* One sentence for every [relocated] key, wherever the verdict
+                     * put the item — a pruned custom/ re-target and a held home
+                     * move share the tag string across kinds and fates, so the
+                     * sentence is written to be true of all of them, the way
+                     * the bare [orphaned] key's is. */
                     static const char relocated_hint[] =
                         "the claim deploys elsewhere now (target or home moved); "
                         "apply prunes the old copy — a moved home holds it "
@@ -1262,7 +1304,7 @@ error_t *cmd_status(const dotta_ctx_t *ctx, const cmd_status_options_t *opts) {
     }
 
     /* Display enabled profiles and last deployment info */
-    display_enabled_profiles(out, scope_active(scope), ws);
+    display_enabled_profiles(out, scope_active(scope), ws, manifest_unbound(manifest));
 
     /* The whole view, on request — before the verdict and the sections that name
      * only what diverged from it */

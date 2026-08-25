@@ -1017,10 +1017,10 @@ static error_t *update_write_record(
                 &outcome, &fs_path
             );
             if (err) goto cleanup;
-            /* UNBOUND is mount_resolve's batch contract, honoured; it cannot
-             * fire today — manifest_build hard-errors on an unbound custom
-             * directory claim at dispatch, so a run that could prune one never
-             * starts. */
+            /* An unbound claim resolves nowhere on this machine: no filesystem
+             * path, so nothing to look up and no record of this run's to retire.
+             * Whatever record a once-bound era may have left is an orphan the
+             * next load's analysis settles. */
             if (outcome == MOUNT_RESOLVE_UNBOUND) continue;
 
             const manifest_row_t *row = manifest_lookup(manifest, fs_path);

@@ -2,7 +2,8 @@
  * cipher.c - SIV encryption/decryption implementation
  *
  * Pipeline (4 steps; decrypt mirrors steps 2–4):
- *   1. Build the 9-byte authenticated header (magic, version, Argon2 params).
+ *   1. Build the 17-byte authenticated header (magic, version, Argon2 params,
+ *      salt fingerprint).
  *   2. SIV = MAC(mac_key, CIPHER_SIV, header, path, plaintext) — all variable
  *      inputs LE64-prefixed by `crypto_mac_absorb`, foreclosing
  *      concatenation-collision attacks.
@@ -38,21 +39,26 @@
  * platform PATH_MAX (1024 on macOS, 4096 on Linux). */
 #define CIPHER_STORAGE_PATH_MAX 4096
 
-/* Header byte offsets within the 9-byte authenticated header. Bound into the
+/* Header byte offsets within the 17-byte authenticated header. Bound into the
  * SIV verbatim; changing any offset is a format-version bump (see CIPHER_VERSION
  * in cipher.h). */
 #define CIPHER_OFFSET_MAGIC   0      /* "DOTTA" — 5 bytes */
 #define CIPHER_OFFSET_VERSION 5      /* CIPHER_VERSION byte */
 #define CIPHER_OFFSET_MIB     6      /* LE16 argon2_memory_mib */
 #define CIPHER_OFFSET_PASSES  8      /* uint8 argon2_passes */
+#define CIPHER_OFFSET_SALT_FP 9      /* 8-byte salt fingerprint */
 
 _Static_assert(
     CIPHER_OFFSET_VERSION == CIPHER_MAGIC_SIZE,
     "version byte must come immediately after magic"
 );
 _Static_assert(
-    CIPHER_OFFSET_PASSES + 1 == CIPHER_HEADER_SIZE,
-    "passes byte must close out the header"
+    CIPHER_OFFSET_SALT_FP == CIPHER_OFFSET_PASSES + 1,
+    "salt fingerprint must come immediately after the params"
+);
+_Static_assert(
+    CIPHER_OFFSET_SALT_FP + KDF_SALT_FP_SIZE == CIPHER_HEADER_SIZE,
+    "salt fingerprint must close out the header"
 );
 
 /**
@@ -79,10 +85,12 @@ static error_t *validate_path(const char *storage_path, size_t *out_len) {
 }
 
 /**
- * Validate the 9-byte cipher-blob header.
+ * Validate the 17-byte cipher-blob header.
  *
  * Length → magic → version → `kdf_validate_params` on the recorded (memory_mib,
- * passes). Used by both `cipher_peek_params` and `cipher_decrypt`; centralising
+ * passes). The salt fingerprint needs no validation — any 8 bytes are a well-formed
+ * fingerprint; whether it names *this* repository's salt is the caller's question
+ * (`keymgr_decrypt`). Used by the two peeks and `cipher_decrypt`; centralising
  * "what does a well-formed header look like" keeps the version-bump policy
  * tractable.
  *
@@ -167,6 +175,27 @@ error_t *cipher_peek_params(
     return NULL;
 }
 
+error_t *cipher_peek_salt_fp(
+    const uint8_t *data,
+    size_t data_len,
+    uint8_t out_fp[KDF_SALT_FP_SIZE]
+) {
+    CHECK_NULL(data);
+    CHECK_NULL(out_fp);
+
+    /* Same gate as cipher_peek_params: a caller holding both facts pays the header
+     * validation twice, a handful of comparisons against the seconds-scale Argon2
+     * work that follows on any decrypt path. */
+    error_t *err = validate_header(data, data_len);
+    if (err) {
+        return err;
+    }
+
+    memcpy(out_fp, &data[CIPHER_OFFSET_SALT_FP], KDF_SALT_FP_SIZE);
+
+    return NULL;
+}
+
 error_t *cipher_encrypt(
     const uint8_t *plaintext,
     size_t plaintext_len,
@@ -175,12 +204,14 @@ error_t *cipher_encrypt(
     const char *storage_path,
     uint16_t argon2_memory_mib,
     uint8_t argon2_passes,
+    const uint8_t salt_fp[KDF_SALT_FP_SIZE],
     buffer_t *out_ciphertext
 ) {
     CHECK_NULL(plaintext);
     CHECK_NULL(mac_key);
     CHECK_NULL(prf_key);
     CHECK_NULL(storage_path);
+    CHECK_NULL(salt_fp);
     CHECK_NULL(out_ciphertext);
 
     error_t *err = NULL;
@@ -238,13 +269,14 @@ error_t *cipher_encrypt(
     }
     const size_t total_len = CIPHER_OVERHEAD + plaintext_len;
 
-    /* Build the header on the stack so its type stays strictly `uint8_t[9]` for
-     * the SIV-input contract; the same bytes feed both `memcpy` into output and
-     * `compute_siv`'s first absorb. */
+    /* Build the header on the stack so its type stays strictly `uint8_t[17]`
+     * for the SIV-input contract; the same bytes feed both `memcpy` into output
+     * and `compute_siv`'s first absorb. */
     memcpy(&header[CIPHER_OFFSET_MAGIC], CIPHER_MAGIC, CIPHER_MAGIC_SIZE);
     header[CIPHER_OFFSET_VERSION] = CIPHER_VERSION;
     store_le16(&header[CIPHER_OFFSET_MIB], argon2_memory_mib);
     header[CIPHER_OFFSET_PASSES] = argon2_passes;
+    memcpy(&header[CIPHER_OFFSET_SALT_FP], salt_fp, KDF_SALT_FP_SIZE);
 
     /* Allocate at final size; SIV and ciphertext write into their slots in-place
      * so peak memory stays at `total_len`. buffer_grow over-allocates by 1 for
@@ -255,7 +287,7 @@ error_t *cipher_encrypt(
     output.size = total_len;
     output.data[output.size] = '\0';
 
-    /* Layout: [header(9) | siv(32) | ciphertext(N)] */
+    /* Layout: [header(17) | siv(32) | ciphertext(N)] */
     memcpy(output.data, header, CIPHER_HEADER_SIZE);
     uint8_t *siv_slot = (uint8_t *) output.data + CIPHER_HEADER_SIZE;
     uint8_t *ct_slot = siv_slot + CIPHER_SIV_SIZE;

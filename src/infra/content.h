@@ -96,19 +96,30 @@ content_kind_t content_classify_bytes(const uint8_t *data, size_t size);
  * canonical entry point for the question "is this blob encrypted?". Header-only
  * inspection — no keymgr required.
  *
+ * When `out_salt_fp` is non-NULL and the blob classifies ENCRYPTED, the header's
+ * salt fingerprint (KDF_SALT_FP_SIZE bytes — which repository salt keyed this
+ * ciphertext) is copied out from the same parse; a truncated header then fails
+ * the call rather than yielding an unattributable fingerprint. For PLAINTEXT
+ * and UNSUPPORTED_VERSION the buffer is untouched — there is no fingerprint to
+ * read. Callers that only want the kind pass NULL.
+ *
  * @param repo Repository (must not be NULL)
  * @param blob_oid Blob OID (must not be NULL)
  * @param out_kind Output kind on success (must not be NULL)
+ * @param out_salt_fp Optional salt fingerprint out (KDF_SALT_FP_SIZE bytes;
+ *          filled only for CONTENT_ENCRYPTED; can be NULL)
  * @return Error or NULL on success
  *
  * Errors:
  * - ERR_GIT: Failed to load blob (corruption, missing object)
+ * - ERR_CRYPTO: out_salt_fp requested but the encrypted header is truncated
  * - ERR_INVALID_ARG: Required arguments are NULL
  */
 error_t *content_classify(
     git_repository *repo,
     const git_oid *blob_oid,
-    content_kind_t *out_kind
+    content_kind_t *out_kind,
+    uint8_t *out_salt_fp
 );
 
 /**

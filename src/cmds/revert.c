@@ -638,7 +638,7 @@ static error_t *revert_file_in_branch(
          * UNSUPPORTED_VERSION carries encryption intent and collapses onto true,
          * the same collapse the capture paths make. */
         content_kind_t target_kind = CONTENT_PLAINTEXT;
-        err = content_classify(repo, &target_blob_oid_copy, &target_kind);
+        err = content_classify(repo, &target_blob_oid_copy, &target_kind, NULL);
         if (err) {
             err = error_wrap(err, "Failed to classify blob for '%s'", file_path);
             goto cleanup;

@@ -97,7 +97,8 @@ content_kind_t content_classify_bytes(
 error_t *content_classify(
     git_repository *repo,
     const git_oid *blob_oid,
-    content_kind_t *out_kind
+    content_kind_t *out_kind,
+    uint8_t *out_salt_fp
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(blob_oid);
@@ -113,8 +114,19 @@ error_t *content_classify(
         (const uint8_t *) view.data, view.size
     );
 
+    /* Attribution rides the same parse: an ENCRYPTED verdict means the detect
+     * window matched, and the fingerprint sits a few bytes further into the
+     * authenticated header. cipher_peek_salt_fp re-validates the full header,
+     * so a blob long enough to classify but too short to carry the fingerprint
+     * (a forged prefix) fails here instead of yielding garbage attribution. */
+    if (out_salt_fp != NULL && *out_kind == CONTENT_ENCRYPTED) {
+        err = cipher_peek_salt_fp(
+            (const uint8_t *) view.data, view.size, out_salt_fp
+        );
+    }
+
     gitops_blob_view_close(&view);
-    return NULL;
+    return err;
 }
 
 error_t *content_classify_path(
@@ -432,7 +444,7 @@ error_t *content_compare_blob_to_disk(
      * field can disagree with this — there is no proxy. The routing-on-stale-flag
      * bug class is structurally impossible here. */
     content_kind_t kind;
-    error_t *err = content_classify(repo, blob_oid, &kind);
+    error_t *err = content_classify(repo, blob_oid, &kind, NULL);
     if (err) {
         return err;  /* Already wrapped by content_classify */
     }

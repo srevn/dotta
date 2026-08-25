@@ -78,10 +78,10 @@ typedef struct keymgr keymgr;
  * Create a key manager.
  *
  * Snapshots the current-config Argon2 params, session timeout, AND the
- * per-repository salt into the struct. Later config edits in the same process
- * do not affect this snapshot, so a single command produces blobs under one
- * consistent (memory_mib, passes) even if the file changes mid-run; the salt is
- * immutable post-init regardless.
+ * per-repository salt (plus its `kdf_salt_fingerprint`) into the struct. Later
+ * config edits in the same process do not affect this snapshot, so a single
+ * command produces blobs under one consistent (memory_mib, passes) even if the
+ * file changes mid-run; the salt is immutable post-init regardless.
  *
  * No derivation, prompt, or I/O at create time. The first call to encrypt / decrypt
  * / set_passphrase / probe_key triggers the lazy resolution chain.
@@ -136,7 +136,11 @@ error_t *keymgr_encrypt(
 /**
  * Decrypt ciphertext under a profile-derived key.
  *
- * Reads (memory_mib, passes) from the blob header via `cipher_peek_params`, then
+ * First checks the blob's salt fingerprint against this keymgr's: a foreign
+ * fingerprint can never decrypt here (the master would derive under a different
+ * salt), so it is refused up front — before any passphrase prompt — with a
+ * precise ERR_CRYPTO instead of a misleading authentication failure. Then reads
+ * (memory_mib, passes) from the blob header via `cipher_peek_params` and
  * acquires the master key under those blob-recorded params. Decryption thus
  * survives config edits.
  *

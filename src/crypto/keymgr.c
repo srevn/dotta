@@ -61,8 +61,11 @@ struct keymgr {
     uint8_t current_passes;
     int32_t session_timeout;        /* seconds; 0 = always prompt, -1 = never expire */
 
-    /* Per-repo Argon2id salt — set at create time, never mutated.*/
+    /* Per-repo Argon2id salt and its public fingerprint — set together at create
+     * time, never mutated. The fingerprint is stamped into every blob this keymgr
+     * encrypts and checked against every blob it is asked to decrypt. */
     uint8_t salt[KDF_SALT_SIZE];
+    uint8_t salt_fp[KDF_SALT_FP_SIZE];
 
     /* Cache slot — params recorded so cross-params transitions can detect a stale
      * slot and evict before re-deriving. */
@@ -170,6 +173,7 @@ error_t *keymgr_create(
     km->current_passes = config->encryption_argon2_passes;
     km->session_timeout = config->session_timeout;
     memcpy(km->salt, salt, KDF_SALT_SIZE);
+    kdf_salt_fingerprint(km->salt, km->salt_fp);
 
     /* Best-effort mlock to keep the cached master off swap. Failure is non-fatal;
      * the advisory is process-wide so the user sees one warning regardless of
@@ -695,6 +699,7 @@ error_t *keymgr_encrypt(
         mac_key, prf_key,
         storage_path,
         km->current_memory_mib, km->current_passes,
+        km->salt_fp,
         out_ciphertext
     );
 
@@ -722,6 +727,28 @@ error_t *keymgr_decrypt(
     CHECK_NULL(ciphertext);
     CHECK_NULL(out_plaintext);
 
+    /* Salt-lineage gate: the blob header names the salt its keys derive from. A
+     * foreign fingerprint means no passphrase can ever verify here — the master
+     * would derive under a different salt — so refuse up front with the precise
+     * fact instead of prompting and then reporting a misleading SIV authentication
+     * failure. Public identity, plain memcmp. */
+    uint8_t blob_salt_fp[KDF_SALT_FP_SIZE];
+    error_t *err = cipher_peek_salt_fp(
+        ciphertext, ciphertext_len, blob_salt_fp
+    );
+    if (err) {
+        /* Parse-level errors pass through unwrapped so the precise diagnostic
+         * (bad magic, version, params) reaches the caller. */
+        return err;
+    }
+    if (memcmp(blob_salt_fp, km->salt_fp, KDF_SALT_FP_SIZE) != 0) {
+        return ERROR(
+            ERR_CRYPTO,
+            "Encrypted under a different repository salt; this repository's "
+            "keys can never decrypt it"
+        );
+    }
+
     /* Read the params bound into the blob header so the master is derived under
      * the producer's Argon2 parameters. A tampered params field surfaces later
      * as a SIV authentication failure; cipher_peek_params runs the range check
@@ -729,12 +756,10 @@ error_t *keymgr_decrypt(
      * allocation. */
     uint16_t blob_memory_mib = 0;
     uint8_t blob_passes = 0;
-    error_t *err = cipher_peek_params(
+    err = cipher_peek_params(
         ciphertext, ciphertext_len, &blob_memory_mib, &blob_passes
     );
     if (err) {
-        /* Parse-level errors pass through unwrapped so the precise diagnostic
-         * (bad magic, version, params) reaches the caller. */
         return err;
     }
 

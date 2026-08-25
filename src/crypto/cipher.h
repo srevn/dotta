@@ -6,7 +6,7 @@
  * deduplication.
  *
  * SIV pipeline:
- *   1. siv  = MAC(mac_key, CIPHER_SIV, header(9), storage_path, plaintext)
+ *   1. siv  = MAC(mac_key, CIPHER_SIV, header(17), storage_path, plaintext)
  *   2. seed = MAC(prf_key, CIPHER_KEY, siv)
  *   3. ciphertext = XChaCha20(key=seed, nonce=siv[0..24], ctr=0, plaintext)
  *
@@ -20,16 +20,24 @@
  *     │ offset │ field                              │ size   │
  *     ├────────┼────────────────────────────────────┼────────┤
  *     │   0    │ magic "DOTTA"                      │  5 B   │
- *     │   5    │ version = 0x07                     │  1 B   │
+ *     │   5    │ version = 0x08                     │  1 B   │
  *     │   6    │ argon2_memory_mib (LE16)           │  2 B   │
  *     │   8    │ argon2_passes                      │  1 B   │
- *     │   9    │ SIV / MAC tag                      │ 32 B   │
- *     │  41    │ ciphertext (XChaCha20 keystream)   │  N B   │
+ *     │   9    │ salt fingerprint (BLAKE2b-8)       │  8 B   │
+ *     │  17    │ SIV / MAC tag                      │ 32 B   │
+ *     │  49    │ ciphertext (XChaCha20 keystream)   │  N B   │
  *     └────────┴────────────────────────────────────┴────────┘
  *
- * The 9-byte header is the FIRST input absorbed into the SIV. Tampering any of
- * magic, version, or Argon2 params fails MAC verification, not parse validation,
- * keeping error paths uniform.
+ * The 17-byte header is the FIRST input absorbed into the SIV. Tampering any of
+ * magic, version, Argon2 params, or the salt fingerprint fails MAC verification,
+ * not parse validation, keeping error paths uniform.
+ *
+ * The salt fingerprint (`kdf_salt_fingerprint` of the repo salt the producer
+ * derived under) makes every ciphertext name the salt that keyed it. Two key-free
+ * consumers read it: the salt census in `infra/salt` attributes reachable
+ * ciphertext to a specific salt before deciding a divergent-salt reconcile, and
+ * `keymgr_decrypt` refuses a foreign-salt blob up front with a precise diagnostic
+ * instead of prompting for a passphrase that can never verify.
  *
  * Security properties:
  *   - Determinism. Same inputs → same ciphertext (Git-friendly).
@@ -74,7 +82,7 @@
 #define CIPHER_MAGIC_SIZE     5
 
 /** Cipher format version. See file-level "Format-version policy". */
-#define CIPHER_VERSION        0x07
+#define CIPHER_VERSION        0x08
 
 /**
  * Detection-prefix length (magic + version).
@@ -87,17 +95,18 @@
 #define CIPHER_DETECT_BYTES   6
 
 /**
- * Authenticated header size (magic + version + Argon2 params).
+ * Authenticated header size (magic + version + Argon2 params + salt fingerprint).
  *
- *   bytes [0..5)  = "DOTTA"
- *   byte   [5]    = CIPHER_VERSION
- *   bytes [6..8)  = LE16 argon2_memory_mib
- *   byte   [8]    = argon2_passes
+ *   bytes [0..5)   = "DOTTA"
+ *   byte   [5]     = CIPHER_VERSION
+ *   bytes [6..8)   = LE16 argon2_memory_mib
+ *   byte   [8]     = argon2_passes
+ *   bytes [9..17)  = salt fingerprint (kdf_salt_fingerprint)
  *
  * Bound into the SIV as the first absorbed input — tampering fails MAC, not parse,
- * closing version-confusion / params-rollback attacks.
+ * closing version-confusion / params-rollback / salt-relabel attacks.
  */
-#define CIPHER_HEADER_SIZE    9
+#define CIPHER_HEADER_SIZE    17
 
 /** SIV / MAC tag size. Must equal `CRYPTO_MAC_SIZE`. */
 #define CIPHER_SIV_SIZE       32
@@ -118,8 +127,9 @@ _Static_assert(
     "SIV is a BLAKE2b-keyed tag"
 );
 _Static_assert(
-    CIPHER_HEADER_SIZE == 9,
-    "header layout drift: must be magic(5) + version(1) + mib(2) + passes(1)"
+    CIPHER_HEADER_SIZE == CIPHER_MAGIC_SIZE + 1 + 2 + 1 + KDF_SALT_FP_SIZE,
+    "header layout drift: must be magic(5) + version(1) + mib(2) + passes(1) "
+    "+ salt_fp(8)"
 );
 _Static_assert(
     CIPHER_OVERHEAD == CIPHER_HEADER_SIZE + CIPHER_SIV_SIZE,
@@ -152,6 +162,29 @@ error_t *cipher_peek_params(
 );
 
 /**
+ * Read the salt fingerprint from a cipher-blob header without touching the SIV
+ * or attempting decryption.
+ *
+ * The fingerprint names the repository salt the producer derived under (see the
+ * file-level layout). Key-free: used by `keymgr_decrypt` to refuse foreign-salt
+ * blobs before any passphrase prompt, and by `infra/content`'s classifier so
+ * the salt census can attribute ciphertext to a salt.
+ *
+ * Runs the same header validation as `cipher_peek_params`; the same failure modes
+ * apply (all ERR_CRYPTO).
+ *
+ * @param data     Blob bytes (must include at least HEADER_SIZE)
+ * @param data_len Blob length
+ * @param out_fp   Set to the header's 8-byte salt fingerprint on success
+ * @return Error or NULL on success
+ */
+error_t *cipher_peek_salt_fp(
+    const uint8_t *data,
+    size_t data_len,
+    uint8_t out_fp[KDF_SALT_FP_SIZE]
+);
+
+/**
  * Encrypt a plaintext buffer under (mac_key, prf_key) bound to `storage_path`,
  * recording the Argon2 params in the header.
  *
@@ -171,6 +204,8 @@ error_t *cipher_peek_params(
  * @param argon2_memory_mib Memory parameter (validated against
  *                          KDF_ARGON2_*_MIN/MAX)
  * @param argon2_passes     Pass parameter (validated)
+ * @param salt_fp           Fingerprint of the repo salt the subkeys derive
+ *                          from (8 bytes; stamped into the authenticated header)
  * @param out_ciphertext    Output buffer (caller frees with buffer_free)
  * @return Error or NULL on success
  */
@@ -182,6 +217,7 @@ error_t *cipher_encrypt(
     const char *storage_path,
     uint16_t argon2_memory_mib,
     uint8_t argon2_passes,
+    const uint8_t salt_fp[KDF_SALT_FP_SIZE],
     buffer_t *out_ciphertext
 );
 

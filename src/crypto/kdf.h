@@ -39,6 +39,7 @@
 
 #define KDF_KEY_SIZE 32            /* All keys in the hierarchy share this size. */
 #define KDF_SALT_SIZE 32           /* Argon2id salt size — 32 bytes (256 bits). */
+#define KDF_SALT_FP_SIZE 8         /* Salt fingerprint — see kdf_salt_fingerprint. */
 
 _Static_assert(
     KDF_KEY_SIZE == CRYPTO_KEY_SIZE,
@@ -74,6 +75,28 @@ _Static_assert(
  * @return Error or NULL on success
  */
 error_t *kdf_validate_params(uint16_t memory_mib, uint8_t passes);
+
+/**
+ * Compute the public 8-byte fingerprint of a repository salt.
+ *
+ * Unkeyed BLAKE2b with an 8-byte digest (the output length is part of BLAKE2b's
+ * parameter block, so this cannot collide with any other BLAKE2b use in the tree
+ * — every other call produces 32 bytes). The fingerprint is *identity*, not key
+ * material: `cipher_encrypt` stamps it into the authenticated blob header so
+ * any ciphertext names the salt that keyed it, letting key-free readers (the
+ * salt census, decrypt pre-flight) attribute a blob to a salt without a passphrase.
+ * 64 bits is far beyond collision concerns for the handful of salts a repository
+ * ever sees, and — like the salt itself — the fingerprint is public.
+ *
+ * Cannot fail: pure hashing, no allocation, no validation.
+ *
+ * @param salt   Per-repo Argon2id salt (32 bytes; non-NULL)
+ * @param out_fp Output buffer for the 8-byte fingerprint
+ */
+void kdf_salt_fingerprint(
+    const uint8_t salt[KDF_SALT_SIZE],
+    uint8_t out_fp[KDF_SALT_FP_SIZE]
+);
 
 /**
  * Derive the master key from a passphrase using Argon2id.

@@ -495,7 +495,7 @@ static error_t *validate_content(
         }
 
         content_kind_t ckind;
-        err = content_classify(repo, &e->blob_oid, &ckind);
+        err = content_classify(repo, &e->blob_oid, &ckind, NULL);
         if (err) {
             return error_wrap(err, "Failed to read '%s'", e->storage_path);
         }

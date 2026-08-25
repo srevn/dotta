@@ -580,7 +580,7 @@ static int salt_census_cb(
 
     content_kind_t kind;
     error_t *err = content_classify(
-        data->repo, git_tree_entry_id(entry), &kind
+        data->repo, git_tree_entry_id(entry), &kind, NULL
     );
     if (err) {
         data->error = err;

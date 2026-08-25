@@ -79,6 +79,16 @@ error_t *kdf_validate_params(uint16_t memory_mib, uint8_t passes) {
     return NULL;
 }
 
+void kdf_salt_fingerprint(
+    const uint8_t salt[KDF_SALT_SIZE],
+    uint8_t out_fp[KDF_SALT_FP_SIZE]
+) {
+    /* Public identity of a public value: plain BLAKE2b-8, no key, no wipe. The
+     * 8-byte output length is baked into BLAKE2b's parameter block, giving this
+     * use domain separation from every 32-byte derivation for free. */
+    crypto_blake2b(out_fp, KDF_SALT_FP_SIZE, salt, KDF_SALT_SIZE);
+}
+
 error_t *kdf_master_key(
     const uint8_t *passphrase,
     size_t passphrase_len,

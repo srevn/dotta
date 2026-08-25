@@ -639,16 +639,23 @@ cleanup:
  * ends dispatch with the builder's message, and the enable never runs):
  *   1. Gather & validate — resolve --all/args to a request set, then filter out
  *      already-enabled, missing, and custom-without-target profiles. Emits
- *      per-profile warnings; produces to_enable_validated.
- *   2. Commit scope to state — state_enable_profile per target. enabled_profiles
- *      membership and order are now authoritative. Nothing else is written: the
- *      view is computed, never stored. `before` borrows nothing from the row
- *      cache the mutation invalidates.
+ *      per-profile warnings; produces to_enable_validated. An already-enabled
+ *      profile named with a --target that differs from its row's is not a skip:
+ *      it re-enters the validated set as a retarget, and `retarget` remembers
+ *      which one (at most one — the --target-single-profile rule above).
+ *   2. Commit scope to state — state_enable_profile per target. The one call
+ *      serves both kinds: a fresh enable inserts the row, a retarget runs the
+ *      UPSERT arm state.h documents (target and timestamp move, position stays).
+ *      enabled_profiles membership and order are now authoritative. Nothing else
+ *      is written: the view is computed, never stored. `before` borrows nothing
+ *      from the row cache the mutation invalidates.
  *   3. The view after — manifest_build over the post-enable set; manifest_diff
  *      attributes the transition to the newly enabled profiles, so gain-side
  *      stats (claimed / added / updated) land in the right slot per profile.
+ *      A retarget reads as its claims materializing at the new target (staged);
+ *      what departs at the old one is apply's to relocate.
  *   4. Per-profile feedback — iterate the validated targets to preserve per-profile
- *      output, then state_save.
+ *      output (the retarget's line says so), then state_save.
  */
 static error_t *profile_enable(
     const dotta_ctx_t *ctx,
@@ -673,7 +680,10 @@ static error_t *profile_enable(
     manifest_diff_stats_t *stats = NULL;
     error_t *err = NULL;
 
-    /* Phase 1 observations — tallied during the validation loop. */
+    /* Phase 1 observations — tallied during the validation loop. retarget names
+     * the one already-enabled profile whose binding this run updates (borrowed
+     * from to_enable; at most one, by the --target-single-profile rule). */
+    const char *retarget = NULL;
     size_t already_enabled = 0;
     size_t not_found = 0;
 
@@ -781,12 +791,13 @@ static error_t *profile_enable(
         }
     }
 
-    /* Filter: already-enabled and missing-branch are non-fatal per-profile skips.
-     * Custom-without-target is fatal — the profile exists but the user's input
-     * is incomplete, which is categorically different from "not found". Treating
-     * it as a per-profile skip previously leaked into the not_found tally and
-     * produced contradictory diagnostics. The surviving set lands in
-     * to_enable_validated. */
+    /* Filter: already-enabled and missing-branch are non-fatal per-profile skips
+     * — unless the already-enabled profile came with a differing --target, which
+     * is a retarget and stays in the run's work. Custom-without-target is fatal
+     * — the profile exists but the user's input is incomplete, which is
+     * categorically different from "not found". Treating it as a per-profile
+     * skip previously leaked into the not_found tally and produced contradictory
+     * diagnostics. The surviving set lands in to_enable_validated. */
     to_enable_validated = string_array_new(0);
     if (!to_enable_validated) {
         err = ERROR(ERR_MEMORY, "Failed to create validated list");
@@ -806,6 +817,24 @@ static error_t *profile_enable(
         }
 
         if (hashmap_has(enabled_set, profile)) {
+            /* --target on an enabled profile is a retarget: the binding is the
+             * verb's subject, and state_enable_profile's UPSERT arm updates it
+             * in place. Only a differing value is work — the same target is an
+             * idempotent re-run and stays the quiet skip below. */
+            if (opts->target) {
+                const char *current = state_peek_profile_target(state, profile);
+                if (!current || strcmp(current, opts->target) != 0) {
+                    retarget = profile;
+                    err = string_array_push(to_enable_validated, profile);
+                    if (err) {
+                        err = error_wrap(
+                            err, "Failed to add profile to validated list"
+                        );
+                        goto cleanup;
+                    }
+                    continue;
+                }
+            }
             output_info(out, OUTPUT_VERBOSE, "  %s already enabled", profile);
             already_enabled++;
             continue;
@@ -868,18 +897,25 @@ static error_t *profile_enable(
             output_newline(out, OUTPUT_NORMAL);
         }
 
-        if (to_enable_validated->count > 0) {
+        size_t would_enable = to_enable_validated->count - (retarget ? 1 : 0);
+        if (would_enable > 0) {
             output_info(
                 out, OUTPUT_NORMAL, "Would enable %zu profile%s:",
-                to_enable_validated->count,
-                to_enable_validated->count == 1 ? "" : "s"
+                would_enable, would_enable == 1 ? "" : "s"
             );
             for (size_t i = 0; i < to_enable_validated->count; i++) {
-                output_print(
-                    out, OUTPUT_NORMAL, "  - %s\n",
-                    to_enable_validated->items[i]
-                );
+                const char *name = to_enable_validated->items[i];
+                if (retarget && strcmp(name, retarget) == 0) continue;
+                output_print(out, OUTPUT_NORMAL, "  - %s\n", name);
             }
+        }
+        if (retarget) {
+            output_info(
+                out, OUTPUT_NORMAL, "Would update deployment target for '%s'",
+                retarget
+            );
+        }
+        if (to_enable_validated->count > 0) {
             output_newline(out, OUTPUT_NORMAL);
             output_info(
                 out, OUTPUT_NORMAL, "Run 'dotta apply' to deploy files"
@@ -926,8 +962,8 @@ static error_t *profile_enable(
         }
 
         /* Phase 3: The view after, and the diff. The builder reads the rows as
-         * the loop above left them, any --target supplied for the new entries
-         * included. */
+         * the loop above left them — any --target supplied for the new entries,
+         * and the retargeted row's new binding, included. */
         err = manifest_build(repo, state, ctx->arena, &after);
         if (err) {
             err = error_wrap(err, "Failed to build manifest after enable");
@@ -956,15 +992,20 @@ static error_t *profile_enable(
             goto cleanup;
         }
 
-        /* Phase 4: Per-profile feedback */
+        /* Phase 4: Per-profile feedback — the retarget's line names its verb. */
         for (size_t i = 0; i < to_enable_validated->count; i++) {
-            output_styled(
-                out, OUTPUT_NORMAL, "  {green}✓{reset} Enabled %s\n",
-                to_enable_validated->items[i]
-            );
-            print_manifest_enable_stats(
-                out, to_enable_validated->items[i], &stats[i]
-            );
+            const char *name = to_enable_validated->items[i];
+            if (retarget && strcmp(name, retarget) == 0) {
+                output_styled(
+                    out, OUTPUT_NORMAL, "  {green}✓{reset} Updated target for %s\n",
+                    name
+                );
+            } else {
+                output_styled(
+                    out, OUTPUT_NORMAL, "  {green}✓{reset} Enabled %s\n", name
+                );
+            }
+            print_manifest_enable_stats(out, name, &stats[i]);
         }
 
         err = state_save(state);
@@ -981,15 +1022,24 @@ static error_t *profile_enable(
         output_newline(out, OUTPUT_NORMAL);
     }
 
-    if (to_enable_validated->count > 0) {
-        output_success(
-            out, OUTPUT_NORMAL, "Enabled %zu profile%s",
-            to_enable_validated->count,
-            to_enable_validated->count == 1 ? "" : "s"
-        );
-        output_info(
-            out, OUTPUT_NORMAL, "Run 'dotta apply' to deploy files"
-        );
+    {
+        size_t enabled_count = to_enable_validated->count - (retarget ? 1 : 0);
+        if (enabled_count > 0) {
+            output_success(
+                out, OUTPUT_NORMAL, "Enabled %zu profile%s",
+                enabled_count, enabled_count == 1 ? "" : "s"
+            );
+        }
+        if (retarget) {
+            output_success(
+                out, OUTPUT_NORMAL, "Updated deployment target for '%s'", retarget
+            );
+        }
+        if (to_enable_validated->count > 0) {
+            output_info(
+                out, OUTPUT_NORMAL, "Run 'dotta apply' to deploy files"
+            );
+        }
     }
     if (already_enabled > 0) {
         output_info(
@@ -1956,7 +2006,8 @@ static const args_command_t spec_profile_enable = {
         "\n"
         "  --target <path> attaches a custom mount point for profiles that contain\n"
         "  custom/ files (e.g. --target /mnt/jails/web). Only valid for a single\n"
-        "  profile per invocation.\n",
+        "  profile per invocation. On an already-enabled profile it updates the\n"
+        "  binding in place; the claims re-resolve at the next apply.\n",
     .opts_size     = sizeof(cmd_profile_options_t),
     .opts          = profile_enable_opts,
     .init_defaults = profile_enable_defaults,

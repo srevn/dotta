@@ -293,6 +293,10 @@ static error_t *verify_schema_version(sqlite3 *db) {
  * - temp_store=MEMORY: Temp operations in RAM
  * - busy_timeout: Wait up to 3s for lock
  *
+ * foreign_keys is deliberately absent: the schema declares no FK constraints
+ * (anchors.profile outlives enabled_profiles rows by design), so nothing cascades
+ * — records leave only through explicit retires.
+ *
  * @param db Database connection (must not be NULL)
  * @return Error or NULL on success
  */
@@ -646,9 +650,8 @@ static void invalidate_profile_entries(state_t *state) {
  * row (name, target) into the cache. Rows are ordered by position to match the
  * user's precedence order.
  *
- * The cache replaces four previous query-shape functions (get_prefix_map,
- * get_profile_prefix, get_profile_commit_oid, load_commit_oid_map) with a single
- * lazy load + linear peek.
+ * One load answers every per-profile question thereafter as a linear peek over
+ * the cache — no per-question SQL.
  */
 static error_t *load_profile_entries(state_t *state) {
     CHECK_NULL(state);

@@ -24,13 +24,6 @@
 #include "sys/gitops.h"
 #include "utils/privilege.h"
 
-/**
- * The mode create_ancestor gives an untracked missing parent, and the fallback
- * resolve_metadata substitutes for a tracked directory row state never gave a
- * mode to. One constant, two readers.
- */
-#define DEPLOY_DIR_MODE_DEFAULT 0755
-
 /* ══════════════════════════════════════════════════════════════════
  * Plan
  * ══════════════════════════════════════════════════════════════════ */
@@ -886,7 +879,7 @@ static error_t *resolve_metadata(
     mode_t mode = row->mode;
 
     if (row->type != PATH_TYPE_SYMLINK && mode == 0) {
-        mode = (row->type == PATH_TYPE_DIRECTORY) ? DEPLOY_DIR_MODE_DEFAULT
+        mode = (row->type == PATH_TYPE_DIRECTORY) ? 0755
              : (row->type == PATH_TYPE_EXECUTABLE) ? 0755 : 0644;
 
         error_t *err = push_entry(
@@ -1368,7 +1361,7 @@ static error_t *create_ancestor(
         return ptr_array_push(&run->result->ancestors, v->row);
     }
 
-    return fs_create_dir_with_ownership(path, DEPLOY_DIR_MODE_DEFAULT, uid, gid);
+    return fs_create_dir_with_ownership(path, 0755, uid, gid);
 }
 
 /**

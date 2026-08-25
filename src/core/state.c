@@ -28,7 +28,7 @@
 #include "sys/filesystem.h"
 
 /* Schema version - must match database */
-#define STATE_SCHEMA_VERSION "16"
+#define STATE_SCHEMA_VERSION "17"
 
 /* Database file name */
 #define STATE_DB_NAME "dotta.db"
@@ -64,12 +64,13 @@ struct state {
     /* Prepared statements (initialized once, reused) */
     sqlite3_stmt *stmt_insert_profile;      /* INSERT INTO enabled_profiles */
 
-    /* Anchor prepared statements (the record's five verbs) */
+    /* Anchor prepared statements (the record's verbs and the order's) */
     sqlite3_stmt *stmt_observe;             /* INSERT OR IGNORE path_anchors (presence only) */
     sqlite3_stmt *stmt_confirm;             /* UPDATE path_anchors SET type, blob_oid, stat_* (content) */
     sqlite3_stmt *stmt_anchor;              /* UPSERT path_anchors … RETURNING observed_at (ownership) */
     sqlite3_stmt *stmt_retire;              /* DELETE FROM path_anchors */
-    sqlite3_stmt *stmt_prune;               /* UPDATE path_anchors SET prune_ordered = 1 */
+    sqlite3_stmt *stmt_prune;               /* INSERT prune_orders, guarded by the record */
+    sqlite3_stmt *stmt_order_void;          /* DELETE FROM prune_orders */
 };
 
 /**
@@ -207,14 +208,24 @@ static error_t *initialize_schema(sqlite3 *db) {
         "    "
         "    observed_at INTEGER NOT NULL CHECK(observed_at > 0),"
         "    deployed_at INTEGER NOT NULL DEFAULT 0,"
-        "    prune_ordered INTEGER NOT NULL DEFAULT 0 CHECK(prune_ordered IN (0, 1)),"
         "    "
         "    CHECK (type != 'directory' OR blob_oid IS NULL),"
         "    CHECK (deployed_at = 0 OR type = 'directory' OR blob_oid IS NOT NULL)"
         ") STRICT;"
 
         "CREATE INDEX IF NOT EXISTS idx_anchors_profile "
-        "ON path_anchors(profile);";
+        "ON path_anchors(profile);"
+
+        /* The one deferred intent: remove --delete-files ordered the deployed
+         * copy at this path pruned at the next apply. One column — the row's
+         * existence is the fact. An order lives only while its path is out of
+         * the view: born after the fallback short-circuit (the post-commit view
+         * lacks the path), voided by the flush's join when the path re-enters,
+         * and dead with its record (the retire's explicit sibling delete — no
+         * foreign key, per the rule above). */
+        "CREATE TABLE IF NOT EXISTS prune_orders ("
+        "    filesystem_path TEXT PRIMARY KEY"
+        ") STRICT;";
 
     /* Execute schema SQL */
     rc = sqlite3_exec(db, schema_sql, NULL, NULL, &errmsg);
@@ -294,7 +305,9 @@ static error_t *verify_schema_version(sqlite3 *db) {
  *
  * foreign_keys is deliberately absent: the schema declares no FK constraints
  * (path_anchors.profile outlives enabled_profiles rows by design), so nothing
- * cascades — records leave only through explicit retires.
+ * cascades — records leave only through explicit retires. prune_orders keeps
+ * the rule: its record-coupling is enforced by the write's guard (the
+ * INSERT…SELECT) and the retire's sibling delete, not a constraint.
  *
  * @param db Database connection (must not be NULL)
  * @return Error or NULL on success
@@ -463,6 +476,7 @@ static void finalize_statements(state_t *state) {
         &state->stmt_anchor,
         &state->stmt_retire,
         &state->stmt_prune,
+        &state->stmt_order_void,
     };
 
     for (size_t i = 0; i < sizeof(roster) / sizeof(roster[0]); i++) {
@@ -529,18 +543,14 @@ static error_t *prepare_statements(state_t *state) {
      *   ?1 filesystem_path ?2 type — travels with the content: the schema forbids
      *             a blob on a directory row, and CMP_EQUAL confirmed the kind
      *             as well
-     *   ?3 blob_oid  ?4 stat_mtime  ?5 stat_size  ?6 stat_ino
-     *
-     * prune_ordered resets to 0: the path is back under a live row, and any order
-     * predating that is void. */
+     *   ?3 blob_oid  ?4 stat_mtime  ?5 stat_size  ?6 stat_ino */
     const char *sql_confirm =
         "UPDATE path_anchors SET "
         "  type          = ?2, "
         "  blob_oid      = ?3, "
         "  stat_mtime    = ?4, "
         "  stat_size     = ?5, "
-        "  stat_ino      = ?6, "
-        "  prune_ordered = 0 "
+        "  stat_ino      = ?6 "
         "WHERE filesystem_path = ?1;";
 
     rc = sqlite3_prepare_v2(state->db, sql_confirm, -1, &state->stmt_confirm, NULL);
@@ -561,9 +571,6 @@ static error_t *prepare_statements(state_t *state) {
      *             name the column, so an existing stamp is never rewritten and
      *             the first writer wins) and deployed_at on both arms: one
      *             placeholder, one moment
-     *
-     * prune_ordered resets to 0 on the UPDATE arm: the path is back under a live
-     * row, and any order predating that is void.
      *
      * RETURNING projects the one column the two arms decide differently —
      * observed_at (INSERT arm: now; UPDATE arm: the existing stamp) — so a caller
@@ -586,8 +593,7 @@ static error_t *prepare_statements(state_t *state) {
         "  stat_mtime    = excluded.stat_mtime, "
         "  stat_size     = excluded.stat_size, "
         "  stat_ino      = excluded.stat_ino, "
-        "  deployed_at   = excluded.deployed_at, "
-        "  prune_ordered = 0 "
+        "  deployed_at   = excluded.deployed_at "
         "RETURNING observed_at;";
 
     rc = sqlite3_prepare_v2(state->db, sql_anchor, -1, &state->stmt_anchor, NULL);
@@ -596,7 +602,8 @@ static error_t *prepare_statements(state_t *state) {
         return sqlite_error(state->db, "Failed to prepare anchor statement");
     }
 
-    /* Retire: the record goes. Nothing cascades — there is no parent. */
+    /* Retire: the record goes. Nothing cascades — there is no parent; the order
+     * that dies with it is state_retire_anchor's explicit second statement. */
     const char *sql_retire =
         "DELETE FROM path_anchors WHERE filesystem_path = ?1;";
 
@@ -606,14 +613,29 @@ static error_t *prepare_statements(state_t *state) {
         return sqlite_error(state->db, "Failed to prepare retire statement");
     }
 
-    /* Order prune: the one persisted intent (remove --delete-files) */
+    /* Order prune: the one deferred intent (remove --delete-files). The SELECT
+     * is the guard — an order cannot exist without a record, so a missing record
+     * inserts nothing (the documented no-op contract); OR IGNORE makes a repeated
+     * order idempotent. */
     const char *sql_prune =
-        "UPDATE path_anchors SET prune_ordered = 1 WHERE filesystem_path = ?1;";
+        "INSERT OR IGNORE INTO prune_orders (filesystem_path) "
+        "SELECT filesystem_path FROM path_anchors WHERE filesystem_path = ?1;";
 
     rc = sqlite3_prepare_v2(state->db, sql_prune, -1, &state->stmt_prune, NULL);
     if (rc != SQLITE_OK) {
         finalize_statements(state);
         return sqlite_error(state->db, "Failed to prepare prune statement");
+    }
+
+    /* Order void: one end of the order's lifetime — the flush's join (the path
+     * re-entered the view) and the retire's sibling (the record died). */
+    const char *sql_order_void =
+        "DELETE FROM prune_orders WHERE filesystem_path = ?1;";
+
+    rc = sqlite3_prepare_v2(state->db, sql_order_void, -1, &state->stmt_order_void, NULL);
+    if (rc != SQLITE_OK) {
+        finalize_statements(state);
+        return sqlite_error(state->db, "Failed to prepare order-void statement");
     }
 
     return NULL;
@@ -1460,10 +1482,10 @@ error_t *state_get_all_anchors(
     #define DUP(s)      arena_strdup(arena, (s))
     #define DUP_OPT(s)  ((s) ? DUP(s) : NULL)
 
-    /* The one read (14 columns: 3 identity + 4 metadata + 7 record) */
+    /* The one read (13 columns: 3 identity + 4 metadata + 6 record) */
     const char *sql_anchors =
         "SELECT filesystem_path, storage_path, profile, type, mode, owner, \"group\", "
-        "blob_oid, stat_mtime, stat_size, stat_ino, observed_at, deployed_at, prune_ordered "
+        "blob_oid, stat_mtime, stat_size, stat_ino, observed_at, deployed_at "
         "FROM path_anchors ORDER BY filesystem_path;";
 
     sqlite3_stmt *stmt = NULL;
@@ -1477,8 +1499,8 @@ error_t *state_get_all_anchors(
         /* Column layout matches sql_anchors:
          *   0-2:  identity (filesystem_path, storage_path, profile)
          *   3-6:  what dotta set (type, mode, owner, group)
-         *   7-13: what dotta confirmed (blob_oid, stat_mtime, stat_size, stat_ino,
-         *         observed_at, deployed_at, prune_ordered) */
+         *   7-12: what dotta confirmed (blob_oid, stat_mtime, stat_size, stat_ino,
+         *         observed_at, deployed_at) */
         anchor_t *anchor = &anchors[i];
 
         const char *fs_path = (const char *) sqlite3_column_text(stmt, 0);
@@ -1522,7 +1544,6 @@ error_t *state_get_all_anchors(
         };
         anchor->observed_at = (time_t) sqlite3_column_int64(stmt, 11);
         anchor->deployed_at = (time_t) sqlite3_column_int64(stmt, 12);
-        anchor->prune_ordered = (sqlite3_column_int(stmt, 13) != 0);
 
         /* Check allocation success */
         if (!anchor->filesystem_path || !anchor->storage_path || !anchor->profile) {
@@ -1686,7 +1707,6 @@ error_t *state_confirm(
  *   - deployed_at = now, both arms.
  *   - observed_at is the INSERT arm's alone.
  *   - stat is always written (zeros when NULL).
- *   - prune_ordered resets to 0.
  *
  * The SQL UPSERT encodes those rules and RETURNING projects the one column the
  * arms decide differently. Callers that mirror an in-memory snapshot pass a
@@ -1770,7 +1790,6 @@ error_t *state_anchor(
                 .stat = triple,
                 .observed_at = (time_t) sqlite3_column_int64(stmt, 0),
                 .deployed_at = now,
-                .prune_ordered = false,
             };
         }
         rc = sqlite3_step(stmt);
@@ -1787,6 +1806,8 @@ error_t *state_anchor(
  * Retire a managed path's record
  *
  * DELETE by filesystem_path; a missing row is success (see the header contract).
+ * The second statement is the "order dies with its record" rule, kept explicit
+ * — nothing is a parent, nothing cascades.
  */
 error_t *state_retire_anchor(state_t *state, const char *filesystem_path) {
     CHECK_NULL(state);
@@ -1804,13 +1825,14 @@ error_t *state_retire_anchor(state_t *state, const char *filesystem_path) {
         return sqlite_error(state->db, "Failed to retire anchor");
     }
 
-    return NULL;
+    return state_void_prune_order(state, filesystem_path);
 }
 
 /**
  * Order a managed path's deployed copy pruned
  *
- * UPDATE by filesystem_path; a missing row is success (see the header contract).
+ * INSERT guarded by the record (see the SQL comment on sql_prune and the header
+ * contract); a missing record inserts nothing and is success.
  */
 error_t *state_order_prune(state_t *state, const char *filesystem_path) {
     CHECK_NULL(state);
@@ -1826,6 +1848,117 @@ error_t *state_order_prune(state_t *state, const char *filesystem_path) {
     int rc = sqlite3_step(stmt);
     if (rc != SQLITE_DONE) {
         return sqlite_error(state->db, "Failed to order prune");
+    }
+
+    return NULL;
+}
+
+/**
+ * Get every ordered path, in filesystem_path order
+ *
+ * The prune_orders read, the shape of state_get_all_anchors: count, allocate
+ * once, hydrate into the caller's arena.
+ */
+error_t *state_get_prune_orders(
+    const state_t *state,
+    arena_t *arena,
+    char ***out,
+    size_t *count
+) {
+    CHECK_NULL(state);
+    CHECK_NULL(arena);
+    CHECK_NULL(out);
+    CHECK_NULL(count);
+
+    *out = NULL;
+    *count = 0;
+
+    /* Empty state (no DB file) — return empty results */
+    if (!state->db) return NULL;
+
+    const char *sql_count = "SELECT COUNT(*) FROM prune_orders;";
+    sqlite3_stmt *stmt_count = NULL;
+
+    int rc = sqlite3_prepare_v2(state->db, sql_count, -1, &stmt_count, NULL);
+    if (rc != SQLITE_OK) {
+        return sqlite_error(state->db, "Failed to prepare order count query");
+    }
+
+    rc = sqlite3_step(stmt_count);
+    if (rc != SQLITE_ROW) {
+        sqlite3_finalize(stmt_count);
+        return sqlite_error(state->db, "Failed to count orders");
+    }
+
+    size_t order_count = (size_t) sqlite3_column_int64(stmt_count, 0);
+    sqlite3_finalize(stmt_count);
+
+    if (order_count == 0) {
+        return NULL;  /* Success, no orders */
+    }
+
+    char **paths = arena_calloc(arena, order_count, sizeof(char *));
+    if (!paths) {
+        return ERROR(ERR_MEMORY, "Failed to allocate order paths array");
+    }
+
+    const char *sql_orders =
+        "SELECT filesystem_path FROM prune_orders ORDER BY filesystem_path;";
+
+    sqlite3_stmt *stmt = NULL;
+    rc = sqlite3_prepare_v2(state->db, sql_orders, -1, &stmt, NULL);
+    if (rc != SQLITE_OK) {
+        return sqlite_error(state->db, "Failed to prepare orders query");
+    }
+
+    size_t i = 0;
+    while ((rc = sqlite3_step(stmt)) == SQLITE_ROW && i < order_count) {
+        const char *fs_path = (const char *) sqlite3_column_text(stmt, 0);
+        if (!fs_path) {
+            sqlite3_finalize(stmt);
+            return ERROR(ERR_STATE_INVALID, "NULL filesystem_path in order %zu", i);
+        }
+
+        paths[i] = arena_strdup(arena, fs_path);
+        if (!paths[i]) {
+            sqlite3_finalize(stmt);
+            return ERROR(ERR_MEMORY, "Failed to copy order path");
+        }
+
+        i++;
+    }
+
+    sqlite3_finalize(stmt);
+
+    if (rc != SQLITE_DONE) {
+        return sqlite_error(state->db, "Failed to query orders");
+    }
+
+    *out = paths;
+    *count = i;
+
+    return NULL;
+}
+
+/**
+ * Void one prune order
+ *
+ * DELETE by filesystem_path; a missing row is success (see the header contract).
+ */
+error_t *state_void_prune_order(state_t *state, const char *filesystem_path) {
+    CHECK_NULL(state);
+    CHECK_NULL(filesystem_path);
+    CHECK_NULL(state->db);
+    CHECK_NULL(state->stmt_order_void);
+
+    sqlite3_stmt *stmt = state->stmt_order_void;
+    sqlite3_reset(stmt);
+    sqlite3_clear_bindings(stmt);
+    sqlite3_bind_text(stmt, 1, filesystem_path, -1, SQLITE_TRANSIENT);
+
+    int rc = sqlite3_step(stmt);
+    if (rc != SQLITE_DONE) {
+        return sqlite_error(state->db, "Failed to void prune order");
     }
 
     return NULL;

@@ -115,6 +115,15 @@ struct workspace {
     const anchor_t **orphans;                    /* Arena-allocated array into the snapshot */
     size_t orphan_count;                         /* Number of orphans */
 
+    /* The prune orders, snapshot at load beside the record — unconditionally:
+     * the honour arm reads membership, and the flush's join must see the orders
+     * even when no orphan stands for them (the path back in the view is exactly
+     * the case with no orphan). The map's keys borrow the arena paths; NULL when
+     * the table is empty (the probes are NULL-safe). */
+    char **order_paths;                          /* Arena snapshot from state_get_prune_orders */
+    size_t order_count;                          /* Number of ordered paths */
+    hashmap_t *prune_orders;                     /* fs_path → the path (membership; heap-allocated) */
+
     /* State and profile set — the view's profiles (manifest_profiles), in
      * precedence order: the untracked scan walks them in that order. */
     state_t *state;                              /* The record's handle (borrowed from caller) */
@@ -417,14 +426,12 @@ static error_t *workspace_add_untracked(
  * OOM asymmetry — returns void on realloc failure. Every other path in workspace
  * analysis propagates ERR_MEMORY; this one deliberately does not. The confirmation
  * is a performance optimization — it converts the NEXT slow-path CMP_EQUAL into
- * a fast-path short-circuit — and, for a record carrying a prune order, the write
- * that voids the order; neither is a correctness invariant of the current analysis
+ * a fast-path short-circuit — not a correctness invariant of the current analysis
  * (which is already complete by the time this is called). Dropping the record
  * on realloc failure:
  *   - Preserves the caller's already-correct divergence result.
  *   - Self-heals on the next status: the slow-path CMP_EQUAL re-confirms and
- *     re-records the confirmation, and a fast-path hit on an ordered record queues
- *     it again (assuming memory pressure has cleared).
+ *     re-records the confirmation (assuming memory pressure has cleared).
  *   - Never produces an incorrect classification — worst case is one extra
  *     slow-path verification per dropped record.
  * Failing here to surface OOM would abort a workspace load that had already
@@ -725,19 +732,6 @@ static error_t *analyze_file_divergence(
             file_stat = initial_stat;
             disk_at_anchor = true;
             cmp_result = git_moved ? CMP_DIFFERENT : CMP_EQUAL;
-
-            /* A standing prune order (remove --delete-files) is void once the
-             * path is back under a live row and clean — the removal it answered
-             * was reverted. The slow path's CMP_EQUAL clears it through
-             * state_confirm; a fast-path hit is the same confirmation (disk is
-             * the row's blob, the stat vouched for it) and must take the same
-             * write, or the order outlives the removal and prunes the copy at
-             * the next scope exit instead of the probe releasing it. Queued only
-             * when there is an order to void: the fast path stays write-free
-             * otherwise. */
-            if (cmp_result == CMP_EQUAL && anchor->prune_ordered) {
-                workspace_record_confirmation(ws, row, &file_stat);
-            }
         } else {
             /* SLOW PATH: Full content comparison, ours vs theirs
              *
@@ -1648,7 +1642,7 @@ static error_t *analyze_orphans(workspace_t *ws) {
             item_state = WORKSPACE_STATE_RELEASED;
             divergence = DIVERGENCE_TYPE;
 
-        } else if (anchor->prune_ordered && measurable) {
+        } else if (hashmap_has(ws->prune_orders, fs_path) && measurable) {
             /* The user ordered the deployed copy pruned (remove --delete-files);
              * Git is not asked. Divergence still protects an edited copy —
              * cleanup's skip reasons read the same bits. */
@@ -2343,7 +2337,9 @@ static int compare_rows_by_path(const void *a, const void *b) {
  * (state_get_all_anchors) is indexed by path as ws->anchor_index — the analyses
  * pair each row with its record through workspace_get_anchor, and the two writers
  * patch the index's values — and every record whose path the view lacks is
- * collected into ws->orphans, in the snapshot's path order.
+ * collected into ws->orphans, in the snapshot's path order. The prune orders
+ * load beside the record, unconditionally (the flush's join needs them even with
+ * zero orphans).
  *
  * The partition is the single source of truth for "is this row in scope?": a
  * path is managed iff the view has a row for it, and a record is an orphan iff
@@ -2446,6 +2442,29 @@ static error_t *workspace_partition(workspace_t *ws) {
 
         if (!manifest_lookup(ws->manifest, anchor->filesystem_path)) {
             ws->orphans[ws->orphan_count++] = anchor;
+        }
+    }
+
+    /* The prune orders, beside the record. Almost always empty; when not, the
+     * membership index serves the honour arm the way the anchors index serves
+     * the row pairing. */
+    err = state_get_prune_orders(
+        ws->state, ws->arena, &ws->order_paths, &ws->order_count
+    );
+    if (err) {
+        return error_wrap(err, "Failed to read prune orders from state");
+    }
+
+    if (ws->order_count > 0) {
+        ws->prune_orders = hashmap_borrow(ws->order_count);
+        if (!ws->prune_orders) {
+            return ERROR(ERR_MEMORY, "Failed to create order index");
+        }
+        for (size_t i = 0; i < ws->order_count; i++) {
+            err = hashmap_set(ws->prune_orders, ws->order_paths[i], ws->order_paths[i]);
+            if (err) {
+                return error_wrap(err, "Failed to populate order index");
+            }
         }
     }
 
@@ -3052,7 +3071,6 @@ error_t *workspace_observe(
         .stat = STAT_CACHE_UNSET,
         .observed_at = now,
         .deployed_at = 0,
-        .prune_ordered = false,
     };
 
     err = hashmap_set(ws->anchor_index, anchor->filesystem_path, anchor);
@@ -3151,13 +3169,27 @@ error_t *workspace_anchor(
  * one has not seen — so the observation's INSERT must land first. Observed first,
  * the confirmation then finds its row on both sides.
  *
+ * The join, last: every prune order whose path the view has is void — its lifetime
+ * rule ("an order lives only while its path is out of the view"), enforced where
+ * the view and the order set are both in hand.
+ *
  * Begins its own transaction only when state isn't already in one
  * (status/diff/sync). Apply always passes state already-in-transaction.
  */
 error_t *workspace_flush_updates(workspace_t *ws) {
     CHECK_NULL(ws);
 
-    if (ws->observation_count == 0 && ws->confirmation_count == 0) {
+    /* The join's pending work, counted up front so the gate below is exact: a
+     * pure-join flush (nothing observed, nothing confirmed, one stale order)
+     * still takes its scoped transaction, and the common all-empty flush still
+     * costs nothing. One loop over the almost-always-empty order set. */
+    size_t pending_voids = 0;
+    for (size_t i = 0; i < ws->order_count; i++) {
+        if (manifest_lookup(ws->manifest, ws->order_paths[i])) pending_voids++;
+    }
+
+    if (ws->observation_count == 0 && ws->confirmation_count == 0 &&
+        pending_voids == 0) {
         return NULL;
     }
 
@@ -3213,7 +3245,27 @@ error_t *workspace_flush_updates(workspace_t *ws) {
             anchor->type = c->row->type;
             anchor->blob_oid = c->row->blob_oid;
             anchor->stat = c->stat;
-            anchor->prune_ordered = false;
+        }
+    }
+
+    /* The join: an order lives only while its path is out of the view, so every
+     * order whose path the view has is void — the removal it answered was reverted
+     * (a revert, a sync pulling the path back, an enable providing it), verified
+     * or not. Left standing, the order would outlive the removal and prune the
+     * copy at the next scope exit instead of the probe releasing it; voided here,
+     * a later discovered departure executes as a release, which is the stated
+     * policy for every discovered departure. */
+    for (size_t i = 0; i < ws->order_count; i++) {
+        if (!manifest_lookup(ws->manifest, ws->order_paths[i])) continue;
+
+        error_t *err = state_void_prune_order(ws->state, ws->order_paths[i]);
+        if (err) {
+            if (needs_transaction) {
+                state_rollback(ws->state);
+            }
+            return error_wrap(
+                err, "Failed to void prune order for '%s'", ws->order_paths[i]
+            );
         }
     }
 
@@ -3252,9 +3304,11 @@ void workspace_free(workspace_t *ws) {
     free(ws->confirmations);
 
     /* Free indices (values are borrowed, so pass NULL for value free function).
-     * anchor_index values are records in ws->arena — also borrowed. */
+     * anchor_index values are records in ws->arena — also borrowed, as are the
+     * order index's arena paths. */
     hashmap_free(ws->diverged_index, NULL);
     hashmap_free(ws->anchor_index, NULL);
+    hashmap_free(ws->prune_orders, NULL);
 
     /* The view is borrowed (the dispatcher's); the slices, the snapshot and the
      * orphans array are arena-allocated and the caller's arena releases them

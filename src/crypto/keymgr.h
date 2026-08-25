@@ -79,9 +79,10 @@ typedef struct keymgr keymgr;
  *
  * Snapshots the current-config Argon2 params, session timeout, AND the
  * per-repository salt (plus its `kdf_salt_fingerprint`) into the struct. Later
- * config edits in the same process do not affect this snapshot, so a single
- * command produces blobs under one consistent (memory_mib, passes) even if the
- * file changes mid-run; the salt is immutable post-init regardless.
+ * config edits in the same process do not affect this snapshot, so a single command
+ * produces blobs under one consistent (memory_mib, passes) even if the file changes
+ * mid-run. The salt snapshot follows `refs/dotta/salt`; the one command that
+ * moves that ref mid-run (sync's salt adopt) re-binds via `keymgr_rekey`.
  *
  * No derivation, prompt, or I/O at create time. The first call to encrypt / decrypt
  * / set_passphrase / probe_key triggers the lazy resolution chain.
@@ -138,11 +139,11 @@ error_t *keymgr_encrypt(
  *
  * First checks the blob's salt fingerprint against this keymgr's: a foreign
  * fingerprint can never decrypt here (the master would derive under a different
- * salt), so it is refused up front — before any passphrase prompt — with a
- * precise ERR_CRYPTO instead of a misleading authentication failure. Then reads
- * (memory_mib, passes) from the blob header via `cipher_peek_params` and
- * acquires the master key under those blob-recorded params. Decryption thus
- * survives config edits.
+ * salt), so it is refused up front — before any passphrase prompt — with a precise
+ * ERR_CRYPTO instead of a misleading authentication failure. Then reads
+ * (memory_mib, passes) from the blob header via `cipher_peek_params` and acquires
+ * the master key under those blob-recorded params. Decryption thus survives config
+ * edits.
  *
  * If the cached slot holds different params it is evicted and re-derived under
  * the blob's params. The on-disk session cache (canonical current-config slot)
@@ -213,6 +214,22 @@ error_t *keymgr_set_passphrase(
  * @param km Key manager (NULL-safe)
  */
 void keymgr_clear(keymgr *km);
+
+/**
+ * Re-bind the key manager to a new repository salt.
+ *
+ * For the one code path that moves `refs/dotta/salt` mid-command — sync's salt
+ * adopt. The create-time snapshot goes stale the moment the ref moves, so the
+ * command that moved it re-establishes the binding, the same duty sync discharges
+ * for Git by rebuilding the manifest after its pulls. Evicts the in-memory master
+ * (it derives from the old salt), recomputes the fingerprint, and unlinks the
+ * on-disk session cache eagerly (its MAC binds the salt, so a stale file would
+ * fail-and-unlink lazily regardless).
+ *
+ * @param km   Key manager (NULL-safe — encryption-disabled runs have none)
+ * @param salt The newly adopted repo salt (32 bytes; non-NULL; copied)
+ */
+void keymgr_rekey(keymgr *km, const uint8_t salt[KDF_SALT_SIZE]);
 
 /**
  * Probe whether the current-config master key is available without prompting.

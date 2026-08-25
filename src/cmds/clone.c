@@ -465,7 +465,7 @@ error_t *cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
      * any local materialization below (state DB, dotta-worktree branch, baseline
      * .dottaignore). The ref also carries the per-repo Argon2id salt; without
      * it, every encrypted blob is undecryptable. */
-    err = salt_fetch(repo, "origin", xfer);
+    err = salt_fetch(repo, "origin", xfer, NULL);
     if (err) {
         if (err->code == ERR_NOT_FOUND) {
             error_free(err);

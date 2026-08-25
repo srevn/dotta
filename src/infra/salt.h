@@ -141,16 +141,24 @@ error_t *salt_push(
  * remote salt therefore never lands locally to be mistaken for canonical by a
  * later `salt_resolve` or `salt_load`.
  *
+ * On success the validated salt bytes are copied to `out_salt` when requested —
+ * the boundary hands over exactly what it proved, so the adopting caller
+ * (`cmd_sync`, which feeds them to `keymgr_rekey`) never re-reads the ref it
+ * just watched move. Clone has no crypto handles yet and passes NULL.
+ *
  * @param repo        Repository (must not be NULL)
  * @param remote_name Remote name (must not be NULL, e.g. "origin")
  * @param xfer        Transfer context for credentials / progress
+ * @param out_salt    Optional: the validated salt bytes (KDF_SALT_SIZE; can be
+ *                    NULL)
  * @return Error or NULL on success; ERR_NOT_FOUND if the remote lacks the ref;
  *         ERR_CRYPTO if the fetched salt is malformed (already rolled back)
  */
 error_t *salt_fetch(
     git_repository *repo,
     const char *remote_name,
-    transfer_context_t *xfer
+    transfer_context_t *xfer,
+    uint8_t *out_salt
 );
 
 /**

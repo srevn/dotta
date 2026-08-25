@@ -571,6 +571,20 @@ void keymgr_clear(keymgr *km) {
     session_clear();
 }
 
+void keymgr_rekey(keymgr *km, const uint8_t salt[KDF_SALT_SIZE]) {
+    if (!km || !salt) {
+        return;
+    }
+
+    /* The cached master derives from the old salt — evict before re-binding.
+     * The on-disk cache is unlinked eagerly; its MAC absorbs the salt, so a stale
+     * file would fail-and-unlink lazily anyway (crypto/session.h). */
+    evict_slot(km);
+    memcpy(km->salt, salt, KDF_SALT_SIZE);
+    kdf_salt_fingerprint(km->salt, km->salt_fp);
+    session_clear();
+}
+
 bool keymgr_probe_key(keymgr *km) {
     if (!km) {
         return false;

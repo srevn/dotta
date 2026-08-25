@@ -465,7 +465,8 @@ static error_t *probe_remote_salt(
 error_t *salt_fetch(
     git_repository *repo,
     const char *remote_name,
-    transfer_context_t *xfer
+    transfer_context_t *xfer,
+    uint8_t *out_salt
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(remote_name);
@@ -584,6 +585,12 @@ error_t *salt_fetch(
         );
         error_free(err);
         return malformed;
+    }
+
+    /* Hand over exactly the bytes the validation proved — the caller never re-reads
+     * the ref it just watched move. */
+    if (out_salt != NULL) {
+        memcpy(out_salt, scratch, KDF_SALT_SIZE);
     }
 
     return NULL;

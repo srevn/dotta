@@ -1436,7 +1436,8 @@ static error_t *salt_reconcile(
                 );
                 return NULL;
             }
-            err = salt_fetch(repo, remote_name, xfer);
+            uint8_t adopted[KDF_SALT_SIZE];
+            err = salt_fetch(repo, remote_name, xfer, adopted);
             if (err) {
                 if (err->code == ERR_CRYPTO) {
                     /* salt_fetch validated the bytes and rolled the local ref
@@ -1460,12 +1461,12 @@ static error_t *salt_reconcile(
                 "Adopted repository salt from remote (no local ciphertext "
                 "depended on the replaced salt)"
             );
-            /* Hygiene: the in-process keymgr (if any) was derived from the salt
-             * we just replaced. Clear it so a later same-process crypto op
-             * re-derives from the adopted salt. NULL-safe; the on-disk session
-             * cache MAC-binds the salt and self-heals regardless, and sync itself
-             * performs no decrypt. */
-            keymgr_clear(keymgr);
+            /* The run's crypto handles were bound to the salt at dispatch; the
+             * adopt moved that authority mid-command, so re-bind — the same duty
+             * sync discharges for Git by rebuilding the manifest after the pulls.
+             * NULL-safe for encryption-disabled runs; the on-disk session cache
+             * MAC-binds the salt and self-heals regardless. */
+            keymgr_rekey(keymgr, adopted);
             return NULL;
         }
     }

@@ -1913,9 +1913,10 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
      * the summary's hint points at.
      *
      * A failed build is not sync's failure — every Git ref already moved and
-     * stands — and its message carries the repair (a pulled custom/ path under
-     * a profile with no target, a tree that will not load): warn with it and
-     * carry on. */
+     * stands — and its message carries the repair (a tree that will not load,
+     * metadata that will not parse): warn with it and carry on. A pulled custom/
+     * claim this machine cannot place does not fail the build; the health notice
+     * after the block is its signal. */
     const string_array_t *enabled = scope_enabled(scope);
     bool manifest_changed = false;    /* The block printed: the Git phase moved something managed */
     bool apply_pending = false;       /* The record disagrees with the view, whenever that began */
@@ -1984,6 +1985,33 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
                 );
             }
             output_print(out, OUTPUT_NORMAL, "\n");
+        }
+
+        /* The import's health: claims the branches carry that this machine cannot
+         * place (their profile has no deployment target here). The block above
+         * cannot say it — an unbound claim is in neither view's rows — so this
+         * notice is the import moment's only signal. */
+        manifest_unbound_t unbound = manifest_unbound(after);
+        const char *unbound_profile = NULL;
+        for (size_t i = 0; i < unbound.count;) {
+            const char *profile = unbound.entries[i].profile;
+            size_t n = 0;
+            while (i + n < unbound.count &&
+                strcmp(unbound.entries[i + n].profile, profile) == 0) n++;
+            output_warning(
+                out, OUTPUT_NORMAL,
+                "Profile '%s': %zu custom/ path%s need%s a deployment target",
+                profile, n, n == 1 ? "" : "s", n == 1 ? "s" : ""
+            );
+            if (!unbound_profile) unbound_profile = profile;
+            i += n;
+        }
+        if (unbound_profile) {
+            output_hint(
+                out, OUTPUT_NORMAL,
+                "Run 'dotta profile enable %s --target /path' to set the target",
+                unbound_profile
+            );
         }
 
         /* The hint's standing half: what the record already disagreed with the

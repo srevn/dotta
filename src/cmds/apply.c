@@ -20,6 +20,7 @@
 #include "cmds/completion.h"
 #include "core/cleanup.h"
 #include "core/deploy.h"
+#include "core/manifest.h"
 #include "core/scope.h"
 #include "core/state.h"
 #include "core/workspace.h"
@@ -836,9 +837,9 @@ static void print_cleanup_preflight_results(
         /* The prunable summary splits by the relocation the item carries
          * (item->row) — a naming, not a verdict: both halves are cleanup's one
          * prunable bucket, named together in the list below, and the split only
-         * keeps each parenthetical true. A relocated prunable copy is not
-         * inactive — its claim deploys at a new filesystem path — so "(no
-         * longer active)" would lie about it. */
+         * keeps each parenthetical true. A relocated prunable copy is not inactive
+         * — its claim deploys at a new filesystem path — so "(no longer active)"
+         * would lie about it. */
         workspace_items_t prunable = workspace_items_view(&verdicts->prunable_files);
         size_t moved = 0;
         for (size_t i = 0; i < prunable.count; i++) {
@@ -944,13 +945,13 @@ static void print_cleanup_preflight_results(
 
     /* Skipped files: each is named with its reason, then the one line the
      * deploy-side conflict block also ends with — --force overrides the hold.
-     * The header names the fate (the preview's word, "Released files"'s
-     * sibling); the labels name the reasons, because no one reason covers the
-     * block — a held relocation is byte-clean and an unverifiable copy may be
-     * — and the closing line names the cost the same way: what stands there,
-     * whatever its state. The ways to keep a held file are the inverse of the
-     * command that orphaned it (profile enable, add) or a move aside, and every
-     * line names the profile; they are not spelled out. */
+     * The header names the fate (the preview's word, "Released files"'s sibling);
+     * the labels name the reasons, because no one reason covers the block — a
+     * held relocation is byte-clean and an unverifiable copy may be — and the
+     * closing line names the cost the same way: what stands there, whatever its
+     * state. The ways to keep a held file are the inverse of the command that
+     * orphaned it (profile enable, add) or a move aside, and every line names
+     * the profile; they are not spelled out. */
     if (skipped.count > 0) {
         output_section(out, OUTPUT_NORMAL, "Skipped files");
         output_warning(
@@ -1262,6 +1263,26 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     );
     output_print(out, OUTPUT_VERBOSE, "Workspace loaded: %s\n", loaded);
 
+    /* The claims the view could not place speak before the plan: they are in no
+     * bucket below, and silence at the deploy moment is exactly what the old
+     * hard error existed to prevent. One line per affected profile — the slice
+     * arrives grouped, so a linear walk counts each run. */
+    {
+        manifest_unbound_t unbound = manifest_unbound(manifest);
+        for (size_t i = 0; i < unbound.count;) {
+            const char *profile = unbound.entries[i].profile;
+            size_t n = 0;
+            while (i + n < unbound.count &&
+                strcmp(unbound.entries[i + n].profile, profile) == 0) n++;
+            output_warning(
+                out, OUTPUT_NORMAL,
+                "Skipping %zu custom/ path%s of profile '%s' (no deployment target)",
+                n, n == 1 ? "" : "s", profile
+            );
+            i += n;
+        }
+    }
+
     /* PLAN: decide once what deploy will do, from (workspace, scope).
      *
      * Every later consumer — preview, adoption, privileges, preflight, the prompt,
@@ -1453,9 +1474,9 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * is the workspace's verdict that Git moved past the blob dotta last deployed
      * (anchor.blob_oid ≠ row.blob_oid) — a persistent signal that survives
      * status→apply sequences and counts the same however the branch moved; work
-     * by definition, so only a pending row carries it, and only a file: a
-     * directory has no blob for Git to move, so the kind-blind read below never
-     * counts one. */
+     * by definition, so only a pending row carries it, and only a file: a directory
+     * has no blob for Git to move, so the kind-blind read below never counts
+     * one. */
     size_t stale_count = 0;
     size_t reassigned_count = 0;
     reassignment_t *reassigned = NULL;
@@ -2000,24 +2021,24 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
          *   fixed                 directories converged in place — dotta did not
          *                         make them, and they were present at load, so
          *                         the flush has already observed any that had
-         *                         no record: nothing to write, with one
-         *                         exception — a pending handover must not
-         *                         outlive the run that converged the directory,
-         *                         so a reassigned fixed row takes the one anchor
-         *                         that acknowledges it
+         *                         no record: nothing to write, with one exception
+         *                         — a pending handover must not outlive the run
+         *                         that converged the directory, so a reassigned
+         *                         fixed row takes the one anchor that acknowledges
+         *                         it
          * Every other active directory present on disk was present at load too,
          * and has its record from the flush by the same argument; the load
          * established presence at the boundary, and nothing here walks the disk
          * to establish it again.
          *
          * A deployed file — or a created, replaced or fixed directory — whose
-         * item read [reassigned] had its record rewritten under the row's
-         * profile by the write just made; each is derived before its anchor
-         * (the write rewrites the record the fact is read against) and counted
-         * with the clean ones the adoption and acknowledgement loops re-stamped.
-         * Ancestors' anchors stay uncounted: they are outside the plan, so the
-         * collection never previewed them, and an acknowledgement that rides
-         * one heals the record silently.
+         * item read [reassigned] had its record rewritten under the row's profile
+         * by the write just made; each is derived before its anchor (the write
+         * rewrites the record the fact is read against) and counted with the
+         * clean ones the adoption and acknowledgement loops re-stamped. Ancestors'
+         * anchors stay uncounted: they are outside the plan, so the collection
+         * never previewed them, and an acknowledgement that rides one heals the
+         * record silently.
          */
         if (deploy_result) {
             manifest_rows_t deployed = manifest_rows_view(&deploy_result->deployed);
@@ -2195,11 +2216,10 @@ static args_class_t apply_classify(const char *tok) {
 }
 
 /**
- * What can stand at the cursor: an enabled profile or a path of the view
- * (files, and directory claims as subtree filters), in any order, as
- * apply_classify routes them — the view narrowed to what the profiles named
- * so far win, by -p or bare, which is the filter the run will apply — or a
- * filesystem path.
+ * What can stand at the cursor: an enabled profile or a path of the view (files,
+ * and directory claims as subtree filters), in any order, as apply_classify routes
+ * them — the view narrowed to what the profiles named so far win, by -p or bare,
+ * which is the filter the run will apply — or a filesystem path.
  */
 static args_want_t apply_complete(
     const void *ctx_v, const void *opts_v, const args_completion_t *at, FILE *out

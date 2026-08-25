@@ -269,8 +269,9 @@ static error_t *initialize_state(
     /* Enable each profile individually, then build the view over the new set once.
      *
      * state_enable_profile is the membership primitive — clone calls it once
-     * per profile (with target=NULL since custom/-bearing profiles are filtered
-     * out by the post-fetch warn-and-skip loop below before reaching this path).
+     * per profile, always with target=NULL: a per-machine target is enable's to
+     * bind later, and a custom/-bearing profile's claims are simply held by the
+     * build (recorded on the view) until it is.
      *
      * The view is computed, never stored: the build writes nothing and its result
      * is discarded. It is the tripwire that keeps clone from landing an enabled
@@ -648,45 +649,40 @@ error_t *cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
 
     /* Initialize state with fetched profiles.
      *
-     * Profiles with custom/ files require a machine-specific --target to resolve
-     * deployment paths. Without it, enabling them creates half-configured state
-     * that breaks other operations. Filter them out and hint the user instead.
-     * The branch data is already fetched and available locally. */
+     * Profiles with custom/ files need a machine-specific --target to place those
+     * claims, and clone cannot take one (enable's --target names a single profile).
+     * They are enabled anyway: the build holds the unplaceable claims, status
+     * carries the health, and the warning below names the binding verb at the
+     * bootstrap moment — a warned-but-whole bootstrap instead of one that silently
+     * withholds the profile's home/ rows along with its custom/ ones. */
     if (fetched_profiles->count > 0) {
-        string_array_t *profiles = string_array_new(0);
-        if (!profiles) {
-            final_err = ERROR(ERR_MEMORY, "Failed to allocate profile array");
-            goto cleanup;
-        }
-
         for (size_t i = 0; i < fetched_profiles->count; i++) {
             const char *profile = fetched_profiles->items[i];
             bool has_custom = false;
 
             error_t *check_err = profile_has_custom_files(repo, profile, &has_custom);
             if (check_err) {
+                /* Cannot determine — enable it; the health surfaces speak if
+                 * its claims turn out unplaceable. */
                 error_free(check_err);
-                /* Can't determine — include it to avoid silently dropping profiles */
-                string_array_push(profiles, profile);
                 continue;
             }
 
             if (has_custom) {
                 output_warning(
-                    out, OUTPUT_NORMAL, "Profile '%s' requires --target (not enabled)",
+                    out, OUTPUT_NORMAL,
+                    "Profile '%s' has custom/ paths that need a deployment target",
                     profile
                 );
                 output_hint(
-                    out, OUTPUT_NORMAL, "Run: dotta profile enable --target <path> %s",
+                    out, OUTPUT_NORMAL,
+                    "Run 'dotta profile enable %s --target /path' after setup",
                     profile
                 );
-            } else {
-                string_array_push(profiles, profile);
             }
         }
 
-        err = initialize_state(repo, ctx->arena, profiles, out);
-        string_array_free(profiles);
+        err = initialize_state(repo, ctx->arena, fetched_profiles, out);
         if (err) {
             final_err = error_wrap(err, "Failed to initialize state");
             goto cleanup;
@@ -896,8 +892,8 @@ static error_t *clone_post_parse(
 
 /**
  * What can stand at the cursor: the local path, a directory, once the URL is
- * given. A `-p` value names a profile on a remote not yet cloned — nothing
- * to offer.
+ * given. A `-p` value names a profile on a remote not yet cloned — nothing to
+ * offer.
  */
 static args_want_t clone_complete(
     const void *ctx, const void *opts_v, const args_completion_t *at, FILE *out

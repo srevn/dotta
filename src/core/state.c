@@ -28,7 +28,7 @@
 #include "sys/filesystem.h"
 
 /* Schema version - must match database */
-#define STATE_SCHEMA_VERSION "15"
+#define STATE_SCHEMA_VERSION "16"
 
 /* Database file name */
 #define STATE_DB_NAME "dotta.db"
@@ -50,26 +50,26 @@
  */
 struct state {
     /* Database connection */
-    sqlite3 *db;
-    char *db_path;
+    sqlite3 *db;                            /* NULL until state_begin opens one (no .git/dotta.db yet) */
+    char *db_path;                          /* .git/dotta.db; owned, freed by state_free */
 
     /* Transaction state */
     bool in_transaction;                    /* BEGIN IMMEDIATE executed */
 
     /* Cached enabled_profiles rows (loaded lazily, position-ordered) */
-    state_profile_entry_t *profile_entries;
-    size_t profile_entry_count;
-    bool profile_entries_loaded;
+    state_profile_entry_t *profile_entries; /* NULL when the load found zero rows */
+    size_t profile_entry_count;             /* Rows in profile_entries */
+    bool profile_entries_loaded;            /* The load happened — zero rows is a valid load */
 
     /* Prepared statements (initialized once, reused) */
     sqlite3_stmt *stmt_insert_profile;      /* INSERT INTO enabled_profiles */
 
     /* Anchor prepared statements (the record's five verbs) */
-    sqlite3_stmt *stmt_observe;             /* INSERT OR IGNORE anchors (presence only) */
-    sqlite3_stmt *stmt_confirm;             /* UPDATE anchors SET type, blob_oid, stat_* (content) */
-    sqlite3_stmt *stmt_anchor;              /* UPSERT anchors … RETURNING observed_at (ownership) */
-    sqlite3_stmt *stmt_retire_anchor;       /* DELETE FROM anchors */
-    sqlite3_stmt *stmt_order_prune;         /* UPDATE anchors SET prune_ordered = 1 */
+    sqlite3_stmt *stmt_observe;             /* INSERT OR IGNORE path_anchors (presence only) */
+    sqlite3_stmt *stmt_confirm;             /* UPDATE path_anchors SET type, blob_oid, stat_* (content) */
+    sqlite3_stmt *stmt_anchor;              /* UPSERT path_anchors … RETURNING observed_at (ownership) */
+    sqlite3_stmt *stmt_retire;              /* DELETE FROM path_anchors */
+    sqlite3_stmt *stmt_prune;               /* UPDATE path_anchors SET prune_ordered = 1 */
 };
 
 /**
@@ -142,8 +142,7 @@ static path_type_t path_type_from_sql_text(const char *s) {
  * Creates tables if they don't exist:
  * - schema_meta: Schema versioning
  * - enabled_profiles: User's profile management (with indexes)
- * - anchors: The record dotta keeps of every managed path (with index)
- * - file_anchors, directory_anchors: per-kind views of anchors
+ * - path_anchors: The record dotta keeps of every managed path (with index)
  *
  * @param db Database connection (must not be NULL)
  * @return Error or NULL on success
@@ -191,7 +190,7 @@ static error_t *initialize_schema(sqlite3 *db) {
          *     set); a row with a blob and deployed_at = 0 is a confirmation,
          *     not a deployment
          *   - a stored blob is a real OID (20 bytes, never zeroblob) */
-        "CREATE TABLE IF NOT EXISTS anchors ("
+        "CREATE TABLE IF NOT EXISTS path_anchors ("
         "    filesystem_path TEXT PRIMARY KEY,"
         "    storage_path TEXT NOT NULL,"
         "    profile TEXT NOT NULL,"
@@ -215,7 +214,7 @@ static error_t *initialize_schema(sqlite3 *db) {
         ") STRICT;"
 
         "CREATE INDEX IF NOT EXISTS idx_anchors_profile "
-        "ON anchors(profile);";
+        "ON path_anchors(profile);";
 
     /* Execute schema SQL */
     rc = sqlite3_exec(db, schema_sql, NULL, NULL, &errmsg);
@@ -294,8 +293,8 @@ static error_t *verify_schema_version(sqlite3 *db) {
  * - busy_timeout: Wait up to 3s for lock
  *
  * foreign_keys is deliberately absent: the schema declares no FK constraints
- * (anchors.profile outlives enabled_profiles rows by design), so nothing cascades
- * — records leave only through explicit retires.
+ * (path_anchors.profile outlives enabled_profiles rows by design), so nothing
+ * cascades — records leave only through explicit retires.
  *
  * @param db Database connection (must not be NULL)
  * @return Error or NULL on success
@@ -462,8 +461,8 @@ static void finalize_statements(state_t *state) {
         &state->stmt_observe,
         &state->stmt_confirm,
         &state->stmt_anchor,
-        &state->stmt_retire_anchor,
-        &state->stmt_order_prune,
+        &state->stmt_retire,
+        &state->stmt_prune,
     };
 
     for (size_t i = 0; i < sizeof(roster) / sizeof(roster[0]); i++) {
@@ -511,7 +510,7 @@ static error_t *prepare_statements(state_t *state) {
      *   ?1 filesystem_path  ?2 storage_path  ?3 profile  ?4 type
      *   ?5 mode  ?6 owner  ?7 group  ?8 observed_at */
     const char *sql_observe =
-        "INSERT OR IGNORE INTO anchors "
+        "INSERT OR IGNORE INTO path_anchors "
         "(filesystem_path, storage_path, profile, type, mode, owner, \"group\", observed_at) "
         "VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8);";
 
@@ -527,15 +526,15 @@ static error_t *prepare_statements(state_t *state) {
      * seen is not a thing.
      *
      * Bind order (numbered placeholders):
-     *   ?1 filesystem_path
-     *   ?2 type — travels with the content: the schema forbids a blob on a
-     *             directory row, and CMP_EQUAL confirmed the kind as well
+     *   ?1 filesystem_path ?2 type — travels with the content: the schema forbids
+     *             a blob on a directory row, and CMP_EQUAL confirmed the kind
+     *             as well
      *   ?3 blob_oid  ?4 stat_mtime  ?5 stat_size  ?6 stat_ino
      *
      * prune_ordered resets to 0: the path is back under a live row, and any order
      * predating that is void. */
     const char *sql_confirm =
-        "UPDATE anchors SET "
+        "UPDATE path_anchors SET "
         "  type          = ?2, "
         "  blob_oid      = ?3, "
         "  stat_mtime    = ?4, "
@@ -572,7 +571,7 @@ static error_t *prepare_statements(state_t *state) {
      * record without re-deriving the rule in C. Every other column is what the
      * caller bound. */
     const char *sql_anchor =
-        "INSERT INTO anchors "
+        "INSERT INTO path_anchors "
         "(filesystem_path, storage_path, profile, type, mode, owner, \"group\", "
         " blob_oid, stat_mtime, stat_size, stat_ino, observed_at, deployed_at) "
         "VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?12) "
@@ -598,27 +597,23 @@ static error_t *prepare_statements(state_t *state) {
     }
 
     /* Retire: the record goes. Nothing cascades — there is no parent. */
-    const char *sql_retire_anchor =
-        "DELETE FROM anchors WHERE filesystem_path = ?1;";
+    const char *sql_retire =
+        "DELETE FROM path_anchors WHERE filesystem_path = ?1;";
 
-    rc = sqlite3_prepare_v2(
-        state->db, sql_retire_anchor, -1, &state->stmt_retire_anchor, NULL
-    );
+    rc = sqlite3_prepare_v2(state->db, sql_retire, -1, &state->stmt_retire, NULL);
     if (rc != SQLITE_OK) {
         finalize_statements(state);
-        return sqlite_error(state->db, "Failed to prepare retire anchor statement");
+        return sqlite_error(state->db, "Failed to prepare retire statement");
     }
 
     /* Order prune: the one persisted intent (remove --delete-files) */
-    const char *sql_order_prune =
-        "UPDATE anchors SET prune_ordered = 1 WHERE filesystem_path = ?1;";
+    const char *sql_prune =
+        "UPDATE path_anchors SET prune_ordered = 1 WHERE filesystem_path = ?1;";
 
-    rc = sqlite3_prepare_v2(
-        state->db, sql_order_prune, -1, &state->stmt_order_prune, NULL
-    );
+    rc = sqlite3_prepare_v2(state->db, sql_prune, -1, &state->stmt_prune, NULL);
     if (rc != SQLITE_OK) {
         finalize_statements(state);
-        return sqlite_error(state->db, "Failed to prepare order prune statement");
+        return sqlite_error(state->db, "Failed to prepare prune statement");
     }
 
     return NULL;
@@ -1434,7 +1429,7 @@ error_t *state_get_all_anchors(
     if (!state->db) return NULL;
 
     /* Count first (arena allocation wants the size up front) */
-    const char *sql_count = "SELECT COUNT(*) FROM anchors;";
+    const char *sql_count = "SELECT COUNT(*) FROM path_anchors;";
     sqlite3_stmt *stmt_count = NULL;
 
     int rc = sqlite3_prepare_v2(state->db, sql_count, -1, &stmt_count, NULL);
@@ -1469,7 +1464,7 @@ error_t *state_get_all_anchors(
     const char *sql_anchors =
         "SELECT filesystem_path, storage_path, profile, type, mode, owner, \"group\", "
         "blob_oid, stat_mtime, stat_size, stat_ino, observed_at, deployed_at, prune_ordered "
-        "FROM anchors ORDER BY filesystem_path;";
+        "FROM path_anchors ORDER BY filesystem_path;";
 
     sqlite3_stmt *stmt = NULL;
     rc = sqlite3_prepare_v2(state->db, sql_anchors, -1, &stmt, NULL);
@@ -1797,9 +1792,9 @@ error_t *state_retire_anchor(state_t *state, const char *filesystem_path) {
     CHECK_NULL(state);
     CHECK_NULL(filesystem_path);
     CHECK_NULL(state->db);
-    CHECK_NULL(state->stmt_retire_anchor);
+    CHECK_NULL(state->stmt_retire);
 
-    sqlite3_stmt *stmt = state->stmt_retire_anchor;
+    sqlite3_stmt *stmt = state->stmt_retire;
     sqlite3_reset(stmt);
     sqlite3_clear_bindings(stmt);
     sqlite3_bind_text(stmt, 1, filesystem_path, -1, SQLITE_TRANSIENT);
@@ -1821,9 +1816,9 @@ error_t *state_order_prune(state_t *state, const char *filesystem_path) {
     CHECK_NULL(state);
     CHECK_NULL(filesystem_path);
     CHECK_NULL(state->db);
-    CHECK_NULL(state->stmt_order_prune);
+    CHECK_NULL(state->stmt_prune);
 
-    sqlite3_stmt *stmt = state->stmt_order_prune;
+    sqlite3_stmt *stmt = state->stmt_prune;
     sqlite3_reset(stmt);
     sqlite3_clear_bindings(stmt);
     sqlite3_bind_text(stmt, 1, filesystem_path, -1, SQLITE_TRANSIENT);

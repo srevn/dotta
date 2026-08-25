@@ -1921,8 +1921,8 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
          * flow for an orphan: the path leaves the view (profile disabled, branch
          * moved, target changed) → the workspace reads its record as an orphan
          * and asks Git why → the verdict → this block → record retired, completing
-         * the cycle. Without it, orphaned records accumulate forever in the anchors
-         * table.
+         * the cycle. Without it, orphaned records accumulate forever in the
+         * path_anchors table.
          *
          * Non-fatal: deployment already succeeded and its state must be saved
          * regardless, or the database would show deployed files as undeployed

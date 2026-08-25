@@ -9,12 +9,12 @@
  * (core/manifest.h) from the enabled profiles at HEAD — both kinds, one row per
  * path, precedence resolved — so an external commit, a pull, a revert or a scope
  * change is simply in the next view. Nothing repairs a cache because there is
- * none. The record dotta keeps of each path (the anchors table: what it deployed
- * or observed there, when, with what stat) is loaded beside the view and paired
- * with it by path. It is dotta's own and nothing repairs it either: the analyses
- * read it as the base of every three-way question, and the two writers here
- * (workspace_observe, workspace_anchor) advance it only after a live look at
- * disk. A record whose path the view lacks is an orphan, and the orphan analysis
+ * none. The record dotta keeps of each path (the path_anchors table: what it
+ * deployed or observed there, when, with what stat) is loaded beside the view
+ * and paired with it by path. It is dotta's own and nothing repairs it either:
+ * the analyses read it as the base of every three-way question, and the two writers
+ * here (workspace_observe, workspace_anchor) advance it only after a live look
+ * at disk. A record whose path the view lacks is an orphan, and the orphan analysis
  * asks Git — the only authority that knows — why it is one.
  */
 
@@ -668,7 +668,7 @@ static error_t *analyze_file_divergence(
      * moved. Without a base there is no second question — any difference from
      * theirs is the user's.
      *
-     * Source of truth for the base: the persistent record (the anchors row's
+     * Source of truth for the base: the persistent record (the path_anchors row's
      * blob_oid). A path with no record, or one observed but never confirmed (zero
      * blob), has no base. Cross-process correct by construction — every invocation
      * sees the same answer.

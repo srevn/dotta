@@ -1693,10 +1693,10 @@ static error_t *profile_validate(
 
     /* Check 2: The record references valid profiles
      *
-     * One read of the anchors table, walked once; each distinct profile is asked
-     * of Git once (`probed` remembers the answer), so R records cost P probes,
-     * where P is the distinct-profile count, typically < 10. `deleted` keeps
-     * the missing profiles in first-seen order so the report is reproducible.
+     * One read of the path_anchors table, walked once; each distinct profile is
+     * asked of Git once (`probed` remembers the answer), so R records cost P
+     * probes, where P is the distinct-profile count, typically < 10. `deleted`
+     * keeps the missing profiles in first-seen order so the report is reproducible.
      * Nothing here is fixable in place: a record whose profile is gone is an
      * orphan the next apply reads, asks Git about, finds LOST, and releases. */
     anchor_t *anchors = NULL;

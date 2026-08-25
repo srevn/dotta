@@ -287,7 +287,7 @@ typedef struct {
  * Slices the view, loads the record and performs divergence analysis against
  * the filesystem:
  * - The view: every enabled profile's tree and metadata at HEAD
- * - The record: the anchors in .git/dotta.db
+ * - The record: the path_anchors in .git/dotta.db
  * - The filesystem: actual files on disk
  *
  * Additionally scans tracked directories for untracked files (new files that

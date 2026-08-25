@@ -18,14 +18,14 @@
  * - Explicit conflict detection
  * - Permission preservation
  * - Fail-stop on error (not transactional, but clear reporting)
- * - Every decision is taken at preflight, from the occupant the workspace
- *   observed (workspace_item_t.occupant) and the row. A confirmation prompt
- *   may sit between preflight and execute; nothing re-observes across it, and
- *   nothing pretends to: the mechanisms refuse what a verdict no longer
- *   describes (O_NOFOLLOW, EISDIR, EEXIST, ENOTEMPTY) and the run fail-stops
- *   with the partial receipt. The same stance as core/cleanup
- * - A dry run is the preview: the caller reads the verdicts and calls no
- *   executor, so there is no dry-run flag beneath the plan
+ * - Every decision is taken at preflight, from the occupant the workspace observed
+ *   (workspace_item_t.occupant) and the row. A confirmation prompt may sit between
+ *   preflight and execute; nothing re-observes across it, and nothing pretends
+ *   to: the mechanisms refuse what a verdict no longer describes (O_NOFOLLOW,
+ *   EISDIR, EEXIST, ENOTEMPTY) and the run fail-stops with the partial receipt.
+ *   The same stance as core/cleanup
+ * - A dry run is the preview: the caller reads the verdicts and calls no executor,
+ *   so there is no dry-run flag beneath the plan
  * - Removals are single-node: what stands at a planned path, never a tree
  * - Directories are materialized in two phases: held at a working mode (recorded
  *   mode, owner rwx on) while the run writes beneath them, then released to the
@@ -78,8 +78,8 @@ typedef struct {
  * "0000" claim in the profile's metadata.json, which the workspace reads as no
  * claim (check_item_metadata_divergence) and preflight reads the same way, with
  * a warning. A symlink row carries mode 0 by design (symlink(2) takes none) and
- * is never asked. Ownership is resolved (resolve_deployment_ownership); (uid_t) -1
- * / (gid_t) -1 is no change.
+ * is never asked. Ownership is resolved (resolve_deployment_ownership); (uid_t)
+ * -1 / (gid_t) -1 is no change.
  */
 typedef struct {
     const manifest_row_t *row;    /* Borrowed (workspace lifetime) */
@@ -114,11 +114,11 @@ typedef struct {
  *                      but not ours) and not writable, or the ancestry cannot
  *                      be reached — privileges, or the directory's owner; or
  *                      the planned path itself could not be examined (the
- *                      workspace's lstat failed for a reason other than
- *                      absence), so no verdict can describe what stands there
- *                      and nothing is written on a guess — --force does not
- *                      lift it; make the path readable and run again. Each
- *                      entry names the path and the reason
+ *                      workspace's lstat failed for a reason other than absence),
+ *                      so no verdict can describe what stands there and nothing
+ *                      is written on a guess — --force does not lift it; make
+ *                      the path readable and run again. Each entry names the
+ *                      path and the reason
  *
  * Any one non-empty blocks the run. The warnings do not: they are the anomalies
  * preflight met while deciding — a mode it substituted, an ownership it could
@@ -205,13 +205,13 @@ typedef struct {
  * executing nothing. A failure is the returned error's to name: fail-stop wraps
  * it with the path, and the partial receipt travels in *out beside it.
  *
- * One bucket is outside the plan: the tracked directories the run made as
- * parents of a planned path (create_ancestor). They carry their recorded mode
- * and ownership like any other tracked directory, and dotta made them — so the
- * record step anchors them as owned, the same event as a created directory —
- * but the plan never named them and the preview never counted them, so the
- * caller's summary keeps them apart from `created`. Untracked parents have no
- * row, and so no bucket and no record.
+ * One bucket is outside the plan: the tracked directories the run made as parents
+ * of a planned path (create_ancestor). They carry their recorded mode and ownership
+ * like any other tracked directory, and dotta made them — so the record step
+ * anchors them as owned, the same event as a created directory — but the plan
+ * never named them and the preview never counted them, so the caller's summary
+ * keeps them apart from `created`. Untracked parents have no row, and so no bucket
+ * and no record.
  *
  * Each bucket carries borrowed row pointers (workspace-arena lifetime, outlives
  * the deploy_result_t); project with manifest_rows_view. Free with
@@ -244,11 +244,11 @@ typedef struct {
  * for the link's target, so a child there reads clean — and the directory pass
  * replaces the squatter before anything beneath it is touched. Such a row is
  * work, and not occupied for --skip-existing's purpose; -e still holds it back.
- * Only a pending ancestor counts (one -e skips is not replaced this run),
- * and only an in-scope descendant is reached: a row scope itself rejects (-p, a
- * path filter) is not planned on its ancestor's account — Coherent Scope — and
- * converges on the next apply that covers it. Preflight carries the same fact
- * through as the row's verdict (deploy_preflight).
+ * Only a pending ancestor counts (one -e skips is not replaced this run), and
+ * only an in-scope descendant is reached: a row scope itself rejects (-p, a path
+ * filter) is not planned on its ancestor's account — Coherent Scope — and converges
+ * on the next apply that covers it. Preflight carries the same fact through as
+ * the row's verdict (deploy_preflight).
  *
  * @param ws Workspace with divergence analysis (must not be NULL)
  * @param scope Operation scope (must not be NULL)
@@ -312,12 +312,12 @@ static inline size_t deploy_plan_row_count(const deploy_plan_t *plan) {
  *
  * One verdict per pending row, each question asked of its one authority:
  * - Type — the occupant the workspace observed at the planned path, both kinds
- *   (workspace_item_t.occupant; a row planned beneath a squatter this run
- *   replaces is absent, and asked nothing). A non-directory where a directory
- *   belongs (or the reverse) blocks unless --force; a directory holding
- *   untracked paths blocks either way, because deploy removes single nodes and
- *   never a tree. An occupant the workspace could not examine is a permission
- *   error: no verdict can say what the run will find there.
+ *   (workspace_item_t.occupant; a row planned beneath a squatter this run replaces
+ *   is absent, and asked nothing). A non-directory where a directory belongs
+ *   (or the reverse) blocks unless --force; a directory holding untracked paths
+ *   blocks either way, because deploy removes single nodes and never a tree. An
+ *   occupant the workspace could not examine is a permission error: no verdict
+ *   can say what the run will find there.
  * - Content — the workspace's divergence verdict, the only authority for a fact
  *   no lstat can settle. Blocks unless --force (STALE without CONTENT never blocks:
  *   disk still holds the blob dotta deployed, so the overwrite loses nothing);
@@ -332,34 +332,33 @@ static inline size_t deploy_plan_row_count(const deploy_plan_t *plan) {
  *   must accept a new entry now (access(2)) or it is a permission error; a
  *   non-directory squatter blocks. Ancestors are not items, so this is the one
  *   fresh probe preflight takes; the mechanism (ensure_parents) asks the same
- *   questions of the same ancestor, so this predicts the run rather than
- *   modelling it.
+ *   questions of the same ancestor, so this predicts the run rather than modelling
+ *   it.
  * - Metadata — the mode the write applies (the row's, or the kind's default for
  *   a row that carries none, with a warning) and the ownership
  *   (resolve_deployment_ownership: the invoking user's for a path under their
- *   home when running as root, the row's owner and group resolved where the
- *   label tracks ownership, no change otherwise). Under strict_ownership an
- *   owner or group this system does not know is an error, returned here —
- *   before the prompt, never mid-run; otherwise it is a warning and no change.
+ *   home when running as root, the row's owner and group resolved where the label
+ *   tracks ownership, no change otherwise). Under strict_ownership an owner or
+ *   group this system does not know is an error, returned here — before the prompt,
+ *   never mid-run; otherwise it is a warning and no change.
  *
- * Then the ancestors: every tracked directory row the plan does not act on,
- * absent as the plan reads it — the workspace's occupant, or beneath a squatter
- * this run replaces — that stands above a pending row. ensure_parents creates
- * exactly these on the way to the planned path (the untracked parents beside
- * them carry no metadata to decide), so their metadata is decided here like
- * any other row's, and a warning or a strict-mode error about one is met before
- * the prompt like any other.
+ * Then the ancestors: every tracked directory row the plan does not act on, absent
+ * as the plan reads it — the workspace's occupant, or beneath a squatter this
+ * run replaces — that stands above a pending row. ensure_parents creates exactly
+ * these on the way to the planned path (the untracked parents beside them carry
+ * no metadata to decide), so their metadata is decided here like any other row's,
+ * and a warning or a strict-mode error about one is met before the prompt like
+ * any other.
  *
- * Only rows the run will touch are consulted — the planned ones, and the
- * ancestors it will make; a directory the run leaves alone cannot block. A
- * planned row beneath a squatted pending directory (deploy_plan_build)
- * is asked nothing: the path is empty once the directory pass has replaced the
- * squatter, and its landing is the pending ancestor's — whose own row carries
- * the conflict --force resolves, and the landing question. Its verdict carries
- * that absence.
+ * Only rows the run will touch are consulted — the planned ones, and the ancestors
+ * it will make; a directory the run leaves alone cannot block. A planned row
+ * beneath a squatted pending directory (deploy_plan_build) is asked nothing:
+ * the path is empty once the directory pass has replaced the squatter, and its
+ * landing is the pending ancestor's — whose own row carries the conflict --force
+ * resolves, and the landing question. Its verdict carries that absence.
  *
- * Runs under the identity the run will act under: apply's privilege check
- * precedes it, so ownership resolves as the executors will apply it.
+ * Runs under the identity the run will act under: apply's privilege check precedes
+ * it, so ownership resolves as the executors will apply it.
  *
  * READ-ONLY: modifies neither the filesystem, the state database nor Git.
  *
@@ -396,9 +395,9 @@ error_t *deploy_preflight(
  * the mode and ownership its ancestor verdict carries, anything else 0755 owned
  * like the planned path. The tracked ones land in the receipt's ancestors bucket;
  * the untracked ones have no row and are never reported. A tracked parent the
- * verdicts did not foresee — present at preflight, gone by the time the run
- * reaches it — is made like an untracked one, and the next load reads whatever
- * it has to say about its mode.
+ * verdicts did not foresee — present at preflight, gone by the time the run reaches
+ * it — is made like an untracked one, and the next load reads whatever it has
+ * to say about its mode.
  *
  * Directories are materialized in two phases. Every directory the run creates
  * or converges carries its recorded mode with the owner triad forced on while
@@ -416,8 +415,8 @@ error_t *deploy_preflight(
  * the wrapped error, after the held directories are released.
  *
  * View rows are self-contained (blob_oid, type, storage path); the content cache
- * handles encryption transparently. The record (anchors, observations) is the
- * caller's to write, after deployment succeeds.
+ * handles encryption transparently. The record (path_anchors, observations) is
+ * the caller's to write, after deployment succeeds.
  *
  * @param repo Repository (must not be NULL)
  * @param ws Workspace the plan was built from (must not be NULL; the

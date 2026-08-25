@@ -11,10 +11,8 @@
  * Schema:
  *   - schema_meta: Schema versioning
  *   - enabled_profiles: User's profile management
- *   - anchors: The record — what dotta last reconciled each managed path against,
- *     and what it confirmed there (both kinds, one row per path)
- *   - file_anchors, directory_anchors: per-kind views of anchors, a debugging
- *     window; never read by dotta
+ *   - path_anchors: The record — what dotta last reconciled each managed path
+ *     against, and what it confirmed there (both kinds, one row per path)
  *
  * Design principles:
  * - Binary format (fast, compact)
@@ -53,11 +51,11 @@ typedef struct manifest_row manifest_row_t;
  * same blind spot and the same cure. A triple whose mtime second had not closed
  * when the stat was taken cannot distinguish the bytes the caller verified from
  * a same-second, same-size, in-place rewrite — so the constructor refuses to
- * build that proof (mtime >= now ⇒ UNSET, Git's "racily clean" smudge,
- * write-side). The record then advances blob-only and the next load's slow path
- * confirms once, in a closed second. Consequence, deliberate: a deploy can never
- * bind a usable triple (its file's second is its own), and a capture of a file
- * edited this second defers its fast path one load.
+ * build that proof (mtime >= now ⇒ UNSET, Git's "racily clean" smudge, write-side).
+ * The record then advances blob-only and the next load's slow path confirms once,
+ * in a closed second. Consequence, deliberate: a deploy can never bind a usable
+ * triple (its file's second is its own), and a capture of a file edited this
+ * second defers its fast path one load.
  */
 typedef struct {
     int64_t mtime;    /* st_mtime seconds at last known-good state (0 = unset) */
@@ -70,20 +68,20 @@ typedef struct {
 /**
  * Populate stat cache from a struct stat
  *
- * The one constructor: a triple is born only from a struct stat the caller
- * already holds at the moment of its look — a post-commit capture's fstat, or
- * the slow-path CMP_EQUAL confirmation's lstat — so the triple and the bytes
- * the caller verified describe the same moment. There is deliberately no
- * from-path variant: a fresh look taken at record-write time would bind
- * whatever stands at the path then to a verdict from earlier.
+ * The one constructor: a triple is born only from a struct stat the caller already
+ * holds at the moment of its look — a post-commit capture's fstat, or the slow-path
+ * CMP_EQUAL confirmation's lstat — so the triple and the bytes the caller verified
+ * describe the same moment. There is deliberately no from-path variant: a fresh
+ * look taken at record-write time would bind whatever stands at the path then
+ * to a verdict from earlier.
  *
- * A stat whose mtime second has not closed (mtime >= now: written this very
- * second, or carrying a future mtime) demotes to UNSET — no proof is built
- * where a same-second, same-size, in-place rewrite could stand behind it (the
- * Lineage note above). Residue, accepted: a rewrite landing between the
- * caller's look and this call, with the call crossing the second boundary in
- * that sub-millisecond gap — the same order of window Git accepts between
- * hashing a file and writing its index entry.
+ * A stat whose mtime second has not closed (mtime >= now: written this very second,
+ * or carrying a future mtime) demotes to UNSET — no proof is built where a
+ * same-second, same-size, in-place rewrite could stand behind it (the Lineage
+ * note above). Residue, accepted: a rewrite landing between the caller's look
+ * and this call, with the call crossing the second boundary in that sub-millisecond
+ * gap — the same order of window Git accepts between hashing a file and writing
+ * its index entry.
  */
 static inline stat_cache_t stat_cache_from_stat(const struct stat *st) {
     if ((int64_t) st->st_mtime >= (int64_t) time(NULL)) {
@@ -97,7 +95,7 @@ static inline stat_cache_t stat_cache_from_stat(const struct stat *st) {
 }
 
 /**
- * Anchor — the record dotta keeps of a managed path (anchors row)
+ * Anchor — the record dotta keeps of a managed path (path_anchors row)
  *
  * The row dotta last reconciled this path against — what it deployed, or, when
  * deployed_at is 0, what it was looking at when it first observed the path —
@@ -238,12 +236,12 @@ error_t *state_save(state_t *state);
  * Begin an explicit transaction on a state handle
  *
  * Acquires a write lock (BEGIN IMMEDIATE). Used by batch operations that need
- * atomicity on a state opened via state_load() (no inherent transaction), and by
- * a state_open() handle that has saved once and has more to write (see
+ * atomicity on a state opened via state_load() (no inherent transaction), and
+ * by a state_open() handle that has saved once and has more to write (see
  * state_save). On a handle whose underlying DB does not yet exist on disk
- * (state_load() on a repository never touched by `dotta init`), this lazily
- * creates .git/dotta.db before taking the lock — mirroring state_open()'s create
- * semantics, deferred to the moment of actual write intent. Must be paired with
+ * (state_load() on a repository never touched by `dotta init`), this lazily creates
+ * .git/dotta.db before taking the lock — mirroring state_open()'s create semantics,
+ * deferred to the moment of actual write intent. Must be paired with
  * state_commit(), state_save() or state_rollback().
  *
  * @param state State (must not be NULL, must not be in transaction)
@@ -454,8 +452,8 @@ const char *state_peek_profile_target(
 /**
  * Get every anchor, in filesystem_path order
  *
- * The one read of the anchors table. Allocates the array and every string field
- * from the caller's arena; lifetime is tied to the arena. A NULL blob column
+ * The one read of the path_anchors table. Allocates the array and every string
+ * field from the caller's arena; lifetime is tied to the arena. A NULL blob column
  * hydrates to a zero OID, a NULL mode to 0. The workspace loads it once per run
  * and indexes it by path; the verbs that need one record by path (remove) load
  * it the same way and index it themselves rather than growing a point read for
@@ -539,7 +537,7 @@ error_t *state_confirm(
  * The ownership event — apply deploy, adoption, acknowledgement, add, update.
  * Call after confirming disk content matches row->blob_oid (or, for a DIRECTORY
  * row, after creating or confirming the directory). One statement, an UPSERT on
- * anchors: the INSERT arm creates the row with observed_at = now; the UPDATE
+ * path_anchors: the INSERT arm creates the row with observed_at = now; the UPDATE
  * arm rewrites everything the row and the confirmation supply and leaves
  * observed_at alone. deployed_at = now on both arms.
  *

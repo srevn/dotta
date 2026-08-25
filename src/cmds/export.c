@@ -735,9 +735,9 @@ static void print_dry_run(
 /**
  * Write raw bytes to stdout ('-o -').
  *
- * Byte-faithful: no headers, no trailing-newline normalization — unlike show's
- * --raw, which is a terminal display mode. Flushes so buffered IO failures surface
- * as a non-zero exit.
+ * Byte-faithful: no headers, no trailing-newline normalization — unlike show,
+ * which is a terminal display. Flushes so buffered IO failures surface as a
+ * non-zero exit.
  */
 static error_t *write_bytes_stdout(const buffer_t *content) {
     if (content->size > 0 &&

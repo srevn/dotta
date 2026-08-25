@@ -161,8 +161,8 @@ dotta show global:home/.bashrc@a4f2c8e
 # Show a commit with diff
 dotta show a4f2c8e
 
-# Raw content (no formatting)
-dotta show --raw home/.bashrc
+# Byte-faithful content to stdout (scripting; show is a terminal display)
+dotta export global:home/.bashrc -
 ```
 
 ## Reverting Files

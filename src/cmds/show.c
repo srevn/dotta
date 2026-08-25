@@ -96,8 +96,7 @@ static error_t *print_blob_content(
     const char *storage_path,
     const char *profile,
     const metadata_t *metadata,
-    git_filemode_t filemode,
-    bool raw
+    git_filemode_t filemode
 ) {
     CHECK_NULL(ctx);
     CHECK_NULL(blob_oid);
@@ -128,90 +127,83 @@ static error_t *print_blob_content(
 
     /* Symlinks: content is the target path */
     if (filemode == GIT_FILEMODE_LINK) {
-        if (!raw) {
-            output_styled(
-                out, OUTPUT_NORMAL, "{dim}# Type:{reset}    symlink\n"
-            );
-            output_styled(
-                out, OUTPUT_NORMAL, "{dim}# Target:{reset}  %.*s\n",
-                (int) content.size, (const char *) content.data
-            );
-        } else {
-            err = write_stdout(&content);
-        }
+        output_styled(
+            out, OUTPUT_NORMAL, "{dim}# Type:{reset}    symlink\n"
+        );
+        output_styled(
+            out, OUTPUT_NORMAL, "{dim}# Target:{reset}  %.*s\n",
+            (int) content.size, (const char *) content.data
+        );
         buffer_free(&content);
-        return err;
+        return NULL;
     }
 
     /* Binary detection (on plaintext, after decryption) */
     if (content.size > 0 &&
         content_is_binary((const unsigned char *) content.data, content.size)) {
-        if (!raw) {
-            char size_buf[32];
-            output_format_size(content.size, size_buf, sizeof(size_buf));
-
-            output_styled(
-                out, OUTPUT_NORMAL, "{dim}# Type:{reset}    binary file"
-            );
-            if (encrypted) {
-                output_print(
-                    out, OUTPUT_NORMAL, " (encrypted)"
-                );
-            }
-            output_newline(out, OUTPUT_NORMAL);
-            output_styled(
-                out, OUTPUT_NORMAL, "{dim}# Size:{reset}    %s\n",
-                size_buf
-            );
-        }
-        /* Don't dump binary content to terminal */
-        buffer_free(&content);
-        return NULL;
-    }
-
-    if (!raw) {
-        /* File type */
-        output_styled(
-            out, OUTPUT_NORMAL, "{dim}# Type:{reset}    %s",
-            filemode_type_str(filemode)
-        );
-        if (encrypted) {
-            output_print(out, OUTPUT_NORMAL, " (encrypted)");
-        }
-        output_newline(out, OUTPUT_NORMAL);
-
-        /* Mode and ownership from metadata */
-        const metadata_item_t *item = NULL;
-        error_t *meta_err = metadata_get_item(metadata, storage_path, &item);
-        if (meta_err) {
-            error_free(meta_err);
-            item = NULL;
-        }
-        if (item) {
-            output_styled(
-                out, OUTPUT_NORMAL, "{dim}# Mode:{reset}    %04o\n",
-                (unsigned) item->mode
-            );
-            if (item->owner) {
-                output_styled(
-                    out, OUTPUT_NORMAL, "{dim}# Owner:{reset}   %s:%s\n",
-                    item->owner, item->group ? item->group : ""
-                );
-            }
-        }
-
-        /* Size */
         char size_buf[32];
         output_format_size(content.size, size_buf, sizeof(size_buf));
+
+        output_styled(
+            out, OUTPUT_NORMAL, "{dim}# Type:{reset}    binary file"
+        );
+        if (encrypted) {
+            output_print(
+                out, OUTPUT_NORMAL, " (encrypted)"
+            );
+        }
+        output_newline(out, OUTPUT_NORMAL);
         output_styled(
             out, OUTPUT_NORMAL, "{dim}# Size:{reset}    %s\n",
             size_buf
         );
 
-        output_styled(
-            out, OUTPUT_NORMAL, "{dim}---{reset}\n"
-        );
+        /* Don't dump binary content to terminal */
+        buffer_free(&content);
+        return NULL;
     }
+
+    /* File type */
+    output_styled(
+        out, OUTPUT_NORMAL, "{dim}# Type:{reset}    %s",
+        filemode_type_str(filemode)
+    );
+    if (encrypted) {
+        output_print(out, OUTPUT_NORMAL, " (encrypted)");
+    }
+    output_newline(out, OUTPUT_NORMAL);
+
+    /* Mode and ownership from metadata */
+    const metadata_item_t *item = NULL;
+    error_t *meta_err = metadata_get_item(metadata, storage_path, &item);
+    if (meta_err) {
+        error_free(meta_err);
+        item = NULL;
+    }
+    if (item) {
+        output_styled(
+            out, OUTPUT_NORMAL, "{dim}# Mode:{reset}    %04o\n",
+            (unsigned) item->mode
+        );
+        if (item->owner) {
+            output_styled(
+                out, OUTPUT_NORMAL, "{dim}# Owner:{reset}   %s:%s\n",
+                item->owner, item->group ? item->group : ""
+            );
+        }
+    }
+
+    /* Size */
+    char size_buf[32];
+    output_format_size(content.size, size_buf, sizeof(size_buf));
+    output_styled(
+        out, OUTPUT_NORMAL, "{dim}# Size:{reset}    %s\n",
+        size_buf
+    );
+
+    output_styled(
+        out, OUTPUT_NORMAL, "{dim}---{reset}\n"
+    );
 
     /* Write content to stdout (trailing newline normalized) */
     err = write_stdout(&content);
@@ -227,8 +219,7 @@ static error_t *show_file(
     const dotta_ctx_t *ctx,
     const char *profile,
     const char *file_path,
-    const char *commit_ref,
-    bool raw
+    const char *commit_ref
 ) {
     git_repository *repo = ctx->run.repo;
     output_t *out = ctx->out;
@@ -254,8 +245,8 @@ static error_t *show_file(
             goto cleanup;
         }
 
-        /* Print commit context if not raw */
-        if (!raw && commit) {
+        /* Print commit context */
+        if (commit) {
             char oid_str[8];
             git_oid_tostr(oid_str, sizeof(oid_str), &commit_oid);
 
@@ -336,7 +327,7 @@ static error_t *show_file(
          * ctx->run.keymgr will prompt for password only if file is encrypted
          */
         err = print_blob_content(
-            ctx, entry_oid, file_path, profile, metadata, filemode, raw
+            ctx, entry_oid, file_path, profile, metadata, filemode
         );
     } else if (entry_type == GIT_OBJECT_TREE) {
         err = ERROR(ERR_INVALID_ARG, "'%s' is a directory", file_path);
@@ -418,7 +409,6 @@ static error_t *show_commit(
     git_repository *repo,
     const char *commit_ref,
     const char *profile,
-    bool raw,
     output_t *out
 ) {
     CHECK_NULL(repo);
@@ -466,91 +456,89 @@ static error_t *show_commit(
         goto cleanup;
     }
 
-    if (!raw) {
-        /* Commit header with color (matching diff command style) */
-        char oid_str[8];
-        git_oid_tostr(oid_str, sizeof(oid_str), &commit_oid);
+    /* Commit header with color (matching diff command style) */
+    char oid_str[8];
+    git_oid_tostr(oid_str, sizeof(oid_str), &commit_oid);
 
-        const git_signature *author = git_commit_author(commit);
-        time_t commit_time = (time_t) author->when.time;
+    const git_signature *author = git_commit_author(commit);
+    time_t commit_time = (time_t) author->when.time;
 
-        struct tm tm_info;
-        localtime_r(&commit_time, &tm_info);
-        char time_buf[64];
-        strftime(
-            time_buf, sizeof(time_buf), "%a %b %d %H:%M:%S %Y",
-            &tm_info
-        );
+    struct tm tm_info;
+    localtime_r(&commit_time, &tm_info);
+    char time_buf[64];
+    strftime(
+        time_buf, sizeof(time_buf), "%a %b %d %H:%M:%S %Y",
+        &tm_info
+    );
 
-        char relative_buf[64];
-        format_relative_time(commit_time, relative_buf, sizeof(relative_buf));
+    char relative_buf[64];
+    format_relative_time(commit_time, relative_buf, sizeof(relative_buf));
 
-        output_styled(
-            out, OUTPUT_NORMAL, "{yellow}commit %s{reset} {cyan}(%s){reset}\n",
-            oid_str, profile
-        );
+    output_styled(
+        out, OUTPUT_NORMAL, "{yellow}commit %s{reset} {cyan}(%s){reset}\n",
+        oid_str, profile
+    );
 
-        output_styled(
-            out, OUTPUT_NORMAL, "{bold}Author:{reset} %s <%s>\n",
-            author->name, author->email
-        );
+    output_styled(
+        out, OUTPUT_NORMAL, "{bold}Author:{reset} %s <%s>\n",
+        author->name, author->email
+    );
 
-        output_styled(
-            out, OUTPUT_NORMAL, "{bold}Date:{reset}   %s (%s)\n",
-            time_buf, relative_buf
-        );
+    output_styled(
+        out, OUTPUT_NORMAL, "{bold}Date:{reset}   %s (%s)\n",
+        time_buf, relative_buf
+    );
 
-        output_newline(out, OUTPUT_NORMAL);
+    output_newline(out, OUTPUT_NORMAL);
 
-        /* Commit message (indented) */
-        const char *msg = git_commit_message(commit);
-        if (msg) {
-            const char *line = msg;
-            while (line && *line) {
-                const char *next = strchr(line, '\n');
-                if (next) {
-                    output_print(
-                        out, OUTPUT_NORMAL, "    %.*s\n", (int) (next - line), line
-                    );
-                    line = next + 1;
-                } else {
-                    output_print(
-                        out, OUTPUT_NORMAL, "    %s\n", line
-                    );
-                    break;
-                }
+    /* Commit message (indented) */
+    const char *msg = git_commit_message(commit);
+    if (msg) {
+        const char *line = msg;
+        while (line && *line) {
+            const char *next = strchr(line, '\n');
+            if (next) {
+                output_print(
+                    out, OUTPUT_NORMAL, "    %.*s\n", (int) (next - line), line
+                );
+                line = next + 1;
+            } else {
+                output_print(
+                    out, OUTPUT_NORMAL, "    %s\n", line
+                );
+                break;
             }
         }
-
-        output_newline(out, OUTPUT_NORMAL);
-
-        /* Diff stats with color */
-        err = gitops_diff_get_stats(diff, &stats);
-        if (err) goto cleanup;
-
-        size_t files_changed = git_diff_stats_files_changed(stats);
-        size_t insertions = git_diff_stats_insertions(stats);
-        size_t deletions = git_diff_stats_deletions(stats);
-
-        output_print(
-            out, OUTPUT_NORMAL, " %zu file%s changed",
-            files_changed, files_changed == 1 ? "" : "s"
-        );
-        if (insertions > 0) {
-            output_styled(
-                out, OUTPUT_NORMAL, ", {green}%zu insertion%s(+){reset}",
-                insertions, insertions == 1 ? "" : "s"
-            );
-        }
-        if (deletions > 0) {
-            output_styled(
-                out, OUTPUT_NORMAL, ", {red}%zu deletion%s(-){reset}",
-                deletions, deletions == 1 ? "" : "s"
-            );
-        }
-
-        output_print(out, OUTPUT_NORMAL, "\n\n");
     }
+
+    output_newline(out, OUTPUT_NORMAL);
+
+    /* Diff stats with color */
+    err = gitops_diff_get_stats(diff, &stats);
+    if (err) goto cleanup;
+
+    size_t files_changed = git_diff_stats_files_changed(stats);
+    size_t insertions = git_diff_stats_insertions(stats);
+    size_t deletions = git_diff_stats_deletions(stats);
+
+    output_print(
+        out, OUTPUT_NORMAL, " %zu file%s changed",
+        files_changed, files_changed == 1 ? "" : "s"
+    );
+    if (insertions > 0) {
+        output_styled(
+            out, OUTPUT_NORMAL, ", {green}%zu insertion%s(+){reset}",
+            insertions, insertions == 1 ? "" : "s"
+        );
+    }
+    if (deletions > 0) {
+        output_styled(
+            out, OUTPUT_NORMAL, ", {red}%zu deletion%s(-){reset}",
+            deletions, deletions == 1 ? "" : "s"
+        );
+    }
+
+    output_print(out, OUTPUT_NORMAL, "\n\n");
 
     /* Print the diff with color */
     int ret = git_diff_print(
@@ -621,9 +609,7 @@ error_t *cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
             /* Try to find commit in enabled profiles (in order) */
             for (size_t i = 0; i < profiles->count; i++) {
                 profile = profiles->items[i];
-                error_t *try_err = show_commit(
-                    repo, opts->commit, profile, opts->raw, out
-                );
+                error_t *try_err = show_commit(repo, opts->commit, profile, out);
 
                 /* If found, we're done */
                 if (!try_err) {
@@ -655,7 +641,7 @@ error_t *cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
             goto cleanup;
         }
 
-        err = show_commit(repo, opts->commit, profile, opts->raw, out);
+        err = show_commit(repo, opts->commit, profile, out);
         goto cleanup;
     }
 
@@ -682,9 +668,7 @@ error_t *cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
             goto cleanup;
         }
 
-        err = show_file(
-            ctx, opts->profile, search_path, opts->commit, opts->raw
-        );
+        err = show_file(ctx, opts->profile, search_path, opts->commit);
         goto cleanup;
     }
 
@@ -717,17 +701,15 @@ error_t *cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
     found_profile = row->profile;
 
     /* Show the file */
-    if (!opts->raw) {
-        output_styled(
-            out, OUTPUT_NORMAL, "{dim}# Profile:{reset} %s\n",
-            found_profile
-        );
-        output_styled(
-            out, OUTPUT_NORMAL, "{dim}# Path:{reset}    %s\n",
-            search_path
-        );
-    }
-    err = show_file(ctx, found_profile, search_path, NULL, opts->raw);
+    output_styled(
+        out, OUTPUT_NORMAL, "{dim}# Profile:{reset} %s\n",
+        found_profile
+    );
+    output_styled(
+        out, OUTPUT_NORMAL, "{dim}# Path:{reset}    %s\n",
+        search_path
+    );
+    err = show_file(ctx, found_profile, search_path, NULL);
 
 cleanup:
     manifest_free(manifest);
@@ -824,13 +806,13 @@ static error_t *show_post_parse(
 }
 
 /**
- * What can stand at the cursor, by the shapes show_post_parse reads. First:
- * a file of any branch as `profile:path` — bare once -p pins one — or a
- * commit. After one positional, the grammar decides by the next token
- * whether it was a profile (`<profile> <file>`) or a file (`<file>
- * <commit>`), so both are offered — the files of the profile it pins, and
- * that profile's history. After two: the commit. An `@` in the token being
- * typed completes its commit part from the refspec's history.
+ * What can stand at the cursor, by the shapes show_post_parse reads. First: a
+ * file of any branch as `profile:path` — bare once -p pins one — or a commit.
+ * After one positional, the grammar decides by the next token whether it was a
+ * profile (`<profile> <file>`) or a file (`<file> <commit>`), so both are offered
+ * — the files of the profile it pins, and that profile's history. After two:
+ * the commit. An `@` in the token being typed completes its commit part from
+ * the refspec's history.
  */
 static args_want_t show_complete(
     const void *ctx_v, const void *opts_v, const args_completion_t *at, FILE *out
@@ -877,11 +859,6 @@ static const args_opt_t show_opts[] = {
         cmd_show_options_t,profile,
         "Override profile for file or commit lookup"
     ),
-    ARGS_FLAG(
-        "raw",
-        cmd_show_options_t,raw,
-        "Print raw file content without formatting"
-    ),
     ARGS_POSITIONAL_RAW(
         cmd_show_options_t,positional_args, positional_count,
         0,                 3
@@ -912,7 +889,11 @@ const args_command_t spec_show = {
         "  Prints file content from the profile branch. Without -p, the\n"
         "  search runs across enabled profiles for an exact path match.\n"
         "  Paths accept either form: filesystem (~/.bashrc, /etc/hosts)\n"
-        "  or storage (home/.bashrc, root/etc/hosts).\n",
+        "  or storage (home/.bashrc, root/etc/hosts).\n"
+        "\n"
+        "  Output is a terminal display: a metadata header precedes the\n"
+        "  content, and binary content is summarized, never dumped. For\n"
+        "  the exact bytes, use 'export <profile>:<file> -'.\n",
     .examples    =
         "  %s show a4f2c8e                          # Commit from enabled profiles\n"
         "  %s show -p global a4f2c8e                # Commit from a specific profile\n"

@@ -31,7 +31,6 @@ typedef struct {
     const char *profile;     /* Profile name (NULL = use enabled profiles) */
     const char *file_path;   /* File path within profile (for SHOW_FILE mode) */
     const char *commit;      /* Commit reference (NULL = HEAD) */
-    bool raw;                /* Show raw content without formatting */
 
     /* Raw positional bucket (engine-populated; interpreted in post_parse). */
     char **positional_args;

@@ -524,8 +524,9 @@ static void handle_remote_ahead(
     bool pulled = false;
     error_t *err = pull_branch_ff(repo, remote_name, result->profile, &pulled);
     if (err) {
-        output_error(
-            out, "  %s: pull failed - %s",
+        output_styled(
+            out, OUTPUT_NORMAL,
+            "  {red}✗{reset} {red}%s{reset}: pull failed - %s\n",
             result->profile, error_message(err)
         );
         mark_result_failed(result, err);
@@ -1199,6 +1200,14 @@ static void sync_render_dry_run(
  * or reassigned it or the record already disagreed with the view — the "Run apply"
  * hint.
  *
+ * The receipt, and only the receipt: every line goes to `out`, and whether sync
+ * kept its promise is sync_failure's to say through the return value. The three
+ * registers partition the profiles by what the run did with them — ✓ for the
+ * buckets it acted on, "Warning:" for the ones it was told to leave alone
+ * (--no-push, --no-pull, 'warn' on a divergence), ✗ for the ones it tried and
+ * could not. A failure written to stderr from here would leave a redirected sync's
+ * receipt reading as a clean success.
+ *
  * The summary keeps the finer-grained user vocabulary; hook env (Tier 2) will
  * expose the cleaner outcome partition.
  */
@@ -1285,8 +1294,8 @@ static void sync_render_summary(
         );
     }
     if (failed > 0) {
-        output_error(
-            out, "{cyan}%zu{reset} profile%s failed",
+        output_styled(
+            out, OUTPUT_NORMAL, "{red}✗{reset} {cyan}%zu{reset} profile%s failed\n",
             failed, failed == 1 ? "" : "s"
         );
     }
@@ -1308,6 +1317,44 @@ static void sync_render_summary(
             out, OUTPUT_NORMAL, "Run 'dotta apply' to deploy, or 'dotta status' to review"
         );
     }
+}
+
+/**
+ * The run's failure, if it had one — the answer cmd_sync returns.
+ *
+ * A profile the run tried to reconcile and could not (SYNC_OUTCOME_FAILED —
+ * whatever the phase: analyze, pull, resolve, push) is a broken promise, and
+ * only the return value carries that to the caller. The reason was printed beside
+ * the profile it belongs to and the receipt counted it, but a shell reads neither.
+ *
+ * A profile the run deliberately left alone is not a failure: the caller asked
+ * for that (--no-push, --no-pull), the configured strategy did ('warn' on a
+ * divergence), or the user declined the prompt. The DIVERGED bucket's warning
+ * is that bucket's whole report, and `dotta sync && dotta apply` keeps working
+ * for everyone who syncs under 'warn'.
+ *
+ * Pure, and deliberately so: the per-profile errors stay owned by `results` and
+ * are never rethrown, since each was already rendered where it happened. The
+ * message carries the one fact the receipt does not — how much of the run the
+ * failures were.
+ */
+static error_t *sync_failure(const sync_results_t *results) {
+    size_t failed = 0;
+    for (size_t i = 0; i < results->profile_count; i++) {
+        if (results->profiles[i].outcome == SYNC_OUTCOME_FAILED) failed++;
+    }
+
+    if (failed == 0) {
+        return NULL;
+    }
+
+    /* The plural agrees with the total, which is the noun it qualifies: "1 of 2
+     * profiles failed", "1 of 1 profile failed". */
+    return ERROR(
+        ERR_GIT, "%zu of %zu profile%s failed to sync",
+        failed, results->profile_count,
+        results->profile_count == 1 ? "" : "s"
+    );
 }
 
 /*
@@ -1856,10 +1903,12 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
         goto cleanup;
     }
 
-    /* Dry run: display analysis and exit without executing push/pull */
+    /* Dry run: display analysis and exit without executing push/pull. The answer
+     * still stands — a profile the analysis could not read is a question the
+     * dry run failed to answer, not a profile it found no work for. */
     if (opts->dry_run) {
         sync_render_dry_run(results, out);
-        err = NULL;
+        err = sync_failure(results);
         goto cleanup;
     }
 
@@ -2063,14 +2112,16 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
     }
 
     /* Post-sync fires once the Git phase and the manifest block are done; a failed
-     * build was warned above and is not a reason to skip it. */
+     * build was warned above and is not a reason to skip it. Nor is a profile
+     * that failed: the pushes and pulls that did land are real, and the hook's
+     * subject is the world sync leaves behind, not what sync returns. */
     hook_fire_post(config, out, repo_path, &hook_inv);
 
     /* Final summary */
     sync_render_summary(results, xfer, manifest_changed, apply_pending, out);
 
-    /* Success - fall through to cleanup */
-    err = NULL;
+    /* The receipt is printed; the return value is what the caller reads. */
+    err = sync_failure(results);
 
 cleanup:
     /* Free resources in reverse order of allocation. state is borrowed from the

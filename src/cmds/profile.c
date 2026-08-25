@@ -397,9 +397,7 @@ static error_t *profile_fetch(
     size_t failed_count = 0;
 
     /* Detect remote (name + URL — URL feeds the credential helper). */
-    err = gitops_resolve_default_remote(
-        repo, ctx->arena, &remote_name, &remote_url
-    );
+    err = gitops_resolve_default_remote(repo, ctx->arena, &remote_name, &remote_url);
     if (err) {
         err = error_wrap(err, "No remote configured");
         goto cleanup;
@@ -420,9 +418,7 @@ static error_t *profile_fetch(
 
     if (opts->fetch_all) {
         /* Query remote server for all available branches */
-        err = gitops_list_remote_branches(
-            repo, remote_name, xfer, &remote_branches
-        );
+        err = gitops_list_remote_branches(repo, remote_name, xfer, &remote_branches);
         if (err) {
             err = error_wrap(err, "Failed to query remote branches");
             goto cleanup;
@@ -435,8 +431,8 @@ static error_t *profile_fetch(
 
             error_t *fetch_err = gitops_fetch_branch(repo, remote_name, branch_name, xfer);
             if (fetch_err) {
-                output_error(
-                    out, "Failed to fetch '%s': %s",
+                output_styled(
+                    out, OUTPUT_NORMAL, "  {red}✗{reset} Failed to fetch %s: %s\n",
                     branch_name, error_message(fetch_err)
                 );
                 error_free(fetch_err);
@@ -456,8 +452,9 @@ static error_t *profile_fetch(
             } else {
                 fetch_err = upstream_create_tracking_branch(repo, remote_name, branch_name);
                 if (fetch_err) {
-                    output_error(
-                        out, "Failed to create local branch '%s': %s",
+                    output_styled(
+                        out, OUTPUT_NORMAL,
+                        "  {red}✗{reset} Failed to create local branch %s: %s\n",
                         branch_name, error_message(fetch_err)
                     );
                     error_free(fetch_err);
@@ -549,8 +546,9 @@ static error_t *profile_fetch(
 
             error_t *fetch_err = gitops_fetch_branch(repo, remote_name, profile, xfer);
             if (fetch_err) {
-                output_error(
-                    out, "Failed to fetch '%s': %s",
+                output_styled(
+                    out, OUTPUT_NORMAL,
+                    "  {red}✗{reset} Failed to fetch %s: %s\n",
                     profile, error_message(fetch_err)
                 );
                 error_free(fetch_err);
@@ -569,15 +567,18 @@ static error_t *profile_fetch(
             } else {
                 fetch_err = upstream_create_tracking_branch(repo, remote_name, profile);
                 if (fetch_err) {
-                    output_warning(
-                        out, OUTPUT_NORMAL, "Failed to create local branch '%s': %s",
+                    output_styled(
+                        out, OUTPUT_NORMAL,
+                        "  {red}✗{reset} Failed to create local branch %s: %s\n",
                         profile, error_message(fetch_err)
                     );
                     error_free(fetch_err);
+                    failed_count++;
                 } else {
                     fetched_count++;
                     output_styled(
-                        out, OUTPUT_VERBOSE, "  {green}✓{reset} Fetched %s\n",
+                        out, OUTPUT_VERBOSE,
+                        "  {green}✓{reset} Fetched %s\n",
                         profile
                     );
                 }
@@ -608,16 +609,24 @@ cleanup:
         );
     }
     if (failed_count > 0) {
-        output_warning(
-            out, OUTPUT_NORMAL, "Failed to fetch %zu profile%s",
+        output_styled(
+            out, OUTPUT_NORMAL,
+            "{red}✗{reset} Failed to fetch %zu profile%s\n",
             failed_count, failed_count == 1 ? "" : "s"
         );
     }
 
-    /* Only error if ALL operations failed or no profiles were available */
-    if (fetched_count == 0 && failed_count > 0) {
+    /* The run's failure. A branch the fetch tried and could not get is a broken
+     * promise whether or not the others landed: the reason was printed beside
+     * the branch it belongs to and the count above is the receipt, but only the
+     * return value reaches the caller, and no flag here licenses swallowing it. */
+    if (failed_count > 0) {
+        /* The plural agrees with the total, which is the noun it qualifies: "1
+         * of 2 profiles failed", "1 of 1 profile failed". */
+        size_t attempted = fetched_count + failed_count;
         return ERROR(
-            ERR_GIT, "All profile fetch operations failed"
+            ERR_GIT, "%zu of %zu profile%s failed to fetch",
+            failed_count, attempted, attempted == 1 ? "" : "s"
         );
     }
 
@@ -627,7 +636,6 @@ cleanup:
         );
     }
 
-    /* Success if at least some profiles were fetched (even if some failed) */
     return NULL;
 }
 

@@ -43,6 +43,11 @@ typedef struct {
  *
  * Clones remote repository and sets up dotta-worktree branch.
  *
+ * The bootstrap that may follow never enters the clone's exit code: the repository
+ * landed either way, so a script that failed is reported where it ran and again
+ * in the closing line, never in the exit code. `dotta bootstrap` re-runs it once
+ * the reason is fixed.
+ *
  * @param ctx Dispatch context (must not be NULL)
  * @param opts Clone options (must not be NULL)
  * @return Error or NULL on success

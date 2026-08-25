@@ -761,6 +761,7 @@ error_t *cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
      * by the final "Next steps" hint. */
     bool run_bootstrap = false;
     bool bootstrap_available = false;
+    bool bootstrap_failed = false;
 
     /* Check bootstrap scripts in all fetched profiles */
     if (opts->bootstrap_mode != CLONE_BOOTSTRAP_SKIP &&
@@ -819,7 +820,12 @@ error_t *cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
         if (err) {
             output_error(out, "Bootstrap failed: %s", error_message(err));
             error_free(err);
-            /* Non-fatal — the clone itself succeeded. */
+            err = NULL;
+            /* Non-fatal — the clone itself succeeded, and the exit code is the
+             * clone's. What the clone may not claim is that the bootstrap finished:
+             * the closing line reads off this flag, the way cmd_bootstrap reads
+             * off its own. */
+            bootstrap_failed = true;
         }
     }
 
@@ -827,7 +833,13 @@ error_t *cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
     output_newline(out, OUTPUT_NORMAL);
     output_success(out, OUTPUT_NORMAL, "Dotta repository cloned successfully!");
 
-    if (run_bootstrap) output_success(out, OUTPUT_NORMAL, "Bootstrap complete!");
+    if (run_bootstrap) {
+        if (bootstrap_failed) {
+            output_warning(out, OUTPUT_NORMAL, "Bootstrap completed with errors.");
+        } else {
+            output_success(out, OUTPUT_NORMAL, "Bootstrap complete!");
+        }
+    }
 
     output_hintline(out, OUTPUT_NORMAL, "Next steps:");
     if (!run_bootstrap && bootstrap_available) {

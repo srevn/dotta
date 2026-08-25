@@ -1312,8 +1312,8 @@ static void sync_render_summary(
 
 /*
  * Render the one unrecoverable cell: the local salt differs from the remote's
- * canonical salt and local ciphertext depends on the local one. Warn loudly and
- * continue — plaintext profiles still sync.
+ * canonical salt and reachable ciphertext (tip or history, any branch) is keyed
+ * by the local one. Warn loudly and continue — plaintext profiles still sync.
  */
 static void salt_emit_conflict(output_t *out) {
     output_warning(
@@ -1325,6 +1325,12 @@ static void salt_emit_conflict(output_t *out) {
         out, OUTPUT_NORMAL,
         "Re-clone if this machine's encrypted files came from the remote; "
         "otherwise reconcile the independent encryption roots manually"
+    );
+    output_hint(
+        out, OUTPUT_NORMAL,
+        "Or delete the profiles whose encrypted content (including history) "
+        "you no longer need ('dotta remove <name> --delete-profile'); the "
+        "next sync then adopts the remote salt"
     );
 }
 
@@ -1451,7 +1457,8 @@ static error_t *salt_reconcile(
             }
             output_success(
                 out, OUTPUT_VERBOSE,
-                "Adopted repository salt from remote (local salt was unused)"
+                "Adopted repository salt from remote (no local ciphertext "
+                "depended on the replaced salt)"
             );
             /* Hygiene: the in-process keymgr (if any) was derived from the salt
              * we just replaced. Clear it so a later same-process crypto op

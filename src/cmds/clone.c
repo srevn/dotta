@@ -520,7 +520,7 @@ error_t *cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
             error_free(err);
             err = NULL;
         } else {
-            final_err = error_wrap(err, "Failed to fetch repository config");
+            final_err = error_wrap(err, "Failed to fetch repository salt");
             goto cleanup;
         }
     }

@@ -34,6 +34,7 @@
 
 #include "base/array.h"
 #include "base/error.h"
+#include "base/hashmap.h"
 #include "infra/content.h"
 #include "sys/entropy.h"
 #include "sys/gitops.h"
@@ -42,6 +43,14 @@
 /* Standard regular-file mode for the salt blob. Nothing checks out the tree;
  * the choice keeps `git show` / `git ls-tree` output readable. */
 #define SALT_BLOB_MODE 0100644
+
+/* The local-ciphertext census (defined with the reconcile machinery below);
+ * salt_init's malformed-ref repair gates on it too. */
+static error_t *local_has_ciphertext(
+    git_repository *repo,
+    const uint8_t *local_fp,
+    bool *out_in_use
+);
 
 /**
  * Resolve refs/dotta/salt to a tree.
@@ -170,8 +179,12 @@ error_t *salt_load(
     return err;
 }
 
-error_t *salt_init(git_repository *repo) {
+error_t *salt_init(git_repository *repo, bool *out_repaired) {
     CHECK_NULL(repo);
+
+    if (out_repaired) {
+        *out_repaired = false;
+    }
 
     /* Idempotency: if the ref already resolves and the salt blob is the right
      * size, treat as success. A user re-running `dotta init` on an existing repo
@@ -182,15 +195,43 @@ error_t *salt_init(git_repository *repo) {
     if (probe_err == NULL) {
         return NULL;  /* already initialized */
     }
-    /* Any error other than ERR_NOT_FOUND propagates: a partially formed ref (e.g.
-     * wrong-size salt blob) needs human attention, not silent overwrite. */
     if (probe_err->code != ERR_NOT_FOUND) {
-        return error_wrap(
-            probe_err,
-            "Repository salt exists but is malformed"
-        );
+        /* Malformed ref. Regenerating is provably safe only when NO reachable
+         * ciphertext exists at all: the true salt's bytes are gone, so a blob's
+         * fingerprint cannot be matched against anything — any ciphertext (any
+         * fingerprint, any version) may be keyed by the salt this ref was before
+         * it was damaged. In that case keep the error and leave the evidence in
+         * place for a restore; the census failing is the same verdict (fail
+         * closed). A clean census makes the garbage ref pure noise — delete it
+         * and mint fresh, and tell the caller a repair happened. */
+        bool any_ciphertext = true;
+        error_t *cerr = local_has_ciphertext(repo, NULL, &any_ciphertext);
+        if (cerr) {
+            error_free(cerr);
+            any_ciphertext = true;
+        }
+        if (any_ciphertext) {
+            return error_wrap(
+                probe_err,
+                "Repository salt exists but is malformed"
+            );
+        }
+        error_free(probe_err);
+
+        int rc = git_reference_remove(repo, SALT_REF);
+        if (rc < 0) {
+            return error_wrap(
+                error_from_git(rc),
+                "Failed to remove malformed salt ref '%s'", SALT_REF
+            );
+        }
+        if (out_repaired) {
+            *out_repaired = true;
+        }
+        /* fall through to mint a fresh salt */
+    } else {
+        error_free(probe_err);
     }
-    error_free(probe_err);
 
     /* Generate the salt. entropy_fill scrubs the buffer to zeros on any failure,
      * so a half-populated salt cannot leak out. */
@@ -350,10 +391,12 @@ error_t *salt_push(
     git_remote_free(remote);
 
     if (git_err < 0) {
-        return error_wrap(
-            error_from_git(git_err),
-            "Failed to push '%s' to '%s'", SALT_REF, remote_name
-        );
+        /* Bare: the boundary (cmd_sync's establish arm) prefixes exactly one
+         * layer of context, and its warning renders error_message — outermost
+         * only — so a wrap here would displace the actual libgit2 reason
+         * (non-fast-forward, rejected namespace, auth) with a restatement of
+         * what the caller already says. */
+        return error_from_git(git_err);
     }
 
     return NULL;
@@ -472,11 +515,13 @@ error_t *salt_fetch(
 
     /* Force update (`+` prefix): the local ref is replaced wholesale by the
      * remote's. This is safe because the only caller that reaches a *divergent*
-     * local salt — `cmd_sync`'s adopt path — gates the fetch on a key-free census
-     * proving no local ciphertext depends on the salt being replaced. Clone reaches
-     * a missing (not divergent) local salt, so there is nothing to overwrite.
-     * The force prefix also lets a deliberate re-init on the canonical machine
-     * propagate to other clones without manual git surgery. */
+     * local salt — `cmd_sync`'s adopt path — gates the fetch on the key-free
+     * census proving no reachable ciphertext (any commit, any branch) is keyed
+     * by the salt being replaced. Clone reaches a missing (not divergent) local
+     * salt, so there is nothing to overwrite. Deliberate salt rotation remains
+     * unsupported end-to-end: a re-minted salt cannot even be published (the
+     * push is non-force), and a clone whose ciphertext the old salt keys lands
+     * on CONFLICT, not adopt. */
     char refspec[DOTTA_REFSPEC_MAX];
     int n = snprintf(
         refspec, sizeof(refspec), "+%s:%s",
@@ -498,10 +543,9 @@ error_t *salt_fetch(
     git_remote_free(remote);
 
     if (git_err < 0) {
-        return error_wrap(
-            error_from_git(git_err),
-            "Failed to fetch '%s' from '%s'", SALT_REF, remote_name
-        );
+        /* Bare, matching salt_push: the boundaries (sync's adopt arm, clone's
+         * acquisition gate) each attach their own single layer of context. */
+        return error_from_git(git_err);
     }
 
     /* Validate the bytes we just landed. This is the salt acquisition boundary:
@@ -546,24 +590,37 @@ error_t *salt_fetch(
 }
 
 /*
- * Local-ciphertext census: "is any blob in any local profile branch encrypted?",
- * answered key-free (content_classify is header-only) so it runs before any
- * passphrase is available. Gates the divergent-salt decision — replacing a salt
- * that keys live ciphertext bricks it (deterministic SIV), so an adopt is safe
- * only when this comes back empty.
+ * Local-ciphertext census: "does any commit reachable from any local branch carry
+ * ciphertext keyed by a given salt?", answered key-free (content_classify is
+ * header-only, the salt fingerprint is public) so it runs before any passphrase
+ * is available. Gates the divergent-salt decision — replacing a salt that keys
+ * reachable ciphertext bricks it (deterministic SIV), and *reachable* means the
+ * full history, not the tips: `dotta show`/`revert`/`diff` decrypt blobs at any
+ * `@commit`, every one of them under the current salt.
+ *
+ * Attribution is by the blob header's salt fingerprint. With a fingerprint to
+ * match (`local_fp` non-NULL), only ciphertext this salt keys counts — foreign
+ * ciphertext (pulled from a remote under its own salt) neither pins the local
+ * salt nor blocks converging to the salt that CAN decrypt it. With no fingerprint
+ * (`local_fp` NULL), any ciphertext counts — the caller has no salt to attribute
+ * against, so presence alone must fail closed.
  */
 
-/* Payload for the census tree-walk. */
+/* Payload for the census walks, shared across every branch so an object visited
+ * under one branch is never re-classified under another. */
 typedef struct {
     git_repository *repo;   /* borrowed; for content_classify blob loads */
-    bool found;             /* set on the first ciphertext blob */
-    error_t *error;         /* set if content_classify fails (owned) */
+    const uint8_t *local_fp;/* fingerprint to attribute against; NULL = any */
+    hashmap_t *seen;        /* borrowed; visited tree/blob OIDs (hex keys) */
+    bool found;             /* set on the first blob that counts */
+    error_t *error;         /* set if classification/bookkeeping fails (owned) */
 } salt_census_t;
 
 /*
- * Tree-walk callback. Returns 0 to continue, -1 to stop; the stop reason is
- * disambiguated by the payload — `found` set means ciphertext located, `error`
- * set means classification failed. gitops_tree_walk maps the -1 to a non-NULL
+ * Tree-walk callback (pre-order). Returns 0 to continue, 1 to skip an
+ * already-visited subtree, -1 to stop; the stop reason is disambiguated by the
+ * payload — `found` set means decisive ciphertext located, `error` set means
+ * the walk could not prove anything. gitops_tree_walk maps the -1 to a non-NULL
  * error_t that the driver discards in favour of the payload.
  */
 static int salt_census_cb(
@@ -574,36 +631,71 @@ static int salt_census_cb(
     (void) root;
     salt_census_t *data = (salt_census_t *) payload;
 
-    if (git_tree_entry_type(entry) != GIT_OBJECT_BLOB) {
+    /* Only trees descend and only blobs carry content; anything else (a submodule
+     * commit) has no bytes under this salt. */
+    git_object_t type = git_tree_entry_type(entry);
+    if (type != GIT_OBJECT_BLOB && type != GIT_OBJECT_TREE) {
         return 0;
     }
 
+    char oid_hex[GIT_OID_HEXSZ + 1];
+    git_oid_tostr(oid_hex, sizeof(oid_hex), git_tree_entry_id(entry));
+    if (hashmap_has(data->seen, oid_hex)) {
+        /* History shares objects heavily between commits: pruning a visited subtree
+         * is what keeps the full-history walk at O(unique objects). */
+        return (type == GIT_OBJECT_TREE) ? 1 : 0;
+    }
+    error_t *err = hashmap_set(data->seen, oid_hex, NULL);
+    if (err) {
+        data->error = err;
+        return -1;
+    }
+
+    if (type == GIT_OBJECT_TREE) {
+        return 0;  /* first visit: descend */
+    }
+
     content_kind_t kind;
-    error_t *err = content_classify(
-        data->repo, git_tree_entry_id(entry), &kind, NULL
+    uint8_t fp[KDF_SALT_FP_SIZE];
+    err = content_classify(
+        data->repo, git_tree_entry_id(entry), &kind,
+        data->local_fp ? fp : NULL
     );
     if (err) {
         data->error = err;
         return -1;
     }
 
-    if (kind != CONTENT_PLAINTEXT) {
-        data->found = true;
-        return -1;  /* ENCRYPTED or UNSUPPORTED_VERSION */
+    if (kind == CONTENT_PLAINTEXT) {
+        return 0;
     }
-
-    return 0;
+    if (data->local_fp == NULL) {
+        data->found = true;  /* any ciphertext counts */
+        return -1;
+    }
+    if (kind == CONTENT_UNSUPPORTED_VERSION) {
+        data->found = true;  /* unattributable format → fail closed */
+        return -1;
+    }
+    if (memcmp(fp, data->local_fp, KDF_SALT_FP_SIZE) == 0) {
+        data->found = true;  /* keyed by exactly the salt in question */
+        return -1;
+    }
+    return 0;  /* foreign-keyed; some other salt's concern */
 }
 
 /*
- * Walk every local profile branch — including disabled ones, whose ciphertext a
- * salt swap bricks just the same — and report whether any blob classifies as
- * ciphertext. Short-circuits on the first hit. Lists branches via sys/gitops
- * directly and skips the local-only dotta-worktree anchor inline, so infra/salt
- * takes no core/ dependency. Propagates any error so the caller can fail closed.
+ * Walk the full history of every local branch — disabled profiles included, whose
+ * ciphertext a salt swap bricks just the same — and report whether any reachable
+ * blob counts under the census rules above. Short-circuits on the first decisive
+ * hit. Lists branches via sys/gitops and skips the local-only dotta-worktree
+ * anchor inline, so infra/salt takes no core/ dependency; the revwalk speaks
+ * libgit2 directly the way sys/stats does. Propagates any error so the caller
+ * can fail closed.
  */
 static error_t *local_has_ciphertext(
     git_repository *repo,
+    const uint8_t *local_fp,
     bool *out_in_use
 ) {
     CHECK_NULL(repo);
@@ -617,7 +709,19 @@ static error_t *local_has_ciphertext(
         return error_wrap(err, "Failed to list local branches for salt census");
     }
 
-    for (size_t i = 0; i < branches->count; i++) {
+    hashmap_t *seen = hashmap_create(0);
+    if (!seen) {
+        string_array_free(branches);
+        return ERROR(ERR_MEMORY, "Failed to allocate salt census visited set");
+    }
+
+    salt_census_t data = {
+        .repo  = repo,  .local_fp = local_fp, .seen = seen,
+        .found = false, .error    = NULL,
+    };
+    git_revwalk *walker = NULL;
+
+    for (size_t i = 0; i < branches->count && !data.found; i++) {
         const char *branch = branches->items[i];
 
         /* dotta-worktree is the local-only empty HEAD anchor, never a profile
@@ -627,53 +731,109 @@ static error_t *local_has_ciphertext(
             continue;
         }
 
-        git_tree *tree = NULL;
-        err = gitops_load_branch_tree(repo, branch, &tree, NULL);
+        char refname[DOTTA_REFNAME_MAX];
+        err = gitops_build_refname(
+            refname, sizeof(refname), "refs/heads/%s", branch
+        );
         if (err) {
-            err = error_wrap(err, "Failed to load tree for branch '%s'", branch);
+            err = error_wrap(err, "Invalid branch name '%s'", branch);
             goto cleanup;
         }
 
-        salt_census_t data = { .repo = repo, .found = false, .error = NULL };
-        error_t *walk_err = gitops_tree_walk(tree, salt_census_cb, &data);
-        git_tree_free(tree);
+        int git_err = git_revwalk_new(&walker, repo);
+        if (git_err < 0) {
+            err = error_from_git(git_err);
+            goto cleanup;
+        }
+        git_revwalk_sorting(walker, GIT_SORT_NONE);
+        git_err = git_revwalk_push_ref(walker, refname);
+        if (git_err < 0) {
+            err = error_from_git(git_err);
+            goto cleanup;
+        }
 
-        if (data.error) {
-            error_free(walk_err);  /* benign stop wrapper */
-            err = data.error;
-            goto cleanup;
+        git_oid commit_oid;
+        while (git_revwalk_next(&commit_oid, walker) == 0) {
+            git_commit *commit = NULL;
+            git_err = git_commit_lookup(&commit, repo, &commit_oid);
+            if (git_err < 0) {
+                err = error_from_git(git_err);
+                goto cleanup;
+            }
+
+            /* A commit whose root tree was already walked (identical content in
+             * an earlier commit or another branch) contributes nothing new —
+             * skip it before loading the tree. */
+            char tree_hex[GIT_OID_HEXSZ + 1];
+            git_oid_tostr(
+                tree_hex, sizeof(tree_hex), git_commit_tree_id(commit)
+            );
+            if (hashmap_has(seen, tree_hex)) {
+                git_commit_free(commit);
+                continue;
+            }
+            err = hashmap_set(seen, tree_hex, NULL);
+            if (err) {
+                git_commit_free(commit);
+                goto cleanup;
+            }
+
+            git_tree *tree = NULL;
+            git_err = git_commit_tree(&tree, commit);
+            git_commit_free(commit);
+            if (git_err < 0) {
+                err = error_from_git(git_err);
+                goto cleanup;
+            }
+
+            error_t *walk_err = gitops_tree_walk(tree, salt_census_cb, &data);
+            git_tree_free(tree);
+
+            if (data.error) {
+                error_free(walk_err);  /* benign stop wrapper */
+                err = data.error;
+                data.error = NULL;
+                goto cleanup;
+            }
+            if (data.found) {
+                error_free(walk_err);  /* benign stop wrapper */
+                break;                 /* short-circuit; outer loop exits too */
+            }
+            if (walk_err) {
+                err = walk_err;  /* genuine walk-machinery failure */
+                goto cleanup;
+            }
         }
-        if (data.found) {
-            error_free(walk_err); /* benign stop wrapper */
-            *out_in_use = true;
-            goto cleanup;            /* short-circuit remaining branches */
-        }
-        if (walk_err) {
-            err = walk_err;  /* genuine walk-machinery failure */
-            goto cleanup;
-        }
+
+        git_revwalk_free(walker);
+        walker = NULL;
     }
 
-    err = NULL;  /* walked every branch; no ciphertext */
+    *out_in_use = data.found;
+    err = NULL;
 
 cleanup:
+    if (walker) {
+        git_revwalk_free(walker);
+    }
+    hashmap_free(seen, NULL);
     string_array_free(branches);
     return err;
 }
 
 /*
  * Would replacing the local salt brick local data? True iff a valid local salt
- * exists AND some local ciphertext depends on it. Fails CLOSED: any uncertainty
- * returns true, because a false "not in use" green-lights an adopt that destroys
- * data while a false "in use" only costs a manual reconcile.
+ * exists AND ciphertext it keys is reachable from some local branch. Fails CLOSED:
+ * any uncertainty returns true, because a false "not in use" green-lights an
+ * adopt that destroys data while a false "in use" only costs a manual reconcile.
  *
  *   local salt absent / malformed → derives nothing → not in use local salt
  *   unreadable for any other reason → can't prove safe → in use local salt valid
- *   → run the census; a census error → in use
+ *   → census against its fingerprint; a census error → in use
  */
 static bool salt_local_in_use(git_repository *repo) {
-    uint8_t scratch[KDF_SALT_SIZE];
-    error_t *lerr = salt_load(repo, scratch);
+    uint8_t salt[KDF_SALT_SIZE];
+    error_t *lerr = salt_load(repo, salt);
     /* Salt is public — no wipe. */
     if (lerr) {
         error_code_t code = lerr->code;
@@ -681,8 +841,11 @@ static bool salt_local_in_use(git_repository *repo) {
         return !(code == ERR_NOT_FOUND || code == ERR_CRYPTO);
     }
 
+    uint8_t fp[KDF_SALT_FP_SIZE];
+    kdf_salt_fingerprint(salt, fp);
+
     bool in_use = false;
-    error_t *cerr = local_has_ciphertext(repo, &in_use);
+    error_t *cerr = local_has_ciphertext(repo, fp, &in_use);
     if (cerr) {
         error_free(cerr);
         return true;  /* census error → fail closed */

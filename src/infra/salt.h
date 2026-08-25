@@ -58,18 +58,27 @@
  * Initialize the per-repository salt ref.
  *
  * If `refs/dotta/salt` exists with a valid salt blob, no-op (idempotent on repeat
- * `dotta init`, and across partial-init repair paths). Otherwise generates
- * KDF_SALT_SIZE random bytes via `entropy_fill`, writes a commit→tree→`salt`
- * blob, and points the ref at the new commit.
+ * `dotta init`, and across partial-init repair paths). If the ref exists but is
+ * malformed (wrong-size blob, broken shape), the ciphertext census decides: with
+ * no reachable ciphertext anywhere the garbage ref is deleted and a fresh salt
+ * minted (`*out_repaired` set — the caller renders the repair); with any reachable
+ * ciphertext — or a census that cannot prove its absence — the malformed ref
+ * may be the damaged form of the salt that keyed it, so the error propagates
+ * and the evidence stays in place for a restore (a remote holding the true salt
+ * heals this via sync's adopt path instead). Otherwise generates KDF_SALT_SIZE
+ * random bytes via `entropy_fill`, writes a commit→tree→`salt` blob, and points
+ * the ref at the new commit.
  *
  * Called by `cmd_init` after the dotta-worktree branch is established.
  * Encryption-disabled installations still produce the ref so a future `dotta
  * key set` (or a clone fetching this remote) finds it ready.
  *
- * @param repo Repository (must not be NULL)
+ * @param repo         Repository (must not be NULL)
+ * @param out_repaired Optional: set true iff a malformed ref was deleted and
+ *                     re-minted (can be NULL)
  * @return Error or NULL on success
  */
-error_t *salt_init(git_repository *repo);
+error_t *salt_init(git_repository *repo, bool *out_repaired);
 
 /**
  * Load the per-repo Argon2id salt.
@@ -166,8 +175,10 @@ typedef enum {
     SALT_RECONCILE_EQUAL,          /* remote OID == local; no-op */
     SALT_RECONCILE_ESTABLISH,      /* remote absent, local salt valid → caller pushes */
     SALT_RECONCILE_NO_LOCAL_SALT,  /* remote absent, local salt missing/malformed → nothing to publish */
-    SALT_RECONCILE_ADOPT,          /* divergent, local salt unused → caller force-fetches */
-    SALT_RECONCILE_CONFLICT,       /* divergent, local salt in use → caller warns, no git op */
+    SALT_RECONCILE_ADOPT,          /* divergent, no reachable ciphertext keyed by the
+                                    * local salt → caller force-fetches */
+    SALT_RECONCILE_CONFLICT,       /* divergent, local salt keys reachable ciphertext
+                                    * → caller warns, no git op */
     SALT_RECONCILE_UNREACHABLE,    /* inspect transport failure → caller skips best-effort */
 } salt_reconcile_t;
 
@@ -176,11 +187,15 @@ typedef enum {
  * No I/O beyond git, no rendering, no CLI flags.
  *
  * Connects and lists the remote (commit-OID compare, zero object transfer); on
- * a divergent salt, also validates the local salt and runs a key-free census of
- * every local profile branch to learn whether any local ciphertext depends on
- * the salt that an adopt would replace. The census fails *closed*: any uncertainty
- * — local salt unreadable for a reason other than absent/malformed, or any census
- * error — lands on CONFLICT, never on a data-destroying ADOPT.
+ * a divergent salt, also validates the local salt and runs a key-free census
+ * over the *full history* of every local branch — `dotta show`/`revert` decrypt
+ * blobs at any `@commit`, so history-reachable ciphertext pins the salt exactly
+ * as tip ciphertext does. Attribution is by the blob header's salt fingerprint:
+ * only ciphertext the local salt keys counts against an adopt; foreign-keyed
+ * blobs (pulled from a remote under its own salt) argue FOR converging, not
+ * against. The census fails *closed*: any uncertainty — local salt unreadable
+ * for a reason other than absent/malformed, an unattributable format version,
+ * or any census error — lands on CONFLICT, never on a data-destroying ADOPT.
  *
  * This module owns only the *mechanism* of looking and classifying; the
  * establish/adopt/conflict actions, CLI gating, and rendering are policy and

@@ -209,14 +209,35 @@ error_t *cmd_init(const dotta_ctx_t *ctx, const cmd_init_options_t *opts) {
     }
 
     /* Per-repo Argon2id salt at refs/dotta/salt. Idempotent — keeps an existing
-     * valid blob; surfaces a malformed blob as an error rather than overwriting
-     * it. Done unconditionally (not gated on encryption_enabled) so a later `dotta
-     * key set` finds the salt ready, and so `dotta clone` of this repo can fetch
+     * valid blob; a malformed one is regenerated when the ciphertext census proves
+     * nothing depends on it, and surfaced as an error otherwise. Done
+     * unconditionally (not gated on encryption_enabled) so a later `dotta key
+     * set` finds the salt ready, and so `dotta clone` of this repo can fetch
      * the salt regardless of the cloner's config. */
-    err = salt_init(repo);
+    bool salt_repaired = false;
+    err = salt_init(repo, &salt_repaired);
     if (err) {
-        err = error_wrap(err, "Failed to initialize repository salt");
+        /* ERR_CRYPTO here is the refusal to regenerate over reachable ciphertext:
+         * the damaged ref may be the salt that keys it, so the fix is restoration,
+         * never a fresh mint. */
+        if (err->code == ERR_CRYPTO) {
+            err = error_wrap(
+                err,
+                "Failed to initialize repository salt\n"
+                "Hint: Encrypted data may depend on the damaged salt. If a "
+                "remote holds the true salt, 'dotta sync' adopts it; otherwise "
+                "restore refs/dotta/salt from a machine that has it."
+            );
+        } else {
+            err = error_wrap(err, "Failed to initialize repository salt");
+        }
         goto cleanup;
+    }
+    if (salt_repaired) {
+        output_info(
+            out, OUTPUT_NORMAL,
+            "Repaired malformed repository salt (no encrypted data depended on it)"
+        );
     }
 
     /* Baseline .dottaignore on dotta-worktree. Idempotent — gitops_update_file
@@ -247,8 +268,8 @@ cleanup:
  * ══════════════════════════════════════════════════════════════════ */
 
 /**
- * What can stand at the cursor: the repository location, a directory, until
- * one is given.
+ * What can stand at the cursor: the repository location, a directory, until one
+ * is given.
  */
 static args_want_t init_complete(
     const void *ctx, const void *opts_v, const args_completion_t *at, FILE *out

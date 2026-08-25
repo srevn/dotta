@@ -1530,7 +1530,7 @@ static error_t *update_display_preview(
         );
         output_info(
             out, OUTPUT_NORMAL, "To keep a file as plaintext, "
-            "narrow the pattern that matches it."
+            "narrow the pattern that matches it before this commit."
         );
     }
 
@@ -2052,9 +2052,8 @@ static error_t *update_post_parse(
 /**
  * What can stand at the cursor, by the rule update_post_parse routes with: an
  * enabled profile while the first positional is still open and -p has not taken
- * it; at every position a path of the view (files, and directory claims as
- * subtree filters) — narrowed to what the profiles named so far win — or a
- * filesystem path.
+ * it; at every position a path of the view (files, and directory claims as subtree
+ * filters) — narrowed to what the profiles named so far win — or a filesystem path.
  */
 static args_want_t update_complete(
     const void *ctx_v, const void *opts_v, const args_completion_t *at, FILE *out

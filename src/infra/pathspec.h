@@ -39,8 +39,12 @@ typedef struct pathspec pathspec_t;
  *
  * Glob rules:
  *   - Basename-only globs ("*.vim") match at any depth
- *   - Patterns containing '/' must use storage format (home/, root/, custom/)
- *     or start with doublestar (recursive) or single star
+ *   - Patterns containing '/' must use storage format (home/, root/, custom/),
+ *     start with doublestar (recursive) or single star, or be a filesystem shape
+ *     (absolute, tilde, relative dot) — the whole input then rides through the
+ *     same resolver as an exact path and compiles in its storage form
+ *     ("~/.config/conf" globs become "home/.config/conf" globs); a trailing '/'
+ *     (gitignore's directory-only marker) survives the ride
  *
  * NULL / empty inputs short-circuit: `*out` is NULL (matches all). A NULL pathspec
  * passed to pathspec_matches matches all paths.
@@ -125,8 +129,9 @@ size_t pathspec_glob_count(const pathspec_t *spec);
 const char *pathspec_exact_at(const pathspec_t *spec, size_t i);
 
 /**
- * Glob pattern (raw user input string) at index `i`. The pointer borrows into
- * pathspec storage; its lifetime ends at pathspec_free.
+ * Glob pattern at index `i`, in its compiled storage-space form (a
+ * filesystem-shaped input is stored resolved, the way exact paths are). The pointer
+ * borrows into pathspec storage; its lifetime ends at pathspec_free.
  *
  * Insertion order: index `i` corresponds to the i-th glob encountered during
  * pathspec_create's input scan.

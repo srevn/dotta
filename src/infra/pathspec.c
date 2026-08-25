@@ -17,16 +17,17 @@
 #include "infra/mount.h"
 #include "infra/path.h"
 
-/* Compiled glob entry: the raw user input string and a single-rule ruleset
- * isolating the pattern from its siblings. Both are arena-backed; their lifetime
- * ends when the caller's arena is destroyed.
+/* Compiled glob entry: the pattern in its storage-space form (filesystem-shaped
+ * inputs are stored resolved, the way the exact arm stores its inputs) and a
+ * single-rule ruleset isolating the pattern from its siblings. Both are
+ * arena-backed; their lifetime ends when the caller's arena is destroyed.
  *
  * The isolated ruleset preserves per-pattern coverage attribution: a
  * combined-ruleset evaluation folds one pattern's negation into another's verdict,
  * which under-counts coverage on overlap. A one-rule ruleset evaluated alone
  * gives each input independent attribution. */
 typedef struct {
-    char *pattern;
+    const char *pattern;
     gitignore_ruleset_t *isolated;
 } pathspec_glob_t;
 
@@ -144,23 +145,59 @@ error_t *pathspec_create(
 
         /* Glob pattern */
         if (input && strpbrk(input, "*?[")) {
-            /* Patterns with '/' must use a storage label or recursive prefix. */
+            /* A slash-bearing glob speaks one of two vocabularies. Storage space
+             * — a label prefix, or a leading `<star><star>`/`<star>` component
+             * — compiles as-is. A filesystem shape (absolute, tilde, relative
+             * dot) is the exact arm's vocabulary wearing a glob tail: the whole
+             * input rides through the same resolver (metacharacters are ordinary
+             * characters to the mount table) and compiles in its storage form.
+             * gitignore's directory-only marker (a trailing '/') is semantics,
+             * not directory spelling, so it is re-applied after the resolver
+             * sheds it. Anything else — a bare `conf<star>/x` could mean either
+             * vocabulary — is refused toward the self-announcing spellings. */
+            const char *pattern = NULL;
             if (strchr(input, '/') != NULL &&
                 mount_spec_for_path(input) == NULL &&
                 !str_starts_with(input, "**/") &&
                 !str_starts_with(input, "*/")) {
-                err = ERROR(
-                    ERR_INVALID_ARG,
-                    "Glob pattern '%s' must use storage format or be basename-only\n"
-                    "Examples: 'home/<star><star>/*.vim', '*.vim'", input
-                );
-                goto cleanup;
-            }
+                if (input[0] != '/' && input[0] != '~' && input[0] != '.') {
+                    err = ERROR(
+                        ERR_INVALID_ARG,
+                        "Glob pattern '%s' must be basename-only, storage format, "
+                        "or a filesystem path (absolute, ~/, ./)\n"
+                        "Examples: '*.vim', 'home/nvim/*.lua', '~/.config/*.conf'",
+                        input
+                    );
+                    goto cleanup;
+                }
 
-            char *arena_copy = arena_strdup(arena, input);
-            if (!arena_copy) {
-                err = ERROR(ERR_MEMORY, "Failed to duplicate pattern");
-                goto cleanup;
+                const char *resolved = NULL;
+                err = path_input_resolve(table, input, arena, &resolved);
+                if (err) {
+                    err = error_wrap(err, "Invalid glob pattern '%s'", input);
+                    goto cleanup;
+                }
+
+                if (input[strlen(input) - 1] == '/') {
+                    size_t len = strlen(resolved);
+                    char *dir_marked = arena_alloc(arena, len + 2);
+                    if (!dir_marked) {
+                        err = ERROR(ERR_MEMORY, "Failed to allocate pattern");
+                        goto cleanup;
+                    }
+                    memcpy(dir_marked, resolved, len);
+                    dir_marked[len] = '/';
+                    dir_marked[len + 1] = '\0';
+                    pattern = dir_marked;
+                } else {
+                    pattern = resolved;
+                }
+            } else {
+                pattern = arena_strdup(arena, input);
+                if (!pattern) {
+                    err = ERROR(ERR_MEMORY, "Failed to duplicate pattern");
+                    goto cleanup;
+                }
             }
 
             size_t slot = spec->glob_count;
@@ -180,20 +217,20 @@ error_t *pathspec_create(
              * are no earlier rules, so the rule is dropped and the isolated check
              * returns false — which is the correct "this pattern alone matches
              * nothing" verdict for coverage purposes. */
-            err = gitignore_ruleset_append(spec->glob_combined, arena_copy, 0);
+            err = gitignore_ruleset_append(spec->glob_combined, pattern, 0);
             if (err) {
                 err = error_wrap(err, "Failed to compile glob pattern '%s'", input);
                 goto cleanup;
             }
             err = gitignore_ruleset_append(
-                spec->globs[slot].isolated, arena_copy, 0
+                spec->globs[slot].isolated, pattern, 0
             );
             if (err) {
                 err = error_wrap(err, "Failed to compile glob pattern '%s'", input);
                 goto cleanup;
             }
 
-            spec->globs[slot].pattern = arena_copy;
+            spec->globs[slot].pattern = pattern;
             spec->glob_count++;
             continue;
         }

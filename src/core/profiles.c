@@ -640,19 +640,14 @@ static int tree_walk_callback(
 
 /**
  * List deployable files in a Git tree
- *
- * Walks the tree, filters metadata paths, and returns storage paths. This is
- * the lightweight primitive for "files in a branch" — takes a pre-loaded tree
- * and returns storage paths.
- *
- * @param tree Git tree to walk (must not be NULL)
- * @param out String array of storage paths (must not be NULL, caller must free)
- * @return Error or NULL on success
  */
-static error_t *profile_list_tree_files(
+error_t *profile_list_tree_files(
     git_tree *tree,
     string_array_t **out
 ) {
+    CHECK_NULL(tree);
+    CHECK_NULL(out);
+
     struct walk_data data = {
         .paths = string_array_new(0),
         .error = NULL
@@ -837,6 +832,7 @@ error_t *profile_get_stats(
 
     metadata_free(metadata);
     git_tree_free(tree);
+
     return NULL;
 }
 
@@ -873,6 +869,7 @@ error_t *profile_has_custom_files(
     }
 
     git_tree_free(tree);
+
     return NULL;
 }
 

@@ -251,6 +251,23 @@ error_t *profile_get_stats(
 );
 
 /**
+ * List deployable files in a Git tree
+ *
+ * Walks the tree, filters metadata paths, and returns storage paths. This is
+ * the lightweight primitive for "files in a branch" — takes a pre-loaded tree
+ * and returns storage paths. For callers that already hold the tree, so one branch
+ * read serves the walk and whatever else the caller does with it.
+ *
+ * @param tree Git tree to walk (must not be NULL)
+ * @param out String array of storage paths (must not be NULL, caller must free)
+ * @return Error or NULL on success
+ */
+error_t *profile_list_tree_files(
+    git_tree *tree,
+    string_array_t **out
+);
+
+/**
  * List files in profile
  *
  * Loads the profile's Git tree internally and walks it to collect storage paths.

@@ -365,9 +365,11 @@ static error_t *list_files(
 
     bool verbose = output_is_verbose(out);
 
-    /* List files */
-    string_array_t *files = NULL;
-    error_t *err = profile_list_files(repo, opts->profile, &files);
+    /* One branch read serves the whole listing: the file walk, the verbose
+     * per-entry lookups and commit map, and the metadata (encryption flags;
+     * the directory count when the file list is empty). */
+    git_tree *tree = NULL;
+    error_t *err = gitops_load_branch_tree(repo, opts->profile, &tree, NULL);
     if (err) {
         return error_wrap(
             err, "Failed to list files in profile '%s'",
@@ -375,9 +377,50 @@ static error_t *list_files(
         );
     }
 
+    string_array_t *files = NULL;
+    err = profile_list_tree_files(tree, &files);
+    if (err) {
+        git_tree_free(tree);
+        return error_wrap(
+            err, "Failed to list files in profile '%s'",
+            opts->profile
+        );
+    }
+
     if (files->count == 0) {
-        output_info(out, OUTPUT_NORMAL, "No files in profile '%s'", opts->profile);
+        /* Directory claims are not listed — no size, no history — but their count
+         * keeps "nothing" honest for a branch that tracks only them. */
+        size_t dir_count = 0;
+        metadata_t *empty_meta = NULL;
+        error_t *meta_err = metadata_load_from_tree(
+            repo, tree, opts->profile, &empty_meta
+        );
+        if (meta_err) {
+            error_free(meta_err);  /* no metadata: no claims to count */
+        } else {
+            size_t item_count = 0;
+            const metadata_item_t *items =
+                metadata_get_all_items(empty_meta, &item_count);
+            for (size_t i = 0; i < item_count; i++) {
+                if (items[i].kind == METADATA_ITEM_DIRECTORY) {
+                    dir_count++;
+                }
+            }
+            metadata_free(empty_meta);
+        }
+
+        if (dir_count > 0) {
+            char counts[64];
+            output_format_counts(0, dir_count, counts, sizeof(counts));
+            output_info(
+                out, OUTPUT_NORMAL, "No files in profile '%s' (%s)",
+                opts->profile, counts
+            );
+        } else {
+            output_info(out, OUTPUT_NORMAL, "No files in profile '%s'", opts->profile);
+        }
         string_array_free(files);
+        git_tree_free(tree);
         return NULL;
     }
 
@@ -388,15 +431,11 @@ static error_t *list_files(
     /* Sort for consistent output */
     string_array_sort(files);
 
-    /* Load tree, file→commit map, and metadata if verbose */
-    git_tree *tree = NULL;
+    /* Build file→commit map and load metadata if verbose */
     file_commit_map_t *commit_map = NULL;
     metadata_t *metadata = NULL;
     if (verbose) {
-        err = gitops_load_branch_tree(repo, opts->profile, &tree, NULL);
-        if (!err) {
-            err = stats_build_file_commit_map(repo, opts->profile, tree, &commit_map);
-        }
+        err = stats_build_file_commit_map(repo, opts->profile, tree, &commit_map);
         if (err) {
             /* Non-fatal: continue without commit info */
             output_warning(
@@ -407,14 +446,12 @@ static error_t *list_files(
             err = NULL;
         }
 
-        /* Load metadata for encryption status from the tree we just opened. Don't
+        /* Load metadata for encryption status from the tree already open. Don't
          * warn — metadata may not exist yet (perfectly normal). */
-        if (tree) {
-            err = metadata_load_from_tree(repo, tree, opts->profile, &metadata);
-            if (err) {
-                error_free(err);
-                err = NULL;
-            }
+        err = metadata_load_from_tree(repo, tree, opts->profile, &metadata);
+        if (err) {
+            error_free(err);
+            err = NULL;
         }
     }
 
@@ -457,7 +494,7 @@ static error_t *list_files(
         if (verbose) {
             /* Get file stats */
             git_tree_entry *entry = NULL;
-            int git_err = tree ? git_tree_entry_bypath(&entry, tree, file_path) : -1;
+            int git_err = git_tree_entry_bypath(&entry, tree, file_path);
             if (git_err == 0) {
                 /* Check encryption status and display indicator */
                 bool encrypted = metadata_get_file_encrypted(metadata, file_path);
@@ -553,9 +590,7 @@ static error_t *list_files(
     if (metadata) {
         metadata_free(metadata);
     }
-    if (tree) {
-        git_tree_free(tree);
-    }
+    git_tree_free(tree);
     string_array_free(files);
 
     return NULL;

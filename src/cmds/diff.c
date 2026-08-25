@@ -790,11 +790,13 @@ cleanup:
 }
 
 /**
- * Validate file filter entries against a state file slice
+ * Validate file filter entries against the managed slices
  *
- * Checks each filter entry (exact paths and glob patterns) against the slice's
- * storage paths. Outputs a warning for each unmatched entry, which likely indicates
- * a typo.
+ * Checks each filter entry (exact paths and glob patterns) against the file slice's
+ * storage paths. Outputs a warning for each entry that matches nothing — which
+ * likely indicates a typo — plus the list hint as the warnings' remedy. An entry
+ * that names only tracked directories is answered for what it is instead: managed,
+ * just with no content to diff.
  *
  * Per-pattern isolation matters here: a combined-ruleset evaluation folds one
  * pattern's negation into another's verdict and would under-count coverage on
@@ -802,23 +804,28 @@ cleanup:
  * attribution.
  *
  * One implementation serves both diff paths — the historical-diff path
- * (commit-to-workspace) feeds the file rows of a tree-built view
+ * (commit-to-workspace) feeds the file and directory rows of a tree-built view
  * (manifest_build_tree); the workspace-diff path feeds the workspace's active
- * slice via workspace_files. Both flow through the same manifest_rows_t carrier.
+ * slices via workspace_files / workspace_directories. All flow through the same
+ * manifest_rows_t carrier.
  *
  * @param file_filter File filter to validate (NULL = no validation, returns 0)
  * @param files File slice to check against (passed by value)
+ * @param directories Directory slice for the tracked-directory answer
  * @param out Output context for warnings
- * @return Number of filter entries that matched no managed file (0 = all matched)
+ * @return Number of filter entries under which nothing will diff (0 = every entry
+ *         covers at least one file)
  */
 static size_t validate_filter_paths(
     const pathspec_t *file_filter,
     manifest_rows_t files,
+    manifest_rows_t directories,
     output_t *out
 ) {
     if (!file_filter) return 0;
 
     size_t unmatched = 0;
+    bool hint = false;
 
     /* Exact paths: literal equality, then directory-prefix walk-up. */
     size_t exact_count = pathspec_exact_count(file_filter);
@@ -840,14 +847,26 @@ static size_t validate_filter_paths(
                 break;
             }
         }
+        if (found) continue;
 
-        if (!found) {
-            output_warning(
-                out, OUTPUT_NORMAL, "No managed file matches '%s'",
-                filter_path
-            );
-            unmatched++;
+        bool tracked_dir = false;
+        for (size_t i = 0; i < directories.count && !tracked_dir; i++) {
+            tracked_dir =
+                strcmp(directories.entries[i]->storage_path, filter_path) == 0;
         }
+        if (tracked_dir) {
+            output_info(
+                out, OUTPUT_NORMAL,
+                "'%s' is a tracked directory (no content to diff)", filter_path
+            );
+        } else {
+            output_warning(
+                out, OUTPUT_NORMAL,
+                "No managed path matches '%s'", filter_path
+            );
+            hint = true;
+        }
+        unmatched++;
     }
 
     /* Glob patterns: per-pattern isolated coverage check. */
@@ -862,13 +881,37 @@ static size_t validate_filter_paths(
                 break;
             }
         }
-        if (!found) {
+        if (found) continue;
+
+        bool tracked_dir = false;
+        for (size_t i = 0; i < directories.count && !tracked_dir; i++) {
+            tracked_dir = pathspec_glob_matches_at(
+                file_filter, g, directories.entries[i]->storage_path,
+                PATH_KIND_DIRECTORY
+            );
+        }
+        if (tracked_dir) {
+            output_info(
+                out, OUTPUT_NORMAL,
+                "Pattern '%s' matches only tracked directories "
+                "(no content to diff)", pathspec_glob_at(file_filter, g)
+            );
+        } else {
             output_warning(
-                out, OUTPUT_NORMAL, "No managed file matches pattern '%s'",
+                out, OUTPUT_NORMAL,
+                "No managed path matches pattern '%s'",
                 pathspec_glob_at(file_filter, g)
             );
-            unmatched++;
+            hint = true;
         }
+        unmatched++;
+    }
+
+    if (hint) {
+        output_hint(
+            out, OUTPUT_NORMAL,
+            "Use 'dotta list <profile>' to see managed files"
+        );
     }
 
     return unmatched;
@@ -922,6 +965,7 @@ static error_t *diff_commit_to_workspace(
     metadata_t *metadata = NULL;
     manifest_t *historical = NULL;
     manifest_rows_t tree_files = { 0 };
+    manifest_rows_t tree_dirs = { 0 };
 
     /* Step 1: Resolve commit to find which profile contains it */
     err = resolve_commit_in_profiles(
@@ -969,14 +1013,15 @@ static error_t *diff_commit_to_workspace(
         if (err) goto cleanup;
     }
 
-    /* Step 5: Build the historical tree's view and take its file rows.
+    /* Step 5: Build the historical tree's view and split its rows by kind.
      *
-     * Rows, per-row strings, and the pointer array are allocated into the borrowed
+     * Rows, per-row strings, and the pointer arrays are allocated into the borrowed
      * command arena; they outlive both this call and the subsequent
      * compare_tree_files_to_filesystem call, then live until command end. Only
      * the view's index is released, at cleanup. A DIRECTORY row (a claim of the
-     * tree's own metadata.json) has no content to diff; the consumers take a
-     * file slice, so the kind is settled here, once. */
+     * tree's own metadata.json) has no content to diff; the compare takes the
+     * file slice, the filter validation takes both, so the kind is settled here,
+     * once. */
     err = manifest_build_tree(
         tree, profile, mounts, metadata, arena, &historical
     );
@@ -988,16 +1033,22 @@ static error_t *diff_commit_to_workspace(
     manifest_rows_t rows = manifest_rows(historical);
     if (rows.count > 0) {
         const manifest_row_t **files = arena_calloc(arena, rows.count, sizeof(*files));
-        if (!files) {
-            err = ERROR(ERR_MEMORY, "Failed to allocate file slice");
+        const manifest_row_t **dirs = arena_calloc(arena, rows.count, sizeof(*dirs));
+        if (!files || !dirs) {
+            err = ERROR(ERR_MEMORY, "Failed to allocate row slices");
             goto cleanup;
         }
         size_t file_count = 0;
+        size_t dir_count = 0;
         for (size_t i = 0; i < rows.count; i++) {
-            if (rows.entries[i]->type == PATH_TYPE_DIRECTORY) continue;
-            files[file_count++] = rows.entries[i];
+            if (rows.entries[i]->type == PATH_TYPE_DIRECTORY) {
+                dirs[dir_count++] = rows.entries[i];
+            } else {
+                files[file_count++] = rows.entries[i];
+            }
         }
         tree_files = (manifest_rows_t){ .entries = files, .count = file_count };
+        tree_dirs = (manifest_rows_t){ .entries = dirs, .count = dir_count };
     }
 
     /* Step 6: Compare historical slice against current filesystem */
@@ -1010,13 +1061,9 @@ static error_t *diff_commit_to_workspace(
     }
 
     if (diff_count == 0 && !opts->name_only) {
-        size_t unmatched = validate_filter_paths(file_filter, tree_files, out);
+        size_t unmatched =
+            validate_filter_paths(file_filter, tree_files, tree_dirs, out);
 
-        if (unmatched > 0) {
-            output_hint(
-                out, OUTPUT_NORMAL, "Use 'dotta list <profile>' to see managed files"
-            );
-        }
         if (unmatched == 0 || unmatched < pathspec_count(file_filter)) {
             output_info(
                 out, OUTPUT_NORMAL, "No differences between commit and workspace\n"
@@ -1069,9 +1116,7 @@ static error_t *build_diff_pathspec(
 
     char **strings = calloc(total, sizeof(*strings));
     if (!strings) {
-        return ERROR(
-            ERR_MEMORY, "Failed to allocate memory for diff pathspec"
-        );
+        return ERROR(ERR_MEMORY, "Failed to allocate memory for diff pathspec");
     }
 
     size_t index = 0;
@@ -1228,9 +1273,7 @@ static error_t *diff_commits(
 
         output_newline(out, OUTPUT_NORMAL);
 
-        int ret = git_diff_print(
-            diff, GIT_DIFF_FORMAT_PATCH, print_diff_line_cb, out
-        );
+        int ret = git_diff_print(diff, GIT_DIFF_FORMAT_PATCH, print_diff_line_cb, out);
         if (ret < 0) {
             err = error_from_git(ret);
             goto cleanup;
@@ -1292,9 +1335,7 @@ static error_t *diff_workspace(
         .analyze_directories = false  /* Not needed for diff */
     };
 
-    err = workspace_load(
-        repo, state, config, cache, manifest, &ws_opts, arena, &ws
-    );
+    err = workspace_load(repo, state, config, cache, manifest, &ws_opts, arena, &ws);
     if (err) {
         return error_wrap(err, "Failed to load workspace");
     }
@@ -1311,19 +1352,17 @@ static error_t *diff_workspace(
     /* Step 2: Get pre-analyzed divergence from workspace */
     workspace_items_t diverged = workspace_get_all_diverged(ws);
 
-    /* Step 3: Borrow the active state slice for filter validation */
+    /* Step 3: Borrow the active slices for filter validation */
     manifest_rows_t active = workspace_files(ws);
+    manifest_rows_t active_dirs = workspace_directories(ws);
 
-    /* Step 4: Validate file filter paths against the active slice */
+    /* Step 4: Validate file filter paths against the active slices */
     const pathspec_t *file_filter = scope_paths(scope);
     if (file_filter) {
-        size_t unmatched = validate_filter_paths(file_filter, active, out);
-        if (unmatched > 0) {
-            output_hint(out, OUTPUT_NORMAL, "Use 'dotta list <profile>' to see managed files");
-            if (unmatched == pathspec_count(file_filter)) {
-                /* All filter paths are invalid — nothing to diff */
-                goto cleanup;
-            }
+        size_t unmatched = validate_filter_paths(file_filter, active, active_dirs, out);
+        if (unmatched == pathspec_count(file_filter)) {
+            /* Nothing diffs under any filter entry — unmatched or content-less */
+            goto cleanup;
         }
     }
 
@@ -1339,8 +1378,7 @@ static error_t *diff_workspace(
         output_info(out, OUTPUT_NORMAL, "Shows what 'dotta apply' would change\n");
 
         err = present_diffs_for_direction(
-            diverged, cache, DIFF_UPSTREAM,
-            scope, opts, out, &upstream_count
+            diverged, cache, DIFF_UPSTREAM, scope, opts, out, &upstream_count
         );
         if (err) goto cleanup;
 
@@ -1436,9 +1474,7 @@ error_t *cmd_diff(const dotta_ctx_t *ctx, const cmd_diff_options_t *opts) {
     switch (opts->mode) {
         case DIFF_COMMIT_TO_COMMIT:
             /* Diff two commits — historical mode, path filter only */
-            err = diff_commits(
-                repo, opts->commit1, opts->commit2, scope, opts, out
-            );
+            err = diff_commits(repo, opts->commit1, opts->commit2, scope, opts, out);
             goto cleanup;
 
         case DIFF_COMMIT_TO_WORKSPACE:

@@ -542,6 +542,9 @@ static workspace_state_t classify_absent(const anchor_t *anchor) {
  * cmds/update.c, projected onto the row at build), so the audit costs one pattern
  * match and inflates nothing. The filesystem is not one of its operands, so every
  * arm carries it — it survives absence and rides beside TYPE and UNVERIFIED alike.
+ * A symlink row can never carry it: the predicate answers only for content-bearing
+ * kinds (policy.h owns the rationale), so a link whose path matches a pattern
+ * is not a violation the capture could never resolve.
  *
  * @param ws Workspace (must not be NULL)
  * @param row Active view row (must not be NULL)
@@ -575,7 +578,7 @@ static error_t *analyze_file_divergence(
      * this row stored plaintext where the auto-encrypt policy claims the path?
      * DIVERGENCE_NONE or DIVERGENCE_ENCRYPTION, carried by every return below. */
     divergence_type_t policy =
-        encryption_policy_violation(config, storage_path, row->encrypted)
+        encryption_policy_violation(config, storage_path, row->type, row->encrypted)
         ? DIVERGENCE_ENCRYPTION : DIVERGENCE_NONE;
 
     /* Single stat capture for the entire analysis

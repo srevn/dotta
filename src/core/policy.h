@@ -99,13 +99,23 @@ error_t *encryption_policy_should_encrypt(
 );
 
 /**
- * Check whether a file is in violation of the auto-encrypt policy.
+ * Check whether a row is in violation of the auto-encrypt policy.
  *
- * Returns true iff the blob is stored plaintext AND the path matches an active
- * auto-encrypt rule.
+ * Returns true iff the row is content-bearing, its blob is stored plaintext,
+ * AND the path matches an active auto-encrypt rule.
  *
  * Used by workspace analysis to flag DIVERGENCE_ENCRYPTION when a managed file
  * matches an auto-encrypt pattern but is stored plaintext in Git.
+ *
+ * Only content-bearing kinds (FILE, EXECUTABLE) can violate. A symlink's blob
+ * is its target path, not content: deploy materializes it via symlink(2) and
+ * readlink exposes the target on the deployed machine regardless, so encrypting
+ * the blob would buy no secrecy — the design stores link targets plaintext always
+ * (metadata.h: symlinks carry no encrypted flag; a secret target belongs in an
+ * encrypted regular file). A directory row carries no blob at all. For both,
+ * "stored plaintext" is not a state the row can be in, so the predicate answers
+ * false rather than reading their structural encrypted=false as a violation
+ * update's capture could never resolve.
  *
  * Why a bool is exact: the caller holds the view's cached `encrypted` — byte
  * truth by the write-boundary invariant (stamped from the blob's bytes in
@@ -121,13 +131,15 @@ error_t *encryption_policy_should_encrypt(
  *
  * @param config Configuration (can be NULL)
  * @param storage_path File path in profile (can be NULL)
+ * @param type The row's type — only content-bearing kinds can violate
  * @param encrypted Whether the blob's bytes carry encryption intent (the view's
  *                  cache)
- * @return true iff the blob/path combination violates auto-encrypt policy
+ * @return true iff the row violates auto-encrypt policy
  */
 bool encryption_policy_violation(
     const config_t *config,
     const char *storage_path,
+    path_type_t type,
     bool encrypted
 );
 

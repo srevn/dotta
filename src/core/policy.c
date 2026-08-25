@@ -194,8 +194,16 @@ error_t *encryption_policy_should_encrypt(
 bool encryption_policy_violation(
     const config_t *config,
     const char *storage_path,
+    path_type_t type,
     bool encrypted
 ) {
+    /* Only content-bearing kinds can violate: a symlink's blob is its target
+     * path and a directory row carries no blob — neither has an encryption state
+     * to be missing (see the header for the design rationale). */
+    if (type != PATH_TYPE_FILE && type != PATH_TYPE_EXECUTABLE) {
+        return false;
+    }
+
     /* Only plaintext blobs can violate the auto-encrypt policy: an encrypted
      * blob satisfies the intent whatever its cipher version — the caller's bool
      * collapses ENCRYPTED and UNSUPPORTED_VERSION onto true, and both carry intent

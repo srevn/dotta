@@ -75,7 +75,7 @@
  *   with no prior bytes, the caller passes false. Policy never opens a metadata
  *   side-channel; bytes are the single authority for whether a file IS encrypted,
  *   and metadata.encrypted is itself a byte-derived cache (established at the
- *   write boundary in cmds/add.c and cmds/update.c).
+ *   write boundary in cmds/add.c, cmds/update.c, and cmds/revert.c's restore).
  *
  * @param config Configuration (can be NULL; disables priority-4)
  * @param storage_path File path in profile (e.g., "home/.bashrc", must not be NULL)
@@ -118,13 +118,13 @@ error_t *encryption_policy_should_encrypt(
  * update's capture could never resolve.
  *
  * Why a bool is exact: the caller holds the view's cached `encrypted` — byte
- * truth by the write-boundary invariant (stamped from the blob's bytes in
- * cmds/add.c and cmds/update.c, projected onto the view row at build). That bool
- * collapses ENCRYPTED and UNSUPPORTED_VERSION onto true, and the collapse is
- * exactly right here: a blob at a cipher version this build does not understand
- * still carries encryption intent, and flagging it as "missing encryption" would
- * be misleading — the version skew surfaces from the content read path when a
- * caller actually tries to decrypt.
+ * truth by the write-boundary invariant (stamped from the blob's bytes at every
+ * committing boundary — cmds/add.c, cmds/update.c, cmds/revert.c — projected
+ * onto the view row at build). That bool collapses ENCRYPTED and
+ * UNSUPPORTED_VERSION onto true, and the collapse is exactly right here: a blob
+ * at a cipher version this build does not understand still carries encryption
+ * intent, and flagging it as "missing encryption" would be misleading — the version
+ * skew surfaces from the content read path when a caller actually tries to decrypt.
  *
  * Pure — no I/O, no allocation. NULL-safe (returns false if config or storage_path
  * is NULL); an inactive policy (no compiled ruleset) never matches.

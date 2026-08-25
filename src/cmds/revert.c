@@ -528,13 +528,14 @@ cleanup:
  * Revert file and metadata in profile branch to target commit
  *
  * This atomically reverts both file content AND its metadata entry to the target
- * commit state in a single commit. This ensures that permissions, ownership,
- * and encryption flags are restored along with file content.
+ * commit state in a single commit. Permissions and ownership are restored from
+ * the target's metadata entry; the encrypted bit is stamped from the restored
+ * blob's own bytes (the write-boundary invariant — see policy.h).
  *
  * The function handles:
  * - Files that exist in both current and target (normal revert)
  * - Files deleted from HEAD (restore from history)
- * - Missing metadata gracefully (creates defaults with warning)
+ * - Missing metadata gracefully (mode from the tree's filemode, with a warning)
  * - Symlinks (restore ownership metadata if present at target commit)
  */
 static error_t *revert_file_in_branch(
@@ -630,6 +631,20 @@ static error_t *revert_file_in_branch(
             error_free(lookup_err);
         }
     } else {
+        /* The encrypted bit revert writes must be true of the blob it restores:
+         * it is stamped from the target blob's own bytes — the single authority
+         * — the way the capture paths stamp from the bytes they store, never
+         * trusted from (or, absent an entry, invented beside) a historical stamp.
+         * UNSUPPORTED_VERSION carries encryption intent and collapses onto true,
+         * the same collapse the capture paths make. */
+        content_kind_t target_kind = CONTENT_PLAINTEXT;
+        err = content_classify(repo, &target_blob_oid_copy, &target_kind);
+        if (err) {
+            err = error_wrap(err, "Failed to classify blob for '%s'", file_path);
+            goto cleanup;
+        }
+        bool target_encrypted = (target_kind != CONTENT_PLAINTEXT);
+
         const metadata_item_t *target_meta_item = NULL;
         error_t *lookup_err = metadata_get_item(
             target_metadata, file_path, &target_meta_item
@@ -637,14 +652,18 @@ static error_t *revert_file_in_branch(
 
         if (!lookup_err && target_meta_item &&
             target_meta_item->kind == METADATA_ITEM_FILE) {
-            /* Found metadata entry - clone it */
+            /* Found metadata entry - clone it. Mode and ownership have no byte
+             * source, so the entry is their authority; the encrypted bit is the
+             * blob's (above). */
             err = metadata_item_clone(target_meta_item, &meta_to_restore);
             if (err) {
                 err = error_wrap(err, "Failed to clone metadata item");
                 goto cleanup;
             }
+            meta_to_restore->file.encrypted = target_encrypted;
         } else {
-            /* No metadata entry at target commit - create default from tree mode */
+            /* No metadata entry at target commit - mode falls back to the tree's
+             * filemode; ownership is not recoverable */
             char oid_str[8];
             git_oid_tostr(oid_str, sizeof(oid_str), target_commit_oid);
 
@@ -653,12 +672,15 @@ static error_t *revert_file_in_branch(
                 file_path, oid_str
             );
             output_hintline(
-                out, OUTPUT_NORMAL, "Using defaults (mode=%04o, encrypted=false)",
-                (unsigned int) (target_mode & 0777)
+                out, OUTPUT_NORMAL,
+                "Reconstructed from the commit (mode=%04o, encrypted=%s); "
+                "ownership is not recoverable",
+                (unsigned int) (target_mode & 0777),
+                target_encrypted ? "true" : "false"
             );
 
             err = metadata_item_create_file(
-                file_path, target_mode & 0777, false, &meta_to_restore
+                file_path, target_mode & 0777, target_encrypted, &meta_to_restore
             );
             if (err) {
                 err = error_wrap(err, "Failed to create default metadata item");
@@ -1139,12 +1161,12 @@ static error_t *revert_post_parse(
 }
 
 /**
- * What can stand at the cursor, by the shapes revert_post_parse reads — as
- * show, without the bare-commit form: first a file of any branch as
- * `profile:path`, bare once -p pins one; after one positional the files of
- * the profile it pins or that profile's history, the grammar deciding by
- * the next token; after two, the commit. An `@` in the token being typed
- * completes its commit part from the refspec's history.
+ * What can stand at the cursor, by the shapes revert_post_parse reads — as show,
+ * without the bare-commit form: first a file of any branch as `profile:path`,
+ * bare once -p pins one; after one positional the files of the profile it pins
+ * or that profile's history, the grammar deciding by the next token; after two,
+ * the commit. An `@` in the token being typed completes its commit part from
+ * the refspec's history.
  */
 static args_want_t revert_complete(
     const void *ctx_v, const void *opts_v, const args_completion_t *at, FILE *out

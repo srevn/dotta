@@ -1998,7 +1998,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
                         : state_release(state, item->filesystem_path);
                     if (err) {
                         output_warning(
-                            out, OUTPUT_NORMAL, "Failed to retire state entry for %s: %s",
+                            out, OUTPUT_NORMAL, "Failed to settle state entry for %s: %s",
                             item->filesystem_path, error_message(err)
                         );
                         error_free(err);
@@ -2190,10 +2190,10 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
          * not a cleanup.c concern — and non-fatal like the record step around
          * it. */
         {
-            released_copy_t *swept = NULL;
-            size_t swept_count = 0;
-            error_t *sweep_err = state_get_all_released(
-                state, ctx->arena, &swept, &swept_count
+            released_copy_t *copies = NULL;
+            size_t copy_count = 0;
+            error_t *sweep_err = state_get_released_copies(
+                state, ctx->arena, &copies, &copy_count
             );
             if (sweep_err) {
                 output_warning(
@@ -2204,8 +2204,8 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
             }
 
             size_t forgotten = 0;
-            for (size_t i = 0; i < swept_count; i++) {
-                const released_copy_t *copy = &swept[i];
+            for (size_t i = 0; i < copy_count; i++) {
+                const released_copy_t *copy = &copies[i];
 
                 struct stat live;
                 fs_occupant_t occupant = fs_lstat_occupant(copy->filesystem_path, &live);

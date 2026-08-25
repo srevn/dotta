@@ -754,7 +754,7 @@ error_t *state_release(state_t *state, const char *filesystem_path);
  * @param count Output count (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *state_get_all_released(
+error_t *state_get_released_copies(
     const state_t *state,
     arena_t *arena,
     released_copy_t **out,

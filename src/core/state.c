@@ -64,15 +64,19 @@ struct state {
     /* Prepared statements (initialized once, reused) */
     sqlite3_stmt *stmt_insert_profile;      /* INSERT INTO enabled_profiles */
 
-    /* Anchor prepared statements (the record's verbs and the order's) */
+    /* Anchor prepared statements (the record's verbs) */
     sqlite3_stmt *stmt_observe;             /* INSERT OR IGNORE path_anchors (presence only) */
     sqlite3_stmt *stmt_confirm;             /* UPDATE path_anchors SET type, blob_oid, stat_* (content) */
     sqlite3_stmt *stmt_anchor;              /* UPSERT path_anchors … RETURNING observed_at (ownership) */
     sqlite3_stmt *stmt_retire;              /* DELETE FROM path_anchors */
-    sqlite3_stmt *stmt_prune;               /* INSERT prune_orders, guarded by the record */
-    sqlite3_stmt *stmt_order_void;          /* DELETE FROM prune_orders */
+
+    /* Order prepared statements */
+    sqlite3_stmt *stmt_order_prune;         /* INSERT prune_orders, guarded by the record */
+    sqlite3_stmt *stmt_void_order;          /* DELETE FROM prune_orders */
+
+    /* Released-copy prepared statements */
     sqlite3_stmt *stmt_release;             /* INSERT OR REPLACE released_copies from the record */
-    sqlite3_stmt *stmt_released_forget;     /* DELETE FROM released_copies */
+    sqlite3_stmt *stmt_forget_released;     /* DELETE FROM released_copies */
 };
 
 /**
@@ -497,10 +501,12 @@ static void finalize_statements(state_t *state) {
         &state->stmt_confirm,
         &state->stmt_anchor,
         &state->stmt_retire,
-        &state->stmt_prune,
-        &state->stmt_order_void,
+        /* Order statements */
+        &state->stmt_order_prune,
+        &state->stmt_void_order,
+        /* Released-copy statements */
         &state->stmt_release,
-        &state->stmt_released_forget,
+        &state->stmt_forget_released,
     };
 
     for (size_t i = 0; i < sizeof(roster) / sizeof(roster[0]); i++) {
@@ -641,25 +647,25 @@ static error_t *prepare_statements(state_t *state) {
      * is the guard — an order cannot exist without a record, so a missing record
      * inserts nothing (the documented no-op contract); OR IGNORE makes a repeated
      * order idempotent. */
-    const char *sql_prune =
+    const char *sql_order_prune =
         "INSERT OR IGNORE INTO prune_orders (filesystem_path) "
         "SELECT filesystem_path FROM path_anchors WHERE filesystem_path = ?1;";
 
-    rc = sqlite3_prepare_v2(state->db, sql_prune, -1, &state->stmt_prune, NULL);
+    rc = sqlite3_prepare_v2(state->db, sql_order_prune, -1, &state->stmt_order_prune, NULL);
     if (rc != SQLITE_OK) {
         finalize_statements(state);
-        return sqlite_error(state->db, "Failed to prepare prune statement");
+        return sqlite_error(state->db, "Failed to prepare order-prune statement");
     }
 
-    /* Order void: one end of the order's lifetime — the flush's join (the path
+    /* Void order: one end of the order's lifetime — the flush's join (the path
      * re-entered the view) and the retire's sibling (the record died). */
-    const char *sql_order_void =
+    const char *sql_void_order =
         "DELETE FROM prune_orders WHERE filesystem_path = ?1;";
 
-    rc = sqlite3_prepare_v2(state->db, sql_order_void, -1, &state->stmt_order_void, NULL);
+    rc = sqlite3_prepare_v2(state->db, sql_void_order, -1, &state->stmt_void_order, NULL);
     if (rc != SQLITE_OK) {
         finalize_statements(state);
-        return sqlite_error(state->db, "Failed to prepare order-void statement");
+        return sqlite_error(state->db, "Failed to prepare void-order statement");
     }
 
     /* Release, the INSERT arm: the record's content-proof half, copied verbatim.
@@ -681,18 +687,18 @@ static error_t *prepare_statements(state_t *state) {
         return sqlite_error(state->db, "Failed to prepare release statement");
     }
 
-    /* Released forget: one end of the fact's lifetime — the flush's join (the
+    /* Forget released: one end of the fact's lifetime — the flush's join (the
      * path's record again carries a confirmed blob) and apply's sweep (disk
      * provably left the copy). */
-    const char *sql_released_forget =
+    const char *sql_forget_released =
         "DELETE FROM released_copies WHERE filesystem_path = ?1;";
 
     rc = sqlite3_prepare_v2(
-        state->db, sql_released_forget, -1, &state->stmt_released_forget, NULL
+        state->db, sql_forget_released, -1, &state->stmt_forget_released, NULL
     );
     if (rc != SQLITE_OK) {
         finalize_statements(state);
-        return sqlite_error(state->db, "Failed to prepare released-forget statement");
+        return sqlite_error(state->db, "Failed to prepare forget-released statement");
     }
 
     return NULL;
@@ -1888,16 +1894,16 @@ error_t *state_retire_anchor(state_t *state, const char *filesystem_path) {
 /**
  * Order a managed path's deployed copy pruned
  *
- * INSERT guarded by the record (see the SQL comment on sql_prune and the header
- * contract); a missing record inserts nothing and is success.
+ * INSERT guarded by the record (see the SQL comment on sql_order_prune and the
+ * header contract); a missing record inserts nothing and is success.
  */
 error_t *state_order_prune(state_t *state, const char *filesystem_path) {
     CHECK_NULL(state);
     CHECK_NULL(filesystem_path);
     CHECK_NULL(state->db);
-    CHECK_NULL(state->stmt_prune);
+    CHECK_NULL(state->stmt_order_prune);
 
-    sqlite3_stmt *stmt = state->stmt_prune;
+    sqlite3_stmt *stmt = state->stmt_order_prune;
     sqlite3_reset(stmt);
     sqlite3_clear_bindings(stmt);
     sqlite3_bind_text(stmt, 1, filesystem_path, -1, SQLITE_TRANSIENT);
@@ -2006,9 +2012,9 @@ error_t *state_void_prune_order(state_t *state, const char *filesystem_path) {
     CHECK_NULL(state);
     CHECK_NULL(filesystem_path);
     CHECK_NULL(state->db);
-    CHECK_NULL(state->stmt_order_void);
+    CHECK_NULL(state->stmt_void_order);
 
-    sqlite3_stmt *stmt = state->stmt_order_void;
+    sqlite3_stmt *stmt = state->stmt_void_order;
     sqlite3_reset(stmt);
     sqlite3_clear_bindings(stmt);
     sqlite3_bind_text(stmt, 1, filesystem_path, -1, SQLITE_TRANSIENT);
@@ -2053,7 +2059,7 @@ error_t *state_release(state_t *state, const char *filesystem_path) {
  * The released_copies read, the shape of state_get_all_anchors: count, allocate
  * once, hydrate into the caller's arena.
  */
-error_t *state_get_all_released(
+error_t *state_get_released_copies(
     const state_t *state,
     arena_t *arena,
     released_copy_t **out,
@@ -2165,9 +2171,9 @@ error_t *state_forget_released(state_t *state, const char *filesystem_path) {
     CHECK_NULL(state);
     CHECK_NULL(filesystem_path);
     CHECK_NULL(state->db);
-    CHECK_NULL(state->stmt_released_forget);
+    CHECK_NULL(state->stmt_forget_released);
 
-    sqlite3_stmt *stmt = state->stmt_released_forget;
+    sqlite3_stmt *stmt = state->stmt_forget_released;
     sqlite3_reset(stmt);
     sqlite3_clear_bindings(stmt);
     sqlite3_bind_text(stmt, 1, filesystem_path, -1, SQLITE_TRANSIENT);

@@ -120,16 +120,16 @@ struct workspace {
      * even when no orphan stands for them (the path back in the view is exactly
      * the case with no orphan). The map's keys borrow the arena paths; NULL when
      * the table is empty (the probes are NULL-safe). */
-    char **order_paths;                          /* Arena snapshot from state_get_prune_orders */
-    size_t order_count;                          /* Number of ordered paths */
-    hashmap_t *prune_orders;                     /* fs_path → the path (membership; heap-allocated) */
+    char **orders;                               /* Arena snapshot from state_get_prune_orders */
+    size_t order_count;                          /* Number of orders */
+    hashmap_t *order_index;                      /* fs_path → the order (membership; heap-allocated) */
 
     /* The released copies, snapshot at load the same way. Two readers only, by
      * design: the base derivation in analyze_file_divergence (through the index,
      * and only when the path's record carries no confirmed blob — a released
      * fact is not a claim) and the flush's join (through the array). No third
      * reader may grow without revisiting the reap design. */
-    released_copy_t *released;                   /* Arena snapshot from state_get_all_released */
+    released_copy_t *released;                   /* Arena snapshot from state_get_released_copies */
     size_t released_count;                       /* Number of released copies */
     hashmap_t *released_index;                   /* fs_path → released_copy_t * (heap-allocated) */
 
@@ -723,14 +723,26 @@ static error_t *analyze_file_divergence(
         const released_copy_t *released = anchor_has_blob ? NULL
             : hashmap_get(ws->released_index, fs_path);
 
-        const git_oid *base_blob = anchor_has_blob ? &anchor->blob_oid
-                                 : released        ? &released->blob_oid : NULL;
-        const stat_cache_t *base_stat = anchor_has_blob ? &anchor->stat
-                                      : released        ? &released->stat : NULL;
-        path_type_t base_type = anchor_has_blob ? anchor->type
-                              : released        ? released->type : row->type;
-        const char *base_storage = released ? released->storage_path : storage_path;
-        const char *base_profile = released ? released->profile : profile;
+        /* No base by default — the NULL blob is the no-base state; the row-derived
+         * type and pair beside it are never read as a base's (every base question
+         * below is gated on git_moved, which needs a base blob). */
+        const git_oid *base_blob = NULL;
+        const stat_cache_t *base_stat = NULL;
+        path_type_t base_type = row->type;
+        const char *base_storage = storage_path;
+        const char *base_profile = profile;
+
+        if (anchor_has_blob) {
+            base_blob = &anchor->blob_oid;
+            base_stat = &anchor->stat;
+            base_type = anchor->type;   /* the pair stays the row's — see above */
+        } else if (released) {
+            base_blob = &released->blob_oid;
+            base_stat = &released->stat;
+            base_type = released->type;
+            base_storage = released->storage_path;
+            base_profile = released->profile;
+        }
 
         /* The first question of the three-way frame is answered from the row
          * and the base alone; the second (disk_at_base — ours == base) is answered
@@ -1584,12 +1596,6 @@ static error_t *compute_orphan_authority(
  *     retire the record, BACKED would remove the copy, and neither is a guess
  *     to make about an empty directory any more than about a file.
  *
- * A released record carries a true fact.** Today a release retires the record.
- * If the path is later re-added under another profile, the workspace reads it
- * as `[modified]` (no base) instead of `[stale]` (base = the blob dotta deployed).
- * Keeping the record would make it a perpetual orphan (no view row → probed every
- * load), so it needs a word.
- *
  * Divergence for a prunable file is disk against what dotta last deployed — the
  * record (compute_orphan_divergence). A prunable directory's verdict is cleanup's
  * emptiness rule, so there is nothing to measure, only whether it can be: a
@@ -1688,7 +1694,7 @@ static error_t *analyze_orphans(workspace_t *ws) {
             item_state = WORKSPACE_STATE_RELEASED;
             divergence = DIVERGENCE_TYPE;
 
-        } else if (hashmap_has(ws->prune_orders, fs_path) && measurable) {
+        } else if (hashmap_has(ws->order_index, fs_path) && measurable) {
             /* The user ordered the deployed copy pruned (remove --delete-files);
              * Git is not asked. Divergence still protects an edited copy —
              * cleanup's skip reasons read the same bits. */
@@ -2495,19 +2501,19 @@ static error_t *workspace_partition(workspace_t *ws) {
      * membership index serves the honour arm the way the anchors index serves
      * the row pairing. */
     err = state_get_prune_orders(
-        ws->state, ws->arena, &ws->order_paths, &ws->order_count
+        ws->state, ws->arena, &ws->orders, &ws->order_count
     );
     if (err) {
         return error_wrap(err, "Failed to read prune orders from state");
     }
 
     if (ws->order_count > 0) {
-        ws->prune_orders = hashmap_borrow(ws->order_count);
-        if (!ws->prune_orders) {
+        ws->order_index = hashmap_borrow(ws->order_count);
+        if (!ws->order_index) {
             return ERROR(ERR_MEMORY, "Failed to create order index");
         }
         for (size_t i = 0; i < ws->order_count; i++) {
-            err = hashmap_set(ws->prune_orders, ws->order_paths[i], ws->order_paths[i]);
+            err = hashmap_set(ws->order_index, ws->orders[i], ws->orders[i]);
             if (err) {
                 return error_wrap(err, "Failed to populate order index");
             }
@@ -2515,7 +2521,7 @@ static error_t *workspace_partition(workspace_t *ws) {
     }
 
     /* The released copies, the same way. */
-    err = state_get_all_released(
+    err = state_get_released_copies(
         ws->state, ws->arena, &ws->released, &ws->released_count
     );
     if (err) {
@@ -3258,7 +3264,7 @@ error_t *workspace_flush_updates(workspace_t *ws) {
      * any, the gate passes regardless and the join re-reads post-patch. */
     size_t pending_voids = 0;
     for (size_t i = 0; i < ws->order_count; i++) {
-        if (manifest_lookup(ws->manifest, ws->order_paths[i])) pending_voids++;
+        if (manifest_lookup(ws->manifest, ws->orders[i])) pending_voids++;
     }
     size_t pending_forgets = 0;
     for (size_t i = 0; i < ws->released_count; i++) {
@@ -3338,15 +3344,15 @@ error_t *workspace_flush_updates(workspace_t *ws) {
      * discovered departure executes as a release, which is the stated policy
      * for every discovered departure. */
     for (size_t i = 0; i < ws->order_count; i++) {
-        if (!manifest_lookup(ws->manifest, ws->order_paths[i])) continue;
+        if (!manifest_lookup(ws->manifest, ws->orders[i])) continue;
 
-        error_t *err = state_void_prune_order(ws->state, ws->order_paths[i]);
+        error_t *err = state_void_prune_order(ws->state, ws->orders[i]);
         if (err) {
             if (needs_transaction) {
                 state_rollback(ws->state);
             }
             return error_wrap(
-                err, "Failed to void prune order for '%s'", ws->order_paths[i]
+                err, "Failed to void prune order for '%s'", ws->orders[i]
             );
         }
     }
@@ -3416,7 +3422,7 @@ void workspace_free(workspace_t *ws) {
      * order index's arena paths and the released index's rows. */
     hashmap_free(ws->diverged_index, NULL);
     hashmap_free(ws->anchor_index, NULL);
-    hashmap_free(ws->prune_orders, NULL);
+    hashmap_free(ws->order_index, NULL);
     hashmap_free(ws->released_index, NULL);
 
     /* The view is borrowed (the dispatcher's); the slices, the snapshot and the
